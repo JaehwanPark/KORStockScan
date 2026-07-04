@@ -64,6 +64,16 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _safe_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 def _tick_count(lower: int, upper: int) -> int:
     if lower <= 0 or upper <= lower:
         return 0
@@ -103,6 +113,8 @@ def evaluate_entry_reprice_after_submit(
     entry_adm_ev_pct: float | None = None,
     lifecycle_matrix_selected_action: str | None = None,
     buy_pressure_10t: float | None = None,
+    tick_aggressor_pressure_usable: bool | str | int | None = None,
+    tick_aggressor_trusted_count: int | float | str | None = None,
     orderbook_micro_state: str | None = None,
     latency_state: str | None = None,
     simulated_order: bool = False,
@@ -129,6 +141,21 @@ def evaluate_entry_reprice_after_submit(
     adm_ev = _safe_float(entry_adm_ev_pct, _safe_float(order.get("entry_adm_ev_pct"), 0.0))
     ldm_action = str(lifecycle_matrix_selected_action or order.get("lifecycle_matrix_selected_action") or "").strip().upper()
     buy_pressure = _safe_float(buy_pressure_10t, _safe_float(order.get("buy_pressure_10t"), 50.0))
+    pressure_usable = bool(
+        _safe_bool(
+            tick_aggressor_pressure_usable
+            if tick_aggressor_pressure_usable is not None
+            else order.get("tick_aggressor_pressure_usable"),
+            False,
+        )
+        or _safe_int(
+            tick_aggressor_trusted_count
+            if tick_aggressor_trusted_count is not None
+            else order.get("tick_aggressor_trusted_count"),
+            0,
+        )
+        > 0
+    )
     micro_state = str(orderbook_micro_state or order.get("orderbook_micro_state") or "").strip().lower()
     latency = str(latency_state or order.get("latency_state") or order.get("latency_entry_state") or "").strip().upper()
     mark_price = _safe_int(
@@ -161,6 +188,13 @@ def evaluate_entry_reprice_after_submit(
         "entry_adm_ev_pct": f"{adm_ev:.4f}",
         "lifecycle_matrix_selected_action": ldm_action or "-",
         "buy_pressure_10t": f"{buy_pressure:.2f}",
+        "tick_aggressor_pressure_usable": bool(pressure_usable),
+        "tick_aggressor_trusted_count": _safe_int(
+            tick_aggressor_trusted_count
+            if tick_aggressor_trusted_count is not None
+            else order.get("tick_aggressor_trusted_count"),
+            0,
+        ),
         "orderbook_micro_state": micro_state or "-",
         "latency_state": latency or "-",
         "mark_price_at_submit": mark_price,
@@ -203,6 +237,7 @@ def evaluate_entry_reprice_after_submit(
 
     strong_continuation = (
         spread_ticks <= int(tight_spread_ticks)
+        and pressure_usable
         and buy_pressure >= float(strong_buy_pressure)
         and ldm_action in {"BUY_DEFENSIVE", "BUY_NOW", ""}
     )

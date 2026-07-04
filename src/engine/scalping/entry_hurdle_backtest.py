@@ -13,6 +13,11 @@ from src.engine.automation.source_quality_clean_baseline import (
     clean_baseline_policy,
     filter_allowed_dates,
 )
+from src.engine.automation.source_quality_hard_gate import (
+    apply_source_quality_preflight_block,
+    load_source_quality_preflight,
+    source_quality_preflight_blocked,
+)
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto
 from src.utils.market_day import is_krx_trading_day
@@ -73,10 +78,66 @@ def _safe_bool(value: Any) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _stale_flag(value: Any) -> bool:
+    if _safe_bool(value):
+        return True
+    return str(value or "").strip().lower() in {
+        "stale",
+        "quote_stale",
+        "stale_quote",
+        "tick_context_stale",
+        "context_stale",
+    }
+
+
 def _tick_aggressor_pressure_usable(fields: dict[str, Any]) -> bool:
     return bool(
         _safe_bool(fields.get("tick_aggressor_pressure_usable"))
         or _safe_float(fields.get("tick_aggressor_trusted_count"), 0.0) > 0
+    )
+
+
+def _event_micro_context_usable(fields: dict[str, Any]) -> bool:
+    if _stale_flag(fields.get("quote_stale")) or _stale_flag(fields.get("tick_context_stale")):
+        return False
+    if _stale_flag(fields.get("quote_stale_at_submit")) or _stale_flag(fields.get("price_context_stale_at_submit")):
+        return False
+    tick_quality = str(fields.get("tick_context_quality") or "").strip().lower()
+    if tick_quality and tick_quality not in {"-", "unknown", "missing", "not_available", "stale"}:
+        return True
+    if str(fields.get("tick_accel_source") or "").strip().lower() in {
+        "computed_10ticks",
+        "same_second_burst_10ticks",
+        "computed",
+    }:
+        return True
+    if _safe_float(fields.get("tick_latest_age_ms"), None) is not None:
+        return True
+    quote_source = str(fields.get("quote_age_source") or "").strip().lower()
+    if quote_source and quote_source not in {"-", "unknown", "missing", "not_available", "stale"}:
+        return True
+    if _safe_float(fields.get("quote_age_ms"), None) is not None:
+        return True
+    return False
+
+
+def _has_present_value(value: Any) -> bool:
+    return str(value or "").strip().lower() not in {"", "-", "none", "null", "nan"}
+
+
+def _micro_vwap_usable(fields: dict[str, Any]) -> bool:
+    if not _has_present_value(fields.get("curr_vs_micro_vwap_bp")):
+        return False
+    minute_quality = str(fields.get("minute_candle_context_quality") or "").strip().lower()
+    minute_quality_ok = bool(
+        minute_quality
+        and minute_quality != "-"
+        and not any(token in minute_quality for token in ("unknown", "missing", "stale", "unavailable"))
+    )
+    return bool(
+        _safe_bool(fields.get("micro_vwap_available"))
+        and _safe_bool(fields.get("minute_candle_window_fresh"))
+        and minute_quality_ok
     )
 
 
@@ -234,6 +295,8 @@ def _signature_strong_bundle(source_signature: Any) -> bool:
 def _signature_micro_pressure_path(fields: dict[str, Any]) -> bool:
     return (
         _signature_strong_bundle(fields.get("source_signature"))
+        and _event_micro_context_usable(fields)
+        and _micro_vwap_usable(fields)
         and _safe_float(fields.get("curr_vs_micro_vwap_bp"), 0.0) >= 25.0
         and _tick_aggressor_pressure_usable(fields)
         and _safe_float(fields.get("buy_pressure_10t"), 0.0) >= 80.0
@@ -349,11 +412,17 @@ def _build_implemented_policy_backtest(
                 if score < 60.0 or score > 74.0:
                     ai_recheck_excluded["score_outside_60_74"] += 1
                     continue
-                if _truthy(fields.get("quote_stale")) or _truthy(fields.get("tick_context_stale")):
+                if _stale_flag(fields.get("quote_stale")) or _stale_flag(fields.get("tick_context_stale")):
                     ai_recheck_excluded["stale_quote_or_tick_context"] += 1
+                    continue
+                if not _event_micro_context_usable(fields):
+                    ai_recheck_excluded["micro_source_quality_missing"] += 1
                     continue
                 if not _signature_strong_bundle(fields.get("source_signature")):
                     ai_recheck_excluded["source_signature_not_strong_bundle"] += 1
+                    continue
+                if not _micro_vwap_usable(fields):
+                    ai_recheck_excluded["micro_vwap_source_quality_missing"] += 1
                     continue
                 if _safe_float(fields.get("curr_vs_micro_vwap_bp"), 0.0) < 0.0:
                     ai_recheck_excluded["micro_vwap_negative"] += 1
@@ -377,7 +446,10 @@ def _build_implemented_policy_backtest(
         "window_policy": "clean_baseline_existing_pipeline_events",
         "sample_floor": "event_level_reconstruction_available_rows_only",
         "primary_decision_metric": "estimated_order_bundle_submitted_count",
-        "source_quality_gate": "clean_baseline_allowed_existing_pipeline_events",
+        "source_quality_gate": (
+            "clean_baseline_allowed_existing_pipeline_events_with_trusted_tick_pressure_and_"
+            "fresh_minute_candle_for_micro_vwap_paths"
+        ),
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "actual_order_submitted_provenance_preserved": True,
@@ -538,7 +610,10 @@ def _next_action_diagnostics(
         "window_policy": window_policy,
         "sample_floor": "report_only_blocker_sample_floor_3",
         "primary_decision_metric": "missed_winner_vs_avoided_loser_tradeoff",
-        "source_quality_gate": "clean_baseline_allowed_existing_buy_funnel_and_missed_entry_artifacts",
+        "source_quality_gate": (
+            "clean_baseline_allowed_existing_buy_funnel_and_missed_entry_artifacts; "
+            "implemented micro-pressure paths require trusted tick pressure and fresh minute-candle provenance"
+        ),
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "actual_order_submitted_provenance_preserved": True,
@@ -884,6 +959,15 @@ def build_report(
     ]
     report["code_improvement_orders"] = _code_improvement_orders(report)
     report["summary"]["code_improvement_order_count"] = len(report["code_improvement_orders"])
+    preflight = load_source_quality_preflight(target_date)
+    if source_quality_preflight_blocked(preflight):
+        blocked = apply_source_quality_preflight_block(report, preflight)
+        blocked["code_improvement_orders"] = []
+        if isinstance(blocked.get("summary"), dict):
+            blocked["summary"]["code_improvement_order_count"] = 0
+            blocked["summary"]["source_quality_gate"] = "blocked_contract_gap"
+        return blocked
+    report["source_quality_preflight_gate"] = preflight
     return report
 
 

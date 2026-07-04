@@ -13,6 +13,10 @@ from src.engine.automation.source_quality_clean_baseline import (
     clean_baseline_policy,
     filter_allowed_dates,
 )
+from src.engine.automation.source_quality_hard_gate import (
+    apply_source_quality_preflight_block,
+    load_source_quality_preflight,
+)
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto
 from src.utils.market_day import is_krx_trading_day
@@ -83,12 +87,29 @@ def _safe_bool(value: Any) -> bool:
         return False
     if isinstance(value, (int, float)):
         return value != 0
-    return str(value).strip().lower() in {"1", "true", "yes", "y", "on", "stale"}
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _stale_flag(value: Any) -> bool:
+    if _safe_bool(value):
+        return True
+    return str(value or "").strip().lower() in {
+        "stale",
+        "quote_stale",
+        "stale_quote",
+        "tick_context_stale",
+        "context_stale",
+    }
 
 
 def _tick_aggressor_pressure_usable(row: dict[str, Any]) -> bool:
+    raw_flag = row.get("tick_aggressor_pressure_usable")
+    if isinstance(raw_flag, bool):
+        pressure_flag = raw_flag
+    else:
+        pressure_flag = str(raw_flag or "").strip().lower() in {"1", "true", "yes", "y", "on"}
     return bool(
-        _safe_bool(row.get("tick_aggressor_pressure_usable"))
+        pressure_flag
         or _safe_float(row.get("tick_aggressor_trusted_count"), 0.0) > 0
     )
 
@@ -172,9 +193,20 @@ def _source_quality_blocked(row: dict[str, Any]) -> bool:
         row.get("source_quality_block_reason"),
         row.get("entry_score_excluded_reason"),
         row.get("ai_input_source_quality_reason"),
+        row.get("minute_candle_source_quality_gate"),
+        row.get("minute_candle_source_quality_reason"),
     ]
     text = " ".join(str(part or "").lower() for part in text_parts)
-    return bool("source_quality_blocked" in text or "hard_block" in text)
+    return bool(
+        "source_quality_blocked" in text
+        or "source_quality_warning" in text
+        or "source_quality_insufficient" in text
+        or "insufficient_window" in text
+        or "truncated_window" in text
+        or "continuation_key_missing" in text
+        or "continuation_page_limit_reached" in text
+        or "hard_block" in text
+    )
 
 
 def _hard_blocked(row: dict[str, Any]) -> bool:
@@ -192,13 +224,58 @@ def _hard_blocked(row: dict[str, Any]) -> bool:
 
 
 def _stale(row: dict[str, Any]) -> bool:
-    if any(_safe_bool(row.get(key)) for key in ("quote_stale", "tick_context_stale", "context_stale")):
+    if any(_stale_flag(row.get(key)) for key in ("quote_stale", "tick_context_stale", "context_stale")):
         return True
     submit_block = str(row.get("entry_submit_revalidation_block") or "").strip().lower()
     if submit_block and submit_block not in {"0", "false", "no", "n", "off", "-"}:
         return True
     stale_bucket = str(row.get("stale_bucket") or "").lower()
     return stale_bucket in {"stale", "quote_stale", "stale_quote"}
+
+
+def _micro_context_usable(row: dict[str, Any]) -> bool:
+    if _stale(row):
+        return False
+    tick_quality = str(row.get("tick_context_quality") or "").strip().lower()
+    if tick_quality and tick_quality not in {"-", "unknown", "missing", "not_available", "stale"}:
+        return True
+    if str(row.get("tick_accel_source") or "").strip().lower() in {
+        "computed_10ticks",
+        "same_second_burst_10ticks",
+        "computed",
+    }:
+        return True
+    if _safe_float(row.get("tick_latest_age_ms"), None) is not None:
+        return True
+    quote_source = str(row.get("quote_age_source") or "").strip().lower()
+    if quote_source and quote_source not in {"-", "unknown", "missing", "not_available", "stale"}:
+        return True
+    if _safe_float(row.get("quote_age_ms"), None) is not None:
+        return True
+    return False
+
+
+def _has_present_value(value: Any) -> bool:
+    return str(value or "").strip().lower() not in {"", "-", "none", "null", "nan"}
+
+
+def _micro_vwap_usable(row: dict[str, Any]) -> bool:
+    if not (
+        _has_present_value(row.get("curr_vs_micro_vwap_bp"))
+        or _has_present_value(row.get("micro_vwap_bp"))
+    ):
+        return False
+    minute_quality = str(row.get("minute_candle_context_quality") or "").strip().lower()
+    minute_quality_ok = bool(
+        minute_quality
+        and minute_quality != "-"
+        and not any(token in minute_quality for token in ("unknown", "missing", "stale", "unavailable"))
+    )
+    return bool(
+        _safe_bool(row.get("micro_vwap_available"))
+        and _safe_bool(row.get("minute_candle_window_fresh"))
+        and minute_quality_ok
+    )
 
 
 def _micro_support(row: dict[str, Any]) -> bool:
@@ -208,14 +285,20 @@ def _micro_support(row: dict[str, Any]) -> bool:
     micro_vwap = _safe_float(row.get("curr_vs_micro_vwap_bp") or row.get("micro_vwap_bp"), None)
     large_sell = _safe_bool(row.get("large_sell_print_detected"))
     pressure_usable = _tick_aggressor_pressure_usable(row)
+    micro_context_usable = _micro_context_usable(row)
     pressure_support = pressure_usable and (
         (buy_pressure is not None and buy_pressure >= 68.0)
         or (net_delta is not None and net_delta > 0.0)
     )
     support = (
         pressure_support
-        or (tick_accel is not None and tick_accel >= 1.10)
-        or (micro_vwap is not None and micro_vwap > 0.0)
+        or (micro_context_usable and tick_accel is not None and tick_accel >= 1.10)
+        or (
+            micro_context_usable
+            and _micro_vwap_usable(row)
+            and micro_vwap is not None
+            and micro_vwap > 0.0
+        )
     )
     return bool(support and not (pressure_usable and large_sell))
 
@@ -387,11 +470,21 @@ def _policy_result(
     mae_values = [value for value in mae_values if value is not None]
     mfe_values = [_safe_float(row.get("_mfe_10m_pct"), None) for row in counterfactual]
     mfe_values = [value for value in mfe_values if value is not None]
+    primary_ev = float(realized_metrics.get("source_quality_adjusted_ev_pct") or 0.0)
     sample_floor_passed = (
         realized_metrics["sample"] >= REALIZED_SAMPLE_FLOOR
         and opportunity_metrics["sample"] >= COUNTERFACTUAL_SAMPLE_FLOOR
     )
-    allowed = bool(policy != "diagnostic_score_only" and sample_floor_passed)
+    primary_ev_positive = primary_ev > 0.0
+    allowed = bool(policy != "diagnostic_score_only" and sample_floor_passed and primary_ev_positive)
+    if policy == "diagnostic_score_only":
+        apply_block_reason = "diagnostic_score_only"
+    elif not sample_floor_passed:
+        apply_block_reason = "hold_sample"
+    elif not primary_ev_positive:
+        apply_block_reason = "non_positive_primary_ev"
+    else:
+        apply_block_reason = ""
     return {
         "policy": policy,
         "threshold": threshold,
@@ -403,8 +496,10 @@ def _policy_result(
             "mae_10m_pct": round(sum(mae_values) / len(mae_values), 6) if mae_values else 0.0,
         },
         "sample_floor_passed": sample_floor_passed,
+        "primary_ev_positive": primary_ev_positive,
         "calibration_state": "candidate_ready" if allowed else "hold_sample",
         "allowed_runtime_apply": allowed,
+        "apply_block_reason": apply_block_reason,
         "runtime_effect": False,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
@@ -493,7 +588,7 @@ def build_report(target_date: str, *, start_date: str | None = None, end_date: s
             score_band_counts["score70_74"] += 1
         else:
             score_band_counts["score75_plus"] += 1
-    return {
+    report = {
         "schema_version": SCHEMA_VERSION,
         "report_type": REPORT_TYPE,
         "target_date": target_date,
@@ -518,7 +613,7 @@ def build_report(target_date: str, *, start_date: str | None = None, end_date: s
             "primary_decision_metric": "source_quality_adjusted_ev_pct",
             "source_quality_gate": (
                 "clean_baseline_allowed_rows_without_hard_source_quality_block_and_"
-                "trusted_tick_pressure_for_buy_pressure_micro_support"
+                "trusted_tick_pressure_for_buy_pressure_support_and_fresh_minute_candle_for_micro_vwap_support"
             ),
             "forbidden_uses": FORBIDDEN_USES,
         },
@@ -581,6 +676,8 @@ def build_report(target_date: str, *, start_date: str | None = None, end_date: s
         "missing_artifacts": missing_artifacts,
         "forbidden_uses": FORBIDDEN_USES,
     }
+    preflight = load_source_quality_preflight(target_date)
+    return apply_source_quality_preflight_block(report, preflight)
 
 
 def render_markdown(report: dict[str, Any]) -> str:

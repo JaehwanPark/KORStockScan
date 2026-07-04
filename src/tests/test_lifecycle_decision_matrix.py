@@ -2424,6 +2424,25 @@ def test_lifecycle_matrix_wait6579_rows_carry_runtime_bucket_fields(tmp_path, mo
     assert combo["recommended_resolution"] == "none"
 
 
+def test_entry_strength_bucket_ignores_buy_pressure_without_aggressor_provenance():
+    assert mod._entry_strength_bucket_from_features({"buy_pressure": 90.0}) == "strength_proxy_unobserved"
+    assert (
+        mod._entry_strength_bucket_from_features(
+            {"buy_pressure": 90.0, "tick_aggressor_trusted_count": 2}
+        )
+        == "strong_strength_momentum"
+    )
+    assert (
+        mod._entry_strength_bucket_from_features(
+            {"buy_pressure": 40.0, "tick_aggressor_pressure_usable": True}
+        )
+        == "weak_strength_momentum"
+    )
+    assert mod._entry_strength_bucket_from_features({"buy_pressure": 90.0, "tick_accel": 1.3}) == (
+        "strong_strength_momentum"
+    )
+
+
 def test_lifecycle_matrix_backfills_scale_in_observation_fields(tmp_path, monkeypatch):
     matrix_dir = tmp_path / "matrix"
     entry_dir = tmp_path / "entry_adm"

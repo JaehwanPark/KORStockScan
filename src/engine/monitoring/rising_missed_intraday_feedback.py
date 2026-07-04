@@ -52,6 +52,17 @@ def _boolish(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _optional_boolish(value: Any) -> bool | None:
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if text in {"", "-", "none", "null", "unknown"}:
+        return None
+    if isinstance(value, bool):
+        return value
+    return text in {"1", "true", "yes", "y", "on"}
+
+
 def _fields(row: dict[str, Any]) -> dict[str, Any]:
     fields = row.get("fields")
     return fields if isinstance(fields, dict) else {}
@@ -216,6 +227,30 @@ def _touch_feature(row: dict[str, Any]) -> dict[str, Any]:
             fields.get("first_touch_avgdown_repeated_blocker_count")
         ),
         "first_touch_avgdown_decision_authority": fields.get("first_touch_avgdown_decision_authority"),
+        "first_touch_avgdown_ai_score_usable": _optional_boolish(
+            fields.get("first_touch_avgdown_ai_score_usable")
+        ),
+        "first_touch_avgdown_ai_score_source": fields.get("first_touch_avgdown_ai_score_source"),
+        "first_touch_avgdown_ai_score_data_quality": fields.get("first_touch_avgdown_ai_score_data_quality"),
+        "first_touch_avgdown_ai_score_excluded_reason": fields.get(
+            "first_touch_avgdown_ai_score_excluded_reason"
+        ),
+        "first_touch_reversal_feature_source_quality": fields.get("first_touch_reversal_feature_source_quality"),
+        "first_touch_reversal_feature_stale": _optional_boolish(fields.get("first_touch_reversal_feature_stale")),
+        "first_touch_reversal_feature_stale_reason": fields.get("first_touch_reversal_feature_stale_reason"),
+        "first_touch_tick_context_quality": fields.get("first_touch_tick_context_quality"),
+        "first_touch_tick_latest_age_ms": fields.get("first_touch_tick_latest_age_ms"),
+        "first_touch_quote_stale": fields.get("first_touch_quote_stale"),
+        "first_touch_quote_age_ms": fields.get("first_touch_quote_age_ms"),
+        "buy_pressure_10t": _safe_float(fields.get("buy_pressure_10t")),
+        "tick_aggressor_trusted_count": _safe_float(fields.get("tick_aggressor_trusted_count")),
+        "tick_aggressor_pressure_usable": _optional_boolish(fields.get("tick_aggressor_pressure_usable")),
+        "tick_acceleration_ratio": _safe_float(fields.get("tick_acceleration_ratio")),
+        "curr_vs_micro_vwap_bp": _safe_float(fields.get("curr_vs_micro_vwap_bp")),
+        "micro_vwap_available": _optional_boolish(fields.get("micro_vwap_available")),
+        "minute_candle_context_quality": fields.get("minute_candle_context_quality"),
+        "minute_candle_window_fresh": _optional_boolish(fields.get("minute_candle_window_fresh")),
+        "minute_candle_latest_age_ms": fields.get("minute_candle_latest_age_ms"),
     }
 
 
@@ -306,6 +341,142 @@ def _build_first_touch_regression_rows(
     return rows
 
 
+def _first_touch_ai_provenance_missing(item: dict[str, Any]) -> bool:
+    if item.get("first_touch_avgdown_ai_score") is None and item.get("first_touch_ai_score") is None:
+        return False
+    return (
+        item.get("first_touch_avgdown_ai_score_usable") is None
+        or item.get("first_touch_avgdown_ai_score_source") in (None, "", "-")
+        or item.get("first_touch_avgdown_ai_score_data_quality") in (None, "", "-")
+    )
+
+
+def _first_touch_ai_provenance_unusable(item: dict[str, Any]) -> bool:
+    usable = item.get("first_touch_avgdown_ai_score_usable")
+    data_quality = str(item.get("first_touch_avgdown_ai_score_data_quality") or "").strip().lower()
+    source = str(item.get("first_touch_avgdown_ai_score_source") or "").strip().lower()
+    if usable is False:
+        return True
+    if data_quality and data_quality not in {"fresh", "partial"}:
+        return True
+    return source in {
+        "fallback_score_50",
+        "engine_disabled",
+        "lock_contention",
+        "timeout",
+        "unknown",
+    }
+
+
+def _first_touch_micro_signals(item: dict[str, Any]) -> set[str]:
+    text = "|".join(
+        str(item.get(key) or "")
+        for key in (
+            "first_touch_avgdown_support_signals",
+            "first_touch_avgdown_risk_signals",
+        )
+    )
+    return {token for token in text.split("|") if token}
+
+
+def _first_touch_pressure_signal_used(item: dict[str, Any]) -> bool:
+    return bool(_first_touch_micro_signals(item) & {"buy_pressure_support", "tick_accel_support"})
+
+
+def _first_touch_micro_vwap_signal_used(item: dict[str, Any]) -> bool:
+    return bool(_first_touch_micro_signals(item) & {"micro_vwap_non_negative", "micro_vwap_negative"})
+
+
+def _first_touch_pressure_provenance_missing(item: dict[str, Any]) -> bool:
+    if not _first_touch_pressure_signal_used(item):
+        return False
+    return (
+        item.get("tick_aggressor_trusted_count") is None
+        and item.get("tick_aggressor_pressure_usable") is None
+    )
+
+
+def _first_touch_pressure_provenance_unusable(item: dict[str, Any]) -> bool:
+    if not _first_touch_pressure_signal_used(item):
+        return False
+    trusted_count = _safe_float(item.get("tick_aggressor_trusted_count")) or 0.0
+    return item.get("tick_aggressor_pressure_usable") is False and trusted_count <= 0.0
+
+
+def _first_touch_micro_provenance_missing(item: dict[str, Any]) -> bool:
+    signals = _first_touch_micro_signals(item)
+    micro_signal_used = bool(
+        signals
+        & {
+            "buy_pressure_support",
+            "tick_accel_support",
+            "micro_vwap_non_negative",
+            "micro_vwap_negative",
+            "micro_context_stale_ignored",
+        }
+    )
+    if not micro_signal_used:
+        return False
+    quality = str(item.get("first_touch_reversal_feature_source_quality") or "").strip().lower()
+    if quality in {"", "-", "missing", "unknown"}:
+        return True
+    if _first_touch_micro_vwap_signal_used(item):
+        return (
+            item.get("micro_vwap_available") is None
+            or item.get("minute_candle_window_fresh") is None
+            or item.get("minute_candle_context_quality") in (None, "", "-")
+            or item.get("minute_candle_latest_age_ms") in (None, "", "-")
+        )
+    return False
+
+
+def _first_touch_micro_provenance_unusable(item: dict[str, Any]) -> bool:
+    signals = _first_touch_micro_signals(item)
+    micro_signal_used = bool(
+        signals
+        & {
+            "buy_pressure_support",
+            "tick_accel_support",
+            "micro_vwap_non_negative",
+            "micro_vwap_negative",
+            "micro_context_stale_ignored",
+        }
+    )
+    if not micro_signal_used:
+        return False
+    quality = str(item.get("first_touch_reversal_feature_source_quality") or "").strip().lower()
+    stale = item.get("first_touch_reversal_feature_stale")
+    reason = str(item.get("first_touch_reversal_feature_stale_reason") or "").strip().lower()
+    if quality not in {"", "-", "usable"} or stale is True or bool(reason and reason != "-"):
+        return True
+    if _first_touch_micro_vwap_signal_used(item):
+        return item.get("micro_vwap_available") is False or item.get("minute_candle_window_fresh") is False
+    return False
+
+
+def _count_first_touch_source_quality(rows: list[dict[str, Any]]) -> dict[str, int]:
+    return {
+        "first_touch_ai_provenance_missing_count": sum(
+            1 for item in rows if _first_touch_ai_provenance_missing(item)
+        ),
+        "first_touch_ai_provenance_unusable_count": sum(
+            1 for item in rows if _first_touch_ai_provenance_unusable(item)
+        ),
+        "first_touch_pressure_provenance_missing_count": sum(
+            1 for item in rows if _first_touch_pressure_provenance_missing(item)
+        ),
+        "first_touch_pressure_provenance_unusable_count": sum(
+            1 for item in rows if _first_touch_pressure_provenance_unusable(item)
+        ),
+        "first_touch_micro_provenance_missing_count": sum(
+            1 for item in rows if _first_touch_micro_provenance_missing(item)
+        ),
+        "first_touch_micro_provenance_unusable_count": sum(
+            1 for item in rows if _first_touch_micro_provenance_unusable(item)
+        ),
+    }
+
+
 def build_report(
     target_date: str,
     *,
@@ -367,6 +538,19 @@ def build_report(
     first_touch_label_counts = Counter(
         str(item.get("first_touch_regression_label") or "unknown") for item in first_touch_rows
     )
+    first_touch_source_quality_counts = _count_first_touch_source_quality(first_touch_rows)
+    if first_touch_source_quality_counts["first_touch_ai_provenance_missing_count"]:
+        source_quality_status = "first_touch_ai_provenance_missing"
+    if first_touch_source_quality_counts["first_touch_ai_provenance_unusable_count"]:
+        source_quality_status = "first_touch_ai_provenance_unusable"
+    if first_touch_source_quality_counts["first_touch_pressure_provenance_missing_count"]:
+        source_quality_status = "first_touch_pressure_provenance_missing"
+    if first_touch_source_quality_counts["first_touch_pressure_provenance_unusable_count"]:
+        source_quality_status = "first_touch_pressure_provenance_unusable"
+    if first_touch_source_quality_counts["first_touch_micro_provenance_missing_count"]:
+        source_quality_status = "first_touch_micro_provenance_missing"
+    if first_touch_source_quality_counts["first_touch_micro_provenance_unusable_count"]:
+        source_quality_status = "first_touch_micro_provenance_unusable"
     initial_fail_count = sum(
         count
         for label, count in label_counts.items()
@@ -449,7 +633,11 @@ def build_report(
                 "window_policy": "same_day_intraday_pipeline_events_continuously_updated",
                 "sample_floor": "1_rising_missed_forced_entry_with_first_stop_line_touch",
                 "primary_decision_metric": "first_touch_regression_label_counts",
-                "source_quality_gate": "record_id_joined_forced_rising_missed_entry_and_first_stop_line_touch_event",
+                "source_quality_gate": (
+                    "record_id_joined_forced_rising_missed_entry_and_first_stop_line_touch_event_with_"
+                    "holding_ai_role_gate_provenance_trusted_pressure_provenance_and_"
+                    "fresh_minute_candle_micro_vwap_provenance_when_used"
+                ),
                 "forbidden_uses": FORBIDDEN_USES,
             }
         },
@@ -457,6 +645,7 @@ def build_report(
         "source_quality": {
             "status": source_quality_status,
             "pipeline_events_exists": resolved_pipeline_path.exists(),
+            **first_touch_source_quality_counts,
         },
         "summary": {
             "forced_rising_missed_record_count": len(forced),
@@ -479,6 +668,7 @@ def build_report(
                 {"first_touch_regression_label": key, "count": value}
                 for key, value in first_touch_label_counts.most_common()
             ],
+            **first_touch_source_quality_counts,
             "initial_quality_fail_count": initial_fail_count,
             "scale_in_rescue_warning_count": label_counts.get("rising_missed_scale_in_rescue_warning", 0),
             "feedback_label_counts": [
@@ -517,6 +707,14 @@ def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path)
         f"- first_touch_closed_count: {summary.get('first_touch_closed_count')}",
         f"- first_touch_profitable_count: {summary.get('first_touch_profitable_count')}",
         f"- first_touch_loss_or_flat_count: {summary.get('first_touch_loss_or_flat_count')}",
+        f"- first_touch_ai_provenance_missing_count: {summary.get('first_touch_ai_provenance_missing_count')}",
+        f"- first_touch_ai_provenance_unusable_count: {summary.get('first_touch_ai_provenance_unusable_count')}",
+        f"- first_touch_pressure_provenance_missing_count: "
+        f"{summary.get('first_touch_pressure_provenance_missing_count')}",
+        f"- first_touch_pressure_provenance_unusable_count: "
+        f"{summary.get('first_touch_pressure_provenance_unusable_count')}",
+        f"- first_touch_micro_provenance_missing_count: {summary.get('first_touch_micro_provenance_missing_count')}",
+        f"- first_touch_micro_provenance_unusable_count: {summary.get('first_touch_micro_provenance_unusable_count')}",
         f"- initial_quality_fail_count: {summary.get('initial_quality_fail_count')}",
         f"- scale_in_rescue_warning_count: {summary.get('scale_in_rescue_warning_count')}",
         f"- code_improvement_order_count: {summary.get('code_improvement_order_count')}",

@@ -12,6 +12,10 @@ from src.engine.automation.source_quality_clean_baseline import (
     clean_baseline_policy,
     filter_allowed_dates,
 )
+from src.engine.automation.source_quality_hard_gate import (
+    apply_source_quality_preflight_block,
+    load_source_quality_preflight,
+)
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto
 from src.utils.market_day import is_krx_trading_day
@@ -27,6 +31,7 @@ RISING_MISSED_FIRST_TOUCH_CALIBRATION_DIR = (
 SCALPING_PYRAMID_QUALITY_CALIBRATION_DIR = (
     DATA_DIR / "report" / "scalping_pyramid_quality_calibration"
 )
+THRESHOLD_CYCLE_EV_DIR = DATA_DIR / "report" / "threshold_cycle_ev"
 PIPELINE_EVENTS_DIR = DATA_DIR / "pipeline_events"
 POST_SELL_DIR = DATA_DIR / "post_sell"
 LIFECYCLE_DECISION_MATRIX_DIR = DATA_DIR / "report" / "lifecycle_decision_matrix"
@@ -148,6 +153,40 @@ def _source_quality_pass(candidate: dict[str, Any]) -> bool:
     return not (isinstance(blockers, list) and blockers)
 
 
+def _payload_source_quality_pass(payload: dict[str, Any]) -> bool:
+    if not isinstance(payload, dict):
+        return True
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    source_quality = payload.get("source_quality") if isinstance(payload.get("source_quality"), dict) else {}
+    if payload.get("source_quality_blocked") or payload.get("source_quality_blocker"):
+        return False
+    if summary.get("source_quality_blocked") or summary.get("source_quality_blocker"):
+        return False
+    if source_quality.get("source_quality_blocked") or source_quality.get("source_quality_blocker"):
+        return False
+    blockers = payload.get("source_quality_blockers") or summary.get("source_quality_blockers")
+    if isinstance(blockers, list) and blockers:
+        return False
+    for value in (
+        payload.get("source_quality_gate"),
+        payload.get("source_quality_status"),
+        source_quality.get("source_quality_gate"),
+        source_quality.get("source_quality_status"),
+        source_quality.get("status"),
+        summary.get("source_quality_gate"),
+        summary.get("source_quality_status"),
+    ):
+        text = str(value or "").strip().lower()
+        if not text:
+            continue
+        if text not in {"pass", "ok", "clean", "source_quality_pass"}:
+            return False
+    status_text = str(summary.get("status") or payload.get("status") or "").strip().lower()
+    if "source_quality_blocked" in status_text or "hard_block" in status_text:
+        return False
+    return True
+
+
 def _sample_floor_passed(candidate: dict[str, Any]) -> bool:
     if "sample_floor_passed" in candidate:
         return _safe_bool(candidate.get("sample_floor_passed"))
@@ -156,12 +195,33 @@ def _sample_floor_passed(candidate: dict[str, Any]) -> bool:
     return bool(candidate.get("allowed_runtime_apply"))
 
 
+def _primary_ev_positive(candidate: dict[str, Any]) -> bool:
+    observed = False
+    for source in (
+        candidate,
+        candidate.get("realized") if isinstance(candidate.get("realized"), dict) else {},
+        candidate.get("source_metrics") if isinstance(candidate.get("source_metrics"), dict) else {},
+    ):
+        value = _safe_float((source or {}).get("source_quality_adjusted_ev_pct"), None)
+        if value is not None:
+            observed = True
+            return value > 0.0
+    source_metrics = candidate.get("source_metrics") if isinstance(candidate.get("source_metrics"), dict) else {}
+    realized = source_metrics.get("realized") if isinstance(source_metrics.get("realized"), dict) else {}
+    value = _safe_float(realized.get("source_quality_adjusted_ev_pct"), None)
+    if value is not None:
+        observed = True
+        return value > 0.0
+    return not observed
+
+
 def _with_required_candidate_fields(
     candidate: dict[str, Any],
     *,
     source_report_type: str,
     source_path: Path | None,
     default_stage: str,
+    source_report_quality_pass: bool = True,
 ) -> dict[str, Any]:
     family = str(candidate.get("family") or "")
     normalized = dict(candidate)
@@ -172,7 +232,15 @@ def _with_required_candidate_fields(
     normalized.setdefault("same_stage_owner_stage", normalized.get("stage"))
     normalized.setdefault("forbidden_uses", FORBIDDEN_USES)
     normalized.setdefault("sample_floor_passed", _sample_floor_passed(candidate))
-    normalized.setdefault("source_quality_gate", "pass" if _source_quality_pass(candidate) else "blocked")
+    if not source_report_quality_pass:
+        normalized["source_quality_gate"] = "source_quality_blocked"
+        normalized["source_quality_blocked"] = str(
+            normalized.get("source_quality_blocked") or f"{source_report_type}_root_source_quality_blocked"
+        )
+        normalized["allowed_runtime_apply"] = False
+        normalized.setdefault("apply_block_reason", "source_quality_blocked")
+    else:
+        normalized.setdefault("source_quality_gate", "pass" if _source_quality_pass(candidate) else "blocked")
     normalized["ai_score_optimization_source_report_type"] = source_report_type
     normalized["ai_score_optimization_source_path"] = str(source_path) if source_path else None
     if family not in KNOWN_AUTO_APPLY_FAMILIES:
@@ -183,6 +251,9 @@ def _with_required_candidate_fields(
     elif not _sample_floor_passed(normalized):
         normalized["allowed_runtime_apply"] = False
         normalized.setdefault("apply_block_reason", "hold_sample")
+    elif not _primary_ev_positive(normalized):
+        normalized["allowed_runtime_apply"] = False
+        normalized.setdefault("apply_block_reason", "non_positive_primary_ev")
     elif not _source_quality_pass(normalized):
         normalized["allowed_runtime_apply"] = False
         normalized.setdefault("apply_block_reason", "source_quality_blocked")
@@ -195,12 +266,19 @@ def _with_required_candidate_fields(
 def _entry_recheck_candidate(entry_report: dict[str, Any], source_path: Path | None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     diagnostics: list[dict[str, Any]] = []
     calibration: list[dict[str, Any]] = []
+    report_quality_pass = _payload_source_quality_pass(entry_report)
     best_apply = entry_report.get("best_apply_candidate")
     if isinstance(best_apply, dict) and best_apply:
         policy = str(best_apply.get("policy") or "")
         threshold = _safe_int(best_apply.get("threshold"), 0)
         realized = best_apply.get("realized") if isinstance(best_apply.get("realized"), dict) else {}
         counterfactual = best_apply.get("counterfactual") if isinstance(best_apply.get("counterfactual"), dict) else {}
+        primary_ev_positive = _safe_float(realized.get("source_quality_adjusted_ev_pct"), 0.0) > 0.0
+        entry_allowed = (
+            report_quality_pass
+            and primary_ev_positive
+            and _safe_bool(best_apply.get("allowed_runtime_apply"))
+        )
         if policy == "supported_wait_recovery" and threshold:
             calibration.append(
                 {
@@ -227,8 +305,19 @@ def _entry_recheck_candidate(entry_report: dict[str, Any], source_path: Path | N
                         "counterfactual": counterfactual,
                     },
                     "sample_floor_passed": _safe_bool(best_apply.get("sample_floor_passed")),
-                    "source_quality_gate": "pass",
-                    "allowed_runtime_apply": _safe_bool(best_apply.get("allowed_runtime_apply")),
+                    "primary_ev_positive": primary_ev_positive,
+                    "source_quality_gate": "pass" if report_quality_pass else "source_quality_blocked",
+                    "source_quality_blocked": "" if report_quality_pass else "entry_ai_gate_backtest_root_source_quality_blocked",
+                    "allowed_runtime_apply": entry_allowed,
+                    "apply_block_reason": (
+                        ""
+                        if entry_allowed
+                        else "source_quality_blocked"
+                        if not report_quality_pass
+                        else "non_positive_primary_ev"
+                        if not primary_ev_positive
+                        else "upstream_candidate_blocked"
+                    ),
                     "forbidden_uses": FORBIDDEN_USES + ["broad_buy_score_threshold_relaxation"],
                 }
             )
@@ -259,15 +348,213 @@ def _copy_calibration_candidates(
     source_path: Path | None,
     default_stage: str,
 ) -> list[dict[str, Any]]:
+    source_report_quality_pass = _payload_source_quality_pass(payload)
     return [
         _with_required_candidate_fields(
             item,
             source_report_type=source_report_type,
             source_path=source_path,
             default_stage=default_stage,
+            source_report_quality_pass=source_report_quality_pass,
         )
         for item in _candidate_list(payload)
     ]
+
+
+def _threshold_ev_decision_families(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    families: dict[str, dict[str, Any]] = {}
+    calibration = payload.get("calibration_outcome")
+    decisions = calibration.get("decisions") if isinstance(calibration, dict) else None
+    if not isinstance(decisions, list):
+        return families
+    for item in decisions:
+        if not isinstance(item, dict):
+            continue
+        family = str(item.get("family") or "").strip()
+        if family:
+            families[family] = item
+    return families
+
+
+def _entry_price_surface_summary(
+    payload: dict[str, Any],
+    source_path: Path | None,
+) -> dict[str, Any]:
+    families = _threshold_ev_decision_families(payload)
+    dynamic = families.get("dynamic_entry_price_resolver") or {}
+    execution = families.get("entry_price_execution_quality") or {}
+    source_metrics = dynamic.get("source_metrics") if isinstance(dynamic.get("source_metrics"), dict) else {}
+    candidate_quality = (
+        source_metrics.get("candidate_quality")
+        if isinstance(source_metrics.get("candidate_quality"), dict)
+        else {}
+    )
+    ai_candidate = (
+        candidate_quality.get("AI_candidate")
+        if isinstance(candidate_quality.get("AI_candidate"), dict)
+        else {}
+    )
+    status = "source_only_backtested" if dynamic else "source_only_instrumentation_gap"
+    reason = (
+        "threshold_cycle_ev_dynamic_entry_price_resolver_loaded"
+        if dynamic
+        else "dynamic_entry_price_resolver_family_missing_from_threshold_cycle_ev"
+    )
+    return {
+        "status": status,
+        "producer": "threshold_cycle_ev.dynamic_entry_price_resolver" if dynamic else None,
+        "source_path": str(source_path) if source_path else None,
+        "auto_apply_family_scope": [],
+        "allowed_runtime_apply": False,
+        "apply_block_reason": "entry_price_source_only_no_ai_score_env_candidate",
+        "reason": reason,
+        "dynamic_entry_price_resolver_present": bool(dynamic),
+        "entry_price_execution_quality_present": bool(execution),
+        "dynamic_entry_price_report_contract_status": source_metrics.get(
+            "dynamic_entry_price_report_contract_status"
+        ),
+        "candidate_metrics_ready": source_metrics.get("candidate_metrics_ready"),
+        "candidate_metrics_missing": source_metrics.get("candidate_metrics_missing"),
+        "candidate_metrics_diagnostic_missing": source_metrics.get(
+            "candidate_metrics_diagnostic_missing"
+        ),
+        "ai_candidate_event_count": _safe_int(ai_candidate.get("candidate_event_count"), 0),
+        "ai_candidate_failure_count": _safe_int(ai_candidate.get("candidate_failure_count"), 0),
+        "ai_candidate_failure_rate": _safe_float(ai_candidate.get("candidate_failure_rate"), 0.0),
+        "ai_candidate_failure_reasons": ai_candidate.get("failure_reasons")
+        if isinstance(ai_candidate.get("failure_reasons"), dict)
+        else {},
+        "unpriced_or_stale_warning_count": _safe_int(
+            source_metrics.get("unpriced_or_stale_warning_count"), 0
+        ),
+        "excluded_from_fill_ev_count": _safe_int(
+            source_metrics.get("excluded_from_fill_ev_count"), 0
+        ),
+        "forbidden_uses": list(
+            dict.fromkeys(
+                FORBIDDEN_USES
+                + [
+                    "entry_price_env_apply_from_ai_score_optimization",
+                    "order_price_guard_bypass",
+                ]
+            )
+        ),
+    }
+
+
+def _holding_exit_surface_summary(
+    payload: dict[str, Any],
+    source_path: Path | None,
+) -> dict[str, Any]:
+    families = _threshold_ev_decision_families(payload)
+    holding_family_names = [
+        "soft_stop_whipsaw_confirmation",
+        "holding_flow_ofi_smoothing",
+        "holding_exit_decision_matrix_advisory",
+        "profit_stagnation_exit_runtime",
+    ]
+    present = {name: families[name] for name in holding_family_names if name in families}
+    soft_stop = present.get("soft_stop_whipsaw_confirmation") or {}
+    flow = present.get("holding_flow_ofi_smoothing") or {}
+    matrix = present.get("holding_exit_decision_matrix_advisory") or {}
+    soft_metrics = (
+        soft_stop.get("source_metrics") if isinstance(soft_stop.get("source_metrics"), dict) else {}
+    )
+    flow_metrics = flow.get("source_metrics") if isinstance(flow.get("source_metrics"), dict) else {}
+    matrix_metrics = matrix.get("source_metrics") if isinstance(matrix.get("source_metrics"), dict) else {}
+    status = "source_only_backtested" if present else "source_only_instrumentation_gap"
+    return {
+        "status": status,
+        "producer": "threshold_cycle_ev.holding_exit_families" if present else None,
+        "source_path": str(source_path) if source_path else None,
+        "auto_apply_family_scope": [],
+        "threshold_ev_mapped_family_scope": [
+            name for name in ("soft_stop_whipsaw_confirmation", "profit_stagnation_exit_runtime") if name in present
+        ],
+        "threshold_ev_families_present": sorted(present.keys()),
+        "allowed_runtime_apply": False,
+        "apply_block_reason": "holding_exit_source_only_no_ai_score_env_candidate",
+        "reason": (
+            "threshold_cycle_ev_holding_exit_families_loaded"
+            if present
+            else "holding_exit_family_missing_from_threshold_cycle_ev"
+        ),
+        "soft_stop_holding_exit_observation_total": _safe_int(
+            soft_metrics.get("holding_exit_observation_total"), 0
+        ),
+        "soft_stop_post_sell_joined_count": _safe_int(
+            soft_metrics.get("post_sell_joined_count"), 0
+        ),
+        "holding_flow_defer_exit_count": _safe_int(
+            flow_metrics.get("holding_flow_override_defer_exit"), 0
+        ),
+        "holding_flow_force_exit_count": _safe_int(
+            flow_metrics.get("holding_flow_override_force_exit"), 0
+        ),
+        "holding_flow_exit_confirmed_count": _safe_int(
+            flow_metrics.get("holding_flow_override_exit_confirmed"), 0
+        ),
+        "holding_exit_matrix_counterfactual_ready_count": _safe_int(
+            matrix_metrics.get("counterfactual_ready_count"), 0
+        ),
+        "holding_exit_matrix_counterfactual_gap_count": _safe_int(
+            matrix_metrics.get("counterfactual_gap_count"), 0
+        ),
+        "forbidden_uses": list(
+            dict.fromkeys(
+                FORBIDDEN_USES
+                + [
+                    "holding_exit_env_apply_from_ai_score_optimization",
+                    "negative_exit_from_unusable_ai_score",
+                    "hard_stop_or_trailing_bypass",
+                ]
+            )
+        ),
+    }
+
+
+def _general_scale_in_surface_summary(
+    payload: dict[str, Any],
+    source_path: Path | None,
+) -> dict[str, Any]:
+    families = _threshold_ev_decision_families(payload)
+    scale_guard = families.get("scale_in_price_guard") or {}
+    source_metrics = (
+        scale_guard.get("source_metrics") if isinstance(scale_guard.get("source_metrics"), dict) else {}
+    )
+    status = "source_only_backtested" if scale_guard else "source_only_instrumentation_gap"
+    return {
+        "status": status,
+        "producer": "threshold_cycle_ev.scale_in_price_guard" if scale_guard else None,
+        "source_path": str(source_path) if source_path else None,
+        "auto_apply_family_scope": [],
+        "threshold_ev_families_present": ["scale_in_price_guard"] if scale_guard else [],
+        "allowed_runtime_apply": False,
+        "apply_block_reason": "general_avg_down_reversal_add_source_only_no_env_mapping",
+        "reason": (
+            "threshold_cycle_ev_scale_in_price_guard_loaded"
+            if scale_guard
+            else "scale_in_price_guard_family_missing_from_threshold_cycle_ev"
+        ),
+        "avg_down_wait_count": _safe_int(source_metrics.get("avg_down_wait"), 0),
+        "pyramid_wait_count": _safe_int(source_metrics.get("pyramid_wait"), 0),
+        "scale_in_price_guard_block_count": _safe_int(
+            source_metrics.get("scale_in_price_guard_block"), 0
+        ),
+        "scale_in_price_resolved_count": _safe_int(
+            source_metrics.get("scale_in_price_resolved"), 0
+        ),
+        "forbidden_uses": list(
+            dict.fromkeys(
+                FORBIDDEN_USES
+                + [
+                    "reversal_add_env_apply_without_dedicated_calibration",
+                    "avg_down_env_apply_without_dedicated_calibration",
+                    "scale_in_price_guard_bypass",
+                ]
+            )
+        ),
+    }
 
 
 def _pipeline_surface_counts(source_dates: list[str]) -> dict[str, Any]:
@@ -346,6 +633,7 @@ def build_report(target_date: str, *, start_date: str | None = None, end_date: s
                 source_report_type="entry_ai_gate_backtest",
                 source_path=entry_path,
                 default_stage="entry",
+                source_report_quality_pass=_payload_source_quality_pass(entry_report),
             )
             for item in entry_candidates
         )
@@ -383,6 +671,17 @@ def build_report(target_date: str, *, start_date: str | None = None, end_date: s
             )
         )
 
+    threshold_ev_report, threshold_ev_path = _latest_existing_report(
+        THRESHOLD_CYCLE_EV_DIR,
+        "threshold_cycle_ev",
+        source_dates,
+    )
+    entry_price_surface = _entry_price_surface_summary(threshold_ev_report, threshold_ev_path)
+    holding_exit_surface = _holding_exit_surface_summary(threshold_ev_report, threshold_ev_path)
+    general_scale_in_surface = _general_scale_in_surface_summary(threshold_ev_report, threshold_ev_path)
+    if threshold_ev_path:
+        source_paths["threshold_cycle_ev"] = str(threshold_ev_path)
+
     surface_counts = _pipeline_surface_counts(source_dates)
     backtest_coverage_status = {
         "analyze_target_entry": {
@@ -391,23 +690,24 @@ def build_report(target_date: str, *, start_date: str | None = None, end_date: s
             "auto_apply_family_scope": [ENTRY_OPPORTUNITY_RECHECK_FAMILY, SCORE65_74_RECOVERY_PROBE_FAMILY],
             "broad_buy_score_threshold_apply": False,
         },
-        "entry_price": {
-            "status": "source_only_instrumentation_gap",
-            "producer": None,
-            "auto_apply_family_scope": [],
-            "reason": "entry_price action/confidence outcomes are inventoried but no fill/slippage/cancel/requote EV sweep is implemented in v1",
-        },
+        "entry_price": entry_price_surface,
         "holding_score_v2": {
-            "status": "source_only_instrumentation_gap",
-            "producer": None,
-            "auto_apply_family_scope": [],
-            "reason": "holding score role-gated provenance is inventoried but no holding-state EV replay sweep is implemented in v1",
+            **holding_exit_surface,
+            "surface": "holding_score_v2",
+            "reason": (
+                "holding score role-gated provenance is covered by threshold_cycle_ev holding/exit evidence"
+                if holding_exit_surface.get("status") == "source_only_backtested"
+                else holding_exit_surface.get("reason")
+            ),
         },
         "holding_flow": {
-            "status": "source_only_instrumentation_gap",
-            "producer": None,
-            "auto_apply_family_scope": [],
-            "reason": "holding_flow override/recheck outcomes are inventoried but no mapped bounded calibration candidate is implemented in v1",
+            **holding_exit_surface,
+            "surface": "holding_flow",
+            "reason": (
+                "holding_flow override/recheck outcomes are covered by threshold_cycle_ev holding/exit evidence"
+                if holding_exit_surface.get("status") == "source_only_backtested"
+                else holding_exit_surface.get("reason")
+            ),
         },
         "first_touch_avg_down": {
             "status": "backtested_if_source_present",
@@ -420,10 +720,13 @@ def build_report(target_date: str, *, start_date: str | None = None, end_date: s
             "auto_apply_family_scope": [PYRAMID_FAMILY],
         },
         "general_avg_down_reversal_add": {
-            "status": "source_only_instrumentation_gap",
-            "producer": None,
-            "auto_apply_family_scope": [],
-            "reason": "REVERSAL_ADD/AVG_DOWN env mapping and sample-floor producer are not confirmed in v1",
+            **general_scale_in_surface,
+            "surface": "general_avg_down_reversal_add",
+            "reason": (
+                "general AVG_DOWN/REVERSAL_ADD price/submission quality is covered by threshold_cycle_ev scale_in_price_guard evidence; dedicated AI-score calibration remains unmapped"
+                if general_scale_in_surface.get("status") == "source_only_backtested"
+                else general_scale_in_surface.get("reason")
+            ),
         },
         "overnight_swing_score": {
             "status": "sim_source_only",
@@ -434,28 +737,22 @@ def build_report(target_date: str, *, start_date: str | None = None, end_date: s
     }
     source_only_surfaces = [
         {
+            **entry_price_surface,
             "surface": "entry_price",
             "stage": "entry_price",
-            "status": "source_only",
             "observed_event_count": surface_counts.get("entry_price", 0),
-            "allowed_runtime_apply": False,
-            "apply_block_reason": "provider_route_and_price_resolver_guard_out_of_scope_v1",
         },
         {
+            **holding_exit_surface,
             "surface": "holding_exit",
             "stage": "holding",
-            "status": "source_only",
             "observed_event_count": surface_counts.get("holding_score_v2", 0) + surface_counts.get("holding_flow", 0),
-            "allowed_runtime_apply": False,
-            "apply_block_reason": "only_existing_holding_exit_family_mapping_can_apply",
         },
         {
+            **general_scale_in_surface,
             "surface": "general_avg_down_reversal_add",
             "stage": "scale_in",
-            "status": "source_only",
             "observed_event_count": surface_counts.get("avg_down", 0) + surface_counts.get("reversal_add", 0),
-            "allowed_runtime_apply": False,
-            "apply_block_reason": "missing_confirmed_reversal_add_env_mapping_or_floor",
         },
         {
             "surface": "overnight_swing_score",
@@ -475,7 +772,7 @@ def build_report(target_date: str, *, start_date: str | None = None, end_date: s
         reason = str(item.get("apply_block_reason") or item.get("calibration_state") or "runtime_apply_not_allowed")
         blocked_by_reason[reason] = blocked_by_reason.get(reason, 0) + 1
 
-    return {
+    report = {
         "schema_version": SCHEMA_VERSION,
         "report_type": REPORT_TYPE,
         "target_date": target_date,
@@ -528,6 +825,8 @@ def build_report(target_date: str, *, start_date: str | None = None, end_date: s
         "diagnostic_only_candidates": diagnostic_only_candidates,
         "forbidden_uses": FORBIDDEN_USES,
     }
+    preflight = load_source_quality_preflight(target_date)
+    return apply_source_quality_preflight_block(report, preflight)
 
 
 def render_markdown(report: dict[str, Any]) -> str:

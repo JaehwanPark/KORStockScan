@@ -87,6 +87,69 @@ def test_pyramid_quality_calibration_recovery_cluster_loosens_candidate(tmp_path
     assert candidate["broker_order_forbidden"] is True
 
 
+def test_pyramid_quality_calibration_blocks_pressure_provenance_missing_report(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "INPUT_REPORT_DIR", tmp_path / "input")
+    mod.INPUT_REPORT_DIR.mkdir(parents=True)
+    rows = [_row(i, "pyramid_would_have_helped") for i in range(20)]
+    path = _feedback(
+        mod.INPUT_REPORT_DIR / "scalping_pyramid_intraday_feedback_2026-07-03.json",
+        rows,
+        source_quality="pressure_provenance_missing",
+    )
+
+    report = mod.build_report("2026-07-03", input_paths=[path], generated_at="fixed")
+    candidate = report["calibration_candidates"][0]
+
+    assert report["source_quality"]["status"] == "blocked"
+    assert candidate["calibration_state"] == "hold_sample"
+    assert candidate["allowed_runtime_apply"] is False
+    assert candidate["target_env_keys"] == []
+    assert "source_quality_not_pass" in candidate["calibration_reason"]
+    assert candidate["source_quality_gate"] == "source_quality_blocked"
+    assert candidate["source_quality_status"] == "blocked"
+    assert "source_quality_not_pass" in candidate["source_quality_blocked"]
+
+
+def test_pyramid_quality_calibration_blocks_pressure_provenance_unusable_report(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "INPUT_REPORT_DIR", tmp_path / "input")
+    mod.INPUT_REPORT_DIR.mkdir(parents=True)
+    rows = [_row(i, "pyramid_would_have_helped") for i in range(20)]
+    path = _feedback(
+        mod.INPUT_REPORT_DIR / "scalping_pyramid_intraday_feedback_2026-07-03.json",
+        rows,
+        source_quality="pressure_provenance_unusable",
+    )
+
+    report = mod.build_report("2026-07-03", input_paths=[path], generated_at="fixed")
+    candidate = report["calibration_candidates"][0]
+
+    assert report["source_quality"]["status"] == "blocked"
+    assert candidate["calibration_state"] == "hold_sample"
+    assert candidate["allowed_runtime_apply"] is False
+    assert candidate["target_env_keys"] == []
+    assert "source_quality_not_pass" in candidate["calibration_reason"]
+
+
+def test_pyramid_quality_calibration_blocks_micro_vwap_provenance_report(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "INPUT_REPORT_DIR", tmp_path / "input")
+    mod.INPUT_REPORT_DIR.mkdir(parents=True)
+    rows = [_row(i, "pyramid_would_have_helped") for i in range(20)]
+    path = _feedback(
+        mod.INPUT_REPORT_DIR / "scalping_pyramid_intraday_feedback_2026-07-03.json",
+        rows,
+        source_quality="micro_vwap_provenance_unusable",
+    )
+
+    report = mod.build_report("2026-07-03", input_paths=[path], generated_at="fixed")
+    candidate = report["calibration_candidates"][0]
+
+    assert report["source_quality"]["status"] == "blocked"
+    assert candidate["calibration_state"] == "hold_sample"
+    assert candidate["allowed_runtime_apply"] is False
+    assert candidate["target_env_keys"] == []
+    assert "source_quality_not_pass" in candidate["calibration_reason"]
+
+
 def test_pyramid_quality_calibration_uses_all_one_share_rows_for_thresholds(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "INPUT_REPORT_DIR", tmp_path / "input")
     mod.INPUT_REPORT_DIR.mkdir(parents=True)

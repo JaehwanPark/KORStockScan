@@ -115,11 +115,35 @@ AI_SOURCE_FIELDS = (
     "quote_age_source",
 )
 
+TICK_PRESSURE_PROVENANCE_FIELDS = (
+    "tick_aggressor_trusted_count",
+    "tick_aggressor_pressure_usable",
+)
+
 AI_OVERLAP_FIELDS = (
     "latest_strength",
     "buy_pressure_10t",
     "distance_from_day_high_pct",
     "intraday_range_pct",
+)
+
+MINUTE_CANDLE_PROVENANCE_FIELDS = (
+    "micro_vwap_available",
+    "minute_candle_context_quality",
+    "minute_candle_window_fresh",
+    "minute_candle_latest_age_ms",
+)
+
+EARLY_ACCEL_RECHECK_PROVENANCE_FIELDS = (
+    "tick_accel_source",
+    "tick_context_quality",
+    "tick_context_stale",
+    "tick_accel_usable",
+    "micro_vwap_available",
+    "minute_candle_context_quality",
+    "minute_candle_window_fresh",
+    "minute_candle_latest_age_ms",
+    "micro_vwap_usable",
 )
 
 ENTRY_ADM_SNAPSHOT_FIELDS = (
@@ -148,6 +172,7 @@ ENTRY_ADM_SNAPSHOT_FIELDS = (
     "buy_pressure_10t",
     "curr_vs_micro_vwap_bp",
     "curr_vs_ma5_bp",
+    *MINUTE_CANDLE_PROVENANCE_FIELDS,
 )
 
 SIM_PROVENANCE_FIELDS = (
@@ -422,6 +447,8 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "buy_pressure",
             "tick_accel",
             "micro_vwap_bp",
+            *TICK_PRESSURE_PROVENANCE_FIELDS,
+            *MINUTE_CANDLE_PROVENANCE_FIELDS,
             "score65_74_recovery_probe_min_buy_pressure",
             "score65_74_recovery_probe_min_tick_accel",
             "score65_74_recovery_probe_min_micro_vwap_bp",
@@ -439,6 +466,8 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "buy_pressure",
             "tick_accel",
             "micro_vwap_bp",
+            *TICK_PRESSURE_PROVENANCE_FIELDS,
+            *MINUTE_CANDLE_PROVENANCE_FIELDS,
             "score65_74_recovery_probe_min_buy_pressure",
             "score65_74_recovery_probe_min_tick_accel",
             "score65_74_recovery_probe_min_micro_vwap_bp",
@@ -565,6 +594,7 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "skip_reason",
             "tick_accel",
             "micro_vwap_bp",
+            *EARLY_ACCEL_RECHECK_PROVENANCE_FIELDS,
             "quote_stale",
         ),
         decision_authority="operator_runtime_observation_retry_only",
@@ -582,6 +612,7 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "skip_reason",
             "tick_accel",
             "micro_vwap_bp",
+            *EARLY_ACCEL_RECHECK_PROVENANCE_FIELDS,
             "quote_stale",
         ),
         decision_authority="operator_runtime_observation_retry_only",
@@ -599,6 +630,7 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "skip_reason",
             "tick_accel",
             "micro_vwap_bp",
+            *EARLY_ACCEL_RECHECK_PROVENANCE_FIELDS,
             "quote_stale",
         ),
         decision_authority="operator_runtime_observation_retry_only",
@@ -616,6 +648,8 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "speed_pass",
             "supply_pass",
             "feature_pass_count",
+            *TICK_PRESSURE_PROVENANCE_FIELDS,
+            *MINUTE_CANDLE_PROVENANCE_FIELDS,
             "recheck_count",
             "recheck_action",
             "recheck_score",
@@ -638,6 +672,8 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "speed_pass",
             "supply_pass",
             "feature_pass_count",
+            *TICK_PRESSURE_PROVENANCE_FIELDS,
+            *MINUTE_CANDLE_PROVENANCE_FIELDS,
             "recheck_count",
             "recheck_action",
             "recheck_score",
@@ -660,6 +696,8 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "speed_pass",
             "supply_pass",
             "feature_pass_count",
+            *TICK_PRESSURE_PROVENANCE_FIELDS,
+            *MINUTE_CANDLE_PROVENANCE_FIELDS,
             "recheck_count",
             "recheck_action",
             "recheck_score",
@@ -682,6 +720,8 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "speed_pass",
             "supply_pass",
             "feature_pass_count",
+            *TICK_PRESSURE_PROVENANCE_FIELDS,
+            *MINUTE_CANDLE_PROVENANCE_FIELDS,
             "recheck_count",
             "recheck_action",
             "recheck_score",
@@ -704,6 +744,8 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "speed_pass",
             "supply_pass",
             "feature_pass_count",
+            *TICK_PRESSURE_PROVENANCE_FIELDS,
+            *MINUTE_CANDLE_PROVENANCE_FIELDS,
             "recheck_count",
             "recheck_action",
             "recheck_score",
@@ -726,7 +768,9 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "cntr_str",
             "tick_acceleration_ratio",
             "curr_vs_micro_vwap_bp",
+            *MINUTE_CANDLE_PROVENANCE_FIELDS,
             "buy_pressure_10t",
+            *TICK_PRESSURE_PROVENANCE_FIELDS,
             "original_action",
             "original_score",
             "recheck_action",
@@ -752,7 +796,9 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "cntr_str",
             "tick_acceleration_ratio",
             "curr_vs_micro_vwap_bp",
+            *MINUTE_CANDLE_PROVENANCE_FIELDS,
             "buy_pressure_10t",
+            *TICK_PRESSURE_PROVENANCE_FIELDS,
             "original_action",
             "original_score",
             "recheck_action",
@@ -778,7 +824,9 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "cntr_str",
             "tick_acceleration_ratio",
             "curr_vs_micro_vwap_bp",
+            *MINUTE_CANDLE_PROVENANCE_FIELDS,
             "buy_pressure_10t",
+            *TICK_PRESSURE_PROVENANCE_FIELDS,
             "original_action",
             "original_score",
             "recheck_action",
@@ -804,7 +852,9 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "cntr_str",
             "tick_acceleration_ratio",
             "curr_vs_micro_vwap_bp",
+            *MINUTE_CANDLE_PROVENANCE_FIELDS,
             "buy_pressure_10t",
+            *TICK_PRESSURE_PROVENANCE_FIELDS,
             "original_action",
             "original_score",
             "recheck_action",
@@ -830,7 +880,9 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "cntr_str",
             "tick_acceleration_ratio",
             "curr_vs_micro_vwap_bp",
+            *MINUTE_CANDLE_PROVENANCE_FIELDS,
             "buy_pressure_10t",
+            *TICK_PRESSURE_PROVENANCE_FIELDS,
             "original_action",
             "original_score",
             "recheck_action",
@@ -1228,9 +1280,98 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         required_fields=(*DIAGNOSTIC_CONTRACT_FIELDS, "source_quality_route", "shadow_only", "hierarchy"),
         decision_authority="source_quality_only",
     ),
+    "adverse_fill_observed": StageContract(
+        required_fields=(
+            "observe_only",
+            "feature_valid",
+            "buy_pressure_10t",
+            "net_aggressive_delta_10t",
+            "large_sell_print_detected",
+            "curr_vs_micro_vwap_bp",
+            *TICK_PRESSURE_PROVENANCE_FIELDS,
+            *MINUTE_CANDLE_PROVENANCE_FIELDS,
+            "micro_context_usable",
+            "reversal_feature_source_quality",
+        ),
+        decision_authority="source_quality_only",
+    ),
+    "soft_stop_absorption_probe": StageContract(
+        required_fields=(
+            "profit_rate",
+            "soft_stop_pct",
+            "absorption_score",
+            "should_extend",
+            "hierarchy",
+            "curr_vs_micro_vwap_bp",
+            *TICK_PRESSURE_PROVENANCE_FIELDS,
+            *MINUTE_CANDLE_PROVENANCE_FIELDS,
+            "micro_context_usable",
+            "reversal_feature_source_quality",
+        ),
+        decision_authority="source_quality_only",
+    ),
+    "soft_stop_dynamic_grace": StageContract(
+        required_fields=(
+            "soft_stop_dynamic_grace_applied",
+            "soft_stop_dynamic_grace_reason",
+            "soft_stop_dynamic_grace_sec",
+            "soft_stop_dynamic_grace_ai_score_usable",
+            "soft_stop_dynamic_grace_ai_score_source",
+            "soft_stop_dynamic_grace_ai_score_data_quality",
+            "curr_vs_micro_vwap_bp",
+            *TICK_PRESSURE_PROVENANCE_FIELDS,
+            *MINUTE_CANDLE_PROVENANCE_FIELDS,
+            "micro_context_usable",
+            "reversal_feature_source_quality",
+            "exit_rule_candidate",
+        ),
+        decision_authority="source_quality_only",
+    ),
+    "soft_stop_dynamic_grace_exit": StageContract(
+        required_fields=(
+            "soft_stop_dynamic_grace_applied",
+            "soft_stop_dynamic_grace_skip_reason",
+            "soft_stop_dynamic_grace_reason",
+            "soft_stop_dynamic_grace_sec",
+            "soft_stop_dynamic_grace_ai_score_usable",
+            "soft_stop_dynamic_grace_ai_score_source",
+            "soft_stop_dynamic_grace_ai_score_data_quality",
+            "curr_vs_micro_vwap_bp",
+            *TICK_PRESSURE_PROVENANCE_FIELDS,
+            *MINUTE_CANDLE_PROVENANCE_FIELDS,
+            "micro_context_usable",
+            "reversal_feature_source_quality",
+            "exit_rule_candidate",
+        ),
+        decision_authority="source_quality_only",
+    ),
     "holding_flow_override_candidate_cleared": StageContract(
         required_fields=(*DIAGNOSTIC_CONTRACT_FIELDS, "source_quality_route", "reason", "previous_key"),
         decision_authority="source_quality_only",
+    ),
+    "holding_flow_override_clamped_never_green_loss": StageContract(
+        required_fields=(
+            "exit_rule",
+            "flow_action",
+            "flow_state",
+            "flow_score",
+            "defer_reason",
+            "holding_flow_override_defer_count",
+            "curr_vs_micro_vwap_bp",
+            "previous_defer_micro_vwap_bp",
+            *MINUTE_CANDLE_PROVENANCE_FIELDS,
+            "micro_context_usable",
+            "reversal_feature_source_quality",
+            "runtime_effect",
+            "allowed_runtime_apply",
+            "decision_authority",
+            "threshold_family",
+            "source_quality_gate",
+            "forbidden_uses",
+            "actual_order_submitted",
+            "broker_order_forbidden",
+        ),
+        decision_authority="real_scalping_holding_defer_clamp",
     ),
     "swing_probe_entry_candidate": StageContract(
         required_fields=(*SIM_PROVENANCE_FIELDS, *SWING_PROBE_FIELDS, "virtual_budget_override", "budget_authority"),
@@ -1287,6 +1428,187 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
     ),
     "swing_entry_micro_context_observed": StageContract(required_fields=ORDERBOOK_MICRO_FIELDS),
     "swing_scale_in_micro_context_observed": StageContract(required_fields=ORDERBOOK_MICRO_FIELDS),
+    "reversal_add_blocked_reason": StageContract(
+        required_fields=(
+            "state",
+            "scale_in_arm",
+            "scale_in_blocker_namespace",
+            "scale_in_blocker_reason",
+            "blocked_reason",
+            "profit_rate",
+            "ai_score",
+            "current_ai_score",
+            "ai_score_source",
+            "buy_pressure_10t",
+            *TICK_PRESSURE_PROVENANCE_FIELDS,
+            "tick_acceleration_ratio",
+            "curr_vs_micro_vwap_bp",
+            *MINUTE_CANDLE_PROVENANCE_FIELDS,
+            "supply_pass_count",
+            "reversal_feature_source_quality",
+            "metric_role",
+            "decision_authority",
+            "runtime_effect",
+            "allowed_runtime_apply",
+            "actual_order_submitted",
+            "broker_order_forbidden",
+            "source_quality_gate",
+            "forbidden_uses",
+        ),
+        decision_authority="scale_in_attribution_source_only",
+    ),
+    "reversal_add_gate_blocked": StageContract(
+        required_fields=(
+            "state",
+            "scale_in_arm",
+            "scale_in_blocker_namespace",
+            "scale_in_blocker_reason",
+            "gate_reason",
+            "blocked_reason",
+            "profit_rate",
+            "ai_score",
+            "current_ai_score",
+            "ai_score_source",
+            "buy_pressure_10t",
+            *TICK_PRESSURE_PROVENANCE_FIELDS,
+            "tick_acceleration_ratio",
+            "curr_vs_micro_vwap_bp",
+            *MINUTE_CANDLE_PROVENANCE_FIELDS,
+            "supply_pass_count",
+            "reversal_feature_source_quality",
+            "metric_role",
+            "decision_authority",
+            "runtime_effect",
+            "allowed_runtime_apply",
+            "actual_order_submitted",
+            "broker_order_forbidden",
+            "source_quality_gate",
+            "forbidden_uses",
+        ),
+        decision_authority="scale_in_attribution_source_only",
+    ),
+    "pyramid_blocked_reason": StageContract(
+        required_fields=(
+            "scale_in_arm",
+            "scale_in_blocker_namespace",
+            "scale_in_blocker_reason",
+            "blocked_reason",
+            "profit_rate",
+            "peak_profit",
+            "ai_score",
+            "ai_score_source",
+            "held_sec",
+            "buy_pressure_10t",
+            *TICK_PRESSURE_PROVENANCE_FIELDS,
+            "tick_acceleration_ratio",
+            "curr_vs_micro_vwap_bp",
+            *MINUTE_CANDLE_PROVENANCE_FIELDS,
+            "min_profit_pct",
+            "min_ai_score",
+            "min_buy_pressure",
+            "min_tick_accel",
+            "max_micro_vwap_bps",
+            "metric_role",
+            "decision_authority",
+            "runtime_effect",
+            "allowed_runtime_apply",
+            "actual_order_submitted",
+            "broker_order_forbidden",
+            "source_quality_gate",
+            "forbidden_uses",
+        ),
+        decision_authority="scale_in_attribution_source_only",
+    ),
+    "stop_line_touch_first_touch_avgdown_decision_blocked": StageContract(
+        required_fields=(
+            "threshold_family",
+            "decision_source",
+            "decision_authority",
+            "metric_role",
+            "window_policy",
+            "sample_floor",
+            "primary_decision_metric",
+            "source_quality_gate",
+            "runtime_effect",
+            "allowed_runtime_apply",
+            "forbidden_uses",
+            "profit_rate",
+            "peak_profit",
+            "current_ai_score",
+            "held_sec",
+            "gate_allowed",
+            "gate_reason",
+            "block_reason",
+            "add_type",
+            "add_reason",
+            "actual_order_submitted",
+            "broker_order_forbidden",
+            "first_touch_avgdown_decision_allowed",
+            "first_touch_avgdown_decision_reason",
+            "first_touch_avgdown_decision_authority",
+        ),
+        decision_authority="real_scalping_stop_line_touch_intercept",
+    ),
+    "stop_line_touch_mandatory_avg_down_candidate": StageContract(
+        required_fields=(
+            "threshold_family",
+            "decision_source",
+            "decision_authority",
+            "metric_role",
+            "window_policy",
+            "sample_floor",
+            "primary_decision_metric",
+            "source_quality_gate",
+            "runtime_effect",
+            "allowed_runtime_apply",
+            "forbidden_uses",
+            "profit_rate",
+            "peak_profit",
+            "current_ai_score",
+            "held_sec",
+            "gate_allowed",
+            "gate_reason",
+            "add_type",
+            "add_reason",
+            "actual_order_submitted",
+            "broker_order_forbidden",
+            "first_touch_avgdown_decision_allowed",
+            "first_touch_avgdown_decision_reason",
+            "first_touch_avgdown_decision_authority",
+        ),
+        decision_authority="real_scalping_stop_line_touch_intercept",
+    ),
+    "stop_line_touch_mandatory_avg_down_submitted": StageContract(
+        required_fields=(
+            "threshold_family",
+            "decision_source",
+            "decision_authority",
+            "metric_role",
+            "window_policy",
+            "sample_floor",
+            "primary_decision_metric",
+            "source_quality_gate",
+            "runtime_effect",
+            "allowed_runtime_apply",
+            "forbidden_uses",
+            "profit_rate",
+            "peak_profit",
+            "current_ai_score",
+            "held_sec",
+            "gate_allowed",
+            "gate_reason",
+            "add_type",
+            "add_reason",
+            "actual_order_submitted",
+            "broker_order_forbidden",
+            "first_touch_avgdown_decision_allowed",
+            "first_touch_avgdown_decision_reason",
+            "first_touch_avgdown_decision_authority",
+            "ord_no",
+            "retry_count",
+        ),
+        decision_authority="real_scalping_stop_line_touch_intercept",
+    ),
     "scale_in_price_resolved": StageContract(
         required_fields=("price_source", "virtual_budget_override", "budget_authority", *ORDERBOOK_MICRO_FIELDS),
         max_missing_rate=0.50,
@@ -1790,6 +2112,48 @@ def _sim_submit_guard_contract_violations(stage: str, fields: dict[str, Any]) ->
     }
 
 
+def _pressure_provenance_unusable(fields: dict[str, Any]) -> bool:
+    if not (_is_present(fields.get("buy_pressure_10t")) or _is_present(fields.get("buy_pressure"))):
+        return False
+    trusted_count = _safe_float(fields.get("tick_aggressor_trusted_count"))
+    if trusted_count is None:
+        trusted_count = 0.0
+    return not _contract_bool(fields.get("tick_aggressor_pressure_usable"), True) and trusted_count <= 0.0
+
+
+def _stage_requires_tick_pressure_provenance(stage: str) -> bool:
+    contract = STAGE_CONTRACTS.get(stage)
+    if not contract:
+        return False
+    required = set(contract.required_fields)
+    return set(TICK_PRESSURE_PROVENANCE_FIELDS).issubset(required)
+
+
+def _micro_vwap_provenance_unusable(fields: dict[str, Any]) -> bool:
+    raw_value = (
+        fields.get("curr_vs_micro_vwap_bp")
+        if _is_present(fields.get("curr_vs_micro_vwap_bp"))
+        else fields.get("micro_vwap_bp")
+    )
+    if not _is_present(raw_value):
+        return False
+    micro_value = _safe_float(raw_value)
+    if micro_value is None or abs(micro_value) <= 1e-9:
+        return False
+    return not (
+        _contract_bool(fields.get("micro_vwap_available"), True)
+        and _contract_bool(fields.get("minute_candle_window_fresh"), True)
+    )
+
+
+def _stage_requires_minute_candle_provenance(stage: str) -> bool:
+    contract = STAGE_CONTRACTS.get(stage)
+    if not contract:
+        return False
+    required = set(contract.required_fields)
+    return set(MINUTE_CANDLE_PROVENANCE_FIELDS).issubset(required)
+
+
 def _row_ts(row: dict[str, Any]) -> str | None:
     for key in ("emitted_at", "timestamp", "created_at", "updated_at"):
         value = row.get(key)
@@ -1844,6 +2208,10 @@ def _row_contract_violations(stage: str, row: dict[str, Any], contract: StageCon
             for key, violated in _sim_submit_guard_contract_violations(stage, fields).items()
             if violated
         )
+    if _stage_requires_tick_pressure_provenance(stage) and _pressure_provenance_unusable(fields):
+        invalid.append("tick_aggressor_pressure_usable_contract")
+    if _stage_requires_minute_candle_provenance(stage) and _micro_vwap_provenance_unusable(fields):
+        invalid.append("minute_candle_window_fresh_contract")
     if contract.required_fields == () or not set(PRE_AI_RISK_CONTEXT_FIELDS).issubset(
         set(contract.required_fields)
     ):
@@ -2219,6 +2587,22 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
                         _normalized_fields_for_contract(stage, row["fields"]),
                     ).get(violation_key)
                 )
+        if _stage_requires_tick_pressure_provenance(stage):
+            invalid_label_counts["tick_aggressor_pressure_usable_contract"] = sum(
+                1
+                for row in stage_rows
+                if _pressure_provenance_unusable(
+                    _normalized_fields_for_contract(stage, row["fields"])
+                )
+            )
+        if _stage_requires_minute_candle_provenance(stage):
+            invalid_label_counts["minute_candle_window_fresh_contract"] = sum(
+                1
+                for row in stage_rows
+                if _micro_vwap_provenance_unusable(
+                    _normalized_fields_for_contract(stage, row["fields"])
+                )
+            )
         if set(PRE_AI_RISK_CONTEXT_FIELDS).issubset(set(contract.required_fields)):
             for violation_key in (
                 "pre_ai_actual_order_submitted_contract",

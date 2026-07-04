@@ -86,6 +86,59 @@ def _stale_holding_score_fields(score=50, *, now_ts=None):
     }
 
 
+def _trusted_orderbook_touch_ticks(*, price=10_000, count=10, hhmm="10:00"):
+    ticks = []
+    for idx in range(count):
+        ticks.append(
+            {
+                "time": f"{hhmm}:{10 - idx:02d}",
+                "price": price,
+                "volume": 10 + idx,
+                "best_ask": price,
+                "best_bid": price - 10,
+                "aggressor_source": "orderbook_touch",
+                "aggressor_quality": "touch_or_crossed_ask",
+                "aggressor_quote_source": "inline_0B_top_of_book",
+                "strength": 120.0,
+            }
+        )
+    return ticks
+
+
+def _micro_vwap_candles(*, price=10_000, count=5):
+    now = datetime.now()
+    return [
+        {
+            "체결시간": (now - timedelta(minutes=(count - idx - 1))).strftime("%H:%M:%S"),
+            "현재가": price,
+            "고가": price + 20,
+            "저가": price - 20,
+            "거래량": 1_000 + idx,
+        }
+        for idx in range(count)
+    ]
+
+
+def _trusted_reversal_features(**overrides):
+    base = {
+        "tick_context_quality": "fresh_computed",
+        "tick_context_stale": False,
+        "tick_latest_age_ms": 100,
+        "tick_accel_source": "computed_10ticks",
+        "tick_aggressor_trusted_count": 4,
+        "tick_aggressor_pressure_usable": True,
+        "micro_vwap_available": True,
+        "minute_candle_window_fresh": True,
+        "minute_candle_context_quality": "fresh_bar_window",
+        "minute_candle_latest_age_ms": 100,
+        "quote_stale": False,
+        "quote_age_ms": 100,
+        "quote_age_source": "ka10004_rest_orderbook",
+    }
+    base.update(overrides)
+    return base
+
+
 def test_holding_score_runtime_context_role_gates_by_quality():
     now_ts = state_handlers.time.time()
     fresh = state_handlers._holding_score_runtime_context(
@@ -716,7 +769,17 @@ def test_real_weak_ai_micro_entry_block_matches_jusung_case(monkeypatch):
             "orderbook_micro_ofi_norm": -0.286618,
             "orderbook_micro_qi": 0.096074,
         },
-        microstructure_fields={"buy_pressure_10t": "12.750"},
+        microstructure_fields={
+            "buy_pressure_10t": "12.750",
+            "tick_aggressor_pressure_usable": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "minute_candle_window_fresh": True,
+            "minute_candle_latest_age_ms": 8000,
+            "tick_context_quality": "fresh_computed",
+            "tick_context_stale": False,
+            "tick_accel_source": "computed_10ticks",
+            "tick_aggressor_trusted_count": 3,
+        },
     )
 
     assert decision["blocked"] is True
@@ -725,6 +788,28 @@ def test_real_weak_ai_micro_entry_block_matches_jusung_case(monkeypatch):
     assert decision["broker_order_forbidden"] is True
     assert decision["weak_ai_micro_entry_block_ai_score"] == "62.0"
     assert decision["weak_ai_micro_entry_block_weak_buy_pressure"] is True
+    assert decision["weak_ai_micro_entry_block_weak_micro"] is True
+
+
+def test_real_weak_ai_micro_entry_block_does_not_block_untrusted_buy_pressure():
+    decision = state_handlers._evaluate_real_weak_ai_micro_entry_block(
+        strategy="SCALPING",
+        stock={"last_watching_ai_action": "WAIT", "last_watching_ai_score": 62.0},
+        latency_gate={"allowed": True, "decision": "ALLOW_NORMAL"},
+        latency_signal_score=62.0,
+        orderbook_fields={
+            "orderbook_micro_state": "neutral",
+            "orderbook_micro_ofi_norm": -0.2,
+            "orderbook_micro_qi": 0.10,
+        },
+        microstructure_fields={"buy_pressure_10t": "12.0"},
+    )
+
+    assert decision["blocked"] is False
+    assert decision["reason"] == "weak_context_not_confirmed"
+    assert decision["weak_ai_micro_entry_block_buy_pressure_10t"] == "12.00"
+    assert decision["weak_ai_micro_entry_block_buy_pressure_usable"] is False
+    assert decision["weak_ai_micro_entry_block_weak_buy_pressure"] is False
     assert decision["weak_ai_micro_entry_block_weak_micro"] is True
 
 
@@ -757,7 +842,11 @@ def test_real_weak_ai_micro_entry_block_blocks_low_score_buy_action():
             "orderbook_micro_ofi_norm": -0.1,
             "orderbook_micro_qi": 0.10,
         },
-        microstructure_fields={"buy_pressure_10t": "20.0"},
+        microstructure_fields={
+            "buy_pressure_10t": "20.0",
+            "tick_aggressor_pressure_usable": True,
+            "tick_aggressor_trusted_count": 2,
+        },
     )
 
     assert decision["blocked"] is True
@@ -2183,11 +2272,17 @@ def test_pre_submit_contract_fields_override_report_only_panic_fields():
 def test_scalping_pyramid_signal():
     stock = {
         "pyramid_count": 0,
+        **_fresh_holding_score_fields(74),
         "last_reversal_features": {
             "buy_pressure_10t": 72.0,
             "tick_acceleration_ratio": 0.85,
             "large_sell_print_detected": False,
             "curr_vs_micro_vwap_bp": 24.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "tick_aggressor_trusted_count": 4,
+            "tick_aggressor_pressure_usable": True,
         },
     }
     result = scale_in.evaluate_scalping_pyramid(
@@ -2210,6 +2305,11 @@ def test_scalping_pyramid_missing_ai_score_source_50_blocks_support():
             "tick_acceleration_ratio": 1.0,
             "large_sell_print_detected": False,
             "curr_vs_micro_vwap_bp": 24.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "tick_aggressor_trusted_count": 4,
+            "tick_aggressor_pressure_usable": True,
         },
     }
     result = scale_in.evaluate_scalping_pyramid(
@@ -2229,12 +2329,19 @@ def test_scalping_pyramid_missing_ai_score_source_50_blocks_support():
 def test_scalping_pyramid_real_ai_score_50_still_blocks():
     stock = {
         "pyramid_count": 0,
-        "holding_ai_score_source": "openai",
+        "holding_score_source": "live",
+        "holding_score_data_quality": "fresh",
+        "holding_score_effective_usable": True,
         "last_reversal_features": {
             "buy_pressure_10t": 92.0,
             "tick_acceleration_ratio": 1.0,
             "large_sell_print_detected": False,
             "curr_vs_micro_vwap_bp": 24.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "tick_aggressor_trusted_count": 4,
+            "tick_aggressor_pressure_usable": True,
         },
     }
     result = scale_in.evaluate_scalping_pyramid(
@@ -2251,6 +2358,65 @@ def test_scalping_pyramid_real_ai_score_50_still_blocks():
     assert result["ai_score_ok"] is False
 
 
+def test_scalping_pyramid_timeout_ai_source_blocks_support():
+    stock = {
+        "pyramid_count": 0,
+        "current_ai_score_source": "timeout",
+        "last_reversal_features": {
+            "buy_pressure_10t": 92.0,
+            "tick_acceleration_ratio": 1.0,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 24.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "tick_aggressor_trusted_count": 4,
+            "tick_aggressor_pressure_usable": True,
+        },
+    }
+    result = scale_in.evaluate_scalping_pyramid(
+        stock,
+        profit_rate=2.0,
+        peak_profit=2.2,
+        is_new_high=True,
+        current_ai_score=74,
+    )
+
+    assert result["should_add"] is False
+    assert result["reason"] == "ai_score_unavailable"
+    assert result["ai_score_source"] == "timeout"
+    assert result["ai_score_available"] is False
+
+
+def test_scalping_pyramid_missing_ai_provenance_blocks_non_50_score_support():
+    stock = {
+        "pyramid_count": 0,
+        "last_reversal_features": {
+            "buy_pressure_10t": 92.0,
+            "tick_acceleration_ratio": 1.0,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 24.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "tick_aggressor_trusted_count": 4,
+            "tick_aggressor_pressure_usable": True,
+        },
+    }
+    result = scale_in.evaluate_scalping_pyramid(
+        stock,
+        profit_rate=2.0,
+        peak_profit=2.2,
+        is_new_high=True,
+        current_ai_score=74,
+    )
+
+    assert result["should_add"] is False
+    assert result["reason"] == "ai_score_unavailable"
+    assert result["ai_score_source"] == "-"
+    assert result["ai_score_available"] is False
+
+
 def test_scalping_pyramid_fallback_score_source_blocks_support_even_after_smoothing():
     stock = {
         "pyramid_count": 0,
@@ -2260,6 +2426,11 @@ def test_scalping_pyramid_fallback_score_source_blocks_support_even_after_smooth
             "tick_acceleration_ratio": 1.0,
             "large_sell_print_detected": False,
             "curr_vs_micro_vwap_bp": 24.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "tick_aggressor_trusted_count": 4,
+            "tick_aggressor_pressure_usable": True,
         },
     }
     result = scale_in.evaluate_scalping_pyramid(
@@ -2289,6 +2460,11 @@ def test_scalping_pyramid_holding_ai_not_called_allowed_only_with_fresh_effectiv
             "tick_acceleration_ratio": 1.0,
             "large_sell_print_detected": False,
             "curr_vs_micro_vwap_bp": 24.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "tick_aggressor_trusted_count": 4,
+            "tick_aggressor_pressure_usable": True,
         },
     }
     result = scale_in.evaluate_scalping_pyramid(
@@ -2327,6 +2503,11 @@ def test_scalping_pyramid_missing_ai_does_not_unlock_strong_continuation_gate():
                     "tick_acceleration_ratio": 1.0,
                     "large_sell_print_detected": False,
                     "curr_vs_micro_vwap_bp": 24.0,
+                    "micro_vwap_available": True,
+                    "minute_candle_window_fresh": True,
+                    "minute_candle_context_quality": "fresh_bar_window",
+                    "tick_aggressor_trusted_count": 4,
+                    "tick_aggressor_pressure_usable": True,
                 },
             },
             profit_rate=1.0,
@@ -2353,6 +2534,11 @@ def test_scalping_pyramid_blocks_overheated_micro_vwap_before_signal():
             "tick_acceleration_ratio": 1.0,
             "large_sell_print_detected": False,
             "curr_vs_micro_vwap_bp": 103.65,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "tick_aggressor_trusted_count": 4,
+            "tick_aggressor_pressure_usable": True,
         },
     }
     result = scale_in.evaluate_scalping_pyramid(
@@ -2372,11 +2558,17 @@ def test_scalping_pyramid_blocks_overheated_micro_vwap_before_signal():
 def test_scalping_pyramid_treats_buy_pressure_below_min_as_composite_risk():
     stock = {
         "pyramid_count": 0,
+        **_fresh_holding_score_fields(75),
         "last_reversal_features": {
             "buy_pressure_10t": 50.0,
             "tick_acceleration_ratio": 1.0,
             "large_sell_print_detected": False,
             "curr_vs_micro_vwap_bp": 24.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "tick_aggressor_trusted_count": 4,
+            "tick_aggressor_pressure_usable": True,
         },
     }
     result = scale_in.evaluate_scalping_pyramid(
@@ -2401,6 +2593,11 @@ def test_scalping_pyramid_blocks_severely_low_buy_pressure():
             "tick_acceleration_ratio": 1.0,
             "large_sell_print_detected": False,
             "curr_vs_micro_vwap_bp": 24.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "tick_aggressor_trusted_count": 4,
+            "tick_aggressor_pressure_usable": True,
         },
     }
     result = scale_in.evaluate_scalping_pyramid(
@@ -2419,16 +2616,22 @@ def test_scalping_pyramid_blocks_severely_low_buy_pressure():
 def test_scalping_pyramid_blocks_stale_tick_and_micro_context():
     stock = {
         "pyramid_count": 0,
+        **_fresh_holding_score_fields(75),
         "last_reversal_features": {
             "buy_pressure_10t": 92.0,
             "tick_acceleration_ratio": 1.1,
             "large_sell_print_detected": False,
             "curr_vs_micro_vwap_bp": 24.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
             "tick_context_quality": "stale_tick",
             "tick_context_stale": True,
             "tick_latest_age_ms": 31_000,
             "quote_stale": False,
             "quote_age_ms": 0,
+            "tick_aggressor_trusted_count": 4,
+            "tick_aggressor_pressure_usable": True,
         },
     }
 
@@ -2448,6 +2651,44 @@ def test_scalping_pyramid_blocks_stale_tick_and_micro_context():
     assert "tick_context_stale" in result["reversal_feature_stale_reason"]
 
 
+def test_scalping_pyramid_does_not_score_untrusted_buy_pressure():
+    stock = {
+        "pyramid_count": 0,
+        "last_reversal_features": {
+            "buy_pressure_10t": 92.0,
+            "tick_acceleration_ratio": 1.1,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 24.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "tick_context_quality": "fresh_computed",
+            "tick_context_stale": False,
+            "tick_latest_age_ms": 100,
+            "quote_stale": False,
+            "quote_age_ms": 100,
+            "tick_aggressor_trusted_count": 0,
+            "tick_aggressor_pressure_usable": False,
+        },
+    }
+
+    result = scale_in.evaluate_scalping_pyramid(
+        stock,
+        profit_rate=2.03,
+        peak_profit=2.03,
+        is_new_high=True,
+        current_ai_score=75,
+    )
+
+    assert result["should_add"] is False
+    assert result["buy_pressure_support_ok"] is False
+    assert result["large_sell_clear"] is False
+    assert result["tick_aggressor_pressure_usable_bool"] is False
+    assert "tick_aggressor_pressure_unusable" in result["pyramid_quality_risk_signals"]
+    assert "buy_pressure_ok" not in result["pyramid_quality_support_signals"]
+    assert "large_sell_clear" not in result["pyramid_quality_support_signals"]
+
+
 def test_scale_in_signal_refreshes_stale_features_before_pyramid(monkeypatch):
     class FeatureEngine:
         def _extract_scalping_features(self, ws_data, recent_ticks, recent_candles):
@@ -2459,8 +2700,13 @@ def test_scale_in_signal_refreshes_stale_features_before_pyramid(monkeypatch):
                 "tick_context_quality": "fresh_tick",
                 "tick_context_stale": False,
                 "tick_latest_age_ms": 100,
+                "tick_aggressor_trusted_count": 4,
+                "tick_aggressor_pressure_usable": True,
                 "large_sell_print_detected": False,
                 "curr_vs_micro_vwap_bp": 24.0,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+                "minute_candle_context_quality": "fresh_bar_window",
                 "quote_stale": False,
                 "quote_age_ms": 100,
                 "quote_age_source": "ka10004_rest_orderbook",
@@ -2502,12 +2748,15 @@ def test_scale_in_signal_refreshes_stale_features_before_pyramid(monkeypatch):
         "name": "REFRESH",
         "strategy": "SCALPING",
         "buy_qty": 1,
-        "holding_ai_score_source": "openai",
+        **_fresh_holding_score_fields(75, now_ts=1_000.0),
         "last_reversal_features": {
             "buy_pressure_10t": 92.0,
             "tick_acceleration_ratio": 1.1,
             "large_sell_print_detected": False,
             "curr_vs_micro_vwap_bp": 24.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
             "tick_context_quality": "stale_tick",
             "tick_context_stale": True,
             "tick_latest_age_ms": 31_000,
@@ -2540,14 +2789,124 @@ def test_scale_in_signal_refreshes_stale_features_before_pyramid(monkeypatch):
     assert refresh_logs[-1]["scale_in_feature_refresh_reason"] == "feature_context_refreshed"
 
 
+def test_scale_in_signal_refresh_preserves_unusable_tick_provenance(monkeypatch):
+    class FeatureEngine:
+        def _extract_scalping_features(self, ws_data, recent_ticks, recent_candles):
+            assert recent_ticks
+            return {
+                "buy_pressure_10t": 92.0,
+                "tick_acceleration_ratio": 1.1,
+                "tick_context_quality": "fresh_tick",
+                "tick_context_stale": False,
+                "tick_latest_age_ms": 100,
+                "tick_aggressor_source_counts": {"price_change_heuristic": 10},
+                "tick_aggressor_price_heuristic_count": 10,
+                "tick_aggressor_trusted_count": 0,
+                "tick_aggressor_pressure_usable": False,
+                "large_sell_print_detected": False,
+                "curr_vs_micro_vwap_bp": 24.0,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+                "minute_candle_context_quality": "fresh_bar_window",
+                "quote_stale": False,
+                "quote_age_ms": 100,
+                "quote_age_source": "ka10004_rest_orderbook",
+            }
+
+    logs = []
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_stock_orderbook_ka10004",
+        lambda token, code: {
+            "curr": 10_000,
+            "best_bid": 9_990,
+            "best_ask": 10_000,
+            "best_bid_qty": 100,
+            "best_ask_qty": 80,
+            "rest_received_ts": time.time(),
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_tick_history_ka10003",
+        lambda token, code, limit=10: [
+            {
+                "price": 10_000,
+                "volume": 10,
+                "dir": "BUY",
+                "aggressor_source": "price_change_heuristic",
+            }
+        ],
+    )
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 1,
+        "name": "REFRESH",
+        "strategy": "SCALPING",
+        "buy_qty": 1,
+        "holding_ai_score_source": "openai",
+        "last_reversal_features": {
+            "buy_pressure_10t": 92.0,
+            "tick_acceleration_ratio": 1.1,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 24.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "tick_context_quality": "stale_tick",
+            "tick_context_stale": True,
+            "tick_latest_age_ms": 31_000,
+            "quote_stale": False,
+            "quote_age_ms": 0,
+        },
+    }
+
+    action = state_handlers._evaluate_scale_in_signal(
+        stock=stock,
+        code="123456",
+        strategy="SCALPING",
+        market_regime="NORMAL",
+        profit_rate=2.0,
+        peak_profit=2.0,
+        curr_price=10_000,
+        ws_data={"curr": 10_000},
+        current_ai_score=75,
+        held_sec=60,
+        ai_engine=FeatureEngine(),
+        now_ts=1_000.0,
+    )
+
+    assert action is None
+    assert stock["last_reversal_features"]["tick_aggressor_pressure_usable"] is False
+    refresh_logs = [fields for stage, fields in logs if stage == "scale_in_feature_context_refresh"]
+    assert refresh_logs
+    assert refresh_logs[-1]["scale_in_feature_refresh_applied"] is False
+    assert refresh_logs[-1]["scale_in_feature_refresh_reason"] == "refreshed_feature_still_stale"
+    assert refresh_logs[-1]["scale_in_feature_refresh_new_quality"] == "stale"
+    assert "tick_aggressor_pressure_unusable" in refresh_logs[-1]["scale_in_feature_refresh_new_stale_reason"]
+
+
 def test_scalping_pyramid_missing_prior_allows_composite_borderline_ai():
     result = scale_in.evaluate_scalping_pyramid(
         {
+            **_fresh_holding_score_fields(66),
             "last_reversal_features": {
                 "buy_pressure_10t": 72.0,
                 "tick_acceleration_ratio": 0.85,
                 "large_sell_print_detected": False,
                 "curr_vs_micro_vwap_bp": 24.0,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+                "minute_candle_context_quality": "fresh_bar_window",
+                "tick_aggressor_trusted_count": 4,
+                "tick_aggressor_pressure_usable": True,
             },
         },
         profit_rate=2.0,
@@ -2567,11 +2926,17 @@ def test_scalping_pyramid_missing_prior_allows_composite_borderline_ai():
 def test_scalping_pyramid_support_prior_relaxes_single_soft_quality_blocker():
     result = scale_in.evaluate_scalping_pyramid(
         {
+            **_fresh_holding_score_fields(66),
             "last_reversal_features": {
                 "buy_pressure_10t": 72.0,
                 "tick_acceleration_ratio": 0.85,
                 "large_sell_print_detected": False,
                 "curr_vs_micro_vwap_bp": 24.0,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+                "minute_candle_context_quality": "fresh_bar_window",
+                "tick_aggressor_trusted_count": 4,
+                "tick_aggressor_pressure_usable": True,
             },
         },
         profit_rate=2.0,
@@ -2596,11 +2961,17 @@ def test_scalping_pyramid_support_prior_relaxes_single_soft_quality_blocker():
 def test_scalping_pyramid_support_prior_relaxes_borderline_buy_pressure_only():
     result = scale_in.evaluate_scalping_pyramid(
         {
+            **_fresh_holding_score_fields(74),
             "last_reversal_features": {
                 "buy_pressure_10t": 58.0,
                 "tick_acceleration_ratio": 0.85,
                 "large_sell_print_detected": False,
                 "curr_vs_micro_vwap_bp": 24.0,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+                "minute_candle_context_quality": "fresh_bar_window",
+                "tick_aggressor_trusted_count": 4,
+                "tick_aggressor_pressure_usable": True,
             },
         },
         profit_rate=2.0,
@@ -2630,6 +3001,11 @@ def test_scalping_pyramid_support_prior_does_not_release_hard_quality_blocker():
                 "tick_acceleration_ratio": 0.85,
                 "large_sell_print_detected": True,
                 "curr_vs_micro_vwap_bp": 24.0,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+                "minute_candle_context_quality": "fresh_bar_window",
+                "tick_aggressor_trusted_count": 4,
+                "tick_aggressor_pressure_usable": True,
             },
         },
         profit_rate=2.0,
@@ -2653,11 +3029,17 @@ def test_scalping_pyramid_support_prior_does_not_release_hard_quality_blocker():
 def test_scalping_pyramid_support_prior_does_not_release_missing_tick_context():
     result = scale_in.evaluate_scalping_pyramid(
         {
+            **_fresh_holding_score_fields(74),
             "last_reversal_features": {
                 "buy_pressure_10t": 72.0,
                 "tick_acceleration_ratio": 1.1,
                 "large_sell_print_detected": False,
                 "curr_vs_micro_vwap_bp": 24.0,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+                "minute_candle_context_quality": "fresh_bar_window",
+                "tick_aggressor_trusted_count": 4,
+                "tick_aggressor_pressure_usable": True,
                 "tick_context_quality": "missing_ticks",
                 "tick_context_stale": "unknown",
                 "tick_latest_age_ms": "-",
@@ -2688,11 +3070,17 @@ def test_scalping_pyramid_support_prior_does_not_release_missing_tick_context():
 def test_scalping_pyramid_risk_prior_blocks_weak_borderline_support():
     result = scale_in.evaluate_scalping_pyramid(
         {
+            **_fresh_holding_score_fields(71),
             "last_reversal_features": {
                 "buy_pressure_10t": 62.0,
                 "tick_acceleration_ratio": 0.55,
                 "large_sell_print_detected": False,
                 "curr_vs_micro_vwap_bp": 24.0,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+                "minute_candle_context_quality": "fresh_bar_window",
+                "tick_aggressor_trusted_count": 4,
+                "tick_aggressor_pressure_usable": True,
             },
         },
         profit_rate=2.0,
@@ -2729,11 +3117,17 @@ def test_scalping_pyramid_strong_continuation_can_use_lower_profit_gate():
     try:
         result = scale_in.evaluate_scalping_pyramid(
             {
+                **_fresh_holding_score_fields(74),
                 "last_reversal_features": {
                     "buy_pressure_10t": 72.0,
                     "tick_acceleration_ratio": 0.85,
                     "large_sell_print_detected": False,
                     "curr_vs_micro_vwap_bp": 24.0,
+                    "micro_vwap_available": True,
+                    "minute_candle_window_fresh": True,
+                    "minute_candle_context_quality": "fresh_bar_window",
+                    "tick_aggressor_trusted_count": 4,
+                    "tick_aggressor_pressure_usable": True,
                 },
             },
             profit_rate=1.0,
@@ -2767,12 +3161,17 @@ def test_scalping_pyramid_strong_continuation_default_off_preserves_base_gate():
         result = scale_in.evaluate_scalping_pyramid(
             {
                 "last_reversal_features": {
-                    "buy_pressure_10t": 72.0,
-                    "tick_acceleration_ratio": 0.85,
-                    "large_sell_print_detected": False,
-                    "curr_vs_micro_vwap_bp": 24.0,
-                },
+                "buy_pressure_10t": 72.0,
+                "tick_acceleration_ratio": 0.85,
+                "large_sell_print_detected": False,
+                "curr_vs_micro_vwap_bp": 24.0,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+                "minute_candle_context_quality": "fresh_bar_window",
+                "tick_aggressor_trusted_count": 4,
+                "tick_aggressor_pressure_usable": True,
             },
+        },
             profit_rate=1.0,
             peak_profit=1.12,
             is_new_high=True,
@@ -2833,6 +3232,9 @@ def test_scalping_pyramid_namkwang_like_profit_stays_blocked():
                     "tick_acceleration_ratio": 0.111,
                     "large_sell_print_detected": False,
                     "curr_vs_micro_vwap_bp": 34.71,
+                    "micro_vwap_available": True,
+                    "minute_candle_window_fresh": True,
+                    "minute_candle_context_quality": "fresh_bar_window",
                 },
             },
             profit_rate=0.58,
@@ -2923,11 +3325,17 @@ def test_scalping_pyramid_count_is_attribution_only():
         result = scale_in.evaluate_scalping_pyramid(
             {
                 "pyramid_count": 5,
+                **_fresh_holding_score_fields(74),
                 "last_reversal_features": {
                     "buy_pressure_10t": 72.0,
                     "tick_acceleration_ratio": 0.85,
                     "large_sell_print_detected": False,
                     "curr_vs_micro_vwap_bp": 24.0,
+                    "micro_vwap_available": True,
+                    "minute_candle_window_fresh": True,
+                    "minute_candle_context_quality": "fresh_bar_window",
+                    "tick_aggressor_trusted_count": 4,
+                    "tick_aggressor_pressure_usable": True,
                 },
             },
             profit_rate=2.0,
@@ -2944,6 +3352,7 @@ def test_scalping_pyramid_count_is_attribution_only():
 def test_avg_down_count_is_attribution_only_for_receipts():
     target_stock = {
         "avg_down_count": 3,
+        **_fresh_holding_score_fields(65),
         "reversal_add_state": "STAGNATION",
         "reversal_add_profit_floor": -0.30,
         "reversal_add_ai_bottom": 42,
@@ -2953,6 +3362,11 @@ def test_avg_down_count_is_attribution_only_for_receipts():
             "tick_acceleration_ratio": 1.05,
             "large_sell_print_detected": False,
             "curr_vs_micro_vwap_bp": -2.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "tick_aggressor_trusted_count": 4,
+            "tick_aggressor_pressure_usable": True,
         },
     }
     original = scale_in.TRADING_RULES
@@ -3148,12 +3562,12 @@ def test_stat_action_decision_snapshot_logs_observe_only_with_rate_limit(monkeyp
         "buy_qty": 2,
         "avg_down_count": 1,
         "pyramid_count": 0,
-        "last_reversal_features": {
-            "buy_pressure_10t": 62,
-            "tick_acceleration_ratio": 1.1,
-            "large_sell_print_detected": False,
-            "curr_vs_micro_vwap_bp": 3.0,
-        },
+        "last_reversal_features": _trusted_reversal_features(
+            buy_pressure_10t=62,
+            tick_acceleration_ratio=1.1,
+            large_sell_print_detected=False,
+            curr_vs_micro_vwap_bp=3.0,
+        ),
     }
     ws_data = {
         "orderbook": {
@@ -3324,6 +3738,9 @@ def test_pyramid_block_log_includes_profit_gate_probe(monkeypatch):
             "strong_continuation_failed_checks": "ai_score_ok,tick_accel_ok",
             "drawdown_from_peak": 0.06,
             "is_new_high": True,
+            "buy_pressure_10t": 62.0,
+            "tick_aggressor_trusted_count": 4,
+            "tick_aggressor_pressure_usable": True,
         },
     )
 
@@ -3333,6 +3750,31 @@ def test_pyramid_block_log_includes_profit_gate_probe(monkeypatch):
     assert logs[0][1]["min_profit_pct"] == 1.5
     assert logs[0][1]["strong_continuation_allowed"] is False
     assert logs[0][1]["strong_continuation_failed_checks"] == "ai_score_ok,tick_accel_ok"
+    assert logs[0][1]["allowed_runtime_apply"] is False
+    assert logs[0][1]["actual_order_submitted"] is False
+    assert logs[0][1]["broker_order_forbidden"] is True
+    assert logs[0][1]["tick_aggressor_trusted_count"] == 4
+    assert logs[0][1]["tick_aggressor_pressure_usable"] is True
+
+
+def test_reversal_add_probe_append_preserves_pressure_provenance():
+    fields = state_handlers._append_reversal_add_probe_fields(
+        {"scale_in_arm": "AVG_DOWN"},
+        {
+            "buy_pressure_10t": 63.0,
+            "tick_aggressor_trusted_count": 5,
+            "tick_aggressor_pressure_usable": True,
+            "tick_acceleration_ratio": 1.05,
+            "curr_vs_micro_vwap_bp": -1.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+        },
+    )
+
+    assert fields["buy_pressure_10t"] == 63.0
+    assert fields["tick_aggressor_trusted_count"] == 5
+    assert fields["tick_aggressor_pressure_usable"] is True
 
 
 def test_add_count_increment_once_on_partial_fills(monkeypatch):
@@ -3604,6 +4046,9 @@ def test_execute_scalping_pyramid_blocks_wide_spread_price_guard(monkeypatch):
         "strategy": "SCALPING",
         "buy_qty": 1,
         "last_reversal_features": {"curr_vs_micro_vwap_bp": 10.0},
+        "micro_vwap_available": True,
+        "minute_candle_window_fresh": True,
+        "minute_candle_context_quality": "fresh_bar_window",
     }
     action = {"add_type": "PYRAMID", "reason": "scalping_pyramid_ok"}
     ws_data = {"curr": 300_500, "best_bid": 299_000, "best_ask": 301_500}
@@ -3668,12 +4113,20 @@ def test_execute_scalping_pyramid_sends_resolved_best_bid_with_dynamic_budget_qt
             "tick_acceleration_ratio": 0.8,
             "large_sell_print_detected": "false",
             "curr_vs_micro_vwap_bp": 10.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "tick_aggressor_trusted_count": 4,
+            "tick_aggressor_pressure_usable": True,
         },
     }
     action = {
         "add_type": "PYRAMID",
         "reason": "scalping_pyramid_ok",
         "current_ai_score": 75,
+        "holding_score_source": "live",
+        "holding_score_data_quality": "fresh",
+        "holding_score_effective_usable": True,
         "profit_rate": 2.0,
         "peak_profit": 2.1,
     }
@@ -3749,12 +4202,20 @@ def test_execute_scalping_pyramid_uses_dynamic_budget_for_one_share_position(mon
             "tick_acceleration_ratio": 1.0,
             "large_sell_print_detected": False,
             "curr_vs_micro_vwap_bp": 47.85,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "tick_aggressor_trusted_count": 4,
+            "tick_aggressor_pressure_usable": True,
         },
     }
     action = {
         "add_type": "PYRAMID",
         "reason": "scalping_pyramid_ok",
         "current_ai_score": 72,
+        "holding_score_source": "live",
+        "holding_score_data_quality": "fresh",
+        "holding_score_effective_usable": True,
         "profit_rate": 1.55,
         "peak_profit": 1.61,
     }
@@ -3810,6 +4271,9 @@ def test_execute_defensive_avg_down_passes_buy_time_block_override(monkeypatch):
             "tick_acceleration_ratio": 1.0,
             "large_sell_print_detected": False,
             "curr_vs_micro_vwap_bp": 5.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
         },
     }
 
@@ -3894,7 +4358,12 @@ def test_late_loss_avg_down_bypasses_quote_divergence_when_executable_price_exis
             "strategy": "SCALPING",
             "buy_price": 2_652_000,
             "buy_qty": 1,
-            "last_reversal_features": {"curr_vs_micro_vwap_bp": -40.7},
+            "last_reversal_features": {
+                "curr_vs_micro_vwap_bp": -40.7,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+                "minute_candle_context_quality": "fresh_bar_window",
+            },
         },
         code="000660",
         ws_data={"curr": 2_569_000, "best_bid": 2_569_000, "best_ask": 2_570_000},
@@ -3967,7 +4436,7 @@ def test_non_defensive_avg_down_still_blocks_quote_divergence(monkeypatch):
             "strategy": "SCALPING",
             "buy_price": 2_652_000,
             "buy_qty": 1,
-            "last_reversal_features": {"curr_vs_micro_vwap_bp": 0.0},
+            "last_reversal_features": _trusted_reversal_features(curr_vs_micro_vwap_bp=0.0),
         },
         code="000660",
         ws_data={"curr": 2_569_000, "best_bid": 2_569_000, "best_ask": 2_570_000},
@@ -4049,6 +4518,9 @@ def test_defensive_avg_down_bypasses_stale_quote_consistency_when_executable_pri
             "buy_price": 2_652_000,
             "buy_qty": 1,
             "last_reversal_features": {"curr_vs_micro_vwap_bp": -40.7},
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
         },
         code="000660",
         ws_data={"curr": 2_569_000, "best_bid": 2_569_000, "best_ask": 2_570_000},
@@ -4192,7 +4664,12 @@ def test_late_loss_avg_down_uses_fresh_rest_quote_after_stale_ws_refresh(monkeyp
             "strategy": "SCALPING",
             "buy_price": 226_500,
             "buy_qty": 1,
-            "last_reversal_features": {"curr_vs_micro_vwap_bp": -52.22},
+            "last_reversal_features": {
+                "curr_vs_micro_vwap_bp": -52.22,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+                "minute_candle_context_quality": "fresh_bar_window",
+            },
         },
         code="000500",
         ws_data={"curr": 218_500},
@@ -4268,12 +4745,20 @@ def test_execute_scalping_pyramid_refreshes_rest_orderbook_when_quote_missing(mo
             "tick_acceleration_ratio": 0.8,
             "large_sell_print_detected": False,
             "curr_vs_micro_vwap_bp": 10.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "tick_aggressor_trusted_count": 4,
+            "tick_aggressor_pressure_usable": True,
         },
     }
     action = {
         "add_type": "PYRAMID",
         "reason": "scalping_pyramid_ok",
         "current_ai_score": 75,
+        "holding_score_source": "live",
+        "holding_score_data_quality": "fresh",
+        "holding_score_effective_usable": True,
         "profit_rate": 2.0,
         "peak_profit": 2.1,
     }
@@ -4362,12 +4847,20 @@ def test_execute_scalping_pyramid_refreshes_rest_orderbook_when_ws_quote_stale(m
             "tick_acceleration_ratio": 0.8,
             "large_sell_print_detected": False,
             "curr_vs_micro_vwap_bp": 10.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "tick_aggressor_trusted_count": 4,
+            "tick_aggressor_pressure_usable": True,
         },
     }
     action = {
         "add_type": "PYRAMID",
         "reason": "scalping_pyramid_ok",
         "current_ai_score": 75,
+        "holding_score_source": "live",
+        "holding_score_data_quality": "fresh",
+        "holding_score_effective_usable": True,
         "profit_rate": 5.39,
         "peak_profit": 5.39,
     }
@@ -4528,6 +5021,9 @@ def test_pending_scale_in_revalidation_context_detects_deterioration():
             "pending_add_type": "PYRAMID",
             "last_reversal_features": {
                 "curr_vs_micro_vwap_bp": -3.0,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+                "minute_candle_context_quality": "fresh_bar_window",
                 "buy_pressure_10t": 55.0,
                 "tick_acceleration_ratio": 0.8,
             },
@@ -4567,6 +5063,9 @@ def test_pending_scale_in_revalidation_not_skipped_by_holding_exit_tuning():
                 "pending_add_type": "PYRAMID",
                 "last_reversal_features": {
                     "curr_vs_micro_vwap_bp": -3.0,
+                    "micro_vwap_available": True,
+                    "minute_candle_window_fresh": True,
+                    "minute_candle_context_quality": "fresh_bar_window",
                     "buy_pressure_10t": 55.0,
                     "tick_acceleration_ratio": 0.8,
                 },
@@ -4602,6 +5101,9 @@ def test_pending_scale_in_revalidation_flags_stale_feature_context():
                 "pending_add_type": "PYRAMID",
                 "last_reversal_features": {
                     "curr_vs_micro_vwap_bp": 24.0,
+                    "micro_vwap_available": True,
+                    "minute_candle_window_fresh": True,
+                    "minute_candle_context_quality": "fresh_bar_window",
                     "buy_pressure_10t": 72.0,
                     "tick_acceleration_ratio": 1.2,
                     "tick_context_quality": "missing_ticks",
@@ -5129,7 +5631,7 @@ def test_execute_scalping_reversal_add_uses_resolved_price_not_curr(monkeypatch)
         "strategy": "SCALPING",
         "buy_qty": 3,
         "hard_stop_price": 9_000,
-        "last_reversal_features": {"curr_vs_micro_vwap_bp": 0.0},
+        "last_reversal_features": _trusted_reversal_features(curr_vs_micro_vwap_bp=0.0),
     }
     action = {"add_type": "AVG_DOWN", "reason": "reversal_add_ok"}
     ws_data = {"curr": 10_000, "best_bid": 9_980, "best_ask": 10_000}
@@ -5178,7 +5680,7 @@ def test_execute_scalping_avg_down_stop_touch_uses_market_order(monkeypatch):
         "strategy": "SCALPING",
         "buy_qty": 3,
         "hard_stop_price": 9_000,
-        "last_reversal_features": {"curr_vs_micro_vwap_bp": 0.0},
+        "last_reversal_features": _trusted_reversal_features(curr_vs_micro_vwap_bp=0.0),
     }
     action = {
         "add_type": "AVG_DOWN",
@@ -5232,7 +5734,7 @@ def test_execute_scalping_avg_down_market_override_blocks_before_stop_touch(monk
         "name": "TEST",
         "strategy": "SCALPING",
         "buy_qty": 3,
-        "last_reversal_features": {"curr_vs_micro_vwap_bp": 0.0},
+        "last_reversal_features": _trusted_reversal_features(curr_vs_micro_vwap_bp=0.0),
     }
     action = {"add_type": "AVG_DOWN", "reason": "reversal_add_ok", "profit_rate": -1.0}
     ws_data = {"curr": 10_000, "best_bid": 9_980, "best_ask": 10_000}
@@ -5281,6 +5783,9 @@ def test_dynamic_scale_in_qty_blocks_weak_pyramid_evidence(monkeypatch):
             "tick_acceleration_ratio": 0.0,
             "large_sell_print_detected": False,
             "curr_vs_micro_vwap_bp": 10.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
         },
     }
     action = {
@@ -5329,6 +5834,11 @@ def test_dynamic_pyramid_qty_uses_budget_even_when_buy_pressure_is_only_supporti
                 "tick_acceleration_ratio": 1.0,
                 "large_sell_print_detected": False,
                 "curr_vs_micro_vwap_bp": 40.0,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+                "minute_candle_context_quality": "fresh_bar_window",
+                "tick_aggressor_trusted_count": 4,
+                "tick_aggressor_pressure_usable": True,
             },
             "actual_order_submitted": True,
         },
@@ -5341,6 +5851,9 @@ def test_dynamic_pyramid_qty_uses_budget_even_when_buy_pressure_is_only_supporti
         action={
             "reason": "scalping_pyramid_ok",
             "current_ai_score": 70,
+            "holding_score_source": "live",
+            "holding_score_data_quality": "fresh",
+            "holding_score_effective_usable": True,
             "profit_rate": 2.0,
             "peak_profit": 2.0,
         },
@@ -5466,17 +5979,20 @@ def test_p2_observe_skip_does_not_change_live_order(monkeypatch):
         "name": "TEST",
         "strategy": "SCALPING",
         "buy_qty": 10,
-        "last_reversal_features": {
-            "buy_pressure_10t": 70.0,
-            "tick_acceleration_ratio": 0.7,
-            "large_sell_print_detected": False,
-            "curr_vs_micro_vwap_bp": 5.0,
-        },
+        "last_reversal_features": _trusted_reversal_features(
+            buy_pressure_10t=70.0,
+            tick_acceleration_ratio=0.7,
+            large_sell_print_detected=False,
+            curr_vs_micro_vwap_bp=5.0,
+        ),
     }
     action = {
         "add_type": "PYRAMID",
         "reason": "scalping_pyramid_ok",
         "current_ai_score": 72,
+        "holding_score_source": "live",
+        "holding_score_data_quality": "fresh",
+        "holding_score_effective_usable": True,
         "profit_rate": 1.8,
         "peak_profit": 1.8,
         "p2_observe_action": "SKIP",
@@ -7557,8 +8073,8 @@ def test_watching_state_logs_latency_entry_price_guard(monkeypatch):
     monkeypatch.setattr(state_handlers, "arm_big_bite_if_triggered", lambda **kwargs: (False, {}))
     monkeypatch.setattr(state_handlers, "confirm_big_bite_follow_through", lambda **kwargs: (True, {}))
     monkeypatch.setattr(state_handlers, "build_tick_data_from_ws", lambda ws_data: {})
-    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [1])
-    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [1])
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: _trusted_orderbook_touch_ticks(price=10_020, hhmm="14:34"))
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: _micro_vwap_candles(price=10_020))
     monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000)
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
@@ -7670,7 +8186,7 @@ def test_watching_state_blocks_quote_fresh_composite_negative_orderbook_micro(mo
 
     class DummyAI:
         def analyze_target(self, *args, **kwargs):
-            return {"action": "BUY", "score": 90, "reason": "confirmed"}
+            return {"action": "BUY", "score": 90, "reason": "confirmed", "ai_result_source": "live", "ai_parse_ok": True}
 
     class DummyEventBus:
         def publish(self, *args, **kwargs):
@@ -7687,8 +8203,8 @@ def test_watching_state_blocks_quote_fresh_composite_negative_orderbook_micro(mo
     monkeypatch.setattr(state_handlers, "arm_big_bite_if_triggered", lambda **kwargs: (False, {}))
     monkeypatch.setattr(state_handlers, "confirm_big_bite_follow_through", lambda **kwargs: (True, {}))
     monkeypatch.setattr(state_handlers, "build_tick_data_from_ws", lambda ws_data: {})
-    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [1])
-    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [1])
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: _trusted_orderbook_touch_ticks(price=10_020))
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: _micro_vwap_candles(price=10_020))
     monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000)
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
@@ -7765,6 +8281,7 @@ def test_watching_state_blocks_quote_fresh_composite_negative_orderbook_micro(mo
     assert sent_orders == []
     by_stage = {stage: fields for stage, fields in logs}
     assert "latency_pass" not in by_stage
+    assert "latency_block" in by_stage, " > ".join(stage for stage, _fields in logs)
     assert by_stage["latency_block"]["reason"] == "quote_fresh_composite_orderbook_micro_block"
     assert by_stage["latency_block"]["quote_fresh_composite_micro_block_reason"] == "negative_ofi"
     assert by_stage["latency_block"]["quote_fresh_composite_previous_reason"] == "latency_quote_fresh_composite_normal_override"
@@ -7901,7 +8418,12 @@ def test_ai_wait_rebound_recheck_bypasses_entry_cooldown_for_fresh_scanner_rebou
                 "buy_pressure_10t": 88.75,
                 "tick_acceleration_ratio": 0.0,
                 "curr_vs_micro_vwap_bp": 51.45,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+                "minute_candle_context_quality": "fresh_bar_window",
                 "curr_vs_ma5_bp": 30.6,
+                "tick_aggressor_trusted_count": 5,
+                "tick_aggressor_pressure_usable": True,
             }
 
     class DummyEventBus:
@@ -7925,8 +8447,8 @@ def test_ai_wait_rebound_recheck_bypasses_entry_cooldown_for_fresh_scanner_rebou
     monkeypatch.setattr(state_handlers, "arm_big_bite_if_triggered", lambda **kwargs: (False, {}))
     monkeypatch.setattr(state_handlers, "confirm_big_bite_follow_through", lambda **kwargs: (False, {}))
     monkeypatch.setattr(state_handlers, "build_tick_data_from_ws", lambda ws_data: {})
-    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [1])
-    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [1])
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: _trusted_orderbook_touch_ticks(price=10_020, hhmm="11:05"))
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: _micro_vwap_candles(price=10_020))
     monkeypatch.setattr(
         state_handlers,
         "_score65_74_recovery_probe_decision",
@@ -7946,6 +8468,15 @@ def test_ai_wait_rebound_recheck_bypasses_entry_cooldown_for_fresh_scanner_rebou
             "buy_pressure": 88.75,
             "micro_vwap_bp": 51.45,
             "tick_accel": 0.0,
+            "tick_aggressor_trusted_count": 5,
+            "tick_aggressor_pressure_usable": True,
+            "micro_vwap_available": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "minute_candle_window_fresh": True,
+            "minute_candle_latest_age_ms": 8000,
+            "tick_context_quality": "fresh_computed",
+            "tick_context_stale": False,
+            "tick_accel_source": "computed_10ticks",
         },
         "ai_wait_cooldown_anchor_at": now_ts - 40,
         "ai_wait_cooldown_anchor_until": now_ts + 111,
@@ -7985,6 +8516,81 @@ def test_ai_wait_rebound_recheck_bypasses_entry_cooldown_for_fresh_scanner_rebou
         stage == "ai_confirmed" and fields.get("ai_call_trigger_reason") == "ai_wait_rebound_recheck"
         for stage, fields in logs
     )
+
+
+def test_ai_wait_rebound_recheck_blocks_untrusted_buy_pressure(monkeypatch):
+    now_ts = 1000.0
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_AI_WAIT_REBOUND_RECHECK_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_AI_WAIT_REBOUND_RECHECK_MIN_REBOUND_PCT", "0.5")
+
+    stock = {
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "last_watching_ai_feature_probe": {
+            "buy_pressure": 88.75,
+            "micro_vwap_bp": 51.45,
+            "tick_accel": 0.0,
+            "tick_aggressor_trusted_count": 0,
+            "tick_aggressor_pressure_usable": False,
+        },
+        "ai_wait_cooldown_anchor_at": now_ts - 40,
+        "ai_wait_cooldown_anchor_until": now_ts + 111,
+        "ai_wait_cooldown_anchor_price": 58600,
+        "ai_wait_cooldown_anchor_score": 68.0,
+        "ai_wait_cooldown_anchor_action": "WAIT",
+    }
+
+    result = state_handlers._scalp_ai_wait_rebound_recheck_decision(
+        stock,
+        {
+            "curr": 59000,
+            "last_ws_update_ts": now_ts - 0.2,
+            "received_types": ["0B"],
+        },
+        now_ts=now_ts,
+        cooldown_until=now_ts + 111,
+    )
+
+    assert result["ai_wait_rebound_recheck_allowed"] is False
+    assert result["ai_wait_rebound_recheck_reason"] == "tick_aggressor_pressure_unusable"
+
+
+def test_ai_wait_rebound_recheck_blocks_numeric_micro_vwap_without_fresh_minute_context(monkeypatch):
+    now_ts = 1000.0
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_AI_WAIT_REBOUND_RECHECK_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_AI_WAIT_REBOUND_RECHECK_MIN_REBOUND_PCT", "0.5")
+
+    stock = {
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "last_watching_ai_feature_probe": {
+            "buy_pressure": 88.75,
+            "micro_vwap_bp": 51.45,
+            "tick_accel": 0.0,
+            "tick_aggressor_trusted_count": 5,
+            "tick_aggressor_pressure_usable": True,
+        },
+        "ai_wait_cooldown_anchor_at": now_ts - 40,
+        "ai_wait_cooldown_anchor_until": now_ts + 111,
+        "ai_wait_cooldown_anchor_price": 58600,
+        "ai_wait_cooldown_anchor_score": 68.0,
+        "ai_wait_cooldown_anchor_action": "WAIT",
+    }
+
+    result = state_handlers._scalp_ai_wait_rebound_recheck_decision(
+        stock,
+        {
+            "curr": 59000,
+            "last_ws_update_ts": now_ts - 0.2,
+            "received_types": ["0B"],
+        },
+        now_ts=now_ts,
+        cooldown_until=now_ts + 111,
+    )
+
+    assert result["ai_wait_rebound_recheck_allowed"] is False
+    assert result["ai_wait_rebound_recheck_reason"] == "micro_vwap_unavailable"
+    assert result["ai_wait_rebound_recheck_micro_vwap_available"] is False
 
 
 def test_ai_numeric_consistency_recheck_failed_attempt_consumes_symbol_budget(monkeypatch):
@@ -8029,7 +8635,12 @@ def test_ai_numeric_consistency_recheck_failed_attempt_consumes_symbol_budget(mo
                     "tick_acceleration_ratio": 1.25,
                     "buy_pressure_10t": 71.0,
                     "net_aggressive_delta_10t": 1200.0,
+                    "tick_aggressor_pressure_usable": True,
+                    "tick_aggressor_trusted_count": 4,
                     "curr_vs_micro_vwap_bp": 8.0,
+                    "micro_vwap_available": True,
+                    "minute_candle_window_fresh": True,
+                    "minute_candle_context_quality": "fresh_bar_window",
                     "curr_vs_ma5_bp": 4.0,
                 }
             return {
@@ -8043,6 +8654,9 @@ def test_ai_numeric_consistency_recheck_failed_attempt_consumes_symbol_budget(mo
                 "buy_pressure_10t": 71.0,
                 "net_aggressive_delta_10t": 1200.0,
                 "curr_vs_micro_vwap_bp": 8.0,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+                "minute_candle_context_quality": "fresh_bar_window",
                 "curr_vs_ma5_bp": 4.0,
             }
 
@@ -8060,8 +8674,8 @@ def test_ai_numeric_consistency_recheck_failed_attempt_consumes_symbol_budget(mo
     monkeypatch.setattr(state_handlers, "arm_big_bite_if_triggered", lambda **kwargs: (False, {}))
     monkeypatch.setattr(state_handlers, "confirm_big_bite_follow_through", lambda **kwargs: (True, {}))
     monkeypatch.setattr(state_handlers, "build_tick_data_from_ws", lambda ws_data: {})
-    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [1])
-    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [1])
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: _trusted_orderbook_touch_ticks(price=10_020, hhmm="11:10"))
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: _micro_vwap_candles(price=10_020))
     monkeypatch.setattr(state_handlers, "_score65_74_recovery_probe_decision", lambda *args, **kwargs: {"allowed": False})
 
     stock = {"id": 17, "name": "TEST", "strategy": "SCALPING", "position_tag": "SCANNER", "prob": 0.9, "rt_ai_prob": 0.9}
@@ -8129,7 +8743,12 @@ def test_ai_numeric_consistency_recheck_corrected_updates_last_reason(monkeypatc
                     "tick_acceleration_ratio": 1.25,
                     "buy_pressure_10t": 71.0,
                     "net_aggressive_delta_10t": 1200.0,
+                    "tick_aggressor_pressure_usable": True,
+                    "tick_aggressor_trusted_count": 4,
                     "curr_vs_micro_vwap_bp": 8.0,
+                    "micro_vwap_available": True,
+                    "minute_candle_window_fresh": True,
+                    "minute_candle_context_quality": "fresh_bar_window",
                     "curr_vs_ma5_bp": 4.0,
                 }
             return {
@@ -8140,6 +8759,9 @@ def test_ai_numeric_consistency_recheck_corrected_updates_last_reason(monkeypatc
                 "buy_pressure_10t": 71.0,
                 "net_aggressive_delta_10t": 1200.0,
                 "curr_vs_micro_vwap_bp": 8.0,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+                "minute_candle_context_quality": "fresh_bar_window",
                 "curr_vs_ma5_bp": 4.0,
             }
 
@@ -8157,8 +8779,8 @@ def test_ai_numeric_consistency_recheck_corrected_updates_last_reason(monkeypatc
     monkeypatch.setattr(state_handlers, "arm_big_bite_if_triggered", lambda **kwargs: (False, {}))
     monkeypatch.setattr(state_handlers, "confirm_big_bite_follow_through", lambda **kwargs: (True, {}))
     monkeypatch.setattr(state_handlers, "build_tick_data_from_ws", lambda ws_data: {})
-    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [1])
-    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [1])
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: _trusted_orderbook_touch_ticks(price=10_020))
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: _micro_vwap_candles(price=10_020))
     monkeypatch.setattr(state_handlers, "_score65_74_recovery_probe_decision", lambda *args, **kwargs: {"allowed": False})
     monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000)
     monkeypatch.setattr(
@@ -8238,7 +8860,12 @@ def test_ai_numeric_consistency_recheck_buy_below_min_score_does_not_arm_entry(m
                     "tick_acceleration_ratio": 1.25,
                     "buy_pressure_10t": 71.0,
                     "net_aggressive_delta_10t": 1200.0,
+                    "tick_aggressor_pressure_usable": True,
+                    "tick_aggressor_trusted_count": 4,
                     "curr_vs_micro_vwap_bp": 8.0,
+                    "micro_vwap_available": True,
+                    "minute_candle_window_fresh": True,
+                    "minute_candle_context_quality": "fresh_bar_window",
                     "curr_vs_ma5_bp": 4.0,
                 }
             return {
@@ -8249,6 +8876,9 @@ def test_ai_numeric_consistency_recheck_buy_below_min_score_does_not_arm_entry(m
                 "buy_pressure_10t": 71.0,
                 "net_aggressive_delta_10t": 1200.0,
                 "curr_vs_micro_vwap_bp": 8.0,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+                "minute_candle_context_quality": "fresh_bar_window",
                 "curr_vs_ma5_bp": 4.0,
             }
 
@@ -8266,8 +8896,8 @@ def test_ai_numeric_consistency_recheck_buy_below_min_score_does_not_arm_entry(m
     monkeypatch.setattr(state_handlers, "arm_big_bite_if_triggered", lambda **kwargs: (False, {}))
     monkeypatch.setattr(state_handlers, "confirm_big_bite_follow_through", lambda **kwargs: (True, {}))
     monkeypatch.setattr(state_handlers, "build_tick_data_from_ws", lambda ws_data: {})
-    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [1])
-    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [1])
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: _trusted_orderbook_touch_ticks(price=10_020))
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: _micro_vwap_candles(price=10_020))
     monkeypatch.setattr(state_handlers, "_score65_74_recovery_probe_decision", lambda *args, **kwargs: {"allowed": False})
     monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000)
     monkeypatch.setattr(
@@ -8306,6 +8936,42 @@ def test_ai_numeric_consistency_recheck_buy_below_min_score_does_not_arm_entry(m
     assert "numeric_consistency_recheck_buy_score_below_min:75" in stock["last_watching_ai_reason"]
 
 
+def test_ai_numeric_consistency_recheck_does_not_count_untrusted_supply_axis(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        AI_NUMERIC_CONSISTENCY_RECHECK_ENABLED=True,
+        AI_NUMERIC_CONSISTENCY_RECHECK_MAX_PER_SYMBOL=1,
+    )
+
+    decision = state_handlers._resolve_ai_numeric_consistency_recheck(
+        {"strategy": "SCALPING", "position_tag": "SCANNER"},
+        {"quote_stale": False},
+        now_ts=1_000.0,
+        strategy="SCALPING",
+        ai_decision={
+            "action": "WAIT",
+            "score": 72,
+            "reason": "supply described incorrectly",
+            "ai_reason_numeric_inconsistency": True,
+            "tick_acceleration_ratio": 1.25,
+            "buy_pressure_10t": 91.0,
+            "net_aggressive_delta_10t": 1200.0,
+            "curr_vs_micro_vwap_bp": 8.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "curr_vs_ma5_bp": 4.0,
+        },
+        ai_score=72,
+    )
+
+    assert decision["allowed"] is False
+    assert decision["supply_pass"] is False
+    assert decision["tick_aggressor_pressure_usable"] is False
+    assert decision["feature_pass_count"] == 2
+    assert decision["skip_reason"] == "strong_micro_override_candidate_only"
+
+
 def test_score65_74_recovery_probe_bypasses_first_ai_big_bite_wait(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 
@@ -8341,6 +9007,9 @@ def test_score65_74_recovery_probe_bypasses_first_ai_big_bite_wait(monkeypatch):
                 "reason": "strong micro recovery probe",
                 "buy_pressure_10t": 88.14,
                 "curr_vs_micro_vwap_bp": 74.95,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+                "minute_candle_context_quality": "fresh_bar_window",
                 "tick_acceleration_ratio": 0.0,
                 "quote_stale": False,
             }
@@ -8367,8 +9036,8 @@ def test_score65_74_recovery_probe_bypasses_first_ai_big_bite_wait(monkeypatch):
     monkeypatch.setattr(state_handlers, "arm_big_bite_if_triggered", lambda **kwargs: (False, {}))
     monkeypatch.setattr(state_handlers, "confirm_big_bite_follow_through", lambda **kwargs: (False, {}))
     monkeypatch.setattr(state_handlers, "build_tick_data_from_ws", lambda ws_data: {})
-    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [1])
-    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [1])
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: _trusted_orderbook_touch_ticks(price=10_020, hhmm="12:17"))
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: _micro_vwap_candles(price=10_020))
     monkeypatch.setattr(
         state_handlers,
         "_score65_74_recovery_probe_decision",
@@ -8508,7 +9177,7 @@ def test_watching_state_blocks_deep_below_bid_pre_submit_price(monkeypatch):
 
     class DummyAI:
         def analyze_target(self, *args, **kwargs):
-            return {"action": "BUY", "score": 90, "reason": "confirmed"}
+            return {"action": "BUY", "score": 90, "reason": "confirmed", "ai_result_source": "live", "ai_parse_ok": True}
 
     class DummyEventBus:
         def publish(self, *args, **kwargs):
@@ -8533,8 +9202,8 @@ def test_watching_state_blocks_deep_below_bid_pre_submit_price(monkeypatch):
     monkeypatch.setattr(state_handlers, "arm_big_bite_if_triggered", lambda **kwargs: (False, {}))
     monkeypatch.setattr(state_handlers, "confirm_big_bite_follow_through", lambda **kwargs: (True, {}))
     monkeypatch.setattr(state_handlers, "build_tick_data_from_ws", lambda ws_data: {})
-    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [1])
-    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [1])
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: _trusted_orderbook_touch_ticks(price=50_500))
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: _micro_vwap_candles(price=50_500))
     monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000)
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
@@ -8639,6 +9308,9 @@ def test_late_entry_price_drift_guard_blocks_hard_latency_drift(monkeypatch):
             "buy_pressure_10t": -44.39,
             "tick_acceleration_ratio": 7.0,
             "curr_vs_micro_vwap_bp": 22.69,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
         },
         price_snapshot={"best_bid_at_submit": 398_000, "best_ask_at_submit": 398_500},
     )
@@ -8671,14 +9343,50 @@ def test_late_entry_price_drift_guard_allows_soft_drift_with_micro_reconfirmatio
             "latency_state": "CAUTION",
             "latency_danger_reasons": "ws_age_too_high",
             "buy_pressure_10t": 92.0,
+            "tick_aggressor_pressure_usable": True,
+            "tick_aggressor_trusted_count": 2,
             "tick_acceleration_ratio": 0.9,
             "curr_vs_micro_vwap_bp": 18.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
         },
     )
 
     assert result["blocked"] is False
     assert result["reason"] == "micro_reconfirmed_after_soft_drift"
     assert result["fields"]["late_entry_micro_positive_count"] == 2
+
+
+def test_late_entry_price_drift_guard_does_not_reconfirm_missing_micro_fields(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALP_LATE_ENTRY_PRICE_DRIFT_GUARD_ENABLED=True,
+        SCALP_LATE_ENTRY_PRICE_DRIFT_HARD_BPS=50,
+        SCALP_LATE_ENTRY_PRICE_DRIFT_SOFT_BPS=35,
+        SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_TICK_ACCEL=1.10,
+        SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_BUY_PRESSURE=0.0,
+        SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_MICRO_VWAP_BP=0.0,
+    )
+
+    result = state_handlers._evaluate_late_entry_price_drift_guard(
+        strategy="SCALPING",
+        stock={"name": "missing-micro", "strategy": "SCALPING", "position_tag": "SCANNER"},
+        price=10_040,
+        latency_gate={
+            "target_buy_price": 10_000,
+            "latency_state": "CAUTION",
+            "latency_danger_reasons": "ws_age_too_high",
+        },
+    )
+
+    assert result["blocked"] is True
+    assert result["reason"] == "soft_price_drift_without_micro_reconfirmation"
+    assert result["fields"]["late_entry_micro_positive_count"] == 0
+    assert result["fields"]["late_entry_buy_pressure_available"] is False
+    assert result["fields"]["late_entry_micro_vwap_available"] is False
 
 
 def test_late_entry_price_drift_guard_blocks_soft_drift_without_micro_reconfirmation(monkeypatch):
@@ -8705,6 +9413,9 @@ def test_late_entry_price_drift_guard_blocks_soft_drift_without_micro_reconfirma
             "buy_pressure_10t": -12.0,
             "tick_acceleration_ratio": 1.0,
             "curr_vs_micro_vwap_bp": -4.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
         },
     )
 
@@ -8738,6 +9449,9 @@ def test_late_entry_price_drift_guard_does_not_treat_refresh_only_as_latency_con
             "buy_pressure_10t": -10.0,
             "tick_acceleration_ratio": 0.5,
             "curr_vs_micro_vwap_bp": -5.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
         },
     )
 
@@ -8775,8 +9489,13 @@ def test_weak_context_late_entry_guard_blocks_when_recent_block_history_and_weak
         now_ts=now_ts,
         latency_gate={
             "buy_pressure_10t": -12.0,
+            "tick_aggressor_pressure_usable": True,
+            "tick_aggressor_trusted_count": 2,
             "tick_acceleration_ratio": 1.0,
             "curr_vs_micro_vwap_bp": -4.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
         },
         late_drift_guard={"blocked": False, "fields": {"late_entry_latency_relevant": False}},
     )
@@ -8785,6 +9504,43 @@ def test_weak_context_late_entry_guard_blocks_when_recent_block_history_and_weak
     assert result["fields"]["recent_blocked_strength_count"] == 1
     assert result["fields"]["recent_blocked_vpw_count"] == 1
     assert "micro_vwap_negative" in result["reason"]
+
+
+def test_weak_context_late_entry_guard_does_not_block_on_missing_micro_fields(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        WEAK_CONTEXT_LATE_ENTRY_GUARD_ENABLED=True,
+        WEAK_CONTEXT_LATE_ENTRY_LOOKBACK_SEC=900,
+        WEAK_CONTEXT_LATE_ENTRY_MIN_BLOCK_COUNT=2,
+        WEAK_CONTEXT_LATE_ENTRY_MIN_TICK_ACCEL=1.10,
+        WEAK_CONTEXT_LATE_ENTRY_MIN_BUY_PRESSURE=0.0,
+        WEAK_CONTEXT_LATE_ENTRY_MIN_MICRO_VWAP_BP=0.0,
+    )
+    now_ts = state_handlers.time.time()
+    stock = {
+        "name": "missing-micro",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "trade_quality_block_history": [
+            {"stage": "blocked_strength_momentum", "ts": now_ts - 120, "risk_state": "weak_momentum_context"},
+            {"stage": "blocked_vpw", "ts": now_ts - 30, "risk_state": "below_static_vpw_context"},
+        ],
+    }
+
+    result = state_handlers._evaluate_weak_context_late_entry_guard(
+        strategy="SCALPING",
+        stock=stock,
+        now_ts=now_ts,
+        latency_gate={},
+        late_drift_guard={"blocked": False, "fields": {"late_entry_latency_relevant": False}},
+    )
+
+    assert result["blocked"] is False
+    assert result["reason"] == "current_submit_context_not_weak"
+    assert result["fields"]["weak_context_guard_weak_signal_count"] == 0
+    assert result["fields"]["weak_context_guard_buy_pressure_available"] is False
 
 
 def test_weak_context_late_entry_guard_uses_late_drift_micro_fallback(monkeypatch):
@@ -8854,6 +9610,9 @@ def test_weak_context_late_entry_guard_uses_ai_source_quality_fallback(monkeypat
             "buy_pressure_10t": "68.31",
             "tick_acceleration_ratio": "1.00",
             "curr_vs_micro_vwap_bp": "41.48",
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
         },
         "trade_quality_block_history": [
             {"stage": "blocked_strength_momentum", "ts": now_ts - 120, "risk_state": "weak_momentum_context"},
@@ -8900,6 +9659,9 @@ def test_weak_context_late_entry_guard_does_not_block_with_insufficient_history(
             "buy_pressure_10t": -5.0,
             "tick_acceleration_ratio": 0.8,
             "curr_vs_micro_vwap_bp": -2.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
         },
         late_drift_guard={"blocked": False, "fields": {"late_entry_latency_relevant": False}},
     )
@@ -8924,6 +9686,9 @@ def test_weak_context_late_entry_guard_skips_when_entry_live_tuning_selected(mon
             "buy_pressure_10t": -10.0,
             "tick_acceleration_ratio": 0.9,
             "curr_vs_micro_vwap_bp": -1.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
         },
         late_drift_guard={"blocked": False, "fields": {"late_entry_latency_relevant": True, "late_entry_price_drift_bps": 40.0}},
     )
@@ -8968,7 +9733,7 @@ def test_scalping_pre_ai_soft_gate_allows_ai_and_blocks_low_liquidity_at_submit(
 
         def analyze_target(self, _name, ws_data, *_args, **_kwargs):
             self.seen_context = ws_data.get("scalp_pre_ai_gate_context")
-            return {"action": "BUY", "score": 90, "reason": "confirmed"}
+            return {"action": "BUY", "score": 90, "reason": "confirmed", "ai_result_source": "live", "ai_parse_ok": True}
 
     class DummyEventBus:
         def publish(self, *args, **kwargs):
@@ -9005,8 +9770,8 @@ def test_scalping_pre_ai_soft_gate_allows_ai_and_blocks_low_liquidity_at_submit(
     monkeypatch.setattr(state_handlers, "arm_big_bite_if_triggered", lambda **kwargs: (False, {}))
     monkeypatch.setattr(state_handlers, "confirm_big_bite_follow_through", lambda **kwargs: (True, {}))
     monkeypatch.setattr(state_handlers, "build_tick_data_from_ws", lambda ws_data: {})
-    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [{"dir": "BUY", "volume": 1, "strength": 100}])
-    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [{"고가": 10000, "저가": 9900}])
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: _trusted_orderbook_touch_ticks(price=10_000, hhmm="13:55"))
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: _micro_vwap_candles(price=10_000))
     monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000)
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
@@ -9112,7 +9877,13 @@ def test_pre_submit_liquidity_relief_allows_strong_bundle_submit(monkeypatch):
 
     class DummyAI:
         def analyze_target(self, _name, ws_data, *_args, **_kwargs):
-            return {"action": "BUY", "score": 90, "reason": "strong bundle confirmed"}
+            return {
+                "action": "BUY",
+                "score": 90,
+                "reason": "strong bundle confirmed",
+                "ai_result_source": "live",
+                "ai_parse_ok": True,
+            }
 
     class DummyEventBus:
         def publish(self, *args, **kwargs):
@@ -9149,8 +9920,8 @@ def test_pre_submit_liquidity_relief_allows_strong_bundle_submit(monkeypatch):
     monkeypatch.setattr(state_handlers, "arm_big_bite_if_triggered", lambda **kwargs: (False, {}))
     monkeypatch.setattr(state_handlers, "confirm_big_bite_follow_through", lambda **kwargs: (True, {}))
     monkeypatch.setattr(state_handlers, "build_tick_data_from_ws", lambda ws_data: {})
-    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [{"dir": "BUY", "volume": 1, "strength": 100}])
-    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [{"고가": 10000, "저가": 9900}])
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: _trusted_orderbook_touch_ticks(price=10_000, hhmm="13:55"))
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: _micro_vwap_candles(price=10_000))
     monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000)
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
@@ -9206,8 +9977,13 @@ def test_pre_submit_liquidity_relief_allows_strong_bundle_submit(monkeypatch):
             "fluctuation": 1.0,
             "tick_acceleration_ratio": 1.25,
             "curr_vs_micro_vwap_bp": 5.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
             "buy_pressure_10t": 72.0,
-            "orderbook": {
+                "tick_aggressor_pressure_usable": True,
+                "tick_aggressor_trusted_count": 3,
+                "orderbook": {
                 "asks": [{"price": 10_010, "volume": 100}],
                 "bids": [{"price": 10_000, "volume": 100}],
             },
@@ -9250,6 +10026,9 @@ def test_pre_submit_liquidity_relief_requires_strong_bundle_path(monkeypatch):
             "quote_stale": False,
             "tick_acceleration_ratio": 1.25,
             "curr_vs_micro_vwap_bp": 5.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
             "buy_pressure_10t": 72.0,
         },
         strategy="SCALPING",
@@ -9267,6 +10046,55 @@ def test_pre_submit_liquidity_relief_requires_strong_bundle_path(monkeypatch):
 
     assert decision["allowed"] is False
     assert decision["relief_skip_reason"] == "not_strong_bundle_path"
+
+
+def test_pre_submit_liquidity_relief_blocks_untrusted_buy_pressure(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_ENABLED=True,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_AI_SCORE=75,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_TICK_ACCEL=1.10,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_BUY_PRESSURE=68.0,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_MICRO_VWAP_BP=0.0,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MAX_PER_SYMBOL=1,
+    )
+    stock = {
+        "id": 121,
+        "name": "UNTRUSTEDPRESSURE",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_reason": "price_jump_start_acceleration",
+        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+    }
+
+    decision = state_handlers._resolve_pre_submit_liquidity_relief(
+        stock,
+        {
+            "quote_stale": False,
+            "tick_acceleration_ratio": 1.25,
+            "curr_vs_micro_vwap_bp": 12.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "buy_pressure_10t": 92.0,
+        },
+        strategy="SCALPING",
+        ai_score=82,
+        liquidity_value=59_808_000,
+        min_liquidity=350_000_000,
+        latency_gate={"latency_state": "SAFE", "quote_stale": False},
+        guard_fields={},
+        submit_fields={},
+        price_snapshot={},
+        orderbook_fields={},
+        microstructure_fields={},
+        pre_ai_fields={},
+    )
+
+    assert decision["allowed"] is False
+    assert decision["relief_skip_reason"] == "tick_aggressor_pressure_unusable"
+    assert decision["tick_aggressor_pressure_usable"] is False
+    assert decision["buy_pressure_10t_source"] == "current_submit_snapshot"
 
 
 def test_pre_submit_liquidity_relief_allows_signature_micro_pressure_path_when_tick_accel_missing(monkeypatch):
@@ -9294,7 +10122,12 @@ def test_pre_submit_liquidity_relief_allows_signature_micro_pressure_path_when_t
             "quote_stale": False,
             "tick_acceleration_ratio": 0.0,
             "curr_vs_micro_vwap_bp": 43.69,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
             "buy_pressure_10t": 93.69,
+            "tick_aggressor_pressure_usable": True,
+            "tick_aggressor_trusted_count": 3,
         },
         strategy="SCALPING",
         ai_score=82,
@@ -9340,6 +10173,9 @@ def test_pre_submit_liquidity_relief_blocks_latency_canary_allowed_danger(monkey
             "quote_stale": False,
             "tick_acceleration_ratio": 1.0,
             "curr_vs_micro_vwap_bp": 13.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
             "buy_pressure_10t": 86.0,
         },
         strategy="SCALPING",
@@ -9391,6 +10227,9 @@ def test_pre_submit_liquidity_relief_still_blocks_raw_latency_danger(monkeypatch
             "quote_stale": False,
             "tick_acceleration_ratio": 1.0,
             "curr_vs_micro_vwap_bp": 13.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
             "buy_pressure_10t": 86.0,
         },
         strategy="SCALPING",
@@ -9432,7 +10271,12 @@ def test_pre_submit_liquidity_relief_uses_recent_ai_feature_probe_when_submit_fe
         "last_watching_ai_feature_probe": {
             "tick_acceleration_ratio": 1.667,
             "curr_vs_micro_vwap_bp": 13.46,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
             "buy_pressure_10t": 72.73,
+            "tick_aggressor_pressure_usable": True,
+            "tick_aggressor_trusted_count": 3,
         },
         "last_watching_ai_feature_probe_at": now - 8.0,
     }
@@ -9443,6 +10287,9 @@ def test_pre_submit_liquidity_relief_uses_recent_ai_feature_probe_when_submit_fe
             "quote_stale": False,
             "tick_acceleration_ratio": 0.0,
             "curr_vs_micro_vwap_bp": 0.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
             "buy_pressure_10t": 0.0,
         },
         strategy="SCALPING",
@@ -9487,6 +10334,9 @@ def test_pre_submit_liquidity_relief_ignores_stale_ai_feature_probe(monkeypatch)
         "last_watching_ai_feature_probe": {
             "tick_acceleration_ratio": 1.667,
             "curr_vs_micro_vwap_bp": 13.46,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
             "buy_pressure_10t": 72.73,
         },
         "last_watching_ai_feature_probe_at": now - 90.0,
@@ -9498,6 +10348,9 @@ def test_pre_submit_liquidity_relief_ignores_stale_ai_feature_probe(monkeypatch)
             "quote_stale": False,
             "tick_acceleration_ratio": 0.0,
             "curr_vs_micro_vwap_bp": 0.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
             "buy_pressure_10t": 0.0,
         },
         strategy="SCALPING",
@@ -9547,7 +10400,7 @@ def test_scalping_overbought_reaches_ai_but_submit_requires_pullback_or_rebreak(
 
     class DummyAI:
         def analyze_target(self, *args, **kwargs):
-            return {"action": "BUY", "score": 91, "reason": "confirmed"}
+            return {"action": "BUY", "score": 91, "reason": "confirmed", "ai_result_source": "live", "ai_parse_ok": True}
 
     state_handlers.EVENT_BUS = type("DummyEventBus", (), {"publish": lambda self, *args, **kwargs: None})()
     logs = []
@@ -9560,8 +10413,8 @@ def test_scalping_overbought_reaches_ai_but_submit_requires_pullback_or_rebreak(
     monkeypatch.setattr(state_handlers, "arm_big_bite_if_triggered", lambda **kwargs: (False, {}))
     monkeypatch.setattr(state_handlers, "confirm_big_bite_follow_through", lambda **kwargs: (True, {}))
     monkeypatch.setattr(state_handlers, "build_tick_data_from_ws", lambda ws_data: {})
-    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [{"dir": "BUY", "volume": 1, "strength": 110}])
-    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [{"고가": 12_000, "저가": 10_000}])
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: _trusted_orderbook_touch_ticks(price=12_000, hhmm="14:00"))
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: _micro_vwap_candles(price=12_000))
     monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000)
     monkeypatch.setattr(state_handlers.kiwoom_orders, "describe_buy_capacity", lambda *args, **kwargs: (100_000, 95_000, 5, 0.95))
     monkeypatch.setattr(state_handlers.kiwoom_orders, "send_buy_order", lambda *args, **kwargs: sent_orders.append(args) or {"return_code": "0", "ord_no": "O1"})
@@ -15305,6 +16158,9 @@ def test_bad_entry_block_observe_logs_never_green_ai_fade(monkeypatch):
             "tick_acceleration_ratio": 0.80,
             "large_sell_print_detected": True,
             "curr_vs_micro_vwap_bp": -12.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
         },
     }
 
@@ -15379,6 +16235,9 @@ def test_bad_entry_refined_canary_exits_before_soft_stop(monkeypatch):
             "tick_acceleration_ratio": 0.50,
             "large_sell_print_detected": True,
             "curr_vs_micro_vwap_bp": -24.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
             "net_aggressive_delta_10t": -500,
             "same_price_buy_absorption": 0,
             "microprice_edge_bp": -3.0,
@@ -15462,6 +16321,9 @@ def test_bad_entry_refined_observe_logs_when_canary_disabled(monkeypatch):
             "tick_acceleration_ratio": 0.50,
             "large_sell_print_detected": True,
             "curr_vs_micro_vwap_bp": -24.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
             "net_aggressive_delta_10t": -500,
             "same_price_buy_absorption": 0,
             "microprice_edge_bp": -3.0,
@@ -15543,6 +16405,9 @@ def test_bad_entry_refined_canary_skips_recovered_peak(monkeypatch):
             "tick_acceleration_ratio": 0.50,
             "large_sell_print_detected": True,
             "curr_vs_micro_vwap_bp": -24.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
             "net_aggressive_delta_10t": -500,
         },
     }
@@ -15725,16 +16590,22 @@ def _dynamic_soft_stop_stock(**overrides):
         "strategy": "SCALPING",
         "buy_price": 10000,
         "buy_qty": 10,
-        "rt_ai_prob": 0.68,
+        **_fresh_holding_score_fields(68),
         "last_reversal_features": {
             "buy_pressure_10t": 62.0,
             "tick_acceleration_ratio": 1.05,
             "large_sell_print_detected": False,
             "curr_vs_micro_vwap_bp": -2.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "minute_candle_latest_age_ms": 100,
             "net_aggressive_delta_10t": 300,
             "same_price_buy_absorption": 3,
             "microprice_edge_bp": 1.5,
             "top3_depth_ratio": 1.05,
+            "tick_aggressor_trusted_count": 4,
+            "tick_aggressor_pressure_usable": True,
         },
     }
     stock.update(overrides)
@@ -15763,6 +16634,12 @@ def test_scalp_soft_stop_dynamic_grace_defers_real_position_before_existing_grac
     assert dynamic_logs
     assert dynamic_logs[-1]["soft_stop_dynamic_grace_sec"] == 90
     assert dynamic_logs[-1]["soft_stop_dynamic_grace_applied"] is True
+    assert dynamic_logs[-1]["curr_vs_micro_vwap_bp"] == "-2.00"
+    assert dynamic_logs[-1]["micro_vwap_available"] is True
+    assert dynamic_logs[-1]["minute_candle_window_fresh"] is True
+    assert dynamic_logs[-1]["minute_candle_latest_age_ms"] == 100
+    assert dynamic_logs[-1]["micro_context_usable"] is True
+    assert dynamic_logs[-1]["reversal_feature_source_quality"] == "usable"
     assert not exit_logs
     assert not exit_calls
 
@@ -15793,6 +16670,164 @@ def test_scalp_soft_stop_dynamic_grace_rejects_unusable_holding_ai_score(monkeyp
     assert decision["ai_score_usable"] is False
     assert decision["ai_score_source"] == "holding_ai_not_called"
     assert decision["ai_score_data_quality"] == "stale"
+
+
+def test_scalp_soft_stop_dynamic_grace_rejects_ai_without_provenance(monkeypatch):
+    state_handlers.TRADING_RULES = _dynamic_soft_stop_grace_config()
+    stock = _dynamic_soft_stop_stock()
+    for key in (
+        "holding_score_effective_usable",
+        "holding_score_data_quality",
+        "holding_score_source",
+        "holding_ai_score_source",
+        "current_ai_score_source",
+        "holding_score_raw",
+        "holding_score_effective",
+        "holding_score_last_effective_at",
+    ):
+        stock.pop(key, None)
+
+    decision = state_handlers._build_soft_stop_dynamic_grace_decision(
+        stock,
+        strategy="SCALPING",
+        now_ts=1_000.0,
+        profit_rate=-1.85,
+        current_ai_score=72,
+        dynamic_stop_pct=-1.50,
+        hard_stop_pct=-2.50,
+        quote_stale=False,
+        source_quality_hard_gap=False,
+    )
+
+    assert decision["should_defer"] is False
+    assert decision["skip_reason"] == "ai_score_unusable"
+    assert decision["ai_score_usable"] is False
+    assert decision["ai_score_source"] == "-"
+    assert decision["ai_score_data_quality"] == "insufficient"
+
+
+def test_scalp_soft_stop_dynamic_grace_does_not_score_untrusted_pressure(monkeypatch):
+    state_handlers.TRADING_RULES = _dynamic_soft_stop_grace_config()
+    stock = _dynamic_soft_stop_stock(
+        last_reversal_features={
+            "buy_pressure_10t": 92.0,
+            "tick_acceleration_ratio": 0.70,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": -10.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "net_aggressive_delta_10t": 900,
+            "same_price_buy_absorption": 6,
+            "microprice_edge_bp": -1.0,
+            "top3_depth_ratio": 2.0,
+        },
+    )
+
+    decision = state_handlers._build_soft_stop_dynamic_grace_decision(
+        stock,
+        strategy="SCALPING",
+        now_ts=1_000.0,
+        profit_rate=-1.85,
+        current_ai_score=72,
+        dynamic_stop_pct=-1.50,
+        hard_stop_pct=-2.50,
+        quote_stale=False,
+        source_quality_hard_gap=False,
+    )
+
+    assert decision["tick_aggressor_pressure_usable"] is False
+    assert decision["tick_aggressor_pressure_source_quality"] == "unusable"
+    assert decision["absorption_score"] == 0
+    assert decision["positive_micro"] is False
+    assert decision["reason"] == "weak_confirmed_soft_stop_dynamic_grace"
+
+
+def test_scalp_soft_stop_dynamic_grace_does_not_score_stale_micro_context(monkeypatch):
+    state_handlers.TRADING_RULES = _dynamic_soft_stop_grace_config()
+    stock = _dynamic_soft_stop_stock(
+        last_reversal_features={
+            "buy_pressure_10t": 92.0,
+            "tick_acceleration_ratio": 1.20,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 15.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "net_aggressive_delta_10t": 900,
+            "same_price_buy_absorption": 6,
+            "microprice_edge_bp": 2.0,
+            "top3_depth_ratio": 0.8,
+            "tick_aggressor_trusted_count": 6,
+            "tick_aggressor_pressure_usable": True,
+            "tick_context_quality": "stale_tick",
+            "tick_context_stale": True,
+            "tick_latest_age_ms": 30_000,
+            "quote_stale": False,
+            "quote_age_ms": 100,
+        },
+    )
+
+    decision = state_handlers._build_soft_stop_dynamic_grace_decision(
+        stock,
+        strategy="SCALPING",
+        now_ts=1_000.0,
+        profit_rate=-1.85,
+        current_ai_score=72,
+        dynamic_stop_pct=-1.50,
+        hard_stop_pct=-2.50,
+        quote_stale=False,
+        source_quality_hard_gap=False,
+    )
+
+    assert decision["micro_context_usable"] is False
+    assert decision["tick_aggressor_pressure_usable"] is False
+    assert decision["absorption_score"] == 0
+    assert decision["positive_micro"] is False
+    assert decision["reversal_feature_source_quality"] == "stale"
+    assert "tick_context_stale" in decision["reversal_feature_stale_reason"]
+
+
+def test_scalp_soft_stop_dynamic_grace_does_not_score_micro_vwap_without_provenance(monkeypatch):
+    state_handlers.TRADING_RULES = _dynamic_soft_stop_grace_config()
+    stock = _dynamic_soft_stop_stock(
+        last_reversal_features={
+            "buy_pressure_10t": 92.0,
+            "tick_acceleration_ratio": 1.20,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 15.0,
+            "net_aggressive_delta_10t": 900,
+            "same_price_buy_absorption": 6,
+            "microprice_edge_bp": 2.0,
+            "top3_depth_ratio": 0.8,
+            "tick_aggressor_trusted_count": 6,
+            "tick_aggressor_pressure_usable": True,
+            "tick_context_quality": "fresh_computed",
+            "tick_context_stale": False,
+            "tick_latest_age_ms": 100,
+            "quote_stale": False,
+            "quote_age_ms": 100,
+        },
+    )
+
+    decision = state_handlers._build_soft_stop_dynamic_grace_decision(
+        stock,
+        strategy="SCALPING",
+        now_ts=1_000.0,
+        profit_rate=-1.85,
+        current_ai_score=72,
+        dynamic_stop_pct=-1.50,
+        hard_stop_pct=-2.50,
+        quote_stale=False,
+        source_quality_hard_gap=False,
+    )
+
+    assert decision["micro_context_usable"] is False
+    assert decision["tick_aggressor_pressure_usable"] is False
+    assert decision["absorption_score"] == 0
+    assert decision["positive_micro"] is False
+    assert decision["reason"] == "weak_confirmed_soft_stop_dynamic_grace"
+    assert "micro_vwap_provenance_missing" in decision["reversal_feature_stale_reason"]
 
 
 def test_scalp_soft_stop_dynamic_grace_excludes_sim_probe_position(monkeypatch):
@@ -15841,6 +16876,11 @@ def test_scalp_soft_stop_dynamic_grace_skips_when_formal_holding_exit_tuning_sel
     assert not dynamic_logs
     assert dynamic_exit_logs
     assert dynamic_exit_logs[-1]["soft_stop_dynamic_grace_skip_reason"] == "formal_holding_exit_live_tuning_selected"
+    assert dynamic_exit_logs[-1]["curr_vs_micro_vwap_bp"] == "-2.00"
+    assert dynamic_exit_logs[-1]["micro_vwap_available"] is True
+    assert dynamic_exit_logs[-1]["minute_candle_window_fresh"] is True
+    assert dynamic_exit_logs[-1]["minute_candle_latest_age_ms"] == 100
+    assert dynamic_exit_logs[-1]["micro_context_usable"] is True
     assert stock["status"] == "SELL_ORDERED"
     assert stock["last_exit_rule"] == "scalp_soft_stop_pct"
     assert exit_calls
@@ -16141,7 +17181,7 @@ def test_never_green_defer_clamp_clamps_loss_position_after_repeated_defer(monke
         "holding_flow_override_candidate_profit": -0.10,
         "holding_flow_override_defer_count": 2,
         "holding_flow_override_last_defer_micro_vwap_bp": -1.0,
-        "last_reversal_features": {"curr_vs_micro_vwap_bp": -4.0},
+        "last_reversal_features": _trusted_reversal_features(curr_vs_micro_vwap_bp=-4.0),
     }
 
     result = state_handlers._evaluate_holding_flow_override(
@@ -16201,7 +17241,7 @@ def test_never_green_defer_clamp_clamps_on_second_defer_boundary(monkeypatch):
         "holding_flow_override_candidate_profit": -0.10,
         "holding_flow_override_defer_count": 1,
         "holding_flow_override_last_defer_micro_vwap_bp": -0.5,
-        "last_reversal_features": {"curr_vs_micro_vwap_bp": -3.0},
+        "last_reversal_features": _trusted_reversal_features(curr_vs_micro_vwap_bp=-3.0),
     }
 
     result = state_handlers._evaluate_holding_flow_override(
@@ -16226,6 +17266,70 @@ def test_never_green_defer_clamp_clamps_on_second_defer_boundary(monkeypatch):
     assert result is True
     assert any(stage == "holding_flow_override_clamped_never_green_loss" for stage, _ in logs)
     assert not any(stage == "holding_flow_override_defer_exit" for stage, _ in logs)
+
+
+def test_never_green_defer_clamp_ignores_micro_vwap_without_provenance(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        HOLDING_FLOW_OVERRIDE_ENABLED=True,
+        NEVER_GREEN_DEFER_CLAMP_ENABLED=True,
+        NEVER_GREEN_DEFER_CLAMP_MAX_PEAK_PROFIT_PCT=0.05,
+        NEVER_GREEN_DEFER_CLAMP_MIN_DEFER_COUNT=2,
+        NEVER_GREEN_DEFER_CLAMP_MAX_MICRO_VWAP_BP=0.0,
+        NEVER_GREEN_DEFER_CLAMP_MIN_LOSS_PCT=0.0,
+        HOLDING_EXIT_LIVE_TUNING_SELECTED=False,
+    )
+    logs = []
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", lambda stock, code, stage, **fields: logs.append((stage, fields)))
+    monkeypatch.setattr(state_handlers, "_append_holding_flow_history", lambda *args, **kwargs: None)
+
+    class DummyAI:
+        def evaluate_scalping_holding_flow(self, *args, **kwargs):
+            return {"action": "HOLD", "flow_state": "watch", "score": 55, "reason": "defer"}
+
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [{"price": "1000"}])
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [{"close": "1000"}])
+    state_handlers.KIWOOM_TOKEN = "token"
+    stock = {
+        "name": "TEST",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "status": "HOLDING",
+        "holding_flow_override_candidate_key": "scalp_soft_stop_pct:SOFT_STOP",
+        "holding_flow_override_started_at": state_handlers.time.time() - 60,
+        "holding_flow_override_candidate_profit": -0.10,
+        "holding_flow_override_defer_count": 2,
+        "holding_flow_override_last_defer_micro_vwap_bp": -1.0,
+        "last_reversal_features": {"curr_vs_micro_vwap_bp": -4.0},
+    }
+
+    result = state_handlers._evaluate_holding_flow_override(
+        stock=stock,
+        code="000000",
+        strategy="SCALPING",
+        ws_data={"curr": 995, "orderbook": {"bids": [{"price": 995, "volume": 10}]}},
+        ai_engine=DummyAI(),
+        exit_rule="scalp_soft_stop_pct",
+        sell_reason_type="SOFT_STOP",
+        reason="soft stop",
+        profit_rate=-0.2,
+        peak_profit=0.0,
+        drawdown=0.2,
+        current_ai_score=61.0,
+        held_sec=120,
+        curr_price=995,
+        buy_price=1000.0,
+        now_ts=state_handlers.time.time(),
+    )
+
+    defer_logs = [fields for stage, fields in logs if stage == "holding_flow_override_defer_exit"]
+    assert result is False
+    assert not any(stage == "holding_flow_override_clamped_never_green_loss" for stage, _ in logs)
+    assert defer_logs
+    assert defer_logs[-1]["micro_context_usable"] is False
+    assert "micro_vwap_provenance_missing" in defer_logs[-1]["reversal_feature_stale_reason"]
 
 
 def test_never_green_defer_clamp_does_not_clamp_when_peak_profit_was_positive(monkeypatch):
@@ -16260,7 +17364,7 @@ def test_never_green_defer_clamp_does_not_clamp_when_peak_profit_was_positive(mo
         "holding_flow_override_candidate_profit": -0.10,
         "holding_flow_override_defer_count": 2,
         "holding_flow_override_last_defer_micro_vwap_bp": -1.0,
-        "last_reversal_features": {"curr_vs_micro_vwap_bp": -4.0},
+        "last_reversal_features": _trusted_reversal_features(curr_vs_micro_vwap_bp=-4.0),
     }
 
     result = state_handlers._evaluate_holding_flow_override(
@@ -16348,7 +17452,7 @@ def test_never_green_defer_clamp_applies_to_ofi_bullish_debounce(monkeypatch):
         "holding_flow_override_candidate_profit": -0.10,
         "holding_flow_override_defer_count": 1,
         "holding_flow_override_last_defer_micro_vwap_bp": -0.5,
-        "last_reversal_features": {"curr_vs_micro_vwap_bp": -2.5},
+        "last_reversal_features": _trusted_reversal_features(curr_vs_micro_vwap_bp=-2.5),
     }
 
     result = state_handlers._evaluate_holding_flow_override(
@@ -16373,6 +17477,99 @@ def test_never_green_defer_clamp_applies_to_ofi_bullish_debounce(monkeypatch):
     assert result is True
     assert any(stage == "holding_flow_override_clamped_never_green_loss" for stage, _ in logs)
     assert not any(stage == "holding_flow_override_defer_exit" for stage, _ in logs)
+
+
+def test_holding_flow_ofi_debounce_ignores_micro_vwap_without_provenance(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        HOLDING_FLOW_OVERRIDE_ENABLED=True,
+        HOLDING_FLOW_OFI_SMOOTHING_OVERRIDE_ENABLED=True,
+        NEVER_GREEN_DEFER_CLAMP_ENABLED=True,
+        NEVER_GREEN_DEFER_CLAMP_MAX_PEAK_PROFIT_PCT=0.05,
+        NEVER_GREEN_DEFER_CLAMP_MIN_DEFER_COUNT=2,
+        NEVER_GREEN_DEFER_CLAMP_MAX_MICRO_VWAP_BP=0.0,
+        NEVER_GREEN_DEFER_CLAMP_MIN_LOSS_PCT=0.0,
+        HOLDING_EXIT_LIVE_TUNING_SELECTED=False,
+    )
+    logs = []
+    orig_rule_float = state_handlers._rule_float
+    monkeypatch.setattr(
+        state_handlers,
+        "_rule_float",
+        lambda name, default=0.0: (
+            -3.0 if name == "HOLDING_FLOW_OFI_DEBOUNCE_MIN_MICRO_VWAP_BP" else orig_rule_float(name, default)
+        ),
+    )
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", lambda stock, code, stage, **fields: logs.append((stage, fields)))
+    monkeypatch.setattr(state_handlers, "_append_holding_flow_history", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        state_handlers,
+        "_evaluate_holding_flow_ofi_state",
+        lambda *args, **kwargs: (
+            {},
+            SimpleNamespace(
+                regime=state_handlers.OFI_STABLE_BULLISH,
+                usable=True,
+                reason="test",
+                micro_score_raw=None,
+                micro_score_smooth=0.0,
+                bullish_count=0,
+                bearish_count=0,
+                snapshot_age_ms=None,
+            ),
+        ),
+    )
+
+    class DummyAI:
+        def evaluate_scalping_holding_flow(self, *args, **kwargs):
+            return {"action": "EXIT", "flow_state": "watch", "score": 55, "reason": "exit"}
+
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [{"price": "1000"}])
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [{"close": "1000"}])
+    state_handlers.KIWOOM_TOKEN = "token"
+    stock = {
+        "name": "TEST",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "status": "HOLDING",
+        "holding_flow_override_candidate_key": "scalp_soft_stop_pct:SOFT_STOP",
+        "holding_flow_override_started_at": state_handlers.time.time() - 60,
+        "holding_flow_override_candidate_profit": -0.10,
+        "holding_flow_override_defer_count": 1,
+        "holding_flow_override_last_defer_micro_vwap_bp": -0.5,
+        "last_reversal_features": {"curr_vs_micro_vwap_bp": -2.5},
+    }
+
+    result = state_handlers._evaluate_holding_flow_override(
+        stock=stock,
+        code="000000",
+        strategy="SCALPING",
+        ws_data={"curr": 995, "orderbook": {"bids": [{"price": 995, "volume": 10}]}},
+        ai_engine=DummyAI(),
+        exit_rule="scalp_soft_stop_pct",
+        sell_reason_type="SOFT_STOP",
+        reason="soft stop",
+        profit_rate=-0.2,
+        peak_profit=0.0,
+        drawdown=0.2,
+        current_ai_score=61.0,
+        held_sec=120,
+        curr_price=995,
+        buy_price=1000.0,
+        now_ts=state_handlers.time.time(),
+    )
+
+    smoothing_logs = [fields for stage, fields in logs if stage == "holding_flow_ofi_smoothing_applied"]
+    assert result is True
+    assert smoothing_logs
+    assert smoothing_logs[-1]["final_flow_action"] == "EXIT"
+    assert smoothing_logs[-1]["ofi_debounce_reason"] == "micro_context_unusable"
+    assert smoothing_logs[-1]["ofi_debounce_micro_context_usable"] is False
+    assert "micro_vwap_provenance_missing" in smoothing_logs[-1]["reversal_feature_stale_reason"]
+    assert not any(stage == "holding_flow_override_defer_exit" for stage, _ in logs)
+
 
 def test_scalp_soft_stop_dynamic_grace_exits_after_max_worsen(monkeypatch):
     state_handlers.TRADING_RULES = _dynamic_soft_stop_grace_config()
@@ -16408,6 +17605,16 @@ def _install_soft_stop_expert_test_doubles(monkeypatch):
     state_handlers.LAST_AI_CALL_TIMES = {}
     state_handlers.LAST_LOG_TIMES = {}
     state_handlers.DB = _DummyDB()
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = cls(2026, 5, 4, 15, 0, 0)
+            if tz is not None:
+                return value.replace(tzinfo=tz)
+            return value
+
+    monkeypatch.setattr(state_handlers, "datetime", FixedDateTime)
 
     pipeline_logs = []
     exit_calls = []
@@ -16461,10 +17668,15 @@ def _soft_stop_expert_stock(**overrides):
             "tick_acceleration_ratio": 1.05,
             "large_sell_print_detected": False,
             "curr_vs_micro_vwap_bp": -2.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
             "net_aggressive_delta_10t": 300,
             "same_price_buy_absorption": 3,
             "microprice_edge_bp": 1.5,
             "top3_depth_ratio": 1.05,
+            "tick_aggressor_trusted_count": 4,
+            "tick_aggressor_pressure_usable": True,
         },
     }
     stock.update(overrides)
@@ -16500,7 +17712,43 @@ def test_soft_stop_expert_absorption_extends_after_micro_grace(monkeypatch):
     assert not exit_calls
 
 
-def test_soft_stop_expert_thesis_veto_blocks_absorption_extension(monkeypatch):
+def test_soft_stop_expert_absorption_ignores_untrusted_pressure_axes(monkeypatch):
+    state_handlers.TRADING_RULES = _soft_stop_expert_config()
+    pipeline_logs, exit_calls = _install_soft_stop_expert_test_doubles(monkeypatch)
+
+    stock = _soft_stop_expert_stock(
+        last_reversal_features={
+            "buy_pressure_10t": 92.0,
+            "tick_acceleration_ratio": 0.70,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": -10.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "net_aggressive_delta_10t": 900,
+            "same_price_buy_absorption": 6,
+            "microprice_edge_bp": -1.0,
+            "top3_depth_ratio": 2.0,
+        }
+    )
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 9840, "orderbook": {"bids": [{"price": 9840, "volume": 1000}]}},
+        admin_id=1,
+        market_regime="BULL",
+        radar=None,
+        ai_engine=None,
+    )
+
+    probe_logs = [fields for stage, fields in pipeline_logs if stage == "soft_stop_absorption_probe"]
+    assert probe_logs
+    assert probe_logs[-1]["absorption_score"] == 0
+    assert probe_logs[-1]["exclusion_reason"] == "absorption_score_low"
+
+
+def test_soft_stop_expert_absorption_ignores_micro_vwap_without_provenance(monkeypatch):
     state_handlers.TRADING_RULES = _soft_stop_expert_config()
     pipeline_logs, exit_calls = _install_soft_stop_expert_test_doubles(monkeypatch)
 
@@ -16508,13 +17756,56 @@ def test_soft_stop_expert_thesis_veto_blocks_absorption_extension(monkeypatch):
         last_reversal_features={
             "buy_pressure_10t": 70.0,
             "tick_acceleration_ratio": 1.10,
-            "large_sell_print_detected": True,
-            "curr_vs_micro_vwap_bp": -1.0,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 10.0,
             "net_aggressive_delta_10t": 400,
             "same_price_buy_absorption": 4,
             "microprice_edge_bp": 2.0,
             "top3_depth_ratio": 1.00,
+            "tick_aggressor_trusted_count": 4,
+            "tick_aggressor_pressure_usable": True,
+            "tick_context_quality": "fresh_computed",
+            "tick_context_stale": False,
+            "tick_latest_age_ms": 100,
+            "quote_stale": False,
+            "quote_age_ms": 100,
         }
+    )
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 9840, "orderbook": {"bids": [{"price": 9840, "volume": 1000}]}},
+        admin_id=1,
+        market_regime="BULL",
+        radar=None,
+        ai_engine=None,
+    )
+
+    probe_logs = [fields for stage, fields in pipeline_logs if stage == "soft_stop_absorption_probe"]
+    extend_logs = [fields for stage, fields in pipeline_logs if stage == "soft_stop_absorption_extend"]
+    assert probe_logs
+    assert probe_logs[-1]["absorption_score"] == 0
+    assert probe_logs[-1]["micro_context_usable"] is False
+    assert "micro_vwap_provenance_missing" in probe_logs[-1]["reversal_feature_stale_reason"]
+    assert not extend_logs
+
+
+def test_soft_stop_expert_thesis_veto_blocks_absorption_extension(monkeypatch):
+    state_handlers.TRADING_RULES = _soft_stop_expert_config()
+    pipeline_logs, exit_calls = _install_soft_stop_expert_test_doubles(monkeypatch)
+
+    stock = _soft_stop_expert_stock(
+        last_reversal_features=_trusted_reversal_features(
+            buy_pressure_10t=70.0,
+            tick_acceleration_ratio=1.10,
+            large_sell_print_detected=True,
+            curr_vs_micro_vwap_bp=-1.0,
+            net_aggressive_delta_10t=400,
+            same_price_buy_absorption=4,
+            microprice_edge_bp=2.0,
+            top3_depth_ratio=1.00,
+        )
     )
 
     state_handlers.handle_holding_state(
@@ -17166,6 +18457,7 @@ def test_holding_fast_reuse_band_logs_review_for_near_safe_profit(monkeypatch):
 def _reversal_add_stock(overrides=None):
     """정상 트리거 조건의 기본 stock 픽스처."""
     base = {
+        **_fresh_holding_score_fields(65),
         "reversal_add_state": "STAGNATION",
         "reversal_add_used": False,
         "reversal_add_profit_floor": -0.30,
@@ -17178,10 +18470,31 @@ def _reversal_add_stock(overrides=None):
             "tick_acceleration_ratio": 1.05,
             "large_sell_print_detected": False,
             "curr_vs_micro_vwap_bp": -2.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "tick_aggressor_trusted_count": 4,
+            "tick_aggressor_pressure_usable": True,
         },
     }
     if overrides:
+        override_features = overrides.get("last_reversal_features") if isinstance(overrides, dict) else None
         base.update(overrides)
+        if isinstance(override_features, dict) and override_features:
+            base["last_reversal_features"] = {
+                **{
+                    "buy_pressure_10t": 60.0,
+                    "tick_acceleration_ratio": 1.05,
+                    "large_sell_print_detected": False,
+                    "curr_vs_micro_vwap_bp": -2.0,
+                    "micro_vwap_available": True,
+                    "minute_candle_window_fresh": True,
+                    "minute_candle_context_quality": "fresh_bar_window",
+                    "tick_aggressor_trusted_count": 4,
+                    "tick_aggressor_pressure_usable": True,
+                },
+                **override_features,
+            }
     return base
 
 
@@ -17278,6 +18591,9 @@ def test_reversal_add_tc5_supply_conditions_not_met():
             "tick_acceleration_ratio": 1.10,  # 통과
             "large_sell_print_detected": False,  # 통과
             "curr_vs_micro_vwap_bp": -10.0,  # 실패
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
         },
     })
     from src.utils.constants import TRADING_RULES as CONFIG
@@ -17299,6 +18615,9 @@ def test_reversal_add_reports_supply_before_ai_when_both_fail():
             "tick_acceleration_ratio": 1.10,
             "large_sell_print_detected": False,
             "curr_vs_micro_vwap_bp": -10.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
         },
     })
     from src.utils.constants import TRADING_RULES as CONFIG
@@ -17322,6 +18641,9 @@ def test_reversal_add_blocks_stale_feature_context_before_avg_down():
             "tick_acceleration_ratio": 1.10,
             "large_sell_print_detected": False,
             "curr_vs_micro_vwap_bp": 0.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
             "tick_context_quality": "stale_tick",
             "tick_context_stale": "true",
             "tick_latest_age_ms": 30_000,
@@ -17349,6 +18671,46 @@ def test_reversal_add_blocks_stale_feature_context_before_avg_down():
     assert result["probe"]["micro_vwap_ok"] is False
 
 
+def test_reversal_add_blocks_missing_pressure_provenance_before_avg_down():
+    stock = _reversal_add_stock({
+        "reversal_add_ai_bottom": 42,
+        "reversal_add_ai_history": [42, 44, 50, 58],
+        "last_reversal_features": {},
+    })
+    stock["last_reversal_features"] = {
+        "buy_pressure_10t": 90.0,
+        "tick_acceleration_ratio": 1.10,
+        "large_sell_print_detected": False,
+        "curr_vs_micro_vwap_bp": 0.0,
+        "micro_vwap_available": True,
+        "minute_candle_window_fresh": True,
+        "minute_candle_context_quality": "fresh_bar_window",
+        "tick_context_quality": "live_tick",
+        "tick_context_stale": False,
+        "tick_latest_age_ms": 250,
+        "quote_stale": False,
+        "quote_age_ms": 100,
+    }
+
+    original = scale_in.TRADING_RULES
+    scale_in.TRADING_RULES = _reversal_add_rules()
+    try:
+        result = scale_in.evaluate_scalping_reversal_add(
+            stock,
+            profit_rate=-0.25,
+            current_ai_score=65,
+            held_sec=50,
+        )
+    finally:
+        scale_in.TRADING_RULES = original
+
+    assert result["should_add"] is False
+    assert result["reason"].startswith("reversal_features_stale:")
+    assert "tick_aggressor_pressure_provenance_missing" in result["reason"]
+    assert result["probe"]["reversal_feature_stale"] is True
+    assert result["probe"]["reversal_feature_source_quality"] == "stale"
+
+
 def test_aggressive_reversal_add_accepts_kistron_like_shallow_recovery():
     stock = _reversal_add_stock({
         "reversal_add_ai_bottom": 84,
@@ -17359,6 +18721,9 @@ def test_aggressive_reversal_add_accepts_kistron_like_shallow_recovery():
             "tick_acceleration_ratio": 0.0,
             "large_sell_print_detected": False,
             "curr_vs_micro_vwap_bp": -7.47,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
         },
     })
     from src.utils.constants import TRADING_RULES as CONFIG
@@ -17392,6 +18757,9 @@ def test_aggressive_reversal_add_blocks_kistron_like_collapse():
             "tick_acceleration_ratio": 1.0,
             "large_sell_print_detected": True,
             "curr_vs_micro_vwap_bp": -124.01,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
         },
     })
     from src.utils.constants import TRADING_RULES as CONFIG
@@ -17490,9 +18858,9 @@ def test_reversal_add_tc11_extended_intraday_window_allows_deeper_loss_and_longe
         scale_in.TRADING_RULES = CONFIG
 
 
-# TC-10: _extract_scalping_features 없는 엔진 → buy_pressure만으로 판단 (feat={} 시)
+# TC-10: _extract_scalping_features 없는 엔진 → feature source-quality insufficient
 def test_reversal_add_tc10_no_features_engine_buy_pressure_only():
-    # last_reversal_features가 비어있는 경우 buy_pressure 기본값(50)으로 판단 → 55 미만 → 차단
+    # last_reversal_features가 비어있는 경우 buy_pressure 기본값으로 통과시키지 않고 source-quality 부족으로 차단
     stock = _reversal_add_stock({
         "last_reversal_features": {},
         "reversal_add_ai_bottom": 42,
@@ -17502,9 +18870,8 @@ def test_reversal_add_tc10_no_features_engine_buy_pressure_only():
     scale_in.TRADING_RULES = _reversal_add_rules()
     try:
         result = scale_in.evaluate_scalping_reversal_add(stock, profit_rate=-0.25, current_ai_score=65, held_sec=50)
-        # feat={} 이면 else 분기: buy_pressure_10t=50.0 < 55 → buy_pressure_not_met
         assert result["should_add"] is False
-        assert result["reason"] == "buy_pressure_not_met(no_features)"
+        assert result["reason"] == "reversal_features_missing"
     finally:
         scale_in.TRADING_RULES = CONFIG
 
@@ -17516,6 +18883,9 @@ def test_reversal_add_probe_contains_all_predicates_when_blocked():
             "tick_acceleration_ratio": 0.91,
             "large_sell_print_detected": False,
             "curr_vs_micro_vwap_bp": -7.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
         },
         "reversal_add_ai_bottom": 40,
         "reversal_add_ai_history": [40, 44, 48],
@@ -18867,6 +20237,7 @@ def test_first_touch_avgdown_decision_gate_allows_moderate_ai_with_limited_block
     monkeypatch.setattr(state_handlers, "TRADING_RULES", CONFIG)
     stock = {
         "strategy": "SCALPING",
+        **_fresh_holding_score_fields(65, now_ts=1_000.0),
         "trade_quality_block_history": [
             {"stage": "blocked_strength_momentum", "ts": 995.0, "risk_state": "weak_momentum_context"}
             for _ in range(8)
@@ -18914,10 +20285,31 @@ def test_first_touch_avgdown_decision_gate_ignores_unusable_ai_support(monkeypat
     assert "ai_score_unusable_ignored" in blocked["fields"]["first_touch_avgdown_risk_signals"]
 
 
+def test_first_touch_avgdown_decision_gate_rejects_ai_without_provenance(monkeypatch):
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", CONFIG)
+    stock = {"strategy": "SCALPING"}
+
+    blocked = state_handlers._evaluate_first_touch_avgdown_decision_gate(
+        stock=stock,
+        ws_data={"curr": 10_000, "best_bid": 9_990, "best_ask": 10_000},
+        context_fields={},
+        current_ai_score=72,
+        peak_profit=-0.23,
+        profit_rate=-3.42,
+        now_ts=1_000.0,
+    )
+
+    assert blocked["allowed"] is False
+    assert blocked["reason"] == "insufficient_first_touch_recovery_confirmation"
+    assert blocked["fields"]["first_touch_avgdown_ai_score_usable"] is False
+    assert blocked["fields"]["first_touch_avgdown_ai_score_source"] == "-"
+    assert "ai_score_unusable_ignored" in blocked["fields"]["first_touch_avgdown_risk_signals"]
+
+
 def test_first_touch_avgdown_decision_gate_stale_prior_keeps_existing_decision(monkeypatch):
     monkeypatch.setattr(state_handlers, "TRADING_RULES", CONFIG)
     allowed = state_handlers._evaluate_first_touch_avgdown_decision_gate(
-        stock={"strategy": "SCALPING"},
+        stock={"strategy": "SCALPING", **_fresh_holding_score_fields(65, now_ts=1_000.0)},
         ws_data={"curr": 10_000, "best_bid": 9_990, "best_ask": 10_000},
         context_fields={
             "runtime_prior_context": {
@@ -18973,7 +20365,7 @@ def test_first_touch_avgdown_decision_gate_risk_prior_blocks_borderline(monkeypa
 def test_first_touch_avgdown_decision_gate_support_prior_does_not_release_hard_block(monkeypatch):
     monkeypatch.setattr(state_handlers, "TRADING_RULES", CONFIG)
     blocked = state_handlers._evaluate_first_touch_avgdown_decision_gate(
-        stock={"strategy": "SCALPING"},
+        stock={"strategy": "SCALPING", **_fresh_holding_score_fields(45, now_ts=1_000.0)},
         ws_data={"curr": 10_000, "best_bid": 9_990, "best_ask": 10_000},
         context_fields={
             "runtime_prior_context": {
@@ -18996,6 +20388,34 @@ def test_first_touch_avgdown_decision_gate_support_prior_does_not_release_hard_b
     assert "low_ai_without_recovery" in blocked["reason"]
     assert "runtime_prior_support" in blocked["fields"]["first_touch_avgdown_support_signals"]
     assert blocked["fields"]["first_touch_runtime_prior_signal"] == "support"
+
+
+def test_first_touch_avgdown_decision_gate_support_prior_does_not_replace_ai_provenance(monkeypatch):
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", CONFIG)
+    blocked = state_handlers._evaluate_first_touch_avgdown_decision_gate(
+        stock={"strategy": "SCALPING"},
+        ws_data={"curr": 10_000, "best_bid": 9_990, "best_ask": 10_000},
+        context_fields={
+            "runtime_prior_context": {
+                "status": "aggregate",
+                "sample_count": 3,
+                "loss_or_flat_rate": 0.0,
+                "recovered_rate": 1.0,
+                "blocked_recovered_rate": 0.0,
+                "signal": "support",
+                "reason": "aggregate_recovered_rate_ge_0_67",
+            }
+        },
+        current_ai_score=72,
+        peak_profit=-0.23,
+        profit_rate=-3.42,
+        now_ts=1_000.0,
+    )
+
+    assert blocked["allowed"] is False
+    assert blocked["reason"] == "insufficient_first_touch_recovery_confirmation"
+    assert blocked["fields"]["first_touch_avgdown_ai_score_usable"] is False
+    assert "runtime_prior_support" in blocked["fields"]["first_touch_avgdown_support_signals"]
 
 
 def test_first_touch_avgdown_decision_gate_allows_prior_peak_recovery(monkeypatch):
@@ -19045,6 +20465,9 @@ def test_first_touch_avgdown_decision_gate_ignores_stale_microstructure_support(
             "buy_pressure_10t": 91.0,
             "tick_acceleration_ratio": 1.25,
             "curr_vs_micro_vwap_bp": 12.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
             "tick_context_quality": "stale_tick",
             "tick_context_stale": True,
             "tick_latest_age_ms": 8000.0,
@@ -19073,7 +20496,57 @@ def test_first_touch_avgdown_decision_gate_ignores_stale_microstructure_support(
     assert blocked["fields"]["first_touch_reversal_feature_stale"] is True
 
 
-def test_first_touch_avgdown_decision_gate_uses_fresh_microstructure_support(monkeypatch):
+def test_first_touch_avgdown_decision_gate_does_not_use_unavailable_micro_vwap_support(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        SimpleNamespace(
+            SCALP_FIRST_TOUCH_AVGDOWN_DECISION_GATE_ENABLED=True,
+            SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_SUPPORT=70,
+            SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_MODERATE=60,
+            SCALP_FIRST_TOUCH_AVGDOWN_MIN_PRIOR_PEAK_PCT=0.30,
+            SCALP_FIRST_TOUCH_AVGDOWN_MAX_REPEATED_BLOCKERS_WITHOUT_SUPPORT=8,
+            SCALP_FIRST_TOUCH_AVGDOWN_LOW_AI_BLOCK=50,
+            SCALP_FIRST_TOUCH_AVGDOWN_MAX_SPREAD_BPS=80,
+            REVERSAL_ADD_MAX_TICK_AGE_MS=5000,
+            SCALP_PRE_AI_MAX_WS_AGE_SEC=3.0,
+        ),
+    )
+    stock = {
+        "strategy": "SCALPING",
+        "last_reversal_features": {
+            "buy_pressure_10t": 91.0,
+            "tick_acceleration_ratio": 1.25,
+            "curr_vs_micro_vwap_bp": 0.0,
+            "micro_vwap_available": False,
+            "tick_context_quality": "live_tick",
+            "tick_context_stale": False,
+            "tick_latest_age_ms": 250.0,
+            "quote_stale": False,
+            "quote_age_ms": 100.0,
+            "tick_aggressor_trusted_count": 5,
+            "tick_aggressor_pressure_usable": True,
+        },
+    }
+
+    blocked = state_handlers._evaluate_first_touch_avgdown_decision_gate(
+        stock=stock,
+        ws_data={"curr": 10_000, "best_bid": 9_990, "best_ask": 10_000},
+        context_fields={},
+        current_ai_score=55,
+        peak_profit=-0.10,
+        profit_rate=-3.42,
+        now_ts=1_000.0,
+    )
+
+    assert blocked["allowed"] is False
+    assert blocked["reason"] == "insufficient_first_touch_recovery_confirmation"
+    assert "micro_vwap_non_negative" not in blocked["fields"]["first_touch_avgdown_support_signals"]
+    assert "micro_vwap_unavailable" in blocked["fields"]["first_touch_reversal_feature_stale_reason"]
+    assert blocked["fields"]["first_touch_reversal_feature_source_quality"] == "stale"
+
+
+def test_first_touch_avgdown_decision_gate_does_not_use_micro_vwap_without_provenance(monkeypatch):
     monkeypatch.setattr(
         state_handlers,
         "TRADING_RULES",
@@ -19100,6 +20573,59 @@ def test_first_touch_avgdown_decision_gate_uses_fresh_microstructure_support(mon
             "tick_latest_age_ms": 250.0,
             "quote_stale": False,
             "quote_age_ms": 100.0,
+            "tick_aggressor_trusted_count": 5,
+            "tick_aggressor_pressure_usable": True,
+        },
+    }
+
+    blocked = state_handlers._evaluate_first_touch_avgdown_decision_gate(
+        stock=stock,
+        ws_data={"curr": 10_000, "best_bid": 9_990, "best_ask": 10_000},
+        context_fields={},
+        current_ai_score=55,
+        peak_profit=-0.10,
+        profit_rate=-3.42,
+        now_ts=1_000.0,
+    )
+
+    assert blocked["allowed"] is False
+    assert "micro_vwap_non_negative" not in blocked["fields"]["first_touch_avgdown_support_signals"]
+    assert "micro_vwap_provenance_missing" in blocked["fields"]["first_touch_reversal_feature_stale_reason"]
+    assert blocked["fields"]["first_touch_reversal_feature_source_quality"] == "stale"
+
+
+def test_first_touch_avgdown_decision_gate_uses_fresh_microstructure_support(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        SimpleNamespace(
+            SCALP_FIRST_TOUCH_AVGDOWN_DECISION_GATE_ENABLED=True,
+            SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_SUPPORT=70,
+            SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_MODERATE=60,
+            SCALP_FIRST_TOUCH_AVGDOWN_MIN_PRIOR_PEAK_PCT=0.30,
+            SCALP_FIRST_TOUCH_AVGDOWN_MAX_REPEATED_BLOCKERS_WITHOUT_SUPPORT=8,
+            SCALP_FIRST_TOUCH_AVGDOWN_LOW_AI_BLOCK=50,
+            SCALP_FIRST_TOUCH_AVGDOWN_MAX_SPREAD_BPS=80,
+            REVERSAL_ADD_MAX_TICK_AGE_MS=5000,
+            SCALP_PRE_AI_MAX_WS_AGE_SEC=3.0,
+        ),
+    )
+    stock = {
+        "strategy": "SCALPING",
+        "last_reversal_features": {
+            "buy_pressure_10t": 91.0,
+            "tick_acceleration_ratio": 1.25,
+            "curr_vs_micro_vwap_bp": 12.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "tick_context_quality": "live_tick",
+            "tick_context_stale": False,
+            "tick_latest_age_ms": 250.0,
+            "quote_stale": False,
+            "quote_age_ms": 100.0,
+            "tick_aggressor_trusted_count": 5,
+            "tick_aggressor_pressure_usable": True,
         },
     }
 
@@ -19144,6 +20670,9 @@ def test_first_touch_avgdown_decision_gate_context_micro_uses_stock_freshness(mo
             "buy_pressure_10t": 91.0,
             "tick_acceleration_ratio": 1.25,
             "curr_vs_micro_vwap_bp": 12.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
             "tick_context_quality": "stale_tick",
             "tick_context_stale": True,
             "tick_latest_age_ms": 8000.0,
@@ -19159,6 +20688,9 @@ def test_first_touch_avgdown_decision_gate_context_micro_uses_stock_freshness(mo
             "buy_pressure_10t": 91.0,
             "tick_acceleration_ratio": 1.25,
             "curr_vs_micro_vwap_bp": 12.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
         },
         current_ai_score=55,
         peak_profit=-0.10,
@@ -19384,6 +20916,74 @@ def test_rising_missed_first_touch_avgdown_uses_current_strength_context(monkeyp
     assert "vpw_below_base" in blocked["first_touch_avgdown_risk_signals"]
 
 
+def test_first_touch_runtime_prior_blocks_source_quality_gap(monkeypatch, tmp_path):
+    monkeypatch.setattr(state_handlers, "_FIRST_TOUCH_RUNTIME_PRIOR_REPORT_DIR", tmp_path)
+    state_handlers._FIRST_TOUCH_RUNTIME_PRIOR_CACHE.clear()
+    now_dt = datetime(2026, 7, 6, 9, 5, tzinfo=state_handlers._KST)
+    path = tmp_path / "rising_missed_intraday_feedback_2026-07-06.json"
+    path.write_text(
+        json.dumps(
+            {
+                "generated_at": now_dt.isoformat(),
+                "source_quality": {"status": "first_touch_micro_provenance_unusable"},
+                "first_touch_regression_rows": [
+                    {
+                        "record_id": "r1",
+                        "first_touch_regression_label": "first_touch_loss_or_flat",
+                        "first_touch_avgdown_decision_blocked": True,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    prior = state_handlers._first_touch_runtime_prior_context(
+        {"record_id": "r1"},
+        "000001",
+        now_dt.timestamp(),
+    )["runtime_prior_context"]
+
+    assert prior["status"] == "source_quality_blocked"
+    assert prior["signal"] == "neutral"
+    assert prior["sample_count"] == 0
+    assert prior["reason"] == "prior_report_source_quality_first_touch_micro_provenance_unusable"
+
+
+def test_pyramid_runtime_prior_blocks_source_quality_gap(monkeypatch, tmp_path):
+    monkeypatch.setattr(state_handlers, "_PYRAMID_RUNTIME_PRIOR_REPORT_DIR", tmp_path)
+    state_handlers._PYRAMID_RUNTIME_PRIOR_CACHE.clear()
+    now_dt = datetime(2026, 7, 6, 9, 5, tzinfo=state_handlers._KST)
+    path = tmp_path / "scalping_pyramid_intraday_feedback_2026-07-06.json"
+    path.write_text(
+        json.dumps(
+            {
+                "generated_at": now_dt.isoformat(),
+                "source_quality": {"status": "pressure_provenance_unusable"},
+                "pyramid_feedback_rows": [
+                    {
+                        "record_id": "p1",
+                        "stock_code": "000002",
+                        "pyramid_feedback_label": "pyramid_would_have_helped",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    prior = state_handlers._pyramid_runtime_prior_context(
+        {"record_id": "p1"},
+        "000002",
+        now_dt.timestamp(),
+    )["pyramid_runtime_prior_context"]
+
+    assert prior["status"] == "source_quality_blocked"
+    assert prior["signal"] == "neutral"
+    assert prior["sample_count"] == 0
+    assert prior["reason"] == "prior_report_source_quality_pressure_provenance_unusable"
+
+
 def test_stop_line_touch_first_touch_avgdown_logs_missing_runtime_prior(monkeypatch, tmp_path):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
@@ -19400,6 +21000,7 @@ def test_stop_line_touch_first_touch_avgdown_logs_missing_runtime_prior(monkeypa
         "buy_price": 10_000,
         "buy_qty": 1,
         "actual_order_submitted": True,
+        **_fresh_holding_score_fields(65, now_ts=1_000.0),
     }
     pipeline_events = []
     monkeypatch.setattr(
@@ -19454,6 +21055,7 @@ def test_stop_line_touch_qty_budget_block_auto_excludes_manual_control(monkeypat
         "buy_price": 300_000,
         "buy_qty": 11,
         "actual_order_submitted": True,
+        **_fresh_holding_score_fields(71, now_ts=1_000.0),
     }
     logs = []
     block_result = {
@@ -19531,6 +21133,7 @@ def test_hard_stop_qty_budget_block_does_not_auto_exclude_manual_control(monkeyp
         "buy_price": 300_000,
         "buy_qty": 11,
         "actual_order_submitted": True,
+        **_fresh_holding_score_fields(71, now_ts=1_000.0),
     }
     block_result = {
         "status": "blocked",
@@ -19597,6 +21200,7 @@ def test_soft_stop_line_touch_avg_down_defer_waits_for_extra_dip(monkeypatch):
         "buy_price": 9_880,
         "buy_qty": 1,
         "actual_order_submitted": True,
+        **_fresh_holding_score_fields(62, now_ts=1_000.0),
     }
     pipeline_events = []
     add_calls = []
@@ -19707,6 +21311,7 @@ def test_hard_stop_line_touch_avg_down_ignores_soft_stop_defer(monkeypatch):
         "buy_price": 9_880,
         "buy_qty": 1,
         "actual_order_submitted": True,
+        **_fresh_holding_score_fields(62, now_ts=1_000.0),
     }
     pipeline_events = []
     add_calls = []
@@ -19770,6 +21375,7 @@ def test_soft_stop_line_touch_avg_down_defer_submits_after_sparse_loop(monkeypat
         "buy_price": 9_880,
         "buy_qty": 1,
         "actual_order_submitted": True,
+        **_fresh_holding_score_fields(62, now_ts=1_000.0),
     }
     pipeline_events = []
     add_calls = []
@@ -20175,6 +21781,7 @@ def test_stop_line_touch_mandatory_avg_down_bypasses_recent_scale_in_cooldown(mo
         "last_add_type": "PYRAMID",
         "last_add_time": 1_930.0,
         "actual_order_submitted": True,
+        **_fresh_holding_score_fields(70, now_ts=2_000.0),
     }
     pipeline_events = []
     add_calls = []
@@ -20236,7 +21843,7 @@ def test_late_loss_avg_down_retry_includes_hanall_and_gwangju_like_cases(monkeyp
     )
 
     hanall = state_handlers._evaluate_late_loss_avg_down_retry(
-        {"strategy": "SCALPING"},
+        {"strategy": "SCALPING", **_fresh_holding_score_fields(70)},
         strategy="SCALPING",
         sell_reason_type="LOSS",
         exit_rule="scalp_soft_stop_pct",
@@ -20276,7 +21883,7 @@ def test_late_loss_avg_down_retry_includes_hanall_and_gwangju_like_cases(monkeyp
         held_sec=515,
     )
     one_used = state_handlers._evaluate_late_loss_avg_down_retry(
-        {"strategy": "SCALPING", "avg_down_count": 1},
+        {"strategy": "SCALPING", "avg_down_count": 1, **_fresh_holding_score_fields(70)},
         strategy="SCALPING",
         sell_reason_type="LOSS",
         exit_rule="scalp_soft_stop_pct",
@@ -20346,6 +21953,36 @@ def test_late_loss_avg_down_retry_rejects_unusable_holding_ai_score(monkeypatch)
     assert result["ai_score_data_quality"] == "stale"
 
 
+def test_late_loss_avg_down_retry_rejects_ai_without_provenance(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALP_LATE_LOSS_AVG_DOWN_ENABLED=True,
+        SCALP_LATE_LOSS_AVG_DOWN_MIN_PEAK_PCT=0.60,
+        SCALP_LATE_LOSS_AVG_DOWN_MIN_GIVEBACK_PCT=0.55,
+        SCALP_LATE_LOSS_AVG_DOWN_MIN_ABS_LOSS_PCT=1.50,
+        SCALP_LATE_LOSS_AVG_DOWN_MIN_HOLD_SEC=30,
+        SCALP_LATE_LOSS_AVG_DOWN_MIN_AI_SCORE=60,
+    )
+
+    result = state_handlers._evaluate_late_loss_avg_down_retry(
+        {"strategy": "SCALPING"},
+        strategy="SCALPING",
+        sell_reason_type="LOSS",
+        exit_rule="scalp_soft_stop_pct",
+        profit_rate=-2.10,
+        peak_profit=-0.23,
+        current_ai_score=70,
+        held_sec=2471,
+        now_ts=1_000.0,
+    )
+
+    assert result["should_retry"] is False
+    assert result["reason"] == "ai_score_unusable"
+    assert result["ai_score_usable"] is False
+    assert result["ai_score_source"] == "-"
+    assert result["ai_score_data_quality"] == "insufficient"
+
+
 def test_loss_fallback_ai_score_context_rejects_unusable_holding_ai_score():
     stock = {
         "strategy": "SCALPING",
@@ -20366,11 +22003,23 @@ def test_loss_fallback_ai_score_context_rejects_unusable_holding_ai_score():
     assert context["data_quality"] == "stale"
 
 
+def test_loss_fallback_ai_score_context_rejects_ai_without_provenance():
+    context = state_handlers._loss_fallback_ai_score_context(
+        {"strategy": "SCALPING"},
+        current_ai_score=72,
+        now_ts=1_000.0,
+    )
+
+    assert context["usable"] is False
+    assert context["source"] == "-"
+    assert context["data_quality"] == "insufficient"
+
+
 def test_late_loss_avg_down_price_resolver_bypasses_micro_vwap_only_for_late_retry(monkeypatch):
     scale_in.TRADING_RULES = replace(CONFIG, REVERSAL_ADD_VWAP_BP_MIN=-5.0)
     stock = {
         "strategy": "SCALPING",
-        "last_reversal_features": {"curr_vs_micro_vwap_bp": -235.79},
+        "last_reversal_features": _trusted_reversal_features(curr_vs_micro_vwap_bp=-235.79),
     }
     ws_data = {
         "curr": 40_500,
@@ -20408,6 +22057,9 @@ def test_avg_down_price_resolver_stale_micro_blocks_reversal_add_not_late_retry(
         "strategy": "SCALPING",
         "last_reversal_features": {
             "curr_vs_micro_vwap_bp": -235.79,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
             "tick_context_quality": "stale_tick",
             "tick_context_stale": True,
             "tick_latest_age_ms": 31_000,
@@ -20440,16 +22092,16 @@ def test_avg_down_price_resolver_stale_micro_blocks_reversal_add_not_late_retry(
 
     assert reversal["allowed"] is False
     assert reversal["reason"].startswith("micro_context_stale:")
-    assert late["allowed"] is True
-    assert late["late_loss_avg_down_retry_micro_vwap_bypass"] is False
-    assert late["order_price"] == 40_350
+    assert late["allowed"] is False
+    assert late["reason"].startswith("micro_context_stale:")
+    assert late.get("late_loss_avg_down_retry_micro_vwap_bypass") is None
 
 
 def test_avg_down_price_resolver_discounts_best_bid_for_high_price_recovery(monkeypatch):
     scale_in.TRADING_RULES = replace(CONFIG, REVERSAL_ADD_VWAP_BP_MIN=-120.0)
     stock = {
         "strategy": "SCALPING",
-        "last_reversal_features": {"curr_vs_micro_vwap_bp": -109.81},
+        "last_reversal_features": _trusted_reversal_features(curr_vs_micro_vwap_bp=-109.81),
     }
     ws_data = {
         "curr": 141_500,

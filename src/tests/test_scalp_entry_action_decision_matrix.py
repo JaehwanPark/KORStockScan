@@ -661,6 +661,77 @@ def test_scalp_entry_adm_runtime_maps_runtime_context_without_unknown_buckets(tm
     assert "unknown" not in fields["entry_adm_bucket_token"]
 
 
+def test_scalp_entry_adm_runtime_ignores_pressure_without_trusted_aggressor_provenance():
+    assert (
+        runtime_mod._risk_context_bucket(
+            {
+                "buy_pressure_10t": 85,
+                "tick_aggressor_pressure_usable": False,
+                "tick_aggressor_trusted_count": 0,
+            }
+        )
+        == "risk_unknown"
+    )
+    assert (
+        runtime_mod._risk_context_bucket(
+            {
+                "buy_pressure_10t": 85,
+                "tick_aggressor_pressure_usable": "stale",
+                "tick_aggressor_trusted_count": 0,
+            }
+        )
+        == "risk_unknown"
+    )
+
+
+def test_scalp_entry_adm_runtime_uses_pressure_with_trusted_aggressor_provenance():
+    assert (
+        runtime_mod._risk_context_bucket(
+            {
+                "buy_pressure_10t": 85,
+                "tick_aggressor_pressure_usable": True,
+                "tick_aggressor_trusted_count": 1,
+            }
+        )
+        == "strong_strength_momentum"
+    )
+    assert (
+        runtime_mod._risk_context_bucket(
+            {
+                "buy_pressure_10t": 35,
+                "tick_aggressor_pressure_usable": "false",
+                "tick_aggressor_trusted_count": 2,
+            }
+        )
+        == "weak_strength_momentum"
+    )
+
+
+def test_scalp_entry_adm_runtime_strength_bucket_still_works_without_pressure_provenance():
+    assert (
+        runtime_mod._risk_context_bucket(
+            {
+                "latest_strength": 145,
+                "buy_pressure_10t": 20,
+                "tick_aggressor_pressure_usable": False,
+                "tick_aggressor_trusted_count": 0,
+            }
+        )
+        == "strong_strength_momentum"
+    )
+    assert (
+        runtime_mod._risk_context_bucket(
+            {
+                "latest_strength": 75,
+                "buy_pressure_10t": 90,
+                "tick_aggressor_pressure_usable": False,
+                "tick_aggressor_trusted_count": 0,
+            }
+        )
+        == "weak_strength_momentum"
+    )
+
+
 def test_scalp_entry_adm_report_and_runtime_share_market_regime_bucket_contract(tmp_path, monkeypatch):
     pipeline_dir = tmp_path / "pipeline_events"
     report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"

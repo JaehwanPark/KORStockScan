@@ -1,7 +1,27 @@
 import gzip
 import json
 
+import pytest
+
 from src.engine.scalping import entry_hurdle_backtest as mod
+
+
+@pytest.fixture(autouse=True)
+def _source_quality_preflight_pass(monkeypatch):
+    monkeypatch.setattr(
+        mod,
+        "load_source_quality_preflight",
+        lambda target_date: {
+            "status": "pass",
+            "tuning_input_allowed": True,
+            "allowed_runtime_apply": True,
+            "source_quality_gate": "pass",
+            "blocked_reason": None,
+            "hard_blocking_contract_gap_count": 0,
+            "clean_baseline_enforced": True,
+        },
+    )
+
 
 
 def test_entry_hurdle_backtest_classifies_overblocking_from_existing_artifacts(tmp_path, monkeypatch):
@@ -114,11 +134,18 @@ def test_entry_hurdle_backtest_classifies_overblocking_from_existing_artifacts(t
                             "ai_score": "82.0",
                             "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
                             "curr_vs_micro_vwap_bp": "43.69",
+                            "micro_vwap_available": "True",
+                            "minute_candle_context_quality": "fresh_bar_window",
+                            "minute_candle_window_fresh": "True",
                             "buy_pressure_10t": "93.69",
                             "tick_aggressor_trusted_count": "3",
                             "tick_aggressor_pressure_usable": "True",
                             "quote_stale_at_submit": "False",
                             "price_context_stale_at_submit": "False",
+                            "tick_context_quality": "fresh_computed",
+                            "tick_accel_source": "computed_10ticks",
+                            "quote_age_ms": "120",
+                            "quote_age_source": "last_ws_update_ts",
                             "pre_submit_overbought_guard_action": "PASS",
                             "entry_submit_revalidation_warning": "",
                             "liquidity_relief_skip_reason": "tick_accel_below_min",
@@ -135,8 +162,13 @@ def test_entry_hurdle_backtest_classifies_overblocking_from_existing_artifacts(t
                             "ai_score": "72.0",
                             "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
                             "curr_vs_micro_vwap_bp": "7.5",
+                            "micro_vwap_available": "True",
+                            "minute_candle_context_quality": "fresh_bar_window",
+                            "minute_candle_window_fresh": "True",
                             "quote_stale": "False",
                             "tick_context_stale": "False",
+                            "tick_context_quality": "fresh_computed",
+                            "tick_accel_source": "computed_10ticks",
                         },
                     }
                 ),
@@ -151,8 +183,13 @@ def test_entry_hurdle_backtest_classifies_overblocking_from_existing_artifacts(t
                             "ai_score": "62.0",
                             "source_signature": "OPEN_TOP,REALTIME_RANK_START,VALUE_TOP,VOLUME_SURGE_POSITIVE",
                             "curr_vs_micro_vwap_bp": "1.2",
+                            "micro_vwap_available": "True",
+                            "minute_candle_context_quality": "fresh_bar_window",
+                            "minute_candle_window_fresh": "True",
                             "quote_stale": "False",
                             "tick_context_stale": "False",
+                            "quote_age_ms": "80",
+                            "quote_age_source": "last_ws_update_ts",
                         },
                     }
                 ),
@@ -166,6 +203,9 @@ def test_entry_hurdle_backtest_classifies_overblocking_from_existing_artifacts(t
                             "ai_score": "72.0",
                             "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
                             "curr_vs_micro_vwap_bp": "7.5",
+                            "micro_vwap_available": "True",
+                            "minute_candle_context_quality": "fresh_bar_window",
+                            "minute_candle_window_fresh": "True",
                             "quote_stale": "True",
                             "tick_context_stale": "False",
                         },
@@ -239,7 +279,94 @@ def test_entry_hurdle_micro_pressure_relief_requires_trusted_tick_pressure():
         "curr_vs_micro_vwap_bp": "43.69",
         "buy_pressure_10t": "93.69",
     }
+    fresh = {
+        **base,
+        "tick_context_quality": "fresh_computed",
+        "tick_accel_source": "computed_10ticks",
+    }
+    fresh_micro_vwap = {
+        **fresh,
+        "micro_vwap_available": "True",
+        "minute_candle_context_quality": "fresh_bar_window",
+        "minute_candle_window_fresh": "True",
+    }
+    missing_quality_micro_vwap = {
+        **fresh,
+        "micro_vwap_available": "True",
+        "minute_candle_window_fresh": "True",
+    }
+    stale_micro_vwap = {
+        **fresh_micro_vwap,
+        "minute_candle_window_fresh": "False",
+    }
 
     assert mod._signature_micro_pressure_path(base) is False
-    assert mod._signature_micro_pressure_path({**base, "tick_aggressor_pressure_usable": "True"}) is True
-    assert mod._signature_micro_pressure_path({**base, "tick_aggressor_trusted_count": "2"}) is True
+    assert mod._signature_micro_pressure_path({**base, "tick_aggressor_pressure_usable": "True"}) is False
+    assert mod._signature_micro_pressure_path({**fresh, "tick_aggressor_pressure_usable": "True"}) is False
+    assert mod._signature_micro_pressure_path({**missing_quality_micro_vwap, "tick_aggressor_pressure_usable": "True"}) is False
+    assert mod._signature_micro_pressure_path({**fresh_micro_vwap, "tick_aggressor_pressure_usable": "True"}) is True
+    assert mod._signature_micro_pressure_path({**fresh_micro_vwap, "tick_aggressor_trusted_count": "2"}) is True
+    assert mod._signature_micro_pressure_path({**stale_micro_vwap, "tick_aggressor_trusted_count": "2"}) is False
+    assert (
+        mod._signature_micro_pressure_path(
+            {**fresh_micro_vwap, "tick_aggressor_trusted_count": "2", "quote_stale": "stale"}
+        )
+        is False
+    )
+
+
+def test_entry_hurdle_backtest_source_quality_preflight_blocks_strategy_workorders(tmp_path, monkeypatch):
+    buy_dir = tmp_path / "buy_funnel_sentinel"
+    missed_dir = tmp_path / "monitor_snapshots"
+    pipeline_dir = tmp_path / "pipeline_events"
+    buy_dir.mkdir(parents=True)
+    missed_dir.mkdir(parents=True)
+    pipeline_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "BUY_FUNNEL_DIR", buy_dir)
+    monkeypatch.setattr(mod, "MISSED_ENTRY_DIRS", [missed_dir])
+    monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", pipeline_dir)
+    monkeypatch.setattr(mod, "filter_allowed_dates", lambda dates, policy: (dates, []))
+    monkeypatch.setattr(mod, "is_krx_trading_day", lambda day: True)
+    monkeypatch.setattr(
+        mod,
+        "load_source_quality_preflight",
+        lambda target_date: {
+            "status": "fail",
+            "tuning_input_allowed": False,
+            "allowed_runtime_apply": False,
+            "source_quality_gate": "blocked_contract_gap",
+            "blocked_reason": "required_field_missing",
+            "hard_blocking_contract_gap_count": 1,
+            "clean_baseline_enforced": True,
+        },
+    )
+    (buy_dir / "buy_funnel_sentinel_2026-06-05.json").write_text(
+        json.dumps({"current": {"session": {"stage_unique": {"ai_confirmed": 10, "budget_pass": 5}}}}),
+        encoding="utf-8",
+    )
+    (missed_dir / "missed_entry_counterfactual_2026-06-05.json").write_text(
+        json.dumps(
+            {
+                "metrics": {
+                    "blocker_outcome_metrics": {
+                        "pre_submit_overbought_pullback_guard_block": {
+                            "evaluated_candidates": 6,
+                            "missed_winner_count": 5,
+                            "avoided_loser_count": 0,
+                            "neutral_count": 1,
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod.build_report("2026-06-05", start_date="2026-06-05", end_date="2026-06-05")
+
+    assert report["status"] == "source_quality_blocked"
+    assert report["allowed_runtime_apply"] is False
+    assert report["source_quality_gate"] == "blocked_contract_gap"
+    assert report["code_improvement_orders"] == []
+    assert report["summary"]["code_improvement_order_count"] == 0
+    assert report["summary"]["calibration_state"] == "source_quality_blocked"

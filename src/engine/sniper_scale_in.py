@@ -109,10 +109,30 @@ _UNTRUSTED_AI_SCORE_SOURCES = {
     "none",
     "null",
     "missing",
+    "unknown",
     "not_called",
     "holding_ai_not_called",
+    "fallback",
     "fallback_score_50",
+    "engine_disabled",
+    "lock_contention",
+    "timeout",
+    "exception",
+    "error",
+    "insufficient",
+    "source_quality_insufficient",
+    "watching_cooldown",
 }
+_UNTRUSTED_AI_SCORE_SOURCE_TOKENS = (
+    "fallback_score_50",
+    "engine_disabled",
+    "lock_contention",
+    "timeout",
+    "exception",
+    "error",
+    "insufficient",
+    "source_quality_insufficient",
+)
 
 
 def _ai_score_source(stock, action=None):
@@ -120,6 +140,7 @@ def _ai_score_source(stock, action=None):
     stock = stock if isinstance(stock, dict) else {}
     for key in (
         "ai_score_source",
+        "holding_score_source",
         "holding_ai_score_source",
         "current_ai_score_source",
         "ai_result_source",
@@ -130,6 +151,7 @@ def _ai_score_source(stock, action=None):
             return str(value).strip()
     for key in (
         "ai_score_source",
+        "holding_score_source",
         "holding_ai_score_source",
         "current_ai_score_source",
         "ai_result_source",
@@ -160,9 +182,11 @@ def _ai_score_available_for_scale_in(stock, action=None, *, current_ai_score=Non
         return _holding_score_recent_and_usable(stock, action), source or "-"
     if normalized == "fallback_score_50":
         return False, source or "-"
-    if normalized in _UNTRUSTED_AI_SCORE_SOURCES:
-        if not _has_explicit_ai_score_provenance(stock, action) and score is not None and abs(float(score) - 50.0) >= 1e-9:
-            return True, source or "-"
+    if normalized in _UNTRUSTED_AI_SCORE_SOURCES or any(
+        token in normalized for token in _UNTRUSTED_AI_SCORE_SOURCE_TOKENS
+    ):
+        return False, source or "-"
+    if not _has_explicit_ai_score_provenance(stock, action):
         return False, source or "-"
     return True, source or "-"
 
@@ -351,6 +375,10 @@ def _scalping_pyramid_quality_snapshot(stock, *, current_ai_score=None):
     )
     source_quality = reversal_feature_source_quality(feat)
     source_stale = bool(feat and source_quality["reversal_feature_stale"])
+    pressure_usable = (
+        _safe_bool(source_quality.get("tick_aggressor_pressure_usable"), False)
+        or _safe_int(source_quality.get("tick_aggressor_trusted_count"), 0) > 0
+    )
     return {
         "current_ai_score": _safe_float(ai_score, ai_default),
         "ai_score_source": ai_score_source,
@@ -360,6 +388,7 @@ def _scalping_pyramid_quality_snapshot(stock, *, current_ai_score=None):
         "large_sell_print_detected": _safe_bool(feat.get("large_sell_print_detected"), True),
         "curr_vs_micro_vwap_bp": _safe_float(raw_micro_vwap, None),
         "reversal_feature_stale": source_stale,
+        "tick_aggressor_pressure_usable_bool": bool(pressure_usable),
         **source_quality,
     }
 
@@ -404,9 +433,15 @@ def _scalping_pyramid_strong_continuation_context(
         "new_high": bool(is_new_high),
         "peak_hold_ok": float(drawdown_from_peak) <= max_drawdown,
         "ai_score_ok": ai_score_ok,
-        "buy_pressure_support_ok": quality["buy_pressure_10t"] >= min_buy_pressure,
+        "buy_pressure_support_ok": (
+            quality["tick_aggressor_pressure_usable_bool"]
+            and quality["buy_pressure_10t"] >= min_buy_pressure
+        ),
         "tick_accel_ok": (not quality["reversal_feature_stale"]) and quality["tick_acceleration_ratio"] >= min_tick_accel,
-        "large_sell_clear": not quality["large_sell_print_detected"],
+        "large_sell_clear": (
+            quality["tick_aggressor_pressure_usable_bool"]
+            and not quality["large_sell_print_detected"]
+        ),
         "micro_vwap_available": micro_vwap_bp is not None,
         "micro_vwap_not_overheated": (
             (not quality["reversal_feature_stale"])
@@ -445,6 +480,9 @@ def _scalping_pyramid_strong_continuation_context(
         "reversal_feature_stale_reason": quality["reversal_feature_stale_reason"],
         "tick_context_quality": quality["tick_context_quality"],
         "tick_context_stale": quality["tick_context_stale"],
+        "tick_aggressor_trusted_count": quality["tick_aggressor_trusted_count"],
+        "tick_aggressor_pressure_usable": quality["tick_aggressor_pressure_usable"],
+        "tick_aggressor_pressure_usable_bool": quality["tick_aggressor_pressure_usable_bool"],
         "tick_latest_age_ms": quality["tick_latest_age_ms"],
         "tick_accel_source": quality["tick_accel_source"],
         "quote_stale": quality["quote_stale"],
@@ -468,6 +506,11 @@ def _pyramid_quality_decision(context):
     micro_value = context.get("curr_vs_micro_vwap_bp")
     micro_vwap = None if micro_value == "-" else _safe_float(micro_value, None)
     stale = _safe_bool(context.get("reversal_feature_stale"), False)
+    pressure_usable = (
+        _safe_bool(context.get("tick_aggressor_pressure_usable"), False)
+        or _safe_bool(context.get("tick_aggressor_pressure_usable_bool"), False)
+        or _safe_int(context.get("tick_aggressor_trusted_count"), 0) > 0
+    )
     large_sell = _safe_bool(context.get("large_sell_print_detected"), True)
 
     support_signals = []
@@ -485,7 +528,9 @@ def _pyramid_quality_decision(context):
     else:
         risk_signals.append("ai_score_unavailable" if not ai_available else "ai_score_below_min")
 
-    if buy_pressure >= min_buy_pressure:
+    if not pressure_usable:
+        risk_signals.append("tick_aggressor_pressure_unusable")
+    elif buy_pressure >= min_buy_pressure:
         support_score += 1.0
         support_signals.append("buy_pressure_ok")
     elif buy_pressure >= min_buy_pressure - 5.0:
@@ -518,7 +563,9 @@ def _pyramid_quality_decision(context):
         risk_signals.append("micro_vwap_severe_overheated")
         hard_blockers.append("micro_vwap_severe_overheated")
 
-    if large_sell:
+    if not pressure_usable:
+        pass
+    elif large_sell:
         risk_signals.append("large_sell_detected")
         hard_blockers.append("large_sell_detected")
     else:
@@ -902,6 +949,36 @@ def reversal_feature_source_quality(feat):
     quote_stale = _safe_bool(feat.get("quote_stale"), False)
     tick_age_ms = _safe_float(feat.get("tick_latest_age_ms"), None)
     quote_age_ms = _safe_float(feat.get("quote_age_ms"), None)
+    has_pressure_metric = any(
+        key in feat
+        for key in (
+            "buy_pressure_10t",
+            "net_aggressive_delta_10t",
+            "large_sell_print_detected",
+            "same_price_buy_absorption",
+        )
+    )
+    has_micro_vwap_metric = any(key in feat for key in ("curr_vs_micro_vwap_bp", "micro_vwap_bp"))
+    has_pressure_provenance = (
+        "tick_aggressor_pressure_usable" in feat
+        or "tick_aggressor_trusted_count" in feat
+    )
+    has_micro_vwap_provenance = (
+        "micro_vwap_available" in feat
+        or "minute_candle_window_fresh" in feat
+        or "minute_candle_context_quality" in feat
+    )
+    pressure_usable = (
+        _safe_bool(feat.get("tick_aggressor_pressure_usable"), False)
+        or _safe_int(feat.get("tick_aggressor_trusted_count"), 0) > 0
+    )
+    micro_vwap_usable = (
+        _safe_bool(feat.get("micro_vwap_available"), False)
+        and not (
+            "minute_candle_window_fresh" in feat
+            and not _safe_bool(feat.get("minute_candle_window_fresh"), False)
+        )
+    )
     max_tick_age_ms = _safe_float(
         getattr(TRADING_RULES, "REVERSAL_ADD_MAX_TICK_AGE_MS", 5000),
         5000.0,
@@ -915,8 +992,14 @@ def reversal_feature_source_quality(feat):
         stale_reasons.append("tick_context_stale")
     elif tick_quality in {"missing_ticks", "missing_tick_time"} or tick_quality.startswith("accel_"):
         stale_reasons.append("tick_context_unusable")
-    if feat.get("tick_aggressor_pressure_usable") is False:
+    if has_pressure_metric and not has_pressure_provenance:
+        stale_reasons.append("tick_aggressor_pressure_provenance_missing")
+    elif has_pressure_metric and not pressure_usable:
         stale_reasons.append("tick_aggressor_pressure_unusable")
+    if has_micro_vwap_metric and not has_micro_vwap_provenance:
+        stale_reasons.append("micro_vwap_provenance_missing")
+    elif has_micro_vwap_metric and not micro_vwap_usable:
+        stale_reasons.append("micro_vwap_unavailable")
     if quote_stale is True:
         stale_reasons.append("quote_stale")
     if tick_age_ms is not None and tick_age_ms > max_tick_age_ms:
@@ -936,6 +1019,10 @@ def reversal_feature_source_quality(feat):
         "quote_stale": feat.get("quote_stale", "unknown"),
         "quote_age_ms": "-" if quote_age_ms is None else round(quote_age_ms, 3),
         "quote_age_source": feat.get("quote_age_source", "missing"),
+        "micro_vwap_available": feat.get(
+            "micro_vwap_available",
+            "unknown" if "curr_vs_micro_vwap_bp" not in feat else True,
+        ),
         "feature_extracted_at": feat.get("feature_extracted_at", "-"),
     }
 
@@ -958,10 +1045,8 @@ def _check_reversal_add_supply(stock):
             return f"supply_conditions_not_met({passed_checks}/4)"
         return None
 
-    bp = float(stock.get('last_reversal_features', {}).get('buy_pressure_10t', 50.0))
-    if bp < min_buy_pressure:
-        return "buy_pressure_not_met(no_features)"
-    return None
+    _ = min_buy_pressure
+    return "reversal_features_missing"
 
 
 def _check_aggressive_reversal_add(stock, profit_rate, current_ai_score, held_sec):
@@ -1242,7 +1327,7 @@ def resolve_scale_in_order_price(stock, ws_data, action, *, strategy=None, curr_
         min_micro_vwap = float(getattr(TRADING_RULES, "REVERSAL_ADD_VWAP_BP_MIN", -5.0) or -5.0)
         result["min_micro_vwap_bps"] = min_micro_vwap
         micro_supported_avg_down = add_reason in {"reversal_add_ok", "aggressive_reversal_add_ok"}
-        if micro_supported_avg_down and feature_quality["reversal_feature_stale"]:
+        if (micro_supported_avg_down or late_loss_retry) and feature_quality["reversal_feature_stale"]:
             result["reason"] = "micro_context_stale:" + feature_quality["reversal_feature_stale_reason"]
             return result
         result["late_loss_avg_down_retry_micro_vwap_bypass"] = bool(
@@ -1570,6 +1655,10 @@ def describe_dynamic_scale_in_qty(
     micro_vwap_bp = _safe_float(feat.get("curr_vs_micro_vwap_bp"), None)
     feature_quality = reversal_feature_source_quality(feat)
     feature_stale = bool(feat and feature_quality["reversal_feature_stale"])
+    pressure_usable = (
+        _safe_bool(feature_quality.get("tick_aggressor_pressure_usable"), False)
+        or _safe_int(feature_quality.get("tick_aggressor_trusted_count"), 0) > 0
+    )
     profit_rate = _safe_float(action.get("profit_rate"), 0.0)
     peak_profit = _safe_float(action.get("peak_profit"), profit_rate)
     drawdown_from_peak = max(0.0, peak_profit - profit_rate)
@@ -1583,7 +1672,7 @@ def describe_dynamic_scale_in_qty(
             "ai_score_ok": ai_score_available and current_ai_score >= min_ai,
             "tick_accel_ok": (not feature_stale) and tick_accel >= min_tick_accel,
             "peak_hold_ok": drawdown_from_peak <= 0.3,
-            "large_sell_clear": not large_sell,
+            "large_sell_clear": pressure_usable and not large_sell,
             "micro_vwap_available": micro_vwap_bp is not None,
             "micro_vwap_not_overheated": (
                 (not feature_stale)
@@ -1592,7 +1681,7 @@ def describe_dynamic_scale_in_qty(
             ),
         }
         support_checks = {
-            "buy_pressure_support_ok": buy_pressure >= min_buy_pressure,
+            "buy_pressure_support_ok": pressure_usable and buy_pressure >= min_buy_pressure,
         }
         quality_context = {
             "current_ai_score": current_ai_score,
@@ -1606,6 +1695,9 @@ def describe_dynamic_scale_in_qty(
             "curr_vs_micro_vwap_bp": "-" if micro_vwap_bp is None else micro_vwap_bp,
             "max_micro_vwap_bps": max_micro_vwap_bp,
             "reversal_feature_stale": feature_stale,
+            "tick_aggressor_trusted_count": feature_quality.get("tick_aggressor_trusted_count", 0),
+            "tick_aggressor_pressure_usable": feature_quality.get("tick_aggressor_pressure_usable", False),
+            "tick_aggressor_pressure_usable_bool": bool(pressure_usable),
         }
         quality_decision = _pyramid_quality_decision(quality_context)
         details.update(

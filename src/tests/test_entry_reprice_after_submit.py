@@ -18,6 +18,8 @@ def _base_order(**overrides):
         "entry_adm_ev_pct": 0.12,
         "lifecycle_matrix_selected_action": "BUY_DEFENSIVE",
         "buy_pressure_10t": 91.0,
+        "tick_aggressor_pressure_usable": True,
+        "tick_aggressor_trusted_count": 3,
         "latency_state": "SAFE",
         "mark_price_at_submit": 39885,
     }
@@ -72,6 +74,29 @@ def test_helper_blocks_negative_adm_even_when_continuation_report_candidate():
     assert decision.allowed is False
     assert decision.reason == "continuation_override_candidate_report_only"
     assert decision.fields["reprice_candidate"] == "continuation_override_candidate"
+
+
+def test_helper_does_not_use_untrusted_pressure_for_continuation_candidate():
+    decision = evaluate_entry_reprice_after_submit(
+        order=_base_order(
+            entry_adm_recommended_action="NO_BUY_AI",
+            entry_adm_ev_pct=-0.37,
+            tick_aggressor_pressure_usable=False,
+            tick_aggressor_trusted_count=0,
+        ),
+        strategy="SCALPING",
+        elapsed_sec=16.0,
+        best_bid=39855,
+        best_ask=39915,
+        current_price=39900,
+        quote_age_ms=120.0,
+        orderbook_micro_state="neutral",
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "adm_negative_prior"
+    assert decision.fields["tick_aggressor_pressure_usable"] is False
+    assert decision.fields["tick_aggressor_trusted_count"] == 0
 
 
 def test_helper_blocks_weak_462900_like_negative_adm():

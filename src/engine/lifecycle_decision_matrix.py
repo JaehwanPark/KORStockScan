@@ -690,7 +690,11 @@ def _entry_strength_bucket_from_features(features: dict[str, Any]) -> str:
     explicit = _bucket_value(features.get("risk_context_bucket"), "")
     if explicit:
         return explicit
-    buy_pressure = _safe_float(features.get("buy_pressure"), None)
+    buy_pressure = (
+        _safe_float(features.get("buy_pressure"), None)
+        if _buy_pressure_feature_usable(features)
+        else None
+    )
     tick_accel = _safe_float(features.get("tick_accel"), None)
     if buy_pressure is None and tick_accel is None:
         return "strength_proxy_unobserved"
@@ -699,6 +703,18 @@ def _entry_strength_bucket_from_features(features: dict[str, Any]) -> str:
     if (buy_pressure is not None and buy_pressure < 45.0) or (tick_accel is not None and tick_accel < 0.5):
         return "weak_strength_momentum"
     return "neutral_strength_momentum"
+
+
+def _buy_pressure_feature_usable(features: dict[str, Any]) -> bool:
+    if _safe_float(features.get("buy_pressure"), None) is None:
+        return False
+    trusted_count = _safe_float(features.get("tick_aggressor_trusted_count"), 0.0) or 0.0
+    pressure_usable = features.get("tick_aggressor_pressure_usable")
+    if isinstance(pressure_usable, bool):
+        return pressure_usable or trusted_count > 0
+    if str(pressure_usable or "").strip().lower() in {"1", "true", "yes", "y", "on"}:
+        return True
+    return trusted_count > 0
 
 
 def _labels(row: dict[str, Any]) -> dict[str, Any]:
@@ -1035,6 +1051,8 @@ def _load_wait6579_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[st
                     "ai_score": item.get("ai_score"),
                     "chosen_action": "WAIT_REQUOTE" if str(item.get("action") or "").upper() == "WAIT" else item.get("action"),
                     "buy_pressure": item.get("buy_pressure"),
+                    "tick_aggressor_trusted_count": item.get("tick_aggressor_trusted_count"),
+                    "tick_aggressor_pressure_usable": item.get("tick_aggressor_pressure_usable"),
                     "tick_accel": item.get("tick_accel"),
                     "micro_vwap_bp": item.get("micro_vwap_bp"),
                     "liquidity_bucket": item.get("liquidity_bucket"),

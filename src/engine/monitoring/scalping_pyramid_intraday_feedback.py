@@ -138,6 +138,8 @@ def _pyramid_blocked_record(row: dict[str, Any]) -> dict[str, Any] | None:
         "tick_aggressor_pressure_usable": _optional_boolish(fields.get("tick_aggressor_pressure_usable")),
         "tick_acceleration_ratio": _safe_float(fields.get("tick_acceleration_ratio")),
         "curr_vs_micro_vwap_bp": _safe_float(fields.get("curr_vs_micro_vwap_bp")),
+        "micro_vwap_available": _optional_boolish(fields.get("micro_vwap_available")),
+        "minute_candle_window_fresh": _optional_boolish(fields.get("minute_candle_window_fresh")),
         "min_profit_pct": _safe_float(fields.get("min_profit_pct")),
         "min_ai_score": _safe_float(fields.get("min_ai_score")),
         "min_buy_pressure": _safe_float(fields.get("min_buy_pressure")),
@@ -178,6 +180,8 @@ def _pyramid_submit_record(row: dict[str, Any]) -> dict[str, Any]:
         "tick_aggressor_pressure_usable": _optional_boolish(fields.get("tick_aggressor_pressure_usable")),
         "tick_acceleration_ratio": _safe_float(fields.get("tick_acceleration_ratio")),
         "curr_vs_micro_vwap_bp": _safe_float(fields.get("curr_vs_micro_vwap_bp")),
+        "micro_vwap_available": _optional_boolish(fields.get("micro_vwap_available")),
+        "minute_candle_window_fresh": _optional_boolish(fields.get("minute_candle_window_fresh")),
         "pyramid_submit_seen": True,
         "pyramid_submit_ts": row.get("emitted_at"),
     }
@@ -204,8 +208,14 @@ def _update_snapshot(item: dict[str, Any], row: dict[str, Any]) -> None:
         "tick_aggressor_pressure_usable",
         "tick_acceleration_ratio",
         "curr_vs_micro_vwap_bp",
+        "micro_vwap_available",
+        "minute_candle_window_fresh",
     ):
         if key == "tick_aggressor_pressure_usable":
+            if fields.get(key) is not None:
+                item[key] = _optional_boolish(fields.get(key))
+            continue
+        if key in {"micro_vwap_available", "minute_candle_window_fresh"}:
             if fields.get(key) is not None:
                 item[key] = _optional_boolish(fields.get(key))
             continue
@@ -224,6 +234,53 @@ def _update_snapshot(item: dict[str, Any], row: dict[str, Any]) -> None:
             if item.get("scale_in_blocker_reason") == "one_share_pyramid_no_opportunity_seen":
                 item["scale_in_blocker_reason"] = "one_share_pyramid_not_submitted_opportunity"
             item["scale_in_blocker_namespace"] = "ONE_SHARE_PYRAMID_BACKTEST"
+
+
+def _pressure_provenance_missing(item: dict[str, Any]) -> bool:
+    if item.get("buy_pressure_10t") is None:
+        return False
+    return (
+        item.get("tick_aggressor_trusted_count") is None
+        and item.get("tick_aggressor_pressure_usable") is None
+    )
+
+
+def _pressure_provenance_unusable(item: dict[str, Any]) -> bool:
+    if item.get("buy_pressure_10t") is None:
+        return False
+    trusted_count = _safe_float(item.get("tick_aggressor_trusted_count"), 0.0) or 0.0
+    pressure_usable = item.get("tick_aggressor_pressure_usable")
+    return pressure_usable is False and trusted_count <= 0.0
+
+
+def _pressure_provenance_missing_count(items: list[dict[str, Any]]) -> int:
+    return sum(1 for item in items if _pressure_provenance_missing(item))
+
+
+def _pressure_provenance_unusable_count(items: list[dict[str, Any]]) -> int:
+    return sum(1 for item in items if _pressure_provenance_unusable(item))
+
+
+def _micro_vwap_provenance_missing(item: dict[str, Any]) -> bool:
+    micro_value = _safe_float(item.get("curr_vs_micro_vwap_bp"), None)
+    if micro_value is None or abs(float(micro_value)) <= 1e-9:
+        return False
+    return item.get("micro_vwap_available") is None or item.get("minute_candle_window_fresh") is None
+
+
+def _micro_vwap_provenance_unusable(item: dict[str, Any]) -> bool:
+    micro_value = _safe_float(item.get("curr_vs_micro_vwap_bp"), None)
+    if micro_value is None or abs(float(micro_value)) <= 1e-9:
+        return False
+    return item.get("micro_vwap_available") is False or item.get("minute_candle_window_fresh") is False
+
+
+def _micro_vwap_provenance_missing_count(items: list[dict[str, Any]]) -> int:
+    return sum(1 for item in items if _micro_vwap_provenance_missing(item))
+
+
+def _micro_vwap_provenance_unusable_count(items: list[dict[str, Any]]) -> int:
+    return sum(1 for item in items if _micro_vwap_provenance_unusable(item))
 
 
 def _update_sell(item: dict[str, Any], row: dict[str, Any]) -> None:
@@ -409,6 +466,18 @@ def build_report(
     label_counts = Counter(str(item.get("pyramid_feedback_label") or "unknown") for item in rows)
     blocker_metrics = _aggregate_by_blocker(rows)
     one_share_opportunity_summary = _one_share_summary(one_share_rows)
+    pressure_provenance_missing_count = _pressure_provenance_missing_count(rows + one_share_rows)
+    pressure_provenance_unusable_count = _pressure_provenance_unusable_count(rows + one_share_rows)
+    micro_vwap_provenance_missing_count = _micro_vwap_provenance_missing_count(rows + one_share_rows)
+    micro_vwap_provenance_unusable_count = _micro_vwap_provenance_unusable_count(rows + one_share_rows)
+    if pressure_provenance_missing_count:
+        source_quality_status = "pressure_provenance_missing"
+    if pressure_provenance_unusable_count:
+        source_quality_status = "pressure_provenance_unusable"
+    if micro_vwap_provenance_missing_count:
+        source_quality_status = "micro_vwap_provenance_missing"
+    if micro_vwap_provenance_unusable_count:
+        source_quality_status = "micro_vwap_provenance_unusable"
     return {
         "schema_version": 1,
         "report_type": REPORT_TYPE,
@@ -426,7 +495,7 @@ def build_report(
             "primary_decision_metric": "pyramid_feedback_label_counts_and_blocker_cluster_rates",
             "source_quality_gate": (
                 "pipeline_event_record_id_or_stock_code_join_with_required_provenance_and_"
-                "tick_aggressor_pressure_provenance_for_buy_pressure"
+                "tick_aggressor_pressure_provenance_for_buy_pressure_and_fresh_minute_candle_for_micro_vwap"
             ),
             "forbidden_uses": FORBIDDEN_USES,
         },
@@ -436,16 +505,27 @@ def build_report(
             "window_policy": "same_day_one_share_events_continuously_updated_then_postclose_rolling_clean_baseline",
             "sample_floor": "rolling_closed_one_share_pyramid_rows_ge_20",
             "primary_decision_metric": "one_share_pyramid_missed_upside_rate_and_avg_opportunity_cost_pct",
-            "source_quality_gate": "one_share_event_record_id_joined_to_holding_snapshots_and_sell_completed",
+            "source_quality_gate": (
+                "one_share_event_record_id_joined_to_holding_snapshots_and_sell_completed_with_"
+                "fresh_minute_candle_provenance_for_micro_vwap_when_present"
+            ),
             "forbidden_uses": FORBIDDEN_USES,
         },
         "source_paths": {"pipeline_events": str(resolved_pipeline_path)},
         "source_quality": {
             "status": source_quality_status,
             "pipeline_events_exists": resolved_pipeline_path.exists(),
+            "pressure_provenance_missing_count": pressure_provenance_missing_count,
+            "pressure_provenance_unusable_count": pressure_provenance_unusable_count,
+            "micro_vwap_provenance_missing_count": micro_vwap_provenance_missing_count,
+            "micro_vwap_provenance_unusable_count": micro_vwap_provenance_unusable_count,
         },
         "summary": {
             "pyramid_feedback_row_count": len(rows),
+            "pressure_provenance_missing_count": pressure_provenance_missing_count,
+            "pressure_provenance_unusable_count": pressure_provenance_unusable_count,
+            "micro_vwap_provenance_missing_count": micro_vwap_provenance_missing_count,
+            "micro_vwap_provenance_unusable_count": micro_vwap_provenance_unusable_count,
             "closed_pyramid_row_count": sum(
                 1 for item in rows if item.get("pyramid_feedback_label") != "pyramid_open_unresolved"
             ),

@@ -23,6 +23,17 @@ def _write_pipeline_events(tmp_path, target_date: str, rows: list[dict]) -> None
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+def test_wait6579_minute_forward_source_quality_marks_truncated_ka10080_window_partial():
+    quality = report_mod._minute_forward_source_quality(
+        {"bars": 10},
+        {"truncated_window": True},
+    )
+
+    assert quality["minute_candle_source_quality"] == "partial_window"
+    assert quality["minute_candle_source_quality_gate"] == "source_quality_warning"
+    assert quality["minute_candle_source_quality_reason"] == "ka10080_truncated_window"
+
+
 def test_build_wait6579_ev_cohort_report(monkeypatch, tmp_path):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     target_date = "2026-04-21"
@@ -179,7 +190,12 @@ def test_build_wait6579_ev_cohort_report(monkeypatch, tmp_path):
 
     assert report["metrics"]["total_candidates"] == 2
     assert report["metrics"]["missed_attempts"] == 2
+    assert report["metrics"]["minute_candle_source_quality_counts"] == {"pass": 2}
     assert len(report["rows"]) == 2
+    assert report["rows"][0]["minute_candle_source_quality"] == "pass"
+    assert report["rows"][0]["minute_candle_source_quality_gate"] == "pass"
+    assert report["rows"][0]["minute_candle_forward_10m_bars"] == 10
+    assert report["rows"][0]["minute_candle_source_meta"]["api_id"] == "ka10080"
     row_keys = set(report["rows"][0].keys())
     assert {
         "buy_pressure",
@@ -231,7 +247,6 @@ def test_build_wait6579_ev_cohort_report(monkeypatch, tmp_path):
     assert report["counterfactual_summary"]["total_candidates"] == 2
     assert report["counterfactual_summary"]["score65_74_probe_candidates"] == 1
     assert report["counterfactual_summary"]["real_execution_quality_source"] == "none"
-
 
 def test_build_wait6579_ev_cohort_report_empty(monkeypatch, tmp_path):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)

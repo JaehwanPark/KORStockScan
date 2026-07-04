@@ -112,7 +112,12 @@ def _closed_first_touch_rows(reports: list[dict[str, Any]]) -> list[dict[str, An
 
 def _provenance_present(rows: list[dict[str, Any]]) -> bool:
     return bool(rows) and all(
-        "actual_order_submitted" in row and "broker_order_forbidden" in row for row in rows
+        "actual_order_submitted" in row
+        and "broker_order_forbidden" in row
+        and "runtime_effect" in row
+        and "decision_authority" in row
+        and "forbidden_uses" in row
+        for row in rows
     )
 
 
@@ -171,6 +176,7 @@ def _calibration_candidate(
         ((report.get("source_quality") or {}).get("status") == "pass") for report in reports
     )
     provenance_present = _provenance_present(rows)
+    source_contract_pass = bool(source_quality_pass and provenance_present)
     sample_floor_met = int(rates["sample_count"]) >= 10
     current = _current_values()
     blockers: list[str] = []
@@ -202,6 +208,9 @@ def _calibration_candidate(
         "sample_floor": 10,
         "allowed_runtime_apply": allowed,
         "safety_revert_required": False,
+        "source_quality_gate": "pass" if source_contract_pass else "source_quality_blocked",
+        "source_quality_status": "pass" if source_contract_pass else "blocked",
+        "source_quality_blocked": None if source_contract_pass else ",".join(blockers) or "source_quality_or_provenance_not_pass",
         "current_values": current,
         "recommended_values": recommended,
         "target_env_keys": TARGET_ENV_KEYS if allowed else [],

@@ -94,6 +94,62 @@ def _safe_float(value, default: float = 0.0) -> float:
         return default
 
 
+def _minute_candle_meta(candles: list[dict], meta: dict | None = None, *, requested_limit: int | None = None) -> dict:
+    source_meta = dict(meta or {})
+    source_meta.setdefault("api_id", "ka10080")
+    source_meta.setdefault("requested_limit", requested_limit)
+    source_meta.setdefault("received_count", len(candles or []))
+    source_meta.setdefault("truncated_window", False)
+    source_meta.setdefault("sort_direction_detected", "unknown")
+    source_meta.setdefault("cont_yn_seen", False)
+    source_meta.setdefault("next_key_seen", False)
+    source_meta.setdefault("continuous_next_key_missing", False)
+    source_meta.setdefault("continuous_page_limit_reached", False)
+    source_meta.setdefault("rest_received_ts_ms", None)
+    source_meta.setdefault("latest_source_timestamp", None)
+    source_meta.setdefault("source_time_basis", "response_received_epoch_ms_and_chart_bar_timestamp")
+    return source_meta
+
+
+def _fetch_minute_candles_with_meta(kiwoom_utils, token: str, code: str, *, limit: int) -> tuple[list[dict], dict]:
+    if hasattr(kiwoom_utils, "get_minute_candles_ka10080_with_meta"):
+        candles, meta = kiwoom_utils.get_minute_candles_ka10080_with_meta(token, code, limit=limit)
+        candles = candles or []
+        return candles, _minute_candle_meta(candles, meta, requested_limit=limit)
+    candles = kiwoom_utils.get_minute_candles_ka10080(token, code, limit=limit) or []
+    return candles, _minute_candle_meta(candles, requested_limit=limit)
+
+
+def _minute_forward_source_quality(metrics_10m: dict, candle_meta: dict) -> dict:
+    bars_10m = _safe_int((metrics_10m or {}).get("bars"), 0)
+    if bars_10m <= 0:
+        status = "insufficient_window"
+        gate = "source_quality_insufficient"
+        reason = "no_ka10080_bars_in_forward_10m_window"
+    elif bool(candle_meta.get("continuous_next_key_missing")):
+        status = "partial_window"
+        gate = "source_quality_warning"
+        reason = "ka10080_continuation_key_missing"
+    elif bool(candle_meta.get("continuous_page_limit_reached")):
+        status = "partial_window"
+        gate = "source_quality_warning"
+        reason = "ka10080_continuation_page_limit_reached"
+    elif bool(candle_meta.get("truncated_window")):
+        status = "partial_window"
+        gate = "source_quality_warning"
+        reason = "ka10080_truncated_window"
+    else:
+        status = "pass"
+        gate = "pass"
+        reason = "ka10080_forward_window_available"
+    return {
+        "minute_candle_source_quality": status,
+        "minute_candle_source_quality_gate": gate,
+        "minute_candle_source_quality_reason": reason,
+        "minute_candle_forward_10m_bars": bars_10m,
+    }
+
+
 def _sim_virtual_budget_krw() -> int:
     return max(0, int(getattr(TRADING_RULES, "SIM_VIRTUAL_BUDGET_KRW", 10_000_000) or 0))
 
@@ -1014,7 +1070,7 @@ def build_missed_entry_counterfactual_report(
             log_error(f"[MISSED_ENTRY_CF] token fetch failed: {exc}")
             token = None
 
-    candle_cache: dict[str, list[dict]] = {}
+    candle_cache: dict[str, tuple[list[dict], dict]] = {}
     evaluations: list[dict] = []
     all_buy_evaluations: list[dict] = []
 
@@ -1024,15 +1080,16 @@ def build_missed_entry_counterfactual_report(
             continue
         if code not in candle_cache:
             try:
-                candle_cache[code] = kiwoom_utils.get_minute_candles_ka10080(token, code, limit=700) or []
+                candle_cache[code] = _fetch_minute_candles_with_meta(kiwoom_utils, token, code, limit=700)
             except Exception as exc:
                 log_error(f"[MISSED_ENTRY_CF] {code} minute candles fetch failed: {exc}")
-                candle_cache[code] = []
+                candle_cache[code] = ([], _minute_candle_meta([], requested_limit=700))
 
-        candles = candle_cache.get(code, [])
+        candles, candle_meta = candle_cache.get(code, ([], _minute_candle_meta([], requested_limit=700)))
         metrics_5m = _compute_window_metrics(candidate, candles, 5)
         metrics_10m = _compute_window_metrics(candidate, candles, 10)
         outcome = _classify_candidate(metrics_5m, metrics_10m)
+        source_quality = _minute_forward_source_quality(metrics_10m, candle_meta)
         entry_price_used = _safe_int(metrics_10m.get("entry_price_used"), 0)
         capacity = _sim_virtual_qty(entry_price_used, _safe_float(candidate.get("ai_score"), 0.0))
         qty = _safe_int(capacity.get("qty"), 0)
@@ -1045,6 +1102,8 @@ def build_missed_entry_counterfactual_report(
                 "metrics_10m": metrics_10m,
                 "entry_price_used": entry_price_used,
                 "price_source": "explicit_target_buy_price" if _safe_int(candidate.get("signal_price"), 0) > 0 else "minute_candle_proxy",
+                "minute_candle_source_meta": candle_meta,
+                **source_quality,
                 "counterfactual_qty": int(qty),
                 "counterfactual_qty_source": "sim_virtual_budget_dynamic_formula" if qty > 0 else "unpriced",
                 "virtual_budget_override": True,
@@ -1117,6 +1176,9 @@ def build_missed_entry_counterfactual_report(
     avg_mfe_10m = _avg([_safe_float((item.get("metrics_10m") or {}).get("mfe_pct"), 0.0) for item in evaluations])
     avg_mae_10m = _avg([_safe_float((item.get("metrics_10m") or {}).get("mae_pct"), 0.0) for item in evaluations])
     estimated_pnl_sum = int(sum(_safe_int(item.get("estimated_counterfactual_pnl_10m_krw"), 0) for item in evaluations))
+    minute_candle_source_quality_counts = dict(
+        Counter(str(item.get("minute_candle_source_quality") or "unknown") for item in evaluations)
+    )
 
     if missed_winner_rate >= avoided_loser_rate + 20.0:
         headline = "BUY 후 미진입 차단이 과한 쪽으로 기울었을 가능성이 큽니다."
@@ -1183,6 +1245,11 @@ def build_missed_entry_counterfactual_report(
             "counterfactual_notional_krw": int(_safe_int(item.get("counterfactual_notional_krw"), 0)),
             "ai_score": round(_safe_float(item.get("ai_score"), 0.0), 1),
             "price_source": str(item.get("price_source") or "minute_candle_proxy"),
+            "minute_candle_source_quality": str(item.get("minute_candle_source_quality") or "unknown"),
+            "minute_candle_source_quality_gate": str(item.get("minute_candle_source_quality_gate") or "unknown"),
+            "minute_candle_source_quality_reason": str(item.get("minute_candle_source_quality_reason") or ""),
+            "minute_candle_forward_10m_bars": _safe_int(item.get("minute_candle_forward_10m_bars"), 0),
+            "minute_candle_source_meta": item.get("minute_candle_source_meta") or {},
             "confidence_tier": _confidence_tier(item),
             "outcome": str(item.get("outcome") or "NEUTRAL"),
             "close_5m_pct": round(_safe_float(metrics_5m.get("close_ret_pct"), 0.0), 3),
@@ -1224,6 +1291,7 @@ def build_missed_entry_counterfactual_report(
             "avg_mfe_10m_pct": float(avg_mfe_10m),
             "avg_mae_10m_pct": float(avg_mae_10m),
             "estimated_counterfactual_pnl_10m_krw_sum": int(estimated_pnl_sum),
+            "minute_candle_source_quality_counts": minute_candle_source_quality_counts,
             "blocker_outcome_metrics": blocker_outcome_metrics,
             "cohort_outcome_metrics": cohort_outcome_metrics,
             "rising_missed_refinement": rising_missed_refinement_metrics,

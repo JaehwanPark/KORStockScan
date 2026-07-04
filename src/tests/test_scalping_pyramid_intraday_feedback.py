@@ -43,6 +43,8 @@ def test_pyramid_intraday_feedback_labels_future_recovery_candidate(tmp_path):
                 "tick_aggressor_pressure_usable": True,
                 "tick_acceleration_ratio": 0.31,
                 "curr_vs_micro_vwap_bp": 66,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
                 "min_ai_score": 70,
                 "min_tick_accel": 0.5,
                 "max_micro_vwap_bps": 60,
@@ -82,6 +84,8 @@ def test_pyramid_intraday_feedback_keeps_ai50_as_risk_or_neutral(tmp_path):
                 "current_ai_score": 50,
                 "tick_acceleration_ratio": 0.52,
                 "curr_vs_micro_vwap_bp": 20,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
             },
         ),
         _event(202, "111111", "weak", "sell_completed", {"profit_rate": "-0.20"}),
@@ -94,6 +98,124 @@ def test_pyramid_intraday_feedback_keeps_ai50_as_risk_or_neutral(tmp_path):
     assert item["current_ai_score"] == 50
     assert item["pyramid_feedback_label"] == "pyramid_overheat_or_reversal_risk"
     assert item["pyramid_feedback_label"] != "pyramid_would_have_helped"
+
+
+def test_pyramid_intraday_feedback_blocks_source_quality_when_pressure_provenance_missing(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-03.jsonl"
+    rows = [
+        _event(
+            205,
+            "111222",
+            "missing-pressure-source",
+            "pyramid_blocked_reason",
+            {
+                "scale_in_arm": "PYRAMID",
+                "scale_in_blocker_reason": "buy_pressure_below_min",
+                "profit_rate": "+1.60",
+                "current_ai_score": 72,
+                "buy_pressure_10t": 81,
+                "tick_acceleration_ratio": 0.52,
+                "curr_vs_micro_vwap_bp": 20,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+            },
+        ),
+        _event(205, "111222", "missing-pressure-source", "sell_completed", {"profit_rate": "+2.40"}),
+    ]
+    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+    report = mod.build_report("2026-07-03", pipeline_path=pipeline_path, generated_at="fixed")
+
+    assert report["source_quality"]["status"] == "pressure_provenance_missing"
+    assert report["source_quality"]["pressure_provenance_missing_count"] == 1
+
+
+def test_pyramid_intraday_feedback_blocks_source_quality_when_pressure_provenance_unusable(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-03.jsonl"
+    rows = [
+        _event(
+            206,
+            "111333",
+            "unusable-pressure-source",
+            "pyramid_blocked_reason",
+            {
+                "scale_in_arm": "PYRAMID",
+                "scale_in_blocker_reason": "buy_pressure_below_min",
+                "profit_rate": "+1.60",
+                "current_ai_score": 72,
+                "buy_pressure_10t": 81,
+                "tick_aggressor_trusted_count": 0,
+                "tick_aggressor_pressure_usable": False,
+                "tick_acceleration_ratio": 0.52,
+                "curr_vs_micro_vwap_bp": 20,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+            },
+        ),
+        _event(206, "111333", "unusable-pressure-source", "sell_completed", {"profit_rate": "+2.40"}),
+    ]
+    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+    report = mod.build_report("2026-07-03", pipeline_path=pipeline_path, generated_at="fixed")
+
+    assert report["source_quality"]["status"] == "pressure_provenance_unusable"
+    assert report["source_quality"]["pressure_provenance_unusable_count"] == 1
+
+
+def test_pyramid_intraday_feedback_blocks_source_quality_when_micro_vwap_provenance_missing(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-03.jsonl"
+    rows = [
+        _event(
+            207,
+            "111444",
+            "missing-micro-source",
+            "pyramid_blocked_reason",
+            {
+                "scale_in_arm": "PYRAMID",
+                "scale_in_blocker_reason": "micro_vwap_overheated",
+                "profit_rate": "+1.60",
+                "current_ai_score": 72,
+                "tick_acceleration_ratio": 0.52,
+                "curr_vs_micro_vwap_bp": 70,
+            },
+        ),
+        _event(207, "111444", "missing-micro-source", "sell_completed", {"profit_rate": "+2.40"}),
+    ]
+    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+    report = mod.build_report("2026-07-03", pipeline_path=pipeline_path, generated_at="fixed")
+
+    assert report["source_quality"]["status"] == "micro_vwap_provenance_missing"
+    assert report["source_quality"]["micro_vwap_provenance_missing_count"] == 1
+
+
+def test_pyramid_intraday_feedback_blocks_source_quality_when_micro_vwap_provenance_unusable(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-03.jsonl"
+    rows = [
+        _event(
+            208,
+            "111555",
+            "stale-micro-source",
+            "pyramid_blocked_reason",
+            {
+                "scale_in_arm": "PYRAMID",
+                "scale_in_blocker_reason": "micro_vwap_overheated",
+                "profit_rate": "+1.60",
+                "current_ai_score": 72,
+                "tick_acceleration_ratio": 0.52,
+                "curr_vs_micro_vwap_bp": 70,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": False,
+            },
+        ),
+        _event(208, "111555", "stale-micro-source", "sell_completed", {"profit_rate": "+2.40"}),
+    ]
+    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+    report = mod.build_report("2026-07-03", pipeline_path=pipeline_path, generated_at="fixed")
+
+    assert report["source_quality"]["status"] == "micro_vwap_provenance_unusable"
+    assert report["source_quality"]["micro_vwap_provenance_unusable_count"] == 1
 
 
 def test_pyramid_intraday_feedback_counts_submitted_then_profit_rows(tmp_path):

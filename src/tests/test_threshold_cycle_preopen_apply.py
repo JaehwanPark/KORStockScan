@@ -1,7 +1,25 @@
 import json
+
+import pytest
 from src.engine import runtime_apply_bridge as bridge_mod
 from src.engine import scalp_sim_scale_in_window_approval as scale_in_approval_mod
 from src.engine import threshold_cycle_preopen_apply as mod
+
+
+@pytest.fixture(autouse=True)
+def _source_quality_preflight_pass(monkeypatch):
+    monkeypatch.setattr(
+        mod,
+        "load_source_quality_preflight",
+        lambda source_date: {
+            "status": "pass",
+            "tuning_input_allowed": True,
+            "allowed_runtime_apply": True,
+            "source_quality_gate": "pass",
+            "clean_baseline_enforced": True,
+        },
+    )
+    monkeypatch.setattr(mod, "source_quality_preflight_blocked", lambda preflight: False)
 
 
 def test_entry_cancel_wait_standalone_defaults_on(tmp_path, monkeypatch):
@@ -198,6 +216,66 @@ def test_rising_missed_first_touch_avgdown_candidate_ai_guard_reject_blocks_env(
     assert decisions[0]["decision_reason"] == "ai_guard_rejected_test"
 
 
+def test_preopen_apply_blocks_candidate_with_nested_source_quality_failure():
+    candidate = {
+        "family": "rising_missed_first_touch_avgdown_decision_gate",
+        "stage": "scale_in",
+        "priority": 38,
+        "calibration_state": "adjust_up",
+        "allowed_runtime_apply": True,
+        "safety_revert_required": False,
+        "target_env_keys": ["SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_MODERATE"],
+        "current_values": {"min_ai_moderate": 60.0},
+        "recommended_values": {"min_ai_moderate": 65.0},
+        "source_metrics": {
+            "source_quality_pass": False,
+            "provenance_present": True,
+        },
+    }
+
+    selected, decisions, env = mod._select_auto_apply_candidates(
+        [candidate],
+        ai_review={"items_by_family": {}},
+        require_ai=False,
+        target_date="2026-07-04",
+    )
+
+    assert selected == []
+    assert env == {}
+    assert decisions[0]["selected"] is False
+    assert decisions[0]["decision_reason"] == "source_quality_blocked"
+
+
+def test_preopen_apply_blocks_candidate_with_missing_order_provenance():
+    candidate = {
+        "family": "scalping_pyramid_quality_gate",
+        "stage": "scale_in",
+        "priority": 39,
+        "calibration_state": "adjust_down",
+        "allowed_runtime_apply": True,
+        "safety_revert_required": False,
+        "target_env_keys": ["SCALPING_PYRAMID_MIN_PROFIT_PCT"],
+        "current_values": {"min_profit_pct": 1.5},
+        "recommended_values": {"min_profit_pct": 1.3},
+        "source_metrics": {
+            "source_quality_pass": True,
+            "provenance_present": False,
+        },
+    }
+
+    selected, decisions, env = mod._select_auto_apply_candidates(
+        [candidate],
+        ai_review={"items_by_family": {}},
+        require_ai=False,
+        target_date="2026-07-04",
+    )
+
+    assert selected == []
+    assert env == {}
+    assert decisions[0]["selected"] is False
+    assert decisions[0]["decision_reason"] == "source_quality_blocked"
+
+
 def test_scalping_pyramid_quality_gate_candidate_emits_runtime_env_overrides():
     env = mod._env_overrides_for_candidate(
         {
@@ -335,6 +413,309 @@ def test_ai_score_optimization_backtest_entry_recheck_candidate_emits_runtime_en
         "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE": "68",
         "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_AI_SCORE": "74",
     }
+
+
+def test_ai_score_optimization_backtest_root_source_quality_blocks_runtime_env(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "AI_SCORE_OPTIMIZATION_BACKTEST_DIR", tmp_path / "ai_score_optimization_backtest")
+    path = mod.AI_SCORE_OPTIMIZATION_BACKTEST_DIR / "ai_score_optimization_backtest_2026-07-03.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(
+            {
+                "report_type": "ai_score_optimization_backtest",
+                "target_date": "2026-07-03",
+                "source_quality_gate": "source_quality_blocked",
+                "summary": {"allowed_runtime_apply_candidate_count": 1},
+                "calibration_candidates": [
+                    {
+                        "family": "entry_opportunity_recheck_runtime",
+                        "stage": "entry",
+                        "priority": 42,
+                        "calibration_state": "adjust_down",
+                        "allowed_runtime_apply": True,
+                        "sample_floor_passed": True,
+                        "source_quality_gate": "pass",
+                        "target_env_keys": [
+                            "ENTRY_OPPORTUNITY_RECHECK_ENABLED",
+                            "ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE",
+                            "ENTRY_OPPORTUNITY_RECHECK_MAX_AI_SCORE",
+                        ],
+                        "current_values": {"enabled": False, "min_ai_score": 75, "max_ai_score": 100},
+                        "recommended_values": {"enabled": True, "min_ai_score": 68, "max_ai_score": 74},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    candidates, status = mod._load_ai_score_optimization_backtest_candidates("2026-07-03")
+    selected, decisions, env = mod._select_auto_apply_candidates(
+        candidates,
+        ai_review={},
+        require_ai=False,
+        target_date="2026-07-04",
+    )
+
+    assert status["source_quality_blocked"] is True
+    assert candidates[0]["allowed_runtime_apply"] is False
+    assert candidates[0]["source_quality_gate"] == "source_quality_blocked"
+    assert selected == []
+    assert env == {}
+    assert decisions[0]["selected"] is False
+    assert decisions[0]["decision_reason"] == "runtime_apply_not_allowed"
+
+
+def test_direct_scale_in_calibration_loaders_block_source_quality_preflight(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        mod,
+        "RISING_MISSED_FIRST_TOUCH_CALIBRATION_DIR",
+        tmp_path / "rising_missed_first_touch_calibration",
+    )
+    monkeypatch.setattr(
+        mod,
+        "SCALPING_PYRAMID_QUALITY_CALIBRATION_DIR",
+        tmp_path / "scalping_pyramid_quality_calibration",
+    )
+    monkeypatch.setattr(
+        mod,
+        "load_source_quality_preflight",
+        lambda source_date: {
+            "status": "fail",
+            "tuning_input_allowed": False,
+            "allowed_runtime_apply": False,
+            "source_quality_gate": "blocked_contract_gap",
+            "blocked_reason": "required_field_missing",
+            "hard_blocking_contract_gap_count": 2,
+            "clean_baseline_enforced": True,
+        },
+    )
+    monkeypatch.setattr(mod, "source_quality_preflight_blocked", lambda preflight: True)
+    rising_path = (
+        mod.RISING_MISSED_FIRST_TOUCH_CALIBRATION_DIR
+        / "rising_missed_first_touch_calibration_2026-07-03.json"
+    )
+    pyramid_path = (
+        mod.SCALPING_PYRAMID_QUALITY_CALIBRATION_DIR
+        / "scalping_pyramid_quality_calibration_2026-07-03.json"
+    )
+    rising_path.parent.mkdir(parents=True)
+    pyramid_path.parent.mkdir(parents=True)
+    rising_path.write_text(
+        json.dumps(
+            {
+                "calibration_candidates": [
+                    {
+                        "family": "rising_missed_first_touch_avgdown_decision_gate",
+                        "stage": "scale_in",
+                        "calibration_state": "adjust_up",
+                        "allowed_runtime_apply": True,
+                        "sample_floor_passed": True,
+                        "source_quality_gate": "pass",
+                        "target_env_keys": ["SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_SUPPORT"],
+                        "recommended_values": {"min_ai_support": 75},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    pyramid_path.write_text(
+        json.dumps(
+            {
+                "calibration_candidates": [
+                    {
+                        "family": "scalping_pyramid_quality_gate",
+                        "stage": "scale_in",
+                        "calibration_state": "adjust_down",
+                        "allowed_runtime_apply": True,
+                        "sample_floor_passed": True,
+                        "source_quality_gate": "pass",
+                        "target_env_keys": ["SCALPING_PYRAMID_MIN_PROFIT_PCT"],
+                        "recommended_values": {"min_profit_pct": 1.1},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rising_candidates, rising_status = mod._load_rising_missed_first_touch_calibration_candidates("2026-07-03")
+    pyramid_candidates, pyramid_status = mod._load_scalping_pyramid_quality_calibration_candidates("2026-07-03")
+
+    assert rising_status["source_quality_blocked"] is True
+    assert pyramid_status["source_quality_blocked"] is True
+    assert rising_candidates[0]["allowed_runtime_apply"] is False
+    assert pyramid_candidates[0]["allowed_runtime_apply"] is False
+    assert rising_candidates[0]["source_quality_gate"] == "source_quality_blocked"
+    assert pyramid_candidates[0]["source_quality_gate"] == "source_quality_blocked"
+
+
+def test_ai_score_optimization_loader_blocks_source_quality_preflight(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "AI_SCORE_OPTIMIZATION_BACKTEST_DIR", tmp_path / "ai_score_optimization_backtest")
+    monkeypatch.setattr(
+        mod,
+        "load_source_quality_preflight",
+        lambda source_date: {
+            "status": "fail",
+            "tuning_input_allowed": False,
+            "allowed_runtime_apply": False,
+            "source_quality_gate": "blocked_contract_gap",
+            "blocked_reason": "raw_row_exclusion_missing",
+            "hard_blocking_contract_gap_count": 1,
+            "clean_baseline_enforced": True,
+        },
+    )
+    monkeypatch.setattr(mod, "source_quality_preflight_blocked", lambda preflight: True)
+    path = mod.AI_SCORE_OPTIMIZATION_BACKTEST_DIR / "ai_score_optimization_backtest_2026-07-03.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(
+            {
+                "report_type": "ai_score_optimization_backtest",
+                "target_date": "2026-07-03",
+                "source_quality_gate": "pass",
+                "summary": {"allowed_runtime_apply_candidate_count": 1},
+                "calibration_candidates": [
+                    {
+                        "family": "entry_opportunity_recheck_runtime",
+                        "stage": "entry",
+                        "priority": 42,
+                        "calibration_state": "adjust_down",
+                        "allowed_runtime_apply": True,
+                        "sample_floor_passed": True,
+                        "source_quality_gate": "pass",
+                        "target_env_keys": [
+                            "ENTRY_OPPORTUNITY_RECHECK_ENABLED",
+                            "ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE",
+                            "ENTRY_OPPORTUNITY_RECHECK_MAX_AI_SCORE",
+                        ],
+                        "current_values": {"enabled": False, "min_ai_score": 75, "max_ai_score": 100},
+                        "recommended_values": {"enabled": True, "min_ai_score": 68, "max_ai_score": 74},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    candidates, status = mod._load_ai_score_optimization_backtest_candidates("2026-07-03")
+    selected, decisions, env = mod._select_auto_apply_candidates(
+        candidates,
+        ai_review={},
+        require_ai=False,
+        target_date="2026-07-04",
+    )
+
+    assert status["source_quality_blocked"] is True
+    assert candidates[0]["allowed_runtime_apply"] is False
+    assert candidates[0]["source_quality_gate"] == "source_quality_blocked"
+    assert selected == []
+    assert env == {}
+    assert decisions[0]["decision_reason"] == "runtime_apply_not_allowed"
+
+
+def test_auto_apply_selector_rejects_source_quality_blocked_candidate():
+    candidate = {
+        "family": "entry_opportunity_recheck_runtime",
+        "stage": "entry",
+        "priority": 10,
+        "calibration_state": "adjust_down",
+        "allowed_runtime_apply": True,
+        "sample_floor_passed": True,
+        "source_quality_gate": "source_quality_blocked",
+        "target_env_keys": [
+            "ENTRY_OPPORTUNITY_RECHECK_ENABLED",
+            "ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE",
+            "ENTRY_OPPORTUNITY_RECHECK_MAX_AI_SCORE",
+        ],
+        "current_values": {"enabled": False, "min_ai_score": 75, "max_ai_score": 100},
+        "recommended_values": {"enabled": True, "min_ai_score": 68, "max_ai_score": 74},
+    }
+
+    selected, decisions, env = mod._select_auto_apply_candidates(
+        [candidate],
+        ai_review={},
+        require_ai=False,
+    )
+
+    assert selected == []
+    assert env == {}
+    assert decisions[0]["selected"] is False
+    assert decisions[0]["decision_reason"] == "source_quality_blocked"
+
+
+def test_auto_apply_selector_does_not_preserve_lock_on_source_quality_blocked_candidate():
+    candidate = {
+        "family": "entry_opportunity_recheck_runtime",
+        "stage": "entry",
+        "priority": 10,
+        "calibration_state": "adjust_down",
+        "allowed_runtime_apply": True,
+        "sample_floor_passed": True,
+        "source_quality_gate": "source_quality_blocked",
+        "target_env_keys": [
+            "ENTRY_OPPORTUNITY_RECHECK_ENABLED",
+            "ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE",
+            "ENTRY_OPPORTUNITY_RECHECK_MAX_AI_SCORE",
+        ],
+        "current_values": {"enabled": False, "min_ai_score": 75, "max_ai_score": 100},
+        "recommended_values": {"enabled": True, "min_ai_score": 68, "max_ai_score": 74},
+    }
+    lock = {
+        "lock_id": "entry_opportunity_recheck_operator_override",
+        "family": "entry_opportunity_recheck_runtime",
+        "stage": "entry",
+        "env_overrides": {
+            "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED": "true",
+            "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE": "69",
+            "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_AI_SCORE": "74",
+        },
+        "allowed_close_reason_keywords": ["same_stage_owner_conflict", "tuning_override"],
+    }
+
+    selected, decisions, env = mod._select_auto_apply_candidates(
+        [candidate],
+        ai_review={},
+        require_ai=False,
+        operator_locks=[lock],
+    )
+
+    assert selected == []
+    assert env == {}
+    assert decisions[0]["selected"] is False
+    assert decisions[0]["decision_reason"] == "source_quality_blocked"
+
+
+def test_auto_apply_selector_rejects_forbidden_use_violation_candidate():
+    candidate = {
+        "family": "entry_opportunity_recheck_runtime",
+        "stage": "entry",
+        "priority": 10,
+        "calibration_state": "adjust_down",
+        "allowed_runtime_apply": True,
+        "sample_floor_passed": True,
+        "source_quality_gate": "pass",
+        "forbidden_use_violation": "broker_guard_bypass",
+        "target_env_keys": [
+            "ENTRY_OPPORTUNITY_RECHECK_ENABLED",
+            "ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE",
+            "ENTRY_OPPORTUNITY_RECHECK_MAX_AI_SCORE",
+        ],
+        "current_values": {"enabled": False, "min_ai_score": 75, "max_ai_score": 100},
+        "recommended_values": {"enabled": True, "min_ai_score": 68, "max_ai_score": 74},
+    }
+
+    selected, decisions, env = mod._select_auto_apply_candidates(
+        [candidate],
+        ai_review={},
+        require_ai=False,
+    )
+
+    assert selected == []
+    assert env == {}
+    assert decisions[0]["selected"] is False
+    assert decisions[0]["decision_reason"] == "forbidden_use_blocked"
 
 
 def test_calibration_candidate_dedupe_prefers_first_source():
@@ -791,6 +1172,14 @@ def test_preopen_apply_consumes_lifecycle_bucket_auto_apply_without_human_artifa
                         "lifecycle_bucket_discovery_ai_review_status": "parsed",
                         "auto_promotion_contract": {"tier2_status": "parsed", "tier2_policy": "fail_closed"},
                         "source_bucket_keys": ["score=score_66_69"],
+                        "source_buckets": [
+                            {
+                                "bucket_type": "scale_in_arm",
+                                "bucket_key": "score=score_66_69",
+                                "source_quality_gate": "pass",
+                                "source_quality_adjusted_ev_pct": 1.25,
+                            }
+                        ],
                     }
                 ],
             }
@@ -5284,6 +5673,64 @@ def test_scalp_sim_auto_approval_ignores_non_scalp_nested_env_keys(tmp_path, mon
     assert "KORSTOCKSCAN_SWING_ONE_SHARE_REAL_CANARY_ENABLED" not in manifest["runtime_env_overrides"]
 
 
+def test_runtime_apply_bridge_blocks_source_quality_blocked_live_candidate(tmp_path, monkeypatch):
+    runtime_dir, bridge_dir, _approval_dir = _install_runtime_bridge_test_dirs(tmp_path, monkeypatch)
+    family = bridge_mod.SCALE_IN_BRIDGE_FAMILY
+    candidate_id = f"{family}:2026-05-30"
+    (bridge_dir / "runtime_apply_bridge_2026-05-30.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-30",
+                "candidates": [
+                    {
+                        "candidate_id": candidate_id,
+                        "family": family,
+                        "stage": "scale_in",
+                        "priority": 39,
+                        "bridge_candidate_state": "live_auto_apply_ready",
+                        "approval_required": False,
+                        "live_auto_apply": True,
+                        "allowed_runtime_apply": True,
+                        "runtime_effect_after_approval": "bounded_scale_in_policy_tighten_live_auto",
+                        "lifecycle_bucket_discovery_ai_review_status": "parsed",
+                        "auto_promotion_contract": {"tier2_status": "parsed", "tier2_policy": "fail_closed"},
+                        "target_env_keys": ["REVERSAL_ADD_MIN_AI_SCORE"],
+                        "recommended_values": {"reversal_add_min_ai_score": 55},
+                        "current_values": {"reversal_add_min_ai_score": 60},
+                        "source_bucket_keys": ["scale_in:blocked"],
+                        "source_buckets": [
+                            {
+                                "bucket_type": "scale_in_arm",
+                                "bucket_key": "scale_in:blocked",
+                                "source_quality_gate": "source_quality_blocked",
+                                "source_quality_adjusted_ev_pct": 1.7,
+                            }
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-06-01",
+        source_date="2026-05-30",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    assert manifest["runtime_change"] is False
+    assert manifest["runtime_apply_bridge"]["approved"] == 0
+    assert (
+        "source_bucket_source_quality_blocked:scale_in_bucket_runtime_policy_v1"
+        in manifest["runtime_apply_bridge"]["blocked"]
+    )
+    env_text = (runtime_dir / "threshold_runtime_env_2026-06-01.env").read_text(encoding="utf-8")
+    assert "KORSTOCKSCAN_REVERSAL_ADD_MIN_AI_SCORE" not in env_text
+
+
 def _install_runtime_bridge_test_dirs(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     apply_dir = tmp_path / "apply_plans"
@@ -5683,6 +6130,14 @@ def test_runtime_apply_bridge_scale_live_auto_writes_tighten_env_without_guard_b
                             "reversal_add_min_buy_pressure": 55.0,
                             "reversal_add_min_tick_accel": 0.95,
                         },
+                        "source_buckets": [
+                            {
+                                "bucket_type": "scale_in_arm",
+                                "bucket_key": "pyramid:tighten",
+                                "source_quality_gate": "pass",
+                                "source_quality_adjusted_ev_pct": -1.4,
+                            }
+                        ],
                         "forbidden_uses": ["scale_in_safety_guard_bypass", "sizing_formula_runtime_apply_without_guard"],
                     }
                 ],
@@ -5736,6 +6191,14 @@ def test_runtime_apply_bridge_partial_scale_arm_emits_only_ready_arm_env(tmp_pat
                             "reversal_add_min_tick_accel": 1.05,
                         },
                         "current_values": {"scalping_enable_pyramid": True},
+                        "source_buckets": [
+                            {
+                                "bucket_type": "scale_in_arm",
+                                "bucket_key": "pyramid:tighten",
+                                "source_quality_gate": "pass",
+                                "source_quality_adjusted_ev_pct": -0.8,
+                            }
+                        ],
                         "forbidden_uses": ["scale_in_safety_guard_bypass"],
                     }
                 ],

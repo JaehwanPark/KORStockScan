@@ -45,7 +45,19 @@ def _truthy(value: Any) -> bool:
         return False
     if isinstance(value, (int, float)):
         return value != 0
-    return str(value).strip().lower() in {"1", "true", "yes", "y", "on", "stale"}
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _stale_flag(value: Any) -> bool:
+    if _truthy(value):
+        return True
+    return str(value or "").strip().lower() in {
+        "stale",
+        "quote_stale",
+        "stale_quote",
+        "tick_context_stale",
+        "context_stale",
+    }
 
 
 def get_entry_buy_score_threshold(config: dict[str, Any] | None = None) -> float:
@@ -75,7 +87,7 @@ def evaluate_entry_score_role_gate(
     parse_ok = True if parse_ok_value in (None, "") else _truthy(parse_ok_value)
     fallback_50 = _truthy(result.get("ai_fallback_score_50"))
     stale = any(
-        _truthy(value)
+        _stale_flag(value)
         for value in (
             result.get("tick_context_stale"),
             result.get("quote_stale"),

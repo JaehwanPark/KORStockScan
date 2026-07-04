@@ -72,6 +72,58 @@ def test_source_quality_preflight_unknown_token_only_does_not_block(monkeypatch,
     assert mod.source_quality_preflight_blocked(preflight) is False
 
 
+def test_source_quality_preflight_preserves_raw_row_exclusion_provenance(monkeypatch, tmp_path):
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
+    artifact = _write_preflight(
+        tmp_path,
+        "2026-06-04",
+        {
+            "status": "pass",
+            "summary": {
+                "tuning_input_allowed": True,
+                "hard_blocking_contract_gap_count": 0,
+                "hard_blocking_excluded_row_count": 2,
+                "raw_row_exclusion_applied": True,
+                "raw_row_exclusion_manifest": "/tmp/raw_row_exclusion/manifest.json",
+                "review_warning_count": 0,
+            },
+            "raw_row_exclusion": {
+                "manifest_path": "/tmp/raw_row_exclusion/manifest.json",
+                "backup_path": "/tmp/raw_row_exclusion/pipeline_events.backup.jsonl",
+                "excluded_row_count": 2,
+                "stage_counts": {"pyramid_blocked_reason": 1, "reversal_add_blocked_reason": 1},
+                "field_gap_counts": {"tick_aggressor_pressure_usable": 2},
+                "exclusion_reasons": {"missing_required_field": 2},
+                "first_timestamp": "2026-06-04T10:00:00+09:00",
+                "last_timestamp": "2026-06-04T10:05:00+09:00",
+                "producer_hint": ["sniper_state_handlers"],
+                "sample_rows": [{"large": "omitted from preflight gate"}],
+                "excluded_rows": [{"large": "omitted from preflight gate"}],
+            },
+        },
+    )
+
+    preflight = mod.load_source_quality_preflight("2026-06-04")
+
+    assert preflight["artifact"] == str(artifact)
+    assert preflight["source_quality_gate"] == "pass"
+    assert preflight["tuning_input_allowed"] is True
+    assert preflight["allowed_runtime_apply"] is True
+    assert mod.source_quality_preflight_blocked(preflight) is False
+    assert preflight["raw_row_exclusion_applied"] is True
+    assert preflight["raw_row_exclusion_manifest"] == "/tmp/raw_row_exclusion/manifest.json"
+    assert preflight["hard_blocking_excluded_row_count"] == 2
+    assert preflight["raw_row_exclusion"]["stage_counts"] == {
+        "pyramid_blocked_reason": 1,
+        "reversal_add_blocked_reason": 1,
+    }
+    assert preflight["raw_row_exclusion"]["field_gap_counts"] == {
+        "tick_aggressor_pressure_usable": 2,
+    }
+    assert "sample_rows" not in preflight["raw_row_exclusion"]
+    assert "excluded_rows" not in preflight["raw_row_exclusion"]
+
+
 def test_source_quality_preflight_contract_gap_blocks_and_scrubs_runtime_aliases(monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
     _write_preflight(
@@ -111,6 +163,7 @@ def test_source_quality_preflight_contract_gap_blocks_and_scrubs_runtime_aliases
     blocked = mod.apply_source_quality_preflight_block(report, preflight)
 
     assert blocked["status"] == "source_quality_blocked"
+    assert blocked["calibration_state"] == "source_quality_blocked"
     assert blocked["approval_requests"] == []
     assert blocked["runtime_approval_candidates"] == []
     assert blocked["runtime_apply_bridge"]["selected"] == []
@@ -120,3 +173,4 @@ def test_source_quality_preflight_contract_gap_blocks_and_scrubs_runtime_aliases
     assert blocked["runtime_apply_bridge"]["env_apply_allowed"] is False
     assert blocked["runtime_mutation_allowed"] is False
     assert blocked["summary"]["runtime_candidate_count"] == 0
+    assert blocked["summary"]["calibration_state"] == "source_quality_blocked"

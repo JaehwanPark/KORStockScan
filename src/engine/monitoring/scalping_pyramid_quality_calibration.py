@@ -350,6 +350,7 @@ def _calibration_candidate(
         ((report.get("source_quality") or {}).get("status") == "pass") for report in reports
     )
     provenance_present = _provenance_present(rows)
+    source_contract_pass = bool(source_quality_pass and provenance_present)
     sample_floor_met = int(rates["sample_count"]) >= 20
     sample_floor_reason = (
         "rolling_closed_one_share_pyramid_rows_lt_20"
@@ -405,6 +406,9 @@ def _calibration_candidate(
         "sample_floor": 20,
         "allowed_runtime_apply": allowed,
         "safety_revert_required": False,
+        "source_quality_gate": "pass" if source_contract_pass else "source_quality_blocked",
+        "source_quality_status": "pass" if source_contract_pass else "blocked",
+        "source_quality_blocked": None if source_contract_pass else ",".join(blockers) or "source_quality_or_provenance_not_pass",
         "current_values": current,
         "recommended_values": recommended,
         "target_env_keys": TARGET_ENV_KEYS if allowed else [],

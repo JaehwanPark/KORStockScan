@@ -94,6 +94,62 @@ def _safe_float(value, default: float = 0.0) -> float:
         return default
 
 
+def _minute_candle_meta(candles: list[dict], meta: dict | None = None, *, requested_limit: int | None = None) -> dict:
+    source_meta = dict(meta or {})
+    source_meta.setdefault("api_id", "ka10080")
+    source_meta.setdefault("requested_limit", requested_limit)
+    source_meta.setdefault("received_count", len(candles or []))
+    source_meta.setdefault("truncated_window", False)
+    source_meta.setdefault("sort_direction_detected", "unknown")
+    source_meta.setdefault("cont_yn_seen", False)
+    source_meta.setdefault("next_key_seen", False)
+    source_meta.setdefault("continuous_next_key_missing", False)
+    source_meta.setdefault("continuous_page_limit_reached", False)
+    source_meta.setdefault("rest_received_ts_ms", None)
+    source_meta.setdefault("latest_source_timestamp", None)
+    source_meta.setdefault("source_time_basis", "response_received_epoch_ms_and_chart_bar_timestamp")
+    return source_meta
+
+
+def _fetch_minute_candles_with_meta(kiwoom_utils, token: str, code: str, *, limit: int) -> tuple[list[dict], dict]:
+    if hasattr(kiwoom_utils, "get_minute_candles_ka10080_with_meta"):
+        candles, meta = kiwoom_utils.get_minute_candles_ka10080_with_meta(token, code, limit=limit)
+        candles = candles or []
+        return candles, _minute_candle_meta(candles, meta, requested_limit=limit)
+    candles = kiwoom_utils.get_minute_candles_ka10080(token, code, limit=limit) or []
+    return candles, _minute_candle_meta(candles, requested_limit=limit)
+
+
+def _minute_forward_source_quality(metrics_10m: dict, candle_meta: dict) -> dict:
+    bars_10m = _safe_int((metrics_10m or {}).get("bars"), 0)
+    if bars_10m <= 0:
+        status = "insufficient_window"
+        gate = "source_quality_insufficient"
+        reason = "no_ka10080_bars_in_forward_10m_window"
+    elif bool(candle_meta.get("continuous_next_key_missing")):
+        status = "partial_window"
+        gate = "source_quality_warning"
+        reason = "ka10080_continuation_key_missing"
+    elif bool(candle_meta.get("continuous_page_limit_reached")):
+        status = "partial_window"
+        gate = "source_quality_warning"
+        reason = "ka10080_continuation_page_limit_reached"
+    elif bool(candle_meta.get("truncated_window")):
+        status = "partial_window"
+        gate = "source_quality_warning"
+        reason = "ka10080_truncated_window"
+    else:
+        status = "pass"
+        gate = "pass"
+        reason = "ka10080_forward_window_available"
+    return {
+        "minute_candle_source_quality": status,
+        "minute_candle_source_quality_gate": gate,
+        "minute_candle_source_quality_reason": reason,
+        "minute_candle_forward_10m_bars": bars_10m,
+    }
+
+
 def _sim_virtual_budget_krw() -> int:
     return max(0, int(getattr(TRADING_RULES, "SIM_VIRTUAL_BUDGET_KRW", 10_000_000) or 0))
 
@@ -997,22 +1053,23 @@ def build_wait6579_ev_cohort_report(
             log_error(f"[WAIT6579_EV] token fetch failed: {exc}")
             token = None
 
-    candle_cache: dict[str, list[dict]] = {}
+    candle_cache: dict[str, tuple[list[dict], dict]] = {}
     rows: list[dict] = []
     for candidate in candidates:
         code = str(candidate.get("stock_code") or "").strip()[:6]
         if code and code not in candle_cache:
             if token is None or kiwoom_utils is None:
-                candle_cache[code] = []
+                candle_cache[code] = ([], _minute_candle_meta([], requested_limit=700))
             else:
                 try:
-                    candle_cache[code] = kiwoom_utils.get_minute_candles_ka10080(token, code, limit=700) or []
+                    candle_cache[code] = _fetch_minute_candles_with_meta(kiwoom_utils, token, code, limit=700)
                 except Exception as exc:
                     log_error(f"[WAIT6579_EV] {code} minute candles fetch failed: {exc}")
-                    candle_cache[code] = []
+                    candle_cache[code] = ([], _minute_candle_meta([], requested_limit=700))
 
-        candles = candle_cache.get(code, [])
+        candles, candle_meta = candle_cache.get(code, ([], _minute_candle_meta([], requested_limit=700)))
         metrics_10m = _compute_window_metrics(candidate, candles, 10)
+        source_quality = _minute_forward_source_quality(metrics_10m, candle_meta)
         paper_fill = _simulate_paper_fill(candidate, metrics_10m)
         rows.append(
             {
@@ -1028,6 +1085,8 @@ def build_wait6579_ev_cohort_report(
                 "buy_pressure": round(_safe_float(candidate.get("buy_pressure"), 0.0), 3),
                 "tick_accel": round(_safe_float(candidate.get("tick_accel"), 0.0), 4),
                 "micro_vwap_bp": round(_safe_float(candidate.get("micro_vwap_bp"), 0.0), 3),
+                "minute_candle_source_meta": candle_meta,
+                **source_quality,
                 "latency_state": str(candidate.get("latency_state") or "-"),
                 "parse_ok": bool(candidate.get("parse_ok")),
                 "ai_response_ms": _safe_int(candidate.get("ai_response_ms"), 0),
@@ -1082,6 +1141,9 @@ def build_wait6579_ev_cohort_report(
     score65_74_probe_candidates = sum(1 for row in rows if bool(row.get("has_score65_74_probe")))
     fill_split = _fill_split_rows(rows)
     terminal_breakdown = _terminal_breakdown(rows)
+    minute_candle_source_quality_counts = dict(
+        Counter(str(row.get("minute_candle_source_quality") or "unknown") for row in rows)
+    )
 
     split_map = {str(item.get("fill_type") or ""): item for item in fill_split}
     full_samples = _safe_int((split_map.get("FULL") or {}).get("samples"), 0)
@@ -1107,6 +1169,7 @@ def build_wait6579_ev_cohort_report(
             "expected_ev_krw_sum": int(sum(_safe_int(row.get("expected_ev_krw"), 0) for row in rows)),
             "avg_close_10m_pct": _avg([_safe_float(row.get("close_10m_pct"), 0.0) for row in rows]),
             "avg_ai_response_ms": _avg([float(_safe_int(row.get("ai_response_ms"), 0)) for row in rows]),
+            "minute_candle_source_quality_counts": minute_candle_source_quality_counts,
         },
         "fill_split": fill_split,
         "terminal_breakdown": terminal_breakdown,

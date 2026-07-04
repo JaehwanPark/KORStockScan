@@ -31,6 +31,10 @@ from src.engine.scalping.scalp_sim_auto_approval_control_tower import (
 from src.engine.monitoring import rising_missed_classifier_prior
 from src.engine.scalping import scalp_sim_auto_approval_control_tower
 from src.engine import lifecycle_bucket_discovery
+from src.engine.automation.source_quality_hard_gate import (
+    load_source_quality_preflight,
+    source_quality_preflight_blocked,
+)
 from src.engine.lifecycle_bucket_discovery import (
     bucket_catalog_path,
     discovery_report_path,
@@ -595,6 +599,118 @@ def _greenfield_policy_block_reason(item: dict[str, Any]) -> str:
     return validate_greenfield_policy_file(policy_file, expected_version=recommended_version or None)
 
 
+def _bridge_candidate_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(str(value).replace(",", ""))
+    except (TypeError, ValueError):
+        return None
+
+
+def _bridge_source_quality_pass(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"pass", "ok", "clean", "source_quality_pass"}
+
+
+def _runtime_bridge_candidate_contract_blockers(item: dict[str, Any]) -> list[str]:
+    blockers: list[str] = []
+    if (
+        item.get("source_quality_blocked")
+        or item.get("source_quality_blocker")
+        or (isinstance(item.get("source_quality_blockers"), list) and item.get("source_quality_blockers"))
+    ):
+        blockers.append("source_quality_blocked")
+    source_quality_gate = item.get("source_quality_gate") or item.get("source_quality_status")
+    if source_quality_gate and not _bridge_source_quality_pass(source_quality_gate):
+        blockers.append("source_quality_blocked")
+    if (
+        item.get("forbidden_use_blocked")
+        or item.get("forbidden_use_violation")
+        or (isinstance(item.get("forbidden_use_violations"), list) and item.get("forbidden_use_violations"))
+    ):
+        blockers.append("forbidden_use_blocked")
+
+    family = str(item.get("family") or "")
+    if family == GREENFIELD_REAL_ENV_FAMILY:
+        return list(dict.fromkeys(blockers))
+
+    source_refs: list[dict[str, Any]] = []
+    source_bucket = item.get("source_bucket") if isinstance(item.get("source_bucket"), dict) else {}
+    if source_bucket:
+        source_refs.append(source_bucket)
+    source_refs.extend(
+        ref for ref in (item.get("source_buckets") or []) if isinstance(ref, dict)
+    )
+    if source_refs:
+        complete_refs = [
+            ref
+            for ref in source_refs
+            if _bridge_source_quality_pass(ref.get("source_quality_gate"))
+            and _bridge_candidate_float(ref.get("source_quality_adjusted_ev_pct")) is not None
+        ]
+        if not any(_bridge_source_quality_pass(ref.get("source_quality_gate")) for ref in source_refs):
+            blockers.append("source_bucket_source_quality_blocked")
+        if not any(_bridge_candidate_float(ref.get("source_quality_adjusted_ev_pct")) is not None for ref in source_refs):
+            blockers.append("source_bucket_primary_ev_missing")
+        if not complete_refs:
+            blockers.append("source_bucket_contract_incomplete")
+    else:
+        metric = str(item.get("primary_decision_metric") or "")
+        if metric == "source_quality_adjusted_ev_pct":
+            if _bridge_candidate_float(item.get("source_quality_adjusted_ev_pct")) is None:
+                blockers.append("primary_ev_missing")
+            if not source_quality_gate:
+                blockers.append("source_quality_gate_missing")
+        elif item.get("bridge_candidate_state") == "live_auto_apply_ready":
+            blockers.append("source_bucket_contract_missing")
+    return list(dict.fromkeys(blockers))
+
+
+def _candidate_source_quality_contract_blocked(candidate: dict[str, Any]) -> bool:
+    source_quality = candidate.get("source_quality") if isinstance(candidate.get("source_quality"), dict) else {}
+    source_metrics = candidate.get("source_metrics") if isinstance(candidate.get("source_metrics"), dict) else {}
+    if (
+        candidate.get("source_quality_blocked")
+        or candidate.get("source_quality_blocker")
+        or (
+            isinstance(candidate.get("source_quality_blockers"), list)
+            and candidate["source_quality_blockers"]
+        )
+    ):
+        return True
+    for value in (
+        candidate.get("source_quality_gate"),
+        candidate.get("source_quality_status"),
+        source_quality.get("source_quality_gate"),
+        source_quality.get("source_quality_status"),
+        source_quality.get("status"),
+    ):
+        text = str(value or "").strip().lower()
+        if text and not _bridge_source_quality_pass(text):
+            return True
+    if source_metrics.get("source_quality_pass") is False:
+        return True
+    if source_metrics.get("provenance_present") is False:
+        return True
+    return False
+
+
+def _candidate_apply_contract_blockers(candidate: dict[str, Any]) -> list[str]:
+    blockers: list[str] = []
+    if _candidate_source_quality_contract_blocked(candidate):
+        blockers.append("source_quality_blocked")
+    if (
+        candidate.get("forbidden_use_blocked")
+        or candidate.get("forbidden_use_violation")
+        or (
+            isinstance(candidate.get("forbidden_use_violations"), list)
+            and candidate["forbidden_use_violations"]
+        )
+    ):
+        blockers.append("forbidden_use_blocked")
+    return list(dict.fromkeys(blockers))
+
+
 def _report_path_for_date(target_date: str, *, source_phase: str | None = None) -> Path:
     if source_phase == "intraday":
         return CALIBRATION_REPORT_DIR / f"threshold_cycle_calibration_{target_date}_intraday.json"
@@ -711,6 +827,11 @@ def _load_rising_missed_first_touch_calibration_candidates(
         candidate = payload.get("calibration_candidate")
         candidates = [candidate] if isinstance(candidate, dict) else []
     normalized = [item for item in candidates if isinstance(item, dict)]
+    normalized, preflight_status = _block_candidates_by_source_quality_preflight(
+        normalized,
+        source_date,
+        source_report_type="rising_missed_first_touch_calibration",
+    )
     selected_candidate = normalized[0] if normalized else {}
     return normalized, {
         "status": "loaded",
@@ -718,6 +839,8 @@ def _load_rising_missed_first_touch_calibration_candidates(
         "allowed_runtime_apply": selected_candidate.get("allowed_runtime_apply"),
         "calibration_state": selected_candidate.get("calibration_state"),
         "sample_count": selected_candidate.get("sample_count"),
+        "source_quality_preflight": preflight_status,
+        "source_quality_blocked": bool(preflight_status.get("blocked")),
     }
 
 
@@ -725,6 +848,45 @@ def _scalping_pyramid_quality_calibration_path(source_date: str) -> Path:
     return SCALPING_PYRAMID_QUALITY_CALIBRATION_DIR / (
         f"scalping_pyramid_quality_calibration_{source_date}.json"
     )
+
+
+def _source_quality_preflight_status(source_date: str | None) -> dict[str, Any]:
+    if not source_date:
+        return {"blocked": True, "reason": "missing_source_date", "preflight": {}}
+    preflight = load_source_quality_preflight(source_date)
+    blocked = source_quality_preflight_blocked(preflight)
+    reason = str(
+        preflight.get("blocked_reason")
+        or preflight.get("source_quality_gate")
+        or "source_quality_blocked"
+    )
+    return {"blocked": blocked, "reason": reason, "preflight": preflight}
+
+
+def _block_candidates_by_source_quality_preflight(
+    candidates: list[dict[str, Any]],
+    source_date: str | None,
+    *,
+    source_report_type: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    status = _source_quality_preflight_status(source_date)
+    if not status["blocked"]:
+        return candidates, status
+    reason = str(status.get("reason") or "source_quality_blocked")
+    blocked_candidates = [
+        {
+            **item,
+            "allowed_runtime_apply": False,
+            "source_quality_gate": "source_quality_blocked",
+            "source_quality_blocked": str(
+                item.get("source_quality_blocked")
+                or f"{source_report_type}_source_quality_preflight_blocked:{reason}"
+            ),
+            "apply_block_reason": "source_quality_blocked",
+        }
+        for item in candidates
+    ]
+    return blocked_candidates, status
 
 
 def _load_scalping_pyramid_quality_calibration_candidates(
@@ -741,6 +903,11 @@ def _load_scalping_pyramid_quality_calibration_candidates(
         candidate = payload.get("calibration_candidate")
         candidates = [candidate] if isinstance(candidate, dict) else []
     normalized = [item for item in candidates if isinstance(item, dict)]
+    normalized, preflight_status = _block_candidates_by_source_quality_preflight(
+        normalized,
+        source_date,
+        source_report_type="scalping_pyramid_quality_calibration",
+    )
     selected_candidate = normalized[0] if normalized else {}
     return normalized, {
         "status": "loaded",
@@ -748,11 +915,37 @@ def _load_scalping_pyramid_quality_calibration_candidates(
         "allowed_runtime_apply": selected_candidate.get("allowed_runtime_apply"),
         "calibration_state": selected_candidate.get("calibration_state"),
         "sample_count": selected_candidate.get("sample_count"),
+        "source_quality_preflight": preflight_status,
+        "source_quality_blocked": bool(preflight_status.get("blocked")),
     }
 
 
 def _ai_score_optimization_backtest_path(source_date: str) -> Path:
     return AI_SCORE_OPTIMIZATION_BACKTEST_DIR / f"ai_score_optimization_backtest_{source_date}.json"
+
+
+def _ai_score_optimization_payload_source_quality_blocked(payload: dict[str, Any]) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    if payload.get("source_quality_blocked") or payload.get("source_quality_blocker"):
+        return True
+    if summary.get("source_quality_blocked") or summary.get("source_quality_blocker"):
+        return True
+    blockers = payload.get("source_quality_blockers") or summary.get("source_quality_blockers")
+    if isinstance(blockers, list) and blockers:
+        return True
+    for value in (
+        payload.get("source_quality_gate"),
+        payload.get("source_quality_status"),
+        summary.get("source_quality_gate"),
+        summary.get("source_quality_status"),
+    ):
+        text = str(value or "").strip().lower()
+        if text and text not in {"pass", "ok", "clean", "source_quality_pass"}:
+            return True
+    status_text = str(summary.get("status") or payload.get("status") or "").strip().lower()
+    return "source_quality_blocked" in status_text or "hard_block" in status_text
 
 
 def _load_ai_score_optimization_backtest_candidates(
@@ -768,6 +961,26 @@ def _load_ai_score_optimization_backtest_candidates(
     if not isinstance(candidates, list):
         candidates = []
     normalized = [item for item in candidates if isinstance(item, dict)]
+    source_quality_blocked = _ai_score_optimization_payload_source_quality_blocked(payload)
+    preflight_status = _source_quality_preflight_status(source_date)
+    if source_quality_blocked or preflight_status.get("blocked"):
+        preflight_reason = str(preflight_status.get("reason") or "source_quality_blocked")
+        block_reason = (
+            "ai_score_optimization_backtest_root_source_quality_blocked"
+            if source_quality_blocked
+            else f"ai_score_optimization_backtest_source_quality_preflight_blocked:{preflight_reason}"
+        )
+        normalized = [
+            {
+                **item,
+                "allowed_runtime_apply": False,
+                "source_quality_gate": "source_quality_blocked",
+                "source_quality_blocked": str(item.get("source_quality_blocked") or block_reason),
+                "apply_block_reason": "source_quality_blocked",
+            }
+            for item in normalized
+        ]
+        source_quality_blocked = True
     selected_candidate = next(
         (item for item in normalized if bool(item.get("allowed_runtime_apply"))),
         normalized[0] if normalized else {},
@@ -780,6 +993,8 @@ def _load_ai_score_optimization_backtest_candidates(
         "calibration_state": selected_candidate.get("calibration_state"),
         "candidate_count": len(normalized),
         "allowed_runtime_apply_candidate_count": summary.get("allowed_runtime_apply_candidate_count"),
+        "source_quality_blocked": source_quality_blocked,
+        "source_quality_preflight": preflight_status,
     }
 
 
@@ -1485,6 +1700,7 @@ def _load_runtime_apply_bridge_approval(source_date: str | None) -> dict[str, An
             item_blocked.append(f"runtime_apply_blocked_bridge_not_ready:{item.get('bridge_candidate_state')}")
         if not bool(item.get("allowed_runtime_apply")):
             item_blocked.append("runtime_apply_not_allowed")
+        item_blocked.extend(_runtime_bridge_candidate_contract_blockers(item))
         if not auto_live:
             item_blocked.append("runtime_apply_bridge_auto_live_contract_missing")
         if family == GREENFIELD_REAL_ENV_FAMILY:
@@ -2162,6 +2378,7 @@ def _select_auto_apply_candidates(
         state = str(candidate.get("calibration_state") or "")
         lock = locks_by_family.get(family)
         allowed, reason = _ai_guard_allows_candidate(candidate, ai_review, require_ai=require_ai)
+        contract_blockers = _candidate_apply_contract_blockers(candidate)
         reject_reason = ""
         hold_carry_forward = False
         hold_carry_forward_blockers: list[str] = []
@@ -2200,6 +2417,8 @@ def _select_auto_apply_candidates(
                         hold_carry_forward = True
                         reject_reason = ""
                         reason = f"hold_carry_forward_previous_runtime:{family}"
+        elif contract_blockers:
+            reject_reason = ",".join(contract_blockers)
         elif state in AUTO_APPLY_BLOCK_STATES or state not in AUTO_APPLY_ALLOWED_STATES:
             reject_reason = f"calibration_state_blocked:{state}"
         elif not allowed:
@@ -2231,7 +2450,7 @@ def _select_auto_apply_candidates(
         ):
             lock_overrides = _lock_env_overrides(lock)
             lock_allowed_close = _lock_allows_close(lock, lock_close_reasons)
-            lock_can_preserve = bool(lock_overrides) and not lock_allowed_close
+            lock_can_preserve = bool(lock_overrides) and not lock_allowed_close and not contract_blockers
             if lock_can_preserve:
                 reject_reason = ""
                 reason = f"operator_runtime_env_lock_preserved:{lock.get('lock_id') or family}"

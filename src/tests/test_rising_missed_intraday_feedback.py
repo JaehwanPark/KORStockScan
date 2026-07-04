@@ -229,7 +229,15 @@ def test_build_report_adds_continuously_updated_first_touch_regression_rows(tmp_
             "000401",
             "winner",
             "stop_line_touch_mandatory_avg_down_candidate",
-            {"profit_rate": "-3.42", "peak_profit": "-0.23", "current_ai_score": "65", "gate_reason": "ok"},
+            {
+                "profit_rate": "-3.42",
+                "peak_profit": "-0.23",
+                "current_ai_score": "65",
+                "gate_reason": "ok",
+                "first_touch_avgdown_ai_score_usable": True,
+                "first_touch_avgdown_ai_score_source": "live",
+                "first_touch_avgdown_ai_score_data_quality": "fresh",
+            },
             emitted_at="2026-07-03T08:06:00",
             pipeline="HOLDING_PIPELINE",
         ),
@@ -272,7 +280,15 @@ def test_build_report_adds_continuously_updated_first_touch_regression_rows(tmp_
             "000402",
             "loser",
             "stop_line_touch_mandatory_avg_down_candidate",
-            {"profit_rate": "-3.33", "peak_profit": "-0.23", "current_ai_score": "67", "gate_reason": "ok"},
+            {
+                "profit_rate": "-3.33",
+                "peak_profit": "-0.23",
+                "current_ai_score": "67",
+                "gate_reason": "ok",
+                "first_touch_avgdown_ai_score_usable": True,
+                "first_touch_avgdown_ai_score_source": "live",
+                "first_touch_avgdown_ai_score_data_quality": "fresh",
+            },
             emitted_at="2026-07-03T08:17:00",
             pipeline="HOLDING_PIPELINE",
         ),
@@ -335,6 +351,9 @@ def test_build_report_adds_continuously_updated_first_touch_regression_rows(tmp_
                 "first_touch_avgdown_risk_signals": "repeated_blockers_without_support",
                 "first_touch_avgdown_repeated_blocker_count": 11,
                 "first_touch_avgdown_decision_authority": "real_scalping_first_touch_avgdown_decision_gate",
+                "first_touch_avgdown_ai_score_usable": True,
+                "first_touch_avgdown_ai_score_source": "live",
+                "first_touch_avgdown_ai_score_data_quality": "fresh",
             },
             emitted_at="2026-07-03T08:20:00",
             pipeline="HOLDING_PIPELINE",
@@ -371,3 +390,201 @@ def test_build_report_adds_continuously_updated_first_touch_regression_rows(tmp_
         report["metric_contracts"]["rising_missed_first_touch_regression"]["decision_authority"]
         == "source_only_first_touch_regression_table"
     )
+    assert report["source_quality"]["status"] == "pass"
+
+
+def test_first_touch_regression_blocks_source_quality_when_ai_provenance_missing(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-03.jsonl"
+    rows = [
+        _event(
+            501,
+            "000501",
+            "missing-ai-provenance",
+            "rising_missed_one_share_entry",
+            {"forced_entry_reason": "rising_missed_one_share_entry"},
+            emitted_at="2026-07-03T08:03:00",
+        ),
+        _event(
+            501,
+            "000501",
+            "missing-ai-provenance",
+            "stop_line_touch_mandatory_avg_down_candidate",
+            {"profit_rate": "-3.42", "peak_profit": "-0.23", "current_ai_score": "65", "gate_reason": "ok"},
+            emitted_at="2026-07-03T08:06:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+    ]
+    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+
+    report = mod.build_report("2026-07-03", pipeline_path=pipeline_path, generated_at="fixed")
+
+    assert report["source_quality"]["status"] == "first_touch_ai_provenance_missing"
+    assert report["summary"]["first_touch_ai_provenance_missing_count"] == 1
+
+
+def test_first_touch_regression_accepts_runtime_usable_holding_ai_not_called_score(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-03.jsonl"
+    rows = [
+        _event(
+            505,
+            "000505",
+            "usable-prior-score",
+            "rising_missed_one_share_entry",
+            {"forced_entry_reason": "rising_missed_one_share_entry"},
+            emitted_at="2026-07-03T08:03:00",
+        ),
+        _event(
+            505,
+            "000505",
+            "usable-prior-score",
+            "stop_line_touch_mandatory_avg_down_candidate",
+            {
+                "profit_rate": "-3.42",
+                "peak_profit": "-0.23",
+                "current_ai_score": "65",
+                "gate_reason": "ok",
+                "first_touch_avgdown_ai_score_usable": True,
+                "first_touch_avgdown_ai_score_source": "holding_ai_not_called",
+                "first_touch_avgdown_ai_score_data_quality": "fresh",
+            },
+            emitted_at="2026-07-03T08:06:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+    ]
+    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+
+    report = mod.build_report("2026-07-03", pipeline_path=pipeline_path, generated_at="fixed")
+
+    assert report["source_quality"]["status"] == "pass"
+    assert report["summary"]["first_touch_ai_provenance_unusable_count"] == 0
+
+
+def test_first_touch_regression_blocks_source_quality_when_micro_provenance_unusable(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-03.jsonl"
+    rows = [
+        _event(
+            502,
+            "000502",
+            "stale-micro",
+            "rising_missed_one_share_entry",
+            {"forced_entry_reason": "rising_missed_one_share_entry"},
+            emitted_at="2026-07-03T08:03:00",
+        ),
+        _event(
+            502,
+            "000502",
+            "stale-micro",
+            "stop_line_touch_first_touch_avgdown_decision_blocked",
+            {
+                "profit_rate": "-3.42",
+                "peak_profit": "-0.23",
+                "current_ai_score": "65",
+                "gate_reason": "micro_context_stale_ignored",
+                "first_touch_avgdown_decision_allowed": False,
+                "first_touch_avgdown_decision_reason": "insufficient_first_touch_recovery_confirmation",
+                "first_touch_avgdown_support_signals": "buy_pressure_support",
+                "first_touch_avgdown_risk_signals": "micro_context_stale_ignored",
+                "first_touch_avgdown_ai_score_usable": True,
+                "first_touch_avgdown_ai_score_source": "live",
+                "first_touch_avgdown_ai_score_data_quality": "fresh",
+                "first_touch_reversal_feature_source_quality": "stale",
+                "first_touch_reversal_feature_stale": True,
+                "first_touch_reversal_feature_stale_reason": "micro_vwap_unavailable",
+            },
+            emitted_at="2026-07-03T08:06:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+    ]
+    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+
+    report = mod.build_report("2026-07-03", pipeline_path=pipeline_path, generated_at="fixed")
+
+    assert report["source_quality"]["status"] == "first_touch_micro_provenance_unusable"
+    assert report["summary"]["first_touch_micro_provenance_unusable_count"] == 1
+
+
+def test_first_touch_regression_blocks_source_quality_when_pressure_provenance_missing(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-03.jsonl"
+    rows = [
+        _event(
+            503,
+            "000503",
+            "missing-pressure",
+            "rising_missed_one_share_entry",
+            {"forced_entry_reason": "rising_missed_one_share_entry"},
+            emitted_at="2026-07-03T08:03:00",
+        ),
+        _event(
+            503,
+            "000503",
+            "missing-pressure",
+            "stop_line_touch_first_touch_avgdown_decision_blocked",
+            {
+                "profit_rate": "-3.42",
+                "peak_profit": "-0.23",
+                "current_ai_score": "65",
+                "first_touch_avgdown_decision_allowed": False,
+                "first_touch_avgdown_decision_reason": "insufficient_first_touch_recovery_confirmation",
+                "first_touch_avgdown_support_signals": "buy_pressure_support|tick_accel_support",
+                "first_touch_avgdown_risk_signals": "",
+                "first_touch_avgdown_ai_score_usable": True,
+                "first_touch_avgdown_ai_score_source": "live",
+                "first_touch_avgdown_ai_score_data_quality": "fresh",
+                "first_touch_reversal_feature_source_quality": "usable",
+                "first_touch_reversal_feature_stale": False,
+                "buy_pressure_10t": "78.0",
+                "tick_acceleration_ratio": "1.25",
+            },
+            emitted_at="2026-07-03T08:06:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+    ]
+    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+
+    report = mod.build_report("2026-07-03", pipeline_path=pipeline_path, generated_at="fixed")
+
+    assert report["source_quality"]["status"] == "first_touch_pressure_provenance_missing"
+    assert report["summary"]["first_touch_pressure_provenance_missing_count"] == 1
+
+
+def test_first_touch_regression_blocks_source_quality_when_micro_vwap_provenance_missing(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-03.jsonl"
+    rows = [
+        _event(
+            504,
+            "000504",
+            "missing-minute",
+            "rising_missed_one_share_entry",
+            {"forced_entry_reason": "rising_missed_one_share_entry"},
+            emitted_at="2026-07-03T08:03:00",
+        ),
+        _event(
+            504,
+            "000504",
+            "missing-minute",
+            "stop_line_touch_first_touch_avgdown_decision_blocked",
+            {
+                "profit_rate": "-3.42",
+                "peak_profit": "-0.23",
+                "current_ai_score": "65",
+                "first_touch_avgdown_decision_allowed": False,
+                "first_touch_avgdown_decision_reason": "insufficient_first_touch_recovery_confirmation",
+                "first_touch_avgdown_support_signals": "micro_vwap_non_negative",
+                "first_touch_avgdown_risk_signals": "",
+                "first_touch_avgdown_ai_score_usable": True,
+                "first_touch_avgdown_ai_score_source": "live",
+                "first_touch_avgdown_ai_score_data_quality": "fresh",
+                "first_touch_reversal_feature_source_quality": "usable",
+                "first_touch_reversal_feature_stale": False,
+                "curr_vs_micro_vwap_bp": "12.0",
+            },
+            emitted_at="2026-07-03T08:06:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+    ]
+    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+
+    report = mod.build_report("2026-07-03", pipeline_path=pipeline_path, generated_at="fixed")
+
+    assert report["source_quality"]["status"] == "first_touch_micro_provenance_missing"
+    assert report["summary"]["first_touch_micro_provenance_missing_count"] == 1

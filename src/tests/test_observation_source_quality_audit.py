@@ -94,6 +94,80 @@ def test_observation_source_quality_audit_flags_missing_ai_fields(monkeypatch, t
     assert report["summary"]["blocked_reason"] == "blocked_contract_gap"
 
 
+def _early_accel_contract_fields(*, include_provenance=True):
+    fields = {
+        "metric_role": "funnel_count",
+        "decision_authority": "operator_runtime_observation_retry_only",
+        "window_policy": "intraday_operator_runtime_retry",
+        "sample_floor": "not_applicable_operator_runtime_retry",
+        "primary_decision_metric": "funnel_count",
+        "source_quality_gate": "early_accel_recheck_contract_fields_present",
+        "runtime_effect": True,
+        "forbidden_uses": "threshold_mutation|provider_route_change|bot_restart|broker_guard_bypass",
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "allowed_runtime_apply": False,
+        "scanner_promotion_reason": "probe_acceleration_confirmed",
+        "promotion_price": 12280,
+        "current_price": 12430,
+        "promotion_age_sec": "30.0",
+        "recheck_count": 0,
+        "last_ai_elapsed_sec": "25.0",
+        "skip_reason": "allowed",
+        "tick_accel": "1.250",
+        "micro_vwap_bp": "12.00",
+        "quote_stale": False,
+    }
+    if include_provenance:
+        fields.update(
+            {
+                "tick_accel_source": "computed_10ticks",
+                "tick_context_quality": "fresh_computed",
+                "tick_context_stale": False,
+                "tick_accel_usable": True,
+                "micro_vwap_available": True,
+                "minute_candle_context_quality": "fresh_bar_window",
+                "minute_candle_window_fresh": True,
+                "minute_candle_latest_age_ms": 8000,
+                "micro_vwap_usable": True,
+            }
+        )
+    return fields
+
+
+def test_observation_source_quality_audit_flags_missing_early_accel_provenance(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-15",
+        [_event("early_accel_recheck_evaluated", _early_accel_contract_fields(include_provenance=False))],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-05-15")
+
+    contract = report["stage_contracts"]["early_accel_recheck_evaluated"]
+    assert contract["status"] == "fail"
+    assert "tick_accel_source" in contract["missing_violations"]
+    assert "micro_vwap_usable" in contract["missing_violations"]
+    assert report["summary"]["tuning_input_allowed"] is False
+    assert "early_accel_recheck_evaluated" in report["summary"]["hard_blocking_stages"]
+
+
+def test_observation_source_quality_audit_accepts_early_accel_provenance(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-15",
+        [_event("early_accel_recheck_evaluated", _early_accel_contract_fields())],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-05-15")
+
+    contract = report["stage_contracts"]["early_accel_recheck_evaluated"]
+    assert contract["status"] == "pass"
+    assert report["summary"]["hard_blocking_contract_gap_count"] == 0
+
+
 def test_ai_confirmed_terminal_no_budget_contract_passes(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
@@ -231,6 +305,10 @@ def test_observation_source_quality_audit_warns_on_high_rate_unknown_tokens(monk
                         "buy_pressure_10t": "70.000",
                         "curr_vs_micro_vwap_bp": "8.000",
                         "curr_vs_ma5_bp": "5.000",
+                        "micro_vwap_available": True,
+                        "minute_candle_context_quality": "fresh_bar_window",
+                        "minute_candle_window_fresh": True,
+                        "minute_candle_latest_age_ms": 12000,
                         "latest_strength": "120.0",
                         "distance_from_day_high_pct": "-0.50",
                         "intraday_range_pct": "2.10",
@@ -403,6 +481,10 @@ def test_observation_source_quality_audit_reviews_entry_adm_price_unknown_proven
                     "buy_pressure_10t": "70.000",
                     "curr_vs_micro_vwap_bp": "8.000",
                     "curr_vs_ma5_bp": "5.000",
+                    "micro_vwap_available": True,
+                    "minute_candle_context_quality": "fresh_bar_window",
+                    "minute_candle_window_fresh": True,
+                    "minute_candle_latest_age_ms": 12000,
                     "latest_strength": "120.0",
                     "distance_from_day_high_pct": "-0.50",
                     "intraday_range_pct": "2.10",
@@ -465,6 +547,10 @@ def test_observation_source_quality_audit_surfaces_ai_numeric_consistency_findin
                     "buy_pressure_10t": "71.200",
                     "curr_vs_micro_vwap_bp": "11.400",
                     "curr_vs_ma5_bp": "9.800",
+                    "micro_vwap_available": True,
+                    "minute_candle_context_quality": "fresh_bar_window",
+                    "minute_candle_window_fresh": True,
+                    "minute_candle_latest_age_ms": 12000,
                     "latest_strength": "130.0",
                     "distance_from_day_high_pct": "-0.40",
                     "intraday_range_pct": "2.10",
@@ -1184,6 +1270,12 @@ def test_observation_source_quality_audit_accepts_score65_74_recovery_probe_bloc
                     "buy_pressure": "70.0",
                     "tick_accel": "0.900",
                     "micro_vwap_bp": "2.00",
+                    "tick_aggressor_trusted_count": 3,
+                    "tick_aggressor_pressure_usable": True,
+                    "micro_vwap_available": True,
+                    "minute_candle_context_quality": "fresh_bar_window",
+                    "minute_candle_window_fresh": True,
+                    "minute_candle_latest_age_ms": 12000,
                     "score65_74_recovery_probe_min_buy_pressure": "65.00",
                     "score65_74_recovery_probe_min_tick_accel": "1.200",
                     "score65_74_recovery_probe_min_micro_vwap_bp": "0.00",
@@ -1226,6 +1318,12 @@ def test_observation_source_quality_audit_accepts_score65_74_recovery_probe_succ
         "buy_pressure": "88.14",
         "tick_accel": "1.200",
         "micro_vwap_bp": "74.95",
+        "tick_aggressor_trusted_count": 4,
+        "tick_aggressor_pressure_usable": True,
+        "micro_vwap_available": True,
+        "minute_candle_context_quality": "fresh_bar_window",
+        "minute_candle_window_fresh": True,
+        "minute_candle_latest_age_ms": 12000,
         "score65_74_recovery_probe_min_buy_pressure": "70.00",
         "score65_74_recovery_probe_min_tick_accel": "1.100",
         "score65_74_recovery_probe_min_micro_vwap_bp": "0.00",
@@ -1236,6 +1334,108 @@ def test_observation_source_quality_audit_accepts_score65_74_recovery_probe_succ
 
     assert report["stage_contracts"]["score65_74_recovery_probe"]["status"] == "pass"
     assert report["status"] == "pass"
+
+
+def test_observation_source_quality_audit_blocks_score65_74_probe_without_trusted_pressure(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    fields = {
+        "tick_source_quality_fields_sent": True,
+        "tick_accel_source": "computed_10ticks",
+        "tick_context_quality": "fresh_computed",
+        "quote_age_source": "ws_realtime_quote",
+        "metric_role": "bounded_tunable",
+        "decision_authority": "score65_74_recovery_probe_entry_unlock_only",
+        "window_policy": "same_day_intraday_events",
+        "sample_floor": 1,
+        "primary_decision_metric": "source_quality_gate",
+        "source_quality_gate": "score65_74_recovery_probe_contract_fields_present",
+        "runtime_effect": True,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": (
+            "runtime_threshold_apply/order_submit/provider_route_change/"
+            "bot_restart/score_threshold_change/broker_guard_bypass/stale_submit_bypass"
+        ),
+        "threshold_family": "score65_74_recovery_probe",
+        "ai_score": "74.0",
+        "buy_pressure": "88.14",
+        "tick_accel": "1.200",
+        "micro_vwap_bp": "74.95",
+        "tick_aggressor_trusted_count": 0,
+        "tick_aggressor_pressure_usable": False,
+        "micro_vwap_available": True,
+        "minute_candle_context_quality": "fresh_bar_window",
+        "minute_candle_window_fresh": True,
+        "minute_candle_latest_age_ms": 12000,
+        "score65_74_recovery_probe_min_buy_pressure": "70.00",
+        "score65_74_recovery_probe_min_tick_accel": "1.100",
+        "score65_74_recovery_probe_min_micro_vwap_bp": "0.00",
+    }
+    _write_events(tmp_path, "2026-06-15", [_event("score65_74_recovery_probe", fields)])
+
+    report = audit.build_observation_source_quality_audit("2026-06-15")
+
+    contract = report["stage_contracts"]["score65_74_recovery_probe"]
+    assert contract["status"] == "fail"
+    assert contract["invalid_label_violations"]["tick_aggressor_pressure_usable_contract"] == 1.0
+    assert report["summary"]["tuning_input_allowed"] is False
+    exclusion = report["hard_blocking_row_exclusions"][0]
+    assert exclusion["stage"] == "score65_74_recovery_probe"
+    assert exclusion["invalid_fields"] == ["tick_aggressor_pressure_usable_contract"]
+
+
+def test_observation_source_quality_audit_blocks_score65_74_probe_without_micro_vwap_provenance(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    fields = {
+        "tick_source_quality_fields_sent": True,
+        "tick_accel_source": "computed_10ticks",
+        "tick_context_quality": "fresh_computed",
+        "quote_age_source": "ws_realtime_quote",
+        "metric_role": "bounded_tunable",
+        "decision_authority": "score65_74_recovery_probe_entry_unlock_only",
+        "window_policy": "same_day_intraday_events",
+        "sample_floor": 1,
+        "primary_decision_metric": "source_quality_gate",
+        "source_quality_gate": "score65_74_recovery_probe_contract_fields_present",
+        "runtime_effect": True,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": (
+            "runtime_threshold_apply/order_submit/provider_route_change/"
+            "bot_restart/score_threshold_change/broker_guard_bypass/stale_submit_bypass"
+        ),
+        "threshold_family": "score65_74_recovery_probe",
+        "ai_score": "74.0",
+        "buy_pressure": "88.14",
+        "tick_accel": "1.200",
+        "micro_vwap_bp": "74.95",
+        "tick_aggressor_trusted_count": 4,
+        "tick_aggressor_pressure_usable": True,
+        "score65_74_recovery_probe_min_buy_pressure": "70.00",
+        "score65_74_recovery_probe_min_tick_accel": "1.100",
+        "score65_74_recovery_probe_min_micro_vwap_bp": "0.00",
+    }
+    _write_events(tmp_path, "2026-06-15", [_event("score65_74_recovery_probe", fields)])
+
+    report = audit.build_observation_source_quality_audit("2026-06-15")
+
+    contract = report["stage_contracts"]["score65_74_recovery_probe"]
+    assert contract["status"] == "fail"
+    assert contract["missing_violations"]["micro_vwap_available"] == 1.0
+    assert contract["missing_violations"]["minute_candle_window_fresh"] == 1.0
+    assert contract["invalid_label_violations"]["minute_candle_window_fresh_contract"] == 1.0
+    assert report["summary"]["tuning_input_allowed"] is False
+    exclusion = report["hard_blocking_row_exclusions"][0]
+    assert exclusion["stage"] == "score65_74_recovery_probe"
+    assert "minute_candle_window_fresh_contract" in exclusion["invalid_fields"]
 
 
 def test_observation_source_quality_audit_flags_score65_74_recovery_probe_success_contract_gap(
@@ -1278,9 +1478,303 @@ def test_observation_source_quality_audit_flags_score65_74_recovery_probe_succes
     report = audit.build_observation_source_quality_audit("2026-06-15")
 
     contract = report["stage_contracts"]["score65_74_recovery_probe"]
-    assert contract["status"] == "warning"
+    assert contract["status"] == "fail"
     assert contract["missing_violations"]["decision_authority"] == 1.0
     assert contract["missing_violations"]["broker_order_forbidden"] == 1.0
+    assert contract["missing_violations"]["tick_aggressor_trusted_count"] == 1.0
+    assert contract["missing_violations"]["tick_aggressor_pressure_usable"] == 1.0
+    assert contract["missing_violations"]["micro_vwap_available"] == 1.0
+    assert contract["missing_violations"]["minute_candle_window_fresh"] == 1.0
+    assert contract["invalid_label_violations"]["tick_aggressor_pressure_usable_contract"] == 1.0
+    assert contract["invalid_label_violations"]["minute_candle_window_fresh_contract"] == 1.0
+    assert report["summary"]["tuning_input_allowed"] is False
+
+
+def _pyramid_blocked_fields(**overrides):
+    fields = {
+        "scale_in_arm": "PYRAMID",
+        "scale_in_blocker_namespace": "PYRAMID_QUALITY_GATE",
+        "scale_in_blocker_reason": "buy_pressure_not_enough",
+        "blocked_reason": "buy_pressure_not_enough",
+        "gate_reason": "buy_pressure_not_enough",
+        "profit_rate": "+1.20",
+        "peak_profit": "+1.45",
+        "ai_score": "72",
+        "ai_score_source": "live",
+        "held_sec": 95,
+        "buy_pressure_10t": "61.5",
+        "tick_aggressor_trusted_count": 4,
+        "tick_aggressor_pressure_usable": True,
+        "tick_acceleration_ratio": "0.80",
+        "curr_vs_micro_vwap_bp": "42.0",
+        "micro_vwap_available": True,
+        "minute_candle_context_quality": "fresh_bar_window",
+        "minute_candle_window_fresh": True,
+        "minute_candle_latest_age_ms": 12000,
+        "min_profit_pct": "1.10",
+        "min_ai_score": "70",
+        "min_buy_pressure": "60",
+        "min_tick_accel": "0.50",
+        "max_micro_vwap_bps": "60",
+        "metric_role": "funnel_count",
+        "decision_authority": "scale_in_attribution_source_only",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "source_quality_gate": "scale_in_arm_and_blocker_namespace_present",
+        "forbidden_uses": "real_scale_in_submit|intraday_threshold_mutation|cap_release",
+    }
+    fields.update(overrides)
+    return fields
+
+
+def test_observation_source_quality_audit_accepts_pyramid_blocked_reason_pressure_contract(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-15",
+        [_event("pyramid_blocked_reason", _pyramid_blocked_fields())],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-15")
+
+    assert report["stage_contracts"]["pyramid_blocked_reason"]["status"] == "pass"
+    assert report["summary"]["tuning_input_allowed"] is True
+    assert report["summary"]["hard_blocking_excluded_row_count"] == 0
+
+
+def test_observation_source_quality_audit_blocks_pyramid_pressure_without_trusted_provenance(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-15",
+        [
+            _event(
+                "pyramid_blocked_reason",
+                _pyramid_blocked_fields(
+                    tick_aggressor_trusted_count=0,
+                    tick_aggressor_pressure_usable=False,
+                ),
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-15")
+
+    contract = report["stage_contracts"]["pyramid_blocked_reason"]
+    assert contract["status"] == "fail"
+    assert contract["invalid_label_violations"]["tick_aggressor_pressure_usable_contract"] == 1.0
+    assert report["summary"]["tuning_input_allowed"] is False
+    assert report["summary"]["hard_blocking_excluded_row_count"] == 1
+    exclusion = report["hard_blocking_row_exclusions"][0]
+    assert exclusion["stage"] == "pyramid_blocked_reason"
+    assert exclusion["invalid_fields"] == ["tick_aggressor_pressure_usable_contract"]
+    assert "invalid_label" in exclusion["exclusion_reasons"]
+
+
+def test_observation_source_quality_audit_blocks_pyramid_micro_vwap_without_fresh_candle_provenance(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-15",
+        [
+            _event(
+                "pyramid_blocked_reason",
+                _pyramid_blocked_fields(
+                    micro_vwap_available=False,
+                    minute_candle_context_quality="stale_bar_window",
+                    minute_candle_window_fresh=False,
+                    minute_candle_latest_age_ms=600000,
+                ),
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-15")
+
+    contract = report["stage_contracts"]["pyramid_blocked_reason"]
+    assert contract["status"] == "fail"
+    assert contract["invalid_label_violations"]["minute_candle_window_fresh_contract"] == 1.0
+    assert report["summary"]["tuning_input_allowed"] is False
+    exclusion = report["hard_blocking_row_exclusions"][0]
+    assert exclusion["stage"] == "pyramid_blocked_reason"
+    assert exclusion["invalid_fields"] == ["minute_candle_window_fresh_contract"]
+
+
+def _reversal_add_blocked_fields(**overrides):
+    fields = {
+        "state": "REVERSAL_CANDIDATE",
+        "scale_in_arm": "AVG_DOWN",
+        "scale_in_blocker_namespace": "AVG_DOWN_REVERSAL_ADD",
+        "scale_in_blocker_reason": "supply_conditions_not_met(2/4)",
+        "blocked_reason": "supply_conditions_not_met(2/4)",
+        "profit_rate": "-0.32",
+        "ai_score": "65",
+        "current_ai_score": 65,
+        "ai_score_source": "live",
+        "buy_pressure_10t": "58.0",
+        "tick_aggressor_trusted_count": 4,
+        "tick_aggressor_pressure_usable": True,
+        "tick_acceleration_ratio": "0.80",
+        "curr_vs_micro_vwap_bp": "-2.0",
+        "micro_vwap_available": True,
+        "minute_candle_context_quality": "fresh_bar_window",
+        "minute_candle_window_fresh": True,
+        "minute_candle_latest_age_ms": 12000,
+        "supply_pass_count": 2,
+        "reversal_feature_source_quality": "usable",
+        "reversal_feature_stale_reason": "-",
+        "metric_role": "funnel_count",
+        "decision_authority": "scale_in_attribution_source_only",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "source_quality_gate": "avg_down_reversal_features_and_blocker_present",
+        "forbidden_uses": "real_scale_in_submit|intraday_threshold_mutation|broker_guard_bypass|cap_release",
+    }
+    fields.update(overrides)
+    return fields
+
+
+def test_observation_source_quality_audit_accepts_reversal_add_blocked_pressure_contract(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-15",
+        [
+            _event("reversal_add_blocked_reason", _reversal_add_blocked_fields()),
+            _event(
+                "reversal_add_gate_blocked",
+                _reversal_add_blocked_fields(
+                    gate_reason="scale_in_cooldown",
+                    scale_in_blocker_reason="scale_in_cooldown",
+                    blocked_reason="scale_in_cooldown",
+                ),
+                record_id=2,
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-15")
+
+    assert report["stage_contracts"]["reversal_add_blocked_reason"]["status"] == "pass"
+    assert report["stage_contracts"]["reversal_add_gate_blocked"]["status"] == "pass"
+    assert report["summary"]["tuning_input_allowed"] is True
+
+
+def test_observation_source_quality_audit_blocks_reversal_add_pressure_without_trusted_provenance(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-15",
+        [
+            _event(
+                "reversal_add_blocked_reason",
+                _reversal_add_blocked_fields(
+                    tick_aggressor_trusted_count=0,
+                    tick_aggressor_pressure_usable=False,
+                ),
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-15")
+
+    contract = report["stage_contracts"]["reversal_add_blocked_reason"]
+    assert contract["status"] == "fail"
+    assert contract["invalid_label_violations"]["tick_aggressor_pressure_usable_contract"] == 1.0
+    assert report["summary"]["tuning_input_allowed"] is False
+    assert report["hard_blocking_row_exclusions"][0]["stage"] == "reversal_add_blocked_reason"
+
+
+def _first_touch_fields(**overrides):
+    fields = {
+        "threshold_family": "stop_line_touch_mandatory_avg_down",
+        "decision_source": "STOP_LINE_TOUCH_MANDATORY_AVG_DOWN",
+        "decision_authority": "real_scalping_stop_line_touch_intercept",
+        "metric_role": "bounded_tunable",
+        "window_policy": "same_day_intraday_runtime",
+        "sample_floor": "not_applicable_operator_override",
+        "primary_decision_metric": "stop_line_touch",
+        "source_quality_gate": "real_holding_stop_line_touch_and_scale_in_guards_present",
+        "runtime_effect": True,
+        "allowed_runtime_apply": True,
+        "forbidden_uses": (
+            "entry_threshold_relaxation|provider_route_change|broker_guard_bypass|"
+            "quantity_cap_release|protect_or_emergency_bypass|max_per_position_bypass|hard_stop_threshold_relaxation"
+        ),
+        "profit_rate": "-3.42",
+        "peak_profit": "-0.23",
+        "current_ai_score": "65",
+        "held_sec": 1494,
+        "gate_allowed": True,
+        "gate_reason": "ok",
+        "add_type": "AVG_DOWN",
+        "add_reason": "stop_line_touch_mandatory_avg_down",
+        "actual_order_submitted": False,
+        "broker_order_forbidden": False,
+        "first_touch_avgdown_decision_allowed": True,
+        "first_touch_avgdown_decision_reason": "ai_score_moderate_with_context_support",
+        "first_touch_avgdown_decision_authority": "real_scalping_first_touch_avgdown_decision_gate",
+    }
+    fields.update(overrides)
+    return fields
+
+
+def test_observation_source_quality_audit_accepts_first_touch_avgdown_contracts(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-15",
+        [
+            _event("stop_line_touch_mandatory_avg_down_candidate", _first_touch_fields()),
+            _event(
+                "stop_line_touch_mandatory_avg_down_submitted",
+                _first_touch_fields(actual_order_submitted=True, ord_no="A1", retry_count=1),
+                record_id=2,
+            ),
+            _event(
+                "stop_line_touch_first_touch_avgdown_decision_blocked",
+                _first_touch_fields(
+                    gate_allowed=False,
+                    gate_reason="repeated_blockers_without_recovery",
+                    block_reason="repeated_blockers_without_recovery",
+                    actual_order_submitted=False,
+                    broker_order_forbidden=True,
+                    first_touch_avgdown_decision_allowed=False,
+                    first_touch_avgdown_decision_reason="repeated_blockers_without_recovery",
+                ),
+                record_id=3,
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-15")
+
+    assert report["stage_contracts"]["stop_line_touch_mandatory_avg_down_candidate"]["status"] == "pass"
+    assert report["stage_contracts"]["stop_line_touch_mandatory_avg_down_submitted"]["status"] == "pass"
+    assert report["stage_contracts"]["stop_line_touch_first_touch_avgdown_decision_blocked"]["status"] == "pass"
+    assert report["summary"]["tuning_input_allowed"] is True
 
 
 def test_observation_source_quality_audit_accepts_scanner_source_guard_contracts(
@@ -1535,6 +2029,19 @@ def test_observation_source_quality_audit_accepts_early_accel_recheck_contracts(
         "micro_vwap_bp": "12.00",
         "quote_stale": False,
     }
+    common_fields.update(
+        {
+            "tick_accel_source": "computed_10ticks",
+            "tick_context_quality": "fresh_computed",
+            "tick_context_stale": False,
+            "tick_accel_usable": True,
+            "micro_vwap_available": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "minute_candle_window_fresh": True,
+            "minute_candle_latest_age_ms": 8000,
+            "micro_vwap_usable": True,
+        }
+    )
     _write_events(
         tmp_path,
         "2026-06-15",
@@ -1585,6 +2092,12 @@ def test_observation_source_quality_audit_accepts_ai_numeric_consistency_recheck
         "speed_pass": True,
         "supply_pass": True,
         "feature_pass_count": 3,
+        "tick_aggressor_trusted_count": 4,
+        "tick_aggressor_pressure_usable": True,
+        "micro_vwap_available": True,
+        "minute_candle_context_quality": "fresh_bar_window",
+        "minute_candle_window_fresh": True,
+        "minute_candle_latest_age_ms": 9000,
         "recheck_count": 0,
         "recheck_action": "BUY",
         "recheck_score": "78.0",
@@ -1644,7 +2157,13 @@ def test_observation_source_quality_audit_accepts_early_accel_strong_bundle_rech
         "cntr_str": "118.0",
         "tick_acceleration_ratio": "1.220",
         "curr_vs_micro_vwap_bp": "8.50",
+        "micro_vwap_available": True,
+        "minute_candle_context_quality": "fresh_bar_window",
+        "minute_candle_window_fresh": True,
+        "minute_candle_latest_age_ms": 12000,
         "buy_pressure_10t": "71.20",
+        "tick_aggressor_trusted_count": 4,
+        "tick_aggressor_pressure_usable": True,
         "original_action": "WAIT",
         "original_score": "62.0",
         "recheck_action": "BUY",
@@ -2865,6 +3384,47 @@ def test_observation_source_quality_audit_routes_holding_diagnostics_by_contract
             },
         ),
         _event(
+            "adverse_fill_observed",
+            {
+                "observe_only": True,
+                "feature_valid": True,
+                "buy_pressure_10t": 62.0,
+                "net_aggressive_delta_10t": 300,
+                "large_sell_print_detected": False,
+                "curr_vs_micro_vwap_bp": -2.0,
+                "tick_aggressor_trusted_count": 4,
+                "tick_aggressor_pressure_usable": True,
+                "micro_vwap_available": True,
+                "minute_candle_context_quality": "fresh_bar_window",
+                "minute_candle_window_fresh": True,
+                "minute_candle_latest_age_ms": 12000,
+                "micro_context_usable": True,
+                "reversal_feature_source_quality": "usable",
+                "reversal_feature_stale_reason": "-",
+            },
+        ),
+        _event(
+            "soft_stop_absorption_probe",
+            {
+                "profit_rate": "-1.83",
+                "soft_stop_pct": "-1.50",
+                "absorption_score": 3,
+                "exclusion_reason": "-",
+                "should_extend": True,
+                "hierarchy": "stop_arbitration|thesis_invalidation|orderbook_absorption",
+                "curr_vs_micro_vwap_bp": -2.0,
+                "tick_aggressor_trusted_count": 4,
+                "tick_aggressor_pressure_usable": True,
+                "micro_vwap_available": True,
+                "minute_candle_context_quality": "fresh_bar_window",
+                "minute_candle_window_fresh": True,
+                "minute_candle_latest_age_ms": 12000,
+                "micro_context_usable": True,
+                "reversal_feature_source_quality": "usable",
+                "reversal_feature_stale_reason": "-",
+            },
+        ),
+        _event(
             "holding_flow_override_candidate_cleared",
             {
                 "metric_role": "funnel_count",
@@ -2884,8 +3444,147 @@ def test_observation_source_quality_audit_routes_holding_diagnostics_by_contract
     assert report["high_volume_no_source_fields"] == []
     assert report["stage_contracts"]["ai_holding_fast_reuse_band"]["status"] == "pass"
     assert report["stage_contracts"]["soft_stop_expert_shadow"]["status"] == "pass"
+    assert report["stage_contracts"]["adverse_fill_observed"]["status"] == "pass"
+    assert report["stage_contracts"]["soft_stop_absorption_probe"]["status"] == "pass"
     assert report["stage_contracts"]["holding_flow_override_candidate_cleared"]["status"] == "pass"
     assert report["status"] == "pass"
+
+
+def test_observation_source_quality_audit_blocks_soft_stop_absorption_without_micro_vwap_provenance(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-15",
+        [
+            _event(
+                "soft_stop_absorption_probe",
+                {
+                    "profit_rate": "-1.83",
+                    "soft_stop_pct": "-1.50",
+                    "absorption_score": 3,
+                    "should_extend": True,
+                    "hierarchy": "stop_arbitration|thesis_invalidation|orderbook_absorption",
+                    "curr_vs_micro_vwap_bp": "10.0",
+                    "tick_aggressor_trusted_count": 4,
+                    "tick_aggressor_pressure_usable": True,
+                    "micro_vwap_available": False,
+                    "minute_candle_context_quality": "stale_bar_window",
+                    "minute_candle_window_fresh": False,
+                    "minute_candle_latest_age_ms": 600000,
+                    "micro_context_usable": False,
+                    "reversal_feature_source_quality": "stale",
+                    "reversal_feature_stale_reason": "micro_vwap_unavailable",
+                },
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-05-15")
+
+    contract = report["stage_contracts"]["soft_stop_absorption_probe"]
+    assert contract["status"] == "fail"
+    assert contract["invalid_label_violations"]["minute_candle_window_fresh_contract"] == 1.0
+    assert report["summary"]["tuning_input_allowed"] is False
+    exclusion = report["hard_blocking_row_exclusions"][0]
+    assert exclusion["stage"] == "soft_stop_absorption_probe"
+    assert exclusion["invalid_fields"] == ["minute_candle_window_fresh_contract"]
+
+
+def test_observation_source_quality_audit_blocks_soft_stop_dynamic_grace_without_micro_vwap_provenance(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-15",
+        [
+            _event(
+                "soft_stop_dynamic_grace",
+                {
+                    "soft_stop_dynamic_grace_applied": True,
+                    "soft_stop_dynamic_grace_reason": "base_micro_confirmed_soft_stop_dynamic_grace",
+                    "soft_stop_dynamic_grace_sec": 45,
+                    "soft_stop_dynamic_grace_ai_score_usable": True,
+                    "soft_stop_dynamic_grace_ai_score_source": "live",
+                    "soft_stop_dynamic_grace_ai_score_data_quality": "fresh",
+                    "curr_vs_micro_vwap_bp": "12.0",
+                    "tick_aggressor_trusted_count": 4,
+                    "tick_aggressor_pressure_usable": True,
+                    "micro_vwap_available": False,
+                    "minute_candle_context_quality": "stale_bar_window",
+                    "minute_candle_window_fresh": False,
+                    "minute_candle_latest_age_ms": 600000,
+                    "micro_context_usable": False,
+                    "reversal_feature_source_quality": "stale",
+                    "exit_rule_candidate": "scalp_soft_stop_pct",
+                },
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-05-15")
+
+    contract = report["stage_contracts"]["soft_stop_dynamic_grace"]
+    assert contract["status"] == "fail"
+    assert contract["invalid_label_violations"]["minute_candle_window_fresh_contract"] == 1.0
+    assert report["summary"]["tuning_input_allowed"] is False
+    exclusion = report["hard_blocking_row_exclusions"][0]
+    assert exclusion["stage"] == "soft_stop_dynamic_grace"
+    assert exclusion["invalid_fields"] == ["minute_candle_window_fresh_contract"]
+
+
+def test_observation_source_quality_audit_blocks_never_green_clamp_without_micro_vwap_provenance(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-15",
+        [
+            _event(
+                "holding_flow_override_clamped_never_green_loss",
+                {
+                    "exit_rule": "scalp_soft_stop_pct",
+                    "flow_action": "HOLD",
+                    "flow_state": "watch",
+                    "flow_score": 55,
+                    "defer_reason": "review_interval_hold",
+                    "holding_flow_override_defer_count": 2,
+                    "curr_vs_micro_vwap_bp": "-4.00",
+                    "previous_defer_micro_vwap_bp": "-1.00",
+                    "micro_vwap_available": False,
+                    "minute_candle_context_quality": "stale_bar_window",
+                    "minute_candle_window_fresh": False,
+                    "minute_candle_latest_age_ms": 600000,
+                    "micro_context_usable": False,
+                    "reversal_feature_source_quality": "stale",
+                    "runtime_effect": True,
+                    "allowed_runtime_apply": False,
+                    "decision_authority": "real_scalping_holding_defer_clamp",
+                    "threshold_family": "never_green_defer_clamp_runtime",
+                    "source_quality_gate": "never_green_defer_clamp_contract",
+                    "forbidden_uses": "threshold_mutation/order_guard_bypass/provider_route_change/bot_restart",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-05-15")
+
+    contract = report["stage_contracts"]["holding_flow_override_clamped_never_green_loss"]
+    assert contract["status"] == "fail"
+    assert contract["invalid_label_violations"]["minute_candle_window_fresh_contract"] == 1.0
+    assert report["summary"]["tuning_input_allowed"] is False
+    exclusion = report["hard_blocking_row_exclusions"][0]
+    assert exclusion["stage"] == "holding_flow_override_clamped_never_green_loss"
+    assert exclusion["invalid_fields"] == ["minute_candle_window_fresh_contract"]
 
 
 def test_observation_source_quality_audit_routes_probe_state_persisted_by_contract(monkeypatch, tmp_path):

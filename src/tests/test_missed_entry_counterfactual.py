@@ -23,6 +23,17 @@ def _write_pipeline_events(tmp_path, target_date: str, rows: list[dict]) -> None
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+def test_minute_forward_source_quality_marks_truncated_ka10080_window_partial():
+    quality = report_mod._minute_forward_source_quality(
+        {"bars": 10},
+        {"truncated_window": True},
+    )
+
+    assert quality["minute_candle_source_quality"] == "partial_window"
+    assert quality["minute_candle_source_quality_gate"] == "source_quality_warning"
+    assert quality["minute_candle_source_quality_reason"] == "ka10080_truncated_window"
+
+
 def test_build_missed_entry_counterfactual_report(monkeypatch, tmp_path):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     target_date = "2026-04-09"
@@ -193,6 +204,11 @@ def test_build_missed_entry_counterfactual_report(monkeypatch, tmp_path):
     assert report["top_missed_winners"][0]["stock_code"] == "111111"
     winner = report["top_missed_winners"][0]
     assert winner["rising_missed_one_share_entry_seen"] is True
+    assert winner["minute_candle_source_quality"] == "pass"
+    assert winner["minute_candle_source_quality_gate"] == "pass"
+    assert winner["minute_candle_forward_10m_bars"] == 10
+    assert winner["minute_candle_source_meta"]["api_id"] == "ka10080"
+    assert report["metrics"]["minute_candle_source_quality_counts"] == {"pass": 2}
     assert winner["rising_missed_stage_count"] == 1
     assert winner["rising_missed_postclose_label"] == "rising_missed_missed_winner_positive"
     assert winner["source_signature"] == "OPEN_TOP,PRICE_JUMP_START"
@@ -487,6 +503,9 @@ def test_missed_entry_counterfactual_preserves_full_rows_when_top_rows_are_limit
     assert report["summary"]["total_candidates"] == 4
     assert len(report["rows"]) == 3
     assert len(report["full_rows"]) == 4
+    assert report["metrics"]["minute_candle_source_quality_counts"] == {"insufficient_window": 4}
+    assert report["full_rows"][0]["minute_candle_source_quality_gate"] == "source_quality_insufficient"
+    assert report["full_rows"][0]["minute_candle_source_quality_reason"] == "no_ka10080_bars_in_forward_10m_window"
 
 
 def test_missed_entry_counterfactual_includes_snapshot_wait_or_skip_paths(monkeypatch, tmp_path):

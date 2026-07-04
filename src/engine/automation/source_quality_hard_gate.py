@@ -21,6 +21,7 @@ RUNTIME_CANDIDATE_LIST_FIELDS = {
     "auto_apply_selected",
 }
 RUNTIME_CANDIDATE_COUNT_FIELDS = {
+    "allowed_runtime_apply_candidate_count",
     "live_auto_apply_ready_count",
     "runtime_candidate_count",
     "runtime_approval_candidate_count",
@@ -44,6 +45,38 @@ def observation_source_quality_audit_path(target_date: str) -> Path:
     return REPORT_DIR / "observation_source_quality_audit" / f"observation_source_quality_audit_{target_date}.json"
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _compact_raw_row_exclusion(raw_row_exclusion: Any) -> dict[str, Any]:
+    if not isinstance(raw_row_exclusion, dict) or not raw_row_exclusion:
+        return {}
+    compact: dict[str, Any] = {}
+    for key in (
+        "manifest_path",
+        "backup_path",
+        "excluded_row_count",
+        "stage_counts",
+        "field_gap_counts",
+        "exclusion_reasons",
+        "first_timestamp",
+        "last_timestamp",
+        "producer_hint",
+        "policy",
+        "market_halt_or_circuit_window_overlap",
+        "market_halt_or_circuit_context",
+    ):
+        value = raw_row_exclusion.get(key)
+        if value in (None, "", [], {}):
+            continue
+        compact[key] = value
+    return compact
+
+
 def load_source_quality_preflight(target_date: str) -> dict[str, Any]:
     path = observation_source_quality_audit_path(target_date)
     exists = path.exists()
@@ -58,6 +91,20 @@ def load_source_quality_preflight(target_date: str) -> dict[str, Any]:
         load_error = load_error or f"non_dict_json:{type(payload).__name__}"
         payload = {}
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    raw_row_exclusion = _compact_raw_row_exclusion(payload.get("raw_row_exclusion"))
+    raw_row_exclusion_manifest = (
+        summary.get("raw_row_exclusion_manifest")
+        or raw_row_exclusion.get("manifest_path")
+    )
+    raw_row_exclusion_applied = bool(
+        summary.get("raw_row_exclusion_applied")
+        or raw_row_exclusion
+        or raw_row_exclusion_manifest
+    )
+    hard_blocking_excluded_row_count = _safe_int(
+        summary.get("hard_blocking_excluded_row_count")
+        or raw_row_exclusion.get("excluded_row_count")
+    )
     status = payload.get("status") or ("missing" if not exists else "invalid")
     has_machine_summary = bool(summary)
     explicit_allowed = summary.get("tuning_input_allowed")
@@ -89,6 +136,10 @@ def load_source_quality_preflight(target_date: str) -> dict[str, Any]:
         "source_quality_gate": BLOCKED_GATE if fail_closed else "pass" if has_machine_summary else "pass_or_not_evaluated",
         "blocked_reason": blocked_reason,
         "hard_blocking_contract_gap_count": hard_gap_count,
+        "hard_blocking_excluded_row_count": hard_blocking_excluded_row_count,
+        "raw_row_exclusion_applied": raw_row_exclusion_applied,
+        "raw_row_exclusion_manifest": raw_row_exclusion_manifest,
+        "raw_row_exclusion": raw_row_exclusion,
         "hard_blocking_stages": (
             summary.get("hard_blocking_stages") if isinstance(summary.get("hard_blocking_stages"), list) else []
         ),
@@ -136,6 +187,7 @@ def apply_source_quality_preflight_block(report: dict[str, Any], preflight: dict
     blocked["status"] = BLOCKED_STATUS
     blocked["runtime_effect"] = False
     blocked["allowed_runtime_apply"] = False
+    blocked["calibration_state"] = BLOCKED_STATUS
     blocked["source_quality_gate"] = BLOCKED_GATE
     blocked["source_quality_preflight_gate"] = preflight
     warnings = blocked.get("warnings") if isinstance(blocked.get("warnings"), list) else []
@@ -147,6 +199,7 @@ def apply_source_quality_preflight_block(report: dict[str, Any], preflight: dict
         summary["status"] = BLOCKED_STATUS
         summary["runtime_effect"] = False
         summary["allowed_runtime_apply"] = False
+        summary["calibration_state"] = BLOCKED_STATUS
         summary["source_quality_gate"] = BLOCKED_GATE
     return blocked
 

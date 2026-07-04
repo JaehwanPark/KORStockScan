@@ -1,8 +1,25 @@
 import json
 from dataclasses import replace
 
+import pytest
+
 from src.engine.scalping import entry_ai_gate as gate
 from src.engine.scalping import entry_ai_gate_backtest as mod
+
+
+@pytest.fixture(autouse=True)
+def _source_quality_preflight_pass(monkeypatch):
+    monkeypatch.setattr(
+        mod,
+        "load_source_quality_preflight",
+        lambda target_date: {
+            "status": "pass",
+            "tuning_input_allowed": True,
+            "allowed_runtime_apply": True,
+            "source_quality_gate": "pass",
+            "clean_baseline_enforced": True,
+        },
+    )
 
 
 def _write_json(path, payload):
@@ -31,7 +48,15 @@ def _realized_row(score, *, action="WAIT", profit=1.0, stale=False, hard_blocked
     }
 
 
-def _counterfactual_row(score, *, action="WAIT", close_10m=1.0, stale=False, hard_blocked=False):
+def _counterfactual_row(
+    score,
+    *,
+    action="WAIT",
+    close_10m=1.0,
+    stale=False,
+    hard_blocked=False,
+    minute_candle_source_quality_gate="pass",
+):
     return {
         "ai_score": score,
         "ai_action": action,
@@ -44,6 +69,14 @@ def _counterfactual_row(score, *, action="WAIT", close_10m=1.0, stale=False, har
         "net_aggressive_delta_10t": 1,
         "tick_aggressor_trusted_count": 2,
         "tick_aggressor_pressure_usable": True,
+        "minute_candle_source_quality_gate": minute_candle_source_quality_gate,
+        "minute_candle_source_quality_reason": (
+            "no_ka10080_bars_in_forward_10m_window"
+            if minute_candle_source_quality_gate == "source_quality_insufficient"
+            else "ka10080_truncated_window"
+            if minute_candle_source_quality_gate == "source_quality_warning"
+            else "ka10080_forward_window_available"
+        ),
     }
 
 
@@ -94,6 +127,16 @@ def test_entry_ai_gate_backtest_excludes_pre_baseline_and_separates_metrics(tmp_
         [
             _counterfactual_row(66, close_10m=12.0, stale=True),
             _counterfactual_row(66, close_10m=12.0, hard_blocked=True),
+            _counterfactual_row(
+                66,
+                close_10m=25.0,
+                minute_candle_source_quality_gate="source_quality_insufficient",
+            ),
+            _counterfactual_row(
+                66,
+                close_10m=30.0,
+                minute_candle_source_quality_gate="source_quality_warning",
+            ),
             _counterfactual_row(80, action="BUY", close_10m=0.5),
             _counterfactual_row(80, action="BUY", close_10m=20.0, stale=True),
             _counterfactual_row(80, action="BUY", close_10m=20.0, hard_blocked=True),
@@ -173,6 +216,19 @@ def test_entry_ai_gate_role_gate_and_threshold_helper(monkeypatch):
     )
     assert insufficient["entry_score_usable_for_recheck"] is False
 
+    stale_parse_token = gate.evaluate_entry_score_role_gate(
+        {"action": "BUY", "score": 72, "ai_result_source": "live", "ai_parse_ok": "stale"},
+        ws_data={"quote_stale": False},
+    )
+    assert stale_parse_token["entry_score_usable_for_entry_submit"] is False
+    assert stale_parse_token["entry_score_excluded_reason"] == "parse_fail_or_not_ok"
+
+    stale_source_flag = gate.evaluate_entry_score_role_gate(
+        {"action": "BUY", "score": 72, "ai_result_source": "live", "ai_parse_ok": True},
+        ws_data={"quote_stale": "stale"},
+    )
+    assert stale_source_flag["entry_score_excluded_reason"] == "stale_quote_or_context"
+
 
 def test_entry_ai_gate_backtest_ignores_untrusted_pressure_micro_support():
     untrusted_pressure_only = {
@@ -191,10 +247,83 @@ def test_entry_ai_gate_backtest_ignores_untrusted_pressure_micro_support():
         **untrusted_pressure_only,
         "tick_acceleration_ratio": 1.2,
     }
+    independent_tick_accel_with_source = {
+        **independent_tick_accel,
+        "tick_context_quality": "fresh_computed",
+        "tick_accel_source": "computed_10ticks",
+    }
+    micro_vwap_without_provenance = {
+        **untrusted_pressure_only,
+        "curr_vs_micro_vwap_bp": 35.0,
+        "quote_age_ms": 100,
+        "quote_age_source": "last_ws_update_ts",
+    }
+    micro_vwap_with_provenance = {
+        **micro_vwap_without_provenance,
+        "micro_vwap_available": True,
+        "minute_candle_context_quality": "fresh_bar_window",
+        "minute_candle_window_fresh": True,
+    }
+    micro_vwap_without_minute_quality = {
+        **micro_vwap_without_provenance,
+        "micro_vwap_available": True,
+        "minute_candle_window_fresh": True,
+    }
+    stale_micro_vwap = {
+        **micro_vwap_with_provenance,
+        "minute_candle_window_fresh": False,
+    }
+    stale_pressure_flag = {
+        **untrusted_pressure_only,
+        "tick_aggressor_pressure_usable": "stale",
+    }
 
     assert mod._micro_support(untrusted_pressure_only) is False
     assert mod._micro_support(trusted_pressure) is True
-    assert mod._micro_support(independent_tick_accel) is True
+    assert mod._micro_support(independent_tick_accel) is False
+    assert mod._micro_support(independent_tick_accel_with_source) is True
+    assert mod._micro_support(micro_vwap_without_provenance) is False
+    assert mod._micro_support(micro_vwap_without_minute_quality) is False
+    assert mod._micro_support(micro_vwap_with_provenance) is True
+    assert mod._micro_support(stale_micro_vwap) is False
+    assert mod._micro_support(stale_pressure_flag) is False
+
+
+def test_entry_ai_gate_backtest_blocks_non_positive_primary_ev_apply_candidate():
+    realized_rows = [
+        {
+            "_score": 66,
+            "_realized_profit_pct": -0.2,
+            "ai_action": "WAIT",
+            "buy_pressure_10t": 75,
+            "tick_aggressor_pressure_usable": True,
+            "tick_aggressor_trusted_count": 2,
+        }
+        for _ in range(mod.REALIZED_SAMPLE_FLOOR)
+    ]
+    counterfactual_rows = [
+        {
+            "_score": 66,
+            "_close_10m_pct": 0.5,
+            "ai_action": "WAIT",
+            "buy_pressure_10t": 75,
+            "tick_aggressor_pressure_usable": True,
+            "tick_aggressor_trusted_count": 2,
+        }
+        for _ in range(mod.COUNTERFACTUAL_SAMPLE_FLOOR)
+    ]
+
+    result = mod._policy_result(
+        policy="supported_wait_recovery",
+        threshold=66,
+        realized_rows=realized_rows,
+        counterfactual_rows=counterfactual_rows,
+    )
+
+    assert result["sample_floor_passed"] is True
+    assert result["primary_ev_positive"] is False
+    assert result["allowed_runtime_apply"] is False
+    assert result["apply_block_reason"] == "non_positive_primary_ev"
 
 
 def test_entry_ai_gate_backtest_realized_join_uses_real_post_sell_once(tmp_path, monkeypatch):
@@ -272,3 +401,43 @@ def test_entry_ai_gate_backtest_realized_join_uses_real_post_sell_once(tmp_path,
     assert report["summary"]["realized_joined_rows"] == 1
     assert strict["realized"]["sample"] == 1
     assert strict["realized"]["equal_weight_avg_profit_pct"] == 2.5
+
+
+def test_entry_ai_gate_backtest_source_quality_preflight_blocks_apply(tmp_path, monkeypatch):
+    adm_dir = tmp_path / "adm"
+    missed_dir = tmp_path / "missed"
+    monkeypatch.setattr(mod, "SCALP_ENTRY_ADM_DIR", adm_dir)
+    monkeypatch.setattr(mod, "MISSED_ENTRY_DIRS", [missed_dir])
+    monkeypatch.setattr(mod, "filter_allowed_dates", lambda dates, policy: (dates, []))
+    monkeypatch.setattr(mod, "is_krx_trading_day", lambda day: True)
+    monkeypatch.setattr(
+        mod,
+        "load_source_quality_preflight",
+        lambda target_date: {
+            "status": "fail",
+            "tuning_input_allowed": False,
+            "allowed_runtime_apply": False,
+            "source_quality_gate": "blocked_contract_gap",
+            "blocked_reason": "required_field_missing",
+            "hard_blocking_contract_gap_count": 1,
+            "clean_baseline_enforced": True,
+        },
+    )
+    _write_json(
+        adm_dir / "scalp_entry_action_decision_matrix_2026-06-05.json",
+        {"rows": [_realized_row(66, profit=1.0) for _ in range(mod.REALIZED_SAMPLE_FLOOR)]},
+    )
+    _write_json(
+        missed_dir / "missed_entry_counterfactual_2026-06-05.json",
+        {"full_rows": [_counterfactual_row(66, close_10m=1.0) for _ in range(mod.COUNTERFACTUAL_SAMPLE_FLOOR)]},
+    )
+
+    report = mod.build_report("2026-06-05")
+
+    assert report["status"] == "source_quality_blocked"
+    assert report["allowed_runtime_apply"] is False
+    assert report["calibration_state"] == "source_quality_blocked"
+    assert report["source_quality_gate"] == "blocked_contract_gap"
+    assert report["summary"]["allowed_runtime_apply"] is False
+    assert report["summary"]["calibration_state"] == "source_quality_blocked"
+    assert report["best_apply_candidate"]["allowed_runtime_apply"] is False

@@ -67,6 +67,23 @@ def _truthy(value: Any) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y", "on", "stale"}
 
 
+def _strict_truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _tick_aggressor_pressure_usable(ws_data: dict[str, Any]) -> bool:
+    return bool(
+        _strict_truthy(ws_data.get("tick_aggressor_pressure_usable"))
+        or _safe_int(ws_data.get("tick_aggressor_trusted_count"), 0) > 0
+    )
+
+
 def _time_bucket(value: datetime | None) -> str:
     return entry_adm_time_bucket(value)
 
@@ -107,7 +124,11 @@ def _risk_context_bucket(ws_data: dict[str, Any] | None) -> str:
         if raw and raw not in {"ok", "pass", "fresh", "-"}:
             return "source_quality_blocker"
     strength = _safe_float(ws.get("latest_strength") or ws.get("strength"), -1.0)
-    buy_pressure = _safe_float(ws.get("buy_pressure_10t") or ws.get("buy_pressure"), -1.0)
+    buy_pressure = (
+        _safe_float(ws.get("buy_pressure_10t") or ws.get("buy_pressure"), -1.0)
+        if _tick_aggressor_pressure_usable(ws)
+        else -1.0
+    )
     if strength < 0 and buy_pressure < 0:
         stage = str(ws.get("source_stage") or ws.get("stage") or "").strip()
         if stage in PRE_SUBMIT_CONTEXT_OPTIONAL_STAGES:
