@@ -57,6 +57,7 @@ RISING_MISSED_FIRST_TOUCH_CALIBRATION_DIR = (
 SCALPING_PYRAMID_QUALITY_CALIBRATION_DIR = (
     DATA_DIR / "report" / "scalping_pyramid_quality_calibration"
 )
+AI_SCORE_OPTIMIZATION_BACKTEST_DIR = DATA_DIR / "report" / "ai_score_optimization_backtest"
 RUNTIME_GAP_PROVENANCE_DIR = DATA_DIR / "threshold_cycle" / "runtime_gap_provenance"
 ENTRY_CANCEL_WAIT_TUNING_DIR = DATA_DIR / "report" / "entry_cancel_wait_tuning"
 ENTRY_CANCEL_WAIT_FAMILY = "entry_cancel_wait_runtime"
@@ -168,6 +169,16 @@ TARGET_ENV_VALUE_KEYS = {
     "REVERSAL_ADD_MIN_BUY_PRESSURE": "reversal_add_min_buy_pressure",
     "REVERSAL_ADD_MIN_TICK_ACCEL": "reversal_add_min_tick_accel",
     "SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED": "enabled",
+    "ENTRY_OPPORTUNITY_RECHECK_ENABLED": "enabled",
+    "ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE": "min_ai_score",
+    "ENTRY_OPPORTUNITY_RECHECK_MAX_AI_SCORE": "max_ai_score",
+    "ENTRY_OPPORTUNITY_RECHECK_MAX_RECHECK_PER_SYMBOL": "max_recheck_per_symbol",
+    "ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_RECHECK": "max_daily_recheck",
+    "ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_BUY_RECOVERY": "max_daily_buy_recovery",
+    "ENTRY_OPPORTUNITY_RECHECK_MAX_WS_AGE_MS": "max_ws_age_ms",
+    "ENTRY_OPPORTUNITY_RECHECK_FORBID_DANGER": "forbid_danger",
+    "ENTRY_OPPORTUNITY_RECHECK_REQUIRE_FRESH_QUOTE": "require_fresh_quote",
+    "ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION": "require_explicit_buy_action",
     "SCALP_BAD_ENTRY_REFINED_MIN_HOLD_SEC": "min_hold_sec",
     "SCALP_BAD_ENTRY_REFINED_MIN_LOSS_PCT": "min_loss_pct",
     "SCALP_BAD_ENTRY_REFINED_MAX_PEAK_PROFIT_PCT": "max_peak_profit_pct",
@@ -740,6 +751,38 @@ def _load_scalping_pyramid_quality_calibration_candidates(
     }
 
 
+def _ai_score_optimization_backtest_path(source_date: str) -> Path:
+    return AI_SCORE_OPTIMIZATION_BACKTEST_DIR / f"ai_score_optimization_backtest_{source_date}.json"
+
+
+def _load_ai_score_optimization_backtest_candidates(
+    source_date: str | None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if not source_date:
+        return [], {"status": "missing_source_date", "path": None}
+    path = _ai_score_optimization_backtest_path(source_date)
+    if not path.exists():
+        return [], {"status": "missing_report", "path": str(path)}
+    payload = _load_json(path)
+    candidates = payload.get("calibration_candidates")
+    if not isinstance(candidates, list):
+        candidates = []
+    normalized = [item for item in candidates if isinstance(item, dict)]
+    selected_candidate = next(
+        (item for item in normalized if bool(item.get("allowed_runtime_apply"))),
+        normalized[0] if normalized else {},
+    )
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    return normalized, {
+        "status": "loaded",
+        "path": str(path),
+        "allowed_runtime_apply": selected_candidate.get("allowed_runtime_apply"),
+        "calibration_state": selected_candidate.get("calibration_state"),
+        "candidate_count": len(normalized),
+        "allowed_runtime_apply_candidate_count": summary.get("allowed_runtime_apply_candidate_count"),
+    }
+
+
 def _runtime_env_name(target_env_key: str) -> str:
     if target_env_key.startswith("AI_SCORE65_74_RECOVERY_PROBE_"):
         return f"KORSTOCKSCAN_{target_env_key.removeprefix('AI_')}"
@@ -1071,6 +1114,24 @@ def _scrub_removed_contracts(value: Any) -> Any:
                 scrubbed_list.append(nested)
         return scrubbed_list
     return value
+
+
+def _dedupe_calibration_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        family = str(item.get("family") or "")
+        threshold_version = str(item.get("threshold_version") or "")
+        target_keys = json.dumps(item.get("target_env_keys") or [], sort_keys=True, ensure_ascii=False)
+        recommended = json.dumps(item.get("recommended_values") or {}, sort_keys=True, ensure_ascii=False)
+        key = (family, threshold_version, target_keys, recommended)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
 
 
 def _score65_74_entry_unlock_candidate(candidate: dict[str, Any]) -> bool:
@@ -3390,6 +3451,15 @@ def build_preopen_apply_manifest(
                 *calibration_candidates,
                 *scalping_pyramid_quality_candidates,
             ]
+        ai_score_optimization_candidates, ai_score_optimization_backtest = (
+            _load_ai_score_optimization_backtest_candidates(report_source_date)
+        )
+        if ai_score_optimization_candidates:
+            calibration_candidates = [
+                *calibration_candidates,
+                *ai_score_optimization_candidates,
+            ]
+        calibration_candidates = _dedupe_calibration_candidates(calibration_candidates)
         calibration_candidates = _scrub_removed_contracts(calibration_candidates) or []
         candidates = _scrub_removed_contracts(candidates) or []
         approval_requests = []
@@ -3648,6 +3718,7 @@ def build_preopen_apply_manifest(
             "latency_classifier_recommendation": latency_recommendation,
             "rising_missed_first_touch_calibration": rising_missed_first_touch_calibration,
             "scalping_pyramid_quality_calibration": scalping_pyramid_quality_calibration,
+            "ai_score_optimization_backtest": ai_score_optimization_backtest,
             "auto_apply_selected": selected,
             "auto_apply_decisions": decisions,
             "entry_cancel_wait_runtime": entry_cancel_wait_decision,

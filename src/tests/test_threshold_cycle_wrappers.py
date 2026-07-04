@@ -171,6 +171,8 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     scalping_pyramid_calibration_idx = script.index("src.engine.monitoring.scalping_pyramid_quality_calibration")
     one_share_threshold_idx = script.index("src.engine.monitoring.one_share_threshold_opportunity")
     entry_adm_idx = script.index("src.engine.scalp_entry_action_decision_matrix")
+    entry_ai_gate_idx = script.index("src.engine.scalping.entry_ai_gate_backtest")
+    ai_score_optimization_idx = script.index("src.engine.scalping.ai_score_optimization_backtest")
     microstructure_idx = script.index("src.engine.scalping.microstructure_reaction_context")
     observation_preflight_idx = script.index("observation_source_quality_preflight")
     scale_in_cf_idx = script.index("src.engine.lifecycle.scale_in_incremental_counterfactual")
@@ -223,6 +225,8 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         < scalping_pyramid_feedback_idx
         < scalping_pyramid_calibration_idx
         < entry_adm_idx
+        < entry_ai_gate_idx
+        < ai_score_optimization_idx
         < microstructure_idx
         < observation_preflight_idx
         < lifecycle_matrix_idx
@@ -267,6 +271,8 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     assert 'RUN_STAGE_HOOK_WORKORDER_DISCOVERY="${THRESHOLD_CYCLE_RUN_STAGE_HOOK_WORKORDER_DISCOVERY:-true}"' in script
     assert 'RUN_STAGE_HOOK_RUNTIME_SCAFFOLD="${THRESHOLD_CYCLE_RUN_STAGE_HOOK_RUNTIME_SCAFFOLD:-true}"' in script
     assert 'RUN_SCALP_ENTRY_ADM="${THRESHOLD_CYCLE_RUN_SCALP_ENTRY_ADM:-true}"' in script
+    assert 'RUN_ENTRY_AI_GATE_BACKTEST="${THRESHOLD_CYCLE_RUN_ENTRY_AI_GATE_BACKTEST:-true}"' in script
+    assert 'RUN_AI_SCORE_OPTIMIZATION_BACKTEST="${THRESHOLD_CYCLE_RUN_AI_SCORE_OPTIMIZATION_BACKTEST:-true}"' in script
     assert 'RUN_MICROSTRUCTURE_REACTION_CONTEXT="${THRESHOLD_CYCLE_RUN_MICROSTRUCTURE_REACTION_CONTEXT:-true}"' in script
     assert 'RUN_LIFECYCLE_DECISION_MATRIX="${THRESHOLD_CYCLE_RUN_LIFECYCLE_DECISION_MATRIX:-true}"' in script
     assert 'RUN_LIFECYCLE_AI_CONTEXT="${THRESHOLD_CYCLE_RUN_LIFECYCLE_AI_CONTEXT:-true}"' in script
@@ -277,6 +283,8 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     assert "lifecycle_bucket_discovery=$RUN_LIFECYCLE_BUCKET_DISCOVERY" in script
     assert "runtime_apply_bridge=$RUN_RUNTIME_APPLY_BRIDGE" in script
     assert "tuning_performance_control_tower=$RUN_TUNING_PERFORMANCE_CONTROL_TOWER" in script
+    assert "entry_ai_gate_backtest=$RUN_ENTRY_AI_GATE_BACKTEST" in script
+    assert "ai_score_optimization_backtest=$RUN_AI_SCORE_OPTIMIZATION_BACKTEST" in script
     assert "time_window_regime_counterfactual=$RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL" in script
     assert "producer_gap_discovery=$RUN_PRODUCER_GAP_DISCOVERY" in script
     assert "stage_hook_workorder_discovery=$RUN_STAGE_HOOK_WORKORDER_DISCOVERY" in script
@@ -372,6 +380,8 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert '"$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/ai_watching_score_smoothing_diagnostic/ai_watching_score_smoothing_diagnostic_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_${TARGET_DATE}.json"' in script
+    assert '"$PROJECT_DIR/data/report/entry_ai_gate_backtest/entry_ai_gate_backtest_${TARGET_DATE}.json"' in script
+    assert '"$PROJECT_DIR/data/report/ai_score_optimization_backtest/ai_score_optimization_backtest_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/rising_missed_intraday_feedback/rising_missed_intraday_feedback_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/rising_missed_scout_workorder/rising_missed_scout_workorder_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/rising_missed_first_touch_calibration/rising_missed_first_touch_calibration_${TARGET_DATE}.json"' in script
@@ -403,6 +413,8 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert "--rolling-sim-scan" in script
     assert "pattern_lab_propagation_audit=$RUN_PATTERN_LAB_PROPAGATION_AUDIT" in script
     assert "scalp_entry_adm=$RUN_SCALP_ENTRY_ADM" in script
+    assert "entry_ai_gate_backtest=$RUN_ENTRY_AI_GATE_BACKTEST" in script
+    assert "ai_score_optimization_backtest=$RUN_AI_SCORE_OPTIMIZATION_BACKTEST" in script
     assert "rising_missed_intraday_feedback_postclose=$RUN_RISING_MISSED_INTRADAY_FEEDBACK_POSTCLOSE" in script
     assert "rising_missed_scout_workorder=$RUN_RISING_MISSED_SCOUT_WORKORDER" in script
     assert "rising_missed_first_touch_calibration=$RUN_RISING_MISSED_FIRST_TOUCH_CALIBRATION" in script

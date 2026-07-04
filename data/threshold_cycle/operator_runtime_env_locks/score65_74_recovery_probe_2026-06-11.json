@@ -1,0 +1,73 @@
+{
+  "lock_id": "score65_74_recovery_probe_real_operator_override_2026-06-11",
+  "family": "score65_74_recovery_probe",
+  "enabled": true,
+  "stage": "entry",
+  "priority": 10,
+  "env_key": "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED",
+  "env_value": "true",
+  "active_from_date": "2026-06-11",
+  "min_observation_until_date": "2026-06-12",
+  "lock_until_explicit_close": true,
+  "explicit_close_required": true,
+  "applied_at": "2026-06-11T10:49:30+09:00",
+  "requested_by": "user_operator_override",
+  "runtime_effect": "real_entry_unlock_probe",
+  "decision_authority": "bounded_real_entry_canary",
+  "scope": {
+    "strategy": "SCALPING",
+    "score_range": "69..74",
+    "entry_unlock_only": true,
+    "normal_new_buy_sizing": true,
+    "hard_safety_priority_preserved": true
+  },
+  "env_overrides": {
+    "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED": "true",
+    "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_SCORE": "69",
+    "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MAX_SCORE": "74",
+    "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE": "65.0",
+    "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL": "1.2",
+    "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP": "0.0",
+    "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION": "score69_74_recovery_probe:operator_override:2026-07-04",
+    "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_CALIBRATION_STATE": "operator_runtime_override"
+  },
+  "allowed_close_reason_keywords": [
+    "safety_revert_required",
+    "severe_loss",
+    "order_provenance",
+    "provenance_breach",
+    "stale_quote",
+    "stale_context_or_quote",
+    "hard_stop",
+    "protect_stop",
+    "emergency_stop",
+    "order_failure",
+    "receipt_missing",
+    "same_stage_owner_conflict"
+  ],
+  "forbidden_uses": [
+    "score_threshold_full_relaxation",
+    "fallback_reopen",
+    "provider_route_change",
+    "order_price_guard_relaxation",
+    "broker_guard_bypass",
+    "stale_quote_bypass",
+    "account_order_quantity_cooldown_bypass",
+    "position_cap_release",
+    "swing_dry_run_disable"
+  ],
+  "rollback_guard": {
+    "disable_key": "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED=false",
+    "revert_scope": "score69-74 bounded real entry unlock probe",
+    "hard_safety_unchanged": true,
+    "broker_guard_unchanged": true,
+    "provider_route_unchanged": true
+  },
+  "source_evidence": {
+    "reason": "user explicitly requested 69-74 plus micro/source-quality conditional recheck after clean-baseline backtest showed 65-68 realized losses and 69-74 positive realized/counterfactual opportunity",
+    "previous_runtime_env": "data/threshold_cycle/runtime_env/threshold_runtime_env_2026-06-10.env",
+    "previous_env_key": "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED=true",
+    "current_apply_decision": "family=score65_74_recovery_probe calibration_state=hold selected=false decision_reason=no_runtime_env_override",
+    "user_instruction": "지금 적용하고 싶다고"
+  }
+}

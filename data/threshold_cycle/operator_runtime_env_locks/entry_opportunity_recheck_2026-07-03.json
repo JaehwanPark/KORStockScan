@@ -4,14 +4,14 @@
   "family": "entry_opportunity_recheck_runtime",
   "stage": "entry",
   "manipulation_point": "blocked_ai_score_near_buy_recheck",
-  "scope": "real_scalping_scanner_ai_buy_score70_74_fresh_quote_only",
+  "scope": "real_scalping_scanner_ai_buy_score69_74_fresh_quote_only",
   "runtime_effect": true,
   "active_from_date": "2026-07-03",
   "priority": 908,
   "explicit_close_required": true,
   "env_overrides": {
     "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED": "true",
-    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE": "70",
+    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE": "69",
     "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_AI_SCORE": "74.999",
     "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_RECHECK_PER_SYMBOL": "1",
     "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_RECHECK": "10",
@@ -54,5 +54,5 @@
     "tuning_override",
     "safety_revert_required"
   ],
-  "notes": "Operator runtime override for the bounded one-share opportunity entry hook. Re-enters only blocked AI-score 70-74.999 SCALPING SCANNER candidates when AI action is BUY and the quote is fresh. When daily caps are exhausted, intraday escalation may raise 10/3 to at most 30/7 only after at least two armed recoveries are non-negative with peak >=0.3% and no recovery mark is worse than -0.6%. It does not change BUY score threshold, provider, order price, quantity, broker, stale quote, cooldown, or hard safety guards."
+  "notes": "Operator runtime override for the bounded one-share opportunity entry hook. Re-enters only blocked AI-score 69-74.999 SCALPING SCANNER candidates when AI action is BUY and the quote is fresh. When daily caps are exhausted, intraday escalation may raise 10/3 to at most 30/7 only after at least two armed recoveries are non-negative with peak >=0.3% and no recovery mark is worse than -0.6%. It does not change BUY score threshold, provider, order price, quantity, broker, stale quote, cooldown, or hard safety guards."
 }

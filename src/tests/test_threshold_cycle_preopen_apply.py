@@ -286,6 +286,78 @@ def test_scalping_pyramid_quality_gate_candidate_ai_guard_reject_blocks_env(monk
     assert decisions[0]["decision_reason"] == "ai_guard_rejected_test"
 
 
+def test_ai_score_optimization_backtest_entry_recheck_candidate_emits_runtime_env(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "AI_SCORE_OPTIMIZATION_BACKTEST_DIR", tmp_path / "ai_score_optimization_backtest")
+    path = mod.AI_SCORE_OPTIMIZATION_BACKTEST_DIR / "ai_score_optimization_backtest_2026-07-03.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(
+            {
+                "report_type": "ai_score_optimization_backtest",
+                "target_date": "2026-07-03",
+                "summary": {"allowed_runtime_apply_candidate_count": 1},
+                "calibration_candidates": [
+                    {
+                        "family": "entry_opportunity_recheck_runtime",
+                        "stage": "entry",
+                        "priority": 42,
+                        "calibration_state": "adjust_down",
+                        "allowed_runtime_apply": True,
+                        "sample_floor_passed": True,
+                        "source_quality_gate": "pass",
+                        "target_env_keys": [
+                            "ENTRY_OPPORTUNITY_RECHECK_ENABLED",
+                            "ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE",
+                            "ENTRY_OPPORTUNITY_RECHECK_MAX_AI_SCORE",
+                        ],
+                        "current_values": {"enabled": False, "min_ai_score": 75, "max_ai_score": 100},
+                        "recommended_values": {"enabled": True, "min_ai_score": 68, "max_ai_score": 74},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    candidates, status = mod._load_ai_score_optimization_backtest_candidates("2026-07-03")
+    selected, decisions, env = mod._select_auto_apply_candidates(
+        candidates,
+        ai_review={},
+        require_ai=False,
+        target_date="2026-07-04",
+    )
+
+    assert status["status"] == "loaded"
+    assert selected[0]["family"] == "entry_opportunity_recheck_runtime"
+    assert decisions[0]["selected"] is True
+    assert env == {
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED": "true",
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE": "68",
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_AI_SCORE": "74",
+    }
+
+
+def test_calibration_candidate_dedupe_prefers_first_source():
+    first = {
+        "family": "scalping_pyramid_quality_gate",
+        "threshold_version": "same",
+        "target_env_keys": ["SCALPING_PYRAMID_MIN_PROFIT_PCT"],
+        "recommended_values": {"min_profit_pct": 1.1},
+        "source": "direct",
+    }
+    duplicate = {**first, "source": "ai_score_optimization_backtest"}
+    different = {
+        **first,
+        "threshold_version": "different",
+        "recommended_values": {"min_profit_pct": 1.3},
+        "source": "next",
+    }
+
+    deduped = mod._dedupe_calibration_candidates([first, duplicate, different])
+
+    assert deduped == [first, different]
+
+
 from src.engine import lifecycle_bucket_discovery as discovery_mod
 from src.engine.scalping import scalp_sim_auto_approval_control_tower as scalp_sim_auto_mod
 from src.engine.swing import sim_auto_approval_control_tower as swing_sim_mod
@@ -2900,7 +2972,7 @@ def test_entry_opportunity_recheck_operator_lock_emits_next_preopen_env(tmp_path
                 "explicit_close_required": True,
                 "env_overrides": {
                     "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED": "true",
-                    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE": "70",
+                    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE": "69",
                     "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_AI_SCORE": "74.999",
                     "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_RECHECK_PER_SYMBOL": "1",
                     "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_RECHECK": "10",
@@ -2943,12 +3015,37 @@ def test_entry_opportunity_recheck_operator_lock_emits_next_preopen_env(tmp_path
     assert decisions["entry_opportunity_recheck_runtime"]["operator_runtime_env_lock"]["applied"] is True
     env = manifest["runtime_env_overrides"]
     assert env["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED"] == "true"
-    assert env["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE"] == "70"
+    assert env["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE"] == "69"
     assert env["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_AI_SCORE"] == "74.999"
     assert env["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_BUY_RECOVERY"] == "3"
     assert env["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_INTRADAY_ESCALATION_ENABLED"] == "true"
     assert env["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ESCALATION_MAX_DAILY_RECHECK"] == "30"
     assert env["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ESCALATION_MAX_DAILY_BUY_RECOVERY"] == "7"
+
+
+def test_score69_74_recovery_probe_operator_lock_preserves_micro_source_quality_env():
+    env = mod._lock_env_overrides(
+        {
+            "family": "score65_74_recovery_probe",
+            "env_overrides": {
+                "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED": "true",
+                "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_SCORE": "69",
+                "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MAX_SCORE": "74",
+                "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE": "65.0",
+                "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL": "1.2",
+                "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP": "0.0",
+                "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_EFFECTIVE_MIN_MICRO_VWAP_FLOOR_BP": "10.0",
+                "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION": (
+                    "score69_74_recovery_probe:operator_override:2026-07-04"
+                ),
+            },
+        }
+    )
+
+    assert env["KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED"] == "true"
+    assert env["KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_SCORE"] == "69"
+    assert env["KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MAX_SCORE"] == "74"
+    assert env["KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_EFFECTIVE_MIN_MICRO_VWAP_FLOOR_BP"] == "10.0"
 
 
 def test_weak_context_late_entry_guard_operator_lock_emits_env(tmp_path, monkeypatch):
