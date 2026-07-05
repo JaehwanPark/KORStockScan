@@ -10425,8 +10425,24 @@ def _emit_scalp_entry_adm_snapshot(
             fallback = source_quality_fields.get(key)
             if fallback not in (None, "", "-", "None", "none"):
                 fields[key] = fallback
-    for key in parity_keys:
-        fields.setdefault(key, "-")
+    entry_snapshot_defaults = {
+        "tick_acceleration_ratio": "-",
+        "tick_acceleration_ratio_raw": "-",
+        "tick_accel_source": "not_evaluated",
+        "recent_5tick_seconds": "-",
+        "prev_5tick_seconds": "-",
+        "tick_accel_effective_recent_5tick_seconds": "-",
+        "buy_pressure_10t": 50.0,
+        "curr_vs_micro_vwap_bp": 0.0,
+        "curr_vs_ma5_bp": 0.0,
+        "micro_vwap_available": False,
+        "minute_candle_context_quality": "not_evaluated",
+        "minute_candle_window_fresh": False,
+        "minute_candle_latest_age_ms": "not_evaluated",
+    }
+    for key, value in entry_snapshot_defaults.items():
+        if fields.get(key) in (None, "", "-", "None", "none", "null"):
+            fields[key] = value
     if fields.get("ai_reason_numeric_inconsistency") is True:
         fields["source_quality_gate"] = "ai_numeric_consistency_review_required"
         fields["allowed_runtime_apply"] = False
@@ -10788,7 +10804,9 @@ def _log_scale_in_arm_blocked(stock, code, *, arm, blocked_reason, profit_rate, 
 def _append_pyramid_probe_fields(fields: dict, probe: dict | None) -> dict:
     merged = dict(fields or {})
     if not isinstance(probe, dict) or not probe:
-        return merged
+        probe = _scale_in_feature_contract_defaults(None)
+    else:
+        probe = _scale_in_feature_contract_defaults(probe)
     for key in (
         "profit_gate_mode",
         "min_profit_pct",
@@ -10815,6 +10833,9 @@ def _append_pyramid_probe_fields(fields: dict, probe: dict | None) -> dict:
         "curr_vs_micro_vwap_bp",
         "max_micro_vwap_bps",
         "micro_vwap_available",
+        "minute_candle_context_quality",
+        "minute_candle_window_fresh",
+        "minute_candle_latest_age_ms",
         "micro_vwap_not_overheated",
         "reversal_feature_source_quality",
         "reversal_feature_stale",
@@ -10853,7 +10874,9 @@ def _append_pyramid_probe_fields(fields: dict, probe: dict | None) -> dict:
 def _append_reversal_add_probe_fields(fields: dict, probe: dict | None) -> dict:
     merged = dict(fields or {})
     if not isinstance(probe, dict) or not probe:
-        return merged
+        probe = _scale_in_feature_contract_defaults(None)
+    else:
+        probe = _scale_in_feature_contract_defaults(probe)
     for key in (
         "pnl_ok",
         "hold_ok",
@@ -10894,6 +10917,10 @@ def _append_reversal_add_probe_fields(fields: dict, probe: dict | None) -> dict:
         "min_tick_accel",
         "curr_vs_micro_vwap_bp",
         "min_micro_vwap_bp",
+        "micro_vwap_available",
+        "minute_candle_context_quality",
+        "minute_candle_window_fresh",
+        "minute_candle_latest_age_ms",
         "supply_pass_count",
         "reversal_feature_source_quality",
         "reversal_feature_stale_reason",
@@ -10911,6 +10938,24 @@ def _append_reversal_add_probe_fields(fields: dict, probe: dict | None) -> dict:
         if key in probe:
             merged[key] = probe.get(key)
     return merged
+
+
+def _scale_in_feature_contract_defaults(probe: dict | None) -> dict:
+    """Return additive provenance defaults for scale-in observation rows.
+
+    These defaults make missing/unusable source quality explicit. They are log
+    provenance only and do not relax any runtime gate.
+    """
+    payload = dict(probe or {})
+    quality = reversal_feature_source_quality(payload)
+    payload.setdefault("buy_pressure_10t", 50.0)
+    payload.setdefault("tick_acceleration_ratio", 0.0)
+    payload.setdefault("curr_vs_micro_vwap_bp", 0.0)
+    payload.setdefault("supply_pass_count", 0)
+    payload.setdefault("large_sell_print_detected", False)
+    for key, value in quality.items():
+        payload.setdefault(key, value)
+    return payload
 
 
 def _log_orderbook_stability_observation(stock, code, snapshot):
@@ -12703,7 +12748,13 @@ def _emit_bad_entry_refined_candidate(
     if stock.get("_bad_entry_refined_candidate_logged_key") == logged_key:
         return
 
-    features = decision.get("features") or {}
+    features = _scale_in_feature_contract_defaults(decision.get("features") or {})
+    feature_valid = bool(decision.get("feature_valid")) and not bool(features.get("reversal_feature_stale"))
+    if not feature_valid:
+        features["buy_pressure_10t"] = 50.0
+        features["net_aggressive_delta_10t"] = 0.0
+        features["curr_vs_micro_vwap_bp"] = 0.0
+        features["large_sell_print_detected"] = False
     _log_holding_pipeline(
         stock,
         code,
@@ -13190,7 +13241,13 @@ def _emit_soft_stop_expert_observations(
     if stock.get("_soft_stop_expert_shadow_logged_key") == logged_key:
         return
 
-    features = decision.get("features") or {}
+    features = _scale_in_feature_contract_defaults(decision.get("features") or {})
+    feature_valid = bool(decision.get("feature_valid")) and not bool(features.get("reversal_feature_stale"))
+    if not feature_valid:
+        features["buy_pressure_10t"] = 50.0
+        features["net_aggressive_delta_10t"] = 0.0
+        features["curr_vs_micro_vwap_bp"] = 0.0
+        features["large_sell_print_detected"] = False
     _log_holding_pipeline(
         stock,
         code,
@@ -13214,7 +13271,7 @@ def _emit_soft_stop_expert_observations(
         code,
         "adverse_fill_observed",
         observe_only=True,
-        feature_valid=bool(decision.get("feature_valid")),
+        feature_valid=feature_valid,
         buy_pressure_10t=features.get("buy_pressure_10t", "-"),
         net_aggressive_delta_10t=features.get("net_aggressive_delta_10t", "-"),
         microprice_edge_bp=features.get("microprice_edge_bp", "-"),
@@ -33896,7 +33953,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                             "reversal_add_blocked_reason",
                             **_append_reversal_add_probe_fields(
                                 {
-                                    "state": stock.get('reversal_add_state', '') or "-",
+                                    "state": stock.get('reversal_add_state', '') or "reversal_state_unknown",
                                     "scale_in_arm": "AVG_DOWN",
                                     "scale_in_blocker_namespace": _scale_in_namespace_for_arm("AVG_DOWN", _ra_probe_reason),
                                     "scale_in_blocker_reason": _ra_probe_reason,
@@ -33988,7 +34045,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         "reversal_add_gate_blocked",
                         **_append_reversal_add_probe_fields(
                             {
-                                "state": stock.get('reversal_add_state', '') or "-",
+                                "state": stock.get('reversal_add_state', '') or "reversal_state_unknown",
                                 "scale_in_arm": "AVG_DOWN",
                                 "scale_in_blocker_namespace": _scale_in_namespace_for_arm("AVG_DOWN", gate.get('reason') or "-"),
                                 "scale_in_blocker_reason": gate.get('reason') or "-",

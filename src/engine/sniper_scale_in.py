@@ -474,6 +474,9 @@ def _scalping_pyramid_strong_continuation_context(
         "curr_vs_micro_vwap_bp": "-" if micro_vwap_bp is None else round(micro_vwap_bp, 4),
         "max_micro_vwap_bps": round(max_micro_vwap_bp, 4),
         "micro_vwap_available": checks["micro_vwap_available"],
+        "minute_candle_context_quality": quality["minute_candle_context_quality"],
+        "minute_candle_window_fresh": quality["minute_candle_window_fresh"],
+        "minute_candle_latest_age_ms": quality["minute_candle_latest_age_ms"],
         "micro_vwap_not_overheated": checks["micro_vwap_not_overheated"],
         "reversal_feature_source_quality": quality["reversal_feature_source_quality"],
         "reversal_feature_stale": quality["reversal_feature_stale"],
@@ -988,6 +991,8 @@ def reversal_feature_source_quality(feat):
         3.0,
     ) * 1000.0
     stale_reasons = []
+    if not feat:
+        stale_reasons.append("features_missing")
     if tick_stale is True or tick_quality == "stale_tick":
         stale_reasons.append("tick_context_stale")
     elif tick_quality in {"missing_ticks", "missing_tick_time"} or tick_quality.startswith("accel_"):
@@ -1013,7 +1018,7 @@ def reversal_feature_source_quality(feat):
         "tick_context_quality": feat.get("tick_context_quality", "-"),
         "tick_context_stale": feat.get("tick_context_stale", "unknown"),
         "tick_aggressor_trusted_count": feat.get("tick_aggressor_trusted_count", 0),
-        "tick_aggressor_pressure_usable": feat.get("tick_aggressor_pressure_usable", "unknown"),
+        "tick_aggressor_pressure_usable": feat.get("tick_aggressor_pressure_usable", False),
         "tick_latest_age_ms": "-" if tick_age_ms is None else round(tick_age_ms, 3),
         "tick_accel_source": feat.get("tick_accel_source", "-"),
         "quote_stale": feat.get("quote_stale", "unknown"),
@@ -1021,8 +1026,11 @@ def reversal_feature_source_quality(feat):
         "quote_age_source": feat.get("quote_age_source", "missing"),
         "micro_vwap_available": feat.get(
             "micro_vwap_available",
-            "unknown" if "curr_vs_micro_vwap_bp" not in feat else True,
+            False if "curr_vs_micro_vwap_bp" not in feat else True,
         ),
+        "minute_candle_context_quality": feat.get("minute_candle_context_quality", "missing"),
+        "minute_candle_window_fresh": feat.get("minute_candle_window_fresh", False),
+        "minute_candle_latest_age_ms": feat.get("minute_candle_latest_age_ms", "-"),
         "feature_extracted_at": feat.get("feature_extracted_at", "-"),
     }
 

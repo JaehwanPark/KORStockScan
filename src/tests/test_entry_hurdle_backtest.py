@@ -23,6 +23,23 @@ def _source_quality_preflight_pass(monkeypatch):
     )
 
 
+def test_entry_hurdle_micro_context_rejects_not_evaluated_quality():
+    assert not mod._event_micro_context_usable(
+        {
+            "tick_context_quality": "not_evaluated",
+            "tick_accel_source": "not_evaluated",
+            "quote_age_source": "not_evaluated",
+        }
+    )
+    assert not mod._event_micro_context_usable(
+        {
+            "tick_context_quality": "not_evaluated_pre_contract",
+            "tick_accel_source": "not_evaluated",
+            "quote_age_source": "not_evaluated_pre_contract",
+        }
+    )
+
+
 
 def test_entry_hurdle_backtest_classifies_overblocking_from_existing_artifacts(tmp_path, monkeypatch):
     buy_dir = tmp_path / "buy_funnel_sentinel"

@@ -237,7 +237,15 @@ def _micro_context_usable(row: dict[str, Any]) -> bool:
     if _stale(row):
         return False
     tick_quality = str(row.get("tick_context_quality") or "").strip().lower()
-    if tick_quality and tick_quality not in {"-", "unknown", "missing", "not_available", "stale"}:
+    if tick_quality and tick_quality not in {
+        "-",
+        "unknown",
+        "missing",
+        "not_available",
+        "not_evaluated",
+        "not_evaluated_pre_contract",
+        "stale",
+    }:
         return True
     if str(row.get("tick_accel_source") or "").strip().lower() in {
         "computed_10ticks",
@@ -248,7 +256,15 @@ def _micro_context_usable(row: dict[str, Any]) -> bool:
     if _safe_float(row.get("tick_latest_age_ms"), None) is not None:
         return True
     quote_source = str(row.get("quote_age_source") or "").strip().lower()
-    if quote_source and quote_source not in {"-", "unknown", "missing", "not_available", "stale"}:
+    if quote_source and quote_source not in {
+        "-",
+        "unknown",
+        "missing",
+        "not_available",
+        "not_evaluated",
+        "not_evaluated_pre_contract",
+        "stale",
+    }:
         return True
     if _safe_float(row.get("quote_age_ms"), None) is not None:
         return True

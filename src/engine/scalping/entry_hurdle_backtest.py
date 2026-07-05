@@ -103,7 +103,15 @@ def _event_micro_context_usable(fields: dict[str, Any]) -> bool:
     if _stale_flag(fields.get("quote_stale_at_submit")) or _stale_flag(fields.get("price_context_stale_at_submit")):
         return False
     tick_quality = str(fields.get("tick_context_quality") or "").strip().lower()
-    if tick_quality and tick_quality not in {"-", "unknown", "missing", "not_available", "stale"}:
+    if tick_quality and tick_quality not in {
+        "-",
+        "unknown",
+        "missing",
+        "not_available",
+        "not_evaluated",
+        "not_evaluated_pre_contract",
+        "stale",
+    }:
         return True
     if str(fields.get("tick_accel_source") or "").strip().lower() in {
         "computed_10ticks",
@@ -114,7 +122,15 @@ def _event_micro_context_usable(fields: dict[str, Any]) -> bool:
     if _safe_float(fields.get("tick_latest_age_ms"), None) is not None:
         return True
     quote_source = str(fields.get("quote_age_source") or "").strip().lower()
-    if quote_source and quote_source not in {"-", "unknown", "missing", "not_available", "stale"}:
+    if quote_source and quote_source not in {
+        "-",
+        "unknown",
+        "missing",
+        "not_available",
+        "not_evaluated",
+        "not_evaluated_pre_contract",
+        "stale",
+    }:
         return True
     if _safe_float(fields.get("quote_age_ms"), None) is not None:
         return True

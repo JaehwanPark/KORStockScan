@@ -80,6 +80,23 @@ def _counterfactual_row(
     }
 
 
+def test_entry_ai_gate_micro_context_rejects_not_evaluated_quality():
+    assert not mod._micro_context_usable(
+        {
+            "tick_context_quality": "not_evaluated",
+            "tick_accel_source": "not_evaluated",
+            "quote_age_source": "not_evaluated",
+        }
+    )
+    assert not mod._micro_context_usable(
+        {
+            "tick_context_quality": "not_evaluated_pre_contract",
+            "tick_accel_source": "not_evaluated",
+            "quote_age_source": "not_evaluated_pre_contract",
+        }
+    )
+
+
 def test_entry_ai_gate_backtest_excludes_pre_baseline_and_separates_metrics(tmp_path, monkeypatch):
     adm_dir = tmp_path / "adm"
     missed_dir = tmp_path / "missed"

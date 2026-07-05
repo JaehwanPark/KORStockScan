@@ -21,6 +21,7 @@ from src.engine.sniper_state_handlers import (
     _is_score65_74_recovery_probe_entry_unlocked,
     _score65_74_recovery_probe_decision,
     _score65_74_recovery_probe_reuse_guard,
+    _scale_in_feature_contract_defaults,
     _without_entry_pipeline_fields,
     _resolve_wait6579_probe_entry_unlock,
     _should_apply_ai_score_50_buy_hold_override,
@@ -120,6 +121,19 @@ def test_reversal_add_runtime_supply_context_accepts_trusted_pressure():
     assert context["feature_usable"] is True
     assert context["supply_ok"] is True
     assert context["checks"] == [True, True, True, True]
+
+
+def test_scale_in_feature_defaults_mark_missing_features_unusable():
+    fields = _scale_in_feature_contract_defaults(None)
+
+    assert fields["buy_pressure_10t"] == 50.0
+    assert fields["tick_acceleration_ratio"] == 0.0
+    assert fields["curr_vs_micro_vwap_bp"] == 0.0
+    assert fields["micro_vwap_available"] is False
+    assert fields["minute_candle_context_quality"] == "missing"
+    assert fields["minute_candle_window_fresh"] is False
+    assert fields["reversal_feature_source_quality"] == "stale"
+    assert "features_missing" in fields["reversal_feature_stale_reason"]
 
 
 def test_watching_strategy_initializes_ai_call_executed_before_optional_ai_call():
@@ -1559,6 +1573,10 @@ def test_entry_adm_snapshot_records_feature_parity_and_numeric_consistency(monke
     assert fields["buy_pressure_10t"] == "71.200"
     assert fields["curr_vs_micro_vwap_bp"] == "11.400"
     assert fields["curr_vs_ma5_bp"] == "9.800"
+    assert fields["micro_vwap_available"] is False
+    assert fields["minute_candle_context_quality"] == "not_evaluated"
+    assert fields["minute_candle_window_fresh"] is False
+    assert fields["minute_candle_latest_age_ms"] == "not_evaluated"
     assert fields["ai_reason_numeric_inconsistency"] is True
     assert fields["source_quality_gate"] == "ai_numeric_consistency_review_required"
     assert fields["allowed_runtime_apply"] is False
