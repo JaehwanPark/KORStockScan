@@ -172,6 +172,53 @@ class TestLogScanner:
             assert errors == 1
             assert counter == {"TIMEOUT_ERROR": 1}
 
+    def test_scan_file_ignores_openai_latency_acceptance_fixture_noise(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_file = Path(tmpdir) / "ai_engine_openai_error.log"
+            log_file.write_text(
+                "\n".join([
+                    "[2026-07-03 23:06:13] 🚨 ERROR in ai_engine_openai: "
+                    "🚨 [HOLDING_SCORE] OpenAI score error (LIVE_SMOKE_TEST, failures 1): "
+                    "OpenAI Responses HTTP 응답/파싱 실패: Request timed out.",
+                    "[2026-07-03 23:26:49] 🚨 ERROR in ai_engine_openai: "
+                    "🚨 [HOLDING_SCORE] OpenAI score error (LatencyTest, failures 1): "
+                    "OpenAI Responses HTTP 응답/파싱 실패: Request timed out.",
+                    "[2026-07-03 23:29:01] 🚨 ERROR in ai_engine_openai: "
+                    "🚨 [LatencyLegacyHolding][SCALPING] OpenAI 실시간 분석 에러 "
+                    "(연속 실패 1회, API키 인덱스 0): OpenAI Responses HTTP 응답/파싱 실패: "
+                    "Request timed out.",
+                    "[2026-07-04 13:46:19] 🚨 ERROR in ai_engine_openai: "
+                    "🚨 [LatencyEntry][SCALPING] OpenAI 실시간 분석 에러 "
+                    "(연속 실패 1회, API키 인덱스 0): OpenAI Responses HTTP 응답/파싱 실패: "
+                    "Request timed out.",
+                    "[2026-07-04 13:46:24] 🚨 ERROR in ai_engine_openai: "
+                    "🚨 [ENTRY_PRICE] OpenAI 가격결정 에러 (LatencyEntryPrice, 연속 실패 1회): "
+                    "OpenAI Responses HTTP 응답/파싱 실패: Request timed out.",
+                    "[2026-07-04 14:25:25] 🚨 ERROR in ai_engine_openai: "
+                    "🚨 [LIVE_ENTRY_TIMEOUT_700_TEST][SCALPING] OpenAI 실시간 분석 에러 "
+                    "(연속 실패 1회, API키 인덱스 0): OpenAI Responses HTTP 응답/파싱 실패: "
+                    "Request timed out.",
+                    "[2026-07-04 14:27:05] 🚨 ERROR in ai_engine_openai: "
+                    "🚨 [LIVE_ENTRY_TIMEOUT_700_REVIEW_FIX][SCALPING] OpenAI 실시간 분석 에러 "
+                    "(연속 실패 1회, API키 인덱스 0): OpenAI Responses HTTP 응답/파싱 실패: "
+                    "Request timed out.",
+                    "[2026-07-04 14:36:29] 🚨 ERROR in ai_engine_openai: "
+                    "🚨 [ENTRY_LIVE_REVIEW_TEST][SCALPING] OpenAI 실시간 분석 에러 "
+                    "(연속 실패 1회, API키 인덱스 0): OpenAI Responses HTTP 응답/파싱 실패: "
+                    "Error code: 400 - {'error': {'message': 'Invalid schema for response_format'}}",
+                    "[2026-07-06 09:31:00] 🚨 ERROR in ai_engine_openai: "
+                    "🚨 [삼성전자][SCALPING] OpenAI 실시간 분석 에러: Request timed out.",
+                ]),
+                encoding="utf-8",
+            )
+
+            scanner = LogScanner()
+            counter = __import__("collections").Counter()
+            errors, _, _ = scanner._scan_file(log_file, 0, counter)
+
+            assert errors == 1
+            assert counter == {"TIMEOUT_ERROR": 1}
+
     def test_scan_file_ignores_pytest_tmp_fixture_leakage(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             log_file = Path(tmpdir) / "kiwoom_utils_error.log"

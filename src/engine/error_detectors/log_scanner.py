@@ -22,7 +22,9 @@ SCAN_STATE_PATH = PROJECT_ROOT / "tmp" / "error_detector_log_scan_state.json"
 _EXCEPTION_PATTERNS: list[tuple[str, re.Pattern]] = []
 _IGNORED_LINE_PATTERNS: list[re.Pattern] = [
     re.compile(r"\[ERROR_DETECTION\]"),
-    re.compile(r"\bTEST(?:\b|[:(])"),
+    re.compile(r"(?:^|[^A-Za-z0-9])(?:[A-Za-z0-9]+_)*TEST(?:$|[^A-Za-z0-9])"),
+    re.compile(r"(?:^|[^A-Za-z0-9])(?:LatencyTest|LatencyLegacyHolding|LatencyEntry|LatencyEntryPrice)(?:$|[^A-Za-z0-9])"),
+    re.compile(r"\[LIVE_ENTRY_TIMEOUT_[A-Za-z0-9_]+\]"),
     re.compile(r"테스트"),
     re.compile(r"\btest\s*:"),
     re.compile(r"\b123456\b"),
