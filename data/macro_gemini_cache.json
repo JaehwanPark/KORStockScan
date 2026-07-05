@@ -1,5 +1,5 @@
 {
-  "bundle_as_of": "2026-07-02T22:20:14Z",
+  "bundle_as_of": "2026-07-05T22:20:14Z",
   "sp500": {
     "name": "S&P 500",
     "value": 7483.24,
@@ -20,66 +20,64 @@
   },
   "vix": {
     "name": "VIX",
-    "value": 16.28,
+    "value": 16.15,
     "prev_value": 16.59,
-    "change": -0.31,
-    "change_pct": -1.87,
-    "as_of": "2026-07-02T20:00:00Z",
+    "change": -0.44,
+    "change_pct": -2.65,
+    "as_of": "2026-07-02T20:15:00Z",
     "source": "Cboe Global Markets"
   },
   "us10y": {
     "name": "US 10-Year Treasury Yield",
-    "value": 4.485,
-    "prev_value": 4.47,
-    "change": 0.015,
-    "change_pct": 0.34,
+    "value": 4.49,
+    "prev_value": 4.48,
+    "change": 0.01,
+    "change_pct": null,
     "as_of": "2026-07-02T20:00:00Z",
-    "source": "Exante"
+    "source": "Trading Economics"
   },
   "brent": {
     "name": "Brent Crude",
-    "value": 71.58,
-    "prev_value": 71.57,
-    "change": 0.01,
-    "change_pct": 0.01,
-    "as_of": "2026-07-02T21:00:00Z",
-    "source": "Trading Economics"
+    "value": 71.87,
+    "prev_value": 71.8,
+    "change": 0.07,
+    "change_pct": 0.1,
+    "as_of": "2026-07-03T20:00:00Z",
+    "source": "Crux Investor"
   },
   "headlines": [
     {
-      "title": "Dow Jumps to Record Closing High After Soft US Jobs Data, Nasdaq Down With Chip Shares",
-      "source": "Reuters",
-      "published_at": "2026-07-02T21:32:00Z",
-      "url": "https://www.reuters.com/"
+      "title": "Trump & Netanyahu to Meet as Iran Faces Life After Khamenei",
+      "source": "ILTV Israel News",
+      "published_at": "2026-07-05T15:20:00Z",
+      "url": "https://www.youtube.com/watch?v=NpL4gbVyzzc"
     },
     {
-      "title": "Facing barbs and pressure from Trump, Europe's leaders close ranks",
-      "source": "AP News",
-      "published_at": "2026-07-02T10:36:00Z",
-      "url": "https://apnews.com/"
+      "title": "Iran-US war latest: Mourner calls for Trump's death as hundreds of thousands commemorate Ali Khamenei",
+      "source": "The Independent",
+      "published_at": "2026-07-05T21:00:00Z",
+      "url": "https://www.independent.co.uk/news/world/americas/us-politics/iran-us-war-latest-trump-khamenei-b2713854.html"
     },
     {
-      "title": "Trump administration plans new rule that it says could save Medicare patients $1.1 billion",
-      "source": "AP News",
-      "published_at": "2026-07-02T19:20:00Z",
-      "url": "https://apnews.com/"
+      "title": "Khamenei's other sons appear at his funeral in Iran as new supreme leader remains in hiding",
+      "source": "The Washington Post",
+      "published_at": "2026-07-05T16:35:00Z",
+      "url": "https://www.washingtonpost.com/"
     },
     {
-      "title": "UBS cuts Brent crude price forecasts on improved Hormuz oil flows",
-      "source": "Reuters",
-      "published_at": "2026-07-02T03:14:00Z",
-      "url": "https://www.reuters.com/"
+      "title": "Russia says Trump 'reaffirmed readiness' to help end Ukraine war in phone call with Putin",
+      "source": "Anadolu Ajansı",
+      "published_at": "2026-07-05T05:20:00Z",
+      "url": "https://www.aa.com.tr/"
     },
     {
-      "title": "Brent Falls to $70.47 & OPEC+ Supply Decision Test US Oil Supply Recovery",
-      "source": "CRUX",
-      "published_at": "2026-07-02T15:20:00Z",
-      "url": "https://cruxinvestor.com/"
+      "title": "Netanyahu says Christian villages in Lebanon have asked to be 'annexed' by Israel",
+      "source": "L'Orient Today",
+      "published_at": "2026-07-05T11:40:00Z",
+      "url": "https://today.lorientlejour.com/"
     }
   ],
   "notes": [
-    "US markets closed mixed on July 2, 2026, ahead of the long Independence Day holiday weekend. Soft June non-farm payrolls data eased rate hike fears.",
-    "Semiconductor stocks sold off sharply for a second straight day, pulling the NASDAQ down 0.8%.",
-    "Crude prices traded lower or mostly flat amid easing geopolitical tensions and improved oil transit flows through the Strait of Hormuz."
+    "U.S. stock and bond markets observed the Independence Day holiday on Friday, July 3, 2026. Equities data reflects the final close on Thursday, July 2, 2026."
   ]
 }
