@@ -1859,6 +1859,101 @@ def _reviewed_unknown_reason_for_stage_field(
             and _field_text("pre_submit_min_liquidity") not in {"", "-", "unknown_pre_contract"}
         )
 
+    def _is_falseish(field: str) -> bool:
+        return _field_text(field).lower() in {"false", "0", "no"}
+
+    def _is_trueish(field: str) -> bool:
+        return _field_text(field).lower() in {"true", "1", "yes"}
+
+    def _is_runtime_order_forbidden_observation() -> bool:
+        return _is_falseish("actual_order_submitted") and (
+            _is_trueish("broker_order_forbidden")
+            or _field_text("decision_authority")
+            in {
+                "entry_advisory_prompt_context_only",
+                "operator_runtime_decision_recheck_only",
+                "operator_runtime_observation_retry_only",
+                "real_scalping_scanner_runtime_watchlist_observation_only",
+                "source_quality_only",
+            }
+        )
+
+    def _is_reviewed_runtime_skip_context_not_evaluated() -> bool:
+        if stage != "scalping_scanner_watching_runtime_skip":
+            return False
+        if str(key or "") not in {"tick_context_quality", "minute_candle_context_quality"}:
+            return False
+        return _is_runtime_order_forbidden_observation() and _field_text("skip_reason") in {
+            "before_strategy_start",
+            "entry_cooldown_active",
+            "runtime_queue_lag",
+            "runtime_not_ready",
+        }
+
+    def _is_reviewed_unusable_micro_context_not_available() -> bool:
+        if stage not in {
+            "early_accel_recheck_evaluated",
+            "early_accel_recheck_skipped",
+            "ai_numeric_consistency_recheck_evaluated",
+            "ai_numeric_consistency_recheck_skipped",
+        }:
+            return False
+        if str(key or "") not in {
+            "tick_accel_source",
+            "tick_context_quality",
+            "minute_candle_context_quality",
+        }:
+            return False
+        skip_reason = _field_text("skip_reason")
+        return _is_runtime_order_forbidden_observation() and (
+            skip_reason in {
+                "micro_vwap_unusable",
+                "original_action_not_wait",
+                "not_evaluated",
+            }
+            or _is_falseish("tick_accel_usable")
+            or _is_falseish("micro_vwap_usable")
+            or _is_falseish("minute_candle_window_fresh")
+        )
+
+    def _is_reviewed_entry_score_source_not_available() -> bool:
+        if stage not in {
+            "scalp_entry_action_decision_snapshot",
+            "ai_confirmed_terminal_no_budget",
+            "blocked_ai_score",
+        }:
+            return False
+        if str(key or "") not in {"entry_score_source", "entry_score_excluded_reason"}:
+            return False
+        reason = _field_text("entry_score_excluded_reason").lower()
+        return _is_runtime_order_forbidden_observation() and (
+            reason.startswith("unusable_source:")
+            or reason in {"stale_quote_or_context", "score50_fallback_blocked", "not_evaluated"}
+        )
+
+    def _is_reviewed_score_prior_neutral_unknown() -> bool:
+        if str(key or "") not in {
+            "score_prior_band",
+            "score_prior_confidence",
+            "holding_exit_matrix_score_prior_band",
+            "soft_stop_dynamic_grace_score_prior_band",
+        }:
+            return False
+        text = _field_text(str(key or "")).lower()
+        return _is_runtime_order_forbidden_observation() and text in {
+            "neutral_or_unknown",
+            "unknown",
+        }
+
+    def _is_reviewed_holding_score_preflight_not_available() -> bool:
+        if stage != "ai_holding_review" or str(key or "") != "holding_score_preflight_source_quality":
+            return False
+        return _field_text("holding_review_trigger_reason") in {
+            "fast_reuse_bypass",
+            "cache_reuse",
+            "cooldown_reuse",
+        } or _field_text("ai_call_skipped_reason") not in {"", "-", "none"}
+
     def _is_reviewed_entry_adm_bucket_provenance() -> bool:
         if stage not in {"scalp_entry_action_decision_snapshot", "ai_confirmed"}:
             return False
@@ -1881,6 +1976,16 @@ def _reviewed_unknown_reason_for_stage_field(
 
     if not _unknown_token_present(value):
         return None
+    if _is_reviewed_runtime_skip_context_not_evaluated():
+        return "reviewed_runtime_skip_context_not_evaluated"
+    if _is_reviewed_unusable_micro_context_not_available():
+        return "reviewed_unusable_micro_context_not_available"
+    if _is_reviewed_entry_score_source_not_available():
+        return "reviewed_entry_score_source_not_available"
+    if _is_reviewed_score_prior_neutral_unknown():
+        return "reviewed_score_prior_neutral_unknown_not_decision_input"
+    if _is_reviewed_holding_score_preflight_not_available():
+        return "reviewed_holding_score_preflight_not_available"
     if str(key or "") in {"tick_context_stale", "quote_stale"} and _is_reviewed_stale_flag_not_available():
         return "reviewed_stale_flag_not_available"
     if str(key or "") in {

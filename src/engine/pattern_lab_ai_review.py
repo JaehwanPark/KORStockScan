@@ -155,7 +155,7 @@ def _summary_for(payload: dict[str, Any]) -> dict[str, Any]:
             if isinstance(data_quality.get("source_quality_contracts"), dict)
             else {}
         ),
-        "warnings": _top_list(payload.get("warnings"), 10),
+        "warnings": _top_list(payload.get("warnings"), 50),
     }
 
 
@@ -411,6 +411,7 @@ _CLASSIFIED_THRESHOLD_EV_WARNING_PREFIXES = {
     "pattern_lab_ai_review_warning",
     "pattern_lab_ai_review_ai_review_followup_required",
     "pattern_lab_propagation_audit_warning",
+    "producer_gap_discovery_ai_review_followup_required",
 }
 
 
@@ -463,7 +464,11 @@ def _is_resolved_classified_source_quality_warning_gap(item: dict[str, Any], con
     if str(item.get("final_decision") or "") == "keep":
         return False
     review_id = str(item.get("review_id") or "").strip().lower()
-    if review_id == "lifecycle_bucket_discovery_source_contract_drift" or lifecycle_drift_context:
+    if review_id in {
+        "lifecycle_bucket_discovery_source_contract_drift",
+        "lifecycle_bucket_discovery",
+        "source_contract_drift",
+    } or lifecycle_drift_context:
         source_wrapper = _source_wrapper(context, "lifecycle_bucket_discovery")
         source = _source_summary(context, "lifecycle_bucket_discovery")
         summary = _nested_report_summary(source)
@@ -479,7 +484,7 @@ def _is_resolved_classified_source_quality_warning_gap(item: dict[str, Any], con
                 "lifecycle_bucket_discovery:source_contract_drift_warning",
             )
         )
-    if review_id == "swing_strategy_discovery_pending_future_quotes" or (
+    if review_id in {"swing_strategy_discovery_pending_future_quotes", "swing_strategy_discovery_ev"} or (
         "swing_strategy_discovery" in reason and "pending_future_quotes" in reason
     ):
         source = _source_summary(context, "swing_strategy_discovery_ev")
@@ -492,19 +497,30 @@ def _is_resolved_classified_source_quality_warning_gap(item: dict[str, Any], con
                 "swing_strategy_discovery:pending_future_quotes",
             )
         )
-    if review_id == "scalping_scalp_entry_adm_status_warning" or (
+    if review_id in {
+        "scalping_scalp_entry_adm_status_warning",
+        "scalp_entry_adm_status_warning",
+        "scalping_pattern_lab_automation",
+    } or (
         "scalp_entry_adm_status" in reason or "scalp entry adm" in reason
+        or "scalp_entry_adm" in reason
+        or "entry adm" in reason
         or "scalping entry admission" in reason
         or "entry admission metric" in reason
     ):
         source = _source_summary(context, "scalping_pattern_lab_automation")
+        source_only_warning = any(
+            _classified_source_only_warning_present(context, warning)
+            for warning in (
+                "scalp_entry_adm:ai_numeric_consistency_rows_excluded_from_aggregates",
+                "scalp_entry_adm:joined_sample_below_sample_floor",
+                "scalp_entry_adm:unknown_bucket_source_quality_gap",
+            )
+        )
         return (
             source.get("runtime_effect") is False
             and source.get("allowed_runtime_apply") is False
-            and _classified_source_only_warning_present(
-                context,
-                "scalp_entry_adm:ai_numeric_consistency_rows_excluded_from_aggregates",
-            )
+            and source_only_warning
             and _threshold_ev_warnings_are_classified_source_only(context)
         )
     if review_id == "swing_lifecycle_decision_matrix_warnings" or (
@@ -553,10 +569,24 @@ def _is_resolved_threshold_cycle_ev_incomplete_gap(item: dict[str, Any], context
         return False
     review_id = str(item.get("review_id") or "").lower()
     reason = str(item.get("reason") or "").lower()
-    if "threshold_cycle_ev_incomplete" not in review_id and "threshold_cycle_ev" not in reason:
+    if (
+        review_id != "threshold_cycle_ev"
+        and "threshold_cycle_ev_incomplete" not in review_id
+        and "threshold_cycle_ev" not in reason
+    ):
         return False
     if not _threshold_ev_warnings_are_classified_source_only(context):
         return False
+    threshold_summary = _threshold_cycle_ev_source_summary(context)
+    nested_threshold_summary = _nested_report_summary(threshold_summary)
+    if (
+        review_id == "threshold_cycle_ev"
+        and "sim_evidence_present_no_live_bucket" in reason
+        and _safe_int(nested_threshold_summary.get("live_auto_ready_count"), 0) == 0
+        and threshold_summary.get("runtime_effect") is not True
+        and threshold_summary.get("allowed_runtime_apply") is not True
+    ):
+        return True
     source_summary = _swing_lifecycle_bucket_discovery_summary(context)
     summary = _nested_report_summary(source_summary)
     return (
@@ -840,7 +870,17 @@ def _is_resolved_pattern_lab_ai_review_contract_gap(item: dict[str, Any], contex
     review_id = str(item.get("review_id") or "").strip().lower()
     reason = str(item.get("reason") or "").lower()
     text = f"{review_id} {reason}"
-    if not any(token in text for token in ("two-pass", "two_pass", "ai reviewer", "reviewer contract")):
+    if not any(
+        token in text
+        for token in (
+            "two-pass",
+            "two_pass",
+            "ai reviewer",
+            "reviewer contract",
+            "ai review contract",
+            "review contract",
+        )
+    ):
         return False
     checks = context.get("currentness_checks") if isinstance(context.get("currentness_checks"), list) else []
     return any(

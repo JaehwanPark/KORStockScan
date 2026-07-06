@@ -1154,6 +1154,10 @@ def _lifecycle_bucket_windows_status(
     warnings: list[str] = []
     windows: dict[str, dict[str, Any]] = {}
     confirmation_target_pass_count = 0
+    bridge_summary = bridge_report.get("summary") if isinstance(bridge_report.get("summary"), dict) else {}
+    live_ready_count = _safe_int(bridge_summary.get("live_auto_apply_ready_count"))
+    promotion_passed = bridge_summary.get("lifecycle_bucket_promotion_contract_passed")
+    promotion_authority_open = live_ready_count > 0 or promotion_passed is True
     for suffix in ("rolling5d", "rolling10d", "mtd"):
         ldm_path = paths[f"lifecycle_decision_matrix_{suffix}"]
         discovery_path = paths[f"lifecycle_bucket_discovery_{suffix}"]
@@ -1179,16 +1183,17 @@ def _lifecycle_bucket_windows_status(
         if parent_granularity_status == "target_pass" and suffix in confirmation_windows:
             confirmation_target_pass_count += 1
         if parent_granularity_status != "target_pass" and suffix == promotion_window:
-            missing.append(f"lifecycle_bucket_discovery_{suffix}_parent_granularity_not_target")
+            issue = f"lifecycle_bucket_discovery_{suffix}_parent_granularity_not_target"
+            if promotion_authority_open:
+                missing.append(issue)
+            else:
+                warnings.append(issue)
         elif parent_granularity_status != "target_pass" and suffix in confirmation_windows:
             warnings.append(f"lifecycle_bucket_discovery_{suffix}_parent_granularity_not_target")
 
     if confirmation_windows and confirmation_target_pass_count == 0:
         missing.append("lifecycle_bucket_confirmation_windows_not_target")
 
-    bridge_summary = bridge_report.get("summary") if isinstance(bridge_report.get("summary"), dict) else {}
-    live_ready_count = _safe_int(bridge_summary.get("live_auto_apply_ready_count"))
-    promotion_passed = bridge_summary.get("lifecycle_bucket_promotion_contract_passed")
     if live_ready_count > 0 and promotion_passed is not True:
         missing.append("runtime_apply_bridge_daily_only_live_authority")
 

@@ -123,8 +123,13 @@ wait_for_threshold_postclose_done() {
         return 0
         ;;
       failed)
-        echo "[FAIL] tuning_monitoring_postclose target_date=${TARGET_DATE} reason=threshold_cycle_postclose_failed"
-        return 1
+        if [[ "$waited" -ge "$PREDECESSOR_WAIT_SEC" ]]; then
+          echo "[FAIL] tuning_monitoring_postclose target_date=${TARGET_DATE} reason=threshold_cycle_postclose_failed waited=${waited}s"
+          return 1
+        fi
+        if [[ "$waited" -eq 0 ]]; then
+          echo "[WARN] threshold_cycle_postclose predecessor failed; waiting for recovery target_date=${TARGET_DATE}"
+        fi
         ;;
     esac
 

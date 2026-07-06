@@ -569,7 +569,13 @@ def test_tuning_monitoring_waits_for_threshold_postclose_done_by_default():
     assert "wait_for_threshold_postclose_done" in script
     assert "threshold_postclose_terminal_marker" in script
     assert "reason=threshold_cycle_postclose_not_done" in script
-    assert "reason=threshold_cycle_postclose_failed" in script
+    assert "reason=threshold_cycle_postclose_failed waited=${waited}s" in script
+    assert "predecessor failed; waiting for recovery" in script
+    failed_start = script.index('failed)')
+    failed_branch = script[failed_start:script.index('        ;;', failed_start)]
+    assert 'if [[ "$waited" -ge "$PREDECESSOR_WAIT_SEC" ]]' in failed_branch
+    assert "reason=threshold_cycle_postclose_failed waited=${waited}s" in failed_branch
+    assert "predecessor failed; waiting for recovery" in failed_branch
 
 
 def test_run_bot_waits_for_threshold_runtime_env_before_launching_bot():

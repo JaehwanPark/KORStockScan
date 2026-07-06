@@ -81,6 +81,11 @@ KNOWN_FIXED_UNKNOWN_TOKEN_FIELDS = {
     "pre_submit_liquidity_value",
     "overbought_guard_reason",
     "pre_submit_overbought_reason",
+    "entry_score_source",
+    "entry_score_excluded_reason",
+    "score_prior_band",
+    "score_prior_confidence",
+    "soft_stop_dynamic_grace_score_prior_band",
     "holding_exit_matrix_decision_alignment",
     "sim_pre_submit_overbought_reason",
     "broker_receipt_status",
@@ -1464,6 +1469,31 @@ def _implementation_provenance_for_bucket(
 def _sanitize_producer_gap_order(order: dict[str, Any]) -> dict[str, Any]:
     sanitized = {**order, "source_report_type": "producer_gap_discovery"}
     sanitized.pop("runtime_hook_candidate_contract", None)
+    if (
+        str(sanitized.get("improvement_type") or "") == "ai_review_followup"
+        and str(sanitized.get("route") or "") == "review_ai_output"
+    ):
+        evidence_text = "\n".join(str(item) for item in sanitized.get("evidence") or [])
+        if (
+            "audit_status=pass" in evidence_text
+            and "forbidden_use_violations=[]" in evidence_text
+            and sanitized.get("runtime_effect") is False
+            and sanitized.get("allowed_runtime_apply") is False
+            and sanitized.get("actual_order_submitted") is False
+            and sanitized.get("broker_order_forbidden") is True
+        ):
+            sanitized["implementation_status"] = "implemented_source_quality_contract_available"
+            sanitized["implementation_provenance"] = {
+                "implementation_type": "producer_gap_ai_review_followup_source_only_provenance",
+                "audit_status": "pass",
+                "forbidden_use_violations": [],
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "decision_authority": "producer_gap_discovery_source_only_review",
+                "root_cause_closure_status_hint": "root_cause_closed",
+            }
     return sanitized
 
 
@@ -3696,6 +3726,48 @@ def _lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) -> list[
             if source_dimension_gap_required
             else "bucket_classifier_hook_or_taxonomy_gap"
         )
+        is_source_contract_drift = (
+            stage == "source_contract"
+            and str(item.get("parent_bucket_id") or "") == "source_contract:schema_drift"
+            and item.get("runtime_effect") is False
+            and item.get("allowed_runtime_apply") is False
+            and item.get("actual_order_submitted") is False
+            and item.get("broker_order_forbidden") is True
+            and item.get("full_real_conversion_allowed") is False
+            and item.get("bounded_live_canary_allowed") is False
+            and str(item.get("transition_target") or "") == "source_only_keep_collecting"
+        )
+        implementation_status = (
+            "implemented_source_quality_contract_available" if is_source_contract_drift else None
+        )
+        implementation_provenance = (
+            {
+                "implementation_type": "lifecycle_source_contract_drift_source_only_provenance",
+                "source_contract_status": ((report.get("summary") or {}).get("source_contract_status"))
+                if isinstance(report.get("summary"), dict)
+                else None,
+                "source_contract_change_count": ((report.get("summary") or {}).get("source_contract_change_count"))
+                if isinstance(report.get("summary"), dict)
+                else None,
+                "evidence_grade": item.get("evidence_grade"),
+                "transition_target": item.get("transition_target"),
+                "source_bucket_kind": item.get("source_bucket_kind"),
+                "ai_tier2_taxonomy_decision": item.get("ai_tier2_taxonomy_decision")
+                or (
+                    item.get("ai_tier2_comparative_review", {}).get("selected_decision")
+                    if isinstance(item.get("ai_tier2_comparative_review"), dict)
+                    else None
+                ),
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "decision_authority": "source_contract_drift_detection",
+                "root_cause_closure_status_hint": "root_cause_closed",
+            }
+            if is_source_contract_drift
+            else None
+        )
         orders.append(
             {
                 "order_id": order_id,
@@ -3719,6 +3791,10 @@ def _lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) -> list[
                 "priority": 1 if state in {"code_patch_required", "runtime_blocked_contract_gap"} or source_dimension_gap_required else 3,
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "implementation_status": implementation_status,
+                "implementation_provenance": implementation_provenance,
                 "expected_ev_effect": (
                     "Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can "
                     "auto-classify and auto-apply without operator memory."

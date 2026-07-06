@@ -22850,6 +22850,18 @@ def _block_ai_score_50_buy_hold_override_if_needed(
         cooldown_sec=cooldown_time,
         blocked_reason="ai_score_50_buy_hold_override",
         ai_score_50_buy_hold_override=True,
+        **{
+            **_build_observation_contract_fields("entry_score_prior_provenance"),
+            "decision_authority": "entry_score_prior_block_observation_only",
+            "source_quality_gate": "blocked_ai_score_entry_score_prior_contract",
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "forbidden_uses": (
+                "threshold mutation,order guard mutation,provider change,bot_restart,"
+                "broker order submit,score50_fallback_submit"
+            ),
+        },
         **_merge_entry_pipeline_field_groups(
             _build_ai_overlap_log_fields(
                 stock=stock,
@@ -25249,6 +25261,18 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                         "blocked_ai_score",
                         threshold=entry_buy_score_threshold,
                         cooldown_sec=cooldown_time,
+                        **{
+                            **_build_observation_contract_fields("entry_score_prior_provenance"),
+                            "decision_authority": "entry_score_prior_block_observation_only",
+                            "source_quality_gate": "blocked_ai_score_entry_score_prior_contract",
+                            "allowed_runtime_apply": False,
+                            "actual_order_submitted": False,
+                            "broker_order_forbidden": True,
+                            "forbidden_uses": (
+                                "threshold mutation,order guard mutation,provider change,bot_restart,"
+                                "broker order submit,score_prior_submit_bypass"
+                            ),
+                        },
                         **_merge_entry_pipeline_field_groups(
                             {
                                 "ai_call_trigger_reason": ai_call_trigger_reason or "-",
@@ -32941,6 +32965,9 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     current_ai_score=f"{current_ai_score:.0f}",
                     held_sec=int(held_time_min * 60),
                     exit_rule_candidate="scalp_soft_stop_pct",
+                    allowed_runtime_apply=False,
+                    actual_order_submitted=False,
+                    broker_order_forbidden=True,
                     **_build_observation_contract_fields("ops_volume_diagnostic"),
                 )
             else:

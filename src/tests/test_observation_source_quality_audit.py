@@ -814,6 +814,100 @@ def test_observation_source_quality_audit_reviews_panic_context_warning_unknown_
     assert reviewed_fields["market_risk_state"]["reviewed_reason"] == "reviewed_missing_risk_regime_context"
 
 
+def test_observation_source_quality_audit_reviews_runtime_skip_context_unknown(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-07-06",
+        [
+            _event(
+                "scalping_scanner_watching_runtime_skip",
+                {
+                    "decision_authority": "real_scalping_scanner_runtime_watchlist_observation_only",
+                    "runtime_effect": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "skip_reason": "entry_cooldown_active",
+                    "tick_context_quality": "unknown",
+                    "minute_candle_context_quality": "unknown",
+                },
+                record_id=1,
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-07-06")
+
+    assert report["summary"]["unknown_token_stage_count"] == 0
+    reviewed = report["reviewed_unknown_token_findings"][0]
+    fields = {item["field"]: item for item in reviewed["fields"]}
+    assert fields["tick_context_quality"]["reviewed_reason"] == "reviewed_runtime_skip_context_not_evaluated"
+    assert (
+        fields["minute_candle_context_quality"]["reviewed_reason"]
+        == "reviewed_runtime_skip_context_not_evaluated"
+    )
+
+
+def test_observation_source_quality_audit_reviews_score_and_micro_context_unknowns(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-07-06",
+        [
+            _event(
+                "early_accel_recheck_evaluated",
+                {
+                    "decision_authority": "operator_runtime_observation_retry_only",
+                    "runtime_effect": True,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "skip_reason": "micro_vwap_unusable",
+                    "tick_accel_usable": False,
+                    "micro_vwap_usable": False,
+                    "minute_candle_window_fresh": False,
+                    "tick_accel_source": "unknown",
+                    "tick_context_quality": "unknown",
+                    "minute_candle_context_quality": "unknown",
+                },
+                record_id=1,
+            ),
+            _event(
+                "scalp_entry_action_decision_snapshot",
+                {
+                    "decision_authority": "entry_advisory_prompt_context_only",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "entry_score_source": "unknown",
+                    "entry_score_excluded_reason": "unusable_source:unknown",
+                    "score_prior_band": "neutral_or_unknown",
+                    "score_prior_confidence": "unknown",
+                },
+                record_id=2,
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-07-06")
+
+    assert report["summary"]["unknown_token_stage_count"] == 0
+    reviewed = {
+        item["stage"]: {field["field"]: field for field in item["fields"]}
+        for item in report["reviewed_unknown_token_findings"]
+    }
+    assert reviewed["early_accel_recheck_evaluated"]["tick_accel_source"]["reviewed_reason"] == (
+        "reviewed_unusable_micro_context_not_available"
+    )
+    assert reviewed["scalp_entry_action_decision_snapshot"]["entry_score_source"]["reviewed_reason"] == (
+        "reviewed_entry_score_source_not_available"
+    )
+    assert reviewed["scalp_entry_action_decision_snapshot"]["score_prior_confidence"]["reviewed_reason"] == (
+        "reviewed_score_prior_neutral_unknown_not_decision_input"
+    )
+
+
 def test_observation_source_quality_audit_reviews_explicit_sim_liquidity_unknown(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(

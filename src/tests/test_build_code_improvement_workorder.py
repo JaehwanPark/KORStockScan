@@ -2802,6 +2802,92 @@ def test_observation_source_quality_known_fixed_unknown_tokens_attach_existing_f
     assert classified.decision == "attach_existing_family"
 
 
+def test_lifecycle_source_contract_drift_followup_is_existing_source_only_provenance():
+    report = {
+        "summary": {
+            "source_contract_status": "warning",
+            "source_contract_change_count": 1,
+        },
+        "metric_role": "source_quality_provenance",
+        "decision_authority": "lifecycle_bucket_discovery_source_only",
+        "window_policy": "same_day_source_bundle_plus_rolling_threshold_cycle_consumer",
+        "sample_floor": 0,
+        "primary_decision_metric": "source_contract_change",
+        "source_quality_gate": "source_contract_drift_warning",
+        "forbidden_uses": ["runtime_threshold_apply", "broker_submit"],
+        "surfaced_candidates": [
+            {
+                "bucket_id": "source_contract:source_added:entry:source_key_entry",
+                "source_bucket_id": "source_contract:source_added:entry:abc",
+                "parent_bucket_id": "source_contract:schema_drift",
+                "stage": "source_contract",
+                "classification_state": "runtime_blocked_contract_gap",
+                "canonical_bucket": "source_contract:source_added:entry",
+                "legacy_raw_bucket_key": "entry",
+                "bucket_alias_version": "lifecycle_bucket_alias_v1",
+                "dimension_set_version": "lifecycle_dimension_set_v1",
+                "source_bucket_kind": "source_quality_gap",
+                "evidence_grade": "source_only",
+                "transition_target": "source_only_keep_collecting",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "full_real_conversion_allowed": False,
+                "bounded_live_canary_allowed": False,
+                "ai_tier2_taxonomy_decision": "instrumentation_gap",
+            }
+        ],
+    }
+
+    order = mod._lifecycle_bucket_discovery_followup_orders(report)[0]
+    classified = mod._classify_order(
+        order,
+        finding_by_order_id={},
+        finding_by_title_slug={},
+        auto_family_order_ids=set(),
+        closed_instrumentation_order_families={},
+    )
+
+    assert order["implementation_status"] == "implemented_source_quality_contract_available"
+    assert order["implementation_provenance"]["decision_authority"] == "source_contract_drift_detection"
+    assert order["actual_order_submitted"] is False
+    assert order["broker_order_forbidden"] is True
+    assert classified.decision == "attach_existing_family"
+
+
+def test_producer_gap_ai_review_followup_pass_is_existing_source_only_provenance():
+    order = mod._sanitize_producer_gap_order(
+        {
+            "order_id": "order_producer_gap_discovery_ai_review_followup_2026_07_06",
+            "title": "Producer gap AI review follow-up",
+            "improvement_type": "ai_review_followup",
+            "route": "review_ai_output",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "evidence": [
+                "ai_review_followup_reason=missing_ai_tier2_proposal:1",
+                "audit_status=pass",
+                "forbidden_use_violations=[]",
+            ],
+        }
+    )
+    classified = mod._classify_order(
+        order,
+        finding_by_order_id={},
+        finding_by_title_slug={},
+        auto_family_order_ids=set(),
+        closed_instrumentation_order_families={},
+    )
+
+    assert order["implementation_status"] == "implemented_source_quality_contract_available"
+    assert order["implementation_provenance"]["runtime_effect"] is False
+    assert order["implementation_provenance"]["broker_order_forbidden"] is True
+    assert classified.decision == "attach_existing_family"
+
+
 def test_observation_source_quality_unknown_token_workorder_evidence_is_not_truncated():
     fields = [
         {
