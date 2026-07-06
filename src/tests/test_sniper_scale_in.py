@@ -18,6 +18,7 @@ from src.engine.kiwoom_websocket import KiwoomWSManager
 from src.engine.scalping.rising_missed_one_share_entry import (
     BLOCK_ALREADY_HOLDING,
     BLOCK_CLASS_NOT_ELIGIBLE,
+    BLOCK_ENTRY_AI_NOT_EVALUATED,
     BLOCK_NOT_CANDIDATE,
     BLOCK_OPEN_PENDING,
     BLOCK_PRICE_ABOVE_CAP,
@@ -504,6 +505,103 @@ def test_rising_missed_one_share_entry_attaches_prior_log_without_decision_chang
     assert decision.log_fields["rising_missed_prior_confidence"] == "high"
     assert decision.log_fields["rising_missed_prior_window"] == "rolling10d"
     assert decision.log_fields["rising_missed_prior_reason"] == "rolling10d_positive_ev_prior"
+
+
+def test_rising_missed_one_share_entry_blocks_not_evaluated_entry_ai_action():
+    decision = evaluate_rising_missed_one_share_entry(
+        {
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "scanner_promotion_id": "scan-ai-ne",
+            "price_delta_since_first_seen_pct": 2.4,
+            "last_watching_ai_action": "not_evaluated",
+        },
+        strategy="SCALPING",
+        position_tag="SCANNER",
+        feature_enabled=True,
+        has_open_pending=False,
+        already_holding=False,
+        min_delta_pct=0.5,
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == BLOCK_ENTRY_AI_NOT_EVALUATED
+    assert decision.log_fields["rising_missed_class"] == RISING_MISSED_CLASS_SOURCE_QUALITY_EXCLUDED
+    assert decision.log_fields["rising_missed_class_reason"] == BLOCK_ENTRY_AI_NOT_EVALUATED
+    assert decision.log_fields["rising_missed_one_share_eligible"] is False
+    assert decision.log_fields["rising_missed_entry_ai_action"] == "not_evaluated"
+    assert decision.log_fields["rising_missed_entry_ai_action_source"] == "last_watching_ai_action"
+    assert decision.log_fields["rising_missed_entry_ai_not_evaluated_excluded"] is True
+
+
+def test_rising_missed_one_share_entry_does_not_block_missing_entry_ai_action():
+    decision = evaluate_rising_missed_one_share_entry(
+        {
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "scanner_promotion_id": "scan-ai-missing",
+            "price_delta_since_first_seen_pct": 2.4,
+        },
+        strategy="SCALPING",
+        position_tag="SCANNER",
+        feature_enabled=True,
+        has_open_pending=False,
+        already_holding=False,
+        min_delta_pct=0.5,
+    )
+
+    assert decision.allowed is True
+    assert decision.reason == FORCED_ENTRY_REASON
+    assert decision.log_fields["rising_missed_entry_ai_action"] == "-"
+    assert decision.log_fields["rising_missed_entry_ai_action_source"] == "missing"
+    assert decision.log_fields["rising_missed_entry_ai_not_evaluated_excluded"] is False
+
+
+def test_rising_missed_one_share_entry_prefers_explicit_entry_ai_action_over_cached_watching_action():
+    decision = evaluate_rising_missed_one_share_entry(
+        {
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "scanner_promotion_id": "scan-ai-current",
+            "price_delta_since_first_seen_pct": 2.4,
+            "ai_action": "BUY",
+            "last_watching_ai_action": "not_evaluated",
+        },
+        strategy="SCALPING",
+        position_tag="SCANNER",
+        feature_enabled=True,
+        has_open_pending=False,
+        already_holding=False,
+        min_delta_pct=0.5,
+    )
+
+    assert decision.allowed is True
+    assert decision.reason == FORCED_ENTRY_REASON
+    assert decision.log_fields["rising_missed_entry_ai_action"] == "BUY"
+    assert decision.log_fields["rising_missed_entry_ai_action_source"] == "ai_action"
+    assert decision.log_fields["rising_missed_entry_ai_not_evaluated_excluded"] is False
+
+
+def test_rising_missed_one_share_entry_not_evaluated_does_not_make_non_candidate_actionable():
+    decision = evaluate_rising_missed_one_share_entry(
+        {
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "scanner_promotion_id": "scan-ai-ne-low-delta",
+            "price_delta_since_first_seen_pct": 0.1,
+            "last_watching_ai_action": "not_evaluated",
+        },
+        strategy="SCALPING",
+        position_tag="SCANNER",
+        feature_enabled=True,
+        has_open_pending=False,
+        already_holding=False,
+        min_delta_pct=0.5,
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == BLOCK_NOT_CANDIDATE
+    assert decision.log_fields["rising_missed_entry_ai_not_evaluated_excluded"] is True
 
 
 def test_rising_missed_default_min_delta_is_one_pct(monkeypatch):
@@ -16828,14 +16926,20 @@ def _dynamic_soft_stop_stock(**overrides):
 
 
 def test_scalp_soft_stop_dynamic_grace_defers_real_position_before_existing_graces(monkeypatch):
-    state_handlers.TRADING_RULES = _dynamic_soft_stop_grace_config()
+    state_handlers.TRADING_RULES = _dynamic_soft_stop_grace_config(
+        SCALP_SOFT_STOP_MICRO_GRACE_ENABLED=True,
+        SCALP_SOFT_STOP_MICRO_GRACE_SEC=20,
+        SCALP_SOFT_STOP_MICRO_GRACE_EMERGENCY_PCT=-2.0,
+    )
     pipeline_logs, exit_calls = _install_soft_stop_expert_test_doubles(monkeypatch)
-    stock = _dynamic_soft_stop_stock()
+    stock = _dynamic_soft_stop_stock(
+        soft_stop_micro_grace_started_at=state_handlers.time.time() - 21,
+    )
 
     state_handlers.handle_holding_state(
         stock=stock,
         code="123456",
-        ws_data={"curr": 9810, "quote_stale": False, "orderbook": {"bids": [{"price": 9810, "volume": 1000}]}},
+        ws_data={"curr": 9860, "quote_stale": False, "orderbook": {"bids": [{"price": 9860, "volume": 1000}]}},
         admin_id=1,
         market_regime="BULL",
         radar=None,
@@ -16843,18 +16947,24 @@ def test_scalp_soft_stop_dynamic_grace_defers_real_position_before_existing_grac
     )
 
     dynamic_logs = [fields for stage, fields in pipeline_logs if stage == "soft_stop_dynamic_grace"]
+    grace_logs = [fields for stage, fields in pipeline_logs if stage == "soft_stop_micro_grace"]
     exit_logs = [fields for stage, fields in pipeline_logs if stage == "exit_signal"]
     assert stock["status"] == "HOLDING"
     assert stock["soft_stop_dynamic_grace_started_at"] > 0
     assert dynamic_logs
-    assert dynamic_logs[-1]["soft_stop_dynamic_grace_sec"] == 90
+    assert dynamic_logs[-1]["soft_stop_dynamic_grace_sec"] == 20
     assert dynamic_logs[-1]["soft_stop_dynamic_grace_applied"] is True
+    assert dynamic_logs[-1]["soft_stop_final_action"] == "confirm_20s"
+    assert dynamic_logs[-1]["soft_stop_extension_source"] == "dynamic_modifier"
     assert dynamic_logs[-1]["curr_vs_micro_vwap_bp"] == "-2.00"
     assert dynamic_logs[-1]["micro_vwap_available"] is True
     assert dynamic_logs[-1]["minute_candle_window_fresh"] is True
     assert dynamic_logs[-1]["minute_candle_latest_age_ms"] == 100
     assert dynamic_logs[-1]["micro_context_usable"] is True
     assert dynamic_logs[-1]["reversal_feature_source_quality"] == "usable"
+    assert grace_logs
+    assert grace_logs[-1]["soft_stop_final_action"] == "confirm_20s"
+    assert grace_logs[-1]["soft_stop_dynamic_modifier_applied"] is True
     assert not exit_logs
     assert not exit_calls
 
@@ -16872,7 +16982,7 @@ def test_scalp_soft_stop_dynamic_grace_rejects_unusable_holding_ai_score(monkeyp
         stock,
         strategy="SCALPING",
         now_ts=1_000.0,
-        profit_rate=-1.85,
+        profit_rate=-1.75,
         current_ai_score=72,
         dynamic_stop_pct=-1.50,
         hard_stop_pct=-2.50,
@@ -16906,7 +17016,7 @@ def test_scalp_soft_stop_dynamic_grace_rejects_ai_without_provenance(monkeypatch
         stock,
         strategy="SCALPING",
         now_ts=1_000.0,
-        profit_rate=-1.85,
+        profit_rate=-1.75,
         current_ai_score=72,
         dynamic_stop_pct=-1.50,
         hard_stop_pct=-2.50,
@@ -16943,7 +17053,7 @@ def test_scalp_soft_stop_dynamic_grace_does_not_score_untrusted_pressure(monkeyp
         stock,
         strategy="SCALPING",
         now_ts=1_000.0,
-        profit_rate=-1.85,
+        profit_rate=-1.75,
         current_ai_score=72,
         dynamic_stop_pct=-1.50,
         hard_stop_pct=-2.50,
@@ -16955,7 +17065,8 @@ def test_scalp_soft_stop_dynamic_grace_does_not_score_untrusted_pressure(monkeyp
     assert decision["tick_aggressor_pressure_source_quality"] == "unusable"
     assert decision["absorption_score"] == 0
     assert decision["positive_micro"] is False
-    assert decision["reason"] == "weak_confirmed_soft_stop_dynamic_grace"
+    assert decision["skip_reason"] == "micro_confirmation_missing"
+    assert decision["reason"] == "confirm_20s_soft_stop_micro_grace_modifier"
 
 
 def test_scalp_soft_stop_dynamic_grace_does_not_score_stale_micro_context(monkeypatch):
@@ -17029,7 +17140,7 @@ def test_scalp_soft_stop_dynamic_grace_does_not_score_micro_vwap_without_provena
         stock,
         strategy="SCALPING",
         now_ts=1_000.0,
-        profit_rate=-1.85,
+        profit_rate=-1.75,
         current_ai_score=72,
         dynamic_stop_pct=-1.50,
         hard_stop_pct=-2.50,
@@ -17041,7 +17152,8 @@ def test_scalp_soft_stop_dynamic_grace_does_not_score_micro_vwap_without_provena
     assert decision["tick_aggressor_pressure_usable"] is False
     assert decision["absorption_score"] == 0
     assert decision["positive_micro"] is False
-    assert decision["reason"] == "weak_confirmed_soft_stop_dynamic_grace"
+    assert decision["skip_reason"] == "micro_confirmation_missing"
+    assert decision["reason"] == "confirm_20s_soft_stop_micro_grace_modifier"
     assert "micro_vwap_provenance_missing" in decision["reversal_feature_stale_reason"]
 
 
@@ -17787,18 +17899,18 @@ def test_holding_flow_ofi_debounce_ignores_micro_vwap_without_provenance(monkeyp
 
 
 def test_scalp_soft_stop_dynamic_grace_exits_after_max_worsen(monkeypatch):
-    state_handlers.TRADING_RULES = _dynamic_soft_stop_grace_config()
+    state_handlers.TRADING_RULES = _dynamic_soft_stop_grace_config(SCALP_STOP=-1.70)
     pipeline_logs, exit_calls = _install_soft_stop_expert_test_doubles(monkeypatch)
     stock = _dynamic_soft_stop_stock(
         soft_stop_dynamic_grace_started_at=state_handlers.time.time() - 10,
-        soft_stop_dynamic_grace_anchor_profit=-1.80,
+        soft_stop_dynamic_grace_anchor_profit=-1.00,
         soft_stop_dynamic_grace_sec=45,
     )
 
     state_handlers.handle_holding_state(
         stock=stock,
         code="123456",
-        ws_data={"curr": 9785, "quote_stale": False, "orderbook": {"bids": [{"price": 9785, "volume": 1000}]}},
+        ws_data={"curr": 9850, "quote_stale": False, "orderbook": {"bids": [{"price": 9850, "volume": 1000}]}},
         admin_id=1,
         market_regime="BULL",
         radar=None,
@@ -17811,6 +17923,114 @@ def test_scalp_soft_stop_dynamic_grace_exits_after_max_worsen(monkeypatch):
     assert stock["status"] == "SELL_ORDERED"
     assert stock["last_exit_rule"] == "scalp_soft_stop_pct"
     assert exit_calls
+
+
+def test_scalp_soft_stop_dynamic_modifier_does_not_defer_weak_ai_large_sell_case(monkeypatch):
+    state_handlers.TRADING_RULES = _dynamic_soft_stop_grace_config(
+        SCALP_STOP=-3.0,
+        SCALP_HARD_STOP=-5.0,
+        SCALP_SOFT_STOP_MICRO_GRACE_ENABLED=True,
+        SCALP_SOFT_STOP_MICRO_GRACE_SEC=20,
+        SCALP_SOFT_STOP_MICRO_GRACE_EMERGENCY_PCT=-4.0,
+        SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT=-5.6,
+    )
+    pipeline_logs, exit_calls = _install_soft_stop_expert_test_doubles(monkeypatch)
+    stock = _dynamic_soft_stop_stock(
+        buy_price=87668,
+        rt_ai_prob=0.58,
+        soft_stop_micro_grace_started_at=state_handlers.time.time() - 21,
+        last_reversal_features=_trusted_reversal_features(
+            buy_pressure_10t=19.05,
+            tick_acceleration_ratio=0.55,
+            large_sell_print_detected=True,
+            curr_vs_micro_vwap_bp=-12.35,
+            net_aggressive_delta_10t=-900,
+            same_price_buy_absorption=0,
+            microprice_edge_bp=-2.5,
+            top3_depth_ratio=1.90,
+        ),
+    )
+    stock.update(_fresh_holding_score_fields(58))
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 84900, "quote_stale": False, "orderbook": {"bids": [{"price": 84900, "volume": 1000}]}},
+        admin_id=1,
+        market_regime="BULL",
+        radar=None,
+        ai_engine=None,
+    )
+
+    dynamic_exit_logs = [fields for stage, fields in pipeline_logs if stage == "soft_stop_dynamic_grace_exit"]
+    exit_logs = [fields for stage, fields in pipeline_logs if stage == "exit_signal"]
+    assert stock["status"] == "SELL_ORDERED"
+    assert stock["last_exit_rule"] == "scalp_soft_stop_pct"
+    assert dynamic_exit_logs
+    assert dynamic_exit_logs[-1]["soft_stop_final_action"] == "exit_now"
+    assert dynamic_exit_logs[-1]["soft_stop_dynamic_modifier_applied"] is False
+    assert dynamic_exit_logs[-1]["soft_stop_dynamic_grace_skip_reason"] == "thesis_invalidated"
+    assert dynamic_exit_logs[-1]["soft_stop_dynamic_grace_ai_score_prior_pass"] is False
+    assert dynamic_exit_logs[-1]["soft_stop_dynamic_grace_strong_absorption_support"] is False
+    assert exit_logs and exit_logs[-1]["exit_rule"] == "scalp_soft_stop_pct"
+    assert exit_calls
+
+
+def test_scalp_soft_stop_dynamic_modifier_uses_active_stop_relative_band(monkeypatch):
+    state_handlers.TRADING_RULES = _dynamic_soft_stop_grace_config(
+        SCALP_STOP=-3.0,
+        SCALP_HARD_STOP=-5.0,
+        SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT=-5.6,
+    )
+    stock = _dynamic_soft_stop_stock()
+
+    decision = state_handlers._build_soft_stop_dynamic_grace_decision(
+        stock,
+        strategy="SCALPING",
+        now_ts=1_000.0,
+        profit_rate=-3.16,
+        current_ai_score=72,
+        dynamic_stop_pct=-3.0,
+        hard_stop_pct=-5.0,
+        quote_stale=False,
+        source_quality_hard_gap=False,
+    )
+
+    assert decision["should_defer"] is True
+    assert decision["skip_reason"] == ""
+    assert decision["grace_sec"] == 20
+    assert decision["active_band_lower"] == -3.3
+    assert decision["active_band_upper"] == -2.2
+    assert decision["ai_score_prior_pass"] is True
+
+
+def test_scalp_soft_stop_dynamic_modifier_allows_low_ai_score_with_strong_absorption(monkeypatch):
+    state_handlers.TRADING_RULES = _dynamic_soft_stop_grace_config(
+        SCALP_STOP=-3.0,
+        SCALP_HARD_STOP=-5.0,
+        SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT=-5.6,
+    )
+    stock = _dynamic_soft_stop_stock()
+    stock.update(_fresh_holding_score_fields(58))
+
+    decision = state_handlers._build_soft_stop_dynamic_grace_decision(
+        stock,
+        strategy="SCALPING",
+        now_ts=1_000.0,
+        profit_rate=-3.16,
+        current_ai_score=58,
+        dynamic_stop_pct=-3.0,
+        hard_stop_pct=-5.0,
+        quote_stale=False,
+        source_quality_hard_gap=False,
+    )
+
+    assert decision["should_defer"] is True
+    assert decision["skip_reason"] == ""
+    assert decision["reason"] == "strong_absorption_confirm_20s_soft_stop_micro_grace_modifier"
+    assert decision["ai_score_usable"] is True
+    assert decision["ai_score_prior_pass"] is False
+    assert decision["strong_absorption_support"] is True
 
 
 def _install_soft_stop_expert_test_doubles(monkeypatch):
@@ -17898,7 +18118,7 @@ def _soft_stop_expert_stock(**overrides):
     return stock
 
 
-def test_soft_stop_expert_absorption_extends_after_micro_grace(monkeypatch):
+def test_soft_stop_expert_absorption_scores_without_standalone_extension(monkeypatch):
     state_handlers.TRADING_RULES = _soft_stop_expert_config()
     pipeline_logs, exit_calls = _install_soft_stop_expert_test_doubles(monkeypatch)
 
@@ -17918,13 +18138,13 @@ def test_soft_stop_expert_absorption_extends_after_micro_grace(monkeypatch):
     shadow_logs = [fields for stage, fields in pipeline_logs if stage == "soft_stop_expert_shadow"]
     adverse_logs = [fields for stage, fields in pipeline_logs if stage == "adverse_fill_observed"]
     exit_logs = [fields for stage, fields in pipeline_logs if stage == "exit_signal"]
-    assert stock["status"] == "HOLDING"
-    assert stock["soft_stop_absorption_extension_used"] is True
-    assert extend_logs and extend_logs[-1]["absorption_score"] >= 3
+    assert stock["status"] == "SELL_ORDERED"
+    assert stock["last_exit_rule"] == "scalp_soft_stop_pct"
+    assert not extend_logs
     assert shadow_logs and shadow_logs[-1]["shadow_only"] is True
     assert adverse_logs and adverse_logs[-1]["observe_only"] is True
-    assert not exit_logs
-    assert not exit_calls
+    assert exit_logs and exit_logs[-1]["exit_rule"] == "scalp_soft_stop_pct"
+    assert exit_calls
 
 
 def test_soft_stop_expert_absorption_ignores_untrusted_pressure_axes(monkeypatch):

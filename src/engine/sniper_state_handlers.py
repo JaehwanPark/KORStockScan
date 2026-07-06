@@ -13004,6 +13004,7 @@ def _build_soft_stop_dynamic_grace_decision(
         float(dynamic_stop_pct),
     )
     max_worsen_pct = max(0.0, _rule_float("SCALP_SOFT_STOP_DYNAMIC_GRACE_MAX_WORSEN_PCT", 0.30))
+    strong_absorption_min_score = max(1, _rule_int("SCALP_SOFT_STOP_ABSORPTION_MIN_SCORE", 3))
 
     features, feature_valid = _normalize_soft_stop_expert_features(stock)
     buy_pressure = _safe_float(features.get("buy_pressure_10t"), 50.0)
@@ -13047,6 +13048,8 @@ def _build_soft_stop_dynamic_grace_decision(
         microstructure_confirmed=positive_micro,
     )
     ai_score_usable = bool(holding_score_ctx.get("usable_for_soft_grace"))
+    ai_score_prior_pass = bool(ai_score_usable and current_ai_score >= min_ai_score)
+    strong_absorption_support = bool(absorption_score >= strong_absorption_min_score)
 
     started_at = _safe_float(stock.get("soft_stop_dynamic_grace_started_at"), 0.0)
     anchor_profit = _safe_float(stock.get("soft_stop_dynamic_grace_anchor_profit"), profit_rate)
@@ -13055,14 +13058,16 @@ def _build_soft_stop_dynamic_grace_decision(
     elapsed_sec = max(0, int(now_ts - started_at)) if started_at > 0 else 0
     additional_worsen = max(0.0, float(anchor_profit or 0.0) - float(profit_rate or 0.0))
 
-    grace_sec = weak_sec
-    reason = "weak_confirmed_soft_stop_dynamic_grace"
+    confirm_sec_cap = 20
+    grace_sec = min(weak_sec, confirm_sec_cap)
+    reason = "confirm_20s_soft_stop_micro_grace_modifier"
     if positive_micro:
-        grace_sec = base_sec
-        reason = "base_micro_confirmed_soft_stop_dynamic_grace"
-    if positive_micro and (absorption_score >= 3 or (ai_score_usable and current_ai_score >= (min_ai_score + 5))):
-        grace_sec = strong_sec
-        reason = "strong_absorption_soft_stop_dynamic_grace"
+        reason = "positive_micro_confirm_20s_soft_stop_micro_grace_modifier"
+    if positive_micro and (strong_absorption_support or (ai_score_usable and current_ai_score >= (min_ai_score + 5))):
+        reason = "strong_absorption_confirm_20s_soft_stop_micro_grace_modifier"
+
+    active_band_lower = float(dynamic_stop_pct or 0.0) - max_worsen_pct
+    active_band_upper = float(dynamic_stop_pct or 0.0) + 0.80
 
     skip_reason = ""
     if not enabled:
@@ -13087,16 +13092,18 @@ def _build_soft_stop_dynamic_grace_decision(
         skip_reason = "hard_stop_zone"
     elif profit_rate <= emergency_pct:
         skip_reason = "emergency_pct"
-    elif current_ai_score < min_ai_score:
-        skip_reason = "ai_score_below_min"
-    elif profit_rate < -2.50 or profit_rate > -1.70:
-        skip_reason = "outside_baseline_soft_stop_missed_upside_band"
-    elif thesis_invalidated:
-        skip_reason = "thesis_invalidated"
-    elif grace_sec <= 0:
-        skip_reason = "grace_sec_zero"
     elif additional_worsen > max_worsen_pct:
         skip_reason = "max_worsen_exceeded"
+    elif profit_rate < active_band_lower or profit_rate > active_band_upper:
+        skip_reason = "outside_active_soft_stop_modifier_band"
+    elif thesis_invalidated:
+        skip_reason = "thesis_invalidated"
+    elif not positive_micro:
+        skip_reason = "micro_confirmation_missing"
+    elif not (ai_score_prior_pass or strong_absorption_support):
+        skip_reason = "composite_support_missing"
+    elif grace_sec <= 0:
+        skip_reason = "grace_sec_zero"
     elif started_at > 0 and elapsed_sec >= grace_sec:
         skip_reason = "expired"
 
@@ -13108,15 +13115,26 @@ def _build_soft_stop_dynamic_grace_decision(
         "skip_reason": skip_reason,
         "reason": reason,
         "grace_sec": int(grace_sec),
+        "base_sec_configured": int(base_sec),
+        "strong_sec_configured": int(strong_sec),
+        "confirm_sec_cap": int(confirm_sec_cap),
         "elapsed_sec": int(elapsed_sec),
         "started_at": float(started_at),
         "anchor_profit": float(anchor_profit),
         "current_profit": float(profit_rate or 0.0),
         "max_worsen_pct": float(max_worsen_pct),
         "additional_worsen": float(additional_worsen),
+        "active_band_lower": float(active_band_lower),
+        "active_band_upper": float(active_band_upper),
         "emergency_pct": float(emergency_pct),
         "absorption_score": int(absorption_score),
+        "strong_absorption_min_score": int(strong_absorption_min_score),
+        "strong_absorption_support": bool(strong_absorption_support),
         "positive_micro": bool(positive_micro),
+        "thesis_invalidated": bool(thesis_invalidated),
+        "large_sell_print_detected": bool(large_sell),
+        "buy_pressure_10t": float(buy_pressure),
+        "tick_acceleration_ratio": float(tick_accel),
         "feature_valid": bool(feature_valid),
         "tick_aggressor_trusted_count": _safe_int(features.get("tick_aggressor_trusted_count"), 0),
         "tick_aggressor_pressure_usable": bool(pressure_usable),
@@ -13130,6 +13148,8 @@ def _build_soft_stop_dynamic_grace_decision(
         "reversal_feature_source_quality": features.get("reversal_feature_source_quality", "-"),
         "reversal_feature_stale_reason": features.get("reversal_feature_stale_reason", "-"),
         "ai_score_usable": ai_score_usable,
+        "ai_score_prior_pass": bool(ai_score_prior_pass),
+        "min_ai_score": float(min_ai_score),
         "ai_score_source": holding_score_ctx.get("source", "-"),
         "ai_score_data_quality": holding_score_ctx.get("data_quality", "-"),
         "ai_score_excluded_reason": holding_score_ctx.get("excluded_reason", "-"),
@@ -31996,7 +32016,27 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 and profit_rate > soft_stop_emergency_pct
                 and profit_rate >= (float(dynamic_stop_pct) - soft_stop_grace_extend_buffer_pct)
             )
-            soft_stop_dynamic_grace_within = bool(soft_stop_dynamic_grace_decision.get("should_defer"))
+            soft_stop_dynamic_modifier_veto_reasons = []
+            if not soft_stop_grace_enabled:
+                soft_stop_dynamic_modifier_veto_reasons.append("micro_grace_authority_disabled")
+            if soft_stop_grace_blocked_by_scale_in_state:
+                soft_stop_dynamic_modifier_veto_reasons.append("scale_in_state_blocked")
+            if soft_stop_grace_elapsed_sec < soft_stop_effective_grace_sec:
+                soft_stop_dynamic_modifier_veto_reasons.append("base_micro_grace_active")
+            if bool(defensive_unfilled_recheck.get("active")):
+                soft_stop_dynamic_modifier_veto_reasons.append("defensive_avg_down_recheck_active")
+            soft_stop_dynamic_grace_within = (
+                bool(soft_stop_dynamic_grace_decision.get("should_defer"))
+                and not soft_stop_dynamic_modifier_veto_reasons
+            )
+            if (
+                soft_stop_dynamic_grace_decision.get("should_defer")
+                and soft_stop_dynamic_modifier_veto_reasons
+            ):
+                soft_stop_dynamic_grace_decision = dict(soft_stop_dynamic_grace_decision)
+                soft_stop_dynamic_grace_decision["skip_reason"] = ",".join(
+                    soft_stop_dynamic_modifier_veto_reasons
+                )
             if soft_stop_dynamic_grace_within:
                 dynamic_started_at = _safe_float(
                     stock.get("soft_stop_dynamic_grace_started_at"), 0.0
@@ -32032,6 +32072,18 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     stock,
                     code,
                     "soft_stop_dynamic_grace",
+                    soft_stop_final_action="confirm_20s",
+                    soft_stop_extension_source="dynamic_modifier",
+                    soft_stop_extension_sec=int(
+                        soft_stop_dynamic_grace_decision.get("grace_sec", 0) or 0
+                    ),
+                    soft_stop_extension_veto_reasons="-",
+                    soft_stop_absorption_score=int(soft_stop_dynamic_grace_decision.get("absorption_score", 0) or 0),
+                    soft_stop_thesis_invalidated=bool(
+                        soft_stop_dynamic_grace_decision.get("thesis_invalidated", False)
+                    ),
+                    soft_stop_dynamic_modifier_applied=True,
+                    soft_stop_dynamic_modifier_skip_reason="-",
                     soft_stop_dynamic_grace_applied=True,
                     soft_stop_dynamic_grace_reason=soft_stop_dynamic_grace_decision.get("reason", "-"),
                     soft_stop_dynamic_grace_sec=int(
@@ -32050,6 +32102,8 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     soft_stop_dynamic_grace_data_window_start=soft_stop_dynamic_grace_decision.get("data_window_start"),
                     soft_stop_dynamic_grace_data_window_end=soft_stop_dynamic_grace_decision.get("data_window_end"),
                     soft_stop_dynamic_grace_ai_score_usable=soft_stop_dynamic_grace_decision.get("ai_score_usable", "-"),
+                    soft_stop_dynamic_grace_ai_score_prior_pass=soft_stop_dynamic_grace_decision.get("ai_score_prior_pass", "-"),
+                    soft_stop_dynamic_grace_strong_absorption_support=soft_stop_dynamic_grace_decision.get("strong_absorption_support", "-"),
                     soft_stop_dynamic_grace_ai_score_source=soft_stop_dynamic_grace_decision.get("ai_score_source", "-"),
                     soft_stop_dynamic_grace_ai_score_data_quality=soft_stop_dynamic_grace_decision.get("ai_score_data_quality", "-"),
                     soft_stop_dynamic_grace_ai_score_excluded_reason=soft_stop_dynamic_grace_decision.get("ai_score_excluded_reason", "-"),
@@ -32196,42 +32250,6 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     ),
                 )
             soft_stop_expert_within_grace = False
-            if soft_stop_expert_decision.get("should_extend") and not soft_stop_within_grace:
-                expert_started_at = float(
-                    stock.get('soft_stop_absorption_extension_started_at', 0.0) or 0.0
-                )
-                expert_extension_sec = _safe_int(soft_stop_expert_decision.get("extension_sec"), 0)
-                if expert_started_at <= 0:
-                    expert_started_at = now_ts
-                    expert_extension_count = _safe_int(
-                        stock.get('soft_stop_absorption_extension_count'), 0
-                    ) + 1
-                    _mutate_stock_state(
-                        stock,
-                        set_fields={
-                            'soft_stop_absorption_extension_started_at': expert_started_at,
-                            'soft_stop_absorption_extension_used': True,
-                            'soft_stop_absorption_extension_count': expert_extension_count,
-                            'soft_stop_micro_grace_extension_used': True,
-                        },
-                    )
-                expert_elapsed_sec = max(0, int(now_ts - expert_started_at))
-                soft_stop_expert_within_grace = expert_extension_sec > 0 and expert_elapsed_sec < expert_extension_sec
-                if soft_stop_expert_within_grace:
-                    _log_holding_pipeline(
-                        stock,
-                        code,
-                        "soft_stop_absorption_extend",
-                        profit_rate=f"{profit_rate:+.2f}",
-                        soft_stop_pct=f"{dynamic_stop_pct:+.2f}",
-                        emergency_pct=f"{soft_stop_emergency_pct:+.2f}",
-                        elapsed_sec=soft_stop_grace_elapsed_sec,
-                        expert_elapsed_sec=expert_elapsed_sec,
-                        extension_sec=expert_extension_sec,
-                        absorption_score=soft_stop_expert_decision.get("absorption_score", 0),
-                        thesis_invalidated=bool(soft_stop_expert_decision.get("thesis_invalidated")),
-                        recovery_prob_shadow=f"{soft_stop_expert_decision.get('recovery_prob_shadow', 0.0):.3f}",
-                    )
             if (
                 soft_stop_expert_decision.get("enabled")
                 and soft_stop_expert_decision.get("active_after_time_gate")
@@ -32340,10 +32358,49 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     **_build_observation_contract_fields("ops_volume_diagnostic"),
                 )
             if soft_stop_within_grace:
+                if soft_stop_dynamic_grace_within:
+                    soft_stop_final_action = "confirm_20s"
+                    soft_stop_extension_source = "dynamic_modifier"
+                    soft_stop_extension_sec = int(
+                        soft_stop_dynamic_grace_decision.get("grace_sec", 0) or 0
+                    )
+                elif soft_stop_extension_within_grace:
+                    soft_stop_final_action = "confirm_20s"
+                    soft_stop_extension_source = "micro_grace_extension"
+                    soft_stop_extension_sec = int(soft_stop_grace_extend_sec or 0)
+                elif bool(defensive_unfilled_recheck.get("active")):
+                    soft_stop_final_action = "avg_down_intercepted"
+                    soft_stop_extension_source = "defensive_avg_down_unfilled_recheck"
+                    soft_stop_extension_sec = int(defensive_unfilled_recheck.get("recheck_sec") or 0)
+                elif whipsaw_decision.get("should_confirm"):
+                    soft_stop_final_action = "confirm_20s"
+                    soft_stop_extension_source = "whipsaw_confirmation"
+                    soft_stop_extension_sec = int(whipsaw_decision.get("confirm_sec", 0) or 0)
+                else:
+                    soft_stop_final_action = "within_base_grace"
+                    soft_stop_extension_source = "base_micro_grace"
+                    soft_stop_extension_sec = int(soft_stop_grace_sec or 0)
+                soft_stop_extension_veto_reasons = (
+                    ",".join(soft_stop_dynamic_modifier_veto_reasons)
+                    if soft_stop_dynamic_modifier_veto_reasons
+                    else "-"
+                )
                 _log_holding_pipeline(
                     stock,
                     code,
                     "soft_stop_micro_grace",
+                    soft_stop_final_action=soft_stop_final_action,
+                    soft_stop_extension_source=soft_stop_extension_source,
+                    soft_stop_extension_sec=soft_stop_extension_sec,
+                    soft_stop_extension_veto_reasons=soft_stop_extension_veto_reasons,
+                    soft_stop_absorption_score=soft_stop_expert_decision.get("absorption_score", 0),
+                    soft_stop_thesis_invalidated=bool(
+                        soft_stop_expert_decision.get("thesis_invalidated")
+                    ),
+                    soft_stop_dynamic_modifier_applied=bool(soft_stop_dynamic_grace_within),
+                    soft_stop_dynamic_modifier_skip_reason=soft_stop_dynamic_grace_decision.get(
+                        "skip_reason", "-"
+                    ),
                     profit_rate=f"{profit_rate:+.2f}",
                     soft_stop_pct=f"{dynamic_stop_pct:+.2f}",
                     emergency_pct=f"{soft_stop_emergency_pct:+.2f}",
@@ -32368,6 +32425,8 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     ),
                     soft_stop_dynamic_grace_skip_reason=soft_stop_dynamic_grace_decision.get("skip_reason", "-"),
                     soft_stop_dynamic_grace_ai_score_usable=soft_stop_dynamic_grace_decision.get("ai_score_usable", "-"),
+                    soft_stop_dynamic_grace_ai_score_prior_pass=soft_stop_dynamic_grace_decision.get("ai_score_prior_pass", "-"),
+                    soft_stop_dynamic_grace_strong_absorption_support=soft_stop_dynamic_grace_decision.get("strong_absorption_support", "-"),
                     soft_stop_dynamic_grace_ai_score_source=soft_stop_dynamic_grace_decision.get("ai_score_source", "-"),
                     soft_stop_dynamic_grace_ai_score_data_quality=soft_stop_dynamic_grace_decision.get("ai_score_data_quality", "-"),
                     soft_stop_dynamic_grace_ai_score_excluded_reason=soft_stop_dynamic_grace_decision.get("ai_score_excluded_reason", "-"),
@@ -32385,6 +32444,23 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         stock,
                         code,
                         "soft_stop_dynamic_grace_exit",
+                        soft_stop_final_action=(
+                            "source_quality_exit"
+                            if soft_stop_dynamic_grace_decision.get("skip_reason")
+                            == "source_or_quote_stale"
+                            else "exit_now"
+                        ),
+                        soft_stop_extension_source="-",
+                        soft_stop_extension_sec=0,
+                        soft_stop_extension_veto_reasons=soft_stop_dynamic_grace_decision.get("skip_reason", "-"),
+                        soft_stop_absorption_score=int(
+                            soft_stop_dynamic_grace_decision.get("absorption_score", 0) or 0
+                        ),
+                        soft_stop_thesis_invalidated=bool(
+                            soft_stop_dynamic_grace_decision.get("thesis_invalidated", False)
+                        ),
+                        soft_stop_dynamic_modifier_applied=False,
+                        soft_stop_dynamic_modifier_skip_reason=soft_stop_dynamic_grace_decision.get("skip_reason", "-"),
                         soft_stop_dynamic_grace_applied=False,
                         soft_stop_dynamic_grace_skip_reason=soft_stop_dynamic_grace_decision.get("skip_reason", "-"),
                         soft_stop_dynamic_grace_reason=soft_stop_dynamic_grace_decision.get("reason", "-"),
@@ -32401,6 +32477,8 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         soft_stop_dynamic_grace_data_window_start=soft_stop_dynamic_grace_decision.get("data_window_start"),
                         soft_stop_dynamic_grace_data_window_end=soft_stop_dynamic_grace_decision.get("data_window_end"),
                         soft_stop_dynamic_grace_ai_score_usable=soft_stop_dynamic_grace_decision.get("ai_score_usable", "-"),
+                        soft_stop_dynamic_grace_ai_score_prior_pass=soft_stop_dynamic_grace_decision.get("ai_score_prior_pass", "-"),
+                        soft_stop_dynamic_grace_strong_absorption_support=soft_stop_dynamic_grace_decision.get("strong_absorption_support", "-"),
                         soft_stop_dynamic_grace_ai_score_source=soft_stop_dynamic_grace_decision.get("ai_score_source", "-"),
                         soft_stop_dynamic_grace_ai_score_data_quality=soft_stop_dynamic_grace_decision.get("ai_score_data_quality", "-"),
                         soft_stop_dynamic_grace_ai_score_excluded_reason=soft_stop_dynamic_grace_decision.get("ai_score_excluded_reason", "-"),

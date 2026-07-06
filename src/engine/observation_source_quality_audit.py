@@ -1316,6 +1316,14 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
     ),
     "soft_stop_dynamic_grace": StageContract(
         required_fields=(
+            "soft_stop_final_action",
+            "soft_stop_extension_source",
+            "soft_stop_extension_sec",
+            "soft_stop_extension_veto_reasons",
+            "soft_stop_absorption_score",
+            "soft_stop_thesis_invalidated",
+            "soft_stop_dynamic_modifier_applied",
+            "soft_stop_dynamic_modifier_skip_reason",
             "soft_stop_dynamic_grace_applied",
             "soft_stop_dynamic_grace_reason",
             "soft_stop_dynamic_grace_sec",
@@ -1333,6 +1341,14 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
     ),
     "soft_stop_dynamic_grace_exit": StageContract(
         required_fields=(
+            "soft_stop_final_action",
+            "soft_stop_extension_source",
+            "soft_stop_extension_sec",
+            "soft_stop_extension_veto_reasons",
+            "soft_stop_absorption_score",
+            "soft_stop_thesis_invalidated",
+            "soft_stop_dynamic_modifier_applied",
+            "soft_stop_dynamic_modifier_skip_reason",
             "soft_stop_dynamic_grace_applied",
             "soft_stop_dynamic_grace_skip_reason",
             "soft_stop_dynamic_grace_reason",

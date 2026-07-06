@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from src.engine.scalping.rising_missed_one_share_entry import (
+    BLOCK_ENTRY_AI_NOT_EVALUATED,
     RISING_MISSED_CLASS_ACTIONABLE_MAJOR,
     RISING_MISSED_CLASS_INTENDED_GUARD_PRESERVED,
     RISING_MISSED_CLASS_NOT_RISING,
@@ -173,6 +174,25 @@ STRENGTH_HISTORY_COUNT_KEYS = (
     "refresh_history_count",
 )
 
+ENTRY_AI_ACTION_FIELD_KEYS = (
+    "rising_missed_entry_ai_action",
+    "entry_ai_action",
+    "ai_action",
+    "action",
+    "last_ai_action",
+    "current_ai_action",
+    "last_watching_ai_action",
+)
+
+ENTRY_AI_ACTION_PRIORITY_STAGES = (
+    "order_bundle_submitted",
+    "scalp_entry_action_decision_snapshot",
+    "ai_confirmed",
+    "blocked_ai_score",
+    "ai_confirmed_terminal_no_budget",
+    "first_ai_wait",
+)
+
 
 def _safe_float(value: Any, default: float | None = None) -> float | None:
     try:
@@ -328,6 +348,42 @@ def _boolish(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _entry_ai_action_from_fields(fields: dict[str, Any]) -> tuple[str, str]:
+    for key in ENTRY_AI_ACTION_FIELD_KEYS:
+        value = fields.get(key)
+        text = str(value or "").strip()
+        if text:
+            return text, key
+    return "", ""
+
+
+def _latest_entry_ai_action_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    for preferred_stage in ENTRY_AI_ACTION_PRIORITY_STAGES:
+        for row in reversed(rows):
+            if str(row.get("stage") or "") != preferred_stage:
+                continue
+            fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
+            action, field = _entry_ai_action_from_fields(fields)
+            if action:
+                return {
+                    "action": action,
+                    "field": field,
+                    "stage": preferred_stage,
+                    "emitted_at": _event_time(row),
+                }
+    for row in reversed(rows):
+        fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
+        action, field = _entry_ai_action_from_fields(fields)
+        if action:
+            return {
+                "action": action,
+                "field": field,
+                "stage": str(row.get("stage") or ""),
+                "emitted_at": _event_time(row),
+            }
+    return {"action": "-", "field": "missing", "stage": "missing", "emitted_at": ""}
 
 
 def _median(values: list[float]) -> float | None:
@@ -1229,6 +1285,7 @@ def _summarize_code(
     latest_budget_deferred = budget_deferred_rows[-1] if budget_deferred_rows else {}
     queue_counts = {stage: stage_counts.get(stage, 0) for stage in QUEUE_STAGES if stage_counts.get(stage, 0)}
     latest_ai = ai_rows[-1] if ai_rows else {}
+    entry_ai_snapshot = _latest_entry_ai_action_snapshot(rows)
     max_delta = _max_delta(rows)
     return {
         "stock_code": code,
@@ -1242,6 +1299,12 @@ def _summarize_code(
         "ai_confirmed_count": len(ai_rows),
         "latest_ai_action": _field(latest_ai, "action") if latest_ai else "",
         "latest_ai_score": _safe_float(_field(latest_ai, "ai_score")) if latest_ai else None,
+        "rising_missed_entry_ai_action": entry_ai_snapshot["action"],
+        "rising_missed_entry_ai_action_source": entry_ai_snapshot["field"],
+        "rising_missed_entry_ai_action_stage": entry_ai_snapshot["stage"],
+        "rising_missed_entry_ai_action_emitted_at": entry_ai_snapshot["emitted_at"],
+        "rising_missed_entry_ai_not_evaluated_excluded": str(entry_ai_snapshot["action"]).strip().lower()
+        == "not_evaluated",
         "latest_entry_score_threshold": _safe_float(_field(latest_ai, "entry_score_threshold"))
         if latest_ai
         else None,
@@ -1743,6 +1806,7 @@ def _rising_missed_classification_for_item(item: dict[str, Any], *, rising_thres
         or int((item.get("runtime_attach_identity_mismatch") or {}).get("count") or 0) > 0
         or int(quality.get("event_count") or 0) >= ZERO_HISTORY_WORKORDER_MIN_EVENTS
         or blocker_class in {"source_freshness_blocker", "source_freshness_evictable"}
+        or bool(item.get("rising_missed_entry_ai_not_evaluated_excluded"))
     )
     intended_guard_preserved = (
         blocker_class in {"submit_hard_guard", "intended_guard"}
@@ -1771,7 +1835,9 @@ def _rising_missed_classification_for_item(item: dict[str, Any], *, rising_thres
     )
     return {
         "rising_missed_class": classification.rising_missed_class,
-        "rising_missed_class_reason": classification.reason,
+        "rising_missed_class_reason": BLOCK_ENTRY_AI_NOT_EVALUATED
+        if classification.rising_missed and item.get("rising_missed_entry_ai_not_evaluated_excluded")
+        else classification.reason,
         "rising_missed_one_share_eligible": classification.one_share_eligible,
         "rising_missed_class_flags": {
             RISING_MISSED_CLASS_SOURCE_QUALITY_EXCLUDED: source_quality_excluded,
@@ -2040,6 +2106,16 @@ def build_report(
             RISING_MISSED_CLASS_NOT_RISING,
             RISING_MISSED_CLASS_SUBMITTED_RESOLVED,
         }
+        and not item.get("rising_missed_entry_ai_not_evaluated_excluded")
+    ]
+    rising_missed_ai_not_evaluated_excluded = [
+        item
+        for item in summaries
+        if item.get("rising_missed_class") not in {
+            RISING_MISSED_CLASS_NOT_RISING,
+            RISING_MISSED_CLASS_SUBMITTED_RESOLVED,
+        }
+        and item.get("rising_missed_entry_ai_not_evaluated_excluded")
     ]
     falling_submitted = [
         item
@@ -2202,6 +2278,22 @@ def build_report(
                     "bot_restart_trigger",
                 ],
             },
+            "rising_missed_ai_not_evaluated_exclusion": {
+                "metric_role": "source_quality_gate",
+                "decision_authority": "exclude_not_evaluated_entry_ai_from_rising_missed_selection",
+                "window_policy": "same_day_intraday_entry_snapshot",
+                "sample_floor": "1_not_evaluated_entry_ai_snapshot",
+                "primary_decision_metric": False,
+                "source_quality_gate": "submit_or_latest_entry_snapshot_ai_action_available",
+                "forbidden_uses": [
+                    "threshold_relaxation",
+                    "broker_guard_bypass",
+                    "stale_submit_bypass",
+                    "provider_route_change",
+                    "bot_restart_trigger",
+                    "real_order_approval",
+                ],
+            },
             "blocker_taxonomy": {
                 "metric_role": "funnel_count",
                 "decision_authority": "diagnostic_taxonomy_only",
@@ -2273,6 +2365,12 @@ def build_report(
                 1 for item in summaries if not item.get("promoted_in_event_window")
             ),
             "rising_missed_buy_count": len(rising_missed),
+            "rising_missed_ai_not_evaluated_excluded_count": len(
+                rising_missed_ai_not_evaluated_excluded
+            ),
+            "rising_missed_ai_not_evaluated_excluded_symbols": [
+                item.get("stock_code") or "" for item in rising_missed_ai_not_evaluated_excluded
+            ],
             "falling_real_submitted_count": len(falling_submitted),
             "real_submit_symbol_count": sum(1 for item in summaries if item["real_submit_count"] > 0),
             "excluded_analysis_scope": "sim_swing_and_rising_missed_forced_one_share_events",
@@ -2357,6 +2455,11 @@ def build_report(
         "rising_missed_buy": sorted(
             rising_missed,
             key=_selection_prior_sort_key,
+        ),
+        "rising_missed_ai_not_evaluated_excluded": sorted(
+            rising_missed_ai_not_evaluated_excluded,
+            key=lambda item: item["max_price_delta_since_first_seen_pct"] or -999.0,
+            reverse=True,
         ),
         "falling_real_submitted": sorted(
             falling_submitted,

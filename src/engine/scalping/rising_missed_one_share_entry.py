@@ -14,6 +14,7 @@ BLOCK_OPEN_PENDING = "open_pending_entry_order"
 BLOCK_ALREADY_HOLDING = "already_holding"
 BLOCK_PRICE_ABOVE_CAP = "price_above_one_share_entry_cap"
 BLOCK_UPPER_LIMIT_PROXIMITY = "upper_limit_proximity_entry_block"
+BLOCK_ENTRY_AI_NOT_EVALUATED = "entry_ai_action_not_evaluated"
 MAX_ONE_SHARE_ENTRY_PRICE_KRW = 1_000_000
 DEFAULT_RISING_MISSED_UPPER_LIMIT_EXCLUDE_PCT = 26.0
 DEFAULT_UPPER_LIMIT_PROXIMITY_BLOCK_PCT = 27.0
@@ -93,6 +94,27 @@ def _prior_log_fields(stock: dict[str, Any]) -> dict[str, Any]:
         or prior.get("reason")
         or "prior_not_attached",
     }
+
+
+def _entry_ai_action_for_rising_missed(stock: dict[str, Any]) -> tuple[str, str]:
+    for key in (
+        "rising_missed_entry_ai_action",
+        "entry_ai_action",
+        "ai_action",
+        "last_ai_action",
+        "current_ai_action",
+        "last_watching_ai_action",
+    ):
+        value = stock.get(key)
+        text = str(value or "").strip()
+        if text:
+            return text, key
+    return "-", "missing"
+
+
+def _entry_ai_action_not_evaluated(stock: dict[str, Any]) -> bool:
+    action, _source = _entry_ai_action_for_rising_missed(stock)
+    return action.strip().lower() == "not_evaluated"
 
 
 def _positive_delta_pct(stock: dict[str, Any], explicit_delta_pct: Any = None) -> float:
@@ -231,6 +253,14 @@ def evaluate_rising_missed_one_share_entry(
         "rising_missed_one_share_entry_upper_limit_exclude_enabled": bool(upper_limit_exclude_enabled),
     }
     base_fields.update(_prior_log_fields(stock))
+    entry_ai_action, entry_ai_action_source = _entry_ai_action_for_rising_missed(stock)
+    base_fields.update(
+        {
+            "rising_missed_entry_ai_action": entry_ai_action,
+            "rising_missed_entry_ai_action_source": entry_ai_action_source,
+            "rising_missed_entry_ai_not_evaluated_excluded": _entry_ai_action_not_evaluated(stock),
+        }
+    )
     classification = classify_rising_missed_candidate(
         max_delta_pct=delta_pct,
         real_submit_count=stock.get("real_submit_count") or stock.get("actual_order_submit_count") or 0,
@@ -275,6 +305,20 @@ def evaluate_rising_missed_one_share_entry(
         return RisingMissedOneShareDecision(
             allowed=False,
             reason=BLOCK_NOT_CANDIDATE,
+            positive_delta_pct=delta_pct,
+            log_fields=base_fields,
+        )
+    if _entry_ai_action_not_evaluated(stock):
+        base_fields.update(
+            {
+                "rising_missed_class": RISING_MISSED_CLASS_SOURCE_QUALITY_EXCLUDED,
+                "rising_missed_class_reason": BLOCK_ENTRY_AI_NOT_EVALUATED,
+                "rising_missed_one_share_eligible": False,
+            }
+        )
+        return RisingMissedOneShareDecision(
+            allowed=False,
+            reason=BLOCK_ENTRY_AI_NOT_EVALUATED,
             positive_delta_pct=delta_pct,
             log_fields=base_fields,
         )

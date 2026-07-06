@@ -3652,6 +3652,14 @@ def test_observation_source_quality_audit_blocks_soft_stop_dynamic_grace_without
             _event(
                 "soft_stop_dynamic_grace",
                 {
+                    "soft_stop_final_action": "confirm_20s",
+                    "soft_stop_extension_source": "dynamic_modifier",
+                    "soft_stop_extension_sec": 20,
+                    "soft_stop_extension_veto_reasons": "-",
+                    "soft_stop_absorption_score": 3,
+                    "soft_stop_thesis_invalidated": False,
+                    "soft_stop_dynamic_modifier_applied": True,
+                    "soft_stop_dynamic_modifier_skip_reason": "-",
                     "soft_stop_dynamic_grace_applied": True,
                     "soft_stop_dynamic_grace_reason": "base_micro_confirmed_soft_stop_dynamic_grace",
                     "soft_stop_dynamic_grace_sec": 45,

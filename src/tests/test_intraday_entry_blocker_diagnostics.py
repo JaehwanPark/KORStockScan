@@ -146,6 +146,101 @@ def test_build_report_uses_one_pct_rising_missed_threshold(tmp_path):
     assert {item["stock_code"] for item in report["promoted_symbols"]} == {"000990", "001000"}
 
 
+def test_build_report_excludes_not_evaluated_entry_ai_from_rising_missed(tmp_path):
+    path = tmp_path / "pipeline_events_2026-06-23.jsonl"
+    rows = [
+        _event(
+            "004990",
+            "금호건설",
+            "scalping_scanner_candidate_promoted",
+            {"price_delta_since_first_seen_pct": "2.30"},
+            emitted_at="2026-06-23T09:00:00",
+        ),
+        _event(
+            "004990",
+            "금호건설",
+            "ai_confirmed",
+            {"price_delta_since_first_seen_pct": "2.30", "action": "not_evaluated"},
+            emitted_at="2026-06-23T09:00:01",
+        ),
+        _event(
+            "004990",
+            "금호건설",
+            "blocked_strength_momentum",
+            {"price_delta_since_first_seen_pct": "2.30", "reason": "below_buy_ratio"},
+            emitted_at="2026-06-23T09:00:02",
+        ),
+        _event(
+            "099990",
+            "제출스냅샷",
+            "scalping_scanner_candidate_promoted",
+            {"price_delta_since_first_seen_pct": "3.10"},
+            emitted_at="2026-06-23T09:01:00",
+        ),
+        _event(
+            "099990",
+            "제출스냅샷",
+            "ai_confirmed",
+            {"price_delta_since_first_seen_pct": "3.10", "action": "WAIT"},
+            emitted_at="2026-06-23T09:01:01",
+        ),
+        _event(
+            "099990",
+            "제출스냅샷",
+            "order_bundle_submitted",
+            {"price_delta_since_first_seen_pct": "3.10", "ai_action": "not_evaluated"},
+            emitted_at="2026-06-23T09:01:02",
+        ),
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(target_date="2026-06-23", pipeline_path=path, generated_at="fixed")
+
+    assert report["summary"]["rising_missed_buy_count"] == 0
+    assert report["summary"]["rising_missed_ai_not_evaluated_excluded_count"] == 2
+    assert set(report["summary"]["rising_missed_ai_not_evaluated_excluded_symbols"]) == {
+        "004990",
+        "099990",
+    }
+    excluded = {item["stock_code"]: item for item in report["rising_missed_ai_not_evaluated_excluded"]}
+    assert excluded["004990"]["rising_missed_class"] == "source_quality_excluded"
+    assert excluded["004990"]["rising_missed_class_reason"] == "entry_ai_action_not_evaluated"
+    assert excluded["004990"]["rising_missed_one_share_eligible"] is False
+    assert excluded["004990"]["rising_missed_entry_ai_action_stage"] == "ai_confirmed"
+    assert excluded["099990"]["rising_missed_entry_ai_action_stage"] == "order_bundle_submitted"
+    assert excluded["099990"]["rising_missed_entry_ai_action_source"] == "ai_action"
+
+
+def test_build_report_not_evaluated_does_not_promote_below_threshold_to_rising_missed(tmp_path):
+    path = tmp_path / "pipeline_events_2026-06-23.jsonl"
+    rows = [
+        _event(
+            "004990",
+            "금호건설",
+            "scalping_scanner_candidate_promoted",
+            {"price_delta_since_first_seen_pct": "0.50"},
+            emitted_at="2026-06-23T09:00:00",
+        ),
+        _event(
+            "004990",
+            "금호건설",
+            "ai_confirmed",
+            {"price_delta_since_first_seen_pct": "0.50", "action": "not_evaluated"},
+            emitted_at="2026-06-23T09:00:01",
+        ),
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(target_date="2026-06-23", pipeline_path=path, generated_at="fixed")
+
+    assert report["summary"]["rising_missed_buy_count"] == 0
+    assert report["summary"]["rising_missed_ai_not_evaluated_excluded_count"] == 0
+    item = report["promoted_symbols"][0]
+    assert item["rising_missed_class"] == "not_rising_missed"
+    assert item["rising_missed_class_reason"] == "below_rising_missed_threshold"
+    assert item["rising_missed_entry_ai_not_evaluated_excluded"] is True
+
+
 def test_build_report_excludes_runtime_attach_identity_mismatch_from_one_share(tmp_path):
     path = tmp_path / "pipeline_events_2026-06-23.jsonl"
     rows = [
