@@ -231,17 +231,6 @@ class OpenAIWSRequestIdMismatchError(RuntimeError):
     pass
 
 
-def _is_recoverable_openai_ws_close(exc: Exception) -> bool:
-    """HTTP fallback 성공 시 error로 올리지 않아도 되는 정상 WS 종료를 식별한다."""
-    error_type = type(exc).__name__
-    message = str(exc).lower()
-    if error_type == "ConnectionClosedOK":
-        return True
-    if "no close frame received or sent" in message:
-        return True
-    return "received 1000 (ok)" in message and "sent 1000 (ok)" in message
-
-
 @dataclass
 class OpenAIResponseRequest:
     prompt: str | None
@@ -2034,17 +2023,17 @@ class GPTSniperEngine:
                 getattr(
                     TRADING_RULES,
                     "OPENAI_RESPONSES_WS_HTTP_FALLBACK_RESERVE_MS",
-                    1500,
+                    2000,
                 )
-                or 1500
+                or 2000
             ),
         )
+        min_ws_attempt_ms = min(700, max(50, remaining_ms // 2))
         reserve_ms = min(
             configured_reserve_ms,
-            max(1, remaining_ms // 2),
-            max(1, remaining_ms - 50),
+            max(1, remaining_ms - min_ws_attempt_ms),
         )
-        attempt_ms = min(configured_ws_ms, max(50, remaining_ms - reserve_ms))
+        attempt_ms = min(configured_ws_ms, max(min_ws_attempt_ms, remaining_ms - reserve_ms))
         if attempt_ms >= remaining_ms:
             return request
         metadata = dict(request.metadata or {})
@@ -2203,12 +2192,7 @@ class GPTSniperEngine:
                     }
                 )
                 fallback_msg = f"⚠️ [OpenAI WS fallback] {context_name}: {e}"
-                if bool(transport_meta.get("openai_ws_http_fallback_fail_closed")):
-                    log_info(fallback_msg)
-                elif _is_recoverable_openai_ws_close(e):
-                    log_info(fallback_msg)
-                else:
-                    log_error(fallback_msg)
+                log_info(fallback_msg)
         else:
             http_lock_wait_started = time.perf_counter()
             with self.api_call_lock:

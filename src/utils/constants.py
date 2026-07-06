@@ -788,7 +788,7 @@ class TradingConfig:
     OPENAI_RESPONSES_WS_ENABLED: bool = False  # Responses WebSocket shadow-first 토글
     OPENAI_RESPONSES_WS_POOL_SIZE: int = 2  # persistent Responses WebSocket worker 수
     OPENAI_RESPONSES_WS_TIMEOUT_MS: int = 700  # hot path 판단 timeout
-    OPENAI_RESPONSES_WS_HTTP_FALLBACK_RESERVE_MS: int = 1500  # WS 실패 후 HTTP fallback에 남길 목표 예산
+    OPENAI_RESPONSES_WS_HTTP_FALLBACK_RESERVE_MS: int = 2000  # WS 실패 후 HTTP fallback에 남길 목표 예산
     OPENAI_ANALYZE_TARGET_TIMEOUT_MS: int = 3000  # entry/analyze_target live decision timeout
     OPENAI_ENTRY_PRICE_TIMEOUT_MS: int = 7000  # entry_price OpenAI route timeout; Bedrock has provider timeout
     OPENAI_HOLDING_SCORE_TIMEOUT_MS: int = 7000  # holding_score_v2 position-state score timeout
