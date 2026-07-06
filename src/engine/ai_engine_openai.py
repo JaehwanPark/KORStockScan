@@ -156,6 +156,7 @@ OPENAI_METADATA_PRIORITY_KEYS = (
     "original_endpoint_name",
 )
 OPENAI_RESPONSE_SCHEMA_REGISTRY = AI_RESPONSE_SCHEMA_REGISTRY
+OPENAI_SDK_MAX_RETRIES = 0
 OPENAI_PROMPT_CONTRACT_MARKER = "OPENAI_PROMPT_CONTRACT_V1"
 OPENAI_PROMPT_CONTRACT_HEADER = f"""
 [{OPENAI_PROMPT_CONTRACT_MARKER}]
@@ -341,7 +342,7 @@ class OpenAIResponsesWSWorker:
         self._queue: queue.Queue[OpenAIWSJob | None] = queue.Queue()
         self._stop_event = threading.Event()
         self._connection = None
-        self._client = OpenAI(api_key=self.api_key)
+        self._client = OpenAI(api_key=self.api_key, max_retries=OPENAI_SDK_MAX_RETRIES)
         self._thread = threading.Thread(target=self._run, daemon=True, name=f"openai-responses-ws-{worker_id}")
         self._thread.start()
 
@@ -580,7 +581,7 @@ class GPTSniperEngine:
     def _rotate_client(self):
         """OpenAI API 클라이언트 교체"""
         self.current_key = next(self.key_cycle)
-        self.client = OpenAI(api_key=self.current_key)
+        self.client = OpenAI(api_key=self.current_key, max_retries=OPENAI_SDK_MAX_RETRIES)
         try:
             self.current_api_key_index = self.api_keys.index(self.current_key)
         except ValueError:
@@ -1926,6 +1927,7 @@ class GPTSniperEngine:
                         "openai_http_provider_ms": provider_ms,
                         "openai_http_provider_total_ms": provider_total_ms,
                         "openai_http_attempt_count": attempt + 1,
+                        "openai_http_sdk_max_retries": OPENAI_SDK_MAX_RETRIES,
                     },
                 )
             except RateLimitError as e:
@@ -1961,7 +1963,17 @@ class GPTSniperEngine:
                     invalid_prompt_retried = True
                     request = self._build_invalid_prompt_retry_request(request)
                     continue
-                if self._is_openai_timeout_like_error(e) or any(
+                if last_error_timeout_like:
+                    remaining = request.remaining_timeout_sec()
+                    if remaining <= 0.05:
+                        break
+                    log_info(
+                        f"⚠️ [OpenAI timeout retry] {request.context_name} | "
+                        f"remaining_budget_ms={int(remaining * 1000)} ({attempt+1}/{len(self.api_keys)})"
+                    )
+                    time.sleep(min(0.8, max(0.0, remaining - 0.05)))
+                    continue
+                if any(
                     x in last_error
                     for x in ["429", "quota", "503", "unavailable", "server", "too_many_requests"]
                 ):
@@ -1995,6 +2007,7 @@ class GPTSniperEngine:
                 "openai_http_attempt_count": attempts_made,
                 "openai_http_error_type": last_error_type,
                 "openai_http_timeout_budget_exhausted": bool(last_error_timeout_like),
+                "openai_http_sdk_max_retries": OPENAI_SDK_MAX_RETRIES,
             },
         )
 

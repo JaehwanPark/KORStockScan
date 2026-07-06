@@ -8,8 +8,10 @@ from src.engine.ai_engine_openai import (
     GPTSniperEngine,
     OPENAI_PROMPT_CONTRACT_MARKER,
     OPENAI_RESPONSE_SCHEMA_REGISTRY,
+    OPENAI_SDK_MAX_RETRIES,
     OpenAIResponseRequest,
     OpenAIResponsesWSPool,
+    OpenAIResponsesWSWorker,
     OpenAIResponsesHTTPError,
     OpenAITransportResult,
     OpenAIWSRequestIdMismatchError,
@@ -88,6 +90,27 @@ def _sample_ws_data():
             ],
         },
     }
+
+
+def test_openai_runtime_clients_disable_sdk_retries(monkeypatch):
+    created_clients = []
+
+    class _FakeOpenAI:
+        def __init__(self, **kwargs):
+            created_clients.append(kwargs)
+            self.responses = SimpleNamespace(connect=lambda: None)
+
+    monkeypatch.setattr(openai_module, "OpenAI", _FakeOpenAI)
+
+    GPTSniperEngine(["main-key"], announce_startup=False)
+    worker = OpenAIResponsesWSWorker(worker_id=0, api_key="ws-key", metrics_callback=None)
+    worker.close()
+
+    assert created_clients
+    assert [client["max_retries"] for client in created_clients] == [
+        OPENAI_SDK_MAX_RETRIES,
+        OPENAI_SDK_MAX_RETRIES,
+    ]
 
 
 def _sample_ticks():
@@ -2053,6 +2076,49 @@ def test_openai_http_retry_sleep_respects_remaining_timeout(monkeypatch):
 
     assert sleeps
     assert max(sleeps) <= 0.08
+
+
+def test_openai_http_timeout_budget_exhaustion_does_not_rotate_key(monkeypatch):
+    engine = _build_engine()
+    rotate_calls = []
+    log_info_calls = []
+    log_error_calls = []
+
+    def _create(**kwargs):
+        raise Exception("Request timed out.")
+
+    engine.client = SimpleNamespace(responses=SimpleNamespace(create=_create))
+    engine._rotate_client = lambda: rotate_calls.append("rotated")
+    monkeypatch.setattr(openai_module, "log_info", lambda msg, **kwargs: log_info_calls.append(msg))
+    monkeypatch.setattr(openai_module, "log_error", lambda msg, **kwargs: log_error_calls.append(msg))
+    request = OpenAIResponseRequest(
+        prompt="PROMPT",
+        user_input="payload",
+        require_json=True,
+        context_name="test_timeout_budget",
+        model_name="gpt-fast",
+        temperature=0.0,
+        schema_name="entry_v1",
+        endpoint_name="analyze_target",
+        request_id="req-timeout-budget-exhausted",
+        symbol="005930",
+        cache_key="-",
+        submitted_at_perf=openai_module.time.perf_counter() - 1.0,
+        timeout_ms=100,
+    )
+
+    try:
+        engine._call_openai_responses_http(request)
+    except OpenAIResponsesHTTPError as exc:
+        assert "timeout budget exhausted" in str(exc)
+        assert exc.timing_meta["openai_http_timeout_budget_exhausted"] is True
+        assert exc.timing_meta["openai_http_sdk_max_retries"] == OPENAI_SDK_MAX_RETRIES
+    else:
+        raise AssertionError("expected timeout budget exhaustion")
+
+    assert not rotate_calls
+    assert any("timeout budget exhausted" in msg for msg in log_info_calls)
+    assert not any("AI 고갈" in msg for msg in log_error_calls)
 
 
 def test_openai_ws_attempt_timeout_leaves_http_fallback_budget(monkeypatch):
