@@ -24,6 +24,7 @@ from src.engine.scalping.rising_missed_one_share_entry import (
     BLOCK_OPEN_PENDING,
     BLOCK_PRICE_ABOVE_CAP,
     BLOCK_UPPER_LIMIT_PROXIMITY,
+    DEFAULT_RISING_MISSED_SCOUT_ENTRY_BUDGET_CAP_KRW,
     FORCED_ENTRY_REASON,
     MAX_ONE_SHARE_ENTRY_PRICE_KRW,
     RISING_MISSED_CLASS_SOURCE_QUALITY_EXCLUDED,
@@ -596,6 +597,54 @@ def test_rising_missed_one_share_entry_allows_scanner_rising_candidate():
     assert decision.forced_qty == 1
 
 
+def test_rising_missed_one_share_entry_uses_budget_cap_with_min_one_share():
+    budget_capped = evaluate_rising_missed_one_share_entry(
+        {
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "scanner_promotion_id": "scan-cap",
+            "price_delta_since_first_seen_pct": 1.2,
+        },
+        strategy="SCALPING",
+        position_tag="SCANNER",
+        feature_enabled=True,
+        has_open_pending=False,
+        already_holding=False,
+        min_delta_pct=0.5,
+        current_price=20_000,
+        scout_budget_cap_krw=DEFAULT_RISING_MISSED_SCOUT_ENTRY_BUDGET_CAP_KRW,
+    )
+    min_one_share = evaluate_rising_missed_one_share_entry(
+        {
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "scanner_promotion_id": "scan-min-share",
+            "price_delta_since_first_seen_pct": 1.2,
+        },
+        strategy="SCALPING",
+        position_tag="SCANNER",
+        feature_enabled=True,
+        has_open_pending=False,
+        already_holding=False,
+        min_delta_pct=0.5,
+        current_price=120_000,
+        scout_budget_cap_krw=DEFAULT_RISING_MISSED_SCOUT_ENTRY_BUDGET_CAP_KRW,
+    )
+
+    assert budget_capped.allowed is True
+    assert budget_capped.forced_qty == 5
+    assert budget_capped.log_fields["rising_missed_scout_sizing_mode"] == "capped_budget_min_one_share"
+    assert budget_capped.log_fields["rising_missed_scout_budget_cap_krw"] == 100_000
+    assert budget_capped.log_fields["rising_missed_scout_budget_qty"] == 5
+    assert budget_capped.log_fields["rising_missed_scout_min_one_share_applied"] is False
+    assert budget_capped.log_fields["rising_missed_one_share_entry_forced_qty"] == 5
+    assert min_one_share.allowed is True
+    assert min_one_share.forced_qty == 1
+    assert min_one_share.log_fields["rising_missed_scout_budget_qty"] == 0
+    assert min_one_share.log_fields["rising_missed_scout_min_one_share_applied"] is True
+    assert min_one_share.log_fields["rising_missed_scout_min_one_share_over_cap"] is True
+
+
 def test_rising_missed_one_share_entry_attaches_prior_log_without_decision_change():
     decision = evaluate_rising_missed_one_share_entry(
         {
@@ -971,6 +1020,70 @@ def test_rising_missed_one_share_order_collapse_keeps_single_one_share_leg():
     ]
 
 
+def test_rising_missed_one_share_order_collapse_uses_forced_scout_qty():
+    collapsed = collapse_to_one_share_order(
+        [{"tag": "main", "qty": 7, "price": 10050, "tif": "DAY"}],
+        fallback_price=9990,
+        forced_qty=5,
+    )
+
+    assert collapsed == [
+        {
+            "tag": FORCED_ENTRY_REASON,
+            "qty": 5,
+            "price": 10050,
+            "tif": "DAY",
+            "rising_missed_one_share_entry_forced": True,
+        }
+    ]
+
+
+def test_rising_missed_scout_holding_accepts_capped_forced_qty():
+    stock = {
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "rising_missed_one_share_scout": True,
+        "rising_missed_one_share_entry_forced": True,
+        "forced_entry_qty": 5,
+        "forced_entry_reason": FORCED_ENTRY_REASON,
+        "buy_qty": 5,
+        "entry_filled_qty": 5,
+    }
+
+    assert state_handlers._is_rising_missed_one_share_scout_holding(
+        stock,
+        strategy="SCALPING",
+        pos_tag="SCANNER",
+    ) is True
+    assert state_handlers._is_rising_missed_one_share_scout_holding(
+        {**stock, "buy_qty": 6},
+        strategy="SCALPING",
+        pos_tag="SCANNER",
+    ) is False
+
+
+def test_rising_missed_forced_scout_qty_does_not_override_scout_upgrade_sizing(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", "true")
+    stock = {
+        "rising_missed_one_share_entry_forced": True,
+        "forced_entry_qty": 5,
+        "forced_entry_reason": FORCED_ENTRY_REASON,
+    }
+    runtime = {"forced_entry_reason": FORCED_ENTRY_REASON}
+
+    assert state_handlers._is_forced_rising_missed_initial_scout_entry(
+        stock,
+        runtime,
+        scout_upgrade_entry=False,
+    ) is True
+    assert state_handlers._is_forced_rising_missed_initial_scout_entry(
+        stock,
+        runtime,
+        scout_upgrade_entry=True,
+    ) is False
+
+
 def test_real_weak_ai_micro_entry_block_matches_jusung_case(monkeypatch):
     monkeypatch.delenv("KORSTOCKSCAN_SCALP_REAL_WEAK_AI_MICRO_ENTRY_BLOCK_ENABLED", raising=False)
 
@@ -1128,9 +1241,9 @@ def test_rising_missed_one_share_hook_bypasses_watching_soft_branch(monkeypatch)
     assert submitted_stock["rising_missed_one_share_entry_forced"] is True
     assert submitted_stock["rising_missed_one_share_scout"] is True
     assert submitted_stock["rising_missed_scout_upgrade_pending"] is True
-    assert submitted_stock["forced_entry_qty"] == 1
+    assert submitted_stock["forced_entry_qty"] == 10
     assert submitted_stock["forced_entry_reason"] == FORCED_ENTRY_REASON
-    assert runtime["forced_entry_qty"] == 1
+    assert runtime["forced_entry_qty"] == 10
     assert runtime["forced_entry_reason"] == FORCED_ENTRY_REASON
 
 

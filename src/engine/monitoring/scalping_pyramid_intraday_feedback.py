@@ -86,7 +86,6 @@ def _is_one_share_event(row: dict[str, Any]) -> bool:
         str(row.get("stage") or "") == "rising_missed_one_share_entry"
         or str(fields.get("forced_entry_reason") or "") == "rising_missed_one_share_entry"
         or _boolish(fields.get("rising_missed_one_share_entry_forced"))
-        or _safe_float(fields.get("forced_entry_qty"), 0.0) == 1.0
     )
 
 
@@ -104,7 +103,7 @@ def _one_share_record(row: dict[str, Any]) -> dict[str, Any]:
         "rising_missed_class": fields.get("rising_missed_class"),
         "scanner_promotion_reason": fields.get("scanner_promotion_reason"),
         "one_share_event": True,
-        "forced_entry_qty": 1,
+        "forced_entry_qty": max(1, int(_safe_float(fields.get("forced_entry_qty"), 1.0) or 1.0)),
         "scale_in_arm": "PYRAMID",
         "scale_in_blocker_reason": "one_share_pyramid_no_opportunity_seen",
         "scale_in_blocker_namespace": "ONE_SHARE_PYRAMID_BACKTEST",

@@ -2010,7 +2010,7 @@ def test_build_report_excludes_rising_missed_one_share_forced_submit_from_genera
                 "actual_order_submitted": "true",
                 "price_delta_since_first_seen_pct": "1.20",
                 "rising_missed_one_share_entry_forced": "true",
-                "forced_entry_qty": "1",
+                "forced_entry_qty": "5",
                 "forced_entry_reason": "rising_missed_one_share_entry",
             },
             emitted_at="2026-06-30T09:11:00",

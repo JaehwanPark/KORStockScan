@@ -94,14 +94,14 @@ def _is_rising_missed_forced_one_share_entry(fields: dict[str, Any]) -> bool:
     reason = str(fields.get("forced_entry_reason") or "").strip()
     forced = _boolish(fields.get("rising_missed_one_share_entry_forced"))
     qty = _safe_float(fields.get("forced_entry_qty"))
-    one_share_or_missing = qty is None or qty == 1.0
-    return one_share_or_missing and (reason == RISING_MISSED_FORCED_ENTRY_REASON or forced)
+    forced_scout_qty_or_missing = qty is None or qty > 0.0
+    return forced_scout_qty_or_missing and (reason == RISING_MISSED_FORCED_ENTRY_REASON or forced)
 
 
-def _forced_lineage_qty_is_one(fields: dict[str, Any]) -> bool:
+def _forced_lineage_qty_present(fields: dict[str, Any]) -> bool:
     for key in ("forced_entry_qty", "order_requested_qty", "order_quantity", "quantity", "qty", "fill_qty", "order_filled_qty"):
         value = _safe_float(fields.get(key))
-        if value == 1.0:
+        if value is not None and value > 0.0:
             return True
     return False
 
@@ -121,7 +121,7 @@ def _is_rising_missed_forced_lineage_row(
     fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
     stage = str(row.get("stage") or "")
     actual_submitted = str(fields.get("actual_order_submitted") or "").strip().lower() == "true"
-    return stage in RISING_MISSED_FORCED_LINEAGE_STAGES or actual_submitted or _forced_lineage_qty_is_one(fields)
+    return stage in RISING_MISSED_FORCED_LINEAGE_STAGES or actual_submitted or _forced_lineage_qty_present(fields)
 
 
 def _fresh_refresh_age_ms(fields: dict[str, Any]) -> float | None:

@@ -16,6 +16,7 @@ BLOCK_PRICE_ABOVE_CAP = "price_above_one_share_entry_cap"
 BLOCK_UPPER_LIMIT_PROXIMITY = "upper_limit_proximity_entry_block"
 BLOCK_ENTRY_AI_NOT_EVALUATED = "entry_ai_action_not_evaluated"
 MAX_ONE_SHARE_ENTRY_PRICE_KRW = 1_000_000
+DEFAULT_RISING_MISSED_SCOUT_ENTRY_BUDGET_CAP_KRW = 100_000
 DEFAULT_RISING_MISSED_UPPER_LIMIT_EXCLUDE_PCT = 26.0
 DEFAULT_UPPER_LIMIT_PROXIMITY_BLOCK_PCT = 27.0
 RISING_MISSED_CLASS_NOT_RISING = "not_rising_missed"
@@ -128,6 +129,28 @@ def _positive_delta_pct(stock: dict[str, Any], explicit_delta_pct: Any = None) -
     return max(0.0, *(_safe_float(value, 0.0) for value in values))
 
 
+def resolve_rising_missed_scout_forced_qty(
+    *,
+    current_price: Any = None,
+    budget_cap_krw: Any = DEFAULT_RISING_MISSED_SCOUT_ENTRY_BUDGET_CAP_KRW,
+) -> tuple[int, dict[str, Any]]:
+    entry_price = _safe_int(current_price, 0)
+    budget_cap = max(0, _safe_int(budget_cap_krw, DEFAULT_RISING_MISSED_SCOUT_ENTRY_BUDGET_CAP_KRW))
+    budget_qty = budget_cap // entry_price if entry_price > 0 and budget_cap > 0 else 0
+    forced_qty = max(1, budget_qty)
+    min_one_share_applied = budget_qty < 1
+    return forced_qty, {
+        "rising_missed_scout_sizing_mode": "capped_budget_min_one_share",
+        "rising_missed_scout_budget_cap_krw": budget_cap,
+        "rising_missed_scout_budget_qty": budget_qty,
+        "rising_missed_scout_min_one_share_applied": min_one_share_applied,
+        "rising_missed_scout_min_one_share_over_cap": bool(
+            min_one_share_applied and budget_cap > 0 and entry_price > budget_cap
+        ),
+        "rising_missed_scout_forced_notional_krw": entry_price * forced_qty if entry_price > 0 else 0,
+    }
+
+
 def classify_rising_missed_candidate(
     *,
     max_delta_pct: Any,
@@ -218,6 +241,7 @@ def evaluate_rising_missed_one_share_entry(
     min_delta_pct: float = 1.0,
     current_price: Any = None,
     max_entry_price_krw: int = MAX_ONE_SHARE_ENTRY_PRICE_KRW,
+    scout_budget_cap_krw: int = DEFAULT_RISING_MISSED_SCOUT_ENTRY_BUDGET_CAP_KRW,
     current_fluctuation_pct: Any = None,
     upper_limit_exclude_enabled: bool = True,
     upper_limit_exclude_pct: float = DEFAULT_RISING_MISSED_UPPER_LIMIT_EXCLUDE_PCT,
@@ -234,6 +258,10 @@ def evaluate_rising_missed_one_share_entry(
         stock.get("curr_price"), 0
     )
     price_cap = max(0, _safe_int(max_entry_price_krw, MAX_ONE_SHARE_ENTRY_PRICE_KRW))
+    forced_qty, sizing_fields = resolve_rising_missed_scout_forced_qty(
+        current_price=entry_price,
+        budget_cap_krw=scout_budget_cap_krw,
+    )
     upper_limit_threshold = max(
         0.0,
         _safe_float(upper_limit_exclude_pct, DEFAULT_RISING_MISSED_UPPER_LIMIT_EXCLUDE_PCT),
@@ -244,7 +272,7 @@ def evaluate_rising_missed_one_share_entry(
         "rising_missed_one_share_entry_min_delta_pct": f"{float(min_delta_pct):.4f}",
         "rising_missed_one_share_entry_strategy": _normalized_text(strategy) or "-",
         "rising_missed_one_share_entry_position_tag": _normalized_text(position_tag) or "-",
-        "rising_missed_one_share_entry_forced_qty": 1,
+        "rising_missed_one_share_entry_forced_qty": forced_qty,
         "rising_missed_one_share_entry_price": entry_price,
         "rising_missed_one_share_entry_price_cap_krw": price_cap,
         "rising_missed_one_share_entry_fluctuation_pct": f"{fluctuation_pct:.2f}",
@@ -252,6 +280,7 @@ def evaluate_rising_missed_one_share_entry(
         "rising_missed_one_share_entry_upper_limit_gap_to_limit_pct": f"{max(0.0, 30.0 - fluctuation_pct):.2f}",
         "rising_missed_one_share_entry_upper_limit_exclude_enabled": bool(upper_limit_exclude_enabled),
     }
+    base_fields.update(sizing_fields)
     base_fields.update(_prior_log_fields(stock))
     entry_ai_action, entry_ai_action_source = _entry_ai_action_for_rising_missed(stock)
     base_fields.update(
@@ -360,7 +389,7 @@ def evaluate_rising_missed_one_share_entry(
     return RisingMissedOneShareDecision(
         allowed=True,
         reason=FORCED_ENTRY_REASON,
-        forced_qty=1,
+        forced_qty=forced_qty,
         positive_delta_pct=delta_pct,
         log_fields=base_fields,
     )
@@ -371,19 +400,24 @@ def is_forced_rising_missed_one_share_entry(stock: dict[str, Any] | None, runtim
     runtime = runtime if isinstance(runtime, dict) else {}
     return (
         bool(stock.get("rising_missed_one_share_entry_forced"))
-        and _safe_int(stock.get("forced_entry_qty"), 0) == 1
+        and _safe_int(stock.get("forced_entry_qty"), 0) > 0
         and str(stock.get("forced_entry_reason") or runtime.get("forced_entry_reason") or "").strip()
         == FORCED_ENTRY_REASON
     )
 
 
-def collapse_to_one_share_order(planned_orders: list[dict[str, Any]] | None, *, fallback_price: int) -> list[dict[str, Any]]:
+def collapse_to_one_share_order(
+    planned_orders: list[dict[str, Any]] | None,
+    *,
+    fallback_price: int,
+    forced_qty: int = 1,
+) -> list[dict[str, Any]]:
     base = dict((planned_orders or [{}])[0] or {})
     price = _safe_int(base.get("price"), 0) or _safe_int(fallback_price, 0)
     base.update(
         {
             "tag": FORCED_ENTRY_REASON,
-            "qty": 1,
+            "qty": max(1, _safe_int(forced_qty, 1)),
             "price": price,
             "tif": base.get("tif") or "DAY",
         }

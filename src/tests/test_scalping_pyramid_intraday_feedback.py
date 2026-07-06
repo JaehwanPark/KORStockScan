@@ -249,7 +249,7 @@ def test_pyramid_intraday_feedback_backtests_all_one_share_events(tmp_path):
             "095500",
             "future",
             "rising_missed_one_share_entry",
-            {"forced_entry_reason": "rising_missed_one_share_entry", "forced_entry_qty": 1},
+            {"forced_entry_reason": "rising_missed_one_share_entry", "forced_entry_qty": 5},
         ),
         _event(401, "095500", "future", "stat_action_decision_snapshot", {"profit_rate": "+1.60"}),
         _event(401, "095500", "future", "stat_action_decision_snapshot", {"profit_rate": "+2.30"}),
@@ -285,6 +285,7 @@ def test_pyramid_intraday_feedback_backtests_all_one_share_events(tmp_path):
     assert report["summary"]["one_share_pyramid_opportunity_count"] == 2
     assert report["summary"]["one_share_pyramid_missed_upside_count"] == 2
     assert set(by_code) == {"095500", "222222", "333333"}
+    assert by_code["095500"]["forced_entry_qty"] == 5
     assert by_code["095500"]["pyramid_feedback_label"] == "pyramid_would_have_helped"
     assert by_code["222222"]["pyramid_feedback_label"] == "pyramid_correctly_blocked"
     assert by_code["333333"]["pyramid_opportunity_cost_pct"] == 1.4

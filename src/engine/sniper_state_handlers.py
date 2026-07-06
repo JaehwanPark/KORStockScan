@@ -68,6 +68,7 @@ from src.engine.scalping.rising_missed_one_share_entry import (
     BLOCK_OPEN_PENDING as RISING_MISSED_BLOCK_OPEN_PENDING,
     BLOCK_PRICE_ABOVE_CAP as RISING_MISSED_BLOCK_PRICE_ABOVE_CAP,
     BLOCK_UPPER_LIMIT_PROXIMITY as RISING_MISSED_BLOCK_UPPER_LIMIT_PROXIMITY,
+    DEFAULT_RISING_MISSED_SCOUT_ENTRY_BUDGET_CAP_KRW,
     DEFAULT_RISING_MISSED_UPPER_LIMIT_EXCLUDE_PCT,
     DEFAULT_UPPER_LIMIT_PROXIMITY_BLOCK_PCT,
     FORCED_ENTRY_REASON as RISING_MISSED_FORCED_ENTRY_REASON,
@@ -25273,13 +25274,25 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                         stock,
                         not_evaluated_reason="blocked_ai_score_no_tick_audit",
                     )
-                    _log_entry_pipeline(
-                        stock,
-                        code,
-                        "blocked_ai_score",
-                        threshold=entry_buy_score_threshold,
-                        cooldown_sec=cooldown_time,
-                        **{
+                    blocked_ai_score_fields = _merge_entry_pipeline_field_groups(
+                        {
+                            "ai_call_trigger_reason": ai_call_trigger_reason or "-",
+                            **_entry_runtime_retry_exclusion_fields(ai_call_trigger_reason),
+                        },
+                        _build_ai_overlap_log_fields(
+                            stock=stock,
+                            ai_score=current_ai_score,
+                            momentum_tag=stock.get("entry_momentum_tag"),
+                            threshold_profile=stock.get("entry_threshold_profile"),
+                            overbought_blocked=False,
+                            blocked_stage="blocked_ai_score",
+                        ),
+                        ai_ops_fields,
+                        entry_score_role_log_fields(entry_score_role_gate),
+                        entry_score_prior,
+                    )
+                    blocked_ai_score_fields.update(
+                        {
                             **_build_observation_contract_fields("entry_score_prior_provenance"),
                             "decision_authority": "entry_score_prior_block_observation_only",
                             "source_quality_gate": "blocked_ai_score_entry_score_prior_contract",
@@ -25290,25 +25303,16 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 "threshold mutation,order guard mutation,provider change,bot_restart,"
                                 "broker order submit,score_prior_submit_bypass"
                             ),
-                        },
-                        **_merge_entry_pipeline_field_groups(
-                            {
-                                "ai_call_trigger_reason": ai_call_trigger_reason or "-",
-                                **_entry_runtime_retry_exclusion_fields(ai_call_trigger_reason),
-                            },
-                                _build_ai_overlap_log_fields(
-                                    stock=stock,
-                                    ai_score=current_ai_score,
-                                momentum_tag=stock.get("entry_momentum_tag"),
-                                threshold_profile=stock.get("entry_threshold_profile"),
-                                overbought_blocked=False,
-                                blocked_stage="blocked_ai_score",
-                            ),
-                                ai_ops_fields,
-                                entry_score_role_log_fields(entry_score_role_gate),
-                                entry_score_prior,
-                            ),
-                        )
+                        }
+                    )
+                    _log_entry_pipeline(
+                        stock,
+                        code,
+                        "blocked_ai_score",
+                        threshold=entry_buy_score_threshold,
+                        cooldown_sec=cooldown_time,
+                        **blocked_ai_score_fields,
+                    )
                     _log_ai_confirmed_terminal_no_budget(
                         stock,
                         code,
@@ -26000,10 +26004,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     cooldowns = runtime["cooldowns"]
     alerted_stocks = runtime["alerted_stocks"]
     ai_engine = runtime.get("ai_engine")
-    forced_rising_missed_one_share = (
-        _rising_missed_one_share_entry_enabled()
-        and is_forced_rising_missed_one_share_entry(stock, runtime)
-    )
     scout_upgrade_entry = (
         bool(runtime.get("scout_upgrade_entry"))
         and _is_rising_missed_one_share_scout_holding(
@@ -26011,6 +26011,14 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             strategy=strategy,
             pos_tag=runtime.get("pos_tag") or stock.get("position_tag"),
         )
+    )
+    forced_rising_missed_one_share = _is_forced_rising_missed_initial_scout_entry(
+        stock,
+        runtime,
+        scout_upgrade_entry=scout_upgrade_entry,
+    )
+    forced_rising_missed_scout_qty = (
+        _rising_missed_forced_scout_qty(stock, runtime) if forced_rising_missed_one_share else 0
     )
 
     if forced_rising_missed_one_share and (
@@ -26027,7 +26035,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             "rising_missed_one_share_entry_submit_blocked",
             block_reason=block_reason,
             forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON,
-            forced_entry_qty=1,
+            forced_entry_qty=forced_rising_missed_scout_qty,
             actual_order_submitted=False,
             broker_order_forbidden=True,
             runtime_effect=False,
@@ -26060,7 +26068,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 "rising_missed_one_share_entry_submit_blocked",
                 block_reason=RISING_MISSED_BLOCK_PRICE_ABOVE_CAP,
                 forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON,
-                forced_entry_qty=1,
+                forced_entry_qty=forced_rising_missed_scout_qty,
                 rising_missed_one_share_entry_price=forced_entry_price,
                 rising_missed_one_share_entry_price_cap_krw=price_cap,
                 actual_order_submitted=False,
@@ -26094,7 +26102,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             code,
             "upper_limit_entry_proximity_block",
             forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON if forced_rising_missed_one_share else "-",
-            forced_entry_qty=1 if forced_rising_missed_one_share else 0,
+            forced_entry_qty=forced_rising_missed_scout_qty,
             actual_order_submitted=False,
             broker_order_forbidden=True,
             **upper_limit_block,
@@ -26150,12 +26158,13 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     if cash_orderable_qty_cap is not None:
         real_buy_qty = min(real_buy_qty, max(0, _safe_int(cash_orderable_qty_cap, 0)))
     if forced_rising_missed_one_share and _safe_int(budget_base, 0) >= curr_price > 0:
-        target_budget = curr_price
-        safe_budget = curr_price
-        real_buy_qty = 1
-        used_safety_ratio = 1.0
+        affordable_qty = max(0, _safe_int(budget_base, 0) // curr_price)
+        real_buy_qty = min(max(1, forced_rising_missed_scout_qty), affordable_qty)
         if cash_orderable_qty_cap is not None:
             real_buy_qty = min(real_buy_qty, max(0, _safe_int(cash_orderable_qty_cap, 0)))
+        target_budget = curr_price * real_buy_qty
+        safe_budget = target_budget
+        used_safety_ratio = 1.0
     budget_cap_applied = budget_cap > 0 and target_budget < uncapped_target_budget
     min_one_share_floor_applied = (
         min_one_share_floor_enabled
@@ -26206,6 +26215,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             min_one_share_floor_enabled=min_one_share_floor_enabled,
             min_one_share_floor_applied=False,
             rising_missed_one_share_entry_forced=forced_rising_missed_one_share,
+            forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON if forced_rising_missed_one_share else "-",
+            forced_entry_qty=forced_rising_missed_scout_qty,
             auth_return_code=(auth_failure or {}).get("return_code", "-"),
             auth_return_msg=(auth_failure or {}).get("return_msg", "-"),
             **_quantity_zero_context_fields(
@@ -26253,6 +26264,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         min_one_share_floor_applied=min_one_share_floor_applied,
         rising_missed_one_share_entry_forced=forced_rising_missed_one_share,
         forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON if forced_rising_missed_one_share else "-",
+        forced_entry_qty=forced_rising_missed_scout_qty,
         deposit_source=deposit_meta.get("source", "-"),
         deposit_age_sec=deposit_meta.get("age_sec", "-"),
         deposit_cache_hit=deposit_meta.get("cache_hit", False),
@@ -26843,7 +26855,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             code,
             "real_weak_ai_micro_entry_block",
             forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON if forced_rising_missed_one_share else "-",
-            forced_entry_qty=1 if forced_rising_missed_one_share else 0,
+            forced_entry_qty=forced_rising_missed_scout_qty,
             **_merge_entry_pipeline_field_groups(
                 latency_price_snapshot,
                 entry_orderbook_micro_fields,
@@ -26869,9 +26881,10 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         planned_orders = collapse_to_one_share_order(
             planned_orders,
             fallback_price=int(latency_gate.get("order_price", 0) or final_price or curr_price or 0),
+            forced_qty=requested_qty,
         )
         latency_gate["orders"] = planned_orders
-        requested_qty = 1
+        requested_qty = max(1, _safe_int(requested_qty, forced_rising_missed_scout_qty or 1))
         latency_price_snapshot = _build_entry_price_snapshot_fields(
             latency_gate,
             request_price=planned_orders[0].get("price", 0),
@@ -26884,7 +26897,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             code,
             "rising_missed_one_share_entry_order_plan_forced",
             forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON,
-            forced_entry_qty=1,
+            forced_entry_qty=requested_qty,
             planned_order_count=len(planned_orders),
             planned_order_price=planned_orders[0].get("price", 0),
             actual_order_submitted=False,
@@ -28480,9 +28493,10 @@ def _is_rising_missed_one_share_scout_holding(stock, *, strategy: str, pos_tag: 
         return False
     if not bool(stock.get("rising_missed_one_share_scout")):
         return False
-    if _safe_int(stock.get("buy_qty"), 0) != 1:
+    scout_qty = _rising_missed_forced_scout_qty(stock, {})
+    if _safe_int(stock.get("buy_qty"), 0) != scout_qty:
         return False
-    if _safe_int(stock.get("entry_filled_qty"), 0) > 1:
+    if _safe_int(stock.get("entry_filled_qty"), 0) > scout_qty:
         return False
     if bool(stock.get("rising_missed_scout_upgrade_order_pending")):
         return False
@@ -28493,6 +28507,29 @@ def _is_rising_missed_one_share_scout_holding(stock, *, strategy: str, pos_tag: 
 
 def _rising_missed_one_share_entry_enabled() -> bool:
     return _env_bool("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", False)
+
+
+def _rising_missed_forced_scout_qty(stock: dict | None, runtime: dict | None) -> int:
+    stock = stock if isinstance(stock, dict) else {}
+    runtime = runtime if isinstance(runtime, dict) else {}
+    for source in (stock, runtime):
+        qty = _safe_int(source.get("forced_entry_qty"), 0)
+        if qty > 0:
+            return qty
+    return 1
+
+
+def _is_forced_rising_missed_initial_scout_entry(
+    stock: dict | None,
+    runtime: dict | None,
+    *,
+    scout_upgrade_entry: bool,
+) -> bool:
+    return (
+        _rising_missed_one_share_entry_enabled()
+        and is_forced_rising_missed_one_share_entry(stock, runtime)
+        and not bool(scout_upgrade_entry)
+    )
 
 
 def _upper_limit_entry_block_enabled() -> bool:
@@ -28577,6 +28614,16 @@ def _rising_missed_one_share_entry_max_price_krw() -> int:
     )
 
 
+def _rising_missed_scout_entry_budget_cap_krw() -> int:
+    return max(
+        0,
+        _env_int(
+            "KORSTOCKSCAN_RISING_MISSED_SCOUT_ENTRY_BUDGET_CAP_KRW",
+            DEFAULT_RISING_MISSED_SCOUT_ENTRY_BUDGET_CAP_KRW,
+        ),
+    )
+
+
 def _maybe_submit_rising_missed_one_share_entry(
     stock,
     code,
@@ -28633,6 +28680,7 @@ def _maybe_submit_rising_missed_one_share_entry(
         min_delta_pct=_scanner_rising_entry_min_delta_pct(),
         current_price=curr_price,
         max_entry_price_krw=_rising_missed_one_share_entry_max_price_krw(),
+        scout_budget_cap_krw=_rising_missed_scout_entry_budget_cap_krw(),
         current_fluctuation_pct=_current_fluctuation_pct(stock, ws_data, runtime),
         upper_limit_exclude_enabled=_rising_missed_upper_limit_exclude_enabled(),
         upper_limit_exclude_pct=_rising_missed_upper_limit_exclude_pct(),
@@ -28653,6 +28701,7 @@ def _maybe_submit_rising_missed_one_share_entry(
     if not decision.allowed:
         return False
 
+    forced_entry_qty = int(decision.forced_qty or 1)
     _mutate_stock_state(
         stock,
         set_fields={
@@ -28660,7 +28709,7 @@ def _maybe_submit_rising_missed_one_share_entry(
             "rising_missed_one_share_scout": True,
             "rising_missed_scout_upgrade_pending": True,
             "rising_missed_scout_started_at": runtime.get("now_ts"),
-            "forced_entry_qty": int(decision.forced_qty or 1),
+            "forced_entry_qty": forced_entry_qty,
             "forced_entry_reason": RISING_MISSED_FORCED_ENTRY_REASON,
             "target_buy_price": curr_price,
             "msg_audience": _resolve_telegram_audience_for_stock(stock, strategy),
@@ -28670,14 +28719,14 @@ def _maybe_submit_rising_missed_one_share_entry(
         {
             "is_trigger": True,
             "msg": (
-                f"✅ **{stock.get('name')} ({code}) rising missed 1주 진입 주문 전송!**\n"
-                f"전략: `{strategy}`\n현재가: `{curr_price:,}원`\n주문 수량: `1주`"
+                f"✅ **{stock.get('name')} ({code}) rising missed scout 진입 주문 전송!**\n"
+                f"전략: `{strategy}`\n현재가: `{curr_price:,}원`\n주문 수량: `{forced_entry_qty}주`"
             ),
             "ratio": 0.0,
             "liquidity_value": None,
             "scalp_min_liquidity": 0,
             "forced_entry_reason": RISING_MISSED_FORCED_ENTRY_REASON,
-            "forced_entry_qty": int(decision.forced_qty or 1),
+            "forced_entry_qty": forced_entry_qty,
             "rising_missed_one_share_entry_forced": True,
         }
     )
@@ -28686,7 +28735,7 @@ def _maybe_submit_rising_missed_one_share_entry(
         code,
         "rising_missed_one_share_entry",
         forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON,
-        forced_entry_qty=int(decision.forced_qty or 1),
+        forced_entry_qty=forced_entry_qty,
         actual_order_submitted=False,
         broker_order_forbidden=False,
         runtime_effect=True,
