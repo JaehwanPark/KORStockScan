@@ -25,17 +25,19 @@
 
 ## 장전 체크리스트 (08:45~09:00)
 
-- [ ] `[ThresholdEnvAutoApplyPreopen0707] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-07-07`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
+- [x] `[ThresholdEnvAutoApplyPreopen0707] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-07-07`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-07-06.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-07-06.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)
   - 판정 기준: 전일 postclose EV와 당일 apply plan/runtime env를 확인하고 `auto_bounded_live` guard 통과분만 runtime env로 인정한다.
   - 금지: blocked family, approval artifact missing, same-stage owner conflict를 수동 env override로 우회하지 않는다.
   - 다음 액션: `applied_guard_passed_env`, `blocked_no_env`, `partial_apply_with_blocked_families`, `failed_preopen_wrapper`, `not_yet_due` 중 하나로 닫는다.
+  - 실행 결과: `applied_guard_passed_env`. `threshold_apply_2026-07-07.json` status=`auto_bounded_live_ready`, apply_mode=`auto_bounded_live`, runtime_change=`true`, generated_at=`2026-07-07T07:35:01+09:00`; `threshold_runtime_env_verify_2026-07-07.json` status=`pass`, missing_family_count=`0`, findings=`[]`. approval_requests=`0`, approval_contract_gaps=`0`, warnings=`0`; unselected families are guard-blocked by sample/runtime-apply/same-stage rules and were not manually overridden.
 
-- [ ] `[RisingMissedScoutRuntimePreopen0707] rising_missed_scout_workorder 구현분 다음 장전 runtime 반영 여부 확인` (`Due: 2026-07-07`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: ScalpingLogic`)
+- [x] `[RisingMissedScoutRuntimePreopen0707] rising_missed_scout_workorder 구현분 다음 장전 runtime 반영 여부 확인` (`Due: 2026-07-07`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: ScalpingLogic`)
   - Source: [rising_missed_scout_workorder_2026-07-06.json](/home/ubuntu/KORStockScan/data/report/rising_missed_scout_workorder/rising_missed_scout_workorder_2026-07-06.json), [code_improvement_workorder_2026-07-06.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-07-06.json), [threshold_apply_2026-07-07.json](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-07-07.json), [threshold_runtime_env_2026-07-07.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-07-07.json), [threshold_runtime_env_verify_2026-07-07.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_verify_2026-07-07.json)
   - 판정 기준: 전일 `rising_missed_scout_workorder` 요약(code_improvement_order_count=`3`, forced_scout_with_post_sell_count=`18`, profitable_forced_scout_count=`13`, loss_or_flat_forced_scout_count=`5`, current_missed_count=`4`)과 구현 완료된 mapped family가 당일 PREOPEN apply plan/runtime env/verify에 반영됐는지 확인한다. source-only order는 별도 runtime family/env mapping과 guard 통과가 있을 때만 반영으로 인정한다.
   - 금지: `rising_missed_scout_workorder` 생성 또는 forced 1-share scout 손익만으로 runtime threshold mutation, stale submit bypass, broker/order guard 완화, provider/bot/cap 변경, real execution quality approval을 열지 않는다.
   - 다음 액션: `runtime_env_reflected_and_verified`, `implemented_but_runtime_not_selected`, `source_only_no_runtime_authority`, `blocked_by_apply_guard`, `report_missing_or_stale`, `verify_missing_or_failed` 중 하나로 닫는다.
+  - 실행 결과: `source_only_no_runtime_authority`. `rising_missed_scout_workorder_2026-07-06.json` summary는 checklist 기준값과 일치한다(code_improvement_order_count=`3`, forced_scout_with_post_sell_count=`18`, profitable_forced_scout_count=`13`, loss_or_flat_forced_scout_count=`5`, current_missed_count=`4`). mapped_family=`rising_missed_classifier_prior_feedback_bridge`, `rising_missed_scout_post_sell_bridge`, `rising_missed_scout_loss_filter`는 모두 implementation_status=`implemented`, runtime_effect=`false`, allowed_runtime_apply=`false`이고 `threshold_runtime_env_2026-07-07.json` selected_families에는 포함되지 않았다. verify는 status=`pass`이지만 해당 source-only family의 runtime 반영 권한은 없다.
 
 ## 장중 체크리스트 (09:05~15:20)
 
