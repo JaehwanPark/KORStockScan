@@ -1815,6 +1815,35 @@ def _pred_pre_signal_direction(value):
     return "unknown"
 
 
+def rank_change_sign_diagnostics(rank_change_sign, rank_change):
+    sign = str(rank_change_sign or "").strip()
+    try:
+        numeric_rank_change = int(rank_change or 0)
+    except (TypeError, ValueError):
+        numeric_rank_change = 0
+
+    if sign == "+":
+        state = "positive"
+        consistency = "consistent" if numeric_rank_change > 0 else "mismatch"
+    elif sign == "-":
+        state = "negative"
+        consistency = "consistent" if numeric_rank_change < 0 else "mismatch"
+    elif sign == "":
+        state = "neutral_empty"
+        consistency = "neutral_zero" if numeric_rank_change == 0 else "mismatch"
+    elif sign == "N":
+        state = "neutral_N"
+        consistency = "neutral_zero" if numeric_rank_change == 0 else "mismatch"
+    else:
+        state = "unknown"
+        consistency = "unknown"
+
+    return {
+        "RankChangeSignState": state,
+        "RankChangeSignConsistency": consistency,
+    }
+
+
 def get_realtime_item_rank_ka00198(token, qry_tp="5", limit=60):
     """
     [ka00198] 실시간종목조회순위.
@@ -1839,6 +1868,9 @@ def get_realtime_item_rank_ka00198(token, qry_tp="5", limit=60):
             continue
         base_change = _scanner_to_signed_float(item.get('base_comp_chgr', item.get('flu_rt')))
         prev_change = _scanner_to_signed_float(item.get('prev_base_chgr'))
+        rank_change = _scanner_to_signed_int(item.get('rank_chg'))
+        rank_change_sign = str(item.get('rank_chg_sign') or '').strip()
+        sign_diagnostics = rank_change_sign_diagnostics(rank_change_sign, rank_change)
         cleaned_list.append({
             'Code': code,
             'Name': item.get('stk_nm', item.get('name', '')),
@@ -1847,9 +1879,10 @@ def get_realtime_item_rank_ka00198(token, qry_tp="5", limit=60):
             'RealtimeRankFluRate': base_change,
             'RealtimePrevBaseChange': prev_change,
             'RankNow': _scanner_to_int(item.get('bigd_rank', item.get('rank'))),
-            'RankChange': _scanner_to_signed_int(item.get('rank_chg')),
-            'RankChangeSign': str(item.get('rank_chg_sign') or '').strip(),
+            'RankChange': rank_change,
+            'RankChangeSign': rank_change_sign,
             'RankChangeSignAuthority': 'raw_unverified_not_decision_input',
+            **sign_diagnostics,
             'RealtimeRankWindow': str(qry_tp),
             'Source': 'REALTIME_RANK_START',
         })

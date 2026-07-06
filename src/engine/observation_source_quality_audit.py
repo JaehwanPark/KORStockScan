@@ -95,6 +95,10 @@ BACKFILL_PREFILTER_PATTERN = (
 )
 RAW_ROW_EXCLUSION_DIRNAME = "raw_row_exclusion"
 ORDERBOOK_MICRO_LEGACY_UNKNOWN_BUCKET_REVIEW_CUTOFF = "2026-06-08"
+SCANNER_RANK_CHANGE_SIGN_STAGES = {
+    "scalping_scanner_real_source_guard_block",
+    "scalping_scanner_runtime_target_attach",
+}
 
 
 @dataclass(frozen=True)
@@ -2112,6 +2116,20 @@ def _sim_submit_guard_contract_violations(stage: str, fields: dict[str, Any]) ->
     }
 
 
+def _scanner_rank_change_sign_contract_violations(fields: dict[str, Any]) -> dict[str, bool]:
+    consistency = str(fields.get("rank_change_sign_consistency") or "").strip()
+    state = str(fields.get("rank_change_sign_state") or "").strip()
+    if not consistency and not state:
+        return {
+            "rank_change_sign_consistency_unknown": False,
+            "rank_change_sign_consistency_mismatch": False,
+        }
+    return {
+        "rank_change_sign_consistency_unknown": consistency == "unknown" or state == "unknown",
+        "rank_change_sign_consistency_mismatch": consistency == "mismatch",
+    }
+
+
 def _pressure_provenance_unusable(fields: dict[str, Any]) -> bool:
     if not (_is_present(fields.get("buy_pressure_10t")) or _is_present(fields.get("buy_pressure"))):
         return False
@@ -2206,6 +2224,12 @@ def _row_contract_violations(stage: str, row: dict[str, Any], contract: StageCon
         invalid.extend(
             key
             for key, violated in _sim_submit_guard_contract_violations(stage, fields).items()
+            if violated
+        )
+    if stage in SCANNER_RANK_CHANGE_SIGN_STAGES:
+        invalid.extend(
+            key
+            for key, violated in _scanner_rank_change_sign_contract_violations(fields).items()
             if violated
         )
     if _stage_requires_tick_pressure_provenance(stage) and _pressure_provenance_unusable(fields):
@@ -2584,6 +2608,18 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
                     for row in stage_rows
                     if _sim_submit_guard_contract_violations(
                         stage,
+                        _normalized_fields_for_contract(stage, row["fields"]),
+                    ).get(violation_key)
+                )
+        if stage in SCANNER_RANK_CHANGE_SIGN_STAGES:
+            for violation_key in (
+                "rank_change_sign_consistency_unknown",
+                "rank_change_sign_consistency_mismatch",
+            ):
+                invalid_label_counts[violation_key] = sum(
+                    1
+                    for row in stage_rows
+                    if _scanner_rank_change_sign_contract_violations(
                         _normalized_fields_for_contract(stage, row["fields"]),
                     ).get(violation_key)
                 )

@@ -1116,6 +1116,8 @@ def test_ka00198_realtime_rank_start_is_normalized(monkeypatch):
             "RankChange": 12,
             "RankChangeSign": "+",
             "RankChangeSignAuthority": "raw_unverified_not_decision_input",
+            "RankChangeSignState": "positive",
+            "RankChangeSignConsistency": "consistent",
             "RealtimeRankWindow": "5",
             "Source": "REALTIME_RANK_START",
         }
@@ -1143,6 +1145,8 @@ def test_realtime_rank_change_sign_authority_reaches_scanner_payload(monkeypatch
 
     merged = candidate_pool["005930"]
     assert merged["RankChangeSignAuthority"] == "raw_unverified_not_decision_input"
+    assert merged["RankChangeSignState"] == "positive"
+    assert merged["RankChangeSignConsistency"] == "consistent"
     fields = scalping_scanner._scanner_event_fields(
         merged,
         {
@@ -1154,6 +1158,8 @@ def test_realtime_rank_change_sign_authority_reaches_scanner_payload(monkeypatch
     assert fields["rank_change"] == 12
     assert fields["rank_change_sign"] == "+"
     assert fields["rank_change_sign_authority"] == "raw_unverified_not_decision_input"
+    assert fields["rank_change_sign_state"] == "positive"
+    assert fields["rank_change_sign_consistency"] == "consistent"
 
     payload = scalping_scanner._scanner_runtime_target_payload(
         merged,
@@ -1168,6 +1174,8 @@ def test_realtime_rank_change_sign_authority_reaches_scanner_payload(monkeypatch
     assert payload["rank_change"] == 12
     assert payload["rank_change_sign"] == "+"
     assert payload["rank_change_sign_authority"] == "raw_unverified_not_decision_input"
+    assert payload["rank_change_sign_state"] == "positive"
+    assert payload["rank_change_sign_consistency"] == "consistent"
     assert payload["rank_change_score_input"] == 12
     assert payload["rank_change_score_policy"] == "positive_signed_rank_delta_only_raw_rank_sign_unverified"
 
@@ -1199,6 +1207,8 @@ def test_ka00198_realtime_rank_change_preserves_negative_sign(monkeypatch):
     assert rows[0]["RankChange"] == -2
     assert rows[0]["RankChangeSign"] == "-"
     assert rows[0]["RankChangeSignAuthority"] == "raw_unverified_not_decision_input"
+    assert rows[0]["RankChangeSignState"] == "negative"
+    assert rows[0]["RankChangeSignConsistency"] == "consistent"
 
 
 def test_negative_rank_change_does_not_raise_rising_start_score():
@@ -1232,10 +1242,39 @@ def test_negative_rank_change_does_not_raise_rising_start_score():
     assert positive["RisingStartScore"] > negative["RisingStartScore"]
     assert scalping_scanner._scanner_event_fields(positive)["rank_change_score_input"] == 12
     assert scalping_scanner._scanner_event_fields(negative)["rank_change_score_input"] == 0
+    assert scalping_scanner._scanner_event_fields(negative)["rank_change_sign_state"] == "negative"
+    assert (
+        scalping_scanner._scanner_event_fields(negative)["rank_change_sign_consistency"]
+        == "consistent"
+    )
     assert (
         scalping_scanner._scanner_event_fields(negative)["rank_change_score_policy"]
         == "positive_signed_rank_delta_only_raw_rank_sign_unverified"
     )
+
+
+def test_non_realtime_rank_source_does_not_emit_neutral_rank_sign_provenance():
+    fields = scalping_scanner._scanner_event_fields(
+        {
+            "Code": "005930",
+            "Name": "삼성전자",
+            "Price": 72000,
+            "FluRate": 1.2,
+            "JumpRate": 3.4,
+            "Source": "PRICE_JUMP_START",
+        },
+        {
+            "blocked": False,
+            "reason": "price_jump_start_acceleration",
+            "source_signature": "PRICE_JUMP_START",
+        },
+    )
+
+    assert fields["rank_change"] == 0
+    assert fields["rank_change_sign"] is None
+    assert fields["rank_change_sign_state"] == "not_applicable"
+    assert fields["rank_change_sign_consistency"] == "not_applicable"
+    assert fields["rank_change_score_input"] == 0
 
 
 def test_ka10019_price_jump_start_preserves_jump_metrics(monkeypatch):

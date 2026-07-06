@@ -78,6 +78,12 @@ def _disable_scanner_operator_runtime_overrides(monkeypatch, tmp_path):
     )
 
 
+def _enable_scanner_rising_ws_gap_test_mode(monkeypatch):
+    _reset_scanner_hot_override_cache()
+    monkeypatch.setattr(kiwoom_sniper_v2, "_SCANNER_OPERATOR_RUNTIME_OVERRIDE_PATH", os.devnull)
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_FULL_EVAL_MIN_DELTA_PCT", "0.5")
+
+
 def test_current_market_regime_code_returns_regime_code(monkeypatch):
     class FakeMarketRegime:
         def refresh_if_needed(self):
@@ -214,6 +220,8 @@ def test_scalping_scanner_promoted_target_attaches_active_watching(monkeypatch):
             "rank_change": -12,
             "rank_change_sign": "-",
             "rank_change_sign_authority": "raw_unverified_not_decision_input",
+            "rank_change_sign_state": "negative",
+            "rank_change_sign_consistency": "consistent",
             "rank_change_score_input": 0,
             "rank_change_score_policy": "positive_signed_rank_delta_only_raw_rank_sign_unverified",
         }
@@ -251,6 +259,8 @@ def test_scalping_scanner_promoted_target_attaches_active_watching(monkeypatch):
     assert emitted[-1]["fields"]["rank_change"] == -12
     assert emitted[-1]["fields"]["rank_change_sign"] == "-"
     assert emitted[-1]["fields"]["rank_change_sign_authority"] == "raw_unverified_not_decision_input"
+    assert emitted[-1]["fields"]["rank_change_sign_state"] == "negative"
+    assert emitted[-1]["fields"]["rank_change_sign_consistency"] == "consistent"
     assert emitted[-1]["fields"]["rank_change_score_input"] == 0
     assert (
         emitted[-1]["fields"]["rank_change_score_policy"]
@@ -1566,6 +1576,8 @@ def test_scanner_promotion_latency_trace_fields_measure_ws_and_heavy_latency():
 
 
 def test_scanner_positive_delta_uses_promotion_fallback_when_stock_delta_is_zero(monkeypatch):
+    _enable_scanner_rising_ws_gap_test_mode(monkeypatch)
+
     def fake_find_context(stock, *, min_delta, require_bid_imbalance):
         assert min_delta == 0.5
         assert require_bid_imbalance is False
@@ -2729,6 +2741,7 @@ def test_scanner_watch_after_full_eval_routes_cooldown_pool_block_to_eviction(mo
 
 
 def test_scanner_rising_cooldown_relief_blocks_watch_eviction(monkeypatch):
+    _enable_scanner_rising_ws_gap_test_mode(monkeypatch)
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_COOLDOWN_EVICTION_RELIEF_ENABLED", "true")
     stock = {
         "id": 88,
@@ -2752,6 +2765,7 @@ def test_scanner_rising_cooldown_relief_blocks_watch_eviction(monkeypatch):
 
 
 def test_scanner_rising_stale_ws_gap_defers_eviction_for_priority_recovery(monkeypatch):
+    _enable_scanner_rising_ws_gap_test_mode(monkeypatch)
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_WS_GAP_PRIORITY_RECOVERY_ENABLED", "true")
     stock = {
         "id": 89,
@@ -3190,6 +3204,7 @@ def test_recover_missing_ws_snapshot_skips_rest_quote_for_non_rising_repeated_mi
 
 def test_recover_missing_ws_snapshot_applies_rest_quote_on_first_positive_scanner_miss(monkeypatch):
     kiwoom_sniper_v2._reset_scanner_rest_quote_fallback_rate_limit_for_tests()
+    _enable_scanner_rising_ws_gap_test_mode(monkeypatch)
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_WS_GAP_PRIORITY_RECOVERY_ENABLED", "true")
     calls = []
     monkeypatch.setattr(
@@ -3228,6 +3243,7 @@ def test_recover_missing_ws_snapshot_applies_rest_quote_on_first_positive_scanne
 
 def test_recover_missing_ws_snapshot_defers_rest_quote_when_loop_budget_exhausted(monkeypatch):
     kiwoom_sniper_v2._reset_scanner_rest_quote_fallback_rate_limit_for_tests()
+    _enable_scanner_rising_ws_gap_test_mode(monkeypatch)
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_WS_GAP_PRIORITY_RECOVERY_ENABLED", "true")
     calls = []
     monkeypatch.setattr(
@@ -3272,14 +3288,9 @@ def test_recover_missing_ws_snapshot_defers_rest_quote_when_loop_budget_exhauste
     kiwoom_sniper_v2._reset_scanner_rest_quote_fallback_rate_limit_for_tests()
 
 
-def test_recover_missing_ws_snapshot_rate_limits_rest_quote_burst(tmp_path, monkeypatch):
+def test_recover_missing_ws_snapshot_rate_limits_rest_quote_burst(monkeypatch):
     kiwoom_sniper_v2._reset_scanner_rest_quote_fallback_rate_limit_for_tests()
-    monkeypatch.setattr(
-        kiwoom_sniper_v2,
-        "_SCANNER_OPERATOR_RUNTIME_OVERRIDE_PATH",
-        tmp_path / "missing_operator_runtime_overrides.env",
-    )
-    _reset_scanner_hot_override_cache()
+    _enable_scanner_rising_ws_gap_test_mode(monkeypatch)
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_WS_GAP_PRIORITY_RECOVERY_ENABLED", "true")
     calls = []
     monkeypatch.setattr(
@@ -3556,6 +3567,7 @@ def test_scanner_rest_quote_budget_hot_reloads_operator_override_file(tmp_path, 
 
 def test_non_rising_ws_misses_do_not_consume_positive_rest_quote_slot(monkeypatch):
     kiwoom_sniper_v2._reset_scanner_rest_quote_fallback_rate_limit_for_tests()
+    _enable_scanner_rising_ws_gap_test_mode(monkeypatch)
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_WS_GAP_PRIORITY_RECOVERY_ENABLED", "true")
     calls = []
     monkeypatch.setattr(
@@ -3641,6 +3653,7 @@ def test_expired_scanner_ws_miss_does_not_consume_rest_quote_slot(monkeypatch):
 
 def test_recover_missing_ws_snapshot_sets_cooldown_after_rest_quote_failure(monkeypatch):
     kiwoom_sniper_v2._reset_scanner_rest_quote_fallback_rate_limit_for_tests()
+    _enable_scanner_rising_ws_gap_test_mode(monkeypatch)
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_WS_GAP_PRIORITY_RECOVERY_ENABLED", "true")
     calls = []
     monkeypatch.setattr(

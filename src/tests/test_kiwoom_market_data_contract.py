@@ -142,18 +142,68 @@ def test_signed_rate_parsers_and_rank_change_sign_contract(monkeypatch):
                         "bigd_rank": "1",
                         "rank_chg": "2",
                         "rank_chg_sign": "X",
+                    },
+                    {
+                        "stk_cd": "000660",
+                        "stk_nm": "SK하이닉스",
+                        "past_curr_prc": "+123000",
+                        "base_comp_chgr": "+1.25",
+                        "prev_base_chgr": "-0.10",
+                        "bigd_rank": "2",
+                        "rank_chg": "3",
+                        "rank_chg_sign": "+",
+                    },
+                    {
+                        "stk_cd": "006340",
+                        "stk_nm": "대원전선",
+                        "past_curr_prc": "+3500",
+                        "base_comp_chgr": "+0.00",
+                        "prev_base_chgr": "+0.00",
+                        "bigd_rank": "3",
+                        "rank_chg": "-2",
+                        "rank_chg_sign": "-",
+                    },
+                    {
+                        "stk_cd": "035420",
+                        "stk_nm": "NAVER",
+                        "past_curr_prc": "+210000",
+                        "base_comp_chgr": "+0.00",
+                        "prev_base_chgr": "+0.00",
+                        "bigd_rank": "4",
+                        "rank_chg": "0",
+                        "rank_chg_sign": "",
+                    },
+                    {
+                        "stk_cd": "035720",
+                        "stk_nm": "카카오",
+                        "past_curr_prc": "+58000",
+                        "base_comp_chgr": "+0.00",
+                        "prev_base_chgr": "+0.00",
+                        "bigd_rank": "5",
+                        "rank_chg": "0",
+                        "rank_chg_sign": "N",
                     }
                 ]
             }
         ],
     )
 
-    rows = kiwoom_utils.get_realtime_item_rank_ka00198("token", limit=1)
+    rows = kiwoom_utils.get_realtime_item_rank_ka00198("token", limit=5)
 
     assert rows[0]["FluRate"] == -0.07
     assert rows[0]["RealtimePrevBaseChange"] == 0.03
     assert rows[0]["RankChangeSign"] == "X"
     assert rows[0]["RankChangeSignAuthority"] == "raw_unverified_not_decision_input"
+    assert rows[0]["RankChangeSignState"] == "unknown"
+    assert rows[0]["RankChangeSignConsistency"] == "unknown"
+    assert rows[1]["RankChangeSignState"] == "positive"
+    assert rows[1]["RankChangeSignConsistency"] == "consistent"
+    assert rows[2]["RankChangeSignState"] == "negative"
+    assert rows[2]["RankChangeSignConsistency"] == "consistent"
+    assert rows[3]["RankChangeSignState"] == "neutral_empty"
+    assert rows[3]["RankChangeSignConsistency"] == "neutral_zero"
+    assert rows[4]["RankChangeSignState"] == "neutral_N"
+    assert rows[4]["RankChangeSignConsistency"] == "neutral_zero"
 
 
 def test_legacy_realtime_hot_stocks_preserves_signed_rank_delta(monkeypatch):

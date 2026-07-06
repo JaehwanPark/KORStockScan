@@ -146,7 +146,7 @@ quantity guards.
 | Item | Confirmation result | Current safe policy |
 | --- | --- | --- |
 | Direct aggressor-side field beyond 0B orderbook touch | Provided 0B spec has no separate direct BUY-aggressor/SELL-aggressor field. Use trade price `10` vs best ask/bid `27`/`28` as the official practical replacement. | Keep orderbook-touch inference with quote freshness/sync checks; `15` is auxiliary provenance only. |
-| `rank_chg_sign` official codes | Provided docs still do not specify the field. Observed/expected values are `+`, `-`, and empty; they appear to represent rank direction and should generally match signed `rank_chg` when that numeric field is present. | Preserve raw sign only; scoring uses signed numeric `rank_chg`, and raw sign still has no entry/priority/live authority. |
+| `rank_chg_sign` official codes | Provided docs still do not specify the field. Observed/expected values are `+`, `-`, empty, and candidate `N`; `+/-` should match signed `rank_chg`, while empty has repeatedly matched `rank_chg=0` during operating samples. | Preserve raw sign plus derived source-quality diagnostics only; scoring uses signed numeric `rank_chg`, and raw sign still has no entry/priority/live authority. |
 | `bid_req_base_tm` exchange/server timing semantics | Practical examples show `HHmmss` such as `162000`, despite some documentation ambiguity. Exchange-time basis is plausible but not explicitly guaranteed. Precision is seconds, not milliseconds. | Treat as quote reference-time provenance and optional lag diagnostic only. Runtime freshness still requires REST receive timestamp/age; do not use `bid_req_base_tm` alone for millisecond freshness or submit authority. |
 
 ## ka10004
@@ -220,6 +220,13 @@ quantity guards.
   `rank_chg` sign in that sample. Treat this as empirical provenance, not an
   official semantic contract. Promotion to decision input requires repeated
   sample logging plus an explicit parser/scoring contract update.
+- 2026-07-06 operating-window samples covered NXT operating/KRX pre-regular
+  session (`400` rows) plus KRX regular session (`200` rows). Combined
+  distribution was `+=135`, `-=151`, `N=0`, `empty=314`; `+/-` direction
+  mismatches were `0`, and empty/nonzero-rank mismatches were `0`. This supports
+  source-quality diagnostics only: `empty` is treated as operating neutral when
+  `RankChange==0`, while `N` remains a closed-market candidate value until
+  postclose repetition confirms it.
 
 ### Signed Field Contract
 
@@ -230,7 +237,7 @@ quantity guards.
 | `open_pric_pre` / `open_pric_pre_flu_rt` | Signed percent parser. Preserve raw rate separately from recomputed open-relative rate. | `OpenPreRateRaw`, `OpenFluRateRaw`, `ViOpenFluRate` | Scanner source metric selection | Scanner/backtest diagnostics | This is a rate, not a price difference. Legacy `OpenDiff` is compatibility only. |
 | `pred_pre_sig` | Raw code plus normalized direction: `positive`, `neutral`, `negative`, or `unknown`. | `PreSig`, `PreSigDirection` | Positive-only source filters and provenance | Source-quality diagnostics | Direction is a state code, not a numeric sign. Unknown code must not be promoted silently. |
 | `rank_chg` | Signed numeric rank delta parser. Preserve negative values. | `RankChange`, `rank_chg`, `rank_change_score_input` | Rising-start score may use only `max(0, RankChange)`. | Scanner event and source-quality diagnostics | Negative rank delta must not reward a rising-start candidate. |
-| `rank_chg_sign` | Raw string only. | `RankChangeSign`, `rank_sign`, `rank_change_sign_authority=raw_unverified_not_decision_input` | Display/provenance only. | Empirical validation only. | No scoring, entry, priority, or live authority until official code semantics are confirmed. |
+| `rank_chg_sign` | Raw string plus derived diagnostics only. | `RankChangeSign`, `rank_sign`, `rank_change_sign_authority=raw_unverified_not_decision_input`, `RankChangeSignState`, `RankChangeSignConsistency` | Display/provenance/source-quality only. | Empirical validation and source-quality audit only. | No scoring, entry, priority, or live authority until official code semantics are confirmed. `RankChangeSignConsistency=mismatch/unknown` is a source-quality finding, not a trading signal. |
 
 ### Signed Field Producer To Consumer Trace
 
@@ -238,7 +245,7 @@ quantity guards.
 | --- | --- | --- | --- | --- |
 | `ka10027`, `ka10028`, `ka10021`, `ka10023`, `ka10054`, `ka00198` scanner helpers | Normalized scanner candidate fields such as `FluRate`, `OpenFluRate`, `BidSurgeRate`, `RankChange` | `scalping_scanner` candidate scoring/source guard and emitted runtime target payload | Scanner event source-quality, entry/missed opportunity reports | Signed rates and signed rank delta must be preserved before scoring; raw sign fields remain provenance. |
 | `market_panic_breadth_collector` | `change_pct`, `change`, breadth summary rows | Panic/breadth report-only context | Panic lifecycle/source-only reports | Signed market/industry change rates may classify regime context but cannot mutate runtime thresholds or orders. |
-| `scalping_scanner` event payload | `rank_change_sign_authority`, `rank_change_score_policy` | Runtime scanner source guard and candidate priority | `pipeline_events`, source-quality audit, LDM/scanner attribution | Score uses signed numeric rank delta only; raw sign authority must travel with the row. |
+| `scalping_scanner` event payload | `rank_change_sign_authority`, `rank_change_sign_state`, `rank_change_sign_consistency`, `rank_change_score_policy` | Runtime scanner source guard and candidate priority | `pipeline_events`, source-quality audit, LDM/scanner attribution | Score uses signed numeric rank delta only; raw sign authority and consistency diagnostics must travel with the row. |
 
 ### Signed Field Contamination Paths Closed In Code
 

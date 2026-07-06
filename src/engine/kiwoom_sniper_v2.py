@@ -1434,6 +1434,14 @@ def _scanner_runtime_target_event_fields(payload, *, outcome, reason, target=Non
             "rank_change_sign_authority",
             "raw_unverified_not_decision_input",
         ),
+        "rank_change_sign_state": payload.get(
+            "rank_change_sign_state",
+            "not_applicable_rank_change_sign_state",
+        ),
+        "rank_change_sign_consistency": payload.get(
+            "rank_change_sign_consistency",
+            "not_applicable_rank_change_sign_consistency",
+        ),
         "rank_change_score_input": payload.get(
             "rank_change_score_input",
             "not_applicable_rank_change_score_input",

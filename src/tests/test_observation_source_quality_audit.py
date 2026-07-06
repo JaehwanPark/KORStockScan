@@ -2002,6 +2002,153 @@ def test_observation_source_quality_audit_does_not_require_repeat_fields_for_lat
     assert contract["missing_violations"] == {}
 
 
+def _runtime_attach_rank_sign_fields(**overrides):
+    fields = {
+        "metric_role": "runtime_handoff_observation",
+        "decision_authority": "real_scalping_scanner_runtime_watchlist_handoff_only",
+        "window_policy": "intraday_runtime_handoff",
+        "sample_floor": "not_applicable_runtime_handoff",
+        "primary_decision_metric": "funnel_count",
+        "source_quality_gate": "scalping_scanner_runtime_target_attach_contract",
+        "runtime_effect": True,
+        "forbidden_uses": "score_threshold_change,provider_route_change,order_price_change",
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "runtime_target_attach_outcome": "attached",
+        "runtime_target_attach_reason": "scanner_runtime_target_attach",
+        "scanner_promotion_id": "SCANPROM-005930-1000000",
+        "scanner_promotion_emitted_epoch": "1000.000",
+        "source_signature": "REALTIME_RANK_START",
+        "target_status": "WATCHING",
+        "target_strategy": "SCALPING",
+        "target_position_tag": "SCANNER",
+        "rank_change": "12",
+        "rank_change_sign": "+",
+        "rank_change_sign_authority": "raw_unverified_not_decision_input",
+        "rank_change_sign_state": "positive",
+        "rank_change_sign_consistency": "consistent",
+        "rank_change_score_input": "12",
+        "rank_change_score_policy": "positive_signed_rank_delta_only_raw_rank_sign_unverified",
+    }
+    fields.update(overrides)
+    return fields
+
+
+def test_observation_source_quality_audit_accepts_scanner_rank_sign_consistency(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-17",
+        [
+            _event(
+                "scalping_scanner_runtime_target_attach",
+                _runtime_attach_rank_sign_fields(),
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-17")
+
+    contract = report["stage_contracts"]["scalping_scanner_runtime_target_attach"]
+    assert contract["status"] == "pass"
+    assert contract["invalid_label_violations"] == {}
+
+
+def test_observation_source_quality_audit_keeps_rank_sign_fields_rollout_compatible(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    fields = _runtime_attach_rank_sign_fields()
+    fields.pop("rank_change_sign_state")
+    fields.pop("rank_change_sign_consistency")
+    _write_events(
+        tmp_path,
+        "2026-06-17",
+        [_event("scalping_scanner_runtime_target_attach", fields)],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-17")
+
+    contract = report["stage_contracts"]["scalping_scanner_runtime_target_attach"]
+    assert contract["status"] == "pass"
+    assert "rank_change_sign_consistency" not in contract["missing_violations"]
+    assert contract["invalid_label_violations"] == {}
+
+
+def test_observation_source_quality_audit_flags_scanner_rank_sign_mismatch(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-17",
+        [
+            _event(
+                "scalping_scanner_runtime_target_attach",
+                _runtime_attach_rank_sign_fields(
+                    rank_change="-12",
+                    rank_change_sign="+",
+                    rank_change_sign_state="positive",
+                    rank_change_sign_consistency="mismatch",
+                ),
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-17")
+
+    contract = report["stage_contracts"]["scalping_scanner_runtime_target_attach"]
+    assert contract["status"] == "fail"
+    assert contract["invalid_label_violations"]["rank_change_sign_consistency_mismatch"] == 1.0
+
+
+def test_observation_source_quality_audit_flags_scanner_source_guard_rank_sign_unknown(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-17",
+        [
+            _event(
+                "scalping_scanner_real_source_guard_block",
+                {
+                    "metric_role": "source_quality_gate",
+                    "decision_authority": "real_scalping_scanner_source_guard_only",
+                    "window_policy": "intraday_operational_guard",
+                    "sample_floor": "not_applicable_runtime_guard",
+                    "primary_decision_metric": "funnel_count",
+                    "source_quality_gate": "scalping_scanner_real_source_guard",
+                    "runtime_effect": True,
+                    "forbidden_uses": "score_threshold_change,provider_route_change,order_price_change",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "scanner_real_source_guard_applied": True,
+                    "scanner_real_source_guard_skip_reason": "source_quality_rank_sign_unknown",
+                    "scanner_real_source_guard_block_event_emitted": True,
+                    "source_signature": "REALTIME_RANK_START",
+                    "current_flu_rate": "1.20",
+                    "rank_change": "1",
+                    "rank_change_sign": "X",
+                    "rank_change_sign_authority": "raw_unverified_not_decision_input",
+                    "rank_change_sign_state": "unknown",
+                    "rank_change_sign_consistency": "unknown",
+                    "rank_change_score_input": "1",
+                    "rank_change_score_policy": "positive_signed_rank_delta_only_raw_rank_sign_unverified",
+                },
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-17")
+
+    contract = report["stage_contracts"]["scalping_scanner_real_source_guard_block"]
+    assert contract["status"] == "fail"
+    assert contract["invalid_label_violations"]["rank_change_sign_consistency_unknown"] == 1.0
+
+
 def test_observation_source_quality_audit_accepts_early_accel_recheck_contracts(
     monkeypatch, tmp_path
 ):

@@ -250,6 +250,26 @@ def _safe_int(value, default=0):
         return default
 
 
+def _rank_change_sign_event_diagnostics(target, source_signature):
+    has_realtime_rank_source = "REALTIME_RANK_START" in set(_source_signature(target))
+    has_realtime_rank_source = has_realtime_rank_source or "REALTIME_RANK_START" in str(
+        source_signature or ""
+    )
+    has_rank_fields = any(
+        key in target and target.get(key) not in (None, "")
+        for key in ("RankChange", "RankChangeSign", "RankChangeSignState", "RankChangeSignConsistency")
+    )
+    if not has_realtime_rank_source and not has_rank_fields:
+        return {
+            "RankChangeSignState": "not_applicable",
+            "RankChangeSignConsistency": "not_applicable",
+        }
+    return kiwoom_utils.rank_change_sign_diagnostics(
+        target.get("RankChangeSign"),
+        _safe_int(target.get("RankChange")),
+    )
+
+
 ZERO_CONTEXT_FORBIDDEN_USES = (
     "threshold_mutation,provider_route_change,order_price_relaxation,"
     "quantity_or_cap_change,broker_guard_bypass,stale_quote_bypass,"
@@ -806,6 +826,17 @@ def _merge_candidate(candidate_pool, raw_target, source):
             str(raw_target.get("RankChangeSignAuthority") or RANK_CHANGE_SIGN_AUTHORITY_DEFAULT).strip()
             or RANK_CHANGE_SIGN_AUTHORITY_DEFAULT
         )
+        sign_diagnostics = kiwoom_utils.rank_change_sign_diagnostics(
+            current.get("RankChangeSign"),
+            current.get("RankChange"),
+        )
+        current["RankChangeSignState"] = str(
+            raw_target.get("RankChangeSignState") or sign_diagnostics["RankChangeSignState"]
+        ).strip()
+        current["RankChangeSignConsistency"] = str(
+            raw_target.get("RankChangeSignConsistency")
+            or sign_diagnostics["RankChangeSignConsistency"]
+        ).strip()
         current["RealtimeRankWindow"] = str(raw_target.get("RealtimeRankWindow") or "")
     elif source == "PRICE_JUMP_START":
         if raw_flu_present:
@@ -1377,6 +1408,7 @@ def _scanner_event_fields(target, source_guard=None):
         source_guard_context = "first_seen_not_applicable"
     else:
         source_guard_context = "repeat_guard_with_provenance"
+    rank_sign_diagnostics = _rank_change_sign_event_diagnostics(target, source_signature)
     return {
         "metric_role": "source_quality_gate",
         "decision_authority": "real_scalping_scanner_source_guard_only",
@@ -1402,6 +1434,10 @@ def _scanner_event_fields(target, source_guard=None):
             str(target.get("RankChangeSignAuthority") or RANK_CHANGE_SIGN_AUTHORITY_DEFAULT).strip()
             or RANK_CHANGE_SIGN_AUTHORITY_DEFAULT
         ),
+        "rank_change_sign_state": target.get("RankChangeSignState")
+        or rank_sign_diagnostics["RankChangeSignState"],
+        "rank_change_sign_consistency": target.get("RankChangeSignConsistency")
+        or rank_sign_diagnostics["RankChangeSignConsistency"],
         "rank_change_score_input": max(0, _safe_int(target.get("RankChange"))),
         "rank_change_score_policy": "positive_signed_rank_delta_only_raw_rank_sign_unverified",
         "jump_rate": _safe_float(target.get("JumpRate")),
@@ -1505,6 +1541,8 @@ def _scanner_runtime_target_payload(target, source_guard, record_id=None, *, now
         "rank_change": fields.get("rank_change"),
         "rank_change_sign": fields.get("rank_change_sign"),
         "rank_change_sign_authority": fields.get("rank_change_sign_authority"),
+        "rank_change_sign_state": fields.get("rank_change_sign_state"),
+        "rank_change_sign_consistency": fields.get("rank_change_sign_consistency"),
         "rank_change_score_input": fields.get("rank_change_score_input"),
         "rank_change_score_policy": fields.get("rank_change_score_policy"),
         "runtime_effect": True,
