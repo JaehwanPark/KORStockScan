@@ -58,6 +58,10 @@ from src.engine.scalping.watching_score_smoothing import (
     evaluate_watching_score,
     normalize_mode as normalize_watching_score_smoothing_mode,
 )
+from src.engine.scalping_feature_packet import (
+    build_scalping_feature_audit_fields,
+    extract_scalping_feature_packet,
+)
 from src.engine.scalping.rising_missed_one_share_entry import (
     BLOCK_ALREADY_HOLDING as RISING_MISSED_BLOCK_ALREADY_HOLDING,
     BLOCK_NOT_CANDIDATE as RISING_MISSED_BLOCK_NOT_CANDIDATE,
@@ -2568,6 +2572,46 @@ def _first_touch_runtime_prior_context(
     return {"runtime_prior_context": {"status": status, **stats}}
 
 
+def _real_stop_line_avg_down_ai_score_submit_authority(
+    *,
+    current_ai_score,
+    holding_score_context: dict | None,
+) -> dict[str, object]:
+    context = holding_score_context if isinstance(holding_score_context, dict) else {}
+    sentinel_score_max = 50.0
+    score = _safe_float(current_ai_score, None)
+    context_score = _safe_float(context.get("score"), score)
+    if not bool(context.get("usable_for_scale_in_support")):
+        return {
+            "allowed": False,
+            "reason": "ai_score_unavailable",
+            "sentinel_score_max": sentinel_score_max,
+        }
+    if score is None:
+        return {
+            "allowed": False,
+            "reason": "ai_score_missing",
+            "sentinel_score_max": sentinel_score_max,
+        }
+    if score <= sentinel_score_max:
+        return {
+            "allowed": False,
+            "reason": "ai_score_sentinel_50",
+            "sentinel_score_max": sentinel_score_max,
+        }
+    if context_score is None or context_score <= sentinel_score_max:
+        return {
+            "allowed": False,
+            "reason": "holding_score_sentinel_50",
+            "sentinel_score_max": sentinel_score_max,
+        }
+    return {
+        "allowed": True,
+        "reason": "evaluated_score_above_sentinel",
+        "sentinel_score_max": sentinel_score_max,
+    }
+
+
 def _pyramid_runtime_prior_default(status: str, reason: str) -> dict[str, Any]:
     return {
         "status": status,
@@ -2874,6 +2918,10 @@ def _evaluate_first_touch_avgdown_decision_gate(
         is_critical_zone=True,
     )
     ai_score_usable = bool(holding_score_ctx.get("usable_for_scale_in_support"))
+    submit_authority = _real_stop_line_avg_down_ai_score_submit_authority(
+        current_ai_score=ai_score,
+        holding_score_context=holding_score_ctx,
+    )
 
     support_signals: list[str] = []
     risk_signals: list[str] = []
@@ -2941,6 +2989,10 @@ def _evaluate_first_touch_avgdown_decision_gate(
 
     has_recovery_support = base_has_recovery_support
     hard_block_reasons: list[str] = []
+    if not bool(submit_authority.get("allowed")):
+        submit_reason = str(submit_authority.get("reason") or "unknown")
+        risk_signals.append(f"ai_score_no_submit_authority:{submit_reason}")
+        hard_block_reasons.append(f"ai_score_no_submit_authority:{submit_reason}")
     if "ai_score_below_low_block" in risk_signals and not has_recovery_support:
         hard_block_reasons.append("low_ai_without_recovery")
     if repeated_blockers > max_repeated_blockers_without_support and not has_recovery_support:
@@ -2979,6 +3031,9 @@ def _evaluate_first_touch_avgdown_decision_gate(
             "first_touch_avgdown_ai_score_source": holding_score_ctx.get("source", "-"),
             "first_touch_avgdown_ai_score_data_quality": holding_score_ctx.get("data_quality", "-"),
             "first_touch_avgdown_ai_score_excluded_reason": holding_score_ctx.get("excluded_reason", "-"),
+            "first_touch_avgdown_ai_score_submit_authority": bool(submit_authority.get("allowed")),
+            "first_touch_avgdown_ai_score_submit_authority_reason": submit_authority.get("reason", "-"),
+            "first_touch_avgdown_ai_score_sentinel_max": submit_authority.get("sentinel_score_max", 50.0),
             "first_touch_avgdown_prior_peak_pct": f"{prior_peak:+.2f}",
             "first_touch_avgdown_profit_rate": f"{current_profit:+.2f}",
             "first_touch_avgdown_repeated_blocker_count": repeated_blockers,
@@ -12049,6 +12104,145 @@ def _holding_score_acceptance_gate(ai_decision: dict | None) -> dict:
     }
 
 
+def _holding_score_source_quality_from_feature_packet(
+    feature_packet: dict | None,
+    audit_fields: dict | None = None,
+) -> dict:
+    audit = audit_fields if isinstance(audit_fields, dict) else {}
+    packet = feature_packet if isinstance(feature_packet, dict) else {}
+    stale_reasons: list[str] = []
+    partial_reasons: list[str] = []
+    fresh_labels = {"fresh", "fresh_computed", "usable", "ok", "pass"}
+    stale_labels = {"missing_ticks", "missing_tick_time", "stale_tick", "insufficient"}
+
+    for key in ("tick_context_stale", "quote_stale"):
+        raw_value = audit.get(key, packet.get(key))
+        text = str(raw_value or "").strip().lower()
+        if raw_value is True or text in {"true", "1", "yes", "stale"}:
+            stale_reasons.append(key)
+
+    for key in ("tick_context_quality", "ai_input_source_quality_status"):
+        text = str(audit.get(key, packet.get(key, "")) or "").strip().lower()
+        if text in stale_labels:
+            stale_reasons.append(f"{key}:{text}")
+        elif text and text not in fresh_labels:
+            partial_reasons.append(f"{key}:{text}")
+
+    pressure_keys = {
+        "buy_pressure_10t",
+        "net_aggressive_delta_10t",
+        "large_sell_print_detected",
+        "same_price_buy_absorption",
+    }
+    if any(key in packet for key in pressure_keys):
+        if "tick_aggressor_pressure_usable" not in packet and "tick_aggressor_trusted_count" not in packet:
+            partial_reasons.append("tick_aggressor_pressure_provenance_missing")
+        elif not _truthy_field(packet.get("tick_aggressor_pressure_usable")) and _safe_float(
+            packet.get("tick_aggressor_trusted_count"),
+            0.0,
+        ) <= 0:
+            partial_reasons.append("tick_aggressor_pressure_unusable")
+
+    if any(key in packet for key in ("curr_vs_micro_vwap_bp", "micro_vwap_bp")):
+        if not any(key in packet for key in ("micro_vwap_available", "minute_candle_window_fresh", "minute_candle_context_quality")):
+            partial_reasons.append("micro_vwap_provenance_missing")
+        elif not _truthy_field(packet.get("micro_vwap_available")):
+            partial_reasons.append("micro_vwap_unavailable")
+        elif "minute_candle_window_fresh" in packet and not _truthy_field(packet.get("minute_candle_window_fresh")):
+            partial_reasons.append("micro_vwap_unavailable")
+
+    micro_quality = str(
+        audit.get(
+            "microstructure_reaction_source_quality",
+            packet.get("microstructure_reaction_source_quality", ""),
+        )
+        or ""
+    ).strip().lower()
+    if micro_quality:
+        if micro_quality in {"stale", "stale_tick", "stale_quote"}:
+            stale_reasons.append(f"microstructure_reaction_source_quality:{micro_quality}")
+        elif micro_quality in {"stale_tick_or_quote", "missing", "insufficient", "not_evaluated"}:
+            partial_reasons.append(f"microstructure_reaction_source_quality:{micro_quality}")
+        elif micro_quality not in fresh_labels | {"fresh_short_window"}:
+            partial_reasons.append(f"microstructure_reaction_source_quality:{micro_quality}")
+
+    if not packet:
+        return {
+            "data_quality": "insufficient",
+            "source_quality_reason": "feature_packet_missing",
+        }
+    if stale_reasons:
+        return {
+            "data_quality": "stale",
+            "source_quality_reason": ",".join(stale_reasons),
+        }
+    if partial_reasons:
+        return {
+            "data_quality": "partial",
+            "source_quality_reason": ",".join(partial_reasons),
+        }
+    return {
+        "data_quality": "fresh",
+        "source_quality_reason": "feature_packet_fresh",
+    }
+
+
+def _holding_score_preflight_source_quality(
+    ws_data: dict | None,
+    recent_ticks: list | None,
+    recent_candles: list | None,
+    *,
+    now_ts: float | None = None,
+) -> dict:
+    try:
+        feature_packet = extract_scalping_feature_packet(
+            ws_data or {},
+            recent_ticks or [],
+            recent_candles or [],
+            now=now_ts,
+        )
+        audit_fields = build_scalping_feature_audit_fields(feature_packet)
+        source_quality = _holding_score_source_quality_from_feature_packet(feature_packet, audit_fields)
+    except Exception as exc:
+        return {
+            "blocked": False,
+            "block_reason": "-",
+            "data_quality": "unknown",
+            "source_quality_reason": f"preflight_error:{type(exc).__name__}",
+            "tick_context_stale": "unknown",
+            "tick_context_quality": "unknown",
+            "tick_latest_age_ms": "-",
+            "tick_aggressor_pressure_usable": "unknown",
+            "quote_stale": "unknown",
+            "quote_age_ms": "-",
+        }
+
+    reason = str(source_quality.get("source_quality_reason") or "-")
+    tick_stale = _truthy_field(audit_fields.get("tick_context_stale"))
+    tick_quality = str(audit_fields.get("tick_context_quality") or "").strip().lower()
+    blocked = bool(
+        source_quality.get("data_quality") == "stale"
+        and (
+            tick_stale
+            or tick_quality == "stale_tick"
+            or "tick_context_stale" in reason
+            or "tick_context_quality:stale_tick" in reason
+        )
+    )
+    return {
+        "blocked": blocked,
+        "block_reason": "stale_tick_context" if blocked else "-",
+        "data_quality": source_quality.get("data_quality", "unknown"),
+        "source_quality_reason": reason,
+        "tick_context_stale": audit_fields.get("tick_context_stale", "unknown"),
+        "tick_context_quality": audit_fields.get("tick_context_quality", "unknown"),
+        "tick_latest_age_ms": audit_fields.get("tick_latest_age_ms", "-"),
+        "tick_aggressor_pressure_usable": audit_fields.get("tick_aggressor_pressure_usable", "unknown"),
+        "quote_stale": audit_fields.get("quote_stale", "unknown"),
+        "quote_age_ms": audit_fields.get("quote_age_ms", "-"),
+    }
+
+
 def _recent_exit_candidate_pyramid_block_context(
     stock: dict | None,
     *,
@@ -19372,6 +19566,11 @@ def _build_ai_ops_log_fields(
         "holding_score_raw_data_quality",
         "holding_score_effective_source",
         "holding_score_excluded_reason",
+        "holding_score_score50_origin",
+        "holding_score_preflight_block_reason",
+        "holding_score_preflight_source_quality",
+        "holding_score_preflight_source_quality_reason",
+        "holding_score_transport_fail_closed_reason",
         "holding_score_action",
         "holding_score_position_state",
     ):
@@ -19383,6 +19582,8 @@ def _build_ai_ops_log_fields(
         "openai_endpoint_name",
         "openai_schema_name",
         "openai_ws_error_type",
+        "openai_ws_http_fallback_error_type",
+        "openai_http_error_type",
         "openai_input_tokens",
         "openai_output_tokens",
         "openai_total_tokens",
@@ -19397,12 +19598,28 @@ def _build_ai_ops_log_fields(
     for field_name in (
         "openai_ws_queue_wait_ms",
         "openai_ws_roundtrip_ms",
+        "openai_ws_attempt_timeout_ms",
+        "openai_ws_total_timeout_ms",
+        "openai_ws_http_fallback_reserve_ms",
+        "openai_ws_elapsed_before_fallback_ms",
+        "openai_http_fallback_budget_ms",
+        "openai_original_timeout_ms",
+        "openai_http_lock_wait_ms",
+        "openai_http_provider_ms",
+        "openai_http_provider_total_ms",
+        "openai_http_attempt_count",
     ):
         if field_name in payload:
             out[field_name] = int(payload.get(field_name, 0) or 0)
     for field_name in (
         "openai_ws_used",
         "openai_ws_http_fallback",
+        "openai_ws_http_fallback_fail_closed",
+        "openai_http_timeout_budget_exhausted",
+        "holding_score_timeout_like",
+        "holding_score_transport_fail_closed",
+        "holding_score_preflight_blocked",
+        "holding_score_raw_score_non50_neutralized",
     ):
         if field_name in payload:
             raw_value = payload.get(field_name)
@@ -21213,7 +21430,7 @@ def _evaluate_holding_flow_override(
             fields["ws_age_sec"] = f"{ws_age_sec:.2f}"
             fields["max_ws_age_sec"] = f"{max_ws_age:.2f}"
             return False, fields
-        if not micro_context_usable:
+        if not micro_context_usable and (curr_vs_micro_vwap_bp is not None or min_micro_vwap_bp > 0):
             fields["ofi_debounce_reason"] = "micro_context_unusable"
             return False, fields
         if curr_vs_micro_vwap_bp is not None and curr_vs_micro_vwap_bp + 1e-9 < min_micro_vwap_bp:
@@ -31227,8 +31444,27 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     holding_ai_orderbook_present = bool(ws_data.get("orderbook"))
                     holding_ai_orderbook_usable = _pre_submit_input_snapshot_has_usable_quote(ws_data)
                     holding_ai_recent_tick_count = len(recent_ticks or [])
-
+                    holding_score_preflight = {
+                        "blocked": False,
+                        "block_reason": "-",
+                        "data_quality": "not_evaluated",
+                        "source_quality_reason": "-",
+                    }
                     if (not sim_ai_budget_skip) and holding_ai_orderbook_usable and recent_ticks:
+                        holding_score_preflight = _holding_score_preflight_source_quality(
+                            ws_data,
+                            recent_ticks,
+                            recent_candles,
+                            now_ts=now_ts,
+                        )
+                    holding_score_preflight_blocked = bool(holding_score_preflight.get("blocked"))
+
+                    if (
+                        (not sim_ai_budget_skip)
+                        and holding_ai_orderbook_usable
+                        and recent_ticks
+                        and not holding_score_preflight_blocked
+                    ):
                         if sim_ai_budget_gate.get("target"):
                             used_after_record = _record_scalp_sim_ai_budget_call(now_ts)
                         else:
@@ -31301,6 +31537,12 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         )
                         holding_score_gate = _holding_score_acceptance_gate(ai_decision)
                         if holding_score_gate["accepted"]:
+                            raw_score_non50_neutralized = False
+                            score50_origin = (
+                                "model_raw_score_50"
+                                if _safe_float(raw_ai_score, None) == 50.0
+                                else "-"
+                            )
                             smoothed_score = int((current_ai_score * 0.6) + (float(raw_ai_score or 50) * 0.4))
                             _mutate_stock_state(
                                 stock,
@@ -31330,6 +31572,12 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                                     'holding_score_source_quality_reason': ai_decision.get(
                                         "holding_score_source_quality_reason", "-"
                                     ),
+                                    "holding_score_score50_origin": score50_origin,
+                                    "holding_score_preflight_blocked": False,
+                                    "holding_score_preflight_block_reason": "-",
+                                    "holding_score_preflight_source_quality": holding_score_preflight.get("data_quality", "-"),
+                                    "holding_score_preflight_source_quality_reason": holding_score_preflight.get("source_quality_reason", "-"),
+                                    "holding_score_raw_score_non50_neutralized": raw_score_non50_neutralized,
                                     'holding_score_action': ai_decision.get("action_v2") or ai_decision.get("action") or "HOLD",
                                     'holding_score_effective_usable': True,
                                     'holding_score_last_effective_at': now_ts,
@@ -31345,6 +31593,12 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                             ai_decision["holding_score_raw_data_quality"] = holding_score_gate["data_quality"]
                             ai_decision["holding_score_effective_source"] = ai_result_source
                             ai_decision["holding_score_effective_from_prior"] = False
+                            ai_decision["holding_score_score50_origin"] = score50_origin
+                            ai_decision["holding_score_preflight_blocked"] = False
+                            ai_decision["holding_score_preflight_block_reason"] = "-"
+                            ai_decision["holding_score_preflight_source_quality"] = holding_score_preflight.get("data_quality", "-")
+                            ai_decision["holding_score_preflight_source_quality_reason"] = holding_score_preflight.get("source_quality_reason", "-")
+                            ai_decision["holding_score_raw_score_non50_neutralized"] = raw_score_non50_neutralized
                         else:
                             holding_score_ctx = _holding_score_runtime_context(
                                 stock,
@@ -31355,6 +31609,20 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                             current_ai_score = holding_score_ctx["score"]
                             effective_from_prior = bool(holding_score_ctx["usable"])
                             effective_source = "prior_valid" if effective_from_prior else "neutral_unusable"
+                            raw_score_non50_neutralized = bool(
+                                _safe_float(raw_ai_score, None) not in (None, 50.0)
+                                and _safe_float(current_ai_score, None) == 50.0
+                                and not effective_from_prior
+                            )
+                            score50_origin = (
+                                "post_call_source_quality_neutralized"
+                                if raw_score_non50_neutralized
+                                else (
+                                    "fallback_score_50"
+                                    if bool(ai_decision.get("ai_fallback_score_50"))
+                                    else "-"
+                                )
+                            )
                             _mutate_stock_state(
                                 stock,
                                 set_fields={
@@ -31381,6 +31649,12 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                                     "holding_score_source_quality_reason": ai_decision.get(
                                         "holding_score_source_quality_reason", "-"
                                     ),
+                                    "holding_score_score50_origin": score50_origin,
+                                    "holding_score_preflight_blocked": False,
+                                    "holding_score_preflight_block_reason": "-",
+                                    "holding_score_preflight_source_quality": holding_score_preflight.get("data_quality", "-"),
+                                    "holding_score_preflight_source_quality_reason": holding_score_preflight.get("source_quality_reason", "-"),
+                                    "holding_score_raw_score_non50_neutralized": raw_score_non50_neutralized,
                                     "holding_score_action": ai_decision.get("action_v2") or ai_decision.get("action") or "HOLD",
                                     "holding_score_effective_usable": bool(holding_score_ctx["usable"]),
                                     "holding_score_age_sec": holding_score_ctx.get("age_sec"),
@@ -31395,6 +31669,12 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                             ai_decision["holding_score_raw_data_quality"] = holding_score_gate["data_quality"]
                             ai_decision["holding_score_effective_source"] = effective_source
                             ai_decision["holding_score_effective_from_prior"] = effective_from_prior
+                            ai_decision["holding_score_score50_origin"] = score50_origin
+                            ai_decision["holding_score_preflight_blocked"] = False
+                            ai_decision["holding_score_preflight_block_reason"] = "-"
+                            ai_decision["holding_score_preflight_source_quality"] = holding_score_preflight.get("data_quality", "-")
+                            ai_decision["holding_score_preflight_source_quality_reason"] = holding_score_preflight.get("source_quality_reason", "-")
+                            ai_decision["holding_score_raw_score_non50_neutralized"] = raw_score_non50_neutralized
                         ai_decision.update(
                             _holding_score_role_log_fields(
                                 _holding_score_runtime_context(
@@ -31502,6 +31782,8 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                             ai_call_skipped_reason = "unusable_orderbook"
                         elif holding_ai_recent_tick_count <= 0:
                             ai_call_skipped_reason = "missing_recent_ticks"
+                        elif holding_score_preflight_blocked:
+                            ai_call_skipped_reason = "preflight_source_quality_blocked"
                         else:
                             ai_call_skipped_reason = "holding_ai_not_called"
                         holding_score_ctx = _holding_score_runtime_context(
@@ -31513,6 +31795,19 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         current_ai_score = holding_score_ctx["score"]
                         effective_from_prior = bool(holding_score_ctx["usable"])
                         effective_source = "prior_valid" if effective_from_prior else "neutral_unusable"
+                        score50_origin = (
+                            "preflight_source_quality_blocked"
+                            if (
+                                holding_score_preflight_blocked
+                                and _safe_float(current_ai_score, None) == 50.0
+                                and not effective_from_prior
+                            )
+                            else (
+                                "not_called_neutral_unusable"
+                                if _safe_float(current_ai_score, None) == 50.0 and not effective_from_prior
+                                else "-"
+                            )
+                        )
                         _mutate_stock_state(
                             stock,
                             set_fields={
@@ -31531,6 +31826,13 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                                 "holding_score_raw_data_quality": holding_score_ctx["data_quality"],
                                 "holding_score_effective_source": effective_source,
                                 "holding_score_effective_from_prior": effective_from_prior,
+                                "holding_score_source_quality_reason": holding_score_preflight.get("source_quality_reason", "-"),
+                                "holding_score_score50_origin": score50_origin,
+                                "holding_score_preflight_blocked": holding_score_preflight_blocked,
+                                "holding_score_preflight_block_reason": holding_score_preflight.get("block_reason", "-"),
+                                "holding_score_preflight_source_quality": holding_score_preflight.get("data_quality", "-"),
+                                "holding_score_preflight_source_quality_reason": holding_score_preflight.get("source_quality_reason", "-"),
+                                "holding_score_raw_score_non50_neutralized": False,
                                 "holding_score_effective_usable": bool(holding_score_ctx["usable"]),
                                 "holding_score_age_sec": holding_score_ctx.get("age_sec"),
                                 "holding_score_excluded_reason": (
@@ -31550,6 +31852,13 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                                 "holding_score_raw_data_quality": holding_score_ctx["data_quality"],
                                 "holding_score_effective_source": effective_source,
                                 "holding_score_effective_from_prior": effective_from_prior,
+                                "holding_score_source_quality_reason": holding_score_preflight.get("source_quality_reason", "-"),
+                                "holding_score_score50_origin": score50_origin,
+                                "holding_score_preflight_blocked": holding_score_preflight_blocked,
+                                "holding_score_preflight_block_reason": holding_score_preflight.get("block_reason", "-"),
+                                "holding_score_preflight_source_quality": holding_score_preflight.get("data_quality", "-"),
+                                "holding_score_preflight_source_quality_reason": holding_score_preflight.get("source_quality_reason", "-"),
+                                "holding_score_raw_score_non50_neutralized": False,
                                 "holding_score_effective_usable": bool(holding_score_ctx["usable"]),
                                 "holding_score_age_sec": holding_score_ctx.get("age_sec"),
                                 "holding_score_excluded_reason": (
@@ -35666,6 +35975,10 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             "large_sell_print_detected",
             "large_sell_clear",
             "ai_score_ok",
+            "pyramid_ai_score_submit_authority",
+            "pyramid_ai_score_submit_authority_reason",
+            "pyramid_ai_score_sentinel_max",
+            "pyramid_holding_score_effective",
             "scale_in_budget_source",
             "scale_in_account_deposit",
             "scale_in_cash_orderable_amount",

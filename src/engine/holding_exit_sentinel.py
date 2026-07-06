@@ -287,6 +287,32 @@ def _count_parse_fail(events: list[PipelineEvent]) -> int:
     )
 
 
+def _score50_origin_counts(events: list[PipelineEvent]) -> dict[str, int]:
+    counter: Counter[str] = Counter()
+    for event in events:
+        if event.stage not in {
+            "ai_holding_review",
+            "ai_holding_fast_reuse_band",
+            "ai_holding_reuse_bypass",
+            "ai_holding_skip_unchanged",
+            "bad_entry_refined_candidate",
+        }:
+            continue
+        fields = event.fields
+        origin = _safe_str(fields.get("holding_score_score50_origin")).strip()
+        if origin and origin not in {"-", "none", "null"}:
+            counter[origin] += 1
+            continue
+        score_values = (
+            fields.get("holding_score_effective"),
+            fields.get("ai_score"),
+            fields.get("current_ai_score"),
+        )
+        if any(_safe_float(value, -1.0) == 50.0 for value in score_values):
+            counter["legacy_or_unclassified_score50"] += 1
+    return dict(sorted(counter.items()))
+
+
 def _max_field(events: list[PipelineEvent], stage: str, field: str) -> float:
     values = [_safe_float(event.fields.get(field), 0.0) for event in events if event.stage == stage]
     return max(values) if values else 0.0
@@ -392,6 +418,7 @@ def _summarize_events(events: list[PipelineEvent], *, start_at: datetime, end_at
     flow_review = int(stage_events.get("holding_flow_override_review", 0) or 0)
     ai_review = int(stage_events.get("ai_holding_review", 0) or 0)
     cache_miss = _count_cache_miss(scoped)
+    score50_origin_counts = _score50_origin_counts(scoped)
     active_keys = _active_holding_keys(scoped)
     latest_event_at = scoped[-1].emitted_at.isoformat(timespec="seconds") if scoped else None
     return {
@@ -402,6 +429,13 @@ def _summarize_events(events: list[PipelineEvent], *, start_at: datetime, end_at
         "stage_events": dict(sorted(stage_events.items())),
         "stage_unique": stage_unique,
         "reason_top": _stage_reason_top(scoped),
+        "score50_origin_counts": score50_origin_counts,
+        "holding_score_preflight_blocked_events": int(
+            score50_origin_counts.get("preflight_source_quality_blocked", 0)
+        ),
+        "holding_score_raw_non50_neutralized_events": int(
+            score50_origin_counts.get("post_call_source_quality_neutralized", 0)
+        ),
         "max_defer_worsen_pct": round(_max_field(scoped, "holding_flow_override_defer_exit", "worsen_pct"), 3),
         "max_force_worsen_pct": round(_max_field(scoped, "holding_flow_override_force_exit", "profit_rate"), 3),
         "ai_parse_fail_events": _count_parse_fail(scoped),
@@ -731,6 +765,9 @@ def build_markdown(report: dict[str, Any]) -> str:
         f"- non-real sell_sent/exit_signal: `{ratios.get('non_real_sell_sent_to_exit_signal_unique_pct', 0.0)}%`",
         f"- flow defer events: `{session['stage_events'].get('holding_flow_override_defer_exit', 0)}`",
         f"- AI holding cache MISS: `{ratios.get('ai_cache_miss_pct', 0.0)}%`",
+        f"- score50 origins: `{session.get('score50_origin_counts') or {}}`",
+        f"- score50 preflight/source-quality blocked: `{session.get('holding_score_preflight_blocked_events', 0)}`",
+        f"- score50 raw-non50 neutralized: `{session.get('holding_score_raw_non50_neutralized_events', 0)}`",
         f"- soft_stop rebound above sell 10m: `{obs.get('soft_stop_rebound_above_sell_10m_rate', 0.0)}%`",
         f"- trailing missed-upside: `{obs.get('trailing_missed_upside_rate', 0.0)}%`",
         f"- top reasons: `{_format_top(session['reason_top'])}`",

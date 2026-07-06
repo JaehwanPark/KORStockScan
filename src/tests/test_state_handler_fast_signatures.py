@@ -2469,12 +2469,35 @@ def test_build_ai_ops_log_fields_preserves_operational_meta():
             "openai_ws_http_fallback": False,
             "openai_ws_queue_wait_ms": 7,
             "openai_ws_roundtrip_ms": 234,
+            "openai_ws_attempt_timeout_ms": 2500,
+            "openai_ws_total_timeout_ms": 4000,
+            "openai_ws_http_fallback_reserve_ms": 1500,
+            "openai_ws_elapsed_before_fallback_ms": 2510,
+            "openai_http_fallback_budget_ms": 1490,
+            "openai_original_timeout_ms": 4000,
+            "openai_http_lock_wait_ms": 12,
+            "openai_http_provider_ms": 640,
+            "openai_http_provider_total_ms": 1440,
+            "openai_http_attempt_count": 2,
+            "openai_http_timeout_budget_exhausted": True,
+            "openai_ws_http_fallback_fail_closed": True,
+            "openai_ws_http_fallback_error_type": "RuntimeError",
+            "openai_http_error_type": "OpenAIResponsesHTTPError",
             "openai_input_tokens": 1234,
             "openai_output_tokens": 56,
             "openai_total_tokens": 1290,
             "openai_cached_input_tokens": 120,
             "openai_reasoning_tokens": 8,
             "holding_score_source_quality_reason": "feature_packet_fresh",
+            "holding_score_score50_origin": "post_call_source_quality_neutralized",
+            "holding_score_preflight_blocked": True,
+            "holding_score_preflight_block_reason": "stale_tick_context",
+            "holding_score_preflight_source_quality": "stale",
+            "holding_score_preflight_source_quality_reason": "tick_context_stale,tick_context_quality:stale_tick",
+            "holding_score_raw_score_non50_neutralized": True,
+            "holding_score_timeout_like": True,
+            "holding_score_transport_fail_closed": True,
+            "holding_score_transport_fail_closed_reason": "OpenAI Responses HTTP timeout budget exhausted",
         },
         ai_score_raw=74,
         ai_score_after_bonus=79,
@@ -2498,17 +2521,61 @@ def test_build_ai_ops_log_fields_preserves_operational_meta():
     assert fields["openai_ws_http_fallback"] is False
     assert fields["openai_ws_queue_wait_ms"] == 7
     assert fields["openai_ws_roundtrip_ms"] == 234
+    assert fields["openai_ws_attempt_timeout_ms"] == 2500
+    assert fields["openai_ws_total_timeout_ms"] == 4000
+    assert fields["openai_ws_http_fallback_reserve_ms"] == 1500
+    assert fields["openai_ws_elapsed_before_fallback_ms"] == 2510
+    assert fields["openai_http_fallback_budget_ms"] == 1490
+    assert fields["openai_original_timeout_ms"] == 4000
+    assert fields["openai_http_lock_wait_ms"] == 12
+    assert fields["openai_http_provider_ms"] == 640
+    assert fields["openai_http_provider_total_ms"] == 1440
+    assert fields["openai_http_attempt_count"] == 2
+    assert fields["openai_http_timeout_budget_exhausted"] is True
+    assert fields["openai_ws_http_fallback_fail_closed"] is True
+    assert fields["openai_ws_http_fallback_error_type"] == "RuntimeError"
+    assert fields["openai_http_error_type"] == "OpenAIResponsesHTTPError"
     assert fields["openai_input_tokens"] == 1234
     assert fields["openai_output_tokens"] == 56
     assert fields["openai_total_tokens"] == 1290
     assert fields["openai_cached_input_tokens"] == 120
     assert fields["openai_reasoning_tokens"] == 8
     assert fields["holding_score_source_quality_reason"] == "feature_packet_fresh"
+    assert fields["holding_score_score50_origin"] == "post_call_source_quality_neutralized"
+    assert fields["holding_score_preflight_blocked"] is True
+    assert fields["holding_score_preflight_block_reason"] == "stale_tick_context"
+    assert fields["holding_score_preflight_source_quality"] == "stale"
+    assert fields["holding_score_preflight_source_quality_reason"] == "tick_context_stale,tick_context_quality:stale_tick"
+    assert fields["holding_score_raw_score_non50_neutralized"] is True
+    assert fields["holding_score_timeout_like"] is True
+    assert fields["holding_score_transport_fail_closed"] is True
+    assert fields["holding_score_transport_fail_closed_reason"] == "OpenAI Responses HTTP timeout budget exhausted"
     assert fields["ai_score_raw"] == "74.0"
     assert fields["ai_score_after_bonus"] == "79.0"
     assert fields["entry_score_threshold"] == "75.0"
     assert fields["big_bite_bonus_applied"] is True
     assert fields["ai_cooldown_blocked"] is False
+
+
+def test_holding_score_preflight_blocks_stale_tick_context():
+    preflight = handlers._holding_score_source_quality_from_feature_packet(
+        {
+            "tick_context_stale": True,
+            "tick_context_quality": "stale_tick",
+            "tick_latest_age_ms": 412000,
+            "buy_pressure_10t": 50.0,
+            "tick_aggressor_pressure_usable": False,
+            "tick_aggressor_trusted_count": 0,
+            "curr_vs_micro_vwap_bp": 0.0,
+            "micro_vwap_available": False,
+            "quote_stale": False,
+        },
+        {},
+    )
+
+    assert preflight["data_quality"] == "stale"
+    assert "tick_context_stale" in preflight["source_quality_reason"]
+    assert "tick_context_quality:stale_tick" in preflight["source_quality_reason"]
 
 
 def test_ai_source_quality_fields_marks_not_evaluated_without_snapshot():

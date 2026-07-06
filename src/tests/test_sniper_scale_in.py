@@ -331,6 +331,109 @@ def test_rejected_live_holding_score_keeps_raw_and_effective_provenance(monkeypa
     assert stock["holding_score_effective_usable"] is True
 
 
+def test_holding_score_preflight_stale_tick_skips_live_ai_call(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        REVERSAL_ADD_ENABLED=False,
+    )
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 100.2}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+    now_ts = state_handlers.time.time()
+    pipeline_logs = []
+
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_tick_history_ka10003",
+        lambda *args, **kwargs: [{"time": "09:01:00", "price": 100, "volume": 1}],
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_minute_candles_ka10080",
+        lambda *args, **kwargs: [{"현재가": 100, "고가": 101, "저가": 99, "거래량": 1000}],
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_holding_score_preflight_source_quality",
+        lambda *args, **kwargs: {
+            "blocked": True,
+            "block_reason": "stale_tick_context",
+            "data_quality": "stale",
+            "source_quality_reason": "tick_context_stale,tick_context_quality:stale_tick",
+            "tick_context_stale": True,
+            "tick_context_quality": "stale_tick",
+            "tick_latest_age_ms": 412000,
+            "tick_aggressor_pressure_usable": False,
+            "quote_stale": False,
+            "quote_age_ms": 0,
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": False, "reason": "test_block"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: pipeline_logs.append((stage, fields)),
+    )
+
+    class FakeEngine:
+        def evaluate_scalping_holding_score(self, *args, **kwargs):
+            raise AssertionError("holding score AI call should be preflight-blocked")
+
+    stock = {
+        "id": 92,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "buy_price": 100,
+        "buy_qty": 10,
+        "order_time": now_ts - 120,
+        "last_ai_reviewed_at": now_ts - 999,
+        **_stale_holding_score_fields(50, now_ts=now_ts - 999),
+    }
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={
+            "curr": 100,
+            "orderbook": {
+                "asks": [{"price": 101, "volume": 1000}],
+                "bids": [{"price": 100, "volume": 1000}],
+            },
+        },
+        admin_id=1,
+        market_regime="BULL",
+        radar=object(),
+        ai_engine=FakeEngine(),
+    )
+
+    assert stock["holding_ai_call_skipped_reason"] == "preflight_source_quality_blocked"
+    assert stock["holding_score_source"] == "neutral_unusable"
+    assert stock["holding_score_effective"] == 50.0
+    assert stock["holding_score_score50_origin"] == "preflight_source_quality_blocked"
+    assert stock["holding_score_preflight_blocked"] is True
+    assert stock["holding_score_preflight_block_reason"] == "stale_tick_context"
+    assert stock["holding_score_preflight_source_quality"] == "stale"
+    assert stock["holding_score_source_quality_reason"] == "tick_context_stale,tick_context_quality:stale_tick"
+
+    review_logs = [fields for stage, fields in pipeline_logs if stage == "ai_holding_review"]
+    assert review_logs
+    assert review_logs[-1]["ai_call_skipped_reason"] == "preflight_source_quality_blocked"
+    assert review_logs[-1]["holding_score_score50_origin"] == "preflight_source_quality_blocked"
+    assert review_logs[-1]["holding_score_preflight_blocked"] is True
+    assert review_logs[-1]["holding_score_preflight_source_quality"] == "stale"
+
+
 @pytest.fixture(autouse=True)
 def stub_kt00011_orderable_lookup(monkeypatch):
     state_handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK.clear()
@@ -4931,6 +5034,7 @@ def test_real_scalping_scale_in_uses_buy_window_not_regular_market_close(monkeyp
             "strategy": "SCALPING",
             "buy_price": 234_500,
             "buy_qty": 1,
+            **_fresh_holding_score_fields(70, now_ts=1_000.0),
         },
         code="000500",
         ws_data={"curr": 226_000, "best_bid": 226_000, "best_ask": 226_500},
@@ -4940,6 +5044,9 @@ def test_real_scalping_scale_in_uses_buy_window_not_regular_market_close(monkeyp
             "stop_line_touched": True,
             "profit_rate": -3.63,
             "current_ai_score": 70,
+            "holding_score_source": "live",
+            "holding_score_data_quality": "fresh",
+            "holding_score_effective_usable": True,
         },
         admin_id=1,
     )
@@ -6120,6 +6227,9 @@ def test_dynamic_scale_in_qty_blocks_weak_pyramid_evidence(monkeypatch):
         "name": "TEST",
         "strategy": "SCALPING",
         "buy_qty": 10,
+        "holding_score_source": "live",
+        "holding_score_data_quality": "fresh",
+        "holding_score_effective_usable": True,
         "last_reversal_features": {
             "buy_pressure_10t": 50.0,
             "tick_acceleration_ratio": 0.0,
@@ -6134,6 +6244,9 @@ def test_dynamic_scale_in_qty_blocks_weak_pyramid_evidence(monkeypatch):
         "add_type": "PYRAMID",
         "reason": "scalping_pyramid_ok",
         "current_ai_score": 75,
+        "holding_score_source": "live",
+        "holding_score_data_quality": "fresh",
+        "holding_score_effective_usable": True,
         "profit_rate": 2.0,
         "peak_profit": 2.1,
     }
@@ -6153,6 +6266,259 @@ def test_dynamic_scale_in_qty_blocks_weak_pyramid_evidence(monkeypatch):
     assert blocked["zero_context_blocker"].startswith("pyramid_evidence_insufficient")
     assert blocked["zero_context_qty_state"] == "actual_zero"
     assert "quantity_or_cap_change" in blocked["zero_context_forbidden_uses"]
+
+
+def test_dynamic_scale_in_qty_blocks_real_pyramid_score_50_submit_authority(monkeypatch):
+    rules = replace(
+        CONFIG,
+        MAX_POSITION_PCT=1.0,
+        INVEST_RATIO_SCALPING_MIN=0.10,
+        INVEST_RATIO_SCALPING_MAX=0.30,
+        SCALPING_SCALE_IN_DYNAMIC_QTY_ENABLED=True,
+        SCALPING_PYRAMID_MIN_AI_SCORE=70,
+    )
+    monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
+
+    details = scale_in.describe_dynamic_scale_in_qty(
+        stock={
+            "name": "TEST",
+            "strategy": "SCALPING",
+            "buy_price": 30_100,
+            "buy_qty": 1,
+            "holding_score_source": "live",
+            "holding_score_data_quality": "fresh",
+            "holding_score_effective_usable": True,
+            "last_reversal_features": {
+                "buy_pressure_10t": 100.0,
+                "tick_acceleration_ratio": 4.25,
+                "large_sell_print_detected": False,
+                "curr_vs_micro_vwap_bp": 30.43,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+                "minute_candle_context_quality": "fresh_bar_window",
+                "tick_context_stale": False,
+                "quote_stale": False,
+                "tick_aggressor_trusted_count": 10,
+                "tick_aggressor_pressure_usable": True,
+            },
+            "actual_order_submitted": True,
+        },
+        resolved_price=30_600,
+        deposit=3_657_179,
+        add_type="PYRAMID",
+        strategy="SCALPING",
+        add_reason="scalping_pyramid_ok",
+        price_resolution={"allowed": True},
+        action={
+            "reason": "scalping_pyramid_ok",
+            "current_ai_score": 50,
+            "holding_score_source": "live",
+            "holding_score_data_quality": "fresh",
+            "holding_score_effective_usable": True,
+            "profit_rate": 1.59,
+            "peak_profit": 1.59,
+        },
+    )
+
+    assert details["qty"] == 0
+    assert details["would_qty"] == 0
+    assert details["effective_qty"] == 0
+    assert details["qty_reason"] == "real_pyramid_ai_score_no_submit_authority:ai_score_sentinel_50"
+    assert details["pyramid_ai_score_submit_authority"] is False
+    assert details["pyramid_ai_score_submit_authority_reason"] == "ai_score_sentinel_50"
+    assert details["pyramid_quality_support_score"] >= details["pyramid_quality_required_support_score"]
+
+
+def test_dynamic_scale_in_qty_blocks_real_pyramid_not_evaluated_score_submit_authority(monkeypatch):
+    rules = replace(
+        CONFIG,
+        MAX_POSITION_PCT=1.0,
+        INVEST_RATIO_SCALPING_MIN=0.10,
+        INVEST_RATIO_SCALPING_MAX=0.30,
+        SCALPING_SCALE_IN_DYNAMIC_QTY_ENABLED=True,
+    )
+    monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
+
+    details = scale_in.describe_dynamic_scale_in_qty(
+        stock={
+            "name": "TEST",
+            "strategy": "SCALPING",
+            "buy_price": 30_100,
+            "buy_qty": 1,
+            "holding_ai_score_source": "holding_ai_not_called",
+            "last_reversal_features": {
+                "buy_pressure_10t": 100.0,
+                "tick_acceleration_ratio": 4.25,
+                "large_sell_print_detected": False,
+                "curr_vs_micro_vwap_bp": 30.43,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+                "minute_candle_context_quality": "fresh_bar_window",
+                "tick_aggressor_trusted_count": 10,
+                "tick_aggressor_pressure_usable": True,
+            },
+            "actual_order_submitted": True,
+        },
+        resolved_price=30_600,
+        deposit=3_657_179,
+        add_type="PYRAMID",
+        strategy="SCALPING",
+        add_reason="scalping_pyramid_ok",
+        price_resolution={"allowed": True},
+        action={
+            "reason": "scalping_pyramid_ok",
+            "current_ai_score": 50,
+            "profit_rate": 1.59,
+            "peak_profit": 1.59,
+        },
+    )
+
+    assert details["qty"] == 0
+    assert details["qty_reason"] == "real_pyramid_ai_score_no_submit_authority:ai_score_unavailable"
+    assert details["ai_score_available"] is False
+    assert details["pyramid_ai_score_submit_authority"] is False
+
+
+def test_dynamic_scale_in_qty_blocks_real_pyramid_holding_score_sentinel_mismatch(monkeypatch):
+    rules = replace(
+        CONFIG,
+        MAX_POSITION_PCT=1.0,
+        INVEST_RATIO_SCALPING_MIN=0.10,
+        INVEST_RATIO_SCALPING_MAX=0.30,
+        SCALPING_SCALE_IN_DYNAMIC_QTY_ENABLED=True,
+    )
+    monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
+
+    details = scale_in.describe_dynamic_scale_in_qty(
+        stock={
+            "name": "TEST",
+            "strategy": "SCALPING",
+            "buy_price": 30_100,
+            "buy_qty": 1,
+            "holding_score_source": "live",
+            "holding_score_data_quality": "fresh",
+            "holding_score_effective_usable": True,
+            "holding_score_effective": 50,
+            "last_reversal_features": {
+                "buy_pressure_10t": 100.0,
+                "tick_acceleration_ratio": 4.25,
+                "large_sell_print_detected": False,
+                "curr_vs_micro_vwap_bp": 30.43,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+                "minute_candle_context_quality": "fresh_bar_window",
+                "tick_context_stale": False,
+                "quote_stale": False,
+                "tick_aggressor_trusted_count": 10,
+                "tick_aggressor_pressure_usable": True,
+            },
+            "actual_order_submitted": True,
+        },
+        resolved_price=30_600,
+        deposit=3_657_179,
+        add_type="PYRAMID",
+        strategy="SCALPING",
+        add_reason="scalping_pyramid_ok",
+        price_resolution={"allowed": True},
+        action={
+            "reason": "scalping_pyramid_ok",
+            "current_ai_score": 72,
+            "holding_score_source": "live",
+            "holding_score_data_quality": "fresh",
+            "holding_score_effective_usable": True,
+            "profit_rate": 1.59,
+            "peak_profit": 1.59,
+        },
+    )
+
+    assert details["qty"] == 0
+    assert details["qty_reason"] == "real_pyramid_ai_score_no_submit_authority:holding_score_sentinel_50"
+    assert details["pyramid_ai_score_submit_authority"] is False
+    assert details["pyramid_ai_score_submit_authority_reason"] == "holding_score_sentinel_50"
+    assert details["pyramid_holding_score_effective"] == 50
+
+
+def test_execute_scalping_pyramid_blocks_score_50_before_real_submit(monkeypatch):
+    rules = replace(CONFIG, MAX_POSITION_PCT=1.0)
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
+    state_handlers.KIWOOM_TOKEN = "test"
+
+    sent_orders = []
+    logs = []
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 3_657_179)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: sent_orders.append(args) or {"return_code": "0", "ord_no": "P-SENTINEL"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_resolve_scalp_cash_budget_context",
+        lambda code, unit_price, fallback_orderable_amount: {
+            "budget_base": fallback_orderable_amount,
+            "budget_source": "kt00011_min_account_deposit_cash_orderable",
+            "account_deposit": fallback_orderable_amount,
+            "cash_orderable_amount": fallback_orderable_amount,
+            "cash_orderable_qty_cap": None,
+            "kt00011_error": "",
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 1,
+        "name": "TEST",
+        "strategy": "SCALPING",
+        "buy_price": 30_100,
+        "buy_qty": 1,
+        "holding_score_source": "live",
+        "holding_score_data_quality": "fresh",
+        "holding_score_effective_usable": True,
+        "last_reversal_features": {
+            "buy_pressure_10t": 100.0,
+            "tick_acceleration_ratio": 4.25,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 30.43,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "tick_context_stale": False,
+            "quote_stale": False,
+            "tick_aggressor_trusted_count": 10,
+            "tick_aggressor_pressure_usable": True,
+        },
+    }
+    action = {
+        "add_type": "PYRAMID",
+        "reason": "scalping_pyramid_ok",
+        "current_ai_score": 50,
+        "holding_score_source": "live",
+        "holding_score_data_quality": "fresh",
+        "holding_score_effective_usable": True,
+        "profit_rate": 1.59,
+        "peak_profit": 1.59,
+    }
+
+    result = state_handlers.execute_scale_in_order(
+        stock=stock,
+        code="200710",
+        ws_data={"curr": 30_650, "best_bid": 30_600, "best_ask": 30_800},
+        action=action,
+        admin_id=1,
+    )
+
+    assert result["status"] == "blocked"
+    assert result["block_stage"] == "scale_in_qty_block"
+    assert result["reason"] == "real_pyramid_ai_score_no_submit_authority:ai_score_sentinel_50"
+    assert sent_orders == []
+    blocked = [fields for stage, fields in logs if stage == "scale_in_qty_block"][0]
+    assert blocked["pyramid_ai_score_submit_authority"] is False
+    assert blocked["pyramid_ai_score_submit_authority_reason"] == "ai_score_sentinel_50"
 
 
 def test_dynamic_pyramid_qty_uses_budget_even_when_buy_pressure_is_only_supportive(monkeypatch):
@@ -20733,6 +21099,7 @@ def test_stop_line_touch_mandatory_avg_down_includes_ollix_like_case(monkeypatch
         "buy_price": 166_300,
         "buy_qty": 8,
         "actual_order_submitted": True,
+        **_fresh_holding_score_fields(70, now_ts=1_000.0),
     }
 
     result = state_handlers._evaluate_stop_line_touch_mandatory_avg_down(
@@ -20913,8 +21280,10 @@ def test_first_touch_avgdown_decision_gate_ignores_unusable_ai_support(monkeypat
     )
 
     assert blocked["allowed"] is False
-    assert blocked["reason"] == "insufficient_first_touch_recovery_confirmation"
+    assert blocked["reason"] == "ai_score_no_submit_authority:ai_score_unavailable"
     assert blocked["fields"]["first_touch_avgdown_ai_score_usable"] is False
+    assert blocked["fields"]["first_touch_avgdown_ai_score_submit_authority"] is False
+    assert blocked["fields"]["first_touch_avgdown_ai_score_submit_authority_reason"] == "ai_score_unavailable"
     assert "ai_score_unusable_ignored" in blocked["fields"]["first_touch_avgdown_risk_signals"]
 
 
@@ -20933,10 +21302,31 @@ def test_first_touch_avgdown_decision_gate_rejects_ai_without_provenance(monkeyp
     )
 
     assert blocked["allowed"] is False
-    assert blocked["reason"] == "insufficient_first_touch_recovery_confirmation"
+    assert blocked["reason"] == "ai_score_no_submit_authority:ai_score_unavailable"
     assert blocked["fields"]["first_touch_avgdown_ai_score_usable"] is False
     assert blocked["fields"]["first_touch_avgdown_ai_score_source"] == "-"
+    assert blocked["fields"]["first_touch_avgdown_ai_score_submit_authority"] is False
+    assert blocked["fields"]["first_touch_avgdown_ai_score_submit_authority_reason"] == "ai_score_unavailable"
     assert "ai_score_unusable_ignored" in blocked["fields"]["first_touch_avgdown_risk_signals"]
+
+
+def test_first_touch_avgdown_decision_gate_rejects_holding_score_sentinel_even_when_action_score_high(monkeypatch):
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", CONFIG)
+
+    blocked = state_handlers._evaluate_first_touch_avgdown_decision_gate(
+        stock={"strategy": "SCALPING", **_fresh_holding_score_fields(50, now_ts=1_000.0)},
+        ws_data={"curr": 10_000, "best_bid": 9_990, "best_ask": 10_000},
+        context_fields={},
+        current_ai_score=72,
+        peak_profit=0.75,
+        profit_rate=-3.42,
+        now_ts=1_000.0,
+    )
+
+    assert blocked["allowed"] is False
+    assert blocked["reason"] == "ai_score_no_submit_authority:holding_score_sentinel_50"
+    assert blocked["fields"]["first_touch_avgdown_ai_score_submit_authority"] is False
+    assert blocked["fields"]["first_touch_avgdown_ai_score_submit_authority_reason"] == "holding_score_sentinel_50"
 
 
 def test_first_touch_avgdown_decision_gate_stale_prior_keeps_existing_decision(monkeypatch):
@@ -21046,8 +21436,9 @@ def test_first_touch_avgdown_decision_gate_support_prior_does_not_replace_ai_pro
     )
 
     assert blocked["allowed"] is False
-    assert blocked["reason"] == "insufficient_first_touch_recovery_confirmation"
+    assert blocked["reason"] == "ai_score_no_submit_authority:ai_score_unavailable"
     assert blocked["fields"]["first_touch_avgdown_ai_score_usable"] is False
+    assert blocked["fields"]["first_touch_avgdown_ai_score_submit_authority"] is False
     assert "runtime_prior_support" in blocked["fields"]["first_touch_avgdown_support_signals"]
 
 
@@ -21055,6 +21446,7 @@ def test_first_touch_avgdown_decision_gate_allows_prior_peak_recovery(monkeypatc
     monkeypatch.setattr(state_handlers, "TRADING_RULES", CONFIG)
     stock = {
         "strategy": "SCALPING",
+        **_fresh_holding_score_fields(62, now_ts=1_000.0),
         "trade_quality_block_history": [
             {"stage": "blocked_vpw", "ts": 995.0, "risk_state": "below_static_vpw_context"}
             for _ in range(11)
@@ -21094,6 +21486,7 @@ def test_first_touch_avgdown_decision_gate_ignores_stale_microstructure_support(
     )
     stock = {
         "strategy": "SCALPING",
+        **_fresh_holding_score_fields(55, now_ts=1_000.0),
         "last_reversal_features": {
             "buy_pressure_10t": 91.0,
             "tick_acceleration_ratio": 1.25,
@@ -21147,6 +21540,7 @@ def test_first_touch_avgdown_decision_gate_does_not_use_unavailable_micro_vwap_s
     )
     stock = {
         "strategy": "SCALPING",
+        **_fresh_holding_score_fields(55, now_ts=1_000.0),
         "last_reversal_features": {
             "buy_pressure_10t": 91.0,
             "tick_acceleration_ratio": 1.25,
@@ -21197,6 +21591,7 @@ def test_first_touch_avgdown_decision_gate_does_not_use_micro_vwap_without_prove
     )
     stock = {
         "strategy": "SCALPING",
+        **_fresh_holding_score_fields(55, now_ts=1_000.0),
         "last_reversal_features": {
             "buy_pressure_10t": 91.0,
             "tick_acceleration_ratio": 1.25,
@@ -21245,6 +21640,7 @@ def test_first_touch_avgdown_decision_gate_uses_fresh_microstructure_support(mon
     )
     stock = {
         "strategy": "SCALPING",
+        **_fresh_holding_score_fields(55, now_ts=1_000.0),
         "last_reversal_features": {
             "buy_pressure_10t": 91.0,
             "tick_acceleration_ratio": 1.25,
@@ -21299,6 +21695,7 @@ def test_first_touch_avgdown_decision_gate_context_micro_uses_stock_freshness(mo
     )
     stock = {
         "strategy": "SCALPING",
+        **_fresh_holding_score_fields(55, now_ts=1_000.0),
         "last_reversal_features": {
             "buy_pressure_10t": 91.0,
             "tick_acceleration_ratio": 1.25,
@@ -21351,6 +21748,7 @@ def test_stop_line_touch_mandatory_avg_down_submits_before_grace(monkeypatch):
         "buy_price": 166_300,
         "buy_qty": 8,
         "actual_order_submitted": True,
+        **_fresh_holding_score_fields(70, now_ts=1_000.0),
     }
     pipeline_events = []
     add_calls = []
@@ -21382,7 +21780,7 @@ def test_stop_line_touch_mandatory_avg_down_submits_before_grace(monkeypatch):
         exit_rule="scalp_soft_stop_pct",
         profit_rate=-3.65,
         peak_profit=0.31,
-        current_ai_score=50,
+        current_ai_score=70,
         held_sec=1_494,
         dynamic_stop_pct=-3.00,
         now_ts=1_000.0,
@@ -21402,6 +21800,76 @@ def test_stop_line_touch_mandatory_avg_down_submits_before_grace(monkeypatch):
         "real_scalping_first_touch_avgdown_decision_gate"
     )
     assert by_stage["stop_line_touch_mandatory_avg_down_submitted"]["actual_order_submitted"] is True
+
+
+def test_stop_line_touch_avgdown_blocks_score_50_before_real_submit(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=True,
+        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=3,
+    )
+    stock = {
+        "id": 14731,
+        "code": "272210",
+        "name": "한화시스템",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 37_600,
+        "buy_qty": 1,
+        "actual_order_submitted": True,
+        **_fresh_holding_score_fields(50, now_ts=1_000.0),
+    }
+    pipeline_events = []
+    add_calls = []
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": True, "reason": "ok"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_process_scale_in_action",
+        lambda **kwargs: add_calls.append(kwargs) or {"return_code": "0", "ord_no": "SENTINEL50"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: pipeline_events.append((stage, fields)),
+    )
+
+    result = state_handlers._attempt_stop_line_touch_mandatory_avg_down(
+        stock=stock,
+        code="272210",
+        ws_data={"curr": 36_450, "best_bid": 36_450, "best_ask": 36_500},
+        strategy="SCALPING",
+        market_regime="NORMAL",
+        admin_id=1,
+        sell_reason_type="LOSS",
+        exit_rule="scalp_soft_stop_pct",
+        profit_rate=-3.06,
+        peak_profit=0.42,
+        current_ai_score=50,
+        held_sec=441,
+        dynamic_stop_pct=-3.00,
+        now_ts=1_000.0,
+        context_fields={"sell_intercept_context": "soft_stop_touch_before_grace"},
+    )
+
+    assert result == {
+        "attempted": True,
+        "submitted": False,
+        "reason": "ai_score_no_submit_authority:ai_score_sentinel_50",
+    }
+    assert add_calls == []
+    assert "stop_line_touch_avg_down_used" not in stock
+    by_stage = {stage: fields for stage, fields in pipeline_events}
+    assert "stop_line_touch_mandatory_avg_down_candidate" not in by_stage
+    blocked = by_stage["stop_line_touch_first_touch_avgdown_decision_blocked"]
+    assert blocked["actual_order_submitted"] is False
+    assert blocked["broker_order_forbidden"] is True
+    assert blocked["first_touch_avgdown_decision_allowed"] is False
+    assert blocked["first_touch_avgdown_ai_score_submit_authority"] is False
+    assert blocked["first_touch_avgdown_ai_score_submit_authority_reason"] == "ai_score_sentinel_50"
 
 
 def test_stop_line_touch_first_touch_avgdown_decision_blocks_submit(monkeypatch):
@@ -22307,6 +22775,7 @@ def test_stop_line_touch_mandatory_avg_down_uses_fresh_rest_orderbook_confirmati
         "buy_qty": 30,
         "actual_order_submitted": True,
         "holding_rest_quote_only_recovery": True,
+        **_fresh_holding_score_fields(70, now_ts=1_000.0),
     }
     pipeline_events = []
     add_calls = []
@@ -22369,7 +22838,7 @@ def test_stop_line_touch_mandatory_avg_down_uses_fresh_rest_orderbook_confirmati
         exit_rule="scalp_soft_stop_pct",
         profit_rate=-3.95,
         peak_profit=1.02,
-        current_ai_score=50,
+        current_ai_score=70,
         held_sec=3_070,
         dynamic_stop_pct=-3.00,
         now_ts=1_000.0,

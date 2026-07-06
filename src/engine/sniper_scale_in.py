@@ -191,6 +191,53 @@ def _ai_score_available_for_scale_in(stock, action=None, *, current_ai_score=Non
     return True, source or "-"
 
 
+def _real_pyramid_ai_score_submit_authority(
+    *,
+    ai_score_available,
+    current_ai_score,
+    holding_score_effective=None,
+    sim_uncapped_qty=False,
+):
+    """Real PYRAMID submit needs an evaluated non-sentinel score; strategy scoring still treats it as a prior."""
+    if sim_uncapped_qty:
+        return {
+            "allowed": True,
+            "reason": "not_applicable_sim_or_probe",
+            "sentinel_score_max": 50.0,
+        }
+    score = _safe_float(current_ai_score, None)
+    effective_score = _safe_float(holding_score_effective, score)
+    if not _safe_bool(ai_score_available, False):
+        return {
+            "allowed": False,
+            "reason": "ai_score_unavailable",
+            "sentinel_score_max": 50.0,
+        }
+    if score is None:
+        return {
+            "allowed": False,
+            "reason": "ai_score_missing",
+            "sentinel_score_max": 50.0,
+        }
+    if score <= 50.0:
+        return {
+            "allowed": False,
+            "reason": "ai_score_sentinel_50",
+            "sentinel_score_max": 50.0,
+        }
+    if effective_score is None or effective_score <= 50.0:
+        return {
+            "allowed": False,
+            "reason": "holding_score_sentinel_50",
+            "sentinel_score_max": 50.0,
+        }
+    return {
+        "allowed": True,
+        "reason": "evaluated_score_above_sentinel",
+        "sentinel_score_max": 50.0,
+    }
+
+
 def _has_explicit_ai_score_provenance(stock, action=None):
     action = action if isinstance(action, dict) else {}
     stock = stock if isinstance(stock, dict) else {}
@@ -1823,6 +1870,10 @@ def describe_dynamic_scale_in_qty(
         action.get("current_ai_score", stock.get("current_ai_score", (stock.get("rt_ai_prob") or 0) * 100)),
         0.0,
     )
+    holding_score_effective = _safe_float(
+        action.get("holding_score_effective", stock.get("holding_score_effective", current_ai_score)),
+        current_ai_score,
+    )
     ai_score_available, ai_score_source = _ai_score_available_for_scale_in(
         stock,
         action,
@@ -1883,6 +1934,12 @@ def describe_dynamic_scale_in_qty(
             "tick_aggressor_pressure_usable_bool": bool(pressure_usable),
         }
         quality_decision = _pyramid_quality_decision(quality_context)
+        submit_authority = _real_pyramid_ai_score_submit_authority(
+            ai_score_available=ai_score_available,
+            current_ai_score=current_ai_score,
+            holding_score_effective=holding_score_effective,
+            sim_uncapped_qty=bool(details["sim_uncapped_qty"]),
+        )
         details.update(
             {
                 "current_ai_score": round(current_ai_score, 4),
@@ -1905,8 +1962,23 @@ def describe_dynamic_scale_in_qty(
                 "pyramid_quality_support_signals": ",".join(quality_decision["support_signals"]) or "-",
                 "pyramid_quality_risk_signals": ",".join(quality_decision["risk_signals"]) or "-",
                 "pyramid_quality_hard_blockers": ",".join(quality_decision["hard_blockers"]) or "-",
+                "pyramid_ai_score_submit_authority": bool(submit_authority["allowed"]),
+                "pyramid_ai_score_submit_authority_reason": submit_authority["reason"],
+                "pyramid_ai_score_sentinel_max": submit_authority["sentinel_score_max"],
+                "pyramid_holding_score_effective": round(holding_score_effective, 4),
             }
         )
+        if not submit_authority["allowed"]:
+            details.update(
+                {
+                    "would_qty": 0,
+                    "effective_qty": 0,
+                    "qty": 0,
+                    "qty_reason": "real_pyramid_ai_score_no_submit_authority:"
+                    + str(submit_authority["reason"]),
+                }
+            )
+            return details
         if not hard_checks["peak_hold_ok"] or not quality_decision["allowed"]:
             failed = ["peak_hold_ok"] if not hard_checks["peak_hold_ok"] else []
             failed.extend(quality_decision["hard_blockers"] or quality_decision["risk_signals"])

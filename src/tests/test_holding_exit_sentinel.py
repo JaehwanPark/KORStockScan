@@ -157,6 +157,63 @@ def test_stale_with_active_holding_is_runtime_ops(monkeypatch, tmp_path):
     assert report["classification"]["primary"] == "RUNTIME_OPS"
 
 
+def test_score50_origin_counts_split_preflight_and_neutralized(monkeypatch, tmp_path):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-06",
+        [
+            _event(
+                "2026-05-06",
+                "10:00:00",
+                "ai_holding_review",
+                record_id=1,
+                fields={
+                    "holding_score_effective": "50",
+                    "holding_score_score50_origin": "preflight_source_quality_blocked",
+                    "holding_score_preflight_blocked": "True",
+                },
+            ),
+            _event(
+                "2026-05-06",
+                "10:01:00",
+                "ai_holding_review",
+                record_id=2,
+                fields={
+                    "holding_score_effective": "50",
+                    "holding_score_raw": "62",
+                    "holding_score_score50_origin": "post_call_source_quality_neutralized",
+                    "holding_score_raw_score_non50_neutralized": "True",
+                },
+            ),
+            _event(
+                "2026-05-06",
+                "10:02:00",
+                "ai_holding_reuse_bypass",
+                record_id=3,
+                fields={"ai_score": "50"},
+            ),
+        ],
+    )
+
+    report = sentinel.build_holding_exit_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "10:05:00"),
+    )
+    session = report["current"]["session"]
+
+    assert session["score50_origin_counts"] == {
+        "legacy_or_unclassified_score50": 1,
+        "post_call_source_quality_neutralized": 1,
+        "preflight_source_quality_blocked": 1,
+    }
+    assert session["holding_score_preflight_blocked_events"] == 1
+    assert session["holding_score_raw_non50_neutralized_events"] == 1
+    markdown = sentinel.build_markdown(report)
+    assert "score50 origins" in markdown
+    assert "score50 raw-non50 neutralized" in markdown
+
+
 def test_policy_excludes_telegram_alert(monkeypatch, tmp_path):
     monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
     _write_events(tmp_path, "2026-05-06", [_event("2026-05-06", "10:00:00", "holding_started")])
