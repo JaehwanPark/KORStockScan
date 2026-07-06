@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import date, timedelta
 
 import pandas as pd
@@ -143,3 +144,40 @@ def test_daily_db_fallback_replaces_missing_ws_when_live_enabled(monkeypatch):
     assert live["fallback_from_source_quality"] == "missing_ws_snapshot"
     assert live["daily_foreign_net_qty"] == 12345
     assert rows[0]["live_confirmed"] is True
+
+
+def test_write_ws_snapshot_preserves_realtime_type_and_trade_tick_provenance(monkeypatch, tmp_path):
+    snapshot_path = tmp_path / "latest.json"
+    monkeypatch.setattr(mod, "WS_SNAPSHOT_PATH", snapshot_path)
+
+    written = mod.write_ws_snapshot(
+        {
+            "011200": {
+                "curr": 10200,
+                "last_ws_update_ts": 1000.0,
+                "received_types": {"0D", "0B"},
+                "last_realtime_type_ts": {"0B": 999.5, "0D": 998.0, "bad": "x"},
+                "last_trade_tick": {
+                    "ts": 999.5,
+                    "price": 10200,
+                    "volume": 3,
+                    "strength": 121.5,
+                    "source": "0B",
+                    "nested": {"ignored": True},
+                },
+            }
+        },
+        now_ts=1001.0,
+    )
+
+    assert written == snapshot_path
+    payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    stock = payload["stocks"]["011200"]
+    assert stock["received_types"] == ["0B", "0D"]
+    assert stock["last_realtime_type_ts"] == {"0B": 999.5, "0D": 998.0}
+    assert stock["last_realtime_type_ages_ms"] == {"0B": 1500.0, "0D": 3000.0}
+    assert stock["last_0b_ts"] == 999.5
+    assert stock["last_0b_age_ms"] == 1500.0
+    assert stock["last_trade_tick"]["price"] == 10200
+    assert "nested" not in stock["last_trade_tick"]
+    assert stock["last_trade_tick_age_ms"] == 1500.0

@@ -655,8 +655,61 @@ def load_or_build_report(
     return build_report(target_date, db_url=db_url, live_intraday=live_intraday, write=True)
 
 
+def _ws_snapshot_received_types(value: Any) -> list[str]:
+    if isinstance(value, (set, list, tuple)):
+        return sorted(str(item) for item in value if item is not None and str(item))
+    if value is None:
+        return []
+    return [str(value)] if str(value) else []
+
+
+def _ws_snapshot_realtime_type_ts(value: Any) -> dict[str, float]:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, float] = {}
+    for key, raw_ts in value.items():
+        if key is None:
+            continue
+        ts = _safe_float(raw_ts, 0.0)
+        if ts > 0 and math.isfinite(ts):
+            result[str(key)] = ts
+    return result
+
+
+def _ws_snapshot_age_ms(ts: Any, now_ts: float) -> Any:
+    ts_value = _safe_float(ts, 0.0)
+    if ts_value <= 0 or not math.isfinite(ts_value):
+        return "not_available_timestamp"
+    return round(max(0.0, now_ts - ts_value) * 1000.0, 3)
+
+
+def _ws_snapshot_last_trade_tick(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    allowed_keys = {
+        "ts",
+        "price",
+        "volume",
+        "strength",
+        "trade_time",
+        "trade_ts",
+        "source",
+        "real_type",
+    }
+    result: dict[str, Any] = {}
+    for key in allowed_keys:
+        if key not in value:
+            continue
+        item = value.get(key)
+        if isinstance(item, float) and not math.isfinite(item):
+            continue
+        if item is None or isinstance(item, (str, int, float, bool)):
+            result[key] = item
+    return result
+
+
 def write_ws_snapshot(realtime_data: dict[str, Any], *, now_ts: float | None = None) -> Path | None:
-    """Persist a minimal read-only WS snapshot for dashboard consumers."""
+    """Persist a read-only WS snapshot for dashboard and source-quality consumers."""
     now_ts = now_ts or time.time()
     stocks: dict[str, Any] = {}
     for code, row in (realtime_data or {}).items():
@@ -667,6 +720,8 @@ def write_ws_snapshot(realtime_data: dict[str, Any], *, now_ts: float | None = N
         bids = orderbook.get("bids") or []
         best_ask = _safe_int((asks[0] or {}).get("price")) if asks else 0
         best_bid = _safe_int((bids[0] or {}).get("price")) if bids else 0
+        realtime_type_ts = _ws_snapshot_realtime_type_ts(row.get("last_realtime_type_ts"))
+        last_trade_tick = _ws_snapshot_last_trade_tick(row.get("last_trade_tick"))
         stocks[str(code)] = {
             "curr": _safe_int(row.get("curr")),
             "foreign_broker_net_est_qty": _safe_int(row.get("foreign_broker_net_est_qty")),
@@ -675,6 +730,15 @@ def write_ws_snapshot(realtime_data: dict[str, Any], *, now_ts: float | None = N
             "last_ws_update_ts": _safe_float(row.get("last_ws_update_ts")),
             "best_bid": best_bid,
             "best_ask": best_ask,
+            "received_types": _ws_snapshot_received_types(row.get("received_types")),
+            "last_realtime_type_ts": realtime_type_ts,
+            "last_realtime_type_ages_ms": {
+                real_type: _ws_snapshot_age_ms(ts, now_ts) for real_type, ts in realtime_type_ts.items()
+            },
+            "last_0b_ts": realtime_type_ts.get("0B", 0.0),
+            "last_0b_age_ms": _ws_snapshot_age_ms(realtime_type_ts.get("0B"), now_ts),
+            "last_trade_tick": last_trade_tick,
+            "last_trade_tick_age_ms": _ws_snapshot_age_ms(last_trade_tick.get("ts"), now_ts),
         }
     payload = {
         "schema_version": "kiwoom_ws_dashboard_snapshot_v1",
