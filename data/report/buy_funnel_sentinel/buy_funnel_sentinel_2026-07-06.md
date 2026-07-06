@@ -15,24 +15,24 @@
 
 ## 근거
 
-- as_of: `2026-07-06T13:40:02`
+- as_of: `2026-07-06T15:20:02`
 - baseline_date: `2026-07-03`
-- ai_confirmed unique: `41`
-- budget_pass unique: `20`
-- latency_pass unique: `11`
-- submitted unique: `10`
-- holding_started unique: `9`
-- budget/ai unique: `48.8%` (baseline `38.5`)
-- submitted/ai unique: `24.4%` (baseline `19.2`)
+- ai_confirmed unique: `48`
+- budget_pass unique: `21`
+- latency_pass unique: `13`
+- submitted unique: `12`
+- holding_started unique: `11`
+- budget/ai unique: `43.8%` (baseline `48.6`)
+- submitted/ai unique: `25.0%` (baseline `32.4`)
 - critical submit thresholds: `submitted/ai < 20.0%` or `submitted/budget <= 10.0%` (floors: ai>=20, budget>=3)
-- top blockers: `blocked_strength_momentum:below_window_buy_value=302, blocked_strength_momentum:below_strength_base=160, blocked_liquidity:-=115, blocked_vpw:-=105, latency_block:latency_state_danger=103`
+- top blockers: `blocked_strength_momentum:below_window_buy_value=386, blocked_strength_momentum:below_strength_base=230, blocked_vpw:-=161, blocked_liquidity:-=141, blocked_overbought:-=123`
 - swing blockers: `-`
-- upstream blockers: `blocked_ai_score:ai_score_50_buy_hold_override=58, first_ai_wait:-=51, blocked_ai_score:score_62.0=42, blocked_ai_score:score_58.0=29, blocked_ai_score:score_54.0=19`
-- AI terminal reasons: `ai_terminal:blocked_ai_score_below_buy_score_threshold=127, ai_terminal:first_ai_wait_big_bite_not_confirmed=51, ai_terminal:entry_policy_no_buy_score_prior=4`
-- latency blockers: `latency_block:latency_state_danger=103`
-- price guards: `entry_ai_price_canary_skip_order:orderbook_micro is ready and micro_state is bearish with negative OFI and high top_depth_ratio indicating weak bid-side support=1, entry_ai_price_canary_fallback:above_best_ask=1`
-- quote refresh: `attempted=20, applied=18, latency_recovered=5, submitted_after_refresh=4`
-- quote refresh downstream: `{'budget_pass_no_submit_event': 1, 'order_bundle_submitted': 4}`
+- upstream blockers: `first_ai_wait:-=89, blocked_ai_score:ai_score_50_buy_hold_override=70, blocked_ai_score:score_62.0=48, blocked_ai_score:score_58.0=33, blocked_ai_score:score_54.0=20`
+- AI terminal reasons: `ai_terminal:blocked_ai_score_below_buy_score_threshold=127, ai_terminal:first_ai_wait_big_bite_not_confirmed=89, ai_terminal:entry_policy_no_buy_score_prior=23`
+- latency blockers: `latency_block:latency_state_danger=111`
+- price guards: `entry_ai_price_canary_skip_order:orderbook_micro is ready and micro_state is bearish with negative OFI and high top_depth_ratio indicating weak bid-side support=1, entry_ai_price_canary_fallback:above_best_ask=1, entry_ai_price_canary_fallback:low_confidence=1`
+- quote refresh: `attempted=21, applied=19, latency_recovered=6, submitted_after_refresh=5`
+- quote refresh downstream: `{'budget_pass_no_submit_event': 1, 'order_bundle_submitted': 5}`
 
 ## 금지된 자동변경
 
@@ -49,6 +49,6 @@
 
 ## Window Summary
 
-- `5m`: ai=2, budget=3, latency=0, submitted=0, top=`blocked_strength_momentum:below_window_buy_value=7, latency_block:latency_state_danger=4, blocked_liquidity:-=2`, swing=`-`, upstream=`first_ai_wait:-=2, blocked_ai_score:score_62.0=2, blocked_ai_score:ai_score_50_buy_hold_override=1`, ai_terminal=`ai_terminal:first_ai_wait_big_bite_not_confirmed=2, ai_terminal:entry_policy_no_buy_score_prior=2`
-- `10m`: ai=3, budget=4, latency=0, submitted=0, top=`latency_block:latency_state_danger=11, blocked_strength_momentum:below_window_buy_value=11, blocked_liquidity:-=4`, swing=`-`, upstream=`blocked_ai_score:ai_score_50_buy_hold_override=3, first_ai_wait:-=2, blocked_ai_score:score_62.0=2`, ai_terminal=`ai_terminal:first_ai_wait_big_bite_not_confirmed=2, ai_terminal:entry_policy_no_buy_score_prior=2`
-- `30m`: ai=9, budget=6, latency=1, submitted=1, top=`blocked_strength_momentum:below_window_buy_value=37, latency_block:latency_state_danger=24, blocked_strength_momentum:below_strength_base=17`, swing=`-`, upstream=`blocked_ai_score:ai_score_50_buy_hold_override=12, first_ai_wait:-=7, blocked_ai_score:score_62.0=3`, ai_terminal=`ai_terminal:first_ai_wait_big_bite_not_confirmed=7, ai_terminal:entry_policy_no_buy_score_prior=4, ai_terminal:blocked_ai_score_below_buy_score_threshold=1`
+- `5m`: ai=4, budget=1, latency=1, submitted=1, top=`blocked_strength_momentum:below_strength_base=5, blocked_vpw:-=3, blocked_liquidity:-=2`, swing=`-`, upstream=`blocked_ai_score:score_62.0=2, blocked_ai_score:score_58.0=1, first_ai_wait:-=1`, ai_terminal=`ai_terminal:entry_policy_no_buy_score_prior=3, ai_terminal:first_ai_wait_big_bite_not_confirmed=1`
+- `10m`: ai=4, budget=1, latency=1, submitted=1, top=`blocked_strength_momentum:below_strength_base=8, blocked_vpw:-=4, blocked_strength_momentum:below_window_buy_value=4`, swing=`-`, upstream=`first_ai_wait:-=2, blocked_ai_score:score_62.0=2, wait65_79_ev_candidate:score_74.0=1`, ai_terminal=`ai_terminal:entry_policy_no_buy_score_prior=3, ai_terminal:first_ai_wait_big_bite_not_confirmed=2`
+- `30m`: ai=7, budget=1, latency=1, submitted=1, top=`blocked_strength_momentum:below_strength_base=17, blocked_strength_momentum:below_window_buy_value=13, blocked_vpw:-=12`, swing=`-`, upstream=`first_ai_wait:-=6, blocked_ai_score:score_58.0=2, blocked_ai_score:score_62.0=2`, ai_terminal=`ai_terminal:first_ai_wait_big_bite_not_confirmed=6, ai_terminal:entry_policy_no_buy_score_prior=6`

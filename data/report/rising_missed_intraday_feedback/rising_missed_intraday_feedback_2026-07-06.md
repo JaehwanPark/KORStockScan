@@ -1,6 +1,6 @@
 # 2026-07-06 Rising Missed Intraday Feedback
 
-- generated_at: 2026-07-06T13:35:01+09:00
+- generated_at: 2026-07-06T16:15:01+09:00
 - decision_authority: source_only_intraday_feedback_no_runtime_mutation
 - runtime_effect: false
 - allowed_runtime_apply: false
@@ -8,8 +8,8 @@
 
 ## Summary
 
-- forced_rising_missed_record_count: 25
-- holding_record_count: 16
+- forced_rising_missed_record_count: 28
+- holding_record_count: 18
 - rising_missed_avg_down_ge2_count: 0
 - first_touch_regression_record_count: 6
 - first_touch_avg_down_submitted_count: 4
