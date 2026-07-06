@@ -165,6 +165,7 @@ from src.engine.scalping.entry_opportunity_recheck import (
 from src.engine.scalping.entry_ai_gate import (
     entry_buy_decision_allowed,
     entry_score_role_log_fields,
+    evaluate_ai_score_prior,
     evaluate_entry_score_role_gate,
     get_entry_buy_score_threshold,
 )
@@ -2031,9 +2032,14 @@ def _evaluate_scalp_profit_stagnation_exit(
     if profit_rate < min_profit:
         _clear_profit_stagnation_state(stock)
         return {"should_exit": False, "reason": "below_min_profit"}
-    if current_ai_score < min_ai_score:
-        _clear_profit_stagnation_state(stock)
-        return {"should_exit": False, "reason": "ai_score_below_min"}
+    score_prior_fields = {
+        "score_gate_converted_to_prior": True,
+        "hard_gate_veto": False,
+        "min_ai_score": min_ai_score,
+        "current_ai_score": current_ai_score,
+        "score_prior_band": "supportive" if current_ai_score >= min_ai_score else "low",
+        "ai_score_prior_weight": 0.6 if current_ai_score >= min_ai_score else -0.3,
+    }
 
     started_at = _safe_float(stock.get("profit_stagnation_started_at"), 0.0)
     anchor_profit = _safe_float(stock.get("profit_stagnation_anchor_profit"), profit_rate)
@@ -2058,6 +2064,7 @@ def _evaluate_scalp_profit_stagnation_exit(
             "anchor_peak": float(peak_profit),
             "profit_move": 0.0,
             "peak_improve": 0.0,
+            **score_prior_fields,
         }
 
     elapsed_sec = max(0, int(float(now_ts) - started_at))
@@ -2074,6 +2081,7 @@ def _evaluate_scalp_profit_stagnation_exit(
             "min_sec": min_sec,
             "max_profit_move": max_profit_move,
             "max_peak_improve": max_peak_improve,
+            **score_prior_fields,
         }
     return {
         "should_exit": False,
@@ -2083,6 +2091,7 @@ def _evaluate_scalp_profit_stagnation_exit(
         "anchor_peak": anchor_peak,
         "profit_move": profit_move,
         "peak_improve": max(0.0, peak_improve),
+        **score_prior_fields,
     }
 
 
@@ -2209,14 +2218,6 @@ def _evaluate_scalp_mfe_protect_exit(
             "giveback_pct": giveback_pct,
             "min_giveback_pct": min_giveback_pct,
         }
-    if current_ai_score > max_ai_score:
-        return {
-            "should_exit": False,
-            "reason": "ai_score_above_max",
-            "current_ai_score": current_ai_score,
-            "max_ai_score": max_ai_score,
-        }
-
     return {
         "should_exit": True,
         "exit_rule": "scalp_mfe_protect_exit",
@@ -2230,6 +2231,11 @@ def _evaluate_scalp_mfe_protect_exit(
         "min_giveback_pct": min_giveback_pct,
         "min_hold_sec": min_hold_sec,
         "max_ai_score": max_ai_score,
+        "current_ai_score": current_ai_score,
+        "score_gate_converted_to_prior": True,
+        "hard_gate_veto": False,
+        "score_prior_band": "hold_supportive" if current_ai_score > max_ai_score else "neutral_or_low",
+        "ai_score_prior_weight": -0.3 if current_ai_score > max_ai_score else 0.0,
     }
 
 
@@ -3626,17 +3632,12 @@ def _evaluate_late_loss_avg_down_retry(
             "ai_score_data_quality": holding_score_ctx.get("data_quality", "-"),
             "ai_score_excluded_reason": holding_score_ctx.get("excluded_reason", "-"),
         }
-    if current_ai_score < min_ai_score:
-        return {
-            "should_retry": False,
-            "reason": "ai_score_below_min",
-            "current_ai_score": current_ai_score,
-            "min_ai_score": min_ai_score,
-            "ai_score_usable": bool(holding_score_ctx.get("usable_for_scale_in_support")),
-            "ai_score_source": holding_score_ctx.get("source", "-"),
-            "ai_score_data_quality": holding_score_ctx.get("data_quality", "-"),
-            "ai_score_excluded_reason": holding_score_ctx.get("excluded_reason", "-"),
-        }
+    score_prior_fields = {
+        "score_gate_converted_to_prior": True,
+        "hard_gate_veto": False,
+        "score_prior_band": "supportive" if current_ai_score >= min_ai_score else "low",
+        "ai_score_prior_weight": 0.6 if current_ai_score >= min_ai_score else -0.3,
+    }
 
     return {
         "should_retry": True,
@@ -3652,6 +3653,7 @@ def _evaluate_late_loss_avg_down_retry(
         "eligibility_path": "positive_mfe_giveback" if peak_path_ok else "deep_loss_retry",
         "min_hold_sec": min_hold_sec,
         "min_ai_score": min_ai_score,
+        **score_prior_fields,
         "ai_score_usable": bool(holding_score_ctx.get("usable_for_scale_in_support")),
         "ai_score_source": holding_score_ctx.get("source", "-"),
         "ai_score_data_quality": holding_score_ctx.get("data_quality", "-"),
@@ -3666,6 +3668,7 @@ def _evaluate_late_loss_avg_down_retry(
             "profit_rate": profit_rate,
             "peak_profit": peak_profit,
             "current_ai_score": current_ai_score,
+            **score_prior_fields,
             "ai_score_usable": bool(holding_score_ctx.get("usable_for_scale_in_support")),
             "ai_score_source": holding_score_ctx.get("source", "-"),
             "ai_score_data_quality": holding_score_ctx.get("data_quality", "-"),
@@ -12116,8 +12119,7 @@ def _pending_scale_in_revalidation_context(
         reasons.append("feature_context_missing")
     elif feature_quality.get("reversal_feature_stale"):
         reasons.append("feature_context_unusable")
-    if float(current_ai_score or 0.0) <= float(ai_limit):
-        reasons.append("holding_ai_score_deteriorated")
+    ai_score_deteriorated = float(current_ai_score or 0.0) <= float(ai_limit)
     if micro_vwap_bp < min_micro_vwap_bp:
         reasons.append("micro_vwap_negative")
     if buy_pressure < min_buy_pressure:
@@ -12131,6 +12133,11 @@ def _pending_scale_in_revalidation_context(
         "reason": "|".join(reasons),
         "holding_exit_matrix_original_action": matrix_action or "-",
         "current_ai_score": float(current_ai_score or 0.0),
+        "score_gate_converted_to_prior": True,
+        "hard_gate_veto": False,
+        "holding_ai_score_deteriorated_prior": bool(ai_score_deteriorated),
+        "score_prior_band": "low" if ai_score_deteriorated else "supportive",
+        "ai_score_prior_weight": -0.3 if ai_score_deteriorated else 0.6,
         "curr_vs_micro_vwap_bp": micro_vwap_bp,
         "buy_pressure_10t": buy_pressure,
         "tick_acceleration_ratio": tick_accel,
@@ -13049,6 +13056,20 @@ def _build_soft_stop_dynamic_grace_decision(
     )
     ai_score_usable = bool(holding_score_ctx.get("usable_for_soft_grace"))
     ai_score_prior_pass = bool(ai_score_usable and current_ai_score >= min_ai_score)
+    ai_score_prior_weight = (
+        0.6
+        if ai_score_prior_pass
+        else -0.3
+        if ai_score_usable and current_ai_score >= (min_ai_score - 10.0)
+        else 0.0
+    )
+    ai_score_prior_band = (
+        "supportive"
+        if ai_score_prior_pass
+        else "low"
+        if ai_score_usable and current_ai_score >= (min_ai_score - 10.0)
+        else "neutral_or_unknown"
+    )
     strong_absorption_support = bool(absorption_score >= strong_absorption_min_score)
 
     started_at = _safe_float(stock.get("soft_stop_dynamic_grace_started_at"), 0.0)
@@ -13084,8 +13105,6 @@ def _build_soft_stop_dynamic_grace_decision(
         skip_reason = "reversal_add_post_eval"
     elif bool(quote_stale) or bool(source_quality_hard_gap):
         skip_reason = "source_or_quote_stale"
-    elif not ai_score_usable:
-        skip_reason = "ai_score_unusable"
     elif profit_rate > dynamic_stop_pct:
         skip_reason = "not_soft_stop_zone"
     elif profit_rate <= hard_stop_pct:
@@ -13149,6 +13168,17 @@ def _build_soft_stop_dynamic_grace_decision(
         "reversal_feature_stale_reason": features.get("reversal_feature_stale_reason", "-"),
         "ai_score_usable": ai_score_usable,
         "ai_score_prior_pass": bool(ai_score_prior_pass),
+        "score_gate_converted_to_prior": True,
+        "hard_gate_veto": False,
+        "ai_score_prior_weight": float(ai_score_prior_weight),
+        "score_prior_band": ai_score_prior_band,
+        "score_prior_reason": (
+            "score_prior_supportive"
+            if ai_score_prior_pass
+            else "score_prior_low"
+            if ai_score_usable
+            else "score_unusable_neutral_prior"
+        ),
         "min_ai_score": float(min_ai_score),
         "ai_score_source": holding_score_ctx.get("source", "-"),
         "ai_score_data_quality": holding_score_ctx.get("data_quality", "-"),
@@ -16002,7 +16032,7 @@ def _maybe_apply_entry_passive_probe(
     watching_action = str((stock or {}).get("last_watching_ai_action") or "").strip().upper()
     watching_score = _safe_float((stock or {}).get("last_watching_ai_score"), 0.0)
     min_score = float(_rule("SCALPING_ENTRY_PASSIVE_PROBE_MIN_AI_SCORE", 75) or 75)
-    if watching_action != "WAIT" or watching_score < min_score:
+    if watching_action != "WAIT":
         return candidate_price, {}
     max_qty = int(_rule("SCALPING_ENTRY_PASSIVE_PROBE_MAX_QTY", 1) or 1)
     total_qty = _entry_planned_total_qty(planned_orders)
@@ -16032,6 +16062,10 @@ def _maybe_apply_entry_passive_probe(
         "entry_passive_probe_max_below_bid_ticks": max_below_bid_ticks,
         "entry_passive_probe_ai_action": watching_action,
         "entry_passive_probe_ai_score": f"{watching_score:.1f}",
+        "entry_passive_probe_score_gate_converted_to_prior": True,
+        "entry_passive_probe_hard_gate_veto": False,
+        "entry_passive_probe_score_prior_band": "supportive" if watching_score >= min_score else "low",
+        "entry_passive_probe_ai_score_prior_weight": 0.6 if watching_score >= min_score else -0.3,
         "entry_passive_probe_total_qty": total_qty,
     }
 
@@ -17674,8 +17708,25 @@ def _update_ai_quote_freshness_fields(ws_data: dict | None) -> dict:
         ws_data["quote_age_ms"] = quote_age_ms
         ws_data["quote_age_source"] = "last_ws_update_ts"
         max_quote_age_ms = int(float(_rule("SCALP_PRE_AI_MAX_WS_AGE_SEC", 3.0) or 3.0) * 1000.0)
-        ws_data["ai_quote_stale_max_ms"] = max(1, max_quote_age_ms)
-        ws_data["quote_stale"] = quote_age_ms > max(1, max_quote_age_ms)
+        stale_max_ms = max(1, max_quote_age_ms)
+        ws_data["ai_quote_stale_max_ms"] = stale_max_ms
+        ws_data["quote_stale"] = quote_age_ms > stale_max_ms
+        pre_ai_refresh_age_ms = _safe_float(ws_data.get("pre_ai_ws_snapshot_refresh_age_ms"), -1.0)
+        if pre_ai_refresh_age_ms >= 0:
+            consume_delta_ms = round(quote_age_ms - pre_ai_refresh_age_ms, 3)
+            ws_data["pre_ai_to_consume_quote_age_delta_ms"] = consume_delta_ms
+            ws_data["quote_stale_consumer_latency_gap_ms"] = max(0.0, consume_delta_ms)
+            if ws_data["quote_stale"] and pre_ai_refresh_age_ms <= stale_max_ms:
+                ws_data["quote_stale_source_class"] = "consumer_latency_stale_after_fresh_refresh"
+            elif ws_data["quote_stale"]:
+                ws_data["quote_stale_source_class"] = "ws_snapshot_stale_at_consume"
+            else:
+                ws_data["quote_stale_source_class"] = "fresh_at_consume_after_refresh"
+        elif ws_data["quote_stale"]:
+            ws_data["quote_stale_source_class"] = "ws_snapshot_stale_at_consume"
+            ws_data["quote_stale_consumer_latency_gap_ms"] = "not_available_consumer_latency_gap_ms"
+        else:
+            ws_data["quote_stale_source_class"] = "fresh_at_consume"
         return ws_data
     elif ws_data.get("orderbook"):
         ws_data.setdefault("quote_age_source", "orderbook_without_timestamp")
@@ -18369,6 +18420,18 @@ def _resolve_early_accel_recheck(
         "minute_candle_latest_age_ms": _safe_int(features.get("minute_candle_latest_age_ms"), 0),
         "micro_vwap_usable": bool(features.get("micro_vwap_usable")),
         "quote_stale": bool(features.get("quote_stale")),
+        "score_gate_converted_to_prior": True,
+        "hard_gate_veto": False,
+        "score_prior_band": (
+            "supportive"
+            if _safe_float(current_ai_score, 50.0) >= get_entry_buy_score_threshold()
+            else "low"
+        ),
+        "ai_score_prior_weight": (
+            0.6
+            if _safe_float(current_ai_score, 50.0) >= get_entry_buy_score_threshold()
+            else -0.3
+        ),
     }
 
     if not _rule_bool("EARLY_ACCEL_RECHECK_RUNTIME_ENABLED", False):
@@ -18413,8 +18476,8 @@ def _resolve_early_accel_recheck(
         return {"allowed": False, "skip_reason": "micro_vwap_below_min", **base}
     if _safe_float(features.get("tick_accel"), 0.0) < _rule_float("EARLY_ACCEL_RECHECK_MIN_TICK_ACCEL", 1.10):
         return {"allowed": False, "skip_reason": "tick_accel_below_min", **base}
-    if _safe_float(current_ai_score, 50.0) >= get_entry_buy_score_threshold():
-        return {"allowed": False, "skip_reason": "already_buy_score_path", **base}
+    if str((stock or {}).get("last_watching_ai_action") or "").strip().upper() == "BUY":
+        return {"allowed": False, "skip_reason": "already_buy_action_path", **base}
     return {"allowed": True, "skip_reason": "", **base}
 
 
@@ -18597,10 +18660,27 @@ def _resolve_early_accel_strong_bundle_recheck(
     min_score = max(0, _rule_int("EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MIN_SCORE", 60))
     max_score = max(min_score, _rule_int("EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_SCORE", 74))
     numeric_score = _safe_float(ai_score, 0.0)
-    if numeric_score < float(min_score):
-        return {"allowed": False, "skip_reason": "score_below_min", **base}
-    if numeric_score > float(max_score):
-        return {"allowed": False, "skip_reason": "score_above_max", **base}
+    base.update(
+        {
+            "score_gate_converted_to_prior": True,
+            "hard_gate_veto": False,
+            "score_in_prior_band": bool(float(min_score) <= numeric_score <= float(max_score)),
+            "score_prior_band": (
+                "supportive"
+                if float(min_score) <= numeric_score <= float(max_score)
+                else "low"
+                if numeric_score < float(min_score)
+                else "high"
+            ),
+            "ai_score_prior_weight": (
+                0.3
+                if float(min_score) <= numeric_score <= float(max_score)
+                else -0.2
+                if numeric_score < float(min_score)
+                else 0.0
+            ),
+        }
+    )
     if (
         promotion_reason not in _early_accel_strong_bundle_allowed_reasons()
         and not _source_signature_strong_bundle_pass(source_signature_text)
@@ -18845,8 +18925,17 @@ def _resolve_pre_submit_liquidity_relief(
         return {"allowed": False, "relief_skip_reason": "latency_danger_relief_combo", **base}
     if latency_state == "DANGER" and not latency_effectively_allowed:
         return {"allowed": False, "relief_skip_reason": "latency_danger", **base}
-    if _safe_float(ai_score, 0.0) < float(_rule_int("PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_AI_SCORE", 75)):
-        return {"allowed": False, "relief_skip_reason": "ai_score_below_min", **base}
+    relief_min_ai_score = float(_rule_int("PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_AI_SCORE", 75))
+    relief_score = _safe_float(ai_score, 0.0)
+    base.update(
+        {
+            "score_gate_converted_to_prior": True,
+            "hard_gate_veto": False,
+            "score_prior_band": "supportive" if relief_score >= relief_min_ai_score else "low",
+            "ai_score_prior_weight": 0.6 if relief_score >= relief_min_ai_score else -0.3,
+            "min_ai_score": relief_min_ai_score,
+        }
+    )
     if not strong_bundle_path:
         return {"allowed": False, "relief_skip_reason": "not_strong_bundle_path", **base}
     if (
@@ -19000,10 +19089,28 @@ def _resolve_ai_numeric_consistency_recheck(
     if not inconsistency:
         return {"allowed": False, "skip_reason": "no_numeric_inconsistency", **base}
     score_floor = max(0, _rule_int("AI_NUMERIC_CONSISTENCY_RECHECK_MIN_SCORE", 60))
-    if _safe_float(ai_score, 0.0) < float(score_floor):
-        return {"allowed": False, "skip_reason": "score_below_min", **base}
-    if _safe_float(ai_score, 0.0) > 74.0:
-        return {"allowed": False, "skip_reason": "score_above_wait_band", **base}
+    numeric_score = _safe_float(ai_score, 0.0)
+    base.update(
+        {
+            "score_gate_converted_to_prior": True,
+            "hard_gate_veto": False,
+            "score_in_prior_band": bool(float(score_floor) <= numeric_score <= 74.0),
+            "score_prior_band": (
+                "supportive"
+                if float(score_floor) <= numeric_score <= 74.0
+                else "low"
+                if numeric_score < float(score_floor)
+                else "high"
+            ),
+            "ai_score_prior_weight": (
+                0.3
+                if float(score_floor) <= numeric_score <= 74.0
+                else -0.2
+                if numeric_score < float(score_floor)
+                else 0.0
+            ),
+        }
+    )
     if stale_quote:
         return {"allowed": False, "skip_reason": "stale_quote_or_context", **base}
     if source_quality_block:
@@ -19012,7 +19119,6 @@ def _resolve_ai_numeric_consistency_recheck(
         return {"allowed": False, "skip_reason": "max_recheck_count_reached", **base}
     if (
         feature_pass_count >= max(1, _rule_int("AI_NUMERIC_CONSISTENCY_RECHECK_MIN_FEATURE_PASS_COUNT", 3))
-        and _safe_float(ai_score, 0.0) >= float(score_floor)
     ):
         return {"allowed": True, "skip_reason": "allowed", **base}
     if feature_pass_count >= 2 and 65.0 <= _safe_float(ai_score, 0.0) <= 74.0:
@@ -22233,12 +22339,28 @@ def _score65_74_recovery_probe_decision(
         return {"allowed": False, "evaluated": False, "score65_74_recovery_probe_skip_reason": "invalid_score"}
     min_score = _rule_float("AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE", 60)
     max_score = _rule_float("AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE", 74)
-    if score < min_score or score > max_score:
-        return {"allowed": False, "evaluated": False, "score65_74_recovery_probe_skip_reason": "score_out_of_range"}
+    score_prior_fields = {
+        "score_gate_converted_to_prior": True,
+        "hard_gate_veto": False,
+        "score65_74_recovery_probe_score_in_prior_band": bool(min_score <= score <= max_score),
+        "score_prior_band": (
+            "supportive"
+            if min_score <= score <= max_score
+            else "low"
+            if score < min_score
+            else "high"
+        ),
+        "ai_score_prior_weight": 0.3 if min_score <= score <= max_score else 0.0,
+    }
 
     latency_state = str((ws_data or {}).get("latency_state", "") or "").strip().upper()
     if latency_state == "DANGER":
-        return {"allowed": False, "evaluated": True, "score65_74_recovery_probe_skip_reason": "latency_state_danger"}
+        return {
+            "allowed": False,
+            "evaluated": True,
+            "score65_74_recovery_probe_skip_reason": "latency_state_danger",
+            **score_prior_fields,
+        }
 
     probe = feature_probe or _extract_buy_recovery_probe_features(
         ai_engine,
@@ -22247,7 +22369,12 @@ def _score65_74_recovery_probe_decision(
         recent_candles,
     )
     if not isinstance(probe, dict):
-        return {"allowed": False, "evaluated": True, "score65_74_recovery_probe_skip_reason": "feature_probe_missing"}
+        return {
+            "allowed": False,
+            "evaluated": True,
+            "score65_74_recovery_probe_skip_reason": "feature_probe_missing",
+            **score_prior_fields,
+        }
     if _buy_recovery_probe_source_quality_hard_block(probe):
         quote_stale_relief_allowed, quote_stale_relief_fields = _quote_stale_score65_74_probe_relief_allowed(
             stock,
@@ -22263,6 +22390,7 @@ def _score65_74_recovery_probe_decision(
                 "allowed": False,
                 "evaluated": True,
                 "score65_74_recovery_probe_skip_reason": "source_quality_hard_block",
+                **score_prior_fields,
             }
     else:
         quote_stale_relief_fields = {}
@@ -22276,6 +22404,7 @@ def _score65_74_recovery_probe_decision(
             "score65_74_recovery_probe_skip_reason": (
                 f"ai_wait_negative_reason_veto:{negative_reason}"
             ),
+            **score_prior_fields,
         }
     guard = _score65_74_recovery_probe_repeat_guard(
         stock,
@@ -22298,7 +22427,7 @@ def _score65_74_recovery_probe_decision(
         guard = {**guard, **quote_stale_relief_fields}
     if micro_relief_fields:
         guard = {**guard, **micro_relief_fields}
-    return {**guard, "evaluated": True, "allowed": bool(guard.get("allowed"))}
+    return {**guard, **score_prior_fields, "evaluated": True, "allowed": bool(guard.get("allowed"))}
 
 
 def _should_run_score65_74_recovery_probe(
@@ -22537,13 +22666,18 @@ def _scalp_ai_wait_rebound_recheck_decision(
             "ai_wait_rebound_recheck_anchor_score": f"{score:.1f}",
             "ai_wait_rebound_recheck_min_score": f"{min_score:.1f}",
             "ai_wait_rebound_recheck_max_score": f"{max_score:.1f}",
+            "ai_wait_rebound_recheck_score_gate_converted_to_prior": True,
+            "ai_wait_rebound_recheck_hard_gate_veto": False,
+            "ai_wait_rebound_recheck_score_prior_band": (
+                "candidate_band" if min_score <= score <= max_score else "outside_candidate_band"
+            ),
+            "ai_wait_rebound_recheck_ai_score_prior_weight": (
+                0.3 if min_score <= score <= max_score else 0.0
+            ),
         }
     )
     if action != "WAIT":
         fields["ai_wait_rebound_recheck_reason"] = "anchor_action_not_wait"
-        return fields
-    if score < min_score or score > max_score:
-        fields["ai_wait_rebound_recheck_reason"] = "anchor_score_out_of_range"
         return fields
 
     anchor_at = _safe_float(stock.get("ai_wait_cooldown_anchor_at"), 0.0)
@@ -22723,8 +22857,22 @@ def _arm_ai_wait_rebound_recheck_anchor(
         return fields
     min_score = _safe_float(os.getenv("KORSTOCKSCAN_SCALP_AI_WAIT_REBOUND_RECHECK_MIN_SCORE"), 65.0)
     max_score = _safe_float(os.getenv("KORSTOCKSCAN_SCALP_AI_WAIT_REBOUND_RECHECK_MAX_SCORE"), 74.0)
-    if action != "WAIT" or score < min_score or score > max_score:
-        fields["ai_wait_rebound_anchor_reason"] = "anchor_not_wait_score_band"
+    fields.update(
+        {
+            "ai_wait_rebound_anchor_min_score": f"{min_score:.1f}",
+            "ai_wait_rebound_anchor_max_score": f"{max_score:.1f}",
+            "ai_wait_rebound_anchor_score_gate_converted_to_prior": True,
+            "ai_wait_rebound_anchor_hard_gate_veto": False,
+            "ai_wait_rebound_anchor_score_prior_band": (
+                "candidate_band" if min_score <= score <= max_score else "outside_candidate_band"
+            ),
+            "ai_wait_rebound_anchor_ai_score_prior_weight": (
+                0.3 if min_score <= score <= max_score else 0.0
+            ),
+        }
+    )
+    if action != "WAIT":
+        fields["ai_wait_rebound_anchor_reason"] = "anchor_action_not_wait"
         return fields
 
     cooldown_raw = (
@@ -23861,16 +24009,18 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 )
                                 if recheck_action == "BUY" and recheck_score < recheck_buy_min_score:
                                     recheck_decision = dict(recheck_decision or {})
-                                    recheck_action = "WAIT"
-                                    recheck_score = min(recheck_score, recheck_buy_min_score - 1.0)
                                     base_reason = str(recheck_decision.get("reason") or "").strip()
-                                    below_min_reason = (
-                                        f"numeric_consistency_recheck_buy_score_below_min:{int(recheck_buy_min_score)}"
-                                    )
-                                    recheck_decision["action"] = recheck_action
-                                    recheck_decision["score"] = recheck_score
+                                    below_min_reason = "numeric_consistency_recheck_buy_score_prior_low"
                                     recheck_decision["reason"] = (
                                         f"{base_reason} | {below_min_reason}" if base_reason else below_min_reason
+                                    )
+                                    ai_numeric_consistency_recheck.update(
+                                        {
+                                            "score_gate_converted_to_prior": True,
+                                            "hard_gate_veto": False,
+                                            "score_prior_band": "low",
+                                            "ai_score_prior_weight": -0.3,
+                                        }
                                     )
                                 if recheck_action != "BUY":
                                     recheck_score = min(recheck_score, 74.0)
@@ -24044,16 +24194,18 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 )
                                 if recheck_action == "BUY" and recheck_score < recheck_buy_min_score:
                                     recheck_decision = dict(recheck_decision or {})
-                                    recheck_action = "WAIT"
-                                    recheck_score = min(recheck_score, recheck_buy_min_score - 1.0)
                                     base_reason = str(recheck_decision.get("reason") or "").strip()
-                                    below_min_reason = (
-                                        f"early_accel_strong_bundle_recheck_buy_score_below_min:{int(recheck_buy_min_score)}"
-                                    )
-                                    recheck_decision["action"] = recheck_action
-                                    recheck_decision["score"] = recheck_score
+                                    below_min_reason = "early_accel_strong_bundle_recheck_buy_score_prior_low"
                                     recheck_decision["reason"] = (
                                         f"{base_reason} | {below_min_reason}" if base_reason else below_min_reason
+                                    )
+                                    early_accel_strong_bundle_recheck.update(
+                                        {
+                                            "score_gate_converted_to_prior": True,
+                                            "hard_gate_veto": False,
+                                            "score_prior_band": "low",
+                                            "ai_score_prior_weight": -0.3,
+                                        }
                                     )
                                 if recheck_action != "BUY":
                                     recheck_score = min(recheck_score, recheck_buy_min_score - 1.0)
@@ -24070,7 +24222,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                         "recheck_count": recheck_attempt_count,
                                     }
                                 )
-                                if recheck_action == "BUY" and recheck_score >= recheck_buy_min_score:
+                                if recheck_action == "BUY":
                                     early_accel_strong_bundle_recheck["recheck_failure_class"] = (
                                         "not_applicable"
                                     )
@@ -24712,10 +24864,16 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                 blocked_ai_score_candidate = (
                     (
                         not entry_score_role_gate.get("entry_score_usable_for_entry_submit")
-                        or not entry_buy_decision_allowed(current_ai_action, current_ai_score, config)
+                        or current_ai_action != "BUY"
                     )
                     and current_ai_score != 50
                     and not wait6579_probe_entry_unlocked
+                )
+                entry_score_prior = evaluate_ai_score_prior(
+                    current_ai_action,
+                    current_ai_score,
+                    config,
+                    usable=bool(entry_score_role_gate.get("entry_score_usable_for_entry_submit")),
                 )
                 entry_opportunity_recheck_allowed = False
                 if blocked_ai_score_candidate and entry_score_role_gate.get("entry_score_usable_for_recheck"):
@@ -24734,7 +24892,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                         ws_age_ms=ws_age_ms,
                         latency_state=(ws_data or {}).get("latency_state"),
                         source_stage="blocked_ai_score",
-                        source_reason="blocked_ai_score_below_buy_score_threshold",
+                        source_reason="entry_policy_no_buy_score_prior",
                         state=_ENTRY_OPPORTUNITY_RECHECK_STATE,
                         today=now_dt.date().isoformat(),
                     )
@@ -24860,22 +25018,23 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 "ai_call_trigger_reason": ai_call_trigger_reason or "-",
                                 **_entry_runtime_retry_exclusion_fields(ai_call_trigger_reason),
                             },
-                            _build_ai_overlap_log_fields(
-                                stock=stock,
-                                ai_score=current_ai_score,
+                                _build_ai_overlap_log_fields(
+                                    stock=stock,
+                                    ai_score=current_ai_score,
                                 momentum_tag=stock.get("entry_momentum_tag"),
                                 threshold_profile=stock.get("entry_threshold_profile"),
                                 overbought_blocked=False,
                                 blocked_stage="blocked_ai_score",
                             ),
-                            ai_ops_fields,
-                            entry_score_role_log_fields(entry_score_role_gate),
-                        ),
-                    )
+                                ai_ops_fields,
+                                entry_score_role_log_fields(entry_score_role_gate),
+                                entry_score_prior,
+                            ),
+                        )
                     _log_ai_confirmed_terminal_no_budget(
                         stock,
                         code,
-                        terminal_reason="blocked_ai_score_below_buy_score_threshold",
+                        terminal_reason="entry_policy_no_buy_score_prior",
                         source_stage="blocked_ai_score",
                         ai_decision=ai_decision,
                         ai_score=current_ai_score,
@@ -24884,6 +25043,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                             "explicit_buy_action": explicit_buy_action,
                             "wait6579_probe_entry_unlocked": wait6579_probe_entry_unlocked,
                             **entry_score_role_log_fields(entry_score_role_gate),
+                            **entry_score_prior,
                         },
                     )
                     _emit_scalp_entry_adm_snapshot(
@@ -24898,6 +25058,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                         extra_fields={
                             **_entry_runtime_retry_exclusion_fields(ai_call_trigger_reason),
                             **entry_score_role_log_fields(entry_score_role_gate),
+                            **entry_score_prior,
                         },
                     )
                     _maybe_arm_scalp_sim_candidate_window(
@@ -24908,7 +25069,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                         ai_decision=ai_decision,
                         ai_score=current_ai_score,
                         source_stage="blocked_ai_score",
-                        blocked_reason="below_buy_score_threshold",
+                        blocked_reason="entry_policy_no_buy_score_prior",
                         ai_engine=ai_engine,
                     )
                     return False
@@ -24930,7 +25091,6 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                     and last_ai_time == 0
                     and not big_bite_confirmed
                     and explicit_buy_action
-                    and current_ai_score >= entry_buy_score_threshold
                 )
 
                 final_target_buy_price, final_used_drop_pct = radar.get_smart_target_price(
@@ -31526,7 +31686,6 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                                 and (_ra_min_hold <= held_sec <= _ra_max_hold)
                                 and (profit_rate >= _ra_floor - _ra_margin)
                                 and reversal_add_ai_state_usable
-                                and current_ai_score >= _ra_min_ai
                                 and (_ra_recovering_delta or _ra_recovering_consec)
                                 and _ra_supply_ok
                             )
@@ -31541,6 +31700,14 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                                     reason="candidate_ready",
                                     profit_rate=f"{profit_rate:+.2f}",
                                     ai_score=f"{current_ai_score:.0f}",
+                                    score_gate_converted_to_prior=True,
+                                    hard_gate_veto=False,
+                                    score_prior_band="supportive"
+                                    if current_ai_score >= _ra_min_ai
+                                    else "low",
+                                    ai_score_prior_weight=0.6
+                                    if current_ai_score >= _ra_min_ai
+                                    else -0.3,
                                     **_holding_score_role_log_fields(reversal_add_score_ctx),
                                 )
                             elif (not _ra_candidate_ok) and _ra_state == 'REVERSAL_CANDIDATE':
@@ -32103,6 +32270,11 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     soft_stop_dynamic_grace_data_window_end=soft_stop_dynamic_grace_decision.get("data_window_end"),
                     soft_stop_dynamic_grace_ai_score_usable=soft_stop_dynamic_grace_decision.get("ai_score_usable", "-"),
                     soft_stop_dynamic_grace_ai_score_prior_pass=soft_stop_dynamic_grace_decision.get("ai_score_prior_pass", "-"),
+                    soft_stop_dynamic_grace_score_gate_converted_to_prior=soft_stop_dynamic_grace_decision.get("score_gate_converted_to_prior", True),
+                    soft_stop_dynamic_grace_hard_gate_veto=soft_stop_dynamic_grace_decision.get("hard_gate_veto", False),
+                    soft_stop_dynamic_grace_ai_score_prior_weight=soft_stop_dynamic_grace_decision.get("ai_score_prior_weight", 0.0),
+                    soft_stop_dynamic_grace_score_prior_band=soft_stop_dynamic_grace_decision.get("score_prior_band", "neutral_or_unknown"),
+                    soft_stop_dynamic_grace_score_prior_reason=soft_stop_dynamic_grace_decision.get("score_prior_reason", "-"),
                     soft_stop_dynamic_grace_strong_absorption_support=soft_stop_dynamic_grace_decision.get("strong_absorption_support", "-"),
                     soft_stop_dynamic_grace_ai_score_source=soft_stop_dynamic_grace_decision.get("ai_score_source", "-"),
                     soft_stop_dynamic_grace_ai_score_data_quality=soft_stop_dynamic_grace_decision.get("ai_score_data_quality", "-"),
@@ -32426,6 +32598,11 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     soft_stop_dynamic_grace_skip_reason=soft_stop_dynamic_grace_decision.get("skip_reason", "-"),
                     soft_stop_dynamic_grace_ai_score_usable=soft_stop_dynamic_grace_decision.get("ai_score_usable", "-"),
                     soft_stop_dynamic_grace_ai_score_prior_pass=soft_stop_dynamic_grace_decision.get("ai_score_prior_pass", "-"),
+                    soft_stop_dynamic_grace_score_gate_converted_to_prior=soft_stop_dynamic_grace_decision.get("score_gate_converted_to_prior", True),
+                    soft_stop_dynamic_grace_hard_gate_veto=soft_stop_dynamic_grace_decision.get("hard_gate_veto", False),
+                    soft_stop_dynamic_grace_ai_score_prior_weight=soft_stop_dynamic_grace_decision.get("ai_score_prior_weight", 0.0),
+                    soft_stop_dynamic_grace_score_prior_band=soft_stop_dynamic_grace_decision.get("score_prior_band", "neutral_or_unknown"),
+                    soft_stop_dynamic_grace_score_prior_reason=soft_stop_dynamic_grace_decision.get("score_prior_reason", "-"),
                     soft_stop_dynamic_grace_strong_absorption_support=soft_stop_dynamic_grace_decision.get("strong_absorption_support", "-"),
                     soft_stop_dynamic_grace_ai_score_source=soft_stop_dynamic_grace_decision.get("ai_score_source", "-"),
                     soft_stop_dynamic_grace_ai_score_data_quality=soft_stop_dynamic_grace_decision.get("ai_score_data_quality", "-"),
@@ -32478,6 +32655,11 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         soft_stop_dynamic_grace_data_window_end=soft_stop_dynamic_grace_decision.get("data_window_end"),
                         soft_stop_dynamic_grace_ai_score_usable=soft_stop_dynamic_grace_decision.get("ai_score_usable", "-"),
                         soft_stop_dynamic_grace_ai_score_prior_pass=soft_stop_dynamic_grace_decision.get("ai_score_prior_pass", "-"),
+                        soft_stop_dynamic_grace_score_gate_converted_to_prior=soft_stop_dynamic_grace_decision.get("score_gate_converted_to_prior", True),
+                        soft_stop_dynamic_grace_hard_gate_veto=soft_stop_dynamic_grace_decision.get("hard_gate_veto", False),
+                        soft_stop_dynamic_grace_ai_score_prior_weight=soft_stop_dynamic_grace_decision.get("ai_score_prior_weight", 0.0),
+                        soft_stop_dynamic_grace_score_prior_band=soft_stop_dynamic_grace_decision.get("score_prior_band", "neutral_or_unknown"),
+                        soft_stop_dynamic_grace_score_prior_reason=soft_stop_dynamic_grace_decision.get("score_prior_reason", "-"),
                         soft_stop_dynamic_grace_strong_absorption_support=soft_stop_dynamic_grace_decision.get("strong_absorption_support", "-"),
                         soft_stop_dynamic_grace_ai_score_source=soft_stop_dynamic_grace_decision.get("ai_score_source", "-"),
                         soft_stop_dynamic_grace_ai_score_data_quality=soft_stop_dynamic_grace_decision.get("ai_score_data_quality", "-"),
@@ -32917,7 +33099,6 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 fallback_action
                 and (not allowed_reasons or fallback_reason in allowed_reasons)
                 and fallback_ai_score_usable
-                and float(current_ai_score or 0.0) >= float(min_fallback_ai)
             )
             fallback_log_fields = _append_reversal_add_probe_fields(
                 {
@@ -32930,6 +33111,18 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     "fallback_add_type": (fallback_action or {}).get("add_type", "-"),
                     "current_ai_score": f"{current_ai_score:.0f}",
                     "min_ai": min_fallback_ai,
+                    "score_gate_converted_to_prior": True,
+                    "hard_gate_veto": False,
+                    "score_prior_band": (
+                        "supportive"
+                        if float(current_ai_score or 0.0) >= float(min_fallback_ai)
+                        else "low"
+                    ),
+                    "ai_score_prior_weight": (
+                        0.6
+                        if float(current_ai_score or 0.0) >= float(min_fallback_ai)
+                        else -0.3
+                    ),
                     "loss_fallback_ai_score_usable": fallback_ai_score_usable,
                     "loss_fallback_ai_score_source": fallback_holding_score_ctx.get("source", "-"),
                     "loss_fallback_ai_score_data_quality": fallback_holding_score_ctx.get("data_quality", "-"),

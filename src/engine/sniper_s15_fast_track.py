@@ -7,6 +7,7 @@ from datetime import datetime
 from src.engine import kiwoom_orders
 from src.engine.sniper_entry_latency import evaluate_live_buy_entry
 from src.engine.trade_profit import calculate_net_profit_rate
+from src.engine.scalping.entry_ai_gate import evaluate_ai_score_prior
 from src.database.models import RecommendationHistory
 from src.utils.constants import TRADING_RULES
 from src.utils.runtime_flags import is_trading_paused
@@ -462,8 +463,14 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
         )
 
         s15_buy_score_threshold = int(getattr(TRADING_RULES, "BUY_SCORE_THRESHOLD", 75) or 75)
-        if ai_res.get('action') != 'BUY' or ai_res.get('score', 0) < s15_buy_score_threshold:
-            block_reason = "ai_not_buy" if ai_res.get('action') != 'BUY' else "ai_score_below_buy_threshold"
+        s15_score_prior = evaluate_ai_score_prior(
+            ai_res.get('action'),
+            ai_res.get('score', 0),
+            {"BUY_SCORE_THRESHOLD": s15_buy_score_threshold},
+            usable=True,
+        )
+        if ai_res.get('action') != 'BUY':
+            block_reason = "ai_not_buy"
             state['status'] = 'FAILED'
             update_s15_shadow_record(state.get('shadow_id'), status='EXPIRED')
             _log_s15_event(
@@ -478,6 +485,11 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
                 ai_action=ai_res.get('action'),
                 ai_score=ai_res.get('score', 0),
                 ai_score_threshold=s15_buy_score_threshold,
+                s15_score_gate_converted_to_prior=True,
+                s15_score_prior_band=s15_score_prior.get("score_prior_band"),
+                s15_ai_score_prior_weight=s15_score_prior.get("ai_score_prior_weight"),
+                s15_score_prior_reason=s15_score_prior.get("score_prior_reason"),
+                s15_hard_gate_veto=False,
             )
             return
 
@@ -497,6 +509,14 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
                 curr_price=curr_price,
                 deposit=deposit,
                 requested_qty=req_qty,
+                ai_action=ai_res.get('action'),
+                ai_score=ai_res.get('score', 0),
+                ai_score_threshold=s15_buy_score_threshold,
+                s15_score_gate_converted_to_prior=True,
+                s15_score_prior_band=s15_score_prior.get("score_prior_band"),
+                s15_ai_score_prior_weight=s15_score_prior.get("ai_score_prior_weight"),
+                s15_score_prior_reason=s15_score_prior.get("score_prior_reason"),
+                s15_hard_gate_veto=False,
             )
             return
 
@@ -538,6 +558,13 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
                 latency_decision=latency_gate.get('decision'),
                 latency_state=latency_gate.get('latency_state'),
                 latency_reason=latency_gate.get('reason'),
+                ai_score=ai_res.get('score', 0),
+                ai_score_threshold=s15_buy_score_threshold,
+                s15_score_gate_converted_to_prior=True,
+                s15_score_prior_band=s15_score_prior.get("score_prior_band"),
+                s15_ai_score_prior_weight=s15_score_prior.get("ai_score_prior_weight"),
+                s15_score_prior_reason=s15_score_prior.get("score_prior_reason"),
+                s15_hard_gate_veto=False,
             )
             return
 
@@ -558,6 +585,13 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
                 curr_price=curr_price,
                 requested_qty=req_qty,
                 order_price=buy_price,
+                ai_score=ai_res.get('score', 0),
+                ai_score_threshold=s15_buy_score_threshold,
+                s15_score_gate_converted_to_prior=True,
+                s15_score_prior_band=s15_score_prior.get("score_prior_band"),
+                s15_ai_score_prior_weight=s15_score_prior.get("ai_score_prior_weight"),
+                s15_score_prior_reason=s15_score_prior.get("score_prior_reason"),
+                s15_hard_gate_veto=False,
                 broker_return_code=(buy_res or {}).get('return_code') if isinstance(buy_res, dict) else "",
                 broker_reason=(buy_res or {}).get('msg') if isinstance(buy_res, dict) else "",
             )
@@ -581,6 +615,14 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
             requested_qty=req_qty,
             order_price=buy_price,
             broker_order_no=state.get('buy_ord_no', ''),
+            ai_action=ai_res.get('action'),
+            ai_score=ai_res.get('score', 0),
+            ai_score_threshold=s15_buy_score_threshold,
+            s15_score_gate_converted_to_prior=True,
+            s15_score_prior_band=s15_score_prior.get("score_prior_band"),
+            s15_ai_score_prior_weight=s15_score_prior.get("ai_score_prior_weight"),
+            s15_score_prior_reason=s15_score_prior.get("score_prior_reason"),
+            s15_hard_gate_veto=False,
         )
 
         expire_at = _now_ts() + 20.0
@@ -614,6 +656,14 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
                 filled_qty=real_buy_qty,
                 broker_order_no=buy_ord_no,
                 s15_cancel_reason="no_fill_after_20s",
+                ai_action=ai_res.get('action'),
+                ai_score=ai_res.get('score', 0),
+                ai_score_threshold=s15_buy_score_threshold,
+                s15_score_gate_converted_to_prior=True,
+                s15_score_prior_band=s15_score_prior.get("score_prior_band"),
+                s15_ai_score_prior_weight=s15_score_prior.get("ai_score_prior_weight"),
+                s15_score_prior_reason=s15_score_prior.get("score_prior_reason"),
+                s15_hard_gate_veto=False,
             )
             return
 

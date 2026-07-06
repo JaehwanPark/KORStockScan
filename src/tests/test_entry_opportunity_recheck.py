@@ -66,10 +66,16 @@ def test_score_70_74_explicit_buy_fresh_quote_can_reenter_normal_path():
     assert "quantity_or_cap_change" not in decision.fields["forbidden_uses"]
 
 
-def test_score_and_action_bounds_are_fail_closed():
-    assert _decision(ai_score=69.9).reason == "score_out_of_range"
+def test_score_bounds_are_prior_not_fail_closed_but_action_still_matters():
+    low = _decision(ai_score=69.9)
+    high = _decision(ai_score=75.0)
+    assert low.allowed
+    assert low.fields["entry_opportunity_recheck_score_gate_converted_to_prior"] is True
+    assert low.fields["entry_opportunity_recheck_hard_gate_veto"] is False
+    assert low.fields["entry_opportunity_recheck_score_prior_band"] == "low"
     assert _decision(ai_score=74.9).allowed
-    assert _decision(ai_score=75.0).reason == "score_out_of_range"
+    assert high.allowed
+    assert high.fields["entry_opportunity_recheck_score_in_prior_band"] is False
     assert _decision(ai_action="WAIT").reason == "ai_action_not_buy"
 
 

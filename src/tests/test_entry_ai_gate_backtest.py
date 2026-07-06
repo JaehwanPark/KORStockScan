@@ -199,8 +199,14 @@ def test_entry_ai_gate_role_gate_and_threshold_helper(monkeypatch):
     monkeypatch.setattr(gate, "TRADING_RULES", rules)
 
     assert gate.entry_buy_decision_allowed("BUY", 72)
-    assert not gate.entry_buy_decision_allowed("BUY", 69.9)
+    assert gate.entry_buy_decision_allowed("BUY", 69.9)
     assert gate.entry_buy_decision_allowed("BUY", 68, {"BUY_SCORE_THRESHOLD": 65})
+    assert not gate.entry_buy_decision_allowed("WAIT", 90)
+
+    low_prior = gate.evaluate_ai_score_prior("BUY", 69.9)
+    assert low_prior["score_gate_converted_to_prior"] is True
+    assert low_prior["hard_gate_veto"] is False
+    assert low_prior["score_prior_band"] == "low"
 
     usable = gate.evaluate_entry_score_role_gate(
         {"action": "BUY", "score": 72, "ai_result_source": "live", "ai_parse_ok": True},

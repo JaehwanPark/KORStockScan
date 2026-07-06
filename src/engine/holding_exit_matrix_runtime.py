@@ -167,6 +167,117 @@ def _holding_matrix_ai_score_context(position_ctx: dict[str, Any] | None) -> dic
     }
 
 
+def _holding_score_prior_fields(
+    *,
+    current_ai_score: Any,
+    threshold: Any,
+    usable: bool,
+    prefix: str = "",
+) -> dict[str, Any]:
+    score = _safe_float(current_ai_score, 0.0)
+    min_score = _safe_float(threshold, 0.0)
+    if not usable:
+        band = "neutral_or_unknown"
+        weight = 0.0
+        confidence = 0.0
+        reason = "ai_score_unusable_neutral_prior"
+    elif score >= min_score:
+        band = "supportive"
+        weight = 0.6
+        confidence = 0.7
+        reason = "ai_score_supportive_prior"
+    else:
+        band = "low"
+        weight = -0.3
+        confidence = 0.5
+        reason = "ai_score_low_prior"
+    return {
+        f"{prefix}score_gate_converted_to_prior": True,
+        f"{prefix}hard_gate_veto": False,
+        f"{prefix}score_prior_band": band,
+        f"{prefix}ai_score_prior_weight": weight,
+        f"{prefix}score_prior_confidence": confidence,
+        f"{prefix}score_prior_reason": reason,
+    }
+
+
+def _holding_matrix_current_micro_support(position_ctx: dict[str, Any] | None) -> dict[str, Any]:
+    ctx = position_ctx if isinstance(position_ctx, dict) else {}
+    stale = any(
+        _safe_bool(ctx.get(key), False)
+        for key in (
+            "quote_stale",
+            "price_context_stale",
+            "micro_context_stale",
+            "reversal_feature_stale",
+            "source_quality_hard_gap",
+        )
+    )
+    pressure_usable = (
+        _safe_bool(ctx.get("tick_aggressor_pressure_usable"), False)
+        or _safe_bool(ctx.get("tick_aggressor_pressure_usable_bool"), False)
+        or _safe_int(ctx.get("tick_aggressor_trusted_count"), 0) > 0
+    )
+    buy_pressure = _safe_float(ctx.get("buy_pressure_10t", ctx.get("buy_pressure")), 0.0)
+    tick_accel = _safe_float(ctx.get("tick_acceleration_ratio", ctx.get("tick_accel")), 0.0)
+    micro_raw = ctx.get("curr_vs_micro_vwap_bp", ctx.get("micro_vwap_bp"))
+    micro_available = micro_raw not in (None, "") and str(micro_raw) != "-"
+    if "micro_vwap_available" in ctx:
+        micro_available = micro_available and _safe_bool(ctx.get("micro_vwap_available"), False)
+    micro_vwap_bp = _safe_float(micro_raw, -999.0)
+    large_sell = _safe_bool(ctx.get("large_sell_print_detected"), False)
+
+    min_buy_pressure = _safe_float(
+        getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_MIN_BUY_PRESSURE", 55.0),
+        55.0,
+    )
+    min_tick_accel = _safe_float(
+        getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_MIN_TICK_ACCEL", 0.5),
+        0.5,
+    )
+    min_micro_vwap_bp = _safe_float(
+        getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_MIN_MICRO_VWAP_BP", -10.0),
+        -10.0,
+    )
+    pressure_ok = pressure_usable and buy_pressure >= min_buy_pressure
+    tick_ok = tick_accel >= min_tick_accel
+    micro_ok = micro_available and micro_vwap_bp >= min_micro_vwap_bp
+    supported = bool((not stale) and pressure_usable and micro_ok and (pressure_ok or tick_ok) and not large_sell)
+
+    support_signals = []
+    risk_signals = []
+    if pressure_ok:
+        support_signals.append("buy_pressure_ok")
+    elif not pressure_usable:
+        risk_signals.append("tick_aggressor_pressure_unusable")
+    else:
+        risk_signals.append("buy_pressure_below_min")
+    if tick_ok:
+        support_signals.append("tick_accel_ok")
+    else:
+        risk_signals.append("tick_accel_below_min")
+    if micro_ok:
+        support_signals.append("micro_vwap_ok")
+    elif not micro_available:
+        risk_signals.append("micro_vwap_missing")
+    else:
+        risk_signals.append("micro_vwap_below_min")
+    if stale:
+        risk_signals.append("source_or_quote_stale")
+    if large_sell:
+        risk_signals.append("large_sell_detected")
+
+    return {
+        "holding_exit_matrix_current_micro_support": supported,
+        "holding_exit_matrix_current_micro_support_signals": ",".join(support_signals) or "-",
+        "holding_exit_matrix_current_micro_risk_signals": ",".join(risk_signals) or "-",
+        "holding_exit_matrix_buy_pressure_10t": round(buy_pressure, 4),
+        "holding_exit_matrix_tick_acceleration_ratio": round(tick_accel, 4),
+        "holding_exit_matrix_curr_vs_micro_vwap_bp": round(micro_vwap_bp, 4) if micro_available else "-",
+        "holding_exit_matrix_micro_vwap_available": bool(micro_available),
+    }
+
+
 def _time_bucket(value: datetime | None) -> str:
     if value is None:
         return "time_unknown"
@@ -393,6 +504,8 @@ def _runtime_bias_from_entries(
     peak_profit = _safe_float((position_ctx or {}).get("peak_profit"), profit_rate)
     ai_context = _holding_matrix_ai_score_context(position_ctx)
     current_ai_score = ai_context["current_ai_score"]
+    avg_ai = int(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_AI_SCORE", 65) or 65)
+    pyr_ai = int(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_PYRAMID_MIN_AI_SCORE", 75) or 75)
     safety_veto = has_holding_exit_matrix_safety_veto(position_ctx)
     result = {
         "holding_exit_matrix_runtime_bias_enabled": runtime_enabled,
@@ -410,7 +523,15 @@ def _runtime_bias_from_entries(
         "holding_exit_matrix_ai_score_data_quality": ai_context["ai_score_data_quality"],
         "holding_exit_matrix_ai_score_excluded_reason": ai_context["ai_score_excluded_reason"],
         "holding_exit_matrix_ai_score_microstructure_confirmed": ai_context["ai_score_microstructure_confirmed"],
+        **_holding_score_prior_fields(
+            current_ai_score=current_ai_score,
+            threshold=avg_ai,
+            usable=ai_context["ai_score_usable"],
+            prefix="holding_exit_matrix_",
+        ),
     }
+    micro_support = _holding_matrix_current_micro_support(position_ctx)
+    result.update(micro_support)
     if not runtime_enabled:
         result["holding_exit_matrix_runtime_reason"] = "runtime_bias_disabled"
         return result
@@ -436,7 +557,7 @@ def _runtime_bias_from_entries(
         biases & {"prefer_avg_down_wait", "prefer_pyramid_wait"}
         and action in _exit_to_hold_candidate_actions()
         and bool(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_EXIT_TO_HOLD_ENABLED", True))
-        and ai_context["ai_score_usable"]
+        and micro_support["holding_exit_matrix_current_micro_support"]
     ):
         forced_action = "HOLD"
         effect = "force_hold"
@@ -444,16 +565,31 @@ def _runtime_bias_from_entries(
 
     if "prefer_avg_down_wait" in biases:
         result["holding_exit_matrix_scale_in_bias"] = "AVG_DOWN"
+        result.update(
+            _holding_score_prior_fields(
+                current_ai_score=current_ai_score,
+                threshold=avg_ai,
+                usable=ai_context["ai_score_usable"],
+                prefix="holding_exit_matrix_",
+            )
+        )
     elif "prefer_pyramid_wait" in biases:
         result["holding_exit_matrix_scale_in_bias"] = "PYRAMID"
+        result.update(
+            _holding_score_prior_fields(
+                current_ai_score=current_ai_score,
+                threshold=pyr_ai,
+                usable=ai_context["ai_score_usable"],
+                prefix="holding_exit_matrix_",
+            )
+        )
 
     if not forced_action and position_ctx:
         drawdown_from_peak = float(peak_profit or 0.0) - float(profit_rate or 0.0)
         if (
             action in _exit_to_hold_candidate_actions()
             and bool(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_EXIT_TO_HOLD_ENABLED", True))
-            and ai_context["ai_score_usable"]
-            and current_ai_score >= float(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_AI_SCORE", 65) or 65)
+            and micro_support["holding_exit_matrix_current_micro_support"]
             and profit_rate >= float(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_PROFIT_PCT", -1.2) or -1.2)
             and profit_rate <= float(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_AVG_DOWN_MAX_PROFIT_PCT", -0.1) or -0.1)
         ):
@@ -464,8 +600,7 @@ def _runtime_bias_from_entries(
         elif (
             action in _exit_to_hold_candidate_actions()
             and bool(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_EXIT_TO_HOLD_ENABLED", True))
-            and ai_context["ai_score_usable"]
-            and current_ai_score >= float(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_PYRAMID_MIN_AI_SCORE", 75) or 75)
+            and micro_support["holding_exit_matrix_current_micro_support"]
             and profit_rate >= float(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_PYRAMID_MIN_PROFIT_PCT", 0.8) or 0.8)
             and drawdown_from_peak <= float(
                 getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_PYRAMID_MAX_DRAWDOWN_FROM_PEAK_PCT", 0.35) or 0.35
@@ -477,7 +612,12 @@ def _runtime_bias_from_entries(
             result["holding_exit_matrix_scale_in_bias"] = "PYRAMID"
 
     if not forced_action:
-        result["holding_exit_matrix_runtime_reason"] = "no_matching_runtime_bias"
+        result["holding_exit_matrix_runtime_reason"] = (
+            "current_micro_support_missing"
+            if biases & {"prefer_avg_down_wait", "prefer_pyramid_wait"}
+            and action in _exit_to_hold_candidate_actions()
+            else "no_matching_runtime_bias"
+        )
         return result
     result.update(
         {
@@ -485,6 +625,8 @@ def _runtime_bias_from_entries(
             "holding_exit_matrix_runtime_effect": effect,
             "holding_exit_matrix_forced_action": forced_action,
             "holding_exit_matrix_runtime_reason": reason,
+            "holding_exit_matrix_score_gate_converted_to_prior": True,
+            "holding_exit_matrix_hard_gate_veto": False,
         }
     )
     return result
@@ -511,6 +653,7 @@ def resolve_holding_exit_matrix_scale_in_bias(
             "current_ai_score": current_ai_score,
         }
     )
+    micro_support = _holding_matrix_current_micro_support(safety_context)
     scale_in_enabled = bool(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_SCALE_IN_BIAS_ENABLED", False))
     lifecycle_decision = resolve_lifecycle_decision(
         stage="scale_in",
@@ -531,18 +674,29 @@ def resolve_holding_exit_matrix_scale_in_bias(
             **lifecycle_decision,
         }
     if lifecycle_effect in {"avg_down_bias", "pyramid_bias"}:
-        if not ai_context["ai_score_usable"]:
+        add_type = "AVG_DOWN" if lifecycle_effect == "avg_down_bias" else "PYRAMID"
+        threshold = (
+            getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_AI_SCORE", 65)
+            if add_type == "AVG_DOWN"
+            else getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_PYRAMID_MIN_AI_SCORE", 75)
+        )
+        if not micro_support["holding_exit_matrix_current_micro_support"]:
             return {
                 "should_add": False,
-                "reason": "holding_exit_matrix_ai_score_unusable",
+                "reason": "holding_exit_matrix_current_micro_support_missing",
                 "ai_score_usable": ai_context["ai_score_usable"],
                 "ai_score_source": ai_context["ai_score_source"],
                 "ai_score_data_quality": ai_context["ai_score_data_quality"],
                 "ai_score_excluded_reason": ai_context["ai_score_excluded_reason"],
                 "ai_score_microstructure_confirmed": ai_context["ai_score_microstructure_confirmed"],
+                **_holding_score_prior_fields(
+                    current_ai_score=current_ai_score,
+                    threshold=threshold,
+                    usable=ai_context["ai_score_usable"],
+                ),
+                **micro_support,
                 **lifecycle_decision,
             }
-        add_type = "AVG_DOWN" if lifecycle_effect == "avg_down_bias" else "PYRAMID"
         return {
             "should_add": True,
             "add_type": add_type,
@@ -553,7 +707,14 @@ def resolve_holding_exit_matrix_scale_in_bias(
             "ai_score_usable": ai_context["ai_score_usable"],
             "ai_score_source": ai_context["ai_score_source"],
             "ai_score_data_quality": ai_context["ai_score_data_quality"],
+            "ai_score_excluded_reason": ai_context["ai_score_excluded_reason"],
             "ai_score_microstructure_confirmed": ai_context["ai_score_microstructure_confirmed"],
+            **_holding_score_prior_fields(
+                current_ai_score=current_ai_score,
+                threshold=threshold,
+                usable=ai_context["ai_score_usable"],
+            ),
+            **micro_support,
             "held_sec": held_sec,
             "holding_exit_matrix_scale_in_bias": add_type,
             **lifecycle_decision,
@@ -563,11 +724,27 @@ def resolve_holding_exit_matrix_scale_in_bias(
     avg_ai = int(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_AI_SCORE", 65) or 65)
     avg_min_held = int(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_HELD_SEC", 10) or 10)
     avg_max_held = int(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_AVG_DOWN_MAX_HELD_SEC", 240) or 240)
-    if avg_min <= float(profit_rate or 0.0) <= avg_max and int(held_sec or 0) >= avg_min_held:
+    avg_window_match = avg_min <= float(profit_rate or 0.0) <= avg_max and int(held_sec or 0) >= avg_min_held
+    if avg_window_match and not micro_support["holding_exit_matrix_current_micro_support"]:
+        return {
+            "should_add": False,
+            "reason": "holding_exit_matrix_current_micro_support_missing",
+            "ai_score_usable": ai_context["ai_score_usable"],
+            "ai_score_source": ai_context["ai_score_source"],
+            "ai_score_data_quality": ai_context["ai_score_data_quality"],
+            "ai_score_excluded_reason": ai_context["ai_score_excluded_reason"],
+            "ai_score_microstructure_confirmed": ai_context["ai_score_microstructure_confirmed"],
+            **_holding_score_prior_fields(
+                current_ai_score=current_ai_score,
+                threshold=avg_ai,
+                usable=ai_context["ai_score_usable"],
+            ),
+            **micro_support,
+        }
+    if avg_window_match:
         if (
             int(held_sec or 0) <= avg_max_held
-            and ai_context["ai_score_usable"]
-            and float(current_ai_score or 0.0) >= avg_ai
+            and micro_support["holding_exit_matrix_current_micro_support"]
         ):
             return {
                 "should_add": True,
@@ -580,6 +757,13 @@ def resolve_holding_exit_matrix_scale_in_bias(
                 "ai_score_source": ai_context["ai_score_source"],
                 "ai_score_data_quality": ai_context["ai_score_data_quality"],
                 "ai_score_microstructure_confirmed": ai_context["ai_score_microstructure_confirmed"],
+                "ai_score_excluded_reason": ai_context["ai_score_excluded_reason"],
+                **_holding_score_prior_fields(
+                    current_ai_score=current_ai_score,
+                    threshold=avg_ai,
+                    usable=ai_context["ai_score_usable"],
+                ),
+                **micro_support,
                 "held_sec": held_sec,
                 "holding_exit_matrix_scale_in_bias": "AVG_DOWN",
             }
@@ -587,12 +771,24 @@ def resolve_holding_exit_matrix_scale_in_bias(
     pyr_ai = int(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_PYRAMID_MIN_AI_SCORE", 75) or 75)
     pyr_max_dd = float(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_PYRAMID_MAX_DRAWDOWN_FROM_PEAK_PCT", 0.35) or 0.35)
     drawdown_from_peak = float(peak_profit or 0.0) - float(profit_rate or 0.0)
-    if (
-        float(profit_rate or 0.0) >= pyr_min
-        and ai_context["ai_score_usable"]
-        and float(current_ai_score or 0.0) >= pyr_ai
-        and drawdown_from_peak <= pyr_max_dd
-    ):
+    pyr_window_match = float(profit_rate or 0.0) >= pyr_min and drawdown_from_peak <= pyr_max_dd
+    if pyr_window_match and not micro_support["holding_exit_matrix_current_micro_support"]:
+        return {
+            "should_add": False,
+            "reason": "holding_exit_matrix_current_micro_support_missing",
+            "ai_score_usable": ai_context["ai_score_usable"],
+            "ai_score_source": ai_context["ai_score_source"],
+            "ai_score_data_quality": ai_context["ai_score_data_quality"],
+            "ai_score_excluded_reason": ai_context["ai_score_excluded_reason"],
+            "ai_score_microstructure_confirmed": ai_context["ai_score_microstructure_confirmed"],
+            **_holding_score_prior_fields(
+                current_ai_score=current_ai_score,
+                threshold=pyr_ai,
+                usable=ai_context["ai_score_usable"],
+            ),
+            **micro_support,
+        }
+    if pyr_window_match and micro_support["holding_exit_matrix_current_micro_support"]:
         return {
             "should_add": True,
             "add_type": "PYRAMID",
@@ -604,22 +800,30 @@ def resolve_holding_exit_matrix_scale_in_bias(
             "ai_score_source": ai_context["ai_score_source"],
             "ai_score_data_quality": ai_context["ai_score_data_quality"],
             "ai_score_microstructure_confirmed": ai_context["ai_score_microstructure_confirmed"],
+            "ai_score_excluded_reason": ai_context["ai_score_excluded_reason"],
+            **_holding_score_prior_fields(
+                current_ai_score=current_ai_score,
+                threshold=pyr_ai,
+                usable=ai_context["ai_score_usable"],
+            ),
+            **micro_support,
             "held_sec": held_sec,
             "holding_exit_matrix_scale_in_bias": "PYRAMID",
         }
-    reason = (
-        "holding_exit_matrix_ai_score_unusable"
-        if not ai_context["ai_score_usable"]
-        else "holding_exit_matrix_scale_in_no_match"
-    )
     return {
         "should_add": False,
-        "reason": reason,
+        "reason": "holding_exit_matrix_scale_in_no_match",
         "ai_score_usable": ai_context["ai_score_usable"],
         "ai_score_source": ai_context["ai_score_source"],
         "ai_score_data_quality": ai_context["ai_score_data_quality"],
         "ai_score_excluded_reason": ai_context["ai_score_excluded_reason"],
         "ai_score_microstructure_confirmed": ai_context["ai_score_microstructure_confirmed"],
+        **_holding_score_prior_fields(
+            current_ai_score=current_ai_score,
+            threshold=avg_ai,
+            usable=ai_context["ai_score_usable"],
+        ),
+        **micro_support,
     }
 
 

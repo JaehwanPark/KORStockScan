@@ -334,6 +334,31 @@ def test_update_ai_quote_freshness_fields_marks_stale_after_pre_ai_window(monkey
 
     assert ws_data["quote_age_ms"] == 3500
     assert ws_data["quote_stale"] is True
+    assert ws_data["quote_stale_source_class"] == "ws_snapshot_stale_at_consume"
+    assert ws_data["quote_stale_consumer_latency_gap_ms"] == "not_available_consumer_latency_gap_ms"
+
+
+def test_update_ai_quote_freshness_fields_marks_consumer_latency_stale_after_fresh_refresh(monkeypatch):
+    monkeypatch.setattr(handlers.time, "time", lambda: 1000.0)
+    monkeypatch.setattr(
+        handlers,
+        "TRADING_RULES",
+        SimpleNamespace(SCALP_PRE_AI_MAX_WS_AGE_SEC=3.0),
+    )
+    ws_data = {
+        "curr": 10000,
+        "orderbook": {"ask": []},
+        "last_ws_update_ts": 996.5,
+        "pre_ai_ws_snapshot_refresh_age_ms": 120.0,
+    }
+
+    handlers._update_ai_quote_freshness_fields(ws_data)
+
+    assert ws_data["quote_age_ms"] == 3500
+    assert ws_data["quote_stale"] is True
+    assert ws_data["quote_stale_source_class"] == "consumer_latency_stale_after_fresh_refresh"
+    assert ws_data["pre_ai_to_consume_quote_age_delta_ms"] == 3380.0
+    assert ws_data["quote_stale_consumer_latency_gap_ms"] == 3380.0
 
 
 def test_entry_adm_snapshot_uses_explicit_not_evaluated_ai_action(monkeypatch):
@@ -2095,7 +2120,10 @@ def test_early_accel_strong_bundle_recheck_skips_weak_or_out_of_band_candidates(
         ai_score=58.0,
     )
     assert low_score["allowed"] is False
-    assert low_score["skip_reason"] == "score_below_min"
+    assert low_score["skip_reason"] == "strong_bundle_below_min_pass_count"
+    assert low_score["score_gate_converted_to_prior"] is True
+    assert low_score["score_prior_band"] == "low"
+    assert low_score["hard_gate_veto"] is False
 
     high_score = _resolve_early_accel_strong_bundle_recheck(
         weak_stock,
@@ -2105,7 +2133,10 @@ def test_early_accel_strong_bundle_recheck_skips_weak_or_out_of_band_candidates(
         ai_score=67.0,
     )
     assert high_score["allowed"] is False
-    assert high_score["skip_reason"] == "score_above_max"
+    assert high_score["skip_reason"] == "strong_bundle_below_min_pass_count"
+    assert high_score["score_gate_converted_to_prior"] is True
+    assert high_score["score_prior_band"] == "high"
+    assert high_score["hard_gate_veto"] is False
 
 
 def test_early_accel_strong_bundle_recheck_skips_scope_and_safety_blocks(monkeypatch):
@@ -4031,6 +4062,43 @@ def test_first_ai_big_bite_wait_anchor_does_not_infer_micro_vwap_from_numeric_on
     assert probe["minute_candle_window_fresh"] is False
 
 
+def test_first_ai_big_bite_wait_anchor_treats_score_band_as_prior(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_AI_WAIT_REBOUND_RECHECK_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_AI_WAIT_REBOUND_RECHECK_MIN_SCORE", "65")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_AI_WAIT_REBOUND_RECHECK_MAX_SCORE", "74")
+    cooldowns = {}
+    stock = {"strategy": "SCALPING", "position_tag": "SCANNER"}
+
+    result = handlers._arm_ai_wait_rebound_recheck_anchor(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 10000},
+        ai_decision={
+            "action": "WAIT",
+            "score": 55,
+            "reason": "low score but strong micro",
+            "buy_pressure_10t": 88.0,
+            "curr_vs_micro_vwap_bp": 4.0,
+            "tick_acceleration_ratio": 1.2,
+            "tick_aggressor_trusted_count": 3,
+            "tick_aggressor_pressure_usable": True,
+            "micro_vwap_available": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "minute_candle_window_fresh": True,
+        },
+        ai_score=55,
+        config={"AI_WAIT_DROP_COOLDOWN": 180},
+        cooldowns=cooldowns,
+        now_ts=100.0,
+        source_stage="first_ai_wait_big_bite_not_confirmed",
+    )
+
+    assert result["ai_wait_rebound_anchor_armed"] is True
+    assert result["ai_wait_rebound_anchor_score_prior_band"] == "outside_candidate_band"
+    assert result["ai_wait_rebound_anchor_score_gate_converted_to_prior"] is True
+    assert result["ai_wait_rebound_anchor_hard_gate_veto"] is False
+
+
 def test_build_ai_overlap_log_fields_includes_momentum_and_profile():
     stock = {"entry_momentum_tag": "SURGE", "entry_threshold_profile": "RELAX"}
 
@@ -4161,7 +4229,7 @@ def test_should_run_main_buy_recovery_canary_keeps_micro_context_feature_only(mo
     )
 
 
-def test_should_run_score65_74_recovery_probe_uses_dedicated_default_off_flag(monkeypatch):
+def test_should_run_score65_74_recovery_probe_uses_score_band_as_prior(monkeypatch):
     rules = replace(
         TRADING_RULES,
         AI_SCORE65_74_RECOVERY_PROBE_ENABLED=True,
@@ -4197,7 +4265,7 @@ def test_should_run_score65_74_recovery_probe_uses_dedicated_default_off_flag(mo
         [],
         None,
         feature_probe=feature_probe,
-    ) is False
+    ) is True
 
 
 def test_score65_74_recovery_probe_enforces_micro_context_hard_gate(monkeypatch):

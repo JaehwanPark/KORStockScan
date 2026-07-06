@@ -44,7 +44,7 @@ def _patch_watching_dependencies(monkeypatch):
     monkeypatch.setattr(
         kiwoom_sniper_v2,
         "entry_buy_decision_allowed",
-        lambda action, score: str(action or "").upper() == "BUY" and float(score or 0.0) >= 75,
+        lambda action, score: str(action or "").upper() == "BUY",
     )
     kiwoom_sniper_v2.cooldowns = {}
     kiwoom_sniper_v2.alerted_stocks = set()
@@ -69,7 +69,7 @@ def test_legacy_watching_blocks_unknown_ai_source_without_score_hard_gate(monkey
     assert stock["entry_score_excluded_reason"] == "unusable_source:unknown"
 
 
-def test_legacy_watching_fresh_live_buy_score_uses_shared_threshold(monkeypatch):
+def test_legacy_watching_fresh_live_buy_score_is_prior_not_hard_gate(monkeypatch):
     _patch_watching_dependencies(monkeypatch)
 
     low_reason = kiwoom_sniper_v2.check_watching_conditions(
@@ -87,7 +87,7 @@ def test_legacy_watching_fresh_live_buy_score_uses_shared_threshold(monkeypatch)
         radar=object(),
     )
 
-    assert low_reason.startswith("AI 점수 불충족")
+    assert low_reason == "관리자 ID 없음"
     assert pass_reason == "관리자 ID 없음"
 
 

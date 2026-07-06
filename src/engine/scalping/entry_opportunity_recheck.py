@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Mapping
 
+from src.engine.scalping.entry_ai_gate import evaluate_ai_score_prior
+
 
 RUNTIME_FAMILY = "entry_opportunity_recheck_runtime"
 POLICY_VERSION = "entry_opportunity_recheck_runtime_v1"
@@ -431,7 +433,7 @@ def evaluate_blocked_ai_score_recheck(
     ws_age_ms: Any,
     latency_state: Any,
     source_stage: Any = "blocked_ai_score",
-    source_reason: Any = "blocked_ai_score_below_buy_score_threshold",
+    source_reason: Any = "entry_policy_no_buy_score_prior",
     state: EntryOpportunityRecheckState | None = None,
     config: EntryOpportunityRecheckConfig | None = None,
     today: str | None = None,
@@ -444,11 +446,28 @@ def evaluate_blocked_ai_score_recheck(
     action = str(ai_action or "").strip().upper()
     latency = str(latency_state or "").strip().upper()
     ws_age = _safe_int(ws_age_ms, -1)
+    score_prior = evaluate_ai_score_prior(
+        action,
+        score,
+        {
+            "ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE": config.min_ai_score,
+        },
+        threshold_key="ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE",
+        default_threshold=config.min_ai_score,
+        usable=score >= 0,
+    )
+    score_in_prior_band = bool(config.min_ai_score <= score <= config.max_ai_score)
     base = {
         "entry_opportunity_recheck_source_stage": str(source_stage or ""),
         "entry_opportunity_recheck_source_reason": str(source_reason or ""),
         "entry_opportunity_recheck_ai_score": round(score, 3),
         "entry_opportunity_recheck_ai_action": action or "-",
+        "entry_opportunity_recheck_score_gate_converted_to_prior": True,
+        "entry_opportunity_recheck_score_in_prior_band": score_in_prior_band,
+        "entry_opportunity_recheck_score_prior_band": score_prior.get("score_prior_band"),
+        "entry_opportunity_recheck_ai_score_prior_weight": score_prior.get("ai_score_prior_weight"),
+        "entry_opportunity_recheck_score_prior_reason": score_prior.get("score_prior_reason"),
+        "entry_opportunity_recheck_hard_gate_veto": False,
         "entry_opportunity_recheck_latency_state": latency or "-",
         "entry_opportunity_recheck_ws_age_ms": ws_age if ws_age >= 0 else "-",
         "entry_opportunity_recheck_daily_count": int(state.daily_recheck_count),
@@ -488,15 +507,6 @@ def evaluate_blocked_ai_score_recheck(
         return _decision(
             allowed=False,
             reason="hard_safety_source_block",
-            stage="entry_opportunity_recheck_blocked",
-            action="block",
-            config=config,
-            fields=base,
-        )
-    if score < config.min_ai_score or score > config.max_ai_score:
-        return _decision(
-            allowed=False,
-            reason="score_out_of_range",
             stage="entry_opportunity_recheck_blocked",
             action="block",
             config=config,

@@ -15,6 +15,7 @@ import src.engine.trade_pause_control as trade_pause_control
 import src.utils.runtime_flags as runtime_flags
 from src.engine import kiwoom_orders
 from src.engine.kiwoom_websocket import KiwoomWSManager
+from src.utils.constants import TRADING_RULES as CONFIG
 from src.engine.scalping.rising_missed_one_share_entry import (
     BLOCK_ALREADY_HOLDING,
     BLOCK_CLASS_NOT_ELIGIBLE,
@@ -29,7 +30,21 @@ from src.engine.scalping.rising_missed_one_share_entry import (
     collapse_to_one_share_order,
     evaluate_rising_missed_one_share_entry,
 )
-from src.utils.constants import TRADING_RULES as CONFIG
+
+
+@pytest.fixture(autouse=True)
+def _clear_scalp_loss_reentry_state(request, monkeypatch):
+    if request.node.name != "test_scalp_same_symbol_loss_reentry_guard_hydrates_from_pipeline_events":
+        monkeypatch.setattr(
+            state_handlers,
+            "_load_scalp_loss_reentry_cooldown_events",
+            lambda target_date: {},
+        )
+    state_handlers._SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS.clear()
+    state_handlers._SCALP_LOSS_REENTRY_EVENT_CACHE.update({"date": None, "events": []})
+    yield
+    state_handlers._SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS.clear()
+    state_handlers._SCALP_LOSS_REENTRY_EVENT_CACHE.update({"date": None, "events": []})
 
 
 class _DummySession:
@@ -55,6 +70,9 @@ class _DummySession:
 class _DummyDB:
     def get_session(self):
         return _DummySession()
+
+    def get_latest_is_nxt(self, code):
+        return False
 
 
 def _fresh_holding_score_fields(score=30, *, now_ts=None):
@@ -2394,7 +2412,7 @@ def test_scalping_pyramid_signal():
     assert result["add_type"] == "PYRAMID"
 
 
-def test_scalping_pyramid_missing_ai_score_source_50_blocks_support():
+def test_scalping_pyramid_missing_ai_score_source_50_is_neutral_prior_with_strong_micro():
     stock = {
         "pyramid_count": 0,
         "holding_ai_score_source": "holding_ai_not_called",
@@ -2418,13 +2436,16 @@ def test_scalping_pyramid_missing_ai_score_source_50_blocks_support():
         current_ai_score=50,
     )
 
-    assert result["should_add"] is False
-    assert result["reason"] == "ai_score_unavailable"
+    assert result["should_add"] is True
+    assert result["reason"] == "scalping_pyramid_ok"
     assert result["ai_score_available"] is False
     assert result["ai_score_ok"] is False
+    assert result["score_gate_converted_to_prior"] is True
+    assert result["hard_gate_veto"] is False
+    assert result["score_prior_band"] == "neutral_or_unknown"
 
 
-def test_scalping_pyramid_real_ai_score_50_still_blocks():
+def test_scalping_pyramid_real_ai_score_50_is_low_prior_not_hard_block():
     stock = {
         "pyramid_count": 0,
         "holding_score_source": "live",
@@ -2450,13 +2471,15 @@ def test_scalping_pyramid_real_ai_score_50_still_blocks():
         current_ai_score=50,
     )
 
-    assert result["should_add"] is False
-    assert result["reason"] == "ai_score_below_min"
+    assert result["should_add"] is True
+    assert result["reason"] == "scalping_pyramid_ok"
     assert result["ai_score_available"] is True
     assert result["ai_score_ok"] is False
+    assert result["score_gate_converted_to_prior"] is True
+    assert result["hard_gate_veto"] is False
 
 
-def test_scalping_pyramid_timeout_ai_source_blocks_support():
+def test_scalping_pyramid_timeout_ai_source_is_neutral_prior_with_strong_micro():
     stock = {
         "pyramid_count": 0,
         "current_ai_score_source": "timeout",
@@ -2480,13 +2503,15 @@ def test_scalping_pyramid_timeout_ai_source_blocks_support():
         current_ai_score=74,
     )
 
-    assert result["should_add"] is False
-    assert result["reason"] == "ai_score_unavailable"
+    assert result["should_add"] is True
+    assert result["reason"] == "scalping_pyramid_ok"
     assert result["ai_score_source"] == "timeout"
     assert result["ai_score_available"] is False
+    assert result["score_gate_converted_to_prior"] is True
+    assert result["hard_gate_veto"] is False
 
 
-def test_scalping_pyramid_missing_ai_provenance_blocks_non_50_score_support():
+def test_scalping_pyramid_missing_ai_provenance_is_neutral_prior_with_strong_micro():
     stock = {
         "pyramid_count": 0,
         "last_reversal_features": {
@@ -2509,13 +2534,15 @@ def test_scalping_pyramid_missing_ai_provenance_blocks_non_50_score_support():
         current_ai_score=74,
     )
 
-    assert result["should_add"] is False
-    assert result["reason"] == "ai_score_unavailable"
+    assert result["should_add"] is True
+    assert result["reason"] == "scalping_pyramid_ok"
     assert result["ai_score_source"] == "-"
     assert result["ai_score_available"] is False
+    assert result["score_gate_converted_to_prior"] is True
+    assert result["hard_gate_veto"] is False
 
 
-def test_scalping_pyramid_fallback_score_source_blocks_support_even_after_smoothing():
+def test_scalping_pyramid_fallback_score_source_is_neutral_prior_after_smoothing():
     stock = {
         "pyramid_count": 0,
         "holding_ai_score_source": "fallback_score_50",
@@ -2539,11 +2566,13 @@ def test_scalping_pyramid_fallback_score_source_blocks_support_even_after_smooth
         current_ai_score=62,
     )
 
-    assert result["should_add"] is False
-    assert result["reason"] == "ai_score_unavailable"
+    assert result["should_add"] is True
+    assert result["reason"] == "scalping_pyramid_ok"
     assert result["ai_score_source"] == "fallback_score_50"
     assert result["ai_score_available"] is False
     assert result["ai_score_ok"] is False
+    assert result["score_gate_converted_to_prior"] is True
+    assert result["hard_gate_veto"] is False
 
 
 def test_scalping_pyramid_holding_ai_not_called_allowed_only_with_fresh_effective_score():
@@ -8516,6 +8545,11 @@ def test_watching_state_blocks_quote_fresh_composite_negative_orderbook_micro(mo
     monkeypatch.setattr(state_handlers, "arm_big_bite_if_triggered", lambda **kwargs: (False, {}))
     monkeypatch.setattr(state_handlers, "confirm_big_bite_follow_through", lambda **kwargs: (True, {}))
     monkeypatch.setattr(state_handlers, "build_tick_data_from_ws", lambda ws_data: {})
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_scalp_same_symbol_loss_reentry_guard",
+        lambda *args, **kwargs: {"allowed": True, "reason": "ok"},
+    )
     monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: _trusted_orderbook_touch_ticks(price=10_020))
     monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: _micro_vwap_candles(price=10_020))
     monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000)
@@ -8831,6 +8865,53 @@ def test_ai_wait_rebound_recheck_bypasses_entry_cooldown_for_fresh_scanner_rebou
     )
 
 
+def test_ai_wait_rebound_recheck_uses_anchor_score_band_as_prior(monkeypatch):
+    now_ts = 1000.0
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_AI_WAIT_REBOUND_RECHECK_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_AI_WAIT_REBOUND_RECHECK_MIN_REBOUND_PCT", "0.5")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_AI_WAIT_REBOUND_RECHECK_MAX_WS_AGE_MS", "1500")
+
+    stock = {
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "last_watching_ai_feature_probe": {
+            "buy_pressure": 88.75,
+            "micro_vwap_bp": 51.45,
+            "tick_aggressor_trusted_count": 5,
+            "tick_aggressor_pressure_usable": True,
+            "micro_vwap_available": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "minute_candle_window_fresh": True,
+            "minute_candle_latest_age_ms": 8000,
+            "tick_context_quality": "fresh_computed",
+            "tick_context_stale": False,
+            "tick_accel_source": "computed_10ticks",
+        },
+        "ai_wait_cooldown_anchor_at": now_ts - 40,
+        "ai_wait_cooldown_anchor_until": now_ts + 111,
+        "ai_wait_cooldown_anchor_price": 58600,
+        "ai_wait_cooldown_anchor_score": 55.0,
+        "ai_wait_cooldown_anchor_action": "WAIT",
+    }
+
+    result = state_handlers._scalp_ai_wait_rebound_recheck_decision(
+        stock,
+        {
+            "curr": 59000,
+            "last_ws_update_ts": now_ts - 0.2,
+            "received_types": ["0B"],
+        },
+        now_ts=now_ts,
+        cooldown_until=now_ts + 111,
+    )
+
+    assert result["ai_wait_rebound_recheck_allowed"] is True
+    assert result["ai_wait_rebound_recheck_reason"] == "price_rebound_after_wait"
+    assert result["ai_wait_rebound_recheck_score_gate_converted_to_prior"] is True
+    assert result["ai_wait_rebound_recheck_score_prior_band"] == "outside_candidate_band"
+    assert result["ai_wait_rebound_recheck_ai_score_prior_weight"] == 0.0
+
+
 def test_ai_wait_rebound_recheck_blocks_untrusted_buy_pressure(monkeypatch):
     now_ts = 1000.0
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_AI_WAIT_REBOUND_RECHECK_ENABLED", "true")
@@ -9093,6 +9174,11 @@ def test_ai_numeric_consistency_recheck_corrected_updates_last_reason(monkeypatc
     monkeypatch.setattr(state_handlers, "confirm_big_bite_follow_through", lambda **kwargs: (True, {}))
     monkeypatch.setattr(state_handlers, "build_tick_data_from_ws", lambda ws_data: {})
     monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: _trusted_orderbook_touch_ticks(price=10_020))
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_scalp_same_symbol_loss_reentry_guard",
+        lambda *args, **kwargs: {"allowed": True, "reason": "ok"},
+    )
     monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: _micro_vwap_candles(price=10_020))
     monkeypatch.setattr(state_handlers, "_score65_74_recovery_probe_decision", lambda *args, **kwargs: {"allowed": False})
     monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000)
@@ -9136,21 +9222,23 @@ def test_ai_numeric_consistency_recheck_buy_below_min_score_does_not_arm_entry(m
         def now(cls, tz=None):
             return cls(2026, 6, 18, 11, 10, 0)
 
-    state_handlers.datetime = FixedDateTime
-    state_handlers.TRADING_RULES = replace(
+    monkeypatch.setattr(state_handlers, "datetime", FixedDateTime)
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", replace(
         CONFIG,
         SCALE_IN_REQUIRE_HISTORY_TABLE=False,
         AI_NUMERIC_CONSISTENCY_RECHECK_ENABLED=True,
         AI_NUMERIC_CONSISTENCY_RECHECK_BUY_MIN_SCORE=75,
         AI_NUMERIC_CONSISTENCY_RECHECK_MAX_PER_SYMBOL=1,
-    )
-    state_handlers.COOLDOWNS = {}
-    state_handlers.ALERTED_STOCKS = set()
-    state_handlers.HIGHEST_PRICES = {}
-    state_handlers.LAST_AI_CALL_TIMES = {"123456": FixedDateTime.now().timestamp() - 600}
-    state_handlers.LAST_LOG_TIMES = {}
-    state_handlers.DB = _DummyDB()
-    state_handlers.KIWOOM_TOKEN = "token"
+    ))
+    monkeypatch.setattr(state_handlers, "COOLDOWNS", {})
+    monkeypatch.setattr(state_handlers, "ALERTED_STOCKS", set())
+    monkeypatch.setattr(state_handlers, "HIGHEST_PRICES", {})
+    monkeypatch.setattr(state_handlers, "LAST_AI_CALL_TIMES", {"123456": FixedDateTime.now().timestamp() - 600})
+    monkeypatch.setattr(state_handlers, "LAST_LOG_TIMES", {})
+    monkeypatch.setattr(state_handlers, "DB", _DummyDB())
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "token")
+    state_handlers._SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS.clear()
+    state_handlers._SCALP_LOSS_REENTRY_EVENT_CACHE.update({"date": None, "events": []})
 
     class DummyRadar:
         def get_smart_target_price(self, curr_price, **kwargs):
@@ -9200,7 +9288,7 @@ def test_ai_numeric_consistency_recheck_buy_below_min_score_does_not_arm_entry(m
             return None
 
     ai = DummyAI()
-    state_handlers.EVENT_BUS = DummyEventBus()
+    monkeypatch.setattr(state_handlers, "EVENT_BUS", DummyEventBus())
     sent_orders = []
     monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda *args, **kwargs: None)
     monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
@@ -9210,6 +9298,11 @@ def test_ai_numeric_consistency_recheck_buy_below_min_score_does_not_arm_entry(m
     monkeypatch.setattr(state_handlers, "confirm_big_bite_follow_through", lambda **kwargs: (True, {}))
     monkeypatch.setattr(state_handlers, "build_tick_data_from_ws", lambda ws_data: {})
     monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: _trusted_orderbook_touch_ticks(price=10_020))
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_scalp_same_symbol_loss_reentry_guard",
+        lambda *args, **kwargs: {"allowed": True, "reason": "ok"},
+    )
     monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: _micro_vwap_candles(price=10_020))
     monkeypatch.setattr(state_handlers, "_score65_74_recovery_probe_decision", lambda *args, **kwargs: {"allowed": False})
     monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000)
@@ -9244,9 +9337,9 @@ def test_ai_numeric_consistency_recheck_buy_below_min_score_does_not_arm_entry(m
 
     assert ai.calls == 2
     assert sent_orders == []
-    assert stock["last_watching_ai_action"] == "WAIT"
+    assert stock["last_watching_ai_action"] == "BUY"
     assert stock["last_watching_ai_score"] == 74
-    assert "numeric_consistency_recheck_buy_score_below_min:75" in stock["last_watching_ai_reason"]
+    assert "numeric_consistency_recheck_buy_score_prior_low" in stock["last_watching_ai_reason"]
 
 
 def test_ai_numeric_consistency_recheck_does_not_count_untrusted_supply_axis(monkeypatch):
@@ -14361,7 +14454,7 @@ def test_s15_fast_track_pause_is_policy_blocked_not_failed(tmp_path, monkeypatch
     assert events[-1]["actual_order_submitted"] is False
 
 
-def test_s15_fast_track_ai_score_below_buy_threshold_blocks_with_provenance(monkeypatch):
+def test_s15_fast_track_ai_score_below_buy_threshold_is_prior_not_hard_gate(monkeypatch):
     import src.engine.sniper_s15_fast_track as s15
 
     updates = []
@@ -14383,6 +14476,18 @@ def test_s15_fast_track_ai_score_below_buy_threshold_blocks_with_provenance(monk
         type("WS", (), {"get_latest_data": lambda self, code: {"curr": 10000, "orderbook": {"asks": [], "bids": []}}})(),
     )
     monkeypatch.setattr(s15.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [])
+    monkeypatch.setattr(s15.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000)
+    monkeypatch.setattr(s15.kiwoom_orders, "calc_buy_qty", lambda *args, **kwargs: 1)
+    monkeypatch.setattr(
+        s15,
+        "evaluate_live_buy_entry",
+        lambda **kwargs: {
+            "allowed": False,
+            "decision": "REJECT_DANGER",
+            "latency_state": "DANGER",
+            "reason": "test_latency_stop",
+        },
+    )
     monkeypatch.setattr(
         s15,
         "AI_ENGINE",
@@ -14402,12 +14507,15 @@ def test_s15_fast_track_ai_score_below_buy_threshold_blocks_with_provenance(monk
 
     s15.execute_fast_track_scalp_v2("123456", "TEST", 10000)
 
-    assert state["status"] == "FAILED"
-    assert updates[-1]["status"] == "EXPIRED"
+    assert state["status"] == "BLOCKED"
+    assert updates[-1]["position_tag"] == "S15_FAST_LATENCY_BLOCKED"
     assert events[-1]["stage"] == "s15_trigger_blocked"
-    assert events[-1]["fields"]["s15_block_reason"] == "ai_score_below_buy_threshold"
+    assert events[-1]["fields"]["s15_block_reason"] == "latency_block"
     assert events[-1]["fields"]["ai_score"] == 74
     assert events[-1]["fields"]["ai_score_threshold"] == 75
+    assert events[-1]["fields"]["s15_score_gate_converted_to_prior"] is True
+    assert events[-1]["fields"]["s15_hard_gate_veto"] is False
+    assert events[-1]["fields"]["s15_score_prior_band"] == "low"
 
 
 def test_s15_fast_track_ai_score_75_passes_ai_gate(monkeypatch):
@@ -14467,6 +14575,81 @@ def test_s15_fast_track_ai_score_75_passes_ai_gate(monkeypatch):
     assert updates[-1]["position_tag"] == "S15_FAST_LATENCY_BLOCKED"
     assert events[-1]["stage"] == "s15_trigger_blocked"
     assert events[-1]["fields"]["s15_block_reason"] == "latency_block"
+
+
+def test_s15_fast_track_submitted_logs_score_prior_fields(monkeypatch):
+    import src.engine.sniper_s15_fast_track as s15
+
+    updates = []
+    events = []
+    state = {
+        "shadow_id": 99,
+        "status": "WATCHING",
+        "lock": type("DummyLock", (), {"__enter__": lambda self: None, "__exit__": lambda self, *args: None})(),
+        "cum_buy_qty": 0,
+        "avg_buy_price": 0,
+    }
+    clock = {"now": 1_000.0}
+
+    def _fast_now():
+        clock["now"] += 25.0
+        return clock["now"]
+
+    monkeypatch.setattr(s15, "_now_ts", _fast_now)
+    monkeypatch.setattr(s15, "_get_fast_state", lambda code: state)
+    monkeypatch.setattr(s15, "update_s15_shadow_record", lambda shadow_id, **kwargs: updates.append(kwargs))
+    monkeypatch.setattr(s15, "_unarm_s15_candidate", lambda code: None)
+    monkeypatch.setattr(s15, "_pop_fast_state", lambda code: None)
+    monkeypatch.setattr(s15, "is_trading_paused", lambda: False)
+    monkeypatch.setattr(
+        s15,
+        "WS_MANAGER",
+        type("WS", (), {"get_latest_data": lambda self, code: {"curr": 10000, "orderbook": {"asks": [], "bids": []}}})(),
+    )
+    monkeypatch.setattr(s15.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [])
+    monkeypatch.setattr(s15.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000)
+    monkeypatch.setattr(s15.kiwoom_orders, "calc_buy_qty", lambda *args, **kwargs: 1)
+    monkeypatch.setattr(s15.kiwoom_orders, "send_cancel_order", lambda *args, **kwargs: {"return_code": "0"})
+    monkeypatch.setattr(
+        s15,
+        "evaluate_live_buy_entry",
+        lambda **kwargs: {
+            "allowed": True,
+            "decision": "ALLOW",
+            "latency_state": "FRESH",
+            "reason": "test_latency_allow",
+            "order_price": 10000,
+        },
+    )
+    monkeypatch.setattr(s15, "_send_s15_limit_buy", lambda code, qty, price: {"return_code": "0", "ord_no": "S15-1"})
+    monkeypatch.setattr(
+        s15,
+        "AI_ENGINE",
+        type("AI", (), {"analyze_target": lambda self, *args, **kwargs: {"action": "BUY", "score": 74}})(),
+    )
+    monkeypatch.setattr(
+        s15,
+        "_log_s15_event",
+        lambda stage, code, name="-", actual_order_submitted=False, **fields: events.append(
+            {
+                "stage": stage,
+                "actual_order_submitted": actual_order_submitted,
+                "fields": fields,
+            }
+        ),
+    )
+
+    s15.execute_fast_track_scalp_v2("123456", "TEST", 10000)
+
+    submitted = next(event for event in events if event["stage"] == "s15_fast_track_submitted")
+    cancelled = next(event for event in events if event["stage"] == "s15_fast_track_cancelled")
+    assert submitted["actual_order_submitted"] is True
+    assert submitted["fields"]["ai_score"] == 74
+    assert submitted["fields"]["ai_score_threshold"] == 75
+    assert submitted["fields"]["s15_score_gate_converted_to_prior"] is True
+    assert submitted["fields"]["s15_hard_gate_veto"] is False
+    assert submitted["fields"]["s15_score_prior_band"] == "low"
+    assert cancelled["fields"]["s15_score_gate_converted_to_prior"] is True
 
 
 def test_add_receipt_without_order_no_matches_single_pending_target(monkeypatch):
@@ -16969,7 +17152,7 @@ def test_scalp_soft_stop_dynamic_grace_defers_real_position_before_existing_grac
     assert not exit_calls
 
 
-def test_scalp_soft_stop_dynamic_grace_rejects_unusable_holding_ai_score(monkeypatch):
+def test_scalp_soft_stop_dynamic_grace_treats_unusable_holding_ai_score_as_neutral_prior(monkeypatch):
     state_handlers.TRADING_RULES = _dynamic_soft_stop_grace_config()
     stock = _dynamic_soft_stop_stock(
         holding_score_effective_usable=False,
@@ -16990,14 +17173,18 @@ def test_scalp_soft_stop_dynamic_grace_rejects_unusable_holding_ai_score(monkeyp
         source_quality_hard_gap=False,
     )
 
-    assert decision["should_defer"] is False
-    assert decision["skip_reason"] == "ai_score_unusable"
+    assert decision["should_defer"] is True
+    assert decision["skip_reason"] == ""
     assert decision["ai_score_usable"] is False
     assert decision["ai_score_source"] == "holding_ai_not_called"
     assert decision["ai_score_data_quality"] == "stale"
+    assert decision["score_gate_converted_to_prior"] is True
+    assert decision["hard_gate_veto"] is False
+    assert decision["score_prior_band"] == "neutral_or_unknown"
+    assert decision["score_prior_reason"] == "score_unusable_neutral_prior"
 
 
-def test_scalp_soft_stop_dynamic_grace_rejects_ai_without_provenance(monkeypatch):
+def test_scalp_soft_stop_dynamic_grace_treats_missing_ai_provenance_as_neutral_prior(monkeypatch):
     state_handlers.TRADING_RULES = _dynamic_soft_stop_grace_config()
     stock = _dynamic_soft_stop_stock()
     for key in (
@@ -17024,11 +17211,14 @@ def test_scalp_soft_stop_dynamic_grace_rejects_ai_without_provenance(monkeypatch
         source_quality_hard_gap=False,
     )
 
-    assert decision["should_defer"] is False
-    assert decision["skip_reason"] == "ai_score_unusable"
+    assert decision["should_defer"] is True
+    assert decision["skip_reason"] == ""
     assert decision["ai_score_usable"] is False
     assert decision["ai_score_source"] == "-"
     assert decision["ai_score_data_quality"] == "insufficient"
+    assert decision["score_gate_converted_to_prior"] is True
+    assert decision["hard_gate_veto"] is False
+    assert decision["score_prior_band"] == "neutral_or_unknown"
 
 
 def test_scalp_soft_stop_dynamic_grace_does_not_score_untrusted_pressure(monkeypatch):
@@ -17359,7 +17549,7 @@ def test_holding_stale_ws_rest_quote_recovery_allows_exit_evaluation(monkeypatch
     )
 
     recovered_logs = [fields for stage, fields in pipeline_logs if stage == "holding_ws_freshness_recovered"]
-    dynamic_logs = [fields for stage, fields in pipeline_logs if stage == "soft_stop_dynamic_grace"]
+    dynamic_logs = [fields for stage, fields in pipeline_logs if stage == "soft_stop_dynamic_grace_exit"]
     assert recovered_logs
     assert recovered_logs[-1]["holding_ws_recovery_outcome"] == "rest_quote_applied"
     assert recovered_logs[-1]["holding_rest_quote_only_recovery"] is True
@@ -17377,7 +17567,7 @@ def test_holding_stale_ws_rest_quote_recovery_allows_exit_evaluation(monkeypatch
         )
     ]
     assert dynamic_logs
-    assert not exit_calls
+    assert exit_calls
 
 
 def test_holding_recent_ws_blocks_divergent_rest_quote_recovery(monkeypatch):
@@ -17969,7 +18159,8 @@ def test_scalp_soft_stop_dynamic_modifier_does_not_defer_weak_ai_large_sell_case
     assert dynamic_exit_logs
     assert dynamic_exit_logs[-1]["soft_stop_final_action"] == "exit_now"
     assert dynamic_exit_logs[-1]["soft_stop_dynamic_modifier_applied"] is False
-    assert dynamic_exit_logs[-1]["soft_stop_dynamic_grace_skip_reason"] == "thesis_invalidated"
+    assert dynamic_exit_logs[-1]["soft_stop_dynamic_grace_skip_reason"] == "outside_active_soft_stop_modifier_band"
+    assert dynamic_exit_logs[-1]["soft_stop_thesis_invalidated"] is True
     assert dynamic_exit_logs[-1]["soft_stop_dynamic_grace_ai_score_prior_pass"] is False
     assert dynamic_exit_logs[-1]["soft_stop_dynamic_grace_strong_absorption_support"] is False
     assert exit_logs and exit_logs[-1]["exit_rule"] == "scalp_soft_stop_pct"
@@ -18034,12 +18225,12 @@ def test_scalp_soft_stop_dynamic_modifier_allows_low_ai_score_with_strong_absorp
 
 
 def _install_soft_stop_expert_test_doubles(monkeypatch):
-    state_handlers.COOLDOWNS = {}
-    state_handlers.ALERTED_STOCKS = set()
-    state_handlers.HIGHEST_PRICES = {"123456": 10000}
-    state_handlers.LAST_AI_CALL_TIMES = {}
-    state_handlers.LAST_LOG_TIMES = {}
-    state_handlers.DB = _DummyDB()
+    monkeypatch.setattr(state_handlers, "COOLDOWNS", {})
+    monkeypatch.setattr(state_handlers, "ALERTED_STOCKS", set())
+    monkeypatch.setattr(state_handlers, "HIGHEST_PRICES", {"123456": 10000})
+    monkeypatch.setattr(state_handlers, "LAST_AI_CALL_TIMES", {})
+    monkeypatch.setattr(state_handlers, "LAST_LOG_TIMES", {})
+    monkeypatch.setattr(state_handlers, "DB", _DummyDB())
 
     class FixedDateTime(datetime):
         @classmethod
@@ -19660,7 +19851,7 @@ def test_same_symbol_loss_reentry_cooldown_marker_is_not_order_submit(monkeypatc
         admin_id=1,
         market_regime="BULL",
         now_ts=1_000.0,
-        now_dt=datetime(2026, 6, 26, 8, 25, 0),
+        now_dt=datetime(2026, 6, 26, 10, 0, 0),
         radar=None,
         ai_engine=None,
     )
@@ -19917,7 +20108,7 @@ def test_scalp_mfe_protect_exit_blocks_negative_profit_even_with_negative_trigge
     assert decision["trigger_profit_pct"] == -0.30
 
 
-def test_scalp_mfe_protect_exit_skips_strong_ai_or_simulated_position(monkeypatch):
+def test_scalp_mfe_protect_exit_treats_strong_ai_as_prior_and_skips_simulated_position(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
         SCALP_MFE_PROTECT_EXIT_ENABLED=True,
@@ -19941,8 +20132,11 @@ def test_scalp_mfe_protect_exit_skips_strong_ai_or_simulated_position(monkeypatc
         held_sec=210,
     )
 
-    assert strong_ai["should_exit"] is False
-    assert strong_ai["reason"] == "ai_score_above_max"
+    assert strong_ai["should_exit"] is True
+    assert strong_ai["exit_rule"] == "scalp_mfe_protect_exit"
+    assert strong_ai["score_gate_converted_to_prior"] is True
+    assert strong_ai["score_prior_band"] == "hold_supportive"
+    assert strong_ai["hard_gate_veto"] is False
     assert simulated == {"should_exit": False, "reason": "simulated_position"}
 
 
@@ -20008,7 +20202,7 @@ def test_scalp_profit_stagnation_time_exit_skips_probe_provenance(monkeypatch):
     assert "profit_stagnation_started_at" not in stock
 
 
-def test_scalp_profit_stagnation_time_exit_resets_when_ai_score_below_floor(monkeypatch):
+def test_scalp_profit_stagnation_time_exit_uses_low_ai_score_as_prior_not_hard_gate(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
         SCALP_PROFIT_STAGNATION_EXIT_ENABLED=True,
@@ -20030,8 +20224,12 @@ def test_scalp_profit_stagnation_time_exit_resets_when_ai_score_below_floor(monk
         now_ts=1_240.0,
     )
 
-    assert decision == {"should_exit": False, "reason": "ai_score_below_min"}
-    assert "profit_stagnation_started_at" not in stock
+    assert decision["should_exit"] is True
+    assert decision["exit_rule"] == "scalp_profit_stagnation_time_exit"
+    assert decision["score_gate_converted_to_prior"] is True
+    assert decision["hard_gate_veto"] is False
+    assert decision["score_prior_band"] == "low"
+    assert stock["profit_stagnation_started_at"] == 1_000.0
 
 
 def test_handle_holding_state_clears_profit_stagnation_anchor_below_min_profit(monkeypatch):

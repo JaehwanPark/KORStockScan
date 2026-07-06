@@ -61,6 +61,7 @@ from src.engine.risk.manual_control_exclusion import (
 from src.engine.scalping.rising_missed_selection_prior import rising_missed_selection_rank_delta
 from src.engine.scalping.entry_ai_gate import (
     entry_buy_decision_allowed,
+    evaluate_ai_score_prior,
     evaluate_entry_score_role_gate,
     get_entry_buy_score_threshold,
 )
@@ -1032,7 +1033,6 @@ def check_watching_conditions(stock, code, ws_data, admin_id, radar=None, ai_eng
             
             # AI score role gate: legacy diagnostic path follows the main entry submit contract.
             current_ai_score = _legacy_current_ai_score(stock)
-            entry_buy_score_threshold = get_entry_buy_score_threshold()
             entry_score_role_gate = _legacy_entry_score_role_gate(stock, ws_data, current_ai_score)
             if not entry_score_role_gate.get("entry_score_usable_for_entry_submit"):
                 return (
@@ -1042,11 +1042,14 @@ def check_watching_conditions(stock, code, ws_data, admin_id, radar=None, ai_eng
                 )
             current_ai_action = entry_score_role_gate.get("entry_score_action") or "-"
             if not entry_buy_decision_allowed(current_ai_action, current_ai_score):
-                if current_ai_score < entry_buy_score_threshold:
-                    return (
-                        f"AI 점수 불충족 "
-                        f"(current_ai_score={current_ai_score} < {entry_buy_score_threshold:g})"
-                    )
+                score_prior = evaluate_ai_score_prior(
+                    current_ai_action,
+                    current_ai_score,
+                    usable=bool(entry_score_role_gate.get("entry_score_usable_for_entry_submit")),
+                )
+                stock["legacy_entry_score_prior_band"] = score_prior.get("score_prior_band")
+                stock["legacy_entry_score_prior_weight"] = score_prior.get("ai_score_prior_weight")
+                stock["legacy_score_gate_converted_to_prior"] = True
                 return (
                     f"AI action BUY 아님 "
                     f"(action={current_ai_action}, current_ai_score={current_ai_score})"
@@ -1068,11 +1071,20 @@ def check_watching_conditions(stock, code, ws_data, admin_id, radar=None, ai_eng
             )
         
         # 추가 검사 생략 (복잡성으로 인해)
-        # AI 점수 체크
+        # AI score is retained as a prior feature only; it no longer blocks swing diagnostics by itself.
         current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
         ai_score_threshold = getattr(TRADING_RULES, 'AI_SCORE_THRESHOLD_KOSDAQ', 60) if strategy == 'KOSDAQ_ML' else getattr(TRADING_RULES, 'AI_SCORE_THRESHOLD_KOSPI', 60)
-        if current_ai_score < ai_score_threshold and current_ai_score != 50:
-            return f"AI 점수 불충족 (current_ai_score={current_ai_score} < ai_score_threshold={ai_score_threshold})"
+        swing_score_prior = evaluate_ai_score_prior(
+            "BUY",
+            current_ai_score,
+            {"SWING_AI_SCORE_THRESHOLD": ai_score_threshold},
+            threshold_key="SWING_AI_SCORE_THRESHOLD",
+            default_threshold=ai_score_threshold,
+            usable=current_ai_score != 50,
+        )
+        stock["swing_ai_score_prior_band"] = swing_score_prior.get("score_prior_band")
+        stock["swing_ai_score_prior_weight"] = swing_score_prior.get("ai_score_prior_weight")
+        stock["swing_score_gate_converted_to_prior"] = True
     
     # 공통 관리자 ID 체크
     if not admin_id:
