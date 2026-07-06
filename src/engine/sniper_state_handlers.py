@@ -3235,17 +3235,6 @@ def _attempt_stop_line_touch_mandatory_avg_down(
     context_fields: dict | None = None,
 ) -> dict:
     """Submit the operator-required AVG_DOWN at real soft/hard stop touch."""
-    stop_touch_avg_down = _evaluate_stop_line_touch_mandatory_avg_down(
-        stock,
-        strategy=strategy,
-        sell_reason_type=sell_reason_type,
-        exit_rule=exit_rule,
-        profit_rate=profit_rate,
-        peak_profit=peak_profit,
-        current_ai_score=current_ai_score,
-        held_sec=held_sec,
-        dynamic_stop_pct=dynamic_stop_pct,
-    )
     rule = str(exit_rule or "").strip()
     reason_type = str(sell_reason_type or "").upper()
 
@@ -3304,6 +3293,17 @@ def _attempt_stop_line_touch_mandatory_avg_down(
         _log_stop_touch_avg_down_not_eligible(reason)
         return {"attempted": False, "submitted": False, "reason": reason}
 
+    stop_touch_avg_down = _evaluate_stop_line_touch_mandatory_avg_down(
+        stock,
+        strategy=strategy,
+        sell_reason_type=sell_reason_type,
+        exit_rule=exit_rule,
+        profit_rate=profit_rate,
+        peak_profit=peak_profit,
+        current_ai_score=current_ai_score,
+        held_sec=held_sec,
+        dynamic_stop_pct=dynamic_stop_pct,
+    )
     if not stop_touch_avg_down.get("should_retry"):
         reason = stop_touch_avg_down.get("reason", "not_eligible")
         _log_stop_touch_avg_down_not_eligible(reason)

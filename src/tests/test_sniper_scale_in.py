@@ -22600,6 +22600,13 @@ def test_hard_stop_line_touch_avg_down_forbidden_before_real_submit(monkeypatch)
     )
     monkeypatch.setattr(
         state_handlers,
+        "_evaluate_stop_line_touch_mandatory_avg_down",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("hard stop context must block before AVG_DOWN evaluation")
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers,
         "_process_scale_in_action",
         lambda **kwargs: add_calls.append(kwargs) or (_ for _ in ()).throw(
             AssertionError("hard stop touch must not submit AVG_DOWN")
@@ -23083,6 +23090,13 @@ def test_stop_line_touch_mandatory_avg_down_bypasses_recent_scale_in_cooldown(mo
         state_handlers,
         "_process_scale_in_action",
         lambda **kwargs: add_calls.append(kwargs) or {"return_code": "0", "ord_no": "A3"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_evaluate_stop_line_touch_mandatory_avg_down",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("final loss context must block before AVG_DOWN evaluation")
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
