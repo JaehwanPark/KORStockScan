@@ -1773,6 +1773,103 @@ def test_openai_analyze_target_waits_min_interval_instead_of_score50_cooldown(mo
     assert result["openai_min_interval_wait_ms"] == 300
 
 
+def test_openai_analyze_target_waits_for_lock_contention_retry(monkeypatch):
+    engine = _build_provider_engine(GPTSniperEngine)
+    acquire_calls = []
+
+    class ContendedThenAvailableLock:
+        def acquire(self, blocking=True, timeout=-1):
+            acquire_calls.append((blocking, timeout))
+            return timeout and timeout > 0
+
+        def release(self):
+            return None
+
+    engine.lock = ContendedThenAvailableLock()
+    monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "packet")
+    monkeypatch.setattr(engine, "_apply_remote_entry_guard", lambda result, **kwargs: result)
+    monkeypatch.setattr(engine, "_call_openai_safe", lambda *args, **kwargs: {"action": "BUY", "score": 88, "reason": "strong"})
+
+    result = engine.analyze_target(
+        "LOCK_WAIT_TEST",
+        {"curr": 10000, "fluctuation": 1.0, "orderbook": {"asks": [], "bids": []}},
+        [{"time": "10:00:00", "price": 10000, "volume": 10, "dir": "BUY"}],
+        [{"체결시간": "10:00:00", "현재가": 10000, "거래량": 100}],
+        strategy="SCALPING",
+        cache_profile="lock_wait_test",
+    )
+
+    assert acquire_calls
+    assert acquire_calls[0][1] > 0
+    assert result["action"] == "BUY"
+    assert result["score"] == 88
+    assert result["ai_result_source"] == "live"
+    assert result["ai_fallback_score_50"] is False
+
+
+def test_openai_analyze_target_lock_contention_exhaustion_is_not_score50_fallback(monkeypatch):
+    engine = _build_provider_engine(GPTSniperEngine)
+
+    class AlwaysContendedLock:
+        def acquire(self, blocking=True, timeout=-1):
+            return False
+
+        def release(self):
+            raise AssertionError("lock must not be released when acquire failed")
+
+    engine.lock = AlwaysContendedLock()
+    monkeypatch.setattr(engine, "_call_openai_safe", lambda *args, **kwargs: {"action": "BUY", "score": 88})
+
+    result = engine.analyze_target(
+        "LOCK_FAIL_TEST",
+        {"curr": 10000, "fluctuation": 1.0, "orderbook": {"asks": [], "bids": []}},
+        [{"time": "10:00:00", "price": 10000, "volume": 10, "dir": "BUY"}],
+        [{"체결시간": "10:00:00", "현재가": 10000, "거래량": 100}],
+        strategy="SCALPING",
+        cache_profile="lock_fail_test",
+    )
+
+    assert result["action"] == "DROP"
+    assert result["score"] == 0
+    assert result["ai_result_source"] == "lock_contention"
+    assert result["ai_fallback_score_50"] is False
+    assert result["ai_retry_attempted"] is True
+    assert result["ai_retry_result"] == "lock_contention_retry_exhausted"
+
+
+def test_holding_score_lock_contention_waits_before_neutral_score50(monkeypatch):
+    engine = _build_provider_engine(GPTSniperEngine)
+    acquire_calls = []
+
+    class AlwaysContendedLock:
+        def acquire(self, blocking=True, timeout=-1):
+            acquire_calls.append((blocking, timeout))
+            return False
+
+        def release(self):
+            raise AssertionError("lock must not be released when acquire failed")
+
+    engine.lock = AlwaysContendedLock()
+
+    result = engine.evaluate_scalping_holding_score(
+        "LOCK_HOLDING_TEST",
+        "005930",
+        {"curr": 10000},
+        [],
+        [],
+        {"profit_rate": 0.2, "peak_profit": 0.5, "held_sec": 80, "current_ai_score": 50},
+    )
+
+    assert acquire_calls
+    assert acquire_calls[0][1] > 0
+    assert result["score"] == 50
+    assert result["holding_score_effective_usable"] is False
+    assert result["ai_result_source"] == "lock_contention"
+    assert result["ai_fallback_score_50"] is True
+    assert result["ai_retry_attempted"] is True
+    assert result["ai_retry_result"] == "lock_contention_retry_exhausted"
+
+
 def test_provider_holding_matrix_cache_token_separates_cache_variants(monkeypatch):
     ws_data = {"curr": 10000, "fluctuation": 1.0, "orderbook": {"asks": [], "bids": []}}
     recent_ticks = [{"time": "10:00:00", "price": 10000, "volume": 10, "dir": "BUY"}]

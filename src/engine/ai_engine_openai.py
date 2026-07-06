@@ -1897,7 +1897,30 @@ class GPTSniperEngine:
             require_json=request.require_json,
             schema_name=request.schema_name,
         )
-        return pool.submit(request, use_schema_registry=use_schema_registry)
+        return pool.submit(
+            self._build_responses_ws_attempt_request(request),
+            use_schema_registry=use_schema_registry,
+        )
+
+    def _build_responses_ws_attempt_request(self, request: OpenAIResponseRequest):
+        remaining_ms = max(1, int(request.remaining_timeout_sec() * 1000))
+        configured_ws_ms = max(
+            1,
+            int(getattr(TRADING_RULES, "OPENAI_RESPONSES_WS_TIMEOUT_MS", remaining_ms) or remaining_ms),
+        )
+        reserve_ms = min(750, max(100, remaining_ms // 4))
+        attempt_ms = min(configured_ws_ms, max(50, remaining_ms - reserve_ms))
+        if attempt_ms >= remaining_ms:
+            return request
+        metadata = dict(request.metadata or {})
+        metadata["ws_attempt_timeout_ms"] = str(attempt_ms)
+        metadata["ws_total_timeout_ms"] = str(request.timeout_ms)
+        return replace(
+            request,
+            submitted_at_perf=time.perf_counter(),
+            timeout_ms=attempt_ms,
+            metadata=self._sanitize_openai_metadata(metadata, context_name=request.context_name),
+        )
 
     def _call_openai_safe(
         self,
@@ -3804,15 +3827,35 @@ class GPTSniperEngine:
                 input_contract_fields=input_contract_fields,
             )
 
-        if not self.lock.acquire(blocking=False):
+        lock_wait_ms = max(
+            0,
+            int(getattr(TRADING_RULES, "OPENAI_ANALYZE_TARGET_LOCK_WAIT_MS", 250) or 0),
+        )
+        lock_wait_started = time.perf_counter()
+        if lock_wait_ms > 0:
+            lock_acquired = self.lock.acquire(timeout=lock_wait_ms / 1000.0)
+        else:
+            lock_acquired = self.lock.acquire(blocking=False)
+        lock_wait_elapsed_ms = max(0, int((time.perf_counter() - lock_wait_started) * 1000))
+        if not lock_acquired:
             return self._annotate_analysis_result(
-                _merge_runtime_fields({"action": "WAIT", "score": 50, "reason": "AI 경합 (다른 종목 분석 중)"}),
+                _merge_runtime_fields(
+                    {
+                        "action": "WAIT" if prompt_type == "scalping_holding" else "DROP",
+                        "score": 0,
+                        "reason": "ai_lock_contention_retry_exhausted",
+                        "ai_lock_wait_ms": lock_wait_elapsed_ms,
+                        "ai_lock_wait_limit_ms": lock_wait_ms,
+                        "ai_retry_attempted": bool(lock_wait_ms > 0),
+                        "ai_retry_result": "lock_contention_retry_exhausted",
+                    }
+                ),
                 prompt_type=prompt_type,
                 prompt_version=prompt_version,
                 response_ms=int((time.perf_counter() - analysis_started) * 1000),
                 parse_ok=False,
                 parse_fail=False,
-                fallback_score_50=True,
+                fallback_score_50=False,
                 cache_hit=False,
                 cache_mode="miss",
                 result_source="lock_contention",
@@ -4685,13 +4728,32 @@ class GPTSniperEngine:
             "ai_input_contract_mode": "structured_json",
             "ai_input_build_fallback": "not_built",
         }
-        if not self.lock.acquire(blocking=False):
-            return self._neutral_holding_score_result(
+        lock_wait_ms = max(
+            0,
+            int(getattr(TRADING_RULES, "OPENAI_ANALYZE_TARGET_LOCK_WAIT_MS", 250) or 0),
+        )
+        lock_wait_started = time.perf_counter()
+        if lock_wait_ms > 0:
+            lock_acquired = self.lock.acquire(timeout=lock_wait_ms / 1000.0)
+        else:
+            lock_acquired = self.lock.acquire(blocking=False)
+        lock_wait_elapsed_ms = max(0, int((time.perf_counter() - lock_wait_started) * 1000))
+        if not lock_acquired:
+            payload = self._neutral_holding_score_result(
                 "lock_contention",
                 started=started,
                 result_source="lock_contention",
                 input_contract_fields=input_contract_fields,
             )
+            payload.update(
+                {
+                    "ai_lock_wait_ms": lock_wait_elapsed_ms,
+                    "ai_lock_wait_limit_ms": lock_wait_ms,
+                    "ai_retry_attempted": bool(lock_wait_ms > 0),
+                    "ai_retry_result": "lock_contention_retry_exhausted",
+                }
+            )
+            return payload
 
         try:
             if self.ai_disabled:

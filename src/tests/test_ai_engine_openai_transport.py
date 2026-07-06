@@ -1893,6 +1893,53 @@ def test_openai_call_falls_back_from_ws_to_http(monkeypatch):
     assert meta["openai_transport_mode"] == "http"
 
 
+def test_openai_ws_attempt_timeout_leaves_http_fallback_budget(monkeypatch):
+    engine = _build_engine()
+    captured = []
+
+    class _StubPool:
+        def submit(self, request, *, use_schema_registry):
+            captured.append(request)
+            raise TimeoutError("ws attempt timeout")
+
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_RESPONSES_WS_TIMEOUT_MS=15000,
+        ),
+    )
+    engine._responses_ws_pool = _StubPool()
+    request = OpenAIResponseRequest(
+        prompt="PROMPT",
+        user_input="payload",
+        require_json=True,
+        context_name="test",
+        model_name="gpt-fast",
+        temperature=0.0,
+        schema_name="entry_v1",
+        endpoint_name="analyze_target",
+        request_id="req-timeout-budget",
+        symbol="005930",
+        cache_key="-",
+        submitted_at_perf=openai_module.time.perf_counter(),
+        timeout_ms=3000,
+    )
+
+    try:
+        engine._call_openai_responses_ws(request)
+    except TimeoutError:
+        pass
+    else:
+        raise AssertionError("expected ws attempt timeout")
+
+    assert captured
+    assert captured[0].request_id == request.request_id
+    assert 2000 <= captured[0].timeout_ms <= 2300
+    assert captured[0].timeout_ms < request.timeout_ms
+
+
 def test_openai_ws_connection_closed_ok_fallback_logs_info_not_error(monkeypatch):
     engine = _build_engine()
     engine.client = SimpleNamespace(responses=SimpleNamespace(create=lambda **kwargs: None))
