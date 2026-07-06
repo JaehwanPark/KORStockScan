@@ -22454,7 +22454,7 @@ def test_hard_stop_qty_budget_block_does_not_auto_exclude_manual_control(monkeyp
         now_ts=1000.0,
     )
 
-    assert result["reason"] == "scale_in_submit_failed_or_guard_blocked"
+    assert result["reason"] == "stop_line_touch_avg_down_forbidden_in_hard_stop_or_final_loss_context"
     assert not path.exists()
     assert "manual_control_auto_scale_in_qty_blocked" not in stock
 
@@ -22570,7 +22570,7 @@ def test_soft_stop_line_touch_avg_down_defer_waits_for_extra_dip(monkeypatch):
     assert candidate["defer_extra_worsen_pct"] == "0.22"
 
 
-def test_hard_stop_line_touch_avg_down_ignores_soft_stop_defer(monkeypatch):
+def test_hard_stop_line_touch_avg_down_forbidden_before_real_submit(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
         SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=True,
@@ -22601,7 +22601,9 @@ def test_hard_stop_line_touch_avg_down_ignores_soft_stop_defer(monkeypatch):
     monkeypatch.setattr(
         state_handlers,
         "_process_scale_in_action",
-        lambda **kwargs: add_calls.append(kwargs) or {"return_code": "0", "ord_no": "H1"},
+        lambda **kwargs: add_calls.append(kwargs) or (_ for _ in ()).throw(
+            AssertionError("hard stop touch must not submit AVG_DOWN")
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -22627,11 +22629,20 @@ def test_hard_stop_line_touch_avg_down_ignores_soft_stop_defer(monkeypatch):
         context_fields={"sell_intercept_context": "final_loss_sell_before_fallback"},
     )
 
-    assert result["submitted"] is True
-    assert add_calls[0]["action"]["stop_line_source"] == "scalp_hard_stop_pct"
+    assert result == {
+        "attempted": False,
+        "submitted": False,
+        "reason": "stop_line_touch_avg_down_forbidden_in_hard_stop_or_final_loss_context",
+    }
+    assert add_calls == []
     by_stage = {stage: fields for stage, fields in pipeline_events}
     assert "stop_line_touch_avg_down_price_improvement_deferred" not in by_stage
-    assert by_stage["stop_line_touch_mandatory_avg_down_submitted"]["actual_order_submitted"] is True
+    assert "stop_line_touch_mandatory_avg_down_candidate" not in by_stage
+    blocked = by_stage["stop_line_touch_mandatory_avg_down_not_eligible"]
+    assert blocked["exit_rule"] == "scalp_hard_stop_pct"
+    assert blocked["gate_reason"] == "stop_line_touch_avg_down_forbidden_in_hard_stop_or_final_loss_context"
+    assert blocked["actual_order_submitted"] is False
+    assert blocked["broker_order_forbidden"] is True
 
 
 def test_soft_stop_line_touch_avg_down_defer_submits_after_sparse_loop(monkeypatch):
@@ -22835,12 +22846,16 @@ def test_stop_line_touch_mandatory_avg_down_logs_not_eligible(monkeypatch):
         context_fields={"sell_intercept_context": "final_loss_sell_before_fallback"},
     )
 
-    assert result == {"attempted": False, "submitted": False, "reason": "disabled"}
+    assert result == {
+        "attempted": False,
+        "submitted": False,
+        "reason": "stop_line_touch_avg_down_forbidden_in_hard_stop_or_final_loss_context",
+    }
     by_stage = {stage: fields for stage, fields in pipeline_events}
     diagnostic = by_stage["stop_line_touch_mandatory_avg_down_not_eligible"]
     assert diagnostic["exit_rule"] == "scalp_hard_stop_pct"
-    assert diagnostic["gate_reason"] == "disabled"
-    assert diagnostic["block_reason"] == "disabled"
+    assert diagnostic["gate_reason"] == "stop_line_touch_avg_down_forbidden_in_hard_stop_or_final_loss_context"
+    assert diagnostic["block_reason"] == "stop_line_touch_avg_down_forbidden_in_hard_stop_or_final_loss_context"
     assert diagnostic["actual_order_submitted"] is False
     assert diagnostic["broker_order_forbidden"] is True
     assert diagnostic["sell_intercept_context"] == "final_loss_sell_before_fallback"
@@ -23102,12 +23117,20 @@ def test_stop_line_touch_mandatory_avg_down_bypasses_recent_scale_in_cooldown(mo
         context_fields={"sell_intercept_context": "final_loss_sell_before_fallback"},
     )
 
-    assert result["submitted"] is True
-    assert add_calls
-    assert stock["stop_line_touch_avg_down_count"] == 1
+    assert result == {
+        "attempted": False,
+        "submitted": False,
+        "reason": "stop_line_touch_avg_down_forbidden_in_hard_stop_or_final_loss_context",
+    }
+    assert add_calls == []
+    assert "stop_line_touch_avg_down_count" not in stock
     by_stage = {stage: fields for stage, fields in pipeline_events}
-    assert by_stage["stop_line_touch_mandatory_avg_down_candidate"]["gate_reason"] == "ok"
-    assert by_stage["stop_line_touch_mandatory_avg_down_submitted"]["actual_order_submitted"] is True
+    assert "stop_line_touch_mandatory_avg_down_candidate" not in by_stage
+    blocked = by_stage["stop_line_touch_mandatory_avg_down_not_eligible"]
+    assert blocked["sell_intercept_context"] == "final_loss_sell_before_fallback"
+    assert blocked["gate_reason"] == "stop_line_touch_avg_down_forbidden_in_hard_stop_or_final_loss_context"
+    assert blocked["actual_order_submitted"] is False
+    assert blocked["broker_order_forbidden"] is True
 
 
 def test_late_loss_avg_down_retry_includes_hanall_and_gwangju_like_cases(monkeypatch):

@@ -3246,9 +3246,10 @@ def _attempt_stop_line_touch_mandatory_avg_down(
         held_sec=held_sec,
         dynamic_stop_pct=dynamic_stop_pct,
     )
-    if not stop_touch_avg_down.get("should_retry"):
-        rule = str(exit_rule or "").strip()
-        reason_type = str(sell_reason_type or "").upper()
+    rule = str(exit_rule or "").strip()
+    reason_type = str(sell_reason_type or "").upper()
+
+    def _log_stop_touch_avg_down_not_eligible(reason: str) -> None:
         if (
             isinstance(context_fields, dict)
             and context_fields.get("sell_intercept_context")
@@ -3281,18 +3282,35 @@ def _attempt_stop_line_touch_mandatory_avg_down(
                 current_ai_score=f"{current_ai_score:.0f}",
                 held_sec=held_sec,
                 gate_allowed=False,
-                gate_reason=stop_touch_avg_down.get("reason", "not_eligible"),
-                block_reason=stop_touch_avg_down.get("reason", "not_eligible"),
+                gate_reason=reason,
+                block_reason=reason,
                 add_type="AVG_DOWN",
                 add_reason=_STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON,
                 actual_order_submitted=False,
                 broker_order_forbidden=True,
                 **context_fields,
             )
+
+    sell_intercept_context = (
+        str((context_fields or {}).get("sell_intercept_context") or "").strip()
+        if isinstance(context_fields, dict)
+        else ""
+    )
+    if reason_type == "LOSS" and (
+        rule == "scalp_hard_stop_pct"
+        or sell_intercept_context == "final_loss_sell_before_fallback"
+    ):
+        reason = "stop_line_touch_avg_down_forbidden_in_hard_stop_or_final_loss_context"
+        _log_stop_touch_avg_down_not_eligible(reason)
+        return {"attempted": False, "submitted": False, "reason": reason}
+
+    if not stop_touch_avg_down.get("should_retry"):
+        reason = stop_touch_avg_down.get("reason", "not_eligible")
+        _log_stop_touch_avg_down_not_eligible(reason)
         return {
             "attempted": False,
             "submitted": False,
-            "reason": stop_touch_avg_down.get("reason", "not_eligible"),
+            "reason": reason,
         }
 
     retry_gate = can_consider_scale_in(
