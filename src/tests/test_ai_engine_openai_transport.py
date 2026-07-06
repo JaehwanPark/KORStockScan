@@ -10,10 +10,11 @@ from src.engine.ai_engine_openai import (
     OPENAI_RESPONSE_SCHEMA_REGISTRY,
     OpenAIResponseRequest,
     OpenAIResponsesWSPool,
+    OpenAIResponsesHTTPError,
     OpenAITransportResult,
     OpenAIWSRequestIdMismatchError,
 )
-from src.engine.ai_prompt_contracts import SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
+from src.engine.ai_prompt_contracts import SCALPING_HOLDING_FLOW_SYSTEM_PROMPT, SCALPING_WATCHING_HOT_SYSTEM_PROMPT
 from src.engine.ai_response_contracts import build_openai_response_text_format
 from src.engine import bedrock_nova_provider
 
@@ -1625,6 +1626,94 @@ def test_openai_scalping_market_data_uses_compact_json_payload(monkeypatch):
     assert "최근 10틱 상세 내역" not in payload
 
 
+def test_openai_scalping_entry_hot_input_reduces_prompt_payload(monkeypatch):
+    engine = _build_engine()
+    ws_data = _sample_ws_data()
+    ticks = _sample_ticks()
+    candles = _sample_candles()
+
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_SCALPING_COMPACT_INPUT_ENABLED=True,
+            OPENAI_ANALYZE_TARGET_HOT_INPUT_ENABLED=True,
+            OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED=False,
+        ),
+    )
+
+    feature_packet = openai_module.extract_scalping_feature_packet(ws_data, ticks, candles)
+    compact_payload = engine._format_market_data(ws_data, ticks, candles, feature_packet=feature_packet)
+    hot_payload = engine._format_entry_screen_hot_data(
+        ws_data,
+        ticks,
+        candles,
+        feature_packet=feature_packet,
+        matrix_runtime={"status": "excluded", "cache_token": "matrix:excluded", "prompt_context": "x" * 200},
+        entry_adm_runtime={
+            "status": "applied",
+            "applied": True,
+            "cache_token": "entry_adm:bucket",
+            "prompt_context": "y" * 200,
+            "fields": {
+                "entry_adm_bucket_token": "bucket-a",
+                "entry_adm_recommended_action": "WAIT",
+                "entry_adm_source_quality_adjusted_ev_pct": 0.12,
+            },
+        },
+        lifecycle_ai_runtime={"status": "ready", "applied": True, "cache_token": "lifecycle:ready", "prompt_context": "z" * 200},
+    )
+    parsed = json.loads(hot_payload)
+
+    assert parsed["input_schema"] == "entry_screen_hot_v1"
+    assert "recent_ticks_latest_first" not in parsed
+    assert "recent_candles_latest_window" not in parsed
+    assert "orderbook_top3" not in parsed
+    assert "prompt_context" not in hot_payload
+    assert parsed["runtime_context"]["entry_adm"]["entry_adm_bucket_token"] == "bucket-a"
+    assert len(hot_payload) < int(len(compact_payload) * 0.6)
+
+
+def test_analyze_target_watching_uses_hot_prompt_and_input_schema(monkeypatch):
+    engine = _build_engine()
+    captured = {}
+
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_ANALYZE_TARGET_HOT_PROMPT_ENABLED=True,
+            OPENAI_ANALYZE_TARGET_HOT_INPUT_ENABLED=True,
+            OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED=False,
+            OPENAI_SCALPING_COMPACT_INPUT_ENABLED=True,
+        ),
+    )
+
+    def _fake_call(prompt, user_input, **kwargs):
+        captured["prompt"] = prompt
+        captured["payload"] = json.loads(user_input)
+        return {"action": "WAIT", "score": 60, "reason": "mixed entry features"}
+
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
+
+    result = engine.analyze_target(
+        "테스트",
+        _sample_ws_data(),
+        _sample_ticks(),
+        _sample_candles(),
+        strategy="SCALPING",
+        prompt_profile="watching",
+    )
+
+    assert captured["prompt"] == SCALPING_WATCHING_HOT_SYSTEM_PROMPT
+    assert captured["payload"]["input_schema"] == "entry_screen_hot_v1"
+    assert result["ai_prompt_version"] == "hot_v1"
+    assert result["ai_input_schema"] == "entry_screen_hot_v1"
+    assert result["ai_input_contract_mode"] == "structured_json"
+
+
 def test_openai_legacy_market_data_excludes_price_change_heuristic_ticks(monkeypatch):
     engine = _build_engine()
     monkeypatch.setattr(
@@ -1891,6 +1980,79 @@ def test_openai_call_falls_back_from_ws_to_http(monkeypatch):
     assert result["action"] == "BUY"
     assert meta["openai_ws_http_fallback"] is True
     assert meta["openai_transport_mode"] == "http"
+    assert meta["openai_http_fallback_budget_ms"] > 0
+    assert meta["openai_original_timeout_ms"] > 0
+    assert meta["openai_ws_elapsed_before_fallback_ms"] >= 0
+    assert meta["openai_http_lock_wait_ms"] >= 0
+
+
+def test_openai_http_timed_out_text_is_retryable(monkeypatch):
+    engine = _build_engine()
+    calls = []
+
+    def _create(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise Exception("Request timed out.")
+        return SimpleNamespace(output_text='{"action":"WAIT","score":61,"reason":"retry success"}')
+
+    engine.client = SimpleNamespace(responses=SimpleNamespace(create=_create))
+    monkeypatch.setattr(openai_module.time, "sleep", lambda seconds: None)
+
+    result = GPTSniperEngine._call_openai_safe(
+        engine,
+        "PROMPT",
+        "payload",
+        require_json=True,
+        context_name="test_http_timeout_text",
+        schema_name="entry_v1",
+        endpoint_name="analyze_target",
+        symbol="005930",
+    )
+    meta = engine._consume_last_transport_meta()
+
+    assert result["action"] == "WAIT"
+    assert len(calls) == 2
+    assert meta["openai_http_attempt_count"] == 2
+    assert meta["openai_http_provider_ms"] >= 0
+    assert meta["openai_http_provider_total_ms"] >= meta["openai_http_provider_ms"]
+    assert meta["openai_http_lock_wait_ms"] >= 0
+
+
+def test_openai_http_retry_sleep_respects_remaining_timeout(monkeypatch):
+    engine = _build_engine()
+    sleeps = []
+
+    def _create(**kwargs):
+        raise Exception("503 unavailable")
+
+    engine.client = SimpleNamespace(responses=SimpleNamespace(create=_create))
+    monkeypatch.setattr(openai_module.time, "sleep", lambda seconds: sleeps.append(seconds))
+    request = OpenAIResponseRequest(
+        prompt="PROMPT",
+        user_input="payload",
+        require_json=True,
+        context_name="test_retry_budget",
+        model_name="gpt-fast",
+        temperature=0.0,
+        schema_name="entry_v1",
+        endpoint_name="analyze_target",
+        request_id="req-retry-budget",
+        symbol="005930",
+        cache_key="-",
+        submitted_at_perf=openai_module.time.perf_counter(),
+        timeout_ms=120,
+    )
+
+    try:
+        engine._call_openai_responses_http(request)
+    except RuntimeError as exc:
+        assert "모든 OpenAI API 키 사용 불가" in str(exc)
+    else:
+        raise AssertionError("expected retry exhaustion")
+
+    assert sleeps
+    assert max(sleeps) <= 0.08
 
 
 def test_openai_ws_attempt_timeout_leaves_http_fallback_budget(monkeypatch):
@@ -1908,6 +2070,7 @@ def test_openai_ws_attempt_timeout_leaves_http_fallback_budget(monkeypatch):
         replace(
             openai_module.TRADING_RULES,
             OPENAI_RESPONSES_WS_TIMEOUT_MS=15000,
+            OPENAI_RESPONSES_WS_HTTP_FALLBACK_RESERVE_MS=1500,
         ),
     )
     engine._responses_ws_pool = _StubPool()
@@ -1936,8 +2099,173 @@ def test_openai_ws_attempt_timeout_leaves_http_fallback_budget(monkeypatch):
 
     assert captured
     assert captured[0].request_id == request.request_id
-    assert 2000 <= captured[0].timeout_ms <= 2300
+    assert 1400 <= captured[0].timeout_ms <= 1600
     assert captured[0].timeout_ms < request.timeout_ms
+    assert 1400 <= int(captured[0].metadata["ws_http_fallback_reserve_ms"]) <= 1500
+
+
+def test_openai_ws_http_fallback_keeps_executable_timeout_after_ws_elapsed(monkeypatch):
+    engine = _build_engine()
+    engine.client = SimpleNamespace(responses=SimpleNamespace(create=lambda **kwargs: None))
+    captured_http = []
+
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_TRANSPORT_MODE="responses_ws",
+            OPENAI_RESPONSES_WS_ENABLED=True,
+            OPENAI_ANALYZE_TARGET_TIMEOUT_MS=3000,
+            OPENAI_RESPONSES_WS_TIMEOUT_MS=15000,
+            OPENAI_RESPONSES_WS_HTTP_FALLBACK_RESERVE_MS=1500,
+        ),
+    )
+
+    def _fake_ws(request):
+        request.submitted_at_perf = openai_module.time.perf_counter() - 1.55
+        raise TimeoutError("ws timeout")
+
+    def _fake_http(request):
+        captured_http.append(request)
+        return OpenAITransportResult(
+            payload={"action": "WAIT", "score": 62, "reason": "http fallback"},
+            transport_mode="http",
+            ws_used=False,
+            ws_http_fallback=True,
+            roundtrip_ms=15,
+        )
+
+    monkeypatch.setattr(engine, "_call_openai_responses_ws", _fake_ws)
+    monkeypatch.setattr(engine, "_call_openai_responses_http", _fake_http)
+
+    result = GPTSniperEngine._call_openai_safe(
+        engine,
+        "PROMPT",
+        "payload",
+        require_json=True,
+        context_name="test",
+        schema_name="entry_v1",
+        endpoint_name="analyze_target",
+        symbol="005930",
+    )
+
+    assert result["action"] == "WAIT"
+    assert captured_http
+    assert 1200 <= captured_http[0].timeout_ms <= 1600
+    meta = engine._consume_last_transport_meta()
+    assert 1200 <= meta["openai_http_fallback_budget_ms"] <= 1600
+    assert meta["openai_ws_elapsed_before_fallback_ms"] >= 1500
+    assert meta["openai_http_lock_wait_ms"] >= 0
+
+
+def test_openai_ws_http_fallback_timeout_fails_closed_for_entry(monkeypatch):
+    engine = _build_engine()
+    engine.client = SimpleNamespace(responses=SimpleNamespace(create=lambda **kwargs: None))
+    log_info_calls = []
+    log_error_calls = []
+
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_TRANSPORT_MODE="responses_ws",
+            OPENAI_RESPONSES_WS_ENABLED=True,
+            OPENAI_ANALYZE_TARGET_TIMEOUT_MS=3000,
+        ),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_call_openai_responses_ws",
+        lambda request: (_ for _ in ()).throw(TimeoutError("ws timeout")),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_call_openai_responses_http",
+        lambda request: (_ for _ in ()).throw(
+            OpenAIResponsesHTTPError(
+                "🚨 [AI 고갈] 모든 OpenAI API 키 사용 불가. 마지막 에러: request timed out.",
+                timing_meta={
+                    "openai_http_provider_ms": 1400,
+                    "openai_http_provider_total_ms": 1400,
+                    "openai_http_attempt_count": 1,
+                    "openai_http_error_type": "TimeoutError",
+                },
+            )
+        ),
+    )
+    monkeypatch.setattr(openai_module, "log_info", lambda msg, **kwargs: log_info_calls.append(msg))
+    monkeypatch.setattr(openai_module, "log_error", lambda msg, **kwargs: log_error_calls.append(msg))
+
+    result = GPTSniperEngine._call_openai_safe(
+        engine,
+        "PROMPT",
+        "payload",
+        require_json=True,
+        context_name="test_entry",
+        schema_name="entry_v1",
+        endpoint_name="analyze_target",
+        symbol="005930",
+    )
+    meta = engine._consume_last_transport_meta()
+
+    assert result["action"] == "DROP"
+    assert result["score"] == 0
+    assert result["openai_transport_fail_closed"] is True
+    assert meta["openai_ws_http_fallback"] is True
+    assert meta["openai_ws_http_fallback_fail_closed"] is True
+    assert meta["openai_ws_http_fallback_error_type"] == "OpenAIResponsesHTTPError"
+    assert meta["openai_http_provider_ms"] == 1400
+    assert meta["openai_http_provider_total_ms"] == 1400
+    assert meta["openai_http_attempt_count"] == 1
+    assert meta["openai_http_error_type"] == "TimeoutError"
+    assert any("HTTP fallback fail-closed" in msg for msg in log_info_calls)
+    assert not log_error_calls
+
+
+def test_openai_ws_http_fallback_timeout_fails_closed_for_holding(monkeypatch):
+    engine = _build_engine()
+    engine.client = SimpleNamespace(responses=SimpleNamespace(create=lambda **kwargs: None))
+
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_TRANSPORT_MODE="responses_ws",
+            OPENAI_RESPONSES_WS_ENABLED=True,
+            OPENAI_ANALYZE_TARGET_TIMEOUT_MS=3000,
+        ),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_call_openai_responses_ws",
+        lambda request: (_ for _ in ()).throw(TimeoutError("ws timeout")),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_call_openai_responses_http",
+        lambda request: (_ for _ in ()).throw(RuntimeError("OpenAI Responses HTTP 응답/파싱 실패: Request timed out.")),
+    )
+
+    result = GPTSniperEngine._call_openai_safe(
+        engine,
+        "PROMPT",
+        "payload",
+        require_json=True,
+        context_name="test_holding",
+        schema_name="holding_exit_v1",
+        endpoint_name="analyze_target",
+        symbol="005930",
+    )
+    meta = engine._consume_last_transport_meta()
+
+    assert result["action"] == "HOLD"
+    assert result["score"] == 0
+    assert result["openai_transport_fail_closed"] is True
+    assert meta["openai_ws_http_fallback"] is True
+    assert meta["openai_ws_http_fallback_fail_closed"] is True
 
 
 def test_openai_ws_connection_closed_ok_fallback_logs_info_not_error(monkeypatch):

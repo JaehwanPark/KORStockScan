@@ -788,9 +788,10 @@ class TradingConfig:
     OPENAI_RESPONSES_WS_ENABLED: bool = False  # Responses WebSocket shadow-first 토글
     OPENAI_RESPONSES_WS_POOL_SIZE: int = 2  # persistent Responses WebSocket worker 수
     OPENAI_RESPONSES_WS_TIMEOUT_MS: int = 700  # hot path 판단 timeout
+    OPENAI_RESPONSES_WS_HTTP_FALLBACK_RESERVE_MS: int = 1500  # WS 실패 후 HTTP fallback에 남길 목표 예산
     OPENAI_ANALYZE_TARGET_TIMEOUT_MS: int = 3000  # entry/analyze_target live decision timeout
     OPENAI_ENTRY_PRICE_TIMEOUT_MS: int = 7000  # entry_price OpenAI route timeout; Bedrock has provider timeout
-    OPENAI_HOLDING_SCORE_TIMEOUT_MS: int = 3000  # holding_score_v2 position-state score timeout
+    OPENAI_HOLDING_SCORE_TIMEOUT_MS: int = 7000  # holding_score_v2 position-state score timeout
     OPENAI_HOLDING_FLOW_TIMEOUT_MS: int = 7000  # holding_flow sell-candidate override/recheck timeout
     OPENAI_SCANNER_REPORT_TIMEOUT_MS: int = 15000  # source-only morning scanner report timeout
     OPENAI_OVERNIGHT_TIMEOUT_MS: int = 12000  # source-only overnight_v1 batch 판단 timeout
@@ -799,6 +800,8 @@ class TradingConfig:
     OPENAI_RESPONSES_WS_LATE_DISCARD_ENABLED: bool = True  # deadline 초과 응답 discard
     OPENAI_ENTRY_TIMEOUT_REJECT_ENABLED: bool = True  # buy-side hot path timeout/parse failure 시 reject fallback
     OPENAI_SCALPING_COMPACT_INPUT_ENABLED: bool = True  # OpenAI live route hot path 입력 compact JSON 사용
+    OPENAI_ANALYZE_TARGET_HOT_PROMPT_ENABLED: bool = True  # watching entry hot path 전용 short prompt 사용
+    OPENAI_ANALYZE_TARGET_HOT_INPUT_ENABLED: bool = True  # watching entry hot path 전용 핵심 feature JSON 사용
     OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED: bool = True  # entry_price compact JSON enabled by operator risk acceptance
     OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED: bool = False  # entry/analyze_target structured v2 input canary
     OPENAI_ENTRY_PRICE_V2_INPUT_ENABLED: bool = False  # entry_price structured v2 input canary
@@ -3837,6 +3840,9 @@ def _build_trading_rules() -> TradingConfig:
     env_openai_ws_enabled = _env_bool("KORSTOCKSCAN_OPENAI_RESPONSES_WS_ENABLED")
     env_openai_ws_pool_size = _env_int("KORSTOCKSCAN_OPENAI_RESPONSES_WS_POOL_SIZE")
     env_openai_ws_timeout_ms = _env_int("KORSTOCKSCAN_OPENAI_RESPONSES_WS_TIMEOUT_MS")
+    env_openai_ws_http_fallback_reserve_ms = _env_int(
+        "KORSTOCKSCAN_OPENAI_RESPONSES_WS_HTTP_FALLBACK_RESERVE_MS"
+    )
     env_openai_analyze_target_timeout_ms = _env_int("KORSTOCKSCAN_OPENAI_ANALYZE_TARGET_TIMEOUT_MS")
     env_openai_entry_price_timeout_ms = _env_int("KORSTOCKSCAN_OPENAI_ENTRY_PRICE_TIMEOUT_MS")
     env_openai_holding_score_timeout_ms = _env_int("KORSTOCKSCAN_OPENAI_HOLDING_SCORE_TIMEOUT_MS")
@@ -3847,6 +3853,8 @@ def _build_trading_rules() -> TradingConfig:
     env_openai_reasoning_effort = _env_str("KORSTOCKSCAN_OPENAI_REASONING_EFFORT")
     env_openai_ws_late_discard = _env_bool("KORSTOCKSCAN_OPENAI_RESPONSES_WS_LATE_DISCARD_ENABLED")
     env_openai_entry_timeout_reject = _env_bool("KORSTOCKSCAN_OPENAI_ENTRY_TIMEOUT_REJECT_ENABLED")
+    env_openai_analyze_target_hot_prompt = _env_bool("KORSTOCKSCAN_OPENAI_ANALYZE_TARGET_HOT_PROMPT_ENABLED")
+    env_openai_analyze_target_hot_input = _env_bool("KORSTOCKSCAN_OPENAI_ANALYZE_TARGET_HOT_INPUT_ENABLED")
     env_openai_entry_price_compact_input = _env_bool("KORSTOCKSCAN_OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED")
     env_openai_entry_screen_v2_input = _env_bool("KORSTOCKSCAN_OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED")
     env_openai_entry_price_v2_input = _env_bool("KORSTOCKSCAN_OPENAI_ENTRY_PRICE_V2_INPUT_ENABLED")
@@ -3863,6 +3871,7 @@ def _build_trading_rules() -> TradingConfig:
         or env_openai_ws_enabled is not None
         or env_openai_ws_pool_size is not None
         or env_openai_ws_timeout_ms is not None
+        or env_openai_ws_http_fallback_reserve_ms is not None
         or env_openai_analyze_target_timeout_ms is not None
         or env_openai_entry_price_timeout_ms is not None
         or env_openai_holding_score_timeout_ms is not None
@@ -3873,6 +3882,8 @@ def _build_trading_rules() -> TradingConfig:
         or env_openai_reasoning_effort is not None
         or env_openai_ws_late_discard is not None
         or env_openai_entry_timeout_reject is not None
+        or env_openai_analyze_target_hot_prompt is not None
+        or env_openai_analyze_target_hot_input is not None
         or env_openai_entry_price_compact_input is not None
         or env_openai_entry_screen_v2_input is not None
         or env_openai_entry_price_v2_input is not None
@@ -3899,6 +3910,9 @@ def _build_trading_rules() -> TradingConfig:
             OPENAI_RESPONSES_WS_TIMEOUT_MS=env_openai_ws_timeout_ms
             if env_openai_ws_timeout_ms is not None
             else config.OPENAI_RESPONSES_WS_TIMEOUT_MS,
+            OPENAI_RESPONSES_WS_HTTP_FALLBACK_RESERVE_MS=env_openai_ws_http_fallback_reserve_ms
+            if env_openai_ws_http_fallback_reserve_ms is not None
+            else config.OPENAI_RESPONSES_WS_HTTP_FALLBACK_RESERVE_MS,
             OPENAI_ANALYZE_TARGET_TIMEOUT_MS=env_openai_analyze_target_timeout_ms
             if env_openai_analyze_target_timeout_ms is not None
             else config.OPENAI_ANALYZE_TARGET_TIMEOUT_MS,
@@ -3929,6 +3943,12 @@ def _build_trading_rules() -> TradingConfig:
             OPENAI_ENTRY_TIMEOUT_REJECT_ENABLED=env_openai_entry_timeout_reject
             if env_openai_entry_timeout_reject is not None
             else config.OPENAI_ENTRY_TIMEOUT_REJECT_ENABLED,
+            OPENAI_ANALYZE_TARGET_HOT_PROMPT_ENABLED=env_openai_analyze_target_hot_prompt
+            if env_openai_analyze_target_hot_prompt is not None
+            else config.OPENAI_ANALYZE_TARGET_HOT_PROMPT_ENABLED,
+            OPENAI_ANALYZE_TARGET_HOT_INPUT_ENABLED=env_openai_analyze_target_hot_input
+            if env_openai_analyze_target_hot_input is not None
+            else config.OPENAI_ANALYZE_TARGET_HOT_INPUT_ENABLED,
             OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED=env_openai_entry_price_compact_input
             if env_openai_entry_price_compact_input is not None
             else config.OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED,

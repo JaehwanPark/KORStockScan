@@ -775,15 +775,30 @@ def call_postclose_structured_review(
             }
         return None, primary_status
     if config.primary_provider == "gemini_3_5_flash":
-        return None, {
-            **config.provider_status_fields(),
-            "provider": "gemini",
-            "status": "disabled",
-            "reason": "gemini_provider_disabled_for_postclose_review",
-            "primary_provider": "gemini_3_5_flash",
-            "failback_provider": config.failback_provider,
-            "failback_used": False,
-        }
+        raw_text, primary_status = _call_gemini_3_5_flash(
+            schema_name=schema_name,
+            instructions=instructions,
+            prompt=prompt,
+            config=config,
+            contract_validator=contract_validator,
+        )
+        if raw_text is not None:
+            primary_status["input_context_chars"] = len(prompt)
+            return raw_text, primary_status
+        if config.failback_provider == "openai":
+            failback_reason = str(primary_status.get("status") or "gemini_3_5_flash_failed")
+            return _call_openai(
+                schema_name=schema_name,
+                instructions=instructions,
+                prompt=prompt,
+                config=config,
+                metadata=metadata,
+                contract_validator=contract_validator,
+                failback_used=True,
+                failback_reason=failback_reason,
+                primary_status=primary_status,
+            )
+        return None, primary_status
     return _call_openai(
         schema_name=schema_name,
         instructions=instructions,

@@ -16,6 +16,7 @@ from src.engine.ai_prompt_contracts import (
     SCALPING_OVERNIGHT_DECISION_PROMPT,
     SCALPING_SYSTEM_PROMPT,
     SCALPING_SYSTEM_PROMPT_75_CANARY,
+    SCALPING_WATCHING_HOT_SYSTEM_PROMPT,
     SCALPING_WATCHING_SYSTEM_PROMPT,
     SWING_SYSTEM_PROMPT,
 )
@@ -305,6 +306,44 @@ def test_holding_score_v2_payload_contains_position_pnl_and_source_quality(monke
     assert result["openai_schema_name"] == "holding_score_v2"
     assert result["openai_total_tokens"] == 123
     assert result["ai_prompt_type"] == "scalping_holding_score"
+
+
+def test_holding_score_timeout_returns_timeout_source_with_timing_meta(monkeypatch):
+    engine = _build_engine()
+
+    def _raise_timeout(*args, **kwargs):
+        raise ai_engine_openai_module.OpenAIResponsesHTTPError(
+            "OpenAI Responses HTTP timeout budget exhausted: endpoint=holding_score, last_error=request timed out",
+            timing_meta={
+                "openai_http_provider_ms": 6900,
+                "openai_http_provider_total_ms": 6900,
+                "openai_http_attempt_count": 1,
+                "openai_http_error_type": "TimeoutError",
+                "openai_http_timeout_budget_exhausted": True,
+            },
+        )
+
+    monkeypatch.setattr(engine, "_call_openai_safe", _raise_timeout)
+
+    result = engine.evaluate_scalping_holding_score(
+        "테스트",
+        "005930",
+        {"curr": 10050, "v_pw": 120, "orderbook": {"asks": [], "bids": []}},
+        [{"time": datetime.now().strftime("%H:%M:%S"), "price": 10050, "volume": 10, "side": "BUY"}],
+        [{"현재가": 10050, "고가": 10080, "저가": 10000, "거래량": 1000}],
+        {"record_id": "REC-1", "buy_price": 10000, "profit_rate": 0.5, "held_sec": 75, "buy_qty": 1},
+    )
+
+    assert result["holding_score_source"] == "timeout"
+    assert result["holding_score_raw_source"] == "timeout"
+    assert result["holding_score_effective_usable"] is False
+    assert result["holding_score_excluded_reason"] == "timeout"
+    assert result["holding_score_transport_fail_closed"] is True
+    assert result["holding_score_timeout_like"] is True
+    assert result["openai_http_provider_ms"] == 6900
+    assert result["openai_http_timeout_budget_exhausted"] is True
+    assert result["ai_result_source"] == "timeout"
+    assert result["ai_parse_fail"] is True
 
 
 def test_holding_score_v2_payload_stays_compact_for_low_latency(monkeypatch):
@@ -908,7 +947,7 @@ def test_scalping_prompt_75_canary_rewrites_buy_band():
 
 
 def test_scalping_entry_prompts_align_default_runtime_buy_band():
-    for prompt in (SCALPING_SYSTEM_PROMPT, SCALPING_WATCHING_SYSTEM_PROMPT):
+    for prompt in (SCALPING_SYSTEM_PROMPT, SCALPING_WATCHING_HOT_SYSTEM_PROMPT, SCALPING_WATCHING_SYSTEM_PROMPT):
         assert "75-100 BUY" in prompt
         assert "50-74 WAIT" in prompt
         assert "0-49 DROP" in prompt
@@ -1132,7 +1171,7 @@ def test_analyze_target_routes_scalping_prompt_profiles(monkeypatch):
     )
 
     assert used_prompts == [
-        SCALPING_WATCHING_SYSTEM_PROMPT,
+        SCALPING_WATCHING_HOT_SYSTEM_PROMPT,
         SCALPING_HOLDING_SYSTEM_PROMPT,
         SCALPING_HOLDING_SYSTEM_PROMPT,
         SCALPING_SYSTEM_PROMPT,
@@ -1144,7 +1183,7 @@ def test_analyze_target_routes_scalping_prompt_profiles(monkeypatch):
     assert shared["ai_prompt_type"] == "scalping_shared"
     assert watching["ai_model"] == "tier1-model"
     assert exiting["ai_model"] == "tier1-model"
-    assert watching["ai_prompt_version"] == "split_v2"
+    assert watching["ai_prompt_version"] == "hot_v1"
 
 
 def test_analyze_target_holding_exit_action_schema_compat(monkeypatch):
@@ -1196,6 +1235,7 @@ def test_scalping_reason_language_contract_keeps_english_reason():
 def test_scalping_prompts_require_english_ascii_reason():
     for prompt in (
         SCALPING_SYSTEM_PROMPT,
+        SCALPING_WATCHING_HOT_SYSTEM_PROMPT,
         SCALPING_WATCHING_SYSTEM_PROMPT,
         SCALPING_HOLDING_SYSTEM_PROMPT,
         SCALPING_HOLDING_FLOW_SYSTEM_PROMPT,
@@ -1207,6 +1247,7 @@ def test_scalping_prompts_require_english_ascii_reason():
 
 def test_internal_json_classifier_prompts_use_english_instruction_text():
     for prompt in (
+        SCALPING_WATCHING_HOT_SYSTEM_PROMPT,
         SCALPING_ENTRY_PRICE_PROMPT,
         SCALPING_HOLDING_SYSTEM_PROMPT,
         SCALPING_HOLDING_FLOW_SYSTEM_PROMPT,
@@ -1226,6 +1267,9 @@ def test_internal_json_classifier_prompts_use_english_instruction_text():
 
 def test_stage_prompts_keep_decision_scope_separated():
     assert "Do not decide order price, quantity, holding, or exit." in SCALPING_SYSTEM_PROMPT
+    assert "Do not decide order price, quantity, holding, exit, provider route, or hard guard policy." in (
+        SCALPING_WATCHING_HOT_SYSTEM_PROMPT
+    )
     assert "Do not decide order price, quantity, holding, or exit." in SCALPING_WATCHING_SYSTEM_PROMPT
     assert "Do not re-decide BUY vs WAIT." in SCALPING_ENTRY_PRICE_PROMPT
     assert "Do not change entry, order price, provider route, quantity, or hard guard policy." in (
@@ -1605,7 +1649,7 @@ def test_condition_entry_and_exit_reuse_scalping_routes(monkeypatch):
     exit_result = engine.evaluate_condition_exit("조건주", "000001", ws_data, recent_ticks, recent_candles, profile, 1.2, 2.1, 78)
 
     assert used_models == ["tier1-model", "tier1-model"]
-    assert used_prompts == [SCALPING_WATCHING_SYSTEM_PROMPT, SCALPING_HOLDING_SYSTEM_PROMPT]
+    assert used_prompts == [SCALPING_WATCHING_HOT_SYSTEM_PROMPT, SCALPING_HOLDING_SYSTEM_PROMPT]
     assert used_schemas == ["entry_v1", "holding_exit_v1"]
     assert entry["decision"] == "BUY"
     assert entry["confidence"] == 88
@@ -1969,7 +2013,7 @@ def test_openai_overnight_uses_batch_timeout_profile(monkeypatch):
             OPENAI_RESPONSES_WS_TIMEOUT_MS=700,
             OPENAI_ANALYZE_TARGET_TIMEOUT_MS=3000,
             OPENAI_ENTRY_PRICE_TIMEOUT_MS=7000,
-            OPENAI_HOLDING_SCORE_TIMEOUT_MS=3000,
+            OPENAI_HOLDING_SCORE_TIMEOUT_MS=7000,
             OPENAI_HOLDING_FLOW_TIMEOUT_MS=7000,
             OPENAI_SCANNER_REPORT_TIMEOUT_MS=15000,
             OPENAI_OVERNIGHT_TIMEOUT_MS=12000,
@@ -1981,7 +2025,7 @@ def test_openai_overnight_uses_batch_timeout_profile(monkeypatch):
     assert engine._get_openai_timeout_ms(endpoint_name="scanner_report", require_json=False) == 15000
     assert engine._get_openai_timeout_ms(endpoint_name="analyze_target", require_json=True) == 3000
     assert engine._get_openai_timeout_ms(endpoint_name="entry_price", require_json=True) == 7000
-    assert engine._get_openai_timeout_ms(endpoint_name="holding_score", require_json=True) == 3000
+    assert engine._get_openai_timeout_ms(endpoint_name="holding_score", require_json=True) == 7000
     assert engine._get_openai_timeout_ms(endpoint_name="holding_flow", require_json=True) == 7000
     assert engine._get_openai_timeout_ms(endpoint_name="generic_json", require_json=True) == 700
 

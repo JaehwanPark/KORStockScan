@@ -59,6 +59,7 @@ from src.engine.macro_briefing_complete import build_scanner_data_input
 from src.engine.ai_prompt_contracts import (
     SCALPING_SYSTEM_PROMPT,
     SCALPING_WATCHING_SYSTEM_PROMPT,
+    SCALPING_WATCHING_HOT_SYSTEM_PROMPT,
     SCALPING_HOLDING_SYSTEM_PROMPT,
     SCALPING_HOLDING_SCORE_SYSTEM_PROMPT,
     SCALPING_HOLDING_FLOW_SYSTEM_PROMPT,
@@ -313,6 +314,13 @@ class OpenAITransportResult:
     queue_wait_ms: int = 0
     roundtrip_ms: int = 0
     usage_meta: dict[str, int] = field(default_factory=dict)
+    timing_meta: dict[str, int] = field(default_factory=dict)
+
+
+class OpenAIResponsesHTTPError(RuntimeError):
+    def __init__(self, message: str, *, timing_meta: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.timing_meta = dict(timing_meta or {})
 
 
 @dataclass
@@ -452,6 +460,15 @@ class OpenAIResponsesWSWorker:
                         queue_wait_ms=queue_wait_ms,
                         roundtrip_ms=roundtrip_ms,
                         usage_meta=_extract_openai_usage_meta(response),
+                        timing_meta={
+                            "openai_ws_attempt_timeout_ms": int(request.timeout_ms),
+                            "openai_ws_total_timeout_ms": int(
+                                (request.metadata or {}).get("ws_total_timeout_ms") or request.timeout_ms
+                            ),
+                            "openai_ws_http_fallback_reserve_ms": int(
+                                (request.metadata or {}).get("ws_http_fallback_reserve_ms") or 0
+                            ),
+                        },
                     )
                 if event_type in {"error", "response.failed", "response.incomplete"}:
                     self._record("openai_ws_parse_fail", 1)
@@ -647,7 +664,7 @@ class GPTSniperEngine:
         if endpoint == "entry_price":
             return max(1, int(getattr(TRADING_RULES, "OPENAI_ENTRY_PRICE_TIMEOUT_MS", 7000) or 7000))
         if endpoint == "holding_score":
-            return max(1, int(getattr(TRADING_RULES, "OPENAI_HOLDING_SCORE_TIMEOUT_MS", 3000) or 3000))
+            return max(1, int(getattr(TRADING_RULES, "OPENAI_HOLDING_SCORE_TIMEOUT_MS", 7000) or 7000))
         if endpoint == "holding_flow":
             return max(1, int(getattr(TRADING_RULES, "OPENAI_HOLDING_FLOW_TIMEOUT_MS", 7000) or 7000))
         if endpoint == "scanner_report":
@@ -1218,6 +1235,8 @@ class GPTSniperEngine:
             return SCALPING_SYSTEM_PROMPT, "scalping_shared", "split_disabled_v1", "shared"
 
         if profile == "watching":
+            if bool(getattr(TRADING_RULES, "OPENAI_ANALYZE_TARGET_HOT_PROMPT_ENABLED", True)):
+                return SCALPING_WATCHING_HOT_SYSTEM_PROMPT, "scalping_entry", "hot_v1", "watching"
             return SCALPING_WATCHING_SYSTEM_PROMPT, "scalping_entry", "split_v2", "watching"
         if profile in {"holding", "exit"}:
             return SCALPING_HOLDING_SYSTEM_PROMPT, "scalping_holding", "split_v2", "holding"
@@ -1356,6 +1375,45 @@ class GPTSniperEngine:
         if strategy in ["KOSPI_ML", "KOSDAQ_ML"]:
             return {"action": "WAIT", "score": 50, "reason": reason}
         return {"action": "DROP", "score": 0, "reason": reason}
+
+    @staticmethod
+    def _is_openai_timeout_like_error(error) -> bool:
+        text = str(error or "").lower()
+        return isinstance(error, TimeoutError) or "timeout" in text or "timed out" in text or "deadline" in text
+
+    def _build_ws_http_fallback_timeout_result(
+        self,
+        request: OpenAIResponseRequest,
+        *,
+        error,
+    ) -> OpenAITransportResult | None:
+        if request.endpoint_name != "analyze_target" or not request.require_json:
+            return None
+        if request.schema_name == "holding_exit_v1":
+            payload = {
+                "action": "HOLD",
+                "score": 0,
+                "reason": "openai_ws_http_fallback_timeout_fail_closed",
+            }
+        elif request.schema_name == "entry_v1":
+            payload = {
+                "action": "DROP",
+                "score": 0,
+                "reason": "openai_ws_http_fallback_timeout_fail_closed",
+            }
+        else:
+            return None
+        roundtrip_ms = max(0, int((time.perf_counter() - request.submitted_at_perf) * 1000))
+        payload["openai_transport_fail_closed"] = True
+        payload["openai_transport_fail_closed_reason"] = str(error or "timeout")[:120]
+        return OpenAITransportResult(
+            payload=payload,
+            transport_mode="http",
+            ws_used=False,
+            ws_http_fallback=True,
+            queue_wait_ms=0,
+            roundtrip_ms=roundtrip_ms,
+        )
 
     def _remote_buy_risk_flags(self, ws_data, recent_ticks, recent_candles):
         if hasattr(self, "_extract_scalping_features"):
@@ -1836,12 +1894,22 @@ class GPTSniperEngine:
         )
         invalid_prompt_retried = bool((request.metadata or {}).get("invalid_prompt_retry") == "true")
         last_error = ""
+        provider_total_ms = 0
+        last_provider_ms = 0
+        attempts_made = 0
+        last_error_type = "-"
+        last_error_timeout_like = False
         for attempt in range(len(self.api_keys)):
+            attempts_made = attempt + 1
+            provider_started_at = time.perf_counter()
             try:
                 response = self.client.responses.create(
                     **request.build_provider_payload(use_schema_registry=use_schema_registry),
                     timeout=max(0.05, request.remaining_timeout_sec()),
                 )
+                provider_ms = max(0, int((time.perf_counter() - provider_started_at) * 1000))
+                last_provider_ms = provider_ms
+                provider_total_ms += provider_ms
                 self._rotate_client()
                 raw_text = self._extract_openai_response_text(response)
                 payload = self._parse_openai_transport_payload(raw_text, require_json=request.require_json)
@@ -1854,9 +1922,18 @@ class GPTSniperEngine:
                     queue_wait_ms=0,
                     roundtrip_ms=roundtrip_ms,
                     usage_meta=_extract_openai_usage_meta(response),
+                    timing_meta={
+                        "openai_http_provider_ms": provider_ms,
+                        "openai_http_provider_total_ms": provider_total_ms,
+                        "openai_http_attempt_count": attempt + 1,
+                    },
                 )
             except RateLimitError as e:
+                last_provider_ms = max(0, int((time.perf_counter() - provider_started_at) * 1000))
+                provider_total_ms += last_provider_ms
                 last_error = str(e)
+                last_error_type = type(e).__name__
+                last_error_timeout_like = False
                 old_key = self.current_key[-5:]
                 self._rotate_client()
                 warn_msg = (
@@ -1865,10 +1942,17 @@ class GPTSniperEngine:
                 )
                 print(warn_msg)
                 log_error(warn_msg)
-                time.sleep(0.8)
+                remaining = request.remaining_timeout_sec()
+                if remaining <= 0.05:
+                    break
+                time.sleep(min(0.8, max(0.0, remaining - 0.05)))
                 continue
             except Exception as e:
+                last_provider_ms = max(0, int((time.perf_counter() - provider_started_at) * 1000))
+                provider_total_ms += last_provider_ms
                 last_error = str(e).lower()
+                last_error_type = type(e).__name__
+                last_error_timeout_like = self._is_openai_timeout_like_error(e)
                 if self._is_invalid_prompt_error(e) and not invalid_prompt_retried:
                     log_error(
                         f"⚠️ [OpenAI invalid_prompt retry] {request.context_name} | "
@@ -1877,19 +1961,42 @@ class GPTSniperEngine:
                     invalid_prompt_retried = True
                     request = self._build_invalid_prompt_retry_request(request)
                     continue
-                if any(x in last_error for x in ["429", "quota", "503", "unavailable", "timeout", "server", "too_many_requests"]):
+                if self._is_openai_timeout_like_error(e) or any(
+                    x in last_error
+                    for x in ["429", "quota", "503", "unavailable", "server", "too_many_requests"]
+                ):
                     old_key = self.current_key[-5:]
                     self._rotate_client()
                     print(
                         f"⚠️ [OpenAI 서버 에러] {request.context_name} | "
                         f"{old_key} 교체 -> {self.current_key[-5:]} ({attempt+1}/{len(self.api_keys)})"
                     )
-                    time.sleep(0.8)
+                    if request.remaining_timeout_sec() <= 0.05:
+                        break
+                    time.sleep(min(0.8, max(0.0, request.remaining_timeout_sec() - 0.05)))
                     continue
                 raise RuntimeError(f"OpenAI Responses HTTP 응답/파싱 실패: {e}") from e
-        fatal_msg = f"🚨 [AI 고갈] 모든 OpenAI API 키 사용 불가. 마지막 에러: {last_error}"
-        log_error(fatal_msg)
-        raise RuntimeError(fatal_msg)
+        if last_error_timeout_like:
+            fatal_msg = (
+                "OpenAI Responses HTTP timeout budget exhausted: "
+                f"endpoint={request.endpoint_name}, attempts={attempts_made}, "
+                f"budget_ms={int(request.timeout_ms)}, provider_total_ms={provider_total_ms}, "
+                f"last_error={last_error}"
+            )
+            log_info(f"⚠️ [{request.context_name}] {fatal_msg}")
+        else:
+            fatal_msg = f"🚨 [AI 고갈] 모든 OpenAI API 키 사용 불가. 마지막 에러: {last_error}"
+            log_error(fatal_msg)
+        raise OpenAIResponsesHTTPError(
+            fatal_msg,
+            timing_meta={
+                "openai_http_provider_ms": last_provider_ms,
+                "openai_http_provider_total_ms": provider_total_ms,
+                "openai_http_attempt_count": attempts_made,
+                "openai_http_error_type": last_error_type,
+                "openai_http_timeout_budget_exhausted": bool(last_error_timeout_like),
+            },
+        )
 
     def _call_openai_responses_ws(self, request: OpenAIResponseRequest):
         pool = self._get_responses_ws_pool()
@@ -1908,12 +2015,28 @@ class GPTSniperEngine:
             1,
             int(getattr(TRADING_RULES, "OPENAI_RESPONSES_WS_TIMEOUT_MS", remaining_ms) or remaining_ms),
         )
-        reserve_ms = min(750, max(100, remaining_ms // 4))
+        configured_reserve_ms = max(
+            1,
+            int(
+                getattr(
+                    TRADING_RULES,
+                    "OPENAI_RESPONSES_WS_HTTP_FALLBACK_RESERVE_MS",
+                    1500,
+                )
+                or 1500
+            ),
+        )
+        reserve_ms = min(
+            configured_reserve_ms,
+            max(1, remaining_ms // 2),
+            max(1, remaining_ms - 50),
+        )
         attempt_ms = min(configured_ws_ms, max(50, remaining_ms - reserve_ms))
         if attempt_ms >= remaining_ms:
             return request
         metadata = dict(request.metadata or {})
         metadata["ws_attempt_timeout_ms"] = str(attempt_ms)
+        metadata["ws_http_fallback_reserve_ms"] = str(reserve_ms)
         metadata["ws_total_timeout_ms"] = str(request.timeout_ms)
         return replace(
             request,
@@ -2006,6 +2129,13 @@ class GPTSniperEngine:
                     self._set_last_transport_meta(transport_meta)
                     raise
                 self._record_ws_metric("openai_ws_http_fallback", 1)
+                fallback_timeout_ms = max(50, int(remaining * 1000))
+                transport_meta["openai_ws_elapsed_before_fallback_ms"] = max(
+                    0,
+                    int((time.perf_counter() - request.submitted_at_perf) * 1000),
+                )
+                transport_meta["openai_http_fallback_budget_ms"] = fallback_timeout_ms
+                transport_meta["openai_original_timeout_ms"] = int(request.timeout_ms)
                 fallback_request = OpenAIResponseRequest(
                     prompt=request.prompt,
                     user_input=request.user_input,
@@ -2021,11 +2151,34 @@ class GPTSniperEngine:
                     symbol=request.symbol,
                     cache_key=request.cache_key,
                     submitted_at_perf=time.perf_counter(),
-                    timeout_ms=max(50, int(remaining * 1000)),
+                    timeout_ms=fallback_timeout_ms,
                     metadata=dict(request.metadata or {}),
                 )
+                http_lock_wait_started = time.perf_counter()
                 with self.api_call_lock:
-                    result = self._call_openai_responses_http(fallback_request)
+                    transport_meta["openai_http_lock_wait_ms"] = max(
+                        0,
+                        int((time.perf_counter() - http_lock_wait_started) * 1000),
+                    )
+                    try:
+                        result = self._call_openai_responses_http(fallback_request)
+                    except Exception as fallback_error:
+                        if getattr(fallback_error, "timing_meta", None):
+                            transport_meta.update(fallback_error.timing_meta)
+                        if not self._is_openai_timeout_like_error(fallback_error):
+                            raise
+                        result = self._build_ws_http_fallback_timeout_result(
+                            fallback_request,
+                            error=fallback_error,
+                        )
+                        if result is None:
+                            raise
+                        transport_meta["openai_ws_http_fallback_fail_closed"] = True
+                        transport_meta["openai_ws_http_fallback_error_type"] = type(fallback_error).__name__
+                        log_info(
+                            f"⚠️ [OpenAI WS HTTP fallback fail-closed] "
+                            f"{context_name}: {fallback_error}"
+                        )
                 result.ws_http_fallback = True
                 transport_meta.update(
                     {
@@ -2037,12 +2190,19 @@ class GPTSniperEngine:
                     }
                 )
                 fallback_msg = f"⚠️ [OpenAI WS fallback] {context_name}: {e}"
-                if _is_recoverable_openai_ws_close(e):
+                if bool(transport_meta.get("openai_ws_http_fallback_fail_closed")):
+                    log_info(fallback_msg)
+                elif _is_recoverable_openai_ws_close(e):
                     log_info(fallback_msg)
                 else:
                     log_error(fallback_msg)
         else:
+            http_lock_wait_started = time.perf_counter()
             with self.api_call_lock:
+                transport_meta["openai_http_lock_wait_ms"] = max(
+                    0,
+                    int((time.perf_counter() - http_lock_wait_started) * 1000),
+                )
                 result = self._call_openai_responses_http(request)
             transport_meta.update(
                 {
@@ -2053,6 +2213,8 @@ class GPTSniperEngine:
                     "openai_ws_roundtrip_ms": int(result.roundtrip_ms),
                 }
             )
+        if getattr(result, "timing_meta", None):
+            transport_meta.update(result.timing_meta)
         if getattr(result, "usage_meta", None):
             transport_meta.update(result.usage_meta)
         self._set_last_transport_meta(transport_meta)
@@ -2631,6 +2793,177 @@ class GPTSniperEngine:
                 "price_change_heuristic_is_not_aggressor": True,
             },
         }
+
+    def _clean_hot_entry_value(self, value):
+        if value is None or value == "":
+            return None
+        if isinstance(value, float):
+            return round(value, 4)
+        if isinstance(value, (str, int, bool)):
+            return value
+        return value
+
+    def _clean_hot_entry_payload(self, value):
+        if isinstance(value, dict):
+            cleaned = {}
+            for key, item in value.items():
+                cleaned_item = self._clean_hot_entry_payload(self._clean_hot_entry_value(item))
+                if cleaned_item not in (None, {}, []):
+                    cleaned[key] = cleaned_item
+            return cleaned
+        if isinstance(value, list):
+            cleaned_list = [
+                self._clean_hot_entry_payload(self._clean_hot_entry_value(item))
+                for item in value
+            ]
+            return [item for item in cleaned_list if item not in (None, {}, [])]
+        return self._clean_hot_entry_value(value)
+
+    def _build_entry_hot_runtime_context(self, *, matrix_runtime, entry_adm_runtime, lifecycle_ai_runtime):
+        context = {}
+        if isinstance(matrix_runtime, dict):
+            context["holding_exit_matrix"] = {
+                "status": matrix_runtime.get("status"),
+                "cache_token": matrix_runtime.get("cache_token"),
+            }
+        if isinstance(entry_adm_runtime, dict):
+            entry_context = {
+                "status": entry_adm_runtime.get("status"),
+                "applied": entry_adm_runtime.get("applied"),
+                "cache_token": entry_adm_runtime.get("cache_token"),
+            }
+            fields = entry_adm_runtime.get("fields")
+            if isinstance(fields, dict):
+                for key, value in fields.items():
+                    if not str(key).startswith("entry_adm_"):
+                        continue
+                    if isinstance(value, (str, int, float, bool)) or value is None:
+                        entry_context[key] = value
+                    if len(entry_context) >= 12:
+                        break
+            context["entry_adm"] = entry_context
+        if isinstance(lifecycle_ai_runtime, dict):
+            context["lifecycle_ai"] = {
+                "status": lifecycle_ai_runtime.get("status"),
+                "applied": lifecycle_ai_runtime.get("applied"),
+                "cache_token": lifecycle_ai_runtime.get("cache_token"),
+            }
+        return self._clean_hot_entry_payload(context)
+
+    def _build_entry_screen_hot_payload(
+        self,
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        *,
+        feature_packet=None,
+        matrix_runtime=None,
+        entry_adm_runtime=None,
+        lifecycle_ai_runtime=None,
+    ):
+        ws = ws_data if isinstance(ws_data, dict) else {}
+        ticks = [tick for tick in (recent_ticks or []) if isinstance(tick, dict)]
+        candles = [candle for candle in (recent_candles or []) if isinstance(candle, dict)]
+        if feature_packet is None:
+            feature_packet = extract_scalping_feature_packet(ws, ticks, candles)
+        quote = self._extract_quote_snapshot(ws)
+        orderbook = ws.get("orderbook") if isinstance(ws.get("orderbook"), dict) else {}
+        asks = orderbook.get("asks") if isinstance(orderbook.get("asks"), list) else []
+        bids = orderbook.get("bids") if isinstance(orderbook.get("bids"), list) else []
+        latest_tick = ticks[0] if ticks else {}
+        hot_feature_keys = (
+            "latest_strength",
+            "buy_pressure_10t",
+            "net_aggressive_delta_10t",
+            "same_price_buy_absorption",
+            "tick_acceleration_ratio",
+            "recent_5tick_seconds",
+            "prev_5tick_seconds",
+            "price_change_10t_pct",
+            "curr_vs_micro_vwap_bp",
+            "curr_vs_ma5_bp",
+            "distance_from_day_high_pct",
+            "intraday_range_pct",
+            "micro_vwap_available",
+            "ma5_available",
+            "large_sell_print_detected",
+            "large_buy_print_detected",
+            "top3_depth_ratio",
+            "orderbook_total_ratio",
+            "ask_depth_ratio",
+            "net_ask_depth",
+            "spread_bp",
+            "volume_ratio_pct",
+            "quote_age_ms",
+            "quote_stale",
+            "tick_latest_age_ms",
+            "tick_context_quality",
+            "tick_context_stale",
+            "tick_accel_source",
+            "tick_aggressor_pressure_usable",
+            "tick_aggressor_trusted_count",
+            "tick_aggressor_price_heuristic_count",
+            "minute_candle_window_fresh",
+            "minute_candle_context_quality",
+        )
+        features = {
+            key: feature_packet.get(key)
+            for key in hot_feature_keys
+            if isinstance(feature_packet, dict) and key in feature_packet
+        }
+        payload = {
+            "input_schema": "entry_screen_hot_v1",
+            "current": {
+                "price": ws.get("curr"),
+                "fluctuation_pct": ws.get("fluctuation", 0.0),
+                "execution_strength": ws.get("v_pw", 0.0),
+                "buy_ratio": ws.get("buy_ratio", 0.0),
+            },
+            "features": features,
+            "quote": {
+                "latency_state": ws.get("latency_state"),
+                "quote_stale": bool(ws.get("quote_stale", False)),
+                **quote,
+            },
+            "orderbook_top1": {
+                "ask": {"price": asks[0].get("price"), "volume": asks[0].get("volume")}
+                if asks and isinstance(asks[0], dict)
+                else {},
+                "bid": {"price": bids[0].get("price"), "volume": bids[0].get("volume")}
+                if bids and isinstance(bids[0], dict)
+                else {},
+            },
+            "latest_tick": {
+                "time": latest_tick.get("time"),
+                "dir": self._display_tick_dir(latest_tick) if latest_tick else None,
+                "aggressor_quality": latest_tick.get("aggressor_quality"),
+                "price": latest_tick.get("price"),
+                "volume": latest_tick.get("volume"),
+                "strength": latest_tick.get("strength", 0),
+            },
+            "runtime_context": self._build_entry_hot_runtime_context(
+                matrix_runtime=matrix_runtime,
+                entry_adm_runtime=entry_adm_runtime,
+                lifecycle_ai_runtime=lifecycle_ai_runtime,
+            ),
+            "source_quality": {
+                "tick_count": len(ticks),
+                "candle_count": len(candles),
+                "orderbook_present": bool(asks or bids),
+                "price_change_heuristic_is_not_aggressor": True,
+            },
+        }
+        return self._clean_hot_entry_payload(payload)
+
+    def _format_entry_screen_hot_data(self, ws_data, recent_ticks, recent_candles, *, feature_packet=None, **runtime):
+        payload = self._build_entry_screen_hot_payload(
+            ws_data,
+            recent_ticks,
+            recent_candles,
+            feature_packet=feature_packet,
+            **runtime,
+        )
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
 
     def _format_market_data(self, ws_data, recent_ticks, recent_candles=None, *, feature_packet=None):
         if recent_candles is None:
@@ -3770,6 +4103,13 @@ class GPTSniperEngine:
             )
             cache_strategy = f"{cache_strategy}:{entry_adm_cache_token}"
             cache_strategy = f"{cache_strategy}:{lifecycle_ai_runtime.get('cache_token', 'disabled')}"
+        use_hot_entry_input = (
+            strategy not in ["KOSPI_ML", "KOSDAQ_ML"]
+            and prompt_type == "scalping_entry"
+            and normalized_profile == "watching"
+            and bool(getattr(TRADING_RULES, "OPENAI_ANALYZE_TARGET_HOT_INPUT_ENABLED", True))
+            and not bool(getattr(TRADING_RULES, "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED", False))
+        )
         if strategy in ["KOSPI_ML", "KOSDAQ_ML"]:
             input_contract_fields = {
                 "ai_input_schema": "swing_market_text_v1",
@@ -3781,6 +4121,8 @@ class GPTSniperEngine:
                 "ai_input_schema": (
                     "entry_screen_v2"
                     if bool(getattr(TRADING_RULES, "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED", False))
+                    else "entry_screen_hot_v1"
+                    if use_hot_entry_input
                     else "entry_screen_compact_v1"
                     if bool(getattr(TRADING_RULES, "OPENAI_SCALPING_COMPACT_INPUT_ENABLED", True))
                     else "entry_screen_legacy_text_v1"
@@ -3789,6 +4131,7 @@ class GPTSniperEngine:
                     "structured_json"
                     if bool(
                         getattr(TRADING_RULES, "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED", False)
+                        or use_hot_entry_input
                         or getattr(TRADING_RULES, "OPENAI_SCALPING_COMPACT_INPUT_ENABLED", True)
                     )
                     else "plain_text"
@@ -3912,15 +4255,26 @@ class GPTSniperEngine:
                 )
             else:
                 feature_packet = extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles)
-                try:
-                    formatted_data = self._format_market_data(
+                if use_hot_entry_input:
+                    formatted_data = self._format_entry_screen_hot_data(
                         ws_data,
                         recent_ticks,
                         recent_candles,
                         feature_packet=feature_packet,
+                        matrix_runtime=matrix_runtime,
+                        entry_adm_runtime=entry_adm_runtime,
+                        lifecycle_ai_runtime=lifecycle_ai_runtime,
                     )
-                except TypeError:
-                    formatted_data = self._format_market_data(ws_data, recent_ticks, recent_candles)
+                else:
+                    try:
+                        formatted_data = self._format_market_data(
+                            ws_data,
+                            recent_ticks,
+                            recent_candles,
+                            feature_packet=feature_packet,
+                        )
+                    except TypeError:
+                        formatted_data = self._format_market_data(ws_data, recent_ticks, recent_candles)
                 if bool(getattr(TRADING_RULES, "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED", False)):
                     try:
                         structured_input = json.loads(formatted_data)
@@ -3941,7 +4295,7 @@ class GPTSniperEngine:
                         separators=(",", ":"),
                         default=str,
                     )
-                else:
+                elif not use_hot_entry_input:
                     if matrix_runtime and matrix_runtime.get("prompt_context"):
                         formatted_data = f"{formatted_data}\n\n{matrix_runtime['prompt_context']}"
                     if entry_adm_runtime and entry_adm_runtime.get("prompt_context"):
@@ -3963,6 +4317,8 @@ class GPTSniperEngine:
                     default_schema=(
                         "entry_screen_v2"
                         if bool(getattr(TRADING_RULES, "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED", False))
+                        else "entry_screen_hot_v1"
+                        if use_hot_entry_input
                         else "entry_screen_compact_v1"
                         if bool(getattr(TRADING_RULES, "OPENAI_SCALPING_COMPACT_INPUT_ENABLED", True))
                         else "entry_screen_legacy_text_v1"
@@ -3971,6 +4327,7 @@ class GPTSniperEngine:
                         "structured_json"
                         if bool(
                             getattr(TRADING_RULES, "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED", False)
+                            or use_hot_entry_input
                             or getattr(TRADING_RULES, "OPENAI_SCALPING_COMPACT_INPUT_ENABLED", True)
                         )
                         else "plain_text"
@@ -4840,14 +5197,26 @@ class GPTSniperEngine:
             )
         except Exception as e:
             failure_count = self._record_failure_and_maybe_disable(context_name=f"HOLDING_SCORE:{stock_name}")
-            log_error(f"🚨 [HOLDING_SCORE] OpenAI score error ({stock_name}, failures {failure_count}): {e}")
-            return self._neutral_holding_score_result(
-                "exception",
+            timeout_like = self._is_openai_timeout_like_error(e)
+            result_source = "timeout" if timeout_like else "exception"
+            log_error(
+                f"🚨 [HOLDING_SCORE] OpenAI score {result_source} fail-closed "
+                f"({stock_name}, failures {failure_count}): {e}"
+            )
+            payload = self._neutral_holding_score_result(
+                result_source,
                 started=started,
-                result_source="exception",
+                result_source=result_source,
                 parse_fail=True,
                 input_contract_fields=input_contract_fields,
             )
+            timing_meta = getattr(e, "timing_meta", None)
+            if isinstance(timing_meta, dict):
+                payload.update({key: value for key, value in timing_meta.items() if str(key).startswith("openai_")})
+            payload["holding_score_timeout_like"] = bool(timeout_like)
+            payload["holding_score_transport_fail_closed"] = True
+            payload["holding_score_transport_fail_closed_reason"] = str(e)[:160]
+            return payload
         finally:
             self.lock.release()
 

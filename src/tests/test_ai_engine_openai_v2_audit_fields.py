@@ -101,7 +101,8 @@ def test_openai_scalping_analyze_target_returns_feature_audit_fields(monkeypatch
 
     assert result["action"] == "BUY"
     assert result["ai_prompt_type"] == "scalping_entry"
-    assert result["ai_prompt_version"] == "split_v2"
+    assert result["ai_prompt_version"] == "hot_v1"
+    assert result["ai_input_schema"] == "entry_screen_hot_v1"
     assert result["ai_model"] == "gpt-fast"
     assert used_models == ["gpt-fast"]
     assert result["ai_parse_ok"] is True
@@ -136,11 +137,11 @@ def test_openai_scalping_analyze_target_returns_parse_fallback_meta(monkeypatch)
         prompt_profile="watching",
     )
 
-    assert result["action"] == "WAIT"
-    assert result["score"] == 50
+    assert result["action"] == "DROP"
+    assert result["score"] == 0
     assert result["ai_parse_ok"] is False
     assert result["ai_parse_fail"] is True
-    assert result["ai_fallback_score_50"] is True
+    assert result["ai_fallback_score_50"] is False
     assert result["ai_response_ms"] >= 0
     assert result["ai_result_source"] == "exception"
 
