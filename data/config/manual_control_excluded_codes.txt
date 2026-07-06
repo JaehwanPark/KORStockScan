@@ -2,3 +2,4 @@
 010120 # auto_scale_in_qty_guard_block source=stop_line_touch_mandatory_avg_down exit=scalp_soft_stop_pct profit=-4.47% peak=-0.23%
 009520 # auto_open_loss KRX_OPEN profit=-11.35% stop=-5.00%
 486990 # current_holding manual control
+042700 # auto_open_loss KRX_OPEN profit=-5.62% stop=-5.00%
