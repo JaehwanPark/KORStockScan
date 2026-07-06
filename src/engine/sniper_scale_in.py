@@ -608,6 +608,123 @@ def _pyramid_quality_reason(context, decision):
     return "pyramid_quality_support_insufficient"
 
 
+def _unique_reasons(reasons):
+    seen = set()
+    unique = []
+    for reason in reasons:
+        text = str(reason or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        unique.append(text)
+    return unique
+
+
+def _is_rising_missed_scout_lineage(stock):
+    if not isinstance(stock, dict):
+        return False
+    return bool(stock.get("rising_missed_one_share_scout") or stock.get("rising_missed_scout_upgraded"))
+
+
+def _apply_rising_missed_scout_pyramid_bridge(result, stock, profit_rate, continuation_context, quality_decision):
+    if not isinstance(result, dict):
+        return result
+    if not bool(getattr(TRADING_RULES, "RISING_MISSED_SCOUT_PYRAMID_BRIDGE_ENABLED", False)):
+        return result
+    if not _is_rising_missed_scout_lineage(stock):
+        return result
+
+    bridge_min_profit = max(
+        0.0,
+        _safe_float(
+            getattr(TRADING_RULES, "RISING_MISSED_SCOUT_PYRAMID_MIN_PROFIT_PCT", 0.70),
+            0.70,
+        ),
+    )
+    max_avg_down = max(
+        0,
+        _safe_int(
+            getattr(TRADING_RULES, "RISING_MISSED_SCOUT_PYRAMID_MAX_AVG_DOWN_COUNT", 1),
+            1,
+        ),
+    )
+    operator_reason = str(
+        getattr(TRADING_RULES, "RISING_MISSED_SCOUT_PYRAMID_OPERATOR_OVERRIDE_REASON", "") or ""
+    ).strip()
+    avg_down_count = _safe_int(stock.get("avg_down_count"), 0)
+    pyramid_count = _safe_int(stock.get("pyramid_count"), 0)
+    current_ai_score = _safe_float(continuation_context.get("current_ai_score"), 0.0)
+    ai_available = _safe_bool(continuation_context.get("ai_score_available"), False)
+    risk_signals = set(quality_decision.get("risk_signals") or [])
+    hard_blockers = set(quality_decision.get("hard_blockers") or [])
+
+    blockers = []
+    if profit_rate < bridge_min_profit:
+        blockers.append("profit_not_enough")
+    if avg_down_count > max_avg_down:
+        blockers.append("avg_down_count_exceeded")
+    if pyramid_count > 0:
+        blockers.append("pyramid_already_used")
+    if not ai_available:
+        blockers.append("ai_score_unavailable")
+    elif current_ai_score < 68.0:
+        blockers.append("ai_score_below_min")
+    if _safe_bool(continuation_context.get("quote_stale"), False):
+        blockers.append("quote_stale")
+    if _safe_bool(continuation_context.get("reversal_feature_stale"), False):
+        blockers.append("micro_context_stale")
+    if _safe_bool(continuation_context.get("tick_context_stale"), False):
+        blockers.append("tick_accel_stale")
+    if not _safe_bool(continuation_context.get("tick_aggressor_pressure_usable_bool"), False):
+        blockers.append("tick_aggressor_pressure_unusable")
+    if not _safe_bool(continuation_context.get("micro_vwap_available"), False):
+        blockers.append("micro_vwap_missing")
+
+    forbidden_quality = {
+        "fresh_micro_confirmation_missing",
+        "large_sell_detected",
+        "buy_pressure_severe_below_min",
+        "micro_vwap_severe_overheated",
+        "tick_accel_stale",
+        "micro_context_stale",
+        "ai_score_below_min",
+    }
+    blockers.extend(sorted((hard_blockers | risk_signals) & forbidden_quality))
+    blockers = _unique_reasons(blockers)
+
+    bridge_fields = {
+        "rising_missed_scout_pyramid_bridge_enabled": True,
+        "rising_missed_scout_pyramid_bridge_lineage": True,
+        "rising_missed_scout_pyramid_bridge_min_profit_pct": round(bridge_min_profit, 4),
+        "rising_missed_scout_pyramid_bridge_max_avg_down_count": max_avg_down,
+        "rising_missed_scout_pyramid_bridge_operator_override_reason": operator_reason or "-",
+        "runtime_family": "rising_missed_scout_pyramid_bridge",
+        "runtime_family_candidate": "rising_missed_scout_pyramid_bridge",
+        "decision_authority": "same_day_operator_runtime_override",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "forbidden_uses": (
+            "threshold_full_relaxation|provider_route_change|bot_auto_restart|cap_release|"
+            "stale_quote_bypass|broker_guard_bypass|hard_safety_bypass"
+        ),
+        "avg_down_count": avg_down_count,
+        "pyramid_count": pyramid_count,
+    }
+    result.update(bridge_fields)
+    if blockers:
+        result["reason"] = "rising_missed_scout_pyramid_bridge_blocked:" + ",".join(blockers)
+        result["rising_missed_scout_pyramid_bridge_blockers"] = ",".join(blockers)
+        return result
+
+    result["should_add"] = True
+    result["add_type"] = "PYRAMID"
+    result["reason"] = "rising_missed_scout_pyramid_bridge_ok"
+    result["runtime_effect"] = True
+    result["rising_missed_scout_pyramid_bridge_blockers"] = "-"
+    result["rising_missed_scout_pyramid_bridge_applied"] = True
+    return result
+
+
 def _pyramid_runtime_prior_default_fields(runtime_prior_context):
     prior = runtime_prior_context if isinstance(runtime_prior_context, dict) else {}
     return {
@@ -770,6 +887,7 @@ def evaluate_scalping_pyramid(
             effective_min_profit = strong_min_profit
             profit_gate_mode = "strong_continuation"
         else:
+            quality_decision = _pyramid_quality_decision(continuation_context)
             result.update(continuation_context)
             result.update(
                 {
@@ -780,15 +898,40 @@ def evaluate_scalping_pyramid(
                     "is_new_high": bool(is_new_high),
                 }
             )
+            result["pyramid_quality_support_score"] = quality_decision["support_score"]
+            result["pyramid_quality_required_support_score"] = quality_decision["required_support_score"]
+            result["pyramid_quality_support_signals"] = ",".join(quality_decision["support_signals"]) or "-"
+            result["pyramid_quality_risk_signals"] = ",".join(quality_decision["risk_signals"]) or "-"
+            result["pyramid_quality_hard_blockers"] = ",".join(quality_decision["hard_blockers"]) or "-"
+            result = _apply_rising_missed_scout_pyramid_bridge(
+                result,
+                stock,
+                profit_rate,
+                continuation_context,
+                quality_decision,
+            )
             return _apply_pyramid_runtime_prior_context(result, runtime_prior_context, profit_rate)
 
     if profit_rate < effective_min_profit:
+        quality_decision = _pyramid_quality_decision(continuation_context)
         result.update(continuation_context)
         result["reason"] = "profit_not_enough"
         result["profit_gate_mode"] = profit_gate_mode
         result["min_profit_pct"] = round(effective_min_profit, 4)
         result["drawdown_from_peak"] = round(drawdown_from_peak, 4)
         result["is_new_high"] = bool(is_new_high)
+        result["pyramid_quality_support_score"] = quality_decision["support_score"]
+        result["pyramid_quality_required_support_score"] = quality_decision["required_support_score"]
+        result["pyramid_quality_support_signals"] = ",".join(quality_decision["support_signals"]) or "-"
+        result["pyramid_quality_risk_signals"] = ",".join(quality_decision["risk_signals"]) or "-"
+        result["pyramid_quality_hard_blockers"] = ",".join(quality_decision["hard_blockers"]) or "-"
+        result = _apply_rising_missed_scout_pyramid_bridge(
+            result,
+            stock,
+            profit_rate,
+            continuation_context,
+            quality_decision,
+        )
         return _apply_pyramid_runtime_prior_context(result, runtime_prior_context, profit_rate)
 
     if not (is_new_high or drawdown_from_peak <= 0.3):

@@ -10731,6 +10731,23 @@ def _emit_stat_action_decision_snapshot(
     }
     if distance_to_buy_bps is not None:
         fields["distance_to_buy_bps"] = f"{distance_to_buy_bps:.2f}"
+    for key in (
+        "runtime_family",
+        "runtime_family_candidate",
+        "decision_authority",
+        "runtime_effect",
+        "allowed_runtime_apply",
+        "forbidden_uses",
+        "rising_missed_scout_pyramid_bridge_enabled",
+        "rising_missed_scout_pyramid_bridge_lineage",
+        "rising_missed_scout_pyramid_bridge_min_profit_pct",
+        "rising_missed_scout_pyramid_bridge_max_avg_down_count",
+        "rising_missed_scout_pyramid_bridge_operator_override_reason",
+        "rising_missed_scout_pyramid_bridge_blockers",
+        "rising_missed_scout_pyramid_bridge_applied",
+    ):
+        if key in action:
+            fields[key] = action.get(key)
 
     _log_holding_pipeline(stock, code, "stat_action_decision_snapshot", **fields)
     _mutate_stock_state(stock, set_fields={"last_stat_action_snapshot_ts": now_ts})
@@ -10865,6 +10882,19 @@ def _append_pyramid_probe_fields(fields: dict, probe: dict | None) -> dict:
         "pyramid_runtime_prior_risk_applied",
         "pyramid_runtime_prior_relaxed_blocker",
         "pyramid_runtime_prior_soft_blockers",
+        "runtime_family",
+        "runtime_family_candidate",
+        "decision_authority",
+        "runtime_effect",
+        "allowed_runtime_apply",
+        "forbidden_uses",
+        "rising_missed_scout_pyramid_bridge_enabled",
+        "rising_missed_scout_pyramid_bridge_lineage",
+        "rising_missed_scout_pyramid_bridge_min_profit_pct",
+        "rising_missed_scout_pyramid_bridge_max_avg_down_count",
+        "rising_missed_scout_pyramid_bridge_operator_override_reason",
+        "rising_missed_scout_pyramid_bridge_blockers",
+        "rising_missed_scout_pyramid_bridge_applied",
     ):
         if key in probe:
             merged[key] = probe.get(key)
@@ -33940,7 +33970,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                             curr_price=curr_p,
                             buy_price=buy_p,
                             scale_in_gate=gate,
-                            scale_in_action={"add_type": "PYRAMID", "reason": _pyramid_reason},
+                            scale_in_action={**_pyramid_probe, "add_type": "PYRAMID", "reason": _pyramid_reason},
                             reason="scale_in_probe_blocked",
                         )
                 else:

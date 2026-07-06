@@ -64,6 +64,10 @@ class TradingConfig:
     SCALPING_PYRAMID_STRONG_CONTINUATION_MIN_PROFIT_PCT: float = 0.9
     SCALPING_PYRAMID_STRONG_CONTINUATION_MAX_DRAWDOWN_PCT: float = 0.20
     SCALPING_PYRAMID_MAX_ADD_QTY_RATIO: float = 0.50  # 실계좌 PYRAMID 1회 추가수량은 기존 보유수량의 50% 이내
+    RISING_MISSED_SCOUT_PYRAMID_BRIDGE_ENABLED: bool = False
+    RISING_MISSED_SCOUT_PYRAMID_MIN_PROFIT_PCT: float = 0.70
+    RISING_MISSED_SCOUT_PYRAMID_MAX_AVG_DOWN_COUNT: int = 1
+    RISING_MISSED_SCOUT_PYRAMID_OPERATOR_OVERRIDE_REASON: str = ""
     REAL_PYRAMID_MICRO_CONTEXT_GUARD_ENABLED: bool = False  # real SCALPING PYRAMID micro context guard; PREOPEN env only
     PENDING_SCALE_IN_REVALIDATION_CANCEL_ENABLED: bool = False  # real pending PYRAMID revalidation cancel; PREOPEN env only
     PENDING_SCALE_IN_REVALIDATION_MIN_AI_SCORE: int = 66
@@ -3201,6 +3205,18 @@ def _build_trading_rules() -> TradingConfig:
         "KORSTOCKSCAN_SCALPING_PYRAMID_STRONG_CONTINUATION_MAX_DRAWDOWN_PCT"
     )
     env_pyramid_max_add_qty_ratio = _env_float("KORSTOCKSCAN_SCALPING_PYRAMID_MAX_ADD_QTY_RATIO")
+    env_rising_missed_scout_pyramid_bridge_enabled = _env_bool(
+        "KORSTOCKSCAN_RISING_MISSED_SCOUT_PYRAMID_BRIDGE_ENABLED"
+    )
+    env_rising_missed_scout_pyramid_min_profit = _env_float(
+        "KORSTOCKSCAN_RISING_MISSED_SCOUT_PYRAMID_MIN_PROFIT_PCT"
+    )
+    env_rising_missed_scout_pyramid_max_avg_down = _env_int(
+        "KORSTOCKSCAN_RISING_MISSED_SCOUT_PYRAMID_MAX_AVG_DOWN_COUNT"
+    )
+    env_rising_missed_scout_pyramid_operator_reason = _env_str(
+        "KORSTOCKSCAN_RISING_MISSED_SCOUT_PYRAMID_OPERATOR_OVERRIDE_REASON"
+    )
     env_real_pyramid_micro_context_guard_enabled = _env_bool(
         "KORSTOCKSCAN_REAL_PYRAMID_MICRO_CONTEXT_GUARD_ENABLED"
     )
@@ -3723,6 +3739,18 @@ def _build_trading_rules() -> TradingConfig:
             SCALPING_PYRAMID_MAX_ADD_QTY_RATIO=env_pyramid_max_add_qty_ratio
             if env_pyramid_max_add_qty_ratio is not None
             else config.SCALPING_PYRAMID_MAX_ADD_QTY_RATIO,
+            RISING_MISSED_SCOUT_PYRAMID_BRIDGE_ENABLED=env_rising_missed_scout_pyramid_bridge_enabled
+            if env_rising_missed_scout_pyramid_bridge_enabled is not None
+            else config.RISING_MISSED_SCOUT_PYRAMID_BRIDGE_ENABLED,
+            RISING_MISSED_SCOUT_PYRAMID_MIN_PROFIT_PCT=env_rising_missed_scout_pyramid_min_profit
+            if env_rising_missed_scout_pyramid_min_profit is not None
+            else config.RISING_MISSED_SCOUT_PYRAMID_MIN_PROFIT_PCT,
+            RISING_MISSED_SCOUT_PYRAMID_MAX_AVG_DOWN_COUNT=env_rising_missed_scout_pyramid_max_avg_down
+            if env_rising_missed_scout_pyramid_max_avg_down is not None
+            else config.RISING_MISSED_SCOUT_PYRAMID_MAX_AVG_DOWN_COUNT,
+            RISING_MISSED_SCOUT_PYRAMID_OPERATOR_OVERRIDE_REASON=env_rising_missed_scout_pyramid_operator_reason
+            if env_rising_missed_scout_pyramid_operator_reason is not None
+            else config.RISING_MISSED_SCOUT_PYRAMID_OPERATOR_OVERRIDE_REASON,
             REAL_PYRAMID_MICRO_CONTEXT_GUARD_ENABLED=env_real_pyramid_micro_context_guard_enabled
             if env_real_pyramid_micro_context_guard_enabled is not None
             else config.REAL_PYRAMID_MICRO_CONTEXT_GUARD_ENABLED,

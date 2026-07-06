@@ -2526,6 +2526,221 @@ def test_scalping_pyramid_missing_ai_does_not_unlock_strong_continuation_gate():
     assert "ai_score_ok" in result["strong_continuation_failed_checks"]
 
 
+def _rising_missed_scout_pyramid_stock(**overrides):
+    stock = {
+        "rising_missed_one_share_scout": True,
+        "buy_qty": 1,
+        "avg_down_count": 0,
+        "pyramid_count": 0,
+        "holding_score_source": "live",
+        "holding_score_effective_usable": True,
+        "holding_score_data_quality": "fresh",
+        "last_reversal_features": {
+            "buy_pressure_10t": 72.0,
+            "tick_acceleration_ratio": 1.0,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 64.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "tick_context_quality": "fresh_computed",
+            "tick_context_stale": False,
+            "tick_latest_age_ms": 1000.0,
+            "tick_aggressor_trusted_count": 4,
+            "tick_aggressor_pressure_usable": True,
+            "quote_stale": False,
+            "quote_age_ms": 1000.0,
+        },
+    }
+    for key, value in overrides.items():
+        if key == "last_reversal_features":
+            stock["last_reversal_features"] = {
+                **stock["last_reversal_features"],
+                **value,
+            }
+        else:
+            stock[key] = value
+    return stock
+
+
+def test_rising_missed_scout_pyramid_bridge_off_keeps_profit_not_enough():
+    original = scale_in.TRADING_RULES
+    scale_in.TRADING_RULES = replace(
+        CONFIG,
+        RISING_MISSED_SCOUT_PYRAMID_BRIDGE_ENABLED=False,
+        SCALPING_PYRAMID_MIN_PROFIT_PCT=1.5,
+    )
+    try:
+        result = scale_in.evaluate_scalping_pyramid(
+            _rising_missed_scout_pyramid_stock(),
+            profit_rate=0.71,
+            peak_profit=0.71,
+            is_new_high=True,
+            current_ai_score=70,
+        )
+    finally:
+        scale_in.TRADING_RULES = original
+
+    assert result["should_add"] is False
+    assert result["reason"] == "profit_not_enough"
+
+
+def test_rising_missed_scout_pyramid_bridge_allows_fresh_scout_lineage():
+    original = scale_in.TRADING_RULES
+    scale_in.TRADING_RULES = replace(
+        CONFIG,
+        RISING_MISSED_SCOUT_PYRAMID_BRIDGE_ENABLED=True,
+        RISING_MISSED_SCOUT_PYRAMID_MIN_PROFIT_PCT=0.70,
+        RISING_MISSED_SCOUT_PYRAMID_MAX_AVG_DOWN_COUNT=1,
+        RISING_MISSED_SCOUT_PYRAMID_OPERATOR_OVERRIDE_REASON="operator_intraday_test",
+        SCALPING_PYRAMID_MIN_PROFIT_PCT=1.5,
+        SCALPING_PYRAMID_MIN_AI_SCORE=70,
+        SCALPING_PYRAMID_MIN_BUY_PRESSURE=60.0,
+        SCALPING_PYRAMID_MIN_TICK_ACCEL=0.5,
+        SCALPING_PYRAMID_MAX_MICRO_VWAP_BPS=60.0,
+    )
+    try:
+        result = scale_in.evaluate_scalping_pyramid(
+            _rising_missed_scout_pyramid_stock(),
+            profit_rate=0.71,
+            peak_profit=0.71,
+            is_new_high=True,
+            current_ai_score=70,
+        )
+    finally:
+        scale_in.TRADING_RULES = original
+
+    assert result["should_add"] is True
+    assert result["add_type"] == "PYRAMID"
+    assert result["reason"] == "rising_missed_scout_pyramid_bridge_ok"
+    assert "qty_override" not in result
+    assert "rising_missed_scout_pyramid_bridge_force_qty" not in result
+    assert result["decision_authority"] == "same_day_operator_runtime_override"
+    assert result["runtime_family"] == "rising_missed_scout_pyramid_bridge"
+    assert result["rising_missed_scout_pyramid_bridge_operator_override_reason"] == "operator_intraday_test"
+
+
+def test_rising_missed_scout_pyramid_bridge_blocks_avg_down_over_scope():
+    original = scale_in.TRADING_RULES
+    scale_in.TRADING_RULES = replace(
+        CONFIG,
+        RISING_MISSED_SCOUT_PYRAMID_BRIDGE_ENABLED=True,
+        RISING_MISSED_SCOUT_PYRAMID_MAX_AVG_DOWN_COUNT=1,
+        SCALPING_PYRAMID_MIN_PROFIT_PCT=1.5,
+    )
+    try:
+        result = scale_in.evaluate_scalping_pyramid(
+            _rising_missed_scout_pyramid_stock(avg_down_count=2),
+            profit_rate=0.71,
+            peak_profit=0.71,
+            is_new_high=True,
+            current_ai_score=70,
+        )
+    finally:
+        scale_in.TRADING_RULES = original
+
+    assert result["should_add"] is False
+    assert result["reason"].startswith("rising_missed_scout_pyramid_bridge_blocked:")
+    assert "avg_down_count_exceeded" in result["rising_missed_scout_pyramid_bridge_blockers"]
+
+
+@pytest.mark.parametrize(
+    ("feature_overrides", "expected_blocker"),
+    [
+        ({"quote_stale": True}, "quote_stale"),
+        ({"large_sell_print_detected": True}, "large_sell_detected"),
+        ({"buy_pressure_10t": 10.0}, "buy_pressure_severe_below_min"),
+        ({"curr_vs_micro_vwap_bp": 120.0}, "micro_vwap_severe_overheated"),
+    ],
+)
+def test_rising_missed_scout_pyramid_bridge_blocks_quality_risks(feature_overrides, expected_blocker):
+    original = scale_in.TRADING_RULES
+    scale_in.TRADING_RULES = replace(
+        CONFIG,
+        RISING_MISSED_SCOUT_PYRAMID_BRIDGE_ENABLED=True,
+        SCALPING_PYRAMID_MIN_PROFIT_PCT=1.5,
+        SCALPING_PYRAMID_MAX_MICRO_VWAP_BPS=60.0,
+        SCALPING_PYRAMID_MIN_BUY_PRESSURE=60.0,
+    )
+    try:
+        result = scale_in.evaluate_scalping_pyramid(
+            _rising_missed_scout_pyramid_stock(last_reversal_features=feature_overrides),
+            profit_rate=0.71,
+            peak_profit=0.71,
+            is_new_high=True,
+            current_ai_score=70,
+        )
+    finally:
+        scale_in.TRADING_RULES = original
+
+    assert result["should_add"] is False
+    assert result["reason"].startswith("rising_missed_scout_pyramid_bridge_blocked:")
+    assert expected_blocker in result["rising_missed_scout_pyramid_bridge_blockers"]
+
+
+def test_rising_missed_scout_pyramid_bridge_uses_existing_dynamic_qty_logic():
+    original = scale_in.TRADING_RULES
+    scale_in.TRADING_RULES = replace(
+        CONFIG,
+        MAX_POSITION_PCT=1.0,
+        INVEST_RATIO_SCALPING_MIN=0.10,
+        INVEST_RATIO_SCALPING_MAX=0.30,
+        BUY_BUDGET_SAFETY_RATIO=0.95,
+        SCALPING_SCALE_IN_DYNAMIC_QTY_ENABLED=True,
+        SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED=True,
+    )
+    try:
+        details = scale_in.describe_dynamic_scale_in_qty(
+            stock=_rising_missed_scout_pyramid_stock(buy_qty=8),
+            resolved_price=10000,
+            deposit=10_000_000,
+            add_type="PYRAMID",
+            strategy="SCALPING",
+            price_resolution={"allowed": True},
+            action={
+                "reason": "rising_missed_scout_pyramid_bridge_ok",
+                "current_ai_score": 70,
+                "holding_score_source": "live",
+                "holding_score_data_quality": "fresh",
+                "holding_score_effective_usable": True,
+                "profit_rate": 0.71,
+                "peak_profit": 0.71,
+            },
+        )
+    finally:
+        scale_in.TRADING_RULES = original
+
+    assert details["scale_in_budget_ratio"] == 0.24
+    assert details["scale_in_budget_qty"] == 228
+    assert details["would_qty"] == 228
+    assert details["effective_qty"] == 228
+    assert details["qty"] == 228
+    assert details["pyramid_sizing_mode"] == "dynamic_budget"
+    assert "scale_in_qty_override" not in details
+
+
+def test_rising_missed_scout_pyramid_bridge_blocked_probe_preserves_runtime_provenance():
+    merged = state_handlers._append_pyramid_probe_fields(
+        {"decision_authority": "scale_in_attribution_source_only"},
+        {
+            "reason": "rising_missed_scout_pyramid_bridge_blocked:quote_stale",
+            "runtime_family": "rising_missed_scout_pyramid_bridge",
+            "runtime_family_candidate": "rising_missed_scout_pyramid_bridge",
+            "decision_authority": "same_day_operator_runtime_override",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "rising_missed_scout_pyramid_bridge_enabled": True,
+            "rising_missed_scout_pyramid_bridge_blockers": "quote_stale",
+            "rising_missed_scout_pyramid_bridge_operator_override_reason": "operator_intraday_test",
+        },
+    )
+
+    assert merged["runtime_family"] == "rising_missed_scout_pyramid_bridge"
+    assert merged["decision_authority"] == "same_day_operator_runtime_override"
+    assert merged["runtime_effect"] is False
+    assert merged["rising_missed_scout_pyramid_bridge_blockers"] == "quote_stale"
+
+
 def test_scalping_pyramid_blocks_overheated_micro_vwap_before_signal():
     stock = {
         "pyramid_count": 0,
