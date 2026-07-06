@@ -46,7 +46,9 @@ _WS_HOT_RUNTIME_OVERRIDE_KEYS = frozenset(
         "KORSTOCKSCAN_WS_ALTERNATE_ROUTE_MAX_CODES",
         "KORSTOCKSCAN_WS_ALTERNATE_ROUTE_TTL_SEC",
         "KORSTOCKSCAN_WS_MAX_REG_ITEMS",
+        "KORSTOCKSCAN_WS_FRESHNESS_STALE_SEC",
         "KORSTOCKSCAN_WS_PERSISTENT_REPAIR_MAX_CODES",
+        "KORSTOCKSCAN_WS_PERSISTENT_REPAIR_REMOVE_BEFORE_REG_ENABLED",
         "KORSTOCKSCAN_WS_PERSISTENT_REPAIR_REBUILD_GROUP_ENABLED",
         "KORSTOCKSCAN_WS_PERSISTENT_REPAIR_REBUILD_GROUP_MIN_INTERVAL_SEC",
         "KORSTOCKSCAN_WS_PERSISTENT_REPAIR_STUCK_COOLDOWN_SEC",
@@ -173,6 +175,7 @@ class KiwoomWSManager:
         self._last_persistent_repair_rebuild_ts = 0.0
         self._registered_items_by_code = {}
         self._top_of_book_cache = {}
+        self._last_remove_request_ts = {}
         
         # 전역 EventBus 인스턴스 획득 및 외부 명령 수신기 장착
         self.event_bus = EventBus()
@@ -213,6 +216,19 @@ class KiwoomWSManager:
             return float(str(val).replace(',', '').replace('+', '').strip())
         except Exception:
             return default
+
+    @staticmethod
+    def _flag_enabled(value, *, default=False):
+        if value is None:
+            return bool(default)
+        if isinstance(value, bool):
+            return value
+        text = str(value or "").strip().lower()
+        if text in {"1", "true", "t", "yes", "y", "on"}:
+            return True
+        if text in {"0", "false", "f", "no", "n", "off"}:
+            return False
+        return bool(default)
 
     @staticmethod
     def _infer_trade_aggressor_from_touch(trade_price, best_ask, best_bid):
@@ -579,6 +595,28 @@ class KiwoomWSManager:
             return 0
         return max(1, min(value, 200))
 
+    @staticmethod
+    def _freshness_stale_sec():
+        raw = _ws_hot_or_env_value("KORSTOCKSCAN_WS_FRESHNESS_STALE_SEC")
+        try:
+            value = float(str(raw).strip()) if str(raw).strip() else 30.0
+        except Exception:
+            value = 30.0
+        return max(1.0, min(value, 1800.0))
+
+    @staticmethod
+    def _persistent_repair_remove_before_reg_enabled():
+        raw = _ws_hot_or_env_value(
+            "KORSTOCKSCAN_WS_PERSISTENT_REPAIR_REMOVE_BEFORE_REG_ENABLED"
+        )
+        return KiwoomWSManager._flag_enabled(raw, default=True)
+
+    def _registered_item_count_locked(self):
+        return sum(
+            len(tuple(items or ()))
+            for items in self._registered_items_by_code.values()
+        )
+
     def _items_by_code(self, normalized_codes, register_items):
         items_by_code = {}
         for code in normalized_codes or []:
@@ -602,10 +640,7 @@ class KiwoomWSManager:
         skipped_codes = []
 
         with self.lock:
-            planned_item_count = sum(
-                len(tuple(items or ()))
-                for items in self._registered_items_by_code.values()
-            )
+            planned_item_count = self._registered_item_count_locked()
             for code in normalized_codes or []:
                 candidate_items = tuple(items_by_code.get(code) or ())
                 if not candidate_items:
@@ -778,6 +813,69 @@ class KiwoomWSManager:
                 )
             )
         return True, merged_targets
+
+    def get_subscription_freshness_snapshot(self, codes=None, *, now_ts=None):
+        """Return client-side freshness state for subscribed websocket symbols."""
+        now_value = time.time() if now_ts is None else float(now_ts)
+        stale_after_sec = self._freshness_stale_sec()
+        requested_codes = self._normalize_subscribe_codes(codes) if codes else None
+        rows = []
+        with self.lock:
+            target_codes = requested_codes or sorted(self.subscribed_codes)
+            registered_item_count = self._registered_item_count_locked()
+            for code in target_codes:
+                target = self.realtime_data.get(code) or {}
+                type_ts = target.get("last_realtime_type_ts")
+                type_ts = type_ts if isinstance(type_ts, dict) else {}
+                numeric_type_ts = [
+                    float(value)
+                    for value in type_ts.values()
+                    if isinstance(value, (int, float)) and float(value) > 0
+                ]
+                last_ws_update_ts = float(target.get("last_ws_update_ts") or 0.0)
+                last_receive_ts = max([last_ws_update_ts] + numeric_type_ts) if (
+                    last_ws_update_ts > 0 or numeric_type_ts
+                ) else 0.0
+                age_sec = round(max(0.0, now_value - last_receive_ts), 3) if last_receive_ts > 0 else None
+                registered_items = tuple(self._registered_items_by_code.get(code) or ())
+                subscribed = code in self.subscribed_codes
+                if not subscribed:
+                    freshness_state = "unsubscribed"
+                elif last_receive_ts <= 0:
+                    freshness_state = "no_tick"
+                elif age_sec is not None and age_sec >= stale_after_sec:
+                    freshness_state = "stale"
+                else:
+                    freshness_state = "fresh"
+                rows.append(
+                    {
+                        "stock_code": code,
+                        "subscribed": subscribed,
+                        "freshness_state": freshness_state,
+                        "last_receive_ts": last_receive_ts,
+                        "last_receive_age_sec": age_sec,
+                        "stale_after_sec": stale_after_sec,
+                        "received_types": sorted(list(target.get("received_types") or [])),
+                        "registered_items": list(registered_items),
+                        "registered_item_count": len(registered_items),
+                        "total_registered_item_count": registered_item_count,
+                        "repair_recommended": subscribed and freshness_state in {"no_tick", "stale"},
+                        "recommended_repair": (
+                            "remove_then_reg_backoff"
+                            if subscribed and freshness_state in {"no_tick", "stale"}
+                            else "none"
+                        ),
+                        "decision_authority": "ws_freshness_source_quality_only",
+                        "runtime_effect": False,
+                        "broker_order_forbidden": True,
+                    }
+                )
+        return {
+            "generated_at_ts": now_value,
+            "stale_after_sec": stale_after_sec,
+            "registered_item_count": sum(row["registered_item_count"] for row in rows),
+            "rows": rows,
+        }
 
     def _filter_persistent_repair_targets(self, codes):
         normalized_codes = self._normalize_subscribe_codes(codes)
@@ -1886,6 +1984,107 @@ class KiwoomWSManager:
         self._tick_dispatch_thread.start()
         self._ws_thread.start()
 
+    async def _send_remove(
+        self,
+        codes,
+        *,
+        items_by_code_snapshot=None,
+        update_local_state=True,
+        source="",
+        reason="",
+    ):
+        try:
+            normalized_codes = self._normalize_subscribe_codes(codes)
+            if not normalized_codes:
+                return
+
+            items_by_code_snapshot = (
+                items_by_code_snapshot
+                if isinstance(items_by_code_snapshot, dict)
+                else None
+            )
+            if items_by_code_snapshot is None:
+                with self.lock:
+                    items_by_code_snapshot = {
+                        code: tuple(self._registered_items_by_code.get(code) or ())
+                        for code in normalized_codes
+                    }
+            fallback_codes = [
+                code for code in normalized_codes if not items_by_code_snapshot.get(code)
+            ]
+            fallback_items_by_code = {}
+            if fallback_codes:
+                _, fallback_items = self._resolve_ws_register_items(fallback_codes)
+                fallback_items_by_code = self._items_by_code(fallback_codes, fallback_items)
+
+            remove_items = []
+            for code in normalized_codes:
+                items = tuple(items_by_code_snapshot.get(code) or ())
+                if not items:
+                    items = tuple(fallback_items_by_code.get(code) or (code,))
+                remove_items.extend(str(item) for item in items if str(item or "").strip())
+            remove_items = list(OrderedDict.fromkeys(remove_items))
+            if not remove_items:
+                return
+
+            for _ in range(100):
+                if self._stop_event.is_set():
+                    return
+                if self.websocket and self._session_ready.is_set():
+                    break
+                await asyncio.sleep(0.1)
+
+            if self._stop_event.is_set():
+                return
+
+            if not (self.websocket and self._session_ready.is_set()):
+                print(f"⚠️ [WS] 로그인 준비가 완료되지 않아 REMOVE 전송 실패: {normalized_codes}")
+                return
+
+            batch_size = min(int(getattr(TRADING_RULES, 'WS_REG_BATCH_SIZE', 20) or 20), 50)
+            total_batches = (len(remove_items) + batch_size - 1) // batch_size
+            for batch_index, batch_items in enumerate(self._chunked(remove_items, batch_size), start=1):
+                if self._stop_event.is_set() or not self.websocket:
+                    return
+                remove_packet = {
+                    'trnm': 'REMOVE',
+                    'grp_no': '1',
+                    'data': [
+                        {'item': batch_items, 'type': ['0B']},
+                        {'item': batch_items, 'type': ['0D']},
+                        {'item': batch_items, 'type': ['0w']},
+                        {'item': batch_items, 'type': ['0F']},
+                    ],
+                }
+                await self.websocket.send(json.dumps(remove_packet))
+                now_ts = time.time()
+                with self.lock:
+                    for code in normalized_codes:
+                        self._last_remove_request_ts[code] = now_ts
+                    if update_local_state:
+                        for code in normalized_codes:
+                            self._recent_reg_request_ts.pop(code, None)
+                            self._registered_items_by_code.pop(code, None)
+                            self._persistent_repair_request_ts.pop(code, None)
+                            self._persistent_repair_no_tick_attempts.pop(code, None)
+                            self._persistent_repair_stuck_until_ts.pop(code, None)
+                            self._persistent_repair_overflow_codes.pop(code, None)
+                            self.subscribed_codes.discard(code)
+                            self.realtime_data.pop(code, None)
+                print(
+                    "🧹 [WS] 종목 REMOVE 패킷 전송 완료: "
+                    f"grp_no=1 batch={batch_index}/{total_batches} "
+                    f"code_count={len(normalized_codes)} item_count={len(batch_items)} "
+                    f"source={source or '-'} reason={reason or '-'} "
+                    f"items={batch_items}"
+                )
+                await asyncio.sleep(0.05)
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            log_error(f"🚨 [WS] _send_remove 에러 발생: {e}")
+            print(f"🚨 [WS] _send_remove 내부 치명적 에러 발생: {e}")
+
     async def _send_reg(
         self,
         codes,
@@ -1894,10 +2093,12 @@ class KiwoomWSManager:
         enforce_item_budget=False,
         include_alternate_route=False,
         alternate_route_codes=None,
+        remove_before_reg=False,
         source="",
         repair_cycle="",
     ):
         try:
+            remove_before_reg = self._flag_enabled(remove_before_reg, default=False)
             normalized_codes, register_items = self._resolve_ws_register_items(
                 codes,
                 include_alternate_route=include_alternate_route,
@@ -1947,6 +2148,14 @@ class KiwoomWSManager:
                 return
 
             if self.websocket and self._session_ready.is_set():
+                if remove_before_reg:
+                    await self._send_remove(
+                        normalized_codes,
+                        update_local_state=False,
+                        source=source,
+                        reason="remove_before_reg_recovery",
+                    )
+                    await asyncio.sleep(0.1)
                 batch_size = min(int(getattr(TRADING_RULES, 'WS_REG_BATCH_SIZE', 20) or 20), 50)
                 total_batches = (len(normalized_codes) + batch_size - 1) // batch_size
                 print(
@@ -1954,7 +2163,8 @@ class KiwoomWSManager:
                     f"(grp_no=1, refresh=1, items={register_items}, "
                     f"batch_size={batch_size}, alternate={include_alternate_route}, "
                     f"replace_existing={replace_existing}, source={source or '-'}, "
-                    f"repair_cycle={repair_cycle or '-'})"
+                    f"repair_cycle={repair_cycle or '-'}, "
+                    f"remove_before_reg={remove_before_reg})"
                 )
                 for batch_index, batch_codes in enumerate(self._chunked(normalized_codes, batch_size), start=1):
                     if self._stop_event.is_set() or not self.websocket:
@@ -2000,12 +2210,21 @@ class KiwoomWSManager:
             log_error(f"🚨 [WS] _send_reg 에러 발생: {e}")
             print(f"🚨 [WS] _send_reg 내부 치명적 에러 발생: {e}")
 
-    def execute_subscribe(self, codes, *, force=False, source="", repair_cycle=""):
+    def execute_subscribe(
+        self,
+        codes,
+        *,
+        force=False,
+        source="",
+        repair_cycle="",
+        remove_before_reg=None,
+    ):
         if not codes: return
         if isinstance(codes, str): codes = [codes]
         if self._stop_event.is_set() or not self._started:
             return
 
+        force = self._flag_enabled(force, default=False)
         normalized_codes = self._normalize_subscribe_codes(codes)
         new_targets = normalized_codes if force else [c for c in normalized_codes if c not in self.subscribed_codes]
         send_ready = bool(self.loop and self.loop.is_running() and not self._stop_event.is_set())
@@ -2025,6 +2244,13 @@ class KiwoomWSManager:
                 "persistent" in source_key
                 or repair_cycle_key == "persistent_ws_gap"
             )
+            if remove_before_reg is None:
+                remove_before_reg = (
+                    persistent_repair
+                    and self._persistent_repair_remove_before_reg_enabled()
+                )
+            else:
+                remove_before_reg = self._flag_enabled(remove_before_reg, default=False)
             if persistent_repair:
                 new_targets, repair_skipped = self._filter_persistent_repair_targets(new_targets)
                 if repair_skipped:
@@ -2064,6 +2290,7 @@ class KiwoomWSManager:
                     enforce_item_budget=enforce_item_budget,
                     include_alternate_route=include_alternate_route,
                     alternate_route_codes=alternate_route_codes,
+                    remove_before_reg=remove_before_reg,
                     source=source,
                     repair_cycle=repair_cycle,
                 ),
@@ -2095,9 +2322,16 @@ class KiwoomWSManager:
         if isinstance(codes, str):
             codes = [codes]
 
-        normalized_codes = {str(code).strip()[:6] for code in codes if code}
+        normalized_codes = set(self._normalize_subscribe_codes(codes))
         if not normalized_codes:
             return
+
+        items_by_code_snapshot = {}
+        with self.lock:
+            items_by_code_snapshot = {
+                code: tuple(self._registered_items_by_code.get(code) or ())
+                for code in normalized_codes
+            }
 
         self.subscribed_codes.difference_update(normalized_codes)
         with self.lock:
@@ -2105,6 +2339,40 @@ class KiwoomWSManager:
                 self._recent_reg_request_ts.pop(code, None)
                 self._registered_items_by_code.pop(code, None)
                 self.realtime_data.pop(code, None)
+                self._persistent_repair_request_ts.pop(code, None)
+                self._persistent_repair_no_tick_attempts.pop(code, None)
+                self._persistent_repair_stuck_until_ts.pop(code, None)
+                self._persistent_repair_overflow_codes.pop(code, None)
+        if self.loop and self.loop.is_running() and not self._stop_event.is_set():
+            future = asyncio.run_coroutine_threadsafe(
+                self._send_remove(
+                    sorted(normalized_codes),
+                    items_by_code_snapshot=items_by_code_snapshot,
+                    update_local_state=False,
+                    source="COMMAND_WS_UNREG",
+                    reason="explicit_unsubscribe",
+                ),
+                self.loop,
+            )
+            with self._pending_future_lock:
+                self._pending_loop_futures.add(future)
+
+            def on_complete(fut):
+                with self._pending_future_lock:
+                    self._pending_loop_futures.discard(fut)
+                try:
+                    fut.result()
+                except asyncio.CancelledError:
+                    return
+                except concurrent.futures.CancelledError:
+                    return
+                except Exception as e:
+                    if self._stop_event.is_set() or "cancelled" in str(e).lower():
+                        return
+                    log_error(f"🚨 [WS] REMOVE 스레드 통신 간 에러 발생: {e}")
+                    print(f"🚨 [WS] REMOVE 스레드 통신 간 에러 발생: {e}")
+
+            future.add_done_callback(on_complete)
     
     def _handle_reg_event(self, payload):
         if self._stop_event.is_set():
@@ -2112,8 +2380,15 @@ class KiwoomWSManager:
         codes = payload.get("codes", [])
         source = str(payload.get("source") or "")
         repair_cycle = str(payload.get("repair_cycle") or "")
-        force = bool(payload.get("force")) or "recovery" in source
-        self.execute_subscribe(codes, force=force, source=source, repair_cycle=repair_cycle)
+        force = self._flag_enabled(payload.get("force"), default=False) or "recovery" in source
+        kwargs = {
+            "force": force,
+            "source": source,
+            "repair_cycle": repair_cycle,
+        }
+        if "remove_before_reg" in payload:
+            kwargs["remove_before_reg"] = payload.get("remove_before_reg")
+        self.execute_subscribe(codes, **kwargs)
 
     def _handle_unreg_event(self, payload):
         if self._stop_event.is_set():

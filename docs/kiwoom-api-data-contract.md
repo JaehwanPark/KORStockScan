@@ -176,6 +176,53 @@ quantity guards.
   missing, runtime must treat the REST orderbook as time-unknown/stale and keep
   `bid_req_base_tm` only as raw provenance.
 
+## Realtime Freshness And Snapshot Backfill
+
+- Kiwoom realtime payloads are treated as event-driven market-data updates, not
+  a quote freshness heartbeat. A connection keepalive, PING, or successful REG
+  state is not quote freshness evidence.
+- The current contract has no documented first-event warm-up SLA, millisecond
+  server send timestamp, or global sequence number. Runtime freshness therefore
+  uses client receive timestamps such as `last_ws_update_ts`,
+  `last_realtime_type_ts`, `rest_received_ts_ms`, and measured refresh age.
+- Public docs and board examples do not provide one stable numeric concurrent
+  subscription limit. Some examples mention different approximate limits, so
+  this codebase must not encode a fixed official session limit from those
+  examples. Until Kiwoom confirms otherwise, count each REG item as quota usage;
+  KRX/NXT alternate-route items such as `_NX` or `_AL` are treated as separate
+  items even when they point to the same symbol.
+- `refresh=1` is treated as append/keep-existing behavior, not full
+  replacement. Route transitions such as NXT premarket to KRX regular session
+  should REMOVE the old route item and then REG the target route. Reusing
+  `refresh=1` alone can leave duplicate or silent subscriptions and is not
+  accepted as a reliable recovery path.
+- Server-side behavior for idle or low-liquidity no-event subscriptions is not
+  specified with an official timeout or cancel-notice payload. Client logic must
+  therefore track per-symbol last receive time and treat prolonged no-tick
+  periods as a source-quality recovery condition, not as proof that the stream is
+  healthy.
+- There is no documented official reREG cooldown. Recovery should use bounded
+  retry and backoff, with request counting to avoid throttle errors such as
+  `105110`. The backoff policy is an operational guard, not a freshness SLA.
+- Runtime implementation owns an empirical freshness controller inside
+  `KiwoomWSManager`: it exposes per-symbol client receive-age snapshots,
+  treats no-tick/stale symbols as source-quality recovery candidates, and can
+  send a bounded server `REMOVE` before `REG` for persistent repair paths. This
+  recovery path is limited to websocket source freshness; it does not create BUY
+  or scale-in authority and cannot bypass stale quote, broker, account, order,
+  quantity, cooldown, provider, cap, bot-state, hard/protect, or emergency
+  guards.
+- 0B/0D websocket rows are the primary quote/tick source. Periodic or bounded
+  `ka10003`/`ka10004` snapshots may backfill stale or missing realtime context,
+  but the backfill remains source-quality recovery unless it carries a measured
+  receive timestamp and passes the same quote, orderbook, and pressure
+  provenance gates.
+- KRX/NXT operating-window differences, subscription item limits, server-side
+  idle behavior, and low-liquidity no-event periods are operational freshness
+  risks. Persistent stale rows should be reported as `source_quality_gate`
+  diagnostics and must not relax broker submit, stale quote, order price,
+  quantity, provider, cap, or bot-state guards.
+
 ## ka10080 and ka10081
 
 - Continuation is controlled by response `cont-yn` and `next-key`.

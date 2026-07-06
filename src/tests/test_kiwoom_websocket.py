@@ -834,6 +834,39 @@ def test_command_ws_reg_persistent_repair_passes_repair_cycle(monkeypatch):
     assert calls == [(["240810"], True, "scanner_persistent_ws_gap_recovery", "persistent_ws_gap")]
 
 
+def test_command_ws_reg_string_false_force_is_not_truthy(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    calls = []
+
+    def fake_execute(codes, *, force=False, source="", repair_cycle=""):
+        calls.append((codes, force, source, repair_cycle))
+
+    monkeypatch.setattr(manager, "execute_subscribe", fake_execute)
+
+    manager._handle_reg_event({"codes": ["240810"], "source": "scanner_watch", "force": "false"})
+
+    assert calls == [(["240810"], False, "scanner_watch", "")]
+
+
+def test_execute_subscribe_string_false_force_does_not_resubscribe(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    manager._started = True
+    manager.loop = SimpleNamespace(is_running=lambda: True)
+    manager.subscribed_codes.add("039490")
+    scheduled = []
+
+    def fake_schedule(coro, loop):
+        coro.close()
+        scheduled.append(coro)
+        return SimpleNamespace(add_done_callback=lambda callback: None)
+
+    monkeypatch.setattr(kiwoom_websocket.asyncio, "run_coroutine_threadsafe", fake_schedule)
+
+    manager.execute_subscribe(["039490"], force="false")
+
+    assert scheduled == []
+
+
 def test_recent_reg_filter_skips_non_force_duplicates(monkeypatch):
     manager = KiwoomWSManager("test-token")
     monkeypatch.setenv("KORSTOCKSCAN_WS_REG_RECENT_TTL_SEC", "20")
@@ -1040,8 +1073,10 @@ def test_ws_repair_budget_hot_reloads_operator_override_file(tmp_path, monkeypat
             [
                 "export KORSTOCKSCAN_WS_ALTERNATE_ROUTE_MAX_CODES=11",
                 "export KORSTOCKSCAN_WS_ALTERNATE_ROUTE_TTL_SEC=30",
+                "export KORSTOCKSCAN_WS_FRESHNESS_STALE_SEC=17",
                 "export KORSTOCKSCAN_WS_MAX_REG_ITEMS=41",
                 "export KORSTOCKSCAN_WS_PERSISTENT_REPAIR_MAX_CODES=17",
+                "export KORSTOCKSCAN_WS_PERSISTENT_REPAIR_REMOVE_BEFORE_REG_ENABLED=false",
                 "export KORSTOCKSCAN_WS_PERSISTENT_REPAIR_REBUILD_GROUP_ENABLED=1",
                 "export KORSTOCKSCAN_WS_PERSISTENT_REPAIR_REBUILD_GROUP_MIN_INTERVAL_SEC=19",
                 "export KORSTOCKSCAN_WS_PERSISTENT_REPAIR_STUCK_COOLDOWN_SEC=120",
@@ -1057,8 +1092,10 @@ def test_ws_repair_budget_hot_reloads_operator_override_file(tmp_path, monkeypat
 
     assert KiwoomWSManager._alternate_route_max_codes() == 11
     assert KiwoomWSManager._alternate_route_ttl_sec() == 30.0
+    assert KiwoomWSManager._freshness_stale_sec() == 17.0
     assert KiwoomWSManager._max_registered_item_count() == 41
     assert KiwoomWSManager._persistent_repair_max_codes() == 17
+    assert KiwoomWSManager._persistent_repair_remove_before_reg_enabled() is False
     assert KiwoomWSManager._persistent_repair_rebuild_group_enabled() is True
     assert KiwoomWSManager._persistent_repair_rebuild_group_min_interval_sec() == 19.0
     assert KiwoomWSManager._persistent_repair_stuck_cooldown_sec() == 120.0
@@ -1169,3 +1206,109 @@ def test_real_payload_with_exchange_suffix_updates_canonical_snapshot():
     assert "039490_AL" not in manager.realtime_data
     assert manager.realtime_data["039490"]["curr"] == 10000
     assert manager.realtime_data["039490"]["received_types"] == {"0B"}
+
+
+def test_subscription_freshness_snapshot_classifies_no_tick_stale_and_fresh(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    monkeypatch.setenv("KORSTOCKSCAN_WS_FRESHNESS_STALE_SEC", "30")
+    manager.subscribed_codes.update({"000001", "000002", "000003"})
+    manager._registered_items_by_code = {
+        "000001": ("000001",),
+        "000002": ("000002",),
+        "000003": ("000003", "000003_AL"),
+    }
+    manager.realtime_data["000002"] = {
+        "last_ws_update_ts": 950.0,
+        "last_realtime_type_ts": {"0B": 950.0},
+        "received_types": {"0B"},
+    }
+    manager.realtime_data["000003"] = {
+        "last_ws_update_ts": 995.0,
+        "last_realtime_type_ts": {"0B": 995.0, "0D": 996.0},
+        "received_types": {"0B", "0D"},
+    }
+
+    snapshot = manager.get_subscription_freshness_snapshot(now_ts=1000.0)
+    rows = {row["stock_code"]: row for row in snapshot["rows"]}
+
+    assert rows["000001"]["freshness_state"] == "no_tick"
+    assert rows["000001"]["repair_recommended"] is True
+    assert rows["000002"]["freshness_state"] == "stale"
+    assert rows["000002"]["last_receive_age_sec"] == 50.0
+    assert rows["000003"]["freshness_state"] == "fresh"
+    assert rows["000003"]["last_receive_age_sec"] == 4.0
+    assert rows["000003"]["registered_item_count"] == 2
+    assert rows["000003"]["decision_authority"] == "ws_freshness_source_quality_only"
+    assert rows["000003"]["broker_order_forbidden"] is True
+
+    filtered = manager.get_subscription_freshness_snapshot(["999999"], now_ts=1000.0)
+    assert filtered["rows"][0]["freshness_state"] == "unsubscribed"
+    assert filtered["rows"][0]["repair_recommended"] is False
+
+
+def test_send_reg_remove_before_reg_removes_existing_route_then_registers_new_route(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    fake_ws = _FakeWS([])
+    manager.websocket = fake_ws
+    manager._session_ready.set()
+    manager.subscribed_codes.add("039490")
+    manager._registered_items_by_code["039490"] = ("039490_AL",)
+
+    monkeypatch.setattr("src.utils.kiwoom_utils.get_effective_kiwoom_code", lambda code: code)
+
+    asyncio.run(
+        manager._send_reg(
+            ["039490"],
+            remove_before_reg=True,
+            source="scanner_persistent_ws_gap_recovery",
+            repair_cycle="persistent_ws_gap",
+        )
+    )
+
+    remove_payload = json.loads(fake_ws.sent[0])
+    reg_payload = json.loads(fake_ws.sent[1])
+    assert remove_payload["trnm"] == "REMOVE"
+    assert remove_payload["data"][0]["item"] == ["039490_AL"]
+    assert reg_payload["trnm"] == "REG"
+    assert reg_payload["data"][0]["item"] == ["039490"]
+    assert manager.subscribed_codes == {"039490"}
+    assert manager._registered_items_by_code["039490"] == ("039490",)
+
+
+def test_send_remove_updates_local_state_when_requested(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    fake_ws = _FakeWS([])
+    manager.websocket = fake_ws
+    manager._session_ready.set()
+    manager.subscribed_codes.add("000001")
+    manager._registered_items_by_code["000001"] = ("000001", "000001_AL")
+    manager.realtime_data["000001"] = {"last_ws_update_ts": 1000.0}
+    manager._recent_reg_request_ts["000001"] = 999.0
+    manager._persistent_repair_request_ts["000001"] = 999.0
+
+    asyncio.run(manager._send_remove(["000001"], update_local_state=True, source="test"))
+
+    remove_payload = json.loads(fake_ws.sent[0])
+    assert remove_payload["trnm"] == "REMOVE"
+    assert remove_payload["data"][0]["item"] == ["000001", "000001_AL"]
+    assert "000001" not in manager.subscribed_codes
+    assert "000001" not in manager._registered_items_by_code
+    assert "000001" not in manager.realtime_data
+    assert "000001" not in manager._recent_reg_request_ts
+    assert "000001" not in manager._persistent_repair_request_ts
+
+
+def test_remove_before_reg_string_false_does_not_send_remove(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    fake_ws = _FakeWS([])
+    manager.websocket = fake_ws
+    manager._session_ready.set()
+    manager.subscribed_codes.add("039490")
+    manager._registered_items_by_code["039490"] = ("039490_AL",)
+
+    monkeypatch.setattr("src.utils.kiwoom_utils.get_effective_kiwoom_code", lambda code: code)
+
+    asyncio.run(manager._send_reg(["039490"], remove_before_reg="false"))
+
+    payloads = [json.loads(payload) for payload in fake_ws.sent]
+    assert [payload["trnm"] for payload in payloads] == ["REG"]

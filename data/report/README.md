@@ -47,6 +47,7 @@ ON 가능한 시점은 다음 조건이 모두 닫힌 뒤다.
 
 | 리포트 | 경로 | 비고 |
 |---|---|---|
+| Quote Stale Frequency | `data/report/quote_stale_frequency/quote_stale_frequency_YYYY-MM-DD.md` | 수동/Codex 요청 기반 source-quality 진단. `pipeline_events`/`threshold_events` quote age, WS repair/no-tick 로그, scale-in refresh 회복률을 묶어 stale 빈도와 구조적 수신 문제를 본다. runtime/evaluation apply 권한 없음 |
 | Preclose Sell Target legacy root | `data/report/preclose_sell_target_YYYY-MM-DD.md` | 2026-05-10 기능 제거 및 사용자 요청으로 과거 산출물 삭제 |
 | Add Blocked Lock Markdown | `data/report/monitor_snapshots/add_blocked_lock_2026-04-16.md` | legacy 단발 산출물로 보이며 최근 snapshot 체인에서는 JSON만 생성됨 |
 
