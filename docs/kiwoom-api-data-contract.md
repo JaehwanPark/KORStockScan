@@ -131,6 +131,11 @@ quantity guards.
 - Scale-in feature refresh payloads preserve `micro_vwap_available` and
   `minute_candle_window_fresh` so refreshed micro VWAP values do not lose
   provenance before PYRAMID/AVG_DOWN/REVERSAL_ADD consumption.
+- When existing scale-in reversal features are stale because of
+  `quote_stale` or `quote_age_gt_max`, refresh forces a bounded
+  `ka10004_rest_orderbook` quote refresh before rebuilding features; failed
+  quote refresh keeps the old feature context blocked instead of reusing a
+  superficially usable WS snapshot.
 - `observation_source_quality_audit` now hard-excludes any stage that requires
   tick pressure provenance and emits a pressure value while provenance is
   unusable or missing.

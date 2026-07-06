@@ -14517,6 +14517,8 @@ def _holding_ai_refresh_rest_orderbook_snapshot(
     code: str,
     ws_data: dict | None,
     strategy: str,
+    *,
+    force: bool = False,
 ) -> tuple[dict, dict]:
     """Refresh holding-AI orderbook input through the existing REST quote guard."""
     base = dict(ws_data or {})
@@ -14532,7 +14534,8 @@ def _holding_ai_refresh_rest_orderbook_snapshot(
         "holding_ai_rest_orderbook_refresh_bid_req_base_tm": "",
     }
     if (
-        _pre_submit_input_snapshot_has_usable_quote(base)
+        not force
+        and _pre_submit_input_snapshot_has_usable_quote(base)
         and not _boolish_true(base.get("quote_stale"))
         and not _boolish_true(base.get("context_stale"))
     ):
@@ -14574,6 +14577,12 @@ def _holding_ai_refresh_rest_orderbook_snapshot(
         }
         refreshed.update(fields)
     return refreshed, fields
+
+
+def _scale_in_existing_feature_quote_stale(existing_quality: dict | None) -> bool:
+    reasons = str((existing_quality or {}).get("reversal_feature_stale_reason") or "").lower()
+    tokens = {token.strip() for token in reasons.split(",") if token.strip()}
+    return bool(tokens & {"quote_stale", "quote_age_gt_max"})
 
 
 def _reversal_feature_payload(feat: dict | None, now_ts: float) -> dict:
@@ -14670,14 +14679,24 @@ def _refresh_scale_in_reversal_features_if_needed(
 
     refreshed_ws = base_ws
     quote_fields = {}
-    if _pre_submit_input_snapshot_needs_rest_orderbook_recheck(refreshed_ws):
-        refreshed_ws, quote_fields = _holding_ai_refresh_rest_orderbook_snapshot(code, refreshed_ws, strategy)
+    force_rest_orderbook_refresh = _scale_in_existing_feature_quote_stale(existing_quality)
+    fields["scale_in_feature_refresh_force_rest_orderbook"] = force_rest_orderbook_refresh
+    if force_rest_orderbook_refresh or _pre_submit_input_snapshot_needs_rest_orderbook_recheck(refreshed_ws):
+        refreshed_ws, quote_fields = _holding_ai_refresh_rest_orderbook_snapshot(
+            code,
+            refreshed_ws,
+            strategy,
+            force=force_rest_orderbook_refresh,
+        )
         fields["scale_in_feature_refresh_quote_applied"] = bool(
             quote_fields.get("holding_ai_rest_orderbook_refresh_applied")
         )
         fields["scale_in_feature_refresh_quote_reason"] = quote_fields.get(
             "holding_ai_rest_orderbook_refresh_reason"
         )
+        if force_rest_orderbook_refresh and not fields["scale_in_feature_refresh_quote_applied"]:
+            fields["scale_in_feature_refresh_reason"] = "quote_refresh_failed_for_stale_features"
+            return refreshed_ws, fields
 
     try:
         recent_ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10) or []

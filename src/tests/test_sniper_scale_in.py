@@ -3234,6 +3234,183 @@ def test_scale_in_signal_refreshes_stale_features_before_pyramid(monkeypatch):
     assert refresh_logs[-1]["scale_in_feature_refresh_reason"] == "feature_context_refreshed"
 
 
+def test_scale_in_feature_refresh_forces_rest_when_existing_features_quote_stale(monkeypatch):
+    class FeatureEngine:
+        def _extract_scalping_features(self, ws_data, recent_ticks, recent_candles):
+            assert ws_data["quote_refresh_source"] == "ka10004_rest_orderbook"
+            assert ws_data["best_bid"] == 9_990
+            assert recent_ticks
+            return {
+                "buy_pressure_10t": 92.0,
+                "tick_acceleration_ratio": 1.1,
+                "tick_context_quality": "fresh_tick",
+                "tick_context_stale": False,
+                "tick_latest_age_ms": 100,
+                "tick_aggressor_trusted_count": 4,
+                "tick_aggressor_pressure_usable": True,
+                "large_sell_print_detected": False,
+                "curr_vs_micro_vwap_bp": 24.0,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+                "minute_candle_context_quality": "fresh_bar_window",
+                "quote_stale": False,
+                "quote_age_ms": 100,
+                "quote_age_source": "ka10004_rest_orderbook",
+            }
+
+    logs = []
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_stock_orderbook_ka10004",
+        lambda token, code: {
+            "curr": 10_000,
+            "best_bid": 9_990,
+            "best_ask": 10_000,
+            "best_bid_qty": 100,
+            "best_ask_qty": 80,
+            "bid_req_base_tm": "100000",
+            "rest_received_ts": time.time(),
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_tick_history_ka10003",
+        lambda token, code, limit=10: [{"price": 10_000, "volume": 10, "dir": "BUY"}],
+    )
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 1,
+        "name": "REFRESH",
+        "strategy": "SCALPING",
+        "buy_qty": 1,
+        **_fresh_holding_score_fields(75, now_ts=1_000.0),
+        "last_reversal_features": {
+            "buy_pressure_10t": 92.0,
+            "tick_acceleration_ratio": 1.1,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 24.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "tick_context_quality": "fresh_computed",
+            "tick_context_stale": False,
+            "tick_latest_age_ms": 100,
+            "quote_stale": True,
+            "quote_age_ms": 12_000,
+        },
+    }
+
+    action = state_handlers._evaluate_scale_in_signal(
+        stock=stock,
+        code="123456",
+        strategy="SCALPING",
+        market_regime="NORMAL",
+        profit_rate=2.0,
+        peak_profit=2.0,
+        curr_price=10_000,
+        ws_data={
+            "curr": 10_000,
+            "best_bid": 9_970,
+            "best_ask": 9_980,
+            "quote_stale": False,
+            "last_ws_update_ts": time.time(),
+        },
+        current_ai_score=75,
+        held_sec=60,
+        ai_engine=FeatureEngine(),
+        now_ts=1_000.0,
+    )
+
+    assert action["should_add"] is True
+    refresh_logs = [fields for stage, fields in logs if stage == "scale_in_feature_context_refresh"]
+    assert refresh_logs
+    latest = refresh_logs[-1]
+    assert latest["scale_in_feature_refresh_force_rest_orderbook"] is True
+    assert latest["scale_in_feature_refresh_quote_applied"] is True
+    assert latest["scale_in_feature_refresh_quote_reason"] == "rest_orderbook_fresh"
+    assert latest["scale_in_feature_refresh_applied"] is True
+    assert latest["scale_in_feature_refresh_reason"] == "feature_context_refreshed"
+    assert stock["last_reversal_features"]["quote_stale"] is False
+
+
+def test_scale_in_feature_refresh_blocks_when_forced_rest_refresh_fails(monkeypatch):
+    class FeatureEngine:
+        def _extract_scalping_features(self, ws_data, recent_ticks, recent_candles):
+            raise AssertionError("feature extraction must wait for fresh quote refresh")
+
+    logs = []
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_stock_orderbook_ka10004",
+        lambda token, code: {},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 1,
+        "name": "REFRESH",
+        "strategy": "SCALPING",
+        "buy_qty": 1,
+        **_fresh_holding_score_fields(75, now_ts=1_000.0),
+        "last_reversal_features": {
+            "buy_pressure_10t": 92.0,
+            "tick_acceleration_ratio": 1.1,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 24.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "tick_context_quality": "fresh_computed",
+            "tick_context_stale": False,
+            "tick_latest_age_ms": 100,
+            "quote_stale": True,
+            "quote_age_ms": 12_000,
+        },
+    }
+
+    action = state_handlers._evaluate_scale_in_signal(
+        stock=stock,
+        code="123456",
+        strategy="SCALPING",
+        market_regime="NORMAL",
+        profit_rate=2.0,
+        peak_profit=2.0,
+        curr_price=10_000,
+        ws_data={
+            "curr": 10_000,
+            "best_bid": 9_970,
+            "best_ask": 9_980,
+            "quote_stale": False,
+            "last_ws_update_ts": time.time(),
+        },
+        current_ai_score=75,
+        held_sec=60,
+        ai_engine=FeatureEngine(),
+        now_ts=1_000.0,
+    )
+
+    assert action is None
+    refresh_logs = [fields for stage, fields in logs if stage == "scale_in_feature_context_refresh"]
+    assert refresh_logs
+    latest = refresh_logs[-1]
+    assert latest["scale_in_feature_refresh_force_rest_orderbook"] is True
+    assert latest["scale_in_feature_refresh_quote_applied"] is False
+    assert latest["scale_in_feature_refresh_quote_reason"] == "rest_orderbook_missing"
+    assert latest["scale_in_feature_refresh_reason"] == "quote_refresh_failed_for_stale_features"
+    assert stock["last_reversal_features"]["quote_stale"] is True
+
+
 def test_scale_in_signal_refresh_preserves_unusable_tick_provenance(monkeypatch):
     class FeatureEngine:
         def _extract_scalping_features(self, ws_data, recent_ticks, recent_candles):
