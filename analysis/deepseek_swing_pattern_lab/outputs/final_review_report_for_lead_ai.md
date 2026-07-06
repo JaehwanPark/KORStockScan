@@ -2,21 +2,21 @@
 
 ## 판정
 
-- 분석 기간: `2026-07-03` ~ `2026-07-03`
+- 분석 기간: `2026-07-06` ~ `2026-07-06`
 - trade_rows: `0`
-- lifecycle_event_rows: `24`
+- lifecycle_event_rows: `26`
 - completed_valid_profit_rows: `0`
-- ofi_qi_rows: `20`
+- ofi_qi_rows: `11`
 - total_findings: `5`
-- code_improvement_orders: `4`
+- code_improvement_orders: `3`
 - runtime_change: `False`
 
 ## 분류 요약
 
-- implement_now: `1`
+- implement_now: `0`
 - attach_existing_family: `2`
 - design_family_candidate: `1`
-- defer_evidence: `1`
+- defer_evidence: `2`
 - reject: `0`
 
 ## Stage별 분석
@@ -62,7 +62,7 @@
 
 - title: OFI/QI stale/missing quality review
 - lifecycle_stage: `ofi_qi`
-- route: `implement_now`
+- route: `defer_evidence`
 - mapped_family: `swing_entry_ofi_qi_execution_quality`
 - confidence: `consensus`
 - runtime_effect: `False`
@@ -106,20 +106,7 @@
 - expected_ev_effect: Investigate the entry funnel for swing-specific bottlenecks.
 - files_likely_touched: `src/engine/swing_lifecycle_audit.py`, `src/engine/swing_selection_funnel_report.py`, `src/model/common_v2.py`
 
-### 3. `order_swing_pattern_lab_deepseek_ofi_qi_stale_missing`
-
-- title: OFI/QI stale/missing quality review
-- lifecycle_stage: `ofi_qi`
-- target_subsystem: `swing_micro_context`
-- route: `implement_now`
-- mapped_family: `swing_entry_ofi_qi_execution_quality`
-- threshold_family: `swing_entry_ofi_qi_execution_quality`
-- runtime_effect: `False`
-- allowed_runtime_apply: `False`
-- expected_ev_effect: If stale ratio > 0.3, consider instrumentation/observer enhancement.
-- files_likely_touched: `src/engine/swing_lifecycle_audit.py`, `src/engine/swing_selection_funnel_report.py`, `src/model/common_v2.py`
-
-### 4. `order_swing_pattern_lab_deepseek_ofi_qi_smoothing_review`
+### 3. `order_swing_pattern_lab_deepseek_ofi_qi_smoothing_review`
 
 - title: OFI/QI exit smoothing action distribution
 - lifecycle_stage: `ofi_qi`
@@ -134,4 +121,4 @@
 
 ## Data Quality Warnings
 
-- OFI/QI stale/missing ratio: 0.45 (9/20); reasons: micro_not_ready=9, state_insufficient=9
+- none
