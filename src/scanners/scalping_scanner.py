@@ -20,6 +20,11 @@ from src.database.db_manager import DBManager
 from src.database.models import RecommendationHistory
 from src.core.event_bus import EventBus
 from src.engine.signal_radar import SniperRadar
+from src.engine.sniper_time import (
+    SCALPING_BUY_WINDOWS,
+    describe_scalping_buy_windows,
+    is_scalping_buy_time_allowed,
+)
 from src.utils.constants import TRADING_RULES
 from src.utils.pipeline_event_logger import emit_pipeline_event
 
@@ -54,21 +59,14 @@ def _parse_scan_time_env(env_name, default_value):
 
 
 def _resolve_scanner_discovery_window():
-    """Scanner source discovery window only; downstream BUY cutoff remains separate."""
-    market_open = _parse_scan_time_env(
-        "KORSTOCKSCAN_SCALP_SCANNER_DISCOVERY_OPEN_TIME",
-        "08:00:00",
-    )
-    market_close = _parse_scan_time_env(
-        "KORSTOCKSCAN_SCALP_SCANNER_DISCOVERY_CLOSE_TIME",
-        "19:45:00",
-    )
+    """Compatibility view for logs; discovery itself follows SCALPING_BUY_WINDOWS."""
+    market_open = min(start for start, _end in SCALPING_BUY_WINDOWS)
+    market_close = max(end for _start, end in SCALPING_BUY_WINDOWS)
     return market_open, market_close
 
 
 def _is_scanner_discovery_time(now_time):
-    market_open, market_close = _resolve_scanner_discovery_window()
-    return market_open <= now_time <= market_close
+    return is_scalping_buy_time_allowed(now_time)
 
 
 def _scalping_watching_max_active():
@@ -1836,14 +1834,13 @@ def run_scalper(is_test_mode=False):
         from src.engine.error_detectors.process_health import write_heartbeat as _sc_whb
         _sc_whb("scalping_scanner")
 
-        # 신규 후보 발굴 시간은 NXT 데이터 수집까지 열되, 실제 BUY submit cutoff는
-        # downstream guard가 별도로 유지한다.
+        # 신규 후보 발굴은 실제 scalping BUY window와 동일하게 맞춘다.
+        # 보유/청산 감시와 downstream hard/broker/order guards는 별도 유지한다.
         if not is_test_mode and not _is_scanner_discovery_time(now_time):
             if time.time() - last_closed_msg_time > 3600:
-                market_open, market_close = _resolve_scanner_discovery_window()
                 print(
                     "🌙 신규 스캘핑 후보 발굴 시간이 아닙니다. "
-                    f"(window={market_open}~{market_close}) 보유/청산 감시는 계속됩니다."
+                    f"(buy_windows={describe_scalping_buy_windows()}) 보유/청산 감시는 계속됩니다."
                 )
                 last_closed_msg_time = time.time()
             time.sleep(60)

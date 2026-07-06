@@ -21,25 +21,36 @@ def test_crisis_monitor_import_keeps_runtime_dependencies_lazy():
     assert not hasattr(module, "event_bus")
 
 
-def test_scalping_scanner_discovery_window_includes_nxt_by_default(monkeypatch):
-    monkeypatch.delenv("KORSTOCKSCAN_SCALP_SCANNER_DISCOVERY_OPEN_TIME", raising=False)
-    monkeypatch.delenv("KORSTOCKSCAN_SCALP_SCANNER_DISCOVERY_CLOSE_TIME", raising=False)
+def test_scalping_scanner_discovery_time_uses_scalping_buy_window(monkeypatch):
     sys.modules.pop("src.scanners.scalping_scanner", None)
 
     module = importlib.import_module("src.scanners.scalping_scanner")
+    monkeypatch.setattr(
+        module,
+        "is_scalping_buy_time_allowed",
+        lambda now_time: time(8, 5) <= now_time <= time(8, 40)
+        or time(9, 5) <= now_time <= time(15, 20)
+        or time(16, 0) <= now_time <= time(19, 20),
+    )
 
-    assert module._is_scanner_discovery_time(time(7, 59)) is False
-    assert module._is_scanner_discovery_time(time(8, 0)) is True
-    assert module._is_scanner_discovery_time(time(17, 30)) is True
-    assert module._is_scanner_discovery_time(time(19, 45)) is True
-    assert module._is_scanner_discovery_time(time(19, 46)) is False
+    assert module._is_scanner_discovery_time(time(8, 4, 59)) is False
+    assert module._is_scanner_discovery_time(time(8, 5)) is True
+    assert module._is_scanner_discovery_time(time(8, 41)) is False
+    assert module._is_scanner_discovery_time(time(9, 5)) is True
+    assert module._is_scanner_discovery_time(time(15, 20)) is True
+    assert module._is_scanner_discovery_time(time(15, 20, 1)) is False
+    assert module._is_scanner_discovery_time(time(16, 0)) is True
+    assert module._is_scanner_discovery_time(time(19, 20)) is True
+    assert module._is_scanner_discovery_time(time(19, 20, 1)) is False
 
 
-def test_scalping_scanner_discovery_window_can_be_operator_capped(monkeypatch):
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_DISCOVERY_CLOSE_TIME", "15:00:00")
+def test_scalping_scanner_discovery_ignores_legacy_open_close_env(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_DISCOVERY_OPEN_TIME", "08:00:00")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_DISCOVERY_CLOSE_TIME", "19:45:00")
     sys.modules.pop("src.scanners.scalping_scanner", None)
 
     module = importlib.import_module("src.scanners.scalping_scanner")
+    monkeypatch.setattr(module, "is_scalping_buy_time_allowed", lambda now_time: now_time == time(9, 5))
 
-    assert module._is_scanner_discovery_time(time(14, 59)) is True
-    assert module._is_scanner_discovery_time(time(17, 30)) is False
+    assert module._is_scanner_discovery_time(time(8, 0)) is False
+    assert module._is_scanner_discovery_time(time(9, 5)) is True

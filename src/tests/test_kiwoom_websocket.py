@@ -613,6 +613,112 @@ def test_condition_realtime_events_ignored_by_default(monkeypatch):
     assert manager._state_event_queue.empty()
 
 
+def test_scalp_condition_init_matches_blocked_outside_buy_window(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_WS_CONDITION_SEARCH_ENABLED", "true")
+    monkeypatch.setattr(kiwoom_websocket, "is_scalping_buy_time_allowed", lambda now=None: False)
+    monkeypatch.setattr(kiwoom_websocket, "scalping_buy_time_block_reason", lambda now=None: "outside_scalping_buy_window")
+    manager = KiwoomWSManager("test-token")
+    manager.condition_dict = {"1": "scalp_candid_normal_01"}
+
+    asyncio.run(
+        manager._handle_message(
+            json.dumps(
+                {
+                    "trnm": "CNSRREQ",
+                    "seq": "1",
+                    "data": [{"jmcode": "A005930"}],
+                }
+            )
+        )
+    )
+
+    assert manager._state_event_queue.empty()
+
+
+def test_scalp_condition_realtime_insert_blocked_outside_buy_window(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_WS_CONDITION_SEARCH_ENABLED", "true")
+    monkeypatch.setattr(kiwoom_websocket, "is_scalping_buy_time_allowed", lambda now=None: False)
+    monkeypatch.setattr(kiwoom_websocket, "scalping_buy_time_block_reason", lambda now=None: "outside_scalping_buy_window")
+    manager = KiwoomWSManager("test-token")
+    manager.condition_dict = {"1": "scalp_candid_normal_01"}
+
+    asyncio.run(
+        manager._handle_message(
+            json.dumps(
+                {
+                    "trnm": "REAL",
+                    "data": [
+                        {
+                            "type": "02",
+                            "name": "조건검색",
+                            "values": {"841": "1", "9001": "A005930", "843": "I"},
+                        }
+                    ],
+                }
+            )
+        )
+    )
+
+    assert manager._state_event_queue.empty()
+
+
+def test_scalp_condition_unmatched_still_flows_outside_buy_window(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_WS_CONDITION_SEARCH_ENABLED", "true")
+    monkeypatch.setattr(kiwoom_websocket, "is_scalping_buy_time_allowed", lambda now=None: False)
+    manager = KiwoomWSManager("test-token")
+    manager.condition_dict = {"1": "scalp_candid_normal_01"}
+
+    asyncio.run(
+        manager._handle_message(
+            json.dumps(
+                {
+                    "trnm": "REAL",
+                    "data": [
+                        {
+                            "type": "02",
+                            "name": "조건검색",
+                            "values": {"841": "1", "9001": "A005930", "843": "D"},
+                        }
+                    ],
+                }
+            )
+        )
+    )
+
+    event_name, payload = manager._state_event_queue.get_nowait()
+    assert event_name == "CONDITION_UNMATCHED"
+    assert payload["code"] == "005930"
+
+
+def test_swing_condition_insert_not_blocked_by_scalping_buy_window(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_WS_CONDITION_SEARCH_ENABLED", "true")
+    monkeypatch.setattr(kiwoom_websocket, "is_scalping_buy_time_allowed", lambda now=None: False)
+    manager = KiwoomWSManager("test-token")
+    manager.condition_dict = {"6": "kospi_short_swing_01"}
+
+    asyncio.run(
+        manager._handle_message(
+            json.dumps(
+                {
+                    "trnm": "REAL",
+                    "data": [
+                        {
+                            "type": "02",
+                            "name": "조건검색",
+                            "values": {"841": "6", "9001": "A005930", "843": "I"},
+                        }
+                    ],
+                }
+            )
+        )
+    )
+
+    event_name, payload = manager._state_event_queue.get_nowait()
+    assert event_name == "CONDITION_MATCHED"
+    assert payload["code"] == "005930"
+    assert payload["condition_name"] == "kospi_short_swing_01"
+
+
 @pytest.mark.parametrize(
     "code,message,expected",
     [

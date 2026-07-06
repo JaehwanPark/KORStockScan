@@ -19,6 +19,11 @@ from src.utils.constants import CONFIG_PATH, DEV_PATH, TRADING_RULES
 from src.database.db_manager import is_swing_real_watching_enabled
 from src.engine.bd_fbuy_accum_pre_scanner import write_ws_snapshot
 from src.engine.monitoring.market_halt_windows import append_market_session_event
+from src.engine.sniper_time import (
+    describe_scalping_buy_windows,
+    is_scalping_buy_time_allowed,
+    scalping_buy_time_block_reason,
+)
 from src.trading.entry.orderbook_stability_observer import ORDERBOOK_STABILITY_OBSERVER
 
 
@@ -41,6 +46,27 @@ def _load_system_config():
 
 WS_CONDITION_SEARCH_ENABLED_ENV = "KORSTOCKSCAN_WS_CONDITION_SEARCH_ENABLED"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+SCALP_CONDITION_KEYWORDS = (
+    "scalp_candid_aggressive_01",
+    "scalp_candid_normal_01",
+    "scalp_open_reclaim_01",
+    "scalp_vwap_reclaim_01",
+    "scalp_dryup_squeeze_01",
+    "scalp_preclose_01",
+    "scalp_strong_01",
+    "scalp_underpress_01",
+    "scalp_shooting_01",
+    "scalp_afternoon_01",
+    "vcp_candid_01",
+    "vcp_shooting_01",
+    "vcp_shooting_next_01",
+    "s15_scan_base_01",
+    "s15_trigger_break_01",
+)
+SWING_CONDITION_KEYWORDS = (
+    "kospi_short_swing_01",
+    "kospi_midterm_swing_01",
+)
 _WS_HOT_RUNTIME_OVERRIDE_KEYS = frozenset(
     {
         "KORSTOCKSCAN_WS_ALTERNATE_ROUTE_MAX_CODES",
@@ -76,6 +102,25 @@ _WS_HOT_RUNTIME_OVERRIDES_LOCK = threading.Lock()
 def is_ws_condition_search_enabled() -> bool:
     raw = str(os.getenv(WS_CONDITION_SEARCH_ENABLED_ENV, "") or "").strip().lower()
     return raw in {"1", "true", "t", "yes", "y", "on"}
+
+
+def _is_scalp_condition_name(condition_name: str) -> bool:
+    name = str(condition_name or "")
+    return any(keyword in name for keyword in SCALP_CONDITION_KEYWORDS)
+
+
+def _condition_match_intake_allowed(condition_name: str, *, now=None) -> bool:
+    if not _is_scalp_condition_name(condition_name):
+        return True
+    if is_scalping_buy_time_allowed(now):
+        return True
+    print(
+        "[WS_CONDITION_BUY_WINDOW_BLOCKED] 스캘핑 조건검색 편입 무시 "
+        f"condition={condition_name or 'UNKNOWN_CONDITION'} "
+        f"reason={scalping_buy_time_block_reason(now)} "
+        f"buy_windows={describe_scalping_buy_windows()}"
+    )
+    return False
 
 
 def _parse_ws_hot_runtime_override_file(path):
@@ -1489,31 +1534,9 @@ class KiwoomWSManager:
                 self.condition_dict.clear()
                 target_seqs = []
 
-                # 💡 HTS에서 만든 시간대별 모든 식을 다 찾습니다! (이름은 HTS 저장명에 맞게 추가하세요)
-                scalp_condition_keywords = [
-                    "scalp_candid_aggressive_01", # 09:00 ~ 09:30 초단타 후보군 (공격형)
-                    "scalp_candid_normal_01", # 09:00 ~ 09:30 초단타 후보군 (일반형)
-                    "scalp_open_reclaim_01", # 09:03 ~ 09:20 시초 회복형 스캘핑
-                    "scalp_vwap_reclaim_01", # 10:00 ~ 14:00 VWAP 재안착형 스캘핑
-                    "scalp_dryup_squeeze_01", # 09:30 ~ 13:30 거래마름 스퀴즈형 스캘핑
-                    "scalp_preclose_01", # 14:30 ~ 15:20 장마감 전 스캘핑
-                    "scalp_strong_01",  # 09:20 ~ 11:00 스캘핑 강세군 (공격형)
-                    "scalp_underpress_01",  # 09:40 ~ 13:00 스캘핑 약세군 (수동)
-                    "scalp_shooting_01",   # 09:40 ~ 13:30 스캘핑 슈팅스타 (공격형)
-                    "scalp_afternoon_01",  # 13:00 ~ 15:30 장중진입_오후재점화
-                    "vcp_candid_01",       # 💡 [VCP 1단계] 15:30 ~ VCP 예비 후보 (다음날용)
-                    "vcp_shooting_01",     # 💡 [VCP 2단계] 09:00 ~ 15:00 VCP 당일 슈팅
-                    "vcp_shooting_next_01", # 💡 [VCP 3단계] 15:30 ~ VCP 다음날 시초가 예약 매수
-                    "s15_scan_base_01",     # 💡 [S15 1단계] 09:02 ~ 10:30 S15 예비 후보
-                    "s15_trigger_break_01" # 💡 [S15 2단계] 09:05 ~ 11:00 S15 트리거 브레이크
-                ]
-                swing_condition_keywords = [
-                    "kospi_short_swing_01", # 💡 [신규] 14:30 ~ 15:30 종가/다음날 단기 스윙
-                    "kospi_midterm_swing_01", # 💡 [신규] 14:30 ~ 15:30 종가/다음날 중기 스윙
-                ]
-                target_keywords = list(scalp_condition_keywords)
+                target_keywords = list(SCALP_CONDITION_KEYWORDS)
                 if is_swing_real_watching_enabled():
-                    target_keywords.extend(swing_condition_keywords)
+                    target_keywords.extend(SWING_CONDITION_KEYWORDS)
                 # 🚨 주의: 다중 검색식을 찾을 때는 여기서 break를 쓰면 안 됩니다!
 
                 if parsed_rows:
@@ -1570,6 +1593,8 @@ class KiwoomWSManager:
                 print(f"[WS] CNSRREQ init load: {len(c_data)} items (seq={seq}, condition={cnd_name})")
                 for item in c_data:
                     code = item.get('jmcode', '').replace('A', '')
+                    if not _condition_match_intake_allowed(cnd_name):
+                        continue
                     self._enqueue_state_event("CONDITION_MATCHED", {
                         'code': code,
                         'seq': seq,
@@ -1599,6 +1624,8 @@ class KiwoomWSManager:
                         cnd_name = self.condition_dict.get(seq) or 'UNKNOWN_CONDITION'
 
                         if insert_type == 'I':
+                            if not _condition_match_intake_allowed(cnd_name):
+                                continue
                             # 💡 스나이퍼에게 출처(이름표)를 함께 보냅니다!
                             self._enqueue_state_event("CONDITION_MATCHED", {
                                 'code': code,
