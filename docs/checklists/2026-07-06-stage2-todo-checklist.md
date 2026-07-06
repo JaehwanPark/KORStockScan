@@ -100,6 +100,12 @@
   - 금지: `rank_chg_sign`을 scoring, entry, priority, live authority, threshold mutation, broker/order/provider/bot 변경 근거로 사용하지 않는다. 확정 전후 모두 `RankChangeSignAuthority=raw_unverified_not_decision_input` 경계를 유지한다.
   - 다음 액션: `closed_market_N_reproduced`, `closed_market_empty_only`, `mixed_N_empty_requires_more_sample`, `api_error_retry_required`, `contract_doc_update_required` 중 하나로 닫는다.
 
+- [ ] `[ScaleInFeatureRefreshImprovementCheck0706] holding_scale_input refresh 개선률 주기 확인` (`Due: 2026-07-06`, `Slot: POSTCLOSE`, `TimeWindow: 20:15~20:25`, `Track: RuntimeStability`)
+  - Source: [quote_stale_frequency_2026-07-06.md](/home/ubuntu/KORStockScan/data/report/quote_stale_frequency/quote_stale_frequency_2026-07-06.md), [kiwoom-api-data-contract.md](/home/ubuntu/KORStockScan/docs/kiwoom-api-data-contract.md), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py)
+  - 판정 기준: 재기동 이후 새 표본이 포함된 `quote_stale_frequency`를 확인해 `scale_in_feature_refresh.applied_true_rate_pct`가 기준선 `15.0284%`보다 개선됐는지, `holding_scale_input` stale rate 기준선 `47.012%`, `refreshed_feature_still_stale=816`, `quote_refresh_failed_for_stale_features` 발생 여부를 함께 비교한다. 새 표본이 부족하면 개선/악화 판정 대신 `insufficient_new_samples`로 닫는다.
+  - 금지: refresh 개선률 확인을 stale submit bypass, broker/order/quantity guard 완화, provider/bot/cap 변경, intraday threshold mutation, real execution quality approval 근거로 사용하지 않는다.
+  - 다음 액션: `improved_refresh_rate`, `flat_refresh_rate`, `worse_refresh_rate`, `insufficient_new_samples`, `report_missing_or_stale`, `needs_followup_patch` 중 하나로 닫는다.
+
 - [ ] `[ThresholdDailyEVReport0706] daily EV real/sim/combined split 및 자동 반영 결과 확인` (`Due: 2026-07-06`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~16:45`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-07-03.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-07-03.json)
   - 판정 기준: threshold cycle EV를 보고 `live_auto_apply_ready`, `sim_auto_approved`, post-apply attribution, EV authority를 분리해 확인한다.
