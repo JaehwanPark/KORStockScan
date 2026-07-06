@@ -237,6 +237,7 @@ def test_save_recommendation_maps_generic_runner_to_kospi_strategy():
     assert db.records[0].trade_type == "RUNNER"
     assert db.records[0].strategy == "KOSPI_ML"
     assert db.records[0].position_tag == "BREAKOUT"
+    assert db.records[0].status == "REPORT_ONLY"
 
 
 def test_save_recommendation_maps_explicit_kosdaq_pick_to_kosdaq_strategy():
@@ -256,6 +257,7 @@ def test_save_recommendation_maps_explicit_kosdaq_pick_to_kosdaq_strategy():
     assert db.records[0].trade_type == "RUNNER"
     assert db.records[0].strategy == "KOSDAQ_ML"
     assert db.records[0].position_tag == "KOSDAQ_BASE"
+    assert db.records[0].status == "REPORT_ONLY"
 
 
 def test_register_manual_stock_reuses_only_empty_watching_row():

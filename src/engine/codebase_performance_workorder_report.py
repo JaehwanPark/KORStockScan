@@ -240,6 +240,24 @@ def _deferred_candidates() -> list[dict[str, Any]]:
             state="deferred",
             defer_reason="runtime config reload semantics are not yet bounded",
         ),
+        _base_candidate(
+            item_id="order_perf_sentinel_event_cache_incremental_review",
+            title="Sentinel event cache incremental parse review",
+            risk_tier="medium",
+            target_subsystem="sentinel_event_cache",
+            files_likely_touched=["src/engine/sentinel_event_cache.py"],
+            acceptance_tests=[
+                "pytest src/tests/test_buy_funnel_sentinel.py src/tests/test_holding_exit_sentinel.py",
+                "sentinel event cache parity on malformed, unchanged, and appended JSONL inputs",
+            ],
+            parity_contract=(
+                "cached row ordering, malformed-line tolerance, source-quality fields, and empty/no-new-event "
+                "fallback behavior exact match"
+            ),
+            priority=22,
+            state="deferred",
+            defer_reason="incremental cache semantics require a dedicated parity harness before implementation",
+        ),
     ]
 
 

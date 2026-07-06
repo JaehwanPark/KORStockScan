@@ -333,12 +333,16 @@ class DBManager:
                 strategy = 'KOSPI_ML'
         strategy = normalize_strategy(strategy)
         position = normalize_position_tag(strategy, position)
+        recommendation_status = 'WATCHING'
         if is_swing_real_watching_strategy(strategy) and not is_swing_real_watching_enabled():
-            log_info(
-                f"[SWING_REAL_WATCHING_DISABLED] skip WATCHING save "
-                f"code={code} strategy={strategy} env={SWING_REAL_WATCHING_ENABLED_ENV}"
-            )
-            return
+            if normalized_type == 'RUNNER':
+                recommendation_status = 'REPORT_ONLY'
+            else:
+                log_info(
+                    f"[SWING_REAL_WATCHING_DISABLED] skip WATCHING save "
+                    f"code={code} strategy={strategy} env={SWING_REAL_WATCHING_ENABLED_ENV}"
+                )
+                return
 
         with self.get_session() as session:
             record = self.find_reusable_watching_record(
@@ -356,18 +360,20 @@ class DBManager:
                 record.position_tag = position
                 record.prob = prob
                 
-                if record.status == 'EXPIRED':
+                if recommendation_status == 'REPORT_ONLY':
+                    record.status = 'REPORT_ONLY'
+                elif record.status == 'EXPIRED':
                     record.status = 'WATCHING'
             else:      # Insert
                 new_record = RecommendationHistory(
-                    rec_date=date,           
-                    stock_code=code,         
-                    stock_name=name,         
-                    buy_price=price, 
+                    rec_date=date,
+                    stock_code=code,
+                    stock_name=name,
+                    buy_price=price,
                     trade_type=normalized_type, # 💡 표준화된 태그 저장
                     strategy=strategy,          # 💡 매핑된 전략 저장
-                    status='WATCHING',
-                    position_tag=position, 
+                    status=recommendation_status,
+                    position_tag=position,
                     prob=prob
                 )
                 session.add(new_record)
