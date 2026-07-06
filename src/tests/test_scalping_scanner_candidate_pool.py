@@ -190,6 +190,107 @@ def test_promote_candidates_releases_after_window_scanner_cap(monkeypatch):
     ]
 
 
+def test_reset_scanner_watch_targets_expires_unbought_scalping_watch_targets_only():
+    db = _DB()
+    db.records.extend(
+        [
+            SimpleNamespace(
+                stock_code="111111",
+                status="WATCHING",
+                strategy="SCALPING",
+                position_tag="SCANNER",
+                buy_time=None,
+                buy_qty=0,
+                entry_armed_at_epoch=900.0,
+            ),
+            SimpleNamespace(
+                stock_code="222222",
+                status="WATCHING",
+                strategy="SCALPING",
+                position_tag="SCANNER",
+                buy_time="09:06:00",
+                buy_qty=1,
+                entry_armed_at_epoch=905.0,
+            ),
+            SimpleNamespace(
+                stock_code="333333",
+                status="WATCHING",
+                strategy="SCALPING",
+                position_tag="OPEN_RECLAIM",
+                buy_time=None,
+                buy_qty=0,
+                entry_armed_at_epoch=910.0,
+            ),
+            SimpleNamespace(
+                stock_code="444444",
+                status="WATCHING",
+                strategy="KOSPI_ML",
+                position_tag="KOSPI_BASE",
+                buy_time=None,
+                buy_qty=0,
+                entry_armed_at_epoch=910.0,
+            ),
+        ]
+    )
+    event_bus = _EventBus()
+
+    expired = scalping_scanner._reset_scanner_watch_targets(
+        db,
+        event_bus,
+        1000.0,
+        reason="after_buy_window",
+    )
+
+    assert expired == ["111111", "333333"]
+    assert [record.status for record in db.records] == ["EXPIRED", "WATCHING", "EXPIRED", "WATCHING"]
+    assert _event_payloads(event_bus, "COMMAND_WS_UNREG") == [
+        {
+            "codes": ["111111", "333333"],
+            "source": "scalping_scanner_buy_window_reset",
+            "reason": "after_buy_window",
+        }
+    ]
+
+
+def test_reset_scanner_watch_targets_preserves_current_window_candidates():
+    db = _DB()
+    db.records.extend(
+        [
+            SimpleNamespace(
+                stock_code="111111",
+                status="WATCHING",
+                strategy="SCALPING",
+                position_tag="SCANNER",
+                buy_time=None,
+                buy_qty=0,
+                entry_armed_at_epoch=900.0,
+            ),
+            SimpleNamespace(
+                stock_code="222222",
+                status="WATCHING",
+                strategy="SCALPING",
+                position_tag="SCANNER",
+                buy_time=None,
+                buy_qty=0,
+                entry_armed_at_epoch=1100.0,
+            ),
+        ]
+    )
+    event_bus = _EventBus()
+
+    expired = scalping_scanner._reset_scanner_watch_targets(
+        db,
+        event_bus,
+        1200.0,
+        reason="buy_window_start:1",
+        armed_before_epoch=1000.0,
+    )
+
+    assert expired == ["111111"]
+    assert [record.status for record in db.records] == ["EXPIRED", "WATCHING"]
+    assert _event_payloads(event_bus, "COMMAND_WS_UNREG")[0]["codes"] == ["111111"]
+
+
 def test_scanner_priority_tiering_sorts_acceleration_before_plain_price_jump(monkeypatch):
     monkeypatch.setattr(
         scalping_scanner,

@@ -10,7 +10,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from math import log10
 
 # 💡 Level 1 & 2 공통 모듈 임포트
@@ -20,11 +20,7 @@ from src.database.db_manager import DBManager
 from src.database.models import RecommendationHistory
 from src.core.event_bus import EventBus
 from src.engine.signal_radar import SniperRadar
-from src.engine.sniper_time import (
-    SCALPING_BUY_WINDOWS,
-    describe_scalping_buy_windows,
-    is_scalping_buy_time_allowed,
-)
+from src.engine.sniper_time import SCALPING_BUY_WINDOWS, describe_scalping_buy_windows, is_scalping_buy_time_allowed
 from src.utils.constants import TRADING_RULES
 from src.utils.pipeline_event_logger import emit_pipeline_event
 
@@ -67,6 +63,25 @@ def _resolve_scanner_discovery_window():
 
 def _is_scanner_discovery_time(now_time):
     return is_scalping_buy_time_allowed(now_time)
+
+
+def _time_in_window(now_time, start, end):
+    return start <= now_time <= end if start <= end else now_time >= start or now_time <= end
+
+
+def _active_scalping_buy_window(now_dt):
+    now_time = now_dt.time()
+    for index, (start, end) in enumerate(SCALPING_BUY_WINDOWS):
+        if _time_in_window(now_time, start, end):
+            return index, start, end
+    return None
+
+
+def _window_start_epoch(now_dt, start):
+    start_dt = datetime.combine(now_dt.date(), start)
+    if start > now_dt.time():
+        start_dt -= timedelta(days=1)
+    return start_dt.timestamp()
 
 
 def _scalping_watching_max_active():
@@ -128,6 +143,33 @@ def _expire_after_buy_window_scanner_watching(db, now_ts):
     if max_per_loop <= 0:
         return 0
     min_age_sec = _scanner_after_buy_window_cap_release_min_age_sec()
+    expired_codes = _expire_scanner_watching_records(
+        db,
+        now_ts,
+        max_per_loop=max_per_loop,
+        min_age_sec=min_age_sec,
+        position_tag="SCANNER",
+        reason="after_window_cap_release",
+    )
+    if expired_codes:
+        log_info(
+            "[SCALPING_SCANNER_AFTER_WINDOW_CAP_RELEASE] "
+            f"expired={len(expired_codes)} codes={','.join(code for code in expired_codes if code)} "
+            f"start_time={start_time.isoformat()} min_age_sec={min_age_sec} max_per_loop={max_per_loop}"
+        )
+    return len(expired_codes)
+
+
+def _expire_scanner_watching_records(
+    db,
+    now_ts,
+    *,
+    max_per_loop=None,
+    min_age_sec=0.0,
+    armed_before_epoch=None,
+    position_tag=None,
+    reason="buy_window_reset",
+):
     expired_codes = []
     try:
         with db.get_session() as session:
@@ -138,7 +180,6 @@ def _expire_after_buy_window_scanner_watching(db, now_ts):
                         RecommendationHistory.rec_date == datetime.now().date(),
                         RecommendationHistory.status == "WATCHING",
                         RecommendationHistory.strategy == "SCALPING",
-                        RecommendationHistory.position_tag == "SCANNER",
                         RecommendationHistory.buy_time.is_(None),
                         RecommendationHistory.buy_qty == 0,
                     )
@@ -152,7 +193,7 @@ def _expire_after_buy_window_scanner_watching(db, now_ts):
                     continue
                 if getattr(record, "strategy", None) != "SCALPING":
                     continue
-                if getattr(record, "position_tag", None) != "SCANNER":
+                if position_tag is not None and getattr(record, "position_tag", None) != position_tag:
                     continue
                 if getattr(record, "buy_time", None) is not None:
                     continue
@@ -162,20 +203,39 @@ def _expire_after_buy_window_scanner_watching(db, now_ts):
                 age_sec = max(0.0, float(now_ts) - armed_ts) if armed_ts > 0 else min_age_sec
                 if age_sec < min_age_sec:
                     continue
+                if armed_before_epoch is not None and armed_ts >= float(armed_before_epoch):
+                    continue
                 candidates.append((armed_ts or 0.0, record))
-            for _armed_ts, record in sorted(candidates, key=lambda item: item[0])[:max_per_loop]:
+            ordered = sorted(candidates, key=lambda item: item[0])
+            if max_per_loop is not None:
+                ordered = ordered[: int(max_per_loop)]
+            for _armed_ts, record in ordered:
                 record.status = "EXPIRED"
                 expired_codes.append(str(getattr(record, "stock_code", "") or "").strip()[:6])
     except Exception as exc:
-        log_error(f"⚠️ [SCALPING 스캐너] after-window cap release 실패: {exc}")
-        return 0
-    if expired_codes:
-        log_info(
-            "[SCALPING_SCANNER_AFTER_WINDOW_CAP_RELEASE] "
-            f"expired={len(expired_codes)} codes={','.join(code for code in expired_codes if code)} "
-            f"start_time={start_time.isoformat()} min_age_sec={min_age_sec} max_per_loop={max_per_loop}"
+        log_error(f"⚠️ [SCALPING 스캐너] watch reset 실패 reason={reason}: {exc}")
+        return []
+    return expired_codes
+
+
+def _reset_scanner_watch_targets(db, event_bus, now_ts, *, reason, armed_before_epoch=None):
+    expired_codes = _expire_scanner_watching_records(
+        db,
+        now_ts,
+        armed_before_epoch=armed_before_epoch,
+        reason=reason,
+    )
+    unreg_codes = sorted({code for code in expired_codes if code})
+    if unreg_codes:
+        event_bus.publish(
+            "COMMAND_WS_UNREG",
+            {"codes": unreg_codes, "source": "scalping_scanner_buy_window_reset", "reason": reason},
         )
-    return len(expired_codes)
+        log_info(
+            "[SCALPING_SCANNER_BUY_WINDOW_RESET] "
+            f"reason={reason} expired={len(expired_codes)} unreg={','.join(unreg_codes)}"
+        )
+    return expired_codes
 
 
 def _active_scanner_watching_count(db):
@@ -1811,6 +1871,8 @@ def run_scalper(is_test_mode=False):
     # 다시 거래가 살아난 종목은 같은 날에도 재포착할 수 있게 만듭니다.
     recent_picks = {}
     last_closed_msg_time = 0 # 💡 장 마감 도배 방지용 타이머 추가
+    last_active_window_key = None
+    last_outside_reset_key = None
     reentry_cooldown_sec = 25 * 60
     max_new_codes = 12
     open_top_limit = 60
@@ -1830,13 +1892,43 @@ def run_scalper(is_test_mode=False):
     while True:
         now = datetime.now()
         now_time = now.time()
+        now_ts = time.time()
 
         from src.engine.error_detectors.process_health import write_heartbeat as _sc_whb
         _sc_whb("scalping_scanner")
 
+        active_window = _active_scalping_buy_window(now)
+        if active_window:
+            window_index, window_start, _window_end = active_window
+            window_key = (now.date().isoformat(), window_index)
+            if window_key != last_active_window_key:
+                _reset_scanner_watch_targets(
+                    db,
+                    event_bus,
+                    now_ts,
+                    reason=f"buy_window_start:{window_index}",
+                    armed_before_epoch=_window_start_epoch(now, window_start),
+                )
+                recent_picks = {}
+                last_active_window_key = window_key
+                last_outside_reset_key = None
+
         # 신규 후보 발굴은 실제 scalping BUY window와 동일하게 맞춘다.
         # 보유/청산 감시와 downstream hard/broker/order guards는 별도 유지한다.
-        if not is_test_mode and not _is_scanner_discovery_time(now_time):
+        if not is_test_mode and active_window is None:
+            reset_key = ("after_buy_window", last_active_window_key) if last_active_window_key else (
+                "outside_buy_window_startup",
+                now.date().isoformat(),
+            )
+            if reset_key != last_outside_reset_key:
+                _reset_scanner_watch_targets(
+                    db,
+                    event_bus,
+                    now_ts,
+                    reason=str(reset_key[0]),
+                )
+                recent_picks = {}
+                last_outside_reset_key = reset_key
             if time.time() - last_closed_msg_time > 3600:
                 print(
                     "🌙 신규 스캘핑 후보 발굴 시간이 아닙니다. "

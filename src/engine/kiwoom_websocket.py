@@ -221,6 +221,7 @@ class KiwoomWSManager:
         self._registered_items_by_code = {}
         self._top_of_book_cache = {}
         self._last_remove_request_ts = {}
+        self._deferred_scalp_condition_matches = OrderedDict()
         
         # 전역 EventBus 인스턴스 획득 및 외부 명령 수신기 장착
         self.event_bus = EventBus()
@@ -1199,6 +1200,43 @@ class KiwoomWSManager:
             return
         self._state_event_queue.put((event_type, payload or {}))
 
+    def _defer_scalp_condition_match(self, payload):
+        code = str((payload or {}).get("code") or "").replace("A", "").strip()[:6]
+        condition_name = str((payload or {}).get("condition_name") or "UNKNOWN_CONDITION")
+        if not code or not _is_scalp_condition_name(condition_name):
+            return
+        deferred_payload = {**(payload or {}), "code": code, "type": "DEFERRED_BUY_WINDOW"}
+        key = (condition_name, code)
+        self._deferred_scalp_condition_matches[key] = deferred_payload
+        while len(self._deferred_scalp_condition_matches) > 300:
+            self._deferred_scalp_condition_matches.popitem(last=False)
+        print(
+            "[WS_CONDITION_BUY_WINDOW_DEFERRED] 스캘핑 조건검색 편입 보류 "
+            f"condition={condition_name} code={code} "
+            f"buy_windows={describe_scalping_buy_windows()}"
+        )
+
+    def _drop_deferred_scalp_condition_match(self, code, condition_name):
+        normalized_code = str(code or "").replace("A", "").strip()[:6]
+        normalized_name = str(condition_name or "UNKNOWN_CONDITION")
+        if not normalized_code:
+            return
+        self._deferred_scalp_condition_matches.pop((normalized_name, normalized_code), None)
+
+    def _flush_deferred_scalp_condition_matches_if_allowed(self):
+        if not self._deferred_scalp_condition_matches:
+            return
+        if not is_ws_condition_search_enabled() or not is_scalping_buy_time_allowed():
+            return
+        payloads = list(self._deferred_scalp_condition_matches.values())
+        self._deferred_scalp_condition_matches.clear()
+        for payload in payloads:
+            self._enqueue_state_event("CONDITION_MATCHED", payload)
+        print(
+            "[WS_CONDITION_BUY_WINDOW_FLUSH] 스캘핑 조건검색 보류 편입 등록 "
+            f"count={len(payloads)} buy_windows={describe_scalping_buy_windows()}"
+        )
+
     def _dispatch_state_events(self):
         while not self._stop_event.is_set():
             try:
@@ -1509,11 +1547,12 @@ class KiwoomWSManager:
                 log_error(f"🚨 [WS] 비정상 메시지 무시: {str(message)[:150]}")
                 return
             trnm = msg_dict.get('trnm')
-            
+
             # =========================================================
             # 🏓 [핵심] 생존 신고 (PING/PONG)
             # =========================================================
             if trnm == 'PING':
+                self._flush_deferred_scalp_condition_matches_if_allowed()
                 if self.websocket:
                     await self.websocket.send(self._ping_echo_payload(message, msg_dict))
                 return
@@ -1594,12 +1633,18 @@ class KiwoomWSManager:
                 for item in c_data:
                     code = item.get('jmcode', '').replace('A', '')
                     if not _condition_match_intake_allowed(cnd_name):
+                        self._defer_scalp_condition_match({
+                            'code': code,
+                            'seq': seq,
+                            'condition_name': cnd_name,
+                        })
                         continue
                     self._enqueue_state_event("CONDITION_MATCHED", {
                         'code': code,
                         'seq': seq,
                         'condition_name': cnd_name
                     })
+                self._flush_deferred_scalp_condition_matches_if_allowed()
                 return
             
             # =========================================================
@@ -1625,6 +1670,11 @@ class KiwoomWSManager:
 
                         if insert_type == 'I':
                             if not _condition_match_intake_allowed(cnd_name):
+                                self._defer_scalp_condition_match({
+                                    'code': code,
+                                    'type': 'REALTIME',
+                                    'condition_name': cnd_name,
+                                })
                                 continue
                             # 💡 스나이퍼에게 출처(이름표)를 함께 보냅니다!
                             self._enqueue_state_event("CONDITION_MATCHED", {
@@ -1633,6 +1683,7 @@ class KiwoomWSManager:
                                 'condition_name': cnd_name
                             })
                         elif insert_type == 'D':
+                            self._drop_deferred_scalp_condition_match(code, cnd_name)
                             self._enqueue_state_event("CONDITION_UNMATCHED", {
                                 'code': code,
                                 'type': 'REALTIME',
@@ -1979,6 +2030,7 @@ class KiwoomWSManager:
                             
                             # 💡 파싱 완료 후 구독자들에게 전파
                             self._queue_tick_event(item_code, self._snapshot_target(target))
+                self._flush_deferred_scalp_condition_matches_if_allowed()
 
         except websockets.ConnectionClosed:
             pass
