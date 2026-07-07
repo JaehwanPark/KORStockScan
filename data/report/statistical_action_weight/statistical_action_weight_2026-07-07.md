@@ -2,18 +2,18 @@
 
 ## 판정
 
-- 상태: `candidate_weight_source_review`
-- weight_source_ready: `True`
+- 상태: `collect_more_samples`
+- weight_source_ready: `False`
 - runtime_change: `False`
 
 ## 표본 충분성
 
 | metric | value |
 | --- | ---: |
-| completed_valid | 129 |
-| exit_only | 99 |
-| avg_down_wait | 29 |
-| pyramid_wait | 1 |
+| completed_valid | 0 |
+| exit_only | 0 |
+| avg_down_wait | 0 |
+| pyramid_wait | 0 |
 | compact_exit_signal | 947 |
 | compact_sell_completed | 22 |
 | compact_scale_in_executed | 3 |
@@ -23,45 +23,26 @@
 
 | field | known |
 | --- | ---: |
-| price_known | 129 |
-| volume_known | 123 |
-| time_known | 129 |
+| price_known | 0 |
+| volume_known | 0 |
+| time_known | 0 |
 
 ## Policy Counts
 
 | policy | count |
 | --- | ---: |
-| candidate_weight_source | 13 |
-| insufficient_sample | 1 |
 
 ## Price Bucket
 
-| bucket | best_action | score | edge | sample | avg_profit | loss_rate | policy |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| price_10k_30k | exit_only | -0.2287 | 1.4211 | 30 | 0.3437 | 0.3333 | candidate_weight_source |
-| price_30k_70k | exit_only | 0.5715 | - | 25 | 1.236 | 0.2 | candidate_weight_source |
-| price_gte_70k | exit_only | 0.1471 | 1.4949 | 16 | 0.425 | 0.3125 | candidate_weight_source |
-| price_lt_10k | exit_only | -0.1076 | - | 28 | 0.2039 | 0.3571 | candidate_weight_source |
+- 표본 없음
 
 ## Volume Bucket
 
-| bucket | best_action | score | edge | sample | avg_profit | loss_rate | policy |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| volume_2m_10m | exit_only | 0.0924 | 1.8426 | 21 | 0.8267 | 0.2381 | candidate_weight_source |
-| volume_500k_2m | exit_only | 0.2649 | 2.4565 | 19 | 0.7979 | 0.2632 | candidate_weight_source |
-| volume_gte_10m | exit_only | -0.9958 | - | 10 | -0.381 | 0.5 | candidate_weight_source |
-| volume_lt_500k | exit_only | 0.3315 | 1.3608 | 44 | 0.6673 | 0.2727 | candidate_weight_source |
-| volume_unknown | exit_only | -1.8897 | - | 5 | -0.87 | 0.6 | candidate_weight_source |
+- 표본 없음
 
 ## Time Bucket
 
-| bucket | best_action | score | edge | sample | avg_profit | loss_rate | policy |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| time_0900_0930 | insufficient_sample | - | - | - | - | - | insufficient_sample |
-| time_0930_1030 | exit_only | 0.0492 | - | 7 | 1.3543 | 0.1429 | candidate_weight_source |
-| time_1030_1400 | exit_only | -0.1179 | 1.3273 | 30 | 0.3897 | 0.2333 | candidate_weight_source |
-| time_1400_1530 | exit_only | 0.3475 | - | 17 | 1.0365 | 0.3529 | candidate_weight_source |
-| time_outside_regular | exit_only | -0.1173 | 1.2759 | 41 | 0.2207 | 0.3902 | candidate_weight_source |
+- 표본 없음
 
 ## Eligible But Not Chosen
 

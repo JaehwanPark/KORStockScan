@@ -1,85 +1,85 @@
 {
-  "bundle_as_of": "2026-07-06T22:20:18Z",
+  "bundle_as_of": "2026-07-07T22:20:15Z",
   "sp500": {
-    "name": "S&P 500",
-    "value": 7537.43,
-    "prev_value": 7483.24,
-    "change": 54.19,
-    "change_pct": 0.72,
-    "as_of": "2026-07-06T20:00:00Z",
-    "source": "The Washington Post"
+    "name": "S&P500",
+    "value": 7503.85,
+    "prev_value": 7537.43,
+    "change": -33.58,
+    "change_pct": -0.45,
+    "as_of": "2026-07-07T20:00:00Z",
+    "source": "Pittsburgh Post-Gazette"
   },
   "nasdaq": {
     "name": "NASDAQ",
-    "value": 26121.16,
-    "prev_value": 25832.67,
-    "change": 288.49,
-    "change_pct": 1.12,
-    "as_of": "2026-07-06T20:00:00Z",
-    "source": "The Washington Post"
+    "value": 25818.69,
+    "prev_value": 26121.16,
+    "change": -302.47,
+    "change_pct": -1.16,
+    "as_of": "2026-07-07T20:00:00Z",
+    "source": "Canadian Press"
   },
   "vix": {
     "name": "VIX",
-    "value": 15.99,
-    "prev_value": 15.81,
-    "change": 0.18,
-    "change_pct": 1.14,
-    "as_of": "2026-07-06T20:00:00Z",
-    "source": "Cboe"
+    "value": 15.84,
+    "prev_value": 15.57,
+    "change": 0.27,
+    "change_pct": 1.73,
+    "as_of": "2026-07-07T20:24:00Z",
+    "source": "Cboe Global Markets"
   },
   "us10y": {
     "name": "US10Y",
-    "value": 4.48,
-    "prev_value": 4.49,
-    "change": -0.01,
-    "change_pct": null,
-    "as_of": "2026-07-06T20:00:00Z",
+    "value": 4.55,
+    "prev_value": 4.48,
+    "change": 0.07,
+    "change_pct": 1.56,
+    "as_of": "2026-07-07T22:20:15Z",
     "source": "Trading Economics"
   },
   "brent": {
     "name": "BRENT",
-    "value": 71.8,
-    "prev_value": 72.1,
-    "change": -0.3,
-    "change_pct": -0.42,
-    "as_of": "2026-07-06T20:00:00Z",
+    "value": 75.86,
+    "prev_value": 71.99,
+    "change": 3.87,
+    "change_pct": 5.38,
+    "as_of": "2026-07-07T22:20:15Z",
     "source": "Trading Economics"
   },
   "headlines": [
     {
-      "title": "Rebounding AI stocks send the S&P 500 within 1% of its record",
+      "title": "AI stocks sink and drag markets lower worldwide",
       "source": "Los Angeles Times",
-      "published_at": "2026-07-06T20:50:00Z",
-      "url": "https://www.latimes.com"
+      "published_at": "2026-07-07T21:04:00Z",
+      "url": "https://www.latimes.com/business/story/2026-07-07/ai-stocks-sink-and-drag-markets-lower-worldwide"
     },
     {
-      "title": "Nasdaq Rings Opening Bell at the White House to Mark America 250 and the First Trading Day for Trump Accounts",
-      "source": "Nasdaq",
-      "published_at": "2026-07-06T13:30:00Z",
-      "url": "https://www.nasdaq.com"
+      "title": "EIA increases global oil production forecast after the opening of the Strait of Hormuz",
+      "source": "U.S. Energy Information Administration (EIA)",
+      "published_at": "2026-07-07T17:28:00Z",
+      "url": "https://www.eia.gov/pressroom/releases/press545.php"
     },
     {
-      "title": "Yield Curve Positive, VIX Calm — But Cracks Are Forming",
-      "source": "The Weekly Investor",
-      "published_at": "2026-07-06T12:00:00Z",
-      "url": "https://theweeklyinvestor.com"
+      "title": "Crude Oil Prices July 7 — Hormuz Tanker Strike Ends Two-Day Fall",
+      "source": "Topics Corner",
+      "published_at": "2026-07-07T12:00:00Z",
+      "url": "https://topicscorner.com/crude-oil-prices-july-7-hormuz-tanker-strike"
     },
     {
-      "title": "What impact have Trump's tariffs had on imports?",
-      "source": "BBVA Research",
-      "published_at": "2026-07-06T08:00:00Z",
-      "url": "https://www.bbvaresearch.com"
+      "title": "Stock Market Today: SpaceX falls 5% on fast-track addition to Nasdaq-100",
+      "source": "TheStreet",
+      "published_at": "2026-07-07T13:30:00Z",
+      "url": "https://www.thestreet.com/markets/stock-market-today-july-7-2026"
     },
     {
-      "title": "Oil Prices Ease As OPEC+ Aims to Bump Up Output from August; Brent Below $72",
-      "source": "HDFCSky",
-      "published_at": "2026-07-06T11:05:00Z",
-      "url": "https://hdfcsky.com"
+      "title": "Hong Kong's Gold Market Reforms Shift Price Discovery to Asia",
+      "source": "Crux Investor",
+      "published_at": "2026-07-07T12:00:00Z",
+      "url": "https://cruxinvestor.com/articles/hong-kongs-gold-market-reforms"
     }
   ],
   "notes": [
-    "U.S. indices recorded solid gains on Monday led by rebounding AI and semiconductor stocks.",
-    "Brent crude oil prices declined below $72 per barrel amid eased Middle East geopolitical tensions and news of OPEC+ aiming to bump up production targets for August.",
-    "Market participants continue to analyze the economic implications of proposed Section 301 tariffs on global imports and broader supply chains."
+    "Market data captured based on the latest available closing values for US equities as of July 7, 2026.",
+    "Brent Crude and US 10-Year Treasury yields increased today following a projectile strike on a tanker near the Strait of Hormuz.",
+    "Tech weakness, notably a significant drop in AI-related stocks despite a Samsung Electronics earnings beat, pressured the broader Nasdaq and S&P 500."
   ]
 }

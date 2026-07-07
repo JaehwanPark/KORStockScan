@@ -11,52 +11,52 @@
 
 | window | dates | events | completed | avg_profit | win_rate | loss_rate |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| cumulative | 78 | 2202691 | 489 | -0.2256 | 0.4765 | 0.4888 |
-| rolling_5d | 5 | 59100 | 72 | 0.2101 | 0.6528 | 0.3194 |
-| rolling_10d | 10 | 187661 | 178 | 0.1632 | 0.5674 | 0.3764 |
-| rolling_20d | 20 | 453945 | 204 | 0.0459 | 0.5343 | 0.4167 |
+| cumulative | 78 | 2202691 | 0 | - | - | - |
+| rolling_5d | 5 | 59100 | 0 | - | - | - |
+| rolling_10d | 10 | 187661 | 0 | - | - | - |
+| rolling_20d | 20 | 453945 | 0 | - | - | - |
 
 ## Real / Sim Source Summary
 
 | window | source | sample | avg_profit | win_rate |
 | --- | --- | ---: | ---: | ---: |
-| cumulative | real | 489 | -0.2256 | 0.4765 |
+| cumulative | real | 0 | - | - |
 | cumulative | sim | 3937 | -1.284 | 0.2405 |
-| cumulative | combined | 4426 | -1.1671 | 0.2666 |
-| rolling_5d | real | 72 | 0.2101 | 0.6528 |
+| cumulative | combined | 3937 | -1.284 | 0.2405 |
+| rolling_5d | real | 0 | - | - |
 | rolling_5d | sim | 59 | -1.6308 | 0.322 |
-| rolling_5d | combined | 131 | -0.619 | 0.5038 |
-| rolling_10d | real | 178 | 0.1632 | 0.5674 |
+| rolling_5d | combined | 59 | -1.6308 | 0.322 |
+| rolling_10d | real | 0 | - | - |
 | rolling_10d | sim | 149 | -1.2397 | 0.3826 |
-| rolling_10d | combined | 327 | -0.4761 | 0.4832 |
-| rolling_20d | real | 204 | 0.0459 | 0.5343 |
+| rolling_10d | combined | 149 | -1.2397 | 0.3826 |
+| rolling_20d | real | 0 | - | - |
 | rolling_20d | sim | 916 | -1.4225 | 0.2293 |
-| rolling_20d | combined | 1120 | -1.155 | 0.2848 |
+| rolling_20d | combined | 916 | -1.4225 | 0.2293 |
 
 ## Cohort Summary
 
 | window | cohort | sample | avg_profit | p10 | p90 | win_rate | loss_rate |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| cumulative | all_completed_valid | 489 | -0.2256 | -2.55 | 2.09 | 0.4765 | 0.4888 |
-| cumulative | normal_only | 489 | -0.2256 | -2.55 | 2.09 | 0.4765 | 0.4888 |
-| cumulative | initial_only | 426 | -0.241 | -2.51 | 2.08 | 0.4695 | 0.4953 |
-| cumulative | pyramid_activated | 27 | 0.3081 | -2.12 | 3.15 | 0.5926 | 0.4074 |
-| cumulative | reversal_add_activated | 37 | -0.2424 | -4.57 | 2.55 | 0.4865 | 0.4595 |
-| rolling_5d | all_completed_valid | 72 | 0.2101 | -3.88 | 3.27 | 0.6528 | 0.3194 |
-| rolling_5d | normal_only | 72 | 0.2101 | -3.88 | 3.27 | 0.6528 | 0.3194 |
-| rolling_5d | initial_only | 54 | 0.5013 | -3.51 | 3.31 | 0.7037 | 0.2593 |
-| rolling_5d | pyramid_activated | 1 | -2.12 | -2.12 | -2.12 | 0 | 1 |
-| rolling_5d | reversal_add_activated | 17 | -0.5776 | -4.64 | 2.55 | 0.5294 | 0.4706 |
-| rolling_10d | all_completed_valid | 178 | 0.1632 | -4.32 | 2.93 | 0.5674 | 0.3764 |
-| rolling_10d | normal_only | 178 | 0.1632 | -4.32 | 2.93 | 0.5674 | 0.3764 |
-| rolling_10d | initial_only | 141 | 0.2896 | -3.51 | 2.93 | 0.5887 | 0.3546 |
-| rolling_10d | pyramid_activated | 3 | 0.6767 | -2.87 | 7.02 | 0.3333 | 0.6667 |
-| rolling_10d | reversal_add_activated | 35 | -0.1943 | -4.57 | 2.55 | 0.5143 | 0.4286 |
-| rolling_20d | all_completed_valid | 204 | 0.0459 | -3.88 | 2.64 | 0.5343 | 0.4167 |
-| rolling_20d | normal_only | 204 | 0.0459 | -3.88 | 2.64 | 0.5343 | 0.4167 |
-| rolling_20d | initial_only | 165 | 0.1458 | -3.44 | 2.75 | 0.5515 | 0.4 |
-| rolling_20d | pyramid_activated | 4 | 0.215 | -2.87 | 7.02 | 0.25 | 0.75 |
-| rolling_20d | reversal_add_activated | 36 | -0.2372 | -4.57 | 2.55 | 0.5 | 0.4444 |
+| cumulative | all_completed_valid | 0 | - | - | - | - | - |
+| cumulative | normal_only | 0 | - | - | - | - | - |
+| cumulative | initial_only | 0 | - | - | - | - | - |
+| cumulative | pyramid_activated | 0 | - | - | - | - | - |
+| cumulative | reversal_add_activated | 0 | - | - | - | - | - |
+| rolling_5d | all_completed_valid | 0 | - | - | - | - | - |
+| rolling_5d | normal_only | 0 | - | - | - | - | - |
+| rolling_5d | initial_only | 0 | - | - | - | - | - |
+| rolling_5d | pyramid_activated | 0 | - | - | - | - | - |
+| rolling_5d | reversal_add_activated | 0 | - | - | - | - | - |
+| rolling_10d | all_completed_valid | 0 | - | - | - | - | - |
+| rolling_10d | normal_only | 0 | - | - | - | - | - |
+| rolling_10d | initial_only | 0 | - | - | - | - | - |
+| rolling_10d | pyramid_activated | 0 | - | - | - | - | - |
+| rolling_10d | reversal_add_activated | 0 | - | - | - | - | - |
+| rolling_20d | all_completed_valid | 0 | - | - | - | - | - |
+| rolling_20d | normal_only | 0 | - | - | - | - | - |
+| rolling_20d | initial_only | 0 | - | - | - | - | - |
+| rolling_20d | pyramid_activated | 0 | - | - | - | - | - |
+| rolling_20d | reversal_add_activated | 0 | - | - | - | - | - |
 
 ## Family Readiness
 
@@ -66,7 +66,8 @@
 | cumulative | score65_74_recovery_probe | entry | 0 | False | report_only_reference |
 | cumulative | pre_submit_price_guard | entry | 89 | False | report_only_reference |
 | cumulative | dynamic_entry_price_resolver | entry | 18262 | True | report_only_reference |
-| cumulative | entry_split_order_plan | submit | 6036 | False | report_only_reference |
+| cumulative | entry_split_order_plan | submit | 6036 | True | report_only_reference |
+| cumulative | scale_in_split_order_plan | scale_in | 5 | True | report_only_reference |
 | cumulative | entry_price_execution_quality | entry | 3482 | False | report_only_reference |
 | cumulative | strength_momentum_soft_gate_p1 | entry | 178640 | False | report_only_reference |
 | cumulative | overbought_pullback_guard_p1 | entry | 47622 | False | report_only_reference |
@@ -81,14 +82,15 @@
 | cumulative | protect_trailing_smoothing | holding_exit | 187 | True | report_only_reference |
 | cumulative | holding_flow_ofi_smoothing | holding_exit | 110 | True | report_only_reference |
 | cumulative | scale_in_price_guard | holding_exit | 2719 | True | report_only_reference |
-| cumulative | position_sizing_dynamic_formula | position_sizing | 489 | False | report_only_reference |
-| cumulative | statistical_action_weight | decision_support | 489 | False | report_only_reference |
+| cumulative | position_sizing_dynamic_formula | position_sizing | 0 | False | report_only_reference |
+| cumulative | statistical_action_weight | decision_support | 0 | False | report_only_reference |
 | cumulative | lifecycle_decision_matrix_runtime | lifecycle | 4063 | True | report_only_reference |
 | rolling_5d | entry_mechanical_momentum | entry | 1529 | True | report_only_reference |
 | rolling_5d | score65_74_recovery_probe | entry | 0 | False | report_only_reference |
 | rolling_5d | pre_submit_price_guard | entry | 0 | False | report_only_reference |
 | rolling_5d | dynamic_entry_price_resolver | entry | 636 | True | report_only_reference |
-| rolling_5d | entry_split_order_plan | submit | 6036 | False | report_only_reference |
+| rolling_5d | entry_split_order_plan | submit | 6036 | True | report_only_reference |
+| rolling_5d | scale_in_split_order_plan | scale_in | 5 | True | report_only_reference |
 | rolling_5d | entry_price_execution_quality | entry | 386 | False | report_only_reference |
 | rolling_5d | strength_momentum_soft_gate_p1 | entry | 3491 | False | report_only_reference |
 | rolling_5d | overbought_pullback_guard_p1 | entry | 345 | False | report_only_reference |
@@ -103,14 +105,15 @@
 | rolling_5d | protect_trailing_smoothing | holding_exit | 25 | True | report_only_reference |
 | rolling_5d | holding_flow_ofi_smoothing | holding_exit | 10 | False | report_only_reference |
 | rolling_5d | scale_in_price_guard | holding_exit | 61 | True | report_only_reference |
-| rolling_5d | position_sizing_dynamic_formula | position_sizing | 72 | False | report_only_reference |
-| rolling_5d | statistical_action_weight | decision_support | 72 | False | report_only_reference |
+| rolling_5d | position_sizing_dynamic_formula | position_sizing | 0 | False | report_only_reference |
+| rolling_5d | statistical_action_weight | decision_support | 0 | False | report_only_reference |
 | rolling_5d | lifecycle_decision_matrix_runtime | lifecycle | 4063 | True | report_only_reference |
 | rolling_10d | entry_mechanical_momentum | entry | 4091 | True | report_only_reference |
 | rolling_10d | score65_74_recovery_probe | entry | 0 | False | report_only_reference |
 | rolling_10d | pre_submit_price_guard | entry | 0 | False | report_only_reference |
 | rolling_10d | dynamic_entry_price_resolver | entry | 1723 | True | report_only_reference |
-| rolling_10d | entry_split_order_plan | submit | 6036 | False | report_only_reference |
+| rolling_10d | entry_split_order_plan | submit | 6036 | True | report_only_reference |
+| rolling_10d | scale_in_split_order_plan | scale_in | 5 | True | report_only_reference |
 | rolling_10d | entry_price_execution_quality | entry | 1197 | False | report_only_reference |
 | rolling_10d | strength_momentum_soft_gate_p1 | entry | 8175 | False | report_only_reference |
 | rolling_10d | overbought_pullback_guard_p1 | entry | 1477 | False | report_only_reference |
@@ -125,14 +128,15 @@
 | rolling_10d | protect_trailing_smoothing | holding_exit | 30 | True | report_only_reference |
 | rolling_10d | holding_flow_ofi_smoothing | holding_exit | 31 | False | report_only_reference |
 | rolling_10d | scale_in_price_guard | holding_exit | 697 | True | report_only_reference |
-| rolling_10d | position_sizing_dynamic_formula | position_sizing | 178 | False | report_only_reference |
-| rolling_10d | statistical_action_weight | decision_support | 178 | False | report_only_reference |
+| rolling_10d | position_sizing_dynamic_formula | position_sizing | 0 | False | report_only_reference |
+| rolling_10d | statistical_action_weight | decision_support | 0 | False | report_only_reference |
 | rolling_10d | lifecycle_decision_matrix_runtime | lifecycle | 4063 | True | report_only_reference |
 | rolling_20d | entry_mechanical_momentum | entry | 13221 | True | report_only_reference |
 | rolling_20d | score65_74_recovery_probe | entry | 0 | False | report_only_reference |
 | rolling_20d | pre_submit_price_guard | entry | 0 | False | report_only_reference |
 | rolling_20d | dynamic_entry_price_resolver | entry | 5208 | True | report_only_reference |
-| rolling_20d | entry_split_order_plan | submit | 6036 | False | report_only_reference |
+| rolling_20d | entry_split_order_plan | submit | 6036 | True | report_only_reference |
+| rolling_20d | scale_in_split_order_plan | scale_in | 5 | True | report_only_reference |
 | rolling_20d | entry_price_execution_quality | entry | 2061 | False | report_only_reference |
 | rolling_20d | strength_momentum_soft_gate_p1 | entry | 36276 | False | report_only_reference |
 | rolling_20d | overbought_pullback_guard_p1 | entry | 4482 | False | report_only_reference |
@@ -147,8 +151,8 @@
 | rolling_20d | protect_trailing_smoothing | holding_exit | 53 | True | report_only_reference |
 | rolling_20d | holding_flow_ofi_smoothing | holding_exit | 40 | False | report_only_reference |
 | rolling_20d | scale_in_price_guard | holding_exit | 1160 | True | report_only_reference |
-| rolling_20d | position_sizing_dynamic_formula | position_sizing | 204 | False | report_only_reference |
-| rolling_20d | statistical_action_weight | decision_support | 204 | False | report_only_reference |
+| rolling_20d | position_sizing_dynamic_formula | position_sizing | 0 | False | report_only_reference |
+| rolling_20d | statistical_action_weight | decision_support | 0 | False | report_only_reference |
 | rolling_20d | lifecycle_decision_matrix_runtime | lifecycle | 4063 | True | report_only_reference |
 
 ## 사용 금지선

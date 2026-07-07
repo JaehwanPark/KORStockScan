@@ -28,9 +28,9 @@
 - stage_hook_workorder_discovery: `/home/ubuntu/KORStockScan/data/report/stage_hook_workorder_discovery/stage_hook_workorder_discovery_2026-07-07.json`
 - stage_hook_runtime_scaffold: `/home/ubuntu/KORStockScan/data/report/stage_hook_runtime_scaffold/stage_hook_runtime_scaffold_2026-07-07.json`
 - buy_funnel_sentinel: `/home/ubuntu/KORStockScan/data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-07-07.json`
-- generated_at: `2026-07-07T21:04:48+09:00`
-- generation_id: `2026-07-07-ec26b6425610`
-- source_hash: `ec26b6425610414977e1ccb00b7d194aa3ff84bd21bd87e9451f9a85f7447b73`
+- generated_at: `2026-07-07T23:37:39+09:00`
+- generation_id: `2026-07-07-318e3e379164`
+- source_hash: `318e3e379164b34495b37e52bc315126906f140ff55b38c03ca22b55b97549a6`
 
 ## 운영 원칙
 
@@ -52,10 +52,10 @@
 ## Snapshot Lineage
 
 - previous_exists: `True`
-- previous_generation_id: `2026-07-07-18fb5c6e53a2`
-- previous_source_hash: `18fb5c6e53a266abae0b88824ea07e8c6a35c93089808be6fe9ecfebe7e2d4dd`
-- new_order_ids: `['order_lifecycle_bucket_discovery_source_contract_source_contract_source_added_entry_6d966faa56_fea3e535', 'order_lifecycle_source_dimension_join_gap_enrichment']`
-- removed_order_ids: `['order_lifecycle_bucket_discovery_source_contract_source_contract_source_added_institutional_flow_context_5ffac855c5_ea33d1b2']`
+- previous_generation_id: `2026-07-07-ec26b6425610`
+- previous_source_hash: `ec26b6425610414977e1ccb00b7d194aa3ff84bd21bd87e9451f9a85f7447b73`
+- new_order_ids: `[]`
+- removed_order_ids: `[]`
 - decision_changed_order_ids: `[]`
 
 ## Summary
