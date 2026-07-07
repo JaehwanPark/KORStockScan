@@ -2,11 +2,11 @@
 
 ## 판정
 
-- 분석 기간: `2026-07-06` ~ `2026-07-06`
+- 분석 기간: `2026-07-07` ~ `2026-07-07`
 - trade_rows: `0`
-- lifecycle_event_rows: `26`
+- lifecycle_event_rows: `33`
 - completed_valid_profit_rows: `0`
-- ofi_qi_rows: `11`
+- ofi_qi_rows: `23`
 - total_findings: `5`
 - code_improvement_orders: `3`
 - runtime_change: `False`
