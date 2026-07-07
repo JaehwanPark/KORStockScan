@@ -1741,6 +1741,64 @@ def test_low_rebound_excludes_below_threshold(monkeypatch):
     assert rows == []
 
 
+def test_low_rebound_uses_latest_trading_day_candles_only(monkeypatch):
+    emitted = []
+
+    def fake_emit(pipeline, name, code, stage, *, record_id=None, fields=None):
+        emitted.append(
+            {
+                "pipeline": pipeline,
+                "name": name,
+                "code": code,
+                "stage": stage,
+                "record_id": record_id,
+                "fields": fields or {},
+            }
+        )
+
+    monkeypatch.setattr(scalping_scanner, "emit_pipeline_event", fake_emit)
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "get_minute_candles_ka10080",
+        lambda *_args, **_kwargs: [
+            {
+                "source_timestamp": "20260703092300",
+                "현재가": 5860,
+                "고가": 5950,
+                "저가": 5850,
+            },
+            {
+                "source_timestamp": "20260707122100",
+                "현재가": 6020,
+                "고가": 6070,
+                "저가": 5990,
+            },
+            {
+                "source_timestamp": "20260707122600",
+                "현재가": 6070,
+                "고가": 6070,
+                "저가": 6010,
+            },
+        ],
+    )
+
+    rows = scalping_scanner._build_low_rebound_rising_missed_targets(
+        "TOKEN",
+        raw_volume_surge_targets=[
+            {"Code": "005720", "Name": "넥센", "Price": 6070, "FluRate": -0.17, "SpikeRate": 28.47}
+        ],
+        emit_observation=True,
+    )
+
+    assert rows == []
+    fields = emitted[0]["fields"]
+    assert fields["low_rebound_intraday_date_filter_applied_count"] == 1
+    assert fields["low_rebound_intraday_date_filter_unique_date_count"] == 2
+    assert fields["low_rebound_intraday_date_filter_latest_date"] == "20260707"
+    assert fields["low_rebound_below_rebound_threshold_count"] == 1
+    assert fields["low_rebound_passed_count"] == 0
+
+
 def test_low_rebound_does_not_require_open_or_day_positive(monkeypatch):
     monkeypatch.setattr(
         kiwoom_utils,

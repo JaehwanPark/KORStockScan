@@ -582,6 +582,37 @@ def _low_rebound_price_from_candle(candle, *keys):
     return 0
 
 
+def _low_rebound_candle_source_date(candle):
+    for key in ("source_timestamp", "cntr_tm", "체결시간"):
+        text = str((candle or {}).get(key) or "").strip()
+        if len(text) >= 8 and text[:8].isdigit():
+            return text[:8]
+    return ""
+
+
+def _filter_low_rebound_intraday_candles(candles):
+    rows = list(candles or [])
+    source_dates = [_low_rebound_candle_source_date(row) for row in rows]
+    dated = [date for date in source_dates if date]
+    if not dated:
+        return rows, {
+            "intraday_date_filter_applied_count": 0,
+            "intraday_date_filter_latest_date": "",
+            "intraday_date_filter_unique_date_count": 0,
+        }
+    latest_date = max(dated)
+    filtered = [
+        row
+        for row, source_date in zip(rows, source_dates, strict=False)
+        if source_date == latest_date
+    ]
+    return filtered, {
+        "intraday_date_filter_applied_count": max(0, len(rows) - len(filtered)),
+        "intraday_date_filter_latest_date": latest_date,
+        "intraday_date_filter_unique_date_count": len(set(dated)),
+    }
+
+
 def _bounded(value, low=0.0, high=9999.0):
     return max(low, min(high, float(value or 0.0)))
 
@@ -2277,6 +2308,9 @@ def _build_low_rebound_rising_missed_targets(
         "missing_candle_count": 0,
         "invalid_candle_price_count": 0,
         "invalid_intraday_price_count": 0,
+        "intraday_date_filter_applied_count": 0,
+        "intraday_date_filter_unique_date_count": 0,
+        "intraday_date_filter_latest_date": "",
         "below_rebound_threshold_count": 0,
         "chase_risk_filtered_count": 0,
         "passed_count": 0,
@@ -2304,6 +2338,20 @@ def _build_low_rebound_rising_missed_targets(
             stats["candle_fetch_failed_count"] += 1
             log_error(f"🚨 [SCALPING 스캐너] ka10080 저가반등 조회 실패 [{code}]: {exc}")
             continue
+        if not candles:
+            stats["missing_candle_count"] += 1
+            continue
+        candles, date_filter_stats = _filter_low_rebound_intraday_candles(candles)
+        stats["intraday_date_filter_applied_count"] += int(
+            date_filter_stats.get("intraday_date_filter_applied_count") or 0
+        )
+        stats["intraday_date_filter_unique_date_count"] = max(
+            int(stats.get("intraday_date_filter_unique_date_count") or 0),
+            int(date_filter_stats.get("intraday_date_filter_unique_date_count") or 0),
+        )
+        latest_filter_date = str(date_filter_stats.get("intraday_date_filter_latest_date") or "")
+        if latest_filter_date:
+            stats["intraday_date_filter_latest_date"] = latest_filter_date
         if not candles:
             stats["missing_candle_count"] += 1
             continue
