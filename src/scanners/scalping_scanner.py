@@ -131,6 +131,24 @@ def _low_rebound_reserve_slots():
     return max(0, min(value, 10))
 
 
+def _low_rebound_active_floor():
+    raw = os.getenv("KORSTOCKSCAN_SCALP_SCANNER_LOW_REBOUND_ACTIVE_FLOOR", "")
+    try:
+        value = int(str(raw).strip()) if str(raw).strip() else 2
+    except (TypeError, ValueError):
+        value = 2
+    return max(0, min(value, 10))
+
+
+def _low_rebound_floor_replacement_max_per_loop():
+    raw = os.getenv("KORSTOCKSCAN_SCALP_SCANNER_LOW_REBOUND_FLOOR_REPLACE_MAX_PER_LOOP", "")
+    try:
+        value = int(str(raw).strip()) if str(raw).strip() else 2
+    except (TypeError, ValueError):
+        value = 2
+    return max(0, min(value, 5))
+
+
 def _scanner_after_buy_window_cap_release_enabled():
     raw = os.getenv("KORSTOCKSCAN_SCANNER_AFTER_BUY_WINDOW_CAP_RELEASE_ENABLED", "")
     text = str(raw).strip().lower()
@@ -252,6 +270,108 @@ def _expire_scanner_watching_records(
                 expired_codes.append(str(getattr(record, "stock_code", "") or "").strip()[:6])
     except Exception as exc:
         log_error(f"⚠️ [SCALPING 스캐너] watch reset 실패 reason={reason}: {exc}")
+        return []
+    return expired_codes
+
+
+def _recent_low_rebound_codes(recent_picks, low_rebound_targets=None):
+    codes = {
+        str((target or {}).get("Code") or "").strip()[:6]
+        for target in (low_rebound_targets or [])
+        if str((target or {}).get("Code") or "").strip()
+    }
+    for code, meta in (recent_picks or {}).items():
+        sources = set((meta or {}).get("last_source_signature") or [])
+        if LOW_REBOUND_RISING_MISSED_SOURCE in sources:
+            norm_code = str(code or "").strip()[:6]
+            if norm_code:
+                codes.add(norm_code)
+    return codes
+
+
+def _active_scanner_watching_codes(db, codes):
+    codes = {str(code or "").strip()[:6] for code in (codes or []) if str(code or "").strip()}
+    if not codes:
+        return set()
+    try:
+        with db.get_session() as session:
+            if hasattr(session, "query"):
+                rows = (
+                    session.query(RecommendationHistory.stock_code)
+                    .filter(
+                        RecommendationHistory.rec_date == datetime.now().date(),
+                        RecommendationHistory.status == "WATCHING",
+                        RecommendationHistory.strategy == "SCALPING",
+                        RecommendationHistory.position_tag == "SCANNER",
+                        RecommendationHistory.buy_time.is_(None),
+                        RecommendationHistory.buy_qty == 0,
+                        RecommendationHistory.stock_code.in_(sorted(codes)),
+                    )
+                    .all()
+                )
+                return {str(row[0] if isinstance(row, tuple) else row.stock_code).strip()[:6] for row in rows}
+            records = getattr(session, "records", [])
+            return {
+                str(getattr(record, "stock_code", "") or "").strip()[:6]
+                for record in records
+                if str(getattr(record, "stock_code", "") or "").strip()[:6] in codes
+                and getattr(record, "status", None) == "WATCHING"
+                and getattr(record, "strategy", None) == "SCALPING"
+                and getattr(record, "position_tag", None) == "SCANNER"
+                and getattr(record, "buy_time", None) is None
+                and int(getattr(record, "buy_qty", 0) or 0) == 0
+            }
+    except Exception as exc:
+        log_error(f"⚠️ [SCALPING 스캐너] LOW_REBOUND active 코드 확인 실패: {exc}")
+        return set()
+
+
+def _expire_scanner_watching_for_low_rebound_floor(db, now_ts, *, max_to_expire, protected_codes=None):
+    protected_codes = {
+        str(code or "").strip()[:6] for code in (protected_codes or set()) if str(code or "").strip()
+    }
+    if int(max_to_expire or 0) <= 0:
+        return []
+    expired_codes = []
+    try:
+        with db.get_session() as session:
+            if hasattr(session, "query"):
+                records = (
+                    session.query(RecommendationHistory)
+                    .filter(
+                        RecommendationHistory.rec_date == datetime.now().date(),
+                        RecommendationHistory.status == "WATCHING",
+                        RecommendationHistory.strategy == "SCALPING",
+                        RecommendationHistory.position_tag == "SCANNER",
+                        RecommendationHistory.buy_time.is_(None),
+                        RecommendationHistory.buy_qty == 0,
+                    )
+                    .all()
+                )
+            else:
+                records = list(getattr(session, "records", []))
+            candidates = []
+            for record in records:
+                code = str(getattr(record, "stock_code", "") or "").strip()[:6]
+                if not code or code in protected_codes:
+                    continue
+                if getattr(record, "status", None) != "WATCHING":
+                    continue
+                if getattr(record, "strategy", None) != "SCALPING":
+                    continue
+                if getattr(record, "position_tag", None) != "SCANNER":
+                    continue
+                if getattr(record, "buy_time", None) is not None:
+                    continue
+                if int(getattr(record, "buy_qty", 0) or 0) != 0:
+                    continue
+                armed_ts = _safe_float(getattr(record, "entry_armed_at_epoch", 0.0), 0.0)
+                candidates.append((armed_ts or 0.0, record))
+            for _armed_ts, record in sorted(candidates, key=lambda item: item[0])[: int(max_to_expire)]:
+                record.status = "EXPIRED"
+                expired_codes.append(str(getattr(record, "stock_code", "") or "").strip()[:6])
+    except Exception as exc:
+        log_error(f"⚠️ [SCALPING 스캐너] LOW_REBOUND floor 슬롯 교체 실패: {exc}")
         return []
     return expired_codes
 
@@ -1766,6 +1886,43 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
     max_active = _scalping_watching_max_active()
     _expire_after_buy_window_scanner_watching(db, now_ts)
     active_count = _active_scanner_watching_count(db)
+    low_rebound_targets = [target for target in ranked_targets if _is_low_rebound_target(target)]
+    low_rebound_candidates_present = bool(low_rebound_targets)
+    low_rebound_active_floor = _low_rebound_active_floor()
+    protected_low_rebound_codes = _recent_low_rebound_codes(recent_picks, low_rebound_targets)
+    active_low_rebound_codes = _active_scanner_watching_codes(db, protected_low_rebound_codes)
+    active_low_rebound_count = len(active_low_rebound_codes)
+    low_rebound_floor_shortfall = max(0, low_rebound_active_floor - active_low_rebound_count)
+    if low_rebound_candidates_present and low_rebound_floor_shortfall > 0:
+        open_slots = max(0, max_active - active_count)
+        replacement_needed = max(0, low_rebound_floor_shortfall - open_slots)
+        replacement_needed = min(
+            replacement_needed,
+            len(low_rebound_targets),
+            _low_rebound_floor_replacement_max_per_loop(),
+        )
+        expired_for_low_rebound = _expire_scanner_watching_for_low_rebound_floor(
+            db,
+            now_ts,
+            max_to_expire=replacement_needed,
+            protected_codes=protected_low_rebound_codes,
+        )
+        if expired_for_low_rebound:
+            active_count = max(0, active_count - len(expired_for_low_rebound))
+            event_bus.publish(
+                "COMMAND_WS_UNREG",
+                {
+                    "codes": sorted({code for code in expired_for_low_rebound if code}),
+                    "source": "scalping_scanner_low_rebound_floor_replace",
+                    "reason": "low_rebound_active_floor",
+                },
+            )
+            log_info(
+                "[SCALPING_SCANNER_LOW_REBOUND_FLOOR_REPLACE] "
+                f"expired={len(expired_for_low_rebound)} "
+                f"codes={','.join(code for code in expired_for_low_rebound if code)} "
+                f"floor={low_rebound_active_floor} active_low_rebound={active_low_rebound_count}"
+            )
     remaining_slots = min(max(0, int(max_new_codes or 0)), max(0, max_active - active_count))
     if remaining_slots <= 0:
         print(
@@ -1773,10 +1930,12 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
             f"active={active_count} max_active={max_active} max_new_codes={max_new_codes}"
         )
         return [], recent_picks
-    low_rebound_candidates_present = any(_is_low_rebound_target(target) for target in ranked_targets)
-    low_rebound_reserved_slots = (
-        min(remaining_slots, _low_rebound_reserve_slots()) if low_rebound_candidates_present else 0
-    )
+    low_rebound_reserved_slots = 0
+    if low_rebound_candidates_present:
+        low_rebound_reserved_slots = min(
+            remaining_slots,
+            max(_low_rebound_reserve_slots(), low_rebound_floor_shortfall),
+        )
     general_slot_limit = remaining_slots - low_rebound_reserved_slots if low_rebound_reserved_slots > 0 else remaining_slots
     low_rebound_promoted_count = 0
     general_promoted_count = 0
@@ -1784,10 +1943,12 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
     for target in ranked_targets:
         code = target["Code"]
         is_low_rebound_target = _is_low_rebound_target(target)
-        if is_low_rebound_target and low_rebound_reserved_slots > 0:
-            if low_rebound_promoted_count >= low_rebound_reserved_slots:
-                continue
-        elif general_promoted_count >= general_slot_limit:
+        uses_low_rebound_reserved_slot = (
+            is_low_rebound_target
+            and low_rebound_reserved_slots > 0
+            and low_rebound_promoted_count < low_rebound_reserved_slots
+        )
+        if not uses_low_rebound_reserved_slot and general_promoted_count >= general_slot_limit:
             continue
 
         pre_filter_reason = _scanner_candidate_pre_filter_reason(target)
@@ -1895,12 +2056,15 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
             "scanner_promotion_emitted_epoch": f"{float(now_ts or 0.0):.3f}",
             "scanner_low_rebound_reserved_slots": low_rebound_reserved_slots,
             "scanner_low_rebound_reserved_promotion": is_low_rebound_target,
+            "scanner_low_rebound_active_floor": low_rebound_active_floor,
+            "scanner_low_rebound_active_count": active_low_rebound_count,
+            "scanner_low_rebound_floor_shortfall": low_rebound_floor_shortfall,
         }
         if bool(getattr(TRADING_RULES, "SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED", False)):
             _log_scanner_candidate_event("scalping_scanner_candidate_promoted", target, source_guard)
         _remember_pick(recent_picks, target, now_ts)
         new_codes_found.append(code)
-        if is_low_rebound_target and low_rebound_reserved_slots > 0:
+        if uses_low_rebound_reserved_slot:
             low_rebound_promoted_count += 1
         else:
             general_promoted_count += 1

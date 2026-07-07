@@ -198,17 +198,25 @@ def test_promote_candidates_reserves_two_slots_for_low_rebound(monkeypatch):
     assert promoted_payloads[1]["broker_order_forbidden"] is True
 
 
-def test_low_rebound_reserve_does_not_bypass_full_active_cap(monkeypatch):
+def test_low_rebound_floor_replaces_old_general_watching_without_increasing_cap(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "1")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_LOW_REBOUND_ACTIVE_FLOOR", "2")
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_LOW_REBOUND_RESERVE_SLOTS", "2")
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(scalping_scanner, "_scanner_candidate_pre_filter_reason", lambda target: "")
+    monkeypatch.setattr(scalping_scanner, "_should_promote_candidate", lambda *args, **kwargs: True)
+    monkeypatch.setattr(scalping_scanner, "_scanner_real_source_guard_decision", lambda *args, **kwargs: {"blocked": False})
     db = _DB()
     db.records.append(
         SimpleNamespace(
+            stock_code="000001",
+            stock_name="GENERAL",
             status="WATCHING",
             strategy="SCALPING",
             position_tag="SCANNER",
             buy_time=None,
             buy_qty=0,
+            entry_armed_at_epoch=900.0,
         )
     )
     event_bus = _EventBus()
@@ -222,6 +230,11 @@ def test_low_rebound_reserve_does_not_bypass_full_active_cap(monkeypatch):
                 "Name": "LOW",
                 "Price": 10000,
                 "Source": scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE,
+                "LowReboundPct": 3.0,
+                "IntradayLowPrice": 9500,
+                "IntradayHighPrice": 11000,
+                "DistanceFromIntradayHighPct": -9.09,
+                "LowReboundBaseSourceSignature": "VOLUME_SURGE_RAW",
             }
         ],
         {},
@@ -231,10 +244,88 @@ def test_low_rebound_reserve_does_not_bypass_full_active_cap(monkeypatch):
         now_ts=1000.0,
     )
 
-    assert codes == []
-    assert recent == {}
-    assert event_bus.events == []
-    assert len(db.records) == 1
+    assert codes == ["100001"]
+    assert db.records[0].status == "EXPIRED"
+    assert len([record for record in db.records if record.status == "WATCHING"]) == 1
+    assert _event_payloads(event_bus, "COMMAND_WS_UNREG") == [
+        {
+            "codes": ["000001"],
+            "source": "scalping_scanner_low_rebound_floor_replace",
+            "reason": "low_rebound_active_floor",
+        }
+    ]
+    assert _event_payloads(event_bus, "COMMAND_WS_REG") == [
+        {"codes": ["100001"], "source": "scalping_scanner_promote"}
+    ]
+    assert "100001" in recent
+
+
+def test_low_rebound_floor_protects_known_low_rebound_watching(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "2")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_LOW_REBOUND_ACTIVE_FLOOR", "2")
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(scalping_scanner, "_scanner_candidate_pre_filter_reason", lambda target: "")
+    monkeypatch.setattr(scalping_scanner, "_should_promote_candidate", lambda *args, **kwargs: True)
+    monkeypatch.setattr(scalping_scanner, "_scanner_real_source_guard_decision", lambda *args, **kwargs: {"blocked": False})
+    db = _DB()
+    db.records.extend(
+        [
+            SimpleNamespace(
+                stock_code="100000",
+                stock_name="LOW_OLD",
+                status="WATCHING",
+                strategy="SCALPING",
+                position_tag="SCANNER",
+                buy_time=None,
+                buy_qty=0,
+                entry_armed_at_epoch=800.0,
+            ),
+            SimpleNamespace(
+                stock_code="000001",
+                stock_name="GENERAL",
+                status="WATCHING",
+                strategy="SCALPING",
+                position_tag="SCANNER",
+                buy_time=None,
+                buy_qty=0,
+                entry_armed_at_epoch=900.0,
+            ),
+        ]
+    )
+    event_bus = _EventBus()
+    recent_picks = {
+        "100000": {
+            "last_source_signature": [scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE],
+            "last_promoted_at": 900.0,
+        }
+    }
+
+    codes, _ = scalping_scanner.promote_candidates(
+        db,
+        event_bus,
+        [
+            {
+                "Code": "100001",
+                "Name": "LOW_NEW",
+                "Price": 10000,
+                "Source": scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE,
+                "LowReboundPct": 3.0,
+                "IntradayLowPrice": 9500,
+                "IntradayHighPrice": 11000,
+                "DistanceFromIntradayHighPct": -9.09,
+                "LowReboundBaseSourceSignature": "VOLUME_SURGE_RAW",
+            }
+        ],
+        recent_picks,
+        max_new_codes=12,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=1000.0,
+    )
+
+    assert codes == ["100001"]
+    assert db.records[0].status == "WATCHING"
+    assert db.records[1].status == "EXPIRED"
 
 
 def test_promote_candidates_releases_after_window_scanner_cap(monkeypatch):
