@@ -122,6 +122,15 @@ def _scalping_watching_max_active():
     return max(1, min(value, 80))
 
 
+def _low_rebound_reserve_slots():
+    raw = os.getenv("KORSTOCKSCAN_SCALP_SCANNER_LOW_REBOUND_RESERVE_SLOTS", "")
+    try:
+        value = int(str(raw).strip()) if str(raw).strip() else 2
+    except (TypeError, ValueError):
+        value = 2
+    return max(0, min(value, 10))
+
+
 def _scanner_after_buy_window_cap_release_enabled():
     raw = os.getenv("KORSTOCKSCAN_SCANNER_AFTER_BUY_WINDOW_CAP_RELEASE_ENABLED", "")
     text = str(raw).strip().lower()
@@ -524,6 +533,10 @@ def _representative_source(source_set):
 
 def _source_signature(target):
     return tuple(sorted(set(target.get("SourceSet") or [target.get("Source") or "OPEN_TOP"])))
+
+
+def _is_low_rebound_target(target):
+    return LOW_REBOUND_RISING_MISSED_SOURCE in set(_source_signature(target or {}))
 
 
 def _scanner_rate_from_field(target, field_name):
@@ -1760,9 +1773,23 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
             f"active={active_count} max_active={max_active} max_new_codes={max_new_codes}"
         )
         return [], recent_picks
+    low_rebound_candidates_present = any(_is_low_rebound_target(target) for target in ranked_targets)
+    low_rebound_reserved_slots = (
+        min(remaining_slots, _low_rebound_reserve_slots()) if low_rebound_candidates_present else 0
+    )
+    general_slot_limit = remaining_slots - low_rebound_reserved_slots if low_rebound_reserved_slots > 0 else remaining_slots
+    low_rebound_promoted_count = 0
+    general_promoted_count = 0
 
     for target in ranked_targets:
         code = target["Code"]
+        is_low_rebound_target = _is_low_rebound_target(target)
+        if is_low_rebound_target and low_rebound_reserved_slots > 0:
+            if low_rebound_promoted_count >= low_rebound_reserved_slots:
+                continue
+        elif general_promoted_count >= general_slot_limit:
+            continue
+
         pre_filter_reason = _scanner_candidate_pre_filter_reason(target)
         if pre_filter_reason:
             source_guard = {
@@ -1866,16 +1893,27 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
             **source_guard,
             "scanner_promotion_id": f"SCANPROM-{code}-{int(float(now_ts or 0.0) * 1000)}",
             "scanner_promotion_emitted_epoch": f"{float(now_ts or 0.0):.3f}",
+            "scanner_low_rebound_reserved_slots": low_rebound_reserved_slots,
+            "scanner_low_rebound_reserved_promotion": is_low_rebound_target,
         }
         if bool(getattr(TRADING_RULES, "SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED", False)):
             _log_scanner_candidate_event("scalping_scanner_candidate_promoted", target, source_guard)
         _remember_pick(recent_picks, target, now_ts)
         new_codes_found.append(code)
+        if is_low_rebound_target and low_rebound_reserved_slots > 0:
+            low_rebound_promoted_count += 1
+        else:
+            general_promoted_count += 1
         promoted_target_payloads.append(
             _scanner_runtime_target_payload(target, source_guard, record_id=record_id, now_ts=now_ts)
         )
 
         if len(new_codes_found) >= remaining_slots:
+            break
+        if (
+            (low_rebound_reserved_slots <= 0 or low_rebound_promoted_count >= low_rebound_reserved_slots)
+            and general_promoted_count >= general_slot_limit
+        ):
             break
 
     if new_codes_found:

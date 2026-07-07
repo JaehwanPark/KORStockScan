@@ -138,6 +138,105 @@ def test_promote_candidates_limits_new_codes_to_remaining_active_slots(monkeypat
     assert len(db.records) == 2
 
 
+def test_promote_candidates_reserves_two_slots_for_low_rebound(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "3")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_LOW_REBOUND_RESERVE_SLOTS", "2")
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(scalping_scanner, "_scanner_candidate_pre_filter_reason", lambda target: "")
+    monkeypatch.setattr(scalping_scanner, "_should_promote_candidate", lambda *args, **kwargs: True)
+    monkeypatch.setattr(scalping_scanner, "_scanner_real_source_guard_decision", lambda *args, **kwargs: {"blocked": False})
+    db = _DB()
+    event_bus = _EventBus()
+
+    ranked_targets = [
+        {"Code": "000001", "Name": "GENERAL1", "Price": 10000, "Source": "PRICE_JUMP_START"},
+        {"Code": "000002", "Name": "GENERAL2", "Price": 11000, "Source": "PRICE_JUMP_START"},
+        {"Code": "000003", "Name": "GENERAL3", "Price": 12000, "Source": "PRICE_JUMP_START"},
+        {
+            "Code": "100001",
+            "Name": "LOW1",
+            "Price": 10000,
+            "Source": scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE,
+            "LowReboundPct": 3.0,
+            "IntradayLowPrice": 9500,
+            "IntradayHighPrice": 11000,
+            "DistanceFromIntradayHighPct": -9.09,
+            "LowReboundBaseSourceSignature": "VOLUME_SURGE_RAW",
+        },
+        {
+            "Code": "100002",
+            "Name": "LOW2",
+            "Price": 20000,
+            "Source": scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE,
+            "LowReboundPct": 4.0,
+            "IntradayLowPrice": 19000,
+            "IntradayHighPrice": 22000,
+            "DistanceFromIntradayHighPct": -9.09,
+            "LowReboundBaseSourceSignature": "VALUE_TOP",
+        },
+    ]
+
+    codes, _ = scalping_scanner.promote_candidates(
+        db,
+        event_bus,
+        ranked_targets,
+        {},
+        max_new_codes=12,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=1000.0,
+    )
+
+    assert codes == ["000001", "100001", "100002"]
+    assert _event_payloads(event_bus, "COMMAND_WS_REG") == [
+        {"codes": ["000001", "100001", "100002"], "source": "scalping_scanner_promote"}
+    ]
+    promoted_payloads = _event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")
+    assert [payload["code"] for payload in promoted_payloads] == ["000001", "100001", "100002"]
+    assert promoted_payloads[1]["source_signature"] == scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE
+    assert promoted_payloads[1]["actual_order_submitted"] is False
+    assert promoted_payloads[1]["broker_order_forbidden"] is True
+
+
+def test_low_rebound_reserve_does_not_bypass_full_active_cap(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "1")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_LOW_REBOUND_RESERVE_SLOTS", "2")
+    db = _DB()
+    db.records.append(
+        SimpleNamespace(
+            status="WATCHING",
+            strategy="SCALPING",
+            position_tag="SCANNER",
+            buy_time=None,
+            buy_qty=0,
+        )
+    )
+    event_bus = _EventBus()
+
+    codes, recent = scalping_scanner.promote_candidates(
+        db,
+        event_bus,
+        [
+            {
+                "Code": "100001",
+                "Name": "LOW",
+                "Price": 10000,
+                "Source": scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE,
+            }
+        ],
+        {},
+        max_new_codes=12,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=1000.0,
+    )
+
+    assert codes == []
+    assert recent == {}
+    assert event_bus.events == []
+    assert len(db.records) == 1
+
+
 def test_promote_candidates_releases_after_window_scanner_cap(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "2")
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_AFTER_BUY_WINDOW_CAP_RELEASE_START_TIME", "00:00:00")
