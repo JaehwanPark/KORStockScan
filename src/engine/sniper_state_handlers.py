@@ -73,6 +73,7 @@ from src.engine.scalping.rising_missed_one_share_entry import (
     DEFAULT_UPPER_LIMIT_PROXIMITY_BLOCK_PCT,
     FORCED_ENTRY_REASON as RISING_MISSED_FORCED_ENTRY_REASON,
     MAX_ONE_SHARE_ENTRY_PRICE_KRW as RISING_MISSED_MAX_ONE_SHARE_ENTRY_PRICE_KRW,
+    RISING_MISSED_CLASS_RAW,
     collapse_to_one_share_order,
     evaluate_rising_missed_one_share_entry,
     is_forced_rising_missed_one_share_entry,
@@ -534,6 +535,13 @@ _SAME_SYMBOL_SOFT_STOP_TS: dict[str, float] = {}
 _SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS: dict[str, dict] = {}
 _RISING_MISSED_SAME_DAY_REENTRY_RISK: dict[str, dict] = {}
 _RISING_MISSED_REENTRY_RISK_EVENT_CACHE: dict[str, Any] = {
+    "date": "",
+    "path": "",
+    "mtime_ns": 0,
+    "size": 0,
+    "rows_by_code": {},
+}
+_RISING_MISSED_COMPLETED_SCALP_EVENT_CACHE: dict[str, Any] = {
     "date": "",
     "path": "",
     "mtime_ns": 0,
@@ -3217,6 +3225,50 @@ def _evaluate_soft_stop_line_touch_avg_down_defer(
     return {**common, "should_defer": False, "reason": "max_wait_elapsed"}
 
 
+_FIRST_TOUCH_AVGDOWN_BLOCK_STATE_FIELDS = (
+    "first_touch_avgdown_decision_blocked",
+    "first_touch_avgdown_decision_blocked_reason",
+    "first_touch_avgdown_decision_blocked_at",
+    "first_touch_avgdown_exit_defer_state",
+    "first_touch_avgdown_exit_defer_source",
+)
+
+
+def _stop_line_touch_avgdown_exit_defer_fields(
+    stock: dict | None,
+    context_fields: dict | None,
+    *,
+    exit_rule: str | None = None,
+) -> dict:
+    context = context_fields if isinstance(context_fields, dict) else {}
+    sell_intercept_context = str(context.get("sell_intercept_context") or "").strip()
+    rule = str(exit_rule or context.get("exit_rule") or "").strip()
+    rejected_actions = context.get("rejected_actions") or context.get("rejected_action") or ""
+    if isinstance(rejected_actions, (list, tuple, set)):
+        rejected_text = "|".join(str(item) for item in rejected_actions)
+    else:
+        rejected_text = str(rejected_actions or "")
+
+    source = "-"
+    if sell_intercept_context in {"soft_stop_touch_before_grace", "soft_stop_micro_grace"}:
+        source = "soft_stop_micro_grace"
+    elif "exit_now:flow_hold" in rejected_text:
+        source = "flow_hold"
+    elif (
+        rule == "holding_flow_override_defer_exit"
+        or (
+            _safe_int((stock or {}).get("holding_flow_override_defer_count"), 0) > 0
+            and str((stock or {}).get("holding_flow_override_last_action") or "").upper() in {"HOLD", "TRIM"}
+        )
+    ):
+        source = "holding_flow_override"
+
+    return {
+        "exit_defer_state": "active" if source != "-" else "inactive",
+        "exit_defer_source": source,
+    }
+
+
 def _attempt_stop_line_touch_mandatory_avg_down(
     *,
     stock: dict | None,
@@ -3354,6 +3406,33 @@ def _attempt_stop_line_touch_mandatory_avg_down(
         "broker_order_forbidden": False,
         **(context_fields or {}),
     }
+    retry_common_fields.update(
+        _stop_line_touch_avgdown_exit_defer_fields(
+            stock,
+            context_fields,
+            exit_rule=exit_rule,
+        )
+    )
+    if (
+        bool((stock or {}).get("first_touch_avgdown_decision_blocked"))
+        and str((stock or {}).get("first_touch_avgdown_exit_defer_state") or "") == "active"
+        and retry_common_fields.get("exit_defer_state") != "active"
+    ):
+        reason = "first_touch_recheck_exit_defer_inactive"
+        _log_holding_pipeline(
+            stock,
+            code,
+            "stop_line_touch_mandatory_avg_down_blocked",
+            **{
+                **retry_common_fields,
+                "gate_allowed": False,
+                "gate_reason": reason,
+                "block_reason": reason,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+        )
+        return {"attempted": True, "submitted": False, "reason": reason}
     rest_quote_only_recovery = bool(
         (stock or {}).get("holding_rest_quote_only_recovery")
         or (ws_data or {}).get("holding_rest_quote_only_recovery")
@@ -3497,6 +3576,17 @@ def _attempt_stop_line_touch_mandatory_avg_down(
         first_touch_fields = first_touch_decision.get("fields") or {}
         retry_common_fields.update(first_touch_fields)
         if not first_touch_decision.get("allowed"):
+            block_reason = first_touch_decision.get("reason", "first_touch_decision_blocked")
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "first_touch_avgdown_decision_blocked": True,
+                    "first_touch_avgdown_decision_blocked_reason": block_reason,
+                    "first_touch_avgdown_decision_blocked_at": now_ts,
+                    "first_touch_avgdown_exit_defer_state": retry_common_fields.get("exit_defer_state", "inactive"),
+                    "first_touch_avgdown_exit_defer_source": retry_common_fields.get("exit_defer_source", "-"),
+                },
+            )
             _log_holding_pipeline(
                 stock,
                 code,
@@ -3504,8 +3594,8 @@ def _attempt_stop_line_touch_mandatory_avg_down(
                 **{
                     **retry_common_fields,
                     "gate_allowed": False,
-                    "gate_reason": first_touch_decision.get("reason", "first_touch_decision_blocked"),
-                    "block_reason": first_touch_decision.get("reason", "first_touch_decision_blocked"),
+                    "gate_reason": block_reason,
+                    "block_reason": block_reason,
                     "actual_order_submitted": False,
                     "broker_order_forbidden": True,
                     "runtime_effect": True,
@@ -3514,8 +3604,14 @@ def _attempt_stop_line_touch_mandatory_avg_down(
             return {
                 "attempted": True,
                 "submitted": False,
-                "reason": first_touch_decision.get("reason", "first_touch_decision_blocked"),
+                "reason": block_reason,
             }
+
+        if (
+            retry_common_fields.get("exit_defer_state") == "active"
+            and bool((stock or {}).get("first_touch_avgdown_decision_blocked"))
+        ):
+            retry_common_fields["first_touch_recheck_source"] = "exit_defer_polling"
 
         _log_holding_pipeline(
             stock,
@@ -3562,6 +3658,7 @@ def _attempt_stop_line_touch_mandatory_avg_down(
                 f"[STOP_LINE_TOUCH_AVG_DOWN] {stock.get('name') if isinstance(stock, dict) else code}({code}) "
                 "mandatory AVG_DOWN submitted at soft stop touch; sell submit skipped for re-evaluation."
             )
+            _mutate_stock_state(stock, pop_fields=_FIRST_TOUCH_AVGDOWN_BLOCK_STATE_FIELDS)
             return {"attempted": True, "submitted": True, "add_result": add_result}
         if _is_scale_in_qty_or_budget_guard_block(add_result) and _can_auto_exclude_after_scale_in_qty_guard(
             strategy=strategy,
@@ -11858,6 +11955,191 @@ def evaluate_rising_missed_same_day_reentry_guard(code: str, now_ts: float | Non
         }
     )
     return base
+
+
+def _rising_missed_weak_micro_reentry_block_enabled() -> bool:
+    return _env_bool("KORSTOCKSCAN_RISING_MISSED_WEAK_MICRO_REENTRY_BLOCK_ENABLED", True)
+
+
+def _rising_missed_weak_micro_reentry_max_qi() -> float:
+    return max(0.0, _env_float("KORSTOCKSCAN_RISING_MISSED_WEAK_MICRO_REENTRY_MAX_QI", 0.15))
+
+
+def _load_rising_missed_completed_scalp_events(target_date: str) -> dict[str, list[dict]]:
+    path = existing_or_gzip_path(DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl")
+    cache = _RISING_MISSED_COMPLETED_SCALP_EVENT_CACHE
+    if not path.exists():
+        cache.update({"date": target_date, "path": str(path), "mtime_ns": 0, "size": 0, "rows_by_code": {}})
+        return {}
+    stat = path.stat()
+    if (
+        cache.get("date") == target_date
+        and cache.get("path") == str(path)
+        and int(cache.get("mtime_ns") or 0) == int(getattr(stat, "st_mtime_ns", 0) or 0)
+        and int(cache.get("size") or 0) == int(getattr(stat, "st_size", 0) or 0)
+    ):
+        return cache.get("rows_by_code") or {}
+
+    rows_by_code: dict[str, list[dict]] = {}
+    for payload in iter_jsonl(path, errors="ignore"):
+        if str(payload.get("stage") or "") != "sell_completed":
+            continue
+        fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+        code = str(payload.get("stock_code") or fields.get("stock_code") or "").strip()[:6]
+        if not code:
+            continue
+        exit_rule = str(fields.get("exit_rule") or "").strip()
+        if not exit_rule.startswith("scalp_"):
+            continue
+        completed_at = _parse_iso_epoch(payload.get("emitted_at"))
+        if completed_at <= 0.0:
+            continue
+        profit_raw = fields.get("profit_rate")
+        if not _field_has_numeric_value(profit_raw):
+            continue
+        rows_by_code.setdefault(code, []).append(
+            {
+                "code": code,
+                "stock_name": payload.get("stock_name") or fields.get("stock_name") or "-",
+                "record_id": payload.get("record_id") or fields.get("record_id") or "-",
+                "completed_at": completed_at,
+                "profit_rate": _safe_float(profit_raw, 0.0),
+                "sell_price": _safe_int(fields.get("sell_price"), 0),
+                "exit_rule": exit_rule,
+                "exit_decision_source": str(fields.get("exit_decision_source") or "-"),
+            }
+        )
+    for rows in rows_by_code.values():
+        rows.sort(key=lambda row: float(row.get("completed_at") or 0.0))
+    cache.update(
+        {
+            "date": target_date,
+            "path": str(path),
+            "mtime_ns": int(getattr(stat, "st_mtime_ns", 0) or 0),
+            "size": int(getattr(stat, "st_size") or 0),
+            "rows_by_code": rows_by_code,
+        }
+    )
+    return rows_by_code
+
+
+def _rising_missed_prior_completed_scalp_trades(code: str, now_ts: float | None) -> list[dict]:
+    norm_code = str(code or "").strip()[:6]
+    if not norm_code:
+        return []
+    now_value = float(now_ts or time.time())
+    target_date = datetime.fromtimestamp(now_value).date().isoformat()
+    rows = _load_rising_missed_completed_scalp_events(target_date).get(norm_code, [])
+    return [
+        row
+        for row in rows
+        if 0.0 < _safe_float(row.get("completed_at"), 0.0) <= now_value
+    ]
+
+
+def _evaluate_rising_missed_same_symbol_weak_micro_reentry_block(
+    *,
+    stock: dict | None,
+    code: str,
+    latency_gate: dict | None,
+    orderbook_fields: dict | None,
+    now_ts: float | None,
+) -> dict:
+    enabled = _rising_missed_weak_micro_reentry_block_enabled()
+    base = {
+        "blocked": False,
+        "reason": "pass",
+        "block_reason": "pass",
+        "rising_missed_weak_micro_reentry_block_enabled": enabled,
+        "threshold_family": "rising_missed_same_symbol_weak_micro_reentry_guard",
+        "decision_authority": "real_scalping_rising_missed_pre_submit_guard",
+        "metric_role": "safety_veto",
+        "window_policy": "same_day_intraday_runtime_state",
+        "sample_floor": "not_applicable_runtime_guard",
+        "primary_decision_metric": "orderbook_micro_qi",
+        "source_quality_gate": "prior_completed_trade_and_pre_submit_micro_fields_present",
+        "runtime_effect": True,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "allowed_runtime_apply": False,
+        "forbidden_uses": TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
+    }
+    if not enabled:
+        return {**base, "reason": "disabled", "block_reason": "disabled"}
+    if not isinstance(stock, dict):
+        return {**base, "reason": "missing_stock", "block_reason": "missing_stock"}
+    if not is_forced_rising_missed_one_share_entry(stock, {"forced_entry_reason": RISING_MISSED_FORCED_ENTRY_REASON}):
+        return {**base, "reason": "not_forced_rising_missed_entry", "block_reason": "not_forced_rising_missed_entry"}
+
+    promotion_reason = str(stock.get("scanner_promotion_reason") or "").strip()
+    source_signature = str(stock.get("source_signature") or "").strip()
+    source_tokens = _scanner_rising_source_signature_set(source_signature)
+    rising_class = str(stock.get("rising_missed_class") or RISING_MISSED_CLASS_RAW).strip()
+    prior_reason = str(stock.get("rising_missed_prior_reason") or "prior_not_attached").strip()
+    if promotion_reason != "price_jump_start_acceleration":
+        return {**base, "reason": "promotion_reason_not_price_jump_start", "block_reason": "promotion_reason_not_price_jump_start"}
+    if "PRICE_JUMP_START" not in source_tokens or "LOW_REBOUND_RISING_MISSED" in source_tokens:
+        return {**base, "reason": "source_signature_not_strict_price_jump_start", "block_reason": "source_signature_not_strict_price_jump_start"}
+    if rising_class != RISING_MISSED_CLASS_RAW:
+        return {**base, "reason": "rising_missed_class_not_raw", "block_reason": "rising_missed_class_not_raw"}
+    if prior_reason != "prior_not_attached":
+        return {**base, "reason": "prior_reason_not_unattached", "block_reason": "prior_reason_not_unattached"}
+
+    prior_trades = _rising_missed_prior_completed_scalp_trades(code, now_ts)
+    profitable_priors = [row for row in prior_trades if _safe_float(row.get("profit_rate"), 0.0) > 0.0]
+    if not profitable_priors:
+        return {
+            **base,
+            "reason": "no_prior_profitable_scalp_completion",
+            "block_reason": "no_prior_profitable_scalp_completion",
+            "prior_completed_scalp_trade_count": len(prior_trades),
+        }
+    latest_prior = profitable_priors[-1]
+
+    latency_fields = latency_gate if isinstance(latency_gate, dict) else {}
+    stability = latency_fields.get("orderbook_stability") if isinstance(latency_fields.get("orderbook_stability"), dict) else {}
+    unstable_quote_observed = _boolish_true(stability.get("unstable_quote_observed"))
+    submit_reason = str(latency_fields.get("effective_reason") or latency_fields.get("reason") or "").strip()
+    micro_fields = orderbook_fields if isinstance(orderbook_fields, dict) else {}
+    micro_state = str(micro_fields.get("orderbook_micro_state") or "").strip().lower()
+    wide_state = str(micro_fields.get("orderbook_micro_wide_180s_state") or "").strip().lower()
+    qi_max = _rising_missed_weak_micro_reentry_max_qi()
+    qi_raw = micro_fields.get("orderbook_micro_qi")
+    qi_present = _field_has_numeric_value(qi_raw)
+    qi = _safe_float(qi_raw, 0.0)
+    block = bool(
+        unstable_quote_observed
+        and micro_state == "neutral"
+        and wide_state == "mixed"
+        and qi_present
+        and qi <= qi_max
+        and submit_reason == "caution_normal_entry_allowed"
+    )
+    fields = {
+        **base,
+        "blocked": block,
+        "reason": "same_symbol_reentry_weak_microstructure" if block else "weak_micro_reentry_context_not_matched",
+        "block_reason": "same_symbol_reentry_weak_microstructure" if block else "weak_micro_reentry_context_not_matched",
+        "scanner_promotion_reason": promotion_reason or "-",
+        "source_signature": source_signature or "-",
+        "rising_missed_class": rising_class or "-",
+        "rising_missed_prior_reason": prior_reason or "-",
+        "prior_completed_scalp_trade_count": len(prior_trades),
+        "prior_profitable_scalp_trade_count": len(profitable_priors),
+        "prior_record_id": latest_prior.get("record_id", "-"),
+        "prior_profit_rate": f"{_safe_float(latest_prior.get('profit_rate'), 0.0):+.2f}",
+        "prior_sell_price": latest_prior.get("sell_price", 0),
+        "prior_exit_rule": latest_prior.get("exit_rule", "-"),
+        "prior_completed_at": latest_prior.get("completed_at", "-"),
+        "unstable_quote_observed": unstable_quote_observed,
+        "unstable_reasons": stability.get("unstable_reasons") or "-",
+        "orderbook_micro_state": micro_state or "-",
+        "orderbook_micro_wide_180s_state": wide_state or "-",
+        "orderbook_micro_qi": f"{qi:.6f}" if qi_present else "-",
+        "rising_missed_weak_micro_reentry_max_qi": f"{qi_max:.6f}",
+        "latency_submit_reason": submit_reason or "-",
+    }
+    return fields
 
 
 def _resolve_exit_decision_source(
@@ -26875,6 +27157,58 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             actual_order_submitted=False,
             broker_order_forbidden=True,
             extra_fields=weak_ai_micro_entry_block,
+        )
+        return False
+    weak_micro_reentry_block = _evaluate_rising_missed_same_symbol_weak_micro_reentry_block(
+        stock=stock,
+        code=code,
+        latency_gate=latency_gate,
+        orderbook_fields=entry_orderbook_micro_fields,
+        now_ts=now_ts,
+    )
+    if forced_rising_missed_one_share and weak_micro_reentry_block.get("blocked"):
+        log_info(
+            f"[RISING_MISSED_WEAK_MICRO_REENTRY_BLOCK] {stock.get('name')}({code}) "
+            f"prior={weak_micro_reentry_block.get('prior_record_id')} "
+            f"qi={weak_micro_reentry_block.get('orderbook_micro_qi')} "
+            f"reason={weak_micro_reentry_block.get('block_reason')}"
+        )
+        _mutate_stock_state(
+            stock,
+            pop_fields=[
+                "rising_missed_one_share_entry_forced",
+                "rising_missed_one_share_scout",
+                "rising_missed_scout_upgrade_pending",
+                "forced_entry_qty",
+                "forced_entry_reason",
+                "target_buy_price",
+            ],
+        )
+        clear_signal_reference(stock)
+        _log_entry_pipeline(
+            stock,
+            code,
+            "rising_missed_same_symbol_weak_micro_reentry_blocked",
+            forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON,
+            forced_entry_qty=forced_rising_missed_scout_qty,
+            **_merge_entry_pipeline_field_groups(
+                latency_price_snapshot,
+                entry_orderbook_micro_fields,
+                weak_micro_reentry_block,
+            ),
+        )
+        _emit_scalp_entry_adm_snapshot(
+            stock,
+            code,
+            "rising_missed_same_symbol_weak_micro_reentry_blocked",
+            ai_score=latency_signal_score,
+            chosen_action="WAIT_REQUOTE",
+            latency_gate=latency_gate,
+            price_snapshot=latency_price_snapshot,
+            orderbook_fields=entry_orderbook_micro_fields,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            extra_fields=weak_micro_reentry_block,
         )
         return False
     if forced_rising_missed_one_share:

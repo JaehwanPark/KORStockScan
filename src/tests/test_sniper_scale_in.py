@@ -43,9 +43,15 @@ def _clear_scalp_loss_reentry_state(request, monkeypatch):
         )
     state_handlers._SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS.clear()
     state_handlers._SCALP_LOSS_REENTRY_EVENT_CACHE.update({"date": None, "events": []})
+    state_handlers._RISING_MISSED_COMPLETED_SCALP_EVENT_CACHE.update(
+        {"date": "", "path": "", "mtime_ns": 0, "size": 0, "rows_by_code": {}}
+    )
     yield
     state_handlers._SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS.clear()
     state_handlers._SCALP_LOSS_REENTRY_EVENT_CACHE.update({"date": None, "events": []})
+    state_handlers._RISING_MISSED_COMPLETED_SCALP_EVENT_CACHE.update(
+        {"date": "", "path": "", "mtime_ns": 0, "size": 0, "rows_by_code": {}}
+    )
 
 
 class _DummySession:
@@ -1624,6 +1630,158 @@ def test_rising_missed_same_day_reentry_guard_downgrades_realized_avgdown_profit
     assert decision["reentry_action"] == "low_priority"
     assert decision["watching_budget_priority"] == "low"
     assert decision["last_exit_profit_rate"] == 0.22
+
+
+def _write_sell_completed_event(data_dir, *, code, name, record_id, emitted_at, profit_rate):
+    event_dir = data_dir / "pipeline_events"
+    event_dir.mkdir(parents=True)
+    target_date = emitted_at.split("T", 1)[0]
+    payload = {
+        "stage": "sell_completed",
+        "stock_code": code,
+        "stock_name": name,
+        "record_id": record_id,
+        "emitted_at": emitted_at,
+        "fields": {
+            "sell_price": "14660",
+            "profit_rate": profit_rate,
+            "exit_rule": "scalp_trailing_take_profit",
+            "exit_decision_source": "HOLDING_FLOW_OVERRIDE",
+        },
+    }
+    (event_dir / f"pipeline_events_{target_date}.jsonl").write_text(
+        json.dumps(payload, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _weak_rising_missed_reentry_stock(**overrides):
+    stock = {
+        "id": 15737,
+        "name": "WEAK_REENTRY",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "rising_missed_one_share_entry_forced": True,
+        "rising_missed_one_share_scout": True,
+        "forced_entry_qty": 6,
+        "forced_entry_reason": FORCED_ENTRY_REASON,
+        "scanner_promotion_reason": "price_jump_start_acceleration",
+        "source_signature": "OPEN_TOP,PRICE_JUMP_START,REALTIME_RANK_START,VOLUME_SURGE_POSITIVE",
+        "rising_missed_class": "rising_missed_raw",
+        "rising_missed_prior_reason": "prior_not_attached",
+    }
+    stock.update(overrides)
+    return stock
+
+
+def test_rising_missed_weak_micro_reentry_blocks_prior_profitable_same_symbol(monkeypatch, tmp_path):
+    data_dir = tmp_path / "data"
+    _write_sell_completed_event(
+        data_dir,
+        code="153890",
+        name="져스텍",
+        record_id=15665,
+        emitted_at="2026-07-07T12:56:04",
+        profit_rate="+3.27",
+    )
+    monkeypatch.setattr(state_handlers, "DATA_DIR", data_dir)
+    now_ts = datetime(2026, 7, 7, 13, 0, 0).timestamp()
+
+    decision = state_handlers._evaluate_rising_missed_same_symbol_weak_micro_reentry_block(
+        stock=_weak_rising_missed_reentry_stock(),
+        code="153890",
+        now_ts=now_ts,
+        latency_gate={
+            "reason": "caution_normal_entry_allowed",
+            "orderbook_stability": {
+                "unstable_quote_observed": True,
+                "unstable_reasons": "fr_10s,print_quote_alignment",
+            },
+        },
+        orderbook_fields={
+            "orderbook_micro_state": "neutral",
+            "orderbook_micro_wide_180s_state": "mixed",
+            "orderbook_micro_qi": 0.125,
+        },
+    )
+
+    assert decision["blocked"] is True
+    assert decision["block_reason"] == "same_symbol_reentry_weak_microstructure"
+    assert decision["prior_record_id"] == 15665
+    assert decision["prior_profit_rate"] == "+3.27"
+    assert decision["broker_order_forbidden"] is True
+
+
+def test_rising_missed_weak_micro_reentry_allows_first_same_symbol_entry(monkeypatch, tmp_path):
+    monkeypatch.setattr(state_handlers, "DATA_DIR", tmp_path / "data")
+    now_ts = datetime(2026, 7, 7, 12, 0, 0).timestamp()
+
+    decision = state_handlers._evaluate_rising_missed_same_symbol_weak_micro_reentry_block(
+        stock=_weak_rising_missed_reentry_stock(),
+        code="153890",
+        now_ts=now_ts,
+        latency_gate={
+            "reason": "caution_normal_entry_allowed",
+            "orderbook_stability": {"unstable_quote_observed": True, "unstable_reasons": "fr_10s"},
+        },
+        orderbook_fields={
+            "orderbook_micro_state": "neutral",
+            "orderbook_micro_wide_180s_state": "mixed",
+            "orderbook_micro_qi": 0.075499,
+        },
+    )
+
+    assert decision["blocked"] is False
+    assert decision["block_reason"] == "no_prior_profitable_scalp_completion"
+
+
+def test_rising_missed_weak_micro_reentry_allows_higher_qi_and_low_rebound(monkeypatch, tmp_path):
+    data_dir = tmp_path / "data"
+    _write_sell_completed_event(
+        data_dir,
+        code="002990",
+        name="금호건설",
+        record_id=15662,
+        emitted_at="2026-07-07T10:34:00",
+        profit_rate="+3.53",
+    )
+    monkeypatch.setattr(state_handlers, "DATA_DIR", data_dir)
+    now_ts = datetime(2026, 7, 7, 11, 0, 0).timestamp()
+    latency_gate = {
+        "reason": "caution_normal_entry_allowed",
+        "orderbook_stability": {"unstable_quote_observed": True, "unstable_reasons": "fr_10s"},
+    }
+
+    higher_qi = state_handlers._evaluate_rising_missed_same_symbol_weak_micro_reentry_block(
+        stock=_weak_rising_missed_reentry_stock(name="금호건설"),
+        code="002990",
+        now_ts=now_ts,
+        latency_gate=latency_gate,
+        orderbook_fields={
+            "orderbook_micro_state": "neutral",
+            "orderbook_micro_wide_180s_state": "mixed",
+            "orderbook_micro_qi": 0.230769,
+        },
+    )
+    low_rebound = state_handlers._evaluate_rising_missed_same_symbol_weak_micro_reentry_block(
+        stock=_weak_rising_missed_reentry_stock(
+            name="넥센",
+            source_signature="LOW_REBOUND_RISING_MISSED,PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        ),
+        code="005720",
+        now_ts=now_ts,
+        latency_gate=latency_gate,
+        orderbook_fields={
+            "orderbook_micro_state": "neutral",
+            "orderbook_micro_wide_180s_state": "mixed",
+            "orderbook_micro_qi": 0.10,
+        },
+    )
+
+    assert higher_qi["blocked"] is False
+    assert higher_qi["block_reason"] == "weak_micro_reentry_context_not_matched"
+    assert low_rebound["blocked"] is False
+    assert low_rebound["block_reason"] == "source_signature_not_strict_price_jump_start"
 
 
 def test_rising_missed_one_share_hook_blocks_price_above_cap_without_submit(monkeypatch):
@@ -22227,6 +22385,173 @@ def test_stop_line_touch_first_touch_avgdown_decision_blocks_submit(monkeypatch)
     assert blocked["broker_order_forbidden"] is True
     assert blocked["first_touch_avgdown_decision_allowed"] is False
     assert blocked["first_touch_avgdown_repeated_blocker_count"] == 9
+
+
+def test_stop_line_touch_avgdown_rechecks_after_exit_defer_block(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=True,
+        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=3,
+    )
+    stock = {
+        "id": 15647,
+        "code": "399720",
+        "name": "가온칩스",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 45_000,
+        "buy_qty": 1,
+        "actual_order_submitted": True,
+        **_fresh_holding_score_fields(72, now_ts=1_000.0),
+    }
+    pipeline_events = []
+    add_calls = []
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": True, "reason": "ok"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_process_scale_in_action",
+        lambda **kwargs: add_calls.append(kwargs) or {"return_code": "0", "ord_no": "RECHECK1"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: pipeline_events.append((stage, fields)),
+    )
+
+    first = state_handlers._attempt_stop_line_touch_mandatory_avg_down(
+        stock=stock,
+        code="399720",
+        ws_data={"curr": 43_500, "best_bid": 43_000, "best_ask": 43_700},
+        strategy="SCALPING",
+        market_regime="NORMAL",
+        admin_id=1,
+        sell_reason_type="LOSS",
+        exit_rule="scalp_soft_stop_pct",
+        profit_rate=-3.33,
+        peak_profit=0.41,
+        current_ai_score=72,
+        held_sec=610,
+        dynamic_stop_pct=-3.00,
+        now_ts=1_000.0,
+        context_fields={"sell_intercept_context": "soft_stop_touch_before_grace"},
+    )
+    second = state_handlers._attempt_stop_line_touch_mandatory_avg_down(
+        stock=stock,
+        code="399720",
+        ws_data={"curr": 43_550, "best_bid": 43_540, "best_ask": 43_550},
+        strategy="SCALPING",
+        market_regime="NORMAL",
+        admin_id=1,
+        sell_reason_type="LOSS",
+        exit_rule="scalp_soft_stop_pct",
+        profit_rate=-3.22,
+        peak_profit=0.41,
+        current_ai_score=72,
+        held_sec=620,
+        dynamic_stop_pct=-3.00,
+        now_ts=1_010.0,
+        context_fields={"sell_intercept_context": "soft_stop_touch_before_grace"},
+    )
+
+    assert first == {
+        "attempted": True,
+        "submitted": False,
+        "reason": "liquidity_or_spread_block",
+    }
+    assert second["submitted"] is True
+    assert add_calls[0]["action"]["reason"] == "stop_line_touch_mandatory_avg_down"
+    assert "first_touch_avgdown_decision_blocked" not in stock
+    blocked_events = [
+        fields
+        for stage, fields in pipeline_events
+        if stage == "stop_line_touch_first_touch_avgdown_decision_blocked"
+    ]
+    assert blocked_events[-1]["exit_defer_state"] == "active"
+    assert blocked_events[-1]["exit_defer_source"] == "soft_stop_micro_grace"
+    submitted = [
+        fields
+        for stage, fields in pipeline_events
+        if stage == "stop_line_touch_mandatory_avg_down_submitted"
+    ][-1]
+    assert submitted["actual_order_submitted"] is True
+    assert submitted["first_touch_recheck_source"] == "exit_defer_polling"
+
+
+def test_stop_line_touch_avgdown_recheck_blocks_when_exit_defer_inactive(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=True,
+        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=3,
+    )
+    stock = {
+        "id": 15648,
+        "code": "399721",
+        "name": "EXIT_NOW",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 45_000,
+        "buy_qty": 1,
+        "actual_order_submitted": True,
+        "first_touch_avgdown_decision_blocked": True,
+        "first_touch_avgdown_exit_defer_state": "active",
+        "first_touch_avgdown_exit_defer_source": "soft_stop_micro_grace",
+        "recent_scale_in_exit_candidate_rule": "holding_flow_override_defer_exit",
+        "recent_scale_in_exit_candidate_stage": "holding_flow_override_defer_exit",
+        "recent_scale_in_exit_candidate_ts": 990.0,
+        **_fresh_holding_score_fields(72, now_ts=1_000.0),
+    }
+    pipeline_events = []
+    add_calls = []
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": True, "reason": "ok"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_process_scale_in_action",
+        lambda **kwargs: add_calls.append(kwargs) or {"return_code": "0", "ord_no": "NOPE"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: pipeline_events.append((stage, fields)),
+    )
+
+    result = state_handlers._attempt_stop_line_touch_mandatory_avg_down(
+        stock=stock,
+        code="399721",
+        ws_data={"curr": 43_550, "best_bid": 43_540, "best_ask": 43_550},
+        strategy="SCALPING",
+        market_regime="NORMAL",
+        admin_id=1,
+        sell_reason_type="LOSS",
+        exit_rule="scalp_soft_stop_pct",
+        profit_rate=-3.22,
+        peak_profit=0.41,
+        current_ai_score=72,
+        held_sec=620,
+        dynamic_stop_pct=-3.00,
+        now_ts=1_010.0,
+        context_fields={"rejected_actions": ["hold_wait:exit_now"]},
+    )
+
+    assert result == {
+        "attempted": True,
+        "submitted": False,
+        "reason": "first_touch_recheck_exit_defer_inactive",
+    }
+    assert add_calls == []
+    by_stage = {stage: fields for stage, fields in pipeline_events}
+    blocked = by_stage["stop_line_touch_mandatory_avg_down_blocked"]
+    assert blocked["exit_defer_state"] == "inactive"
+    assert blocked["exit_defer_source"] == "-"
+    assert blocked["actual_order_submitted"] is False
+    assert blocked["broker_order_forbidden"] is True
 
 
 def test_rising_missed_first_touch_avgdown_uses_current_strength_context(monkeypatch):
