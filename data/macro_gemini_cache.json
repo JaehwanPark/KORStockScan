@@ -1,83 +1,85 @@
 {
-  "bundle_as_of": "2026-07-05T22:20:14Z",
+  "bundle_as_of": "2026-07-06T22:20:18Z",
   "sp500": {
     "name": "S&P 500",
-    "value": 7483.24,
-    "prev_value": 7483.23,
-    "change": 0.01,
-    "change_pct": 0.0,
-    "as_of": "2026-07-02T20:00:00Z",
-    "source": "AP News"
+    "value": 7537.43,
+    "prev_value": 7483.24,
+    "change": 54.19,
+    "change_pct": 0.72,
+    "as_of": "2026-07-06T20:00:00Z",
+    "source": "The Washington Post"
   },
   "nasdaq": {
-    "name": "NASDAQ Composite",
-    "value": 25832.67,
-    "prev_value": 26040.03,
-    "change": -207.36,
-    "change_pct": -0.8,
-    "as_of": "2026-07-02T20:00:00Z",
-    "source": "AP News"
+    "name": "NASDAQ",
+    "value": 26121.16,
+    "prev_value": 25832.67,
+    "change": 288.49,
+    "change_pct": 1.12,
+    "as_of": "2026-07-06T20:00:00Z",
+    "source": "The Washington Post"
   },
   "vix": {
     "name": "VIX",
-    "value": 16.15,
-    "prev_value": 16.59,
-    "change": -0.44,
-    "change_pct": -2.65,
-    "as_of": "2026-07-02T20:15:00Z",
-    "source": "Cboe Global Markets"
+    "value": 15.99,
+    "prev_value": 15.81,
+    "change": 0.18,
+    "change_pct": 1.14,
+    "as_of": "2026-07-06T20:00:00Z",
+    "source": "Cboe"
   },
   "us10y": {
-    "name": "US 10-Year Treasury Yield",
-    "value": 4.49,
-    "prev_value": 4.48,
-    "change": 0.01,
+    "name": "US10Y",
+    "value": 4.48,
+    "prev_value": 4.49,
+    "change": -0.01,
     "change_pct": null,
-    "as_of": "2026-07-02T20:00:00Z",
+    "as_of": "2026-07-06T20:00:00Z",
     "source": "Trading Economics"
   },
   "brent": {
-    "name": "Brent Crude",
-    "value": 71.87,
-    "prev_value": 71.8,
-    "change": 0.07,
-    "change_pct": 0.1,
-    "as_of": "2026-07-03T20:00:00Z",
-    "source": "Crux Investor"
+    "name": "BRENT",
+    "value": 71.8,
+    "prev_value": 72.1,
+    "change": -0.3,
+    "change_pct": -0.42,
+    "as_of": "2026-07-06T20:00:00Z",
+    "source": "Trading Economics"
   },
   "headlines": [
     {
-      "title": "Trump & Netanyahu to Meet as Iran Faces Life After Khamenei",
-      "source": "ILTV Israel News",
-      "published_at": "2026-07-05T15:20:00Z",
-      "url": "https://www.youtube.com/watch?v=NpL4gbVyzzc"
+      "title": "Rebounding AI stocks send the S&P 500 within 1% of its record",
+      "source": "Los Angeles Times",
+      "published_at": "2026-07-06T20:50:00Z",
+      "url": "https://www.latimes.com"
     },
     {
-      "title": "Iran-US war latest: Mourner calls for Trump's death as hundreds of thousands commemorate Ali Khamenei",
-      "source": "The Independent",
-      "published_at": "2026-07-05T21:00:00Z",
-      "url": "https://www.independent.co.uk/news/world/americas/us-politics/iran-us-war-latest-trump-khamenei-b2713854.html"
+      "title": "Nasdaq Rings Opening Bell at the White House to Mark America 250 and the First Trading Day for Trump Accounts",
+      "source": "Nasdaq",
+      "published_at": "2026-07-06T13:30:00Z",
+      "url": "https://www.nasdaq.com"
     },
     {
-      "title": "Khamenei's other sons appear at his funeral in Iran as new supreme leader remains in hiding",
-      "source": "The Washington Post",
-      "published_at": "2026-07-05T16:35:00Z",
-      "url": "https://www.washingtonpost.com/"
+      "title": "Yield Curve Positive, VIX Calm — But Cracks Are Forming",
+      "source": "The Weekly Investor",
+      "published_at": "2026-07-06T12:00:00Z",
+      "url": "https://theweeklyinvestor.com"
     },
     {
-      "title": "Russia says Trump 'reaffirmed readiness' to help end Ukraine war in phone call with Putin",
-      "source": "Anadolu Ajansı",
-      "published_at": "2026-07-05T05:20:00Z",
-      "url": "https://www.aa.com.tr/"
+      "title": "What impact have Trump's tariffs had on imports?",
+      "source": "BBVA Research",
+      "published_at": "2026-07-06T08:00:00Z",
+      "url": "https://www.bbvaresearch.com"
     },
     {
-      "title": "Netanyahu says Christian villages in Lebanon have asked to be 'annexed' by Israel",
-      "source": "L'Orient Today",
-      "published_at": "2026-07-05T11:40:00Z",
-      "url": "https://today.lorientlejour.com/"
+      "title": "Oil Prices Ease As OPEC+ Aims to Bump Up Output from August; Brent Below $72",
+      "source": "HDFCSky",
+      "published_at": "2026-07-06T11:05:00Z",
+      "url": "https://hdfcsky.com"
     }
   ],
   "notes": [
-    "U.S. stock and bond markets observed the Independence Day holiday on Friday, July 3, 2026. Equities data reflects the final close on Thursday, July 2, 2026."
+    "U.S. indices recorded solid gains on Monday led by rebounding AI and semiconductor stocks.",
+    "Brent crude oil prices declined below $72 per barrel amid eased Middle East geopolitical tensions and news of OPEC+ aiming to bump up production targets for August.",
+    "Market participants continue to analyze the economic implications of proposed Section 301 tariffs on global imports and broader supply chains."
   ]
 }
