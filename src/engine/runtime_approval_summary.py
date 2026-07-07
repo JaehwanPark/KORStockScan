@@ -97,6 +97,7 @@ _FAMILY_DESCRIPTIONS = {
     "pre_submit_price_guard": "broker 제출 직전 quote stale, spread, passive probe 가격품질 문제를 막는 hard safety 축",
     "dynamic_entry_price_resolver": "bid-1/bid-2/bid-3/best_bid/AI/reference/timeout 후보별 체결품질과 EV를 비교하는 진입가 튜닝 축",
     "entry_split_order_plan": "기존 requested_qty를 보존하면서 planned_orders를 bucket별 leg/price offset/비중 policy로 분해하는 submit 직전 튜닝 축",
+    "scale_in_split_order_plan": "기존 scale-in qty를 보존하면서 AVG_DOWN 물타기 주문을 leg/price offset policy로 분해하는 scale-in 직전 튜닝 축",
     "entry_price_execution_quality": "real-only 제출/체결/취소/late-fill/partial/full fill 품질을 감사하는 실행품질 축",
     "latency_classifier_runtime_profile": "latency SAFE/CAUTION/DANGER classifier와 bounded submit recovery canary를 분리 적용하는 진입 실행품질 축",
     "score65_74_recovery_probe": "family id는 score65_74로 유지하지만 현 runtime floor 기준 AI 점수 60~74 WAIT 구간 중 수급/가속 조건이 좋은 후보를 기본 신규 BUY sizing으로 회수하는 축",
@@ -138,6 +139,7 @@ _BASELINE_APPLICATION = {
     "pre_submit_price_guard": "기존 적용/검증 유지: 제출 직전 hard safety guard이며 auto_bounded_live 후보 아님",
     "dynamic_entry_price_resolver": "선택 시 다음 PREOPEN dynamic entry price resolver env만 bounded 적용, submit safety guard 우선",
     "entry_split_order_plan": "선택 시 다음 PREOPEN entry split order policy env/file/version만 적용, requested_qty 산정과 broker/account/order/quantity/cooldown guard는 변경 없음",
+    "scale_in_split_order_plan": "선택 시 다음 PREOPEN scale-in split order policy env/file/version만 적용, scale-in qty 산정과 broker/account/order/quantity/cooldown guard는 변경 없음",
     "entry_price_execution_quality": "real-only audit: submit/fill/cancel 품질 기록만 수행, runtime threshold apply 권한 없음",
     "latency_classifier_runtime_profile": "선택 시 다음 PREOPEN latency classifier/recovery env만 적용",
     "holding_exit_decision_matrix_advisory": "관찰/리포트 only: advisory live 적용 아님",
@@ -2087,6 +2089,11 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
     swing_lifecycle_bucket_discovery_summary = _swing_lifecycle_bucket_discovery_summary(ev_report)
     institutional_flow_summary = _institutional_flow_context_summary(ev_report)
     microstructure_reaction_summary = _microstructure_reaction_context_summary(ev_report)
+    scale_in_split_order_plan_summary = (
+        ev_report.get("scale_in_split_order_plan")
+        if isinstance(ev_report.get("scale_in_split_order_plan"), dict)
+        else {}
+    )
     source_load_warnings = [
         f"source_load_{item.get('status')}:{Path(str(item.get('path') or '')).name}"
         for item in _JSON_LOAD_DIAGNOSTICS
@@ -2108,6 +2115,11 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
             "scalp_entry_action_decision_matrix": scalp_entry_adm_path,
             "entry_split_order_plan": (
                 (ev_report.get("sources") or {}).get("entry_split_order_plan")
+                if isinstance(ev_report.get("sources"), dict)
+                else None
+            ),
+            "scale_in_split_order_plan": (
+                (ev_report.get("sources") or {}).get("scale_in_split_order_plan")
                 if isinstance(ev_report.get("sources"), dict)
                 else None
             ),
@@ -2161,6 +2173,18 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
                 "ready_for_daily_policy_tuning"
             ),
             "scalp_entry_adm_warnings": scalp_entry_adm_summary.get("warnings"),
+            "scale_in_split_order_plan_counterfactual_selected_count": scale_in_split_order_plan_summary.get(
+                "counterfactual_selected_count"
+            ),
+            "scale_in_split_order_plan_baseline_fallback_count": scale_in_split_order_plan_summary.get(
+                "baseline_fallback_count"
+            ),
+            "scale_in_split_order_plan_price_observation_join_gap_count": scale_in_split_order_plan_summary.get(
+                "price_observation_join_gap_count"
+            ),
+            "scale_in_split_order_plan_market_qty_split_only_count": scale_in_split_order_plan_summary.get(
+                "market_qty_split_only_count"
+            ),
             "buy_funnel_sentinel_primary": (
                 (ev_report.get("buy_funnel_sentinel") or {}).get("primary")
                 if isinstance(ev_report.get("buy_funnel_sentinel"), dict)

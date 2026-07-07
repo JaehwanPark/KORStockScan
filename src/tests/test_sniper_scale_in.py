@@ -5025,6 +5025,98 @@ def test_execute_scale_in_order_failure_no_pending(monkeypatch):
     assert stock.get("pending_add_type") is None
 
 
+def test_execute_scale_in_order_partial_split_submit_keeps_pending(monkeypatch):
+    state_handlers.KIWOOM_TOKEN = "test"
+
+    monkeypatch.setattr(
+        state_handlers,
+        "describe_dynamic_scale_in_qty",
+        lambda *args, **kwargs: {
+            "qty": 4,
+            "template_qty": 4,
+            "cap_qty": 4,
+            "would_qty": 4,
+            "effective_qty": 4,
+            "qty_reason": "test",
+            "floor_applied": False,
+        },
+    )
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 100000)
+    monkeypatch.setattr(
+        state_handlers,
+        "_resolve_scalp_cash_budget_context",
+        lambda code, unit_price, fallback_orderable_amount: {
+            "budget_base": fallback_orderable_amount,
+            "budget_source": "test",
+            "account_deposit": fallback_orderable_amount,
+            "cash_orderable_amount": fallback_orderable_amount,
+            "cash_orderable_qty_cap": None,
+            "kt00011_error": "",
+        },
+    )
+    monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", lambda *args, **kwargs: None)
+    monkeypatch.setattr(state_handlers, "record_add_history_event", lambda *args, **kwargs: True)
+    monkeypatch.setattr(state_handlers, "_publish_greenfield_stage_notice", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        state_handlers,
+        "resolve_scale_in_order_price",
+        lambda **kwargs: {
+            "allowed": True,
+            "reason": "test",
+            "order_price": 10000,
+            "best_bid": 10000,
+            "best_ask": 10010,
+            "price_source": "test_limit",
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "apply_scale_in_split_order_policy",
+        lambda order, **kwargs: (
+            [
+                {**order, "qty": 2, "price": 10000, "order_type_code": "00"},
+                {**order, "qty": 2, "price": 9990, "order_type_code": "00"},
+            ],
+            {
+                "scale_in_split_order_policy_applied": True,
+                "scale_in_split_order_leg_count": 2,
+                "scale_in_split_order_original_qty": 4,
+            },
+        ),
+    )
+
+    send_calls = []
+
+    def fake_send_buy_order(code, qty, price, order_type_code, *args, **kwargs):
+        send_calls.append((code, qty, price, order_type_code))
+        if len(send_calls) == 1:
+            return {"return_code": "0", "ord_no": "A1"}
+        return None
+
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "send_buy_order", fake_send_buy_order)
+
+    stock = {"id": 1, "name": "TEST", "strategy": "SCALPING", "buy_qty": 10}
+    result = state_handlers.execute_scale_in_order(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 10000, "best_bid": 10000, "best_ask": 10010},
+        action={"add_type": "AVG_DOWN", "reason": "late_loss_avg_down_retry"},
+        admin_id=1,
+    )
+
+    assert result["ord_no"] == "A1"
+    assert send_calls == [
+        ("123456", 2, 10000, "00"),
+        ("123456", 2, 9990, "00"),
+    ]
+    assert stock["pending_add_order"] is True
+    assert stock["pending_add_qty"] == 2
+    assert stock["pending_add_ord_no"] == "A1"
+    assert stock["add_odno"] == "A1"
+    assert stock["last_scale_in_split_partial_submit_failure"] == "none_response:leg=2"
+
+
 def test_execute_scalping_pyramid_blocks_wide_spread_price_guard(monkeypatch):
     state_handlers.KIWOOM_TOKEN = "test"
     state_handlers.TRADING_RULES = replace(
@@ -15809,6 +15901,46 @@ def test_add_execution_preserves_request_qty_on_final_fill(monkeypatch):
     assert history_calls[-1]["event_type"] == "EXECUTED"
     assert history_calls[-1]["request_qty"] == 5
     assert target_stock.get("pending_add_order") is None
+
+
+def test_add_execution_matches_split_pending_order_numbers(monkeypatch):
+    receipts.ACTIVE_TARGETS = []
+    receipts.highest_prices = {}
+    receipts._get_fast_state = lambda code: None
+
+    history_calls = []
+
+    monkeypatch.setattr(receipts, "_update_db_for_add", lambda *args, **kwargs: None)
+    monkeypatch.setattr(receipts, "record_add_history_event", lambda *args, **kwargs: history_calls.append(kwargs) or True)
+
+    target_stock = {
+        "id": 17,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 10000,
+        "buy_qty": 10,
+        "pending_add_order": True,
+        "pending_add_type": "AVG_DOWN",
+        "pending_add_qty": 5,
+        "pending_add_ord_no": "A1,A2",
+        "add_count": 0,
+        "avg_down_count": 0,
+    }
+    receipts.ACTIVE_TARGETS.append(target_stock)
+
+    receipts.handle_real_execution(
+        {"code": "123456", "type": "BUY", "order_no": "A2", "price": 9490, "qty": 2}
+    )
+
+    assert history_calls
+    assert history_calls[-1]["event_type"] == "EXECUTED"
+    assert history_calls[-1]["order_no"] == "A2"
+    assert target_stock["buy_qty"] == 12
+    assert target_stock["add_count"] == 1
+    assert target_stock["avg_down_count"] == 1
+    assert target_stock.get("pending_add_order") is True
 
 
 def test_add_receipt_normalizes_cumulative_partial_fill(monkeypatch):

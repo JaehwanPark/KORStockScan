@@ -177,6 +177,7 @@ from src.engine.scalping.entry_ai_gate import (
     get_entry_buy_score_threshold,
 )
 from src.engine.scalping.entry_split_order_plan import apply_entry_split_order_policy
+from src.engine.scalping.scale_in_split_order_plan import apply_scale_in_split_order_policy
 
 
 KIWOOM_TOKEN = None
@@ -36814,6 +36815,43 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         )
         return None
 
+    scale_in_split_orders = [
+        {
+            "qty": qty,
+            "price": final_price,
+            "order_type_code": order_type_code,
+            "add_type": add_type,
+            "add_reason": action.get("reason"),
+        }
+    ]
+    scale_in_split_fields = {
+        "scale_in_split_order_policy_applied": False,
+        "scale_in_split_order_original_qty": qty,
+    }
+    if add_type == "AVG_DOWN":
+        scale_in_split_orders, scale_in_split_fields = apply_scale_in_split_order_policy(
+            scale_in_split_orders[0],
+            stock=stock,
+            action={**(action or {}), "add_type": add_type},
+            price_resolution=price_resolution,
+            quote_fields=scale_in_quote_refresh_fields,
+        )
+        _log_holding_pipeline(
+            stock,
+            code,
+            "scale_in_split_order_plan",
+            add_type=add_type,
+            scale_in_type=add_type,
+            add_trigger=action.get("reason"),
+            scale_in_trigger=action.get("reason"),
+            qty=qty,
+            final_price=final_price,
+            resolved_price=resolved_price,
+            actual_order_submitted=False,
+            broker_order_forbidden=bool(simulated_position),
+            **scale_in_split_fields,
+        )
+
     if _is_scalp_simulated_position(stock, strategy):
         touched, fill_price, best_ask, best_bid = _scalp_sim_buy_quote_touch(ws_data or {}, final_price)
         ord_no = _simulated_order_no("SIMADD", code)
@@ -37285,105 +37323,155 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         )
         return None
 
-    res = kiwoom_orders.send_buy_order(
-        code,
-        qty,
-        final_price,
-        order_type_code,
-        token=KIWOOM_TOKEN,
-        order_type_desc=f"추가매수({add_type})",
-        allow_time_block_override=bool(buy_time_block_override_reason),
-        time_block_override_reason=buy_time_block_override_reason,
-        dmst_stex_tp=kiwoom_orders.resolve_order_dmst_stex_tp(),
-    )
+    submitted_results: list[dict] = []
+    submitted_ord_nos: list[str] = []
+    submitted_qty = 0
+    last_res: dict | None = None
+    total_leg_count = len(scale_in_split_orders)
+    partial_submit_failure = ""
+    for leg_index, leg_order in enumerate(scale_in_split_orders, start=1):
+        leg_qty = int(leg_order.get("qty", 0) or 0)
+        leg_price = int(leg_order.get("price", final_price) or 0)
+        leg_order_type_code = str(leg_order.get("order_type_code") or order_type_code)
+        if leg_qty <= 0:
+            log_error(f"❌ [{stock.get('name')}] 추가매수 leg 수량 오류 leg={leg_index} qty={leg_qty}")
+            if submitted_results:
+                partial_submit_failure = f"invalid_leg_qty:leg={leg_index}:qty={leg_qty}"
+                break
+            return None
+        res = kiwoom_orders.send_buy_order(
+            code,
+            leg_qty,
+            leg_price,
+            leg_order_type_code,
+            token=KIWOOM_TOKEN,
+            order_type_desc=f"추가매수({add_type})",
+            allow_time_block_override=bool(buy_time_block_override_reason),
+            time_block_override_reason=buy_time_block_override_reason,
+            dmst_stex_tp=kiwoom_orders.resolve_order_dmst_stex_tp(),
+        )
 
-    if res is None:
-        log_error(f"❌ [{stock.get('name')}] 추가매수 주문 전송 실패 (None 반환)")
-        log_info(f"[ADD_ORDER_SENT] {stock.get('name')}({code}) failed=None_response")
-        return None
-
-    if isinstance(res, dict):
-        rt_cd = str(res.get('return_code', res.get('rt_cd', '')))
-        if rt_cd == '0':
-            ord_no = str(res.get('ord_no', '') or res.get('odno', ''))
-            now_ts = time.time()
-            set_fields = {
-                'pending_add_order': True,
-                'pending_add_type': add_type,
-                'pending_add_reason': action.get('reason'),
-                'pending_add_qty': qty,
-                'pending_add_ord_no': ord_no,
-                'pending_add_requested_at': now_ts,
-                'add_order_time': now_ts,
-            }
-            if ord_no:
-                set_fields['add_odno'] = ord_no
-            _mutate_stock_state(stock, set_fields=set_fields)
-
+        if res is None:
+            log_error(f"❌ [{stock.get('name')}] 추가매수 주문 전송 실패 (None 반환)")
             log_info(
-                f"✅ [{stock.get('name')}] 추가매수 주문 전송 완료. "
-                f"type={add_type}, qty={qty}, ord_no={ord_no}"
+                f"[ADD_ORDER_SENT] {stock.get('name')}({code}) failed=None_response "
+                f"leg={leg_index}/{total_leg_count}"
             )
+            if submitted_results:
+                partial_submit_failure = f"none_response:leg={leg_index}"
+                break
+            return None
+
+        if isinstance(res, dict):
+            rt_cd = str(res.get('return_code', res.get('rt_cd', '')))
+            if rt_cd == '0':
+                ord_no = str(res.get('ord_no', '') or res.get('odno', ''))
+                submitted_results.append(res)
+                last_res = res
+                submitted_qty += leg_qty
+                if ord_no:
+                    submitted_ord_nos.append(ord_no)
+                log_info(
+                    "[ADD_ORDER_SENT] "
+                    f"{stock.get('name')}({code}) "
+                    f"type={add_type} qty={leg_qty} ord_no={ord_no} leg={leg_index}/{total_leg_count} "
+                    f"template_qty={template_qty} would_qty={would_qty} effective_qty={effective_qty} "
+                    f"cap_qty={cap_qty} floor_applied={floor_applied} "
+                    f"request_price={leg_price if strategy in {'SCALPING', 'KOSPI_ML', 'KOSDAQ_ML'} else '-'} "
+                    f"qty_reason={qty_reason}"
+                )
+                record_add_history_event(
+                    DB,
+                    recommendation_id=stock.get('id'),
+                    stock_code=code,
+                    stock_name=stock.get('name'),
+                    strategy=stock.get('strategy'),
+                    add_type=add_type,
+                    event_type='ORDER_SENT',
+                    order_no=ord_no,
+                    request_qty=leg_qty,
+                    request_price=leg_price if strategy == 'SCALPING' else None,
+                    prev_buy_price=stock.get('buy_price'),
+                    prev_buy_qty=stock.get('buy_qty', 0),
+                    add_count_after=stock.get('add_count', 0),
+                    reason=action.get('reason'),
+                )
+                continue
+
+            log_error(f"❌ [{stock.get('name')}] 추가매수 주문 거절: {res.get('return_msg')}")
             log_info(
                 "[ADD_ORDER_SENT] "
-                f"{stock.get('name')}({code}) "
-                f"type={add_type} qty={qty} ord_no={ord_no} "
-                f"template_qty={template_qty} would_qty={would_qty} effective_qty={effective_qty} "
-                f"cap_qty={cap_qty} floor_applied={floor_applied} "
-                f"request_price={final_price if strategy in {'SCALPING', 'KOSPI_ML', 'KOSDAQ_ML'} else '-'} qty_reason={qty_reason}"
+                f"{stock.get('name')}({code}) failed=reject msg={res.get('return_msg')} "
+                f"leg={leg_index}/{total_leg_count}"
             )
-            _publish_greenfield_stage_notice(
-                stock,
-                code,
-                stage="scale_in",
-                action=add_type,
-                strategy=strategy,
-                title=f"➕ **[SCALE-IN 주문 제출] {stock.get('name')} ({code})**",
-                body=(
-                    f"유형: `{add_type}` | 수량: `{int(qty or 0)}주`\n"
-                    f"주문가: `{int(final_price or resolved_price or curr_price or 0):,}원` | "
-                    f"사유: `{action.get('reason') or '-'}`\n"
-                    f"{_greenfield_bucket_notice_line(scale_in_greenfield_decision)}"
-                ),
-                event_id=ord_no or f"{add_type}:{action.get('reason') or '-'}",
-                decision_override=scale_in_greenfield_decision,
-                extra_fields={
-                    "add_type": add_type,
-                    "qty": qty,
-                    "ord_no": ord_no or "-",
-                    "final_price": final_price,
-                    "resolved_price": resolved_price,
-                    "add_trigger": action.get("reason"),
-                },
-            )
-            record_add_history_event(
-                DB,
-                recommendation_id=stock.get('id'),
-                stock_code=code,
-                stock_name=stock.get('name'),
-                strategy=stock.get('strategy'),
-                add_type=add_type,
-                event_type='ORDER_SENT',
-                order_no=ord_no,
-                request_qty=qty,
-                request_price=resolved_price if strategy == 'SCALPING' else None,
-                prev_buy_price=stock.get('buy_price'),
-                prev_buy_qty=stock.get('buy_qty', 0),
-                add_count_after=stock.get('add_count', 0),
-                reason=action.get('reason'),
-            )
-            return res
+            if submitted_results:
+                partial_submit_failure = f"reject:leg={leg_index}:msg={res.get('return_msg')}"
+                break
+            return None
 
-        log_error(f"❌ [{stock.get('name')}] 추가매수 주문 거절: {res.get('return_msg')}")
-        log_info(
-            "[ADD_ORDER_SENT] "
-            f"{stock.get('name')}({code}) failed=reject msg={res.get('return_msg')}"
-        )
+        log_error(f"❌ [{stock.get('name')}] 추가매수 주문 전송 실패 (응답 파싱 실패)")
+        log_info(f"[ADD_ORDER_SENT] {stock.get('name')}({code}) failed=parse_error leg={leg_index}/{total_leg_count}")
+        if submitted_results:
+            partial_submit_failure = f"parse_error:leg={leg_index}"
+            break
         return None
 
-    log_error(f"❌ [{stock.get('name')}] 추가매수 주문 전송 실패 (응답 파싱 실패)")
-    log_info(f"[ADD_ORDER_SENT] {stock.get('name')}({code}) failed=parse_error")
-    return None
+    if not submitted_results:
+        return None
+    now_ts = time.time()
+    joined_ord_nos = ",".join(submitted_ord_nos)
+    set_fields = {
+        'pending_add_order': True,
+        'pending_add_type': add_type,
+        'pending_add_reason': action.get('reason'),
+        'pending_add_qty': submitted_qty,
+        'pending_add_ord_no': joined_ord_nos,
+        'pending_add_requested_at': now_ts,
+        'add_order_time': now_ts,
+    }
+    if joined_ord_nos:
+        set_fields['add_odno'] = joined_ord_nos
+    if partial_submit_failure:
+        set_fields['last_scale_in_split_partial_submit_failure'] = partial_submit_failure
+    _mutate_stock_state(stock, set_fields=set_fields)
+
+    if partial_submit_failure:
+        log_error(
+            f"⚠️ [{stock.get('name')}] 추가매수 분할 주문 일부만 접수. "
+            f"type={add_type}, qty={submitted_qty}, ord_no={joined_ord_nos}, failure={partial_submit_failure}"
+        )
+    else:
+        log_info(
+            f"✅ [{stock.get('name')}] 추가매수 주문 전송 완료. "
+            f"type={add_type}, qty={submitted_qty}, ord_no={joined_ord_nos}"
+        )
+    _publish_greenfield_stage_notice(
+        stock,
+        code,
+        stage="scale_in",
+        action=add_type,
+        strategy=strategy,
+        title=f"➕ **[SCALE-IN 주문 제출] {stock.get('name')} ({code})**",
+        body=(
+            f"유형: `{add_type}` | 수량: `{int(submitted_qty or 0)}주`\n"
+            f"주문가: `{int(final_price or resolved_price or curr_price or 0):,}원` | "
+            f"사유: `{action.get('reason') or '-'}`\n"
+            f"{_greenfield_bucket_notice_line(scale_in_greenfield_decision)}"
+        ),
+        event_id=joined_ord_nos or f"{add_type}:{action.get('reason') or '-'}",
+        decision_override=scale_in_greenfield_decision,
+        extra_fields={
+            "add_type": add_type,
+            "qty": submitted_qty,
+            "ord_no": joined_ord_nos or "-",
+            "final_price": final_price,
+            "resolved_price": resolved_price,
+            "add_trigger": action.get("reason"),
+            "partial_submit_failure": partial_submit_failure,
+            **scale_in_split_fields,
+        },
+    )
+    return last_res
 
 
 def handle_buy_ordered_state(stock, code):

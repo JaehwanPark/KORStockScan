@@ -5621,6 +5621,90 @@ def _entry_split_order_plan_followup_orders(ev_report: dict[str, Any]) -> list[d
     ]
 
 
+def _scale_in_split_order_plan_followup_orders(ev_report: dict[str, Any]) -> list[dict[str, Any]]:
+    summary = (
+        ev_report.get("scale_in_split_order_plan")
+        if isinstance(ev_report.get("scale_in_split_order_plan"), dict)
+        else {}
+    )
+    if not summary:
+        return []
+    issues: list[str] = []
+    status = str(summary.get("status") or "").strip()
+    if not summary.get("available"):
+        issues.append("report_contract_gap")
+    if status == "source_quality_blocked":
+        issues.append("source_quality_gap")
+    if summary.get("schema_version") and summary.get("schema_version") != "scale_in_split_order_plan_v1":
+        issues.append("report_contract_gap")
+    if _safe_int(summary.get("price_observation_join_gap_count"), 0) > 0:
+        issues.append("price_observation_join_gap")
+    if _safe_int(summary.get("base_price_reconstruction_gap_count"), 0) > 0:
+        issues.append("base_price_reconstruction_gap")
+    if _safe_int(summary.get("recommended_policy_candidate_count"), 0) <= 0:
+        issues.append("runtime_policy_handoff_gap")
+    if not issues:
+        return []
+    source_path = (
+        (ev_report.get("sources") or {}).get("scale_in_split_order_plan")
+        if isinstance(ev_report.get("sources"), dict)
+        else None
+    )
+    return [
+        {
+            "order_id": "order_scale_in_split_order_plan_contract_gap",
+            "title": "scale-in split order plan report/source-quality contract gap",
+            "source_report_type": "threshold_cycle_ev",
+            "lifecycle_stage": "scale_in",
+            "target_subsystem": "scale_in_split_order_plan",
+            "route": "source_quality_gap",
+            "mapped_family": "scale_in_split_order_plan",
+            "threshold_family": "scale_in_split_order_plan",
+            "improvement_type": ",".join(sorted(set(issues))),
+            "confidence": "postclose_threshold_ev_source",
+            "priority": 3,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "expected_ev_effect": (
+                "Close report/source-quality/runtime-hook gaps so threshold-cycle can pass an AVG_DOWN "
+                "qty-preserving split policy to next PREOPEN."
+            ),
+            "evidence": [
+                f"status={summary.get('status')}",
+                f"schema_version={summary.get('schema_version')}",
+                f"candidate_grid_count={summary.get('candidate_grid_count')}",
+                f"recommended_policy_candidate_count={summary.get('recommended_policy_candidate_count')}",
+                f"counterfactual_selected_count={summary.get('counterfactual_selected_count')}",
+                f"price_observation_join_gap_count={summary.get('price_observation_join_gap_count')}",
+                f"base_price_reconstruction_gap_count={summary.get('base_price_reconstruction_gap_count')}",
+            ],
+            "source_paths": [str(source_path)] if source_path else [],
+            "next_postclose_metric": (
+                "scale_in_split_order_plan should provide valid schema, source-quality pass/exclusion, "
+                "candidate_grid, post-submit price observation joins, and recommended_policy."
+            ),
+            "files_likely_touched": [
+                "src/engine/scalping/scale_in_split_order_plan.py",
+                "src/engine/daily_threshold_cycle_report.py",
+                "src/engine/sniper_state_handlers.py",
+            ],
+            "acceptance_tests": [
+                "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_scale_in_split_order_plan.py src/tests/test_daily_threshold_cycle_report.py",
+                "Runtime hook must preserve total scale-in qty and not bypass broker guards.",
+            ],
+            "forbidden_uses": [
+                "scale_in_qty_increase",
+                "cap_release",
+                "broker_guard_relief",
+                "intraday_mutation",
+                "pyramid_scale_in",
+            ],
+        }
+    ]
+
+
 def _calibration_report_from_ev(ev_report: dict[str, Any]) -> dict[str, Any]:
     sources = ev_report.get("sources") if isinstance(ev_report.get("sources"), dict) else {}
     path_text = sources.get("calibration")
@@ -6432,6 +6516,10 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         entry_split_order_plan_path = Path(str(ev_sources.get("entry_split_order_plan")))
         if _source_path_enabled(entry_split_order_plan_path, isolated_source_mode=isolated_source_mode):
             source_paths["entry_split_order_plan"] = entry_split_order_plan_path
+    if ev_sources.get("scale_in_split_order_plan"):
+        scale_in_split_order_plan_path = Path(str(ev_sources.get("scale_in_split_order_plan")))
+        if _source_path_enabled(scale_in_split_order_plan_path, isolated_source_mode=isolated_source_mode):
+            source_paths["scale_in_split_order_plan"] = scale_in_split_order_plan_path
     if ev_sources.get("scalp_entry_action_decision_matrix"):
         scalp_entry_source_path = Path(str(ev_sources.get("scalp_entry_action_decision_matrix")))
         if _source_path_enabled(scalp_entry_source_path, isolated_source_mode=isolated_source_mode):
@@ -6570,6 +6658,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         *_window_policy_audit_followup_orders(calibration_report),
         *_dynamic_entry_price_report_contract_orders(ev_report),
         *_entry_split_order_plan_followup_orders(ev_report),
+        *_scale_in_split_order_plan_followup_orders(ev_report),
         *sim_fill_match_orders,
         *_panic_lifecycle_followup_orders(calibration_report),
         *_pipeline_event_verbosity_followup_orders(pipeline_event_verbosity),
@@ -6954,6 +7043,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "swing_lifecycle_bucket_discovery": source_ref("swing_lifecycle_bucket_discovery"),
             "threshold_cycle_ev": source_ref("threshold_cycle_ev"),
             "entry_split_order_plan": source_ref("entry_split_order_plan"),
+            "scale_in_split_order_plan": source_ref("scale_in_split_order_plan"),
             "lifecycle_decision_matrix": source_ref("lifecycle_decision_matrix"),
             "lifecycle_bucket_discovery": source_ref("lifecycle_bucket_discovery"),
             "scalp_entry_action_decision_matrix": source_ref("scalp_entry_action_decision_matrix"),

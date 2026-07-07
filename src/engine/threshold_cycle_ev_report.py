@@ -48,6 +48,7 @@ STAGE_HOOK_RUNTIME_SCAFFOLD_DIR = REPORT_DIR / "stage_hook_runtime_scaffold"
 PATTERN_LAB_PROPAGATION_AUDIT_DIR = REPORT_DIR / "pattern_lab_propagation_audit"
 BUY_FUNNEL_SENTINEL_DIR = REPORT_DIR / "buy_funnel_sentinel"
 ENTRY_SPLIT_ORDER_PLAN_DIR = REPORT_DIR / "entry_split_order_plan"
+SCALE_IN_SPLIT_ORDER_PLAN_DIR = REPORT_DIR / "scale_in_split_order_plan"
 
 _JSON_LOAD_DIAGNOSTICS: list[dict[str, Any]] = []
 
@@ -1774,6 +1775,68 @@ def _entry_split_order_plan_summary(target_date: str) -> tuple[dict[str, Any], s
     )
 
 
+def _scale_in_split_order_plan_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
+    json_path = SCALE_IN_SPLIT_ORDER_PLAN_DIR / f"scale_in_split_order_plan_{target_date}.json"
+    payload = _load_json(json_path)
+    if not payload:
+        return (
+            {
+                "available": False,
+                "artifact": None,
+                "status": "missing",
+                "candidate_grid_count": 0,
+                "recommended_policy_candidate_count": 0,
+                "runtime_effect": False,
+            },
+            None,
+            ["scale_in_split_order_plan_missing"],
+        )
+    recommended = payload.get("recommended_policy") if isinstance(payload.get("recommended_policy"), dict) else {}
+    source_quality = payload.get("source_quality") if isinstance(payload.get("source_quality"), dict) else {}
+    input_summary = payload.get("input_summary") if isinstance(payload.get("input_summary"), dict) else {}
+    candidate_grid = payload.get("candidate_grid") if isinstance(payload.get("candidate_grid"), list) else []
+    candidates = recommended.get("candidates") if isinstance(recommended.get("candidates"), list) else []
+    baseline_count = sum(
+        1
+        for item in candidates
+        if isinstance(item, dict) and item.get("policy_mode") == "bounded_equal_scale_in_split_baseline"
+    )
+    counterfactual_selected_count = _safe_int(input_summary.get("counterfactual_selected_count"), 0)
+    price_observation_join_gap_count = _safe_int(input_summary.get("price_observation_join_gap_count"), 0)
+    market_qty_split_only_count = _safe_int(input_summary.get("market_qty_split_only_count"), 0)
+    warnings: list[str] = []
+    if source_quality.get("tuning_input_allowed") is False:
+        warnings.append("scale_in_split_order_plan_source_quality_blocked")
+    if payload.get("schema_version") != "scale_in_split_order_plan_v1":
+        warnings.append("scale_in_split_order_plan_schema_mismatch")
+    return (
+        {
+            "available": True,
+            "artifact": str(json_path),
+            "status": "source_quality_blocked" if source_quality.get("tuning_input_allowed") is False else "pass",
+            "schema_version": payload.get("schema_version"),
+            "candidate_grid_count": len(candidate_grid),
+            "recommended_policy_candidate_count": len(candidates),
+            "bounded_equal_split_baseline_candidate_count": baseline_count,
+            "counterfactual_selected_count": counterfactual_selected_count,
+            "baseline_fallback_count": _safe_int(input_summary.get("baseline_fallback_count"), baseline_count),
+            "price_observation_join_gap_count": price_observation_join_gap_count,
+            "base_price_reconstruction_gap_count": _safe_int(input_summary.get("base_price_reconstruction_gap_count"), 0),
+            "market_qty_split_only_count": market_qty_split_only_count,
+            "diagnostic_three_leg_candidate_count": _safe_int(input_summary.get("diagnostic_three_leg_candidate_count"), 0),
+            "avg_down_observation_count": _safe_int(input_summary.get("avg_down_observation_count"), 0),
+            "policy_file": recommended.get("policy_file"),
+            "policy_version": recommended.get("policy_version"),
+            "runtime_apply_allowed": recommended.get("runtime_apply_allowed"),
+            "source_quality_status": source_quality.get("status"),
+            "runtime_effect": False,
+            "decision_authority": "next_preopen_bounded_scale_in_split_policy",
+        },
+        str(json_path),
+        warnings,
+    )
+
+
 def _positive_lifecycle_parent_summary(payload: dict[str, Any], *, limit: int = 8) -> dict[str, Any]:
     parents = payload.get("parent_bucket_summaries") if isinstance(payload.get("parent_bucket_summaries"), list) else []
     positive: list[dict[str, Any]] = []
@@ -2139,6 +2202,9 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
     entry_split_order_plan_summary, entry_split_order_plan_path, entry_split_order_plan_warnings = (
         _entry_split_order_plan_summary(target_date)
     )
+    scale_in_split_order_plan_summary, scale_in_split_order_plan_path, scale_in_split_order_plan_warnings = (
+        _scale_in_split_order_plan_summary(target_date)
+    )
     (
         lifecycle_bucket_discovery_summary,
         lifecycle_bucket_discovery_path,
@@ -2338,6 +2404,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
         "scalp_entry_action_decision_matrix": scalp_entry_adm_summary,
         "buy_funnel_sentinel": buy_funnel_sentinel_summary,
         "entry_split_order_plan": entry_split_order_plan_summary,
+        "scale_in_split_order_plan": scale_in_split_order_plan_summary,
         "lifecycle_decision_matrix": lifecycle_matrix_summary,
         "lifecycle_bucket_discovery": lifecycle_bucket_discovery_summary,
         "lifecycle_bucket_windows": lifecycle_bucket_windows_summary,
@@ -2368,6 +2435,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
             "scalp_entry_action_decision_matrix": scalp_entry_adm_path,
             "buy_funnel_sentinel": buy_funnel_sentinel_path,
             "entry_split_order_plan": entry_split_order_plan_path,
+            "scale_in_split_order_plan": scale_in_split_order_plan_path,
             "lifecycle_decision_matrix": lifecycle_matrix_path,
             "lifecycle_bucket_discovery": lifecycle_bucket_discovery_path,
             "lifecycle_bucket_windows": lifecycle_bucket_windows_summary,
@@ -2404,6 +2472,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
                 *scalp_entry_adm_warnings,
                 *buy_funnel_sentinel_warnings,
                 *entry_split_order_plan_warnings,
+                *scale_in_split_order_plan_warnings,
                 *lifecycle_matrix_warnings,
                 *lifecycle_bucket_discovery_warnings,
                 *lifecycle_bucket_windows_warnings,
@@ -2455,6 +2524,7 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
     swing_lab = report.get("swing_pattern_lab_automation") if isinstance(report.get("swing_pattern_lab_automation"), dict) else {}
     scalp_entry_adm = report.get("scalp_entry_action_decision_matrix") if isinstance(report.get("scalp_entry_action_decision_matrix"), dict) else {}
     entry_split_order_plan = report.get("entry_split_order_plan") if isinstance(report.get("entry_split_order_plan"), dict) else {}
+    scale_in_split_order_plan = report.get("scale_in_split_order_plan") if isinstance(report.get("scale_in_split_order_plan"), dict) else {}
     lifecycle_matrix = report.get("lifecycle_decision_matrix") if isinstance(report.get("lifecycle_decision_matrix"), dict) else {}
     lifecycle_bucket_discovery = (
         report.get("lifecycle_bucket_discovery")
@@ -2518,6 +2588,7 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         f"- stale/broker override excluded: `{funnel.get('stale_quote_override_events')}` / `{funnel.get('broker_guard_bypass_candidates')}`",
         f"- full/partial fill: `{funnel.get('full_fill_events')}` / `{funnel.get('partial_fill_events')}`",
         f"- entry_split_order_plan: status=`{entry_split_order_plan.get('status') or '-'}` candidates=`{entry_split_order_plan.get('recommended_policy_candidate_count')}` policy=`{entry_split_order_plan.get('policy_version') or '-'}`",
+        f"- scale_in_split_order_plan: status=`{scale_in_split_order_plan.get('status') or '-'}` candidates=`{scale_in_split_order_plan.get('recommended_policy_candidate_count')}` policy=`{scale_in_split_order_plan.get('policy_version') or '-'}`",
         "",
         "## Holding Exit",
         f"- holding_reviews: `{holding.get('holding_reviews')}`",

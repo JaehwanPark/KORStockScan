@@ -318,6 +318,9 @@ TARGET_ENV_VALUE_KEYS = {
     "ENTRY_SPLIT_ORDER_POLICY_ENABLED": "enabled",
     "ENTRY_SPLIT_ORDER_POLICY_FILE": "policy_file",
     "ENTRY_SPLIT_ORDER_POLICY_VERSION": "policy_version",
+    "SCALE_IN_SPLIT_ORDER_POLICY_ENABLED": "enabled",
+    "SCALE_IN_SPLIT_ORDER_POLICY_FILE": "policy_file",
+    "SCALE_IN_SPLIT_ORDER_POLICY_VERSION": "policy_version",
     "SCALP_SIM_AUTO_POLICY_ENABLED": "enabled",
     "SCALP_SIM_AUTO_POLICY_FILE": "policy_file",
     "SCALP_SIM_AUTO_POLICY_VERSION": "policy_version",
@@ -1142,6 +1145,7 @@ _FAMILY_ENV_KEY_PREFIXES: dict[str, str] = {
     "scalp_sim_scale_in_window_expansion": "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_",
     "lifecycle_bucket_discovery_sim_auto_approval": "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_",
     "entry_split_order_plan": "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_",
+    "scale_in_split_order_plan": "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_",
     PROFIT_STAGNATION_EXIT_FAMILY: "KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_",
 }
 
@@ -2355,6 +2359,11 @@ def _operator_lock_stage_coexist(
         return False
     previous = selected_by_stage[stage]
     previous_family = str(previous.get("family") or "")
+    if stage == "scale_in" and {family, previous_family} == {
+        "scale_in_split_order_plan",
+        REAL_PYRAMID_SCALE_IN_QUALITY_GUARD_FAMILY,
+    }:
+        return True
     return (
         stage == "holding_exit"
         and {family, previous_family} == {PRESET_TP_SOFT_STOP_FAMILY, PROFIT_STAGNATION_EXIT_FAMILY}

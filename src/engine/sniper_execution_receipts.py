@@ -801,12 +801,16 @@ def _find_terminal_entry_target(normalized_order_no: str):
 
 
 def _find_add_order_match(code: str, normalized_order_no: str):
+    def _pending_add_ord_nos(stock: dict) -> set[str]:
+        raw = str(stock.get('pending_add_ord_no', '') or '').strip()
+        return {part.strip() for part in raw.split(',') if part.strip()}
+
     return next(
         (
             stock for stock in ACTIVE_TARGETS
             if str(stock.get('code', '')).strip()[:6] == code
             and bool(stock.get('pending_add_order'))
-            and str(stock.get('pending_add_ord_no', '')).strip() == normalized_order_no
+            and normalized_order_no in _pending_add_ord_nos(stock)
         ),
         None
     )
@@ -1324,7 +1328,8 @@ def _handle_add_buy_execution(
     old_qty = int(target_stock.get('buy_qty') or 0)
     request_qty = int(requested_qty or target_stock.get('pending_add_qty', 0) or 0)
     pending_ord_no = str(target_stock.get('pending_add_ord_no', '') or '').strip()
-    history_order_no = pending_ord_no or order_no
+    pending_ord_nos = {part.strip() for part in pending_ord_no.split(',') if part.strip()}
+    history_order_no = order_no if order_no in pending_ord_nos else (pending_ord_no or order_no)
     new_qty = old_qty + exec_qty
     if old_qty > 0:
         total_qty = old_qty + exec_qty
@@ -1806,7 +1811,8 @@ def handle_real_execution(exec_data):
         if exec_type == 'BUY':
             pending_add = bool(target_stock.get('pending_add_order'))
             pending_ord_no = str(target_stock.get('pending_add_ord_no', '') or '').strip()
-            is_add_fill = pending_add and (not order_no or order_no == pending_ord_no)
+            pending_ord_nos = {part.strip() for part in pending_ord_no.split(',') if part.strip()}
+            is_add_fill = pending_add and (not order_no or order_no in pending_ord_nos)
 
             if is_add_fill:
                 _handle_add_buy_execution(

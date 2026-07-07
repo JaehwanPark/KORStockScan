@@ -29,11 +29,13 @@ CUMULATIVE_THRESHOLD_REPORT_DIR = REPORT_DIR / "threshold_cycle_cumulative"
 THRESHOLD_CALIBRATION_REPORT_DIR = REPORT_DIR / "threshold_cycle_calibration"
 THRESHOLD_AI_REVIEW_DIR = REPORT_DIR / "threshold_cycle_ai_review"
 ENTRY_SPLIT_ORDER_PLAN_DIR = REPORT_DIR / "entry_split_order_plan"
+SCALE_IN_SPLIT_ORDER_PLAN_DIR = REPORT_DIR / "scale_in_split_order_plan"
 POST_SELL_DIR = DATA_DIR / "post_sell"
 THRESHOLD_CYCLE_SCHEMA_VERSION = 3
 THRESHOLD_AI_CORRECTION_SCHEMA_VERSION = 1
 THRESHOLD_CYCLE_DIR = DATA_DIR / "threshold_cycle"
 ENTRY_SPLIT_ORDER_POLICY_DIR = THRESHOLD_CYCLE_DIR / "entry_split_order_policy"
+SCALE_IN_SPLIT_ORDER_POLICY_DIR = THRESHOLD_CYCLE_DIR / "scale_in_split_order_policy"
 RAW_PIPELINE_FALLBACK_MAX_BYTES = 64 * 1024 * 1024
 CUMULATIVE_BASELINE_START_DATE = "2026-04-21"
 THRESHOLD_EVENT_TOP_LEVEL_KEEP_KEYS = {
@@ -354,6 +356,28 @@ CALIBRATION_FAMILY_METADATA = {
         },
         "sample_denominator_keys": ["real_sample_count", "sim_sample_count", "recommended_policy_candidate_count"],
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "allowed_runtime_apply": True,
+    },
+    "scale_in_split_order_plan": {
+        "priority": 9,
+        "source_family": "scale_in_split_order_plan",
+        "target_env_keys": [
+            "SCALE_IN_SPLIT_ORDER_POLICY_ENABLED",
+            "SCALE_IN_SPLIT_ORDER_POLICY_FILE",
+            "SCALE_IN_SPLIT_ORDER_POLICY_VERSION",
+        ],
+        "primary_key": "enabled",
+        "bounds": {},
+        "sample_floor": 0,
+        "sample_window": "operator_requested_seed_with_daily_diagnostic",
+        "window_policy": {
+            "primary": "daily_intraday",
+            "secondary": ["rolling_10d"],
+            "use": "모든 AVG_DOWN 물타기 실행에서 기존 scale-in qty를 보존한 50:50 1tick split policy만 다음 PREOPEN bounded env로 연결한다.",
+            "daily_only_allowed": True,
+        },
+        "sample_denominator_keys": ["avg_down_observation_count", "recommended_policy_candidate_count"],
+        "primary_decision_metric": "qty_preserving_execution_shape_seed",
         "allowed_runtime_apply": True,
     },
     "entry_price_execution_quality": {
@@ -5501,6 +5525,12 @@ def _entry_split_order_plan_path(target_date: str | None) -> Path | None:
     return ENTRY_SPLIT_ORDER_PLAN_DIR / f"entry_split_order_plan_{target_date}.json"
 
 
+def _scale_in_split_order_plan_path(target_date: str | None) -> Path | None:
+    if not target_date:
+        return None
+    return SCALE_IN_SPLIT_ORDER_PLAN_DIR / f"scale_in_split_order_plan_{target_date}.json"
+
+
 def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> dict:
     report_path = _entry_split_order_plan_path(target_date)
     payload = _read_json_dict(report_path) if report_path is not None else {}
@@ -5590,6 +5620,77 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
             "entry_split_order_plan only decomposes planned_orders and never increases requested_qty.",
             "runtime apply is next PREOPEN env/policy-file only; intraday mutation is forbidden.",
             "sim/probe rows are kept separate from real execution quality approval.",
+        ],
+    }
+
+
+def _build_scale_in_split_order_plan_family(*, target_date: str | None = None) -> dict:
+    report_path = _scale_in_split_order_plan_path(target_date)
+    payload = _read_json_dict(report_path) if report_path is not None else {}
+    recommended_policy = (
+        payload.get("recommended_policy") if isinstance(payload.get("recommended_policy"), dict) else {}
+    )
+    candidate_grid = payload.get("candidate_grid") if isinstance(payload.get("candidate_grid"), list) else []
+    source_quality = payload.get("source_quality") if isinstance(payload.get("source_quality"), dict) else {}
+    input_summary = payload.get("input_summary") if isinstance(payload.get("input_summary"), dict) else {}
+    candidates = recommended_policy.get("candidates") if isinstance(recommended_policy.get("candidates"), list) else []
+    baseline_count = sum(
+        1
+        for item in candidates
+        if isinstance(item, dict) and item.get("policy_mode") == "bounded_equal_scale_in_split_baseline"
+    )
+    real_sample = max(
+        [_safe_int(item.get("real_sample_count"), 0) or 0 for item in candidate_grid if isinstance(item, dict)] or [0]
+    )
+    sim_sample = max(
+        [_safe_int(item.get("sim_sample_count"), 0) or 0 for item in candidate_grid if isinstance(item, dict)] or [0]
+    )
+    policy_file = str(recommended_policy.get("policy_file") or "")
+    policy_version = str(recommended_policy.get("policy_version") or "")
+    source_quality_blocked = source_quality.get("tuning_input_allowed") is False
+    recommended = {
+        "enabled": bool(candidates) and bool(policy_file) and not source_quality_blocked,
+        "policy_file": policy_file,
+        "policy_version": policy_version,
+    }
+    return {
+        "family": "scale_in_split_order_plan",
+        "stage": "scale_in",
+        "sample": {
+            "report_loaded": bool(payload),
+            "report_path": str(report_path) if report_path and report_path.exists() else None,
+            "candidate_grid_count": len(candidate_grid),
+            "recommended_policy_candidate_count": len(candidates),
+            "bounded_equal_split_baseline_candidate_count": baseline_count,
+            "counterfactual_selected_count": _safe_int(input_summary.get("counterfactual_selected_count"), 0) or 0,
+            "baseline_fallback_count": _safe_int(input_summary.get("baseline_fallback_count"), baseline_count) or 0,
+            "price_observation_join_gap_count": _safe_int(input_summary.get("price_observation_join_gap_count"), 0) or 0,
+            "base_price_reconstruction_gap_count": _safe_int(input_summary.get("base_price_reconstruction_gap_count"), 0) or 0,
+            "market_qty_split_only_count": _safe_int(input_summary.get("market_qty_split_only_count"), 0) or 0,
+            "diagnostic_three_leg_candidate_count": _safe_int(input_summary.get("diagnostic_three_leg_candidate_count"), 0) or 0,
+            "avg_down_observation_count": _safe_int(input_summary.get("avg_down_observation_count"), 0) or 0,
+            "real_sample_count": real_sample,
+            "sim_sample_count": sim_sample,
+            "primary_sample_book": "post_submit_tick_band_counterfactual",
+            "source_quality_blocked": bool(source_quality_blocked),
+            "source_quality_status": source_quality.get("status"),
+            "excluded_source_quality_event_count": input_summary.get("excluded_source_quality_event_count"),
+            "policy_file": policy_file or None,
+            "policy_version": policy_version or None,
+        },
+        "current": {
+            "enabled": False,
+            "policy_file": "",
+            "policy_version": "",
+        },
+        "recommended": recommended,
+        "candidate_grid": candidate_grid,
+        "apply_ready": bool(recommended["enabled"]),
+        "apply_mode": "calibrated_apply_candidate" if recommended["enabled"] else "report_only_calibration",
+        "notes": [
+            "scale_in_split_order_plan only decomposes AVG_DOWN scale-in orders and never increases requested_qty.",
+            "PYRAMID is excluded from v1 because it is not avg-down averaging.",
+            "runtime apply is next PREOPEN env/policy-file only; intraday mutation is forbidden.",
         ],
     }
 
@@ -6768,6 +6869,7 @@ def _build_family_reports(
         _build_pre_submit_guard_family(events),
         _build_dynamic_entry_price_resolver_family(events, completed_rows, target_date=target_date),
         _build_entry_split_order_plan_family(target_date=target_date),
+        _build_scale_in_split_order_plan_family(target_date=target_date),
         _build_entry_price_execution_quality_family(events),
         _build_entry_filter_refined_candidate_family(
             events,
@@ -7170,6 +7272,8 @@ def _source_metrics_for_family(output_family: str, report_source_context: dict |
         )
     if output_family == "entry_split_order_plan":
         return metrics.get("entry_split_order_plan") if isinstance(metrics.get("entry_split_order_plan"), dict) else {}
+    if output_family == "scale_in_split_order_plan":
+        return metrics.get("scale_in_split_order_plan") if isinstance(metrics.get("scale_in_split_order_plan"), dict) else {}
     if output_family == "entry_price_execution_quality":
         return (
             metrics.get("entry_price_execution_quality")
@@ -7232,6 +7336,13 @@ def _source_sample_count_for_family(output_family: str, source_metrics: dict) ->
         )
     if output_family == "entry_split_order_plan":
         return max(
+            _safe_int(source_metrics.get("real_sample_count"), 0) or 0,
+            _safe_int(source_metrics.get("sim_sample_count"), 0) or 0,
+            _safe_int(source_metrics.get("recommended_policy_candidate_count"), 0) or 0,
+        )
+    if output_family == "scale_in_split_order_plan":
+        return max(
+            _safe_int(source_metrics.get("avg_down_observation_count"), 0) or 0,
             _safe_int(source_metrics.get("real_sample_count"), 0) or 0,
             _safe_int(source_metrics.get("sim_sample_count"), 0) or 0,
             _safe_int(source_metrics.get("recommended_policy_candidate_count"), 0) or 0,
@@ -7487,6 +7598,30 @@ def _calibration_state_for_family(
         return (
             "adjust_up",
             "entry split policy passed report guards; next PREOPEN env points to policy file and runtime only decomposes requested_qty-preserving planned_orders.",
+        )
+    if output_family == "scale_in_split_order_plan":
+        policy_count = _safe_int(source_metrics.get("recommended_policy_candidate_count"), 0) or 0
+        baseline_policy_count = _safe_int(source_metrics.get("bounded_equal_split_baseline_candidate_count"), 0) or 0
+        counterfactual_policy_count = _safe_int(source_metrics.get("counterfactual_selected_count"), 0) or 0
+        market_policy_count = _safe_int(source_metrics.get("market_qty_split_only_count"), 0) or 0
+        if not source_metrics.get("report_loaded"):
+            return (
+                "hold_sample",
+                "scale_in_split_order_plan report missing; postclose producer/handoff must run before PREOPEN policy selection.",
+            )
+        if source_metrics.get("source_quality_blocked"):
+            return (
+                "source_quality_blocked",
+                "scale_in_split_order_plan source-quality hard block present; exclude row/window and regenerate before policy use.",
+            )
+        if policy_count > 0 and (baseline_policy_count > 0 or counterfactual_policy_count > 0 or market_policy_count > 0):
+            return (
+                "adjust_up",
+                "AVG_DOWN scale-in split policy is qty-preserving, guard-bounded, and has baseline/counterfactual/market candidates; next PREOPEN env may point to its policy file.",
+            )
+        return (
+            "hold_sample",
+            "scale_in_split_order_plan candidate grid exists but no runtime-allowed baseline/counterfactual/market policy candidate was emitted.",
         )
     if output_family == "entry_price_execution_quality":
         return (
@@ -7825,6 +7960,51 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
                 "runtime_authority": "next_preopen_bounded_entry_split_policy",
                 "requested_qty_authority": "position_sizing_dynamic_formula",
             }
+        if output_family == "scale_in_split_order_plan":
+            family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
+            source_metrics = {
+                **source_metrics,
+                "report_loaded": bool(family_sample.get("report_loaded")),
+                "report_path": family_sample.get("report_path"),
+                "candidate_grid_count": _safe_int(family_sample.get("candidate_grid_count"), 0) or 0,
+                "recommended_policy_candidate_count": _safe_int(
+                    family_sample.get("recommended_policy_candidate_count"), 0
+                )
+                or 0,
+                "bounded_equal_split_baseline_candidate_count": _safe_int(
+                    family_sample.get("bounded_equal_split_baseline_candidate_count"), 0
+                )
+                or 0,
+                "counterfactual_selected_count": _safe_int(family_sample.get("counterfactual_selected_count"), 0) or 0,
+                "baseline_fallback_count": _safe_int(family_sample.get("baseline_fallback_count"), 0) or 0,
+                "price_observation_join_gap_count": _safe_int(
+                    family_sample.get("price_observation_join_gap_count"), 0
+                )
+                or 0,
+                "base_price_reconstruction_gap_count": _safe_int(
+                    family_sample.get("base_price_reconstruction_gap_count"), 0
+                )
+                or 0,
+                "market_qty_split_only_count": _safe_int(family_sample.get("market_qty_split_only_count"), 0) or 0,
+                "diagnostic_three_leg_candidate_count": _safe_int(
+                    family_sample.get("diagnostic_three_leg_candidate_count"), 0
+                )
+                or 0,
+                "avg_down_observation_count": _safe_int(family_sample.get("avg_down_observation_count"), 0) or 0,
+                "real_sample_count": _safe_int(family_sample.get("real_sample_count"), 0) or 0,
+                "sim_sample_count": _safe_int(family_sample.get("sim_sample_count"), 0) or 0,
+                "primary_sample_book": family_sample.get("primary_sample_book"),
+                "source_quality_blocked": bool(family_sample.get("source_quality_blocked")),
+                "source_quality_status": family_sample.get("source_quality_status"),
+                "excluded_source_quality_event_count": _safe_int(
+                    family_sample.get("excluded_source_quality_event_count"), 0
+                )
+                or 0,
+                "policy_file": family_sample.get("policy_file"),
+                "policy_version": family_sample.get("policy_version"),
+                "runtime_authority": "next_preopen_bounded_scale_in_split_policy",
+                "requested_qty_authority": "describe_dynamic_scale_in_qty",
+            }
         source_sample_count = _source_sample_count_for_family(output_family, source_metrics)
         if output_family == "dynamic_entry_price_resolver":
             family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
@@ -7847,6 +8027,8 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
         elif output_family == "dynamic_entry_price_resolver":
             sample_count = source_sample_count
         elif output_family == "entry_split_order_plan":
+            sample_count = source_sample_count
+        elif output_family == "scale_in_split_order_plan":
             sample_count = source_sample_count
         elif output_family == "position_sizing_dynamic_formula":
             family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}

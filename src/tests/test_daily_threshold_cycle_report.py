@@ -2112,6 +2112,64 @@ def test_score65_74_recovery_probe_reads_score60_74_alias_metrics():
     assert candidate["source_metrics"]["score60_74_avg_expected_ev_pct"] == 3.2
 
 
+def test_scale_in_split_order_plan_counterfactual_candidates_are_apply_ready(tmp_path, monkeypatch):
+    target_date = "2026-07-07"
+    report_dir = tmp_path / "scale_in_split_order_plan"
+    policy_file = tmp_path / "scale_in_split_order_policy_2026-07-07.json"
+    report_dir.mkdir(parents=True)
+    policy_file.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(report_mod, "SCALE_IN_SPLIT_ORDER_PLAN_DIR", report_dir)
+    (report_dir / f"scale_in_split_order_plan_{target_date}.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "scale_in_split_order_plan_v1",
+                "source_quality": {"status": "pass", "tuning_input_allowed": True},
+                "input_summary": {
+                    "avg_down_observation_count": 2,
+                    "counterfactual_selected_count": 2,
+                    "baseline_fallback_count": 0,
+                    "price_observation_join_gap_count": 0,
+                    "base_price_reconstruction_gap_count": 0,
+                    "market_qty_split_only_count": 0,
+                },
+                "candidate_grid": [
+                    {
+                        "context_bucket": "unknown_strategy:late_loss_retry:normal",
+                        "real_sample_count": 1,
+                        "sim_sample_count": 0,
+                        "policy_mode": "counterfactual_tick_band_selector",
+                    }
+                ],
+                "recommended_policy": {
+                    "policy_file": str(policy_file),
+                    "policy_version": "scale_in_split_order_plan:test-counterfactual",
+                    "candidates": [
+                        {
+                            "context_bucket": "unknown_strategy:late_loss_retry:normal",
+                            "policy_mode": "counterfactual_tick_band_selector",
+                            "runtime_apply_allowed": True,
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    family = report_mod._build_scale_in_split_order_plan_family(target_date=target_date)
+    candidate = next(
+        item
+        for item in report_mod._build_calibration_candidates([family], {})
+        if item["family"] == "scale_in_split_order_plan"
+    )
+
+    assert candidate["calibration_state"] == "adjust_up"
+    assert candidate["recommended_values"]["enabled"] is True
+    assert candidate["recommended_values"]["policy_version"] == "scale_in_split_order_plan:test-counterfactual"
+    assert candidate["source_metrics"]["counterfactual_selected_count"] == 2
+    assert "counterfactual" in candidate["calibration_reason"]
+
+
 def test_bad_entry_refined_candidate_waits_for_postclose_lifecycle_attribution(tmp_path, monkeypatch):
     monkeypatch.setattr(report_mod, "POST_SELL_DIR", tmp_path)
     (tmp_path / "post_sell_evaluations_2026-05-08.jsonl").write_text(
