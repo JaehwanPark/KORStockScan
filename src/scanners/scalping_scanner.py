@@ -38,6 +38,30 @@ PRIMARY_RISING_START_SOURCES = {
     "BID_IMBALANCE_SURGE",
 }
 LOW_REBOUND_BASE_SOURCES = {"VOLUME_SURGE_RAW", "VALUE_TOP", "REALTIME_RANK_START"}
+LOW_REBOUND_PREFETCH_EXCLUDED_NAME_KEYWORDS = (
+    "스팩",
+    "ETF",
+    "ETN",
+    "TIGER",
+    "KBSTAR",
+    "KODEX",
+    "KINDEX",
+    "ARIRANG",
+    "KOSEF",
+    "리츠",
+    "HANARO",
+    "SOL ",
+    "ACE ",
+    "RISE ",
+    "PLUS ",
+    "TIMEFOLIO",
+    "KIWOOM ",
+    "선물",
+    "레버리지",
+    "블룸버그",
+    "VIX",
+    "인버스",
+)
 
 
 def _resolve_scan_interval_sec(now_time):
@@ -399,7 +423,7 @@ def _low_rebound_max_distance_from_high_pct():
 
 
 def _low_rebound_candle_fetch_cap():
-    return int(getattr(TRADING_RULES, "SCALP_SCANNER_LOW_REBOUND_CANDLE_FETCH_CAP", 12) or 12)
+    return int(getattr(TRADING_RULES, "SCALP_SCANNER_LOW_REBOUND_CANDLE_FETCH_CAP", 20) or 20)
 
 
 def _low_rebound_candle_limit():
@@ -1930,6 +1954,43 @@ def _merge_low_rebound_universe(universe, targets, source):
         )
 
 
+def _is_low_rebound_prefetch_product_allowed(target):
+    name = str((target or {}).get("Name") or "").upper()
+    if any(keyword in name for keyword in LOW_REBOUND_PREFETCH_EXCLUDED_NAME_KEYWORDS):
+        return False
+    price = _safe_positive_int((target or {}).get("Price"))
+    min_price = _safe_positive_int(getattr(TRADING_RULES, "MIN_PRICE", 0))
+    if min_price > 0 and 0 < price < min_price:
+        return False
+    return True
+
+
+def _low_rebound_prefetch_rank_key(target):
+    source_set = set((target or {}).get("SourceSet") or [])
+    change_rate, has_change_rate = _candidate_current_change_rate(target or {})
+    eligible_change = has_change_rate and change_rate <= 0.5
+    negative_or_flat = has_change_rate and change_rate <= 0.0
+    pullback_band = has_change_rate and -6.0 <= change_rate <= 0.5
+    multi_source = len(LOW_REBOUND_BASE_SOURCES & source_set)
+    raw_volume = "VOLUME_SURGE_RAW" in source_set
+    value_top = "VALUE_TOP" in source_set
+    realtime_rank = "REALTIME_RANK_START" in source_set
+    product_allowed = _is_low_rebound_prefetch_product_allowed(target or {})
+    return (
+        0 if product_allowed else 1,
+        0 if eligible_change else 1,
+        0 if negative_or_flat else 1,
+        0 if pullback_band else 1,
+        -multi_source,
+        0 if raw_volume and value_top else 1,
+        0 if raw_volume else 1,
+        0 if realtime_rank else 1,
+        -_safe_float((target or {}).get("SpikeRate")),
+        -min(_safe_float((target or {}).get("TradeValue")), 50_000_000_000.0),
+        str((target or {}).get("Code") or ""),
+    )
+
+
 def _build_low_rebound_universe(realtime_rank_targets=None, raw_volume_surge_targets=None, value_targets=None):
     universe = {}
     _merge_low_rebound_universe(universe, raw_volume_surge_targets, "VOLUME_SURGE_RAW")
@@ -1937,13 +1998,51 @@ def _build_low_rebound_universe(realtime_rank_targets=None, raw_volume_surge_tar
     _merge_low_rebound_universe(universe, realtime_rank_targets, "REALTIME_RANK_START")
     return sorted(
         universe.values(),
-        key=lambda item: (
-            -_safe_float(item.get("PriorityScore")),
-            -_safe_float(item.get("TradeValue")),
-            -_safe_float(item.get("SpikeRate")),
-            str(item.get("Code") or ""),
-        ),
+        key=_low_rebound_prefetch_rank_key,
     )
+
+
+def _select_low_rebound_prefetch_targets(universe, fetch_cap):
+    selected = []
+    stats = {
+        "prefilter_eligible_count": 0,
+        "prefilter_product_filtered_count": 0,
+        "prefilter_change_rate_filtered_count": 0,
+        "prefilter_base_source_missing_count": 0,
+    }
+    selection_reasons = []
+    for target in universe:
+        code = str((target or {}).get("Code") or "").strip()
+        source_set = set((target or {}).get("SourceSet") or [])
+        if not code or not (LOW_REBOUND_BASE_SOURCES & source_set):
+            stats["prefilter_base_source_missing_count"] += 1
+            continue
+        if not _is_low_rebound_prefetch_product_allowed(target):
+            stats["prefilter_product_filtered_count"] += 1
+            continue
+        change_rate, has_change_rate = _candidate_current_change_rate(target)
+        if not has_change_rate or change_rate > 0.5:
+            stats["prefilter_change_rate_filtered_count"] += 1
+            continue
+        stats["prefilter_eligible_count"] += 1
+        if len(selected) >= int(fetch_cap or 0):
+            continue
+        reasons = []
+        if change_rate < 0:
+            reasons.append("negative_display")
+        else:
+            reasons.append("weak_display")
+        if "VOLUME_SURGE_RAW" in source_set:
+            reasons.append("volume_raw")
+        if "VALUE_TOP" in source_set:
+            reasons.append("value_top")
+        if "REALTIME_RANK_START" in source_set:
+            reasons.append("realtime_rank")
+        if len(LOW_REBOUND_BASE_SOURCES & source_set) >= 2:
+            reasons.append("multi_source")
+        selected.append(target)
+        selection_reasons.append(f"{code}:{'+'.join(reasons)}")
+    return selected, stats, selection_reasons
 
 
 def _build_low_rebound_rising_missed_targets(
@@ -1964,6 +2063,7 @@ def _build_low_rebound_rising_missed_targets(
         value_targets=value_targets,
     )
     fetch_cap = _low_rebound_candle_fetch_cap()
+    prefetch_targets, prefetch_stats, selection_reasons = _select_low_rebound_prefetch_targets(universe, fetch_cap)
     stats = {
         "universe_count": len(universe),
         "candidate_scan_cap": fetch_cap,
@@ -1979,10 +2079,11 @@ def _build_low_rebound_rising_missed_targets(
         "chase_risk_filtered_count": 0,
         "passed_count": 0,
         "negative_display_candidate_count": 0,
+        **prefetch_stats,
     }
     sampled_codes = []
     passed_codes = []
-    for target in universe[:fetch_cap]:
+    for target in prefetch_targets:
         stats["scanned_count"] += 1
         code = str(target.get("Code") or "").strip()
         if code and len(sampled_codes) < fetch_cap:
@@ -2062,6 +2163,7 @@ def _build_low_rebound_rising_missed_targets(
             min_rebound_pct=min_rebound_pct,
             chase_distance_pct=chase_distance_pct,
             candle_limit=candle_limit,
+            selection_reasons=selection_reasons,
         )
     return candidates
 
@@ -2074,6 +2176,7 @@ def _log_low_rebound_source_observation(
     min_rebound_pct,
     chase_distance_pct,
     candle_limit,
+    selection_reasons,
 ):
     emit_pipeline_event(
         "ENTRY_PIPELINE",
@@ -2104,6 +2207,7 @@ def _log_low_rebound_source_observation(
             "low_rebound_candle_limit": candle_limit,
             "low_rebound_sampled_codes": ",".join(sampled_codes),
             "low_rebound_passed_codes": ",".join(passed_codes),
+            "low_rebound_fetch_selection_reason": ",".join(selection_reasons),
             **{f"low_rebound_{key}": value for key, value in stats.items()},
         },
     )

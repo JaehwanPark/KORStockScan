@@ -1518,14 +1518,19 @@ def test_low_rebound_source_observation_emits_cap_independent_summary(monkeypatc
     assert fields["scanner_source_family"] == "rising_missed_low_rebound_source_v1"
     assert fields["rising_missed_lineage"] == "low_rebound_from_intraday_low"
     assert fields["low_rebound_universe_count"] == 3
-    assert fields["low_rebound_scanned_count"] == 3
+    assert fields["low_rebound_prefilter_eligible_count"] == 2
+    assert fields["low_rebound_prefilter_change_rate_filtered_count"] == 1
+    assert fields["low_rebound_scanned_count"] == 2
     assert fields["low_rebound_candle_fetch_attempted_count"] == 2
-    assert fields["low_rebound_change_rate_filtered_count"] == 1
+    assert fields["low_rebound_change_rate_filtered_count"] == 0
     assert fields["low_rebound_below_rebound_threshold_count"] == 1
     assert fields["low_rebound_passed_count"] == 1
     assert fields["low_rebound_negative_display_candidate_count"] == 1
-    assert fields["low_rebound_sampled_codes"] == "000001,000002,000003"
+    assert fields["low_rebound_sampled_codes"] == "000001,000002"
     assert fields["low_rebound_passed_codes"] == "000001"
+    assert fields["low_rebound_fetch_selection_reason"] == (
+        "000001:negative_display+volume_raw,000002:negative_display+volume_raw"
+    )
 
 
 def test_low_rebound_excludes_below_threshold(monkeypatch):
@@ -1703,12 +1708,43 @@ def test_low_rebound_minute_candle_fetch_is_capped(monkeypatch):
         "TOKEN",
         raw_volume_surge_targets=[
             {"Code": f"{idx:06d}", "Name": f"RAW{idx}", "Price": 10300, "FluRate": -0.1}
-            for idx in range(20)
+            for idx in range(25)
         ],
     )
 
-    assert len(calls) == 12
-    assert len(rows) == 12
+    assert len(calls) == 20
+    assert len(rows) == 20
+
+
+def test_low_rebound_prefetch_skips_etf_products_before_candle_fetch(monkeypatch):
+    calls = []
+
+    def fake_candles(_token, code, limit=420):
+        calls.append(code)
+        return [
+            {"현재가": 10000, "고가": 10100, "저가": 10000},
+            {"현재가": 10300, "고가": 10600, "저가": 10100},
+        ]
+
+    monkeypatch.setattr(kiwoom_utils, "get_minute_candles_ka10080", fake_candles)
+
+    rows = scalping_scanner._build_low_rebound_rising_missed_targets(
+        "TOKEN",
+        raw_volume_surge_targets=[
+            {
+                "Code": "122630",
+                "Name": "KODEX 레버리지",
+                "Price": 25000,
+                "FluRate": -0.2,
+                "TradeValue": 999999999999,
+                "SpikeRate": 999.0,
+            },
+            {"Code": "000010", "Name": "REAL", "Price": 10300, "FluRate": -0.2, "SpikeRate": 120.0},
+        ],
+    )
+
+    assert calls == ["000010"]
+    assert [row["Code"] for row in rows] == ["000010"]
 
 
 def test_ka10021_bid_balance_surge_is_normalized(monkeypatch):
