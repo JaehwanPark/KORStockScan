@@ -292,3 +292,26 @@ This file is cumulative. Do not append every 10-minute loop result here. Loop-le
 - `runtime_effect=false`
 - `allowed_runtime_apply=false`
 - This changed diagnostic filtering and taxonomy only. It did not change thresholds, provider route, bot state, order submission, cooldown behavior, stale/latency/broker/account/order/quantity guards, or hard safety.
+
+## 11. 2026-07-07 Forced Scout Source-Only Separation
+
+### Decision
+
+- Intraday flow reports must count `rising_missed_one_share_entry` and `rising_missed_one_share_entry_order_plan_forced` directly from source events, even when the latest blocker diagnostic is missing or has not promoted the symbol yet.
+- Forced scout lineage must remain excluded from normal BUY/submit/fill/holding success counts.
+
+### Change
+
+- `intraday_entry_flow_report` recognizes forced scout by canonical stage as well as forced-entry fields.
+- Forced scout observation no longer depends on diagnostic `promoted_symbols`; downstream submit/fill lineage remains source-only observation.
+
+### Validation
+
+- `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_intraday_entry_flow_report.py` passed with `23 passed`.
+- `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/monitoring/intraday_entry_flow_report.py src/tests/test_intraday_entry_flow_report.py` passed.
+
+### Operating Boundary
+
+- `runtime_effect=false`
+- `allowed_runtime_apply=false`
+- This changed report/source-quality separation only. It did not change thresholds, provider route, bot state, order submission, stale/latency/broker/account/order/quantity/cooldown guards, or hard/protect/emergency safety.

@@ -23,10 +23,20 @@ BUY_SIGNAL_STAGES = {
 }
 SUBMIT_STAGE_MARKERS = ("submitted", "order_send", "broker_submit", "buy_submit")
 RISING_MISSED_FORCED_ENTRY_REASON = "rising_missed_one_share_entry"
+RISING_MISSED_FORCED_ENTRY_STAGES = {
+    "rising_missed_one_share_entry",
+    "rising_missed_one_share_entry_order_plan_forced",
+}
 RISING_MISSED_FORCED_LINEAGE_WINDOW_SEC = 180
 RISING_MISSED_FORCED_LINEAGE_STAGES = {
+    "entry_cancel_wait_attribution",
+    "order_leg_request",
+    "order_leg_sent",
     "latency_pass",
     "order_bundle_submitted",
+    "buy_signal_telegram_enqueued",
+    "scalp_entry_action_decision_snapshot",
+    "position_rebased_after_fill",
     "holding_started",
 }
 STALE_EVAL_QUOTE_AGE_MS = 3000.0
@@ -90,12 +100,13 @@ def _boolish(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def _is_rising_missed_forced_one_share_entry(fields: dict[str, Any]) -> bool:
+def _is_rising_missed_forced_one_share_entry(stage: str, fields: dict[str, Any]) -> bool:
     reason = str(fields.get("forced_entry_reason") or "").strip()
     forced = _boolish(fields.get("rising_missed_one_share_entry_forced"))
     qty = _safe_float(fields.get("forced_entry_qty"))
     forced_scout_qty_or_missing = qty is None or qty > 0.0
-    return forced_scout_qty_or_missing and (reason == RISING_MISSED_FORCED_ENTRY_REASON or forced)
+    stage_forced = stage in RISING_MISSED_FORCED_ENTRY_STAGES
+    return forced_scout_qty_or_missing and (stage_forced or reason == RISING_MISSED_FORCED_ENTRY_REASON or forced)
 
 
 def _forced_lineage_qty_present(fields: dict[str, Any]) -> bool:
@@ -254,9 +265,9 @@ def _is_real_entry_candidate(row: dict[str, Any], promoted_codes: set[str]) -> b
     fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
     if str(fields.get("simulated_order") or "").strip().lower() == "true":
         return False
-    if _is_rising_missed_forced_one_share_entry(fields):
-        return False
     stage = str(row.get("stage") or "")
+    if _is_rising_missed_forced_one_share_entry(stage, fields):
+        return False
     if stage.startswith("scalp_sim_") or stage.startswith("swing_"):
         return False
     authority = str(fields.get("decision_authority") or "").lower()
@@ -470,7 +481,8 @@ def build_report(
         in_window = ts is not None and not (
             (since_ts is not None and ts < since_ts) or (until_ts is not None and ts > until_ts)
         )
-        if code in raw_promoted_codes and _is_rising_missed_forced_one_share_entry(fields):
+        stage = str(row.get("stage") or "")
+        if row.get("pipeline") == ENTRY_PIPELINE and code and _is_rising_missed_forced_one_share_entry(stage, fields):
             if ts is not None and (until_ts is None or ts <= until_ts):
                 forced_scout_symbols.add(code)
                 latest_forced_scout_at_by_code[code] = ts
@@ -483,7 +495,6 @@ def build_report(
             continue
         if not _is_real_entry_candidate(row, raw_promoted_codes):
             continue
-        stage = str(row.get("stage") or "")
         reason = _reason(fields)
         record = grouped[code]
         record["code"] = code
@@ -565,7 +576,8 @@ def build_report(
         if latest_blocker:
             record["latest_stage"] = latest_blocker.get("stage") or record["latest_stage"]
             record["latest_reason"] = latest_blocker.get("reason") or record["latest_reason"]
-        record["actual_submit_count"] = max(record["actual_submit_count"], int(item.get("real_submit_count") or 0))
+        if code not in forced_scout_symbols:
+            record["actual_submit_count"] = max(record["actual_submit_count"], int(item.get("real_submit_count") or 0))
 
     rows: list[dict[str, Any]] = []
     for code, record in grouped.items():

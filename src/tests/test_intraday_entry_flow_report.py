@@ -896,6 +896,167 @@ def test_build_report_excludes_unflagged_submit_after_forced_scout_from_flow_sub
     assert report["summary"]["rising_missed_forced_scout_residual_symbol_count"] == 1
 
 
+def test_build_report_counts_stage_only_forced_scout_without_diagnostic(tmp_path):
+    event_path = tmp_path / "events.jsonl"
+    diagnostic_path = tmp_path / "missing_diag.json"
+    rows = [
+        _event(
+            "086520",
+            "에코프로",
+            "rising_missed_one_share_entry",
+            {
+                "scanner_promotion_id": "p1",
+                "price_delta_since_first_seen_pct": "3.75",
+            },
+            emitted_at="2026-07-07T09:06:13",
+        ),
+        _event(
+            "086520",
+            "에코프로",
+            "rising_missed_one_share_entry_order_plan_forced",
+            {
+                "scanner_promotion_id": "p1",
+                "price_delta_since_first_seen_pct": "3.75",
+                "planned_order_count": "1",
+            },
+            emitted_at="2026-07-07T09:06:16",
+        ),
+        _event(
+            "086520",
+            "에코프로",
+            "scalp_entry_action_decision_snapshot",
+            {
+                "scanner_promotion_id": "p1",
+                "price_delta_since_first_seen_pct": "3.75",
+                "actual_order_submitted": "true",
+                "order_requested_qty": "1",
+            },
+            emitted_at="2026-07-07T09:06:21",
+        ),
+        _event(
+            "086520",
+            "에코프로",
+            "order_leg_sent",
+            {
+                "scanner_promotion_id": "p1",
+                "price_delta_since_first_seen_pct": "3.75",
+                "actual_order_submitted": "true",
+                "order_requested_qty": "1",
+            },
+            emitted_at="2026-07-07T09:06:22",
+        ),
+        _event(
+            "086520",
+            "에코프로",
+            "entry_cancel_wait_attribution",
+            {
+                "scanner_promotion_id": "p1",
+                "price_delta_since_first_seen_pct": "3.75",
+                "order_requested_qty": "1",
+            },
+            emitted_at="2026-07-07T09:06:23",
+        ),
+        _event(
+            "086520",
+            "에코프로",
+            "scalping_scanner_promotion_latency_trace",
+            {
+                "scanner_promotion_id": "p1",
+                "price_delta_since_first_seen_pct": "3.75",
+                "reason": "caution_normal_entry_allowed",
+            },
+            emitted_at="2026-07-07T09:07:00",
+        ),
+    ]
+    event_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(
+        target_date="2026-07-07",
+        event_cache_path=event_path,
+        diagnostic_path=diagnostic_path,
+        since="2026-07-07T09:00:00",
+        until="2026-07-07T09:10:00",
+        generated_at="fixed",
+    )
+
+    row = report["rows"][0]
+    assert row["stock_code"] == "086520"
+    assert row["actual_submit_count"] == 0
+    assert report["summary"]["rising_missed_forced_scout_event_count"] == 2
+    assert report["summary"]["rising_missed_forced_scout_symbol_count"] == 1
+    assert report["forced_scout_observation"]["symbols"] == ["086520"]
+    assert report["forced_scout_observation"]["runtime_effect"] is False
+    assert "scalp_entry_action_decision_snapshot" not in row["flow"]
+    assert "order_leg_sent" not in row["flow"]
+    assert "entry_cancel_wait_attribution" not in row["flow"]
+
+
+def test_build_report_does_not_restore_forced_scout_submit_from_diagnostic_count(tmp_path):
+    event_path = tmp_path / "events.jsonl"
+    diagnostic_path = tmp_path / "diag.json"
+    diagnostic_path.write_text(
+        json.dumps(
+            {
+                "summary": {"real_submit_symbol_count": 1},
+                "promoted_symbols": [
+                    {
+                        "stock_code": "086520",
+                        "stock_name": "에코프로",
+                        "first_promoted_at": "2026-07-07T09:06:00",
+                        "last_event_at": "2026-07-07T09:08:00",
+                        "max_price_delta_since_first_seen_pct": 3.75,
+                        "latest_price_delta_since_first_seen_pct": 3.75,
+                        "real_submit_count": 1,
+                    }
+                ],
+                "rising_missed_buy": [{"stock_code": "086520"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    rows = [
+        _event(
+            "086520",
+            "에코프로",
+            "rising_missed_one_share_entry",
+            {
+                "scanner_promotion_id": "p1",
+                "price_delta_since_first_seen_pct": "3.75",
+                "forced_entry_reason": "rising_missed_one_share_entry",
+                "forced_entry_qty": "1",
+            },
+            emitted_at="2026-07-07T09:06:13",
+        ),
+        _event(
+            "086520",
+            "에코프로",
+            "scalping_scanner_promotion_latency_trace",
+            {
+                "scanner_promotion_id": "p1",
+                "price_delta_since_first_seen_pct": "3.75",
+                "reason": "caution_normal_entry_allowed",
+            },
+            emitted_at="2026-07-07T09:08:00",
+        ),
+    ]
+    event_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(
+        target_date="2026-07-07",
+        event_cache_path=event_path,
+        diagnostic_path=diagnostic_path,
+        since="2026-07-07T09:00:00",
+        until="2026-07-07T09:10:00",
+        generated_at="fixed",
+    )
+
+    row = report["rows"][0]
+    assert row["stock_code"] == "086520"
+    assert row["actual_submit_count"] == 0
+    assert report["summary"]["rising_missed_forced_scout_event_count"] == 1
+    assert report["summary"]["rising_missed_forced_scout_symbol_count"] == 1
+
+
 def test_build_report_summarizes_latency_danger_root_cause(tmp_path):
     event_path = tmp_path / "events.jsonl"
     diagnostic_path = tmp_path / "diag.json"
