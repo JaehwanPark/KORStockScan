@@ -351,6 +351,11 @@ def _discovery_live_candidate_contract_passed(item: Any) -> bool:
         return False
     if str(item.get("source_quality_gate") or "pass") != "pass":
         return False
+    if str(item.get("stage") or "") == "lifecycle_flow":
+        primary_book = str(item.get("primary_sample_book") or item.get("parent_primary_sample_book") or "")
+        real_joined = max(_safe_int(item.get("real_joined_sample"), 0), _safe_int(item.get("parent_real_joined_sample"), 0))
+        if primary_book != "real" or real_joined < 10:
+            return False
     return _discovery_candidate_tier2_passed(item)
 
 
@@ -371,6 +376,10 @@ def _greenfield_parent_policy_contract_passed(item: Any) -> bool:
     if item.get("parent_live_floor_passed") is not True:
         return False
     if _safe_int(item.get("parent_joined_sample")) < 10:
+        return False
+    if str(item.get("parent_primary_sample_book") or item.get("primary_sample_book") or "") != "real":
+        return False
+    if _safe_int(item.get("parent_real_joined_sample"), 0) < 10:
         return False
     if str(item.get("parent_granularity_status") or "") != "target_pass":
         return False

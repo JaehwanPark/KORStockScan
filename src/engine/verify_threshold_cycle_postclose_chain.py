@@ -523,6 +523,9 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         / "ai_watching_score_smoothing_diagnostic"
         / f"ai_watching_score_smoothing_diagnostic_{target_date}.json",
         "runtime_approval_summary": REPORT_DIR / "runtime_approval_summary" / f"runtime_approval_summary_{target_date}.json",
+        "entry_split_order_plan": REPORT_DIR
+        / "entry_split_order_plan"
+        / f"entry_split_order_plan_{target_date}.json",
         "runtime_apply_gap_audit": REPORT_DIR
         / "runtime_apply_gap_audit"
         / f"runtime_apply_gap_audit_{target_date}.json",
@@ -3567,6 +3570,7 @@ def build_threshold_cycle_postclose_verification(
     key_lineage_ledger = _load_json(paths["key_lineage_ledger"])
     conversion_lane = _load_json(paths["conversion_lane"])
     bridge_report = _load_json(paths["runtime_apply_bridge"])
+    entry_split_order_plan = _load_json(paths["entry_split_order_plan"])
     quote_consistency_report = _load_json(paths["quote_consistency"])
     preopen_apply_current = _load_json(paths["threshold_preopen_apply_current"])
     preopen_apply_next = _load_json(paths["threshold_preopen_apply_next"])
@@ -3911,6 +3915,12 @@ def build_threshold_cycle_postclose_verification(
         "runtime_approval_summary_sources_lifecycle_decision_matrix": (
             ((runtime_summary.get("sources") or {}).get("lifecycle_decision_matrix")) or None
         ),
+        "threshold_cycle_ev_sources_entry_split_order_plan": (
+            ((ev_report.get("sources") or {}).get("entry_split_order_plan")) or None
+        ),
+        "runtime_approval_summary_sources_entry_split_order_plan": (
+            ((runtime_summary.get("sources") or {}).get("entry_split_order_plan")) or None
+        ),
         "threshold_cycle_ev_sources_swing_lifecycle_decision_matrix": (
             ((ev_report.get("sources") or {}).get("swing_lifecycle_decision_matrix")) or None
         ),
@@ -3995,6 +4005,12 @@ def build_threshold_cycle_postclose_verification(
         required_execution_flags = (*required_execution_flags, "ai_watching_score_smoothing_diagnostic")
     if (
         done_line
+        and "entry_split_order_plan" in execution_flags
+        and "entry_split_order_plan" not in missing_execution_flags
+    ):
+        required_execution_flags = (*required_execution_flags, "entry_split_order_plan")
+    if (
+        done_line
         and "ldm_hypothesis_parent_refinement" in execution_flags
         and "ldm_hypothesis_parent_refinement" not in missing_execution_flags
     ):
@@ -4022,6 +4038,7 @@ def build_threshold_cycle_postclose_verification(
             "daily_ev",
             "runtime_approval_summary",
             "runtime_apply_gap_audit",
+            "entry_split_order_plan",
             "ldm_hypothesis_parent_refinement",
             "next_stage2_checklist",
         )
@@ -4046,6 +4063,7 @@ def build_threshold_cycle_postclose_verification(
         "runtime_approval_summary" if "runtime_approval_summary" in disabled_stage_flags else "",
         "runtime_apply_bridge" if "runtime_apply_bridge" in disabled_stage_flags else "",
         "runtime_apply_gap_audit" if "runtime_apply_gap_audit" in disabled_stage_flags else "",
+        "entry_split_order_plan" if "entry_split_order_plan" in disabled_stage_flags else "",
         "ldm_hypothesis_parent_refinement" if "ldm_hypothesis_parent_refinement" in disabled_stage_flags else "",
         "next_stage2_checklist" if "next_stage2_checklist" in disabled_stage_flags else "",
     }
@@ -4053,6 +4071,8 @@ def build_threshold_cycle_postclose_verification(
         disabled_artifact_labels.add("runtime_apply_bridge")
     if "runtime_apply_gap_audit" not in execution_flags:
         disabled_artifact_labels.add("runtime_apply_gap_audit")
+    if "entry_split_order_plan" not in execution_flags:
+        disabled_artifact_labels.add("entry_split_order_plan")
     if "ldm_hypothesis_parent_refinement" not in execution_flags:
         disabled_artifact_labels.add("ldm_hypothesis_parent_refinement")
     if "swing_strategy_discovery" not in execution_flags:
@@ -4110,6 +4130,19 @@ def build_threshold_cycle_postclose_verification(
         quote_consistency_warnings.append("quote_consistency_report_missing")
     if quote_consistency_warnings:
         handoff_warnings.extend(quote_consistency_warnings)
+    entry_split_grid = (
+        entry_split_order_plan.get("candidate_grid")
+        if isinstance(entry_split_order_plan.get("candidate_grid"), list)
+        else []
+    )
+    if any(
+        isinstance(item, dict)
+        and _safe_int(item.get("real_sample_count"), 0) >= 20
+        and _safe_int(item.get("real_outcome_joined_sample"), 0) > 0
+        and str(item.get("primary_sample_book") or "") != "real"
+        for item in entry_split_grid
+    ):
+        handoff_warnings.append("real_sample_unused_by_postclose_decision")
     missing_downstream_links = [
         key for key, value in downstream_links.items() if value in (None, "", "-")
     ]
@@ -4144,6 +4177,10 @@ def build_threshold_cycle_postclose_verification(
     if "scalp_entry_adm" in disabled_stage_flags:
         missing_downstream_links = [
             key for key in missing_downstream_links if "scalp_entry_action_decision_matrix" not in key
+        ]
+    if "entry_split_order_plan" in disabled_stage_flags or "entry_split_order_plan" not in execution_flags:
+        missing_downstream_links = [
+            key for key in missing_downstream_links if "entry_split_order_plan" not in key
         ]
     if "lifecycle_decision_matrix" in disabled_stage_flags:
         missing_downstream_links = [

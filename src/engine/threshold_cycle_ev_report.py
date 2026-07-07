@@ -47,6 +47,7 @@ STAGE_HOOK_WORKORDER_DISCOVERY_DIR = REPORT_DIR / "stage_hook_workorder_discover
 STAGE_HOOK_RUNTIME_SCAFFOLD_DIR = REPORT_DIR / "stage_hook_runtime_scaffold"
 PATTERN_LAB_PROPAGATION_AUDIT_DIR = REPORT_DIR / "pattern_lab_propagation_audit"
 BUY_FUNNEL_SENTINEL_DIR = REPORT_DIR / "buy_funnel_sentinel"
+ENTRY_SPLIT_ORDER_PLAN_DIR = REPORT_DIR / "entry_split_order_plan"
 
 _JSON_LOAD_DIAGNOSTICS: list[dict[str, Any]] = []
 
@@ -109,6 +110,11 @@ def _top_level_summary(report: dict[str, Any]) -> dict[str, Any]:
         if isinstance(report.get("lifecycle_bucket_discovery"), dict)
         else {}
     )
+    decisions = (
+        ((report.get("calibration_outcome") or {}).get("decisions") or [])
+        if isinstance(report.get("calibration_outcome"), dict)
+        else []
+    )
     live_auto_ready = _safe_int(lifecycle_discovery.get("live_auto_apply_ready_count"), 0)
     source_split = daily_ev.get("source_split") if isinstance(daily_ev.get("source_split"), dict) else {}
     real_split = source_split.get("real") if isinstance(source_split.get("real"), dict) else {}
@@ -120,6 +126,38 @@ def _top_level_summary(report: dict[str, Any]) -> dict[str, Any]:
         else scalp_sim.get("completed"),
         0,
     ) or _safe_int(sim_split.get("sample"), 0)
+    real_outcome_joined_sample = real_sample
+    sim_diagnostic_sample = sim_sample
+    primary_sample_book = "real" if real_sample >= 20 else "sim" if sim_sample > 0 else "none"
+    for item in (decisions if isinstance(decisions, list) else []):
+        if not isinstance(item, dict):
+            continue
+        metrics = item.get("source_metrics") if isinstance(item.get("source_metrics"), dict) else {}
+        if str(item.get("family") or "") == "dynamic_entry_price_resolver":
+            real_outcome_joined_sample = max(
+                real_outcome_joined_sample,
+                _safe_int(metrics.get("real_outcome_joined_sample"), 0),
+            )
+            sim_diagnostic_sample = max(
+                sim_diagnostic_sample,
+                _safe_int(metrics.get("sim_candidate_observations"), 0),
+            )
+            book = str(metrics.get("primary_sample_book") or "").strip()
+            if book:
+                primary_sample_book = book
+        if str(item.get("family") or "") == "entry_split_order_plan":
+            real_outcome_joined_sample = max(
+                real_outcome_joined_sample,
+                _safe_int(metrics.get("real_outcome_joined_sample"), 0),
+            )
+            sim_diagnostic_sample = max(
+                sim_diagnostic_sample,
+                _safe_int(metrics.get("sim_sample_count"), 0),
+            )
+            book = str(metrics.get("primary_sample_book") or "").strip()
+            if book and primary_sample_book not in {"real"}:
+                primary_sample_book = book
+    real_sample_ready = real_sample >= 20 or real_outcome_joined_sample >= 20 or primary_sample_book == "real"
     if report.get("status"):
         status = str(report.get("status"))
     elif source_quality_preflight_blocked(source_quality):
@@ -130,6 +168,8 @@ def _top_level_summary(report: dict[str, Any]) -> dict[str, Any]:
         status = "pass"
     if live_auto_ready > 0:
         primary_verdict = "live_auto_candidate_present"
+    elif real_sample_ready and real_outcome_joined_sample > 0:
+        primary_verdict = "real_primary_evidence_present"
     elif sim_sample > 0:
         primary_verdict = "sim_evidence_present_no_live_bucket"
     else:
@@ -141,6 +181,10 @@ def _top_level_summary(report: dict[str, Any]) -> dict[str, Any]:
         "source_quality_tuning_input_allowed": source_quality.get("tuning_input_allowed"),
         "real_sample": real_sample,
         "sim_sample": sim_sample,
+        "real_sample_ready": real_sample_ready,
+        "real_outcome_joined_sample": real_outcome_joined_sample,
+        "sim_diagnostic_sample": sim_diagnostic_sample,
+        "primary_sample_book": primary_sample_book,
         "live_auto_ready_count": live_auto_ready,
         "primary_verdict": primary_verdict,
         "runtime_effect": False,
@@ -1648,6 +1692,70 @@ def _audit_summary(target_date: str, report_type: str, report_dir: Path) -> tupl
     )
 
 
+def _entry_split_order_plan_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
+    json_path = ENTRY_SPLIT_ORDER_PLAN_DIR / f"entry_split_order_plan_{target_date}.json"
+    payload = _load_json(json_path)
+    if not payload:
+        return (
+            {
+                "available": False,
+                "artifact": None,
+                "status": "missing",
+                "candidate_grid_count": 0,
+                "recommended_policy_candidate_count": 0,
+                "runtime_effect": False,
+            },
+            None,
+            ["entry_split_order_plan_missing"],
+        )
+    recommended = payload.get("recommended_policy") if isinstance(payload.get("recommended_policy"), dict) else {}
+    source_quality = payload.get("source_quality") if isinstance(payload.get("source_quality"), dict) else {}
+    candidate_grid = payload.get("candidate_grid") if isinstance(payload.get("candidate_grid"), list) else []
+    candidates = recommended.get("candidates") if isinstance(recommended.get("candidates"), list) else []
+    real_sample = max(
+        [_safe_int(item.get("real_sample_count"), 0) for item in candidate_grid if isinstance(item, dict)] or [0]
+    )
+    real_outcome = max(
+        [_safe_int(item.get("real_outcome_joined_sample"), 0) for item in candidate_grid if isinstance(item, dict)] or [0]
+    )
+    sim_sample = max(
+        [_safe_int(item.get("sim_sample_count"), 0) for item in candidate_grid if isinstance(item, dict)] or [0]
+    )
+    primary_books = [
+        str(item.get("primary_sample_book") or "")
+        for item in candidate_grid
+        if isinstance(item, dict) and str(item.get("primary_sample_book") or "")
+    ]
+    warnings: list[str] = []
+    if source_quality.get("tuning_input_allowed") is False:
+        warnings.append("entry_split_order_plan_source_quality_blocked")
+    if payload.get("schema_version") != "entry_split_order_plan_v1":
+        warnings.append("entry_split_order_plan_schema_mismatch")
+    return (
+        {
+            "available": True,
+            "artifact": str(json_path),
+            "status": "source_quality_blocked" if source_quality.get("tuning_input_allowed") is False else "pass",
+            "schema_version": payload.get("schema_version"),
+            "candidate_grid_count": len(candidate_grid),
+            "recommended_policy_candidate_count": len(candidates),
+            "real_sample_ready": real_sample >= 20,
+            "real_sample_count": real_sample,
+            "real_outcome_joined_sample": real_outcome,
+            "sim_diagnostic_sample": sim_sample,
+            "primary_sample_book": "real" if "real" in primary_books else (primary_books[0] if primary_books else "none"),
+            "policy_file": recommended.get("policy_file"),
+            "policy_version": recommended.get("policy_version"),
+            "runtime_apply_allowed": recommended.get("runtime_apply_allowed"),
+            "source_quality_status": source_quality.get("status"),
+            "runtime_effect": False,
+            "decision_authority": "next_preopen_bounded_entry_split_policy",
+        },
+        str(json_path),
+        warnings,
+    )
+
+
 def _positive_lifecycle_parent_summary(payload: dict[str, Any], *, limit: int = 8) -> dict[str, Any]:
     parents = payload.get("parent_bucket_summaries") if isinstance(payload.get("parent_bucket_summaries"), list) else []
     positive: list[dict[str, Any]] = []
@@ -2010,6 +2118,9 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
     scalp_entry_adm_summary, scalp_entry_adm_path, scalp_entry_adm_warnings = _scalp_entry_adm_summary(target_date)
     lifecycle_matrix_summary, lifecycle_matrix_path, lifecycle_matrix_warnings = _lifecycle_decision_matrix_summary(target_date)
     buy_funnel_sentinel_summary, buy_funnel_sentinel_path, buy_funnel_sentinel_warnings = _buy_funnel_sentinel_summary(target_date)
+    entry_split_order_plan_summary, entry_split_order_plan_path, entry_split_order_plan_warnings = (
+        _entry_split_order_plan_summary(target_date)
+    )
     (
         lifecycle_bucket_discovery_summary,
         lifecycle_bucket_discovery_path,
@@ -2208,6 +2319,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
         "swing_pattern_lab_automation": swing_lab_summary,
         "scalp_entry_action_decision_matrix": scalp_entry_adm_summary,
         "buy_funnel_sentinel": buy_funnel_sentinel_summary,
+        "entry_split_order_plan": entry_split_order_plan_summary,
         "lifecycle_decision_matrix": lifecycle_matrix_summary,
         "lifecycle_bucket_discovery": lifecycle_bucket_discovery_summary,
         "lifecycle_bucket_windows": lifecycle_bucket_windows_summary,
@@ -2237,6 +2349,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
             "swing_pattern_lab_automation": swing_lab_path,
             "scalp_entry_action_decision_matrix": scalp_entry_adm_path,
             "buy_funnel_sentinel": buy_funnel_sentinel_path,
+            "entry_split_order_plan": entry_split_order_plan_path,
             "lifecycle_decision_matrix": lifecycle_matrix_path,
             "lifecycle_bucket_discovery": lifecycle_bucket_discovery_path,
             "lifecycle_bucket_windows": lifecycle_bucket_windows_summary,
@@ -2272,6 +2385,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
                 *swing_lab_warnings,
                 *scalp_entry_adm_warnings,
                 *buy_funnel_sentinel_warnings,
+                *entry_split_order_plan_warnings,
                 *lifecycle_matrix_warnings,
                 *lifecycle_bucket_discovery_warnings,
                 *lifecycle_bucket_windows_warnings,
@@ -2322,6 +2436,7 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
     pattern_lab = report.get("pattern_lab_automation") if isinstance(report.get("pattern_lab_automation"), dict) else {}
     swing_lab = report.get("swing_pattern_lab_automation") if isinstance(report.get("swing_pattern_lab_automation"), dict) else {}
     scalp_entry_adm = report.get("scalp_entry_action_decision_matrix") if isinstance(report.get("scalp_entry_action_decision_matrix"), dict) else {}
+    entry_split_order_plan = report.get("entry_split_order_plan") if isinstance(report.get("entry_split_order_plan"), dict) else {}
     lifecycle_matrix = report.get("lifecycle_decision_matrix") if isinstance(report.get("lifecycle_decision_matrix"), dict) else {}
     lifecycle_bucket_discovery = (
         report.get("lifecycle_bucket_discovery")
@@ -2384,6 +2499,7 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         f"- recovered/lost labels: `{funnel.get('missed_winner_recovered')}` / `{funnel.get('avoided_loser_lost')}`",
         f"- stale/broker override excluded: `{funnel.get('stale_quote_override_events')}` / `{funnel.get('broker_guard_bypass_candidates')}`",
         f"- full/partial fill: `{funnel.get('full_fill_events')}` / `{funnel.get('partial_fill_events')}`",
+        f"- entry_split_order_plan: status=`{entry_split_order_plan.get('status') or '-'}` candidates=`{entry_split_order_plan.get('recommended_policy_candidate_count')}` policy=`{entry_split_order_plan.get('policy_version') or '-'}`",
         "",
         "## Holding Exit",
         f"- holding_reviews: `{holding.get('holding_reviews')}`",

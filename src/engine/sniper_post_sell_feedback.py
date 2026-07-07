@@ -403,6 +403,7 @@ def record_post_sell_candidate(
         resolved_ai_effective = round(_safe_float(stock.get("last_exit_ai_score_effective"), resolved_ai_score), 1)
         payload = {
             "post_sell_id": uuid.uuid4().hex[:16],
+            "actual_order_submitted": True,
             "recorded_at": now.isoformat(),
             "signal_date": target_date,
             "recommendation_id": _safe_int(recommendation_id, 0),

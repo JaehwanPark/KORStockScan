@@ -663,13 +663,7 @@ def test_dynamic_entry_price_resolver_uses_sim_metrics_for_readiness_and_keeps_r
     assert dynamic["apply_mode"] == "calibrated_apply_candidate"
     assert dynamic["source_metrics"]["candidate_metrics_ready"] is True
     assert dynamic["source_metrics"]["candidate_metrics_missing"] == {}
-    assert set(dynamic["source_metrics"]["candidate_metrics_diagnostic_missing"]) == {"real"}
-    assert set(dynamic["source_metrics"]["candidate_metrics_diagnostic_missing"]["real"]) == {
-        "fill_rate",
-        "full_fill_rate",
-        "partial_fill_rate",
-        "missed_upside",
-    }
+    assert "candidate_metrics_diagnostic_missing" not in dynamic["source_metrics"]
 
 
 def test_dynamic_entry_price_resolver_does_not_use_real_observations_for_sample_floor():
@@ -715,10 +709,10 @@ def test_dynamic_entry_price_resolver_does_not_use_real_observations_for_sample_
     dynamic = {item["family"]: item for item in report["calibration_candidates"]}[
         "dynamic_entry_price_resolver"
     ]
-    assert dynamic["calibration_state"] == "hold_sample"
-    assert dynamic["sample_count"] == 5
-    assert dynamic["sample_floor_status"] == "hold_sample"
-    assert "후보 표본 미달(5/20)" in dynamic["calibration_reason"]
+    assert dynamic["calibration_state"] == "hold_real_outcome_pending"
+    assert dynamic["sample_count"] == 20
+    assert dynamic["sample_floor_status"] == "hold_real_outcome_pending"
+    assert "outcome join" in dynamic["calibration_reason"]
 
 
 def test_dynamic_entry_price_resolver_separates_sim_unpriced_stale_and_ai_candidate_failures():
@@ -777,6 +771,7 @@ def test_dynamic_entry_price_resolver_separates_sim_unpriced_stale_and_ai_candid
 
     dynamic = report["threshold_snapshot"]["dynamic_entry_price_resolver"]["sample"]
     sim_metrics = dynamic["candidate_metrics"]["sim"]
+    assert dynamic["real_candidate_observations"] == 0
     assert sim_metrics["priced_sample_count"] == 2
     assert sim_metrics["unpriced_sample_count"] == 2
     assert sim_metrics["stale_warning_count"] == 2

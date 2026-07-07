@@ -315,6 +315,9 @@ TARGET_ENV_VALUE_KEYS = {
     "LIFECYCLE_BUCKET_DISCOVERY_POLICY_FILE": "policy_file",
     "LIFECYCLE_BUCKET_DISCOVERY_POLICY_VERSION": "policy_version",
     "LIFECYCLE_BUCKET_DISCOVERY_LIVE_AUTO_APPLY_ENABLED": "live_auto_apply_enabled",
+    "ENTRY_SPLIT_ORDER_POLICY_ENABLED": "enabled",
+    "ENTRY_SPLIT_ORDER_POLICY_FILE": "policy_file",
+    "ENTRY_SPLIT_ORDER_POLICY_VERSION": "policy_version",
     "SCALP_SIM_AUTO_POLICY_ENABLED": "enabled",
     "SCALP_SIM_AUTO_POLICY_FILE": "policy_file",
     "SCALP_SIM_AUTO_POLICY_VERSION": "policy_version",
@@ -1138,6 +1141,7 @@ _FAMILY_ENV_KEY_PREFIXES: dict[str, str] = {
     "swing_sim_auto_approval": "KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_",
     "scalp_sim_scale_in_window_expansion": "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_",
     "lifecycle_bucket_discovery_sim_auto_approval": "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_",
+    "entry_split_order_plan": "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_",
     PROFIT_STAGNATION_EXIT_FAMILY: "KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_",
 }
 

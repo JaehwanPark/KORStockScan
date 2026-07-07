@@ -5349,6 +5349,45 @@ def _dynamic_entry_price_report_contract_orders(ev_report: dict[str, Any]) -> li
     if not source_metrics:
         return []
     orders: list[dict[str, Any]] = []
+    real_count = _safe_int(source_metrics.get("real_candidate_observations"), 0)
+    real_joined = _safe_int(source_metrics.get("real_outcome_joined_sample"), 0)
+    sim_count = _safe_int(source_metrics.get("sim_candidate_observations"), 0)
+    state = str(dynamic.get("calibration_state") or source_metrics.get("calibration_state") or "")
+    reason = str(dynamic.get("calibration_reason") or source_metrics.get("calibration_reason") or "")
+    if real_count >= 20 and real_joined > 0 and state == "hold_sample" and "sim" in reason.lower():
+        orders.append(
+            {
+                "order_id": "order_dynamic_entry_price_real_sample_unused_by_postclose_decision",
+                "title": "dynamic entry price real sample unused by postclose decision",
+                "source_report_type": "threshold_cycle_ev",
+                "lifecycle_stage": "entry",
+                "target_subsystem": "daily_threshold_cycle_report",
+                "route": "source_quality_gap",
+                "mapped_family": "dynamic_entry_price_resolver",
+                "threshold_family": "dynamic_entry_price_resolver",
+                "improvement_type": "real_sample_unused_by_postclose_decision",
+                "confidence": "postclose_threshold_ev_source",
+                "priority": 2,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "expected_ev_effect": "Use submitted real outcome evidence as primary when it is source-quality ready instead of blocking solely on sim diagnostic floor.",
+                "evidence": [
+                    f"real_candidate_observations={real_count}",
+                    f"real_outcome_joined_sample={real_joined}",
+                    f"sim_candidate_observations={sim_count}",
+                    f"calibration_state={state}",
+                    f"calibration_reason={reason}",
+                ],
+                "next_postclose_metric": "dynamic_entry_price_resolver primary_sample_book should be real when real outcome EV is ready.",
+                "files_likely_touched": [
+                    "src/engine/daily_threshold_cycle_report.py",
+                    "src/tests/test_daily_threshold_cycle_report.py",
+                ],
+                "acceptance_tests": [
+                    "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py src/tests/test_build_code_improvement_workorder.py",
+                ],
+            }
+        )
     contract_status = str(
         source_metrics.get("report_contract_status")
         or source_metrics.get("dynamic_entry_price_report_contract_status")
@@ -5381,7 +5420,7 @@ def _dynamic_entry_price_report_contract_orders(ev_report: dict[str, Any]) -> li
         "report_contract_gap",
     }
     if not explicit_contract_gap:
-        return []
+        return orders
     candidate_quality = (
         source_metrics.get("candidate_quality") if isinstance(source_metrics.get("candidate_quality"), dict) else {}
     )
@@ -5457,6 +5496,87 @@ def _dynamic_entry_price_report_contract_orders(ev_report: dict[str, Any]) -> li
             }
         )
     return orders
+
+
+def _entry_split_order_plan_followup_orders(ev_report: dict[str, Any]) -> list[dict[str, Any]]:
+    summary = (
+        ev_report.get("entry_split_order_plan")
+        if isinstance(ev_report.get("entry_split_order_plan"), dict)
+        else {}
+    )
+    if not summary:
+        return []
+    issues: list[str] = []
+    status = str(summary.get("status") or "").strip()
+    if not summary.get("available"):
+        issues.append("report_contract_gap")
+    if status == "source_quality_blocked":
+        issues.append("source_quality_gap")
+    if (
+        _safe_int(summary.get("real_sample_count"), 0) >= 20
+        and _safe_int(summary.get("real_outcome_joined_sample"), 0) > 0
+        and _safe_int(summary.get("recommended_policy_candidate_count"), 0) <= 0
+        and str(summary.get("primary_sample_book") or "") != "real"
+    ):
+        issues.append("real_sample_unused_by_postclose_decision")
+    if summary.get("schema_version") and summary.get("schema_version") != "entry_split_order_plan_v1":
+        issues.append("report_contract_gap")
+    if not issues:
+        return []
+    source_path = (
+        (ev_report.get("sources") or {}).get("entry_split_order_plan")
+        if isinstance(ev_report.get("sources"), dict)
+        else None
+    )
+    return [
+        {
+            "order_id": "order_entry_split_order_plan_contract_gap",
+            "title": "entry split order plan report/source-quality contract gap",
+            "source_report_type": "threshold_cycle_ev",
+            "lifecycle_stage": "submit",
+            "target_subsystem": "entry_split_order_plan",
+            "route": "source_quality_gap",
+            "mapped_family": "entry_split_order_plan",
+            "threshold_family": "entry_split_order_plan",
+            "improvement_type": ",".join(sorted(set(issues))),
+            "confidence": "postclose_threshold_ev_source",
+            "priority": 3,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "expected_ev_effect": (
+                "Close report/source-quality/runtime-hook gaps so threshold-cycle can decide whether to pass a "
+                "requested_qty-preserving split policy to next PREOPEN."
+            ),
+            "evidence": [
+                f"status={summary.get('status')}",
+                f"schema_version={summary.get('schema_version')}",
+                f"candidate_grid_count={summary.get('candidate_grid_count')}",
+                f"recommended_policy_candidate_count={summary.get('recommended_policy_candidate_count')}",
+            ],
+            "source_paths": [str(source_path)] if source_path else [],
+            "next_postclose_metric": (
+                "entry_split_order_plan should provide valid schema, source-quality pass/exclusion, "
+                "candidate_grid, and recommended_policy."
+            ),
+            "files_likely_touched": [
+                "src/engine/scalping/entry_split_order_plan.py",
+                "src/engine/daily_threshold_cycle_report.py",
+                "src/engine/sniper_state_handlers.py",
+            ],
+            "acceptance_tests": [
+                "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_entry_split_order_plan.py src/tests/test_daily_threshold_cycle_report.py",
+                "Runtime hook must preserve total requested qty and not bypass pre-submit/broker guards.",
+            ],
+            "forbidden_uses": [
+                "requested_qty_increase",
+                "cap_release",
+                "broker_guard_relief",
+                "intraday_mutation",
+            ],
+        }
+    ]
 
 
 def _calibration_report_from_ev(ev_report: dict[str, Any]) -> dict[str, Any]:
@@ -6266,6 +6386,10 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         if _source_path_enabled(path, isolated_source_mode=isolated_source_mode)
     }
     ev_sources = ev_report.get("sources") if isinstance(ev_report.get("sources"), dict) else {}
+    if ev_sources.get("entry_split_order_plan"):
+        entry_split_order_plan_path = Path(str(ev_sources.get("entry_split_order_plan")))
+        if _source_path_enabled(entry_split_order_plan_path, isolated_source_mode=isolated_source_mode):
+            source_paths["entry_split_order_plan"] = entry_split_order_plan_path
     if ev_sources.get("scalp_entry_action_decision_matrix"):
         scalp_entry_source_path = Path(str(ev_sources.get("scalp_entry_action_decision_matrix")))
         if _source_path_enabled(scalp_entry_source_path, isolated_source_mode=isolated_source_mode):
@@ -6403,6 +6527,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         *_lifecycle_ai_context_followup_orders(ev_report),
         *_window_policy_audit_followup_orders(calibration_report),
         *_dynamic_entry_price_report_contract_orders(ev_report),
+        *_entry_split_order_plan_followup_orders(ev_report),
         *sim_fill_match_orders,
         *_panic_lifecycle_followup_orders(calibration_report),
         *_pipeline_event_verbosity_followup_orders(pipeline_event_verbosity),
@@ -6786,6 +6911,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "swing_lifecycle_decision_matrix": source_ref("swing_lifecycle_decision_matrix"),
             "swing_lifecycle_bucket_discovery": source_ref("swing_lifecycle_bucket_discovery"),
             "threshold_cycle_ev": source_ref("threshold_cycle_ev"),
+            "entry_split_order_plan": source_ref("entry_split_order_plan"),
             "lifecycle_decision_matrix": source_ref("lifecycle_decision_matrix"),
             "lifecycle_bucket_discovery": source_ref("lifecycle_bucket_discovery"),
             "scalp_entry_action_decision_matrix": source_ref("scalp_entry_action_decision_matrix"),

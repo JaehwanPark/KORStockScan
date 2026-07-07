@@ -2769,6 +2769,18 @@ def _apply_lifecycle_flow_parent_absorption(report: dict[str, Any], candidates: 
 
     for parent_id, items in groups.items():
         parent_joined_sample = sum(_safe_int(item.get("joined_sample")) for item in items)
+        parent_real_submitted_count = sum(_safe_int(item.get("real_submitted_count")) for item in items)
+        parent_real_joined_sample = sum(_safe_int(item.get("real_joined_sample")) for item in items)
+        parent_sim_probe_joined_sample = sum(_safe_int(item.get("sim_probe_joined_sample")) for item in items)
+        parent_primary_sample_book = (
+            "real"
+            if parent_real_joined_sample >= LIFECYCLE_FLOW_PARENT_MIN_JOINED_SAMPLE
+            else "sim_probe"
+            if parent_sim_probe_joined_sample > 0
+            else "real_outcome_pending"
+            if parent_real_submitted_count > 0
+            else "none"
+        )
         absorbed_sample_count = sum(_safe_int(item.get("sample"), _safe_int(item.get("joined_sample"))) for item in items)
         complete_flow_count = sum(_safe_int(item.get("complete_flow_count")) for item in items)
         parent_ev = _weighted_average(items, "source_quality_adjusted_ev_pct", "joined_sample")
@@ -2790,6 +2802,8 @@ def _apply_lifecycle_flow_parent_absorption(report: dict[str, Any], candidates: 
             and not group_live_blocked
             and route_pass
             and parent_joined_sample >= LIFECYCLE_FLOW_PARENT_MIN_JOINED_SAMPLE
+            and parent_primary_sample_book == "real"
+            and parent_real_joined_sample >= LIFECYCLE_FLOW_PARENT_MIN_JOINED_SAMPLE
             and primary_ev_uplift_passes(parent_ev, positive_edge=True)
         )
         parent_live_floor_passed = parent_deterministic_floor_passed and tier2_parent_pass
@@ -2836,6 +2850,10 @@ def _apply_lifecycle_flow_parent_absorption(report: dict[str, Any], candidates: 
             "parent_granularity_status": parent_granularity_status,
             "parent_granularity_floor_passed": parent_granularity_pass,
             "parent_joined_sample": parent_joined_sample,
+            "parent_real_submitted_count": parent_real_submitted_count,
+            "parent_real_joined_sample": parent_real_joined_sample,
+            "parent_sim_probe_joined_sample": parent_sim_probe_joined_sample,
+            "parent_primary_sample_book": parent_primary_sample_book,
             "parent_ev": parent_ev,
             "parent_source_quality_adjusted_ev_pct": parent_ev,
             "absorbed_child_bucket_ids": child_bucket_ids,
@@ -2868,6 +2886,10 @@ def _apply_lifecycle_flow_parent_absorption(report: dict[str, Any], candidates: 
             item["parent_level_candidate_counts"] = level_counts
             item["lifecycle_flow_parent_dimensions"] = _lifecycle_flow_parent_dimensions(item)
             item["parent_joined_sample"] = parent_joined_sample
+            item["parent_real_submitted_count"] = parent_real_submitted_count
+            item["parent_real_joined_sample"] = parent_real_joined_sample
+            item["parent_sim_probe_joined_sample"] = parent_sim_probe_joined_sample
+            item["parent_primary_sample_book"] = parent_primary_sample_book
             item["parent_source_quality_adjusted_ev_pct"] = parent_ev
             item["parent_live_floor_passed"] = parent_live_floor_passed
             item["parent_sample_floor"] = LIFECYCLE_FLOW_PARENT_MIN_JOINED_SAMPLE
@@ -3218,6 +3240,17 @@ def _sim_handoff_allowed(bucket: dict[str, Any], grade: dict[str, Any]) -> bool:
     return False
 
 
+def _real_primary_bucket_ready(bucket: dict[str, Any]) -> bool:
+    primary_book = str(bucket.get("primary_sample_book") or "").strip()
+    real_joined = _safe_int(bucket.get("real_joined_sample"), 0)
+    parent_primary_book = str(bucket.get("parent_primary_sample_book") or "").strip()
+    parent_real_joined = _safe_int(bucket.get("parent_real_joined_sample"), 0)
+    return (
+        (primary_book == "real" and real_joined >= 10)
+        or (parent_primary_book == "real" and parent_real_joined >= 10)
+    )
+
+
 def _classify_bucket(stage: str, bucket: dict[str, Any]) -> tuple[str, str | None, dict[str, Any]]:
     bucket_type = str(bucket.get("bucket_type") or "")
     bucket_key = str(bucket.get("bucket_key") or "")
@@ -3262,6 +3295,7 @@ def _classify_bucket(stage: str, bucket: dict[str, Any]) -> tuple[str, str | Non
         if (
             route == "candidate_recovery_or_relax"
             and str(grade.get("evidence_grade") or "") == EVIDENCE_GRADE_1_COMPLETED_SIM
+            and _real_primary_bucket_ready(bucket)
             and primary_ev_uplift_passes(ev, positive_edge=True)
         ):
             return "live_auto_apply_ready", live_family, grade
@@ -3463,6 +3497,10 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
         "sample": sample,
         "joined_sample": joined_sample,
+        "real_submitted_count": _safe_int(bucket.get("real_submitted_count"), 0),
+        "real_joined_sample": _safe_int(bucket.get("real_joined_sample"), 0),
+        "sim_probe_joined_sample": _safe_int(bucket.get("sim_probe_joined_sample"), 0),
+        "primary_sample_book": bucket.get("primary_sample_book") or "none",
         "join_rate": _safe_float(bucket.get("join_rate"), None),
         "source_quality_adjusted_ev_pct": _safe_float(bucket.get("source_quality_adjusted_ev_pct"), None),
         "equal_weight_avg_profit_pct": _safe_float(bucket.get("equal_weight_avg_profit_pct"), None),

@@ -4509,6 +4509,35 @@ def _unique_flow_values(rows: list[dict[str, Any]], *keys: str) -> list[str]:
     return sorted(dict.fromkeys(values))
 
 
+def _source_book_counts(rows: list[dict[str, Any]], joined_rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    joined_rows = joined_rows if joined_rows is not None else [
+        row for row in rows if row.get("stage_ev_composite_pct") is not None
+    ]
+
+    def _is_real(row: dict[str, Any]) -> bool:
+        features = row.get("runtime_features") if isinstance(row.get("runtime_features"), dict) else {}
+        raw = features.get("actual_order_submitted") if features.get("actual_order_submitted") is not None else row.get("actual_order_submitted")
+        return raw is not None and not _boolish_false(raw)
+
+    real_submitted_count = sum(1 for row in rows if _is_real(row))
+    real_joined_sample = sum(1 for row in joined_rows if _is_real(row))
+    sim_probe_joined_sample = max(0, len(joined_rows) - real_joined_sample)
+    if real_joined_sample >= 10:
+        primary_sample_book = "real"
+    elif sim_probe_joined_sample > 0:
+        primary_sample_book = "sim_probe"
+    elif real_submitted_count > 0:
+        primary_sample_book = "real_outcome_pending"
+    else:
+        primary_sample_book = "none"
+    return {
+        "real_submitted_count": real_submitted_count,
+        "real_joined_sample": real_joined_sample,
+        "sim_probe_joined_sample": sim_probe_joined_sample,
+        "primary_sample_book": primary_sample_book,
+    }
+
+
 def _flow_record(attribution_key: str, identity_quality: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
     by_stage: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -4567,6 +4596,29 @@ def _flow_record(attribution_key: str, identity_quality: str, rows: list[dict[st
     bucket_id = _stable_flow_bucket_id(bucket_key)
     labels = exit_row.get("labels") if exit_row and isinstance(exit_row.get("labels"), dict) else {}
     identity_closure_type = _flow_identity_closure_type(identity_quality)
+    def _row_is_real(row: dict[str, Any]) -> bool:
+        features = row.get("runtime_features") if isinstance(row.get("runtime_features"), dict) else {}
+        raw = (
+            features.get("actual_order_submitted")
+            if features.get("actual_order_submitted") is not None
+            else row.get("actual_order_submitted")
+        )
+        return raw is not None and not _boolish_false(raw)
+
+    real_flow = any(_row_is_real(row) for row in rows)
+    joined_flow = ev is not None and complete
+    source_book_counts = {
+        "real_submitted_count": 1 if real_flow else 0,
+        "real_joined_sample": 1 if real_flow and joined_flow else 0,
+        "sim_probe_joined_sample": 1 if joined_flow and not real_flow else 0,
+        "primary_sample_book": "real_outcome_pending"
+        if real_flow and not joined_flow
+        else "real"
+        if real_flow and joined_flow
+        else "sim_probe"
+        if joined_flow
+        else "none",
+    }
     return {
         "flow_instance_id": attribution_key,
         "identity_quality": identity_quality,
@@ -4608,6 +4660,7 @@ def _flow_record(attribution_key: str, identity_quality: str, rows: list[dict[st
         },
         "sample": 1,
         "joined_sample": 1 if ev is not None and complete else 0,
+        **source_book_counts,
         "source_quality_gate": source_quality,
         "ai_inference_proposal": _ai_inference_proposal(
             decision_point="lifecycle_flow_completeness_and_identity_quality",
@@ -4683,6 +4736,19 @@ def _lifecycle_flow_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, 
         applicability_counts: dict[str, int] = defaultdict(int)
         for item in subset:
             applicability_counts[str(item.get("scale_in_applicability") or "unknown")] += 1
+        source_book_counts = {
+            "real_submitted_count": sum(_safe_int(item.get("real_submitted_count")) for item in subset),
+            "real_joined_sample": sum(_safe_int(item.get("real_joined_sample")) for item in joined),
+            "sim_probe_joined_sample": sum(_safe_int(item.get("sim_probe_joined_sample")) for item in joined),
+        }
+        if source_book_counts["real_joined_sample"] >= 10:
+            source_book_counts["primary_sample_book"] = "real"
+        elif source_book_counts["sim_probe_joined_sample"] > 0:
+            source_book_counts["primary_sample_book"] = "sim_probe"
+        elif source_book_counts["real_submitted_count"] > 0:
+            source_book_counts["primary_sample_book"] = "real_outcome_pending"
+        else:
+            source_book_counts["primary_sample_book"] = "none"
         buckets.append(
             {
                 "lifecycle_flow_bucket_id": first.get("lifecycle_flow_bucket_id"),
@@ -4690,6 +4756,7 @@ def _lifecycle_flow_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, 
                 "bucket_key": bucket_key,
                 "sample": len(subset),
                 "joined_sample": len(joined),
+                **source_book_counts,
                 "join_rate": round(len(joined) / len(subset), 4) if subset else 0.0,
                 "complete_flow_count": len(subset) - incomplete_count,
                 "incomplete_flow_count": incomplete_count,
@@ -4898,6 +4965,7 @@ def _policy_entries(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         confidence = round(min(1.0, (joined_sample / JOINED_SAMPLE_FLOOR) * join_rate), 4) if sample else 0.0
         source_quality = "pass" if sample >= SAMPLE_FLOOR and joined_sample >= JOINED_SAMPLE_FLOOR else "hold_sample"
         selected_action = _policy_action_for(stage, subset)
+        source_book_counts = _source_book_counts(subset, joined)
         promote_ready = (
             stage == "entry"
             and selected_action == "BUY_DEFENSIVE"
@@ -4911,6 +4979,7 @@ def _policy_entries(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "stage": stage,
                 "sample": sample,
                 "joined_sample": joined_sample,
+                **source_book_counts,
                 "join_rate": round(join_rate, 4),
                 "stage_ev_composite_pct": avg_ev,
                 "confidence": confidence,

@@ -28,10 +28,12 @@ LIFECYCLE_DECISION_MATRIX_DIR = REPORT_DIR / "lifecycle_decision_matrix"
 CUMULATIVE_THRESHOLD_REPORT_DIR = REPORT_DIR / "threshold_cycle_cumulative"
 THRESHOLD_CALIBRATION_REPORT_DIR = REPORT_DIR / "threshold_cycle_calibration"
 THRESHOLD_AI_REVIEW_DIR = REPORT_DIR / "threshold_cycle_ai_review"
+ENTRY_SPLIT_ORDER_PLAN_DIR = REPORT_DIR / "entry_split_order_plan"
 POST_SELL_DIR = DATA_DIR / "post_sell"
 THRESHOLD_CYCLE_SCHEMA_VERSION = 3
 THRESHOLD_AI_CORRECTION_SCHEMA_VERSION = 1
 THRESHOLD_CYCLE_DIR = DATA_DIR / "threshold_cycle"
+ENTRY_SPLIT_ORDER_POLICY_DIR = THRESHOLD_CYCLE_DIR / "entry_split_order_policy"
 RAW_PIPELINE_FALLBACK_MAX_BYTES = 64 * 1024 * 1024
 CUMULATIVE_BASELINE_START_DATE = "2026-04-21"
 THRESHOLD_EVENT_TOP_LEVEL_KEEP_KEYS = {
@@ -329,6 +331,28 @@ CALIBRATION_FAMILY_METADATA = {
             "daily_only_allowed": True,
         },
         "sample_denominator_keys": ["candidate_observations", "sim_candidate_observations", "real_candidate_observations"],
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "allowed_runtime_apply": True,
+    },
+    "entry_split_order_plan": {
+        "priority": 9,
+        "source_family": "entry_split_order_plan",
+        "target_env_keys": [
+            "ENTRY_SPLIT_ORDER_POLICY_ENABLED",
+            "ENTRY_SPLIT_ORDER_POLICY_FILE",
+            "ENTRY_SPLIT_ORDER_POLICY_VERSION",
+        ],
+        "primary_key": "enabled",
+        "bounds": {},
+        "sample_floor": 20,
+        "sample_window": "rolling_10d_with_daily_diagnostic",
+        "window_policy": {
+            "primary": "rolling_10d",
+            "secondary": ["daily_intraday", "cumulative_since_2026-04-21"],
+            "use": "기존 requested_qty는 position_sizing_dynamic_formula에 맡기고, 총 수량을 보존한 planned_orders leg 분해 policy만 다음 PREOPEN bounded env로 연결한다.",
+            "daily_only_allowed": False,
+        },
+        "sample_denominator_keys": ["real_sample_count", "sim_sample_count", "recommended_policy_candidate_count"],
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
         "allowed_runtime_apply": True,
     },
@@ -4851,6 +4875,11 @@ ENTRY_PRICE_REQUIRED_METRIC_NAMES = {
     "missed_upside",
     "source_quality_adjusted_ev_pct",
 }
+ENTRY_PRICE_REAL_PRIMARY_REQUIRED_METRIC_NAMES = {
+    "cancel_rate",
+    "late_fill_rate",
+    "source_quality_adjusted_ev_pct",
+}
 ENTRY_PRICE_TARGET_ENV_VALUE_KEYS = {
     "SCALPING_ENTRY_PRICE_RESOLVER_ENABLED": "enabled",
     "SCALPING_ENTRY_PRICE_RESOLVER_MAX_BELOW_BID_BPS": "max_below_bid_bps",
@@ -4867,9 +4896,14 @@ def _entry_price_missing_metrics(
     missing_by_book: dict[str, list[str]] = {}
     for book in required_books:
         book_metrics = candidate_metrics.get(book) if isinstance(candidate_metrics.get(book), dict) else {}
+        required_names = (
+            ENTRY_PRICE_REAL_PRIMARY_REQUIRED_METRIC_NAMES
+            if book == "real"
+            else ENTRY_PRICE_REQUIRED_METRIC_NAMES
+        )
         missing = [
             name
-            for name in ENTRY_PRICE_REQUIRED_METRIC_NAMES
+            for name in required_names
             if name not in book_metrics or book_metrics.get(name) is None
         ]
         if missing:
@@ -4886,6 +4920,129 @@ def _entry_price_candidate_metrics_ready(
         candidate_metrics if isinstance(candidate_metrics, dict) else {},
         required_books=required_books,
     )
+
+
+def _entry_price_outcome_row_key(row: dict) -> str:
+    for key in (
+        "order_no",
+        "broker_order_no",
+        "broker_receipt_no",
+        "trade_id",
+        "record_id",
+        "entry_record_id",
+        "candidate_id",
+    ):
+        value = str(row.get(key) or "").strip()
+        if value and value != "-":
+            return f"{key}:{value}"
+    return f"row:{id(row)}"
+
+
+def _entry_price_real_outcome_metrics(real_events: list[dict], completed_rows: list[dict]) -> dict:
+    valid_rows = [
+        row
+        for row in _valid_profit_rows(completed_rows or [])
+        if not _is_synthetic_test_row(row)
+    ]
+    rows_by_key: dict[str, dict] = {}
+    rows_by_stock: dict[str, list[dict]] = defaultdict(list)
+    join_keys = (
+        "order_no",
+        "broker_order_no",
+        "broker_receipt_no",
+        "trade_id",
+        "record_id",
+        "entry_record_id",
+        "candidate_id",
+    )
+    for row in valid_rows:
+        stock_code = str(row.get("stock_code") or row.get("code") or "").strip()
+        if stock_code:
+            rows_by_stock[stock_code].append(row)
+        for key in join_keys:
+            value = str(row.get(key) or "").strip()
+            if value and value != "-":
+                rows_by_key[f"{key}:{value}"] = row
+
+    event_stock_counts: Counter[str] = Counter()
+    for event in real_events:
+        fields = _event_fields(event)
+        stock_code = str(fields.get("stock_code") or fields.get("code") or "").strip()
+        if stock_code:
+            event_stock_counts[stock_code] += 1
+
+    matched_rows: dict[str, dict] = {}
+    for event in real_events:
+        fields = _event_fields(event)
+        row = None
+        for key in join_keys:
+            value = str(fields.get(key) or "").strip()
+            if value and value != "-":
+                row = rows_by_key.get(f"{key}:{value}")
+                if row is not None:
+                    break
+        if row is None:
+            stock_code = str(fields.get("stock_code") or fields.get("code") or "").strip()
+            stock_rows = rows_by_stock.get(stock_code) or []
+            if stock_code and len(stock_rows) == 1 and event_stock_counts.get(stock_code, 0) == 1:
+                row = stock_rows[0]
+        if row is not None:
+            matched_rows[_entry_price_outcome_row_key(row)] = row
+
+    profit_values = [
+        float(value)
+        for value in (_safe_float(row.get("profit_rate"), None) for row in matched_rows.values())
+        if value is not None
+    ]
+    joined_sample = len(profit_values)
+    submitted_count = len(real_events)
+    return {
+        "real_outcome_joined_sample": joined_sample,
+        "real_outcome_pending_count": max(0, submitted_count - joined_sample),
+        "real_outcome_join_rate": round(joined_sample / submitted_count, 4) if submitted_count else 0.0,
+        "real_source_quality_adjusted_ev_pct": round(sum(profit_values) / joined_sample, 4)
+        if joined_sample
+        else None,
+        "real_notional_weighted_ev_pct": round(sum(profit_values) / joined_sample, 4)
+        if joined_sample
+        else None,
+        "real_execution_quality_ready": submitted_count >= 20 and joined_sample > 0,
+    }
+
+
+def _entry_price_real_execution_event(event: dict) -> bool:
+    fields = _event_fields(event)
+    return _field_bool(fields.get("actual_order_submitted"))
+
+
+def _entry_price_primary_sample_book(
+    metrics: dict,
+    candidate_metrics: dict,
+) -> tuple[str, str]:
+    explicit = str(metrics.get("primary_sample_book") or "").strip()
+    if explicit:
+        authority = str(metrics.get("decision_authority") or "").strip() or (
+            "real_outcome_primary_next_preopen_bounded_entry_price_policy"
+            if explicit == "real"
+            else "sim_diagnostic_or_preopen_bounded_fallback"
+            if explicit == "sim"
+            else "hold_sample"
+        )
+        return explicit, authority
+    real_count = _safe_int(metrics.get("real_candidate_observations"), 0) or 0
+    sim_count = _safe_int(metrics.get("sim_candidate_observations"), 0) or 0
+    real_joined = _safe_int(metrics.get("real_outcome_joined_sample"), 0) or 0
+    real_ev = _safe_float(metrics.get("real_source_quality_adjusted_ev_pct"), None)
+    if real_ev is None:
+        real_ev = _safe_float((candidate_metrics.get("real") or {}).get("source_quality_adjusted_ev_pct"), None)
+    sim_ready = sim_count >= 20 and _entry_price_candidate_metrics_ready(candidate_metrics, required_books=("sim",))
+    if real_count >= 20 and real_joined > 0 and real_ev is not None and real_ev > 0:
+        return "real", "real_outcome_primary_next_preopen_bounded_entry_price_policy"
+    if sim_ready:
+        return "sim", "sim_diagnostic_or_preopen_bounded_fallback"
+    if real_count >= 20 and real_joined <= 0:
+        return "real_outcome_pending", "real_execution_quality_observed_outcome_pending"
+    return "none", "hold_sample"
 
 
 def _entry_price_exclusion_reason(event: dict) -> str:
@@ -5177,7 +5334,12 @@ def _entry_price_recommendation_has_runtime_change(recommended: dict, current: d
     return False
 
 
-def _build_dynamic_entry_price_resolver_family(events: list[dict], *, target_date: str | None = None) -> dict:
+def _build_dynamic_entry_price_resolver_family(
+    events: list[dict],
+    completed_rows: list[dict] | None = None,
+    *,
+    target_date: str | None = None,
+) -> dict:
     current = {
         "enabled": bool(getattr(TRADING_RULES, "SCALPING_ENTRY_PRICE_RESOLVER_ENABLED", True)),
         "normal_defensive_ticks": int(getattr(TRADING_RULES, "SCALPING_NORMAL_DEFENSIVE_TICKS", 1) or 1),
@@ -5207,7 +5369,12 @@ def _build_dynamic_entry_price_resolver_family(events: list[dict], *, target_dat
         "scalp_sim_entry_unpriced",
         "scalp_sim_entry_expired",
     }
-    real_events = [event for event in events if str(event.get("stage") or "") in real_stages]
+    real_stage_events = [event for event in events if str(event.get("stage") or "") in real_stages]
+    real_events = [
+        event
+        for event in real_stage_events
+        if _entry_price_real_execution_event(event)
+    ]
     sim_events = [event for event in events if str(event.get("stage") or "") in sim_stages]
     values = _extract_field_values(events, "order_bundle_submitted", "price_below_bid_bps")
     if not values:
@@ -5236,19 +5403,42 @@ def _build_dynamic_entry_price_resolver_family(events: list[dict], *, target_dat
         sim_events,
         target_date=target_date,
     )
+    real_outcome = _entry_price_real_outcome_metrics(real_events, completed_rows or [])
+    candidate_metrics["real"] = {
+        **candidate_metrics.get("real", {}),
+        "missed_upside": 0.0 if real_outcome.get("real_outcome_joined_sample") else None,
+        "source_quality_adjusted_ev_pct": real_outcome.get("real_source_quality_adjusted_ev_pct"),
+        "notional_weighted_ev_pct": real_outcome.get("real_notional_weighted_ev_pct"),
+        "real_outcome_joined_sample": real_outcome.get("real_outcome_joined_sample"),
+        "real_outcome_pending_count": real_outcome.get("real_outcome_pending_count"),
+        "real_outcome_join_rate": real_outcome.get("real_outcome_join_rate"),
+        "ev_source": "real_completed_profit_rate" if real_outcome.get("real_outcome_joined_sample") else "-",
+    }
     counterfactual_join_diagnostics = _dynamic_entry_price_counterfactual_join_diagnostics(
-        real_events + sim_events,
+        real_stage_events + sim_events,
         target_date=target_date,
     )
     candidate_quality = {
-        "AI_candidate": _entry_price_ai_candidate_quality(real_events + sim_events),
+        "AI_candidate": _entry_price_ai_candidate_quality(real_stage_events + sim_events),
     }
     sim_submit_path_quality = _entry_price_sim_submit_path_quality(events)
     sim_unpriced_or_stale_warning_count = int(
         candidate_metrics["sim"].get("excluded_from_fill_ev_count") or 0
     )
-    sample_floor_ready = len(sim_events) >= 20
-    metrics_ready = _entry_price_candidate_metrics_ready(candidate_metrics, required_books=("sim",))
+    sim_metrics_ready = _entry_price_candidate_metrics_ready(candidate_metrics, required_books=("sim",))
+    primary_sample_book, decision_authority = _entry_price_primary_sample_book(
+        {
+            "real_candidate_observations": len(real_events),
+            "sim_candidate_observations": len(sim_events),
+            **real_outcome,
+        },
+        candidate_metrics,
+    )
+    sample_floor_ready = primary_sample_book in {"real", "sim"}
+    metrics_ready = _entry_price_candidate_metrics_ready(
+        candidate_metrics,
+        required_books=(primary_sample_book,) if primary_sample_book in {"real", "sim"} else ("sim",),
+    )
     sample_ready = sample_floor_ready and metrics_ready
     return {
         "family": "dynamic_entry_price_resolver",
@@ -5257,6 +5447,11 @@ def _build_dynamic_entry_price_resolver_family(events: list[dict], *, target_dat
             "candidate_observations": len(real_events) + len(sim_events),
             "real_candidate_observations": len(real_events),
             "sim_candidate_observations": len(sim_events),
+            "real_outcome_joined_sample": real_outcome.get("real_outcome_joined_sample"),
+            "real_source_quality_adjusted_ev_pct": real_outcome.get("real_source_quality_adjusted_ev_pct"),
+            "real_execution_quality_ready": real_outcome.get("real_execution_quality_ready"),
+            "primary_sample_book": primary_sample_book,
+            "decision_authority": decision_authority,
             "price_below_bid_bps": len(values),
             "sim_price_below_bid_bps": len(sim_values),
             "entry_ai_price_canary_applied": _stage_count(events, "entry_ai_price_canary_applied"),
@@ -5270,6 +5465,7 @@ def _build_dynamic_entry_price_resolver_family(events: list[dict], *, target_dat
             "candidate_metrics": candidate_metrics,
             "candidate_quality": candidate_quality,
             "candidate_metrics_ready": metrics_ready,
+            "sim_candidate_metrics_ready": sim_metrics_ready,
             "sim_submit_path_quality": sim_submit_path_quality,
             "counterfactual_join_diagnostics": counterfactual_join_diagnostics,
             "counterfactual_join_failure_reason_counts": counterfactual_join_diagnostics.get("reason_counts") or {},
@@ -5293,7 +5489,89 @@ def _build_dynamic_entry_price_resolver_family(events: list[dict], *, target_dat
         "notes": [
             "가격 후보 비교와 dynamic entry tuning 전용 family다.",
             "sim 표본은 actual_order_submitted=false, broker_order_forbidden=true로 real execution 품질과 분리한다.",
+            "real outcome이 sample floor와 positive EV를 충족하면 real book이 primary 판단 근거다.",
             "real 반영은 hard safety, stale quote, broker/account/order/quantity/cooldown guard를 우회하지 않는다.",
+        ],
+    }
+
+
+def _entry_split_order_plan_path(target_date: str | None) -> Path | None:
+    if not target_date:
+        return None
+    return ENTRY_SPLIT_ORDER_PLAN_DIR / f"entry_split_order_plan_{target_date}.json"
+
+
+def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> dict:
+    report_path = _entry_split_order_plan_path(target_date)
+    payload = _read_json_dict(report_path) if report_path is not None else {}
+    recommended_policy = (
+        payload.get("recommended_policy") if isinstance(payload.get("recommended_policy"), dict) else {}
+    )
+    candidate_grid = payload.get("candidate_grid") if isinstance(payload.get("candidate_grid"), list) else []
+    source_quality = payload.get("source_quality") if isinstance(payload.get("source_quality"), dict) else {}
+    input_summary = payload.get("input_summary") if isinstance(payload.get("input_summary"), dict) else {}
+    candidates = recommended_policy.get("candidates") if isinstance(recommended_policy.get("candidates"), list) else []
+    best_candidate = max(
+        [item for item in candidates if isinstance(item, dict)],
+        key=lambda item: _safe_float(item.get("source_quality_adjusted_ev_pct"), 0.0) or 0.0,
+        default={},
+    )
+    real_sample = max(
+        [_safe_int(item.get("real_sample_count"), 0) or 0 for item in candidate_grid if isinstance(item, dict)] or [0]
+    )
+    sim_sample = max(
+        [_safe_int(item.get("sim_sample_count"), 0) or 0 for item in candidate_grid if isinstance(item, dict)] or [0]
+    )
+    real_outcome_sample = max(
+        [_safe_int(item.get("real_outcome_joined_sample"), 0) or 0 for item in candidate_grid if isinstance(item, dict)]
+        or [0]
+    )
+    policy_file = str(recommended_policy.get("policy_file") or "")
+    policy_version = str(recommended_policy.get("policy_version") or "")
+    report_loaded = bool(payload)
+    source_quality_blocked = source_quality.get("tuning_input_allowed") is False
+    current = {
+        "enabled": False,
+        "policy_file": "",
+        "policy_version": "",
+    }
+    recommended = {
+        "enabled": bool(candidates) and bool(policy_file) and not source_quality_blocked,
+        "policy_file": policy_file,
+        "policy_version": policy_version,
+    }
+    return {
+        "family": "entry_split_order_plan",
+        "stage": "submit",
+        "sample": {
+            "report_loaded": report_loaded,
+            "report_path": str(report_path) if report_path and report_path.exists() else None,
+            "candidate_grid_count": len(candidate_grid),
+            "recommended_policy_candidate_count": len(candidates),
+            "real_sample_count": real_sample,
+            "sim_sample_count": sim_sample,
+            "real_outcome_joined_sample": real_outcome_sample,
+            "primary_sample_book": best_candidate.get("primary_sample_book")
+            or ("real" if real_outcome_sample > 0 else "real_outcome_pending" if real_sample >= 20 else "none"),
+            "source_quality_blocked": bool(source_quality_blocked),
+            "source_quality_status": source_quality.get("status"),
+            "excluded_source_quality_event_count": input_summary.get("excluded_source_quality_event_count"),
+            "policy_file": policy_file or None,
+            "policy_version": policy_version or None,
+            "best_context_bucket": best_candidate.get("context_bucket"),
+            "best_source_quality_adjusted_ev_pct": best_candidate.get("source_quality_adjusted_ev_pct"),
+            "best_notional_weighted_ev_pct": best_candidate.get("notional_weighted_ev_pct"),
+            "best_downside_p10_profit_rate": best_candidate.get("downside_p10_profit_rate"),
+        },
+        "current": current,
+        "recommended": recommended,
+        "candidate_grid": candidate_grid,
+        "apply_ready": bool(recommended["enabled"]),
+        "apply_mode": "calibrated_apply_candidate" if recommended["enabled"] else "report_only_calibration",
+        "notes": [
+            "entry_split_order_plan only decomposes planned_orders and never increases requested_qty.",
+            "runtime apply is next PREOPEN env/policy-file only; intraday mutation is forbidden.",
+            "sim/probe rows are kept separate from real execution quality approval.",
         ],
     }
 
@@ -6470,7 +6748,8 @@ def _build_family_reports(
         _build_mechanical_entry_family(events),
         _build_score65_74_recovery_probe_family(events),
         _build_pre_submit_guard_family(events),
-        _build_dynamic_entry_price_resolver_family(events, target_date=target_date),
+        _build_dynamic_entry_price_resolver_family(events, completed_rows, target_date=target_date),
+        _build_entry_split_order_plan_family(target_date=target_date),
         _build_entry_price_execution_quality_family(events),
         _build_entry_filter_refined_candidate_family(
             events,
@@ -6871,6 +7150,8 @@ def _source_metrics_for_family(output_family: str, report_source_context: dict |
             if isinstance(metrics.get("latency_guard_miss_ev_recovery"), dict)
             else {}
         )
+    if output_family == "entry_split_order_plan":
+        return metrics.get("entry_split_order_plan") if isinstance(metrics.get("entry_split_order_plan"), dict) else {}
     if output_family == "entry_price_execution_quality":
         return (
             metrics.get("entry_price_execution_quality")
@@ -6922,7 +7203,21 @@ def _source_sample_count_for_family(output_family: str, source_metrics: dict) ->
             _safe_int(source_metrics.get("submit_revalidation_block"), 0) or 0,
         )
     if output_family == "dynamic_entry_price_resolver":
-        return _safe_int(source_metrics.get("sim_candidate_observations"), 0) or 0
+        primary_book = str(source_metrics.get("primary_sample_book") or "").strip()
+        if primary_book in {"real", "real_outcome_pending"}:
+            return _safe_int(source_metrics.get("real_candidate_observations"), 0) or 0
+        if primary_book == "sim":
+            return _safe_int(source_metrics.get("sim_candidate_observations"), 0) or 0
+        return max(
+            _safe_int(source_metrics.get("real_candidate_observations"), 0) or 0,
+            _safe_int(source_metrics.get("sim_candidate_observations"), 0) or 0,
+        )
+    if output_family == "entry_split_order_plan":
+        return max(
+            _safe_int(source_metrics.get("real_sample_count"), 0) or 0,
+            _safe_int(source_metrics.get("sim_sample_count"), 0) or 0,
+            _safe_int(source_metrics.get("recommended_policy_candidate_count"), 0) or 0,
+        )
     if output_family == "entry_price_execution_quality":
         return max(
             _safe_int(source_metrics.get("real_broker_events"), 0) or 0,
@@ -7128,6 +7423,45 @@ def _calibration_state_for_family(
             "hold",
             "pre_submit_price_guard는 broker 제출 직전 hard safety/source-quality 감사 전용으로 유지하며 runtime apply 후보에서 제외한다.",
         )
+    if output_family == "entry_split_order_plan":
+        real_count = _safe_int(source_metrics.get("real_sample_count"), 0) or 0
+        sim_count = _safe_int(source_metrics.get("sim_sample_count"), 0) or 0
+        real_outcome_count = _safe_int(source_metrics.get("real_outcome_joined_sample"), 0) or 0
+        policy_count = _safe_int(source_metrics.get("recommended_policy_candidate_count"), 0) or 0
+        if not source_metrics.get("report_loaded"):
+            return (
+                "hold_sample",
+                "entry_split_order_plan report missing; postclose producer/handoff must run before PREOPEN policy selection.",
+            )
+        if source_metrics.get("source_quality_blocked"):
+            return (
+                "source_quality_blocked",
+                "entry_split_order_plan source-quality hard block present; exclude row/window and regenerate before policy use.",
+            )
+        if real_count < 20:
+            return (
+                "hold_sample",
+                f"entry split real submit sample floor 미달(real={real_count}/20); planned_orders split policy 유지 보류",
+            )
+        if real_outcome_count <= 0 and sim_count >= 10:
+            return (
+                "hold_real_outcome_pending",
+                f"entry split sim diagnostic은 있으나 real outcome join이 없어 live/PREOPEN policy 후보 보류(real_outcome={real_outcome_count}, sim={sim_count}/10)",
+            )
+        if real_outcome_count <= 0:
+            return (
+                "hold_sample",
+                f"entry split real outcome join 미완성(real_outcome={real_outcome_count}); policy 후보 보류",
+            )
+        if policy_count <= 0:
+            return (
+                "hold_no_edge",
+                "entry split candidate grid was generated but no positive EV policy passed the downside/source-quality guards.",
+            )
+        return (
+            "adjust_up",
+            "entry split policy passed report guards; next PREOPEN env points to policy file and runtime only decomposes requested_qty-preserving planned_orders.",
+        )
     if output_family == "entry_price_execution_quality":
         return (
             "hold",
@@ -7136,27 +7470,46 @@ def _calibration_state_for_family(
     if output_family == "dynamic_entry_price_resolver":
         family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
         candidate_metrics = _merged_entry_price_candidate_metrics(family_sample, source_metrics)
-        missing_by_book = _entry_price_missing_metrics(candidate_metrics, required_books=("sim",))
+        primary_metrics = {
+            **family_sample,
+            **source_metrics,
+        }
+        if "primary_sample_book" not in source_metrics:
+            primary_metrics.pop("primary_sample_book", None)
+            primary_metrics.pop("decision_authority", None)
+        primary_book, _decision_authority = _entry_price_primary_sample_book(
+            primary_metrics,
+            candidate_metrics,
+        )
+        real_count = _safe_int(source_metrics.get("real_candidate_observations"), 0) or 0
+        real_joined = _safe_int(source_metrics.get("real_outcome_joined_sample"), 0) or 0
+        if primary_book == "real_outcome_pending":
+            return (
+                "hold_real_outcome_pending",
+                f"real submit 표본은 충분하나 outcome join이 없어 PREOPEN apply 보류(real={real_count}/20, joined={real_joined})",
+            )
+        required_books = (primary_book,) if primary_book in {"real", "sim"} else ("sim",)
+        missing_by_book = _entry_price_missing_metrics(candidate_metrics, required_books=required_books)
         if sample_count < sample_floor:
             return (
                 "hold_sample",
-                f"dynamic entry price resolver 후보 표본 미달({sample_count}/{sample_floor}); bid-1/bid-2/bid-3/best_bid/AI/reference/timeout 비교 유지",
+                f"dynamic entry price resolver 후보 표본 미달({sample_count}/{sample_floor}, primary={primary_book or 'none'}); bid-1/bid-2/bid-3/best_bid/AI/reference/timeout 비교 유지",
             )
         if missing_by_book:
             return (
                 "hold_sample",
                 f"가격 후보별 fill/cancel/late-fill/EV 필수 지표 미완성({missing_by_book}); PREOPEN apply 보류",
             )
-        if not bool(source_metrics.get("recommended_values_runtime_change_ready")):
+        if primary_book != "real" and not bool(source_metrics.get("recommended_values_runtime_change_ready")):
             return (
                 "hold_sample",
                 "dynamic entry price 후보 지표는 준비됐지만 유효한 bounded 추천값 또는 runtime env 변경값이 없어 PREOPEN apply 보류",
             )
-        ev = _safe_float((candidate_metrics.get("sim") or {}).get("source_quality_adjusted_ev_pct"), None)
+        ev = _safe_float((candidate_metrics.get(primary_book) or {}).get("source_quality_adjusted_ev_pct"), None)
         if ev is not None and ev > 0:
             return (
                 "adjust_up",
-                "dynamic entry price 후보 EV가 source-quality adjusted 기준 양수라 다음 PREOPEN bounded resolver 후보로 둔다.",
+                f"dynamic entry price {primary_book} 후보 EV가 source-quality adjusted 기준 양수라 다음 PREOPEN bounded resolver 후보로 둔다.",
             )
         return (
             "hold",
@@ -7404,11 +7757,42 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
                 source_metrics["late_detected_soft_stop_zone_records"] = _safe_int(
                     type_counts.get("late_detected_soft_stop_zone"), 0
                 ) or 0
+        if output_family == "entry_split_order_plan":
+            family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
+            source_metrics = {
+                **source_metrics,
+                "report_loaded": bool(family_sample.get("report_loaded")),
+                "report_path": family_sample.get("report_path"),
+                "candidate_grid_count": _safe_int(family_sample.get("candidate_grid_count"), 0) or 0,
+                "recommended_policy_candidate_count": _safe_int(
+                    family_sample.get("recommended_policy_candidate_count"), 0
+                )
+                or 0,
+                "real_sample_count": _safe_int(family_sample.get("real_sample_count"), 0) or 0,
+                "sim_sample_count": _safe_int(family_sample.get("sim_sample_count"), 0) or 0,
+                "real_outcome_joined_sample": _safe_int(family_sample.get("real_outcome_joined_sample"), 0) or 0,
+                "primary_sample_book": family_sample.get("primary_sample_book"),
+                "source_quality_blocked": bool(family_sample.get("source_quality_blocked")),
+                "source_quality_status": family_sample.get("source_quality_status"),
+                "excluded_source_quality_event_count": _safe_int(
+                    family_sample.get("excluded_source_quality_event_count"), 0
+                )
+                or 0,
+                "policy_file": family_sample.get("policy_file"),
+                "policy_version": family_sample.get("policy_version"),
+                "best_context_bucket": family_sample.get("best_context_bucket"),
+                "source_quality_adjusted_ev_pct": family_sample.get("best_source_quality_adjusted_ev_pct"),
+                "notional_weighted_ev_pct": family_sample.get("best_notional_weighted_ev_pct"),
+                "downside_p10_profit_rate": family_sample.get("best_downside_p10_profit_rate"),
+                "runtime_authority": "next_preopen_bounded_entry_split_policy",
+                "requested_qty_authority": "position_sizing_dynamic_formula",
+            }
         source_sample_count = _source_sample_count_for_family(output_family, source_metrics)
         if output_family == "dynamic_entry_price_resolver":
             family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
             source_sample_count = max(
                 source_sample_count,
+                _safe_int(family_sample.get("real_candidate_observations"), 0) or 0,
                 _safe_int(family_sample.get("sim_candidate_observations"), 0) or 0,
             )
         if output_family == "bad_entry_refined_canary":
@@ -7423,6 +7807,8 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
             # Runtime readiness must use the bounded low-score source cohort only.
             sample_count = source_sample_count
         elif output_family == "dynamic_entry_price_resolver":
+            sample_count = source_sample_count
+        elif output_family == "entry_split_order_plan":
             sample_count = source_sample_count
         elif output_family == "position_sizing_dynamic_formula":
             family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
@@ -7458,19 +7844,61 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
         if output_family == "dynamic_entry_price_resolver":
             family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
             candidate_metrics = _merged_entry_price_candidate_metrics(family_sample, source_metrics)
+            primary_metrics = {
+                **family_sample,
+                **source_metrics,
+            }
+            if "primary_sample_book" not in source_metrics:
+                primary_metrics.pop("primary_sample_book", None)
+                primary_metrics.pop("decision_authority", None)
+            primary_book, decision_authority = _entry_price_primary_sample_book(
+                primary_metrics,
+                candidate_metrics,
+            )
+            if primary_book in {"real", "sim"}:
+                source_sample_count = _source_sample_count_for_family(
+                    output_family,
+                    {
+                        **source_metrics,
+                        "primary_sample_book": primary_book,
+                        "real_candidate_observations": source_metrics.get(
+                            "real_candidate_observations",
+                            family_sample.get("real_candidate_observations"),
+                        ),
+                        "sim_candidate_observations": source_metrics.get(
+                            "sim_candidate_observations",
+                            family_sample.get("sim_candidate_observations"),
+                        ),
+                    },
+                )
+                sample_count = source_sample_count
+            required_books = (primary_book,) if primary_book in {"real", "sim"} else ("sim",)
             source_ready = source_ready and _entry_price_candidate_metrics_ready(
                 candidate_metrics,
-                required_books=("sim",),
+                required_books=required_books,
             )
             if candidate_metrics:
                 source_metrics = dict(source_metrics)
+                for key in (
+                    "real_candidate_observations",
+                    "sim_candidate_observations",
+                    "real_outcome_joined_sample",
+                    "real_source_quality_adjusted_ev_pct",
+                    "real_execution_quality_ready",
+                    "primary_sample_book",
+                        "decision_authority",
+                ):
+                    if key in family_sample and key not in source_metrics:
+                        source_metrics[key] = family_sample.get(key)
+                source_metrics["primary_sample_book"] = primary_book
+                source_metrics["decision_authority"] = decision_authority
                 source_metrics["candidate_metrics_ready"] = _entry_price_candidate_metrics_ready(
                     candidate_metrics,
-                    required_books=("sim",),
+                    required_books=required_books,
                 )
                 source_metrics["candidate_metrics_missing"] = _entry_price_missing_metrics(
                     candidate_metrics,
-                    required_books=("sim",),
+                    required_books=required_books,
                 )
                 diagnostic_missing = _entry_price_missing_metrics(
                     candidate_metrics,
@@ -7549,12 +7977,14 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
             sample_floor_status = "manual_approval_required"
         if calibration_state == "hold_sample":
             sample_floor_status = "hold_sample"
+        if calibration_state == "hold_real_outcome_pending":
+            sample_floor_status = "hold_real_outcome_pending"
         confidence = round(min(1.0, sample_count / sample_floor), 4) if sample_floor > 0 else 0.0
         primary_key = str(metadata.get("primary_key") or "")
         runtime_apply_candidate = (
             sample_ready
             and bool(metadata.get("allowed_runtime_apply"))
-            and calibration_state not in {"freeze", "hold_sample", "hold_no_edge"}
+            and calibration_state not in {"freeze", "hold_sample", "hold_no_edge", "hold_real_outcome_pending", "source_quality_blocked"}
         )
         candidate = {
             "family": output_family,

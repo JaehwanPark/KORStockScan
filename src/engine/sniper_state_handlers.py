@@ -176,6 +176,7 @@ from src.engine.scalping.entry_ai_gate import (
     evaluate_entry_score_role_gate,
     get_entry_buy_score_threshold,
 )
+from src.engine.scalping.entry_split_order_plan import apply_entry_split_order_policy
 
 
 KIWOOM_TOKEN = None
@@ -27889,6 +27890,39 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 ),
             )
             return False
+
+    if strategy == "SCALPING":
+        planned_orders, entry_split_fields = apply_entry_split_order_policy(
+            planned_orders,
+            stock=stock,
+            latency_gate={
+                **latency_gate,
+                **latency_price_snapshot,
+                **entry_orderbook_micro_fields,
+                **microstructure_submit_log_fields,
+                **submit_revalidation_fields,
+            },
+        )
+        submit_revalidation_fields.update(entry_split_fields)
+        latency_gate.update(
+            {
+                "entry_split_order_policy_applied": entry_split_fields.get("entry_split_order_policy_applied"),
+                "entry_split_order_bucket": entry_split_fields.get("entry_split_order_bucket"),
+                "entry_split_order_policy_version": entry_split_fields.get("entry_split_order_policy_version"),
+            }
+        )
+        _log_entry_pipeline(
+            stock,
+            code,
+            "entry_split_order_plan_applied"
+            if entry_split_fields.get("entry_split_order_policy_applied")
+            else "entry_split_order_plan_skipped",
+            strategy=strategy,
+            entry_mode=entry_mode,
+            actual_order_submitted=False,
+            broker_order_forbidden=False,
+            **entry_split_fields,
+        )
 
     msg = msg or (
         f"✅ **{stock['name']} ({code}) 진입 주문 전송!**\n전략: `{strategy}`\n현재가: `{curr_price:,}원`\n주문 수량: `{requested_qty}주`"
