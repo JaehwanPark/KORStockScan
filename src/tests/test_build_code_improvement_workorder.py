@@ -2431,6 +2431,45 @@ def test_lifecycle_bucket_discovery_rollup_gap_is_not_implement_now():
     assert classified.route == "source_dimension_rollup"
 
 
+def test_lifecycle_bucket_discovery_join_gap_enrichment_creates_source_only_workorder():
+    report = {
+        "surfaced_candidates": [],
+        "source_dimension_gap_summary": {
+            "rollup_only_gap_count": 1,
+            "source_dimension_gap_counts": {"unknown_source_dimensions": 1},
+            "join_gap_enrichment": {
+                "candidate_count": 2,
+                "stage_counts": {"exit": 2},
+                "bucket_type_counts": {"exit_rule": 2},
+                "recommended_resolution_counts": {"join_labels_before_bucket_decision": 2},
+                "missing_dimension_key_counts": {"exit": 2},
+                "recommended_next_action": "enrich_bucket_label_or_join_key_before_bucket_decision",
+            },
+        },
+    }
+
+    orders = mod._lifecycle_bucket_discovery_followup_orders(report)
+    order = [
+        item
+        for item in orders
+        if item["order_id"] == "order_lifecycle_source_dimension_join_gap_enrichment"
+    ][0]
+
+    assert order["runtime_effect"] is False
+    assert order["allowed_runtime_apply"] is False
+    assert order["improvement_type"] == "source_dimension_join_gap_enrichment"
+    assert "join_gap_candidate_count=2" in order["evidence"]
+    classified = mod._classify_order(
+        order,
+        finding_by_order_id={},
+        finding_by_title_slug={},
+        auto_family_order_ids=set(),
+        closed_instrumentation_order_families={},
+    )
+    assert classified.decision == "attach_existing_family"
+    assert classified.route == "join_gap_enrichment"
+
+
 def test_lifecycle_bucket_discovery_quiet_gap_rollup_orders_are_attach_existing_family():
     report = {
         "quiet_gap_summary": {

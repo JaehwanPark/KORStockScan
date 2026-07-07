@@ -1268,13 +1268,14 @@ def test_lifecycle_bucket_discovery_summarizes_source_dimension_gaps():
             "unknown_reason_counts": {"missing_source_field": 1},
         },
         {
-            "bucket_id": "entry:combo:not-applicable",
-            "stage": "entry",
+            "bucket_id": "exit:rule:join-gap",
+            "stage": "exit",
             "bucket_type": "exit_rule",
             "classification_state": "source_only_keep_collecting",
             "source_dimension_gap": "unknown_source_dimensions",
-            "recommended_resolution": "entry_label_not_applicable",
-            "unknown_reason_counts": {"entry_label_not_applicable": 1},
+            "recommended_resolution": "join_labels_before_bucket_decision",
+            "missing_dimension_keys": ["exit"],
+            "unknown_reason_counts": {"join_gap": 1},
         },
         {
             "bucket_id": "lifecycle_flow:combo:missing",
@@ -1298,6 +1299,14 @@ def test_lifecycle_bucket_discovery_summarizes_source_dimension_gaps():
     assert summary["lifecycle_flow_incomplete_stage_contract_count"] == 1
     assert summary["missing_dimension_key_counts"]["liquidity_bucket"] == 1
     assert summary["missing_dimension_key_counts"]["holding"] == 1
+    assert summary["join_gap_enrichment"]["runtime_effect"] is False
+    assert summary["join_gap_enrichment"]["allowed_runtime_apply"] is False
+    assert summary["join_gap_enrichment"]["candidate_count"] == 1
+    assert summary["join_gap_enrichment"]["stage_counts"]["exit"] == 1
+    assert summary["join_gap_enrichment"]["bucket_type_counts"]["exit_rule"] == 1
+    assert summary["join_gap_enrichment"]["candidates"][0]["join_gap_resolution"] == (
+        "enrich_bucket_label_or_join_key_before_bucket_decision"
+    )
 
 
 def test_lifecycle_flow_source_dimensions_use_explicit_stage_bucket_ids():
@@ -1668,6 +1677,8 @@ def test_lifecycle_flow_parent_absorbs_thin_children_for_live_policy(tmp_path, m
             ),
             "sample": sample,
             "joined_sample": sample,
+            "real_joined_sample": sample,
+            "real_submitted_count": sample,
             "join_rate": 1.0,
             "complete_flow_count": sample,
             "incomplete_flow_count": 0,
@@ -1770,7 +1781,11 @@ def test_lifecycle_flow_parent_absorbs_thin_children_for_live_policy(tmp_path, m
         if item["stage"] == "lifecycle_flow" and item["bucket_type"] == "combo_lifecycle_flow"
     ]
     live = [item for item in flow_candidates if item["classification_state"] == "live_auto_apply_ready"]
-    absorbed = [item for item in flow_candidates if item["classification_state"] == "source_only_keep_collecting"]
+    absorbed = [
+        item
+        for item in flow_candidates
+        if item.get("recommended_resolution") == "absorbed_into_parent_live_policy"
+    ]
     assert len(live) == 1
     assert len(absorbed) >= 1
     assert live[0]["policy_bucket_id"].startswith(

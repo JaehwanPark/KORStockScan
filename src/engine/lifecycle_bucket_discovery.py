@@ -1123,6 +1123,12 @@ def _source_dimension_gap_summary(candidates: list[dict[str, Any]]) -> dict[str,
     policy_key_gap_classification_counts: Counter[str] = Counter()
     actionable: list[dict[str, Any]] = []
     rollup: list[dict[str, Any]] = []
+    join_gap_candidates: list[dict[str, Any]] = []
+    join_gap_stage_counts: Counter[str] = Counter()
+    join_gap_bucket_type_counts: Counter[str] = Counter()
+    join_gap_resolution_counts: Counter[str] = Counter()
+    join_gap_missing_dimension_counts: Counter[str] = Counter()
+    join_gap_total_count = 0
     lifecycle_flow_incomplete = 0
 
     for item in candidates:
@@ -1164,11 +1170,44 @@ def _source_dimension_gap_summary(candidates: list[dict[str, Any]]) -> dict[str,
             "source_field_coverage": item.get("source_field_coverage") or {},
             "source_dimension_gap_provenance": item.get("source_dimension_gap_provenance") or {},
         }
+        join_gap_count = _safe_int(reason_counts.get("join_gap"))
+        if join_gap_count > 0 or resolution == "join_labels_before_bucket_decision":
+            join_gap_total_count += 1
+            join_gap_stage_counts[stage] += 1
+            join_gap_bucket_type_counts[bucket_type] += 1
+            join_gap_resolution_counts[resolution] += 1
+            for key in compact["missing_dimension_keys"]:
+                join_gap_missing_dimension_counts[str(key)] += 1
+            for key in compact["missing_lifecycle_flow_stage_keys"]:
+                join_gap_missing_dimension_counts[str(key)] += 1
+            if len(join_gap_candidates) < 50:
+                join_gap_candidates.append(
+                    {
+                        **compact,
+                        "join_gap_count": join_gap_count,
+                        "join_gap_resolution": "enrich_bucket_label_or_join_key_before_bucket_decision",
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                    }
+                )
         if gap == "unknown_source_dimensions" and resolution in SOURCE_DIMENSION_ACTIONABLE_RESOLUTIONS:
             actionable.append(compact)
         else:
             rollup.append(compact)
 
+    join_gap_enrichment = {
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "decision_authority": "source_quality_gap_discovery",
+        "candidate_count": join_gap_total_count,
+        "sampled_candidate_count": len(join_gap_candidates),
+        "stage_counts": dict(join_gap_stage_counts),
+        "bucket_type_counts": dict(join_gap_bucket_type_counts),
+        "recommended_resolution_counts": dict(join_gap_resolution_counts),
+        "missing_dimension_key_counts": dict(join_gap_missing_dimension_counts),
+        "recommended_next_action": "enrich_bucket_label_or_join_key_before_bucket_decision",
+        "candidates": join_gap_candidates,
+    }
     return {
         "runtime_effect": False,
         "allowed_runtime_apply": False,
@@ -1185,6 +1224,7 @@ def _source_dimension_gap_summary(candidates: list[dict[str, Any]]) -> dict[str,
         "missing_dimension_key_counts": dict(missing_dimension_counts),
         "unknown_reason_counts": dict(unknown_reason_counts),
         "policy_key_gap_classification_counts": dict(policy_key_gap_classification_counts),
+        "join_gap_enrichment": join_gap_enrichment,
         "actionable_candidates": actionable[:50],
         "rollup_candidates": rollup[:50],
     }
@@ -4967,6 +5007,16 @@ def build_lifecycle_bucket_discovery_report(
 def _render_markdown(report: dict[str, Any]) -> str:
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
     ai_review = report.get("ai_two_pass_review") if isinstance(report.get("ai_two_pass_review"), dict) else {}
+    source_dimension_summary = (
+        report.get("source_dimension_gap_summary")
+        if isinstance(report.get("source_dimension_gap_summary"), dict)
+        else {}
+    )
+    join_gap_enrichment = (
+        source_dimension_summary.get("join_gap_enrichment")
+        if isinstance(source_dimension_summary.get("join_gap_enrichment"), dict)
+        else {}
+    )
     lines = [
         f"# Lifecycle Bucket Discovery - {report.get('date')}",
         "",
@@ -5064,6 +5114,18 @@ def _render_markdown(report: dict[str, Any]) -> str:
                         f"context_chars=`{shard.get('context_chars')}`"
                     )
             lines.append("")
+    if source_dimension_summary:
+        lines.extend(
+            [
+                "### Source Dimension Gap Enrichment",
+                f"- gap_count: `{source_dimension_summary.get('gap_count', 0)}` / actionable_unknown_gap_count: `{source_dimension_summary.get('actionable_unknown_gap_count', 0)}`",
+                f"- join_gap_candidate_count: `{join_gap_enrichment.get('candidate_count', 0)}` / sampled: `{join_gap_enrichment.get('sampled_candidate_count', 0)}`",
+                f"- join_gap_stage_counts: `{join_gap_enrichment.get('stage_counts') or {}}`",
+                f"- join_gap_bucket_type_counts: `{join_gap_enrichment.get('bucket_type_counts') or {}}`",
+                f"- join_gap_recommended_next_action: `{join_gap_enrichment.get('recommended_next_action') or '-'}`",
+                "",
+            ]
+        )
     for item in (report.get("surfaced_candidates") or [])[:20]:
         lines.append(
             f"- `{item.get('bucket_id')}` stage=`{item.get('stage')}` "

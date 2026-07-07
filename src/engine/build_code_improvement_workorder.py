@@ -3953,6 +3953,48 @@ def _lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) -> list[
                 "next_postclose_metric": "source_dimension_gap_summary rollup/actionable counts remain visible.",
             }
         )
+    join_gap_enrichment = (
+        source_dimension_summary.get("join_gap_enrichment")
+        if isinstance(source_dimension_summary.get("join_gap_enrichment"), dict)
+        else {}
+    )
+    join_gap_count = _safe_int(join_gap_enrichment.get("candidate_count"))
+    if join_gap_count > 0:
+        orders.append(
+            {
+                "order_id": "order_lifecycle_source_dimension_join_gap_enrichment",
+                "source_report_type": "lifecycle_bucket_discovery_source_dimension_rollup",
+                "lifecycle_stage": "multi_stage",
+                "target_subsystem": "lifecycle_bucket_discovery_taxonomy_provenance",
+                "route": "join_gap_enrichment",
+                "mapped_family": "lifecycle_bucket_discovery",
+                "threshold_family": "lifecycle_bucket_discovery",
+                "improvement_type": "source_dimension_join_gap_enrichment",
+                "confidence": "postclose_discovery_source",
+                "priority": 3,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "expected_ev_effect": (
+                    "Keep LDM bucket label/join gaps visible as source-quality provenance before any bucket "
+                    "decision or runtime apply interpretation."
+                ),
+                "evidence": [
+                    f"join_gap_candidate_count={join_gap_count}",
+                    f"join_gap_stage_counts={join_gap_enrichment.get('stage_counts') or {}}",
+                    f"join_gap_bucket_type_counts={join_gap_enrichment.get('bucket_type_counts') or {}}",
+                    f"join_gap_recommended_resolution_counts={join_gap_enrichment.get('recommended_resolution_counts') or {}}",
+                    f"join_gap_missing_dimension_key_counts={join_gap_enrichment.get('missing_dimension_key_counts') or {}}",
+                    f"recommended_next_action={join_gap_enrichment.get('recommended_next_action') or ''}",
+                    "runtime_effect=false",
+                    "allowed_runtime_apply=false",
+                ],
+                "intent": (
+                    "Make LDM label/join enrichment targets explicit in the workorder chain without changing "
+                    "runtime thresholds, broker submit behavior, provider routing, or bot state."
+                ),
+                "next_postclose_metric": "source_dimension_gap_summary.join_gap_enrichment candidate_count is tracked until explicitly closed.",
+            }
+        )
     quiet_summary = _quiet_gap_summary(report)
     quiet_type_counts = (
         quiet_summary.get("quiet_gap_type_counts")
