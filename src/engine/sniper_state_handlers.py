@@ -16,7 +16,7 @@ from uuid import uuid4
 import numpy as np
 
 from src.database.models import HoldingAddHistory, RecommendationHistory
-from src.engine import kiwoom_orders
+from src.engine import kiwoom_orders, sniper_trade_utils
 from src.utils import kiwoom_utils
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl

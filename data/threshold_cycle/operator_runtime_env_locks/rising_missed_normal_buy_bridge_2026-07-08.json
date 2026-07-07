@@ -5,8 +5,9 @@
   "stage": "entry_score_prior_bridge",
   "manipulation_point": "blocked_ai_score_prior_to_normal_buy_flow",
   "priority": 910,
-  "active_from_date": "2026-07-07",
-  "expires_after_source_date": "2026-07-07",
+  "active_from_date": "2026-07-08",
+  "lock_until_explicit_close": true,
+  "explicit_close_required": true,
   "target_date": "2026-07-08",
   "runtime_effect": true,
   "decision_authority": "operator_runtime_override_preopen_env_only",
@@ -52,7 +53,7 @@
     "provider_route_unchanged": true
   },
   "source_evidence": {
-    "user_instruction": "KORSTOCKSCAN_RISING_MISSED_NORMAL_BUY_BRIDGE_ENABLED next PREOPEN apply",
+    "user_instruction": "KORSTOCKSCAN_RISING_MISSED_NORMAL_BUY_BRIDGE_ENABLED apply from 2026-07-08 until explicit close",
     "implementation_files": [
       "src/engine/sniper_state_handlers.py",
       "src/engine/scalping/rising_missed_one_share_entry.py",
@@ -63,5 +64,5 @@
       "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_constants.py"
     ]
   },
-  "notes": "One-day PREOPEN operator lock for 2026-07-08. It converts only AI BUY score-prior blocked rising-missed eligible rows back to the existing normal BUY path and cannot bypass hard safety or broker/order/quote/quantity/cooldown guards."
+  "notes": "Persistent PREOPEN operator lock starting with the 2026-07-08 runtime env and remaining active until explicitly closed. It converts only AI BUY score-prior blocked rising-missed eligible rows back to the existing normal BUY path and cannot bypass hard safety or broker/order/quote/quantity/cooldown guards."
 }
