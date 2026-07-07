@@ -13,7 +13,7 @@
 
 ## 근거
 
-- as_of: `2026-07-07T11:40:02`
+- as_of: `2026-07-07T11:45:03`
 - exit_signal unique: `11`
 - sell_order_sent unique: `4`
 - sell_completed unique: `4`
@@ -22,14 +22,14 @@
 - sell_sent/exit_signal: `36.4%`
 - real sell_sent/exit_signal: `0.0%`
 - non-real sell_sent/exit_signal: `36.4%`
-- flow defer events: `71`
+- flow defer events: `72`
 - AI holding cache MISS: `100.0%`
-- score50 origins: `{'legacy_or_unclassified_score50': 649, 'not_called_neutral_unusable': 1, 'post_call_source_quality_neutralized': 42}`
+- score50 origins: `{'legacy_or_unclassified_score50': 673, 'not_called_neutral_unusable': 1, 'post_call_source_quality_neutralized': 44}`
 - score50 preflight/source-quality blocked: `0`
-- score50 raw-non50 neutralized: `42`
+- score50 raw-non50 neutralized: `44`
 - soft_stop rebound above sell 10m: `0.0%`
 - trailing missed-upside: `0.0%`
-- top reasons: `AI보유감시:cache_miss=258, flow유예:scalp_soft_stop_pct=71, soft_stop_grace=60, 청산신호:scalp_soft_stop_pct=19, 청산신호:scalp_trailing_take_profit=6`
+- top reasons: `AI보유감시:cache_miss=268, flow유예:scalp_soft_stop_pct=72, soft_stop_grace=62, 청산신호:scalp_soft_stop_pct=19, 청산신호:scalp_trailing_take_profit=6`
 
 ## 금지된 자동변경
 

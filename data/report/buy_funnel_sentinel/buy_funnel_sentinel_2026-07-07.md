@@ -15,20 +15,20 @@
 
 ## 근거
 
-- as_of: `2026-07-07T11:40:02`
+- as_of: `2026-07-07T11:45:03`
 - baseline_date: `2026-07-06`
 - ai_confirmed unique: `35`
 - budget_pass unique: `7`
 - latency_pass unique: `6`
 - submitted unique: `5`
 - holding_started unique: `4`
-- budget/ai unique: `20.0%` (baseline `46.9`)
-- submitted/ai unique: `14.3%` (baseline `25.0`)
+- budget/ai unique: `20.0%` (baseline `45.5`)
+- submitted/ai unique: `14.3%` (baseline `24.2`)
 - critical submit thresholds: `submitted/ai < 20.0%` or `submitted/budget <= 10.0%` (floors: ai>=20, budget>=3)
-- top blockers: `blocked_strength_momentum:below_strength_base=117, blocked_strength_momentum:below_window_buy_value=104, blocked_vpw:-=80, first_ai_wait:-=64, blocked_liquidity:-=47`
+- top blockers: `blocked_strength_momentum:below_strength_base=124, blocked_strength_momentum:below_window_buy_value=109, blocked_vpw:-=83, first_ai_wait:-=67, blocked_liquidity:-=49`
 - swing blockers: `-`
-- upstream blockers: `first_ai_wait:-=64, blocked_ai_score:score_62.0=34, blocked_ai_score:ai_score_50_buy_hold_override=30, blocked_ai_score:score_0.0=13, blocked_ai_score:score_64.0=2`
-- AI terminal reasons: `ai_terminal:first_ai_wait_big_bite_not_confirmed=64, ai_terminal:entry_policy_no_buy_score_prior=53`
+- upstream blockers: `first_ai_wait:-=67, blocked_ai_score:score_62.0=34, blocked_ai_score:ai_score_50_buy_hold_override=32, blocked_ai_score:score_0.0=13, blocked_ai_score:score_64.0=2`
+- AI terminal reasons: `ai_terminal:first_ai_wait_big_bite_not_confirmed=67, ai_terminal:entry_policy_no_buy_score_prior=53`
 - latency blockers: `latency_block:latency_state_danger=9`
 - price guards: `entry_ai_price_canary_fallback:skip_low_confidence=1`
 - quote refresh: `attempted=7, applied=7, latency_recovered=6, submitted_after_refresh=5`
@@ -50,6 +50,6 @@
 
 ## Window Summary
 
-- `5m`: ai=6, budget=0, latency=0, submitted=0, top=`blocked_vpw:-=5, blocked_strength_momentum:below_window_buy_value=5, blocked_liquidity:-=4`, swing=`-`, upstream=`blocked_ai_score:score_62.0=4, blocked_ai_score:ai_score_50_buy_hold_override=2, first_ai_wait:-=2`, ai_terminal=`ai_terminal:entry_policy_no_buy_score_prior=5, ai_terminal:first_ai_wait_big_bite_not_confirmed=2`
-- `10m`: ai=8, budget=0, latency=0, submitted=0, top=`blocked_strength_momentum:below_window_buy_value=14, blocked_vpw:-=7, blocked_ai_score:score_62.0=6`, swing=`-`, upstream=`blocked_ai_score:score_62.0=6, first_ai_wait:-=4, blocked_ai_score:ai_score_50_buy_hold_override=4`, ai_terminal=`ai_terminal:entry_policy_no_buy_score_prior=8, ai_terminal:first_ai_wait_big_bite_not_confirmed=4`
-- `30m`: ai=15, budget=1, latency=1, submitted=0, top=`blocked_strength_momentum:below_window_buy_value=42, blocked_strength_momentum:below_strength_base=18, first_ai_wait:-=17`, swing=`-`, upstream=`first_ai_wait:-=17, blocked_ai_score:score_62.0=9, blocked_ai_score:ai_score_50_buy_hold_override=7`, ai_terminal=`ai_terminal:first_ai_wait_big_bite_not_confirmed=17, ai_terminal:entry_policy_no_buy_score_prior=14`
+- `5m`: ai=3, budget=0, latency=0, submitted=0, top=`blocked_strength_momentum:below_strength_base=7, blocked_strength_momentum:below_window_buy_value=5, blocked_vpw:-=3`, swing=`-`, upstream=`first_ai_wait:-=3, blocked_ai_score:ai_score_50_buy_hold_override=2`, ai_terminal=`ai_terminal:first_ai_wait_big_bite_not_confirmed=3`
+- `10m`: ai=7, budget=0, latency=0, submitted=0, top=`blocked_strength_momentum:below_strength_base=10, blocked_strength_momentum:below_window_buy_value=10, blocked_vpw:-=8`, swing=`-`, upstream=`first_ai_wait:-=5, blocked_ai_score:ai_score_50_buy_hold_override=4, blocked_ai_score:score_62.0=4`, ai_terminal=`ai_terminal:entry_policy_no_buy_score_prior=5, ai_terminal:first_ai_wait_big_bite_not_confirmed=5`
+- `30m`: ai=13, budget=1, latency=1, submitted=0, top=`blocked_strength_momentum:below_window_buy_value=39, blocked_strength_momentum:below_strength_base=22, blocked_vpw:-=17`, swing=`-`, upstream=`first_ai_wait:-=14, blocked_ai_score:ai_score_50_buy_hold_override=9, blocked_ai_score:score_62.0=9`, ai_terminal=`ai_terminal:first_ai_wait_big_bite_not_confirmed=14, ai_terminal:entry_policy_no_buy_score_prior=13`
