@@ -201,6 +201,53 @@ def _safe_bool(value, default: bool = False) -> bool:
     return default
 
 
+ENTRY_SPLIT_POST_SELL_KEYS = (
+    "entry_split_order_policy_applied",
+    "entry_split_order_bucket",
+    "entry_split_order_policy_version",
+    "entry_split_order_policy_mode",
+    "entry_split_order_variant_id",
+    "entry_split_order_leg_count",
+    "entry_split_order_price_offsets_ticks",
+    "entry_split_order_qty_weight_min",
+    "entry_split_order_qty_weight_max",
+    "entry_split_order_runtime_default_policy_applied",
+)
+
+
+def _entry_split_post_sell_fields(stock: dict) -> dict:
+    fields: dict = {}
+    for key in ENTRY_SPLIT_POST_SELL_KEYS:
+        value = stock.get(key)
+        if value not in (None, "", "-", "None", "none", "null"):
+            fields[key] = value
+    if fields.get("entry_split_order_variant_id"):
+        fields["entry_split_order_policy_applied"] = _safe_bool(
+            fields.get("entry_split_order_policy_applied"), True
+        )
+        return fields
+    pending_orders = stock.get("pending_entry_orders") if isinstance(stock.get("pending_entry_orders"), list) else []
+    for order in pending_orders:
+        if not isinstance(order, dict):
+            continue
+        if not (
+            _safe_bool(order.get("entry_split_order_policy_applied"))
+            or order.get("entry_split_order_variant_id")
+            or order.get("entry_split_order_policy_mode")
+        ):
+            continue
+        for key in ENTRY_SPLIT_POST_SELL_KEYS:
+            value = order.get(key)
+            if value not in (None, "", "-", "None", "none", "null"):
+                fields.setdefault(key, value)
+        if fields.get("entry_split_order_variant_id"):
+            fields["entry_split_order_policy_applied"] = _safe_bool(
+                fields.get("entry_split_order_policy_applied"), True
+            )
+            break
+    return fields
+
+
 def _realized_result_label(profit_rate) -> str:
     value = _safe_float(profit_rate, 0.0)
     if value > 0.0:
@@ -443,6 +490,7 @@ def record_post_sell_candidate(
                 else same_symbol_soft_stop_cooldown_would_block
             ),
             "evaluation_mode": "post_sell_minute_forward",
+            **_entry_split_post_sell_fields(stock),
         }
         for optional_key in (
             "no_scale_in_counterfactual_profit_pct",
@@ -853,6 +901,7 @@ def evaluate_post_sell_candidates(target_date: str, token: str | None = None) ->
 
         evaluation = {
             "post_sell_id": post_sell_id,
+            "actual_order_submitted": True,
             "evaluated_at": datetime.now().isoformat(),
             "signal_date": target_date,
             "stock_code": code,
@@ -911,6 +960,7 @@ def evaluate_post_sell_candidates(target_date: str, token: str | None = None) ->
                 "ai_transport_mode_at_exit",
                 candidate.get("ai_transport_mode", "-"),
             ),
+            **{key: candidate.get(key) for key in ENTRY_SPLIT_POST_SELL_KEYS if candidate.get(key) is not None},
             "soft_stop_threshold_pct": candidate.get("soft_stop_threshold_pct", 0.0),
             "same_symbol_soft_stop_cooldown_would_block": bool(
                 candidate.get("same_symbol_soft_stop_cooldown_would_block", False)

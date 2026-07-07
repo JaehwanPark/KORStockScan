@@ -2376,6 +2376,36 @@ def _stop_line_first_touch_signal_weak(value: str) -> bool:
     return any(token in normalized for token in ("weak", "below", "block", "fail", "risk"))
 
 
+def _first_touch_quote_stale_provenance_fields(
+    *,
+    micro_context_present: bool,
+    micro_context_quality: dict[str, Any],
+) -> dict[str, Any]:
+    if not micro_context_present:
+        return {
+            "first_touch_quote_stale": "not_available_quote_stale_no_micro_context",
+            "first_touch_quote_age_ms": "not_available_quote_age_no_micro_context",
+            "first_touch_quote_age_source": "not_available_no_micro_context",
+        }
+
+    quote_stale = micro_context_quality.get("quote_stale")
+    quote_age_ms = micro_context_quality.get("quote_age_ms")
+    quote_age_source = str(micro_context_quality.get("quote_age_source") or "").strip()
+    quote_stale_text = str(quote_stale).strip().lower()
+    if quote_stale is None or quote_stale_text in {"", "-", "unknown"}:
+        return {
+            "first_touch_quote_stale": "not_available_quote_stale",
+            "first_touch_quote_age_ms": quote_age_ms if quote_age_ms not in {None, ""} else "not_available_quote_age",
+            "first_touch_quote_age_source": quote_age_source or "not_available_quote_age_source",
+        }
+
+    return {
+        "first_touch_quote_stale": quote_stale,
+        "first_touch_quote_age_ms": quote_age_ms if quote_age_ms not in {None, ""} else "-",
+        "first_touch_quote_age_source": quote_age_source or "-",
+    }
+
+
 def _first_touch_runtime_prior_default(status: str, reason: str) -> dict[str, Any]:
     return {
         "status": status,
@@ -3031,6 +3061,10 @@ def _evaluate_first_touch_avgdown_decision_gate(
         allowed = False
         reason = "insufficient_first_touch_recovery_confirmation"
 
+    quote_provenance_fields = _first_touch_quote_stale_provenance_fields(
+        micro_context_present=micro_context_present,
+        micro_context_quality=micro_context_quality,
+    )
     fields.update(
         {
             "first_touch_avgdown_decision_allowed": allowed,
@@ -3071,12 +3105,7 @@ def _evaluate_first_touch_avgdown_decision_gate(
             "first_touch_tick_latest_age_ms": (
                 micro_context_quality.get("tick_latest_age_ms") if micro_context_present else "-"
             ),
-            "first_touch_quote_stale": (
-                micro_context_quality.get("quote_stale") if micro_context_present else "unknown"
-            ),
-            "first_touch_quote_age_ms": (
-                micro_context_quality.get("quote_age_ms") if micro_context_present else "-"
-            ),
+            **quote_provenance_fields,
             **_first_touch_runtime_prior_log_fields(runtime_prior),
         }
     )
@@ -27909,6 +27938,15 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 "entry_split_order_policy_applied": entry_split_fields.get("entry_split_order_policy_applied"),
                 "entry_split_order_bucket": entry_split_fields.get("entry_split_order_bucket"),
                 "entry_split_order_policy_version": entry_split_fields.get("entry_split_order_policy_version"),
+                "entry_split_order_policy_mode": entry_split_fields.get("entry_split_order_policy_mode"),
+                "entry_split_order_variant_id": entry_split_fields.get("entry_split_order_variant_id"),
+                "entry_split_order_leg_count": entry_split_fields.get("entry_split_order_leg_count"),
+                "entry_split_order_price_offsets_ticks": entry_split_fields.get("entry_split_order_price_offsets_ticks"),
+                "entry_split_order_qty_weight_min": entry_split_fields.get("entry_split_order_qty_weight_min"),
+                "entry_split_order_qty_weight_max": entry_split_fields.get("entry_split_order_qty_weight_max"),
+                "entry_split_order_runtime_default_policy_applied": entry_split_fields.get(
+                    "entry_split_order_runtime_default_policy_applied"
+                ),
             }
         )
         _log_entry_pipeline(
@@ -27930,6 +27968,20 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     )
 
     successful_orders = []
+    entry_split_order_submit_fields = {
+        "entry_split_order_policy_applied": bool(submit_revalidation_fields.get("entry_split_order_policy_applied")),
+        "entry_split_order_bucket": submit_revalidation_fields.get("entry_split_order_bucket"),
+        "entry_split_order_policy_version": submit_revalidation_fields.get("entry_split_order_policy_version"),
+        "entry_split_order_policy_mode": submit_revalidation_fields.get("entry_split_order_policy_mode"),
+        "entry_split_order_variant_id": submit_revalidation_fields.get("entry_split_order_variant_id"),
+        "entry_split_order_leg_count": submit_revalidation_fields.get("entry_split_order_leg_count"),
+        "entry_split_order_price_offsets_ticks": submit_revalidation_fields.get("entry_split_order_price_offsets_ticks"),
+        "entry_split_order_qty_weight_min": submit_revalidation_fields.get("entry_split_order_qty_weight_min"),
+        "entry_split_order_qty_weight_max": submit_revalidation_fields.get("entry_split_order_qty_weight_max"),
+        "entry_split_order_runtime_default_policy_applied": submit_revalidation_fields.get(
+            "entry_split_order_runtime_default_policy_applied"
+        ),
+    }
     swing_order_dry_run = _is_swing_live_order_dry_run(strategy)
     broker_order_forbidden_for_request = bool(swing_order_dry_run)
     for planned_order in planned_orders:
@@ -28131,6 +28183,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 'price_below_bid_bps': price_snapshot.get('price_below_bid_bps'),
                 'price_decision_context_age_ms': submit_revalidation_fields.get('price_decision_context_age_ms'),
                 'quote_age_at_submit_ms': submit_revalidation_fields.get('quote_age_at_submit_ms'),
+                **entry_split_order_submit_fields,
             })
             log_info(
                 f"[SWING_LIVE_ORDER_DRY_RUN] {stock.get('name')}({code}) "
@@ -28226,6 +28279,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             'mark_price_at_submit': int(latency_gate.get('latest_price', 0) or curr_price or 0),
             'submitted_mark_price': int(latency_gate.get('signal_price', 0) or curr_price or 0),
             'latest_price_at_submit': int(latency_gate.get('latest_price', 0) or curr_price or 0),
+            **entry_split_order_submit_fields,
         })
         _stage_buy_order_submission(
             stock=stock, code=code, curr_price=curr_price, requested_qty=requested_qty, msg=msg, entry_orders=successful_orders,

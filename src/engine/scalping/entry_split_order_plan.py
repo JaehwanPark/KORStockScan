@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
@@ -13,7 +14,7 @@ from statistics import mean
 from typing import Any
 
 from src.engine.automation.source_quality_clean_baseline import clean_baseline_policy, is_date_allowed
-from src.trading.order.tick_utils import clamp_price_to_tick
+from src.trading.order.tick_utils import clamp_price_to_tick, get_tick_size
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import iter_jsonl
 
@@ -26,6 +27,16 @@ REPORT_DIR = DATA_DIR / "report" / REPORT_TYPE
 POLICY_DIR = DATA_DIR / "threshold_cycle" / "entry_split_order_policy"
 SAMPLE_FLOOR_REAL = 20
 SAMPLE_FLOOR_SIM = 10
+SPLIT_VARIANT_OUTCOME_FLOOR_REAL = 20
+POST_SUBMIT_TICK_BAND_FLOOR_REAL = 20
+POST_SUBMIT_LOW_WINDOW_MINUTES = 10
+POLICY_MODE_REAL_PRIMARY_EV = "real_primary_ev_optimized"
+POLICY_MODE_BOUNDED_EQUAL_BASELINE = "bounded_equal_split_baseline"
+POLICY_MODE_POST_SUBMIT_TICK_BAND = "post_submit_tick_band_seed"
+BASELINE_SPLIT_VARIANT_ID = "equal_50_50_offset_0_1tick"
+TICK_BAND_3LEG_VARIANT_ID = "equal_3leg_offset_0_1_2tick"
+RUNTIME_FALLBACK_POLICY_MODE = "runtime_default_equal_50_50_1tick"
+RUNTIME_FALLBACK_VARIANT_ID = "runtime_default_equal_50_50_offset_0_1tick"
 ALLOWED_PRICE_CANDIDATES = {
     "resolved_order_price",
     "best_bid",
@@ -118,6 +129,21 @@ def _event_date(event: dict[str, Any]) -> str:
             return value[:10]
     ts = str(event.get("timestamp") or event.get("created_at") or event.get("ts") or "").strip()
     return ts[:10] if len(ts) >= 10 else ""
+
+
+def _event_dt(event: dict[str, Any]) -> datetime | None:
+    for key in ("emitted_at", "timestamp", "created_at", "ts"):
+        value = str(event.get(key) or "").strip()
+        if not value:
+            continue
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if parsed.tzinfo is not None:
+            return parsed.astimezone(timezone(timedelta(hours=9))).replace(tzinfo=None)
+        return parsed
+    return None
 
 
 def _hard_blocking_stages(source_quality: dict[str, Any]) -> set[str]:
@@ -223,6 +249,49 @@ def _load_real_ev_values(target_date: str) -> dict[str, list[float]]:
     return values
 
 
+def _split_variant_id_from_fields(fields: dict[str, Any]) -> str:
+    explicit = str(fields.get("entry_split_order_variant_id") or "").strip()
+    if explicit:
+        return explicit
+    if not (
+        _safe_bool(fields.get("entry_split_order_policy_applied"))
+        or str(fields.get("entry_split_order_policy_mode") or "").strip()
+    ):
+        return ""
+    mode = str(fields.get("entry_split_order_policy_mode") or "").strip() or "unknown_mode"
+    leg_count = _safe_int(fields.get("entry_split_order_leg_count"), 0)
+    offsets = str(fields.get("entry_split_order_price_offsets_ticks") or "").strip() or "unknown_offsets"
+    weight = str(fields.get("entry_split_order_qty_weight_min") or "").strip() or "unknown_weight"
+    return f"{mode}:legs{leg_count}:offsets{offsets}:w{weight}"
+
+
+def _load_real_split_variant_ev_values(target_date: str) -> dict[tuple[str, str], list[float]]:
+    if not is_date_allowed(target_date, clean_baseline_policy()):
+        return {}
+    values: dict[tuple[str, str], list[float]] = defaultdict(list)
+    path = _real_post_sell_path(target_date)
+    for event in iter_jsonl(path):
+        fields = _event_fields(event)
+        event_date = _event_date(fields) or str(fields.get("entry_date") or fields.get("sell_date") or "")[:10]
+        if event_date and event_date != target_date:
+            continue
+        if not _safe_bool(fields.get("actual_order_submitted")):
+            continue
+        variant_id = _split_variant_id_from_fields(fields)
+        if not variant_id:
+            continue
+        profit = _safe_float(
+            fields.get("profit_rate")
+            if fields.get("profit_rate") is not None
+            else fields.get("post_sell_profit_rate"),
+            None,
+        )
+        if profit is None:
+            continue
+        values[(_context_bucket(fields), variant_id)].append(float(profit))
+    return values
+
+
 def _context_bucket(fields: dict[str, Any]) -> str:
     spread_bps = _safe_float(fields.get("spread_bps"), None)
     if spread_bps is None:
@@ -283,6 +352,149 @@ def _template_for_bucket(bucket: str) -> dict[str, Any]:
     return dict(templates.get(bucket) or templates["balanced_normal"])
 
 
+def _bounded_equal_split_template(bucket: str) -> dict[str, Any]:
+    template = _template_for_bucket(bucket)
+    template.update(
+        {
+            "leg_count": 2,
+            "price_offsets_ticks": [0, 1],
+            "qty_weight_min": 0.5,
+            "qty_weight_max": 0.5,
+            "price_candidates": ["resolved_order_price", "best_bid", "bid-1tick"],
+            "split_variant_id": BASELINE_SPLIT_VARIANT_ID,
+        }
+    )
+    return template
+
+
+def _post_submit_tick_band_template(bucket: str, tick_band: dict[str, Any]) -> dict[str, Any]:
+    template = _bounded_equal_split_template(bucket)
+    sample = _safe_int(tick_band.get("sample_count"), 0)
+    p75 = _safe_float(tick_band.get("p75_down_ticks"), 0.0) or 0.0
+    touch2 = _safe_float(tick_band.get("touch_2tick_rate"), 0.0) or 0.0
+    if sample >= POST_SUBMIT_TICK_BAND_FLOOR_REAL and p75 >= 2.0 and touch2 >= 50.0:
+        template.update(
+            {
+                "leg_count": 3,
+                "price_offsets_ticks": [0, 1, 2],
+                "qty_weight_min": 0.34,
+                "qty_weight_max": 0.34,
+                "price_candidates": ["resolved_order_price", "best_bid", "bid-1tick", "bid-2tick"],
+                "split_variant_id": TICK_BAND_3LEG_VARIANT_ID,
+            }
+        )
+    return template
+
+
+def _percentile(values: list[int], pct: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(int(value) for value in values)
+    if len(ordered) == 1:
+        return float(ordered[0])
+    rank = (len(ordered) - 1) * max(0.0, min(100.0, float(pct))) / 100.0
+    lower = int(rank)
+    upper = min(lower + 1, len(ordered) - 1)
+    if lower == upper:
+        return float(ordered[lower])
+    weight = rank - lower
+    return (ordered[lower] * (1.0 - weight)) + (ordered[upper] * weight)
+
+
+def _post_submit_observed_prices(fields: dict[str, Any]) -> list[int]:
+    prices: list[int] = []
+    for key in (
+        "current_price_observed",
+        "current_price",
+        "latest_price",
+        "holding_ws_recovered_curr",
+        "curr_price",
+        "mark_price_at_submit",
+        "submitted_mark_price",
+    ):
+        value = _safe_int(fields.get(key), 0)
+        if value > 0:
+            prices.append(value)
+    return prices
+
+
+def _submit_order_price(fields: dict[str, Any]) -> int:
+    return _safe_int(
+        fields.get("order_price")
+        or fields.get("submitted_order_price")
+        or fields.get("resolved_order_price")
+        or fields.get("price")
+        or fields.get("submitted_price"),
+        0,
+    )
+
+
+def _build_post_submit_low_tick_bands(
+    events: list[dict[str, Any]],
+    *,
+    source_quality: dict[str, Any] | None = None,
+    window_minutes: int = POST_SUBMIT_LOW_WINDOW_MINUTES,
+) -> dict[str, dict[str, Any]]:
+    blocked_stages = set((source_quality or {}).get("hard_blocking_stages") or [])
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for fields in events:
+        stage = str(fields.get("stage") or fields.get("event") or "").strip()
+        if stage in blocked_stages:
+            continue
+        record_id = str(fields.get("record_id") or "").strip()
+        code = str(fields.get("stock_code") or "").strip()
+        if not record_id or not code:
+            continue
+        grouped[(record_id, code)].append(fields)
+
+    down_ticks_by_bucket: dict[str, list[int]] = defaultdict(list)
+    for group in grouped.values():
+        dated = [(item, _event_dt(item)) for item in group]
+        for submit, submit_dt in dated:
+            stage = str(submit.get("stage") or submit.get("event") or "").strip()
+            if stage != "order_bundle_submitted":
+                continue
+            if not _safe_bool(submit.get("actual_order_submitted")):
+                continue
+            if submit_dt is None:
+                continue
+            submit_price = _submit_order_price(submit)
+            if submit_price <= 0:
+                continue
+            observed_prices: list[int] = []
+            for item, item_dt in dated:
+                if item_dt is None:
+                    continue
+                if item_dt < submit_dt:
+                    continue
+                if item_dt > submit_dt + timedelta(minutes=window_minutes):
+                    continue
+                observed_prices.extend(_post_submit_observed_prices(item))
+            if not observed_prices:
+                continue
+            low_price = min(observed_prices)
+            tick = max(1, int(get_tick_size(submit_price) or 1))
+            down_ticks = max(0, int(math.ceil((submit_price - low_price) / tick)))
+            down_ticks_by_bucket[_context_bucket(submit)].append(down_ticks)
+
+    result: dict[str, dict[str, Any]] = {}
+    for bucket, values in down_ticks_by_bucket.items():
+        sample = len(values)
+        result[bucket] = {
+            "sample_count": sample,
+            "window_minutes": int(window_minutes),
+            "source": "runtime_post_submit_observed_prices",
+            "p50_down_ticks": round(_percentile(values, 50), 3),
+            "p75_down_ticks": round(_percentile(values, 75), 3),
+            "p90_down_ticks": round(_percentile(values, 90), 3),
+            "max_down_ticks": max(values) if values else 0,
+            "touch_1tick_rate": _pct(sum(1 for value in values if value >= 1), sample),
+            "touch_2tick_rate": _pct(sum(1 for value in values if value >= 2), sample),
+            "no_pullback_rate": _pct(sum(1 for value in values if value <= 0), sample),
+        }
+    return result
+
+
 def _is_real_submit_event(fields: dict[str, Any]) -> bool:
     return _safe_bool(fields.get("actual_order_submitted"))
 
@@ -337,45 +549,97 @@ def _build_candidate_grid(
     buckets: dict[str, dict[str, Any]],
     sim_ev_values: dict[str, list[float]],
     real_ev_values: dict[str, list[float]],
+    real_split_variant_ev_values: dict[tuple[str, str], list[float]] | None = None,
+    post_submit_low_tick_bands: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     grid: list[dict[str, Any]] = []
-    for bucket in sorted(set(buckets) | set(sim_ev_values) | set(real_ev_values)):
+    real_split_variant_ev_values = real_split_variant_ev_values or {}
+    post_submit_low_tick_bands = post_submit_low_tick_bands or {}
+    split_variant_buckets = {bucket for bucket, _variant_id in real_split_variant_ev_values}
+    for bucket in sorted(
+        set(buckets) | set(sim_ev_values) | set(real_ev_values) | split_variant_buckets | set(post_submit_low_tick_bands)
+    ):
         counts = buckets.get(bucket) or {}
         template = _template_for_bucket(bucket)
+        tick_band = post_submit_low_tick_bands.get(bucket) or {}
         real_count = _safe_int(counts.get("real_sample_count"), 0)
         sim_count = _safe_int(counts.get("sim_sample_count"), 0)
         total = max(1, real_count + sim_count)
         real_ev_list = real_ev_values.get(bucket) or []
         sim_ev_list = sim_ev_values.get(bucket) or []
-        real_outcome_count = len(real_ev_list)
-        real_ev = round(mean(real_ev_list), 4) if real_ev_list else None
+        real_bucket_outcome_count = len(real_ev_list)
+        real_bucket_ev = round(mean(real_ev_list), 4) if real_ev_list else None
         sim_ev = round(mean(sim_ev_list), 4) if sim_ev_list else None
-        primary_ev = real_ev if real_ev is not None else None
+        split_variant_id = ""
+        if bucket != "guarded_or_stale":
+            template = _post_submit_tick_band_template(bucket, tick_band)
+            split_variant_id = BASELINE_SPLIT_VARIANT_ID
+            if template.get("split_variant_id"):
+                split_variant_id = str(template.get("split_variant_id") or BASELINE_SPLIT_VARIANT_ID)
+        split_variant_ev_list = real_split_variant_ev_values.get((bucket, split_variant_id)) if split_variant_id else []
+        split_variant_outcome_count = len(split_variant_ev_list or [])
+        split_variant_ev = round(mean(split_variant_ev_list), 4) if split_variant_ev_list else None
+        primary_ev = split_variant_ev if split_variant_ev is not None else None
         notional_ev = primary_ev
         partial_fill_rate = _pct(_safe_int(counts.get("partial_fill_count"), 0), max(real_count, 1))
         cancel_rate = _pct(_safe_int(counts.get("cancel_or_fail_count"), 0), total)
         late_fill_rate = _pct(_safe_int(counts.get("late_fill_count"), 0), max(real_count, 1))
-        downside_source = real_ev_list if real_ev_list else sim_ev_list
+        downside_source = split_variant_ev_list or []
         downside = sorted(downside_source)[max(0, int(len(downside_source) * 0.10) - 1)] if downside_source else 0.0
-        if real_count < SAMPLE_FLOOR_REAL:
+        split_variant_outcome_ready = split_variant_outcome_count >= SPLIT_VARIANT_OUTCOME_FLOOR_REAL
+        ev_passed = (
+            bucket != "guarded_or_stale"
+            and real_count >= SAMPLE_FLOOR_REAL
+            and split_variant_outcome_ready
+            and split_variant_ev is not None
+            and split_variant_ev > 0
+            and downside > -2.0
+        )
+        execution_shape_seed_passed = (
+            bucket != "guarded_or_stale"
+            and real_count >= SAMPLE_FLOOR_REAL
+            and not split_variant_outcome_ready
+            and cancel_rate <= 20.0
+            and late_fill_rate <= 20.0
+        )
+        policy_mode = ""
+        policy_generation_reason = ""
+        if ev_passed:
+            floor_status = "pass_real_primary_ev"
+            primary_sample_book = "real_split_variant"
+            policy_mode = POLICY_MODE_REAL_PRIMARY_EV
+            policy_generation_reason = "real split variant outcome EV passed sample/downside guards"
+        elif execution_shape_seed_passed:
+            tick_sample = _safe_int(tick_band.get("sample_count"), 0)
+            if template.get("leg_count") == 3 and tick_sample >= POST_SUBMIT_TICK_BAND_FLOOR_REAL:
+                floor_status = "pass_post_submit_tick_band_seed"
+                primary_sample_book = "real_submit_post_submit_observed_low"
+                policy_mode = POLICY_MODE_POST_SUBMIT_TICK_BAND
+                policy_generation_reason = (
+                    "real submit sample floor and post-submit observed low tick-band passed; "
+                    "open a qty-preserving 3-leg 0/1/2tick seed"
+                )
+            else:
+                floor_status = "pass_bounded_equal_split_baseline"
+                primary_sample_book = "real_submit_execution_shape"
+                policy_mode = POLICY_MODE_BOUNDED_EQUAL_BASELINE
+                policy_generation_reason = (
+                    "real submit sample floor passed, split-variant outcome is pending, and execution guards allow "
+                    "a qty-preserving 2-leg 50/50 1tick baseline"
+                )
+        elif real_count < SAMPLE_FLOOR_REAL:
             floor_status = "hold_sample"
             primary_sample_book = "none"
-        elif real_ev is not None:
-            floor_status = "pass"
-            primary_sample_book = "real"
+        elif split_variant_outcome_ready:
+            floor_status = "hold_no_split_variant_edge"
+            primary_sample_book = "real_split_variant"
         elif sim_count >= SAMPLE_FLOOR_SIM and sim_ev is not None:
             floor_status = "hold_real_outcome_pending"
             primary_sample_book = "sim_diagnostic"
         else:
             floor_status = "hold_real_outcome_pending"
             primary_sample_book = "real_outcome_pending"
-        passed = (
-            bucket != "guarded_or_stale"
-            and real_count >= SAMPLE_FLOOR_REAL
-            and real_ev is not None
-            and real_ev > 0
-            and downside > -2.0
-        )
+        passed = ev_passed or execution_shape_seed_passed
         grid.append(
             {
                 "context_bucket": bucket,
@@ -383,7 +647,19 @@ def _build_candidate_grid(
                 "price_candidates": [item for item in template["price_candidates"] if item in ALLOWED_PRICE_CANDIDATES],
                 "real_sample_count": real_count,
                 "sim_sample_count": sim_count,
-                "real_outcome_joined_sample": real_outcome_count,
+                "real_outcome_joined_sample": real_bucket_outcome_count,
+                "real_bucket_outcome_ev_pct": real_bucket_ev,
+                "real_split_variant_outcome_joined_sample": split_variant_outcome_count,
+                "real_split_variant_ev_pct": split_variant_ev,
+                "split_variant_id": split_variant_id,
+                "optimization_basis": (
+                    "split_variant_outcome"
+                    if ev_passed
+                    else "post_submit_observed_low_tick_band"
+                    if policy_mode == POLICY_MODE_POST_SUBMIT_TICK_BAND
+                    else "bounded_execution_shape_seed"
+                ),
+                "post_submit_low_tick_band": tick_band,
                 "primary_sample_book": primary_sample_book,
                 "fill_quality": round(
                     (_safe_int(counts.get("real_submitted_count"), 0) + _safe_int(counts.get("sim_fill_count"), 0))
@@ -392,14 +668,16 @@ def _build_candidate_grid(
                 ),
                 "missed_upside": round(max(0.0, primary_ev or 0.0), 4),
                 "source_quality_adjusted_ev_pct": primary_ev,
-                "real_source_quality_adjusted_ev_pct": real_ev,
+                "real_source_quality_adjusted_ev_pct": split_variant_ev,
                 "diagnostic_sim_ev_pct": sim_ev,
                 "notional_weighted_ev_pct": notional_ev,
                 "partial_fill_rate": partial_fill_rate,
                 "cancel_rate": cancel_rate,
                 "late_fill_rate": late_fill_rate,
                 "downside_p10_profit_rate": round(float(downside), 4),
-                "sample_floor_status": "pass" if passed else floor_status,
+                "sample_floor_status": floor_status,
+                "policy_mode": policy_mode,
+                "policy_generation_reason": policy_generation_reason,
                 "candidate_passed": passed,
             }
         )
@@ -435,6 +713,15 @@ def _policy_payload(target_date: str, report_json: Path, candidate_grid: list[di
                 "qty_weight_max": item["qty_weight_max"],
                 "urgency_score": item["urgency_score"],
                 "passive_edge_score": item["passive_edge_score"],
+                "policy_mode": item.get("policy_mode") or POLICY_MODE_REAL_PRIMARY_EV,
+                "policy_generation_reason": item.get("policy_generation_reason") or "",
+                "primary_sample_book": item.get("primary_sample_book"),
+                "real_sample_count": item.get("real_sample_count"),
+                "real_outcome_joined_sample": item.get("real_outcome_joined_sample"),
+                "real_split_variant_outcome_joined_sample": item.get("real_split_variant_outcome_joined_sample"),
+                "split_variant_id": item.get("split_variant_id"),
+                "optimization_basis": item.get("optimization_basis"),
+                "post_submit_low_tick_band": item.get("post_submit_low_tick_band"),
                 "source_quality_adjusted_ev_pct": item["source_quality_adjusted_ev_pct"],
                 "notional_weighted_ev_pct": item["notional_weighted_ev_pct"],
                 "downside_p10_profit_rate": item["downside_p10_profit_rate"],
@@ -451,7 +738,15 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
     counts, excluded_source_quality = _quality_counts(events, source_quality)
     sim_ev_values = _load_sim_ev_values(target_date)
     real_ev_values = _load_real_ev_values(target_date)
-    candidate_grid = _build_candidate_grid(counts, sim_ev_values, real_ev_values)
+    real_split_variant_ev_values = _load_real_split_variant_ev_values(target_date)
+    post_submit_low_tick_bands = _build_post_submit_low_tick_bands(events, source_quality=source_quality)
+    candidate_grid = _build_candidate_grid(
+        counts,
+        sim_ev_values,
+        real_ev_values,
+        real_split_variant_ev_values,
+        post_submit_low_tick_bands,
+    )
     json_path, md_path = report_paths(target_date)
     policy_json = policy_path(target_date)
     source_quality_allowed = source_quality.get("tuning_input_allowed") is True
@@ -475,6 +770,29 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
             "sample_floor": {"real": SAMPLE_FLOOR_REAL, "sim": SAMPLE_FLOOR_SIM},
             "primary_decision_metric": "source_quality_adjusted_ev_pct",
             "source_quality_gate": "observation_source_quality_audit_hard_block_rows_excluded",
+            "policy_modes": {
+                POLICY_MODE_REAL_PRIMARY_EV: "real split-variant outcome EV-positive optimized split",
+                POLICY_MODE_BOUNDED_EQUAL_BASELINE: "real-submit-backed qty-preserving 2-leg 50/50 1tick baseline",
+                POLICY_MODE_POST_SUBMIT_TICK_BAND: "post-submit observed-low tick-band qty-preserving seed",
+            },
+            "post_submit_low_tick_band_contract": {
+                "metric_role": "execution_shape_seed",
+                "decision_authority": "next_preopen_bounded_entry_split_policy",
+                "window_policy": f"same_day_submit_plus_{POST_SUBMIT_LOW_WINDOW_MINUTES}m_runtime_observed_prices",
+                "sample_floor": {"real_submit_observed_low": POST_SUBMIT_TICK_BAND_FLOOR_REAL},
+                "primary_decision_metric": "p75_down_ticks",
+                "source_quality_gate": "actual_order_submitted=true and post-submit runtime observed prices present",
+                "forbidden_uses": [
+                    "claim_split_variant_ev_without_variant_outcome",
+                    "increase_requested_qty",
+                    "broker_guard_relief",
+                    "intraday_mutation",
+                ],
+            },
+            "optimization_contract": (
+                "Post-sell profit_rate is only split-policy primary EV when it is joined to an applied "
+                "entry_split_order_variant_id. Bucket-only sell outcome is diagnostic."
+            ),
             "forbidden_uses": [
                 "requested_qty_increase",
                 "real_execution_quality_approval_from_sim",
@@ -490,6 +808,7 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
             "sim_post_sell_path": str(_sim_post_sell_path(target_date)) if _sim_post_sell_path(target_date).exists() else None,
             "real_post_sell_path": str(_real_post_sell_path(target_date)) if _real_post_sell_path(target_date).exists() else None,
             "threshold_cycle_ev_path": str(_threshold_cycle_ev_path(target_date)) if _threshold_cycle_ev_path(target_date).exists() else None,
+            "post_submit_low_tick_band_bucket_count": len(post_submit_low_tick_bands),
         },
         "candidate_grid": candidate_grid,
         "recommended_policy": {
@@ -529,8 +848,11 @@ def _render_markdown(report: dict[str, Any]) -> str:
         lines.append(
             "- "
             f"`{item.get('context_bucket')}` legs=`{item.get('leg_count')}` "
+            f"mode=`{item.get('policy_mode') or '-'}` "
             f"real/sim=`{item.get('real_sample_count')}/{item.get('sim_sample_count')}` "
             f"ev=`{item.get('source_quality_adjusted_ev_pct')}` "
+            f"bucket_ev=`{item.get('real_bucket_outcome_ev_pct')}` "
+            f"p75_down_ticks=`{((item.get('post_submit_low_tick_band') or {}).get('p75_down_ticks'))}` "
             f"cancel=`{item.get('cancel_rate')}` "
             f"pass=`{item.get('candidate_passed')}`"
         )
@@ -603,6 +925,35 @@ def _tick_size(price: int) -> int:
         return 1
 
 
+def _runtime_default_bucket_policy(bucket: str) -> dict[str, Any]:
+    return {
+        "context_bucket": bucket,
+        "leg_count": 2,
+        "price_offsets_ticks": [0, 1],
+        "qty_weight_min": 0.5,
+        "qty_weight_max": 0.5,
+        "policy_mode": RUNTIME_FALLBACK_POLICY_MODE,
+        "split_variant_id": RUNTIME_FALLBACK_VARIANT_ID,
+        "policy_generation_reason": "runtime fallback for policy bucket gap; qty-preserving 50/50 1tick seed",
+    }
+
+
+def _has_present_value(fields: dict[str, Any], key: str) -> bool:
+    value = fields.get(key)
+    return value not in (None, "", "-", "unknown", "not_available")
+
+
+def _split_allocator_stale_quote_blocked(fields: dict[str, Any]) -> bool:
+    if _safe_bool(fields.get("stale_quote_submit_block")):
+        return True
+    for key in ("quote_stale_at_submit", "pre_submit_effective_quote_stale"):
+        if _safe_bool(fields.get(key)):
+            return True
+    if any(_has_present_value(fields, key) for key in ("quote_stale_at_submit", "pre_submit_effective_quote_stale")):
+        return False
+    return _safe_bool(fields.get("quote_stale"))
+
+
 def apply_entry_split_order_policy(
     planned_orders: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None,
     *,
@@ -626,7 +977,7 @@ def apply_entry_split_order_policy(
     if len(orders) != 1:
         fields["entry_split_order_skip_reason"] = "multi_order_input_not_supported_v1"
         return orders, fields
-    if _safe_bool(latency_gate.get("quote_stale")) or _safe_bool(latency_gate.get("stale_quote_submit_block")):
+    if _split_allocator_stale_quote_blocked(latency_gate):
         fields["entry_split_order_skip_reason"] = "stale_quote"
         return orders, fields
     if str(latency_gate.get("latency_state") or "").upper() == "DANGER" and not _safe_bool(
@@ -643,10 +994,22 @@ def apply_entry_split_order_policy(
         return orders, fields
     bucket = _context_bucket({**stock, **latency_gate})
     bucket_policy = (policy.get("buckets") or {}).get(bucket)
+    fallback_policy_applied = False
     if not isinstance(bucket_policy, dict):
-        fields["entry_split_order_skip_reason"] = "bucket_policy_missing"
-        fields["entry_split_order_bucket"] = bucket
-        return orders, fields
+        bucket_policy = _runtime_default_bucket_policy(bucket)
+        fallback_policy_applied = True
+    policy_mode = str(bucket_policy.get("policy_mode") or "").strip()
+    split_variant_id = str(bucket_policy.get("split_variant_id") or "").strip() or _split_variant_id_from_fields(
+        {
+            "entry_split_order_policy_applied": True,
+            "entry_split_order_policy_mode": policy_mode,
+            "entry_split_order_leg_count": bucket_policy.get("leg_count"),
+            "entry_split_order_price_offsets_ticks": ",".join(
+                str(item) for item in (bucket_policy.get("price_offsets_ticks") or [])
+            ),
+            "entry_split_order_qty_weight_min": bucket_policy.get("qty_weight_min"),
+        }
+    )
     max_legs = _max_legs_for_qty(total_qty)
     desired_legs = min(_safe_int(bucket_policy.get("leg_count"), 1), max_legs, total_qty)
     if desired_legs <= 1:
@@ -676,6 +1039,7 @@ def apply_entry_split_order_policy(
         offsets.append(offsets[-1] + 1 if offsets else 0)
     first_weight = (_safe_float(bucket_policy.get("qty_weight_min"), 0.5) or 0.5)
     quantities = _split_qty(total_qty, desired_legs, first_weight)
+    applied_offsets = offsets[:desired_legs]
     split_orders: list[dict[str, Any]] = []
     for idx, qty in enumerate(quantities):
         price = clamp_price_to_tick(max(1, base_price - (tick * offsets[idx])))
@@ -687,7 +1051,13 @@ def apply_entry_split_order_policy(
                 "price": price,
                 "entry_split_order_leg_index": idx + 1,
                 "entry_split_order_policy_version": policy.get("policy_version"),
+                "entry_split_order_policy_mode": policy_mode,
+                "entry_split_order_variant_id": split_variant_id,
                 "entry_split_order_bucket": bucket,
+                "entry_split_order_runtime_default_policy_applied": fallback_policy_applied,
+                "entry_split_order_price_offsets_ticks": ",".join(str(item) for item in applied_offsets),
+                "entry_split_order_qty_weight_min": first_weight,
+                "entry_split_order_qty_weight_max": _safe_float(bucket_policy.get("qty_weight_max"), first_weight),
             }
         )
     if sum(_safe_int(item.get("qty"), 0) for item in split_orders) != total_qty:
@@ -699,10 +1069,16 @@ def apply_entry_split_order_policy(
             "entry_split_order_skip_reason": "",
             "entry_split_order_bucket": bucket,
             "entry_split_order_policy_version": policy.get("policy_version"),
+            "entry_split_order_policy_mode": policy_mode,
+            "entry_split_order_variant_id": split_variant_id,
+            "entry_split_order_runtime_default_policy_applied": fallback_policy_applied,
             "entry_split_order_policy_file": policy_file
             or os.environ.get("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE"),
             "entry_split_order_leg_count": len(split_orders),
             "entry_split_order_split_qty": sum(_safe_int(item.get("qty"), 0) for item in split_orders),
+            "entry_split_order_price_offsets_ticks": ",".join(str(item) for item in applied_offsets),
+            "entry_split_order_qty_weight_min": first_weight,
+            "entry_split_order_qty_weight_max": _safe_float(bucket_policy.get("qty_weight_max"), first_weight),
         }
     )
     return split_orders, fields
