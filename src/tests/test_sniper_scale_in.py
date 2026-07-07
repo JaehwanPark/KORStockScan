@@ -148,6 +148,50 @@ def _micro_vwap_candles(*, price=10_000, count=5):
     ]
 
 
+def test_rising_missed_caution_weak_liquidity_combo_blocks_entry(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_CAUTION_WEAK_LIQUIDITY_BLOCK_ENABLED", raising=False)
+
+    decision = state_handlers._evaluate_rising_missed_caution_weak_liquidity_block(
+        stock={"rising_missed_normal_buy_bridge_allowed": True},
+        runtime={},
+        strategy="SCALPING",
+        latency_gate={
+            "latency_state": "CAUTION",
+            "entry_price_gap_profile": "weak_liquidity_wide_spread",
+        },
+        guard_fields={
+            "pre_submit_liquidity_guard_action": "NOT_AVAILABLE",
+            "pre_submit_liquidity_reason": "liquidity_not_available",
+        },
+    )
+
+    assert decision["blocked"] is True
+    assert decision["threshold_family"] == "rising_missed_caution_weak_liquidity_entry_block"
+    assert decision["actual_order_submitted"] is False
+    assert decision["broker_order_forbidden"] is True
+
+
+def test_rising_missed_caution_weak_liquidity_combo_does_not_block_non_rising_entry(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_CAUTION_WEAK_LIQUIDITY_BLOCK_ENABLED", raising=False)
+
+    decision = state_handlers._evaluate_rising_missed_caution_weak_liquidity_block(
+        stock={},
+        runtime={},
+        strategy="SCALPING",
+        latency_gate={
+            "latency_state": "CAUTION",
+            "entry_price_gap_profile": "weak_liquidity_wide_spread",
+        },
+        guard_fields={
+            "pre_submit_liquidity_guard_action": "NOT_AVAILABLE",
+            "pre_submit_liquidity_reason": "liquidity_not_available",
+        },
+    )
+
+    assert decision["blocked"] is False
+    assert decision["rising_missed_entry_lineage"] is False
+
+
 def _trusted_reversal_features(**overrides):
     base = {
         "tick_context_quality": "fresh_computed",

@@ -1155,6 +1155,17 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
     "pre_submit_liquidity_guard_block": StageContract(
         required_fields=(*PRE_SUBMIT_GUARD_FIELDS, "liquidity_value", "min_liquidity"),
     ),
+    "rising_missed_caution_weak_liquidity_entry_block": StageContract(
+        required_fields=(
+            *PRE_SUBMIT_GUARD_FIELDS,
+            "block_reason",
+            "rising_missed_entry_lineage",
+            "rising_missed_block_latency_state",
+            "rising_missed_block_entry_price_gap_profile",
+            "rising_missed_block_liquidity_action",
+            "rising_missed_block_liquidity_reason",
+        ),
+    ),
     "pre_submit_overbought_pullback_guard_block": StageContract(
         required_fields=(*PRE_SUBMIT_GUARD_FIELDS, "risk_state"),
     ),

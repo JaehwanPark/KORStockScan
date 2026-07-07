@@ -17,6 +17,7 @@ THRESHOLD_STAGE_FAMILY_MAP = {
     "latency_pass": "dynamic_entry_price_resolver",
     "pre_submit_price_guard_block": "pre_submit_price_guard",
     "pre_submit_liquidity_guard_block": "liquidity_pre_submit_guard_p1",
+    "rising_missed_caution_weak_liquidity_entry_block": "rising_missed_caution_weak_liquidity_entry_block",
     "pre_submit_overbought_pullback_guard_block": "overbought_pullback_guard_p1",
     "entry_ai_price_canary_applied": "dynamic_entry_price_resolver",
     "entry_ai_price_canary_fallback": "dynamic_entry_price_resolver",
