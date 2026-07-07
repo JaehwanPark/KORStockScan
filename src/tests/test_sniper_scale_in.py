@@ -18,6 +18,7 @@ from src.engine.kiwoom_websocket import KiwoomWSManager
 from src.utils.constants import TRADING_RULES as CONFIG
 from src.engine.scalping.rising_missed_one_share_entry import (
     BLOCK_ALREADY_HOLDING,
+    BLOCK_ENTRY_AI_ACTION_NOT_BUY,
     BLOCK_CLASS_NOT_ELIGIBLE,
     BLOCK_ENTRY_AI_NOT_EVALUATED,
     BLOCK_NOT_CANDIDATE,
@@ -27,8 +28,10 @@ from src.engine.scalping.rising_missed_one_share_entry import (
     DEFAULT_RISING_MISSED_SCOUT_ENTRY_BUDGET_CAP_KRW,
     FORCED_ENTRY_REASON,
     MAX_ONE_SHARE_ENTRY_PRICE_KRW,
+    NORMAL_BUY_BRIDGE_REASON,
     RISING_MISSED_CLASS_SOURCE_QUALITY_EXCLUDED,
     collapse_to_one_share_order,
+    evaluate_rising_missed_normal_buy_bridge,
     evaluate_rising_missed_one_share_entry,
 )
 
@@ -601,6 +604,112 @@ def test_rising_missed_one_share_entry_allows_scanner_rising_candidate():
     assert decision.allowed is True
     assert decision.reason == FORCED_ENTRY_REASON
     assert decision.forced_qty == 1
+
+
+def test_rising_missed_normal_buy_bridge_allows_buy_without_forced_scout_fields():
+    decision = evaluate_rising_missed_normal_buy_bridge(
+        {
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "scanner_promotion_id": "scan-1",
+            "price_delta_since_first_seen_pct": 1.2,
+            "last_watching_ai_action": "BUY",
+        },
+        strategy="SCALPING",
+        position_tag="SCANNER",
+        feature_enabled=True,
+        has_open_pending=False,
+        already_holding=False,
+        current_ai_action="BUY",
+        min_delta_pct=0.5,
+        current_price=20_000,
+        scout_budget_cap_krw=DEFAULT_RISING_MISSED_SCOUT_ENTRY_BUDGET_CAP_KRW,
+    )
+
+    assert decision.allowed is True
+    assert decision.reason == NORMAL_BUY_BRIDGE_REASON
+    assert decision.log_fields["rising_missed_normal_buy_bridge_allowed"] is True
+    assert decision.log_fields["rising_missed_normal_buy_bridge_uses_normal_sizing"] is True
+    assert decision.log_fields["rising_missed_normal_buy_bridge_forced_scout_fields_used"] is False
+    assert "rising_missed_one_share_entry_forced_qty" not in decision.log_fields
+    assert not any(key.startswith("rising_missed_scout_") for key in decision.log_fields)
+
+
+def test_rising_missed_normal_buy_bridge_blocks_wait_action_and_safety_reasons():
+    base_stock = {
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_id": "scan-1",
+        "price_delta_since_first_seen_pct": 1.2,
+    }
+    wait_action = evaluate_rising_missed_normal_buy_bridge(
+        {**base_stock, "last_watching_ai_action": "WAIT"},
+        strategy="SCALPING",
+        position_tag="SCANNER",
+        feature_enabled=True,
+        has_open_pending=False,
+        already_holding=False,
+        current_ai_action="WAIT",
+        min_delta_pct=0.5,
+        current_price=20_000,
+    )
+    upper_limit = evaluate_rising_missed_normal_buy_bridge(
+        {**base_stock, "last_watching_ai_action": "BUY"},
+        strategy="SCALPING",
+        position_tag="SCANNER",
+        feature_enabled=True,
+        has_open_pending=False,
+        already_holding=False,
+        current_ai_action="BUY",
+        min_delta_pct=0.5,
+        current_price=20_000,
+        current_fluctuation_pct=26.0,
+        upper_limit_exclude_pct=26.0,
+    )
+    open_pending = evaluate_rising_missed_normal_buy_bridge(
+        {**base_stock, "last_watching_ai_action": "BUY"},
+        strategy="SCALPING",
+        position_tag="SCANNER",
+        feature_enabled=True,
+        has_open_pending=True,
+        already_holding=False,
+        current_ai_action="BUY",
+        min_delta_pct=0.5,
+        current_price=20_000,
+    )
+    already_holding = evaluate_rising_missed_normal_buy_bridge(
+        {**base_stock, "last_watching_ai_action": "BUY"},
+        strategy="SCALPING",
+        position_tag="SCANNER",
+        feature_enabled=True,
+        has_open_pending=False,
+        already_holding=True,
+        current_ai_action="BUY",
+        min_delta_pct=0.5,
+        current_price=20_000,
+    )
+    price_cap = evaluate_rising_missed_normal_buy_bridge(
+        {**base_stock, "last_watching_ai_action": "BUY"},
+        strategy="SCALPING",
+        position_tag="SCANNER",
+        feature_enabled=True,
+        has_open_pending=False,
+        already_holding=False,
+        current_ai_action="BUY",
+        min_delta_pct=0.5,
+        current_price=MAX_ONE_SHARE_ENTRY_PRICE_KRW + 1,
+    )
+
+    assert wait_action.allowed is False
+    assert wait_action.reason == BLOCK_ENTRY_AI_ACTION_NOT_BUY
+    assert upper_limit.allowed is False
+    assert upper_limit.reason == BLOCK_UPPER_LIMIT_PROXIMITY
+    assert open_pending.allowed is False
+    assert open_pending.reason == BLOCK_OPEN_PENDING
+    assert already_holding.allowed is False
+    assert already_holding.reason == BLOCK_ALREADY_HOLDING
+    assert price_cap.allowed is False
+    assert price_cap.reason == BLOCK_PRICE_ABOVE_CAP
 
 
 def test_rising_missed_one_share_entry_uses_budget_cap_with_min_one_share():
@@ -9535,6 +9644,155 @@ def test_watching_state_reuses_cached_ai_action_during_cooldown_without_local_ac
     assert "blocked_ai_score" in by_stage
     assert by_stage["blocked_ai_score"]["threshold"] == 75
     assert stock["last_watching_ai_action"] == "WAIT"
+
+
+@pytest.mark.parametrize(
+    ("bridge_enabled", "ai_action", "expected_submit"),
+    [
+        (False, "BUY", False),
+        (True, "BUY", True),
+        (True, "WAIT", False),
+    ],
+)
+def test_rising_missed_normal_buy_bridge_controls_first_ai_score_prior_path(
+    monkeypatch,
+    bridge_enabled,
+    ai_action,
+    expected_submit,
+):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 7, 7, 10, 0, 0)
+
+    now_ts = FixedDateTime.now().timestamp()
+    state_handlers.datetime = FixedDateTime
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        AI_WATCHING_STATE_CHANGE_REFRESH_ENABLED=False,
+        EARLY_ACCEL_RECHECK_RUNTIME_ENABLED=False,
+        RISING_MISSED_NORMAL_BUY_BRIDGE_ENABLED=bridge_enabled,
+    )
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+    state_handlers.KIWOOM_TOKEN = "token"
+
+    class DummyRadar:
+        def get_smart_target_price(self, curr_price, **kwargs):
+            return curr_price, 0.0
+
+    class DummyAI:
+        def analyze_target(self, *args, **kwargs):
+            return {
+                "action": ai_action,
+                "score": 70,
+                "reason": "low score prior",
+                "ai_result_source": "live",
+                "ai_parse_ok": True,
+            }
+
+    class DummyEventBus:
+        def publish(self, *args, **kwargs):
+            return None
+
+    logs = []
+    submit_calls = []
+    state_handlers.EVENT_BUS = DummyEventBus()
+
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", raising=False)
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(state_handlers, "_publish_buy_signal_submission_notice", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_scalping_strength_momentum",
+        lambda ws_data: {"enabled": True, "allowed": True, "reason": "ok"},
+    )
+    monkeypatch.setattr(state_handlers, "arm_big_bite_if_triggered", lambda **kwargs: (False, {}))
+    monkeypatch.setattr(state_handlers, "confirm_big_bite_follow_through", lambda **kwargs: (False, {}))
+    monkeypatch.setattr(state_handlers, "build_tick_data_from_ws", lambda ws_data: {})
+    monkeypatch.setattr(state_handlers, "_extract_ai_overlap_snapshot", lambda **kwargs: {})
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_tick_history_ka10003",
+        lambda *args, **kwargs: [{"price": 10_020, "volume": 100, "time": "100000"}],
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_minute_candles_ka10080",
+        lambda *args, **kwargs: [{"close": 10_020, "volume": 100, "time": "1000"}],
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_score65_74_recovery_probe_decision",
+        lambda *args, **kwargs: {"allowed": False},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_submit_watching_triggered_entry",
+        lambda stock, code, ws_data, admin_id, runtime: submit_calls.append((stock, code, runtime)) or True,
+    )
+
+    stock = {
+        "id": 991,
+        "name": "RISING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "prob": 0.9,
+        "rt_ai_prob": 0.70,
+        "scanner_promotion_id": "scan-bridge",
+        "price_delta_since_first_seen_pct": 1.4,
+    }
+
+    state_handlers.handle_watching_state(
+        stock=stock,
+        code="123456",
+        ws_data={
+            "curr": 10_020,
+            "v_pw": 120.0,
+            "ask_tot": 20_000,
+            "bid_tot": 20_000,
+            "open": 10_000,
+            "fluctuation": 0.5,
+            "orderbook": {
+                "asks": [{"price": 10_020, "volume": 100}],
+                "bids": [{"price": 10_000, "volume": 100}],
+            },
+        },
+        admin_id=1,
+        now_ts=now_ts,
+        now_dt=FixedDateTime.now(),
+        radar=DummyRadar(),
+        ai_engine=DummyAI(),
+    )
+
+    by_stage = {stage: fields for stage, fields in logs}
+    assert bool(submit_calls) is expected_submit
+    if expected_submit:
+        submitted_stock, code, runtime = submit_calls[0]
+        assert code == "123456"
+        assert by_stage["rising_missed_normal_buy_bridge_unlocked"][
+            "rising_missed_normal_buy_bridge_allowed"
+        ] is True
+        assert by_stage["rising_missed_normal_buy_bridge_unlocked"]["score_gate_converted_to_prior"] is True
+        assert submitted_stock["rising_missed_normal_buy_bridge_allowed"] is True
+        assert submitted_stock.get("rising_missed_one_share_entry_forced") is None
+        assert submitted_stock.get("rising_missed_one_share_scout") is None
+        assert submitted_stock.get("forced_entry_qty") is None
+        assert "forced_entry_qty" not in runtime
+        assert runtime.get("forced_entry_reason") is None
+    else:
+        assert "rising_missed_normal_buy_bridge_unlocked" not in by_stage
+        assert "first_ai_wait" in by_stage
 
 
 def test_ai_wait_rebound_recheck_bypasses_entry_cooldown_for_fresh_scanner_rebound(monkeypatch):

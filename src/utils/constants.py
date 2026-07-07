@@ -65,6 +65,7 @@ class TradingConfig:
     SCALPING_PYRAMID_STRONG_CONTINUATION_MAX_DRAWDOWN_PCT: float = 0.20
     SCALPING_PYRAMID_MAX_ADD_QTY_RATIO: float = 0.50  # 실계좌 PYRAMID 1회 추가수량은 기존 보유수량의 50% 이내
     RISING_MISSED_SCOUT_PYRAMID_BRIDGE_ENABLED: bool = False
+    RISING_MISSED_NORMAL_BUY_BRIDGE_ENABLED: bool = False
     RISING_MISSED_SCOUT_PYRAMID_MIN_PROFIT_PCT: float = 0.70
     RISING_MISSED_SCOUT_PYRAMID_MAX_AVG_DOWN_COUNT: int = 1
     RISING_MISSED_SCOUT_PYRAMID_OPERATOR_OVERRIDE_REASON: str = ""
@@ -3211,6 +3212,9 @@ def _build_trading_rules() -> TradingConfig:
     env_rising_missed_scout_pyramid_bridge_enabled = _env_bool(
         "KORSTOCKSCAN_RISING_MISSED_SCOUT_PYRAMID_BRIDGE_ENABLED"
     )
+    env_rising_missed_normal_buy_bridge_enabled = _env_bool(
+        "KORSTOCKSCAN_RISING_MISSED_NORMAL_BUY_BRIDGE_ENABLED"
+    )
     env_rising_missed_scout_pyramid_min_profit = _env_float(
         "KORSTOCKSCAN_RISING_MISSED_SCOUT_PYRAMID_MIN_PROFIT_PCT"
     )
@@ -3377,6 +3381,7 @@ def _build_trading_rules() -> TradingConfig:
         or env_pyramid_strong_continuation_min_profit is not None
         or env_pyramid_strong_continuation_max_drawdown is not None
         or env_pyramid_max_add_qty_ratio is not None
+        or env_rising_missed_normal_buy_bridge_enabled is not None
         or env_real_pyramid_micro_context_guard_enabled is not None
         or env_pending_scale_in_revalidation_cancel_enabled is not None
         or env_pending_scale_in_revalidation_min_ai_score is not None
@@ -3745,6 +3750,9 @@ def _build_trading_rules() -> TradingConfig:
             RISING_MISSED_SCOUT_PYRAMID_BRIDGE_ENABLED=env_rising_missed_scout_pyramid_bridge_enabled
             if env_rising_missed_scout_pyramid_bridge_enabled is not None
             else config.RISING_MISSED_SCOUT_PYRAMID_BRIDGE_ENABLED,
+            RISING_MISSED_NORMAL_BUY_BRIDGE_ENABLED=env_rising_missed_normal_buy_bridge_enabled
+            if env_rising_missed_normal_buy_bridge_enabled is not None
+            else config.RISING_MISSED_NORMAL_BUY_BRIDGE_ENABLED,
             RISING_MISSED_SCOUT_PYRAMID_MIN_PROFIT_PCT=env_rising_missed_scout_pyramid_min_profit
             if env_rising_missed_scout_pyramid_min_profit is not None
             else config.RISING_MISSED_SCOUT_PYRAMID_MIN_PROFIT_PCT,

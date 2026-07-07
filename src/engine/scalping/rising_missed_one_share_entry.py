@@ -15,6 +15,8 @@ BLOCK_ALREADY_HOLDING = "already_holding"
 BLOCK_PRICE_ABOVE_CAP = "price_above_one_share_entry_cap"
 BLOCK_UPPER_LIMIT_PROXIMITY = "upper_limit_proximity_entry_block"
 BLOCK_ENTRY_AI_NOT_EVALUATED = "entry_ai_action_not_evaluated"
+BLOCK_ENTRY_AI_ACTION_NOT_BUY = "entry_ai_action_not_buy"
+NORMAL_BUY_BRIDGE_REASON = "rising_missed_normal_buy_bridge_ok"
 MAX_ONE_SHARE_ENTRY_PRICE_KRW = 1_000_000
 DEFAULT_RISING_MISSED_SCOUT_ENTRY_BUDGET_CAP_KRW = 100_000
 DEFAULT_RISING_MISSED_UPPER_LIMIT_EXCLUDE_PCT = 26.0
@@ -39,6 +41,13 @@ class RisingMissedOneShareDecision:
     reason: str
     forced_qty: int = 0
     positive_delta_pct: float = 0.0
+    log_fields: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class RisingMissedNormalBuyBridgeDecision:
+    allowed: bool
+    reason: str
     log_fields: dict[str, Any] | None = None
 
 
@@ -392,6 +401,74 @@ def evaluate_rising_missed_one_share_entry(
         forced_qty=forced_qty,
         positive_delta_pct=delta_pct,
         log_fields=base_fields,
+    )
+
+
+def evaluate_rising_missed_normal_buy_bridge(
+    stock: dict[str, Any] | None,
+    *,
+    strategy: str,
+    position_tag: str,
+    feature_enabled: bool,
+    has_open_pending: bool,
+    already_holding: bool,
+    current_ai_action: Any = None,
+    positive_delta_pct: Any = None,
+    min_delta_pct: float = 1.0,
+    current_price: Any = None,
+    max_entry_price_krw: int = MAX_ONE_SHARE_ENTRY_PRICE_KRW,
+    scout_budget_cap_krw: int = DEFAULT_RISING_MISSED_SCOUT_ENTRY_BUDGET_CAP_KRW,
+    current_fluctuation_pct: Any = None,
+    upper_limit_exclude_enabled: bool = True,
+    upper_limit_exclude_pct: float = DEFAULT_RISING_MISSED_UPPER_LIMIT_EXCLUDE_PCT,
+) -> RisingMissedNormalBuyBridgeDecision:
+    stock = stock if isinstance(stock, dict) else {}
+    decision = evaluate_rising_missed_one_share_entry(
+        stock,
+        strategy=strategy,
+        position_tag=position_tag,
+        feature_enabled=feature_enabled,
+        has_open_pending=has_open_pending,
+        already_holding=already_holding,
+        positive_delta_pct=positive_delta_pct,
+        min_delta_pct=min_delta_pct,
+        current_price=current_price,
+        max_entry_price_krw=max_entry_price_krw,
+        scout_budget_cap_krw=scout_budget_cap_krw,
+        current_fluctuation_pct=current_fluctuation_pct,
+        upper_limit_exclude_enabled=upper_limit_exclude_enabled,
+        upper_limit_exclude_pct=upper_limit_exclude_pct,
+    )
+    log_fields = {
+        key: value
+        for key, value in dict(decision.log_fields or {}).items()
+        if key != "rising_missed_one_share_entry_forced_qty"
+        and not str(key).startswith("rising_missed_scout_")
+    }
+    action = str(
+        current_ai_action
+        if current_ai_action not in (None, "")
+        else _entry_ai_action_for_rising_missed(stock)[0]
+    ).strip().upper()
+    allowed = bool(decision.allowed and action == "BUY")
+    reason = NORMAL_BUY_BRIDGE_REASON if allowed else decision.reason
+    if decision.allowed and action != "BUY":
+        reason = BLOCK_ENTRY_AI_ACTION_NOT_BUY
+    log_fields.update(
+        {
+            "rising_missed_normal_buy_bridge_enabled": bool(feature_enabled),
+            "rising_missed_normal_buy_bridge_allowed": allowed,
+            "rising_missed_normal_buy_bridge_reason": reason,
+            "rising_missed_normal_buy_bridge_underlying_reason": decision.reason,
+            "rising_missed_normal_buy_bridge_ai_action": action or "-",
+            "rising_missed_normal_buy_bridge_uses_normal_sizing": True,
+            "rising_missed_normal_buy_bridge_forced_scout_fields_used": False,
+        }
+    )
+    return RisingMissedNormalBuyBridgeDecision(
+        allowed=allowed,
+        reason=reason,
+        log_fields=log_fields,
     )
 
 

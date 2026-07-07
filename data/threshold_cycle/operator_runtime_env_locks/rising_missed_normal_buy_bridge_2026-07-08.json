@@ -1,0 +1,67 @@
+{
+  "lock_id": "rising_missed_normal_buy_bridge_operator_override_2026-07-08",
+  "enabled": true,
+  "family": "rising_missed_normal_buy_bridge",
+  "stage": "entry_score_prior_bridge",
+  "manipulation_point": "blocked_ai_score_prior_to_normal_buy_flow",
+  "priority": 910,
+  "active_from_date": "2026-07-07",
+  "expires_after_source_date": "2026-07-07",
+  "target_date": "2026-07-08",
+  "runtime_effect": true,
+  "decision_authority": "operator_runtime_override_preopen_env_only",
+  "requested_by": "user_explicit_request",
+  "requested_at": "2026-07-07",
+  "scope": {
+    "strategy": "SCALPING",
+    "position_tag": "SCANNER",
+    "normal_buy_flow_only": true,
+    "rising_missed_one_share_eligible_required": true,
+    "ai_action_buy_required": true,
+    "score_prior_block_only": true,
+    "uses_normal_buy_sizing": true,
+    "forced_one_share_qty_or_tag_used": false,
+    "broker_guard_unchanged": true,
+    "stale_quote_guard_unchanged": true,
+    "order_guard_unchanged": true,
+    "quantity_cooldown_guard_unchanged": true,
+    "provider_route_unchanged": true,
+    "buy_score_threshold_unchanged": true,
+    "hard_protect_emergency_stop_unchanged": true
+  },
+  "env_overrides": {
+    "KORSTOCKSCAN_RISING_MISSED_NORMAL_BUY_BRIDGE_ENABLED": "true"
+  },
+  "forbidden_uses": [
+    "intraday_threshold_mutation",
+    "buy_score_threshold_change",
+    "broker_guard_bypass",
+    "stale_submit_bypass",
+    "order_guard_relaxation",
+    "quantity_or_cap_change",
+    "forced_one_share_qty_or_tag_reuse",
+    "provider_route_change",
+    "bot_restart_authority",
+    "real_execution_quality_approval"
+  ],
+  "rollback_guard": {
+    "disable_key": "KORSTOCKSCAN_RISING_MISSED_NORMAL_BUY_BRIDGE_ENABLED=false",
+    "revert_scope": "normal BUY bridge for rising-missed score-prior block only",
+    "broker_guard_unchanged": true,
+    "stale_quote_guard_unchanged": true,
+    "provider_route_unchanged": true
+  },
+  "source_evidence": {
+    "user_instruction": "KORSTOCKSCAN_RISING_MISSED_NORMAL_BUY_BRIDGE_ENABLED next PREOPEN apply",
+    "implementation_files": [
+      "src/engine/sniper_state_handlers.py",
+      "src/engine/scalping/rising_missed_one_share_entry.py",
+      "src/utils/constants.py"
+    ],
+    "validation": [
+      "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_sniper_scale_in.py -k \"rising_missed or blocked_ai_score\"",
+      "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_constants.py"
+    ]
+  },
+  "notes": "One-day PREOPEN operator lock for 2026-07-08. It converts only AI BUY score-prior blocked rising-missed eligible rows back to the existing normal BUY path and cannot bypass hard safety or broker/order/quote/quantity/cooldown guards."
+}

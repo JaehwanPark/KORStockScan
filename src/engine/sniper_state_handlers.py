@@ -75,6 +75,7 @@ from src.engine.scalping.rising_missed_one_share_entry import (
     MAX_ONE_SHARE_ENTRY_PRICE_KRW as RISING_MISSED_MAX_ONE_SHARE_ENTRY_PRICE_KRW,
     RISING_MISSED_CLASS_RAW,
     collapse_to_one_share_order,
+    evaluate_rising_missed_normal_buy_bridge,
     evaluate_rising_missed_one_share_entry,
     is_forced_rising_missed_one_share_entry,
 )
@@ -23557,6 +23558,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
         big_bite_armed = False
         big_bite_confirmed = False
         big_bite_info = {}
+        rising_missed_normal_buy_bridge_fields = {}
         entry_arm = _get_live_entry_arm(stock, code)
 
         if entry_arm:
@@ -25241,13 +25243,66 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                     )
 
                     if ai_call_executed and last_ai_time == 0:
-                        if (
+                        current_ai_action_for_bridge = str(
+                            (ai_decision or {}).get("action")
+                            or stock.get("last_watching_ai_action")
+                            or "WAIT"
+                        ).upper()
+                        entry_score_role_gate_for_bridge = evaluate_entry_score_role_gate(
+                            ai_decision,
+                            ws_data=ws_data,
+                            source_stage="rising_missed_normal_buy_bridge",
+                            ai_score=current_ai_score,
+                            ai_action=current_ai_action_for_bridge,
+                        )
+                        first_ai_wait_score_prior_block = (
                             not wait6579_probe_entry_unlocked
                             and _should_first_ai_wait_for_big_bite(
                                 ai_decision,
                                 current_ai_score,
                                 big_bite_confirmed=big_bite_confirmed,
                                 entry_score_threshold=entry_buy_score_threshold,
+                            )
+                        )
+                        if first_ai_wait_score_prior_block:
+                            rising_missed_normal_buy_bridge_fields = _evaluate_rising_missed_normal_buy_bridge(
+                                stock,
+                                code,
+                                ws_data,
+                                runtime,
+                                strategy=strategy,
+                                pos_tag=pos_tag,
+                                curr_price=curr_price,
+                                ai_decision=ai_decision,
+                                current_ai_score=current_ai_score,
+                                entry_score_threshold=entry_buy_score_threshold,
+                                entry_score_role_gate=entry_score_role_gate_for_bridge,
+                            )
+                            if rising_missed_normal_buy_bridge_fields.get(
+                                "rising_missed_normal_buy_bridge_allowed"
+                            ):
+                                _mutate_stock_state(
+                                    stock,
+                                    set_fields={
+                                        "rising_missed_normal_buy_bridge_allowed": True,
+                                        "rising_missed_normal_buy_bridge_reason": (
+                                            rising_missed_normal_buy_bridge_fields.get(
+                                                "rising_missed_normal_buy_bridge_reason"
+                                            )
+                                        ),
+                                        "rising_missed_normal_buy_bridge_at": now_ts,
+                                    },
+                                )
+                                _log_entry_pipeline(
+                                    stock,
+                                    code,
+                                    "rising_missed_normal_buy_bridge_unlocked",
+                                    **rising_missed_normal_buy_bridge_fields,
+                                )
+                        if (
+                            first_ai_wait_score_prior_block
+                            and not rising_missed_normal_buy_bridge_fields.get(
+                                "rising_missed_normal_buy_bridge_allowed"
                             )
                         ):
                             _log_entry_pipeline(
@@ -25692,6 +25747,17 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                             if first_ai_big_bite_wait_bypassed
                             else "not_applicable"
                         ),
+                        **{
+                            key: value
+                            for key, value in rising_missed_normal_buy_bridge_fields.items()
+                            if key
+                            not in {
+                                "actual_order_submitted",
+                                "broker_order_forbidden",
+                                "allowed_runtime_apply",
+                                "forbidden_uses",
+                            }
+                        },
                     },
                 )
                 is_trigger = True
@@ -28841,6 +28907,97 @@ def _is_rising_missed_one_share_scout_holding(stock, *, strategy: str, pos_tag: 
 
 def _rising_missed_one_share_entry_enabled() -> bool:
     return _env_bool("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", False)
+
+
+def _rising_missed_normal_buy_bridge_enabled() -> bool:
+    return bool(getattr(TRADING_RULES, "RISING_MISSED_NORMAL_BUY_BRIDGE_ENABLED", False))
+
+
+def _evaluate_rising_missed_normal_buy_bridge(
+    stock,
+    code,
+    ws_data,
+    runtime,
+    *,
+    strategy,
+    pos_tag,
+    curr_price,
+    ai_decision,
+    current_ai_score,
+    entry_score_threshold,
+    entry_score_role_gate,
+) -> dict:
+    feature_enabled = _rising_missed_normal_buy_bridge_enabled()
+    current_ai_action = str(
+        (ai_decision or {}).get("action")
+        or stock.get("last_watching_ai_action")
+        or "WAIT"
+    ).upper()
+    score_value = _safe_float(current_ai_score, 0.0)
+    bridge_fields = {
+        "rising_missed_normal_buy_bridge_enabled": bool(feature_enabled),
+        "rising_missed_normal_buy_bridge_allowed": False,
+        "rising_missed_normal_buy_bridge_reason": "not_evaluated",
+        "score_gate_converted_to_prior": False,
+    }
+    if not feature_enabled:
+        bridge_fields["rising_missed_normal_buy_bridge_reason"] = "feature_disabled"
+        return bridge_fields
+    if normalize_strategy(strategy) != "SCALPING" or normalize_position_tag(strategy, pos_tag) != "SCANNER":
+        bridge_fields["rising_missed_normal_buy_bridge_reason"] = "strategy_or_position_not_scanner_scalping"
+        return bridge_fields
+    if current_ai_action != "BUY":
+        bridge_fields["rising_missed_normal_buy_bridge_reason"] = "entry_ai_action_not_buy"
+        return bridge_fields
+    if score_value >= float(entry_score_threshold):
+        bridge_fields["rising_missed_normal_buy_bridge_reason"] = "score_prior_not_blocking"
+        return bridge_fields
+    if not bool((entry_score_role_gate or {}).get("entry_score_usable_for_entry_submit")):
+        bridge_fields["rising_missed_normal_buy_bridge_reason"] = "entry_score_source_quality_excluded"
+        bridge_fields.update(entry_score_role_log_fields(entry_score_role_gate))
+        return bridge_fields
+
+    decision = evaluate_rising_missed_normal_buy_bridge(
+        stock,
+        strategy=strategy,
+        position_tag=pos_tag,
+        feature_enabled=feature_enabled,
+        has_open_pending=_has_open_pending_entry_orders(stock),
+        already_holding=_already_holding_entry_position(stock),
+        current_ai_action=current_ai_action,
+        positive_delta_pct=_scanner_positive_delta_pct(stock),
+        min_delta_pct=_scanner_rising_entry_min_delta_pct(),
+        current_price=curr_price,
+        max_entry_price_krw=_rising_missed_one_share_entry_max_price_krw(),
+        scout_budget_cap_krw=_rising_missed_scout_entry_budget_cap_krw(),
+        current_fluctuation_pct=_current_fluctuation_pct(stock, ws_data, runtime),
+        upper_limit_exclude_enabled=_rising_missed_upper_limit_exclude_enabled(),
+        upper_limit_exclude_pct=_rising_missed_upper_limit_exclude_pct(),
+    )
+    bridge_fields.update(decision.log_fields or {})
+    bridge_fields.update(
+        {
+            "rising_missed_normal_buy_bridge_allowed": bool(decision.allowed),
+            "rising_missed_normal_buy_bridge_reason": decision.reason,
+            "score_gate_converted_to_prior": bool(decision.allowed),
+            "hard_gate_veto": False,
+            "entry_score_threshold": f"{float(entry_score_threshold):.1f}",
+            "rising_missed_normal_buy_bridge_score": f"{score_value:.1f}",
+            "rising_missed_normal_buy_bridge_source_stage": "first_ai_wait",
+            "decision_authority": "rising_missed_normal_buy_runtime_bridge"
+            if decision.allowed
+            else "rising_missed_normal_buy_runtime_bridge_blocked",
+            "allowed_runtime_apply": bool(decision.allowed),
+            "actual_order_submitted": False,
+            "broker_order_forbidden": not bool(decision.allowed),
+            "runtime_effect": bool(decision.allowed),
+            "forbidden_uses": (
+                "threshold_mutation,order_guard_mutation,provider_change,bot_restart,"
+                "stale_submit_bypass,broker_guard_bypass,quantity_or_cap_change"
+            ),
+        }
+    )
+    return bridge_fields
 
 
 def _rising_missed_forced_scout_qty(stock: dict | None, runtime: dict | None) -> int:
@@ -35494,7 +35651,12 @@ def _cancel_or_reconcile_pending_add(stock, reason):
         )
         return {"cleared": False, "reason": "missing_runtime_context"}
 
-    res = kiwoom_orders.send_cancel_order(code=code, orig_ord_no=ord_no, token=KIWOOM_TOKEN, qty=0)
+    res = sniper_trade_utils.send_cancel_order_with_exchange_retry(
+        code=code,
+        orig_ord_no=ord_no,
+        token=KIWOOM_TOKEN,
+        qty=0,
+    )
     if _is_ok_response(res):
         now_ts = time.time()
         record_add_history_event(
@@ -37274,7 +37436,12 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
 
     target_id = stock.get('id')
 
-    res = kiwoom_orders.send_cancel_order(code=code, orig_ord_no=orig_ord_no, token=KIWOOM_TOKEN, qty=0)
+    res = sniper_trade_utils.send_cancel_order_with_exchange_retry(
+        code=code,
+        orig_ord_no=orig_ord_no,
+        token=KIWOOM_TOKEN,
+        qty=0,
+    )
 
     is_success = False
     err_msg = str(res)
@@ -37370,7 +37537,12 @@ def process_order_cancellation(stock, code, orig_ord_no, db, strategy):
                 cooldowns[code] = time.time() + 1200
             return True
 
-    res = kiwoom_orders.send_cancel_order(code=code, orig_ord_no=orig_ord_no, token=KIWOOM_TOKEN, qty=0)
+    res = sniper_trade_utils.send_cancel_order_with_exchange_retry(
+        code=code,
+        orig_ord_no=orig_ord_no,
+        token=KIWOOM_TOKEN,
+        qty=0,
+    )
 
     is_success = False
     err_msg = str(res)

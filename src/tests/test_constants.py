@@ -75,6 +75,20 @@ def test_reversal_add_runtime_env_overrides(monkeypatch):
     assert reloaded.TRADING_RULES.REVERSAL_ADD_VWAP_BP_MIN == 5
 
 
+def test_rising_missed_normal_buy_bridge_default_off_and_env_override(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_NORMAL_BUY_BRIDGE_ENABLED", raising=False)
+
+    reloaded = importlib.reload(constants)
+
+    assert reloaded.TRADING_RULES.RISING_MISSED_NORMAL_BUY_BRIDGE_ENABLED is False
+
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_NORMAL_BUY_BRIDGE_ENABLED", "true")
+
+    reloaded = importlib.reload(constants)
+
+    assert reloaded.TRADING_RULES.RISING_MISSED_NORMAL_BUY_BRIDGE_ENABLED is True
+
+
 def test_avg_down_market_on_stop_touch_runtime_env_override(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED", "true")
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_ENABLED", "true")
