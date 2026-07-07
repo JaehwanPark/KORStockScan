@@ -148,10 +148,11 @@ def _micro_vwap_candles(*, price=10_000, count=5):
     ]
 
 
-def test_rising_missed_caution_weak_liquidity_combo_blocks_entry(monkeypatch):
+def test_caution_weak_liquidity_combo_blocks_rising_missed_entry(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_CAUTION_WEAK_LIQUIDITY_ENTRY_BLOCK_ENABLED", raising=False)
     monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_CAUTION_WEAK_LIQUIDITY_BLOCK_ENABLED", raising=False)
 
-    decision = state_handlers._evaluate_rising_missed_caution_weak_liquidity_block(
+    decision = state_handlers._evaluate_caution_weak_liquidity_entry_block(
         stock={"rising_missed_normal_buy_bridge_allowed": True},
         runtime={},
         strategy="SCALPING",
@@ -166,15 +167,17 @@ def test_rising_missed_caution_weak_liquidity_combo_blocks_entry(monkeypatch):
     )
 
     assert decision["blocked"] is True
-    assert decision["threshold_family"] == "rising_missed_caution_weak_liquidity_entry_block"
+    assert decision["threshold_family"] == "caution_weak_liquidity_entry_block"
+    assert decision["rising_missed_entry_lineage"] is True
     assert decision["actual_order_submitted"] is False
     assert decision["broker_order_forbidden"] is True
 
 
-def test_rising_missed_caution_weak_liquidity_combo_does_not_block_non_rising_entry(monkeypatch):
+def test_caution_weak_liquidity_combo_blocks_general_buy_entry(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_CAUTION_WEAK_LIQUIDITY_ENTRY_BLOCK_ENABLED", raising=False)
     monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_CAUTION_WEAK_LIQUIDITY_BLOCK_ENABLED", raising=False)
 
-    decision = state_handlers._evaluate_rising_missed_caution_weak_liquidity_block(
+    decision = state_handlers._evaluate_caution_weak_liquidity_entry_block(
         stock={},
         runtime={},
         strategy="SCALPING",
@@ -188,8 +191,9 @@ def test_rising_missed_caution_weak_liquidity_combo_does_not_block_non_rising_en
         },
     )
 
-    assert decision["blocked"] is False
+    assert decision["blocked"] is True
     assert decision["rising_missed_entry_lineage"] is False
+    assert decision["threshold_family"] == "caution_weak_liquidity_entry_block"
 
 
 def _trusted_reversal_features(**overrides):

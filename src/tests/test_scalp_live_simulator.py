@@ -3442,10 +3442,7 @@ def test_swing_probe_state_sync_removes_exited_and_restores_active(tmp_path):
 
 def test_scalp_simulator_threshold_stages_are_included():
     assert threshold_family_for_stage("pre_submit_liquidity_guard_block") == "liquidity_pre_submit_guard_p1"
-    assert (
-        threshold_family_for_stage("rising_missed_caution_weak_liquidity_entry_block")
-        == "rising_missed_caution_weak_liquidity_entry_block"
-    )
+    assert threshold_family_for_stage("caution_weak_liquidity_entry_block") == "caution_weak_liquidity_entry_block"
     assert (
         threshold_family_for_stage("pre_submit_overbought_pullback_guard_block")
         == "overbought_pullback_guard_p1"

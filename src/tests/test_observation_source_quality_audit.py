@@ -4024,22 +4024,22 @@ def test_observation_source_quality_audit_accepts_pre_ai_and_pre_submit_gate_con
                 record_id=2,
             ),
             _event(
-                "rising_missed_caution_weak_liquidity_entry_block",
+                "caution_weak_liquidity_entry_block",
                 {
                     "metric_role": "safety_veto",
-                    "decision_authority": "real_scalping_rising_missed_pre_submit_guard",
+                    "decision_authority": "real_scalping_pre_submit_quality_guard",
                     "runtime_effect": True,
                     "forbidden_uses": "provider_route_change/bot_restart/runtime_threshold_apply_without_approval",
-                    "threshold_family": "rising_missed_caution_weak_liquidity_entry_block",
+                    "threshold_family": "caution_weak_liquidity_entry_block",
                     "gate_action": "pre_submit_block",
                     "actual_order_submitted": False,
                     "broker_order_forbidden": True,
-                    "block_reason": "rising_missed_caution_weak_liquidity_not_available",
+                    "block_reason": "caution_weak_liquidity_not_available",
                     "rising_missed_entry_lineage": True,
-                    "rising_missed_block_latency_state": "CAUTION",
-                    "rising_missed_block_entry_price_gap_profile": "weak_liquidity_wide_spread",
-                    "rising_missed_block_liquidity_action": "NOT_AVAILABLE",
-                    "rising_missed_block_liquidity_reason": "liquidity_not_available",
+                    "caution_weak_liquidity_block_latency_state": "CAUTION",
+                    "caution_weak_liquidity_block_entry_price_gap_profile": "weak_liquidity_wide_spread",
+                    "caution_weak_liquidity_block_liquidity_action": "NOT_AVAILABLE",
+                    "caution_weak_liquidity_block_liquidity_reason": "liquidity_not_available",
                 },
                 record_id=3,
             ),
@@ -4054,7 +4054,7 @@ def test_observation_source_quality_audit_accepts_pre_ai_and_pre_submit_gate_con
     assert report["stage_contracts"]["blocked_vpw"]["status"] == "pass"
     assert report["stage_contracts"]["blocked_overbought"]["status"] == "pass"
     assert report["stage_contracts"]["pre_submit_liquidity_guard_block"]["status"] == "pass"
-    assert report["stage_contracts"]["rising_missed_caution_weak_liquidity_entry_block"]["status"] == "pass"
+    assert report["stage_contracts"]["caution_weak_liquidity_entry_block"]["status"] == "pass"
 
 
 def test_observation_source_quality_audit_fails_pre_ai_broker_authority_contract(

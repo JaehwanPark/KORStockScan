@@ -27579,19 +27579,19 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         )
         return False
 
-    rising_missed_weak_liquidity_block = _evaluate_rising_missed_caution_weak_liquidity_block(
+    caution_weak_liquidity_block = _evaluate_caution_weak_liquidity_entry_block(
         stock=stock,
         runtime=runtime,
         strategy=strategy,
         latency_gate=latency_gate,
         guard_fields=real_pre_submit_guard_fields,
     )
-    if rising_missed_weak_liquidity_block.get("blocked"):
+    if caution_weak_liquidity_block.get("blocked"):
         log_info(
-            f"[RISING_MISSED_CAUTION_WEAK_LIQUIDITY_BLOCK] {stock.get('name')}({code}) "
-            f"latency={rising_missed_weak_liquidity_block.get('rising_missed_block_latency_state')} "
-            f"profile={rising_missed_weak_liquidity_block.get('rising_missed_block_entry_price_gap_profile')} "
-            f"liquidity={rising_missed_weak_liquidity_block.get('rising_missed_block_liquidity_reason')}"
+            f"[CAUTION_WEAK_LIQUIDITY_ENTRY_BLOCK] {stock.get('name')}({code}) "
+            f"latency={caution_weak_liquidity_block.get('caution_weak_liquidity_block_latency_state')} "
+            f"profile={caution_weak_liquidity_block.get('caution_weak_liquidity_block_entry_price_gap_profile')} "
+            f"liquidity={caution_weak_liquidity_block.get('caution_weak_liquidity_block_liquidity_reason')}"
         )
         _mutate_stock_state(
             stock,
@@ -27611,7 +27611,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         _log_entry_pipeline(
             stock,
             code,
-            "rising_missed_caution_weak_liquidity_entry_block",
+            "caution_weak_liquidity_entry_block",
             **_merge_entry_pipeline_field_groups(
                 real_pre_submit_guard_fields,
                 submit_revalidation_fields,
@@ -27619,13 +27619,13 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 entry_orderbook_micro_fields,
                 microstructure_submit_log_fields,
                 pre_ai_gate_submit_log_fields,
-                rising_missed_weak_liquidity_block,
+                caution_weak_liquidity_block,
             ),
         )
         _emit_scalp_entry_adm_snapshot(
             stock,
             code,
-            "rising_missed_caution_weak_liquidity_entry_block",
+            "caution_weak_liquidity_entry_block",
             ai_score=latency_signal_score,
             chosen_action="SKIP_PRE_SUBMIT_SAFETY",
             latency_gate=latency_gate,
@@ -27634,7 +27634,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             orderbook_fields=entry_orderbook_micro_fields,
             actual_order_submitted=False,
             broker_order_forbidden=True,
-            extra_fields=rising_missed_weak_liquidity_block,
+            extra_fields=caution_weak_liquidity_block,
         )
         return False
 
@@ -29061,7 +29061,9 @@ def _rising_missed_normal_buy_bridge_enabled() -> bool:
     return bool(getattr(TRADING_RULES, "RISING_MISSED_NORMAL_BUY_BRIDGE_ENABLED", False))
 
 
-def _rising_missed_caution_weak_liquidity_block_enabled() -> bool:
+def _caution_weak_liquidity_entry_block_enabled() -> bool:
+    if "KORSTOCKSCAN_CAUTION_WEAK_LIQUIDITY_ENTRY_BLOCK_ENABLED" in os.environ:
+        return _env_bool("KORSTOCKSCAN_CAUTION_WEAK_LIQUIDITY_ENTRY_BLOCK_ENABLED", True)
     return _env_bool("KORSTOCKSCAN_RISING_MISSED_CAUTION_WEAK_LIQUIDITY_BLOCK_ENABLED", True)
 
 
@@ -29085,7 +29087,7 @@ def _has_rising_missed_entry_lineage(stock: dict | None, runtime: dict | None = 
     return bool(rising_class and rising_class not in {"-", "not_rising_missed"})
 
 
-def _evaluate_rising_missed_caution_weak_liquidity_block(
+def _evaluate_caution_weak_liquidity_entry_block(
     *,
     stock: dict | None,
     runtime: dict | None,
@@ -29095,7 +29097,7 @@ def _evaluate_rising_missed_caution_weak_liquidity_block(
 ) -> dict:
     latency_gate = latency_gate if isinstance(latency_gate, dict) else {}
     guard_fields = guard_fields if isinstance(guard_fields, dict) else {}
-    enabled = _rising_missed_caution_weak_liquidity_block_enabled()
+    enabled = _caution_weak_liquidity_entry_block_enabled()
     latency_state = str(latency_gate.get("latency_state") or "").strip().upper()
     gap_profile = str(latency_gate.get("entry_price_gap_profile") or "").strip()
     liquidity_action = str(guard_fields.get("pre_submit_liquidity_guard_action") or "").strip().upper()
@@ -29104,7 +29106,6 @@ def _evaluate_rising_missed_caution_weak_liquidity_block(
     blocked = bool(
         enabled
         and normalize_strategy(strategy) == "SCALPING"
-        and is_rising_missed
         and latency_state == "CAUTION"
         and gap_profile == "weak_liquidity_wide_spread"
         and liquidity_action == "NOT_AVAILABLE"
@@ -29112,20 +29113,20 @@ def _evaluate_rising_missed_caution_weak_liquidity_block(
     )
     return {
         "blocked": blocked,
-        "block_reason": "rising_missed_caution_weak_liquidity_not_available",
-        "rising_missed_caution_weak_liquidity_block_enabled": bool(enabled),
+        "block_reason": "caution_weak_liquidity_not_available",
+        "caution_weak_liquidity_entry_block_enabled": bool(enabled),
         "rising_missed_entry_lineage": bool(is_rising_missed),
-        "rising_missed_block_latency_state": latency_state or "-",
-        "rising_missed_block_entry_price_gap_profile": gap_profile or "-",
-        "rising_missed_block_liquidity_action": liquidity_action or "-",
-        "rising_missed_block_liquidity_reason": liquidity_reason or "-",
+        "caution_weak_liquidity_block_latency_state": latency_state or "-",
+        "caution_weak_liquidity_block_entry_price_gap_profile": gap_profile or "-",
+        "caution_weak_liquidity_block_liquidity_action": liquidity_action or "-",
+        "caution_weak_liquidity_block_liquidity_reason": liquidity_reason or "-",
         "metric_role": "safety_veto",
-        "decision_authority": "real_scalping_rising_missed_pre_submit_guard",
+        "decision_authority": "real_scalping_pre_submit_quality_guard",
         "window_policy": "same_day_intraday_runtime_state",
         "sample_floor": "not_applicable_operator_guard",
-        "primary_decision_metric": "rising_missed_caution_weak_liquidity_combo",
+        "primary_decision_metric": "caution_weak_liquidity_combo",
         "source_quality_gate": "latency_gap_profile_and_pre_submit_liquidity_fields_present",
-        "threshold_family": "rising_missed_caution_weak_liquidity_entry_block",
+        "threshold_family": "caution_weak_liquidity_entry_block",
         "gate_action": "pre_submit_block",
         "runtime_effect": True,
         "actual_order_submitted": False,
