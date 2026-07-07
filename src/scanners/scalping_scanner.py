@@ -25,6 +25,10 @@ from src.utils.constants import TRADING_RULES
 from src.utils.pipeline_event_logger import emit_pipeline_event
 
 SCANNER_RISING_START_SOURCE_FAMILY = "scalping_scanner_rising_start_source_v1"
+LOW_REBOUND_RISING_MISSED_SOURCE = "LOW_REBOUND_RISING_MISSED"
+LOW_REBOUND_RISING_MISSED_SOURCE_FAMILY = "rising_missed_low_rebound_source_v1"
+LOW_REBOUND_RISING_MISSED_ROLE = "rising_missed_low_rebound_candidate"
+LOW_REBOUND_RISING_MISSED_LINEAGE = "low_rebound_from_intraday_low"
 RANK_CHANGE_SIGN_AUTHORITY_DEFAULT = "raw_unverified_not_decision_input"
 SCANNER_PROMOTION_POLICY_VERSION = "scanner_priority_v2_20260617_evidence"
 PRIMARY_RISING_START_SOURCES = {
@@ -33,6 +37,7 @@ PRIMARY_RISING_START_SOURCES = {
     "VOLUME_SURGE_POSITIVE",
     "BID_IMBALANCE_SURGE",
 }
+LOW_REBOUND_BASE_SOURCES = {"VOLUME_SURGE_RAW", "VALUE_TOP", "REALTIME_RANK_START"}
 
 
 def _resolve_scan_interval_sec(now_time):
@@ -281,9 +286,10 @@ def _source_priority(source):
         "SUPERNOVA+VALUE": 6,
         "BOTH": 7,
         "SUPERNOVA": 8,
-        "BOTH+VALUE": 9,
-        "OPEN_TOP": 10,
-        "VALUE_TOP": 11,
+        LOW_REBOUND_RISING_MISSED_SOURCE: 9,
+        "BOTH+VALUE": 10,
+        "OPEN_TOP": 11,
+        "VALUE_TOP": 12,
     }.get(str(source or "OPEN_TOP"), 12)
 
 
@@ -384,6 +390,45 @@ def _safe_positive_int(value, default=0):
     return abs(parsed)
 
 
+def _low_rebound_min_pct():
+    return float(getattr(TRADING_RULES, "SCALP_SCANNER_LOW_REBOUND_MIN_PCT", 2.5) or 2.5)
+
+
+def _low_rebound_max_distance_from_high_pct():
+    return float(getattr(TRADING_RULES, "SCALP_SCANNER_LOW_REBOUND_MAX_DISTANCE_FROM_HIGH_PCT", -0.5) or -0.5)
+
+
+def _low_rebound_candle_fetch_cap():
+    return int(getattr(TRADING_RULES, "SCALP_SCANNER_LOW_REBOUND_CANDLE_FETCH_CAP", 12) or 12)
+
+
+def _low_rebound_candle_limit():
+    return int(getattr(TRADING_RULES, "SCALP_SCANNER_LOW_REBOUND_CANDLE_LIMIT", 420) or 420)
+
+
+def _candidate_current_change_rate(target):
+    for key in (
+        "LowReboundDisplayChangeRate",
+        "RealtimeRankFluRate",
+        "VolumeSurgeFluRate",
+        "ValueFluRate",
+        "FluRate",
+        "flu_rate",
+    ):
+        value = (target or {}).get(key)
+        if value not in (None, ""):
+            return _safe_float(value), True
+    return 0.0, False
+
+
+def _low_rebound_price_from_candle(candle, *keys):
+    for key in keys:
+        price = _safe_positive_int((candle or {}).get(key))
+        if price > 0:
+            return price
+    return 0
+
+
 def _bounded(value, low=0.0, high=9999.0):
     return max(low, min(high, float(value or 0.0)))
 
@@ -440,6 +485,8 @@ def _representative_source(source_set):
         return "BOTH+VALUE"
     if has_value and has_supernova:
         return "SUPERNOVA+VALUE"
+    if LOW_REBOUND_RISING_MISSED_SOURCE in sources:
+        return LOW_REBOUND_RISING_MISSED_SOURCE
     if has_value:
         return "VALUE_TOP"
     if has_vi:
@@ -463,6 +510,11 @@ def _scanner_rate_from_field(target, field_name):
 
 def _scanner_flu_metric(target):
     source_set = set(_source_signature(target))
+
+    if LOW_REBOUND_RISING_MISSED_SOURCE in source_set:
+        rate, has_rate = _scanner_rate_from_field(target, "LowReboundDisplayChangeRate")
+        if has_rate:
+            return rate, "low_rebound_display_change_rate", LOW_REBOUND_RISING_MISSED_SOURCE
 
     if "REALTIME_RANK_START" in source_set:
         rate, has_rate = _scanner_rate_from_field(target, "RealtimeRankFluRate")
@@ -520,6 +572,8 @@ def _rank_jump(target):
 
 def _scanner_candidate_role(target):
     source_set = set(_source_signature(target))
+    if LOW_REBOUND_RISING_MISSED_SOURCE in source_set:
+        return LOW_REBOUND_RISING_MISSED_ROLE
     if bool(getattr(TRADING_RULES, "SCALP_SCANNER_PRIORITY_TIERING_ENABLED", False)):
         if source_set == {"BID_IMBALANCE_SURGE"} and bool(
             getattr(TRADING_RULES, "SCALP_SCANNER_PRIORITY_DEMOTE_BID_IMBALANCE_ONLY", True)
@@ -552,6 +606,7 @@ def _rising_start_score(target):
         "PRICE_JUMP_START": 690.0,
         "VOLUME_SURGE_POSITIVE": 650.0,
         "BID_IMBALANCE_SURGE": 610.0,
+        LOW_REBOUND_RISING_MISSED_SOURCE: 520.0,
         "VI_TRIGGERED": 360.0,
         "OPEN_TOP": 120.0,
         "VALUE_TOP": 20.0,
@@ -630,7 +685,12 @@ def _scanner_priority_profile(target, previous=None):
         source_set & {"REALTIME_RANK_START", "VOLUME_SURGE_POSITIVE"}
     )
 
-    if source_set == {"BID_IMBALANCE_SURGE"} and demote_bid_only:
+    if LOW_REBOUND_RISING_MISSED_SOURCE in source_set:
+        tier = "tier_c_volume_confirmation"
+        reason = acceleration_reason or "low_rebound_rising_missed_candidate"
+        base_score = 1800.0
+        demoted_reason = ""
+    elif source_set == {"BID_IMBALANCE_SURGE"} and demote_bid_only:
         tier = "tier_z_source_only"
         reason = "bid_imbalance_only_source_only"
         base_score = 0.0
@@ -726,6 +786,8 @@ def _late_confirmation_probe_block_reason(*, probe_age, min_probe_sec, max_probe
 def _acceleration_reason(target, previous=None):
     source_set = set(_source_signature(target))
     previous_sources = set((previous or {}).get("last_source_signature") or [])
+    if LOW_REBOUND_RISING_MISSED_SOURCE in source_set:
+        return "low_rebound_rising_missed_candidate"
     for source in (
         "REALTIME_RANK_START",
         "PRICE_JUMP_START",
@@ -785,6 +847,7 @@ def _freshness_score(target):
         "BOTH": 520.0,
         "SUPERNOVA": 460.0,
         "BOTH+VALUE": 430.0,
+        LOW_REBOUND_RISING_MISSED_SOURCE: 360.0,
         "VALUE_TOP": 180.0,
         "OPEN_TOP": 0.0,
     }.get(str(target.get("Source") or "OPEN_TOP"), 0.0)
@@ -943,6 +1006,20 @@ def _merge_candidate(candidate_pool, raw_target, source):
             elif "ViStaticDisparityRate" in current:
                 current["ViFluRate"] = current["ViStaticDisparityRate"]
                 current.setdefault("ViFluRateMetric", "vi_static_disparity_rate")
+    elif source == LOW_REBOUND_RISING_MISSED_SOURCE:
+        current["SourceFamily"] = LOW_REBOUND_RISING_MISSED_SOURCE_FAMILY
+        current["RisingMissedLineage"] = (
+            raw_target.get("RisingMissedLineage") or LOW_REBOUND_RISING_MISSED_LINEAGE
+        )
+        current["LowReboundPct"] = _safe_float(raw_target.get("LowReboundPct"))
+        current["IntradayLowPrice"] = _safe_positive_int(raw_target.get("IntradayLowPrice"))
+        current["IntradayHighPrice"] = _safe_positive_int(raw_target.get("IntradayHighPrice"))
+        current["DistanceFromIntradayHighPct"] = _safe_float(raw_target.get("DistanceFromIntradayHighPct"))
+        current["NegativeDisplayRebound"] = bool(raw_target.get("NegativeDisplayRebound"))
+        current["LowReboundBaseSourceSignature"] = str(raw_target.get("LowReboundBaseSourceSignature") or "")
+        current["LowReboundCandleLimit"] = _safe_positive_int(raw_target.get("LowReboundCandleLimit"))
+        if raw_target.get("LowReboundDisplayChangeRate") not in (None, ""):
+            current["LowReboundDisplayChangeRate"] = _safe_float(raw_target.get("LowReboundDisplayChangeRate"))
     elif source == "SUPERNOVA":
         if raw_flu_present:
             current["SupernovaFluRate"] = raw_flu_rate
@@ -993,6 +1070,7 @@ def build_candidate_pool(
     supernova_targets=None,
     value_targets=None,
     vi_targets=None,
+    low_rebound_targets=None,
 ):
     candidate_pool = {}
     for target in realtime_rank_targets or []:
@@ -1011,6 +1089,8 @@ def build_candidate_pool(
         _merge_candidate(candidate_pool, target, "VALUE_TOP")
     for target in vi_targets or []:
         _merge_candidate(candidate_pool, target, "VI_TRIGGERED")
+    for target in low_rebound_targets or []:
+        _merge_candidate(candidate_pool, target, LOW_REBOUND_RISING_MISSED_SOURCE)
     return candidate_pool
 
 
@@ -1048,6 +1128,20 @@ def _scanner_candidate_pre_filter_reason(target):
     if price <= 0:
         return "invalid_or_stale_price"
     source_set = set(_source_signature(target))
+    if LOW_REBOUND_RISING_MISSED_SOURCE in source_set:
+        low_rebound_pct = _safe_float(target.get("LowReboundPct"))
+        intraday_low = _safe_positive_int(target.get("IntradayLowPrice"))
+        intraday_high = _safe_positive_int(target.get("IntradayHighPrice"))
+        distance_from_high_pct = _safe_float(target.get("DistanceFromIntradayHighPct"))
+        if intraday_low <= 0 or intraday_high <= 0 or price <= intraday_low:
+            return "low_rebound_invalid_intraday_price"
+        if low_rebound_pct < _low_rebound_min_pct():
+            return "low_rebound_below_threshold"
+        if distance_from_high_pct > _low_rebound_max_distance_from_high_pct():
+            return "low_rebound_chase_risk"
+        if not str(target.get("LowReboundBaseSourceSignature") or "").strip():
+            return "low_rebound_base_source_missing"
+        return ""
     flu_rate, _, _ = _scanner_flu_metric(target)
     if source_set == {"VALUE_TOP"}:
         if flu_rate <= 0:
@@ -1467,6 +1561,7 @@ def _scanner_event_fields(target, source_guard=None):
     else:
         source_guard_context = "repeat_guard_with_provenance"
     rank_sign_diagnostics = _rank_change_sign_event_diagnostics(target, source_signature)
+    is_low_rebound_source = LOW_REBOUND_RISING_MISSED_SOURCE in set(_source_signature(target))
     return {
         "metric_role": "source_quality_gate",
         "decision_authority": "real_scalping_scanner_source_guard_only",
@@ -1543,6 +1638,17 @@ def _scanner_event_fields(target, source_guard=None):
         "cntr_str": _safe_float(target.get("CntrStr")),
         "current_price_observed": _safe_positive_int(target.get("Price")),
         "current_source": target.get("Source"),
+        "rising_missed_lineage": target.get("RisingMissedLineage") or (
+            LOW_REBOUND_RISING_MISSED_LINEAGE if is_low_rebound_source else ""
+        ),
+        "low_rebound_pct": _safe_float(target.get("LowReboundPct")) if is_low_rebound_source else "",
+        "intraday_low_price": _safe_positive_int(target.get("IntradayLowPrice")) if is_low_rebound_source else "",
+        "intraday_high_price": _safe_positive_int(target.get("IntradayHighPrice")) if is_low_rebound_source else "",
+        "distance_from_intraday_high_pct": (
+            _safe_float(target.get("DistanceFromIntradayHighPct")) if is_low_rebound_source else ""
+        ),
+        "negative_display_rebound": bool(target.get("NegativeDisplayRebound")) if is_low_rebound_source else "",
+        "low_rebound_base_source_signature": target.get("LowReboundBaseSourceSignature") or "",
         **_scanner_zero_context_fields(target, source_guard, current_flu, source_guard_context),
     }
 
@@ -1603,6 +1709,12 @@ def _scanner_runtime_target_payload(target, source_guard, record_id=None, *, now
         "rank_change_sign_consistency": fields.get("rank_change_sign_consistency"),
         "rank_change_score_input": fields.get("rank_change_score_input"),
         "rank_change_score_policy": fields.get("rank_change_score_policy"),
+        "rising_missed_lineage": fields.get("rising_missed_lineage") or "",
+        "low_rebound_pct": fields.get("low_rebound_pct"),
+        "intraday_low_price": fields.get("intraday_low_price"),
+        "intraday_high_price": fields.get("intraday_high_price"),
+        "distance_from_intraday_high_pct": fields.get("distance_from_intraday_high_pct"),
+        "negative_display_rebound": bool(fields.get("negative_display_rebound")),
         "runtime_effect": True,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
@@ -1762,6 +1874,153 @@ def _fetch_scan_source(source_name, fetcher, *args, **kwargs):
         return []
 
 
+def _positive_volume_surge_from_raw(raw_targets, limit=60):
+    positive = []
+    for item in raw_targets or []:
+        if _safe_float((item or {}).get("FluRate", (item or {}).get("flu_rate"))) <= 0:
+            continue
+        pre_sig = (item or {}).get("PreSig")
+        if pre_sig not in (None, "") and str(pre_sig or "").strip() not in {"1", "2", "+", "상한", "상승"}:
+            continue
+        positive.append({**item, "Source": "VOLUME_SURGE_POSITIVE"})
+        if len(positive) >= int(limit or 60):
+            break
+    return positive
+
+
+def _merge_low_rebound_universe(universe, targets, source):
+    for raw_target in targets or []:
+        code = kiwoom_utils.normalize_stock_code((raw_target or {}).get("Code", (raw_target or {}).get("code", "")))
+        if not code:
+            continue
+        current = universe.setdefault(
+            code,
+            {
+                "Code": code,
+                "Name": (raw_target or {}).get("Name", (raw_target or {}).get("name", "")),
+                "Price": _safe_positive_int((raw_target or {}).get("Price", (raw_target or {}).get("cur_prc"))),
+                "SourceSet": set(),
+                "BaseTargets": [],
+                "PriorityScore": 0.0,
+                "TradeValue": 0,
+                "SpikeRate": 0.0,
+            },
+        )
+        current["SourceSet"].add(source)
+        current["BaseTargets"].append(raw_target)
+        if (raw_target or {}).get("Name") or (raw_target or {}).get("name"):
+            current["Name"] = (raw_target or {}).get("Name", (raw_target or {}).get("name", ""))
+        price = _safe_positive_int((raw_target or {}).get("Price", (raw_target or {}).get("cur_prc")))
+        if price > 0:
+            current["Price"] = price
+        change_rate, has_change_rate = _candidate_current_change_rate(raw_target)
+        if has_change_rate:
+            current["LowReboundDisplayChangeRate"] = change_rate
+        current["PriorityScore"] = max(
+            _safe_float(current.get("PriorityScore")),
+            _safe_float((raw_target or {}).get("PriorityScore", (raw_target or {}).get("priority_score"))),
+        )
+        current["TradeValue"] = max(
+            _safe_positive_int(current.get("TradeValue")),
+            _safe_positive_int((raw_target or {}).get("TradeValue", (raw_target or {}).get("trade_value"))),
+        )
+        current["SpikeRate"] = max(
+            _safe_float(current.get("SpikeRate")),
+            _safe_float((raw_target or {}).get("SpikeRate", (raw_target or {}).get("spike_rate"))),
+        )
+
+
+def _build_low_rebound_universe(realtime_rank_targets=None, raw_volume_surge_targets=None, value_targets=None):
+    universe = {}
+    _merge_low_rebound_universe(universe, raw_volume_surge_targets, "VOLUME_SURGE_RAW")
+    _merge_low_rebound_universe(universe, value_targets, "VALUE_TOP")
+    _merge_low_rebound_universe(universe, realtime_rank_targets, "REALTIME_RANK_START")
+    return sorted(
+        universe.values(),
+        key=lambda item: (
+            -_safe_float(item.get("PriorityScore")),
+            -_safe_float(item.get("TradeValue")),
+            -_safe_float(item.get("SpikeRate")),
+            str(item.get("Code") or ""),
+        ),
+    )
+
+
+def _build_low_rebound_rising_missed_targets(
+    token,
+    *,
+    realtime_rank_targets=None,
+    raw_volume_surge_targets=None,
+    value_targets=None,
+):
+    candidates = []
+    min_rebound_pct = _low_rebound_min_pct()
+    chase_distance_pct = _low_rebound_max_distance_from_high_pct()
+    candle_limit = _low_rebound_candle_limit()
+    universe = _build_low_rebound_universe(
+        realtime_rank_targets=realtime_rank_targets,
+        raw_volume_surge_targets=raw_volume_surge_targets,
+        value_targets=value_targets,
+    )
+    for target in universe[: _low_rebound_candle_fetch_cap()]:
+        code = str(target.get("Code") or "").strip()
+        if not code or not (LOW_REBOUND_BASE_SOURCES & set(target.get("SourceSet") or [])):
+            continue
+        current_change_rate, has_change_rate = _candidate_current_change_rate(target)
+        if not has_change_rate or current_change_rate > 0.5:
+            continue
+        try:
+            candles = kiwoom_utils.get_minute_candles_ka10080(token, code, limit=candle_limit) or []
+        except Exception as exc:
+            log_error(f"🚨 [SCALPING 스캐너] ka10080 저가반등 조회 실패 [{code}]: {exc}")
+            continue
+        if not candles:
+            continue
+        lows = [_low_rebound_price_from_candle(row, "저가", "Low", "low") for row in candles]
+        highs = [_low_rebound_price_from_candle(row, "고가", "High", "high") for row in candles]
+        lows = [price for price in lows if price > 0]
+        highs = [price for price in highs if price > 0]
+        if not lows or not highs:
+            continue
+        latest_current = _low_rebound_price_from_candle(candles[-1], "현재가", "Close", "close", "cur_prc")
+        current_price = latest_current or _safe_positive_int(target.get("Price"))
+        intraday_low = min(lows)
+        intraday_high = max(highs)
+        if current_price <= 0 or intraday_low <= 0 or current_price <= intraday_low or intraday_high <= 0:
+            continue
+        low_rebound_pct = round(((current_price - intraday_low) / intraday_low) * 100.0, 2)
+        if low_rebound_pct < min_rebound_pct:
+            continue
+        distance_from_high_pct = round(((current_price - intraday_high) / intraday_high) * 100.0, 2)
+        if distance_from_high_pct > chase_distance_pct:
+            continue
+        source_signature = sorted(set(target.get("SourceSet") or []))
+        candidates.append(
+            {
+                "Code": code,
+                "Name": target.get("Name") or "",
+                "Price": current_price,
+                "FluRate": current_change_rate,
+                "LowReboundDisplayChangeRate": current_change_rate,
+                "LowReboundPct": low_rebound_pct,
+                "IntradayLowPrice": intraday_low,
+                "IntradayHighPrice": intraday_high,
+                "DistanceFromIntradayHighPct": distance_from_high_pct,
+                "NegativeDisplayRebound": current_change_rate < 0,
+                "LowReboundBaseSourceSignature": ",".join(source_signature),
+                "LowReboundCandleLimit": candle_limit,
+                "RisingMissedLineage": LOW_REBOUND_RISING_MISSED_LINEAGE,
+                "Source": LOW_REBOUND_RISING_MISSED_SOURCE,
+                "SourceFamily": LOW_REBOUND_RISING_MISSED_SOURCE_FAMILY,
+                "SourceRole": LOW_REBOUND_RISING_MISSED_ROLE,
+                "PriorityScore": _safe_float(target.get("PriorityScore")),
+                "TradeValue": _safe_positive_int(target.get("TradeValue")),
+                "SpikeRate": _safe_float(target.get("SpikeRate")),
+            }
+        )
+    return candidates
+
+
 def run_scalper_iteration(
     *,
     token,
@@ -1789,13 +2048,13 @@ def run_scalper_iteration(
         minutes=3,
         limit=60,
     )
-    volume_surge_targets = _fetch_scan_source(
-        "ka10023 거래량급증 positive",
-        kiwoom_utils.get_positive_volume_surge_ka10023,
+    raw_volume_surge_targets = _fetch_scan_source(
+        "ka10023 거래량급증 raw",
+        kiwoom_utils.scan_volume_spike_ka10023,
         token,
         mrkt_tp="000",
-        limit=supernova_limit,
     )
+    volume_surge_targets = _positive_volume_surge_from_raw(raw_volume_surge_targets, limit=supernova_limit)
     bid_imbalance_targets = _fetch_scan_source(
         "ka10021 호가잔량급증",
         kiwoom_utils.get_bid_balance_surge_ka10021,
@@ -1825,6 +2084,12 @@ def run_scalper_iteration(
         mrkt_tp="000",
         limit=60,
     )
+    low_rebound_targets = _build_low_rebound_rising_missed_targets(
+        token,
+        realtime_rank_targets=realtime_rank_targets,
+        raw_volume_surge_targets=raw_volume_surge_targets,
+        value_targets=value_targets,
+    )
 
     candidate_pool = build_candidate_pool(
         realtime_rank_targets=realtime_rank_targets,
@@ -1834,6 +2099,7 @@ def run_scalper_iteration(
         soaring_targets=soaring_targets,
         value_targets=value_targets,
         vi_targets=vi_targets,
+        low_rebound_targets=low_rebound_targets,
     )
     ranked_targets = rank_candidates(candidate_pool)
     return promote_candidates(

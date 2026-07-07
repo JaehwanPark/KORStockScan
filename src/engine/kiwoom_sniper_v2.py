@@ -1464,6 +1464,14 @@ def _scanner_runtime_target_event_fields(payload, *, outcome, reason, target=Non
         ),
         "current_price_observed": payload.get("current_price_observed") or payload.get("buy_price") or "",
         "price_delta_since_first_seen_pct": payload.get("price_delta_since_first_seen_pct") or "",
+        "rising_missed_lineage": payload.get("rising_missed_lineage") or "",
+        "low_rebound_pct": payload.get("low_rebound_pct") or "",
+        "intraday_low_price": payload.get("intraday_low_price") or "",
+        "intraday_high_price": payload.get("intraday_high_price") or "",
+        "distance_from_intraday_high_pct": payload.get("distance_from_intraday_high_pct") or "",
+        "negative_display_rebound": payload.get("negative_display_rebound")
+        if payload.get("negative_display_rebound") is not None
+        else "",
         "target_status": target.get("status") or payload.get("status") or "not_applicable_target_status",
         "target_strategy": target.get("strategy") or payload.get("strategy") or "not_applicable_target_strategy",
         "target_position_tag": target.get("position_tag") or payload.get("position_tag") or "not_applicable_target_position_tag",
@@ -3807,6 +3815,12 @@ def _scanner_runtime_context_updates(payload):
         "comparable_flu_delta_since_first_seen",
         "cntr_str_available",
         "cntr_str",
+        "rising_missed_lineage",
+        "low_rebound_pct",
+        "intraday_low_price",
+        "intraday_high_price",
+        "distance_from_intraday_high_pct",
+        "negative_display_rebound",
     ):
         value = payload.get(key)
         if value not in (None, ""):
@@ -3861,6 +3875,12 @@ def _scanner_pipeline_stock_snapshot(stock_value):
             "comparable_flu_delta_since_first_seen",
             "cntr_str_available",
             "cntr_str",
+            "rising_missed_lineage",
+            "low_rebound_pct",
+            "intraday_low_price",
+            "intraday_high_price",
+            "distance_from_intraday_high_pct",
+            "negative_display_rebound",
             "_scanner_rising_entry_relief_eligible",
             "_scanner_rising_entry_relief_reason",
             "_scanner_positive_delta_pct",

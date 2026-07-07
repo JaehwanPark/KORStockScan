@@ -1430,6 +1430,220 @@ def test_ka10023_positive_volume_surge_filters_non_positive(monkeypatch):
     assert rows[0]["Source"] == "VOLUME_SURGE_POSITIVE"
 
 
+def test_low_rebound_negative_display_candidate_builds_from_intraday_low(monkeypatch):
+    calls = []
+
+    def fake_candles(_token, code, limit=420):
+        calls.append((code, limit))
+        return [
+            {"체결시간": "09:01:00", "현재가": 10000, "고가": 10100, "저가": 10000},
+            {"체결시간": "09:02:00", "현재가": 10260, "고가": 10400, "저가": 10120},
+        ]
+
+    monkeypatch.setattr(kiwoom_utils, "get_minute_candles_ka10080", fake_candles)
+
+    rows = scalping_scanner._build_low_rebound_rising_missed_targets(
+        "TOKEN",
+        raw_volume_surge_targets=[
+            {"Code": "000001", "Name": "NEG", "Price": 10240, "FluRate": -0.4, "SpikeRate": 130.0}
+        ],
+    )
+
+    assert calls == [("000001", 420)]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["Source"] == scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE
+    assert row["LowReboundPct"] == 2.6
+    assert row["IntradayLowPrice"] == 10000
+    assert row["IntradayHighPrice"] == 10400
+    assert row["DistanceFromIntradayHighPct"] == -1.35
+    assert row["NegativeDisplayRebound"] is True
+    assert row["RisingMissedLineage"] == "low_rebound_from_intraday_low"
+
+
+def test_low_rebound_excludes_below_threshold(monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "get_minute_candles_ka10080",
+        lambda *_args, **_kwargs: [
+            {"현재가": 10000, "고가": 10100, "저가": 10000},
+            {"현재가": 10240, "고가": 10400, "저가": 10100},
+        ],
+    )
+
+    rows = scalping_scanner._build_low_rebound_rising_missed_targets(
+        "TOKEN",
+        value_targets=[{"Code": "000001", "Name": "LOW", "Price": 10240, "FluRate": -0.2}],
+    )
+
+    assert rows == []
+
+
+def test_low_rebound_does_not_require_open_or_day_positive(monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "get_minute_candles_ka10080",
+        lambda *_args, **_kwargs: [
+            {"현재가": 10000, "고가": 10100, "저가": 10000},
+            {"현재가": 10300, "고가": 10600, "저가": 10100},
+        ],
+    )
+
+    pool = scalping_scanner.build_candidate_pool(
+        low_rebound_targets=scalping_scanner._build_low_rebound_rising_missed_targets(
+            "TOKEN",
+            realtime_rank_targets=[
+                {
+                    "Code": "000001",
+                    "Name": "MISS",
+                    "Price": 10300,
+                    "FluRate": -1.2,
+                    "RealtimeRankFluRate": -1.2,
+                }
+            ],
+        )
+    )
+
+    target = pool["000001"]
+    assert target["Source"] == scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE
+    assert target["FluRate"] == -1.2
+    assert scalping_scanner._scanner_candidate_pre_filter_reason(target) == ""
+
+
+def test_low_rebound_excludes_missing_candles_chase_and_invalid_prices(monkeypatch):
+    candle_map = {
+        "000001": [],
+        "000002": [
+            {"현재가": 10000, "고가": 10100, "저가": 10000},
+            {"현재가": 10260, "고가": 10280, "저가": 10100},
+        ],
+        "000003": [
+            {"현재가": 0, "고가": 10100, "저가": 0},
+            {"현재가": 10000, "고가": 10200, "저가": 0},
+        ],
+    }
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "get_minute_candles_ka10080",
+        lambda _token, code, limit=420: candle_map.get(code, []),
+    )
+
+    rows = scalping_scanner._build_low_rebound_rising_missed_targets(
+        "TOKEN",
+        value_targets=[
+            {"Code": "000001", "Name": "NO_CANDLES", "Price": 10260, "FluRate": -0.1},
+            {"Code": "000002", "Name": "CHASE", "Price": 10260, "FluRate": -0.1},
+            {"Code": "000003", "Name": "BAD", "Price": 10000, "FluRate": -0.1},
+        ],
+    )
+
+    assert rows == []
+
+
+def test_low_rebound_promoted_payload_keeps_watching_only_authority(monkeypatch):
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(scalping_scanner, "_should_promote_candidate", lambda *args, **kwargs: True)
+    monkeypatch.setattr(scalping_scanner, "_scanner_real_source_guard_decision", lambda *args, **kwargs: {"blocked": False})
+    db = _DB()
+    event_bus = _EventBus()
+    target = scalping_scanner.build_candidate_pool(
+        low_rebound_targets=[
+            {
+                "Code": "000001",
+                "Name": "MISS",
+                "Price": 10260,
+                "FluRate": -0.4,
+                "LowReboundDisplayChangeRate": -0.4,
+                "LowReboundPct": 2.6,
+                "IntradayLowPrice": 10000,
+                "IntradayHighPrice": 10400,
+                "DistanceFromIntradayHighPct": -1.35,
+                "NegativeDisplayRebound": True,
+                "LowReboundBaseSourceSignature": "VOLUME_SURGE_RAW",
+                "RisingMissedLineage": "low_rebound_from_intraday_low",
+            }
+        ]
+    )["000001"]
+
+    codes, _ = scalping_scanner.promote_candidates(
+        db,
+        event_bus,
+        [target],
+        {},
+        max_new_codes=1,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=1000.0,
+    )
+
+    payload = _event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")[0]
+    assert codes == ["000001"]
+    assert payload["source_signature"] == scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE
+    assert payload["scanner_source_family"] == "rising_missed_low_rebound_source_v1"
+    assert payload["scanner_source_role"] == "rising_missed_low_rebound_candidate"
+    assert payload["rising_missed_lineage"] == "low_rebound_from_intraday_low"
+    assert payload["low_rebound_pct"] == 2.6
+    assert payload["negative_display_rebound"] is True
+    assert payload["actual_order_submitted"] is False
+    assert payload["broker_order_forbidden"] is True
+
+
+def test_low_rebound_priority_sits_between_volume_and_open_top(monkeypatch):
+    monkeypatch.setattr(
+        scalping_scanner,
+        "TRADING_RULES",
+        SimpleNamespace(SCALP_SCANNER_PRIORITY_TIERING_ENABLED=True),
+    )
+    pool = scalping_scanner.build_candidate_pool(
+        volume_surge_targets=[
+            {"Code": "000001", "Name": "VOL", "Price": 10300, "FluRate": 1.0, "SpikeRate": 90.0}
+        ],
+        low_rebound_targets=[
+            {
+                "Code": "000002",
+                "Name": "LOW",
+                "Price": 10260,
+                "FluRate": -0.4,
+                "LowReboundDisplayChangeRate": -0.4,
+                "LowReboundPct": 2.6,
+                "IntradayLowPrice": 10000,
+                "IntradayHighPrice": 10400,
+                "DistanceFromIntradayHighPct": -1.35,
+                "LowReboundBaseSourceSignature": "VOLUME_SURGE_RAW",
+            }
+        ],
+        soaring_targets=[
+            {"Code": "000003", "Name": "OPEN", "Price": 10300, "FluRate": 1.0, "OpenFluRate": 1.0}
+        ],
+    )
+
+    assert [row["Code"] for row in scalping_scanner.rank_candidates(pool)] == ["000001", "000002", "000003"]
+
+
+def test_low_rebound_minute_candle_fetch_is_capped(monkeypatch):
+    calls = []
+
+    def fake_candles(_token, code, limit=420):
+        calls.append(code)
+        return [
+            {"현재가": 10000, "고가": 10100, "저가": 10000},
+            {"현재가": 10300, "고가": 10600, "저가": 10100},
+        ]
+
+    monkeypatch.setattr(kiwoom_utils, "get_minute_candles_ka10080", fake_candles)
+
+    rows = scalping_scanner._build_low_rebound_rising_missed_targets(
+        "TOKEN",
+        raw_volume_surge_targets=[
+            {"Code": f"{idx:06d}", "Name": f"RAW{idx}", "Price": 10300, "FluRate": -0.1}
+            for idx in range(20)
+        ],
+    )
+
+    assert len(calls) == 12
+    assert len(rows) == 12
+
+
 def test_ka10021_bid_balance_surge_is_normalized(monkeypatch):
     def fake_fetch(**kwargs):
         assert kwargs["api_id"] == "ka10021"
@@ -2826,7 +3040,7 @@ def test_run_scalper_iteration_keeps_ws_payload_and_max_new_codes(monkeypatch):
         ],
     )
     monkeypatch.setattr(kiwoom_utils, "get_price_jump_ka10019", lambda *args, **kwargs: [])
-    monkeypatch.setattr(kiwoom_utils, "get_positive_volume_surge_ka10023", lambda *args, **kwargs: [])
+    monkeypatch.setattr(kiwoom_utils, "scan_volume_spike_ka10023", lambda *args, **kwargs: [])
     monkeypatch.setattr(kiwoom_utils, "get_bid_balance_surge_ka10021", lambda *args, **kwargs: [])
     monkeypatch.setattr(
         kiwoom_utils,
@@ -2877,7 +3091,7 @@ def test_run_scalper_iteration_continues_when_one_source_fails(monkeypatch):
             {"Code": "005930", "Name": "삼성전자", "Price": 70000, "FluRate": 1.2, "JumpRate": 0.5}
         ],
     )
-    monkeypatch.setattr(kiwoom_utils, "get_positive_volume_surge_ka10023", lambda *args, **kwargs: [])
+    monkeypatch.setattr(kiwoom_utils, "scan_volume_spike_ka10023", lambda *args, **kwargs: [])
     monkeypatch.setattr(kiwoom_utils, "get_bid_balance_surge_ka10021", lambda *args, **kwargs: [])
     monkeypatch.setattr(
         kiwoom_utils,
