@@ -164,6 +164,9 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     sim_post_sell_idx = script.index("src.engine.sniper_post_sell_feedback")
     rising_missed_feedback_idx = script.index("src.engine.monitoring.rising_missed_intraday_feedback")
     rising_missed_scout_idx = script.index("src.engine.monitoring.rising_missed_scout_workorder")
+    rising_missed_bridge_idx = script.index(
+        "src.engine.monitoring.rising_missed_normal_buy_bridge_candidate_discovery"
+    )
     rising_missed_first_touch_calibration_idx = script.index(
         "src.engine.monitoring.rising_missed_first_touch_calibration"
     )
@@ -183,6 +186,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     assert (
         rising_missed_feedback_idx
         < rising_missed_scout_idx
+        < rising_missed_bridge_idx
         < rising_missed_first_touch_calibration_idx
         < scalping_pyramid_feedback_idx
         < scalping_pyramid_calibration_idx
@@ -384,6 +388,7 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert '"$PROJECT_DIR/data/report/ai_score_optimization_backtest/ai_score_optimization_backtest_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/rising_missed_intraday_feedback/rising_missed_intraday_feedback_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/rising_missed_scout_workorder/rising_missed_scout_workorder_${TARGET_DATE}.json"' in script
+    assert '"$PROJECT_DIR/data/report/rising_missed_normal_buy_bridge_candidate_discovery/rising_missed_normal_buy_bridge_candidate_discovery_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/rising_missed_first_touch_calibration/rising_missed_first_touch_calibration_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/scalping_pyramid_intraday_feedback/scalping_pyramid_intraday_feedback_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/scalping_pyramid_quality_calibration/scalping_pyramid_quality_calibration_${TARGET_DATE}.json"' in script
@@ -417,6 +422,10 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert "ai_score_optimization_backtest=$RUN_AI_SCORE_OPTIMIZATION_BACKTEST" in script
     assert "rising_missed_intraday_feedback_postclose=$RUN_RISING_MISSED_INTRADAY_FEEDBACK_POSTCLOSE" in script
     assert "rising_missed_scout_workorder=$RUN_RISING_MISSED_SCOUT_WORKORDER" in script
+    assert (
+        "rising_missed_normal_buy_bridge_candidate_discovery="
+        "$RUN_RISING_MISSED_NORMAL_BUY_BRIDGE_CANDIDATE_DISCOVERY"
+    ) in script
     assert "rising_missed_first_touch_calibration=$RUN_RISING_MISSED_FIRST_TOUCH_CALIBRATION" in script
     assert "scalping_pyramid_intraday_feedback_postclose=$RUN_SCALPING_PYRAMID_INTRADAY_FEEDBACK_POSTCLOSE" in script
     assert "scalping_pyramid_quality_calibration=$RUN_SCALPING_PYRAMID_QUALITY_CALIBRATION" in script

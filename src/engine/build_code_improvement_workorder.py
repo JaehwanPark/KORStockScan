@@ -43,6 +43,9 @@ CONVERSION_LANE_DIR = REPORT_DIR / "conversion_lane"
 INTRADAY_ENTRY_BLOCKER_DIAGNOSTICS_DIR = REPORT_DIR / "intraday_entry_blocker_diagnostics"
 RISING_MISSED_SCOUT_WORKORDER_DIR = REPORT_DIR / "rising_missed_scout_workorder"
 RISING_MISSED_CLASSIFIER_PRIOR_DIR = REPORT_DIR / "rising_missed_classifier_prior"
+RISING_MISSED_NORMAL_BUY_BRIDGE_CANDIDATE_DIR = (
+    REPORT_DIR / "rising_missed_normal_buy_bridge_candidate_discovery"
+)
 ONE_SHARE_THRESHOLD_OPPORTUNITY_DIR = REPORT_DIR / "one_share_threshold_opportunity"
 CODE_IMPROVEMENT_WORKORDER_DIR = PROJECT_ROOT / "docs" / "code-improvement-workorders"
 CODE_IMPROVEMENT_WORKORDER_REPORT_DIR = REPORT_DIR / "code_improvement_workorder"
@@ -202,6 +205,13 @@ def rising_missed_scout_workorder_report_path(target_date: str) -> Path:
 
 def rising_missed_classifier_prior_report_path(target_date: str) -> Path:
     return RISING_MISSED_CLASSIFIER_PRIOR_DIR / f"rising_missed_classifier_prior_{target_date}.json"
+
+
+def rising_missed_normal_buy_bridge_candidate_report_path(target_date: str) -> Path:
+    return (
+        RISING_MISSED_NORMAL_BUY_BRIDGE_CANDIDATE_DIR
+        / f"rising_missed_normal_buy_bridge_candidate_discovery_{target_date}.json"
+    )
 
 
 def one_share_threshold_opportunity_report_path(target_date: str) -> Path:
@@ -642,6 +652,53 @@ def _rising_missed_classifier_prior_followup_orders(report: dict[str, Any]) -> l
             "actual_order_submitted": False,
             "broker_order_forbidden": True,
             "requires_separate_runtime_apply_candidate": True,
+        }
+        existing_forbidden = order.get("forbidden_uses")
+        if not isinstance(existing_forbidden, list):
+            existing_forbidden = []
+        order["forbidden_uses"] = list(dict.fromkeys([*existing_forbidden, *default_forbidden_uses]))
+        sanitized.append(order)
+    return sanitized
+
+
+def _rising_missed_normal_buy_bridge_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+    orders = report.get("code_improvement_orders")
+    if not isinstance(orders, list):
+        return []
+    default_forbidden_uses = [
+        "intraday_threshold_mutation",
+        "buy_score_threshold_change",
+        "broker_guard_bypass",
+        "stale_submit_bypass",
+        "order_guard_relaxation",
+        "quantity_or_cap_change",
+        "forced_one_share_qty_or_tag_reuse",
+        "provider_route_change",
+        "bot_restart",
+        "real_execution_quality_approval",
+    ]
+    sanitized: list[dict[str, Any]] = []
+    for item in orders:
+        if not isinstance(item, dict):
+            continue
+        order = dict(item)
+        order["source_report_type"] = "rising_missed_normal_buy_bridge_candidate_discovery"
+        order["runtime_effect"] = False
+        order["allowed_runtime_apply"] = False
+        order["actual_order_submitted"] = False
+        order["broker_order_forbidden"] = True
+        order["decision_authority"] = "source_only_preopen_env_candidate_discovery"
+        provenance = order.get("implementation_provenance")
+        if not isinstance(provenance, dict):
+            provenance = {}
+        order["implementation_provenance"] = {
+            **provenance,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "requires_preopen_env_selection": True,
+            "requires_operator_review": True,
         }
         existing_forbidden = order.get("forbidden_uses")
         if not isinstance(existing_forbidden, list):
@@ -6160,6 +6217,13 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         rising_missed_classifier_prior_path,
         isolated_source_mode=isolated_source_mode,
     )
+    rising_missed_normal_buy_bridge_candidate_path = rising_missed_normal_buy_bridge_candidate_report_path(
+        target_date
+    )
+    rising_missed_normal_buy_bridge_candidate = _load_source_json(
+        rising_missed_normal_buy_bridge_candidate_path,
+        isolated_source_mode=isolated_source_mode,
+    )
     one_share_threshold_opportunity_path = one_share_threshold_opportunity_report_path(target_date)
     one_share_threshold_opportunity = _load_source_json(
         one_share_threshold_opportunity_path,
@@ -6193,6 +6257,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         "entry_hurdle_backtest": entry_hurdle_backtest_path,
         "rising_missed_scout_workorder": rising_missed_scout_workorder_path,
         "rising_missed_classifier_prior": rising_missed_classifier_prior_path,
+        "rising_missed_normal_buy_bridge_candidate_discovery": rising_missed_normal_buy_bridge_candidate_path,
         "one_share_threshold_opportunity": one_share_threshold_opportunity_path,
     }
     source_paths = {
@@ -6304,6 +6369,9 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     rising_missed_classifier_prior_orders = _rising_missed_classifier_prior_followup_orders(
         rising_missed_classifier_prior
     )
+    rising_missed_normal_buy_bridge_orders = _rising_missed_normal_buy_bridge_followup_orders(
+        rising_missed_normal_buy_bridge_candidate
+    )
     one_share_threshold_orders = _one_share_threshold_opportunity_followup_orders(
         one_share_threshold_opportunity
     )
@@ -6371,6 +6439,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         *entry_hurdle_backtest_orders,
         *rising_missed_scout_orders,
         *rising_missed_classifier_prior_orders,
+        *rising_missed_normal_buy_bridge_orders,
         *one_share_threshold_orders,
         *lifecycle_entry_bucket_orders,
         *lifecycle_submit_bucket_orders,
@@ -6576,6 +6645,11 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     )
     required_handoff_order_ids.update(
         str(order.get("order_id"))
+        for order in rising_missed_normal_buy_bridge_orders
+        if order.get("order_id")
+    )
+    required_handoff_order_ids.update(
+        str(order.get("order_id"))
         for order in observation_source_quality_orders
         if order.get("order_id")
         and order.get("improvement_type") == "source_quality_raw_row_exclusion_producer_gap"
@@ -6730,6 +6804,9 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "entry_hurdle_backtest": source_ref("entry_hurdle_backtest"),
             "rising_missed_scout_workorder": source_ref("rising_missed_scout_workorder"),
             "rising_missed_classifier_prior": source_ref("rising_missed_classifier_prior"),
+            "rising_missed_normal_buy_bridge_candidate_discovery": source_ref(
+                "rising_missed_normal_buy_bridge_candidate_discovery"
+            ),
             "one_share_threshold_opportunity": source_ref("one_share_threshold_opportunity"),
             "threshold_cycle_calibration": source_ref("threshold_cycle_calibration"),
         },
@@ -6772,6 +6849,9 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "rising_missed_scout_source_order_count": len(rising_missed_scout_orders),
             "rising_missed_classifier_prior_source_order_count": len(
                 rising_missed_classifier_prior_orders
+            ),
+            "rising_missed_normal_buy_bridge_source_order_count": len(
+                rising_missed_normal_buy_bridge_orders
             ),
             "one_share_threshold_opportunity_source_order_count": len(one_share_threshold_orders),
             "producer_gap_discovery_high_priority_selected": bool(

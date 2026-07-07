@@ -286,10 +286,12 @@ def test_build_code_improvement_workorder_adds_intraday_entry_blocker_source_qua
 def test_build_code_improvement_workorder_adds_rising_missed_scout_orders(tmp_path, monkeypatch):
     scout_dir = tmp_path / "rising_missed_scout_workorder"
     prior_dir = tmp_path / "rising_missed_classifier_prior"
+    bridge_dir = tmp_path / "rising_missed_normal_buy_bridge_candidate_discovery"
     report_dir = tmp_path / "report"
     doc_dir = tmp_path / "docs"
     scout_dir.mkdir()
     prior_dir.mkdir()
+    bridge_dir.mkdir()
     payload = {
         "report_type": "rising_missed_scout_workorder",
         "runtime_effect": False,
@@ -352,11 +354,45 @@ def test_build_code_improvement_workorder_adds_rising_missed_scout_orders(tmp_pa
         json.dumps(prior_payload, ensure_ascii=False),
         encoding="utf-8",
     )
+    bridge_payload = {
+        "report_type": "rising_missed_normal_buy_bridge_candidate_discovery",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "code_improvement_orders": [
+            {
+                "order_id": "order_rising_missed_normal_buy_bridge_preopen_env_review",
+                "title": "rising missed normal BUY bridge PREOPEN env review",
+                "target_subsystem": "normal_buy_score_prior_bridge",
+                "route": "preopen_env_candidate_review",
+                "mapped_family": "rising_missed_normal_buy_bridge",
+                "threshold_family": "rising_missed_normal_buy_bridge",
+                "priority": 1,
+                "runtime_effect": True,
+                "allowed_runtime_apply": True,
+                "actual_order_submitted": True,
+                "broker_order_forbidden": False,
+                "implementation_status": "implemented_but_waiting_sample",
+                "implementation_provenance": {
+                    "implementation_type": "rising_missed_normal_buy_runtime_bridge_hook",
+                    "runtime_env_key": "KORSTOCKSCAN_RISING_MISSED_NORMAL_BUY_BRIDGE_ENABLED",
+                    "runtime_effect": True,
+                    "allowed_runtime_apply": True,
+                },
+                "forbidden_uses": ["forced_one_share_qty_or_tag_reuse"],
+            }
+        ],
+    }
+    (
+        bridge_dir / "rising_missed_normal_buy_bridge_candidate_discovery_2026-07-01.json"
+    ).write_text(json.dumps(bridge_payload, ensure_ascii=False), encoding="utf-8")
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-automation")
     monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "RISING_MISSED_SCOUT_WORKORDER_DIR", scout_dir)
     monkeypatch.setattr(mod, "RISING_MISSED_CLASSIFIER_PRIOR_DIR", prior_dir)
+    monkeypatch.setattr(mod, "RISING_MISSED_NORMAL_BUY_BRIDGE_CANDIDATE_DIR", bridge_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
 
@@ -368,10 +404,17 @@ def test_build_code_improvement_workorder_adds_rising_missed_scout_orders(tmp_pa
     prior_orders = [
         item for item in report["orders"] if item["source_report_type"] == "rising_missed_classifier_prior"
     ]
+    bridge_orders = [
+        item
+        for item in report["orders"]
+        if item["source_report_type"] == "rising_missed_normal_buy_bridge_candidate_discovery"
+    ]
     assert report["summary"]["rising_missed_scout_source_order_count"] == 1
     assert report["summary"]["rising_missed_classifier_prior_source_order_count"] == 1
+    assert report["summary"]["rising_missed_normal_buy_bridge_source_order_count"] == 1
     assert len(scout_orders) == 1
     assert len(prior_orders) == 1
+    assert len(bridge_orders) == 1
     assert scout_orders[0]["decision"] == "attach_existing_family"
     assert scout_orders[0]["runtime_effect"] is False
     assert scout_orders[0]["allowed_runtime_apply"] is False
@@ -385,11 +428,21 @@ def test_build_code_improvement_workorder_adds_rising_missed_scout_orders(tmp_pa
     assert prior_orders[0]["allowed_runtime_apply"] is False
     assert prior_orders[0]["broker_order_forbidden"] is True
     assert "cap_release" in prior_orders[0]["forbidden_uses"]
+    assert bridge_orders[0]["runtime_effect"] is False
+    assert bridge_orders[0]["allowed_runtime_apply"] is False
+    assert bridge_orders[0]["actual_order_submitted"] is False
+    assert bridge_orders[0]["broker_order_forbidden"] is True
+    assert bridge_orders[0]["implementation_provenance"]["requires_preopen_env_selection"] is True
+    assert "buy_score_threshold_change" in bridge_orders[0]["forbidden_uses"]
+    assert "forced_one_share_qty_or_tag_reuse" in bridge_orders[0]["forbidden_uses"]
     assert report["source"]["rising_missed_scout_workorder"] == str(
         scout_dir / "rising_missed_scout_workorder_2026-07-01.json"
     )
     assert report["source"]["rising_missed_classifier_prior"] == str(
         prior_dir / "rising_missed_classifier_prior_2026-07-01.json"
+    )
+    assert report["source"]["rising_missed_normal_buy_bridge_candidate_discovery"] == str(
+        bridge_dir / "rising_missed_normal_buy_bridge_candidate_discovery_2026-07-01.json"
     )
 
 

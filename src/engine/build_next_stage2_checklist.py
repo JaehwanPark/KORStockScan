@@ -25,6 +25,9 @@ RUNTIME_APPLY_GAP_REPORT_DIR = PROJECT_ROOT / "data" / "report" / "runtime_apply
 TUNING_PERFORMANCE_REPORT_DIR = PROJECT_ROOT / "data" / "report" / "tuning_performance_control_tower"
 AUTOMATION_TRIGGER_DECISION_REPORT_DIR = PROJECT_ROOT / "data" / "report" / "automation_chain_trigger_decision"
 RISING_MISSED_SCOUT_WORKORDER_REPORT_DIR = PROJECT_ROOT / "data" / "report" / "rising_missed_scout_workorder"
+RISING_MISSED_NORMAL_BUY_BRIDGE_CANDIDATE_REPORT_DIR = (
+    PROJECT_ROOT / "data" / "report" / "rising_missed_normal_buy_bridge_candidate_discovery"
+)
 
 AUTO_START = "<!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->"
 AUTO_END = "<!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->"
@@ -281,6 +284,18 @@ def _rising_missed_scout_summary(rising_missed_report: dict[str, Any]) -> str:
     )
 
 
+def _rising_missed_normal_buy_bridge_summary(bridge_report: dict[str, Any]) -> str:
+    if not bridge_report:
+        return "report_missing_or_unreadable"
+    summary = bridge_report.get("summary") if isinstance(bridge_report.get("summary"), dict) else {}
+    return (
+        f"status=`{summary.get('status') or 'unknown'}`, "
+        f"bridge_candidate_count=`{summary.get('bridge_candidate_count') or 0}`, "
+        f"code_improvement_order_count=`{summary.get('code_improvement_order_count') or 0}`, "
+        f"runtime_env_key=`{summary.get('runtime_env_key') or 'KORSTOCKSCAN_RISING_MISSED_NORMAL_BUY_BRIDGE_ENABLED'}`"
+    )
+
+
 def _automation_trigger_decision_summary(trigger_report: dict[str, Any]) -> str:
     if not trigger_report:
         return "trigger_report_missing=`true`, required_action=`run_required_or_report_generation_check`"
@@ -353,6 +368,7 @@ def _build_tasks(
     runtime_gap_report: dict[str, Any],
     trigger_report: dict[str, Any],
     rising_missed_report: dict[str, Any],
+    rising_missed_normal_buy_bridge_report: dict[str, Any],
 ) -> list[GeneratedTask]:
     mmdd = _compact_mmdd(target_date)
     ev_path = EV_REPORT_DIR / f"threshold_cycle_ev_{source_date}.json"
@@ -369,8 +385,15 @@ def _build_tasks(
     rising_missed_path = (
         RISING_MISSED_SCOUT_WORKORDER_REPORT_DIR / f"rising_missed_scout_workorder_{source_date}.json"
     )
+    rising_missed_normal_buy_bridge_path = (
+        RISING_MISSED_NORMAL_BUY_BRIDGE_CANDIDATE_REPORT_DIR
+        / f"rising_missed_normal_buy_bridge_candidate_discovery_{source_date}.json"
+    )
     trigger_decision_summary = _automation_trigger_decision_summary(trigger_report)
     rising_missed_summary = _rising_missed_scout_summary(rising_missed_report)
+    rising_missed_normal_buy_bridge_summary = _rising_missed_normal_buy_bridge_summary(
+        rising_missed_normal_buy_bridge_report
+    )
     tuning_sources = (
         f"[threshold_cycle_ev_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(ev_path)})"
     )
@@ -426,14 +449,15 @@ def _build_tasks(
             track="ScalpingLogic",
             source=(
                 f"[rising_missed_scout_workorder_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(rising_missed_path)}), "
+                f"[rising_missed_normal_buy_bridge_candidate_discovery_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(rising_missed_normal_buy_bridge_path)}), "
                 f"[code_improvement_workorder_{source_date}.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_{source_date}.json), "
                 f"[threshold_apply_{target_date}.json](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_{target_date}.json), "
                 f"[threshold_runtime_env_{target_date}.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_{target_date}.json), "
                 f"[threshold_runtime_env_verify_{target_date}.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_verify_{target_date}.json)"
             ),
             lines=(
-                f"판정 기준: 전일 `rising_missed_scout_workorder` 요약({rising_missed_summary})과 구현 완료된 mapped family가 당일 PREOPEN apply plan/runtime env/verify에 반영됐는지 확인한다. source-only order는 별도 runtime family/env mapping과 guard 통과가 있을 때만 반영으로 인정한다.",
-                "금지: `rising_missed_scout_workorder` 생성 또는 forced 1-share scout 손익만으로 runtime threshold mutation, stale submit bypass, broker/order guard 완화, provider/bot/cap 변경, real execution quality approval을 열지 않는다.",
+                f"판정 기준: 전일 `rising_missed_scout_workorder` 요약({rising_missed_summary})과 `rising_missed_normal_buy_bridge_candidate_discovery` 요약({rising_missed_normal_buy_bridge_summary})을 함께 보고 구현 완료된 mapped family가 당일 PREOPEN apply plan/runtime env/verify에 반영됐는지 확인한다. source-only order는 별도 runtime family/env mapping과 guard 통과가 있을 때만 반영으로 인정한다.",
+                "금지: `rising_missed_scout_workorder`/bridge discovery 생성 또는 forced 1-share scout 손익만으로 runtime threshold mutation, stale submit bypass, broker/order guard 완화, provider/bot/cap 변경, real execution quality approval을 열지 않는다.",
                 "다음 액션: `runtime_env_reflected_and_verified`, `implemented_but_runtime_not_selected`, `source_only_no_runtime_authority`, `blocked_by_apply_guard`, `report_missing_or_stale`, `verify_missing_or_failed` 중 하나로 닫는다.",
             ),
         ),
@@ -683,6 +707,7 @@ def _render_auto_block(
     runtime_gap_report: dict[str, Any],
     trigger_report: dict[str, Any],
     rising_missed_report: dict[str, Any],
+    rising_missed_normal_buy_bridge_report: dict[str, Any],
     exclude_task_ids: set[str] | None = None,
 ) -> str:
     tasks = _build_tasks(
@@ -694,6 +719,7 @@ def _render_auto_block(
         runtime_gap_report=runtime_gap_report,
         trigger_report=trigger_report,
         rising_missed_report=rising_missed_report,
+        rising_missed_normal_buy_bridge_report=rising_missed_normal_buy_bridge_report,
     )
     exclude_task_ids = exclude_task_ids or set()
     tasks = [task for task in tasks if task.task_id not in exclude_task_ids]
@@ -929,6 +955,10 @@ def build_next_stage2_checklist(source_date: str) -> dict[str, Any]:
     rising_missed_report = _load_json(
         RISING_MISSED_SCOUT_WORKORDER_REPORT_DIR / f"rising_missed_scout_workorder_{source_date}.json"
     )
+    rising_missed_normal_buy_bridge_report = _load_json(
+        RISING_MISSED_NORMAL_BUY_BRIDGE_CANDIDATE_REPORT_DIR
+        / f"rising_missed_normal_buy_bridge_candidate_discovery_{source_date}.json"
+    )
     existing = target_path.read_text(encoding="utf-8") if target_path.exists() else ""
     exclude_task_ids = _existing_manual_task_ids(existing) if existing else set()
     auto_block = _render_auto_block(
@@ -940,6 +970,7 @@ def build_next_stage2_checklist(source_date: str) -> dict[str, Any]:
         runtime_gap_report=runtime_gap_report,
         trigger_report=trigger_report,
         rising_missed_report=rising_missed_report,
+        rising_missed_normal_buy_bridge_report=rising_missed_normal_buy_bridge_report,
         exclude_task_ids=exclude_task_ids,
     )
     if existing:
@@ -963,6 +994,7 @@ def build_next_stage2_checklist(source_date: str) -> dict[str, Any]:
         runtime_gap_report=runtime_gap_report,
         trigger_report=trigger_report,
         rising_missed_report=rising_missed_report,
+        rising_missed_normal_buy_bridge_report=rising_missed_normal_buy_bridge_report,
     )
     tasks = [task for task in tasks if task.task_id not in exclude_task_ids]
     tasks.sort(key=_task_sort_key)

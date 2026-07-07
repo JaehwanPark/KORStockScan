@@ -17,6 +17,9 @@ def _patch_dirs(monkeypatch, tmp_path):
     tuning_performance = tmp_path / "data" / "report" / "tuning_performance_control_tower"
     trigger_decision = tmp_path / "data" / "report" / "automation_chain_trigger_decision"
     rising_missed = tmp_path / "data" / "report" / "rising_missed_scout_workorder"
+    rising_missed_bridge = (
+        tmp_path / "data" / "report" / "rising_missed_normal_buy_bridge_candidate_discovery"
+    )
     for path in (
         docs,
         ev,
@@ -27,6 +30,7 @@ def _patch_dirs(monkeypatch, tmp_path):
         tuning_performance,
         trigger_decision,
         rising_missed,
+        rising_missed_bridge,
     ):
         path.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(mod, "DOCS_DIR", docs)
@@ -39,6 +43,11 @@ def _patch_dirs(monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "TUNING_PERFORMANCE_REPORT_DIR", tuning_performance)
     monkeypatch.setattr(mod, "AUTOMATION_TRIGGER_DECISION_REPORT_DIR", trigger_decision)
     monkeypatch.setattr(mod, "RISING_MISSED_SCOUT_WORKORDER_REPORT_DIR", rising_missed)
+    monkeypatch.setattr(
+        mod,
+        "RISING_MISSED_NORMAL_BUY_BRIDGE_CANDIDATE_REPORT_DIR",
+        rising_missed_bridge,
+    )
     return docs, ev, openai, swing, code
 
 
@@ -52,6 +61,7 @@ def test_build_next_stage2_checklist_generates_next_trading_day_and_tasks(monkey
     trigger_dir = mod.AUTOMATION_TRIGGER_DECISION_REPORT_DIR
     tuning_dir = mod.TUNING_PERFORMANCE_REPORT_DIR
     rising_missed_dir = mod.RISING_MISSED_SCOUT_WORKORDER_REPORT_DIR
+    rising_missed_bridge_dir = mod.RISING_MISSED_NORMAL_BUY_BRIDGE_CANDIDATE_REPORT_DIR
     _write_json(
         ev_dir / "threshold_cycle_ev_2026-05-08.json",
         {
@@ -89,6 +99,19 @@ def test_build_next_stage2_checklist_generates_next_trading_day_and_tasks(monkey
             "allowed_runtime_apply": False,
         },
     )
+    _write_json(
+        rising_missed_bridge_dir / "rising_missed_normal_buy_bridge_candidate_discovery_2026-05-08.json",
+        {
+            "summary": {
+                "status": "preopen_env_candidate",
+                "bridge_candidate_count": 1,
+                "code_improvement_order_count": 1,
+                "runtime_env_key": "KORSTOCKSCAN_RISING_MISSED_NORMAL_BUY_BRIDGE_ENABLED",
+            },
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        },
+    )
 
     summary = mod.build_next_stage2_checklist("2026-05-08")
 
@@ -98,6 +121,8 @@ def test_build_next_stage2_checklist_generates_next_trading_day_and_tasks(monkey
     assert "[ThresholdEnvAutoApplyPreopen0511]" in text
     assert "[RisingMissedScoutRuntimePreopen0511]" in text
     assert "rising_missed_scout_workorder_2026-05-08.json" in text
+    assert "rising_missed_normal_buy_bridge_candidate_discovery_2026-05-08.json" in text
+    assert "bridge_candidate_count=`1`" in text
     assert "source-only order는 별도 runtime family/env mapping과 guard 통과가 있을 때만 반영" in text
     assert "runtime_env_reflected_and_verified" in text
     assert "stale submit bypass" in text
