@@ -1952,6 +1952,7 @@ def _build_low_rebound_rising_missed_targets(
     realtime_rank_targets=None,
     raw_volume_surge_targets=None,
     value_targets=None,
+    emit_observation=False,
 ):
     candidates = []
     min_rebound_pct = _low_rebound_min_pct()
@@ -1962,39 +1963,74 @@ def _build_low_rebound_rising_missed_targets(
         raw_volume_surge_targets=raw_volume_surge_targets,
         value_targets=value_targets,
     )
-    for target in universe[: _low_rebound_candle_fetch_cap()]:
+    fetch_cap = _low_rebound_candle_fetch_cap()
+    stats = {
+        "universe_count": len(universe),
+        "candidate_scan_cap": fetch_cap,
+        "scanned_count": 0,
+        "base_source_missing_count": 0,
+        "change_rate_filtered_count": 0,
+        "candle_fetch_attempted_count": 0,
+        "candle_fetch_failed_count": 0,
+        "missing_candle_count": 0,
+        "invalid_candle_price_count": 0,
+        "invalid_intraday_price_count": 0,
+        "below_rebound_threshold_count": 0,
+        "chase_risk_filtered_count": 0,
+        "passed_count": 0,
+        "negative_display_candidate_count": 0,
+    }
+    sampled_codes = []
+    passed_codes = []
+    for target in universe[:fetch_cap]:
+        stats["scanned_count"] += 1
         code = str(target.get("Code") or "").strip()
+        if code and len(sampled_codes) < fetch_cap:
+            sampled_codes.append(code)
         if not code or not (LOW_REBOUND_BASE_SOURCES & set(target.get("SourceSet") or [])):
+            stats["base_source_missing_count"] += 1
             continue
         current_change_rate, has_change_rate = _candidate_current_change_rate(target)
         if not has_change_rate or current_change_rate > 0.5:
+            stats["change_rate_filtered_count"] += 1
             continue
+        stats["candle_fetch_attempted_count"] += 1
         try:
             candles = kiwoom_utils.get_minute_candles_ka10080(token, code, limit=candle_limit) or []
         except Exception as exc:
+            stats["candle_fetch_failed_count"] += 1
             log_error(f"🚨 [SCALPING 스캐너] ka10080 저가반등 조회 실패 [{code}]: {exc}")
             continue
         if not candles:
+            stats["missing_candle_count"] += 1
             continue
         lows = [_low_rebound_price_from_candle(row, "저가", "Low", "low") for row in candles]
         highs = [_low_rebound_price_from_candle(row, "고가", "High", "high") for row in candles]
         lows = [price for price in lows if price > 0]
         highs = [price for price in highs if price > 0]
         if not lows or not highs:
+            stats["invalid_candle_price_count"] += 1
             continue
         latest_current = _low_rebound_price_from_candle(candles[-1], "현재가", "Close", "close", "cur_prc")
         current_price = latest_current or _safe_positive_int(target.get("Price"))
         intraday_low = min(lows)
         intraday_high = max(highs)
         if current_price <= 0 or intraday_low <= 0 or current_price <= intraday_low or intraday_high <= 0:
+            stats["invalid_intraday_price_count"] += 1
             continue
         low_rebound_pct = round(((current_price - intraday_low) / intraday_low) * 100.0, 2)
         if low_rebound_pct < min_rebound_pct:
+            stats["below_rebound_threshold_count"] += 1
             continue
         distance_from_high_pct = round(((current_price - intraday_high) / intraday_high) * 100.0, 2)
         if distance_from_high_pct > chase_distance_pct:
+            stats["chase_risk_filtered_count"] += 1
             continue
         source_signature = sorted(set(target.get("SourceSet") or []))
+        stats["passed_count"] += 1
+        if current_change_rate < 0:
+            stats["negative_display_candidate_count"] += 1
+        passed_codes.append(code)
         candidates.append(
             {
                 "Code": code,
@@ -2018,7 +2054,59 @@ def _build_low_rebound_rising_missed_targets(
                 "SpikeRate": _safe_float(target.get("SpikeRate")),
             }
         )
+    if emit_observation:
+        _log_low_rebound_source_observation(
+            stats,
+            sampled_codes=sampled_codes,
+            passed_codes=passed_codes,
+            min_rebound_pct=min_rebound_pct,
+            chase_distance_pct=chase_distance_pct,
+            candle_limit=candle_limit,
+        )
     return candidates
+
+
+def _log_low_rebound_source_observation(
+    stats,
+    *,
+    sampled_codes,
+    passed_codes,
+    min_rebound_pct,
+    chase_distance_pct,
+    candle_limit,
+):
+    emit_pipeline_event(
+        "ENTRY_PIPELINE",
+        LOW_REBOUND_RISING_MISSED_SOURCE,
+        "",
+        "scalping_scanner_low_rebound_source_observed",
+        fields={
+            "metric_role": "funnel_count",
+            "decision_authority": "scalping_scanner_source_only_low_rebound_observation",
+            "source_quality_gate": "scalping_scanner_low_rebound_source_observation_contract",
+            "window_policy": "intraday_runtime_source_observation",
+            "sample_floor": "not_applicable_source_observation",
+            "primary_decision_metric": "funnel_count",
+            "forbidden_uses": (
+                "score_threshold_change,provider_route_change,order_price_change,"
+                "quantity_or_cap_change,broker_guard_change,bot_restart_authority,"
+                "real_execution_quality_approval"
+            ),
+            "runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "source_signature": LOW_REBOUND_RISING_MISSED_SOURCE,
+            "scanner_source_family": LOW_REBOUND_RISING_MISSED_SOURCE_FAMILY,
+            "scanner_source_role": LOW_REBOUND_RISING_MISSED_ROLE,
+            "rising_missed_lineage": LOW_REBOUND_RISING_MISSED_LINEAGE,
+            "low_rebound_min_pct": min_rebound_pct,
+            "low_rebound_chase_distance_pct": chase_distance_pct,
+            "low_rebound_candle_limit": candle_limit,
+            "low_rebound_sampled_codes": ",".join(sampled_codes),
+            "low_rebound_passed_codes": ",".join(passed_codes),
+            **{f"low_rebound_{key}": value for key, value in stats.items()},
+        },
+    )
 
 
 def run_scalper_iteration(
@@ -2089,6 +2177,7 @@ def run_scalper_iteration(
         realtime_rank_targets=realtime_rank_targets,
         raw_volume_surge_targets=raw_volume_surge_targets,
         value_targets=value_targets,
+        emit_observation=True,
     )
 
     candidate_pool = build_candidate_pool(

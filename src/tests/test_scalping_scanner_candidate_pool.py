@@ -1461,6 +1461,73 @@ def test_low_rebound_negative_display_candidate_builds_from_intraday_low(monkeyp
     assert row["RisingMissedLineage"] == "low_rebound_from_intraday_low"
 
 
+def test_low_rebound_source_observation_emits_cap_independent_summary(monkeypatch):
+    emitted = []
+
+    def fake_emit(pipeline, name, code, stage, *, record_id=None, fields=None):
+        emitted.append(
+            {
+                "pipeline": pipeline,
+                "name": name,
+                "code": code,
+                "stage": stage,
+                "record_id": record_id,
+                "fields": fields or {},
+            }
+        )
+
+    def fake_candles(_token, code, limit=420):
+        if code == "000001":
+            return [
+                {"현재가": 10000, "고가": 10100, "저가": 10000},
+                {"현재가": 10300, "고가": 10600, "저가": 10100},
+            ]
+        if code == "000002":
+            return [
+                {"현재가": 10000, "고가": 10100, "저가": 10000},
+                {"현재가": 10240, "고가": 10400, "저가": 10100},
+            ]
+        raise AssertionError(f"unexpected candle fetch for {code}")
+
+    monkeypatch.setattr(scalping_scanner, "emit_pipeline_event", fake_emit)
+    monkeypatch.setattr(kiwoom_utils, "get_minute_candles_ka10080", fake_candles)
+
+    rows = scalping_scanner._build_low_rebound_rising_missed_targets(
+        "TOKEN",
+        raw_volume_surge_targets=[
+            {"Code": "000001", "Name": "PASS", "Price": 10300, "FluRate": -0.2},
+            {"Code": "000002", "Name": "BELOW", "Price": 10240, "FluRate": -0.1},
+            {"Code": "000003", "Name": "UP", "Price": 10300, "FluRate": 0.6},
+        ],
+        emit_observation=True,
+    )
+
+    assert [row["Code"] for row in rows] == ["000001"]
+    assert len(emitted) == 1
+    event = emitted[0]
+    fields = event["fields"]
+    assert event["pipeline"] == "ENTRY_PIPELINE"
+    assert event["name"] == scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE
+    assert event["stage"] == "scalping_scanner_low_rebound_source_observed"
+    assert fields["metric_role"] == "funnel_count"
+    assert fields["decision_authority"] == "scalping_scanner_source_only_low_rebound_observation"
+    assert fields["runtime_effect"] is False
+    assert fields["actual_order_submitted"] is False
+    assert fields["broker_order_forbidden"] is True
+    assert fields["source_signature"] == scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE
+    assert fields["scanner_source_family"] == "rising_missed_low_rebound_source_v1"
+    assert fields["rising_missed_lineage"] == "low_rebound_from_intraday_low"
+    assert fields["low_rebound_universe_count"] == 3
+    assert fields["low_rebound_scanned_count"] == 3
+    assert fields["low_rebound_candle_fetch_attempted_count"] == 2
+    assert fields["low_rebound_change_rate_filtered_count"] == 1
+    assert fields["low_rebound_below_rebound_threshold_count"] == 1
+    assert fields["low_rebound_passed_count"] == 1
+    assert fields["low_rebound_negative_display_candidate_count"] == 1
+    assert fields["low_rebound_sampled_codes"] == "000001,000002,000003"
+    assert fields["low_rebound_passed_codes"] == "000001"
+
+
 def test_low_rebound_excludes_below_threshold(monkeypatch):
     monkeypatch.setattr(
         kiwoom_utils,
@@ -3075,6 +3142,77 @@ def test_run_scalper_iteration_keeps_ws_payload_and_max_new_codes(monkeypatch):
         "000002",
     ]
     assert len(db.records) == 3
+
+
+def test_run_scalper_iteration_observes_low_rebound_before_scanner_cap(monkeypatch):
+    emitted = []
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "1")
+    monkeypatch.setattr(
+        scalping_scanner,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "name": name, "fields": fields or {}}
+        ),
+    )
+    monkeypatch.setattr(kiwoom_utils, "get_realtime_item_rank_ka00198", lambda *args, **kwargs: [])
+    monkeypatch.setattr(kiwoom_utils, "get_price_jump_ka10019", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "scan_volume_spike_ka10023",
+        lambda *args, **kwargs: [
+            {"Code": "000001", "Name": "LOW", "Price": 10300, "FluRate": -0.2, "SpikeRate": 140.0}
+        ],
+    )
+    monkeypatch.setattr(kiwoom_utils, "get_bid_balance_surge_ka10021", lambda *args, **kwargs: [])
+    monkeypatch.setattr(kiwoom_utils, "get_top_open_fluctuation_ka10028", lambda *args, **kwargs: [])
+    monkeypatch.setattr(kiwoom_utils, "get_value_top_ka10032", lambda *args, **kwargs: [])
+    monkeypatch.setattr(kiwoom_utils, "get_vi_triggered_ka10054", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "get_minute_candles_ka10080",
+        lambda *_args, **_kwargs: [
+            {"현재가": 10000, "고가": 10100, "저가": 10000},
+            {"현재가": 10300, "고가": 10600, "저가": 10100},
+        ],
+    )
+    radar = SimpleNamespace(find_supernova_targets=lambda *args, **kwargs: [])
+    db = _DB()
+    db.records.append(
+        SimpleNamespace(
+            status="WATCHING",
+            strategy="SCALPING",
+            position_tag="SCANNER",
+            buy_time=None,
+            buy_qty=0,
+        )
+    )
+    event_bus = _EventBus()
+
+    codes, recent = scalping_scanner.run_scalper_iteration(
+        token="TOKEN",
+        radar=radar,
+        db=db,
+        event_bus=event_bus,
+        recent_picks={},
+        reentry_cooldown_sec=1500,
+        max_new_codes=12,
+        open_top_limit=60,
+        supernova_limit=30,
+    )
+
+    low_events = [event for event in emitted if event["stage"] == "scalping_scanner_low_rebound_source_observed"]
+    assert codes == []
+    assert recent == {}
+    assert event_bus.events == []
+    assert len(low_events) == 1
+    fields = low_events[0]["fields"]
+    assert fields["low_rebound_universe_count"] == 1
+    assert fields["low_rebound_candle_fetch_attempted_count"] == 1
+    assert fields["low_rebound_passed_count"] == 1
+    assert fields["low_rebound_passed_codes"] == "000001"
+    assert fields["runtime_effect"] is False
+    assert fields["actual_order_submitted"] is False
+    assert fields["broker_order_forbidden"] is True
 
 
 def test_run_scalper_iteration_continues_when_one_source_fails(monkeypatch):
