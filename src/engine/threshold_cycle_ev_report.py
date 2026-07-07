@@ -1712,6 +1712,21 @@ def _entry_split_order_plan_summary(target_date: str) -> tuple[dict[str, Any], s
     source_quality = payload.get("source_quality") if isinstance(payload.get("source_quality"), dict) else {}
     candidate_grid = payload.get("candidate_grid") if isinstance(payload.get("candidate_grid"), list) else []
     candidates = recommended.get("candidates") if isinstance(recommended.get("candidates"), list) else []
+    bounded_equal_baseline_count = sum(
+        1
+        for item in candidates
+        if isinstance(item, dict) and item.get("policy_mode") == "bounded_equal_split_baseline"
+    )
+    post_submit_tick_band_seed_count = sum(
+        1
+        for item in candidates
+        if isinstance(item, dict) and item.get("policy_mode") == "post_submit_tick_band_seed"
+    )
+    real_primary_ev_candidate_count = sum(
+        1
+        for item in candidates
+        if isinstance(item, dict) and item.get("policy_mode") == "real_primary_ev_optimized"
+    )
     real_sample = max(
         [_safe_int(item.get("real_sample_count"), 0) for item in candidate_grid if isinstance(item, dict)] or [0]
     )
@@ -1739,6 +1754,9 @@ def _entry_split_order_plan_summary(target_date: str) -> tuple[dict[str, Any], s
             "schema_version": payload.get("schema_version"),
             "candidate_grid_count": len(candidate_grid),
             "recommended_policy_candidate_count": len(candidates),
+            "bounded_equal_split_baseline_candidate_count": bounded_equal_baseline_count,
+            "post_submit_tick_band_seed_candidate_count": post_submit_tick_band_seed_count,
+            "real_primary_ev_policy_candidate_count": real_primary_ev_candidate_count,
             "real_sample_ready": real_sample >= 20,
             "real_sample_count": real_sample,
             "real_outcome_joined_sample": real_outcome,

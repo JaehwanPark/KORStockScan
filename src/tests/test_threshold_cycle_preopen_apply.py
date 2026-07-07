@@ -330,6 +330,69 @@ def test_scalping_pyramid_quality_gate_candidate_emits_runtime_env_overrides():
     }
 
 
+def test_entry_split_order_plan_allows_deterministic_ai_unavailable(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", tmp_path / "runtime_env")
+    policy_file = "/tmp/entry_split_order_policy_2026-07-07.json"
+    candidate = {
+        "family": "entry_split_order_plan",
+        "stage": "submit",
+        "priority": 9,
+        "calibration_state": "adjust_up",
+        "allowed_runtime_apply": True,
+        "safety_revert_required": False,
+        "target_env_keys": [
+            "ENTRY_SPLIT_ORDER_POLICY_ENABLED",
+            "ENTRY_SPLIT_ORDER_POLICY_FILE",
+            "ENTRY_SPLIT_ORDER_POLICY_VERSION",
+        ],
+        "current_values": {
+            "enabled": False,
+            "policy_file": "",
+            "policy_version": "",
+        },
+        "recommended_values": {
+            "enabled": True,
+            "policy_file": policy_file,
+            "policy_version": "entry_split_order_plan:2026-07-07:test",
+        },
+        "source_metrics": {
+            "source_quality_status": "pass",
+            "primary_sample_book": "real_submit_post_submit_observed_low",
+        },
+    }
+
+    selected, decisions, env = mod._select_auto_apply_candidates(
+        [candidate],
+        ai_review={
+            "status": "unavailable",
+            "items_by_family": {
+                "entry_split_order_plan": {
+                    "family": "entry_split_order_plan",
+                    "ai_review_state": "unavailable",
+                    "guard_accepted": False,
+                    "guard_reject_reason": "ai_unavailable",
+                    "guard_decision": {
+                        "guard_accepted": False,
+                        "guard_reject_reason": "ai_unavailable",
+                        "route_action": "deterministic_only",
+                    },
+                }
+            },
+        },
+        require_ai=False,
+        target_date="2026-07-08",
+    )
+
+    assert selected[0]["family"] == "entry_split_order_plan"
+    assert decisions[0]["selected"] is True
+    assert decisions[0]["decision_reason"] == "ai_unavailable_deterministic_allowed"
+    assert env == {
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED": "true",
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE": policy_file,
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_VERSION": "entry_split_order_plan:2026-07-07:test",
+    }
+
+
 def test_scalping_pyramid_quality_gate_candidate_ai_guard_reject_blocks_env(monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", tmp_path / "runtime_env")
     candidate = {

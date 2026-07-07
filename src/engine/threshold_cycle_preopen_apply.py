@@ -2284,6 +2284,15 @@ def _ai_guard_allows_candidate(candidate: dict[str, Any], ai_review: dict[str, A
         return (not require_ai, "ai_review_missing" if require_ai else "ai_review_missing_deterministic_allowed")
     guard_decision = item.get("guard_decision") if isinstance(item.get("guard_decision"), dict) else {}
     route_action = str(item.get("route_action") or guard_decision.get("route_action") or "")
+    guard_reject_reason = str(item.get("guard_reject_reason") or guard_decision.get("guard_reject_reason") or "")
+    if not require_ai and (
+        guard_reject_reason == "ai_unavailable"
+        or (
+            route_action == "deterministic_only"
+            and str(item.get("ai_review_state") or ai_review.get("status") or "") == "unavailable"
+        )
+    ):
+        return (True, "ai_unavailable_deterministic_allowed")
     if (
         _score65_74_entry_unlock_candidate(candidate)
         and route_action == "exclude_from_threshold_candidate_review"

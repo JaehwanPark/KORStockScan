@@ -5511,6 +5511,21 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
     source_quality = payload.get("source_quality") if isinstance(payload.get("source_quality"), dict) else {}
     input_summary = payload.get("input_summary") if isinstance(payload.get("input_summary"), dict) else {}
     candidates = recommended_policy.get("candidates") if isinstance(recommended_policy.get("candidates"), list) else []
+    bounded_equal_baseline_count = sum(
+        1
+        for item in candidates
+        if isinstance(item, dict) and item.get("policy_mode") == "bounded_equal_split_baseline"
+    )
+    post_submit_tick_band_seed_count = sum(
+        1
+        for item in candidates
+        if isinstance(item, dict) and item.get("policy_mode") == "post_submit_tick_band_seed"
+    )
+    real_primary_ev_candidate_count = sum(
+        1
+        for item in candidates
+        if isinstance(item, dict) and item.get("policy_mode") == "real_primary_ev_optimized"
+    )
     best_candidate = max(
         [item for item in candidates if isinstance(item, dict)],
         key=lambda item: _safe_float(item.get("source_quality_adjusted_ev_pct"), 0.0) or 0.0,
@@ -5548,6 +5563,9 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
             "report_path": str(report_path) if report_path and report_path.exists() else None,
             "candidate_grid_count": len(candidate_grid),
             "recommended_policy_candidate_count": len(candidates),
+            "bounded_equal_split_baseline_candidate_count": bounded_equal_baseline_count,
+            "post_submit_tick_band_seed_candidate_count": post_submit_tick_band_seed_count,
+            "real_primary_ev_policy_candidate_count": real_primary_ev_candidate_count,
             "real_sample_count": real_sample,
             "sim_sample_count": sim_sample,
             "real_outcome_joined_sample": real_outcome_sample,
@@ -7443,6 +7461,14 @@ def _calibration_state_for_family(
                 "hold_sample",
                 f"entry split real submit sample floor 미달(real={real_count}/20); planned_orders split policy 유지 보류",
             )
+        baseline_policy_count = _safe_int(source_metrics.get("bounded_equal_split_baseline_candidate_count"), 0) or 0
+        tick_band_policy_count = _safe_int(source_metrics.get("post_submit_tick_band_seed_candidate_count"), 0) or 0
+        real_primary_policy_count = _safe_int(source_metrics.get("real_primary_ev_policy_candidate_count"), 0) or 0
+        if policy_count > 0 and (baseline_policy_count > 0 or tick_band_policy_count > 0) and real_primary_policy_count <= 0:
+            return (
+                "adjust_up",
+                "entry split real submit sample floor와 execution-shape guard가 통과해 qty-preserving split seed policy를 다음 PREOPEN env 후보로 연다.",
+            )
         if real_outcome_count <= 0 and sim_count >= 10:
             return (
                 "hold_real_outcome_pending",
@@ -7766,6 +7792,18 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
                 "candidate_grid_count": _safe_int(family_sample.get("candidate_grid_count"), 0) or 0,
                 "recommended_policy_candidate_count": _safe_int(
                     family_sample.get("recommended_policy_candidate_count"), 0
+                )
+                or 0,
+                "bounded_equal_split_baseline_candidate_count": _safe_int(
+                    family_sample.get("bounded_equal_split_baseline_candidate_count"), 0
+                )
+                or 0,
+                "post_submit_tick_band_seed_candidate_count": _safe_int(
+                    family_sample.get("post_submit_tick_band_seed_candidate_count"), 0
+                )
+                or 0,
+                "real_primary_ev_policy_candidate_count": _safe_int(
+                    family_sample.get("real_primary_ev_policy_candidate_count"), 0
                 )
                 or 0,
                 "real_sample_count": _safe_int(family_sample.get("real_sample_count"), 0) or 0,
