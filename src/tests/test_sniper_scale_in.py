@@ -742,17 +742,17 @@ def test_rising_missed_one_share_entry_uses_budget_cap_with_min_one_share():
         has_open_pending=False,
         already_holding=False,
         min_delta_pct=0.5,
-        current_price=120_000,
+        current_price=220_000,
         scout_budget_cap_krw=DEFAULT_RISING_MISSED_SCOUT_ENTRY_BUDGET_CAP_KRW,
     )
 
     assert budget_capped.allowed is True
-    assert budget_capped.forced_qty == 5
+    assert budget_capped.forced_qty == 10
     assert budget_capped.log_fields["rising_missed_scout_sizing_mode"] == "capped_budget_min_one_share"
-    assert budget_capped.log_fields["rising_missed_scout_budget_cap_krw"] == 100_000
-    assert budget_capped.log_fields["rising_missed_scout_budget_qty"] == 5
+    assert budget_capped.log_fields["rising_missed_scout_budget_cap_krw"] == 200_000
+    assert budget_capped.log_fields["rising_missed_scout_budget_qty"] == 10
     assert budget_capped.log_fields["rising_missed_scout_min_one_share_applied"] is False
-    assert budget_capped.log_fields["rising_missed_one_share_entry_forced_qty"] == 5
+    assert budget_capped.log_fields["rising_missed_one_share_entry_forced_qty"] == 10
     assert min_one_share.allowed is True
     assert min_one_share.forced_qty == 1
     assert min_one_share.log_fields["rising_missed_scout_budget_qty"] == 0
@@ -1356,9 +1356,9 @@ def test_rising_missed_one_share_hook_bypasses_watching_soft_branch(monkeypatch)
     assert submitted_stock["rising_missed_one_share_entry_forced"] is True
     assert submitted_stock["rising_missed_one_share_scout"] is True
     assert submitted_stock["rising_missed_scout_upgrade_pending"] is True
-    assert submitted_stock["forced_entry_qty"] == 10
+    assert submitted_stock["forced_entry_qty"] == 20
     assert submitted_stock["forced_entry_reason"] == FORCED_ENTRY_REASON
-    assert runtime["forced_entry_qty"] == 10
+    assert runtime["forced_entry_qty"] == 20
     assert runtime["forced_entry_reason"] == FORCED_ENTRY_REASON
 
 
@@ -5571,6 +5571,14 @@ def test_real_scalping_scale_in_uses_buy_window_not_regular_market_close(monkeyp
         state_handlers,
         "_pre_submit_refresh_real_ws_snapshot",
         lambda code, ws_data, strategy: (dict(ws_data), {}),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_pre_submit_refresh_rest_orderbook_snapshot",
+        lambda code, ws_data, strategy: (
+            dict(ws_data),
+            {"pre_submit_rest_orderbook_refresh_reason": "input_orderbook_usable"},
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -22576,6 +22584,8 @@ def test_stop_line_touch_avgdown_blocks_score_50_before_real_submit(monkeypatch)
     assert blocked["first_touch_avgdown_decision_allowed"] is False
     assert blocked["first_touch_avgdown_ai_score_submit_authority"] is False
     assert blocked["first_touch_avgdown_ai_score_submit_authority_reason"] == "ai_score_sentinel_50"
+    assert blocked["first_touch_quote_stale"] != "unknown"
+    assert blocked["first_touch_quote_age_source"] != "unknown"
 
 
 def test_stop_line_touch_first_touch_avgdown_decision_blocks_submit(monkeypatch):

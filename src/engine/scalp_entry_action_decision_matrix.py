@@ -293,16 +293,19 @@ def _score_bucket(score: Any, *, stage: str = "") -> str:
     return "score85_plus"
 
 
+SCORE_SOURCE_FIELDS = (
+    "ai_score",
+    "ai_score_after_bonus",
+    "current_ai_score",
+    "ai_score_raw",
+    "entry_score",
+    "score",
+    "swing_entry_recovery_gate_score",
+)
+
+
 def _score_source(fields: dict[str, Any]) -> Any:
-    for key in (
-        "ai_score",
-        "ai_score_after_bonus",
-        "current_ai_score",
-        "ai_score_raw",
-        "entry_score",
-        "score",
-        "swing_entry_recovery_gate_score",
-    ):
+    for key in SCORE_SOURCE_FIELDS:
         value = fields.get(key)
         if _safe_float(value, None) is not None:
             return value
@@ -1070,6 +1073,7 @@ def _unknown_bucket_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     unknown_resolution_route_counts: Counter[str] = Counter()
     score_root_cause_counts: Counter[str] = Counter()
     score_backfill_match_type_counts: Counter[str] = Counter()
+    score_source_missing_examples: list[dict[str, Any]] = []
     examples: list[dict[str, Any]] = []
     adm_source_count = 0
     raw_recomputed_count = 0
@@ -1114,6 +1118,21 @@ def _unknown_bucket_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
             elif key == "score_bucket" and row.get("score_source_value") is None:
                 unknown_root_causes[f"{key}:source_score_missing"] += 1
                 score_root_cause_counts["missing"] += 1
+                if len(score_source_missing_examples) < 10:
+                    score_source_missing_examples.append(
+                        {
+                            "stage": row.get("stage"),
+                            "source_stage": row.get("source_stage"),
+                            "stock_code": row.get("stock_code"),
+                            "candidate_id": row.get("candidate_id"),
+                            "record_id": row.get("record_id"),
+                            "event_time": row.get("event_time"),
+                            "source_path": row.get("source_path"),
+                            "bucket_token": entry_adm_bucket_token(row),
+                            "bucket_provenance": provenance if isinstance(provenance, dict) else None,
+                            "expected_source_fields": list(SCORE_SOURCE_FIELDS),
+                        }
+                    )
             elif key == "risk_context_bucket":
                 reason = _context_unknown_reason(row, key, provenance_value)
                 unknown_root_causes[f"{key}:{reason}"] += 1
@@ -1186,6 +1205,18 @@ def _unknown_bucket_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "backfilled": score_root_cause_counts.get("backfilled", 0),
         },
         "score_backfill_match_type_counts": dict(score_backfill_match_type_counts),
+        "score_source_missing_count": unknown_root_causes.get("score_bucket:source_score_missing", 0),
+        "score_source_missing_examples": score_source_missing_examples,
+        "score_source_missing_provenance": {
+            "gap": "score_bucket_source_score_missing",
+            "expected_source_fields": list(SCORE_SOURCE_FIELDS),
+            "recommended_resolution": "join_or_emit_entry_score_before_adm_bucket_decision",
+            "decision_authority": "source_quality_gap_discovery",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+        if score_source_missing_examples
+        else {},
         "examples": examples,
         "source_quality_gate": unknown_source_quality_gate,
         "recommended_route": unknown_recommended_route,
@@ -1393,6 +1424,8 @@ def render_scalp_entry_action_decision_matrix_markdown(report: dict[str, Any]) -
         f"- not_available_dimension_occurrence_count: `{unknown_summary.get('not_available_dimension_occurrence_count', 0)}`",
         f"- unknown_bucket_dimension_counts: `{unknown_summary.get('dimension_counts') or {}}`",
         f"- unknown_bucket_not_available_dimension_counts: `{unknown_summary.get('not_available_dimension_counts') or {}}`",
+        f"- score_source_missing_count: `{unknown_summary.get('score_source_missing_count', 0)}`",
+        f"- score_source_missing_provenance: `{unknown_summary.get('score_source_missing_provenance') or {}}`",
         f"- adm_source_bucket_used_count: `{unknown_summary.get('adm_source_bucket_used_count', 0)}`",
         f"- recomputed_unknown_count: `{unknown_summary.get('recomputed_unknown_count', 0)}`",
         "",

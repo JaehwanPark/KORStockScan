@@ -376,6 +376,10 @@ def test_scalp_entry_adm_report_warns_on_unknown_bucket_source_quality(tmp_path,
     assert unknown_summary["not_available_affected_rows"] <= unknown_summary["total_rows"]
     assert unknown_summary["dimension_counts"]["score_bucket"] == 1
     assert unknown_summary["unknown_root_cause_counts"]["score_bucket:source_score_missing"] == 1
+    assert unknown_summary["score_source_missing_count"] == 1
+    assert unknown_summary["score_source_missing_provenance"]["runtime_effect"] is False
+    assert unknown_summary["score_source_missing_provenance"]["allowed_runtime_apply"] is False
+    assert unknown_summary["score_source_missing_examples"][0]["expected_source_fields"]
     assert "unknown_dimension_occurrence_count" in unknown_summary
     assert "not_available_dimension_counts" in unknown_summary
     assert "recomputed_unknown_count" in unknown_summary

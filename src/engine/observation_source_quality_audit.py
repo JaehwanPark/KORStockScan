@@ -1954,6 +1954,22 @@ def _reviewed_unknown_reason_for_stage_field(
             "cooldown_reuse",
         } or _field_text("ai_call_skipped_reason") not in {"", "-", "none"}
 
+    def _is_reviewed_first_touch_quote_stale_not_available() -> bool:
+        if stage != "stop_line_touch_first_touch_avgdown_decision_blocked":
+            return False
+        if str(key or "") != "first_touch_quote_stale":
+            return False
+        quote_age = _field_text("first_touch_quote_age_ms")
+        quote_source = _field_text("first_touch_quote_age_source")
+        source_quality = _field_text("first_touch_reversal_feature_source_quality")
+        stale_reason = _field_text("first_touch_reversal_feature_stale_reason")
+        return _is_runtime_order_forbidden_observation() and (
+            quote_age in {"", "-", "not_available_quote_age", "not_available_quote_age_no_micro_context"}
+            or quote_source.startswith("not_available")
+            or source_quality in {"missing", "stale"}
+            or stale_reason in {"-", "features_missing", "micro_vwap_unavailable"}
+        )
+
     def _is_reviewed_entry_adm_bucket_provenance() -> bool:
         if stage not in {"scalp_entry_action_decision_snapshot", "ai_confirmed"}:
             return False
@@ -1986,6 +2002,8 @@ def _reviewed_unknown_reason_for_stage_field(
         return "reviewed_score_prior_neutral_unknown_not_decision_input"
     if _is_reviewed_holding_score_preflight_not_available():
         return "reviewed_holding_score_preflight_not_available"
+    if _is_reviewed_first_touch_quote_stale_not_available():
+        return "reviewed_first_touch_quote_stale_not_available"
     if str(key or "") in {"tick_context_stale", "quote_stale"} and _is_reviewed_stale_flag_not_available():
         return "reviewed_stale_flag_not_available"
     if str(key or "") in {

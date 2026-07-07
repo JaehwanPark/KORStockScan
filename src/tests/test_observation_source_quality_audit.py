@@ -1871,6 +1871,46 @@ def test_observation_source_quality_audit_accepts_first_touch_avgdown_contracts(
     assert report["summary"]["tuning_input_allowed"] is True
 
 
+def test_observation_source_quality_audit_reviews_first_touch_quote_stale_unknown(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-15",
+        [
+            _event(
+                "stop_line_touch_first_touch_avgdown_decision_blocked",
+                _first_touch_fields(
+                    gate_allowed=False,
+                    gate_reason="repeated_blockers_without_recovery",
+                    block_reason="repeated_blockers_without_recovery",
+                    actual_order_submitted=False,
+                    broker_order_forbidden=True,
+                    first_touch_avgdown_decision_allowed=False,
+                    first_touch_avgdown_decision_reason="repeated_blockers_without_recovery",
+                    first_touch_reversal_feature_source_quality="missing",
+                    first_touch_reversal_feature_stale=False,
+                    first_touch_reversal_feature_stale_reason="-",
+                    first_touch_quote_stale="unknown",
+                    first_touch_quote_age_ms="-",
+                    first_touch_quote_age_source="missing",
+                ),
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-15")
+
+    assert report["unknown_token_findings"] == []
+    reviewed = report["reviewed_unknown_token_findings"]
+    fields = {item["field"]: item for item in reviewed[0]["fields"]}
+    assert fields["first_touch_quote_stale"]["reviewed_reason"] == (
+        "reviewed_first_touch_quote_stale_not_available"
+    )
+
+
 def test_observation_source_quality_audit_accepts_scanner_source_guard_contracts(
     monkeypatch, tmp_path
 ):
