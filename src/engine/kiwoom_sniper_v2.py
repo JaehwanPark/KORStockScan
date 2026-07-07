@@ -268,6 +268,7 @@ _SCANNER_HOT_RUNTIME_OVERRIDE_KEYS = frozenset(
         "KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_COOLDOWN_SEC",
         "KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_RECOVERY_STREAK",
         "KORSTOCKSCAN_SCALPING_WATCHING_ATTACH_REPLACE_ENABLED",
+        "KORSTOCKSCAN_SCALPING_WATCHING_TTL_SEC",
         "KORSTOCKSCAN_SCANNER_RISING_TERMINAL_HARDGATE_RECHECK_ENABLED",
         "KORSTOCKSCAN_SCANNER_RISING_TERMINAL_HARDGATE_RECHECK_DELAY_SEC",
         "KORSTOCKSCAN_SCANNER_RISING_TERMINAL_HARDGATE_RECHECK_MAX_ATTEMPTS",
@@ -2673,6 +2674,15 @@ def _scalping_fifo_base_max_active():
     return max(1, min(value, 80))
 
 
+def _scalping_watching_ttl_sec():
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCALPING_WATCHING_TTL_SEC")
+    try:
+        value = float(str(raw).strip()) if str(raw).strip() else 1800.0
+    except Exception:
+        value = 1800.0
+    return max(300.0, min(value, 7200.0))
+
+
 def _scalping_dynamic_watch_cap_enabled():
     raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_CAP_ENABLED")
     return _env_bool_from_value(raw, True)
@@ -4798,9 +4808,10 @@ def run_sniper(is_test_mode=False):
 
                 watching_stocks.sort(key=lambda x: _runtime_added_time_for_target(x, now_ts=now_ts))
                 scalp_fifo_targets = _scalping_fifo_candidates(watching_stocks, now_ts)
+                scalping_watching_ttl_sec = _scalping_watching_ttl_sec()
 
                 for t in scalp_fifo_targets:
-                    if now_ts - _runtime_added_time_for_target(t, now_ts=now_ts) > 7200:
+                    if now_ts - _runtime_added_time_for_target(t, now_ts=now_ts) > scalping_watching_ttl_sec:
                         expired_ids.append(t['id'])
                         expired_names.append(t['name'])
 

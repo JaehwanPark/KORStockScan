@@ -1804,6 +1804,21 @@ def test_scalping_fifo_max_active_env(monkeypatch, tmp_path):
     kiwoom_sniper_v2._reset_scalping_dynamic_watch_cap_state()
 
 
+def test_scalping_watching_ttl_sec_env(monkeypatch, tmp_path):
+    _disable_scanner_operator_runtime_overrides(monkeypatch, tmp_path)
+    monkeypatch.delenv("KORSTOCKSCAN_SCALPING_WATCHING_TTL_SEC", raising=False)
+    assert kiwoom_sniper_v2._scalping_watching_ttl_sec() == 1800.0
+
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_TTL_SEC", "900")
+    assert kiwoom_sniper_v2._scalping_watching_ttl_sec() == 900.0
+
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_TTL_SEC", "60")
+    assert kiwoom_sniper_v2._scalping_watching_ttl_sec() == 300.0
+
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_TTL_SEC", "99999")
+    assert kiwoom_sniper_v2._scalping_watching_ttl_sec() == 7200.0
+
+
 def test_scalping_dynamic_watch_cap_reduces_without_restart(monkeypatch, tmp_path):
     _disable_scanner_operator_runtime_overrides(monkeypatch, tmp_path)
     kiwoom_sniper_v2._reset_scalping_dynamic_watch_cap_state()
