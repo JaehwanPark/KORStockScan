@@ -1722,10 +1722,26 @@ def _handle_entry_buy_execution(
     )
 
     buy_receipt_snapshot = _receipt_snapshot(target_stock, _BUY_RECEIPT_SNAPSHOT_KEYS)
+    entry_partial_fill_pending = requested_entry_qty > 0 and cum_filled_qty < requested_entry_qty
+    buy_receipt_snapshot.update(
+        {
+            "entry_fill_quality": fill_quality,
+            "entry_requested_qty": int(requested_entry_qty or 0),
+            "entry_cum_filled_qty": int(cum_filled_qty or 0),
+            "entry_remaining_qty": int(remaining_qty or 0),
+            "entry_partial_fill_pending": entry_partial_fill_pending,
+        }
+    )
     buy_receipt_snapshot['buy_execution_notified'] = bool(
         buy_receipt_snapshot.get('buy_execution_notified', False)
-    )
-    if not buy_receipt_snapshot.get('buy_execution_notified'):
+    ) or entry_partial_fill_pending
+    if entry_partial_fill_pending:
+        log_info(
+            f"[ENTRY_PARTIAL_FILL_NOTICE_DEFERRED] {target_stock.get('name')}({code}) "
+            f"filled={cum_filled_qty}/{requested_entry_qty} remaining={remaining_qty} "
+            "reason=wait_full_entry_bundle_before_buy_execution_telegram"
+        )
+    elif not buy_receipt_snapshot.get('buy_execution_notified'):
         target_stock['buy_execution_notified'] = True
         target_stock.pop('pending_buy_msg', None)
 

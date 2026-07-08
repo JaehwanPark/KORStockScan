@@ -385,12 +385,163 @@ def test_entry_split_order_plan_allows_deterministic_ai_unavailable(tmp_path, mo
 
     assert selected[0]["family"] == "entry_split_order_plan"
     assert decisions[0]["selected"] is True
-    assert decisions[0]["decision_reason"] == "ai_unavailable_deterministic_allowed"
+    assert decisions[0]["decision_reason"] == "deterministic_policy_handoff"
     assert env == {
         "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED": "true",
         "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE": policy_file,
         "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_VERSION": "entry_split_order_plan:2026-07-07:test",
     }
+
+
+def test_split_order_plans_do_not_require_ai_review_when_require_ai_true(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", tmp_path / "runtime_env")
+    entry_policy_file = "/tmp/entry_split_order_policy_2026-07-07.json"
+    scale_policy_file = "/tmp/scale_in_split_order_policy_2026-07-07.json"
+    candidates = [
+        {
+            "family": "entry_split_order_plan",
+            "stage": "submit",
+            "priority": 9,
+            "calibration_state": "adjust_up",
+            "allowed_runtime_apply": True,
+            "safety_revert_required": False,
+            "target_env_keys": [
+                "ENTRY_SPLIT_ORDER_POLICY_ENABLED",
+                "ENTRY_SPLIT_ORDER_POLICY_FILE",
+                "ENTRY_SPLIT_ORDER_POLICY_VERSION",
+            ],
+            "current_values": {
+                "enabled": True,
+                "policy_file": entry_policy_file,
+                "policy_version": "entry_split_order_plan:2026-07-07:test",
+            },
+            "recommended_values": {
+                "enabled": True,
+                "policy_file": entry_policy_file,
+                "policy_version": "entry_split_order_plan:2026-07-07:test",
+            },
+        },
+        {
+            "family": "scale_in_split_order_plan",
+            "stage": "scale_in",
+            "priority": 9,
+            "calibration_state": "adjust_up",
+            "allowed_runtime_apply": True,
+            "safety_revert_required": False,
+            "target_env_keys": [
+                "SCALE_IN_SPLIT_ORDER_POLICY_ENABLED",
+                "SCALE_IN_SPLIT_ORDER_POLICY_FILE",
+                "SCALE_IN_SPLIT_ORDER_POLICY_VERSION",
+            ],
+            "current_values": {
+                "enabled": True,
+                "policy_file": scale_policy_file,
+                "policy_version": "scale_in_split_order_plan:2026-07-07:test",
+            },
+            "recommended_values": {
+                "enabled": True,
+                "policy_file": scale_policy_file,
+                "policy_version": "scale_in_split_order_plan:2026-07-07:test",
+            },
+        },
+    ]
+
+    selected, decisions, env = mod._select_auto_apply_candidates(
+        candidates,
+        ai_review={
+            "status": "unavailable",
+            "items_by_family": {
+                "entry_split_order_plan": {
+                    "guard_accepted": False,
+                    "guard_reject_reason": "ai_unavailable",
+                    "guard_decision": {
+                        "guard_reject_reason": "ai_unavailable",
+                        "route_action": "deterministic_only",
+                    },
+                },
+                "scale_in_split_order_plan": {
+                    "guard_accepted": False,
+                    "guard_reject_reason": "ai_unavailable",
+                    "guard_decision": {
+                        "guard_reject_reason": "ai_unavailable",
+                        "route_action": "deterministic_only",
+                    },
+                },
+            },
+        },
+        require_ai=True,
+        target_date="2026-07-08",
+    )
+
+    assert [item["family"] for item in selected] == [
+        "entry_split_order_plan",
+        "scale_in_split_order_plan",
+    ]
+    assert [item["decision_reason"] for item in decisions] == [
+        "deterministic_policy_handoff",
+        "deterministic_policy_handoff",
+    ]
+    assert env["KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED"] == "true"
+    assert env["KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE"] == entry_policy_file
+    assert env["KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED"] == "true"
+    assert env["KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_FILE"] == scale_policy_file
+
+
+def test_scale_in_split_order_plan_does_not_close_pyramid_quality_guard(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", tmp_path / "runtime_env")
+    split_policy_file = "/tmp/scale_in_split_order_policy_2026-07-07.json"
+    selected = [
+        {
+            "family": mod.REAL_PYRAMID_SCALE_IN_QUALITY_GUARD_FAMILY,
+            "stage": "scale_in",
+            "calibration_state": "operator_locked",
+        },
+        {
+            "family": "scale_in_split_order_plan",
+            "stage": "scale_in",
+            "calibration_state": "adjust_up",
+        },
+    ]
+    decisions = [
+        {
+            "family": mod.REAL_PYRAMID_SCALE_IN_QUALITY_GUARD_FAMILY,
+            "selected": True,
+            "decision_reason": "operator_runtime_env_lock_preserved",
+            "env_overrides": {
+                "KORSTOCKSCAN_REAL_PYRAMID_MICRO_CONTEXT_GUARD_ENABLED": "true",
+            },
+        },
+        {
+            "family": "scale_in_split_order_plan",
+            "selected": True,
+            "decision_reason": "deterministic_policy_handoff",
+            "env_overrides": {
+                "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED": "true",
+                "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_FILE": split_policy_file,
+            },
+        },
+    ]
+    env = {
+        "KORSTOCKSCAN_REAL_PYRAMID_MICRO_CONTEXT_GUARD_ENABLED": "true",
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED": "true",
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_FILE": split_policy_file,
+    }
+
+    owner = mod._scale_in_live_owner_family(selected)
+    next_selected, next_decisions, next_env = mod._close_real_pyramid_scale_in_quality_guard_for_live_owner(
+        selected=selected,
+        decisions=decisions,
+        env_overrides=env,
+        owner_family=owner,
+    )
+
+    assert owner == ""
+    assert [item["family"] for item in next_selected] == [
+        mod.REAL_PYRAMID_SCALE_IN_QUALITY_GUARD_FAMILY,
+        "scale_in_split_order_plan",
+    ]
+    assert next_decisions == decisions
+    assert next_env == env
 
 
 def test_scalping_pyramid_quality_gate_candidate_ai_guard_reject_blocks_env(monkeypatch, tmp_path):

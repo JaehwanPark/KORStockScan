@@ -487,6 +487,13 @@ PRESET_TP_SOFT_STOP_ENV_KEYS = frozenset(
     }
 )
 
+DETERMINISTIC_POLICY_HANDOFF_FAMILIES = frozenset(
+    {
+        "entry_split_order_plan",
+        "scale_in_split_order_plan",
+    }
+)
+
 
 def _load_json(path: Path) -> dict[str, Any]:
     try:
@@ -1287,6 +1294,7 @@ def _env_overrides_for_candidate(candidate: dict[str, Any]) -> dict[str, str]:
         "lifecycle_decision_matrix_runtime",
         ENTRY_BRIDGE_FAMILY,
         SCALE_IN_BRIDGE_FAMILY,
+        *DETERMINISTIC_POLICY_HANDOFF_FAMILIES,
         "lifecycle_bucket_discovery_sim_auto_approval",
         "scalp_sim_auto_approval",
         "swing_sim_auto_approval",
@@ -2280,10 +2288,13 @@ def _select_swing_sim_auto_approval(bundle: dict[str, Any]) -> tuple[list[dict[s
 
 
 def _ai_guard_allows_candidate(candidate: dict[str, Any], ai_review: dict[str, Any], *, require_ai: bool) -> tuple[bool, str]:
-    if str(candidate.get("family") or "") == "latency_classifier_runtime_profile":
+    family = str(candidate.get("family") or "")
+    if family in DETERMINISTIC_POLICY_HANDOFF_FAMILIES:
+        return (True, "deterministic_policy_handoff")
+    if family == "latency_classifier_runtime_profile":
         return (True, "deterministic_latency_classifier_recommendation")
     items_by_family = ai_review.get("items_by_family") if isinstance(ai_review.get("items_by_family"), dict) else {}
-    item = items_by_family.get(str(candidate.get("family") or ""))
+    item = items_by_family.get(family)
     if not item:
         return (not require_ai, "ai_review_missing" if require_ai else "ai_review_missing_deterministic_allowed")
     guard_decision = item.get("guard_decision") if isinstance(item.get("guard_decision"), dict) else {}
@@ -2844,7 +2855,7 @@ def _scale_in_live_owner_family(*selected_groups: list[dict[str, Any]]) -> str:
             if not isinstance(item, dict):
                 continue
             family = str(item.get("family") or "")
-            if family == REAL_PYRAMID_SCALE_IN_QUALITY_GUARD_FAMILY:
+            if family in {REAL_PYRAMID_SCALE_IN_QUALITY_GUARD_FAMILY, "scale_in_split_order_plan"}:
                 continue
             stage = str(item.get("stage") or "")
             if stage == "scale_in":

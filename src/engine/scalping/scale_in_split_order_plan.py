@@ -27,14 +27,14 @@ POLICY_MODE_BOUNDED_EQUAL_BASELINE = "bounded_equal_scale_in_split_baseline"
 POLICY_MODE_COUNTERFACTUAL_TICK_BAND = "counterfactual_tick_band_selector"
 POLICY_MODE_MARKET_QTY_SPLIT_ONLY = "market_qty_split_only"
 POLICY_MODE_DIAGNOSTIC_THREE_LEG = "diagnostic_three_leg_tick_band"
-BASELINE_SPLIT_VARIANT_ID = "scale_in_equal_50_50_offset_0_1tick"
-COUNTERFACTUAL_70_30_VARIANT_ID = "scale_in_counterfactual_70_30_offset_0_1tick"
-COUNTERFACTUAL_50_50_VARIANT_ID = "scale_in_counterfactual_50_50_offset_0_1tick"
-COUNTERFACTUAL_60_40_VARIANT_ID = "scale_in_counterfactual_60_40_offset_0_2tick"
+BASELINE_SPLIT_VARIANT_ID = "scale_in_equal_50_50_offset_0pct_1pct"
+COUNTERFACTUAL_70_30_VARIANT_ID = "scale_in_counterfactual_70_30_offset_0pct_0_5pct"
+COUNTERFACTUAL_50_50_VARIANT_ID = "scale_in_counterfactual_50_50_offset_0pct_1pct"
+COUNTERFACTUAL_60_40_VARIANT_ID = "scale_in_counterfactual_60_40_offset_0pct_1_5pct"
 MARKET_QTY_SPLIT_VARIANT_ID = "scale_in_market_qty_split_50_50"
-DIAGNOSTIC_THREE_LEG_VARIANT_ID = "scale_in_diagnostic_50_25_25_offset_0_1_2tick"
-RUNTIME_FALLBACK_POLICY_MODE = "runtime_default_scale_in_equal_50_50_1tick"
-RUNTIME_FALLBACK_VARIANT_ID = "runtime_default_scale_in_equal_50_50_offset_0_1tick"
+DIAGNOSTIC_THREE_LEG_VARIANT_ID = "scale_in_diagnostic_50_25_25_offset_0pct_1pct_1_5pct"
+RUNTIME_FALLBACK_POLICY_MODE = "runtime_default_scale_in_equal_50_50_1pct"
+RUNTIME_FALLBACK_VARIANT_ID = "runtime_default_scale_in_equal_50_50_offset_0pct_1pct"
 COUNTERFACTUAL_WINDOW_SEC = 180
 ANCHOR_RECONSTRUCT_WINDOW_SEC = 5
 
@@ -423,9 +423,13 @@ def _counterfactual_for_anchor(
         "min_observed_price": None,
         "max_observed_price": None,
         "down_ticks_reached": None,
+        "down_pct_reached": None,
         "touch_0tick": False,
         "touch_1tick": False,
         "touch_2tick": False,
+        "touch_0_5pct": False,
+        "touch_1_0pct": False,
+        "touch_1_5pct": False,
         "missed_upside_proxy": False,
     }
     if anchor_time is None or not code or base_price <= 0 or order_market_like:
@@ -454,15 +458,20 @@ def _counterfactual_for_anchor(
     if min_price is None:
         return result
     down_ticks = max(0, int((base_price - min_price) // tick))
+    down_pct = max(0.0, round(((base_price - min_price) / base_price) * 100.0, 4))
     result.update(
         {
             "observed": True,
             "min_observed_price": min_price,
             "max_observed_price": max_price,
             "down_ticks_reached": down_ticks,
+            "down_pct_reached": down_pct,
             "touch_0tick": min_price <= base_price,
             "touch_1tick": min_price <= base_price - tick,
             "touch_2tick": min_price <= base_price - (2 * tick),
+            "touch_0_5pct": down_pct >= 0.5,
+            "touch_1_0pct": down_pct >= 1.0,
+            "touch_1_5pct": down_pct >= 1.5,
             "missed_upside_proxy": min_price > base_price - tick and (max_price or 0) >= base_price + tick,
         }
     )
@@ -510,6 +519,11 @@ def _counterfactual_summary(bucket_rows: list[dict[str, Any]], all_events: list[
         for item in observed
         if item.get("down_ticks_reached") is not None
     ]
+    down_pct_values = [
+        _safe_float(item.get("down_pct_reached"), 0.0) or 0.0
+        for item in observed
+        if item.get("down_pct_reached") is not None
+    ]
     return {
         "counterfactual_anchor_count": len(anchor_results),
         "post_submit_observed_sample": len(observed),
@@ -519,9 +533,14 @@ def _counterfactual_summary(bucket_rows: list[dict[str, Any]], all_events: list[
         "min_observed_price": min(min_observed_values) if min_observed_values else None,
         "max_down_ticks_reached": max(down_ticks_values) if down_ticks_values else None,
         "avg_down_ticks_reached": round(sum(down_ticks_values) / len(down_ticks_values), 4) if down_ticks_values else None,
+        "max_down_pct_reached": max(down_pct_values) if down_pct_values else None,
+        "avg_down_pct_reached": round(sum(down_pct_values) / len(down_pct_values), 4) if down_pct_values else None,
         "touch_0tick_rate": rate("touch_0tick"),
         "touch_1tick_rate": rate("touch_1tick"),
         "touch_2tick_rate": rate("touch_2tick"),
+        "touch_0_5pct_rate": rate("touch_0_5pct"),
+        "touch_1_0pct_rate": rate("touch_1_0pct"),
+        "touch_1_5pct_rate": rate("touch_1_5pct"),
         "missed_upside_proxy_rate": rate("missed_upside_proxy"),
         "anchor_samples": anchor_results[:20],
     }
@@ -535,6 +554,7 @@ def _selected_policy_from_counterfactual(summary: dict[str, Any]) -> dict[str, A
         return {
             "leg_count": 2,
             "price_offsets_ticks": "market",
+            "price_offsets_pct": "market",
             "qty_weights": [0.5, 0.5],
             "qty_weight_min": 0.5,
             "qty_weight_max": 0.5,
@@ -547,6 +567,7 @@ def _selected_policy_from_counterfactual(summary: dict[str, Any]) -> dict[str, A
         return {
             "leg_count": 2,
             "price_offsets_ticks": [0, 1],
+            "price_offsets_pct": [0.0, 1.0],
             "qty_weights": [0.5, 0.5],
             "qty_weight_min": 0.5,
             "qty_weight_max": 0.5,
@@ -557,40 +578,59 @@ def _selected_policy_from_counterfactual(summary: dict[str, Any]) -> dict[str, A
         }
     touch1 = _safe_float(summary.get("touch_1tick_rate"), 0.0) or 0.0
     touch2 = _safe_float(summary.get("touch_2tick_rate"), 0.0) or 0.0
+    touch05pct = _safe_float(summary.get("touch_0_5pct_rate"), 0.0) or 0.0
+    touch1pct = _safe_float(summary.get("touch_1_0pct_rate"), 0.0) or 0.0
+    touch15pct = _safe_float(summary.get("touch_1_5pct_rate"), 0.0) or 0.0
     missed = _safe_float(summary.get("missed_upside_proxy_rate"), 0.0) or 0.0
-    if touch1 >= 0.70 and touch2 >= 0.40 and missed < 0.40:
+    if touch15pct >= 0.25 and missed < 0.40:
         return {
             "leg_count": 2,
             "price_offsets_ticks": [0, 2],
+            "price_offsets_pct": [0.0, 1.5],
             "qty_weights": [0.6, 0.4],
             "qty_weight_min": 0.6,
             "qty_weight_max": 0.4,
             "policy_mode": POLICY_MODE_COUNTERFACTUAL_TICK_BAND,
             "split_variant_id": COUNTERFACTUAL_60_40_VARIANT_ID,
-            "selection_reason": "touch_1tick_and_2tick_high_with_low_missed_upside",
+            "selection_reason": "touch_1_5pct_high_with_low_missed_upside",
             "runtime_apply_allowed": True,
         }
-    if touch1 < 0.30 or missed >= 0.40:
+    if touch05pct < 0.30 or touch1 < 0.30 or missed >= 0.40:
         return {
             "leg_count": 2,
             "price_offsets_ticks": [0, 1],
+            "price_offsets_pct": [0.0, 0.5],
             "qty_weights": [0.7, 0.3],
             "qty_weight_min": 0.7,
             "qty_weight_max": 0.3,
             "policy_mode": POLICY_MODE_COUNTERFACTUAL_TICK_BAND,
             "split_variant_id": COUNTERFACTUAL_70_30_VARIANT_ID,
-            "selection_reason": "touch_1tick_low_or_missed_upside_high",
+            "selection_reason": "touch_0_5pct_low_or_missed_upside_high",
+            "runtime_apply_allowed": True,
+        }
+    if touch1pct >= 0.40 or (touch1 >= 0.70 and touch2 >= 0.40):
+        return {
+            "leg_count": 2,
+            "price_offsets_ticks": [0, 1],
+            "price_offsets_pct": [0.0, 1.0],
+            "qty_weights": [0.5, 0.5],
+            "qty_weight_min": 0.5,
+            "qty_weight_max": 0.5,
+            "policy_mode": POLICY_MODE_COUNTERFACTUAL_TICK_BAND,
+            "split_variant_id": COUNTERFACTUAL_50_50_VARIANT_ID,
+            "selection_reason": "touch_1pct_ready_or_tick_band_high",
             "runtime_apply_allowed": True,
         }
     return {
         "leg_count": 2,
         "price_offsets_ticks": [0, 1],
+        "price_offsets_pct": [0.0, 1.0],
         "qty_weights": [0.5, 0.5],
         "qty_weight_min": 0.5,
         "qty_weight_max": 0.5,
         "policy_mode": POLICY_MODE_COUNTERFACTUAL_TICK_BAND,
         "split_variant_id": COUNTERFACTUAL_50_50_VARIANT_ID,
-        "selection_reason": "touch_1tick_mid_range",
+        "selection_reason": "touch_0_5pct_mid_range_pct_baseline",
         "runtime_apply_allowed": True,
     }
 
@@ -606,6 +646,7 @@ def _diagnostic_three_leg_candidate(bucket: str, summary: dict[str, Any]) -> dic
         "context_bucket": bucket,
         "leg_count": 3,
         "price_offsets_ticks": [0, 1, 2],
+        "price_offsets_pct": [0.0, 1.0, 1.5],
         "qty_weights": [0.5, 0.25, 0.25],
         "qty_weight_min": 0.5,
         "qty_weight_max": 0.25,
@@ -626,6 +667,7 @@ def _candidate_for_bucket(bucket: str, rows: list[dict[str, Any]], all_events: l
         "context_bucket": bucket,
         "leg_count": selected["leg_count"],
         "price_offsets_ticks": selected["price_offsets_ticks"],
+        "price_offsets_pct": selected.get("price_offsets_pct"),
         "qty_weights": selected.get("qty_weights"),
         "qty_weight_min": selected["qty_weight_min"],
         "qty_weight_max": selected["qty_weight_max"],
@@ -652,6 +694,9 @@ def _candidate_for_bucket(bucket: str, rows: list[dict[str, Any]], all_events: l
             "touch_0tick_rate": counterfactual.get("touch_0tick_rate"),
             "touch_1tick_rate": counterfactual.get("touch_1tick_rate"),
             "touch_2tick_rate": counterfactual.get("touch_2tick_rate"),
+            "touch_0_5pct_rate": counterfactual.get("touch_0_5pct_rate"),
+            "touch_1_0pct_rate": counterfactual.get("touch_1_0pct_rate"),
+            "touch_1_5pct_rate": counterfactual.get("touch_1_5pct_rate"),
             "missed_upside_proxy_rate": counterfactual.get("missed_upside_proxy_rate"),
         },
         **counterfactual,
@@ -659,7 +704,20 @@ def _candidate_for_bucket(bucket: str, rows: list[dict[str, Any]], all_events: l
 
 
 def _build_policy(target_date: str, candidates: list[dict[str, Any]]) -> dict[str, Any]:
-    policy_version = f"{RUNTIME_FAMILY}:{target_date}:{_policy_hash(candidates)}"
+    default_bucket = {
+        "context_bucket": "default",
+        "leg_count": 2,
+        "price_offsets_ticks": [0, 1],
+        "price_offsets_pct": [0.0, 1.0],
+        "qty_weights": [0.5, 0.5],
+        "qty_weight_min": 0.5,
+        "qty_weight_max": 0.5,
+        "policy_mode": POLICY_MODE_BOUNDED_EQUAL_BASELINE,
+        "split_variant_id": BASELINE_SPLIT_VARIANT_ID,
+        "selection_reason": "default_qty_preserving_baseline",
+        "runtime_apply_allowed": True,
+    }
+    policy_version = f"{RUNTIME_FAMILY}:{target_date}:{_policy_hash(candidates, default_bucket=default_bucket)}"
     return {
         "schema_version": POLICY_SCHEMA_VERSION,
         "policy_version": policy_version,
@@ -673,24 +731,17 @@ def _build_policy(target_date: str, candidates: list[dict[str, Any]]) -> dict[st
             "quantity_authority": "describe_dynamic_scale_in_qty",
             "forbidden_uses": "quantity_expansion|cap_release|broker_guard_bypass|stale_quote_bypass|provider_route_change|bot_restart",
         },
-        "default_bucket": {
-            "context_bucket": "default",
-            "leg_count": 2,
-            "price_offsets_ticks": [0, 1],
-            "qty_weights": [0.5, 0.5],
-            "qty_weight_min": 0.5,
-            "qty_weight_max": 0.5,
-            "policy_mode": POLICY_MODE_BOUNDED_EQUAL_BASELINE,
-            "split_variant_id": BASELINE_SPLIT_VARIANT_ID,
-            "selection_reason": "default_qty_preserving_baseline",
-            "runtime_apply_allowed": True,
-        },
+        "default_bucket": default_bucket,
         "buckets": {str(item["context_bucket"]): item for item in candidates},
     }
 
 
-def _policy_hash(candidates: list[dict[str, Any]]) -> str:
-    raw = json.dumps(candidates, ensure_ascii=False, sort_keys=True)
+def _policy_hash(candidates: list[dict[str, Any]], *, default_bucket: dict[str, Any] | None = None) -> str:
+    raw = json.dumps(
+        {"candidates": candidates, "default_bucket": default_bucket or {}},
+        ensure_ascii=False,
+        sort_keys=True,
+    )
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
 
 
@@ -901,6 +952,7 @@ def _runtime_default_bucket_policy(bucket: str) -> dict[str, Any]:
         "context_bucket": bucket,
         "leg_count": 2,
         "price_offsets_ticks": [0, 1],
+        "price_offsets_pct": [0.0, 1.0],
         "qty_weights": [0.5, 0.5],
         "qty_weight_min": 0.5,
         "qty_weight_max": 0.5,
@@ -960,6 +1012,13 @@ def _tick_size(price: int) -> int:
         return max(1, int(get_tick_size(price) or 1))
     except Exception:
         return 1
+
+
+def _pct_price_offset(base_price: int, offset_pct: float) -> int:
+    if base_price <= 0:
+        return 0
+    raw_price = int(round(float(base_price) * max(0.0, 1.0 - (float(offset_pct or 0.0) / 100.0))))
+    return clamp_price_to_tick(max(1, raw_price))
 
 
 def apply_scale_in_split_order_policy(
@@ -1034,6 +1093,13 @@ def apply_scale_in_split_order_policy(
         offsets = [0, 1][:desired_legs]
     while len(offsets) < desired_legs:
         offsets.append(len(offsets))
+    raw_pct_offsets = bucket_policy.get("price_offsets_pct")
+    pct_offsets = [
+        max(0.0, _safe_float(item, 0.0) or 0.0)
+        for item in raw_pct_offsets
+    ][:desired_legs] if isinstance(raw_pct_offsets, list) else []
+    while pct_offsets and len(pct_offsets) < desired_legs:
+        pct_offsets.append(pct_offsets[-1])
     raw_weights = bucket_policy.get("qty_weights")
     qty_weights = [
         _safe_float(item, 0.0) or 0.0
@@ -1048,7 +1114,13 @@ def apply_scale_in_split_order_policy(
     tick = _tick_size(base_price) if base_price > 0 else 1
     split_orders = []
     for idx, leg_qty in enumerate(quantities):
-        price = 0 if market_order else clamp_price_to_tick(max(1, base_price - (tick * offsets[idx])))
+        price = (
+            0
+            if market_order
+            else _pct_price_offset(base_price, pct_offsets[idx])
+            if pct_offsets
+            else clamp_price_to_tick(max(1, base_price - (tick * offsets[idx])))
+        )
         split_orders.append(
             {
                 **base_order,
@@ -1063,6 +1135,9 @@ def apply_scale_in_split_order_policy(
                 "scale_in_split_order_market_order_applied": market_order,
                 "scale_in_split_order_price_offsets_ticks": (
                     "market" if market_order else ",".join(str(item) for item in offsets)
+                ),
+                "scale_in_split_order_price_offsets_pct": (
+                    "market" if market_order else ",".join(str(item) for item in pct_offsets) if pct_offsets else ""
                 ),
                 "scale_in_split_order_qty_weight_min": first_weight,
                 "scale_in_split_order_qty_weight_max": _safe_float(bucket_policy.get("qty_weight_max"), first_weight),
@@ -1088,6 +1163,9 @@ def apply_scale_in_split_order_policy(
             "scale_in_split_order_market_order_applied": market_order,
             "scale_in_split_order_price_offsets_ticks": (
                 "market" if market_order else ",".join(str(item) for item in offsets)
+            ),
+            "scale_in_split_order_price_offsets_pct": (
+                "market" if market_order else ",".join(str(item) for item in pct_offsets) if pct_offsets else ""
             ),
             "scale_in_split_order_qty_weight_min": first_weight,
             "scale_in_split_order_qty_weight_max": _safe_float(bucket_policy.get("qty_weight_max"), first_weight),

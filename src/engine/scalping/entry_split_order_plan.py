@@ -33,10 +33,10 @@ POST_SUBMIT_LOW_WINDOW_MINUTES = 10
 POLICY_MODE_REAL_PRIMARY_EV = "real_primary_ev_optimized"
 POLICY_MODE_BOUNDED_EQUAL_BASELINE = "bounded_equal_split_baseline"
 POLICY_MODE_POST_SUBMIT_TICK_BAND = "post_submit_tick_band_seed"
-BASELINE_SPLIT_VARIANT_ID = "equal_50_50_offset_0_1tick"
-TICK_BAND_3LEG_VARIANT_ID = "equal_3leg_offset_0_1_2tick"
-RUNTIME_FALLBACK_POLICY_MODE = "runtime_default_equal_50_50_1tick"
-RUNTIME_FALLBACK_VARIANT_ID = "runtime_default_equal_50_50_offset_0_1tick"
+BASELINE_SPLIT_VARIANT_ID = "equal_50_50_offset_0pct_1pct"
+PCT_BAND_3LEG_VARIANT_ID = "equal_3leg_offset_0pct_1pct_1_5pct"
+RUNTIME_FALLBACK_POLICY_MODE = "runtime_default_equal_50_50_1pct"
+RUNTIME_FALLBACK_VARIANT_ID = "runtime_default_equal_50_50_offset_0pct_1pct"
 ALLOWED_PRICE_CANDIDATES = {
     "resolved_order_price",
     "best_bid",
@@ -315,6 +315,7 @@ def _template_for_bucket(bucket: str) -> dict[str, Any]:
         "urgent_tight_spread": {
             "leg_count": 2,
             "price_offsets_ticks": [0, 1],
+            "price_offsets_pct": [0.0, 0.5],
             "qty_weight_min": 0.65,
             "qty_weight_max": 0.85,
             "urgency_score": 0.82,
@@ -324,6 +325,7 @@ def _template_for_bucket(bucket: str) -> dict[str, Any]:
         "balanced_normal": {
             "leg_count": 2,
             "price_offsets_ticks": [0, 1],
+            "price_offsets_pct": [0.0, 1.0],
             "qty_weight_min": 0.55,
             "qty_weight_max": 0.70,
             "urgency_score": 0.55,
@@ -333,6 +335,7 @@ def _template_for_bucket(bucket: str) -> dict[str, Any]:
         "passive_wide_or_weak": {
             "leg_count": 3,
             "price_offsets_ticks": [0, 1, 2],
+            "price_offsets_pct": [0.0, 1.0, 1.5],
             "qty_weight_min": 0.30,
             "qty_weight_max": 0.50,
             "urgency_score": 0.30,
@@ -342,6 +345,7 @@ def _template_for_bucket(bucket: str) -> dict[str, Any]:
         "guarded_or_stale": {
             "leg_count": 1,
             "price_offsets_ticks": [0],
+            "price_offsets_pct": [0.0],
             "qty_weight_min": 1.0,
             "qty_weight_max": 1.0,
             "urgency_score": 0.0,
@@ -358,6 +362,7 @@ def _bounded_equal_split_template(bucket: str) -> dict[str, Any]:
         {
             "leg_count": 2,
             "price_offsets_ticks": [0, 1],
+            "price_offsets_pct": [0.0, 1.0],
             "qty_weight_min": 0.5,
             "qty_weight_max": 0.5,
             "price_candidates": ["resolved_order_price", "best_bid", "bid-1tick"],
@@ -377,13 +382,21 @@ def _post_submit_tick_band_template(bucket: str, tick_band: dict[str, Any]) -> d
             {
                 "leg_count": 3,
                 "price_offsets_ticks": [0, 1, 2],
+                "price_offsets_pct": [0.0, 1.0, 1.5],
                 "qty_weight_min": 0.34,
                 "qty_weight_max": 0.34,
                 "price_candidates": ["resolved_order_price", "best_bid", "bid-1tick", "bid-2tick"],
-                "split_variant_id": TICK_BAND_3LEG_VARIANT_ID,
+                "split_variant_id": PCT_BAND_3LEG_VARIANT_ID,
             }
         )
     return template
+
+
+def _pct_price_offset(base_price: int, offset_pct: float) -> int:
+    if base_price <= 0:
+        return 0
+    raw_price = int(round(float(base_price) * max(0.0, 1.0 - (float(offset_pct or 0.0) / 100.0))))
+    return clamp_price_to_tick(max(1, raw_price))
 
 
 def _percentile(values: list[int], pct: float) -> float:
@@ -448,6 +461,7 @@ def _build_post_submit_low_tick_bands(
         grouped[(record_id, code)].append(fields)
 
     down_ticks_by_bucket: dict[str, list[int]] = defaultdict(list)
+    down_pct_by_bucket: dict[str, list[float]] = defaultdict(list)
     for group in grouped.values():
         dated = [(item, _event_dt(item)) for item in group]
         for submit, submit_dt in dated:
@@ -475,11 +489,15 @@ def _build_post_submit_low_tick_bands(
             low_price = min(observed_prices)
             tick = max(1, int(get_tick_size(submit_price) or 1))
             down_ticks = max(0, int(math.ceil((submit_price - low_price) / tick)))
-            down_ticks_by_bucket[_context_bucket(submit)].append(down_ticks)
+            down_pct = max(0.0, ((submit_price - low_price) / submit_price) * 100.0)
+            bucket = _context_bucket(submit)
+            down_ticks_by_bucket[bucket].append(down_ticks)
+            down_pct_by_bucket[bucket].append(down_pct)
 
     result: dict[str, dict[str, Any]] = {}
     for bucket, values in down_ticks_by_bucket.items():
         sample = len(values)
+        pct_values = down_pct_by_bucket.get(bucket) or []
         result[bucket] = {
             "sample_count": sample,
             "window_minutes": int(window_minutes),
@@ -490,6 +508,18 @@ def _build_post_submit_low_tick_bands(
             "max_down_ticks": max(values) if values else 0,
             "touch_1tick_rate": _pct(sum(1 for value in values if value >= 1), sample),
             "touch_2tick_rate": _pct(sum(1 for value in values if value >= 2), sample),
+            "p50_down_pct": round(_percentile([int(value * 10000) for value in pct_values], 50) / 10000.0, 4)
+            if pct_values
+            else 0.0,
+            "p75_down_pct": round(_percentile([int(value * 10000) for value in pct_values], 75) / 10000.0, 4)
+            if pct_values
+            else 0.0,
+            "p90_down_pct": round(_percentile([int(value * 10000) for value in pct_values], 90) / 10000.0, 4)
+            if pct_values
+            else 0.0,
+            "touch_0_5pct_rate": _pct(sum(1 for value in pct_values if value >= 0.5), sample),
+            "touch_1_0pct_rate": _pct(sum(1 for value in pct_values if value >= 1.0), sample),
+            "touch_1_5pct_rate": _pct(sum(1 for value in pct_values if value >= 1.5), sample),
             "no_pullback_rate": _pct(sum(1 for value in values if value <= 0), sample),
         }
     return result
@@ -625,7 +655,7 @@ def _build_candidate_grid(
                 policy_mode = POLICY_MODE_BOUNDED_EQUAL_BASELINE
                 policy_generation_reason = (
                     "real submit sample floor passed, split-variant outcome is pending, and execution guards allow "
-                    "a qty-preserving 2-leg 50/50 1tick baseline"
+                    "a qty-preserving 2-leg 50/50 1pct baseline"
                 )
         elif real_count < SAMPLE_FLOOR_REAL:
             floor_status = "hold_sample"
@@ -709,6 +739,7 @@ def _policy_payload(target_date: str, report_json: Path, candidate_grid: list[di
                 "context_bucket": item["context_bucket"],
                 "leg_count": item["leg_count"],
                 "price_offsets_ticks": item["price_offsets_ticks"],
+                "price_offsets_pct": item.get("price_offsets_pct"),
                 "qty_weight_min": item["qty_weight_min"],
                 "qty_weight_max": item["qty_weight_max"],
                 "urgency_score": item["urgency_score"],
@@ -772,7 +803,7 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
             "source_quality_gate": "observation_source_quality_audit_hard_block_rows_excluded",
             "policy_modes": {
                 POLICY_MODE_REAL_PRIMARY_EV: "real split-variant outcome EV-positive optimized split",
-                POLICY_MODE_BOUNDED_EQUAL_BASELINE: "real-submit-backed qty-preserving 2-leg 50/50 1tick baseline",
+                POLICY_MODE_BOUNDED_EQUAL_BASELINE: "real-submit-backed qty-preserving 2-leg 50/50 1pct baseline",
                 POLICY_MODE_POST_SUBMIT_TICK_BAND: "post-submit observed-low tick-band qty-preserving seed",
             },
             "post_submit_low_tick_band_contract": {
@@ -930,11 +961,12 @@ def _runtime_default_bucket_policy(bucket: str) -> dict[str, Any]:
         "context_bucket": bucket,
         "leg_count": 2,
         "price_offsets_ticks": [0, 1],
+        "price_offsets_pct": [0.0, 1.0],
         "qty_weight_min": 0.5,
         "qty_weight_max": 0.5,
         "policy_mode": RUNTIME_FALLBACK_POLICY_MODE,
         "split_variant_id": RUNTIME_FALLBACK_VARIANT_ID,
-        "policy_generation_reason": "runtime fallback for policy bucket gap; qty-preserving 50/50 1tick seed",
+        "policy_generation_reason": "runtime fallback for policy bucket gap; qty-preserving 50/50 1pct seed",
     }
 
 
@@ -1040,9 +1072,20 @@ def apply_entry_split_order_policy(
     first_weight = (_safe_float(bucket_policy.get("qty_weight_min"), 0.5) or 0.5)
     quantities = _split_qty(total_qty, desired_legs, first_weight)
     applied_offsets = offsets[:desired_legs]
+    raw_pct_offsets = bucket_policy.get("price_offsets_pct")
+    pct_offsets = [
+        max(0.0, _safe_float(item, 0.0) or 0.0)
+        for item in raw_pct_offsets
+    ][:desired_legs] if isinstance(raw_pct_offsets, list) else []
+    while pct_offsets and len(pct_offsets) < desired_legs:
+        pct_offsets.append(pct_offsets[-1])
     split_orders: list[dict[str, Any]] = []
     for idx, qty in enumerate(quantities):
-        price = clamp_price_to_tick(max(1, base_price - (tick * offsets[idx])))
+        price = (
+            _pct_price_offset(base_price, pct_offsets[idx])
+            if pct_offsets
+            else clamp_price_to_tick(max(1, base_price - (tick * offsets[idx])))
+        )
         split_orders.append(
             {
                 **base_order,
@@ -1056,6 +1099,7 @@ def apply_entry_split_order_policy(
                 "entry_split_order_bucket": bucket,
                 "entry_split_order_runtime_default_policy_applied": fallback_policy_applied,
                 "entry_split_order_price_offsets_ticks": ",".join(str(item) for item in applied_offsets),
+                "entry_split_order_price_offsets_pct": ",".join(str(item) for item in pct_offsets) if pct_offsets else "",
                 "entry_split_order_qty_weight_min": first_weight,
                 "entry_split_order_qty_weight_max": _safe_float(bucket_policy.get("qty_weight_max"), first_weight),
             }
@@ -1077,6 +1121,7 @@ def apply_entry_split_order_policy(
             "entry_split_order_leg_count": len(split_orders),
             "entry_split_order_split_qty": sum(_safe_int(item.get("qty"), 0) for item in split_orders),
             "entry_split_order_price_offsets_ticks": ",".join(str(item) for item in applied_offsets),
+            "entry_split_order_price_offsets_pct": ",".join(str(item) for item in pct_offsets) if pct_offsets else "",
             "entry_split_order_qty_weight_min": first_weight,
             "entry_split_order_qty_weight_max": _safe_float(bucket_policy.get("qty_weight_max"), first_weight),
         }
