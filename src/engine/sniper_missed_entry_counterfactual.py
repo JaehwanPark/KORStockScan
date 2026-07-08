@@ -235,7 +235,18 @@ def _parse_event_dt(value) -> datetime | None:
         return None
 
 
-def _parse_minute_time(value: str, signal_date: str) -> datetime | None:
+def _parse_minute_time(value: str, signal_date: str, source_timestamp: str | None = None) -> datetime | None:
+    source_text = str(source_timestamp or "").strip()
+    if source_text:
+        for fmt in ("%Y%m%d%H%M%S", "%Y-%m-%d %H:%M:%S"):
+            try:
+                return datetime.strptime(source_text[:14 if fmt == "%Y%m%d%H%M%S" else 19], fmt)
+            except Exception:
+                continue
+        try:
+            return datetime.fromisoformat(source_text)
+        except Exception:
+            pass
     try:
         return datetime.strptime(f"{signal_date} {value}", "%Y-%m-%d %H:%M:%S")
     except Exception:
@@ -611,7 +622,11 @@ def _compute_window_metrics(candidate: dict, candles: list[dict], window_minutes
 
     relevant: list[tuple[datetime, dict]] = []
     for candle in candles:
-        candle_dt = _parse_minute_time(str(candle.get("체결시간", "") or ""), candidate["signal_date"])
+        candle_dt = _parse_minute_time(
+            str(candle.get("체결시간", "") or ""),
+            candidate["signal_date"],
+            str(candle.get("source_timestamp", "") or ""),
+        )
         if candle_dt is None:
             continue
         if candle_dt < start_dt or candle_dt >= end_dt:

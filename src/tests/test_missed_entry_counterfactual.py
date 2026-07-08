@@ -5,14 +5,17 @@ import json
 from src.engine import sniper_missed_entry_counterfactual as report_mod
 
 
-def _make_candle(ts: str, open_p: int, high: int, low: int, close: int) -> dict:
-    return {
+def _make_candle(ts: str, open_p: int, high: int, low: int, close: int, *, source_timestamp: str = "") -> dict:
+    row = {
         "체결시간": ts,
         "시가": open_p,
         "고가": high,
         "저가": low,
         "현재가": close,
     }
+    if source_timestamp:
+        row["source_timestamp"] = source_timestamp
+    return row
 
 
 def _write_pipeline_events(tmp_path, target_date: str, rows: list[dict]) -> None:
@@ -32,6 +35,46 @@ def test_minute_forward_source_quality_marks_truncated_ka10080_window_partial():
     assert quality["minute_candle_source_quality"] == "partial_window"
     assert quality["minute_candle_source_quality_gate"] == "source_quality_warning"
     assert quality["minute_candle_source_quality_reason"] == "ka10080_truncated_window"
+
+
+def test_window_metrics_respects_ka10080_source_timestamp_date():
+    candidate = {
+        "signal_date": "2026-07-08",
+        "signal_time": "12:45:03",
+        "signal_price": 5710,
+    }
+    candles = [
+        _make_candle(
+            "12:46:00",
+            4775,
+            4775,
+            4775,
+            4775,
+            source_timestamp="20260707124600",
+        ),
+        _make_candle(
+            "12:46:00",
+            5620,
+            5720,
+            5620,
+            5680,
+            source_timestamp="20260708124600",
+        ),
+        _make_candle(
+            "12:47:00",
+            5690,
+            5800,
+            5660,
+            5800,
+            source_timestamp="20260708124700",
+        ),
+    ]
+
+    metrics = report_mod._compute_window_metrics(candidate, candles, 15)
+
+    assert metrics["bars"] == 2
+    assert metrics["mae_pct"] == -1.576
+    assert metrics["mfe_pct"] == 1.576
 
 
 def test_build_missed_entry_counterfactual_report(monkeypatch, tmp_path):
