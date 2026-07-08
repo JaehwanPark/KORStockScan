@@ -16586,24 +16586,24 @@ def _entry_ai_submit_authority_fields(
     latency_fields = latency_gate if isinstance(latency_gate, dict) else {}
     source_quality_fields = stock.get("last_watching_ai_source_quality_fields")
     source_quality_fields = source_quality_fields if isinstance(source_quality_fields, dict) else {}
-    score = _safe_float(
-        _entry_submit_field(
-            latency_fields,
-            submit_fields,
-            pre_ai_fields,
-            source_quality_fields,
-            stock,
-            key="ai_score",
-            aliases=(
-                "current_ai_score",
-                "last_watching_ai_score",
-                "entry_submit_ai_score",
-                "ai_score_after_bonus",
-            ),
-            default=latency_signal_score,
+    raw_score = _entry_submit_field(
+        latency_fields,
+        submit_fields,
+        pre_ai_fields,
+        source_quality_fields,
+        stock,
+        key="ai_score",
+        aliases=(
+            "current_ai_score",
+            "last_watching_ai_score",
+            "entry_submit_ai_score",
+            "ai_score_after_bonus",
         ),
-        0.0,
+        default=latency_signal_score,
     )
+    score = _safe_float(raw_score, 0.0)
+    if score <= 0.0:
+        score = _safe_float(stock.get("last_watching_ai_score"), score)
     raw_action = _entry_submit_field(
         latency_fields,
         submit_fields,
@@ -16615,6 +16615,8 @@ def _entry_ai_submit_authority_fields(
         default=None,
     )
     action = str(raw_action or "").strip()
+    if action.lower() in {"", "-", "none", "null", "nan", "nat", "not_evaluated"}:
+        action = str(stock.get("last_watching_ai_action") or action or "").strip()
     normalized_action = action.lower()
     result_source = str(
         _entry_submit_field(
@@ -16683,6 +16685,412 @@ def _entry_ai_submit_authority_fields(
             "broker_guard_bypass,stale_quote_bypass,tuning_auto_apply_authority"
         ),
     }
+
+
+def _pre_submit_micro_unavailable_guard_enabled() -> bool:
+    return _rule_bool("PRE_SUBMIT_MICRO_UNAVAILABLE_GUARD_ENABLED", True)
+
+
+def _pre_submit_micro_context_unavailable_reason(
+    *,
+    orderbook_fields: dict | None,
+    microstructure_fields: dict | None,
+) -> str:
+    orderbook_fields = orderbook_fields if isinstance(orderbook_fields, dict) else {}
+    microstructure_fields = microstructure_fields if isinstance(microstructure_fields, dict) else {}
+    tick_quality = str(microstructure_fields.get("tick_context_quality") or "").strip().lower()
+    tick_accel_source = str(microstructure_fields.get("tick_accel_source") or "").strip().lower()
+    pressure_usable = _truthy_field(microstructure_fields.get("tick_aggressor_pressure_usable"))
+    trusted_count = _safe_int(microstructure_fields.get("tick_aggressor_trusted_count"), 0)
+    micro_vwap_available = _truthy_field(microstructure_fields.get("micro_vwap_available"))
+    minute_quality = str(microstructure_fields.get("minute_candle_context_quality") or "").strip().lower()
+    minute_fresh = _truthy_field(microstructure_fields.get("minute_candle_window_fresh"))
+    orderbook_state = str(orderbook_fields.get("orderbook_micro_state") or "").strip().lower()
+    orderbook_reason = str(orderbook_fields.get("orderbook_micro_reason") or "").strip().lower()
+    orderbook_ready = _truthy_field(orderbook_fields.get("orderbook_micro_ready"))
+
+    tick_context_bad = tick_quality in {
+        "",
+        "-",
+        "unknown",
+        "not_evaluated",
+        "missing_ticks",
+        "accel_insufficient_ticks",
+        "stale_tick",
+    }
+    tick_accel_bad = tick_accel_source in {
+        "",
+        "-",
+        "unknown",
+        "not_evaluated",
+        "insufficient_ticks",
+    }
+    micro_vwap_bad = not micro_vwap_available
+    pressure_bad = not pressure_usable and trusted_count <= 0
+    orderbook_bad = (
+        not orderbook_ready
+        and orderbook_state in {"", "missing", "insufficient", "unavailable", "not_evaluated"}
+        and orderbook_reason in {
+            "",
+            "micro_context_missing",
+            "missing_snapshot",
+            "insufficient_samples",
+            "not_evaluated",
+            "unavailable",
+        }
+    )
+    minute_bad = minute_quality in {"", "-", "unknown", "missing", "not_evaluated"} and not minute_fresh
+
+    reasons = []
+    if micro_vwap_bad:
+        reasons.append("micro_vwap_missing")
+    if tick_context_bad:
+        reasons.append(f"tick_context_{tick_quality or 'missing'}")
+    if tick_accel_bad:
+        reasons.append(f"tick_accel_{tick_accel_source or 'missing'}")
+    if pressure_bad:
+        reasons.append("tick_aggressor_pressure_unusable")
+    if orderbook_bad:
+        reasons.append(f"orderbook_micro_{orderbook_reason or orderbook_state or 'missing'}")
+    if minute_bad:
+        reasons.append(f"minute_candle_{minute_quality or 'missing'}")
+
+    core_missing = bool(micro_vwap_bad and tick_context_bad and tick_accel_bad)
+    pressure_and_vwap_missing = bool(micro_vwap_bad and pressure_bad)
+    orderbook_only_missing = bool(orderbook_bad and tick_context_bad and tick_accel_bad)
+    if core_missing or pressure_and_vwap_missing or orderbook_only_missing:
+        return ",".join(reasons) if reasons else "micro_context_unavailable"
+    return ""
+
+
+def _pre_submit_micro_unavailable_guard_fields(
+    *,
+    strategy,
+    orderbook_fields: dict | None,
+    microstructure_fields: dict | None,
+) -> dict:
+    enabled = _pre_submit_micro_unavailable_guard_enabled()
+    reason = ""
+    if enabled and normalize_strategy(strategy) == "SCALPING":
+        reason = _pre_submit_micro_context_unavailable_reason(
+            orderbook_fields=orderbook_fields,
+            microstructure_fields=microstructure_fields,
+        )
+    blocked = bool(reason)
+    return {
+        "blocked": blocked,
+        "block_reason": reason or "ok",
+        "threshold_family": "pre_submit_micro_unavailable_guard",
+        "metric_role": "source_quality_gate" if blocked else "diagnostic",
+        "decision_authority": (
+            "real_buy_submit_source_quality_guard"
+            if blocked
+            else "pre_submit_micro_context_diagnostic_only"
+        ),
+        "source_quality_gate": "pre_submit_micro_context_contract",
+        "window_policy": "intraday_pre_submit",
+        "sample_floor": "not_applicable_runtime_guard",
+        "primary_decision_metric": "funnel_count",
+        "runtime_effect": bool(blocked),
+        "actual_order_submitted": False,
+        "broker_order_forbidden": bool(blocked),
+        "pre_submit_micro_unavailable_guard_enabled": bool(enabled),
+        "pre_submit_micro_unavailable_blocked": bool(blocked),
+        "pre_submit_micro_unavailable_reason": reason or "ok",
+        "pre_submit_micro_unavailable_micro_vwap_available": bool(
+            _truthy_field((microstructure_fields or {}).get("micro_vwap_available"))
+        ),
+        "pre_submit_micro_unavailable_tick_context_quality": str(
+            (microstructure_fields or {}).get("tick_context_quality") or "-"
+        ),
+        "pre_submit_micro_unavailable_tick_accel_source": str(
+            (microstructure_fields or {}).get("tick_accel_source") or "-"
+        ),
+        "pre_submit_micro_unavailable_tick_aggressor_pressure_usable": bool(
+            _truthy_field((microstructure_fields or {}).get("tick_aggressor_pressure_usable"))
+        ),
+        "pre_submit_micro_unavailable_orderbook_micro_state": str(
+            (orderbook_fields or {}).get("orderbook_micro_state") or "-"
+        ),
+        "pre_submit_micro_unavailable_orderbook_micro_reason": str(
+            (orderbook_fields or {}).get("orderbook_micro_reason") or "-"
+        ),
+        "allowed_runtime_apply": False,
+        "forbidden_uses": (
+            "score_threshold_mutation,provider_route_change,quantity_cap_release,"
+            "broker_guard_bypass,stale_quote_bypass,tuning_auto_apply_authority"
+        ),
+    }
+
+
+def _refresh_pre_submit_micro_context_before_block(
+    *,
+    stock,
+    code,
+    ws_data,
+    ai_engine,
+    now_ts: float,
+) -> dict:
+    fields = {
+        "pre_submit_micro_context_retry_attempted": False,
+        "pre_submit_micro_context_retry_success": False,
+        "pre_submit_micro_context_retry_reason": "not_attempted",
+        "pre_submit_micro_context_retry_tick_count": 0,
+        "pre_submit_micro_context_retry_candle_count": 0,
+    }
+    if ai_engine is None or not hasattr(ai_engine, "_extract_scalping_features"):
+        fields["pre_submit_micro_context_retry_reason"] = "feature_extractor_unavailable"
+        return fields
+    min_interval_sec = max(
+        0.0,
+        _safe_float(os.getenv("KORSTOCKSCAN_PRE_SUBMIT_MICRO_CONTEXT_RETRY_MIN_INTERVAL_SEC"), 5.0),
+    )
+    last_retry_at = _safe_float((stock or {}).get("pre_submit_micro_context_retry_at"), 0.0)
+    if last_retry_at > 0 and now_ts - last_retry_at < min_interval_sec:
+        fields["pre_submit_micro_context_retry_reason"] = "retry_interval_active"
+        fields["pre_submit_micro_context_retry_age_sec"] = f"{max(0.0, now_ts - last_retry_at):.3f}"
+        return fields
+    fields["pre_submit_micro_context_retry_attempted"] = True
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "pre_submit_micro_context_retry_at": now_ts,
+            "pre_submit_micro_context_retry_count": _safe_int(
+                (stock or {}).get("pre_submit_micro_context_retry_count"),
+                0,
+            )
+            + 1,
+        },
+    )
+    try:
+        recent_ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10) or []
+    except Exception as exc:
+        fields["pre_submit_micro_context_retry_reason"] = "tick_history_error"
+        fields["pre_submit_micro_context_retry_error"] = str(exc)[:160]
+        return fields
+    try:
+        recent_candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=40) or []
+    except Exception:
+        recent_candles = []
+    fields["pre_submit_micro_context_retry_tick_count"] = len(recent_ticks)
+    fields["pre_submit_micro_context_retry_candle_count"] = len(recent_candles)
+    if not recent_ticks:
+        fields["pre_submit_micro_context_retry_reason"] = "tick_history_missing"
+        return fields
+    try:
+        features = ai_engine._extract_scalping_features(dict(ws_data or {}), recent_ticks, recent_candles) or {}
+    except Exception as exc:
+        fields["pre_submit_micro_context_retry_reason"] = "feature_extract_error"
+        fields["pre_submit_micro_context_retry_error"] = str(exc)[:160]
+        return fields
+    feature_fields = _build_tick_source_quality_log_fields(features)
+    feature_fields.update(
+        {
+            "pre_submit_micro_context_retry_attempted": True,
+            "pre_submit_micro_context_retry_success": True,
+            "pre_submit_micro_context_retry_reason": "ok",
+            "pre_submit_micro_context_retry_tick_count": len(recent_ticks),
+            "pre_submit_micro_context_retry_candle_count": len(recent_candles),
+            "pre_submit_micro_context_retry_at": f"{now_ts:.3f}",
+        }
+    )
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "last_watching_ai_source_quality_fields": {
+                **dict((stock or {}).get("last_watching_ai_source_quality_fields") or {}),
+                **feature_fields,
+            },
+            "last_watching_ai_feature_probe": {
+                **dict((stock or {}).get("last_watching_ai_feature_probe") or {}),
+                **feature_fields,
+            },
+            "last_watching_ai_feature_probe_at": now_ts,
+        },
+    )
+    return feature_fields
+
+
+def _retry_entry_ai_submit_authority_before_block(
+    *,
+    stock,
+    code,
+    ws_data,
+    ai_engine,
+    now_ts: float,
+    current_ai_score,
+) -> dict:
+    fields = {
+        "pre_submit_entry_ai_authority_retry_attempted": False,
+        "pre_submit_entry_ai_authority_retry_success": False,
+        "pre_submit_entry_ai_authority_retry_reason": "not_attempted",
+        "pre_submit_entry_ai_authority_retry_result_source": "-",
+        "pre_submit_entry_ai_authority_retry_score": "0.0",
+        "pre_submit_entry_ai_authority_retry_action": "not_evaluated",
+    }
+    if _is_any_simulated_position(stock, (stock or {}).get("strategy")):
+        fields["pre_submit_entry_ai_authority_retry_reason"] = "sim_position"
+        return fields
+    if not _rule_bool("PRE_SUBMIT_ENTRY_AI_AUTHORITY_RETRY_ENABLED", True):
+        fields["pre_submit_entry_ai_authority_retry_reason"] = "disabled"
+        return fields
+    if ai_engine is None or not hasattr(ai_engine, "analyze_target"):
+        fields["pre_submit_entry_ai_authority_retry_reason"] = "ai_engine_unavailable"
+        return fields
+
+    min_interval_sec = max(
+        0.0,
+        _safe_float(os.getenv("KORSTOCKSCAN_PRE_SUBMIT_ENTRY_AI_AUTHORITY_RETRY_MIN_INTERVAL_SEC"), 10.0),
+    )
+    last_retry_at = _safe_float((stock or {}).get("pre_submit_entry_ai_authority_retry_at"), 0.0)
+    if last_retry_at > 0 and now_ts - last_retry_at < min_interval_sec:
+        fields["pre_submit_entry_ai_authority_retry_reason"] = "retry_interval_active"
+        fields["pre_submit_entry_ai_authority_retry_age_sec"] = f"{max(0.0, now_ts - last_retry_at):.3f}"
+        return fields
+
+    fields["pre_submit_entry_ai_authority_retry_attempted"] = True
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "pre_submit_entry_ai_authority_retry_at": now_ts,
+            "pre_submit_entry_ai_authority_retry_count": _safe_int(
+                (stock or {}).get("pre_submit_entry_ai_authority_retry_count"),
+                0,
+            )
+            + 1,
+        },
+    )
+    try:
+        recent_ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10) or []
+        recent_candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=40) or []
+        retry_ws_data = dict(ws_data or {})
+        try:
+            _update_ai_quote_freshness_fields(retry_ws_data)
+        except Exception as exc:
+            retry_ws_data.setdefault("quote_age_source", "pre_submit_retry_quote_freshness_unavailable")
+            retry_ws_data.setdefault("quote_stale", False)
+            retry_ws_data.setdefault("quote_freshness_source_quality", f"retry_freshness_error:{type(exc).__name__}")
+        retry_ws_data.setdefault("current_ai_score", _safe_float(current_ai_score, 0.0))
+        retry_ws_data.setdefault("ai_score_baseline_source", "pre_submit_entry_ai_authority_retry")
+        try:
+            overlap_snapshot = _extract_ai_overlap_snapshot(
+                ws_data=retry_ws_data,
+                recent_ticks=recent_ticks,
+                recent_candles=recent_candles,
+                ai_engine=ai_engine,
+            )
+        except Exception:
+            overlap_snapshot = {}
+        for adm_key, adm_value in overlap_snapshot.items():
+            retry_ws_data.setdefault(adm_key, adm_value)
+        ai_decision = ai_engine.analyze_target(
+            (stock or {}).get("name"),
+            retry_ws_data,
+            recent_ticks,
+            recent_candles,
+            prompt_profile="watching",
+            metadata_extra={
+                "record_id": (stock or {}).get("id"),
+                "sim_record_id": (stock or {}).get("sim_record_id"),
+                "sim_parent_record_id": (stock or {}).get("sim_parent_record_id"),
+                "entry_adm_candidate_id": (stock or {}).get("entry_adm_candidate_id"),
+                "source_event_stage": "pre_submit_entry_ai_authority_retry",
+            },
+        )
+        ai_decision = dict(ai_decision or {})
+        action = str(ai_decision.get("action") or "not_evaluated").upper()
+        score = _safe_float(ai_decision.get("score"), 0.0)
+        result_source = str(ai_decision.get("ai_result_source") or "live").strip().lower()
+        reason = str(ai_decision.get("reason") or "")[:240]
+        source_quality_fields = _build_tick_source_quality_log_fields(ai_decision)
+        source_quality_fields["ai_result_source"] = result_source
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "last_watching_ai_action": action,
+                "last_watching_ai_score": float(score or 0.0),
+                "last_watching_ai_score_raw": float(score or 0.0),
+                "last_watching_ai_reason": reason,
+                "last_watching_ai_confirmed_at": now_ts,
+                "last_watching_ai_result_source": result_source,
+                "last_watching_ai_source_quality_fields": source_quality_fields,
+                "last_watching_ai_call_trigger_reason": "pre_submit_entry_ai_authority_retry",
+            },
+        )
+        if isinstance(LAST_AI_CALL_TIMES, dict):
+            LAST_AI_CALL_TIMES[code] = now_ts
+        try:
+            feature_probe = _extract_buy_recovery_probe_features(
+                ai_engine,
+                retry_ws_data,
+                recent_ticks,
+                recent_candles,
+            ) or {}
+        except Exception:
+            feature_probe = {}
+        _log_entry_pipeline(
+            stock,
+            code,
+            "ai_confirmed",
+            action=action,
+            vip_target=True,
+            ai_call_trigger_reason="pre_submit_entry_ai_authority_retry",
+            buy_pressure=f"{float(feature_probe.get('buy_pressure', 0.0) or 0.0):.2f}",
+            tick_accel=f"{float(feature_probe.get('tick_accel', 0.0) or 0.0):.3f}",
+            micro_vwap_bp=f"{float(feature_probe.get('micro_vwap_bp', 0.0) or 0.0):.2f}",
+            large_sell_print_detected=bool(feature_probe.get("large_sell_print", False)),
+            latency_state=str((retry_ws_data or {}).get("latency_state", "") or "-").upper(),
+            **_merge_entry_pipeline_field_groups(
+                _build_ai_overlap_log_fields(
+                    stock=stock,
+                    ai_score=score,
+                    momentum_tag=(stock or {}).get("entry_momentum_tag"),
+                    threshold_profile=(stock or {}).get("entry_threshold_profile"),
+                    overbought_blocked=False,
+                    blocked_stage="-",
+                    overlap_snapshot=overlap_snapshot,
+                ),
+                _build_ai_ops_log_fields(
+                    ai_decision,
+                    ai_score_raw=score,
+                    ai_score_after_bonus=score,
+                    entry_score_threshold=get_entry_buy_score_threshold(),
+                    big_bite_bonus_applied=False,
+                    ai_cooldown_blocked=False,
+                ),
+            ),
+        )
+        _emit_scalp_entry_adm_snapshot(
+            stock,
+            code,
+            "ai_confirmed",
+            ai_decision=ai_decision,
+            ai_score=score,
+            chosen_action="BUY_NOW" if entry_buy_decision_allowed(action, score) else "NO_BUY_AI",
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            extra_fields={"ai_call_trigger_reason": "pre_submit_entry_ai_authority_retry"},
+        )
+        retry_authority_success = bool(result_source in {"live", "prior_valid"} and score > 0.0)
+        fields.update(
+            {
+                "pre_submit_entry_ai_authority_retry_success": retry_authority_success,
+                "pre_submit_entry_ai_authority_retry_reason": "ok"
+                if retry_authority_success
+                else "ai_score_unavailable"
+                if score <= 0.0
+                else "ai_result_source_untrusted",
+                "pre_submit_entry_ai_authority_retry_result_source": result_source or "-",
+                "pre_submit_entry_ai_authority_retry_score": f"{score:.1f}",
+                "pre_submit_entry_ai_authority_retry_action": action or "not_evaluated",
+            }
+        )
+        return fields
+    except Exception as exc:
+        log_error(f"⚠️ [PRE_SUBMIT_ENTRY_AI_AUTHORITY_RETRY_FAIL] {code}: {exc}")
+        fields["pre_submit_entry_ai_authority_retry_reason"] = "exception"
+        fields["pre_submit_entry_ai_authority_retry_error"] = str(exc)[:180]
+        return fields
 
 
 def _entry_planned_total_qty(planned_orders) -> int:
@@ -20318,7 +20726,44 @@ def _microstructure_reaction_log_fields_from_stock(stock: dict | None) -> dict:
         return {}
     fields = stock.get("last_watching_ai_source_quality_fields")
     fields = fields if isinstance(fields, dict) else {}
-    return {key: fields.get(key) for key in MICROSTRUCTURE_REACTION_CONTEXT_KEYS if key in fields}
+    out = {key: fields.get(key) for key in MICROSTRUCTURE_REACTION_CONTEXT_KEYS if key in fields}
+    feature_probe = stock.get("last_watching_ai_feature_probe")
+    feature_probe = feature_probe if isinstance(feature_probe, dict) else {}
+    feature_probe_at = _safe_float(stock.get("last_watching_ai_feature_probe_at"), 0.0)
+    max_age_sec = max(
+        1.0,
+        _safe_float(
+            os.getenv("KORSTOCKSCAN_PRE_SUBMIT_MICRO_FEATURE_PROBE_MAX_AGE_SEC"),
+            _rule_float("AI_WATCHING_COOLDOWN", 300.0),
+        ),
+    )
+    feature_age_sec = max(0.0, time.time() - feature_probe_at) if feature_probe_at > 0 else None
+    feature_fresh = bool(feature_probe and feature_age_sec is not None and feature_age_sec <= max_age_sec)
+    if feature_fresh:
+        probe_fields = _build_tick_source_quality_log_fields(feature_probe)
+        for key, value in probe_fields.items():
+            existing = out.get(key)
+            if existing is None or str(existing).strip().lower() in {
+                "",
+                "-",
+                "none",
+                "null",
+                "nan",
+                "nat",
+                "unknown",
+                "not_evaluated",
+            }:
+                out[key] = value
+        out["pre_submit_micro_feature_probe_reused"] = True
+        out["pre_submit_micro_feature_probe_age_sec"] = f"{feature_age_sec:.3f}"
+        out["pre_submit_micro_feature_probe_max_age_sec"] = f"{max_age_sec:.1f}"
+    else:
+        out["pre_submit_micro_feature_probe_reused"] = False
+        out["pre_submit_micro_feature_probe_age_sec"] = (
+            f"{feature_age_sec:.3f}" if feature_age_sec is not None else "not_available"
+        )
+        out["pre_submit_micro_feature_probe_max_age_sec"] = f"{max_age_sec:.1f}"
+    return out
 
 
 def _merge_entry_pipeline_field_groups(*field_groups) -> dict:
@@ -24572,6 +25017,9 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                     'last_watching_ai_score_raw': float(raw_ai_score or 0.0),
                                     'last_watching_ai_reason': str(reason or '')[:240],
                                     'last_watching_ai_confirmed_at': now_ts,
+                                    'last_watching_ai_result_source': str(
+                                        ai_decision.get("ai_result_source") or "live"
+                                    ).lower(),
                                     'last_watching_ai_source_quality_fields': ai_source_quality_fields,
                                     'watching_score_smoothing_observations': smoothing_observations,
                                 },
@@ -24810,6 +25258,9 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                             "last_watching_ai_score_raw": recheck_score,
                                             "last_watching_ai_reason": str(recheck_decision.get("reason") or recheck_reason or "")[:240],
                                             "last_watching_ai_confirmed_at": now_ts,
+                                            "last_watching_ai_result_source": str(
+                                                recheck_decision.get("ai_result_source") or "live"
+                                            ).lower(),
                                             "last_watching_ai_source_quality_fields": _build_tick_source_quality_log_fields(
                                                 recheck_decision
                                             ),
@@ -24994,6 +25445,9 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                                 recheck_decision.get("reason") or early_accel_recheck_reason or ""
                                             )[:240],
                                             "last_watching_ai_confirmed_at": now_ts,
+                                            "last_watching_ai_result_source": str(
+                                                recheck_decision.get("ai_result_source") or "live"
+                                            ).lower(),
                                             "last_watching_ai_source_quality_fields": _build_tick_source_quality_log_fields(
                                                 recheck_decision
                                             ),
@@ -27383,6 +27837,62 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             best_ask=best_ask_at_submit,
         )
     microstructure_submit_log_fields = _microstructure_reaction_log_fields_from_stock(stock)
+    pre_submit_micro_unavailable_guard = _pre_submit_micro_unavailable_guard_fields(
+        strategy=strategy,
+        orderbook_fields=entry_orderbook_micro_fields,
+        microstructure_fields=microstructure_submit_log_fields,
+    )
+    if pre_submit_micro_unavailable_guard.get("blocked"):
+        retry_micro_fields = _refresh_pre_submit_micro_context_before_block(
+            stock=stock,
+            code=code,
+            ws_data=ws_data,
+            ai_engine=ai_engine,
+            now_ts=now_ts,
+        )
+        microstructure_submit_log_fields = _merge_entry_pipeline_field_groups(
+            microstructure_submit_log_fields,
+            retry_micro_fields,
+        )
+        pre_submit_micro_unavailable_guard = _pre_submit_micro_unavailable_guard_fields(
+            strategy=strategy,
+            orderbook_fields=entry_orderbook_micro_fields,
+            microstructure_fields=microstructure_submit_log_fields,
+        )
+        pre_submit_micro_unavailable_guard.update(retry_micro_fields)
+    if pre_submit_micro_unavailable_guard.get("blocked"):
+        log_info(
+            f"[PRE_SUBMIT_MICRO_UNAVAILABLE_BLOCK] {stock.get('name')}({code}) "
+            f"reason={pre_submit_micro_unavailable_guard.get('pre_submit_micro_unavailable_reason')}"
+        )
+        clear_signal_reference(stock)
+        _log_entry_pipeline(
+            stock,
+            code,
+            "pre_submit_micro_unavailable_block",
+            forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON if forced_rising_missed_one_share else "-",
+            forced_entry_qty=forced_rising_missed_scout_qty,
+            **_merge_entry_pipeline_field_groups(
+                latency_price_snapshot,
+                entry_orderbook_micro_fields,
+                microstructure_submit_log_fields,
+                pre_submit_micro_unavailable_guard,
+            ),
+        )
+        _emit_scalp_entry_adm_snapshot(
+            stock,
+            code,
+            "pre_submit_micro_unavailable_block",
+            ai_score=latency_signal_score,
+            chosen_action="WAIT_REQUOTE",
+            latency_gate=latency_gate,
+            price_snapshot=latency_price_snapshot,
+            orderbook_fields=entry_orderbook_micro_fields,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            extra_fields=pre_submit_micro_unavailable_guard,
+        )
+        return False
     weak_ai_micro_entry_block = _evaluate_real_weak_ai_micro_entry_block(
         strategy=strategy,
         stock=stock,
@@ -27810,6 +28320,32 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             extra_fields=caution_weak_liquidity_block,
         )
         return False
+    if caution_weak_liquidity_block.get("rising_missed_liquidity_observation_only"):
+        real_pre_submit_guard_fields.update(
+            {
+                "rising_missed_liquidity_observation_only": True,
+                "rising_missed_liquidity_observation_gate_action": "observe_only",
+                "rising_missed_liquidity_observation_authority": "attribution_only",
+                "rising_missed_entry_lineage": bool(
+                    caution_weak_liquidity_block.get("rising_missed_entry_lineage")
+                ),
+                "caution_weak_liquidity_entry_block_enabled": bool(
+                    caution_weak_liquidity_block.get("caution_weak_liquidity_entry_block_enabled")
+                ),
+                "caution_weak_liquidity_block_latency_state": (
+                    caution_weak_liquidity_block.get("caution_weak_liquidity_block_latency_state") or "-"
+                ),
+                "caution_weak_liquidity_block_entry_price_gap_profile": (
+                    caution_weak_liquidity_block.get("caution_weak_liquidity_block_entry_price_gap_profile") or "-"
+                ),
+                "caution_weak_liquidity_block_liquidity_action": (
+                    caution_weak_liquidity_block.get("caution_weak_liquidity_block_liquidity_action") or "-"
+                ),
+                "caution_weak_liquidity_block_liquidity_reason": (
+                    caution_weak_liquidity_block.get("caution_weak_liquidity_block_liquidity_reason") or "-"
+                ),
+            }
+        )
 
     entry_ai_submit_authority = _entry_ai_submit_authority_fields(
         strategy=strategy,
@@ -27819,6 +28355,25 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         submit_fields=submit_revalidation_fields,
         pre_ai_fields=pre_ai_gate_submit_log_fields,
     )
+    if entry_ai_submit_authority.get("blocked"):
+        retry_fields = _retry_entry_ai_submit_authority_before_block(
+            stock=stock,
+            code=code,
+            ws_data=ws_data,
+            ai_engine=ai_engine,
+            now_ts=now_ts,
+            current_ai_score=latency_signal_score,
+        )
+        entry_ai_submit_authority = _entry_ai_submit_authority_fields(
+            strategy=strategy,
+            stock=stock,
+            latency_gate=latency_gate,
+            latency_signal_score=latency_signal_score,
+            submit_fields=submit_revalidation_fields,
+            pre_ai_fields=pre_ai_gate_submit_log_fields,
+        )
+        entry_ai_submit_authority.update(retry_fields)
+
     if entry_ai_submit_authority.get("blocked"):
         log_info(
             f"[PRE_SUBMIT_ENTRY_AI_AUTHORITY_BLOCK] {stock.get('name')}({code}) "
@@ -29340,44 +29895,48 @@ def _evaluate_caution_weak_liquidity_entry_block(
     liquidity_action = str(guard_fields.get("pre_submit_liquidity_guard_action") or "").strip().upper()
     liquidity_reason = str(guard_fields.get("pre_submit_liquidity_reason") or "").strip()
     is_rising_missed = _has_rising_missed_entry_lineage(stock, runtime)
-    blocked = bool(
+    has_missing_liquidity = bool(
         enabled
         and normalize_strategy(strategy) == "SCALPING"
         and liquidity_action == "NOT_AVAILABLE"
         and liquidity_reason == "liquidity_not_available"
+    )
+    blocked = bool(
+        has_missing_liquidity
+        and not is_rising_missed
         and (
-            is_rising_missed
-            or (
-                latency_state == "CAUTION"
-                and gap_profile == "weak_liquidity_wide_spread"
-            )
+            latency_state == "CAUTION"
+            and gap_profile == "weak_liquidity_wide_spread"
         )
     )
-    block_reason = (
-        "rising_missed_liquidity_not_available"
-        if blocked and is_rising_missed
-        else "caution_weak_liquidity_not_available"
-    )
+    observation_only = bool(has_missing_liquidity and is_rising_missed and not blocked)
+    block_reason = "caution_weak_liquidity_not_available" if blocked else "ok"
+    decision_authority = "caution_weak_liquidity_diagnostic_only"
+    if blocked:
+        decision_authority = "real_scalping_pre_submit_quality_guard"
+    elif observation_only:
+        decision_authority = "rising_missed_liquidity_attribution_only"
     return {
         "blocked": blocked,
         "block_reason": block_reason,
         "caution_weak_liquidity_entry_block_enabled": bool(enabled),
         "rising_missed_entry_lineage": bool(is_rising_missed),
+        "rising_missed_liquidity_observation_only": observation_only,
         "caution_weak_liquidity_block_latency_state": latency_state or "-",
         "caution_weak_liquidity_block_entry_price_gap_profile": gap_profile or "-",
         "caution_weak_liquidity_block_liquidity_action": liquidity_action or "-",
         "caution_weak_liquidity_block_liquidity_reason": liquidity_reason or "-",
-        "metric_role": "safety_veto",
-        "decision_authority": "real_scalping_pre_submit_quality_guard",
+        "metric_role": "safety_veto" if blocked else "diagnostic",
+        "decision_authority": decision_authority,
         "window_policy": "same_day_intraday_runtime_state",
         "sample_floor": "not_applicable_operator_guard",
         "primary_decision_metric": "caution_weak_liquidity_combo",
         "source_quality_gate": "latency_gap_profile_and_pre_submit_liquidity_fields_present",
         "threshold_family": "caution_weak_liquidity_entry_block",
-        "gate_action": "pre_submit_block",
-        "runtime_effect": True,
+        "gate_action": "pre_submit_block" if blocked else "observe_only",
+        "runtime_effect": bool(blocked),
         "actual_order_submitted": False,
-        "broker_order_forbidden": True,
+        "broker_order_forbidden": bool(blocked),
         "allowed_runtime_apply": False,
         "forbidden_uses": TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
     }

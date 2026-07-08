@@ -148,7 +148,7 @@ def _micro_vwap_candles(*, price=10_000, count=5):
     ]
 
 
-def test_caution_weak_liquidity_combo_blocks_rising_missed_entry(monkeypatch):
+def test_caution_weak_liquidity_combo_is_observation_only_for_rising_missed(monkeypatch):
     monkeypatch.delenv("KORSTOCKSCAN_CAUTION_WEAK_LIQUIDITY_ENTRY_BLOCK_ENABLED", raising=False)
     monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_CAUTION_WEAK_LIQUIDITY_BLOCK_ENABLED", raising=False)
 
@@ -166,11 +166,16 @@ def test_caution_weak_liquidity_combo_blocks_rising_missed_entry(monkeypatch):
         },
     )
 
-    assert decision["blocked"] is True
+    assert decision["blocked"] is False
+    assert decision["block_reason"] == "ok"
     assert decision["threshold_family"] == "caution_weak_liquidity_entry_block"
     assert decision["rising_missed_entry_lineage"] is True
+    assert decision["rising_missed_liquidity_observation_only"] is True
+    assert decision["decision_authority"] == "rising_missed_liquidity_attribution_only"
+    assert decision["gate_action"] == "observe_only"
+    assert decision["runtime_effect"] is False
     assert decision["actual_order_submitted"] is False
-    assert decision["broker_order_forbidden"] is True
+    assert decision["broker_order_forbidden"] is False
 
 
 def test_caution_weak_liquidity_combo_blocks_general_buy_entry(monkeypatch):
@@ -196,7 +201,7 @@ def test_caution_weak_liquidity_combo_blocks_general_buy_entry(monkeypatch):
     assert decision["threshold_family"] == "caution_weak_liquidity_entry_block"
 
 
-def test_rising_missed_missing_liquidity_blocks_even_when_latency_safe(monkeypatch):
+def test_rising_missed_missing_liquidity_is_observation_only_when_latency_safe(monkeypatch):
     monkeypatch.delenv("KORSTOCKSCAN_CAUTION_WEAK_LIQUIDITY_ENTRY_BLOCK_ENABLED", raising=False)
     monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_CAUTION_WEAK_LIQUIDITY_BLOCK_ENABLED", raising=False)
 
@@ -214,10 +219,191 @@ def test_rising_missed_missing_liquidity_blocks_even_when_latency_safe(monkeypat
         },
     )
 
-    assert decision["blocked"] is True
-    assert decision["block_reason"] == "rising_missed_liquidity_not_available"
+    assert decision["blocked"] is False
+    assert decision["block_reason"] == "ok"
+    assert decision["rising_missed_entry_lineage"] is True
+    assert decision["rising_missed_liquidity_observation_only"] is True
+    assert decision["decision_authority"] == "rising_missed_liquidity_attribution_only"
+    assert decision["gate_action"] == "observe_only"
+    assert decision["runtime_effect"] is False
     assert decision["actual_order_submitted"] is False
+    assert decision["broker_order_forbidden"] is False
+
+
+def test_pre_submit_micro_unavailable_guard_blocks_missing_context(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_PRE_SUBMIT_MICRO_UNAVAILABLE_GUARD_ENABLED", raising=False)
+
+    decision = state_handlers._pre_submit_micro_unavailable_guard_fields(
+        strategy="SCALPING",
+        orderbook_fields={
+            "orderbook_micro_ready": False,
+            "orderbook_micro_state": "insufficient",
+            "orderbook_micro_reason": "missing_snapshot",
+        },
+        microstructure_fields={
+            "micro_vwap_available": False,
+            "tick_context_quality": "not_evaluated",
+            "tick_accel_source": "not_evaluated",
+            "tick_aggressor_pressure_usable": False,
+            "tick_aggressor_trusted_count": 0,
+        },
+    )
+
+    assert decision["blocked"] is True
+    assert decision["threshold_family"] == "pre_submit_micro_unavailable_guard"
     assert decision["broker_order_forbidden"] is True
+    assert "micro_vwap_missing" in decision["pre_submit_micro_unavailable_reason"]
+    assert "tick_context_not_evaluated" in decision["pre_submit_micro_unavailable_reason"]
+
+
+def test_pre_submit_micro_unavailable_guard_allows_refreshed_context():
+    decision = state_handlers._pre_submit_micro_unavailable_guard_fields(
+        strategy="SCALPING",
+        orderbook_fields={
+            "orderbook_micro_ready": False,
+            "orderbook_micro_state": "insufficient",
+            "orderbook_micro_reason": "missing_snapshot",
+        },
+        microstructure_fields={
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh",
+            "tick_context_quality": "fresh_computed",
+            "tick_accel_source": "computed_10ticks",
+            "tick_aggressor_pressure_usable": True,
+            "tick_aggressor_trusted_count": 7,
+        },
+    )
+
+    assert decision["blocked"] is False
+    assert decision["decision_authority"] == "pre_submit_micro_context_diagnostic_only"
+    assert decision["broker_order_forbidden"] is False
+
+
+def test_pre_submit_micro_context_retry_refreshes_features(monkeypatch):
+    now_ts = 1_783_471_111.0
+
+    class DummyAI:
+        def _extract_scalping_features(self, ws_data, ticks, candles):
+            return {
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+                "minute_candle_context_quality": "fresh",
+                "tick_context_quality": "fresh_computed",
+                "tick_accel_source": "computed_10ticks",
+                "tick_aggressor_pressure_usable": True,
+                "tick_aggressor_trusted_count": 8,
+                "tick_sample_count": len(ticks),
+                "tick_window_sample_count": len(ticks),
+                "tick_acceleration_ratio": 1.2,
+                "buy_pressure_10t": 71.0,
+                "curr_vs_micro_vwap_bp": 2.5,
+            }
+
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_tick_history_ka10003",
+        lambda *args, **kwargs: [{"현재가": 10000, "체결시간": "09:01:00"} for _ in range(10)],
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_minute_candles_ka10080",
+        lambda *args, **kwargs: [{"현재가": 10000, "체결시간": "09:01:00"}],
+    )
+
+    stock = {"name": "retry-micro", "strategy": "SCALPING"}
+    retry = state_handlers._refresh_pre_submit_micro_context_before_block(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 10000},
+        ai_engine=DummyAI(),
+        now_ts=now_ts,
+    )
+    decision = state_handlers._pre_submit_micro_unavailable_guard_fields(
+        strategy="SCALPING",
+        orderbook_fields={},
+        microstructure_fields=retry,
+    )
+
+    assert retry["pre_submit_micro_context_retry_attempted"] is True
+    assert retry["pre_submit_micro_context_retry_success"] is True
+    assert retry["tick_context_quality"] == "fresh_computed"
+    assert retry["tick_accel_source"] == "computed_10ticks"
+    assert retry["micro_vwap_available"] is True
+    assert retry["tick_aggressor_pressure_usable"] is True
+    assert decision["blocked"] is False
+    assert stock["last_watching_ai_source_quality_fields"]["tick_context_quality"] == "fresh_computed"
+
+
+def test_pre_submit_micro_fields_reuse_fresh_feature_probe(monkeypatch):
+    now_ts = 1_783_471_222.0
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
+
+    fields = state_handlers._microstructure_reaction_log_fields_from_stock(
+        {
+            "last_watching_ai_source_quality_fields": {
+                "micro_vwap_available": False,
+                "tick_context_quality": "not_evaluated",
+                "tick_accel_source": "not_evaluated",
+                "tick_aggressor_pressure_usable": False,
+            },
+            "last_watching_ai_feature_probe": {
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+                "minute_candle_context_quality": "fresh",
+                "tick_context_quality": "fresh_computed",
+                "tick_accel_source": "computed_10ticks",
+                "tick_aggressor_pressure_usable": True,
+                "tick_aggressor_trusted_count": 5,
+            },
+            "last_watching_ai_feature_probe_at": now_ts - 20.0,
+        }
+    )
+    decision = state_handlers._pre_submit_micro_unavailable_guard_fields(
+        strategy="SCALPING",
+        orderbook_fields={},
+        microstructure_fields=fields,
+    )
+
+    assert fields["pre_submit_micro_feature_probe_reused"] is True
+    assert fields["micro_vwap_available"] is True
+    assert fields["tick_context_quality"] == "fresh_computed"
+    assert fields["tick_accel_source"] == "computed_10ticks"
+    assert fields["tick_aggressor_pressure_usable"] is True
+    assert decision["blocked"] is False
+
+
+def test_pre_submit_micro_fields_do_not_reuse_stale_feature_probe(monkeypatch):
+    now_ts = 1_783_471_222.0
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
+    monkeypatch.setenv("KORSTOCKSCAN_PRE_SUBMIT_MICRO_FEATURE_PROBE_MAX_AGE_SEC", "30")
+
+    fields = state_handlers._microstructure_reaction_log_fields_from_stock(
+        {
+            "last_watching_ai_source_quality_fields": {
+                "micro_vwap_available": False,
+                "tick_context_quality": "not_evaluated",
+                "tick_accel_source": "not_evaluated",
+                "tick_aggressor_pressure_usable": False,
+            },
+            "last_watching_ai_feature_probe": {
+                "micro_vwap_available": True,
+                "tick_context_quality": "fresh_computed",
+                "tick_accel_source": "computed_10ticks",
+                "tick_aggressor_pressure_usable": True,
+            },
+            "last_watching_ai_feature_probe_at": now_ts - 120.0,
+        }
+    )
+    decision = state_handlers._pre_submit_micro_unavailable_guard_fields(
+        strategy="SCALPING",
+        orderbook_fields={},
+        microstructure_fields=fields,
+    )
+
+    assert fields["pre_submit_micro_feature_probe_reused"] is False
+    assert fields["tick_context_quality"] == "not_evaluated"
+    assert decision["blocked"] is True
 
 
 def test_real_pre_submit_liquidity_value_falls_back_to_orderbook_totals():
@@ -1452,6 +1638,114 @@ def test_entry_ai_submit_authority_allows_fresh_prior_valid_score(monkeypatch):
     assert decision["blocked"] is False
     assert decision["reason"] == "ok"
     assert decision["entry_ai_submit_authority_fresh_prior"] is True
+
+
+def test_entry_ai_submit_authority_allows_fresh_live_score(monkeypatch):
+    now_ts = 1_783_471_000.0
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
+
+    decision = state_handlers._entry_ai_submit_authority_fields(
+        strategy="SCALPING",
+        stock={
+            "name": "live-valid",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "last_watching_ai_confirmed_at": now_ts - 20.0,
+            "last_watching_ai_result_source": "live",
+        },
+        latency_gate={"decision": "ALLOW_NORMAL", "ai_score": 61.0, "ai_action": "not_evaluated"},
+        latency_signal_score=61.0,
+    )
+
+    assert decision["blocked"] is False
+    assert decision["reason"] == "ok"
+    assert decision["entry_ai_submit_authority_fresh_prior"] is True
+
+
+def test_pre_submit_entry_ai_authority_retry_refreshes_missing_ai(monkeypatch):
+    now_ts = 1_783_471_000.0
+    logs = []
+    snapshots = []
+
+    class DummyAI:
+        def analyze_target(self, *args, **kwargs):
+            return {
+                "action": "WAIT",
+                "score": 62.0,
+                "reason": "fresh pre-submit retry",
+                "ai_result_source": "live",
+                "ai_parse_ok": True,
+            }
+
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [])
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_emit_scalp_entry_adm_snapshot",
+        lambda *args, **kwargs: snapshots.append((args, kwargs)),
+    )
+
+    stock = {"id": 1, "name": "retry", "strategy": "SCALPING", "position_tag": "SCANNER"}
+    before = state_handlers._entry_ai_submit_authority_fields(
+        strategy="SCALPING",
+        stock=stock,
+        latency_gate={"decision": "ALLOW_NORMAL", "ai_score": 0.0, "ai_action": "not_evaluated"},
+        latency_signal_score=0.0,
+    )
+    retry = state_handlers._retry_entry_ai_submit_authority_before_block(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 10_000, "orderbook": {"asks": [], "bids": []}},
+        ai_engine=DummyAI(),
+        now_ts=now_ts,
+        current_ai_score=0.0,
+    )
+    after = state_handlers._entry_ai_submit_authority_fields(
+        strategy="SCALPING",
+        stock=stock,
+        latency_gate={"decision": "ALLOW_NORMAL", "ai_score": 0.0, "ai_action": "not_evaluated"},
+        latency_signal_score=0.0,
+    )
+
+    assert before["blocked"] is True
+    assert retry["pre_submit_entry_ai_authority_retry_attempted"] is True
+    assert retry["pre_submit_entry_ai_authority_retry_success"] is True
+    assert stock["last_watching_ai_result_source"] == "live"
+    assert stock["last_watching_ai_confirmed_at"] == now_ts
+    assert after["blocked"] is False
+    assert after["entry_ai_submit_authority_fresh_prior"] is True
+    assert logs[-1][0] == "ai_confirmed"
+    assert logs[-1][1]["ai_call_trigger_reason"] == "pre_submit_entry_ai_authority_retry"
+    assert snapshots
+
+
+def test_pre_submit_entry_ai_authority_retry_without_engine_keeps_block():
+    stock = {"id": 1, "name": "no-engine", "strategy": "SCALPING", "position_tag": "SCANNER"}
+
+    retry = state_handlers._retry_entry_ai_submit_authority_before_block(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 10_000},
+        ai_engine=None,
+        now_ts=1_783_471_000.0,
+        current_ai_score=0.0,
+    )
+    decision = state_handlers._entry_ai_submit_authority_fields(
+        strategy="SCALPING",
+        stock=stock,
+        latency_gate={"decision": "ALLOW_NORMAL", "ai_score": 0.0, "ai_action": "not_evaluated"},
+        latency_signal_score=0.0,
+    )
+
+    assert retry["pre_submit_entry_ai_authority_retry_attempted"] is False
+    assert retry["pre_submit_entry_ai_authority_retry_reason"] == "ai_engine_unavailable"
+    assert decision["blocked"] is True
 
 
 def test_entry_ai_submit_authority_blocks_prior_valid_without_fresh_timestamp():
@@ -15456,6 +15750,7 @@ def test_split_entry_partial_fill_defers_buy_execution_telegram_until_bundle_ful
     entry_state.TERMINAL_ENTRY_ORDERS.clear()
 
     thread_calls = []
+    telegram_events = []
 
     class DummyThread:
         def __init__(self, target=None, args=(), daemon=None):
@@ -15464,7 +15759,12 @@ def test_split_entry_partial_fill_defers_buy_execution_telegram_until_bundle_ful
         def start(self):
             return None
 
+    class DummyEventBus:
+        def publish(self, event_name, payload):
+            telegram_events.append((event_name, payload))
+
     monkeypatch.setattr(receipts.threading, "Thread", DummyThread)
+    monkeypatch.setattr(receipts, "event_bus", DummyEventBus())
     monkeypatch.setattr(receipts.kiwoom_utils, "get_target_price_up", lambda price, pct: 10350)
     monkeypatch.setattr(kiwoom_orders, "send_sell_order_market", lambda *args, **kwargs: {"ord_no": "TP1"})
 
@@ -15500,6 +15800,10 @@ def test_split_entry_partial_fill_defers_buy_execution_telegram_until_bundle_ful
     assert first_snapshot["entry_cum_filled_qty"] == 3
     assert first_snapshot["entry_remaining_qty"] == 16
     assert first_snapshot["buy_qty"] == 3
+    assert len(telegram_events) == 1
+    assert telegram_events[-1][0] == "TELEGRAM_BROADCAST"
+    assert "부분 체결" in telegram_events[-1][1]["message"]
+    assert "`3/19주`" in telegram_events[-1][1]["message"]
 
     receipts.handle_real_execution({"code": "078160", "type": "BUY", "order_no": "O1", "price": 10180, "qty": 10})
     receipts.handle_real_execution({"code": "078160", "type": "BUY", "order_no": "O2", "price": 10000, "qty": 9})
@@ -15507,12 +15811,78 @@ def test_split_entry_partial_fill_defers_buy_execution_telegram_until_bundle_ful
     assert stock["buy_qty"] == 19
     assert stock["buy_execution_notified"] is True
     assert "pending_buy_msg" not in stock
+    assert "entry_partial_fill_notified_qty" not in stock
     final_snapshot = thread_calls[-1][1][3]
     assert final_snapshot["buy_execution_notified"] is False
     assert final_snapshot["entry_fill_quality"] == "FULL_FILL"
     assert final_snapshot["entry_cum_filled_qty"] == 19
     assert final_snapshot["entry_remaining_qty"] == 0
     assert final_snapshot["buy_qty"] == 19
+
+
+def test_split_entry_full_leg_partial_bundle_sends_partial_not_completion(monkeypatch):
+    receipts.ACTIVE_TARGETS = []
+    receipts.highest_prices = {}
+    receipts._get_fast_state = lambda code: None
+    receipts.DB = _DummyDB()
+    receipts.KIWOOM_TOKEN = "token"
+
+    thread_calls = []
+    telegram_events = []
+
+    class DummyThread:
+        def __init__(self, target=None, args=(), daemon=None):
+            thread_calls.append((target, args, daemon))
+
+        def start(self):
+            return None
+
+    class DummyEventBus:
+        def publish(self, event_name, payload):
+            telegram_events.append((event_name, payload))
+
+    monkeypatch.setattr(receipts.threading, "Thread", DummyThread)
+    monkeypatch.setattr(receipts, "event_bus", DummyEventBus())
+    monkeypatch.setattr(receipts.kiwoom_utils, "get_target_price_up", lambda price, pct: 6300)
+    monkeypatch.setattr(kiwoom_orders, "send_sell_order_market", lambda *args, **kwargs: {"ord_no": "TP1"})
+
+    stock = {
+        "id": 13,
+        "code": "073240",
+        "name": "금호타이어",
+        "status": "BUY_ORDERED",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "buy_price": 0,
+        "buy_qty": 0,
+        "entry_mode": "normal",
+        "entry_requested_qty": 32,
+        "requested_buy_qty": 32,
+        "pending_buy_msg": "🛒 **BUY 주문 제출 금호타이어 (073240)**",
+        "pending_entry_orders": [
+            {"tag": "entry_split_primary", "qty": 11, "ord_no": "0027590", "status": "OPEN", "filled_qty": 0},
+            {"tag": "entry_split_passive_1", "qty": 10, "ord_no": "0027591", "status": "OPEN", "filled_qty": 0},
+            {"tag": "entry_split_passive_2", "qty": 11, "ord_no": "0027592", "status": "OPEN", "filled_qty": 0},
+        ],
+    }
+    receipts.ACTIVE_TARGETS.append(stock)
+
+    receipts.handle_real_execution(
+        {"code": "073240", "type": "BUY", "order_no": "0027590", "price": 6200, "qty": 11}
+    )
+
+    assert stock["buy_qty"] == 11
+    assert stock.get("buy_execution_notified") in (None, False)
+    assert stock["entry_partial_fill_notified_qty"] == 11
+    snapshot = thread_calls[-1][1][3]
+    assert snapshot["buy_execution_notified"] is True
+    assert snapshot["entry_fill_quality"] == "PARTIAL_FILL"
+    assert snapshot["entry_cum_filled_qty"] == 11
+    assert snapshot["entry_remaining_qty"] == 21
+    assert len(telegram_events) == 1
+    assert "부분 체결" in telegram_events[0][1]["message"]
+    assert "`11/32주`" in telegram_events[0][1]["message"]
+    assert "체결 완료" not in telegram_events[0][1]["message"]
 
 
 def test_sell_execution_thread_receives_snapshot_and_clears_live_notify_state(monkeypatch):
