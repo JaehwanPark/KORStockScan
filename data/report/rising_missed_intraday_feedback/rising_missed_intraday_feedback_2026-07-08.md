@@ -1,6 +1,6 @@
 # 2026-07-08 Rising Missed Intraday Feedback
 
-- generated_at: 2026-07-08T18:40:01+09:00
+- generated_at: 2026-07-08T20:10:32+09:00
 - decision_authority: source_only_intraday_feedback_no_runtime_mutation
 - runtime_effect: false
 - allowed_runtime_apply: false
