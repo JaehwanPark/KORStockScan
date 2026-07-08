@@ -115,6 +115,7 @@ def test_write_outputs_renders_json_and_markdown(tmp_path):
             "initial_quality_fail_count": 1,
             "scale_in_rescue_warning_count": 0,
             "code_improvement_order_count": 1,
+            "first_touch_entry_submitted_count": 1,
         },
         "records": [
             {
@@ -135,6 +136,8 @@ def test_write_outputs_renders_json_and_markdown(tmp_path):
                 "stock_code": "000101",
                 "stock_name": "failer",
                 "first_touch_regression_label": "first_touch_loss_or_flat",
+                "entry_order_submitted": True,
+                "entry_order_submitted_count": 1,
                 "first_touch_avg_down_submitted": True,
                 "first_touch_profit_rate": -3.1,
                 "first_touch_peak_profit": -0.2,
@@ -155,7 +158,9 @@ def test_write_outputs_renders_json_and_markdown(tmp_path):
     markdown = output_md.read_text(encoding="utf-8")
     assert "rising_missed_avg_down_ge2_count: 1" in markdown
     assert "## First Touch Regression" in markdown
-    assert "submitted_count=2" in markdown
+    assert "entry_submitted=True" in markdown
+    assert "entry_submit_count=1" in markdown
+    assert "avgdown_submitted_count=2" in markdown
     assert "shadow_cap1=-" in markdown
     assert "rising_missed_initial_quality_fail" in markdown
 
@@ -364,6 +369,7 @@ def test_build_report_adds_continuously_updated_first_touch_regression_rows(tmp_
     report = mod.build_report("2026-07-03", pipeline_path=pipeline_path, generated_at="fixed")
 
     assert report["summary"]["first_touch_regression_record_count"] == 3
+    assert report["summary"]["first_touch_entry_submitted_count"] == 0
     assert report["summary"]["first_touch_avg_down_submitted_count"] == 2
     assert report["summary"]["first_touch_avgdown_decision_blocked_count"] == 1
     assert report["summary"]["first_touch_closed_count"] == 2
@@ -371,6 +377,8 @@ def test_build_report_adds_continuously_updated_first_touch_regression_rows(tmp_
     assert report["summary"]["first_touch_loss_or_flat_count"] == 1
     rows_by_record = {row["record_id"]: row for row in report["first_touch_regression_rows"]}
     assert rows_by_record["401"]["first_touch_regression_label"] == "first_touch_recovered_profit"
+    assert rows_by_record["401"]["entry_order_submitted"] is False
+    assert rows_by_record["401"]["entry_order_submitted_count"] == 0
     assert rows_by_record["401"]["blocker_counts_before_first_touch"] == {"blocked_strength_momentum": 1}
     assert rows_by_record["401"]["first_touch_shadow_cap1_decision"] == "cap1_first_avg_down_allowed"
     assert rows_by_record["402"]["first_touch_regression_label"] == "first_touch_loss_or_flat"
@@ -391,6 +399,78 @@ def test_build_report_adds_continuously_updated_first_touch_regression_rows(tmp_
         == "source_only_first_touch_regression_table"
     )
     assert report["source_quality"]["status"] == "pass"
+
+
+def test_build_report_captures_real_entry_submit_separately_from_first_touch_avgdown_submit(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-08.jsonl"
+    rows = [
+        _event(
+            601,
+            "000601",
+            "real-entry-only",
+            "rising_missed_one_share_entry",
+            {"forced_entry_reason": "rising_missed_one_share_entry"},
+            emitted_at="2026-07-08T10:00:00",
+        ),
+        _event(
+            601,
+            "000601",
+            "real-entry-only",
+            "order_bundle_submitted",
+            {"actual_order_submitted": True, "broker_order_forbidden": False},
+            emitted_at="2026-07-08T10:00:05",
+        ),
+        _event(
+            601,
+            "000601",
+            "real-entry-only",
+            "holding_started",
+            {"actual_order_submitted": True, "buy_price": "1000", "buy_qty": "1"},
+            emitted_at="2026-07-08T10:00:10",
+            pipeline="HOLDING_PIPELINE",
+        ),
+        _event(
+            601,
+            "000601",
+            "real-entry-only",
+            "stop_line_touch_first_touch_avgdown_decision_blocked",
+            {
+                "profit_rate": "-3.10",
+                "peak_profit": "0.10",
+                "current_ai_score": "57",
+                "first_touch_avgdown_decision_allowed": False,
+                "first_touch_avgdown_decision_reason": "ai_score_no_submit_authority",
+                "first_touch_avgdown_ai_score_usable": False,
+                "first_touch_avgdown_ai_score_source": "live",
+                "first_touch_avgdown_ai_score_data_quality": "partial",
+                "first_touch_reversal_feature_source_quality": "usable",
+                "first_touch_reversal_feature_stale": False,
+            },
+            emitted_at="2026-07-08T10:05:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+        _event(
+            601,
+            "000601",
+            "real-entry-only",
+            "sell_completed",
+            {"profit_rate": "-3.14"},
+            emitted_at="2026-07-08T10:06:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+    ]
+    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+
+    report = mod.build_report("2026-07-08", pipeline_path=pipeline_path, generated_at="fixed")
+
+    assert report["summary"]["first_touch_entry_submitted_count"] == 1
+    row = report["first_touch_regression_rows"][0]
+    assert row["entry_order_submitted"] is True
+    assert row["entry_order_submitted_count"] == 1
+    assert row["entry_fill_seen"] is True
+    assert row["entry_fill_seen_count"] == 1
+    assert row["first_touch_avg_down_submitted"] is False
+    assert row["avg_down_submitted_event_count"] == 0
 
 
 def test_first_touch_regression_blocks_source_quality_when_ai_provenance_missing(tmp_path):

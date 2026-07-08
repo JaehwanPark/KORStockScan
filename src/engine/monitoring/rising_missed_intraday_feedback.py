@@ -318,6 +318,18 @@ def _build_first_touch_regression_rows(
         record_id = str(row.get("record_id") or "").strip()
         if record_id not in candidates:
             continue
+        fields = _fields(row)
+        stage = str(row.get("stage") or "")
+        if stage == "order_bundle_submitted" and _boolish(fields.get("actual_order_submitted")):
+            candidates[record_id]["entry_order_submitted"] = True
+            candidates[record_id]["entry_order_submitted_count"] = (
+                _safe_int(candidates[record_id].get("entry_order_submitted_count")) + 1
+            )
+            candidates[record_id]["entry_order_last_submitted_ts"] = row.get("emitted_at")
+        if stage == "holding_started" and _boolish(fields.get("actual_order_submitted")):
+            candidates[record_id]["entry_fill_seen"] = True
+            candidates[record_id]["entry_fill_seen_count"] = _safe_int(candidates[record_id].get("entry_fill_seen_count")) + 1
+            candidates[record_id]["entry_fill_last_seen_ts"] = row.get("emitted_at")
         _update_first_touch_regression(
             candidates[record_id],
             row,
@@ -331,6 +343,10 @@ def _build_first_touch_regression_rows(
         item["first_touch_regression_label"] = _regression_label(item)
         item.update(_first_touch_shadow_decision(item))
         item["decision_authority"] = "source_only_first_touch_regression_table"
+        item["entry_order_submitted"] = bool(item.get("entry_order_submitted"))
+        item["entry_order_submitted_count"] = _safe_int(item.get("entry_order_submitted_count"))
+        item["entry_fill_seen"] = bool(item.get("entry_fill_seen"))
+        item["entry_fill_seen_count"] = _safe_int(item.get("entry_fill_seen_count"))
         item["actual_order_submitted"] = False
         item["broker_order_forbidden"] = True
         item["runtime_effect"] = False
@@ -652,6 +668,7 @@ def build_report(
             "holding_record_count": len(holding_by_record),
             "rising_missed_avg_down_ge2_count": len(rows),
             "first_touch_regression_record_count": len(first_touch_rows),
+            "first_touch_entry_submitted_count": sum(1 for item in first_touch_rows if item.get("entry_order_submitted")),
             "first_touch_avg_down_submitted_count": sum(
                 1 for item in first_touch_rows if item.get("first_touch_avg_down_submitted")
             ),
@@ -702,6 +719,7 @@ def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path)
         f"- holding_record_count: {summary.get('holding_record_count')}",
         f"- rising_missed_avg_down_ge2_count: {summary.get('rising_missed_avg_down_ge2_count')}",
         f"- first_touch_regression_record_count: {summary.get('first_touch_regression_record_count')}",
+        f"- first_touch_entry_submitted_count: {summary.get('first_touch_entry_submitted_count')}",
         f"- first_touch_avg_down_submitted_count: {summary.get('first_touch_avg_down_submitted_count')}",
         f"- first_touch_avgdown_decision_blocked_count: {summary.get('first_touch_avgdown_decision_blocked_count')}",
         f"- first_touch_closed_count: {summary.get('first_touch_closed_count')}",
@@ -734,9 +752,11 @@ def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path)
         }
         lines.append(
             "- record_id={record_id} code={stock_code} name={stock_name} label={first_touch_regression_label} "
-            "submitted={first_touch_avg_down_submitted} touch_profit={first_touch_profit_rate} "
+            "entry_submitted={entry_order_submitted} avgdown_submitted={first_touch_avg_down_submitted} "
+            "touch_profit={first_touch_profit_rate} "
             "touch_peak={first_touch_peak_profit} touch_ai={first_touch_ai_score} "
-            "final_profit={final_profit_rate} submitted_count={avg_down_submitted_event_count} "
+            "final_profit={final_profit_rate} entry_submit_count={entry_order_submitted_count} "
+            "avgdown_submitted_count={avg_down_submitted_event_count} "
             "runtime_decision={first_touch_avgdown_decision_reason} shadow_cap1={first_touch_shadow_cap1_decision} "
             "max_avg_down={max_avg_down_count} blockers={top_blockers}".format(**display_item)
         )
