@@ -1,6 +1,6 @@
 # 2026-07-08 Rising Missed Intraday Feedback
 
-- generated_at: 2026-07-08T12:20:01+09:00
+- generated_at: 2026-07-08T18:00:01+09:00
 - decision_authority: source_only_intraday_feedback_no_runtime_mutation
 - runtime_effect: false
 - allowed_runtime_apply: false
@@ -8,22 +8,22 @@
 
 ## Summary
 
-- forced_rising_missed_record_count: 23
-- holding_record_count: 16
+- forced_rising_missed_record_count: 37
+- holding_record_count: 21
 - rising_missed_avg_down_ge2_count: 0
-- first_touch_regression_record_count: 10
-- first_touch_entry_submitted_count: 9
+- first_touch_regression_record_count: 14
+- first_touch_entry_submitted_count: 13
 - first_touch_avg_down_submitted_count: 3
-- first_touch_avgdown_decision_blocked_count: 7
-- first_touch_closed_count: 9
+- first_touch_avgdown_decision_blocked_count: 10
+- first_touch_closed_count: 13
 - first_touch_profitable_count: 2
-- first_touch_loss_or_flat_count: 7
-- first_touch_ai_provenance_missing_count: 1
-- first_touch_ai_provenance_unusable_count: 4
+- first_touch_loss_or_flat_count: 11
+- first_touch_ai_provenance_missing_count: 2
+- first_touch_ai_provenance_unusable_count: 7
 - first_touch_pressure_provenance_missing_count: 3
 - first_touch_pressure_provenance_unusable_count: 0
 - first_touch_micro_provenance_missing_count: 5
-- first_touch_micro_provenance_unusable_count: 4
+- first_touch_micro_provenance_unusable_count: 7
 - initial_quality_fail_count: 0
 - scale_in_rescue_warning_count: 0
 - code_improvement_order_count: 0
@@ -40,5 +40,9 @@
 - record_id=16000 code=365660 name=레몬헬스케어 label=first_touch_loss_or_flat entry_submitted=True avgdown_submitted=False touch_profit=-4.21 touch_peak=-0.23 touch_ai=56.0 final_profit=-5.69 entry_submit_count=1 avgdown_submitted_count=0 runtime_decision=insufficient_first_touch_recovery_confirmation shadow_cap1=cap1_not_applicable_no_submit max_avg_down=0 blockers=
 - record_id=16027 code=365660 name=레몬헬스케어 label=first_touch_recovered_profit entry_submitted=False avgdown_submitted=True touch_profit=-4.11 touch_peak=1.34 touch_ai=61.0 final_profit=1.48 entry_submit_count=0 avgdown_submitted_count=1 runtime_decision=moderate_ai_with_limited_repeated_blockers shadow_cap1=cap1_first_avg_down_allowed max_avg_down=1 blockers=
 - record_id=15996 code=042040 name=케이피엠테크 label=first_touch_loss_or_flat entry_submitted=True avgdown_submitted=False touch_profit=-3.87 touch_peak=0.06 touch_ai=57.0 final_profit=-3.14 entry_submit_count=2 avgdown_submitted_count=0 runtime_decision=ai_score_no_submit_authority:ai_score_unavailable|liquidity_or_spread_block shadow_cap1=cap1_not_applicable_no_submit max_avg_down=0 blockers=
+- record_id=16063 code=024060 name=흥구석유 label=first_touch_loss_or_flat entry_submitted=True avgdown_submitted=False touch_profit=-4.41 touch_peak=0.16 touch_ai=53.0 final_profit=-3.15 entry_submit_count=1 avgdown_submitted_count=0 runtime_decision=ai_score_no_submit_authority:ai_score_unavailable|repeated_blockers_without_recovery|liquidity_or_spread_block|weak_strength_vpw_without_recovery shadow_cap1=cap1_not_applicable_no_submit max_avg_down=0 blockers=blocked_strength_momentum=8,blocked_vpw=5,blocked_liquidity=7,blocked_gap_from_scan=1
+- record_id=16090 code=365660 name=레몬헬스케어 label=first_touch_loss_or_flat entry_submitted=True avgdown_submitted=False touch_profit=-5.27 touch_peak=-0.23 touch_ai=50.0 final_profit=-5.58 entry_submit_count=1 avgdown_submitted_count=0 runtime_decision=- shadow_cap1=cap1_not_applicable_no_submit max_avg_down=0 blockers=
+- record_id=15974 code=092730 name=네오팜 label=first_touch_loss_or_flat entry_submitted=True avgdown_submitted=False touch_profit=-3.78 touch_peak=0.51 touch_ai=50.0 final_profit=-3.43 entry_submit_count=1 avgdown_submitted_count=0 runtime_decision=ai_score_no_submit_authority:ai_score_unavailable shadow_cap1=cap1_not_applicable_no_submit max_avg_down=0 blockers=blocked_strength_momentum=7,blocked_vpw=2,blocked_liquidity=3,blocked_ai_score=2
+- record_id=16154 code=181710 name=NHN label=first_touch_loss_or_flat entry_submitted=True avgdown_submitted=False touch_profit=-3.86 touch_peak=0.42 touch_ai=50.0 final_profit=-3.86 entry_submit_count=1 avgdown_submitted_count=0 runtime_decision=ai_score_no_submit_authority:ai_score_unavailable|liquidity_or_spread_block shadow_cap1=cap1_not_applicable_no_submit max_avg_down=0 blockers=
 
 ## Records

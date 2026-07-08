@@ -57,11 +57,15 @@
   - 금지: sim/probe EV를 broker execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.
   - 다음 액션: source-quality split, active state 복원, open/closed count를 같이 기록한다.
 
-- [ ] `[IntradaySourceQualityGateCheck0708] 장중 raw source-quality 결손/unknown 조기 경보 및 튜닝 입력 차단 준비 확인` (`Due: 2026-07-08`, `Slot: INTRADAY`, `TimeWindow: 14:20~14:35`, `Track: RuntimeStability`)
+- [x] `[IntradaySourceQualityGateCheck0708] 장중 raw source-quality 결손/unknown 조기 경보 및 튜닝 입력 차단 준비 확인` (`Due: 2026-07-08`, `Slot: INTRADAY`, `TimeWindow: 14:20~14:35`, `Track: RuntimeStability`)
   - Source: [pipeline_events_2026-07-08.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-08.jsonl), [threshold_events_2026-07-08.jsonl](/home/ubuntu/KORStockScan/data/threshold_cycle/threshold_events_2026-07-08.jsonl), [observation_source_quality_audit_2026-07-08.json](/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-07-08.json), [observation_source_quality_audit.py](/home/ubuntu/KORStockScan/src/engine/observation_source_quality_audit.py)
   - 판정 기준: 장중 `PYTHONPATH=. .venv/bin/python -m src.engine.observation_source_quality_audit --target-date 2026-07-08 --write` 재감사를 실행하거나 최신 산출물을 확인해 `hard_blocking_contract_gap_count`, `hard_blocking_excluded_row_count`, `tuning_input_allowed`, `raw_row_exclusion_applied`, `unknown_token_stage_count`, `review_warning_count`를 기록한다.
   - 금지: hard contract gap 또는 unknown-token warning을 답변에만 남기지 않는다. 결손 row/window는 튜닝 입력 제외 또는 workorder handoff 대상으로 고정하고, broker/order/provider/cap/bot/threshold 변경 근거로 사용하지 않는다.
   - 다음 액션: `source_quality_clean_intraday`, `defective_rows_excluded`, `hard_block_requires_producer_fix`, `unknown_warning_workorder_required`, `audit_missing_or_stale` 중 하나로 닫는다. hard gap/unknown warning이 있으면 장후 `PostcloseSourceQualityGateReview`와 `CodeImprovementWorkorderReview`에서 누락 없이 재확인한다.
+  - 실행 결과: `hard_block_requires_producer_fix`
+  - 근거: `observation_source_quality_audit_2026-07-08.json` generated_at=`2026-07-08T14:22:13+09:00`, status=`fail`, hard_blocking_contract_gap_count=`3`, hard_blocking_excluded_row_count=`3`, raw_row_exclusion_applied=`true`, tuning_input_allowed=`false`, blocked_reason=`blocked_contract_gap`, unknown_token_stage_count=`2`, review_warning_count=`2`.
+  - 결손 stage: `early_accel_strong_bundle_recheck_evaluated`, `early_accel_strong_bundle_recheck_skipped`, `score65_74_recovery_probe_blocked`; review warning stage: `scalp_entry_action_decision_snapshot`, `real_weak_ai_micro_entry_block`.
+  - row exclusion: [manifest.json](/home/ubuntu/KORStockScan/data/source_quality/raw_row_exclusion/2026-07-08_20260708T142200110744+0900/manifest.json). 장중 threshold/order/provider/bot 변경 없이 장후 `PostcloseSourceQualityGateReview0708`와 `CodeImprovementWorkorderReview`에서 producer-fix/workorder handoff를 재확인한다.
 
 ## 장후 체크리스트 (20:05~21:55)
 
@@ -116,3 +120,18 @@
 ```bash
 PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar
 ```
+
+<!-- AUTO_SERVER_COMPARISON_START -->
+### 본서버 vs songstockscan 자동 비교 (`2026-07-08 15:46:40`)
+
+- 기준: `profit-derived metrics are excluded by default because fallback-normalized values such as NULL -> 0 can distort comparison`
+- 상세 리포트: `data/report/server_comparison/server_comparison_2026-07-08.md`
+- `Trade Review`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Performance Tuning`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Post Sell Feedback`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Entry Pipeline Flow`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+<!-- AUTO_SERVER_COMPARISON_END -->

@@ -1,20 +1,20 @@
 {
-  "timestamp": "2026-07-08T12:18:10.225249",
-  "vix_close": 16.1299991607666,
-  "vix_ma3": 15.949999491373697,
+  "timestamp": "2026-07-08T17:59:14.685953",
+  "vix_close": 18.389999389648438,
+  "vix_ma3": 16.696666081746418,
   "vix_peak_passed": false,
   "vix_two_day_down": false,
   "vix_extreme": false,
-  "wti_close": 72.33000183105469,
-  "wti_rsi": 34.16947500387893,
-  "wti_macd": -6.121633621532155,
-  "wti_macd_signal": -6.299642853180538,
+  "wti_close": 74.5,
+  "wti_rsi": 43.66373215572774,
+  "wti_macd": -5.476792795556577,
+  "wti_macd_signal": -5.976211988008701,
   "wti_dead_cross": false,
-  "wti_from_recent_high_pct": -20.777656721379365,
+  "wti_from_recent_high_pct": -17.249804498351416,
   "oil_reversal": true,
   "oil_pullback_relief": true,
-  "fng_value": 43.0,
-  "fng_prev": 43.0,
+  "fng_value": 43.4571428571429,
+  "fng_prev": 43.4571428571429,
   "fng_description": "fear",
   "fng_extreme_fear": false,
   "fng_recovery": false,
@@ -25,11 +25,11 @@
   "swing_recovery_gate_label": "INSUFFICIENT",
   "recovery_gate_reason": "oil_only_recovery_signal_insufficient",
   "oil_only_recovery_prior": true,
-  "market_regime_continuous_score": 64.12,
+  "market_regime_continuous_score": 62.0429,
   "market_regime_continuous_label": "NEUTRAL",
   "market_regime_component_scores": {
-    "vix_level": 23.87,
-    "fear_greed_level": 7.2,
+    "vix_level": 21.61,
+    "fear_greed_level": 7.3829,
     "domestic_breadth": 19.3,
     "oil_relief": 10.0,
     "local_model": 3.75
@@ -43,8 +43,8 @@
   ],
   "debug": {
     "oil_rsi_turned": false,
-    "fng_curr": 43.0,
-    "fng_prev": 43.0,
+    "fng_curr": 43.4571428571429,
+    "fng_prev": 43.4571428571429,
     "score_threshold": 70,
     "component_scores": {
       "vix": 0,
@@ -68,8 +68,8 @@
         "neutral_min_score": 45.0
       },
       "component_scores": {
-        "vix_level": 23.87,
-        "fear_greed_level": 7.2,
+        "vix_level": 21.61,
+        "fear_greed_level": 7.3829,
         "domestic_breadth": 19.3,
         "oil_relief": 10.0,
         "local_model": 3.75
@@ -96,5 +96,5 @@
     "local_breadth_signal": "none"
   },
   "cached_session_date": "2026-07-08",
-  "cached_at": "2026-07-08T12:18:10.233813+09:00"
+  "cached_at": "2026-07-08T17:59:14.699568+09:00"
 }
