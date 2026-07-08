@@ -50,6 +50,53 @@ def _counterfactual_row(code, record_id, *, outcome="MISSED_WINNER", close_10m_p
     }
 
 
+def test_counterfactual_labels_prefer_full_rows(tmp_path, monkeypatch):
+    monitor_dir = tmp_path / "monitor_snapshots"
+    monitor_dir.mkdir()
+    monkeypatch.setattr(mod, "MONITOR_SNAPSHOT_DIR", monitor_dir)
+    (monitor_dir / "missed_entry_counterfactual_2026-07-08.json").write_text(
+        json.dumps(
+            {
+                "rows": [
+                    {
+                        **_counterfactual_row("111111", 1),
+                        "terminal_stage": "blocked_ai_score",
+                    }
+                ],
+                "full_rows": [_counterfactual_row("222222", 2)],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    labels, meta = mod._load_counterfactual_labels("2026-07-08")
+
+    assert ("222222", "2") in labels
+    assert ("111111", "1") not in labels
+    assert meta["row_source"] == "full_rows"
+    assert meta["full_row_count"] == 1
+    assert meta["display_row_count"] == 1
+    assert meta["latency_block_label_count"] == 1
+
+
+def test_counterfactual_labels_fallback_to_rows(tmp_path, monkeypatch):
+    monitor_dir = tmp_path / "monitor_snapshots"
+    monitor_dir.mkdir()
+    monkeypatch.setattr(mod, "MONITOR_SNAPSHOT_DIR", monitor_dir)
+    (monitor_dir / "missed_entry_counterfactual_2026-07-08.json").write_text(
+        json.dumps({"rows": [_counterfactual_row("111111", 1)]}),
+        encoding="utf-8",
+    )
+
+    labels, meta = mod._load_counterfactual_labels("2026-07-08")
+
+    assert ("111111", "1") in labels
+    assert meta["row_source"] == "rows"
+    assert meta["full_row_count"] == 0
+    assert meta["display_row_count"] == 1
+    assert meta["latency_block_label_count"] == 1
+
+
 def test_latency_classifier_recommendation_holds_after_runtime_simplification(tmp_path, monkeypatch):
     event_dir = tmp_path / "pipeline_events"
     report_dir = tmp_path / "report"

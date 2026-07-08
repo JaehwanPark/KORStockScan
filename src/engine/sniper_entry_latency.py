@@ -602,6 +602,128 @@ def _normalize_signal_score(signal_strength: Any) -> float:
     return score
 
 
+def _score_candidate_from_source(source: dict[str, Any] | None, prefix: str) -> tuple[float | None, str]:
+    fields = source if isinstance(source, dict) else {}
+    zero_candidate = ""
+    for key in (
+        "rt_ai_prob",
+        "prob",
+        "ai_prob",
+        "entry_ai_prob",
+        "rt_ai_score",
+        "ai_score",
+        "entry_ai_score",
+        "latest_ai_score",
+        "prior_ai_score",
+        "holding_ai_score",
+    ):
+        raw_value = fields.get(key)
+        if raw_value in (None, "", "None", "-", "not_evaluated"):
+            continue
+        score = _normalize_signal_score(raw_value)
+        if score > 0:
+            return score, f"{prefix}.{key}"
+        if score == 0:
+            zero_candidate = zero_candidate or f"{prefix}.{key}"
+    if zero_candidate:
+        return 0.0, zero_candidate
+    return None, ""
+
+
+def _latency_relief_signal_provenance(
+    *,
+    signal_strength: Any,
+    stock: dict[str, Any] | None,
+    ws_data: dict[str, Any] | None,
+) -> dict[str, Any]:
+    input_score = _normalize_signal_score(signal_strength)
+    stock_score, stock_source = _score_candidate_from_source(stock, "stock")
+    ws_score, ws_source = _score_candidate_from_source(ws_data, "ws")
+    candidate_score: float | None = None
+    candidate_source = ""
+    for score, score_source in ((stock_score, stock_source), (ws_score, ws_source)):
+        if score is not None and score > 0:
+            candidate_score = score
+            candidate_source = score_source
+            break
+    if candidate_score is None:
+        candidate_score = stock_score if stock_score is not None else ws_score
+        candidate_source = stock_source or ws_source
+
+    if input_score > 0:
+        state = "fresh"
+        source = "input_signal_strength"
+        gap = ""
+    elif candidate_score is None:
+        state = "missing"
+        source = "missing"
+        gap = "signal_strength_missing"
+    elif candidate_score > 0:
+        state = "source_gap"
+        source = "input_signal_strength_zero"
+        gap = "prior_ai_available_but_signal_strength_zero"
+    else:
+        state = "unusable"
+        source = "input_signal_strength_zero"
+        gap = "candidate_ai_score_zero_or_unusable"
+
+    return {
+        "latency_spread_relief_signal_score_source": source,
+        "latency_spread_relief_signal_source_quality_state": state,
+        "latency_spread_relief_candidate_ai_score": (
+            round(float(candidate_score), 3) if candidate_score is not None else 0.0
+        ),
+        "latency_spread_relief_candidate_ai_score_source": candidate_source,
+        "latency_spread_relief_source_quality_gap": gap,
+    }
+
+
+def _latency_spread_block_buckets(
+    *,
+    latency_status,
+    latest_price: int,
+    best_bid: int,
+    best_ask: int,
+    signal_source_quality_state: str,
+) -> dict[str, Any]:
+    spread_ratio = _to_float(getattr(latency_status, "spread_ratio", 0.0), 0.0)
+    spread_bps = round(float(spread_ratio) * 10000.0, 3)
+    spread_ticks = _compute_spread_ticks(best_ask, best_bid)
+    quote_stale = bool(getattr(latency_status, "quote_stale", False))
+    ws_age_ms = int(getattr(latency_status, "ws_age_ms", 0) or 0)
+    max_ws_age_caution = int(_CONFIG.max_ws_age_ms_for_caution or 0)
+
+    if spread_ratio <= 0:
+        price_bucket = "not_spread_block"
+    elif quote_stale or (max_ws_age_caution > 0 and ws_age_ms > max_ws_age_caution):
+        price_bucket = "stale_mixed_spread"
+    elif int(latest_price or best_bid or 0) < 10000 and spread_ticks >= 5:
+        price_bucket = "low_price_tick_wide"
+    elif spread_ratio >= 0.0100 or spread_ticks >= 8:
+        price_bucket = "true_wide_spread"
+    elif spread_ratio > _to_float(_CONFIG.max_spread_ratio_for_caution, 0.0):
+        price_bucket = "spread_above_caution"
+    else:
+        price_bucket = "spread_not_above_caution"
+
+    if signal_source_quality_state in {"missing", "unusable", "source_gap"}:
+        signal_bucket = f"signal_{signal_source_quality_state}"
+    else:
+        signal_bucket = "signal_fresh"
+
+    block_bucket = price_bucket
+    if price_bucket not in {"not_spread_block", "stale_mixed_spread"} and signal_bucket != "signal_fresh":
+        block_bucket = f"{price_bucket}|{signal_bucket}"
+
+    return {
+        "latency_spread_block_bucket": block_bucket,
+        "latency_spread_block_price_bucket": price_bucket,
+        "latency_spread_block_signal_context_bucket": signal_bucket,
+        "latency_spread_block_spread_bps": spread_bps,
+        "latency_spread_block_spread_ticks": spread_ticks,
+    }
+
+
 def _normalized_reason_set(values: Any) -> set[str]:
     normalized: set[str] = set()
     for value in values or ():
@@ -627,6 +749,89 @@ def _latency_danger_reasons(latency_status) -> list[str]:
     if not reasons:
         reasons.append("other_danger")
     return reasons
+
+
+def _latency_danger_provenance(latency_status) -> dict[str, Any]:
+    """Expose the EntryPolicy DANGER basis without changing legacy reason labels."""
+
+    state_value = str(
+        getattr(getattr(latency_status, "state", None), "value", getattr(latency_status, "state", ""))
+        or ""
+    ).upper()
+    if state_value != "DANGER":
+        return {
+            "latency_danger_detail_reason": "not_applicable",
+            "latency_danger_source_quality_state": "not_applicable",
+            "latency_danger_reason_taxonomy_gap": False,
+            "latency_danger_max_ws_age_ms_for_caution": int(_CONFIG.max_ws_age_ms_for_caution or 0),
+            "latency_danger_max_ws_jitter_ms_for_caution": int(_CONFIG.max_ws_jitter_ms_for_caution or 0),
+            "latency_danger_max_spread_ratio_for_caution": round(
+                float(_to_float(_CONFIG.max_spread_ratio_for_caution, 0.0)),
+                6,
+            ),
+            "latency_danger_guard_max_spread_ratio": round(
+                float(
+                    _to_float(
+                        getattr(TRADING_RULES, "SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO", 0.0100),
+                        0.0100,
+                    )
+                ),
+                6,
+            ),
+        }
+
+    max_ws_age_caution = int(_CONFIG.max_ws_age_ms_for_caution or 0)
+    max_ws_jitter_caution = int(_CONFIG.max_ws_jitter_ms_for_caution or 0)
+    max_spread_caution = _to_float(_CONFIG.max_spread_ratio_for_caution, 0.0)
+    guard_max_spread = _to_float(
+        getattr(TRADING_RULES, "SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO", 0.0100),
+        0.0100,
+    )
+    ws_age_ms = int(getattr(latency_status, "ws_age_ms", 0) or 0)
+    ws_jitter_ms = int(getattr(latency_status, "ws_jitter_ms", 0) or 0)
+    spread_ratio = _to_float(getattr(latency_status, "spread_ratio", 0.0), 0.0)
+    order_rtt_avg_ms = int(getattr(latency_status, "order_rtt_avg_ms", 0) or 0)
+
+    detail_reasons: list[str] = []
+    if getattr(latency_status, "quote_stale", False):
+        detail_reasons.append("quote_stale")
+    if max_ws_age_caution > 0 and ws_age_ms > max_ws_age_caution:
+        detail_reasons.append("ws_age_above_caution")
+    if max_ws_jitter_caution > 0 and ws_jitter_ms > max_ws_jitter_caution:
+        detail_reasons.append("ws_jitter_above_caution")
+    if order_rtt_avg_ms > int(_CONFIG.max_order_rtt_avg_ms_for_caution or 0):
+        detail_reasons.append("order_rtt_avg_above_caution")
+    if max_spread_caution > 0 and spread_ratio > max_spread_caution:
+        if guard_max_spread > 0 and spread_ratio <= guard_max_spread:
+            detail_reasons.append("spread_above_caution_below_guard_cap")
+        else:
+            detail_reasons.append("spread_above_caution")
+
+    if not detail_reasons:
+        detail_reasons.append("unclassified_danger")
+
+    if getattr(latency_status, "quote_stale", False):
+        source_quality_state = "stale"
+    elif {"ws_age_above_caution", "ws_jitter_above_caution", "order_rtt_avg_above_caution"} & set(
+        detail_reasons
+    ):
+        source_quality_state = "degraded"
+    elif any(reason.startswith("spread_above_caution") for reason in detail_reasons):
+        source_quality_state = "fresh"
+    else:
+        source_quality_state = "unknown"
+
+    legacy_reasons = _normalized_reason_set(_latency_danger_reasons(latency_status))
+    taxonomy_gap = legacy_reasons == {"other_danger"} and detail_reasons != ["unclassified_danger"]
+    return {
+        "latency_danger_detail_reason": ",".join(detail_reasons),
+        "latency_danger_source_quality_state": source_quality_state,
+        "latency_danger_reason_taxonomy_gap": taxonomy_gap,
+        "latency_danger_max_ws_age_ms_for_caution": max_ws_age_caution,
+        "latency_danger_max_ws_jitter_ms_for_caution": max_ws_jitter_caution,
+        "latency_danger_max_spread_ratio_for_caution": round(float(max_spread_caution), 6),
+        "latency_danger_guard_max_spread_ratio": round(float(guard_max_spread), 6),
+    }
 
 
 def _danger_latency_relief_runtime_enabled() -> bool:
@@ -1602,7 +1807,9 @@ def evaluate_live_buy_entry(
     latency_wide_spread_passive_requote_reason = ""
     latency_wide_spread_passive_requote_context: dict[str, Any] = {}
     latency_danger_reasons = ",".join(_latency_danger_reasons(latency))
+    latency_danger_provenance = _latency_danger_provenance(latency)
     latency_buy_pressure = _latency_buy_pressure_value(ws_data, stock)
+    latency_spread_relief_block_reason = ""
     danger_relief_forbidden = (
         policy.decision == EntryDecision.REJECT_DANGER and not _danger_latency_relief_runtime_enabled()
     )
@@ -1765,6 +1972,7 @@ def evaluate_live_buy_entry(
                 f"danger_reasons={latency_danger_reasons}"
             )
         else:
+            latency_spread_relief_block_reason = spread_relief_reason
             if (
                 not latency_canary_reason
                 or latency_canary_reason == "disabled"
@@ -1887,6 +2095,20 @@ def evaluate_live_buy_entry(
     spread_relief_configured_min_signal, spread_relief_effective_min_signal = (
         _latency_spread_relief_signal_score_floors()
     )
+    spread_relief_signal_provenance = _latency_relief_signal_provenance(
+        signal_strength=signal_strength,
+        stock=stock,
+        ws_data=ws_data,
+    )
+    spread_block_buckets = _latency_spread_block_buckets(
+        latency_status=latency,
+        latest_price=latest_price,
+        best_bid=best_bid,
+        best_ask=best_ask,
+        signal_source_quality_state=str(
+            spread_relief_signal_provenance.get("latency_spread_relief_signal_source_quality_state") or ""
+        ),
+    )
     result = {
         "allowed": False,
         "decision": effective_decision.value,
@@ -1908,6 +2130,7 @@ def evaluate_live_buy_entry(
         "spread_ratio": latency.spread_ratio,
         "quote_stale": latency.quote_stale,
         "latency_danger_reasons": latency_danger_reasons,
+        **latency_danger_provenance,
         "target_buy_price": int(target_buy_price or 0),
         "order_price": 0,
         "entry_price_guard": "none",
@@ -1939,6 +2162,17 @@ def evaluate_live_buy_entry(
         "latency_spread_relief_configured_min_signal_score": round(spread_relief_configured_min_signal, 3),
         "latency_spread_relief_effective_min_signal_score": round(spread_relief_effective_min_signal, 3),
         "latency_spread_relief_tag": spread_relief_tag,
+        "latency_spread_relief_block_reason": latency_spread_relief_block_reason,
+        **spread_relief_signal_provenance,
+        **spread_block_buckets,
+        "latency_relief_attempted": bool(policy.decision == EntryDecision.REJECT_DANGER and not danger_relief_forbidden),
+        "latency_relief_block_reason": (
+            latency_canary_reason
+            if policy.decision == EntryDecision.REJECT_DANGER
+            and effective_decision == EntryDecision.REJECT_DANGER
+            and not latency_canary_applied
+            else ""
+        ),
         "latency_wide_spread_passive_requote_applied": latency_wide_spread_passive_requote_applied,
         "latency_wide_spread_passive_requote_reason": latency_wide_spread_passive_requote_reason,
         "latency_wide_spread_passive_requote_context": latency_wide_spread_passive_requote_context,

@@ -207,6 +207,9 @@ def test_build_missed_entry_counterfactual_report(monkeypatch, tmp_path):
     assert winner["minute_candle_source_quality"] == "pass"
     assert winner["minute_candle_source_quality_gate"] == "pass"
     assert winner["minute_candle_forward_10m_bars"] == 10
+    assert winner["minute_candle_forward_15m_bars"] == 10
+    assert winner["minute_candle_forward_15m_source_quality_gate"] == "source_quality_warning"
+    assert winner["minute_candle_forward_15m_source_quality_reason"] == "insufficient_ka10080_bars_in_forward_15m_window"
     assert winner["minute_candle_source_meta"]["api_id"] == "ka10080"
     assert report["metrics"]["minute_candle_source_quality_counts"] == {"pass": 2}
     assert winner["rising_missed_stage_count"] == 1
@@ -252,6 +255,90 @@ def test_build_missed_entry_counterfactual_report(monkeypatch, tmp_path):
     assert action_plan["hold_sample_candidates"][0]["key"] == "OPEN_TOP,PRICE_JUMP_START"
     assert action_plan["next_actions"][0] == "surface_positive_prior_candidates_in_daily_calibration_source_bundle"
     assert len(report["full_rows"]) == 2
+
+
+def test_missed_entry_counterfactual_adds_15m_metrics_and_quick_profit_bucket(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    target_date = "2026-07-08"
+    _write_pipeline_events(
+        tmp_path,
+        target_date,
+        [
+            {
+                "pipeline": "ENTRY_PIPELINE",
+                "stage": "ai_confirmed",
+                "stock_name": "퀵프로핏",
+                "stock_code": "444444",
+                "record_id": 4,
+                "fields": {"action": "BUY", "ai_score": "90"},
+                "emitted_at": "2026-07-08T10:00:01",
+                "emitted_date": target_date,
+            },
+            {
+                "pipeline": "ENTRY_PIPELINE",
+                "stage": "entry_armed",
+                "stock_name": "퀵프로핏",
+                "stock_code": "444444",
+                "record_id": 4,
+                "fields": {"ai_score": "90.0", "target_buy_price": "7000"},
+                "emitted_at": "2026-07-08T10:00:02",
+                "emitted_date": target_date,
+            },
+            {
+                "pipeline": "ENTRY_PIPELINE",
+                "stage": "rising_missed_one_share_entry",
+                "stock_name": "퀵프로핏",
+                "stock_code": "444444",
+                "record_id": 4,
+                "fields": {
+                    "source_signature": "PRICE_JUMP_START",
+                    "rising_missed_class": "rising_missed_raw",
+                },
+                "emitted_at": "2026-07-08T10:00:03",
+                "emitted_date": target_date,
+            },
+            {
+                "pipeline": "ENTRY_PIPELINE",
+                "stage": "latency_block",
+                "stock_name": "퀵프로핏",
+                "stock_code": "444444",
+                "record_id": 4,
+                "fields": {
+                    "reason": "latency_state_danger",
+                    "spread_ratio": "0.008",
+                },
+                "emitted_at": "2026-07-08T10:00:04",
+                "emitted_date": target_date,
+            },
+        ],
+    )
+    candles = [
+        _make_candle(f"10:{minute:02d}:00", 7000, 7100 if minute == 3 else 7070, 6980, 7080)
+        for minute in range(1, 16)
+    ]
+    fake_kiwoom = types.SimpleNamespace(
+        get_kiwoom_token=lambda: "dummy",
+        get_minute_candles_ka10080=lambda _token, code, limit=700: candles if code == "444444" else [],
+    )
+    import src.utils as utils_pkg
+    monkeypatch.setattr(utils_pkg, "kiwoom_utils", fake_kiwoom, raising=False)
+    monkeypatch.setitem(sys.modules, "src.utils.kiwoom_utils", fake_kiwoom)
+
+    report = report_mod.build_missed_entry_counterfactual_report(target_date, token="dummy")
+
+    row = report["full_rows"][0]
+    assert row["minute_candle_forward_15m_bars"] == 15
+    assert row["minute_candle_forward_15m_source_quality"] == "pass"
+    assert row["mfe_15m_pct"] >= 1.0
+    assert row["close_15m_pct"] >= 1.0
+    assert "avg_close_15m_pct" in report["metrics"]["blocker_outcome_metrics"]["latency_block"]
+    quick = report["metrics"]["quick_profit_5k_10k_rising_missed_latency_source_only"]
+    assert quick["runtime_effect"] is False
+    assert quick["allowed_runtime_apply"] is False
+    assert "spread_guard_relaxation" in quick["forbidden_uses"]
+    assert quick["target_sample_count"] == 1
+    assert quick["spread_bucket_metrics"][0]["spread_ratio_bucket"] == "spread_ratio_0_0075_to_0_010"
+    assert quick["spread_bucket_metrics"][0]["mfe_15m_ge_1_count"] == 1
 
 
 def test_missed_entry_counterfactual_splits_ai_and_pre_submit_cohorts(monkeypatch, tmp_path):
@@ -506,6 +593,12 @@ def test_missed_entry_counterfactual_preserves_full_rows_when_top_rows_are_limit
     assert report["metrics"]["minute_candle_source_quality_counts"] == {"insufficient_window": 4}
     assert report["full_rows"][0]["minute_candle_source_quality_gate"] == "source_quality_insufficient"
     assert report["full_rows"][0]["minute_candle_source_quality_reason"] == "no_ka10080_bars_in_forward_10m_window"
+    assert report["full_rows"][0]["minute_candle_forward_15m_bars"] == 0
+    assert report["full_rows"][0]["minute_candle_forward_15m_source_quality_gate"] == "source_quality_insufficient"
+    assert (
+        report["full_rows"][0]["minute_candle_forward_15m_source_quality_reason"]
+        == "no_ka10080_bars_in_forward_15m_window"
+    )
 
 
 def test_missed_entry_counterfactual_includes_snapshot_wait_or_skip_paths(monkeypatch, tmp_path):

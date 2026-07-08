@@ -318,6 +318,14 @@ LATENCY_SUBMIT_FIELDS = (
     "quote_stale",
     "signal_price",
     "latest_price",
+    "latency_danger_reasons",
+    "latency_danger_detail_reason",
+    "latency_danger_source_quality_state",
+    "latency_danger_reason_taxonomy_gap",
+    "latency_danger_max_ws_age_ms_for_caution",
+    "latency_danger_max_ws_jitter_ms_for_caution",
+    "latency_danger_max_spread_ratio_for_caution",
+    "latency_danger_guard_max_spread_ratio",
     "latency_canary_applied",
     "latency_canary_reason",
     "latency_strategy_id",
@@ -326,6 +334,19 @@ LATENCY_SUBMIT_FIELDS = (
     "latency_spread_relief_signal_score",
     "latency_spread_relief_configured_min_signal_score",
     "latency_spread_relief_effective_min_signal_score",
+    "latency_spread_relief_block_reason",
+    "latency_spread_relief_signal_score_source",
+    "latency_spread_relief_signal_source_quality_state",
+    "latency_spread_relief_candidate_ai_score",
+    "latency_spread_relief_candidate_ai_score_source",
+    "latency_spread_relief_source_quality_gap",
+    "latency_spread_block_bucket",
+    "latency_spread_block_price_bucket",
+    "latency_spread_block_signal_context_bucket",
+    "latency_spread_block_spread_bps",
+    "latency_spread_block_spread_ticks",
+    "latency_relief_attempted",
+    "latency_relief_block_reason",
     "threshold_family",
     "runtime_effect",
     "actual_order_submitted",
@@ -2124,12 +2145,33 @@ def _normalized_fields_for_contract(stage: str, fields: dict[str, Any]) -> dict[
                 normalized[field] = "unknown_pre_contract"
         if not _is_present(normalized.get("latency_canary_reason")):
             normalized["latency_canary_reason"] = "not_applicable_or_pre_contract"
+        normalized.setdefault("latency_danger_reasons", "unknown_pre_contract")
+        normalized.setdefault("latency_danger_detail_reason", "unknown_pre_contract")
+        normalized.setdefault("latency_danger_source_quality_state", "unknown_pre_contract")
+        normalized.setdefault("latency_danger_reason_taxonomy_gap", "unknown_pre_contract")
+        normalized.setdefault("latency_danger_max_ws_age_ms_for_caution", "unknown_pre_contract")
+        normalized.setdefault("latency_danger_max_ws_jitter_ms_for_caution", "unknown_pre_contract")
+        normalized.setdefault("latency_danger_max_spread_ratio_for_caution", "unknown_pre_contract")
+        normalized.setdefault("latency_danger_guard_max_spread_ratio", "unknown_pre_contract")
         normalized.setdefault("latency_strategy_id", "unknown_pre_contract")
         normalized.setdefault("latency_position_tag", "unknown_pre_contract")
         normalized.setdefault("latency_spread_relief_tag", "unknown_pre_contract")
         normalized.setdefault("latency_spread_relief_signal_score", "unknown_pre_contract")
         normalized.setdefault("latency_spread_relief_configured_min_signal_score", "unknown_pre_contract")
         normalized.setdefault("latency_spread_relief_effective_min_signal_score", "unknown_pre_contract")
+        normalized.setdefault("latency_spread_relief_block_reason", "not_applicable_or_pre_contract")
+        normalized.setdefault("latency_spread_relief_signal_score_source", "unknown_pre_contract")
+        normalized.setdefault("latency_spread_relief_signal_source_quality_state", "unknown_pre_contract")
+        normalized.setdefault("latency_spread_relief_candidate_ai_score", "unknown_pre_contract")
+        normalized.setdefault("latency_spread_relief_candidate_ai_score_source", "unknown_pre_contract")
+        normalized.setdefault("latency_spread_relief_source_quality_gap", "not_applicable_or_pre_contract")
+        normalized.setdefault("latency_spread_block_bucket", "unknown_pre_contract")
+        normalized.setdefault("latency_spread_block_price_bucket", "unknown_pre_contract")
+        normalized.setdefault("latency_spread_block_signal_context_bucket", "unknown_pre_contract")
+        normalized.setdefault("latency_spread_block_spread_bps", "unknown_pre_contract")
+        normalized.setdefault("latency_spread_block_spread_ticks", "unknown_pre_contract")
+        normalized.setdefault("latency_relief_attempted", "unknown_pre_contract")
+        normalized.setdefault("latency_relief_block_reason", "not_applicable_or_pre_contract")
     if stage.startswith("early_accel_strong_bundle_recheck_"):
         normalized.setdefault("recheck_reason_excerpt", "not_evaluated_pre_contract")
         normalized.setdefault("recheck_failure_class", "not_evaluated_pre_contract")

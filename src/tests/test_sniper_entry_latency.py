@@ -1613,6 +1613,62 @@ def test_latency_entry_canary_does_not_apply_when_signal_score_low(monkeypatch):
     _assert_danger_hard_safety_block(result, danger_reasons="other_danger")
 
 
+def test_latency_other_danger_records_spread_above_caution_taxonomy_gap(monkeypatch):
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=True,
+            SCALP_LATENCY_SPREAD_RELIEF_TAGS=("SCANNER",),
+            SCALP_LATENCY_SPREAD_RELIEF_MIN_SIGNAL_SCORE=60.0,
+            SCALP_LATENCY_SPREAD_RELIEF_EFFECTIVE_MIN_SIGNAL_SCORE_FLOOR=80.0,
+            SCALP_LATENCY_SPREAD_RELIEF_MAX_SPREAD_RATIO=0.0150,
+            SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED=False,
+            SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_GUARD_CANARY_ENABLED=False,
+            SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO=0.0100,
+        ),
+    )
+
+    result = evaluate_live_buy_entry(
+        stock={"name": "TEST", "position_tag": "SCANNER"},
+        code="123456_other_danger_spread_gap",
+        ws_data={
+            "curr": 10_020,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook": {
+                "asks": [{"price": 10_080, "volume": 100}],
+                "bids": [{"price": 10_020, "volume": 100}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=2,
+        signal_price=10_000,
+        signal_strength=70.0,
+    )
+
+    assert result["decision"] == "REJECT_DANGER"
+    assert result["latency_danger_reasons"] == "other_danger"
+    assert result["latency_danger_detail_reason"] == "spread_above_caution_below_guard_cap"
+    assert result["latency_danger_source_quality_state"] == "fresh"
+    assert result["latency_danger_reason_taxonomy_gap"] is True
+    assert result["latency_danger_max_spread_ratio_for_caution"] == 0.005
+    assert result["latency_danger_guard_max_spread_ratio"] == 0.01
+    assert result["latency_spread_relief_block_reason"] == "spread_only_required"
+    assert result["latency_relief_attempted"] is True
+    assert result["latency_relief_block_reason"] == "spread_only_required"
+    assert result["latency_spread_relief_signal_score_source"] == "input_signal_strength"
+    assert result["latency_spread_relief_signal_source_quality_state"] == "fresh"
+    assert result["latency_spread_block_price_bucket"] == "spread_above_caution"
+    assert result["latency_spread_block_signal_context_bucket"] == "signal_fresh"
+    assert result["latency_spread_block_bucket"] == "spread_above_caution"
+
+
 def test_latency_spread_relief_canary_overrides_reject_danger_to_normal(monkeypatch):
     monkeypatch.setattr(
         entry_latency_module,
@@ -1778,6 +1834,100 @@ def test_latency_spread_relief_canary_enforces_effective_min_signal_floor(monkey
     assert result["latency_spread_relief_configured_min_signal_score"] == 60.0
     assert result["latency_spread_relief_effective_min_signal_score"] == 85.0
     assert result["latency_spread_relief_tag"] == "SCANNER"
+
+
+def test_latency_spread_relief_records_prior_ai_signal_source_gap(monkeypatch):
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=True,
+            SCALP_LATENCY_SPREAD_RELIEF_TAGS=("SCANNER",),
+            SCALP_LATENCY_SPREAD_RELIEF_MIN_SIGNAL_SCORE=60.0,
+            SCALP_LATENCY_SPREAD_RELIEF_EFFECTIVE_MIN_SIGNAL_SCORE_FLOOR=80.0,
+            SCALP_LATENCY_SPREAD_RELIEF_MAX_SPREAD_RATIO=0.0150,
+            SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED=False,
+            SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
+        ),
+    )
+
+    result = evaluate_live_buy_entry(
+        stock={"name": "TEST", "position_tag": "SCANNER", "ai_score": 62},
+        code="123456_spread_signal_source_gap",
+        ws_data={
+            "curr": 10_020,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook": {
+                "asks": [{"price": 10_130, "volume": 100}],
+                "bids": [{"price": 10_020, "volume": 100}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=2,
+        signal_price=10_000,
+        signal_strength=0.0,
+    )
+
+    assert result["decision"] == "REJECT_DANGER"
+    assert result["latency_canary_applied"] is False
+    assert result["latency_spread_relief_block_reason"] == "low_signal"
+    assert result["latency_spread_relief_signal_score"] == 0.0
+    assert result["latency_spread_relief_signal_score_source"] == "input_signal_strength_zero"
+    assert result["latency_spread_relief_signal_source_quality_state"] == "source_gap"
+    assert result["latency_spread_relief_candidate_ai_score"] == 62.0
+    assert result["latency_spread_relief_candidate_ai_score_source"] == "stock.ai_score"
+    assert result["latency_spread_relief_source_quality_gap"] == "prior_ai_available_but_signal_strength_zero"
+    assert result["latency_spread_block_price_bucket"] == "true_wide_spread"
+    assert result["latency_spread_block_signal_context_bucket"] == "signal_source_gap"
+    assert result["latency_spread_block_bucket"] == "true_wide_spread|signal_source_gap"
+
+
+def test_latency_spread_relief_candidate_ai_prefers_positive_ws_over_stock_zero(monkeypatch):
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=True,
+            SCALP_LATENCY_SPREAD_RELIEF_TAGS=("SCANNER",),
+            SCALP_LATENCY_SPREAD_RELIEF_MIN_SIGNAL_SCORE=60.0,
+            SCALP_LATENCY_SPREAD_RELIEF_EFFECTIVE_MIN_SIGNAL_SCORE_FLOOR=80.0,
+            SCALP_LATENCY_SPREAD_RELIEF_MAX_SPREAD_RATIO=0.0150,
+            SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED=False,
+            SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
+        ),
+    )
+
+    result = evaluate_live_buy_entry(
+        stock={"name": "TEST", "position_tag": "SCANNER", "ai_score": 0},
+        code="123456_spread_signal_ws_source_gap",
+        ws_data={
+            "curr": 10_020,
+            "ai_score": 63,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook": {
+                "asks": [{"price": 10_130, "volume": 100}],
+                "bids": [{"price": 10_020, "volume": 100}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=2,
+        signal_price=10_000,
+        signal_strength=0.0,
+    )
+
+    assert result["decision"] == "REJECT_DANGER"
+    assert result["latency_spread_relief_block_reason"] == "low_signal"
+    assert result["latency_spread_relief_signal_source_quality_state"] == "source_gap"
+    assert result["latency_spread_relief_candidate_ai_score"] == 63.0
+    assert result["latency_spread_relief_candidate_ai_score_source"] == "ws.ai_score"
 
 
 def test_latency_wide_spread_passive_requote_allows_scanner_target_price(monkeypatch):

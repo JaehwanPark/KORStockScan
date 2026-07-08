@@ -14,7 +14,7 @@ from src.utils.jsonl_io import read_jsonl
 from src.utils.logger import log_error
 
 
-MISSED_ENTRY_COUNTERFACTUAL_SCHEMA_VERSION = 2
+MISSED_ENTRY_COUNTERFACTUAL_SCHEMA_VERSION = 3
 _ENTRY_ARMED_STAGES = {"entry_armed", "entry_armed_resume"}
 _INFERRED_BUY_INTENT_STAGES = _ENTRY_ARMED_STAGES | {"score65_74_recovery_probe_entry_unlocked"}
 _INFERRED_BUY_INTENT_DEDUP_TERMINAL_STAGES = {
@@ -122,12 +122,16 @@ def _fetch_minute_candles_with_meta(kiwoom_utils, token: str, code: str, *, limi
     return candles, _minute_candle_meta(candles, requested_limit=limit)
 
 
-def _minute_forward_source_quality(metrics_10m: dict, candle_meta: dict) -> dict:
-    bars_10m = _safe_int((metrics_10m or {}).get("bars"), 0)
-    if bars_10m <= 0:
+def _minute_forward_source_quality(metrics: dict, candle_meta: dict, *, window_minutes: int = 10) -> dict:
+    bars = _safe_int((metrics or {}).get("bars"), 0)
+    if bars <= 0:
         status = "insufficient_window"
         gate = "source_quality_insufficient"
-        reason = "no_ka10080_bars_in_forward_10m_window"
+        reason = f"no_ka10080_bars_in_forward_{window_minutes}m_window"
+    elif window_minutes > 10 and bars < window_minutes:
+        status = "partial_window"
+        gate = "source_quality_warning"
+        reason = f"insufficient_ka10080_bars_in_forward_{window_minutes}m_window"
     elif bool(candle_meta.get("continuous_next_key_missing")):
         status = "partial_window"
         gate = "source_quality_warning"
@@ -143,12 +147,19 @@ def _minute_forward_source_quality(metrics_10m: dict, candle_meta: dict) -> dict
     else:
         status = "pass"
         gate = "pass"
-        reason = "ka10080_forward_window_available"
+        reason = "ka10080_forward_window_available" if window_minutes == 10 else f"ka10080_forward_{window_minutes}m_window_available"
+    if window_minutes == 10:
+        return {
+            "minute_candle_source_quality": status,
+            "minute_candle_source_quality_gate": gate,
+            "minute_candle_source_quality_reason": reason,
+            "minute_candle_forward_10m_bars": bars,
+        }
     return {
-        "minute_candle_source_quality": status,
-        "minute_candle_source_quality_gate": gate,
-        "minute_candle_source_quality_reason": reason,
-        "minute_candle_forward_10m_bars": bars_10m,
+        f"minute_candle_forward_{window_minutes}m_source_quality": status,
+        f"minute_candle_forward_{window_minutes}m_source_quality_gate": gate,
+        f"minute_candle_forward_{window_minutes}m_source_quality_reason": reason,
+        f"minute_candle_forward_{window_minutes}m_bars": bars,
     }
 
 
@@ -719,6 +730,15 @@ def _build_blocker_outcome_metrics(items: list[dict]) -> dict:
             "avg_mae_10m_pct": _avg(
                 [_safe_float((row.get("metrics_10m") or {}).get("mae_pct"), 0.0) for row in rows]
             ),
+            "avg_close_15m_pct": _avg(
+                [_safe_float((row.get("metrics_15m") or {}).get("close_ret_pct"), 0.0) for row in rows]
+            ),
+            "avg_mfe_15m_pct": _avg(
+                [_safe_float((row.get("metrics_15m") or {}).get("mfe_pct"), 0.0) for row in rows]
+            ),
+            "avg_mae_15m_pct": _avg(
+                [_safe_float((row.get("metrics_15m") or {}).get("mae_pct"), 0.0) for row in rows]
+            ),
             "estimated_counterfactual_pnl_10m_krw_sum": estimated_pnl,
             "candidate_ids": [str(row.get("candidate_id") or "") for row in rows[:20]],
         }
@@ -748,6 +768,15 @@ def _build_cohort_outcome_metrics(items: list[dict]) -> dict:
             ),
             "avg_mae_10m_pct": _avg(
                 [_safe_float((row.get("metrics_10m") or {}).get("mae_pct"), 0.0) for row in rows]
+            ),
+            "avg_close_15m_pct": _avg(
+                [_safe_float((row.get("metrics_15m") or {}).get("close_ret_pct"), 0.0) for row in rows]
+            ),
+            "avg_mfe_15m_pct": _avg(
+                [_safe_float((row.get("metrics_15m") or {}).get("mfe_pct"), 0.0) for row in rows]
+            ),
+            "avg_mae_15m_pct": _avg(
+                [_safe_float((row.get("metrics_15m") or {}).get("mae_pct"), 0.0) for row in rows]
             ),
         }
     return metrics
@@ -816,6 +845,15 @@ def _build_rising_missed_refinement_metrics(items: list[dict]) -> dict:
                     "avg_mae_10m_pct": _avg(
                         [_safe_float((row.get("metrics_10m") or {}).get("mae_pct"), 0.0) for row in bucket_rows]
                     ),
+                    "avg_close_15m_pct": _avg(
+                        [_safe_float((row.get("metrics_15m") or {}).get("close_ret_pct"), 0.0) for row in bucket_rows]
+                    ),
+                    "avg_mfe_15m_pct": _avg(
+                        [_safe_float((row.get("metrics_15m") or {}).get("mfe_pct"), 0.0) for row in bucket_rows]
+                    ),
+                    "avg_mae_15m_pct": _avg(
+                        [_safe_float((row.get("metrics_15m") or {}).get("mae_pct"), 0.0) for row in bucket_rows]
+                    ),
                 }
             )
         return rows
@@ -877,6 +915,9 @@ def _build_rising_missed_refinement_action_plan(metrics: dict) -> dict:
             "avoided_loser_rate": _safe_float(row.get("avoided_loser_rate"), 0.0) or 0.0,
             "avg_mfe_10m_pct": _safe_float(row.get("avg_mfe_10m_pct"), None),
             "avg_mae_10m_pct": _safe_float(row.get("avg_mae_10m_pct"), None),
+            "avg_close_15m_pct": _safe_float(row.get("avg_close_15m_pct"), None),
+            "avg_mfe_15m_pct": _safe_float(row.get("avg_mfe_15m_pct"), None),
+            "avg_mae_15m_pct": _safe_float(row.get("avg_mae_15m_pct"), None),
             "runtime_effect": False,
             "allowed_runtime_apply": False,
         }
@@ -984,6 +1025,94 @@ def _build_rising_missed_refinement_action_plan(metrics: dict) -> dict:
     }
 
 
+def _spread_ratio_bucket(value: float | None) -> str:
+    if value is None:
+        return "spread_ratio_missing"
+    if value <= 0.005:
+        return "spread_ratio_lte_0_005"
+    if value <= 0.0075:
+        return "spread_ratio_0_005_to_0_0075"
+    if value <= 0.010:
+        return "spread_ratio_0_0075_to_0_010"
+    return "spread_ratio_gt_0_010"
+
+
+def _build_quick_profit_source_only_metrics(items: list[dict]) -> dict:
+    target_rows: list[dict] = []
+    for item in items:
+        if str(item.get("terminal_stage") or "") != "latency_block":
+            continue
+        if not _rising_missed_seen(item):
+            continue
+        if not _rising_missed_source_field(item, "rising_missed_class"):
+            continue
+        entry_price = _safe_float(item.get("entry_price_used"), 0.0)
+        if not (5000.0 <= entry_price < 10000.0):
+            continue
+        target_rows.append(item)
+
+    buckets: dict[str, list[dict]] = defaultdict(list)
+    for item in target_rows:
+        terminal_fields = item.get("terminal_fields") if isinstance(item.get("terminal_fields"), dict) else {}
+        raw_spread = terminal_fields.get("spread_ratio")
+        spread_ratio = _safe_float(raw_spread, None) if raw_spread not in (None, "", "None") else None
+        buckets[_spread_ratio_bucket(spread_ratio)].append(item)
+
+    bucket_rows: list[dict] = []
+    for bucket, rows in sorted(buckets.items(), key=lambda pair: (-len(pair[1]), pair[0])):
+        sample = len(rows)
+        mfe_touch = sum(1 for row in rows if _safe_float((row.get("metrics_15m") or {}).get("mfe_pct"), 0.0) >= 1.0)
+        close_hold = sum(
+            1 for row in rows if _safe_float((row.get("metrics_15m") or {}).get("close_ret_pct"), 0.0) >= 1.0
+        )
+        bucket_rows.append(
+            {
+                "spread_ratio_bucket": bucket,
+                "sample_count": sample,
+                "mfe_15m_ge_1_count": mfe_touch,
+                "mfe_15m_ge_1_rate": _ratio(mfe_touch, sample),
+                "close_15m_ge_1_count": close_hold,
+                "close_15m_ge_1_rate": _ratio(close_hold, sample),
+                "avg_close_15m_pct": _avg(
+                    [_safe_float((row.get("metrics_15m") or {}).get("close_ret_pct"), 0.0) for row in rows]
+                ),
+                "avg_mfe_15m_pct": _avg(
+                    [_safe_float((row.get("metrics_15m") or {}).get("mfe_pct"), 0.0) for row in rows]
+                ),
+                "avg_mae_15m_pct": _avg(
+                    [_safe_float((row.get("metrics_15m") or {}).get("mae_pct"), 0.0) for row in rows]
+                ),
+                "candidate_ids": [str(row.get("candidate_id") or "") for row in rows[:20]],
+            }
+        )
+
+    return {
+        "metric_role": "source_quality_gate",
+        "decision_authority": "postclose_source_only_quick_profit_hypothesis_no_runtime_apply",
+        "window_policy": "same_day_missed_entry_counterfactual_15m_labels",
+        "sample_floor": 1,
+        "primary_decision_metric": "diagnostic_mfe_15m_ge_1_rate",
+        "source_quality_gate": "full_rows_counterfactual_metrics_15m_and_latency_spread_fields_present",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "forbidden_uses": [
+            "intraday_threshold_mutation",
+            "spread_guard_relaxation",
+            "broker_order_submit",
+            "provider_route_change",
+            "bot_restart_trigger",
+            "real_execution_quality_approval",
+        ],
+        "target_filter": {
+            "price_band": "5000_10000",
+            "terminal_stage": "latency_block",
+            "rising_missed_class": "present",
+        },
+        "target_sample_count": len(target_rows),
+        "spread_bucket_metrics": bucket_rows,
+    }
+
+
 def missed_entry_counterfactual_summary_to_dict(summary: MissedEntryCounterfactualSummary) -> dict:
     return {
         "date": summary.date,
@@ -1027,6 +1156,9 @@ def build_missed_entry_counterfactual_report(
                 "avg_close_10m_pct": 0.0,
                 "avg_mfe_10m_pct": 0.0,
                 "avg_mae_10m_pct": 0.0,
+                "avg_close_15m_pct": 0.0,
+                "avg_mfe_15m_pct": 0.0,
+                "avg_mae_15m_pct": 0.0,
                 "estimated_counterfactual_pnl_10m_krw_sum": 0,
                 "blocker_outcome_metrics": {},
                 "cohort_outcome_metrics": {},
@@ -1034,6 +1166,7 @@ def build_missed_entry_counterfactual_report(
                 "rising_missed_refinement_action_plan": _build_rising_missed_refinement_action_plan(
                     empty_rising_metrics
                 ),
+                "quick_profit_5k_10k_rising_missed_latency_source_only": _build_quick_profit_source_only_metrics([]),
             },
             "buy_signal_universe": {
                 "metrics": {
@@ -1091,8 +1224,10 @@ def build_missed_entry_counterfactual_report(
         candles, candle_meta = candle_cache.get(code, ([], _minute_candle_meta([], requested_limit=700)))
         metrics_5m = _compute_window_metrics(candidate, candles, 5)
         metrics_10m = _compute_window_metrics(candidate, candles, 10)
+        metrics_15m = _compute_window_metrics(candidate, candles, 15)
         outcome = _classify_candidate(metrics_5m, metrics_10m)
         source_quality = _minute_forward_source_quality(metrics_10m, candle_meta)
+        source_quality_15m = _minute_forward_source_quality(metrics_15m, candle_meta, window_minutes=15)
         entry_price_used = _safe_int(metrics_10m.get("entry_price_used"), 0)
         capacity = _sim_virtual_qty(entry_price_used, _safe_float(candidate.get("ai_score"), 0.0))
         qty = _safe_int(capacity.get("qty"), 0)
@@ -1103,10 +1238,12 @@ def build_missed_entry_counterfactual_report(
                 "outcome": outcome,
                 "metrics_5m": metrics_5m,
                 "metrics_10m": metrics_10m,
+                "metrics_15m": metrics_15m,
                 "entry_price_used": entry_price_used,
                 "price_source": "explicit_target_buy_price" if _safe_int(candidate.get("signal_price"), 0) > 0 else "minute_candle_proxy",
                 "minute_candle_source_meta": candle_meta,
                 **source_quality,
+                **source_quality_15m,
                 "counterfactual_qty": int(qty),
                 "counterfactual_qty_source": "sim_virtual_budget_dynamic_formula" if qty > 0 else "unpriced",
                 "virtual_budget_override": True,
@@ -1178,6 +1315,9 @@ def build_missed_entry_counterfactual_report(
     avg_close_10m = _avg([_safe_float((item.get("metrics_10m") or {}).get("close_ret_pct"), 0.0) for item in evaluations])
     avg_mfe_10m = _avg([_safe_float((item.get("metrics_10m") or {}).get("mfe_pct"), 0.0) for item in evaluations])
     avg_mae_10m = _avg([_safe_float((item.get("metrics_10m") or {}).get("mae_pct"), 0.0) for item in evaluations])
+    avg_close_15m = _avg([_safe_float((item.get("metrics_15m") or {}).get("close_ret_pct"), 0.0) for item in evaluations])
+    avg_mfe_15m = _avg([_safe_float((item.get("metrics_15m") or {}).get("mfe_pct"), 0.0) for item in evaluations])
+    avg_mae_15m = _avg([_safe_float((item.get("metrics_15m") or {}).get("mae_pct"), 0.0) for item in evaluations])
     estimated_pnl_sum = int(sum(_safe_int(item.get("estimated_counterfactual_pnl_10m_krw"), 0) for item in evaluations))
     minute_candle_source_quality_counts = dict(
         Counter(str(item.get("minute_candle_source_quality") or "unknown") for item in evaluations)
@@ -1199,6 +1339,7 @@ def build_missed_entry_counterfactual_report(
     rising_missed_refinement_action_plan = _build_rising_missed_refinement_action_plan(
         rising_missed_refinement_metrics
     )
+    quick_profit_source_only_metrics = _build_quick_profit_source_only_metrics(evaluations)
     reason_breakdown = []
     for stage, items in sorted(reason_buckets.items(), key=lambda pair: len(pair[1]), reverse=True):
         trades = len(items)
@@ -1214,12 +1355,16 @@ def build_missed_entry_counterfactual_report(
                 "avg_close_10m_pct": _avg([_safe_float((item.get("metrics_10m") or {}).get("close_ret_pct"), 0.0) for item in items]),
                 "avg_mfe_10m_pct": _avg([_safe_float((item.get("metrics_10m") or {}).get("mfe_pct"), 0.0) for item in items]),
                 "avg_mae_10m_pct": _avg([_safe_float((item.get("metrics_10m") or {}).get("mae_pct"), 0.0) for item in items]),
+                "avg_close_15m_pct": _avg([_safe_float((item.get("metrics_15m") or {}).get("close_ret_pct"), 0.0) for item in items]),
+                "avg_mfe_15m_pct": _avg([_safe_float((item.get("metrics_15m") or {}).get("mfe_pct"), 0.0) for item in items]),
+                "avg_mae_15m_pct": _avg([_safe_float((item.get("metrics_15m") or {}).get("mae_pct"), 0.0) for item in items]),
             }
         )
 
     def _row_view(item: dict) -> dict:
         metrics_5m = item.get("metrics_5m", {}) or {}
         metrics_10m = item.get("metrics_10m", {}) or {}
+        metrics_15m = item.get("metrics_15m", {}) or {}
         return {
             "candidate_id": str(item.get("candidate_id") or ""),
             "stock_code": str(item.get("stock_code") or ""),
@@ -1252,6 +1397,16 @@ def build_missed_entry_counterfactual_report(
             "minute_candle_source_quality_gate": str(item.get("minute_candle_source_quality_gate") or "unknown"),
             "minute_candle_source_quality_reason": str(item.get("minute_candle_source_quality_reason") or ""),
             "minute_candle_forward_10m_bars": _safe_int(item.get("minute_candle_forward_10m_bars"), 0),
+            "minute_candle_forward_15m_bars": _safe_int(item.get("minute_candle_forward_15m_bars"), 0),
+            "minute_candle_forward_15m_source_quality": str(
+                item.get("minute_candle_forward_15m_source_quality") or "unknown"
+            ),
+            "minute_candle_forward_15m_source_quality_gate": str(
+                item.get("minute_candle_forward_15m_source_quality_gate") or "unknown"
+            ),
+            "minute_candle_forward_15m_source_quality_reason": str(
+                item.get("minute_candle_forward_15m_source_quality_reason") or ""
+            ),
             "minute_candle_source_meta": item.get("minute_candle_source_meta") or {},
             "confidence_tier": _confidence_tier(item),
             "outcome": str(item.get("outcome") or "NEUTRAL"),
@@ -1259,6 +1414,9 @@ def build_missed_entry_counterfactual_report(
             "close_10m_pct": round(_safe_float(metrics_10m.get("close_ret_pct"), 0.0), 3),
             "mfe_10m_pct": round(_safe_float(metrics_10m.get("mfe_pct"), 0.0), 3),
             "mae_10m_pct": round(_safe_float(metrics_10m.get("mae_pct"), 0.0), 3),
+            "close_15m_pct": round(_safe_float(metrics_15m.get("close_ret_pct"), 0.0), 3),
+            "mfe_15m_pct": round(_safe_float(metrics_15m.get("mfe_pct"), 0.0), 3),
+            "mae_15m_pct": round(_safe_float(metrics_15m.get("mae_pct"), 0.0), 3),
             "estimated_counterfactual_pnl_10m_krw": int(_safe_int(item.get("estimated_counterfactual_pnl_10m_krw"), 0)),
             "missed_submit_cohort": str(item.get("missed_submit_cohort") or ""),
             "stage_flow": [str(stage) for stage in (item.get("stage_flow") or [])],
@@ -1293,12 +1451,16 @@ def build_missed_entry_counterfactual_report(
             "avg_close_10m_pct": float(avg_close_10m),
             "avg_mfe_10m_pct": float(avg_mfe_10m),
             "avg_mae_10m_pct": float(avg_mae_10m),
+            "avg_close_15m_pct": float(avg_close_15m),
+            "avg_mfe_15m_pct": float(avg_mfe_15m),
+            "avg_mae_15m_pct": float(avg_mae_15m),
             "estimated_counterfactual_pnl_10m_krw_sum": int(estimated_pnl_sum),
             "minute_candle_source_quality_counts": minute_candle_source_quality_counts,
             "blocker_outcome_metrics": blocker_outcome_metrics,
             "cohort_outcome_metrics": cohort_outcome_metrics,
             "rising_missed_refinement": rising_missed_refinement_metrics,
             "rising_missed_refinement_action_plan": rising_missed_refinement_action_plan,
+            "quick_profit_5k_10k_rising_missed_latency_source_only": quick_profit_source_only_metrics,
         },
         "buy_signal_universe": {
             "metrics": {

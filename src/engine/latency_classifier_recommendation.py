@@ -216,7 +216,10 @@ def _latency_block_events(target_date: str, *, source_path: Path | None = None) 
 def _load_counterfactual_labels(target_date: str) -> tuple[dict[tuple[str, str], dict[str, Any]], dict[str, Any]]:
     path = _counterfactual_source_path(target_date)
     payload = _read_json_dict(path)
-    rows = payload.get("rows") if isinstance(payload.get("rows"), list) else []
+    full_rows = payload.get("full_rows") if isinstance(payload.get("full_rows"), list) else []
+    display_rows = payload.get("rows") if isinstance(payload.get("rows"), list) else []
+    rows = full_rows or display_rows
+    row_source = "full_rows" if full_rows else "rows"
     labels: dict[tuple[str, str], dict[str, Any]] = {}
     terminal_stage_counts: Counter[str] = Counter()
     duplicate_keys = 0
@@ -236,7 +239,10 @@ def _load_counterfactual_labels(target_date: str) -> tuple[dict[tuple[str, str],
     return labels, {
         "path": str(path),
         "status": "loaded" if payload else "missing",
+        "row_source": row_source if payload else "missing",
         "row_count": len(rows),
+        "full_row_count": len(full_rows),
+        "display_row_count": len(display_rows),
         "latency_block_label_count": len(labels),
         "duplicate_latency_block_label_keys": duplicate_keys,
         "terminal_stage_counts": dict(sorted(terminal_stage_counts.items())),
