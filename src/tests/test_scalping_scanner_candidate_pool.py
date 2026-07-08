@@ -198,6 +198,61 @@ def test_promote_candidates_reserves_two_slots_for_low_rebound(monkeypatch):
     assert promoted_payloads[1]["broker_order_forbidden"] is True
 
 
+def test_promote_candidates_does_not_reserve_under_10000_low_rebound(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "2")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_LOW_REBOUND_ACTIVE_FLOOR", "0")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_LOW_REBOUND_RESERVE_SLOTS", "1")
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(scalping_scanner, "_scanner_candidate_pre_filter_reason", lambda target: "")
+    monkeypatch.setattr(scalping_scanner, "_should_promote_candidate", lambda *args, **kwargs: True)
+    monkeypatch.setattr(scalping_scanner, "_scanner_real_source_guard_decision", lambda *args, **kwargs: {"blocked": False})
+    db = _DB()
+    event_bus = _EventBus()
+
+    ranked_targets = [
+        {"Code": "000001", "Name": "GENERAL1", "Price": 12000, "Source": "PRICE_JUMP_START"},
+        {"Code": "000002", "Name": "GENERAL2", "Price": 13000, "Source": "PRICE_JUMP_START"},
+        {
+            "Code": "100001",
+            "Name": "LOW_UNDER",
+            "Price": 9900,
+            "Source": scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE,
+            "LowReboundPct": 3.0,
+            "IntradayLowPrice": 9400,
+            "IntradayHighPrice": 11000,
+            "DistanceFromIntradayHighPct": -10.0,
+            "LowReboundBaseSourceSignature": "VOLUME_SURGE_RAW",
+        },
+        {
+            "Code": "100002",
+            "Name": "LOW_HIGH",
+            "Price": 12000,
+            "Source": scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE,
+            "LowReboundPct": 4.0,
+            "IntradayLowPrice": 11000,
+            "IntradayHighPrice": 13000,
+            "DistanceFromIntradayHighPct": -7.7,
+            "LowReboundBaseSourceSignature": "VALUE_TOP",
+        },
+    ]
+
+    codes, _ = scalping_scanner.promote_candidates(
+        db,
+        event_bus,
+        ranked_targets,
+        {},
+        max_new_codes=12,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=1000.0,
+    )
+
+    assert codes == ["000001", "100002"]
+    assert _event_payloads(event_bus, "COMMAND_WS_REG") == [
+        {"codes": ["000001", "100002"], "source": "scalping_scanner_promote"}
+    ]
+
+
 def test_low_rebound_floor_replaces_old_general_watching_without_increasing_cap(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "1")
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_LOW_REBOUND_ACTIVE_FLOOR", "2")
@@ -537,6 +592,83 @@ def test_scanner_priority_tiering_sorts_acceleration_before_plain_price_jump(mon
     assert scalping_scanner._scanner_priority_profile(ranked[1])["scanner_priority_tier"] == (
         "tier_b_price_jump_candidate"
     )
+
+
+def test_scanner_priority_tiering_sorts_under_10000_after_same_tier(monkeypatch):
+    monkeypatch.setattr(
+        scalping_scanner,
+        "TRADING_RULES",
+        SimpleNamespace(
+            SCALP_SCANNER_PRIORITY_TIERING_ENABLED=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_REALTIME_RANK_ONLY=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_BID_IMBALANCE_ONLY=True,
+            SCALP_SCANNER_ACCEL_MIN_RANK_JUMP=10,
+            SCALP_SCANNER_ACCEL_MIN_SPIKE_RATE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_PRIORITY_SCORE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_CNTR_STR=110.0,
+        ),
+    )
+    candidates = {
+        "000001": {
+            "Code": "000001",
+            "Name": "UNDER",
+            "Price": 9900,
+            "Source": "PRICE_JUMP_START",
+            "SourceSet": {"PRICE_JUMP_START"},
+            "PriceJumpFluRate": 5.0,
+            "JumpRate": 0.1,
+        },
+        "000002": {
+            "Code": "000002",
+            "Name": "TENK",
+            "Price": 10000,
+            "Source": "PRICE_JUMP_START",
+            "SourceSet": {"PRICE_JUMP_START"},
+            "PriceJumpFluRate": 1.0,
+            "JumpRate": 0.1,
+        },
+    }
+
+    ranked = scalping_scanner.rank_candidates(candidates)
+
+    assert [item["Code"] for item in ranked] == ["000002", "000001"]
+    assert scalping_scanner._scanner_priority_profile(ranked[0])["scanner_priority_tier"] == (
+        "tier_b_price_jump_candidate"
+    )
+    assert scalping_scanner._scanner_priority_profile(ranked[1])["scanner_priority_tier"] == (
+        "tier_b_price_jump_candidate"
+    )
+
+
+def test_scanner_priority_non_tier_sorts_under_10000_after_price_band(monkeypatch):
+    monkeypatch.setattr(
+        scalping_scanner,
+        "TRADING_RULES",
+        SimpleNamespace(SCALP_SCANNER_PRIORITY_TIERING_ENABLED=False),
+    )
+    candidates = {
+        "000001": {
+            "Code": "000001",
+            "Name": "UNDER",
+            "Price": 9900,
+            "Source": "PRICE_JUMP_START",
+            "SourceSet": {"PRICE_JUMP_START"},
+            "PriceJumpFluRate": 8.0,
+            "JumpRate": 1.0,
+        },
+        "000002": {
+            "Code": "000002",
+            "Name": "TENK",
+            "Price": 10000,
+            "Source": "OPEN_TOP",
+            "SourceSet": {"OPEN_TOP"},
+            "OpenFluRate": 1.0,
+        },
+    }
+
+    ranked = scalping_scanner.rank_candidates(candidates)
+
+    assert [item["Code"] for item in ranked] == ["000002", "000001"]
 
 
 def test_scanner_priority_tiering_blocks_rank_only_first_seen(monkeypatch):

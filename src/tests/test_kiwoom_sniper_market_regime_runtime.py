@@ -4,6 +4,8 @@ import threading
 import time
 from types import SimpleNamespace
 
+import pytest
+
 from src.engine import kiwoom_sniper_v2
 from src.engine import sniper_market_regime
 from src.utils.constants import TRADING_RULES
@@ -76,6 +78,16 @@ def _disable_scanner_operator_runtime_overrides(monkeypatch, tmp_path):
         "_SCANNER_OPERATOR_RUNTIME_OVERRIDE_PATH",
         tmp_path / "missing_operator_runtime_overrides.env",
     )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_manual_control_exclusion(monkeypatch, tmp_path):
+    empty_path = tmp_path / "manual_control_excluded_codes.empty.txt"
+    empty_path.write_text("", encoding="utf-8")
+    monkeypatch.delenv("KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_WATCH_EXCLUDED_CODES", raising=False)
+    monkeypatch.setenv("KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES_FILE", str(empty_path))
+    monkeypatch.delenv("KORSTOCKSCAN_WATCH_EXCLUDED_CODES_FILE", raising=False)
 
 
 def _enable_scanner_rising_ws_gap_test_mode(monkeypatch):
@@ -1383,6 +1395,35 @@ def test_runtime_iteration_targets_orders_positive_scanner_by_delta_magnitude():
     assert [target["id"] for target in ordered] == ["large_positive", "small_positive"]
 
 
+def test_runtime_iteration_targets_demotes_under_10000_scanner_for_heavy_eval():
+    targets = [
+        {
+            "id": "under_10000_large_delta",
+            "code": "000001",
+            "status": "WATCHING",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "entry_armed_at_epoch": 1500.0,
+            "buy_price": 9900,
+            "price_delta_since_first_seen_pct": "13.95",
+        },
+        {
+            "id": "tenk_small_delta",
+            "code": "000002",
+            "status": "WATCHING",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "entry_armed_at_epoch": 1400.0,
+            "buy_price": 10000,
+            "price_delta_since_first_seen_pct": "0.70",
+        },
+    ]
+
+    ordered = kiwoom_sniper_v2._runtime_iteration_targets(targets, now_ts=1600.0)
+
+    assert [target["id"] for target in ordered] == ["tenk_small_delta", "under_10000_large_delta"]
+
+
 def test_runtime_iteration_targets_applies_rising_missed_selection_prior_delta(monkeypatch):
     monkeypatch.setattr(
         kiwoom_sniper_v2,
@@ -1673,6 +1714,36 @@ def test_scalping_fifo_overflow_preserves_positive_scanner_before_zero_delta_sca
     overflow_order = kiwoom_sniper_v2._scalping_fifo_overflow_candidates(targets, now_ts=1500.0)
 
     assert [target["id"] for target in overflow_order] == ["zero_delta_new", "positive_delta_old"]
+
+
+def test_scalping_fifo_overflow_evicts_under_10000_scanner_before_same_state(monkeypatch, tmp_path):
+    _disable_scanner_operator_runtime_overrides(monkeypatch, tmp_path)
+    targets = [
+        {
+            "id": "under_10000_positive",
+            "code": "000001",
+            "status": "WATCHING",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "entry_armed_at_epoch": 1000.0,
+            "buy_price": 9900,
+            "price_delta_since_first_seen_pct": "13.95",
+        },
+        {
+            "id": "tenk_zero",
+            "code": "000002",
+            "status": "WATCHING",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "entry_armed_at_epoch": 1400.0,
+            "buy_price": 10000,
+            "price_delta_since_first_seen_pct": "0.00",
+        },
+    ]
+
+    overflow_order = kiwoom_sniper_v2._scalping_fifo_overflow_candidates(targets, now_ts=1500.0)
+
+    assert [target["id"] for target in overflow_order] == ["under_10000_positive", "tenk_zero"]
 
 
 def test_scalping_fifo_overflow_preserves_evaluated_rising_scanner_before_zero_delta_scanner(monkeypatch, tmp_path):

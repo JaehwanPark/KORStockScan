@@ -169,6 +169,8 @@ except ImportError:
         return text
 bind_condition_dependencies(escape_markdown_fn=escape_markdown)
 
+SCANNER_UNDER_10000_PRIORITY_PRICE_CEILING = 10000
+
 
 def resolve_runtime_role() -> str:
     """Return runtime role: main (default) or remote."""
@@ -1156,6 +1158,20 @@ def _safe_float(value, default=0.0):
         return numeric
     except Exception:
         return default
+
+
+def _runtime_priority_price(target):
+    target = target or {}
+    for key in ("current_price", "curr_price", "curr", "buy_price", "price", "Price"):
+        price = abs(_safe_int(target.get(key), 0))
+        if price > 0:
+            return price
+    return 0
+
+
+def _under_10000_runtime_priority_rank(target):
+    price = _runtime_priority_price(target)
+    return 1 if 0 < price < SCANNER_UNDER_10000_PRIORITY_PRICE_CEILING else 0
 
 
 def _is_disabled_swing_watching_target(target) -> bool:
@@ -2849,21 +2865,26 @@ def _scalping_fifo_overflow_candidates(scalp_fifo_targets, now_ts):
         if not _is_scanner_watching_target(target):
             return (0, _runtime_added_time_for_target(target, now_ts=now_ts))
         armed_epoch = _runtime_added_time_for_target(target, now_ts=now_ts)
+        last_full_eval = _scanner_last_full_eval_epoch(target)
+        under_10000_priority = _under_10000_runtime_priority_rank(target)
+        if under_10000_priority:
+            if last_full_eval > 0:
+                return (1, last_full_eval, armed_epoch)
+            return (2, armed_epoch)
         if (
             scanner_new_promotion_grace_sec > 0.0
             and armed_epoch > 0.0
             and float(now_ts) - armed_epoch < scanner_new_promotion_grace_sec
         ):
-            return (5, armed_epoch)
-        last_full_eval = _scanner_last_full_eval_epoch(target)
+            return (9, armed_epoch)
         rising = _scanner_positive_delta_value(target) >= _scanner_rising_entry_min_delta_pct()
         if not rising:
             if last_full_eval > 0:
-                return (1, last_full_eval, armed_epoch)
-            return (2, armed_epoch)
+                return (3, last_full_eval, armed_epoch)
+            return (4, armed_epoch)
         if last_full_eval > 0:
-            return (3, last_full_eval, armed_epoch)
-        return (4, armed_epoch)
+            return (6, last_full_eval, armed_epoch)
+        return (7, armed_epoch)
 
     return sorted(list(scalp_fifo_targets or []), key=_overflow_rank)
 
@@ -2938,8 +2959,10 @@ def _runtime_iteration_targets(targets, now_ts):
             cooldown_waiting = _scanner_cooldown_recheck_waiting(target, now_ts=now_ts)
             positive_delta = _scanner_positive_delta_value(target)
             selection_delta = rising_missed_selection_rank_delta(target)
+            under_10000_priority = _under_10000_runtime_priority_rank(target)
             recency_key = (
                 2 if cooldown_waiting else (0 if pending_recheck or rising_recheck else 1),
+                under_10000_priority,
                 -selection_delta,
                 0 if last_full_eval <= 0 else 1,
                 -positive_delta,

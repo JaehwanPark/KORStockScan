@@ -30,7 +30,8 @@ LOW_REBOUND_RISING_MISSED_SOURCE_FAMILY = "rising_missed_low_rebound_source_v1"
 LOW_REBOUND_RISING_MISSED_ROLE = "rising_missed_low_rebound_candidate"
 LOW_REBOUND_RISING_MISSED_LINEAGE = "low_rebound_from_intraday_low"
 RANK_CHANGE_SIGN_AUTHORITY_DEFAULT = "raw_unverified_not_decision_input"
-SCANNER_PROMOTION_POLICY_VERSION = "scanner_priority_v2_20260617_evidence"
+SCANNER_PROMOTION_POLICY_VERSION = "scanner_priority_v3_20260708_under10000_priority_demote"
+SCANNER_UNDER_10000_PRIORITY_PRICE_CEILING = 10000
 PRIMARY_RISING_START_SOURCES = {
     "REALTIME_RANK_START",
     "PRICE_JUMP_START",
@@ -283,6 +284,9 @@ def _recent_low_rebound_codes(recent_picks, low_rebound_targets=None):
     for code, meta in (recent_picks or {}).items():
         sources = set((meta or {}).get("last_source_signature") or [])
         if LOW_REBOUND_RISING_MISSED_SOURCE in sources:
+            recent_price = _safe_positive_int((meta or {}).get("last_price") or (meta or {}).get("first_price"))
+            if 0 < recent_price < SCANNER_UNDER_10000_PRIORITY_PRICE_CEILING:
+                continue
             norm_code = str(code or "").strip()[:6]
             if norm_code:
                 codes.add(norm_code)
@@ -543,6 +547,20 @@ def _safe_positive_int(value, default=0):
     return abs(parsed)
 
 
+def _candidate_priority_price(target):
+    target = target or {}
+    for key in ("Price", "CurrentPrice", "curr", "current_price", "buy_price"):
+        price = _safe_positive_int(target.get(key))
+        if price > 0:
+            return price
+    return 0
+
+
+def _under_10000_runtime_priority_rank(target):
+    price = _candidate_priority_price(target)
+    return 1 if 0 < price < SCANNER_UNDER_10000_PRIORITY_PRICE_CEILING else 0
+
+
 def _low_rebound_min_pct():
     return float(getattr(TRADING_RULES, "SCALP_SCANNER_LOW_REBOUND_MIN_PCT", 2.5) or 2.5)
 
@@ -688,6 +706,10 @@ def _source_signature(target):
 
 def _is_low_rebound_target(target):
     return LOW_REBOUND_RISING_MISSED_SOURCE in set(_source_signature(target or {}))
+
+
+def _is_low_rebound_reserved_priority_target(target):
+    return _is_low_rebound_target(target) and _under_10000_runtime_priority_rank(target) == 0
 
 
 def _scanner_rate_from_field(target, field_name):
@@ -1295,6 +1317,7 @@ def rank_candidates(candidate_pool):
             candidate_pool.values(),
             key=lambda item: (
                 tier_rank.get(_scanner_priority_profile(item).get("scanner_priority_tier"), 8),
+                _under_10000_runtime_priority_rank(item),
                 -_scanner_priority_profile(item).get("scanner_priority_score", 0.0),
                 _source_priority(item.get("Source")),
                 -_safe_float(item.get("FluRate")),
@@ -1303,6 +1326,7 @@ def rank_candidates(candidate_pool):
     return sorted(
         candidate_pool.values(),
         key=lambda item: (
+            _under_10000_runtime_priority_rank(item),
             _source_priority(item.get("Source")),
             -_rising_start_score(item),
             -_freshness_score(item),
@@ -1917,7 +1941,7 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
     max_active = _scalping_watching_max_active()
     _expire_after_buy_window_scanner_watching(db, now_ts)
     active_count = _active_scanner_watching_count(db)
-    low_rebound_targets = [target for target in ranked_targets if _is_low_rebound_target(target)]
+    low_rebound_targets = [target for target in ranked_targets if _is_low_rebound_reserved_priority_target(target)]
     low_rebound_candidates_present = bool(low_rebound_targets)
     low_rebound_active_floor = _low_rebound_active_floor()
     protected_low_rebound_codes = _recent_low_rebound_codes(recent_picks, low_rebound_targets)
@@ -1974,8 +1998,9 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
     for target in ranked_targets:
         code = target["Code"]
         is_low_rebound_target = _is_low_rebound_target(target)
+        is_low_rebound_reserved_priority_target = _is_low_rebound_reserved_priority_target(target)
         uses_low_rebound_reserved_slot = (
-            is_low_rebound_target
+            is_low_rebound_reserved_priority_target
             and low_rebound_reserved_slots > 0
             and low_rebound_promoted_count < low_rebound_reserved_slots
         )
@@ -2086,7 +2111,7 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
             "scanner_promotion_id": f"SCANPROM-{code}-{int(float(now_ts or 0.0) * 1000)}",
             "scanner_promotion_emitted_epoch": f"{float(now_ts or 0.0):.3f}",
             "scanner_low_rebound_reserved_slots": low_rebound_reserved_slots,
-            "scanner_low_rebound_reserved_promotion": is_low_rebound_target,
+            "scanner_low_rebound_reserved_promotion": uses_low_rebound_reserved_slot,
             "scanner_low_rebound_active_floor": low_rebound_active_floor,
             "scanner_low_rebound_active_count": active_low_rebound_count,
             "scanner_low_rebound_floor_shortfall": low_rebound_floor_shortfall,
