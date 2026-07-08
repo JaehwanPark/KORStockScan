@@ -134,6 +134,8 @@ def _positive_delta_pct(stock: dict[str, Any], explicit_delta_pct: Any = None) -
         stock.get("scanner_positive_delta_pct"),
         stock.get("comparable_flu_delta_since_first_seen"),
         stock.get("max_price_delta_since_first_seen_pct"),
+        stock.get("low_rebound_pct"),
+        stock.get("LowReboundPct"),
     ]
     return max(0.0, *(_safe_float(value, 0.0) for value in values))
 
@@ -214,7 +216,7 @@ def classify_rising_missed_candidate(
     )
 
 
-def _looks_like_scanner_rising_missed_candidate(
+def _looks_like_scalping_rising_missed_candidate(
     stock: dict[str, Any],
     *,
     strategy: str,
@@ -223,8 +225,6 @@ def _looks_like_scanner_rising_missed_candidate(
     min_delta_pct: float,
 ) -> bool:
     if _normalized_text(strategy) != "SCALPING":
-        return False
-    if _normalized_text(position_tag) != "SCANNER":
         return False
     if positive_delta_pct < max(0.0, float(min_delta_pct)):
         return False
@@ -235,6 +235,10 @@ def _looks_like_scanner_rising_missed_candidate(
         or _field_present(stock.get("_scanner_rising_entry_relief_reason"))
         or _field_present(stock.get("rising_missed_buy"))
         or _field_present(stock.get("rising_entry_relief_eligible"))
+        or _field_present(stock.get("rising_missed_lineage"))
+        or _field_present(stock.get("low_rebound_pct"))
+        or _field_present(stock.get("LowReboundPct"))
+        or "LOW_REBOUND_RISING_MISSED" in str(stock.get("source_signature") or "").upper()
     )
 
 
@@ -333,7 +337,7 @@ def evaluate_rising_missed_one_share_entry(
             positive_delta_pct=delta_pct,
             log_fields=base_fields,
         )
-    if not _looks_like_scanner_rising_missed_candidate(
+    if not _looks_like_scalping_rising_missed_candidate(
         stock,
         strategy=strategy,
         position_tag=position_tag,

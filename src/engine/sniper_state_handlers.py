@@ -9673,6 +9673,8 @@ def _scanner_positive_delta_pct(stock) -> float:
         0.0,
         _safe_float(stock.get("price_delta_since_first_seen_pct"), 0.0),
         _safe_float(stock.get("comparable_flu_delta_since_first_seen"), 0.0),
+        _safe_float(stock.get("low_rebound_pct"), 0.0),
+        _safe_float(stock.get("LowReboundPct"), 0.0),
     )
 
 
@@ -31248,8 +31250,8 @@ def _evaluate_rising_missed_normal_buy_bridge(
     if not feature_enabled:
         bridge_fields["rising_missed_normal_buy_bridge_reason"] = "feature_disabled"
         return bridge_fields
-    if normalize_strategy(strategy) != "SCALPING" or normalize_position_tag(strategy, pos_tag) != "SCANNER":
-        bridge_fields["rising_missed_normal_buy_bridge_reason"] = "strategy_or_position_not_scanner_scalping"
+    if normalize_strategy(strategy) != "SCALPING":
+        bridge_fields["rising_missed_normal_buy_bridge_reason"] = "strategy_not_scalping"
         return bridge_fields
     if current_ai_action != "BUY":
         bridge_fields["rising_missed_normal_buy_bridge_reason"] = "entry_ai_action_not_buy"
@@ -31313,6 +31315,71 @@ def _rising_missed_forced_scout_qty(stock: dict | None, runtime: dict | None) ->
         if qty > 0:
             return qty
     return 1
+
+
+def _maybe_retry_rising_missed_entry_ai_not_evaluated(
+    stock,
+    code,
+    ws_data,
+    runtime,
+    *,
+    curr_price,
+) -> dict:
+    fields = {
+        "rising_missed_entry_ai_retry_attempted": False,
+        "rising_missed_entry_ai_retry_success": False,
+        "rising_missed_entry_ai_retry_reason": "not_needed",
+    }
+    if not isinstance(stock, dict):
+        fields["rising_missed_entry_ai_retry_reason"] = "missing_stock"
+        return fields
+    action = str(
+        stock.get("rising_missed_entry_ai_action")
+        or stock.get("entry_ai_action")
+        or stock.get("ai_action")
+        or stock.get("last_ai_action")
+        or stock.get("current_ai_action")
+        or stock.get("last_watching_ai_action")
+        or ""
+    ).strip().lower()
+    if action != "not_evaluated":
+        return fields
+    ai_engine = (runtime or {}).get("ai_engine")
+    if ai_engine is None:
+        fields["rising_missed_entry_ai_retry_reason"] = "ai_engine_unavailable"
+        return fields
+    retry_fields = _retry_entry_ai_submit_authority_before_block(
+        stock=stock,
+        code=code,
+        ws_data=ws_data,
+        ai_engine=ai_engine,
+        now_ts=_safe_float((runtime or {}).get("now_ts"), time.time()),
+        current_ai_score=(runtime or {}).get("current_ai_score"),
+    )
+    fields.update(
+        {
+            "rising_missed_entry_ai_retry_attempted": bool(
+                retry_fields.get("pre_submit_entry_ai_authority_retry_attempted")
+            ),
+            "rising_missed_entry_ai_retry_success": bool(
+                retry_fields.get("pre_submit_entry_ai_authority_retry_success")
+            ),
+            "rising_missed_entry_ai_retry_reason": retry_fields.get(
+                "pre_submit_entry_ai_authority_retry_reason"
+            )
+            or "unknown",
+            "rising_missed_entry_ai_retry_action": retry_fields.get(
+                "pre_submit_entry_ai_authority_retry_action"
+            )
+            or "not_evaluated",
+            "rising_missed_entry_ai_retry_score": retry_fields.get(
+                "pre_submit_entry_ai_authority_retry_score"
+            )
+            or "0.0",
+            "rising_missed_entry_ai_retry_current_price": _safe_int(curr_price, 0),
+        }
+    )
+    return fields
 
 
 def _is_forced_rising_missed_initial_scout_entry(
@@ -31465,6 +31532,13 @@ def _maybe_submit_rising_missed_one_share_entry(
             **_rising_missed_same_day_reentry_log_fields(reentry_guard),
         )
         return True
+    retry_fields = _maybe_retry_rising_missed_entry_ai_not_evaluated(
+        stock,
+        code,
+        ws_data,
+        runtime,
+        curr_price=curr_price,
+    )
     decision = evaluate_rising_missed_one_share_entry(
         stock,
         strategy=strategy,
@@ -31481,6 +31555,9 @@ def _maybe_submit_rising_missed_one_share_entry(
         upper_limit_exclude_enabled=_rising_missed_upper_limit_exclude_enabled(),
         upper_limit_exclude_pct=_rising_missed_upper_limit_exclude_pct(),
     )
+    decision_log_fields = dict(decision.log_fields or {})
+    if retry_fields.get("rising_missed_entry_ai_retry_reason") != "not_needed":
+        decision_log_fields.update(retry_fields)
     if decision.allowed is False and decision.reason != RISING_MISSED_BLOCK_NOT_CANDIDATE:
         _log_entry_pipeline(
             stock,
@@ -31491,7 +31568,7 @@ def _maybe_submit_rising_missed_one_share_entry(
             actual_order_submitted=False,
             broker_order_forbidden=True,
             runtime_effect=decision.reason == RISING_MISSED_BLOCK_PRICE_ABOVE_CAP,
-            **(decision.log_fields or {}),
+            **decision_log_fields,
         )
         return True
     if not decision.allowed:
@@ -31502,7 +31579,7 @@ def _maybe_submit_rising_missed_one_share_entry(
         code,
         ws_data,
         runtime,
-        decision.log_fields or {},
+        decision_log_fields,
     )
     if quality_guard.get("rising_missed_scout_quality_guard_blocked"):
         _log_entry_pipeline(
@@ -31553,7 +31630,7 @@ def _maybe_submit_rising_missed_one_share_entry(
         actual_order_submitted=False,
         broker_order_forbidden=False,
         runtime_effect=True,
-        **(decision.log_fields or {}),
+        **decision_log_fields,
     )
     _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime)
     return True

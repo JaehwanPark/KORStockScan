@@ -908,6 +908,69 @@ def test_rising_missed_one_share_entry_allows_scanner_rising_candidate():
     assert decision.forced_qty == 1
 
 
+def test_rising_missed_one_share_entry_allows_non_scanner_scalping_candidate():
+    decision = evaluate_rising_missed_one_share_entry(
+        {
+            "strategy": "SCALPING",
+            "position_tag": "VWAP_RECLAIM",
+            "price_delta_since_first_seen_pct": 1.2,
+            "rising_missed_buy": True,
+        },
+        strategy="SCALPING",
+        position_tag="VWAP_RECLAIM",
+        feature_enabled=True,
+        has_open_pending=False,
+        already_holding=False,
+        min_delta_pct=0.5,
+    )
+
+    assert decision.allowed is True
+    assert decision.reason == FORCED_ENTRY_REASON
+    assert decision.log_fields["rising_missed_one_share_entry_position_tag"] == "VWAP_RECLAIM"
+
+
+def test_rising_missed_one_share_entry_blocks_non_scanner_without_rising_missed_provenance():
+    decision = evaluate_rising_missed_one_share_entry(
+        {
+            "strategy": "SCALPING",
+            "position_tag": "VWAP_RECLAIM",
+            "price_delta_since_first_seen_pct": 1.2,
+        },
+        strategy="SCALPING",
+        position_tag="VWAP_RECLAIM",
+        feature_enabled=True,
+        has_open_pending=False,
+        already_holding=False,
+        min_delta_pct=0.5,
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == BLOCK_NOT_CANDIDATE
+
+
+def test_rising_missed_one_share_entry_uses_low_rebound_pct_as_positive_delta():
+    decision = evaluate_rising_missed_one_share_entry(
+        {
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "source_signature": "LOW_REBOUND_RISING_MISSED",
+            "rising_missed_lineage": "low_rebound_from_intraday_low",
+            "price_delta_since_first_seen_pct": 0.0,
+            "low_rebound_pct": 2.6,
+        },
+        strategy="SCALPING",
+        position_tag="SCANNER",
+        feature_enabled=True,
+        has_open_pending=False,
+        already_holding=False,
+        min_delta_pct=1.0,
+    )
+
+    assert decision.allowed is True
+    assert decision.reason == FORCED_ENTRY_REASON
+    assert decision.positive_delta_pct == 2.6
+
+
 def test_rising_missed_normal_buy_bridge_allows_buy_without_forced_scout_fields():
     decision = evaluate_rising_missed_normal_buy_bridge(
         {
@@ -935,6 +998,30 @@ def test_rising_missed_normal_buy_bridge_allows_buy_without_forced_scout_fields(
     assert decision.log_fields["rising_missed_normal_buy_bridge_forced_scout_fields_used"] is False
     assert "rising_missed_one_share_entry_forced_qty" not in decision.log_fields
     assert not any(key.startswith("rising_missed_scout_") for key in decision.log_fields)
+
+
+def test_rising_missed_normal_buy_bridge_allows_non_scanner_scalping_candidate():
+    decision = evaluate_rising_missed_normal_buy_bridge(
+        {
+            "strategy": "SCALPING",
+            "position_tag": "OPEN_RECLAIM",
+            "price_delta_since_first_seen_pct": 1.4,
+            "rising_missed_buy": True,
+            "last_watching_ai_action": "BUY",
+        },
+        strategy="SCALPING",
+        position_tag="OPEN_RECLAIM",
+        feature_enabled=True,
+        has_open_pending=False,
+        already_holding=False,
+        current_ai_action="BUY",
+        min_delta_pct=0.5,
+        current_price=20_000,
+    )
+
+    assert decision.allowed is True
+    assert decision.reason == NORMAL_BUY_BRIDGE_REASON
+    assert decision.log_fields["rising_missed_normal_buy_bridge_uses_normal_sizing"] is True
 
 
 def test_rising_missed_normal_buy_bridge_blocks_wait_action_and_safety_reasons():
@@ -1864,6 +1951,85 @@ def test_rising_missed_one_share_hook_bypasses_watching_soft_branch(monkeypatch)
     assert submitted_stock["forced_entry_reason"] == FORCED_ENTRY_REASON
     assert runtime["forced_entry_qty"] == 20
     assert runtime["forced_entry_reason"] == FORCED_ENTRY_REASON
+
+
+def test_rising_missed_one_share_hook_retries_not_evaluated_ai_before_block(monkeypatch):
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.TRADING_RULES = CONFIG
+    state_handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK.clear()
+
+    submit_calls = []
+    entry_logs = []
+
+    class DummyAI:
+        pass
+
+    def fake_retry(*, stock, code, ws_data, ai_engine, now_ts, current_ai_score):
+        stock["last_watching_ai_action"] = "BUY"
+        stock["last_watching_ai_score"] = 72.0
+        return {
+            "pre_submit_entry_ai_authority_retry_attempted": True,
+            "pre_submit_entry_ai_authority_retry_success": True,
+            "pre_submit_entry_ai_authority_retry_reason": "ok",
+            "pre_submit_entry_ai_authority_retry_action": "BUY",
+            "pre_submit_entry_ai_authority_retry_score": "72.0",
+        }
+
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", "true")
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_rising_missed_same_day_reentry_guard",
+        lambda *args, **kwargs: {"allowed": True},
+    )
+    monkeypatch.setattr(state_handlers, "_retry_entry_ai_submit_authority_before_block", fake_retry)
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: entry_logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_submit_watching_triggered_entry",
+        lambda stock, code, ws_data, admin_id, runtime: submit_calls.append((stock, code, runtime)) or True,
+    )
+
+    stock = {
+        "id": 2,
+        "name": "RETRY_RISING",
+        "strategy": "SCALPING",
+        "position_tag": "OPEN_RECLAIM",
+        "price_delta_since_first_seen_pct": 2.0,
+        "rising_missed_buy": True,
+        "last_watching_ai_action": "not_evaluated",
+    }
+    runtime = {
+        "now_ts": 1000.0,
+        "current_ai_score": 50.0,
+        "ai_engine": DummyAI(),
+        "scout_upgrade_entry": False,
+    }
+
+    submitted = state_handlers._maybe_submit_rising_missed_one_share_entry(
+        stock,
+        "123456",
+        {"curr": 10000, "v_pw": 100.0},
+        admin_id=1,
+        runtime=runtime,
+        strategy="SCALPING",
+        pos_tag="OPEN_RECLAIM",
+        curr_price=10000,
+    )
+
+    assert submitted is True
+    assert len(submit_calls) == 1
+    assert stock["rising_missed_one_share_entry_forced"] is True
+    assert stock["forced_entry_reason"] == FORCED_ENTRY_REASON
+    assert entry_logs[-1][0] == "rising_missed_one_share_entry"
+    assert entry_logs[-1][1]["rising_missed_entry_ai_retry_attempted"] is True
+    assert entry_logs[-1][1]["rising_missed_entry_ai_retry_success"] is True
+    assert entry_logs[-1][1]["rising_missed_entry_ai_action"] == "BUY"
+    assert entry_logs[-1][1]["rising_missed_one_share_entry_position_tag"] == "OPEN_RECLAIM"
 
 
 def test_rising_missed_scout_quality_guard_blocks_stale_recent_weak_ai_micro(monkeypatch):
