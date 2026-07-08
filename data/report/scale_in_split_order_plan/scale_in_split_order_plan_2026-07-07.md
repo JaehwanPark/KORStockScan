@@ -3,7 +3,7 @@
 - schema_version: `scale_in_split_order_plan_v1`
 - source_quality: `pass`
 - runtime_apply_allowed: `True`
-- policy_version: `scale_in_split_order_plan:2026-07-07:be68bc9cdeb4`
+- policy_version: `scale_in_split_order_plan:2026-07-07:dc3f6f98693a`
 - policy_file: `/home/ubuntu/KORStockScan/data/threshold_cycle/scale_in_split_order_policy/scale_in_split_order_policy_2026-07-07.json`
 - candidate_count: `2`
 - counterfactual_selected_count: `2`

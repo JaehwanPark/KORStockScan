@@ -15,7 +15,9 @@
           "min_observed_price": 10240,
           "missed_upside_proxy": false,
           "observed": true,
+          "touch_0_3pct": true,
           "touch_0_5pct": true,
+          "touch_0_8pct": true,
           "touch_0tick": true,
           "touch_1_0pct": true,
           "touch_1_5pct": true,
@@ -48,7 +50,9 @@
       "post_submit_observed_sample": 1,
       "post_submit_touch_rates": {
         "missed_upside_proxy_rate": 0.0,
+        "touch_0_3pct_rate": 1.0,
         "touch_0_5pct_rate": 1.0,
+        "touch_0_8pct_rate": 1.0,
         "touch_0tick_rate": 1.0,
         "touch_1_0pct_rate": 1.0,
         "touch_1_5pct_rate": 1.0,
@@ -58,7 +62,7 @@
       "price_observation_join_gap_count": 0,
       "price_offsets_pct": [
         0.0,
-        1.5
+        0.8
       ],
       "price_offsets_ticks": [
         0,
@@ -74,11 +78,13 @@
       "real_outcome_joined_sample": 0,
       "real_sample_count": 1,
       "runtime_apply_allowed": true,
-      "selection_reason": "touch_1_5pct_high_with_low_missed_upside",
+      "selection_reason": "touch_0_8pct_high_with_low_missed_upside",
       "sim_sample_count": 0,
       "source_quality_adjusted_ev_pct": null,
-      "split_variant_id": "scale_in_counterfactual_60_40_offset_0pct_1_5pct",
+      "split_variant_id": "scale_in_counterfactual_60_40_offset_0pct_0_8pct",
+      "touch_0_3pct_rate": 1.0,
       "touch_0_5pct_rate": 1.0,
+      "touch_0_8pct_rate": 1.0,
       "touch_0tick_rate": 1.0,
       "touch_1_0pct_rate": 1.0,
       "touch_1_5pct_rate": 1.0,
@@ -112,7 +118,9 @@
       "post_submit_observed_sample": 1,
       "post_submit_touch_rates": {
         "missed_upside_proxy_rate": 0.0,
+        "touch_0_3pct_rate": 1.0,
         "touch_0_5pct_rate": 1.0,
+        "touch_0_8pct_rate": 1.0,
         "touch_0tick_rate": 1.0,
         "touch_1_0pct_rate": 1.0,
         "touch_1_5pct_rate": 1.0,
@@ -122,8 +130,8 @@
       "price_observation_join_gap_count": 0,
       "price_offsets_pct": [
         0.0,
-        1.0,
-        1.5
+        0.3,
+        0.8
       ],
       "price_offsets_ticks": [
         0,
@@ -144,8 +152,10 @@
       "selection_reason": "diagnostic_only_touch_1tick_and_2tick_high",
       "sim_sample_count": 0,
       "source_quality_adjusted_ev_pct": null,
-      "split_variant_id": "scale_in_diagnostic_50_25_25_offset_0pct_1pct_1_5pct",
+      "split_variant_id": "scale_in_diagnostic_50_25_25_offset_0pct_0_3pct_0_8pct",
+      "touch_0_3pct_rate": 1.0,
       "touch_0_5pct_rate": 1.0,
+      "touch_0_8pct_rate": 1.0,
       "touch_0tick_rate": 1.0,
       "touch_1_0pct_rate": 1.0,
       "touch_1_5pct_rate": 1.0,
@@ -167,7 +177,9 @@
           "min_observed_price": 11670,
           "missed_upside_proxy": false,
           "observed": true,
+          "touch_0_3pct": true,
           "touch_0_5pct": true,
+          "touch_0_8pct": true,
           "touch_0tick": true,
           "touch_1_0pct": true,
           "touch_1_5pct": true,
@@ -187,7 +199,9 @@
           "min_observed_price": 10240,
           "missed_upside_proxy": false,
           "observed": true,
+          "touch_0_3pct": true,
           "touch_0_5pct": true,
+          "touch_0_8pct": true,
           "touch_0tick": true,
           "touch_1_0pct": true,
           "touch_1_5pct": true,
@@ -207,7 +221,9 @@
           "min_observed_price": 10240,
           "missed_upside_proxy": true,
           "observed": true,
+          "touch_0_3pct": false,
           "touch_0_5pct": false,
+          "touch_0_8pct": false,
           "touch_0tick": true,
           "touch_1_0pct": false,
           "touch_1_5pct": false,
@@ -240,7 +256,9 @@
       "post_submit_observed_sample": 3,
       "post_submit_touch_rates": {
         "missed_upside_proxy_rate": 0.3333,
+        "touch_0_3pct_rate": 0.6667,
         "touch_0_5pct_rate": 0.6667,
+        "touch_0_8pct_rate": 0.6667,
         "touch_0tick_rate": 1.0,
         "touch_1_0pct_rate": 0.6667,
         "touch_1_5pct_rate": 0.6667,
@@ -250,7 +268,7 @@
       "price_observation_join_gap_count": 0,
       "price_offsets_pct": [
         0.0,
-        1.5
+        0.8
       ],
       "price_offsets_ticks": [
         0,
@@ -266,11 +284,13 @@
       "real_outcome_joined_sample": 0,
       "real_sample_count": 4,
       "runtime_apply_allowed": true,
-      "selection_reason": "touch_1_5pct_high_with_low_missed_upside",
+      "selection_reason": "touch_0_8pct_high_with_low_missed_upside",
       "sim_sample_count": 0,
       "source_quality_adjusted_ev_pct": null,
-      "split_variant_id": "scale_in_counterfactual_60_40_offset_0pct_1_5pct",
+      "split_variant_id": "scale_in_counterfactual_60_40_offset_0pct_0_8pct",
+      "touch_0_3pct_rate": 0.6667,
       "touch_0_5pct_rate": 0.6667,
+      "touch_0_8pct_rate": 0.6667,
       "touch_0tick_rate": 1.0,
       "touch_1_0pct_rate": 0.6667,
       "touch_1_5pct_rate": 0.6667,
@@ -278,7 +298,7 @@
       "touch_2tick_rate": 0.6667
     }
   ],
-  "generated_at": "2026-07-08T08:37:13.666600+09:00",
+  "generated_at": "2026-07-08T10:43:36.561389+09:00",
   "input_summary": {
     "anchor_reconstruct_window_sec": 5,
     "avg_down_observation_count": 5,
@@ -370,7 +390,9 @@
             "min_observed_price": 10240,
             "missed_upside_proxy": false,
             "observed": true,
+            "touch_0_3pct": true,
             "touch_0_5pct": true,
+            "touch_0_8pct": true,
             "touch_0tick": true,
             "touch_1_0pct": true,
             "touch_1_5pct": true,
@@ -403,7 +425,9 @@
         "post_submit_observed_sample": 1,
         "post_submit_touch_rates": {
           "missed_upside_proxy_rate": 0.0,
+          "touch_0_3pct_rate": 1.0,
           "touch_0_5pct_rate": 1.0,
+          "touch_0_8pct_rate": 1.0,
           "touch_0tick_rate": 1.0,
           "touch_1_0pct_rate": 1.0,
           "touch_1_5pct_rate": 1.0,
@@ -413,7 +437,7 @@
         "price_observation_join_gap_count": 0,
         "price_offsets_pct": [
           0.0,
-          1.5
+          0.8
         ],
         "price_offsets_ticks": [
           0,
@@ -429,11 +453,13 @@
         "real_outcome_joined_sample": 0,
         "real_sample_count": 1,
         "runtime_apply_allowed": true,
-        "selection_reason": "touch_1_5pct_high_with_low_missed_upside",
+        "selection_reason": "touch_0_8pct_high_with_low_missed_upside",
         "sim_sample_count": 0,
         "source_quality_adjusted_ev_pct": null,
-        "split_variant_id": "scale_in_counterfactual_60_40_offset_0pct_1_5pct",
+        "split_variant_id": "scale_in_counterfactual_60_40_offset_0pct_0_8pct",
+        "touch_0_3pct_rate": 1.0,
         "touch_0_5pct_rate": 1.0,
+        "touch_0_8pct_rate": 1.0,
         "touch_0tick_rate": 1.0,
         "touch_1_0pct_rate": 1.0,
         "touch_1_5pct_rate": 1.0,
@@ -455,7 +481,9 @@
             "min_observed_price": 11670,
             "missed_upside_proxy": false,
             "observed": true,
+            "touch_0_3pct": true,
             "touch_0_5pct": true,
+            "touch_0_8pct": true,
             "touch_0tick": true,
             "touch_1_0pct": true,
             "touch_1_5pct": true,
@@ -475,7 +503,9 @@
             "min_observed_price": 10240,
             "missed_upside_proxy": false,
             "observed": true,
+            "touch_0_3pct": true,
             "touch_0_5pct": true,
+            "touch_0_8pct": true,
             "touch_0tick": true,
             "touch_1_0pct": true,
             "touch_1_5pct": true,
@@ -495,7 +525,9 @@
             "min_observed_price": 10240,
             "missed_upside_proxy": true,
             "observed": true,
+            "touch_0_3pct": false,
             "touch_0_5pct": false,
+            "touch_0_8pct": false,
             "touch_0tick": true,
             "touch_1_0pct": false,
             "touch_1_5pct": false,
@@ -528,7 +560,9 @@
         "post_submit_observed_sample": 3,
         "post_submit_touch_rates": {
           "missed_upside_proxy_rate": 0.3333,
+          "touch_0_3pct_rate": 0.6667,
           "touch_0_5pct_rate": 0.6667,
+          "touch_0_8pct_rate": 0.6667,
           "touch_0tick_rate": 1.0,
           "touch_1_0pct_rate": 0.6667,
           "touch_1_5pct_rate": 0.6667,
@@ -538,7 +572,7 @@
         "price_observation_join_gap_count": 0,
         "price_offsets_pct": [
           0.0,
-          1.5
+          0.8
         ],
         "price_offsets_ticks": [
           0,
@@ -554,11 +588,13 @@
         "real_outcome_joined_sample": 0,
         "real_sample_count": 4,
         "runtime_apply_allowed": true,
-        "selection_reason": "touch_1_5pct_high_with_low_missed_upside",
+        "selection_reason": "touch_0_8pct_high_with_low_missed_upside",
         "sim_sample_count": 0,
         "source_quality_adjusted_ev_pct": null,
-        "split_variant_id": "scale_in_counterfactual_60_40_offset_0pct_1_5pct",
+        "split_variant_id": "scale_in_counterfactual_60_40_offset_0pct_0_8pct",
+        "touch_0_3pct_rate": 0.6667,
         "touch_0_5pct_rate": 0.6667,
+        "touch_0_8pct_rate": 0.6667,
         "touch_0tick_rate": 1.0,
         "touch_1_0pct_rate": 0.6667,
         "touch_1_5pct_rate": 0.6667,
@@ -594,7 +630,9 @@
         "post_submit_observed_sample": 1,
         "post_submit_touch_rates": {
           "missed_upside_proxy_rate": 0.0,
+          "touch_0_3pct_rate": 1.0,
           "touch_0_5pct_rate": 1.0,
+          "touch_0_8pct_rate": 1.0,
           "touch_0tick_rate": 1.0,
           "touch_1_0pct_rate": 1.0,
           "touch_1_5pct_rate": 1.0,
@@ -604,8 +642,8 @@
         "price_observation_join_gap_count": 0,
         "price_offsets_pct": [
           0.0,
-          1.0,
-          1.5
+          0.3,
+          0.8
         ],
         "price_offsets_ticks": [
           0,
@@ -626,8 +664,10 @@
         "selection_reason": "diagnostic_only_touch_1tick_and_2tick_high",
         "sim_sample_count": 0,
         "source_quality_adjusted_ev_pct": null,
-        "split_variant_id": "scale_in_diagnostic_50_25_25_offset_0pct_1pct_1_5pct",
+        "split_variant_id": "scale_in_diagnostic_50_25_25_offset_0pct_0_3pct_0_8pct",
+        "touch_0_3pct_rate": 1.0,
         "touch_0_5pct_rate": 1.0,
+        "touch_0_8pct_rate": 1.0,
         "touch_0tick_rate": 1.0,
         "touch_1_0pct_rate": 1.0,
         "touch_1_5pct_rate": 1.0,
@@ -636,7 +676,7 @@
       }
     ],
     "policy_file": "/home/ubuntu/KORStockScan/data/threshold_cycle/scale_in_split_order_policy/scale_in_split_order_policy_2026-07-07.json",
-    "policy_version": "scale_in_split_order_plan:2026-07-07:be68bc9cdeb4",
+    "policy_version": "scale_in_split_order_plan:2026-07-07:dc3f6f98693a",
     "runtime_apply_allowed": true
   },
   "report_type": "scale_in_split_order_plan",

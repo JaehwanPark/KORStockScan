@@ -3,7 +3,7 @@
 ## 판정
 
 - primary: `HOLD_DEFER_DANGER`
-- secondary: `AI_HOLDING_OPS`
+- secondary: `AI_HOLDING_OPS, SOFT_STOP_WHIPSAW`
 - report_only: `true`
 - live_runtime_effect: `false`
 - operator_action_required: `false`
@@ -13,23 +13,23 @@
 
 ## 근거
 
-- as_of: `2026-07-08T10:00:02`
-- exit_signal unique: `5`
-- sell_order_sent unique: `4`
-- sell_completed unique: `4`
+- as_of: `2026-07-08T12:15:02`
+- exit_signal unique: `14`
+- sell_order_sent unique: `9`
+- sell_completed unique: `9`
 - real exit/sell_sent/sell_completed: `0` / `0` / `0`
-- non-real exit/sell_sent/sell_completed: `5` / `4` / `4`
-- sell_sent/exit_signal: `80.0%`
+- non-real exit/sell_sent/sell_completed: `14` / `9` / `9`
+- sell_sent/exit_signal: `64.3%`
 - real sell_sent/exit_signal: `0.0%`
-- non-real sell_sent/exit_signal: `80.0%`
-- flow defer events: `40`
+- non-real sell_sent/exit_signal: `64.3%`
+- flow defer events: `42`
 - AI holding cache MISS: `100.0%`
-- score50 origins: `{'fallback_score_50': 1, 'legacy_or_unclassified_score50': 153, 'post_call_source_quality_neutralized': 18}`
+- score50 origins: `{'fallback_score_50': 4, 'legacy_or_unclassified_score50': 947, 'post_call_source_quality_neutralized': 112}`
 - score50 preflight/source-quality blocked: `0`
-- score50 raw-non50 neutralized: `18`
-- soft_stop rebound above sell 10m: `0.0%`
-- trailing missed-upside: `0.0%`
-- top reasons: `AI보유감시:cache_miss=102, soft_stop_grace=53, flow유예:scalp_soft_stop_pct=40, 청산신호:scalp_soft_stop_pct=10, sell_order_sent=4`
+- score50 raw-non50 neutralized: `112`
+- soft_stop rebound above sell 10m: `94.1%`
+- trailing missed-upside: `28.3%`
+- top reasons: `AI보유감시:cache_miss=375, soft_stop_grace=59, flow유예:scalp_soft_stop_pct=42, 청산신호:scalp_soft_stop_pct=15, sell_order_sent=9`
 
 ## 금지된 자동변경
 
