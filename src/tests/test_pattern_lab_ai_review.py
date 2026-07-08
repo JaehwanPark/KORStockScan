@@ -2258,6 +2258,61 @@ def test_pattern_lab_ai_review_marks_swing_ai_two_pass_incomplete_as_implemented
     )
 
 
+def test_pattern_lab_ai_review_marks_generic_swing_ai_gap_as_source_only_two_pass_provenance(tmp_path, monkeypatch):
+    report_dir = tmp_path / "data" / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+
+    _write_json(
+        report_dir / "swing_lifecycle_bucket_discovery" / "swing_lifecycle_bucket_discovery_2026-05-15.json",
+        {
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "summary": {
+                "ai_two_pass_review_status": "parsed",
+                "sim_auto_review_shard_count": 3,
+                "sim_auto_reviewed_candidate_count": 43,
+                "sim_auto_unreviewed_candidate_count": 0,
+                "sim_auto_downgraded_by_review_count": 0,
+                "ai_unreviewed_candidate_count": 627,
+                "missing_ai_tier2_proposal_count": 627,
+                "ai_review_optional_deferred_candidate_count": 47,
+                "ai_review_optional_deferred_shard_count": 2,
+                "ai_review_followup_required": False,
+                "ai_review_followup_reasons": [],
+            },
+            "warnings": [],
+        },
+    )
+    raw_response = {
+        "schema_version": 1,
+        "interpretation": {"review_items": [], "source_feedback_status": "warning"},
+        "audit": {"status": "correction_required", "issues": ["ai_review_gap:1"], "forbidden_use_violations": []},
+        "final_conclusions": [
+            {
+                "review_id": "ai_review_gap",
+                "domain": "swing",
+                "final_state": "ai_review_gap",
+                "final_decision": "block_runtime_use",
+                "reason": "Broad Swing candidates remain deferred while critical sim-auto candidates were reviewed.",
+                "source_paths": ["/tmp/swing_lifecycle_bucket_discovery.json"],
+            }
+        ],
+    }
+
+    report = mod.build_pattern_lab_ai_review_report("2026-05-15", provider="openai", ai_raw_response=raw_response)
+
+    order = next(
+        item for item in report["code_improvement_orders"] if item["order_id"] == "order_pattern_lab_ai_review_ai_review_gap"
+    )
+    assert order["implementation_status"] == "implemented"
+    provenance = order["implementation_provenance"]
+    assert provenance["implementation_type"] == "pattern_lab_swing_generic_ai_gap_two_pass_provenance"
+    assert provenance["sim_auto_unreviewed_candidate_count"] == 0
+    assert provenance["ai_unreviewed_candidate_count"] == 627
+    assert provenance["missing_ai_tier2_proposal_count"] == 627
+    assert provenance["runtime_effect"] is False
+
+
 def test_pattern_lab_ai_review_marks_recursive_workorder_review_id_as_implemented_source_only():
     status, provenance = mod._implementation_marker_for_conclusion(
         {
@@ -2276,3 +2331,53 @@ def test_pattern_lab_ai_review_marks_recursive_workorder_review_id_as_implemente
     assert provenance["runtime_effect"] is False
     assert provenance["allowed_runtime_apply"] is False
     assert provenance["requires_separate_runtime_apply_candidate"] is True
+
+
+def test_pattern_lab_ai_review_marks_report_only_source_quality_reviews_as_implemented():
+    for review_id in ("threshold_cycle_ev", "pattern_lab_propagation_audit"):
+        status, provenance = mod._implementation_marker_for_conclusion(
+            {
+                "review_id": review_id,
+                "final_state": "source_quality_gap",
+                "final_decision": "block_runtime_use",
+                "explicit_gap_type": "source_quality_gap",
+                "auditor_pass": False,
+                "source_paths": [f"/tmp/{review_id}.json"],
+            },
+            {},
+        )
+
+        assert status == "implemented"
+        assert provenance["normalized_review_id"] == review_id
+        assert provenance["runtime_effect"] is False
+        assert provenance["allowed_runtime_apply"] is False
+        assert provenance["requires_separate_runtime_apply_candidate"] is True
+
+
+def test_pattern_lab_ai_review_marks_workorder_duplicate_warnings_as_source_only_provenance():
+    status, provenance = mod._implementation_marker_for_conclusion(
+        {
+            "review_id": "code_improvement_workorder_duplicate_orders",
+            "final_state": "source_quality_gap",
+            "final_decision": "block_runtime_use",
+            "source_paths": ["/tmp/code_improvement_workorder.json"],
+        },
+        {
+            "sources": {
+                "code_improvement_workorder": {
+                    "summary": {
+                        "summary": {
+                            "duplicate_order_warnings": [
+                                "duplicate_order_id=order_a source=swing_lifecycle_bucket_discovery"
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+    )
+
+    assert status == "implemented"
+    assert provenance["implementation_type"] == "pattern_lab_code_improvement_workorder_duplicate_warning_provenance"
+    assert provenance["duplicate_order_warning_count"] == 1
+    assert provenance["runtime_effect"] is False

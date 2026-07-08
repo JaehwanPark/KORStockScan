@@ -449,21 +449,57 @@ def _classified_source_only_warning_present(context: dict[str, Any], warning: st
 
 def _is_resolved_classified_source_quality_warning_gap(item: dict[str, Any], context: dict[str, Any]) -> bool:
     final_state = str(item.get("final_state") or "")
+    review_id = str(item.get("review_id") or "").strip().lower()
     reason = str(item.get("reason") or "").lower()
     lifecycle_drift_context = "lifecycle_bucket_discovery" in reason and (
         "source_contract_drift" in reason or "source contract drift" in reason
+    )
+    swing_strategy_source_only_context = review_id in {
+        "swing_strategy_discovery_pending_future_quotes",
+        "swing_strategy_discovery_ev",
+    } or ("swing_strategy_discovery" in reason and "pending_future_quotes" in reason)
+    swing_lifecycle_source_only_context = review_id.startswith("swing_lifecycle_decision_matrix") or (
+        "swing_lifecycle_decision_matrix" in reason
+        and ("pending_future_quotes" in reason or "swing_intraday_live_equiv_probe_missing" in reason)
+    )
+    pattern_lab_propagation_source_only_context = review_id.startswith("pattern_lab_propagation_audit") or (
+        "pattern_lab_propagation_audit" in reason or "pattern lab propagation" in reason
     )
     swing_bucket_implemented_context = (
         ("swing_lifecycle_bucket_discovery" in reason or "swing lifecycle bucket discovery" in reason)
         and ("code_patch_required" in reason or "code patch" in reason)
     )
     if final_state != "source_quality_gap" and not (
-        final_state == "automation_handoff_gap" and (swing_bucket_implemented_context or lifecycle_drift_context)
+        final_state == "automation_handoff_gap"
+        and (
+            swing_bucket_implemented_context
+            or lifecycle_drift_context
+            or swing_strategy_source_only_context
+            or swing_lifecycle_source_only_context
+            or pattern_lab_propagation_source_only_context
+        )
     ):
         return False
     if str(item.get("final_decision") or "") == "keep":
         return False
-    review_id = str(item.get("review_id") or "").strip().lower()
+    if review_id.startswith("threshold_cycle_ev"):
+        threshold_summary = _threshold_cycle_ev_source_summary(context)
+        nested_summary = _nested_report_summary(threshold_summary)
+        return (
+            (threshold_summary.get("runtime_effect") is False or nested_summary.get("runtime_effect") is False)
+            and threshold_summary.get("allowed_runtime_apply") is not True
+            and nested_summary.get("source_quality_status") == "warning"
+            and _threshold_ev_warnings_are_classified_source_only(context)
+        )
+    if pattern_lab_propagation_source_only_context:
+        source = _source_summary(context, "pattern_lab_propagation_audit")
+        summary = _nested_report_summary(source)
+        return (
+            (source.get("runtime_effect") is False or summary.get("runtime_effect") is False)
+            and source.get("allowed_runtime_apply") is not True
+            and source.get("status") == "warning"
+            and _classified_source_only_warning_present(context, "pattern_lab_propagation_audit_warning")
+        )
     if review_id in {
         "lifecycle_bucket_discovery_source_contract_drift",
         "lifecycle_bucket_discovery",
@@ -484,9 +520,7 @@ def _is_resolved_classified_source_quality_warning_gap(item: dict[str, Any], con
                 "lifecycle_bucket_discovery:source_contract_drift_warning",
             )
         )
-    if review_id in {"swing_strategy_discovery_pending_future_quotes", "swing_strategy_discovery_ev"} or (
-        "swing_strategy_discovery" in reason and "pending_future_quotes" in reason
-    ):
+    if swing_strategy_source_only_context:
         source = _source_summary(context, "swing_strategy_discovery_ev")
         return (
             source.get("runtime_effect") is False
@@ -523,10 +557,7 @@ def _is_resolved_classified_source_quality_warning_gap(item: dict[str, Any], con
             and source_only_warning
             and _threshold_ev_warnings_are_classified_source_only(context)
         )
-    if review_id == "swing_lifecycle_decision_matrix_warnings" or (
-        "swing_lifecycle_decision_matrix" in reason
-        and ("pending_future_quotes" in reason or "swing_intraday_live_equiv_probe_missing" in reason)
-    ) or (
+    if review_id == "swing_lifecycle_decision_matrix_warnings" or swing_lifecycle_source_only_context or (
         ("pending future quotes" in reason or "pending_future_quotes" in reason)
         and ("intraday live probe" in reason or "swing_intraday_live_equiv_probe_missing" in reason)
     ):
@@ -1430,11 +1461,48 @@ def _implementation_marker_for_conclusion(
     order_prefix = f"order_{REPORT_TYPE}_"
     if normalized_review_id.startswith(order_prefix):
         normalized_review_id = normalized_review_id[len(order_prefix) :]
+    if review_id == "code_improvement_workorder_duplicate_orders":
+        source_summary = _source_summary(context, "code_improvement_workorder")
+        nested_summary = _nested_report_summary(source_summary)
+        duplicate_warnings = (
+            nested_summary.get("duplicate_order_warnings")
+            if isinstance(nested_summary.get("duplicate_order_warnings"), list)
+            else []
+        )
+        if duplicate_warnings and str(conclusion.get("final_state") or "") in {"source_quality_gap", "code_patch_required"}:
+            return (
+                "implemented",
+                {
+                    "implementation_type": "pattern_lab_code_improvement_workorder_duplicate_warning_provenance",
+                    "implemented_scope": (
+                        "Code improvement workorder candidate duplicate warnings are surfaced as source-only "
+                        "dedupe provenance; final selected order ids remain unique."
+                    ),
+                    "source_report_type": "code_improvement_workorder",
+                    "review_id": review_id,
+                    "normalized_review_id": normalized_review_id,
+                    "final_state": conclusion.get("final_state"),
+                    "final_decision": conclusion.get("final_decision"),
+                    "duplicate_order_warning_count": len(duplicate_warnings),
+                    "decision_authority": "pattern_lab_ai_review_source_only",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "requires_separate_runtime_apply_candidate": True,
+                    "runtime_mutation_allowed": False,
+                    "forbidden_uses": FORBIDDEN_USES,
+                    "source_paths": conclusion.get("source_paths") if isinstance(conclusion.get("source_paths"), list) else [],
+                    "root_cause_closure_status_hint": "root_cause_closed",
+                },
+            )
     source_quality_review_ids = {
         "lifecycle_bucket_discovery",
+        "pattern_lab_propagation_audit",
         "swing_lifecycle_bucket_discovery",
         "swing_lifecycle_decision_matrix",
         "swing_strategy_discovery_ev",
+        "threshold_cycle_ev",
     }
     if (
         normalized_review_id in source_quality_review_ids
@@ -1470,6 +1538,7 @@ def _implementation_marker_for_conclusion(
                 },
             )
     if review_id not in {
+        "ai_review_gap",
         "swing_lifecycle_bucket_discovery_ai_two_pass_partial",
         "swing_ai_two_pass_review_incomplete",
     }:
@@ -1496,6 +1565,10 @@ def _implementation_marker_for_conclusion(
     reviewed_count = _safe_int(source_summary.get("sim_auto_reviewed_candidate_count"), 0)
     unreviewed_count = _safe_int(source_summary.get("sim_auto_unreviewed_candidate_count"), 0)
     downgraded_count = _safe_int(source_summary.get("sim_auto_downgraded_by_review_count"), 0)
+    all_candidate_unreviewed_count = _safe_int(source_summary.get("ai_unreviewed_candidate_count"), 0)
+    missing_ai_tier2_proposal_count = _safe_int(source_summary.get("missing_ai_tier2_proposal_count"), 0)
+    optional_deferred_candidate_count = _safe_int(source_summary.get("ai_review_optional_deferred_candidate_count"), 0)
+    optional_deferred_shard_count = _safe_int(source_summary.get("ai_review_optional_deferred_shard_count"), 0)
     followup_reasons = (
         source_summary.get("ai_review_followup_reasons")
         if isinstance(source_summary.get("ai_review_followup_reasons"), list)
@@ -1509,11 +1582,13 @@ def _implementation_marker_for_conclusion(
             "implementation_type": (
                 "pattern_lab_swing_ai_two_pass_followup_provenance"
                 if review_id == "swing_ai_two_pass_review_incomplete"
+                else "pattern_lab_swing_generic_ai_gap_two_pass_provenance"
+                if review_id == "ai_review_gap"
                 else "pattern_lab_swing_bucket_ai_two_pass_partial_provenance"
             ),
             "implemented_scope": (
                 "Pattern Lab source-only follow-up now carries the Swing bucket two-pass partial-review "
-                "telemetry and source paths into the workorder surface."
+                "telemetry, deferred broad-candidate review counts, and source paths into the workorder surface."
             ),
             "source_report_type": "swing_lifecycle_bucket_discovery",
             "decision_authority": "pattern_lab_ai_review_source_only",
@@ -1524,6 +1599,10 @@ def _implementation_marker_for_conclusion(
             "sim_auto_reviewed_candidate_count": reviewed_count,
             "sim_auto_unreviewed_candidate_count": unreviewed_count,
             "sim_auto_downgraded_by_review_count": downgraded_count,
+            "ai_unreviewed_candidate_count": all_candidate_unreviewed_count,
+            "missing_ai_tier2_proposal_count": missing_ai_tier2_proposal_count,
+            "ai_review_optional_deferred_candidate_count": optional_deferred_candidate_count,
+            "ai_review_optional_deferred_shard_count": optional_deferred_shard_count,
             "ai_review_followup_required": bool(source_summary.get("ai_review_followup_required")),
             "ai_review_followup_reasons": followup_reasons,
             "source_paths": conclusion.get("source_paths") if isinstance(conclusion.get("source_paths"), list) else [],

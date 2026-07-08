@@ -472,6 +472,11 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _is_real_primary_sample_book(value: Any) -> bool:
+    text = str(value or "").strip()
+    return text == "real" or text.startswith("real_")
+
+
 def _artifact_paths(target_date: str) -> dict[str, Path]:
     next_day = _next_krx_trading_day(target_date)
     return {
@@ -2467,6 +2472,7 @@ def _active_sim_priority_handoff_status(
 ) -> dict[str, Any]:
     missing: list[str] = []
     warnings: list[str] = []
+    next_preopen_pending: list[str] = []
     producer_seeds = [
         item
         for item in (discovery.get("active_sim_priority_seeds") or [])
@@ -2573,7 +2579,7 @@ def _active_sim_priority_handoff_status(
         elif due_active_seed_ids and not due_active_seed_ids.issubset(preopen_seed_ids):
             missing.append("active_sim_priority_preopen_handoff_missing")
         if pending_active_seed_ids:
-            warnings.append("active_sim_priority_preopen_handoff_pending")
+            next_preopen_pending.append("active_sim_priority_preopen_handoff_pending")
         if due_active_swing_policy_ids and "swing_sim_auto_approval" not in selected_families:
             missing.append("swing_active_arm_priority_preopen_handoff_missing")
         elif due_active_swing_policy_ids and not preopen_swing_policy_ids:
@@ -2581,9 +2587,12 @@ def _active_sim_priority_handoff_status(
         elif due_active_swing_policy_ids and not due_active_swing_policy_ids.issubset(preopen_swing_policy_ids):
             warnings.append("swing_active_arm_priority_preopen_handoff_pending")
         if pending_active_swing_policy_ids:
-            warnings.append("swing_active_arm_priority_preopen_handoff_pending")
+            next_preopen_pending.append("swing_active_arm_priority_preopen_handoff_pending")
     elif active_seed_ids or active_swing_policy_ids:
-        warnings.append("active_sim_priority_preopen_handoff_pending")
+        if active_seed_ids:
+            next_preopen_pending.append("active_sim_priority_preopen_handoff_pending")
+        if active_swing_policy_ids:
+            next_preopen_pending.append("swing_active_arm_priority_preopen_handoff_pending")
 
     def truthy(value: Any) -> bool:
         return value is True or str(value).strip().lower() in {"true", "1", "yes"}
@@ -2756,6 +2765,7 @@ def _active_sim_priority_handoff_status(
         "catalog_seed_ids": sorted(catalog_seed_ids),
         "active_seed_ids": sorted(active_seed_ids),
         "preopen_seed_ids": sorted(preopen_seed_ids),
+        "pending_next_preopen_seed_ids": sorted(pending_active_seed_ids),
         "observed_seed_ids": sorted(observed_seed_ids),
         "referenced_runtime_seed_ids": sorted(referenced_runtime_seed_ids),
         "inactive_consumed_ids": sorted(inactive_consumed),
@@ -2764,9 +2774,18 @@ def _active_sim_priority_handoff_status(
         "swing_priority_policy_ids": sorted(swing_policy_ids),
         "active_swing_priority_policy_ids": sorted(active_swing_policy_ids),
         "preopen_swing_priority_policy_ids": sorted(preopen_swing_policy_ids),
+        "pending_next_preopen_swing_priority_policy_ids": sorted(pending_active_swing_policy_ids),
         "observed_swing_priority_policy_ids": sorted(observed_swing_policy_ids),
         "missing": list(dict.fromkeys(missing)),
         "warnings": list(dict.fromkeys(warnings)),
+        "next_preopen_pending": list(dict.fromkeys(next_preopen_pending)),
+        "next_preopen_pending_count": len(set(next_preopen_pending)),
+        "next_preopen_pending_interpretation": (
+            "active sim/swing priority was generated after the current preopen apply source date; "
+            "verify closure is due after the next PREOPEN apply/runtime observation"
+            if next_preopen_pending
+            else "none"
+        ),
         "active_priority_match_absence_diagnosis": active_priority_match_absence_diagnosis,
         "runtime_effect": False,
         "allowed_runtime_apply": False,
@@ -4159,7 +4178,7 @@ def build_threshold_cycle_postclose_verification(
         isinstance(item, dict)
         and _safe_int(item.get("real_sample_count"), 0) >= 20
         and _safe_int(item.get("real_outcome_joined_sample"), 0) > 0
-        and str(item.get("primary_sample_book") or "") != "real"
+        and not _is_real_primary_sample_book(item.get("primary_sample_book"))
         for item in entry_split_grid
     ):
         handoff_warnings.append("real_sample_unused_by_postclose_decision")

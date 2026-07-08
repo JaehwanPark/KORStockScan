@@ -335,6 +335,54 @@ def test_observation_source_quality_audit_warns_on_high_rate_unknown_tokens(monk
     assert finding["runtime_effect"] is False
 
 
+def test_observation_source_quality_audit_reviews_entry_block_source_quality_unknown(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    rows = [
+        _event(
+            "scalp_entry_action_decision_snapshot",
+            {
+                "block_reason": "source_quality_unknown",
+                "metric_role": "action_decision_matrix",
+                "decision_authority": "entry_advisory_prompt_context_only",
+                "source_quality_gate": "source_quality_review_warning",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+            record_id=1,
+        ),
+        _event(
+            "real_weak_ai_micro_entry_block",
+            {
+                "reason": "source_quality_unknown",
+                "block_reason": "source_quality_unknown",
+                "metric_role": "entry_block_observation",
+                "decision_authority": "real_buy_submit_source_quality_guard",
+                "source_quality_gate": "weak_ai_micro_context_contract",
+                "runtime_effect": True,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+            record_id=2,
+        ),
+    ]
+    _write_events(tmp_path, "2026-05-15", rows)
+
+    report = audit.build_observation_source_quality_audit("2026-05-15")
+
+    assert report["unknown_token_findings"] == []
+    reviewed = {item["stage"]: item for item in report["reviewed_unknown_token_findings"]}
+    snapshot_fields = {item["field"]: item for item in reviewed["scalp_entry_action_decision_snapshot"]["fields"]}
+    weak_fields = {item["field"]: item for item in reviewed["real_weak_ai_micro_entry_block"]["fields"]}
+    assert snapshot_fields["block_reason"]["reviewed_reason"] == (
+        "reviewed_entry_block_source_quality_unknown_provenance"
+    )
+    assert weak_fields["reason"]["reviewed_reason"] == "reviewed_entry_block_source_quality_unknown_provenance"
+    assert weak_fields["block_reason"]["reviewed_reason"] == "reviewed_entry_block_source_quality_unknown_provenance"
+    assert report["summary"]["review_warning_count"] == 0
+
+
 def test_observation_source_quality_audit_reviews_live_liquidity_would_unknown(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(

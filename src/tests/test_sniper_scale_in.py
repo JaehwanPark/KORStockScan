@@ -1866,6 +1866,76 @@ def test_rising_missed_one_share_hook_bypasses_watching_soft_branch(monkeypatch)
     assert runtime["forced_entry_reason"] == FORCED_ENTRY_REASON
 
 
+def test_rising_missed_scout_quality_guard_blocks_stale_recent_weak_ai_micro(monkeypatch):
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.TRADING_RULES = CONFIG
+    state_handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK.clear()
+
+    submit_calls = []
+    branch_calls = []
+    entry_logs = []
+
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", "true")
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_SCOUT_QUALITY_GUARD_ENABLED", raising=False)
+    monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_scalp_same_symbol_loss_reentry_guard",
+        lambda *args, **kwargs: {"allowed": True},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_handle_watching_strategy_branch",
+        lambda *args, **kwargs: branch_calls.append(True) or False,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_submit_watching_triggered_entry",
+        lambda *args, **kwargs: submit_calls.append(True) or True,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: entry_logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 1,
+        "name": "STALE_WEAK_RISING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_id": "scan-weak-stale",
+        "price_delta_since_first_seen_pct": 2.1,
+        "prob": 0.62,
+        "last_real_weak_ai_micro_entry_block_at": 900.0,
+        "last_real_weak_ai_micro_entry_block_ai_score": "0.0",
+        "last_real_weak_ai_micro_entry_block_micro_state": "neutral",
+    }
+
+    state_handlers.handle_watching_state(
+        stock,
+        "000810",
+        {"curr": 690000, "v_pw": 100.0, "source_quality_state": "diagnostic_quote_age_stale"},
+        admin_id=1,
+        now_ts=1000.0,
+        now_dt=datetime(2026, 7, 8, 18, 12, 0),
+    )
+
+    assert submit_calls == []
+    assert branch_calls == []
+    assert stock.get("rising_missed_one_share_entry_forced") is None
+    assert entry_logs[-1][0] == "rising_missed_scout_quality_guard_blocked"
+    assert entry_logs[-1][1]["block_reason"] == "stale_quote_with_weak_ai_or_strength"
+    assert entry_logs[-1][1]["rising_missed_scout_quality_guard_quote_stale"] is True
+    assert entry_logs[-1][1]["rising_missed_scout_quality_guard_text_quote_stale"] is True
+    assert entry_logs[-1][1]["rising_missed_scout_quality_guard_recent_weak_ai_micro_block"] is True
+    assert entry_logs[-1][1]["rising_missed_one_share_entry_forced_qty"] == 1
+    assert entry_logs[-1][1]["rising_missed_scout_min_one_share_over_cap"] is True
+    assert entry_logs[-1][1]["actual_order_submitted"] is False
+    assert entry_logs[-1][1]["broker_order_forbidden"] is True
+
+
 def test_rising_missed_one_share_hook_allows_initial_scout_before_first_touch_avgdown_gate(monkeypatch):
     state_handlers.COOLDOWNS = {}
     state_handlers.ALERTED_STOCKS = set()
@@ -6459,6 +6529,95 @@ def test_non_defensive_avg_down_still_blocks_quote_divergence(monkeypatch):
     blocked = [fields for stage, fields in logs if stage == "scale_in_price_guard_block"]
     assert blocked
     assert blocked[-1]["reason"] == "quote_consistency_diverged"
+    assert blocked[-1]["price_source"] == "rest_orderbook"
+
+
+def test_quote_consistency_merge_backfills_blank_ws_price_source():
+    target = {
+        "price_source": "",
+        "quote_consistency_state": "single_source",
+        "quote_consistency_reason": "ws_only_fresh",
+    }
+
+    state_handlers._merge_quote_consistency_fields(
+        target,
+        {
+            "price_source": "",
+            "quote_consistency_state": "single_source",
+            "quote_consistency_reason": "ws_only_fresh",
+            "canonical_mark_price": 10_000,
+            "executable_buy_price": 10_010,
+            "executable_sell_price": 10_000,
+            "normalization_runtime_effect": True,
+        },
+    )
+
+    assert target["price_source"] == "ws"
+
+
+def test_scale_in_quote_consistency_block_backfills_blank_price_source(monkeypatch):
+    rules = replace(CONFIG, MAX_POSITION_PCT=1.0)
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
+    state_handlers.KIWOOM_TOKEN = "test"
+
+    logs = []
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 100_000_000)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: pytest.fail("quote consistency block must not submit an order"),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_pre_submit_refresh_real_ws_snapshot",
+        lambda code, ws_data, strategy: (dict(ws_data), {"normalization_runtime_effect": True}),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_build_quote_consistency_fields",
+        lambda *args, **kwargs: (
+            {
+                "normalization_runtime_effect": True,
+                "quote_consistency_entry_blocked": True,
+                "quote_consistency_state": "single_source",
+                "quote_consistency_reason": "ws_only_fresh",
+                "price_source": "",
+                "canonical_mark_price": 10_000,
+                "executable_buy_price": 10_010,
+                "executable_sell_price": 10_000,
+            },
+            10_000,
+            10_010,
+            10_000,
+        ),
+    )
+
+    result = state_handlers.execute_scale_in_order(
+        stock={
+            "id": 1,
+            "name": "TEST",
+            "strategy": "SCALPING",
+            "buy_price": 10_500,
+            "buy_qty": 1,
+            "last_reversal_features": _trusted_reversal_features(curr_vs_micro_vwap_bp=0.0),
+        },
+        code="123456",
+        ws_data={"curr": 10_000, "best_bid": 9_990, "best_ask": 10_010},
+        action={"add_type": "AVG_DOWN", "reason": "reversal_add_ok", "profit_rate": -2.0},
+        admin_id=1,
+    )
+
+    assert result is None
+    blocked = [fields for stage, fields in logs if stage == "scale_in_price_guard_block"]
+    assert blocked
+    assert blocked[-1]["price_source"] == "ws"
+    assert blocked[-1]["canonical_mark_price"] == 10_000
 
 
 @pytest.mark.parametrize(
@@ -7311,6 +7470,7 @@ def test_scalp_sim_scale_in_execution_observation_uses_shadow_marketable_arm(mon
     ][0]
     started = [fields for stage, fields in logs if stage == "scalp_sim_scale_in_counterfactual_started"][0]
     assert passive["runtime_ev_eligible"] is False
+    assert passive["lifecycle_bucket_match_status"] in {"candidate_context_only", "policy_disabled"}
     assert marketable["assumed_fill_price"] == 10_000
     assert marketable["runtime_ev_eligible"] is True
     assert passive["scale_in_decision_id"] == marketable["scale_in_decision_id"] == started["scale_in_decision_id"]
@@ -7394,6 +7554,7 @@ def test_scalp_sim_scale_in_marketable_arm_requires_fresh_quote_timestamp(monkey
         and fields.get("execution_arm") == "MARKETABLE_OBSERVATION"
     ][0]
     assert unavailable["scale_in_candidate_funnel_state"] == "quote_unavailable"
+    assert unavailable["lifecycle_bucket_match_status"] == "candidate_context_only"
     assert unavailable["quote_age_sec"] >= 10
     assert not any(fields.get("execution_arm") == "PASSIVE_BASELINE" for _, fields in logs)
 

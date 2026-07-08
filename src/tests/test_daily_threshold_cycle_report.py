@@ -3852,6 +3852,40 @@ def test_lifecycle_entry_armed_remains_contract_missing():
     assert result == "contract_missing"
 
 
+def test_sim_only_lifecycle_context_missing_status_backfilled_as_context_only():
+    from src.engine import daily_threshold_cycle_report as target
+
+    result = target._reclassify_match_status(
+        raw_match_status="missing",
+        fields={
+            "simulation_book": "scalp_ai_buy_all",
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "decision_authority": "sim_observation_only",
+        },
+        stage="scalp_sim_overnight_decision",
+        active_seed_state="none",
+    )
+    assert result == "candidate_context_only"
+
+
+def test_sim_submit_path_lifecycle_context_missing_status_backfilled_as_context_only():
+    from src.engine import daily_threshold_cycle_report as target
+
+    result = target._reclassify_match_status(
+        raw_match_status="missing",
+        fields={
+            "simulation_book": "scalp_ai_buy_all",
+            "actual_order_submitted": "False",
+            "broker_order_forbidden": "True",
+            "decision_authority": "sim_submit_path_observation_only",
+        },
+        stage="scalp_sim_pre_submit_liquidity_guard_would_pass",
+        active_seed_state="none",
+    )
+    assert result == "candidate_context_only"
+
+
 def test_duplicate_not_in_lifecycle_eligible_stages():
     from src.engine import daily_threshold_cycle_report as target
 

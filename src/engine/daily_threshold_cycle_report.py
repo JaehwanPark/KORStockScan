@@ -63,6 +63,7 @@ THRESHOLD_EVENT_FIELD_KEEP_KEYS = {
     "assumed_fill_price",
     "avg_down_count",
     "blocked_reason",
+    "broker_order_forbidden",
     "budget_authority",
     "buffer_pct",
     "buy_pressure_10t",
@@ -73,6 +74,7 @@ THRESHOLD_EVENT_FIELD_KEEP_KEYS = {
     "conditional_1tick_real_override_context",
     "conditional_1tick_real_override_reason",
     "current_ai_score",
+    "decision_authority",
     "drawdown_from_peak",
     "effective_qty",
     "eligible_actions",
@@ -3904,6 +3906,8 @@ def _reclassify_match_status(
 
     if not raw_match_status or raw_match_status == "missing":
         if _is_lifecycle_match_eligible_stage(stage):
+            if _has_sim_only_lifecycle_context_contract(fields):
+                return "candidate_context_only"
             return "contract_missing"
         return "not_instrumented"
 
@@ -3925,6 +3929,26 @@ def _reclassify_match_status(
         return "natural_no_match"
 
     return "natural_no_match"
+
+
+def _has_sim_only_lifecycle_context_contract(fields: dict) -> bool:
+    if not isinstance(fields, dict):
+        return False
+    if str(fields.get("simulation_book") or "") != "scalp_ai_buy_all":
+        return False
+    decision_authority = str(fields.get("decision_authority") or "").strip()
+    if decision_authority and decision_authority not in {
+        "sim_observation_only",
+        "sim_submit_path_observation_only",
+    }:
+        return False
+    if "broker_order_forbidden" in fields and not _field_bool(fields.get("broker_order_forbidden")):
+        return False
+    actual_submitted_value = fields.get("actual_order_submitted")
+    actual_submitted = "" if actual_submitted_value is None else str(actual_submitted_value).strip().lower()
+    if actual_submitted not in {"false", "0", "no"}:
+        return False
+    return True
 
 
 _LIFECYCLE_MATCH_ELIGIBLE_STAGES: set[str] = {

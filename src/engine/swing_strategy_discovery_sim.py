@@ -33,6 +33,7 @@ from src.utils.jsonl_io import iter_jsonl
 REPORT_DIR = Path(DATA_DIR) / "report" / "swing_strategy_discovery_sim"
 PIPELINE_EVENTS_DIR = Path(DATA_DIR) / "pipeline_events"
 BOTTOM_REBOUND_SOURCE_DIR = Path(DATA_DIR) / "report" / "swing_bottom_rebound_candidate_source"
+THRESHOLD_APPLY_PLAN_DIR = Path(DATA_DIR) / "threshold_cycle" / "apply_plans"
 
 POLICY_VERSION = "swing_strategy_discovery_sim_v1"
 LABEL_WEIGHT_POLICY_VERSION = "swing_lifecycle_ev_label_weight_policy_v1"
@@ -281,8 +282,43 @@ def load_bottom_rebound_source_rows(target_date: str, *, source_path: str | Path
     }
 
 
-def _load_active_arm_priority_policies(policy_file: str | Path | None = None) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+def _selected_swing_policy_file_from_apply_plan(target_date: str) -> str:
+    path = THRESHOLD_APPLY_PLAN_DIR / f"threshold_apply_{_date_text(target_date)}.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+
+    def walk(value: Any) -> str:
+        if isinstance(value, dict):
+            family = str(value.get("family") or "")
+            if family == "swing_sim_auto_approval" and value.get("selected") is not False:
+                recommended = value.get("recommended_values") if isinstance(value.get("recommended_values"), dict) else {}
+                policy_file = str(recommended.get("policy_file") or value.get("policy_file") or "").strip()
+                if policy_file:
+                    return policy_file
+            for child in value.values():
+                found = walk(child)
+                if found:
+                    return found
+        elif isinstance(value, list):
+            for item in value:
+                found = walk(item)
+                if found:
+                    return found
+        return ""
+
+    return walk(payload)
+
+
+def _load_active_arm_priority_policies(
+    policy_file: str | Path | None = None,
+    *,
+    target_date: str | None = None,
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
     resolved = str(policy_file or os.environ.get("KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_FILE") or "").strip()
+    if not resolved and target_date:
+        resolved = _selected_swing_policy_file_from_apply_plan(target_date)
     if not resolved:
         return {}, {"status": "disabled", "path": ""}
     path = Path(resolved)
@@ -946,7 +982,10 @@ def build_swing_strategy_discovery_report(
     swing_sim_policy_file: str | Path | None = None,
 ) -> dict[str, Any]:
     date_key = _date_text(target_date)
-    active_arm_policies, active_arm_policy_diag = _load_active_arm_priority_policies(swing_sim_policy_file)
+    active_arm_policies, active_arm_policy_diag = _load_active_arm_priority_policies(
+        swing_sim_policy_file,
+        target_date=date_key,
+    )
     effective_max_candidates = (
         max_candidates
         if max_candidates is not None

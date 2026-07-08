@@ -99,3 +99,80 @@ def test_quote_consistency_missing_required_fields_are_warning_when_ev_blocked(m
             "message": "Rows with missing quote consistency required fields were excluded from EV input.",
         }
     ]
+
+
+def test_quote_consistency_partitioned_threshold_events_satisfy_source_contract(monkeypatch, tmp_path):
+    pipeline_dir = tmp_path / "pipeline_events"
+    threshold_dir = tmp_path / "threshold_cycle"
+    pipeline_dir.mkdir()
+    partition_dir = threshold_dir / "date=2026-06-30" / "family=quote_consistency_normalization"
+    partition_dir.mkdir(parents=True)
+    (pipeline_dir / "pipeline_events_2026-06-30.jsonl").write_text("", encoding="utf-8")
+    (partition_dir / "part-000001.jsonl").write_text(
+        json.dumps(
+            {
+                "event_type": "pipeline_event",
+                "stage": "entry_submit_revalidation_block",
+                "stock_code": "005930",
+                "fields": {
+                    "quote_consistency_family": "quote_consistency_normalization",
+                    "quote_consistency_state": "ok",
+                    "canonical_mark_price": 10000,
+                    "executable_buy_price": 9990,
+                    "executable_sell_price": 9990,
+                    "price_source": "ws_rest_mid",
+                    "normalization_runtime_effect": True,
+                },
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", pipeline_dir)
+    monkeypatch.setattr(mod, "THRESHOLD_EVENTS_DIR", threshold_dir)
+
+    report = mod.build_quote_consistency_report("2026-06-30")
+
+    assert report["summary"]["observed_count"] == 1
+    assert not any(item["code"] == "quote_consistency_source_missing" for item in report["verifier_findings"])
+    assert report["sources"]["threshold_events"] is None
+    assert len(report["sources"]["threshold_events_partitioned"]) == 1
+
+
+def test_quote_consistency_report_backfills_blank_ws_price_source(monkeypatch, tmp_path):
+    pipeline_dir = tmp_path / "pipeline_events"
+    threshold_dir = tmp_path / "threshold_cycle"
+    pipeline_dir.mkdir()
+    threshold_dir.mkdir()
+    (threshold_dir / "threshold_events_2026-06-30.jsonl").write_text("", encoding="utf-8")
+    (pipeline_dir / "pipeline_events_2026-06-30.jsonl").write_text(
+        json.dumps(
+            {
+                "stage": "scale_in_price_guard_block",
+                "stock_code": "005930",
+                "fields": {
+                    "quote_consistency_family": "quote_consistency_normalization",
+                    "quote_consistency_state": "single_source",
+                    "quote_consistency_reason": "ws_only_fresh",
+                    "canonical_mark_price": 10000,
+                    "executable_buy_price": 10010,
+                    "executable_sell_price": 10000,
+                    "price_source": "",
+                    "normalization_runtime_effect": True,
+                },
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", pipeline_dir)
+    monkeypatch.setattr(mod, "THRESHOLD_EVENTS_DIR", threshold_dir)
+
+    report = mod.build_quote_consistency_report("2026-06-30")
+
+    assert report["summary"]["observed_count"] == 1
+    assert report["summary"]["missing_required_fields"] == 0
+    assert report["source_counts"] == {"ws": 1}
+    assert report["verifier_findings"] == []

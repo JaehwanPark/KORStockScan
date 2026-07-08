@@ -103,6 +103,9 @@ def test_emitted_events_include_metric_contract_and_openai_provenance(tmp_path, 
     )
 
     decision_fields = dict(emitted[0][1])
+    sell_today_fields = dict(
+        next(fields for stage, fields in emitted if stage == "scalp_sim_overnight_sell_today")
+    )
     sell_fields = dict(
         next(fields for stage, fields in emitted if stage == "scalp_sim_sell_order_assumed_filled")
     )
@@ -111,15 +114,18 @@ def test_emitted_events_include_metric_contract_and_openai_provenance(tmp_path, 
     assert decision_fields["decision_authority"] == "sim_observation_only"
     assert decision_fields["threshold_family"] == "scalp_sim_overnight_ai_carry"
     assert decision_fields["source_quality_gate"] == "overnight_decision_coverage"
+    assert decision_fields["lifecycle_bucket_match_status"] == "candidate_context_only"
     assert decision_fields["openai_model"] == "gpt-5.4-mini"
     assert decision_fields["openai_transport_mode"] == "responses_ws"
     assert decision_fields["openai_ws_used"] is True
     assert decision_fields["openai_response_ms"] == 123
+    assert sell_today_fields["lifecycle_bucket_match_status"] == "candidate_context_only"
     assert sell_fields["simulated_order"] is True
     assert sell_fields["actual_order_submitted"] is False
     assert sell_fields["broker_order_forbidden"] is True
     assert sell_fields["decision_authority"] == "sim_observation_only"
     assert sell_fields["runtime_effect"] == "simulated_completed_only"
+    assert sell_fields["lifecycle_bucket_match_status"] == "candidate_context_only"
 
 
 def test_hold_overnight_keeps_active_state_with_carry_fields(tmp_path):

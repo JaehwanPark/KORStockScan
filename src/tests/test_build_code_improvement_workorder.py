@@ -6543,6 +6543,31 @@ def test_contract_missing_threshold_creates_workorder():
     assert "order_active_seed_or_ldm_match_missing_contract_gap" in gap_ids
 
 
+def test_contract_missing_threshold_reads_top_level_scalp_simulator():
+    ev_report = {
+        "scalp_simulator": {
+            "lifecycle_bucket_match_aggregation": {
+                "contract_missing_count": 563,
+                "active_seed_prefix_matched_parent_missing_count": 0,
+                "active_seed_matched_none_count": 5655,
+                "not_instrumented_count": 4250,
+                "natural_no_match_count": 0,
+                "panic_scale_in_stage_excluded_count": 842,
+                "hypothesis_matched_but_parent_bucket_no_match_count": 0,
+            },
+            "swing_micro_source_quality": {
+                "provenance_gap_count": 0,
+                "missing_ws_quote_source_count": 0,
+                "ready_count": 0,
+            },
+        },
+        "family_reports": [],
+    }
+    orders = mod._sim_fill_and_match_report_contract_orders(ev_report)
+    gap_ids = [o["order_id"] for o in orders]
+    assert "order_active_seed_or_ldm_match_missing_contract_gap" in gap_ids
+
+
 def test_contract_missing_below_threshold_no_workorder():
     ev_report = {
         "calibration": {
@@ -6619,6 +6644,22 @@ def test_natural_no_match_not_workorder_trigger():
     orders = mod._sim_fill_and_match_report_contract_orders(ev_report)
     gap_ids = [o["order_id"] for o in orders]
     assert "order_active_seed_or_ldm_match_missing_contract_gap" not in gap_ids
+
+
+def test_entry_split_real_detail_primary_book_does_not_create_unused_real_sample_order():
+    ev_report = {
+        "entry_split_order_plan": {
+            "available": True,
+            "status": "pass",
+            "schema_version": "entry_split_order_plan_v1",
+            "real_sample_count": 100,
+            "real_outcome_joined_sample": 17,
+            "recommended_policy_candidate_count": 1,
+            "primary_sample_book": "real_submit_post_submit_observed_low",
+        }
+    }
+
+    assert mod._entry_split_order_plan_followup_orders(ev_report) == []
 
 
 def test_source_quality_contract_gap_creates_workorder():

@@ -199,6 +199,73 @@ def test_active_arm_priority_raises_default_cap_but_explicit_cap_wins(tmp_path, 
     assert explicit["summary"]["candidate_count"] == 5
 
 
+def test_active_arm_priority_policy_file_falls_back_to_preopen_apply(tmp_path, monkeypatch):
+    policy_file = tmp_path / "swing_sim_policy_catalog_2026-06-01.json"
+    policy_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "swing_sim_policy_catalog_v1",
+                "active_arm_priority_policies": [
+                    {
+                        "priority_policy_id": "priority_arm05",
+                        "priority_arm_id": "arm05_breakout_conf_trailing",
+                        "status": "active",
+                        "source_report_date": "2026-06-01",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    apply_dir = tmp_path / "apply_plans"
+    apply_dir.mkdir()
+    (apply_dir / "threshold_apply_2026-06-01.json").write_text(
+        json.dumps(
+            {
+                "swing_sim_auto_approval": {
+                    "selected": [
+                        {
+                            "family": "swing_sim_auto_approval",
+                            "recommended_values": {"policy_file": str(policy_file)},
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "THRESHOLD_APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "load_safe_pool_rows", lambda target_date: _source_rows(70))
+    monkeypatch.setattr(mod, "load_block_reason_map", lambda target_date: {})
+    monkeypatch.setattr(mod, "fetch_quote_features", lambda codes, db_url=mod.POSTGRES_URL: _quote_features(70))
+    monkeypatch.setattr(
+        mod,
+        "build_sector_theme_map",
+        lambda codes, target_date, allow_external=True: {
+            "mapped_code_count": len(list(codes)),
+            "rows_by_code": {
+                f"{idx:06d}": {
+                    "sector": f"sector-{idx % 3}",
+                    "industry": f"industry-{idx % 2}",
+                    "theme_tags": [f"theme-{idx % 4}"],
+                    "theme_source": "test",
+                    "theme_source_quality": "ok",
+                }
+                for idx in range(1, 71)
+            },
+            "warnings": [],
+        },
+    )
+
+    report = mod.build_swing_strategy_discovery_report("2026-06-01", persist=False)
+
+    assert report["summary"]["effective_max_daily_candidates"] == 80
+    assert report["summary"]["candidate_count"] == 70
+    assert report["summary"]["active_arm_priority_policy_count"] == 1
+    assert report["summary"]["active_arm_priority_arm_count"] > 0
+    assert report["sources"]["swing_sim_policy_catalog"] == str(policy_file)
+
+
 def test_active_bucket_priority_raises_default_cap_without_arm_duplication(tmp_path, monkeypatch):
     policy_file = tmp_path / "swing_sim_policy_catalog_2026-06-01.json"
     policy_file.write_text(

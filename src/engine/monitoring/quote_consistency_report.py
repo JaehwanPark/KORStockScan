@@ -43,6 +43,13 @@ def _source_paths(target_date: str) -> dict[str, Path]:
     }
 
 
+def _partitioned_threshold_paths(target_date: str) -> list[Path]:
+    root = THRESHOLD_EVENTS_DIR / f"date={target_date}"
+    if not root.exists():
+        return []
+    return sorted(root.glob("family=*/part-*.jsonl"))
+
+
 def _iter_rows(path: Path) -> Iterable[dict[str, Any]]:
     if not path.exists():
         return
@@ -55,7 +62,30 @@ def _flatten_event(row: dict[str, Any]) -> dict[str, Any]:
     fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
     merged = dict(row)
     merged.update(fields)
+    if (
+        str(merged.get("quote_consistency_state") or "").strip()
+        and str(merged.get("price_source") or "").strip() == ""
+    ):
+        merged["price_source"] = _derive_price_source(merged)
     return merged
+
+
+def _derive_price_source(row: dict[str, Any]) -> str:
+    reason = str(row.get("quote_consistency_reason") or "").strip().lower()
+    state = str(row.get("quote_consistency_state") or "").strip().lower()
+    if reason == "ws_only_fresh":
+        return "ws"
+    if reason == "rest_only_fresh":
+        return "rest_mid"
+    if reason in {"quote_stale", "stale_quote"}:
+        return "stale_cached"
+    if state in {"ok", "warning"}:
+        return "ws_rest_mid"
+    if state == "diverged":
+        return "ws_primary_rest_diverged"
+    if state == "missing":
+        return "none"
+    return ""
 
 
 def _percentiles(values: list[float]) -> dict[str, float | None]:
@@ -79,6 +109,7 @@ def _percentiles(values: list[float]) -> dict[str, float | None]:
 def build_quote_consistency_report(target_date: str | None = None) -> dict[str, Any]:
     target_date = target_date or date.today().isoformat()
     paths = _source_paths(target_date)
+    threshold_partition_paths = _partitioned_threshold_paths(target_date)
     stage_counts: dict[str, Counter] = defaultdict(Counter)
     source_counts: Counter = Counter()
     action_counts: Counter = Counter()
@@ -92,7 +123,15 @@ def build_quote_consistency_report(target_date: str | None = None) -> dict[str, 
     ev_input_blocked_count = 0
 
     for source_name, path in paths.items():
-        for raw in _iter_rows(path):
+        if source_name == "threshold_events" and not path.exists() and threshold_partition_paths:
+            row_iter = (
+                row
+                for partition_path in threshold_partition_paths
+                for row in _iter_rows(partition_path)
+            )
+        else:
+            row_iter = _iter_rows(path)
+        for raw in row_iter:
             row = _flatten_event(raw)
             state = str(row.get("quote_consistency_state") or "").strip()
             has_family = str(row.get("quote_consistency_family") or "") == RUNTIME_FAMILY
@@ -148,7 +187,11 @@ def build_quote_consistency_report(target_date: str | None = None) -> dict[str, 
                         }
                     )
 
-    source_missing = [name for name, path in paths.items() if not path.exists()]
+    source_missing = [
+        name
+        for name, path in paths.items()
+        if not path.exists() and not (name == "threshold_events" and threshold_partition_paths)
+    ]
     verifier_findings = []
     if source_missing:
         verifier_findings.append(
@@ -198,7 +241,10 @@ def build_quote_consistency_report(target_date: str | None = None) -> dict[str, 
         "schema_version": 1,
         "runtime_family": RUNTIME_FAMILY,
         "target_date": target_date,
-        "sources": {name: str(path) if path.exists() else None for name, path in paths.items()},
+        "sources": {
+            **{name: str(path) if path.exists() else None for name, path in paths.items()},
+            "threshold_events_partitioned": [str(path) for path in threshold_partition_paths],
+        },
         "summary": {
             "observed_count": observed_count,
             "rest_fallback_count": rest_fallback_count,

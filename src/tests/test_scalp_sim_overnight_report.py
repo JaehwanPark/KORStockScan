@@ -226,6 +226,89 @@ def test_build_report_does_not_reflag_event_decided_active_state(tmp_path, monke
     assert report["summary"]["source_quality_status"] == "pass"
 
 
+def test_build_report_ignores_stale_fallback_class_on_success_event(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    events_dir = data_dir / "pipeline_events"
+    events_dir.mkdir(parents=True)
+    target_date = "2026-05-19"
+    (events_dir / f"pipeline_events_{target_date}.jsonl").write_text(
+        json.dumps(
+            {
+                "stage": "scalp_sim_overnight_decision",
+                "stock_name": "A",
+                "stock_code": "000001",
+                "emitted_at": "2026-05-19T15:31:00",
+                "fields": {
+                    "sim_record_id": "SIM-A",
+                    "ai_action": "SELL_TODAY",
+                    "ai_confidence": "96",
+                    "ai_parse_ok": "True",
+                    "ai_fallback": "False",
+                    "ai_fallback_class": "missing",
+                    "ai_result_source": "live",
+                    "openai_model": "gpt-5.4-mini",
+                    "actual_order_submitted": "False",
+                    "broker_order_forbidden": "True",
+                    "decision_authority": "sim_observation_only",
+                    "runtime_effect": "sim_observation_only",
+                },
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps({"active_positions": []}), encoding="utf-8")
+    monkeypatch.setattr(overnight, "DATA_DIR", data_dir)
+
+    report = overnight.build_report(target_date, state_path)
+
+    assert report["summary"]["ai_failure_fallback"] == 0
+    assert report["summary"]["ai_fallback_counts"] == {}
+    assert report["rows"][0]["ai_fallback"] == "False"
+    assert report["rows"][0]["ai_fallback_class"] == "none"
+
+
+def test_build_report_keeps_explicit_fallback_class_when_parse_state_missing(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    events_dir = data_dir / "pipeline_events"
+    events_dir.mkdir(parents=True)
+    target_date = "2026-05-19"
+    (events_dir / f"pipeline_events_{target_date}.jsonl").write_text(
+        json.dumps(
+            {
+                "stage": "scalp_sim_overnight_decision",
+                "stock_name": "A",
+                "stock_code": "000001",
+                "emitted_at": "2026-05-19T15:31:00",
+                "fields": {
+                    "sim_record_id": "SIM-A",
+                    "ai_action": "SELL_TODAY",
+                    "ai_fallback": "False",
+                    "ai_fallback_class": "timeout",
+                    "actual_order_submitted": "False",
+                    "broker_order_forbidden": "True",
+                    "decision_authority": "sim_observation_only",
+                    "runtime_effect": "sim_observation_only",
+                },
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps({"active_positions": []}), encoding="utf-8")
+    monkeypatch.setattr(overnight, "DATA_DIR", data_dir)
+
+    report = overnight.build_report(target_date, state_path)
+
+    assert report["summary"]["ai_failure_fallback"] == 1
+    assert report["summary"]["ai_fallback_counts"] == {"timeout": 1}
+    assert report["rows"][0]["ai_fallback_class"] == "timeout"
+
+
 def test_build_report_excludes_positions_created_after_decision_window(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     events_dir = data_dir / "pipeline_events"

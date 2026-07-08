@@ -14861,8 +14861,37 @@ def _merge_quote_consistency_fields(target: dict, fields: dict | None) -> dict:
                 "normalization_runtime_effect",
             }
         ):
+            if key == "price_source" and str(value or "").strip() == "":
+                continue
             target[key] = value
+    if (
+        str(target.get("quote_consistency_state") or "").strip()
+        and str(target.get("price_source") or "").strip() == ""
+    ):
+        target["price_source"] = _quote_consistency_price_source_from_fields(target)
     return target
+
+
+def _quote_consistency_price_source_from_fields(fields: dict | None) -> str:
+    fields = fields if isinstance(fields, dict) else {}
+    explicit = str(fields.get("price_source") or "").strip()
+    if explicit:
+        return explicit
+    reason = str(fields.get("quote_consistency_reason") or "").strip().lower()
+    state = str(fields.get("quote_consistency_state") or "").strip().lower()
+    if reason == "ws_only_fresh":
+        return "ws"
+    if reason == "rest_only_fresh":
+        return "rest_mid"
+    if reason in {"quote_stale", "stale_quote"}:
+        return "stale_cached"
+    if state in {"ok", "warning"}:
+        return "ws_rest_mid"
+    if state == "diverged":
+        return "ws_primary_rest_diverged"
+    if state == "missing":
+        return "none"
+    return ""
 
 
 def _without_event_field_collisions(fields: dict | None, *reserved_keys: str) -> dict:
@@ -17086,6 +17115,277 @@ def _evaluate_real_weak_ai_micro_entry_block(
         fields["reason"] = "weak_context_not_confirmed"
         fields["block_reason"] = "weak_context_not_confirmed"
     return fields
+
+
+def _rising_missed_scout_quality_guard_enabled() -> bool:
+    return _env_bool("KORSTOCKSCAN_RISING_MISSED_SCOUT_QUALITY_GUARD_ENABLED", True)
+
+
+def _rising_missed_scout_quality_guard_max_quote_age_ms() -> float:
+    return max(
+        1.0,
+        _env_float("KORSTOCKSCAN_RISING_MISSED_SCOUT_QUALITY_GUARD_MAX_QUOTE_AGE_MS", 3000.0),
+    )
+
+
+def _rising_missed_scout_quality_guard_weak_ai_max_score() -> float:
+    return max(
+        0.0,
+        _env_float("KORSTOCKSCAN_RISING_MISSED_SCOUT_QUALITY_GUARD_WEAK_AI_MAX_SCORE", 60.0),
+    )
+
+
+def _quote_stale_for_rising_missed_scout_quality_guard(
+    stock: dict | None,
+    ws_data: dict | None,
+    runtime: dict | None,
+) -> tuple[bool, dict[str, Any]]:
+    stock = stock if isinstance(stock, dict) else {}
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    runtime = runtime if isinstance(runtime, dict) else {}
+    max_age_ms = _rising_missed_scout_quality_guard_max_quote_age_ms()
+    explicit_stale = any(
+        _boolish_true(source.get(key))
+        for source in (ws_data, runtime, stock)
+        for key in ("quote_stale", "stale_quote", "quote_stale_at_submit", "diagnostic_quote_age_stale")
+    )
+    stale_tokens = {"stale", "quote_stale", "diagnostic_quote_age_stale", "stale_quote_or_context"}
+    text_stale = any(
+        str(source.get(key) or "").strip().lower() in stale_tokens
+        for source in (ws_data, runtime, stock)
+        for key in (
+            "quote_stale",
+            "stale_quote",
+            "quote_state",
+            "source_quality_state",
+            "source_quality_block_reason",
+            "submit_quality_parent",
+            "entry_submit_revalidation_block_reason",
+        )
+    )
+    quote_age_ms = None
+    for source in (ws_data, runtime, stock):
+        for key in (
+            "quote_age_ms",
+            "ws_age_ms",
+            "pre_submit_effective_quote_age_ms",
+            "pre_ai_ws_snapshot_refresh_age_ms",
+        ):
+            value = source.get(key)
+            if value in (None, "", "-"):
+                continue
+            parsed = _safe_float(value, None)
+            if parsed is not None:
+                quote_age_ms = parsed
+                break
+        if quote_age_ms is not None:
+            break
+    if quote_age_ms is None:
+        quote_age_sec = _get_ws_snapshot_age_sec(ws_data)
+        if quote_age_sec is not None:
+            quote_age_ms = quote_age_sec * 1000.0
+    age_stale = quote_age_ms is not None and quote_age_ms > max_age_ms
+    stale = bool(explicit_stale or text_stale or age_stale)
+    return stale, {
+        "rising_missed_scout_quality_guard_quote_stale": stale,
+        "rising_missed_scout_quality_guard_quote_age_ms": (
+            f"{quote_age_ms:.1f}" if quote_age_ms is not None else "-"
+        ),
+        "rising_missed_scout_quality_guard_max_quote_age_ms": f"{max_age_ms:.1f}",
+        "rising_missed_scout_quality_guard_explicit_quote_stale": bool(explicit_stale),
+        "rising_missed_scout_quality_guard_text_quote_stale": bool(text_stale),
+    }
+
+
+def _rising_missed_scout_recent_weak_ai_micro_block_fields(
+    stock: dict | None,
+    *,
+    now_ts: float | None,
+) -> dict[str, Any]:
+    stock = stock if isinstance(stock, dict) else {}
+    lookback_sec = max(1, _env_int("KORSTOCKSCAN_RISING_MISSED_SCOUT_QUALITY_GUARD_WEAK_BLOCK_LOOKBACK_SEC", 300))
+    block_at = _safe_float(stock.get("last_real_weak_ai_micro_entry_block_at"), 0.0)
+    now_value = float(now_ts or time.time())
+    age_sec = max(0.0, now_value - block_at) if block_at > 0 else None
+    recent = bool(age_sec is not None and age_sec <= lookback_sec)
+    return {
+        "rising_missed_scout_quality_guard_recent_weak_ai_micro_block": recent,
+        "rising_missed_scout_quality_guard_recent_weak_ai_micro_block_age_sec": (
+            f"{age_sec:.1f}" if age_sec is not None else "-"
+        ),
+        "rising_missed_scout_quality_guard_weak_block_lookback_sec": lookback_sec,
+        "rising_missed_scout_quality_guard_prior_weak_ai_score": stock.get(
+            "last_real_weak_ai_micro_entry_block_ai_score", "-"
+        ),
+        "rising_missed_scout_quality_guard_prior_weak_micro_state": stock.get(
+            "last_real_weak_ai_micro_entry_block_micro_state", "-"
+        ),
+    }
+
+
+def _weak_ai_for_rising_missed_scout_quality_guard(
+    stock: dict | None,
+    runtime: dict | None,
+) -> tuple[bool, dict[str, Any]]:
+    stock = stock if isinstance(stock, dict) else {}
+    runtime = runtime if isinstance(runtime, dict) else {}
+    max_score = _rising_missed_scout_quality_guard_weak_ai_max_score()
+    ai_score = _safe_float(
+        _entry_submit_field(
+            runtime,
+            stock,
+            key="current_ai_score",
+            aliases=("last_watching_ai_score", "ai_score", "rt_ai_score"),
+            default=None,
+        ),
+        None,
+    )
+    ai_action = str(
+        _entry_submit_field(
+            runtime,
+            stock,
+            key="ai_action",
+            aliases=("last_watching_ai_action", "entry_ai_action", "current_ai_action"),
+            default="",
+        )
+        or ""
+    ).strip().upper()
+    unusable = any(
+        _boolish_true(stock.get(key))
+        for key in (
+            "entry_score_source_quality_excluded",
+            "holding_score_effective_usable_false",
+            "ai_score_unusable",
+        )
+    )
+    weak_score = ai_score is not None and ai_score <= max_score
+    weak_action = ai_action in {"DROP", "WAIT", "NOT_EVALUATED", "UNAVAILABLE", "FAIL_CLOSED"}
+    return bool(unusable or weak_score or weak_action), {
+        "rising_missed_scout_quality_guard_weak_ai": bool(unusable or weak_score or weak_action),
+        "rising_missed_scout_quality_guard_ai_score": f"{ai_score:.1f}" if ai_score is not None else "-",
+        "rising_missed_scout_quality_guard_weak_ai_max_score": f"{max_score:.1f}",
+        "rising_missed_scout_quality_guard_ai_action": ai_action or "-",
+        "rising_missed_scout_quality_guard_ai_unusable": bool(unusable),
+    }
+
+
+def _weak_strength_for_rising_missed_scout_quality_guard(
+    stock: dict | None,
+    ws_data: dict | None,
+    *,
+    now_ts: float | None,
+) -> tuple[bool, dict[str, Any]]:
+    stock = stock if isinstance(stock, dict) else {}
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    strength_context = dict(stock.get("scalp_pre_ai_gate_context") or {}).get("strength")
+    strength_context = strength_context if isinstance(strength_context, dict) else {}
+    strength_reason = str(
+        _entry_submit_field(
+            strength_context,
+            ws_data,
+            stock,
+            key="reason",
+            aliases=("strength_momentum_reason", "entry_strength_momentum_reason"),
+            default="",
+        )
+        or ""
+    ).strip()
+    strength_state = str(
+        _entry_submit_field(
+            strength_context,
+            ws_data,
+            stock,
+            key="risk_state",
+            aliases=("strength_momentum_risk_state", "entry_strength_momentum_risk_state"),
+            default="",
+        )
+        or ""
+    ).strip()
+    weak_reasons = {
+        "below_buy_ratio",
+        "below_exec_buy_ratio",
+        "below_window_buy_value",
+        "below_strength_base",
+        "insufficient_history",
+        "trade_tick_quiet_recheck_pending",
+    }
+    weak_states = {
+        "weak_momentum_context",
+        "below_static_vpw_context",
+        "strength_momentum_stability_pending",
+    }
+    recent_counts = _recent_trade_quality_block_counts(stock, now_ts=now_ts)
+    recent_strength_block = _safe_int(recent_counts.get("blocked_strength_momentum"), 0) > 0
+    weak_strength = bool(
+        strength_reason in weak_reasons
+        or strength_state in weak_states
+        or recent_strength_block
+        or (
+            _boolish_true(stock.get("entry_strength_momentum_recheck_pending"))
+            and str(stock.get("entry_strength_momentum_recheck_reason") or "").strip() in weak_reasons
+        )
+    )
+    return weak_strength, {
+        "rising_missed_scout_quality_guard_weak_strength": weak_strength,
+        "rising_missed_scout_quality_guard_strength_reason": strength_reason or "-",
+        "rising_missed_scout_quality_guard_strength_state": strength_state or "-",
+        "rising_missed_scout_quality_guard_recent_block_signature": recent_counts.get("signature") or "-",
+        "rising_missed_scout_quality_guard_recent_strength_block_count": _safe_int(
+            recent_counts.get("blocked_strength_momentum"), 0
+        ),
+    }
+
+
+def _evaluate_rising_missed_scout_quality_guard(
+    stock: dict | None,
+    code: str,
+    ws_data: dict | None,
+    runtime: dict | None,
+    decision_log_fields: dict | None,
+) -> dict[str, Any]:
+    stock = stock if isinstance(stock, dict) else {}
+    runtime = runtime if isinstance(runtime, dict) else {}
+    enabled = _rising_missed_scout_quality_guard_enabled()
+    quote_stale, quote_fields = _quote_stale_for_rising_missed_scout_quality_guard(stock, ws_data, runtime)
+    weak_ai, ai_fields = _weak_ai_for_rising_missed_scout_quality_guard(stock, runtime)
+    weak_strength, strength_fields = _weak_strength_for_rising_missed_scout_quality_guard(
+        stock,
+        ws_data,
+        now_ts=_safe_float(runtime.get("now_ts"), None),
+    )
+    recent_weak_fields = _rising_missed_scout_recent_weak_ai_micro_block_fields(
+        stock,
+        now_ts=_safe_float(runtime.get("now_ts"), None),
+    )
+    recent_weak = bool(recent_weak_fields["rising_missed_scout_quality_guard_recent_weak_ai_micro_block"])
+    weak_evidence = bool(weak_ai or weak_strength or recent_weak)
+    blocked = bool(enabled and quote_stale and weak_evidence)
+    block_reason = "stale_quote_with_weak_ai_or_strength" if blocked else "quality_guard_pass"
+    return {
+        **(decision_log_fields or {}),
+        **quote_fields,
+        **ai_fields,
+        **strength_fields,
+        **recent_weak_fields,
+        "rising_missed_scout_quality_guard_enabled": bool(enabled),
+        "rising_missed_scout_quality_guard_blocked": blocked,
+        "rising_missed_scout_quality_guard_weak_evidence": weak_evidence,
+        "block_reason": block_reason,
+        "reason": block_reason,
+        "stock_code": code,
+        "metric_role": "source_quality_gate",
+        "decision_authority": "operator_runtime_override_rising_missed_scout_quality_guard",
+        "window_policy": "same_day_intraday_runtime_state",
+        "sample_floor": "not_applicable_runtime_guard",
+        "primary_decision_metric": "stale_quote_with_weak_ai_or_strength",
+        "source_quality_gate": "rising_missed_scout_quality_context_present",
+        "threshold_family": "rising_missed_scout_quality_guard",
+        "runtime_effect": blocked,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
+    }
 
 
 def _entry_ai_submit_authority_fields(
@@ -28760,6 +29060,23 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             f"bp={weak_ai_micro_entry_block.get('weak_ai_micro_entry_block_buy_pressure_10t')} "
             f"micro={weak_ai_micro_entry_block.get('weak_ai_micro_entry_block_micro_state')}"
         )
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "last_real_weak_ai_micro_entry_block_at": now_ts,
+                "last_real_weak_ai_micro_entry_block_reason": weak_ai_micro_entry_block.get("block_reason")
+                or weak_ai_micro_entry_block.get("reason")
+                or "-",
+                "last_real_weak_ai_micro_entry_block_ai_score": weak_ai_micro_entry_block.get(
+                    "weak_ai_micro_entry_block_ai_score"
+                )
+                or "-",
+                "last_real_weak_ai_micro_entry_block_micro_state": weak_ai_micro_entry_block.get(
+                    "weak_ai_micro_entry_block_micro_state"
+                )
+                or "-",
+            },
+        )
         clear_signal_reference(stock)
         _log_entry_pipeline(
             stock,
@@ -31179,6 +31496,24 @@ def _maybe_submit_rising_missed_one_share_entry(
         return True
     if not decision.allowed:
         return False
+
+    quality_guard = _evaluate_rising_missed_scout_quality_guard(
+        stock,
+        code,
+        ws_data,
+        runtime,
+        decision.log_fields or {},
+    )
+    if quality_guard.get("rising_missed_scout_quality_guard_blocked"):
+        _log_entry_pipeline(
+            stock,
+            code,
+            "rising_missed_scout_quality_guard_blocked",
+            forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON,
+            forced_entry_qty=int(decision.forced_qty or 1),
+            **quality_guard,
+        )
+        return True
 
     forced_entry_qty = int(decision.forced_qty or 1)
     _mutate_stock_state(
@@ -38683,7 +39018,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             resolved_price=0,
             best_bid=scale_in_quote_refresh_fields.get("passive_buy_price"),
             best_ask=0,
-            price_source=scale_in_quote_refresh_fields.get("price_source"),
+            price_source=_quote_consistency_price_source_from_fields(scale_in_quote_refresh_fields),
             scale_in_candidate_funnel_state=(
                 "price_guard_blocked" if sim_window_observation else None
             ),
@@ -38722,7 +39057,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             executable_buy_price=executable_buy_price,
             passive_buy_price=scale_in_buy_reference_price,
             executable_sell_price=scale_in_quote_refresh_fields.get("executable_sell_price"),
-            price_source=scale_in_quote_refresh_fields.get("price_source"),
+            price_source=_quote_consistency_price_source_from_fields(scale_in_quote_refresh_fields),
             threshold_family="defensive_avg_down_quote_consistency_bypass",
             decision_authority="real_scalping_defensive_avg_down_pre_sell_intercept",
             metric_role="hard_safety_price_refresh_exception",
@@ -38778,7 +39113,10 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             max_spread_bps=f"{float(price_resolution.get('max_spread_bps') or 0):.2f}",
             curr_vs_micro_vwap_bp=f"{float(price_resolution.get('curr_vs_micro_vwap_bp') or 0):.2f}",
             max_micro_vwap_bps=f"{float(price_resolution.get('max_micro_vwap_bps') or 0):.2f}",
-            price_source=price_resolution.get("price_source"),
+            price_source=(
+                price_resolution.get("price_source")
+                or _quote_consistency_price_source_from_fields(scale_in_quote_refresh_fields)
+            ),
             avg_down_bid_discount_ticks=price_resolution.get("avg_down_bid_discount_ticks"),
             scale_in_candidate_funnel_state=(
                 "price_guard_blocked" if sim_window_observation else None
@@ -39161,6 +39499,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                         quote_age_sec=quote_age_sec,
                         max_quote_age_sec=max_quote_age_sec,
                         scale_in_candidate_funnel_state=unavailable_state,
+                        lifecycle_bucket_match_status="candidate_context_only",
                         runtime_ev_eligible=False,
                         runtime_effect=False,
                     ),

@@ -842,6 +842,13 @@ def test_lifecycle_bucket_windows_status_warns_promotion_granularity_without_liv
     assert "lifecycle_bucket_discovery_mtd_parent_granularity_not_target" in report["warnings"]
 
 
+def test_real_detail_primary_sample_book_counts_as_real_for_verifier():
+    assert mod._is_real_primary_sample_book("real")
+    assert mod._is_real_primary_sample_book("real_submit_post_submit_observed_low")
+    assert mod._is_real_primary_sample_book("real_submit_execution_shape")
+    assert not mod._is_real_primary_sample_book("sim_diagnostic")
+
+
 def test_lifecycle_bucket_windows_status_fails_promotion_granularity_when_live_authority_open(tmp_path):
     paths = {}
     for suffix, granularity in (
@@ -2483,8 +2490,9 @@ def test_active_sim_priority_pending_preopen_does_not_require_runtime_observatio
         swing_sim_report={},
     )
 
-    assert status["status"] == "warning"
-    assert "active_sim_priority_preopen_handoff_pending" in status["warnings"]
+    assert status["status"] == "pass"
+    assert "active_sim_priority_preopen_handoff_pending" not in status["warnings"]
+    assert "active_sim_priority_preopen_handoff_pending" in status["next_preopen_pending"]
     assert "active_sim_priority_runtime_observation_missing" not in status["warnings"]
     assert "swing_active_arm_priority_runtime_observation_missing" not in status["warnings"]
 
@@ -2549,9 +2557,10 @@ def test_active_sim_priority_current_preopen_only_requires_due_prior_source_seed
         swing_sim_report={},
     )
 
-    assert status["status"] == "warning"
+    assert status["status"] == "pass"
     assert "active_sim_priority_preopen_handoff_missing" not in status["missing"]
-    assert "active_sim_priority_preopen_handoff_pending" in status["warnings"]
+    assert "active_sim_priority_preopen_handoff_pending" not in status["warnings"]
+    assert "active_sim_priority_preopen_handoff_pending" in status["next_preopen_pending"]
     assert "active_sim_priority_runtime_observation_missing" not in status["warnings"]
 
 

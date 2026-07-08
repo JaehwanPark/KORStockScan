@@ -1363,6 +1363,11 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _is_real_primary_sample_book(value: Any) -> bool:
+    text = str(value or "").strip()
+    return text == "real" or text.startswith("real_")
+
+
 def _slug(value: str) -> str:
     text = re.sub(r"[^a-zA-Z0-9가-힣]+", "_", str(value or "").strip().lower()).strip("_")
     return text[:80] or "unknown"
@@ -4287,7 +4292,9 @@ _ACTIVE_SEED_NONE_ORDER_THRESHOLD = 3
 def _sim_fill_and_match_report_contract_orders(ev_report: dict[str, Any], source_quality_report: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     orders: list[dict[str, Any]] = []
     calibration = ev_report.get("calibration") if isinstance(ev_report.get("calibration"), dict) else {}
-    scalp_simulator = calibration.get("scalp_simulator") if isinstance(calibration.get("scalp_simulator"), dict) else {}
+    scalp_simulator = ev_report.get("scalp_simulator") if isinstance(ev_report.get("scalp_simulator"), dict) else {}
+    if not scalp_simulator:
+        scalp_simulator = calibration.get("scalp_simulator") if isinstance(calibration.get("scalp_simulator"), dict) else {}
     lifecycle_match = (
         scalp_simulator.get("lifecycle_bucket_match_aggregation")
         if isinstance(scalp_simulator.get("lifecycle_bucket_match_aggregation"), dict)
@@ -5558,7 +5565,7 @@ def _entry_split_order_plan_followup_orders(ev_report: dict[str, Any]) -> list[d
         _safe_int(summary.get("real_sample_count"), 0) >= 20
         and _safe_int(summary.get("real_outcome_joined_sample"), 0) > 0
         and _safe_int(summary.get("recommended_policy_candidate_count"), 0) <= 0
-        and str(summary.get("primary_sample_book") or "") != "real"
+        and not _is_real_primary_sample_book(summary.get("primary_sample_book"))
     ):
         issues.append("real_sample_unused_by_postclose_decision")
     if summary.get("schema_version") and summary.get("schema_version") != "entry_split_order_plan_v1":

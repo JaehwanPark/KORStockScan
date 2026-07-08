@@ -1608,6 +1608,40 @@ def test_postclose_done_controller_blocks_done_marker_with_unknown_warning(monke
     assert report["blocked_reasons"] == ["source_generation_needs_review"]
 
 
+def test_postclose_done_controller_allows_real_sample_unused_followup_warning(monkeypatch, tmp_path):
+    report_dir = tmp_path / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
+    _write_succeeded_status(report_dir)
+    _write_json(
+        report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json",
+        {
+            "status": "warning",
+            "latest_done_marker": "[DONE] threshold-cycle postclose target_date=2026-06-03",
+            "handoff_warnings": [
+                "real_sample_unused_by_postclose_decision",
+                "active_sim_priority_preopen_handoff_pending",
+            ],
+        },
+    )
+    _write_json(
+        report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-06-03.json",
+        {"generation_id": "g1"},
+    )
+
+    report = mod.build_postclose_done_controller(
+        "2026-06-03",
+        max_attempts=1,
+        allow_wrapper_rerun=True,
+        command_runner=lambda cmd, env=None: 0,
+    )
+
+    assert report["status"] == "done"
+    assert report["final_verifier_status"] == "warning"
+    assert report["blocked_reasons"] == []
+    assert report["actions"] == []
+
+
 def test_postclose_done_controller_blocks_non_recoverable(monkeypatch, tmp_path):
     report_dir = tmp_path / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)

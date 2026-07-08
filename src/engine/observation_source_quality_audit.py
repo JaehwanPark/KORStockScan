@@ -1979,6 +1979,26 @@ def _reviewed_unknown_reason_for_stage_field(
             or reason in {"stale_quote_or_context", "score50_fallback_blocked", "not_evaluated"}
         )
 
+    def _is_reviewed_entry_block_source_quality_unknown() -> bool:
+        if stage == "scalp_entry_action_decision_snapshot" and str(key or "") != "block_reason":
+            return False
+        if stage == "real_weak_ai_micro_entry_block" and str(key or "") not in {"reason", "block_reason"}:
+            return False
+        if stage not in {"scalp_entry_action_decision_snapshot", "real_weak_ai_micro_entry_block"}:
+            return False
+        return (
+            str(value or "").strip() == "source_quality_unknown"
+            and _is_runtime_order_forbidden_observation()
+            and _field_text("source_quality_gate")
+            in {
+                "",
+                "contract_fields_present",
+                "entry pipeline event + post-sell sim evaluation join when available",
+                "source_quality_review_warning",
+                "weak_ai_micro_context_contract",
+            }
+        )
+
     def _is_reviewed_score_prior_neutral_unknown() -> bool:
         if str(key or "") not in {
             "score_prior_band",
@@ -2046,6 +2066,8 @@ def _reviewed_unknown_reason_for_stage_field(
         return "reviewed_unusable_micro_context_not_available"
     if _is_reviewed_entry_score_source_not_available():
         return "reviewed_entry_score_source_not_available"
+    if _is_reviewed_entry_block_source_quality_unknown():
+        return "reviewed_entry_block_source_quality_unknown_provenance"
     if _is_reviewed_score_prior_neutral_unknown():
         return "reviewed_score_prior_neutral_unknown_not_decision_input"
     if _is_reviewed_holding_score_preflight_not_available():

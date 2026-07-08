@@ -205,6 +205,7 @@ def _peak_profit_pct(row: dict[str, Any], profit_pct: float) -> float:
 
 
 def _base_event_fields(row: dict[str, Any], target_date: str, price: dict[str, Any]) -> dict[str, Any]:
+    lifecycle_fields = _lifecycle_bucket_contract_fields(row)
     return {
         "sim_record_id": row.get("sim_record_id"),
         "sim_parent_record_id": row.get("sim_parent_record_id"),
@@ -226,7 +227,38 @@ def _base_event_fields(row: dict[str, Any], target_date: str, price: dict[str, A
         "best_ask": price.get("best_ask"),
         "current_price_source": price.get("price_source"),
         "price_fallback_used": price.get("price_fallback_used"),
+        **lifecycle_fields,
     }
+
+
+def _lifecycle_bucket_contract_fields(row: dict[str, Any]) -> dict[str, Any]:
+    source_bucket_id = str(row.get("lifecycle_bucket_source_bucket_id") or "").strip()
+    bucket_id = str(row.get("lifecycle_bucket_bucket_id") or row.get("lifecycle_flow_bucket_id") or "").strip()
+    status = str(row.get("lifecycle_bucket_match_status") or "").strip()
+    if not status:
+        status = "no_match" if (source_bucket_id or bucket_id) else "candidate_context_only"
+    fields = {
+        "lifecycle_bucket_match_status": status,
+        "bucket_directed_sim_probe": bool(row.get("bucket_directed_sim_probe")) if status == "matched" else False,
+    }
+    if source_bucket_id:
+        fields["lifecycle_bucket_source_bucket_id"] = source_bucket_id
+    if bucket_id:
+        fields["lifecycle_bucket_bucket_id"] = bucket_id
+    for key in (
+        "lifecycle_bucket_classification_state",
+        "lifecycle_bucket_source_bucket_kind",
+        "lifecycle_bucket_stage",
+        "lifecycle_bucket_type",
+        "lifecycle_flow_child_bucket_ids",
+        "lifecycle_bucket_sample",
+        "lifecycle_bucket_joined_sample",
+        "lifecycle_bucket_complete_flow_count",
+        "lifecycle_bucket_incomplete_flow_count",
+    ):
+        if row.get(key) not in (None, ""):
+            fields[key] = row.get(key)
+    return fields
 
 
 def _emit(row: dict[str, Any], stage: str, fields: dict[str, Any]) -> None:
@@ -704,13 +736,18 @@ def _truthy(value: Any) -> bool:
 
 
 def _event_fallback_class(fields: dict[str, Any]) -> str:
+    fallback_flag = str(fields.get("ai_fallback") or "").strip().lower()
+    parse_state = str(fields.get("ai_parse_ok") or "").strip().lower()
+    result_source = str(fields.get("ai_result_source") or "")
+    if fallback_flag in {"false", "0", "no"} and parse_state in {"true", "1", "yes"}:
+        return "none"
     explicit = str(fields.get("ai_fallback_class") or "").strip()
     if explicit:
         return explicit
-    if _truthy(fields.get("ai_fallback")) or str(fields.get("ai_parse_ok") or "").strip().lower() in {"false", "0"}:
+    if _truthy(fields.get("ai_fallback")) or parse_state in {"false", "0"}:
         return _classify_ai_fallback(
             str(fields.get("ai_fallback_reason") or fields.get("ai_reason") or fields.get("ai_risk_note") or ""),
-            result_source=str(fields.get("ai_result_source") or ""),
+            result_source=result_source,
         )
     return "none"
 

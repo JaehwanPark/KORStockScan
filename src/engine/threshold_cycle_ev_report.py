@@ -97,6 +97,11 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _is_real_primary_sample_book(value: Any) -> bool:
+    text = str(value or "").strip()
+    return text == "real" or text.startswith("real_")
+
+
 def _top_level_summary(report: dict[str, Any]) -> dict[str, Any]:
     warnings = report.get("warnings") if isinstance(report.get("warnings"), list) else []
     source_quality = (
@@ -158,7 +163,11 @@ def _top_level_summary(report: dict[str, Any]) -> dict[str, Any]:
             book = str(metrics.get("primary_sample_book") or "").strip()
             if book and primary_sample_book not in {"real"}:
                 primary_sample_book = book
-    real_sample_ready = real_sample >= 20 or real_outcome_joined_sample >= 20 or primary_sample_book == "real"
+    real_sample_ready = (
+        real_sample >= 20
+        or real_outcome_joined_sample >= 20
+        or _is_real_primary_sample_book(primary_sample_book)
+    )
     if report.get("status"):
         status = str(report.get("status"))
     elif source_quality_preflight_blocked(source_quality):
@@ -1742,6 +1751,7 @@ def _entry_split_order_plan_summary(target_date: str) -> tuple[dict[str, Any], s
         for item in candidate_grid
         if isinstance(item, dict) and str(item.get("primary_sample_book") or "")
     ]
+    real_primary_books = [book for book in primary_books if book == "real" or book.startswith("real_")]
     warnings: list[str] = []
     if source_quality.get("tuning_input_allowed") is False:
         warnings.append("entry_split_order_plan_source_quality_blocked")
@@ -1762,7 +1772,7 @@ def _entry_split_order_plan_summary(target_date: str) -> tuple[dict[str, Any], s
             "real_sample_count": real_sample,
             "real_outcome_joined_sample": real_outcome,
             "sim_diagnostic_sample": sim_sample,
-            "primary_sample_book": "real" if "real" in primary_books else (primary_books[0] if primary_books else "none"),
+            "primary_sample_book": real_primary_books[0] if real_primary_books else (primary_books[0] if primary_books else "none"),
             "policy_file": recommended.get("policy_file"),
             "policy_version": recommended.get("policy_version"),
             "runtime_apply_allowed": recommended.get("runtime_apply_allowed"),

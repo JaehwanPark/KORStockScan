@@ -1195,6 +1195,76 @@ def test_threshold_cycle_ev_report_exposes_codebase_performance_source_as_ops_su
     assert "ops_performance_workorder_source" in markdown
 
 
+def test_entry_split_summary_treats_real_detail_book_as_real_evidence(tmp_path, monkeypatch):
+    report_dir = tmp_path / "entry_split_order_plan"
+    report_dir.mkdir()
+    monkeypatch.setattr(mod, "ENTRY_SPLIT_ORDER_PLAN_DIR", report_dir)
+    (report_dir / "entry_split_order_plan_2026-06-30.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "entry_split_order_plan_v1",
+                "source_quality": {"status": "pass", "tuning_input_allowed": True},
+                "candidate_grid": [
+                    {
+                        "context_bucket": "hold_sample",
+                        "real_sample_count": 0,
+                        "real_outcome_joined_sample": 0,
+                        "sim_sample_count": 5,
+                        "primary_sample_book": "none",
+                    },
+                    {
+                        "context_bucket": "passive_wide_or_weak",
+                        "real_sample_count": 100,
+                        "real_outcome_joined_sample": 17,
+                        "sim_sample_count": 5732,
+                        "primary_sample_book": "real_submit_post_submit_observed_low",
+                    },
+                ],
+                "recommended_policy": {
+                    "policy_file": "policy.json",
+                    "policy_version": "entry_split_order_plan:test",
+                    "runtime_apply_allowed": False,
+                    "candidates": [{"policy_mode": "post_submit_tick_band_seed"}],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary, _path, warnings = mod._entry_split_order_plan_summary("2026-06-30")
+
+    assert warnings == []
+    assert summary["real_sample_count"] == 100
+    assert summary["real_outcome_joined_sample"] == 17
+    assert summary["primary_sample_book"] == "real_submit_post_submit_observed_low"
+
+
+def test_top_level_summary_treats_real_detail_book_as_real_ready():
+    summary = mod._top_level_summary(
+        {
+            "daily_ev_summary": {"source_split": {"real": {"sample": 0}, "sim": {"sample": 0}}},
+            "calibration_outcome": {
+                "decisions": [
+                    {
+                        "family": "entry_split_order_plan",
+                        "source_metrics": {
+                            "real_outcome_joined_sample": 1,
+                            "sim_sample_count": 0,
+                            "primary_sample_book": "real_submit_execution_shape",
+                        },
+                    }
+                ]
+            },
+            "lifecycle_bucket_discovery": {"live_auto_apply_ready_count": 0},
+            "source_quality_preflight_gate": {"status": "pass", "tuning_input_allowed": True},
+        }
+    )
+
+    assert summary["real_sample_ready"] is True
+    assert summary["primary_sample_book"] == "real_submit_execution_shape"
+    assert summary["primary_verdict"] == "real_primary_evidence_present"
+
+
 def test_threshold_cycle_ev_report_prefers_candidate_sample_counts_from_calibration(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     monitor_dir = report_dir / "monitor_snapshots"

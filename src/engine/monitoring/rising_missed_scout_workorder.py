@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Iterator
@@ -57,7 +58,8 @@ def _load_json(path: Path) -> dict[str, Any]:
 def _iter_jsonl(path: Path) -> Iterator[dict[str, Any]]:
     if not path.exists():
         return
-    with path.open("r", encoding="utf-8") as handle:
+    opener = gzip.open if path.suffix == ".gz" else Path.open
+    with opener(path, "rt", encoding="utf-8") as handle:
         for line in handle:
             if not line.strip():
                 continue
@@ -74,11 +76,17 @@ def _load_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def _default_pipeline_path(target_date: str) -> Path:
-    return PROJECT_ROOT / "data" / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
+    plain = PROJECT_ROOT / "data" / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
+    if plain.exists():
+        return plain
+    return plain.with_suffix(plain.suffix + ".gz")
 
 
 def _default_post_sell_path(target_date: str) -> Path:
-    return PROJECT_ROOT / "data" / "post_sell" / f"post_sell_candidates_{target_date}.jsonl"
+    plain = PROJECT_ROOT / "data" / "post_sell" / f"post_sell_candidates_{target_date}.jsonl"
+    if plain.exists():
+        return plain
+    return plain.with_suffix(plain.suffix + ".gz")
 
 
 def _default_diagnostic_path(target_date: str) -> Path:
@@ -283,9 +291,140 @@ def _profit_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _avg(values: list[float]) -> float | None:
+    return round(sum(values) / len(values), 4) if values else None
+
+
 def _signature_counts(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     counts = Counter(str(row.get("source_signature") or "-") for row in rows)
     return [{"source_signature": key, "count": value} for key, value in counts.most_common(10)]
+
+
+def _exit_rule_counts(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    counts = Counter(str(row.get("exit_rule") or "-") for row in rows)
+    return [{"exit_rule": key, "count": value} for key, value in counts.most_common(10)]
+
+
+def _shared_signature_counts(
+    winners: list[dict[str, Any]],
+    losers: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    winner_counts = Counter(str(row.get("source_signature") or "-") for row in winners)
+    loser_counts = Counter(str(row.get("source_signature") or "-") for row in losers)
+    shared = sorted(set(winner_counts) & set(loser_counts))
+    return [
+        {
+            "source_signature": signature,
+            "winner_count": winner_counts[signature],
+            "loser_count": loser_counts[signature],
+        }
+        for signature in shared
+    ]
+
+
+def _entry_quality_split_summary(
+    winners: list[dict[str, Any]],
+    losers: list[dict[str, Any]],
+) -> dict[str, Any]:
+    loser_peaks = [float(row["peak_profit"]) for row in losers if row.get("peak_profit") is not None]
+    return {
+        "decision_authority": "source_only_entry_quality_split",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "winner_count": len(winners),
+        "loser_count": len(losers),
+        "winner_profit": _profit_summary(winners),
+        "loser_profit": _profit_summary(losers),
+        "shared_source_signature_counts": _shared_signature_counts(winners, losers),
+        "loser_exit_rule_counts": _exit_rule_counts(losers),
+        "loser_peak_profit": {
+            "sample": len(loser_peaks),
+            "avg_peak_profit": _avg(loser_peaks),
+            "max_peak_profit": max(loser_peaks) if loser_peaks else None,
+            "non_positive_peak_count": sum(1 for value in loser_peaks if value <= 0),
+        },
+        "loser_missing_latency_pass_count": sum(
+            1 for row in losers if (row.get("latency_pass_count") or 0) <= 0
+        ),
+        "loser_order_bundle_submitted_count": sum(
+            1 for row in losers if (row.get("order_bundle_submitted_count") or 0) > 0
+        ),
+        "entry_recheck_rule": (
+            "only positive_prior/recheck_prior and source-quality pass may become source-only "
+            "normal-entry recheck evidence; broad source signatures alone remain insufficient"
+        ),
+        "loss_filter_rule": (
+            "loss_filter, source_quality_blocked, and low-peak stop/soft-stop rows must be separated "
+            "before any scout expansion proposal"
+        ),
+        "forbidden_uses": FORBIDDEN_USES,
+    }
+
+
+def _take_profit_capture_summary(winners: list[dict[str, Any]]) -> dict[str, Any]:
+    capture_rows: list[dict[str, Any]] = []
+    for row in winners:
+        profit_rate = row.get("profit_rate")
+        peak_profit = row.get("peak_profit")
+        if profit_rate is None or peak_profit is None:
+            continue
+        peak_value = float(peak_profit)
+        profit_value = float(profit_rate)
+        giveback = round(peak_value - profit_value, 4)
+        capture_pct = round((profit_value / peak_value) * 100.0, 4) if peak_value > 0 else None
+        capture_rows.append(
+            {
+                "record_id": row.get("record_id"),
+                "stock_code": row.get("stock_code"),
+                "stock_name": row.get("stock_name"),
+                "exit_rule": row.get("exit_rule"),
+                "profit_rate": profit_value,
+                "peak_profit": peak_value,
+                "giveback_pct": giveback,
+                "peak_capture_ratio_pct": capture_pct,
+                "held_sec": row.get("held_sec"),
+                "source_signature": row.get("source_signature"),
+            }
+        )
+    givebacks = [row["giveback_pct"] for row in capture_rows]
+    captures = [
+        row["peak_capture_ratio_pct"]
+        for row in capture_rows
+        if row.get("peak_capture_ratio_pct") is not None
+    ]
+    runner_candidates = [
+        row
+        for row in capture_rows
+        if row.get("peak_profit") is not None
+        and row["peak_profit"] >= 1.5
+        and row.get("giveback_pct") is not None
+        and row["giveback_pct"] >= 0.25
+    ]
+    return {
+        "decision_authority": "source_only_take_profit_expansion_review",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "winner_count": len(winners),
+        "evaluated_capture_count": len(capture_rows),
+        "avg_peak_profit": _avg([row["peak_profit"] for row in capture_rows]),
+        "avg_profit_rate": _avg([row["profit_rate"] for row in capture_rows]),
+        "avg_giveback_pct": _avg(givebacks),
+        "max_giveback_pct": max(givebacks) if givebacks else None,
+        "avg_peak_capture_ratio_pct": _avg(captures),
+        "winner_exit_rule_counts": _exit_rule_counts(winners),
+        "runner_review_candidate_count": len(runner_candidates),
+        "runner_review_candidates": runner_candidates[:10],
+        "expansion_rule": (
+            "review runner/partial-TP only for positive-prior or recovered winner cohorts with "
+            "post-sell MFE capture evidence; do not widen TP or trailing globally"
+        ),
+        "forbidden_uses": [
+            *FORBIDDEN_USES,
+            "take_profit_policy_change_without_approval",
+            "trailing_policy_change_without_approval",
+            "forced_holding_extension",
+        ],
+    }
 
 
 def _counter_rows(counter: Counter[str], *, key_name: str = "reason", limit: int = 10) -> list[dict[str, Any]]:
@@ -461,6 +600,8 @@ def _build_operational_workorders(
     source_paths: dict[str, str],
 ) -> list[dict[str, Any]]:
     orders: list[dict[str, Any]] = []
+    entry_quality_split = _entry_quality_split_summary(winners, losers)
+    take_profit_capture = _take_profit_capture_summary(winners)
     classifier_prior_summary = (
         classifier_prior.get("summary")
         if isinstance(classifier_prior.get("summary"), dict)
@@ -611,6 +752,10 @@ def _build_operational_workorders(
                     f"winner_count={len(winners)}",
                     f"loser_count={len(losers)}",
                     f"winner_avg_profit_rate={_profit_summary(winners).get('avg_profit_rate')}",
+                    "shared_source_signature_count="
+                    + str(len(entry_quality_split.get("shared_source_signature_counts") or [])),
+                    "runner_review_candidate_count="
+                    + str(take_profit_capture.get("runner_review_candidate_count")),
                     f"current_missed_count={current_missed.get('count')}",
                     f"current_missed_eligible_count={current_missed.get('eligible_count')}",
                     "all_winner_rows_had_latency_pass="
@@ -632,6 +777,62 @@ def _build_operational_workorders(
                 "forbidden_uses": FORBIDDEN_USES,
             }
         )
+        if (take_profit_capture.get("runner_review_candidate_count") or 0) > 0:
+            orders.append(
+                {
+                    "order_id": "order_rising_missed_scout_take_profit_capture_review",
+                    "title": "rising missed scout take-profit capture review",
+                    "source_report_type": "rising_missed_scout_workorder",
+                    "lifecycle_stage": "holding_exit",
+                    "target_subsystem": "take_profit_and_trailing_capture",
+                    "route": "instrumentation_order",
+                    "mapped_family": "rising_missed_scout_take_profit_capture_review",
+                    "threshold_family": "rising_missed_scout_take_profit_capture_review",
+                    "improvement_type": "source_only_exit_capture_workorder",
+                    "confidence": "same_day_source_only",
+                    "priority": 2,
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "implementation_status": "implemented",
+                    "implementation_provenance": {
+                        "implementation_type": "forced_scout_take_profit_capture_source_split",
+                        "decision_authority": "source_only_take_profit_expansion_review",
+                        "winner_count": len(winners),
+                        "runner_review_candidate_count": take_profit_capture.get(
+                            "runner_review_candidate_count"
+                        ),
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                        "root_cause_closure_status_hint": "implementation_done",
+                    },
+                    "expected_ev_effect": (
+                        "Separate profitable forced-scout rows with measurable peak-profit giveback into a "
+                        "runner/partial-TP review cohort before any take-profit or trailing policy proposal."
+                    ),
+                    "evidence": [
+                        f"winner_count={len(winners)}",
+                        "evaluated_capture_count="
+                        + str(take_profit_capture.get("evaluated_capture_count")),
+                        "avg_peak_profit=" + str(take_profit_capture.get("avg_peak_profit")),
+                        "avg_profit_rate=" + str(take_profit_capture.get("avg_profit_rate")),
+                        "avg_giveback_pct=" + str(take_profit_capture.get("avg_giveback_pct")),
+                        "runner_review_candidate_count="
+                        + str(take_profit_capture.get("runner_review_candidate_count")),
+                        "runtime_effect=false",
+                    ],
+                    "source_paths": list(source_paths.values()),
+                    "files_likely_touched": [
+                        "src/engine/monitoring/rising_missed_scout_workorder.py",
+                        "src/engine/holding_exit_observation_report.py",
+                        "src/engine/daily_threshold_cycle_report.py",
+                    ],
+                    "acceptance_tests": [
+                        "PYTHONPATH=. .venv/bin/pytest src/tests/test_rising_missed_scout_workorder.py src/tests/test_build_code_improvement_workorder.py",
+                        "take-profit capture review remains source-only and cannot widen TP/trailing or force holding extension",
+                    ],
+                    "forbidden_uses": take_profit_capture.get("forbidden_uses"),
+                }
+            )
     if (scale_in_bottleneck.get("price_guard_block_record_count") or 0) > 0:
         orders.append(
             {
@@ -776,6 +977,10 @@ def _build_operational_workorders(
                 "evidence": [
                     f"loser_count={len(losers)}",
                     f"loser_avg_profit_rate={_profit_summary(losers).get('avg_profit_rate')}",
+                    "loser_avg_peak_profit="
+                    + str((entry_quality_split.get("loser_peak_profit") or {}).get("avg_peak_profit")),
+                    "shared_source_signature_count="
+                    + str(len(entry_quality_split.get("shared_source_signature_counts") or [])),
                     "losers_also_had_latency_pass="
                     + str(all((row.get("latency_pass_count") or 0) > 0 for row in losers)),
                     "losers_also_had_order_bundle_submitted="
@@ -834,6 +1039,8 @@ def build_report(
     outcomes = _joined_scout_outcomes(forced=forced, stage_counts=stage_counts, post_sell_rows=post_sell_rows)
     winners = [row for row in outcomes if (row.get("profit_rate") is not None and row["profit_rate"] > 0)]
     losers = [row for row in outcomes if (row.get("profit_rate") is not None and row["profit_rate"] <= 0)]
+    entry_quality_split = _entry_quality_split_summary(winners, losers)
+    take_profit_capture = _take_profit_capture_summary(winners)
     current_missed = _current_missed_summary(diagnostic)
     source_paths = {
         "pipeline_events": str(pipeline_path),
@@ -879,6 +1086,24 @@ def build_report(
                 "primary_decision_metric": False,
                 "source_quality_gate": "record_id_joined_forced_scout_post_sell_and_holding_scale_in_events",
                 "forbidden_uses": SCALE_IN_FORBIDDEN_USES,
+            },
+            "entry_quality_split_summary": {
+                "metric_role": "source_quality_gate",
+                "decision_authority": "source_only_entry_quality_split",
+                "window_policy": "same_day_forced_scout_post_sell_join",
+                "sample_floor": "1_winner_or_loser_with_post_sell_outcome",
+                "primary_decision_metric": False,
+                "source_quality_gate": "record_id_joined_forced_scout_post_sell_and_stage_counts",
+                "forbidden_uses": FORBIDDEN_USES,
+            },
+            "take_profit_capture_summary": {
+                "metric_role": "sim_probe_ev",
+                "decision_authority": "source_only_take_profit_expansion_review",
+                "window_policy": "same_day_profitable_forced_scout_post_sell_mfe_join",
+                "sample_floor": "1_profitable_forced_scout_with_profit_and_peak_profit",
+                "primary_decision_metric": "avg_giveback_pct",
+                "source_quality_gate": "record_id_joined_forced_scout_post_sell_profit_and_peak_profit",
+                "forbidden_uses": take_profit_capture.get("forbidden_uses"),
             }
         },
         "source_paths": source_paths,
@@ -891,6 +1116,13 @@ def build_report(
             "loser_profit": _profit_summary(losers),
             "winner_source_signature_counts": _signature_counts(winners),
             "loser_source_signature_counts": _signature_counts(losers),
+            "shared_source_signature_count": len(
+                entry_quality_split.get("shared_source_signature_counts") or []
+            ),
+            "take_profit_runner_review_candidate_count": take_profit_capture.get(
+                "runner_review_candidate_count"
+            ),
+            "take_profit_avg_giveback_pct": take_profit_capture.get("avg_giveback_pct"),
             "forced_scout_selection_prior_winner_counts": _selection_recommendation_counts(winners),
             "forced_scout_selection_prior_loser_counts": _selection_recommendation_counts(losers),
             "current_missed_count": current_missed.get("count"),
@@ -922,6 +1154,8 @@ def build_report(
         "intraday_feedback_summary": intraday_feedback_summary,
         "classifier_prior_summary": classifier_prior_summary,
         "scale_in_bottleneck_summary": scale_in_bottleneck,
+        "entry_quality_split_summary": entry_quality_split,
+        "take_profit_capture_summary": take_profit_capture,
         "code_improvement_orders": code_improvement_orders,
     }
 
@@ -948,6 +1182,9 @@ def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path)
         f"- loss_or_flat_forced_scout_count: {summary.get('loss_or_flat_forced_scout_count')}",
         f"- winner_avg_profit_rate: {(summary.get('winner_profit') or {}).get('avg_profit_rate')}",
         f"- loser_avg_profit_rate: {(summary.get('loser_profit') or {}).get('avg_profit_rate')}",
+        f"- shared_source_signature_count: {summary.get('shared_source_signature_count')}",
+        f"- take_profit_runner_review_candidate_count: {summary.get('take_profit_runner_review_candidate_count')}",
+        f"- take_profit_avg_giveback_pct: {summary.get('take_profit_avg_giveback_pct')}",
         f"- current_missed_count: {summary.get('current_missed_count')}",
         f"- scale_in_price_guard_block_record_count: {summary.get('scale_in_price_guard_block_record_count')}",
         f"- scale_in_qty_block_record_count: {summary.get('scale_in_qty_block_record_count')}",

@@ -1,3 +1,4 @@
+import gzip
 import json
 from pathlib import Path
 
@@ -178,6 +179,17 @@ def test_build_report_joins_forced_scout_post_sell_and_creates_workorders(tmp_pa
     assert report["summary"]["forced_scout_selection_prior_loser_counts"] == [
         {"recommendation": "loss_filter", "count": 1}
     ]
+    assert report["summary"]["shared_source_signature_count"] == 1
+    assert report["summary"]["take_profit_runner_review_candidate_count"] == 1
+    assert report["entry_quality_split_summary"]["loser_peak_profit"]["avg_peak_profit"] == 0.0
+    assert (
+        report["take_profit_capture_summary"]["runner_review_candidates"][0]["stock_code"]
+        == "000001"
+    )
+    assert (
+        "take_profit_policy_change_without_approval"
+        in report["take_profit_capture_summary"]["forbidden_uses"]
+    )
     assert report["summary"]["current_missed_count"] == 1
     assert report["summary"]["current_missed_selection_prior_recommendation_counts"] == [
         {"recommendation": "source_quality_blocked", "count": 1}
@@ -185,7 +197,7 @@ def test_build_report_joins_forced_scout_post_sell_and_creates_workorders(tmp_pa
     assert report["current_missed_summary"]["top_rows"][0]["rising_missed_selection_prior_key"] == "prior_blocked"
     assert report["summary"]["scale_in_price_guard_block_record_count"] == 1
     assert report["summary"]["scale_in_qty_block_record_count"] == 1
-    assert report["summary"]["code_improvement_order_count"] == 4
+    assert report["summary"]["code_improvement_order_count"] == 5
     assert report["scale_in_bottleneck_summary"]["pyramid_ok_record_count"] == 1
     assert report["scale_in_bottleneck_summary"]["price_guard_reason_counts"] == [
         {"reason": "quote_stale", "count": 1}
@@ -204,6 +216,7 @@ def test_build_report_joins_forced_scout_post_sell_and_creates_workorders(tmp_pa
     assert {order["mapped_family"] for order in report["code_improvement_orders"]} == {
         "rising_missed_scout_loss_filter",
         "rising_missed_scout_post_sell_bridge",
+        "rising_missed_scout_take_profit_capture_review",
         "rising_missed_scout_scale_in_price_guard_split",
         "rising_missed_scout_scale_in_qty_evidence_split",
     }
@@ -263,6 +276,7 @@ def test_write_outputs_renders_json_and_markdown(tmp_path):
     markdown = output_md.read_text(encoding="utf-8")
     assert "order_rising_missed_scout_post_sell_bridge" in markdown
     assert "runtime_effect: false" in markdown
+    assert "take_profit_runner_review_candidate_count" in markdown
 
 
 def test_build_report_streams_pipeline_jsonl_without_full_text_read(tmp_path, monkeypatch):
@@ -318,6 +332,48 @@ def test_build_report_streams_pipeline_jsonl_without_full_text_read(tmp_path, mo
 
     assert report["summary"]["forced_scout_record_count"] == 1
     assert report["summary"]["scale_in_executed_record_count"] == 1
+
+
+def test_build_report_reads_gzip_pipeline_fallback(tmp_path, monkeypatch):
+    pipeline_dir = tmp_path / "data" / "pipeline_events"
+    post_sell_dir = tmp_path / "data" / "post_sell"
+    diagnostic_dir = tmp_path / "data" / "report" / "intraday_entry_blocker_diagnostics"
+    feedback_dir = tmp_path / "data" / "report" / "rising_missed_intraday_feedback"
+    prior_dir = tmp_path / "data" / "report" / "rising_missed_classifier_prior"
+    for path in [pipeline_dir, post_sell_dir, diagnostic_dir, feedback_dir, prior_dir]:
+        path.mkdir(parents=True, exist_ok=True)
+    with gzip.open(pipeline_dir / "pipeline_events_2026-07-02.jsonl.gz", "wt", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                _event(
+                    1,
+                    "000001",
+                    "gzip",
+                    "rising_missed_one_share_entry",
+                    {"forced_entry_reason": "rising_missed_one_share_entry"},
+                )
+            )
+            + "\n"
+        )
+    (post_sell_dir / "post_sell_candidates_2026-07-02.jsonl").write_text("", encoding="utf-8")
+    (diagnostic_dir / "intraday_entry_blocker_diagnostics_2026-07-02.json").write_text(
+        json.dumps({"rising_missed_buy": []}),
+        encoding="utf-8",
+    )
+    (feedback_dir / "rising_missed_intraday_feedback_2026-07-02.json").write_text(
+        json.dumps({"summary": {}}),
+        encoding="utf-8",
+    )
+    (prior_dir / "rising_missed_classifier_prior_2026-07-02.json").write_text(
+        json.dumps({"summary": {}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
+
+    report = mod.build_report("2026-07-02", generated_at="fixed")
+
+    assert report["summary"]["forced_scout_record_count"] == 1
+    assert report["source_paths"]["pipeline_events"].endswith("pipeline_events_2026-07-02.jsonl.gz")
 
 
 def test_build_report_ingests_intraday_feedback_order(tmp_path):
