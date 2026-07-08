@@ -4043,6 +4043,25 @@ def test_observation_source_quality_audit_accepts_pre_ai_and_pre_submit_gate_con
                 },
                 record_id=3,
             ),
+            _event(
+                "pre_submit_entry_ai_authority_guard_block",
+                {
+                    "metric_role": "source_quality_gate",
+                    "decision_authority": "real_buy_submit_source_quality_guard",
+                    "runtime_effect": True,
+                    "forbidden_uses": "score_threshold_mutation,provider_route_change,broker_guard_bypass",
+                    "threshold_family": "pre_submit_entry_ai_authority_guard",
+                    "source_quality_gate": "pre_submit_entry_ai_authority_contract",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "block_reason": "entry_ai_score_unavailable",
+                    "entry_ai_submit_authority_score": "0.0",
+                    "entry_ai_submit_authority_action": "not_evaluated",
+                    "entry_ai_submit_authority_reason": "entry_ai_score_unavailable",
+                    "entry_ai_submit_authority_result_source": "-",
+                },
+                record_id=4,
+            ),
         ],
     )
 
@@ -4055,6 +4074,7 @@ def test_observation_source_quality_audit_accepts_pre_ai_and_pre_submit_gate_con
     assert report["stage_contracts"]["blocked_overbought"]["status"] == "pass"
     assert report["stage_contracts"]["pre_submit_liquidity_guard_block"]["status"] == "pass"
     assert report["stage_contracts"]["caution_weak_liquidity_entry_block"]["status"] == "pass"
+    assert report["stage_contracts"]["pre_submit_entry_ai_authority_guard_block"]["status"] == "pass"
 
 
 def test_observation_source_quality_audit_fails_pre_ai_broker_authority_contract(

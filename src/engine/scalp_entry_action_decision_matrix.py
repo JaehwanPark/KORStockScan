@@ -53,6 +53,7 @@ RELEVANT_STAGES = {
     "entry_submit_revalidation_warning",
     "entry_submit_revalidation_block",
     "pre_submit_liquidity_guard_block",
+    "pre_submit_entry_ai_authority_guard_block",
     "pre_submit_overbought_pullback_guard_block",
     "order_bundle_submitted",
     "scalp_sim_entry_armed",
@@ -76,6 +77,7 @@ PRE_SUBMIT_CONTEXT_OPTIONAL_STAGES = {
     "entry_submit_revalidation_warning",
     "entry_submit_revalidation_block",
     "pre_submit_liquidity_guard_block",
+    "pre_submit_entry_ai_authority_guard_block",
     "pre_submit_overbought_pullback_guard_block",
     "scalp_sim_entry_armed",
     "scalp_sim_entry_ai_price_skip_order",
@@ -101,6 +103,7 @@ SCORE_CONTEXT_NOT_AVAILABLE_STAGES = {
 SCORE_CONTEXT_BACKFILL_ELIGIBLE_STAGES = {
     "order_bundle_submitted",
     "pre_submit_liquidity_guard_block",
+    "pre_submit_entry_ai_authority_guard_block",
     "pre_submit_overbought_pullback_guard_block",
     "scalp_sim_pre_submit_liquidity_guard_would_block",
     "scalp_sim_pre_submit_liquidity_guard_unknown",

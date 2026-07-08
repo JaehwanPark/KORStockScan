@@ -50,6 +50,7 @@ AI_TERMINAL_ATTRIBUTION_STAGES = {
 }
 PRICE_GUARD_STAGES = {
     "pre_submit_price_guard_block",
+    "pre_submit_entry_ai_authority_guard_block",
     "entry_ai_price_canary_skip_order",
     "entry_ai_price_canary_fallback",
     "scale_in_price_guard_block",
@@ -57,6 +58,7 @@ PRICE_GUARD_STAGES = {
 POST_LATENCY_SUBMIT_BLOCK_STAGES = {
     "budget_pass",
     "pre_submit_price_guard_block",
+    "pre_submit_entry_ai_authority_guard_block",
     "entry_ai_price_canary_skip_order",
     "entry_ai_price_canary_fallback",
     "scale_in_price_guard_block",

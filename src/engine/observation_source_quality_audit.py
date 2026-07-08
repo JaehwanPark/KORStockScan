@@ -1165,6 +1165,23 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "caution_weak_liquidity_block_liquidity_reason",
         ),
     ),
+    "pre_submit_entry_ai_authority_guard_block": StageContract(
+        required_fields=(
+            "metric_role",
+            "decision_authority",
+            "runtime_effect",
+            "forbidden_uses",
+            "threshold_family",
+            "source_quality_gate",
+            "actual_order_submitted",
+            "broker_order_forbidden",
+            "block_reason",
+            "entry_ai_submit_authority_score",
+            "entry_ai_submit_authority_action",
+            "entry_ai_submit_authority_reason",
+            "entry_ai_submit_authority_result_source",
+        ),
+    ),
     "pre_submit_overbought_pullback_guard_block": StageContract(
         required_fields=(*PRE_SUBMIT_GUARD_FIELDS, "risk_state"),
     ),

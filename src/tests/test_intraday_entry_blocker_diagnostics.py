@@ -470,6 +470,53 @@ def test_build_report_keeps_unknown_latency_guard_as_actionable_major(tmp_path):
     } in report["blocker_taxonomy"]["actionable_major_blocker_counts"]
 
 
+def test_build_report_keeps_entry_ai_authority_guard_as_actionable_major(tmp_path):
+    path = tmp_path / "pipeline_events_2026-06-23.jsonl"
+    rows = [
+        _event(
+            "000001",
+            "A",
+            "scalping_scanner_candidate_promoted",
+            {"price_delta_since_first_seen_pct": "1.25"},
+            emitted_at="2026-06-23T10:11:58",
+        ),
+        _event(
+            "000001",
+            "A",
+            "pre_submit_entry_ai_authority_guard_block",
+            {
+                "price_delta_since_first_seen_pct": "1.25",
+                "block_reason": "entry_ai_score_unavailable",
+                "actual_order_submitted": "False",
+                "broker_order_forbidden": "True",
+                "entry_ai_submit_authority_score": "0.0",
+                "entry_ai_submit_authority_action": "not_evaluated",
+            },
+            emitted_at="2026-06-23T10:16:55",
+        ),
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(target_date="2026-06-23", pipeline_path=path, generated_at="fixed")
+
+    item = report["rising_missed_buy"][0]
+    assert item["rising_missed_class"] == "actionable_major_missed"
+    assert item["rising_missed_one_share_eligible"] is True
+    assert item["dominant_actionable_blocker"] == {
+        "stage": "pre_submit_entry_ai_authority_guard_block",
+        "reason": "entry_ai_score_unavailable",
+        "count": 1,
+        "class": "pre_submit_quality_guard",
+        "route": "restore_entry_ai_authority_before_submit_without_broker_guard_bypass",
+    }
+    assert {
+        "class": "pre_submit_quality_guard",
+        "stage": "pre_submit_entry_ai_authority_guard_block",
+        "reason": "entry_ai_score_unavailable",
+        "count": 1,
+    } in report["blocker_taxonomy"]["actionable_major_blocker_counts"]
+
+
 def test_build_report_splits_mixed_known_and_unknown_latency_causes(tmp_path):
     path = tmp_path / "pipeline_events_2026-06-23.jsonl"
     rows = [

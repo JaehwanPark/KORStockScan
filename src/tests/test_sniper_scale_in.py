@@ -196,6 +196,60 @@ def test_caution_weak_liquidity_combo_blocks_general_buy_entry(monkeypatch):
     assert decision["threshold_family"] == "caution_weak_liquidity_entry_block"
 
 
+def test_rising_missed_missing_liquidity_blocks_even_when_latency_safe(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_CAUTION_WEAK_LIQUIDITY_ENTRY_BLOCK_ENABLED", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_CAUTION_WEAK_LIQUIDITY_BLOCK_ENABLED", raising=False)
+
+    decision = state_handlers._evaluate_caution_weak_liquidity_entry_block(
+        stock={"rising_missed_one_share_entry_forced": True},
+        runtime={},
+        strategy="SCALPING",
+        latency_gate={
+            "latency_state": "SAFE",
+            "entry_price_gap_profile": "normal",
+        },
+        guard_fields={
+            "pre_submit_liquidity_guard_action": "NOT_AVAILABLE",
+            "pre_submit_liquidity_reason": "liquidity_not_available",
+        },
+    )
+
+    assert decision["blocked"] is True
+    assert decision["block_reason"] == "rising_missed_liquidity_not_available"
+    assert decision["actual_order_submitted"] is False
+    assert decision["broker_order_forbidden"] is True
+
+
+def test_real_pre_submit_liquidity_value_falls_back_to_orderbook_totals():
+    value = state_handlers._real_pre_submit_liquidity_value(
+        {"curr": 10_000, "ask_tot": 100, "bid_tot": 200},
+        {"liquidity_value": 0, "scalp_liquidity_source_quality": "missing_orderbook_totals"},
+        None,
+    )
+
+    assert value == 3_000_000
+
+
+def test_real_pre_submit_liquidity_value_treats_zero_without_quality_as_placeholder():
+    value = state_handlers._real_pre_submit_liquidity_value(
+        {"curr": 10_000, "ask_tot": 100, "bid_tot": 200},
+        {"liquidity_value": 0},
+        0,
+    )
+
+    assert value == 3_000_000
+
+
+def test_real_pre_submit_liquidity_value_prefers_valid_runtime_value():
+    value = state_handlers._real_pre_submit_liquidity_value(
+        {"curr": 10_000, "ask_tot": 100, "bid_tot": 200},
+        {"liquidity_value": 9_000_000, "scalp_liquidity_source_quality": "valid_orderbook_totals"},
+        9_000_000,
+    )
+
+    assert value == 9_000_000
+
+
 def _trusted_reversal_features(**overrides):
     base = {
         "tick_context_quality": "fresh_computed",
@@ -1346,6 +1400,76 @@ def test_real_weak_ai_micro_entry_block_blocks_low_score_buy_action():
 
     assert decision["blocked"] is True
     assert decision["weak_ai_micro_entry_block_ai_action"] == "BUY"
+
+
+def test_entry_ai_submit_authority_blocks_not_evaluated_zero_score():
+    decision = state_handlers._entry_ai_submit_authority_fields(
+        strategy="SCALPING",
+        stock={"name": "레몬헬스케어", "strategy": "SCALPING", "position_tag": "SCANNER"},
+        latency_gate={"decision": "ALLOW_NORMAL", "ai_score": 0.0, "ai_action": "not_evaluated"},
+        latency_signal_score=0.0,
+    )
+
+    assert decision["blocked"] is True
+    assert decision["block_reason"] == "entry_ai_score_unavailable"
+    assert decision["threshold_family"] == "pre_submit_entry_ai_authority_guard"
+    assert decision["actual_order_submitted"] is False
+    assert decision["broker_order_forbidden"] is True
+    assert decision["entry_ai_submit_authority_action"] == "not_evaluated"
+    assert decision["entry_ai_submit_authority_score"] == "0.0"
+
+
+def test_entry_ai_submit_authority_blocks_not_evaluated_positive_score_without_prior():
+    decision = state_handlers._entry_ai_submit_authority_fields(
+        strategy="SCALPING",
+        stock={"name": "missing-action", "strategy": "SCALPING", "position_tag": "SCANNER"},
+        latency_gate={"decision": "ALLOW_NORMAL", "ai_score": 72.0, "ai_action": "not_evaluated"},
+        latency_signal_score=72.0,
+    )
+
+    assert decision["blocked"] is True
+    assert decision["block_reason"] == "entry_ai_action_not_evaluated"
+    assert decision["entry_ai_submit_authority_score"] == "72.0"
+
+
+def test_entry_ai_submit_authority_allows_fresh_prior_valid_score(monkeypatch):
+    now_ts = 1_783_471_000.0
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
+
+    decision = state_handlers._entry_ai_submit_authority_fields(
+        strategy="SCALPING",
+        stock={
+            "name": "prior-valid",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "last_watching_ai_confirmed_at": now_ts - 20.0,
+            "last_watching_ai_result_source": "prior_valid",
+        },
+        latency_gate={"decision": "ALLOW_NORMAL", "ai_score": 68.0, "ai_action": "not_evaluated"},
+        latency_signal_score=68.0,
+    )
+
+    assert decision["blocked"] is False
+    assert decision["reason"] == "ok"
+    assert decision["entry_ai_submit_authority_fresh_prior"] is True
+
+
+def test_entry_ai_submit_authority_blocks_prior_valid_without_fresh_timestamp():
+    decision = state_handlers._entry_ai_submit_authority_fields(
+        strategy="SCALPING",
+        stock={
+            "name": "stale-prior",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "last_watching_ai_result_source": "prior_valid",
+        },
+        latency_gate={"decision": "ALLOW_NORMAL", "ai_score": 68.0, "ai_action": "not_evaluated"},
+        latency_signal_score=68.0,
+    )
+
+    assert decision["blocked"] is True
+    assert decision["block_reason"] == "entry_ai_action_not_evaluated"
+    assert decision["entry_ai_submit_authority_fresh_prior"] is False
 
 
 def test_rising_missed_one_share_hook_bypasses_watching_soft_branch(monkeypatch):
@@ -11132,6 +11256,134 @@ def test_weak_context_late_entry_guard_blocks_when_recent_block_history_and_weak
     assert "micro_vwap_negative" in result["reason"]
 
 
+def test_weak_context_late_entry_guard_blocks_rising_missed_zero_mfe_proxy(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        WEAK_CONTEXT_LATE_ENTRY_GUARD_ENABLED=True,
+        WEAK_CONTEXT_LATE_ENTRY_LOOKBACK_SEC=900,
+        WEAK_CONTEXT_LATE_ENTRY_MIN_BLOCK_COUNT=2,
+        WEAK_CONTEXT_LATE_ENTRY_MIN_TICK_ACCEL=1.10,
+        WEAK_CONTEXT_LATE_ENTRY_MIN_BUY_PRESSURE=0.0,
+        WEAK_CONTEXT_LATE_ENTRY_MIN_MICRO_VWAP_BP=0.0,
+    )
+    now_ts = state_handlers.time.time()
+    stock = {
+        "name": "한화오션",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "rising_missed_one_share_entry_forced": True,
+        "trade_quality_block_history": [
+            {"stage": "blocked_strength_momentum", "ts": now_ts - 120, "risk_state": "weak_momentum_context"},
+            {"stage": "blocked_strength_momentum", "ts": now_ts - 30, "risk_state": "weak_momentum_context"},
+        ],
+    }
+
+    result = state_handlers._evaluate_weak_context_late_entry_guard(
+        strategy="SCALPING",
+        stock=stock,
+        now_ts=now_ts,
+        latency_gate={
+            "curr_vs_micro_vwap_bp": -3.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+        },
+        late_drift_guard={"blocked": False, "fields": {"late_entry_latency_relevant": False}},
+        pre_submit_fields={
+            "strength_momentum_risk_state": "weak_momentum_context",
+            "strength_momentum_reason": "below_buy_ratio",
+        },
+    )
+
+    assert result["blocked"] is True
+    assert "weak_strength_momentum_context:below_buy_ratio" in result["reason"]
+    assert "micro_vwap_negative" in result["reason"]
+    assert result["fields"]["weak_context_guard_weak_strength_context"] is True
+
+
+def test_weak_context_late_entry_guard_blocks_general_buy_zero_mfe_proxy(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        WEAK_CONTEXT_LATE_ENTRY_GUARD_ENABLED=True,
+        WEAK_CONTEXT_LATE_ENTRY_LOOKBACK_SEC=900,
+        WEAK_CONTEXT_LATE_ENTRY_MIN_BLOCK_COUNT=2,
+        WEAK_CONTEXT_LATE_ENTRY_MIN_TICK_ACCEL=1.10,
+        WEAK_CONTEXT_LATE_ENTRY_MIN_BUY_PRESSURE=0.0,
+        WEAK_CONTEXT_LATE_ENTRY_MIN_MICRO_VWAP_BP=0.0,
+    )
+    now_ts = state_handlers.time.time()
+    stock = {
+        "name": "삼성에스디에스",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "trade_quality_block_history": [
+            {"stage": "blocked_strength_momentum", "ts": now_ts - 100, "risk_state": "weak_momentum_context"},
+            {"stage": "blocked_strength_momentum", "ts": now_ts - 20, "risk_state": "weak_momentum_context"},
+        ],
+    }
+
+    result = state_handlers._evaluate_weak_context_late_entry_guard(
+        strategy="SCALPING",
+        stock=stock,
+        now_ts=now_ts,
+        latency_gate={
+            "curr_vs_micro_vwap_bp": -1.5,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+        },
+        late_drift_guard={"blocked": False, "fields": {"late_entry_latency_relevant": False}},
+        pre_submit_fields={
+            "strength_momentum_risk_state": "weak_momentum_context",
+            "strength_momentum_reason": "below_window_buy_value",
+        },
+    )
+
+    assert result["blocked"] is True
+    assert "weak_strength_momentum_context:below_window_buy_value" in result["reason"]
+    assert "micro_vwap_negative" in result["reason"]
+
+
+def test_weak_context_late_entry_guard_does_not_block_weak_strength_without_micro_confirmation(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        WEAK_CONTEXT_LATE_ENTRY_GUARD_ENABLED=True,
+        WEAK_CONTEXT_LATE_ENTRY_LOOKBACK_SEC=900,
+        WEAK_CONTEXT_LATE_ENTRY_MIN_BLOCK_COUNT=2,
+    )
+    now_ts = state_handlers.time.time()
+
+    result = state_handlers._evaluate_weak_context_late_entry_guard(
+        strategy="SCALPING",
+        stock={
+            "name": "missing-micro-strength",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "trade_quality_block_history": [
+                {"stage": "blocked_strength_momentum", "ts": now_ts - 100, "risk_state": "weak_momentum_context"},
+                {"stage": "blocked_strength_momentum", "ts": now_ts - 20, "risk_state": "weak_momentum_context"},
+            ],
+        },
+        now_ts=now_ts,
+        latency_gate={},
+        late_drift_guard={"blocked": False, "fields": {"late_entry_latency_relevant": False}},
+        pre_submit_fields={
+            "strength_momentum_risk_state": "weak_momentum_context",
+            "strength_momentum_reason": "below_buy_ratio",
+        },
+    )
+
+    assert result["blocked"] is False
+    assert result["reason"] == "current_submit_context_not_weak"
+    assert result["fields"]["weak_context_guard_weak_signal_count"] == 1
+
+
 def test_weak_context_late_entry_guard_does_not_block_on_missing_micro_fields(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 
@@ -15193,6 +15445,74 @@ def test_buy_execution_thread_receives_snapshot_and_clears_live_notify_state(mon
 
     stock["buy_qty"] = 999
     assert snapshot["buy_qty"] == 1
+
+
+def test_split_entry_partial_fill_defers_buy_execution_telegram_until_bundle_full(monkeypatch):
+    receipts.ACTIVE_TARGETS = []
+    receipts.highest_prices = {}
+    receipts._get_fast_state = lambda code: None
+    receipts.DB = _DummyDB()
+    receipts.KIWOOM_TOKEN = "token"
+    entry_state.TERMINAL_ENTRY_ORDERS.clear()
+
+    thread_calls = []
+
+    class DummyThread:
+        def __init__(self, target=None, args=(), daemon=None):
+            thread_calls.append((target, args, daemon))
+
+        def start(self):
+            return None
+
+    monkeypatch.setattr(receipts.threading, "Thread", DummyThread)
+    monkeypatch.setattr(receipts.kiwoom_utils, "get_target_price_up", lambda price, pct: 10350)
+    monkeypatch.setattr(kiwoom_orders, "send_sell_order_market", lambda *args, **kwargs: {"ord_no": "TP1"})
+
+    stock = {
+        "id": 12,
+        "code": "078160",
+        "name": "메디포스트",
+        "status": "BUY_ORDERED",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "buy_price": 0,
+        "buy_qty": 0,
+        "entry_mode": "normal",
+        "entry_requested_qty": 19,
+        "requested_buy_qty": 19,
+        "pending_buy_msg": "✅ **메디포스트 (078160) rising missed scout 진입 주문 전송!**",
+        "pending_entry_orders": [
+            {"tag": "entry_split_primary", "qty": 10, "ord_no": "O1", "status": "OPEN", "filled_qty": 0},
+            {"tag": "entry_split_passive_1", "qty": 9, "ord_no": "O2", "status": "OPEN", "filled_qty": 0},
+        ],
+    }
+    receipts.ACTIVE_TARGETS.append(stock)
+
+    receipts.handle_real_execution({"code": "078160", "type": "BUY", "order_no": "O1", "price": 10180, "qty": 3})
+
+    assert stock["buy_qty"] == 3
+    assert stock.get("buy_execution_notified") in (None, False)
+    assert stock["pending_buy_msg"].startswith("✅ **메디포스트")
+    assert thread_calls
+    first_snapshot = thread_calls[-1][1][3]
+    assert first_snapshot["buy_execution_notified"] is True
+    assert first_snapshot["entry_fill_quality"] == "PARTIAL_FILL"
+    assert first_snapshot["entry_cum_filled_qty"] == 3
+    assert first_snapshot["entry_remaining_qty"] == 16
+    assert first_snapshot["buy_qty"] == 3
+
+    receipts.handle_real_execution({"code": "078160", "type": "BUY", "order_no": "O1", "price": 10180, "qty": 10})
+    receipts.handle_real_execution({"code": "078160", "type": "BUY", "order_no": "O2", "price": 10000, "qty": 9})
+
+    assert stock["buy_qty"] == 19
+    assert stock["buy_execution_notified"] is True
+    assert "pending_buy_msg" not in stock
+    final_snapshot = thread_calls[-1][1][3]
+    assert final_snapshot["buy_execution_notified"] is False
+    assert final_snapshot["entry_fill_quality"] == "FULL_FILL"
+    assert final_snapshot["entry_cum_filled_qty"] == 19
+    assert final_snapshot["entry_remaining_qty"] == 0
+    assert final_snapshot["buy_qty"] == 19
 
 
 def test_sell_execution_thread_receives_snapshot_and_clears_live_notify_state(monkeypatch):

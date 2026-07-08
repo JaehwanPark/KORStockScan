@@ -19,6 +19,7 @@ _ENTRY_ARMED_STAGES = {"entry_armed", "entry_armed_resume"}
 _INFERRED_BUY_INTENT_STAGES = _ENTRY_ARMED_STAGES | {"score65_74_recovery_probe_entry_unlocked"}
 _INFERRED_BUY_INTENT_DEDUP_TERMINAL_STAGES = {
     "pre_submit_liquidity_guard_block",
+    "pre_submit_entry_ai_authority_guard_block",
     "pre_submit_overbought_pullback_guard_block",
     "pre_submit_weak_context_late_entry_guard_block",
 }
@@ -59,6 +60,7 @@ _STAGE_LABELS = {
     "blocked_big_bite_hard_gate": "Big-Bite 차단",
     "blocked_vpw": "정적 체결강도 차단",
     "blocked_strength_momentum": "동적 체결강도 차단",
+    "pre_submit_entry_ai_authority_guard_block": "AI 평가 소스품질 차단",
     "pre_submit_weak_context_late_entry_guard_block": "약한 문맥 늦은 진입 차단",
     "entry_armed_expired": "진입 자격 만료",
     "entry_armed_expired_after_wait": "진입 대기 후 자격 만료",
@@ -413,6 +415,7 @@ def _missed_submit_cohort(candidate: dict) -> str:
     if terminal_stage in {
         "latency_block",
         "entry_submit_revalidation_block",
+        "pre_submit_entry_ai_authority_guard_block",
         "pre_submit_weak_context_late_entry_guard_block",
         "pre_submit_overbought_pullback_guard_block",
         "real_weak_pullback_entry_block",

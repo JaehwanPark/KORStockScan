@@ -3444,6 +3444,10 @@ def test_scalp_simulator_threshold_stages_are_included():
     assert threshold_family_for_stage("pre_submit_liquidity_guard_block") == "liquidity_pre_submit_guard_p1"
     assert threshold_family_for_stage("caution_weak_liquidity_entry_block") == "caution_weak_liquidity_entry_block"
     assert (
+        threshold_family_for_stage("pre_submit_entry_ai_authority_guard_block")
+        == "pre_submit_entry_ai_authority_guard"
+    )
+    assert (
         threshold_family_for_stage("pre_submit_overbought_pullback_guard_block")
         == "overbought_pullback_guard_p1"
     )

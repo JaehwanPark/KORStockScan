@@ -44,6 +44,7 @@ BLOCKER_STAGES = {
     "blocked_vpw",
     "first_ai_wait",
     "latency_block",
+    "pre_submit_entry_ai_authority_guard_block",
     "score65_74_recovery_probe_blocked",
     "scalping_scanner_watch_eviction",
     "scalping_scanner_watching_runtime_skip",
@@ -93,6 +94,7 @@ SCALE_IN_STAGES = {
 ACTIONABLE_BLOCKER_STAGE_PRIORITY = {
     "latency_block": 100,
     "entry_submit_revalidation_block": 95,
+    "pre_submit_entry_ai_authority_guard_block": 93,
     "pre_submit_price_guard_block": 90,
 }
 
@@ -848,6 +850,13 @@ def _blocker_taxonomy(
             "actionable": True,
             "major_blocker": True,
             "route": "preserve_stale_submit_block_and_fix_price_or_quote_context",
+        }
+    if stage == "pre_submit_entry_ai_authority_guard_block":
+        return {
+            "class": "pre_submit_quality_guard",
+            "actionable": True,
+            "major_blocker": True,
+            "route": "restore_entry_ai_authority_before_submit_without_broker_guard_bypass",
         }
     if stage == "latency_block":
         if latency_cause in {"quote_stale", "spread_too_wide", "spread_microstructure_wide"}:

@@ -16182,8 +16182,42 @@ def _evaluate_weak_context_late_entry_guard(
         key="curr_vs_micro_vwap_bp",
         aliases=("micro_vwap_bp", "late_entry_fresh_micro_vwap_bp"),
     )
+    strength_state = str(
+        _entry_submit_field(
+            pre_submit_fields,
+            latency_gate,
+            stock or {},
+            key="strength_momentum_risk_state",
+            aliases=("entry_strength_momentum_risk_state", "strength_momentum_state"),
+            default="",
+        )
+    ).strip()
+    strength_reason = str(
+        _entry_submit_field(
+            pre_submit_fields,
+            latency_gate,
+            stock or {},
+            key="strength_momentum_reason",
+            aliases=("entry_strength_momentum_reason",),
+            default="",
+        )
+    ).strip()
+    weak_strength_states = {"weak_momentum_context", "below_static_vpw_context"}
+    weak_strength_reasons = {
+        "below_buy_ratio",
+        "below_exec_buy_ratio",
+        "below_window_buy_value",
+        "below_strength_base",
+        "insufficient_history",
+    }
+    weak_strength_context = bool(
+        strength_state in weak_strength_states
+        or strength_reason in weak_strength_reasons
+    )
 
     weak_reasons: list[str] = []
+    if weak_strength_context:
+        weak_reasons.append(f"weak_strength_momentum_context:{strength_reason or strength_state or 'unknown'}")
     if has_micro_vwap and micro_vwap_bp < _rule_float("WEAK_CONTEXT_LATE_ENTRY_MIN_MICRO_VWAP_BP", 0.0):
         weak_reasons.append("micro_vwap_negative")
     if buy_pressure_usable and buy_pressure <= _rule_float("WEAK_CONTEXT_LATE_ENTRY_MIN_BUY_PRESSURE", 0.0):
@@ -16208,6 +16242,9 @@ def _evaluate_weak_context_late_entry_guard(
             "pre_entry_block_signature": recent_counts.get("signature") or "-",
             "weak_context_guard_lookback_sec": _safe_int(recent_counts.get("lookback_sec"), 0),
             "weak_context_guard_min_block_count": min_block_count,
+            "weak_context_guard_strength_state": strength_state or "-",
+            "weak_context_guard_strength_reason": strength_reason or "-",
+            "weak_context_guard_weak_strength_context": bool(weak_strength_context),
             "weak_context_guard_tick_accel": f"{tick_accel:.3f}",
             "weak_context_guard_buy_pressure_10t": f"{buy_pressure:.2f}",
             "weak_context_guard_curr_vs_micro_vwap_bp": f"{micro_vwap_bp:.2f}",
@@ -16531,6 +16568,121 @@ def _evaluate_real_weak_ai_micro_entry_block(
         fields["reason"] = "weak_context_not_confirmed"
         fields["block_reason"] = "weak_context_not_confirmed"
     return fields
+
+
+def _entry_ai_submit_authority_fields(
+    *,
+    strategy,
+    stock,
+    latency_gate,
+    latency_signal_score,
+    submit_fields=None,
+    pre_ai_fields=None,
+) -> dict:
+    if _is_any_simulated_position(stock, strategy) or _is_swing_live_order_dry_run(strategy):
+        return {"blocked": False, "reason": "sim_or_dry_run"}
+
+    stock = stock if isinstance(stock, dict) else {}
+    latency_fields = latency_gate if isinstance(latency_gate, dict) else {}
+    source_quality_fields = stock.get("last_watching_ai_source_quality_fields")
+    source_quality_fields = source_quality_fields if isinstance(source_quality_fields, dict) else {}
+    score = _safe_float(
+        _entry_submit_field(
+            latency_fields,
+            submit_fields,
+            pre_ai_fields,
+            source_quality_fields,
+            stock,
+            key="ai_score",
+            aliases=(
+                "current_ai_score",
+                "last_watching_ai_score",
+                "entry_submit_ai_score",
+                "ai_score_after_bonus",
+            ),
+            default=latency_signal_score,
+        ),
+        0.0,
+    )
+    raw_action = _entry_submit_field(
+        latency_fields,
+        submit_fields,
+        pre_ai_fields,
+        source_quality_fields,
+        stock,
+        key="ai_action",
+        aliases=("action", "last_watching_ai_action", "current_ai_action", "score_prior_action"),
+        default=None,
+    )
+    action = str(raw_action or "").strip()
+    normalized_action = action.lower()
+    result_source = str(
+        _entry_submit_field(
+            latency_fields,
+            submit_fields,
+            pre_ai_fields,
+            source_quality_fields,
+            stock,
+            key="ai_result_source",
+            aliases=("last_watching_ai_result_source", "last_ai_result_source", "result_source"),
+            default="",
+        )
+        or ""
+    ).strip().lower()
+    confirmed_at = _safe_float(stock.get("last_watching_ai_confirmed_at"), 0.0)
+    max_prior_age_sec = max(
+        1.0,
+        _safe_float(
+            os.getenv("KORSTOCKSCAN_PRE_SUBMIT_AI_AUTHORITY_MAX_PRIOR_AGE_SEC"),
+            _rule_float("AI_WATCHING_COOLDOWN", 300.0),
+        ),
+    )
+    age_sec = max(0.0, time.time() - confirmed_at) if confirmed_at > 0 else None
+    fresh_prior = (
+        result_source in {"live", "prior_valid"}
+        and score > 0.0
+        and age_sec is not None
+        and age_sec <= max_prior_age_sec
+    )
+    invalid_action = normalized_action in {"", "-", "none", "null", "nan", "nat", "not_evaluated"}
+    missing_score = score <= 0.0
+    blocked = bool((invalid_action or missing_score) and not fresh_prior)
+    reason = "ok"
+    if blocked and missing_score:
+        reason = "entry_ai_score_unavailable"
+    elif blocked:
+        reason = "entry_ai_action_not_evaluated"
+
+    return {
+        "blocked": blocked,
+        "reason": reason,
+        "block_reason": reason,
+        "threshold_family": "pre_submit_entry_ai_authority_guard",
+        "metric_role": "source_quality_gate",
+        "decision_authority": "real_buy_submit_source_quality_guard",
+        "source_quality_gate": "pre_submit_entry_ai_authority_contract",
+        "window_policy": "intraday_pre_submit",
+        "sample_floor": "not_applicable_runtime_guard",
+        "primary_decision_metric": "funnel_count",
+        "runtime_effect": bool(blocked),
+        "actual_order_submitted": False,
+        "broker_order_forbidden": bool(blocked),
+        "entry_ai_submit_authority_guard_enabled": True,
+        "entry_ai_submit_authority_blocked": bool(blocked),
+        "entry_ai_submit_authority_reason": reason,
+        "entry_ai_submit_authority_score": f"{score:.1f}",
+        "entry_ai_submit_authority_action": action or "not_evaluated",
+        "entry_ai_submit_authority_result_source": result_source or "-",
+        "entry_ai_submit_authority_fresh_prior": bool(fresh_prior),
+        "entry_ai_submit_authority_confirmed_age_sec": (
+            f"{age_sec:.3f}" if age_sec is not None else "not_available"
+        ),
+        "entry_ai_submit_authority_max_prior_age_sec": f"{max_prior_age_sec:.1f}",
+        "forbidden_uses": (
+            "score_threshold_mutation,provider_route_change,quantity_cap_release,"
+            "broker_guard_bypass,stale_quote_bypass,tuning_auto_apply_authority"
+        ),
+    }
 
 
 def _entry_planned_total_qty(planned_orders) -> int:
@@ -21244,6 +21396,24 @@ def _sim_submit_liquidity_value(ws_data: dict | None, runtime: dict | None) -> i
     if curr_price <= 0:
         return None
     return (_safe_int(ws_data.get("ask_tot"), 0) + _safe_int(ws_data.get("bid_tot"), 0)) * curr_price
+
+
+def _real_pre_submit_liquidity_value(
+    ws_data: dict | None,
+    runtime: dict | None,
+    liquidity_value,
+) -> int | None:
+    runtime = runtime if isinstance(runtime, dict) else {}
+    if liquidity_value not in (None, "", "-", "None", "none", "null"):
+        resolved = _safe_int(liquidity_value, 0)
+        source_quality = str(runtime.get("scalp_liquidity_source_quality") or "").strip()
+        if resolved > 0 or source_quality == "valid_orderbook_totals":
+            return resolved
+    fallback_runtime = dict(runtime)
+    for key in ("liquidity_value", "scalp_liquidity_value"):
+        if _safe_int(fallback_runtime.get(key), 0) <= 0:
+            fallback_runtime.pop(key, None)
+    return _sim_submit_liquidity_value(ws_data, fallback_runtime)
 
 
 def _derive_sim_overbought_context_fields(
@@ -27337,6 +27507,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     submit_revalidation_fields = _build_entry_submit_revalidation_fields(ws_data, latency_gate, now_ts=time.time())
     scalp_pre_ai_gate_context = runtime.get("scalp_pre_ai_gate_context") if isinstance(runtime.get("scalp_pre_ai_gate_context"), dict) else {}
     pre_ai_gate_submit_log_fields = _scalp_pre_ai_gate_context_log_fields(scalp_pre_ai_gate_context)
+    liquidity_value = _real_pre_submit_liquidity_value(ws_data, runtime, liquidity_value)
+    runtime["liquidity_value"] = liquidity_value if liquidity_value is not None else None
+    runtime["scalp_liquidity_value"] = liquidity_value if liquidity_value is not None else None
     real_pre_submit_guard_verdicts = _evaluate_scalp_pre_submit_guard_verdicts(
         strategy=strategy,
         liquidity_value=liquidity_value,
@@ -27635,6 +27808,66 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             actual_order_submitted=False,
             broker_order_forbidden=True,
             extra_fields=caution_weak_liquidity_block,
+        )
+        return False
+
+    entry_ai_submit_authority = _entry_ai_submit_authority_fields(
+        strategy=strategy,
+        stock=stock,
+        latency_gate=latency_gate,
+        latency_signal_score=latency_signal_score,
+        submit_fields=submit_revalidation_fields,
+        pre_ai_fields=pre_ai_gate_submit_log_fields,
+    )
+    if entry_ai_submit_authority.get("blocked"):
+        log_info(
+            f"[PRE_SUBMIT_ENTRY_AI_AUTHORITY_BLOCK] {stock.get('name')}({code}) "
+            f"reason={entry_ai_submit_authority.get('entry_ai_submit_authority_reason')} "
+            f"action={entry_ai_submit_authority.get('entry_ai_submit_authority_action')} "
+            f"score={entry_ai_submit_authority.get('entry_ai_submit_authority_score')}"
+        )
+        _mutate_stock_state(
+            stock,
+            pop_fields=[
+                "rising_missed_one_share_entry_forced",
+                "rising_missed_one_share_scout",
+                "rising_missed_scout_upgrade_pending",
+                "forced_entry_qty",
+                "forced_entry_reason",
+                "target_buy_price",
+                "rising_missed_normal_buy_bridge_allowed",
+                "rising_missed_normal_buy_bridge_reason",
+                "rising_missed_normal_buy_bridge_at",
+            ],
+        )
+        clear_signal_reference(stock)
+        _log_entry_pipeline(
+            stock,
+            code,
+            "pre_submit_entry_ai_authority_guard_block",
+            **_merge_entry_pipeline_field_groups(
+                real_pre_submit_guard_fields,
+                submit_revalidation_fields,
+                latency_price_snapshot,
+                entry_orderbook_micro_fields,
+                microstructure_submit_log_fields,
+                pre_ai_gate_submit_log_fields,
+                entry_ai_submit_authority,
+            ),
+        )
+        _emit_scalp_entry_adm_snapshot(
+            stock,
+            code,
+            "pre_submit_entry_ai_authority_guard_block",
+            ai_score=latency_signal_score,
+            chosen_action="SKIP_SOURCE_QUALITY",
+            latency_gate=latency_gate,
+            submit_fields=submit_revalidation_fields,
+            price_snapshot=latency_price_snapshot,
+            orderbook_fields=entry_orderbook_micro_fields,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            extra_fields=entry_ai_submit_authority,
         )
         return False
 
@@ -28086,6 +28319,10 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             microstructure_fields=microstructure_submit_log_fields,
             orderbook_fields=entry_orderbook_micro_fields,
         )
+        weak_context_pre_submit_fields = _merge_entry_pipeline_field_groups(
+            real_pre_submit_guard_fields,
+            pre_ai_gate_submit_log_fields,
+        )
         if late_drift_guard.get("blocked"):
             _log_entry_pipeline(
                 stock,
@@ -28133,7 +28370,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             now_ts=now_ts,
             latency_gate=latency_gate,
             late_drift_guard=late_drift_guard,
-            pre_submit_fields=real_pre_submit_guard_fields,
+            pre_submit_fields=weak_context_pre_submit_fields,
             microstructure_fields=microstructure_submit_log_fields,
             orderbook_fields=entry_orderbook_micro_fields,
         )
@@ -29106,14 +29343,24 @@ def _evaluate_caution_weak_liquidity_entry_block(
     blocked = bool(
         enabled
         and normalize_strategy(strategy) == "SCALPING"
-        and latency_state == "CAUTION"
-        and gap_profile == "weak_liquidity_wide_spread"
         and liquidity_action == "NOT_AVAILABLE"
         and liquidity_reason == "liquidity_not_available"
+        and (
+            is_rising_missed
+            or (
+                latency_state == "CAUTION"
+                and gap_profile == "weak_liquidity_wide_spread"
+            )
+        )
+    )
+    block_reason = (
+        "rising_missed_liquidity_not_available"
+        if blocked and is_rising_missed
+        else "caution_weak_liquidity_not_available"
     )
     return {
         "blocked": blocked,
-        "block_reason": "caution_weak_liquidity_not_available",
+        "block_reason": block_reason,
         "caution_weak_liquidity_entry_block_enabled": bool(enabled),
         "rising_missed_entry_lineage": bool(is_rising_missed),
         "caution_weak_liquidity_block_latency_state": latency_state or "-",
