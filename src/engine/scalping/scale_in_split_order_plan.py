@@ -1149,6 +1149,11 @@ def apply_scale_in_split_order_policy(
                 "scale_in_split_order_price_offsets_pct": (
                     "market" if market_order else ",".join(str(item) for item in pct_offsets) if pct_offsets else ""
                 ),
+                "scale_in_split_order_price_offset_ticks": "market" if market_order else offsets[idx],
+                "scale_in_split_order_price_offset_pct": "market" if market_order else pct_offsets[idx] if pct_offsets else "",
+                "split_price_offset_ticks": "market" if market_order else offsets[idx],
+                "split_price_offset_pct": "market" if market_order else pct_offsets[idx] if pct_offsets else "",
+                "split_leg_role": "primary" if idx == 0 else "passive",
                 "scale_in_split_order_qty_weight_min": first_weight,
                 "scale_in_split_order_qty_weight_max": _safe_float(bucket_policy.get("qty_weight_max"), first_weight),
                 "scale_in_split_order_qty_weights": ",".join(str(item) for item in qty_weights) if qty_weights else "",

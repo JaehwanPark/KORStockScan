@@ -330,6 +330,61 @@ def _entry_receipt_int_map(target_stock: dict[str, Any], key: str) -> dict[str, 
     return normalized
 
 
+def _add_receipt_leg_meta(target_stock: dict[str, Any], order_no: str) -> dict[str, Any]:
+    raw_map = target_stock.get("_add_receipt_leg_meta_by_order_no")
+    if not isinstance(raw_map, dict):
+        return {}
+    order_key = _add_receipt_order_key(order_no)
+    raw_meta = raw_map.get(order_key) or raw_map.get(str(order_no or "").strip())
+    return dict(raw_meta) if isinstance(raw_meta, dict) else {}
+
+
+def _split_receipt_leg_meta_fields(leg_meta: dict[str, Any], *, filled_at_ts: float) -> dict[str, Any]:
+    if not isinstance(leg_meta, dict) or not leg_meta:
+        return {
+            "split_leg_ttl_sec": "-",
+            "split_bundle_hard_ttl_sec": "-",
+            "split_leg_role": "-",
+            "split_price_offset_pct": "-",
+            "split_price_offset_ticks": "-",
+            "split_leg_age_sec": "-",
+            "split_fill_before_ttl": "-",
+            "split_fill_after_ttl": "-",
+            "scale_in_split_order_leg_index": "-",
+            "scale_in_split_order_market_order_applied": "-",
+        }
+    ttl_sec = _safe_int(leg_meta.get("split_leg_ttl_sec"), 0)
+    sent_at = _safe_float(leg_meta.get("sent_at"), 0.0)
+    age_sec = max(0.0, float(filled_at_ts or 0.0) - sent_at) if sent_at > 0 else None
+    return {
+        "split_leg_ttl_sec": ttl_sec if ttl_sec > 0 else "-",
+        "split_bundle_hard_ttl_sec": leg_meta.get("split_bundle_hard_ttl_sec") or "-",
+        "split_leg_role": leg_meta.get("split_leg_role") or "-",
+        "split_price_offset_pct": leg_meta.get("split_price_offset_pct") if leg_meta.get("split_price_offset_pct") is not None else "-",
+        "split_price_offset_ticks": leg_meta.get("split_price_offset_ticks") if leg_meta.get("split_price_offset_ticks") is not None else "-",
+        "split_leg_age_sec": f"{age_sec:.1f}" if age_sec is not None else "-",
+        "split_fill_before_ttl": bool(ttl_sec > 0 and age_sec is not None and age_sec < ttl_sec) if ttl_sec > 0 else "-",
+        "split_fill_after_ttl": bool(ttl_sec > 0 and age_sec is not None and age_sec >= ttl_sec) if ttl_sec > 0 else "-",
+        "scale_in_split_order_leg_index": leg_meta.get("scale_in_split_order_leg_index") or "-",
+        "scale_in_split_order_market_order_applied": bool(leg_meta.get("scale_in_split_order_market_order_applied")),
+    }
+
+
+def _split_receipt_history_note(leg_fields: dict[str, Any]) -> str | None:
+    ttl = leg_fields.get("split_leg_ttl_sec")
+    if ttl in {None, "", "-"}:
+        return None
+    return (
+        "receipt_confirmed"
+        f"|split_leg_ttl_sec={ttl}"
+        f"|split_leg_age_sec={leg_fields.get('split_leg_age_sec', '-')}"
+        f"|split_fill_before_ttl={leg_fields.get('split_fill_before_ttl', '-')}"
+        f"|split_leg_role={leg_fields.get('split_leg_role', '-')}"
+        f"|split_price_offset_pct={leg_fields.get('split_price_offset_pct', '-')}"
+        f"|split_price_offset_ticks={leg_fields.get('split_price_offset_ticks', '-')}"
+    )
+
+
 def _pending_add_order_numbers(target_stock: dict[str, Any]) -> list[str]:
     raw = str(target_stock.get("pending_add_ord_no", "") or "").strip()
     return [part.strip() for part in raw.split(",") if part.strip()]
@@ -1606,6 +1661,10 @@ def _handle_add_buy_execution(
         )
 
     add_receipt_snapshot = _receipt_snapshot(target_stock, _ADD_RECEIPT_SNAPSHOT_KEYS)
+    fill_event_ts = time.time()
+    split_leg_meta = _add_receipt_leg_meta(target_stock, order_no)
+    split_leg_fields = _split_receipt_leg_meta_fields(split_leg_meta, filled_at_ts=fill_event_ts)
+    history_note = _split_receipt_history_note(split_leg_fields)
     _update_db_for_add(
         target_id,
         exec_price,
@@ -1633,6 +1692,7 @@ def _handle_add_buy_execution(
         new_buy_qty=new_qty,
         add_count_after=target_stock.get('add_count', 0),
         reason='receipt_confirmed',
+        note=history_note,
     )
     if pending_qty > 0 and filled_qty >= pending_qty:
         _clear_pending_add_meta(target_stock)
@@ -1661,6 +1721,7 @@ def _handle_add_buy_execution(
         bundle_filled_qty=int(filled_qty or 0),
         order_requested_qty=int(order_requested_qty or 0),
         order_filled_qty=int(order_filled_qty or 0),
+        **split_leg_fields,
         scale_in_receipt_reconciled_before_ordno_bind=bool(
             reconciled_before_ordno_bind
             or target_stock.get("scale_in_receipt_reconciled_before_ordno_bind")

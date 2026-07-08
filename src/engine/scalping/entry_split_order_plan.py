@@ -35,8 +35,10 @@ POLICY_MODE_BOUNDED_EQUAL_BASELINE = "bounded_equal_split_baseline"
 POLICY_MODE_POST_SUBMIT_TICK_BAND = "post_submit_tick_band_seed"
 BASELINE_SPLIT_VARIANT_ID = "equal_50_50_offset_0pct_0_3pct"
 PCT_BAND_3LEG_VARIANT_ID = "equal_3leg_offset_0pct_0_3pct_0_8pct"
-RUNTIME_FALLBACK_POLICY_MODE = "runtime_default_equal_50_50_0_3pct"
-RUNTIME_FALLBACK_VARIANT_ID = "runtime_default_equal_50_50_offset_0pct_0_3pct"
+RUNTIME_FALLBACK_POLICY_MODE = "runtime_default_passive_center_40_60_0_3pct"
+RUNTIME_FALLBACK_VARIANT_ID = "runtime_default_passive_center_40_60_offset_0pct_0_3pct"
+PASSIVE_CENTER_MAX_FIRST_WEIGHT = 0.40
+PASSIVE_BIAS_WAIT_WARNING_FIRST_WEIGHT = 0.20
 ALLOWED_PRICE_CANDIDATES = {
     "resolved_order_price",
     "best_bid",
@@ -968,7 +970,7 @@ def _runtime_default_bucket_policy(bucket: str) -> dict[str, Any]:
         "qty_weight_max": 0.5,
         "policy_mode": RUNTIME_FALLBACK_POLICY_MODE,
         "split_variant_id": RUNTIME_FALLBACK_VARIANT_ID,
-        "policy_generation_reason": "runtime fallback for policy bucket gap; qty-preserving 50/50 0.3pct seed",
+        "policy_generation_reason": "runtime fallback for policy bucket gap; qty-preserving passive-centered 0.3pct seed",
     }
 
 
@@ -986,6 +988,73 @@ def _split_allocator_stale_quote_blocked(fields: dict[str, Any]) -> bool:
     if any(_has_present_value(fields, key) for key in ("quote_stale_at_submit", "pre_submit_effective_quote_stale")):
         return False
     return _safe_bool(fields.get("quote_stale"))
+
+
+def _spread_bps_from_fields(fields: dict[str, Any]) -> float:
+    spread_bps = _safe_float(fields.get("spread_bps"), None)
+    if spread_bps is not None:
+        return float(spread_bps)
+    spread_ratio = _safe_float(fields.get("spread_ratio"), None)
+    return float(spread_ratio or 0.0) * 10000.0 if spread_ratio is not None else 0.0
+
+
+def _entry_split_passive_bias_reason(fields: dict[str, Any]) -> str:
+    action_tokens = {
+        str(fields.get(key) or "").strip().upper()
+        for key in (
+            "ai_action",
+            "action",
+            "chosen_action",
+            "entry_ai_action",
+            "entry_ai_submit_authority_action",
+            "last_watching_ai_action",
+        )
+    }
+    if "WAIT" not in action_tokens:
+        return ""
+    reasons: list[str] = []
+    if _safe_bool(fields.get("quote_stale")) or _safe_bool(fields.get("ai_input_quote_stale")):
+        reasons.append("quote_stale_warning")
+    if _spread_bps_from_fields(fields) >= 35.0:
+        reasons.append("high_spread")
+    text = " ".join(
+        str(fields.get(key) or "").lower()
+        for key in (
+            "reason",
+            "block_reason",
+            "policy_reason",
+            "latency_danger_reasons",
+            "latency_danger_detail_reason",
+            "entry_submit_revalidation_warning",
+            "entry_price_gap_profile_reason",
+            "ai_entry_price_canary_reason",
+            "entry_ai_submit_authority_reason",
+            "submit_quality_parent",
+        )
+    )
+    text_markers = {
+        "stale_quote": ("stale quote", "quote_stale", "stale_snapshot", "diagnostic_quote_age_stale"),
+        "high_spread": ("high spread", "wide spread", "spread_too_wide", "spread=wide"),
+    }
+    for reason, markers in text_markers.items():
+        if any(marker in text for marker in markers) and reason not in reasons:
+            reasons.append(reason)
+    if not reasons:
+        return ""
+    return "ai_wait_with_" + "+".join(reasons)
+
+
+def _entry_split_passive_bias_first_weight(
+    policy_first_weight: float,
+    fields: dict[str, Any],
+) -> tuple[float, str]:
+    reason = _entry_split_passive_bias_reason(fields)
+    if reason:
+        return min(policy_first_weight, PASSIVE_BIAS_WAIT_WARNING_FIRST_WEIGHT), reason
+    passive_center_weight = min(policy_first_weight, PASSIVE_CENTER_MAX_FIRST_WEIGHT)
+    if passive_center_weight < policy_first_weight:
+        return passive_center_weight, "passive_center_first_leg_cap"
+    return policy_first_weight, ""
 
 
 def apply_entry_split_order_policy(
@@ -1026,14 +1095,15 @@ def apply_entry_split_order_policy(
     if _policy_is_stale(policy, now=now):
         fields["entry_split_order_skip_reason"] = "stale_policy"
         return orders, fields
-    bucket = _context_bucket({**stock, **latency_gate})
+    context_fields = {**stock, **latency_gate}
+    bucket = _context_bucket(context_fields)
     bucket_policy = (policy.get("buckets") or {}).get(bucket)
     fallback_policy_applied = False
     if not isinstance(bucket_policy, dict):
         bucket_policy = _runtime_default_bucket_policy(bucket)
         fallback_policy_applied = True
     policy_mode = str(bucket_policy.get("policy_mode") or "").strip()
-    split_variant_id = str(bucket_policy.get("split_variant_id") or "").strip() or _split_variant_id_from_fields(
+    policy_split_variant_id = str(bucket_policy.get("split_variant_id") or "").strip() or _split_variant_id_from_fields(
         {
             "entry_split_order_policy_applied": True,
             "entry_split_order_policy_mode": policy_mode,
@@ -1071,7 +1141,14 @@ def apply_entry_split_order_policy(
     ][:desired_legs]
     while len(offsets) < desired_legs:
         offsets.append(offsets[-1] + 1 if offsets else 0)
-    first_weight = (_safe_float(bucket_policy.get("qty_weight_min"), 0.5) or 0.5)
+    policy_first_weight = (_safe_float(bucket_policy.get("qty_weight_min"), 0.5) or 0.5)
+    first_weight, passive_bias_reason = _entry_split_passive_bias_first_weight(policy_first_weight, context_fields)
+    runtime_weight_adjusted = abs(float(first_weight) - float(policy_first_weight)) > 0.000001
+    split_variant_id = policy_split_variant_id
+    if runtime_weight_adjusted:
+        split_variant_id = (
+            f"{policy_split_variant_id}__runtime_first_weight_{int(round(first_weight * 100)):02d}"
+        )
     quantities = _split_qty(total_qty, desired_legs, first_weight)
     applied_offsets = offsets[:desired_legs]
     raw_pct_offsets = bucket_policy.get("price_offsets_pct")
@@ -1098,12 +1175,22 @@ def apply_entry_split_order_policy(
                 "entry_split_order_policy_version": policy.get("policy_version"),
                 "entry_split_order_policy_mode": policy_mode,
                 "entry_split_order_variant_id": split_variant_id,
+                "entry_split_order_policy_variant_id": policy_split_variant_id,
                 "entry_split_order_bucket": bucket,
                 "entry_split_order_runtime_default_policy_applied": fallback_policy_applied,
                 "entry_split_order_price_offsets_ticks": ",".join(str(item) for item in applied_offsets),
                 "entry_split_order_price_offsets_pct": ",".join(str(item) for item in pct_offsets) if pct_offsets else "",
+                "entry_split_order_price_offset_ticks": applied_offsets[idx],
+                "entry_split_order_price_offset_pct": pct_offsets[idx] if pct_offsets else "",
+                "split_price_offset_ticks": applied_offsets[idx],
+                "split_price_offset_pct": pct_offsets[idx] if pct_offsets else "",
+                "split_leg_role": "primary" if idx == 0 else "passive",
                 "entry_split_order_qty_weight_min": first_weight,
-                "entry_split_order_qty_weight_max": _safe_float(bucket_policy.get("qty_weight_max"), first_weight),
+                "entry_split_order_qty_weight_max": min(
+                    _safe_float(bucket_policy.get("qty_weight_max"), first_weight) or first_weight,
+                    first_weight,
+                ),
+                "entry_split_order_runtime_weight_adjustment_applied": runtime_weight_adjusted,
             }
         )
     if sum(_safe_int(item.get("qty"), 0) for item in split_orders) != total_qty:
@@ -1117,6 +1204,7 @@ def apply_entry_split_order_policy(
             "entry_split_order_policy_version": policy.get("policy_version"),
             "entry_split_order_policy_mode": policy_mode,
             "entry_split_order_variant_id": split_variant_id,
+            "entry_split_order_policy_variant_id": policy_split_variant_id,
             "entry_split_order_runtime_default_policy_applied": fallback_policy_applied,
             "entry_split_order_policy_file": policy_file
             or os.environ.get("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE"),
@@ -1125,7 +1213,15 @@ def apply_entry_split_order_policy(
             "entry_split_order_price_offsets_ticks": ",".join(str(item) for item in applied_offsets),
             "entry_split_order_price_offsets_pct": ",".join(str(item) for item in pct_offsets) if pct_offsets else "",
             "entry_split_order_qty_weight_min": first_weight,
-            "entry_split_order_qty_weight_max": _safe_float(bucket_policy.get("qty_weight_max"), first_weight),
+            "entry_split_order_qty_weight_max": min(
+                _safe_float(bucket_policy.get("qty_weight_max"), first_weight) or first_weight,
+                first_weight,
+            ),
+            "entry_split_order_passive_bias_applied": bool(passive_bias_reason),
+            "entry_split_order_passive_bias_reason": passive_bias_reason,
+            "entry_split_order_policy_original_qty_weight_min": policy_first_weight,
+            "entry_split_order_passive_center_max_first_weight": PASSIVE_CENTER_MAX_FIRST_WEIGHT,
+            "entry_split_order_runtime_weight_adjustment_applied": runtime_weight_adjusted,
         }
     )
     return split_orders, fields

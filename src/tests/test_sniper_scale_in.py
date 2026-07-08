@@ -1640,6 +1640,7 @@ def test_entry_ai_submit_authority_blocks_not_evaluated_zero_score():
     assert decision["broker_order_forbidden"] is True
     assert decision["entry_ai_submit_authority_action"] == "not_evaluated"
     assert decision["entry_ai_submit_authority_score"] == "0.0"
+    assert decision["entry_ai_submit_authority_result_source"] == "not_available"
 
 
 def test_entry_ai_submit_authority_blocks_not_evaluated_positive_score_without_prior():
@@ -2823,6 +2824,318 @@ def test_rising_missed_one_share_submit_respects_runtime_cooldown_before_deposit
     assert logs[-1][1]["actual_order_submitted"] is False
     assert logs[-1][1]["broker_order_forbidden"] is True
     assert logs[-1][1]["decision_authority"] == "rising_missed_one_share_entry_cooldown_guard"
+
+
+def test_rising_missed_one_share_submit_blocks_entry_price_canary_skip_before_forced_rebuild(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALPING_ENTRY_AI_PRICE_CANARY_ENABLED=True,
+        SCALPING_ENTRY_AI_PRICE_SKIP_MIN_CONFIDENCE=80,
+    )
+    logs = []
+    sent_orders = []
+
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", "true")
+    monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000)
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_last_deposit_meta", lambda: {})
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_last_deposit_errors", lambda: [])
+    monkeypatch.setattr(
+        state_handlers,
+        "_resolve_scalp_cash_budget_context",
+        lambda *args, **kwargs: {
+            "budget_base": 1_000_000,
+            "budget_source": "test",
+            "account_deposit": 1_000_000,
+            "cash_orderable_amount": 1_000_000,
+            "cash_orderable_qty_cap": None,
+            "kt00011_error": "",
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "describe_buy_capacity",
+        lambda *args, **kwargs: (200_000, 200_000, 17, 1.0),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_scalp_same_symbol_loss_reentry_guard",
+        lambda *args, **kwargs: {"allowed": True, "reason": "ok"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_pre_submit_refresh_real_ws_snapshot",
+        lambda code, ws_data, strategy: (ws_data, {"pre_submit_ws_snapshot_refresh_applied": False}),
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: sent_orders.append(args)
+        or (_ for _ in ()).throw(AssertionError("canary SKIP must block before broker submit")),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_live_buy_entry",
+        lambda **kwargs: {
+            "allowed": True,
+            "mode": "normal",
+            "decision": "ALLOW_NORMAL",
+            "reason": "ok",
+            "latency_state": "CAUTION",
+            "orders": [{"tag": "normal", "qty": 17, "price": 11_170, "tif": "DAY"}],
+            "signal_price": 11_220,
+            "latest_price": 11_220,
+            "computed_allowed_slippage": 0,
+            "ws_age_ms": 100,
+            "ws_jitter_ms": 10,
+            "spread_ratio": 0.004,
+            "quote_stale": False,
+            "latency_danger_reasons": "other_danger",
+            "latency_danger_detail_reason": "not_applicable",
+            "latency_danger_source_quality_state": "not_applicable",
+            "order_price": 11_170,
+            "orderbook_stability": {
+                "orderbook_micro": {
+                    "ready": True,
+                    "micro_state": "bearish",
+                    "qi": 0.165289,
+                    "qi_ewma": 0.122909,
+                    "ofi_norm": -10.24481,
+                    "ofi_z": -2.427888,
+                    "sample_quote_count": 161,
+                    "spread_ticks": 5,
+                }
+            },
+        },
+    )
+
+    def fake_canary(**kwargs):
+        latency_gate = kwargs["latency_gate"]
+        latency_gate.update(
+            {
+                "orders": [],
+                "ai_entry_price_canary_action": "SKIP",
+                "ai_entry_price_canary_final_action": "SKIP",
+                "ai_entry_price_canary_confidence": 95,
+                "ai_entry_price_canary_reason": "bearish micro",
+                "ai_entry_price_canary_submit_blocked": True,
+                "ai_entry_price_canary_submit_block_reason": (
+                    "entry_price_canary_skip_confirmed_bearish_micro"
+                ),
+                "ai_entry_price_canary_submit_block_confirmation_state": "confirmed_bearish_micro",
+                "ai_entry_price_canary_submit_block_policy_warning": "",
+                "ai_entry_price_canary_submit_block_policy_basis": "ofi_bearish_supported",
+            }
+        )
+        return [], True
+
+    monkeypatch.setattr(state_handlers, "_apply_entry_ai_price_canary", fake_canary)
+
+    stock = {
+        "id": 1,
+        "name": "RISING_SKIP",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "rising_missed_one_share_entry_forced": True,
+        "rising_missed_one_share_scout": True,
+        "rising_missed_scout_upgrade_pending": True,
+        "forced_entry_qty": 17,
+        "forced_entry_reason": FORCED_ENTRY_REASON,
+        "target_buy_price": 11_170,
+        "prob": 0.70,
+        "rt_ai_prob": 0.70,
+    }
+    runtime = {
+        "strategy": "SCALPING",
+        "ratio": 0.2,
+        "curr_price": 11_220,
+        "liquidity_value": 287_467_620,
+        "msg": "forced",
+        "now_ts": 1000.0,
+        "cooldowns": {},
+        "alerted_stocks": set(),
+        "forced_entry_reason": FORCED_ENTRY_REASON,
+        "forced_entry_qty": 17,
+    }
+    ws_data = {
+        "curr": 11_220,
+        "v_pw": 100.0,
+        "fluctuation": 4.0,
+        "orderbook": {
+            "asks": [{"price": 11_280, "volume": 100}],
+            "bids": [{"price": 11_230, "volume": 100}],
+        },
+    }
+
+    result = state_handlers._submit_watching_triggered_entry(stock, "024060", ws_data, 1, runtime)
+
+    assert result is False
+    assert sent_orders == []
+    by_stage = {stage: fields for stage, fields in logs}
+    assert "rising_missed_one_share_entry_order_plan_forced" not in by_stage
+    blocked = by_stage["entry_price_canary_submit_block"]
+    assert blocked["block_reason"] == "entry_price_canary_skip_confirmed_bearish_micro"
+    assert blocked["forced_entry_reason"] == FORCED_ENTRY_REASON
+    assert blocked["actual_order_submitted"] is False
+    assert blocked["broker_order_forbidden"] is True
+    assert stock.get("rising_missed_one_share_entry_forced") is None
+
+
+def test_normal_scalping_buy_blocks_entry_price_canary_skip_before_broker_submit(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALPING_ENTRY_AI_PRICE_CANARY_ENABLED=True,
+        SCALPING_ENTRY_AI_PRICE_SKIP_MIN_CONFIDENCE=80,
+    )
+    logs = []
+    sent_orders = []
+
+    monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000)
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_last_deposit_meta", lambda: {})
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_last_deposit_errors", lambda: [])
+    monkeypatch.setattr(
+        state_handlers,
+        "_resolve_scalp_cash_budget_context",
+        lambda *args, **kwargs: {
+            "budget_base": 1_000_000,
+            "budget_source": "test",
+            "account_deposit": 1_000_000,
+            "cash_orderable_amount": 1_000_000,
+            "cash_orderable_qty_cap": None,
+            "kt00011_error": "",
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "describe_buy_capacity",
+        lambda *args, **kwargs: (200_000, 200_000, 10, 1.0),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_scalp_same_symbol_loss_reentry_guard",
+        lambda *args, **kwargs: {"allowed": True, "reason": "ok"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_pre_submit_refresh_real_ws_snapshot",
+        lambda code, ws_data, strategy: (ws_data, {"pre_submit_ws_snapshot_refresh_applied": False}),
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: sent_orders.append(args)
+        or (_ for _ in ()).throw(AssertionError("canary SKIP must block normal BUY submit")),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_live_buy_entry",
+        lambda **kwargs: {
+            "allowed": True,
+            "mode": "normal",
+            "decision": "ALLOW_NORMAL",
+            "reason": "ok",
+            "latency_state": "CAUTION",
+            "orders": [{"tag": "normal", "qty": 10, "price": 10_000, "tif": "DAY"}],
+            "signal_price": 10_020,
+            "latest_price": 10_020,
+            "computed_allowed_slippage": 0,
+            "ws_age_ms": 100,
+            "ws_jitter_ms": 10,
+            "spread_ratio": 0.004,
+            "quote_stale": False,
+            "latency_danger_reasons": "other_danger",
+            "latency_danger_detail_reason": "not_applicable",
+            "latency_danger_source_quality_state": "not_applicable",
+            "order_price": 10_000,
+            "orderbook_stability": {
+                "orderbook_micro": {
+                    "ready": True,
+                    "micro_state": "bearish",
+                    "qi": 0.16,
+                    "qi_ewma": 0.12,
+                    "ofi_norm": -8.0,
+                    "ofi_z": -2.1,
+                    "sample_quote_count": 120,
+                    "spread_ticks": 4,
+                }
+            },
+        },
+    )
+
+    def fake_canary(**kwargs):
+        latency_gate = kwargs["latency_gate"]
+        latency_gate.update(
+            {
+                "orders": [],
+                "ai_entry_price_canary_action": "SKIP",
+                "ai_entry_price_canary_final_action": "SKIP",
+                "ai_entry_price_canary_confidence": 92,
+                "ai_entry_price_canary_reason": "bearish micro",
+                "ai_entry_price_canary_submit_blocked": True,
+                "ai_entry_price_canary_submit_block_reason": (
+                    "entry_price_canary_skip_confirmed_bearish_micro"
+                ),
+                "ai_entry_price_canary_submit_block_confirmation_state": "confirmed_bearish_micro",
+                "ai_entry_price_canary_submit_block_policy_warning": "",
+                "ai_entry_price_canary_submit_block_policy_basis": "ofi_bearish_supported",
+            }
+        )
+        return [], True
+
+    monkeypatch.setattr(state_handlers, "_apply_entry_ai_price_canary", fake_canary)
+
+    stock = {
+        "id": 2,
+        "name": "NORMAL_SKIP",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "prob": 0.70,
+        "rt_ai_prob": 0.70,
+        "target_buy_price": 10_000,
+    }
+    runtime = {
+        "strategy": "SCALPING",
+        "ratio": 0.2,
+        "curr_price": 10_020,
+        "liquidity_value": 300_000_000,
+        "msg": "normal",
+        "now_ts": 1000.0,
+        "cooldowns": {},
+        "alerted_stocks": set(),
+    }
+    ws_data = {
+        "curr": 10_020,
+        "v_pw": 100.0,
+        "fluctuation": 3.0,
+        "orderbook": {
+            "asks": [{"price": 10_040, "volume": 100}],
+            "bids": [{"price": 10_000, "volume": 100}],
+        },
+    }
+
+    result = state_handlers._submit_watching_triggered_entry(stock, "024061", ws_data, 1, runtime)
+
+    assert result is False
+    assert sent_orders == []
+    by_stage = {stage: fields for stage, fields in logs}
+    assert "entry_price_canary_submit_block" in by_stage
+    assert "order_bundle_sent" not in by_stage
+    blocked = by_stage["entry_price_canary_submit_block"]
+    assert blocked["forced_entry_reason"] == "-"
+    assert blocked["block_reason"] == "entry_price_canary_skip_confirmed_bearish_micro"
+    assert blocked["actual_order_submitted"] is False
+    assert blocked["broker_order_forbidden"] is True
 
 
 def test_rising_missed_one_share_submit_rechecks_price_cap_before_deposit(monkeypatch):
@@ -8822,6 +9135,109 @@ def test_timeout_partially_filled_stop_line_avg_down_keeps_retry_count(monkeypat
     assert stock.get("pending_add_order") is None
     assert stock["stop_line_touch_avg_down_count"] == 3
     assert "last_defensive_avg_down_count_rollback_kind" not in stock
+    assert "last_add_cancel_at" not in stock
+    assert stock["last_add_residual_cancel_at"] == 100.0
+
+
+def test_scale_in_split_ttl_cancels_only_expired_leg(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    state_handlers.TRADING_RULES = replace(CONFIG, SCALE_IN_REQUIRE_HISTORY_TABLE=False)
+    state_handlers.KIWOOM_TOKEN = "token"
+    state_handlers.DB = None
+
+    cancel_calls = []
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_cancel_order",
+        lambda **kwargs: cancel_calls.append(kwargs) or {"return_code": "0"},
+    )
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", lambda *args, **kwargs: None)
+
+    stock = {
+        "name": "TEST",
+        "code": "123456",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 10000,
+        "buy_qty": 10,
+        "pending_add_order": True,
+        "pending_add_type": "AVG_DOWN",
+        "pending_add_qty": 5,
+        "pending_add_ord_no": "A1,A2",
+        "pending_add_requested_at": 90.0,
+        "_add_receipt_requested_by_order_no": {"A1": 2, "A2": 3},
+        "_add_receipt_leg_meta_by_order_no": {
+            "A1": {"qty": 2, "sent_at": 90.0, "split_leg_ttl_sec": 5, "split_bundle_hard_ttl_sec": 20},
+            "A2": {"qty": 3, "sent_at": 90.0, "split_leg_ttl_sec": 20, "split_bundle_hard_ttl_sec": 20},
+        },
+    }
+
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 100.0)
+    result = state_handlers.can_consider_scale_in(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 10000},
+        strategy="SCALPING",
+        market_regime="BULL",
+    )
+
+    assert result["allowed"] is False
+    assert result["reason"] == "pending_add_order"
+    assert [call["orig_ord_no"] for call in cancel_calls] == ["A1"]
+    assert stock["pending_add_ord_no"] == "A2"
+    assert stock["pending_add_qty"] == 3
+    assert stock.get("pending_add_order") is True
+    assert "last_add_cancel_at" not in stock
+
+
+def test_scale_in_split_residual_cancel_after_partial_fill_has_no_cancel_cooldown(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    state_handlers.TRADING_RULES = replace(CONFIG, SCALE_IN_REQUIRE_HISTORY_TABLE=False)
+    state_handlers.KIWOOM_TOKEN = "token"
+    state_handlers.DB = None
+
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_cancel_order",
+        lambda **kwargs: {"return_code": "0"},
+    )
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", lambda *args, **kwargs: None)
+
+    stock = {
+        "name": "TEST",
+        "code": "123456",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 10000,
+        "buy_qty": 10,
+        "pending_add_order": True,
+        "pending_add_type": "AVG_DOWN",
+        "pending_add_qty": 3,
+        "pending_add_ord_no": "A2",
+        "pending_add_requested_at": 90.0,
+        "pending_add_filled_qty": 1,
+        "_add_receipt_requested_by_order_no": {"A2": 3},
+        "_add_receipt_leg_meta_by_order_no": {
+            "A2": {"qty": 3, "sent_at": 90.0, "split_leg_ttl_sec": 5, "split_bundle_hard_ttl_sec": 5},
+        },
+    }
+
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 100.0)
+    result = state_handlers.can_consider_scale_in(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 10000},
+        strategy="SCALPING",
+        market_regime="BULL",
+    )
+
+    assert result["allowed"] is False
+    assert result["reason"] == "pending_add_timeout_released"
+    assert stock.get("pending_add_order") is None
+    assert "last_add_cancel_at" not in stock
+    assert stock["last_add_residual_cancel_at"] == 100.0
 
 
 def test_timeout_unfilled_late_loss_avg_down_restores_retry_count(monkeypatch):
@@ -11590,6 +12006,66 @@ def test_watching_state_blocks_deep_below_bid_pre_submit_price(monkeypatch):
     assert by_stage["order_bundle_failed"]["overbought_guard_action"] == "WOULD_PASS"
 
 
+def test_pre_submit_price_guard_allows_policy_split_passive_leg_within_cap(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALPING_PRE_SUBMIT_PRICE_GUARD_ENABLED=True,
+        SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS=80,
+    )
+
+    fields = state_handlers._split_policy_pre_submit_price_guard_fields(
+        "SCALPING",
+        price=12_620,
+        best_bid=12_770,
+        planned_order={
+            "entry_split_order_policy_applied": True,
+            "entry_split_order_variant_id": "equal_3leg_offset_0pct_0_3pct_0_8pct",
+            "entry_split_order_leg_index": 3,
+            "split_price_offset_pct": 0.8,
+            "split_price_offset_ticks": 2,
+            "split_leg_role": "passive",
+        },
+    )
+
+    assert fields["pre_submit_price_guard_price_below_bid_bps"] == 117
+    assert fields["pre_submit_price_guard_base_max_below_bid_bps"] == 80
+    assert fields["pre_submit_price_guard_effective_max_below_bid_bps"] == 180
+    assert fields["pre_submit_price_guard_mode"] == "entry_split_policy"
+    assert fields["split_policy_guard_relief_applied"] is True
+    assert fields["pre_submit_price_guard_blocked"] is False
+
+
+def test_pre_submit_price_guard_blocks_policy_split_leg_beyond_split_cap(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALPING_PRE_SUBMIT_PRICE_GUARD_ENABLED=True,
+        SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS=80,
+    )
+
+    fields = state_handlers._split_policy_pre_submit_price_guard_fields(
+        "SCALPING",
+        price=12_300,
+        best_bid=12_770,
+        planned_order={
+            "entry_split_order_policy_applied": True,
+            "entry_split_order_variant_id": "equal_3leg_offset_0pct_0_3pct_0_8pct",
+            "entry_split_order_leg_index": 3,
+            "split_price_offset_pct": 0.8,
+            "split_price_offset_ticks": 2,
+            "split_leg_role": "passive",
+        },
+    )
+
+    assert fields["pre_submit_price_guard_price_below_bid_bps"] == 368
+    assert fields["pre_submit_price_guard_effective_max_below_bid_bps"] == 180
+    assert fields["pre_submit_price_guard_blocked"] is True
+    assert fields["pre_submit_price_guard_block_reason"] == "below_bid_bps_exceeded"
+
+
 def test_late_entry_price_drift_guard_blocks_hard_latency_drift(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 
@@ -14150,6 +14626,177 @@ def test_pending_entry_cancel_logs_receipt_provenance(monkeypatch):
     assert cancel_calls[-1]["dmst_stex_tp"] == "SOR"
 
 
+def test_split_entry_cancel_only_expired_leg_keeps_later_legs(monkeypatch):
+    cancel_calls = []
+    logs = []
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda stock, code, stage, **fields: logs.append((stage, fields)))
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_cancel_order",
+        lambda **kwargs: cancel_calls.append(kwargs) or {"return_code": "0", "ord_no": "C1", "return_msg": "정상"},
+    )
+    stock = {
+        "id": 1,
+        "name": "TEST",
+        "strategy": "SCALPING",
+        "pending_entry_orders": [
+            {
+                "tag": "entry_split_primary",
+                "qty": 5,
+                "filled_qty": 0,
+                "price": 10000,
+                "ord_no": "O1",
+                "order_type": "00",
+                "status": "OPEN",
+                "sent_at": 940.0,
+                "split_leg_ttl_sec": 45,
+                "split_bundle_hard_ttl_sec": 180,
+                "split_leg_role": "primary",
+                "split_price_offset_pct": 0.0,
+            },
+            {
+                "tag": "entry_split_passive_1",
+                "qty": 4,
+                "filled_qty": 0,
+                "price": 9970,
+                "ord_no": "O2",
+                "order_type": "00",
+                "status": "OPEN",
+                "sent_at": 940.0,
+                "split_leg_ttl_sec": 90,
+                "split_bundle_hard_ttl_sec": 180,
+                "split_leg_role": "passive",
+                "split_price_offset_pct": -0.3,
+            },
+        ],
+    }
+
+    result = state_handlers._cancel_pending_entry_orders(
+        stock,
+        "440110",
+        force=True,
+        expired_only=True,
+        now_ts=1000.0,
+    )
+
+    assert result == "partial_cancelled"
+    assert [call["orig_ord_no"] for call in cancel_calls] == ["O1"]
+    assert stock["pending_entry_orders"][0]["status"] == "CANCELLED"
+    assert stock["pending_entry_orders"][1]["status"] == "OPEN"
+    assert stock.get("pending_buy_msg", "present") == "present"
+    requested = [fields for stage, fields in logs if stage == "entry_order_cancel_requested"]
+    assert requested[0]["split_leg_expired"] is True
+    assert requested[0]["split_bundle_final_cancel"] is False
+
+
+def test_split_entry_residual_cancel_after_partial_fill_has_no_cooldown(monkeypatch):
+    cancel_calls = []
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_cancel_order",
+        lambda **kwargs: cancel_calls.append(kwargs) or {"return_code": "0", "ord_no": "C1", "return_msg": "정상"},
+    )
+    stock = {
+        "id": 1,
+        "name": "TEST",
+        "strategy": "SCALPING",
+        "entry_filled_qty": 3,
+        "pending_entry_orders": [
+            {
+                "tag": "entry_split_passive_1",
+                "qty": 4,
+                "filled_qty": 0,
+                "price": 9970,
+                "ord_no": "O2",
+                "order_type": "00",
+                "status": "OPEN",
+                "sent_at": 900.0,
+                "split_leg_ttl_sec": 45,
+                "split_bundle_hard_ttl_sec": 45,
+            }
+        ],
+    }
+
+    result = state_handlers._cancel_pending_entry_orders(
+        stock,
+        "440110",
+        force=True,
+        expired_only=True,
+        now_ts=1000.0,
+    )
+
+    assert result == "cancelled"
+    assert [call["orig_ord_no"] for call in cancel_calls] == ["O2"]
+    assert "score65_74_recovery_probe_cancel_cooldown_until" not in stock
+    assert "last_entry_cancel_confirmed_at" not in stock
+    assert stock["last_entry_residual_cancel_at"] > 0
+
+
+def test_split_entry_bundle_hard_ttl_cancels_all_and_sets_single_cooldown(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_ENABLED=True,
+        SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_SEC=3600,
+    )
+    cancel_calls = []
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_cancel_order",
+        lambda **kwargs: cancel_calls.append(kwargs) or {"return_code": "0", "ord_no": "C1", "return_msg": "정상"},
+    )
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 1000.0)
+
+    stock = {
+        "id": 1,
+        "name": "TEST",
+        "strategy": "SCALPING",
+        "pending_entry_orders": [
+            {
+                "tag": "entry_split_primary",
+                "qty": 5,
+                "filled_qty": 0,
+                "price": 10000,
+                "ord_no": "O1",
+                "order_type": "00",
+                "status": "OPEN",
+                "sent_at": 800.0,
+                "split_leg_ttl_sec": 45,
+                "split_bundle_hard_ttl_sec": 180,
+            },
+            {
+                "tag": "entry_split_passive_1",
+                "qty": 4,
+                "filled_qty": 0,
+                "price": 9970,
+                "ord_no": "O2",
+                "order_type": "00",
+                "status": "OPEN",
+                "sent_at": 800.0,
+                "split_leg_ttl_sec": 90,
+                "split_bundle_hard_ttl_sec": 180,
+            },
+        ],
+    }
+
+    result = state_handlers._cancel_pending_entry_orders(
+        stock,
+        "440110",
+        force=True,
+        expired_only=True,
+        now_ts=1000.0,
+    )
+
+    assert result == "cancelled"
+    assert [call["orig_ord_no"] for call in cancel_calls] == ["O1", "O2"]
+    assert stock["last_entry_cancel_confirmed_at"] == 1000.0
+    assert stock["score65_74_recovery_probe_cancel_cooldown_until"] == 4600.0
+    assert stock.get("pending_entry_orders") is None
+
+
 def test_pending_entry_cancel_corrects_legacy_krx_limit_marker(monkeypatch):
     cancel_calls = []
     monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda *args, **kwargs: None)
@@ -14798,6 +15445,12 @@ def test_entry_ai_price_skip_logs_bearish_policy_basis(monkeypatch):
     skip_log = [fields for stage, fields in logs if stage == "entry_ai_price_canary_skip_order"][0]
     assert skip_log["entry_ai_price_skip_policy_warning"] == ""
     assert skip_log["entry_ai_price_skip_policy_basis"] == "ofi_bearish_supported"
+    assert skip_log["ai_entry_price_canary_submit_blocked"] is True
+    assert skip_log["ai_entry_price_canary_submit_block_reason"] == (
+        "entry_price_canary_skip_confirmed_bearish_micro"
+    )
+    assert latency_gate["ai_entry_price_canary_submit_blocked"] is True
+    assert latency_gate["ai_entry_price_canary_submit_block_confirmation_state"] == "confirmed_bearish_micro"
     assert stock["entry_ai_price_skip_policy_warning"] == ""
     assert stock["entry_ai_price_skip_threshold_source"] == "bucket"
 
@@ -17172,9 +17825,16 @@ def test_add_execution_matches_split_pending_order_numbers(monkeypatch):
     receipts._get_fast_state = lambda code: None
 
     history_calls = []
+    pipeline_events = []
 
     monkeypatch.setattr(receipts, "_update_db_for_add", lambda *args, **kwargs: None)
     monkeypatch.setattr(receipts, "record_add_history_event", lambda *args, **kwargs: history_calls.append(kwargs) or True)
+    monkeypatch.setattr(
+        receipts,
+        "_log_holding_pipeline",
+        lambda name, code, target_id, stage, **fields: pipeline_events.append((stage, fields)),
+    )
+    monkeypatch.setattr(receipts.time, "time", lambda: 120.0)
 
     target_stock = {
         "id": 17,
@@ -17188,6 +17848,29 @@ def test_add_execution_matches_split_pending_order_numbers(monkeypatch):
         "pending_add_type": "AVG_DOWN",
         "pending_add_qty": 5,
         "pending_add_ord_no": "A1,A2",
+        "_add_receipt_requested_by_order_no": {"A1": 3, "A2": 2},
+        "_add_receipt_leg_meta_by_order_no": {
+            "A1": {
+                "qty": 3,
+                "sent_at": 100.0,
+                "split_leg_ttl_sec": 10,
+                "split_bundle_hard_ttl_sec": 20,
+                "split_leg_role": "primary",
+                "split_price_offset_pct": 0.0,
+                "split_price_offset_ticks": 0,
+                "scale_in_split_order_leg_index": 1,
+            },
+            "A2": {
+                "qty": 2,
+                "sent_at": 100.0,
+                "split_leg_ttl_sec": 30,
+                "split_bundle_hard_ttl_sec": 30,
+                "split_leg_role": "passive",
+                "split_price_offset_pct": -0.3,
+                "split_price_offset_ticks": "pct",
+                "scale_in_split_order_leg_index": 2,
+            },
+        },
         "add_count": 0,
         "avg_down_count": 0,
     }
@@ -17200,10 +17883,36 @@ def test_add_execution_matches_split_pending_order_numbers(monkeypatch):
     assert history_calls
     assert history_calls[-1]["event_type"] == "EXECUTED"
     assert history_calls[-1]["order_no"] == "A2"
+    assert "split_leg_ttl_sec=30" in history_calls[-1]["note"]
+    assert "split_fill_before_ttl=True" in history_calls[-1]["note"]
     assert target_stock["buy_qty"] == 12
     assert target_stock["add_count"] == 1
     assert target_stock["avg_down_count"] == 1
     assert target_stock.get("pending_add_order") is True
+    scale_in_events = [fields for stage, fields in pipeline_events if stage == "scale_in_executed"]
+    assert scale_in_events[-1]["split_leg_ttl_sec"] == 30
+    assert scale_in_events[-1]["split_leg_role"] == "passive"
+    assert scale_in_events[-1]["split_price_offset_pct"] == -0.3
+    assert scale_in_events[-1]["split_leg_age_sec"] == "20.0"
+    assert scale_in_events[-1]["split_fill_before_ttl"] is True
+    assert scale_in_events[-1]["scale_in_split_order_leg_index"] == 2
+
+
+def test_split_receipt_leg_meta_invalid_values_do_not_block_receipt():
+    fields = receipts._split_receipt_leg_meta_fields(
+        {
+            "sent_at": "bad-sent-at",
+            "split_leg_ttl_sec": "bad-ttl",
+            "split_leg_role": "passive",
+            "split_price_offset_pct": -0.3,
+        },
+        filled_at_ts=120.0,
+    )
+
+    assert fields["split_leg_ttl_sec"] == "-"
+    assert fields["split_leg_age_sec"] == "-"
+    assert fields["split_fill_before_ttl"] == "-"
+    assert fields["split_leg_role"] == "passive"
 
 
 def test_add_receipt_normalizes_cumulative_partial_fill(monkeypatch):

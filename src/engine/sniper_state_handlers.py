@@ -16271,15 +16271,125 @@ def _build_entry_ai_price_skip_policy_fields(orderbook_micro):
     }
 
 
-def _is_pre_submit_price_guard_block(strategy, price, best_bid):
+def _entry_ai_price_canary_skip_submit_block_fields(
+    *,
+    confidence: int,
+    reason: str,
+    skip_policy_fields: dict | None,
+) -> dict[str, Any]:
+    fields = dict(skip_policy_fields or {})
+    warning = str(fields.get("entry_ai_price_skip_policy_warning") or "").strip()
+    basis = str(fields.get("entry_ai_price_skip_policy_basis") or "missing").strip() or "missing"
+    confirmed_bearish = warning == "" and basis == "ofi_bearish_supported"
+    block_reason = (
+        "entry_price_canary_skip_confirmed_bearish_micro"
+        if confirmed_bearish
+        else "entry_price_canary_skip_without_confirmed_bearish_micro"
+    )
+    return {
+        "ai_entry_price_canary_submit_blocked": True,
+        "ai_entry_price_canary_submit_block_reason": block_reason,
+        "ai_entry_price_canary_submit_block_confirmation_state": (
+            "confirmed_bearish_micro" if confirmed_bearish else "unconfirmed_micro"
+        ),
+        "ai_entry_price_canary_submit_block_confidence": int(confidence or 0),
+        "ai_entry_price_canary_submit_block_ai_reason": str(reason or "")[:160],
+        "ai_entry_price_canary_submit_block_policy_warning": warning,
+        "ai_entry_price_canary_submit_block_policy_basis": basis,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+
+def _split_policy_pre_submit_price_guard_fields(strategy, price, best_bid, planned_order=None):
+    base_threshold_bps = int(_rule("SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS", 80) or 80)
+    price_below_bid_bps = _compute_price_below_bid_bps(price, best_bid)
+    fields = {
+        "pre_submit_price_guard_mode": "default",
+        "pre_submit_price_guard_price_below_bid_bps": price_below_bid_bps,
+        "pre_submit_price_guard_base_max_below_bid_bps": base_threshold_bps,
+        "pre_submit_price_guard_effective_max_below_bid_bps": base_threshold_bps,
+        "split_policy_guard_relief_applied": False,
+        "split_policy_allowed_below_bid_bps": "-",
+        "split_policy_guard_relief_bps": 0,
+        "split_policy_guard_relief_reason": "",
+        "split_policy_guard_relief_rejected_reason": "",
+    }
     if strategy not in ('SCALPING', 'SCALP'):
-        return False
+        fields["pre_submit_price_guard_blocked"] = False
+        fields["pre_submit_price_guard_block_reason"] = "non_scalping"
+        return fields
     if not bool(_rule("SCALPING_PRE_SUBMIT_PRICE_GUARD_ENABLED", True)):
-        return False
-    threshold_bps = int(_rule("SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS", 80) or 80)
-    if threshold_bps < 0:
-        return False
-    return _compute_price_below_bid_bps(price, best_bid) > threshold_bps
+        fields["pre_submit_price_guard_blocked"] = False
+        fields["pre_submit_price_guard_block_reason"] = "guard_disabled"
+        return fields
+    if base_threshold_bps < 0:
+        fields["pre_submit_price_guard_blocked"] = False
+        fields["pre_submit_price_guard_block_reason"] = "negative_threshold_disabled"
+        return fields
+
+    effective_threshold_bps = base_threshold_bps
+    if isinstance(planned_order, dict) and (
+        bool(planned_order.get("entry_split_order_policy_applied"))
+        or str(planned_order.get("entry_split_order_variant_id") or "").strip()
+    ):
+        split_offset_pct = _safe_float(
+            planned_order.get("split_price_offset_pct")
+            if planned_order.get("split_price_offset_pct") is not None
+            else planned_order.get("entry_split_order_price_offset_pct"),
+            0.0,
+        )
+        if split_offset_pct > 0:
+            offset_bps = int(round(split_offset_pct * 100))
+            tick_margin_bps = int(_rule("SCALPING_PRE_SUBMIT_SPLIT_PRICE_GUARD_TICK_MARGIN_BPS", 20) or 20)
+            cap_bps = int(_rule("SCALPING_PRE_SUBMIT_SPLIT_PRICE_GUARD_MAX_BELOW_BID_BPS", 180) or 180)
+            allowed_bps = max(base_threshold_bps, min(cap_bps, base_threshold_bps + offset_bps + tick_margin_bps))
+            effective_threshold_bps = allowed_bps
+            fields.update(
+                {
+                    "pre_submit_price_guard_mode": "entry_split_policy",
+                    "pre_submit_price_guard_effective_max_below_bid_bps": allowed_bps,
+                    "split_policy_guard_relief_applied": allowed_bps > base_threshold_bps,
+                    "split_policy_allowed_below_bid_bps": allowed_bps,
+                    "split_policy_guard_relief_bps": max(0, allowed_bps - base_threshold_bps),
+                    "split_policy_guard_relief_reason": "entry_split_policy_offset_with_tick_margin",
+                    "pre_submit_price_guard_split_price_offset_pct": planned_order.get("split_price_offset_pct"),
+                    "pre_submit_price_guard_split_price_offset_ticks": planned_order.get("split_price_offset_ticks"),
+                    "pre_submit_price_guard_split_leg_role": planned_order.get("split_leg_role"),
+                    "pre_submit_price_guard_entry_split_order_leg_index": planned_order.get(
+                        "entry_split_order_leg_index"
+                    ),
+                }
+            )
+        else:
+            fields.update(
+                {
+                    "pre_submit_price_guard_mode": "entry_split_policy",
+                    "split_policy_guard_relief_rejected_reason": "split_offset_pct_lte_zero",
+                    "pre_submit_price_guard_split_price_offset_pct": planned_order.get("split_price_offset_pct"),
+                    "pre_submit_price_guard_split_price_offset_ticks": planned_order.get("split_price_offset_ticks"),
+                    "pre_submit_price_guard_split_leg_role": planned_order.get("split_leg_role"),
+                    "pre_submit_price_guard_entry_split_order_leg_index": planned_order.get(
+                        "entry_split_order_leg_index"
+                    ),
+                }
+            )
+
+    fields["pre_submit_price_guard_blocked"] = price_below_bid_bps > effective_threshold_bps
+    fields["pre_submit_price_guard_block_reason"] = (
+        "below_bid_bps_exceeded"
+        if fields["pre_submit_price_guard_blocked"]
+        else "within_effective_threshold"
+    )
+    return fields
+
+
+def _is_pre_submit_price_guard_block(strategy, price, best_bid):
+    return bool(
+        _split_policy_pre_submit_price_guard_fields(strategy, price, best_bid).get(
+            "pre_submit_price_guard_blocked"
+        )
+    )
 
 
 def _compute_price_above_reference_bps(price, reference_price) -> float:
@@ -17082,7 +17192,7 @@ def _entry_ai_submit_authority_fields(
         "entry_ai_submit_authority_reason": reason,
         "entry_ai_submit_authority_score": f"{score:.1f}",
         "entry_ai_submit_authority_action": action or "not_evaluated",
-        "entry_ai_submit_authority_result_source": result_source or "-",
+        "entry_ai_submit_authority_result_source": result_source or "not_available",
         "entry_ai_submit_authority_fresh_prior": bool(fresh_prior),
         "entry_ai_submit_authority_confirmed_age_sec": (
             f"{age_sec:.3f}" if age_sec is not None else "not_available"
@@ -17974,6 +18084,124 @@ def _entry_cancel_wait_profile_base_sec(stock) -> tuple[str, int]:
     return profile, max(5, min(1200, _rule_int(rule_name, default)))
 
 
+def _split_ttl_profile_max_sec(profile: str) -> int:
+    normalized = str(profile or "standard").strip().lower()
+    if normalized == "reserve":
+        return 1200
+    if normalized == "pullback":
+        return 600
+    return 300
+
+
+def _split_leg_ttl_values(base_sec: int, leg_count: int, *, max_sec: int, min_sec: int = 5) -> list[int]:
+    multipliers = (0.5, 1.0, 2.0)
+    count = max(0, int(leg_count or 0))
+    values: list[int] = []
+    for idx in range(count):
+        multiplier = multipliers[idx] if idx < len(multipliers) else multipliers[-1]
+        ttl = int(round(max(1, int(base_sec or 0)) * multiplier))
+        values.append(max(int(min_sec), min(int(max_sec), ttl)))
+    return values
+
+
+def _decorate_entry_split_leg_ttls(planned_orders, stock, strategy):
+    if not isinstance(planned_orders, list) or len(planned_orders) <= 1:
+        return planned_orders
+    profile, profile_base_sec = _entry_cancel_wait_profile_base_sec(stock)
+    base_sec = _resolve_buy_order_timeout_sec(stock, strategy) or profile_base_sec
+    max_sec = _split_ttl_profile_max_sec(profile)
+    ttl_values = _split_leg_ttl_values(base_sec, len(planned_orders), max_sec=max_sec, min_sec=5)
+    hard_ttl_sec = max(ttl_values) if ttl_values else max(5, min(max_sec, int(base_sec or profile_base_sec)))
+    decorated = []
+    for idx, order in enumerate(planned_orders):
+        if not isinstance(order, dict):
+            decorated.append(order)
+            continue
+        next_order = dict(order)
+        next_order.setdefault("split_leg_ttl_sec", ttl_values[idx] if idx < len(ttl_values) else hard_ttl_sec)
+        next_order.setdefault("split_bundle_hard_ttl_sec", hard_ttl_sec)
+        next_order.setdefault("split_leg_role", "primary" if idx == 0 else "passive")
+        decorated.append(next_order)
+    return decorated
+
+
+def _decorate_scale_in_split_leg_ttls(split_orders, stock, strategy):
+    if not isinstance(split_orders, list) or len(split_orders) <= 1:
+        return split_orders
+    if any(bool((order or {}).get("scale_in_split_order_market_order_applied")) for order in split_orders):
+        return split_orders
+    raw_strategy = str(strategy or (stock or {}).get("strategy") or "").strip().upper()
+    if raw_strategy in {"SCALP", "SCALPING"}:
+        base_sec = 20
+        max_sec = 120
+    else:
+        base_sec = _rule_int("ORDER_TIMEOUT_SEC", 30)
+        max_sec = 300
+    ttl_values = _split_leg_ttl_values(base_sec, len(split_orders), max_sec=max_sec, min_sec=5)
+    hard_ttl_sec = max(ttl_values) if ttl_values else max(5, min(max_sec, int(base_sec or 30)))
+    decorated = []
+    for idx, order in enumerate(split_orders):
+        if not isinstance(order, dict):
+            decorated.append(order)
+            continue
+        next_order = dict(order)
+        next_order.setdefault("split_leg_ttl_sec", ttl_values[idx] if idx < len(ttl_values) else hard_ttl_sec)
+        next_order.setdefault("split_bundle_hard_ttl_sec", hard_ttl_sec)
+        next_order.setdefault("split_leg_role", "primary" if idx == 0 else "passive")
+        decorated.append(next_order)
+    return decorated
+
+
+def _split_order_meta_fields(order: dict | None) -> dict:
+    src = order if isinstance(order, dict) else {}
+    return {
+        "split_leg_ttl_sec": src.get("split_leg_ttl_sec"),
+        "split_bundle_hard_ttl_sec": src.get("split_bundle_hard_ttl_sec"),
+        "split_leg_role": src.get("split_leg_role"),
+        "split_price_offset_pct": src.get("split_price_offset_pct"),
+        "split_price_offset_ticks": src.get("split_price_offset_ticks"),
+    }
+
+
+def _entry_bundle_filled_qty(stock) -> int:
+    filled = _safe_int((stock or {}).get("entry_filled_qty"), 0)
+    if filled > 0:
+        return filled
+    return sum(
+        max(0, _safe_int((order or {}).get("filled_qty"), 0))
+        for order in _iter_pending_entry_orders(stock)
+        if isinstance(order, dict)
+    )
+
+
+def _open_entry_split_orders(stock) -> list[dict]:
+    return [
+        order
+        for order in _iter_pending_entry_orders(stock)
+        if isinstance(order, dict)
+        and str(order.get("status", "OPEN")).upper() in {"OPEN", "PARTIAL", "SENT"}
+        and str(order.get("ord_no", "") or "").strip()
+    ]
+
+
+def _entry_order_leg_expired(order: dict, now_ts: float) -> bool:
+    ttl_sec = _safe_int((order or {}).get("split_leg_ttl_sec"), 0)
+    sent_at = _safe_float((order or {}).get("sent_at"), 0.0)
+    return bool(ttl_sec > 0 and sent_at > 0 and float(now_ts) - sent_at >= ttl_sec)
+
+
+def _entry_split_bundle_hard_expired(open_orders: list[dict], now_ts: float) -> bool:
+    if not open_orders:
+        return False
+    hard_ttl = max(_safe_int((order or {}).get("split_bundle_hard_ttl_sec"), 0) for order in open_orders)
+    sent_times = [
+        _safe_float((order or {}).get("sent_at"), 0.0)
+        for order in open_orders
+        if _safe_float((order or {}).get("sent_at"), 0.0) > 0
+    ]
+    return bool(hard_ttl > 0 and sent_times and float(now_ts) - min(sent_times) >= hard_ttl)
+
+
 def _compute_and_emit_entry_cancel_wait_attribution(stock, code, *, latency_gate=None, curr_price=0):
     if not isinstance(stock, dict):
         return None
@@ -18408,11 +18636,26 @@ def _apply_entry_ai_price_canary(
                 "entry_ai_price_skip_followup_90s": False,
             },
         )
+        submit_block_fields = _entry_ai_price_canary_skip_submit_block_fields(
+            confidence=confidence,
+            reason=reason,
+            skip_policy_fields=skip_policy_fields,
+        )
+        latency_gate.update(submit_block_fields)
+        latency_gate["ai_entry_price_canary_applied"] = True
+        latency_gate["ai_entry_price_canary_final_action"] = "SKIP"
+        latency_gate["ai_entry_price_canary_eval_ms"] = ai_eval_ms
+        latency_gate["ai_entry_price_canary_decision_ts"] = decision_ts
+        latency_gate["ai_entry_price_canary_context_age_ms"] = context_age_ms
+        latency_gate["ai_entry_price_canary_context_best_bid"] = _coerce_int_value(best_bid)
+        latency_gate["ai_entry_price_canary_context_best_ask"] = _coerce_int_value(best_ask)
+        latency_gate.update(openai_transport_fields)
         _log_entry_pipeline(
             stock, code, "entry_ai_price_canary_skip_order",
             action=action,
             confidence=confidence,
             reason=reason[:160],
+            **submit_block_fields,
             **openai_transport_fields,
             **skip_policy_fields,
             **ofi_log_fields,
@@ -28121,6 +28364,19 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             actual_order_submitted=False,
             broker_order_forbidden=True,
             latency_danger_reasons=latency_gate.get('latency_danger_reasons'),
+            latency_danger_detail_reason=latency_gate.get('latency_danger_detail_reason'),
+            latency_danger_source_quality_state=latency_gate.get('latency_danger_source_quality_state'),
+            latency_danger_reason_taxonomy_gap=bool(latency_gate.get('latency_danger_reason_taxonomy_gap')),
+            latency_danger_max_ws_age_ms_for_caution=latency_gate.get(
+                'latency_danger_max_ws_age_ms_for_caution'
+            ),
+            latency_danger_max_ws_jitter_ms_for_caution=latency_gate.get(
+                'latency_danger_max_ws_jitter_ms_for_caution'
+            ),
+            latency_danger_max_spread_ratio_for_caution=latency_gate.get(
+                'latency_danger_max_spread_ratio_for_caution'
+            ),
+            latency_danger_guard_max_spread_ratio=latency_gate.get('latency_danger_guard_max_spread_ratio'),
             signal_price=int(latency_gate.get('signal_price', 0) or 0),
             latest_price=int(latency_gate.get('latest_price', 0) or 0),
             computed_allowed_slippage=int(latency_gate.get('computed_allowed_slippage', 0) or 0),
@@ -28153,6 +28409,31 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             latency_spread_relief_effective_min_signal_score=latency_gate.get(
                 'latency_spread_relief_effective_min_signal_score'
             ),
+            latency_spread_relief_block_reason=latency_gate.get('latency_spread_relief_block_reason'),
+            latency_spread_relief_signal_score_source=latency_gate.get(
+                'latency_spread_relief_signal_score_source'
+            ),
+            latency_spread_relief_signal_source_quality_state=latency_gate.get(
+                'latency_spread_relief_signal_source_quality_state'
+            ),
+            latency_spread_relief_candidate_ai_score=latency_gate.get(
+                'latency_spread_relief_candidate_ai_score'
+            ),
+            latency_spread_relief_candidate_ai_score_source=latency_gate.get(
+                'latency_spread_relief_candidate_ai_score_source'
+            ),
+            latency_spread_relief_source_quality_gap=latency_gate.get(
+                'latency_spread_relief_source_quality_gap'
+            ),
+            latency_spread_block_bucket=latency_gate.get('latency_spread_block_bucket'),
+            latency_spread_block_price_bucket=latency_gate.get('latency_spread_block_price_bucket'),
+            latency_spread_block_signal_context_bucket=latency_gate.get(
+                'latency_spread_block_signal_context_bucket'
+            ),
+            latency_spread_block_spread_bps=latency_gate.get('latency_spread_block_spread_bps'),
+            latency_spread_block_spread_ticks=latency_gate.get('latency_spread_block_spread_ticks'),
+            latency_relief_attempted=bool(latency_gate.get('latency_relief_attempted')),
+            latency_relief_block_reason=latency_gate.get('latency_relief_block_reason'),
             pre_submit_quote_refresh_enabled=bool(latency_gate.get('pre_submit_quote_refresh_enabled')),
             pre_submit_quote_refresh_applied=bool(latency_gate.get('pre_submit_quote_refresh_applied')),
             pre_submit_quote_refresh_reason=latency_gate.get('pre_submit_quote_refresh_reason'),
@@ -28286,6 +28567,84 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             latency_gate, request_price=latency_gate.get('order_price', 0), curr_price=curr_price,
             best_bid=best_bid_at_submit, best_ask=best_ask_at_submit,
         )
+        if real_entry_panic_gap_subject and bool(latency_gate.get("ai_entry_price_canary_submit_blocked")):
+            block_reason = (
+                latency_gate.get("ai_entry_price_canary_submit_block_reason")
+                or "entry_price_canary_skip_order"
+            )
+            log_info(
+                f"[ENTRY_PRICE_CANARY_SUBMIT_BLOCK] {stock.get('name')}({code}) "
+                f"reason={block_reason} confidence={latency_gate.get('ai_entry_price_canary_confidence')}"
+            )
+            _mutate_stock_state(
+                stock,
+                pop_fields=[
+                    "rising_missed_one_share_entry_forced",
+                    "rising_missed_one_share_scout",
+                    "rising_missed_scout_upgrade_pending",
+                    "forced_entry_qty",
+                    "forced_entry_reason",
+                    "target_buy_price",
+                    "rising_missed_normal_buy_bridge_allowed",
+                    "rising_missed_normal_buy_bridge_reason",
+                    "rising_missed_normal_buy_bridge_at",
+                ],
+            )
+            clear_signal_reference(stock)
+            block_fields = {
+                key: value
+                for key, value in latency_gate.items()
+                if str(key).startswith("ai_entry_price_canary_")
+                or str(key).startswith("entry_ai_price_skip_")
+            }
+            _log_entry_pipeline(
+                stock,
+                code,
+                "entry_price_canary_submit_block",
+                forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON if forced_rising_missed_one_share else "-",
+                forced_entry_qty=forced_rising_missed_scout_qty,
+                block_reason=block_reason,
+                decision_authority="entry_price_canary_submit_safety_guard",
+                source_quality_gate="entry_price_canary_skip_contract",
+                threshold_family="entry_price_canary_submit_guard",
+                runtime_effect=True,
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                **_without_entry_pipeline_fields(
+                    _merge_entry_pipeline_field_groups(
+                        latency_price_snapshot,
+                        entry_orderbook_micro_fields,
+                        block_fields,
+                        _build_pre_submit_gate_contract_fields(
+                            "entry_price_canary_submit_guard",
+                            gate_action="entry_price_canary_skip_block",
+                        ),
+                    ),
+                    "actual_order_submitted",
+                    "broker_order_forbidden",
+                    "decision_authority",
+                    "source_quality_gate",
+                    "threshold_family",
+                    "runtime_effect",
+                ),
+            )
+            _emit_scalp_entry_adm_snapshot(
+                stock,
+                code,
+                "entry_price_canary_submit_block",
+                ai_score=latency_signal_score,
+                chosen_action="SKIP_PRE_SUBMIT_SAFETY",
+                latency_gate=latency_gate,
+                price_snapshot=latency_price_snapshot,
+                orderbook_fields=entry_orderbook_micro_fields,
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                extra_fields={
+                    "block_reason": block_reason,
+                    **block_fields,
+                },
+            )
+            return False
     elif real_entry_panic_gap_subject and not planned_orders and requested_qty > 0:
         clear_signal_reference(stock)
         _log_entry_pipeline(
@@ -28552,6 +28911,17 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         ws_age_ms=latency_gate.get('ws_age_ms'), ws_jitter_ms=latency_gate.get('ws_jitter_ms'),
         spread_ratio=f"{float(latency_gate.get('spread_ratio', 0.0) or 0.0):.6f}",
         quote_stale=bool(latency_gate.get('quote_stale')), latency_danger_reasons=latency_gate.get('latency_danger_reasons'),
+        latency_danger_detail_reason=latency_gate.get('latency_danger_detail_reason'),
+        latency_danger_source_quality_state=latency_gate.get('latency_danger_source_quality_state'),
+        latency_danger_reason_taxonomy_gap=bool(latency_gate.get('latency_danger_reason_taxonomy_gap')),
+        latency_danger_max_ws_age_ms_for_caution=latency_gate.get('latency_danger_max_ws_age_ms_for_caution'),
+        latency_danger_max_ws_jitter_ms_for_caution=latency_gate.get(
+            'latency_danger_max_ws_jitter_ms_for_caution'
+        ),
+        latency_danger_max_spread_ratio_for_caution=latency_gate.get(
+            'latency_danger_max_spread_ratio_for_caution'
+        ),
+        latency_danger_guard_max_spread_ratio=latency_gate.get('latency_danger_guard_max_spread_ratio'),
         policy_decision=latency_gate.get('policy_decision'),
         policy_reason=latency_gate.get('policy_reason'),
         effective_decision=latency_gate.get('effective_decision', latency_gate.get('decision')),
@@ -28579,6 +28949,29 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         latency_spread_relief_effective_min_signal_score=latency_gate.get(
             'latency_spread_relief_effective_min_signal_score'
         ),
+        latency_spread_relief_block_reason=latency_gate.get('latency_spread_relief_block_reason'),
+        latency_spread_relief_signal_score_source=latency_gate.get(
+            'latency_spread_relief_signal_score_source'
+        ),
+        latency_spread_relief_signal_source_quality_state=latency_gate.get(
+            'latency_spread_relief_signal_source_quality_state'
+        ),
+        latency_spread_relief_candidate_ai_score=latency_gate.get(
+            'latency_spread_relief_candidate_ai_score'
+        ),
+        latency_spread_relief_candidate_ai_score_source=latency_gate.get(
+            'latency_spread_relief_candidate_ai_score_source'
+        ),
+        latency_spread_relief_source_quality_gap=latency_gate.get('latency_spread_relief_source_quality_gap'),
+        latency_spread_block_bucket=latency_gate.get('latency_spread_block_bucket'),
+        latency_spread_block_price_bucket=latency_gate.get('latency_spread_block_price_bucket'),
+        latency_spread_block_signal_context_bucket=latency_gate.get(
+            'latency_spread_block_signal_context_bucket'
+        ),
+        latency_spread_block_spread_bps=latency_gate.get('latency_spread_block_spread_bps'),
+        latency_spread_block_spread_ticks=latency_gate.get('latency_spread_block_spread_ticks'),
+        latency_relief_attempted=bool(latency_gate.get('latency_relief_attempted')),
+        latency_relief_block_reason=latency_gate.get('latency_relief_block_reason'),
         pre_submit_quote_refresh_enabled=bool(latency_gate.get('pre_submit_quote_refresh_enabled')),
         pre_submit_quote_refresh_applied=bool(latency_gate.get('pre_submit_quote_refresh_applied')),
         pre_submit_quote_refresh_reason=latency_gate.get('pre_submit_quote_refresh_reason'),
@@ -29277,8 +29670,10 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 **entry_orderbook_micro_fields,
                 **microstructure_submit_log_fields,
                 **submit_revalidation_fields,
+                **entry_ai_submit_authority,
             },
         )
+        planned_orders = _decorate_entry_split_leg_ttls(planned_orders, stock, strategy)
         submit_revalidation_fields.update(entry_split_fields)
         latency_gate.update(
             {
@@ -29287,10 +29682,26 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 "entry_split_order_policy_version": entry_split_fields.get("entry_split_order_policy_version"),
                 "entry_split_order_policy_mode": entry_split_fields.get("entry_split_order_policy_mode"),
                 "entry_split_order_variant_id": entry_split_fields.get("entry_split_order_variant_id"),
+                "entry_split_order_policy_variant_id": entry_split_fields.get("entry_split_order_policy_variant_id"),
                 "entry_split_order_leg_count": entry_split_fields.get("entry_split_order_leg_count"),
                 "entry_split_order_price_offsets_ticks": entry_split_fields.get("entry_split_order_price_offsets_ticks"),
                 "entry_split_order_qty_weight_min": entry_split_fields.get("entry_split_order_qty_weight_min"),
                 "entry_split_order_qty_weight_max": entry_split_fields.get("entry_split_order_qty_weight_max"),
+                "entry_split_order_runtime_weight_adjustment_applied": entry_split_fields.get(
+                    "entry_split_order_runtime_weight_adjustment_applied"
+                ),
+                "entry_split_order_passive_bias_applied": entry_split_fields.get(
+                    "entry_split_order_passive_bias_applied"
+                ),
+                "entry_split_order_passive_bias_reason": entry_split_fields.get(
+                    "entry_split_order_passive_bias_reason"
+                ),
+                "entry_split_order_policy_original_qty_weight_min": entry_split_fields.get(
+                    "entry_split_order_policy_original_qty_weight_min"
+                ),
+                "entry_split_order_passive_center_max_first_weight": entry_split_fields.get(
+                    "entry_split_order_passive_center_max_first_weight"
+                ),
                 "entry_split_order_runtime_default_policy_applied": entry_split_fields.get(
                     "entry_split_order_runtime_default_policy_applied"
                 ),
@@ -29321,10 +29732,26 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         "entry_split_order_policy_version": submit_revalidation_fields.get("entry_split_order_policy_version"),
         "entry_split_order_policy_mode": submit_revalidation_fields.get("entry_split_order_policy_mode"),
         "entry_split_order_variant_id": submit_revalidation_fields.get("entry_split_order_variant_id"),
+        "entry_split_order_policy_variant_id": submit_revalidation_fields.get("entry_split_order_policy_variant_id"),
         "entry_split_order_leg_count": submit_revalidation_fields.get("entry_split_order_leg_count"),
         "entry_split_order_price_offsets_ticks": submit_revalidation_fields.get("entry_split_order_price_offsets_ticks"),
         "entry_split_order_qty_weight_min": submit_revalidation_fields.get("entry_split_order_qty_weight_min"),
         "entry_split_order_qty_weight_max": submit_revalidation_fields.get("entry_split_order_qty_weight_max"),
+        "entry_split_order_runtime_weight_adjustment_applied": submit_revalidation_fields.get(
+            "entry_split_order_runtime_weight_adjustment_applied"
+        ),
+        "entry_split_order_passive_bias_applied": submit_revalidation_fields.get(
+            "entry_split_order_passive_bias_applied"
+        ),
+        "entry_split_order_passive_bias_reason": submit_revalidation_fields.get(
+            "entry_split_order_passive_bias_reason"
+        ),
+        "entry_split_order_policy_original_qty_weight_min": submit_revalidation_fields.get(
+            "entry_split_order_policy_original_qty_weight_min"
+        ),
+        "entry_split_order_passive_center_max_first_weight": submit_revalidation_fields.get(
+            "entry_split_order_passive_center_max_first_weight"
+        ),
         "entry_split_order_runtime_default_policy_applied": submit_revalidation_fields.get(
             "entry_split_order_runtime_default_policy_applied"
         ),
@@ -29332,6 +29759,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     swing_order_dry_run = _is_swing_live_order_dry_run(strategy)
     broker_order_forbidden_for_request = bool(swing_order_dry_run)
     for planned_order in planned_orders:
+        split_leg_meta_fields = _split_order_meta_fields(planned_order)
         request = _resolve_live_entry_order_request(
             strategy=strategy, entry_mode=entry_mode, planned_order=planned_order,
             default_order_type_code=order_type_code, default_price=final_price,
@@ -29471,8 +29899,17 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 f"overbought={_safe_int((weak_context_guard.get('fields') or {}).get('recent_blocked_overbought_count'), 0)}"
             )
             continue
-        if _is_pre_submit_price_guard_block(strategy, price, best_bid_at_submit):
-            max_below_bid_bps = int(_rule('SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS', 80) or 80)
+        pre_submit_price_guard_fields = _split_policy_pre_submit_price_guard_fields(
+            strategy,
+            price,
+            best_bid_at_submit,
+            planned_order=planned_order,
+        )
+        if pre_submit_price_guard_fields.get("pre_submit_price_guard_blocked"):
+            max_below_bid_bps = _safe_int(
+                pre_submit_price_guard_fields.get("pre_submit_price_guard_effective_max_below_bid_bps"),
+                int(_rule('SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS', 80) or 80),
+            )
             _log_entry_pipeline(
                 stock, code, "pre_submit_price_guard_block", tag=request['tag'], qty=qty, price=price,
                 order_type=request['order_type_code'], tif=request['tif'],
@@ -29483,6 +29920,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     _merge_entry_pipeline_field_groups(
                         real_pre_submit_guard_fields,
                         price_snapshot,
+                        pre_submit_price_guard_fields,
                         microstructure_submit_log_fields,
                         _panic_gap_weight_log_fields(latency_gate),
                     ),
@@ -29493,13 +29931,15 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             log_info(
                 f"[PRE_SUBMIT_PRICE_GUARD_BLOCK] {stock.get('name')}({code}) "
                 f"price={price} best_bid={best_bid_at_submit} "
-                f"below_bid_bps={price_snapshot['price_below_bid_bps']} threshold_bps={max_below_bid_bps}"
+                f"below_bid_bps={price_snapshot['price_below_bid_bps']} threshold_bps={max_below_bid_bps} "
+                f"mode={pre_submit_price_guard_fields.get('pre_submit_price_guard_mode')}"
             )
             continue
         _log_entry_pipeline(
             stock, code, "order_leg_request", tag=request['tag'], qty=qty, price=price,
             order_type=request['order_type_code'], tif=request['tif'],
             entry_price_guard=latency_gate.get('entry_price_guard'),
+            **pre_submit_price_guard_fields,
             entry_price_defensive_ticks=int(latency_gate.get('entry_price_defensive_ticks', 0) or 0),
             normal_defensive_order_price=int(latency_gate.get('normal_defensive_order_price', 0) or 0),
             latency_guarded_order_price=int(latency_gate.get('latency_guarded_order_price', 0) or 0),
@@ -29507,6 +29947,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             conditional_1tick_real_override_applied=bool(latency_gate.get('conditional_1tick_real_override_applied')),
             conditional_1tick_real_override_reason=latency_gate.get('conditional_1tick_real_override_reason'),
             conditional_1tick_real_override_context=latency_gate.get('conditional_1tick_real_override_context'),
+            **split_leg_meta_fields,
             **_without_entry_pipeline_fields(
                 _merge_entry_pipeline_field_groups(
                     real_pre_submit_guard_fields,
@@ -29534,6 +29975,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 'price_below_bid_bps': price_snapshot.get('price_below_bid_bps'),
                 'price_decision_context_age_ms': submit_revalidation_fields.get('price_decision_context_age_ms'),
                 'quote_age_at_submit_ms': submit_revalidation_fields.get('quote_age_at_submit_ms'),
+                **split_leg_meta_fields,
                 **entry_split_order_submit_fields,
             })
             log_info(
@@ -29630,6 +30072,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             'mark_price_at_submit': int(latency_gate.get('latest_price', 0) or curr_price or 0),
             'submitted_mark_price': int(latency_gate.get('signal_price', 0) or curr_price or 0),
             'latest_price_at_submit': int(latency_gate.get('latest_price', 0) or curr_price or 0),
+            **split_leg_meta_fields,
             **entry_split_order_submit_fields,
         })
         _stage_buy_order_submission(
@@ -29648,6 +30091,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             broker_order_no=ord_no,
             order_no=ord_no,
             order_response_ord_no=ord_no,
+            **split_leg_meta_fields,
             **_merge_entry_pipeline_field_groups(
                 real_pre_submit_guard_fields,
             ),
@@ -30988,7 +31432,7 @@ def _resolve_entry_cancel_exchange_from_unfilled_snapshot(code: str, ord_no: str
     return {"resolved": False, "reason": "order_not_found", "row_count": len(rows or [])}
 
 
-def _cancel_pending_entry_orders(stock, code, *, force=False):
+def _cancel_pending_entry_orders(stock, code, *, force=False, expired_only=False, now_ts=None, cancel_reason=None):
     """
     Cancel unresolved entry BUY orders.
 
@@ -30999,20 +31443,31 @@ def _cancel_pending_entry_orders(stock, code, *, force=False):
     """
 
     with ENTRY_LOCK:
-        open_orders = [
-            order for order in _iter_pending_entry_orders(stock)
-            if str(order.get('status', 'OPEN')).upper() in {'OPEN', 'PARTIAL', 'SENT'}
-            and str(order.get('ord_no', '') or '').strip()
-        ]
+        now_ts = float(now_ts or time.time())
+        open_orders = _open_entry_split_orders(stock)
         if not open_orders:
             _clear_pending_entry_meta(stock)
             return 'resolved'
 
+        bundle_hard_expired = _entry_split_bundle_hard_expired(open_orders, now_ts)
+        if expired_only and not bundle_hard_expired:
+            open_orders = [
+                order for order in open_orders
+                if _entry_order_leg_expired(order, now_ts)
+            ]
+            if not open_orders:
+                return 'pending'
+
+        entry_filled_before_cancel = _entry_bundle_filled_qty(stock)
         had_failure = False
+        cancelled_any = False
+        bundle_cancel_cooldown_eligible = False
         for order in open_orders:
             ord_no = str(order.get('ord_no', '') or '').strip()
             sent_at = _safe_float(order.get('sent_at'), 0.0)
-            order_age_sec = max(0.0, time.time() - sent_at) if sent_at > 0 else 0.0
+            order_age_sec = max(0.0, now_ts - sent_at) if sent_at > 0 else 0.0
+            leg_expired = _entry_order_leg_expired(order, now_ts)
+            residual_cancel_after_partial = entry_filled_before_cancel > 0
             cancel_fields = {
                 "orig_ord_no": ord_no,
                 "tag": order.get('tag'),
@@ -31021,7 +31476,6 @@ def _cancel_pending_entry_orders(stock, code, *, force=False):
                 "remaining_qty": max(0, _coerce_int_value(order.get('qty')) - _coerce_int_value(order.get('filled_qty'))),
                 "submitted_price": _coerce_int_value(order.get('price')),
                 "order_age_sec": f"{order_age_sec:.1f}",
-                "cancel_reason": "entry_timeout_or_reconcile",
                 "entry_order_lifecycle": str(order.get('entry_order_lifecycle') or "standard"),
                 "entry_passive_probe_applied": bool(order.get('entry_passive_probe_applied')),
                 "best_bid_at_submit": _coerce_int_value(order.get('best_bid_at_submit')),
@@ -31029,6 +31483,17 @@ def _cancel_pending_entry_orders(stock, code, *, force=False):
                 "price_below_bid_bps": _coerce_int_value(order.get('price_below_bid_bps')),
                 "price_decision_context_age_ms": order.get('price_decision_context_age_ms', "-"),
                 "quote_age_at_submit_ms": order.get('quote_age_at_submit_ms', "-"),
+                "cancel_reason": cancel_reason or (
+                    "entry_split_bundle_hard_ttl"
+                    if bundle_hard_expired
+                    else "entry_split_leg_ttl"
+                    if expired_only
+                    else "entry_timeout_or_reconcile"
+                ),
+                "split_leg_expired": bool(leg_expired),
+                "split_bundle_final_cancel": bool(bundle_hard_expired or not expired_only),
+                "split_residual_cancel_after_partial_fill": bool(residual_cancel_after_partial),
+                **_split_order_meta_fields(order),
             }
             cancel_dmst_stex_tp = _entry_order_cancel_dmst_stex_tp(order)
             cancel_fields["dmst_stex_tp"] = cancel_dmst_stex_tp
@@ -31123,6 +31588,7 @@ def _cancel_pending_entry_orders(stock, code, *, force=False):
                 order['status'] = 'CANCELLED'
                 cancelled_at = time.time()
                 order['cancelled_at'] = cancelled_at
+                cancelled_any = True
                 _log_entry_pipeline(
                     stock,
                     code,
@@ -31135,23 +31601,18 @@ def _cancel_pending_entry_orders(stock, code, *, force=False):
                 cancel_cooldown_eligible = (
                     normalize_strategy(stock.get("strategy")) == "SCALPING"
                     and (is_success or (already_resolved and "체결" not in err_msg))
+                    and not residual_cancel_after_partial
                 )
-                if cancel_cooldown_eligible:
-                    recovery_probe_cancel_cooldown_sec = (
-                        max(0, _rule_int("SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_SEC", 3600))
-                        if _rule_bool("SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_ENABLED", True)
-                        else 0
+                if residual_cancel_after_partial:
+                    _mutate_stock_state(
+                        stock,
+                        set_fields={
+                            "last_entry_residual_cancel_at": cancelled_at,
+                            "last_entry_residual_cancel_reason": cancel_fields.get("cancel_reason"),
+                        },
                     )
-                    if recovery_probe_cancel_cooldown_sec > 0:
-                        _mutate_stock_state(
-                            stock,
-                            set_fields={
-                                "last_entry_cancel_confirmed_at": cancelled_at,
-                                "score65_74_recovery_probe_cancel_cooldown_until": (
-                                    cancelled_at + recovery_probe_cancel_cooldown_sec
-                                ),
-                            },
-                        )
+                if cancel_cooldown_eligible:
+                    bundle_cancel_cooldown_eligible = True
                     wait_result = (stock or {}).get("entry_cancel_wait_attribution_result") or {}
                     wait_profile, profile_base_wait_sec = _entry_cancel_wait_profile_base_sec(stock)
                     selected_timeout_sec = _safe_int(wait_result.get("cancel_wait_sec"), profile_base_wait_sec)
@@ -31207,6 +31668,32 @@ def _cancel_pending_entry_orders(stock, code, *, force=False):
 
         if had_failure:
             return 'failed'
+
+        remaining_open_orders = _open_entry_split_orders(stock)
+        if remaining_open_orders:
+            return 'partial_cancelled' if cancelled_any else 'pending'
+
+        if (
+            bundle_cancel_cooldown_eligible
+            and entry_filled_before_cancel <= 0
+            and normalize_strategy(stock.get("strategy")) == "SCALPING"
+        ):
+            recovery_probe_cancel_cooldown_sec = (
+                max(0, _rule_int("SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_SEC", 3600))
+                if _rule_bool("SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_ENABLED", True)
+                else 0
+            )
+            if recovery_probe_cancel_cooldown_sec > 0:
+                cooldown_started_at = time.time()
+                _mutate_stock_state(
+                    stock,
+                    set_fields={
+                        "last_entry_cancel_confirmed_at": cooldown_started_at,
+                        "score65_74_recovery_probe_cancel_cooldown_until": (
+                            cooldown_started_at + recovery_probe_cancel_cooldown_sec
+                        ),
+                    },
+                )
 
         _clear_pending_entry_meta(stock)
         return 'cancelled'
@@ -31815,12 +32302,34 @@ def _reconcile_pending_entry_orders(stock, code, strategy):
         return
 
     timeout_sec = _resolve_buy_order_timeout_sec(stock, strategy)
-    if time.time() - order_time <= timeout_sec:
+    now_ts = time.time()
+    open_orders = _open_entry_split_orders(stock)
+    has_split_leg_ttl = any(_safe_int((order or {}).get("split_leg_ttl_sec"), 0) > 0 for order in open_orders)
+    if has_split_leg_ttl:
+        bundle_hard_expired = _entry_split_bundle_hard_expired(open_orders, now_ts)
+        if not bundle_hard_expired and not any(_entry_order_leg_expired(order, now_ts) for order in open_orders):
+            return
+    elif now_ts - order_time <= timeout_sec:
         return
 
     was_rising_missed_scout_upgrade = bool(stock.get("rising_missed_scout_upgrade_order_pending"))
-    result = _cancel_pending_entry_orders(stock, code, force=True)
+    result = _cancel_pending_entry_orders(
+        stock,
+        code,
+        force=True,
+        expired_only=has_split_leg_ttl,
+        now_ts=now_ts,
+        cancel_reason=(
+            "entry_split_bundle_hard_ttl"
+            if has_split_leg_ttl and _entry_split_bundle_hard_expired(open_orders, now_ts)
+            else "entry_split_leg_ttl"
+            if has_split_leg_ttl
+            else "entry_timeout_or_reconcile"
+        ),
+    )
     if result == 'failed':
+        return
+    if result in {'pending', 'partial_cancelled'}:
         return
     if was_rising_missed_scout_upgrade and ALERTED_STOCKS is not None:
         with ENTRY_LOCK:
@@ -36880,20 +37389,42 @@ def can_consider_scale_in(
     # 장시간 미체결된 추가매수 주문은 보수적으로 해제
     pending_ts = float(stock.get('pending_add_requested_at', 0) or 0)
     if pending_ts:
-        raw_strategy = (strategy or "").upper()
-        base_timeout = 20 if raw_strategy == 'SCALPING' else _rule_int('ORDER_TIMEOUT_SEC', 30)
-        add_type = (stock.get('pending_add_type') or '').upper()
-        if raw_strategy != 'SCALPING' and add_type == 'PYRAMID':
-            base_timeout = int(base_timeout * 2)
-        timeout_sec = base_timeout
-        pending_filled = int(stock.get('pending_add_filled_qty', 0) or 0)
-        if pending_filled > 0:
-            timeout_sec = timeout_sec * 3
-        if (time.time() - pending_ts) > timeout_sec:
-            reconcile = _cancel_or_reconcile_pending_add(stock, reason="timeout")
+        pending_ord_nos = _split_pending_add_ord_nos(stock)
+        pending_leg_meta = stock.get('_add_receipt_leg_meta_by_order_no')
+        has_split_leg_ttl = (
+            isinstance(pending_leg_meta, dict)
+            and any(
+                isinstance(pending_leg_meta.get(item), dict)
+                and _safe_int((pending_leg_meta.get(item) or {}).get("split_leg_ttl_sec"), 0) > 0
+                for item in pending_ord_nos
+            )
+        )
+        if has_split_leg_ttl:
+            reconcile = _cancel_or_reconcile_pending_add(
+                stock,
+                reason="timeout",
+                expired_only=True,
+                now_ts=time.time(),
+            )
             if reconcile.get('cleared'):
                 return {"allowed": False, "reason": "pending_add_timeout_released"}
-            return {"allowed": False, "reason": "pending_add_cancel_failed"}
+            if reconcile.get('reason') == "cancel_failed":
+                return {"allowed": False, "reason": "pending_add_cancel_failed"}
+        else:
+            raw_strategy = (strategy or "").upper()
+            base_timeout = 20 if raw_strategy == 'SCALPING' else _rule_int('ORDER_TIMEOUT_SEC', 30)
+            add_type = (stock.get('pending_add_type') or '').upper()
+            if raw_strategy != 'SCALPING' and add_type == 'PYRAMID':
+                base_timeout = int(base_timeout * 2)
+            timeout_sec = base_timeout
+            pending_filled = int(stock.get('pending_add_filled_qty', 0) or 0)
+            if pending_filled > 0:
+                timeout_sec = timeout_sec * 3
+            if (time.time() - pending_ts) > timeout_sec:
+                reconcile = _cancel_or_reconcile_pending_add(stock, reason="timeout")
+                if reconcile.get('cleared'):
+                    return {"allowed": False, "reason": "pending_add_timeout_released"}
+                return {"allowed": False, "reason": "pending_add_cancel_failed"}
 
     if stock.get('status') != 'HOLDING':
         return {"allowed": False, "reason": "not_holding"}
@@ -37013,6 +37544,7 @@ def _clear_pending_add_meta(stock, reason=None):
             '_add_receipt_requested_by_order_no',
             '_add_receipt_filled_by_order_no',
             '_add_receipt_filled_amount_by_order_no',
+            '_add_receipt_leg_meta_by_order_no',
             'pending_add_notice_by_order_no',
             'scale_in_receipt_reconciled_before_ordno_bind',
             'add_order_time',
@@ -37160,17 +37692,50 @@ def _is_ok_response(res):
     return str(res.get('return_code', res.get('rt_cd', ''))) == '0'
 
 
-def _cancel_or_reconcile_pending_add(stock, reason):
+def _split_pending_add_ord_nos(stock) -> list[str]:
+    return [
+        part.strip()
+        for part in str((stock or {}).get('pending_add_ord_no', '') or '').split(',')
+        if part.strip()
+    ]
+
+
+def _pending_add_split_leg_expired(meta: dict, now_ts: float) -> bool:
+    ttl_sec = _safe_int((meta or {}).get("split_leg_ttl_sec"), 0)
+    sent_at = _safe_float((meta or {}).get("sent_at"), 0.0)
+    return bool(ttl_sec > 0 and sent_at > 0 and float(now_ts) - sent_at >= ttl_sec)
+
+
+def _pending_add_split_bundle_hard_expired(meta_by_order: dict, ord_nos: list[str], now_ts: float) -> bool:
+    metas = [
+        meta_by_order.get(ord_no)
+        for ord_no in ord_nos
+        if isinstance(meta_by_order.get(ord_no), dict)
+    ]
+    if not metas:
+        return False
+    hard_ttl = max(_safe_int((meta or {}).get("split_bundle_hard_ttl_sec"), 0) for meta in metas)
+    sent_times = [
+        _safe_float((meta or {}).get("sent_at"), 0.0)
+        for meta in metas
+        if _safe_float((meta or {}).get("sent_at"), 0.0) > 0
+    ]
+    return bool(hard_ttl > 0 and sent_times and float(now_ts) - min(sent_times) >= hard_ttl)
+
+
+def _cancel_or_reconcile_pending_add(stock, reason, *, expired_only=False, now_ts=None):
     """
     보수적으로 pending add를 정리합니다.
     - 주문번호가 있으면 실제 취소를 먼저 시도
     - 주문이 이미 없거나 체결/취소 완료로 보이면 잠금 후 정리
     - 취소 실패 시 pending을 유지해 중복 add를 막음
     """
-    ord_no = str(stock.get('pending_add_ord_no', '') or '').strip()
+    now_ts = float(now_ts or time.time())
+    ord_nos = _split_pending_add_ord_nos(stock)
+    ord_no = ",".join(ord_nos)
     code = str(stock.get('code', '')).strip()[:6]
 
-    if not ord_no:
+    if not ord_nos:
         _mutate_stock_state(stock, set_fields={'scale_in_locked': True})
         _persist_scale_in_flags(stock)
         record_add_history_event(
@@ -37206,76 +37771,189 @@ def _cancel_or_reconcile_pending_add(stock, reason):
         )
         return {"cleared": False, "reason": "missing_runtime_context"}
 
-    res = sniper_trade_utils.send_cancel_order_with_exchange_retry(
-        code=code,
-        orig_ord_no=ord_no,
-        token=KIWOOM_TOKEN,
-        qty=0,
+    meta_by_order = stock.get('_add_receipt_leg_meta_by_order_no')
+    if not isinstance(meta_by_order, dict):
+        meta_by_order = {}
+    has_split_ttl = any(
+        isinstance(meta_by_order.get(item), dict)
+        and _safe_int((meta_by_order.get(item) or {}).get("split_leg_ttl_sec"), 0) > 0
+        for item in ord_nos
     )
-    if _is_ok_response(res):
-        now_ts = time.time()
-        record_add_history_event(
-            DB,
-            recommendation_id=stock.get('id'),
-            stock_code=code,
-            stock_name=stock.get('name'),
-            strategy=stock.get('strategy'),
-            add_type=stock.get('pending_add_type'),
-            event_type='CANCELLED',
-            order_no=ord_no,
-            request_qty=stock.get('pending_add_qty', 0),
-            prev_buy_price=stock.get('buy_price'),
-            prev_buy_qty=stock.get('buy_qty', 0),
-            add_count_after=stock.get('add_count', 0),
-            reason=reason,
-            note='pending add order cancelled before release',
+    bundle_hard_expired = _pending_add_split_bundle_hard_expired(meta_by_order, ord_nos, now_ts)
+    selected_ord_nos = ord_nos
+    if expired_only and has_split_ttl and not bundle_hard_expired:
+        selected_ord_nos = [
+            item for item in ord_nos
+            if _pending_add_split_leg_expired(meta_by_order.get(item) or {}, now_ts)
+        ]
+        if not selected_ord_nos:
+            return {"cleared": False, "reason": "pending_add_waiting_leg_ttl"}
+
+    requested_by_order = stock.get('_add_receipt_requested_by_order_no')
+    if not isinstance(requested_by_order, dict):
+        requested_by_order = {}
+    filled_qty = _safe_int(stock.get('pending_add_filled_qty'), 0)
+    cancelled_ord_nos: list[str] = []
+    for selected_ord_no in selected_ord_nos:
+        leg_meta = meta_by_order.get(selected_ord_no) if isinstance(meta_by_order.get(selected_ord_no), dict) else {}
+        res = sniper_trade_utils.send_cancel_order_with_exchange_retry(
+            code=code,
+            orig_ord_no=selected_ord_no,
+            token=KIWOOM_TOKEN,
+            qty=0,
         )
-        _mutate_stock_state(
-            stock,
-            set_fields={
-                'last_add_cancel_at': now_ts,
-                'last_add_cancel_reason': reason,
-                'last_add_cancel_type': stock.get('pending_add_type'),
-                'last_add_cancel_ord_no': ord_no,
-            },
+        if _is_ok_response(res):
+            cancelled_ord_nos.append(selected_ord_no)
+            record_add_history_event(
+                DB,
+                recommendation_id=stock.get('id'),
+                stock_code=code,
+                stock_name=stock.get('name'),
+                strategy=stock.get('strategy'),
+                add_type=stock.get('pending_add_type'),
+                event_type='CANCELLED',
+                order_no=selected_ord_no,
+                request_qty=_safe_int(requested_by_order.get(selected_ord_no), 0)
+                or _safe_int((leg_meta or {}).get("qty"), 0)
+                or stock.get('pending_add_qty', 0),
+                prev_buy_price=stock.get('buy_price'),
+                prev_buy_qty=stock.get('buy_qty', 0),
+                add_count_after=stock.get('add_count', 0),
+                reason=(
+                    f"{reason}_split_bundle_hard_ttl"
+                    if bundle_hard_expired
+                    else f"{reason}_split_leg_ttl"
+                    if expired_only and has_split_ttl
+                    else reason
+                ),
+                note=(
+                    "pending add split residual cancelled after partial fill"
+                    if filled_qty > 0
+                    else "pending add order cancelled before release"
+                ),
+            )
+            _log_holding_pipeline(
+                stock,
+                code,
+                "scale_in_pending_add_cancelled",
+                add_type=stock.get('pending_add_type'),
+                scale_in_type=stock.get('pending_add_type'),
+                add_trigger=stock.get('pending_add_reason'),
+                order_no=selected_ord_no,
+                ord_no=selected_ord_no,
+                pending_add_cancel_reason=reason,
+                split_leg_expired=_pending_add_split_leg_expired(leg_meta or {}, now_ts),
+                split_bundle_final_cancel=bool(bundle_hard_expired or not expired_only),
+                split_residual_cancel_after_partial_fill=bool(filled_qty > 0),
+                **_split_order_meta_fields(leg_meta or {}),
+            )
+            continue
+
+        err_msg = str(res.get('return_msg', '')) if isinstance(res, dict) else str(res)
+        uncertain_keywords = ['주문없음', '취소가능수량', '체결', '원주문']
+        if any(keyword in err_msg for keyword in uncertain_keywords):
+            _mutate_stock_state(stock, set_fields={'scale_in_locked': True})
+            _persist_scale_in_flags(stock)
+            record_add_history_event(
+                DB,
+                recommendation_id=stock.get('id'),
+                stock_code=code,
+                stock_name=stock.get('name'),
+                strategy=stock.get('strategy'),
+                add_type=stock.get('pending_add_type'),
+                event_type='CANCELLED',
+                order_no=selected_ord_no,
+                request_qty=_safe_int(requested_by_order.get(selected_ord_no), 0)
+                or stock.get('pending_add_qty', 0),
+                prev_buy_price=stock.get('buy_price'),
+                prev_buy_qty=stock.get('buy_qty', 0),
+                add_count_after=stock.get('add_count', 0),
+                reason=f"{reason}_uncertain",
+                note=f'cancel uncertain: {err_msg}',
+            )
+            _clear_pending_add_meta(stock, reason=f"{reason}_uncertain")
+            log_error(
+                f"[ADD_CANCELLED] {stock.get('name')}({code}) pending add uncertain after cancel attempt. "
+                "scale_in_locked=True for manual/account reconciliation."
+            )
+            return {"cleared": True, "reason": f"{reason}_uncertain"}
+
+        log_error(
+            f"[ADD_BLOCKED] {stock.get('name')}({code}) pending add cancel failed; keeping pending. "
+            f"reason={reason} ord_no={selected_ord_no} err={err_msg}"
         )
-        _rollback_unfilled_defensive_avg_down_usage(stock, reason=reason)
+        return {"cleared": False, "reason": "cancel_failed"}
+
+    if cancelled_ord_nos:
+        remaining_ord_nos = [item for item in ord_nos if item not in set(cancelled_ord_nos)]
+        filled_by_order = stock.get('_add_receipt_filled_by_order_no')
+        if not isinstance(filled_by_order, dict):
+            filled_by_order = {}
+        filled_amount_by_order = stock.get('_add_receipt_filled_amount_by_order_no')
+        if not isinstance(filled_amount_by_order, dict):
+            filled_amount_by_order = {}
+        cancelled_qty = sum(
+            _safe_int(requested_by_order.get(item), 0)
+            or _safe_int((meta_by_order.get(item) or {}).get("qty"), 0)
+            for item in cancelled_ord_nos
+        )
+        for item in cancelled_ord_nos:
+            requested_by_order.pop(item, None)
+            meta_by_order.pop(item, None)
+            filled_by_order.pop(item, None)
+            filled_amount_by_order.pop(item, None)
+        if remaining_ord_nos:
+            remaining_qty = sum(_safe_int(requested_by_order.get(item), 0) for item in remaining_ord_nos)
+            if remaining_qty <= 0:
+                remaining_qty = max(0, _safe_int(stock.get('pending_add_qty'), 0) - cancelled_qty)
+            if filled_qty > 0:
+                remaining_qty += filled_qty
+            joined_remaining = ",".join(remaining_ord_nos)
+            set_fields = {
+                'pending_add_ord_no': joined_remaining,
+                'add_odno': joined_remaining,
+                'pending_add_qty': remaining_qty,
+                '_add_receipt_requested_by_order_no': requested_by_order,
+                '_add_receipt_filled_by_order_no': filled_by_order,
+                '_add_receipt_filled_amount_by_order_no': filled_amount_by_order,
+                '_add_receipt_leg_meta_by_order_no': meta_by_order,
+            }
+            if filled_qty > 0:
+                set_fields.update(
+                    {
+                        'last_add_residual_cancel_at': now_ts,
+                        'last_add_residual_cancel_reason': reason,
+                    }
+                )
+            _mutate_stock_state(
+                stock,
+                set_fields=set_fields,
+            )
+            return {"cleared": False, "reason": "pending_add_partial_cancelled"}
+
+        if filled_qty > 0:
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    'last_add_residual_cancel_at': now_ts,
+                    'last_add_residual_cancel_reason': reason,
+                    'last_add_residual_cancel_ord_no': ord_no,
+                },
+            )
+        else:
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    'last_add_cancel_at': now_ts,
+                    'last_add_cancel_reason': reason,
+                    'last_add_cancel_type': stock.get('pending_add_type'),
+                    'last_add_cancel_ord_no': ord_no,
+                },
+            )
+            _rollback_unfilled_defensive_avg_down_usage(stock, reason=reason)
         _clear_pending_add_meta(stock, reason=reason)
         return {"cleared": True, "reason": f"{reason}_cancelled"}
-
-    err_msg = str(res.get('return_msg', '')) if isinstance(res, dict) else str(res)
-    uncertain_keywords = ['주문없음', '취소가능수량', '체결', '원주문']
-    if any(keyword in err_msg for keyword in uncertain_keywords):
-        _mutate_stock_state(stock, set_fields={'scale_in_locked': True})
-        _persist_scale_in_flags(stock)
-        record_add_history_event(
-            DB,
-            recommendation_id=stock.get('id'),
-            stock_code=code,
-            stock_name=stock.get('name'),
-            strategy=stock.get('strategy'),
-            add_type=stock.get('pending_add_type'),
-            event_type='CANCELLED',
-            order_no=ord_no,
-            request_qty=stock.get('pending_add_qty', 0),
-            prev_buy_price=stock.get('buy_price'),
-            prev_buy_qty=stock.get('buy_qty', 0),
-            add_count_after=stock.get('add_count', 0),
-            reason=f"{reason}_uncertain",
-            note=f'cancel uncertain: {err_msg}',
-        )
-        _clear_pending_add_meta(stock, reason=f"{reason}_uncertain")
-        log_error(
-            f"[ADD_CANCELLED] {stock.get('name')}({code}) pending add uncertain after cancel attempt. "
-            "scale_in_locked=True for manual/account reconciliation."
-        )
-        return {"cleared": True, "reason": f"{reason}_uncertain"}
-
-    log_error(
-        f"[ADD_BLOCKED] {stock.get('name')}({code}) pending add cancel failed; keeping pending. "
-        f"reason={reason} err={err_msg}"
-    )
-    return {"cleared": False, "reason": "cancel_failed"}
+    return {"cleared": False, "reason": "pending_add_no_cancel_attempt"}
 
 
 def _sanitize_pending_add_states(active_targets):
@@ -37295,6 +37973,19 @@ def _sanitize_pending_add_states(active_targets):
             # 오래된 pending은 정리
             pending_ts = float(stock.get('pending_add_requested_at', 0) or 0)
             if pending_ts:
+                ord_nos = _split_pending_add_ord_nos(stock)
+                leg_meta = stock.get('_add_receipt_leg_meta_by_order_no')
+                has_split_ttl = (
+                    isinstance(leg_meta, dict)
+                    and any(
+                        isinstance(leg_meta.get(item), dict)
+                        and _safe_int((leg_meta.get(item) or {}).get("split_leg_ttl_sec"), 0) > 0
+                        for item in ord_nos
+                    )
+                )
+                if has_split_ttl:
+                    _cancel_or_reconcile_pending_add(stock, reason="recovery_timeout", expired_only=True)
+                    continue
                 raw_strategy = (stock.get('strategy') or '').upper()
                 timeout_sec = 20 if raw_strategy == 'SCALPING' else int(_rule('ORDER_TIMEOUT_SEC', 30) or 30)
                 if (time.time() - pending_ts) > timeout_sec:
@@ -38367,6 +39058,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             broker_order_forbidden=bool(simulated_position),
             **scale_in_split_fields,
         )
+    scale_in_split_orders = _decorate_scale_in_split_leg_ttls(scale_in_split_orders, stock, strategy)
 
     if _is_scalp_simulated_position(stock, strategy):
         touched, fill_price, best_ask, best_bid = _scalp_sim_buy_quote_touch(ws_data or {}, final_price)
@@ -38865,6 +39557,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             '_add_receipt_requested_by_order_no': {},
             '_add_receipt_filled_by_order_no': {},
             '_add_receipt_filled_amount_by_order_no': {},
+            '_add_receipt_leg_meta_by_order_no': {},
             'pending_add_notice_by_order_no': {},
             'add_order_time': pending_registered_at,
         },
@@ -38911,6 +39604,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                 submitted_results.append(res)
                 last_res = res
                 submitted_qty += leg_qty
+                leg_sent_at = time.time()
                 if ord_no:
                     existing_ord_nos = [
                         part.strip()
@@ -38927,12 +39621,30 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                         _safe_int(requested_by_order.get(ord_no), 0),
                         leg_qty,
                     )
+                    leg_meta_by_order = stock.get('_add_receipt_leg_meta_by_order_no')
+                    if not isinstance(leg_meta_by_order, dict):
+                        leg_meta_by_order = {}
+                    leg_meta_by_order[ord_no] = {
+                        "qty": leg_qty,
+                        "price": leg_price,
+                        "sent_at": leg_sent_at,
+                        "split_leg_ttl_sec": leg_order.get("split_leg_ttl_sec"),
+                        "split_bundle_hard_ttl_sec": leg_order.get("split_bundle_hard_ttl_sec"),
+                        "split_leg_role": leg_order.get("split_leg_role"),
+                        "split_price_offset_pct": leg_order.get("split_price_offset_pct"),
+                        "split_price_offset_ticks": leg_order.get("split_price_offset_ticks"),
+                        "scale_in_split_order_leg_index": leg_order.get("scale_in_split_order_leg_index"),
+                        "scale_in_split_order_market_order_applied": bool(
+                            leg_order.get("scale_in_split_order_market_order_applied")
+                        ),
+                    }
                     _mutate_stock_state(
                         stock,
                         set_fields={
                             'pending_add_ord_no': ",".join(existing_ord_nos),
                             'add_odno': ",".join(existing_ord_nos),
                             '_add_receipt_requested_by_order_no': requested_by_order,
+                            '_add_receipt_leg_meta_by_order_no': leg_meta_by_order,
                         },
                     )
                 log_info(
@@ -39098,9 +39810,10 @@ def handle_buy_ordered_state(stock, code):
         if reprice_result in {"submitted", "failed"}:
             return
 
-    if _has_open_pending_entry_orders(stock) and time_elapsed > timeout_sec:
+    if _has_open_pending_entry_orders(stock):
         _reconcile_pending_entry_orders(stock, code, strategy)
-        return
+        if _has_open_pending_entry_orders(stock):
+            return
 
     if time_elapsed > timeout_sec:
         log_info(f"⚠️ [{stock['name']}] 매수 대기 {timeout_sec}초 초과. 취소 절차 진입.")

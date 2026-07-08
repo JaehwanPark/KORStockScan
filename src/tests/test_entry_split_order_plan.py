@@ -306,7 +306,9 @@ def test_build_report_creates_bounded_equal_baseline_without_real_outcome(monkey
     assert [item["qty"] for item in orders] == [1, 1]
     assert fields["entry_split_order_price_offsets_pct"] == "0.0,0.3"
     assert [item["price"] for item in orders] == [1000, 997]
-    assert fields["entry_split_order_variant_id"] == "equal_50_50_offset_0pct_0_3pct"
+    assert fields["entry_split_order_policy_variant_id"] == "equal_50_50_offset_0pct_0_3pct"
+    assert fields["entry_split_order_variant_id"] == "equal_50_50_offset_0pct_0_3pct__runtime_first_weight_40"
+    assert fields["entry_split_order_runtime_weight_adjustment_applied"] is True
 
 
 def test_build_report_uses_split_variant_outcome_as_primary_ev(monkeypatch, tmp_path):
@@ -601,12 +603,127 @@ def test_allocator_uses_runtime_default_for_missing_bucket_policy(monkeypatch, t
 
     assert fields["entry_split_order_policy_applied"] is True
     assert fields["entry_split_order_runtime_default_policy_applied"] is True
-    assert fields["entry_split_order_policy_mode"] == "runtime_default_equal_50_50_0_3pct"
-    assert fields["entry_split_order_variant_id"] == "runtime_default_equal_50_50_offset_0pct_0_3pct"
+    assert fields["entry_split_order_policy_mode"] == "runtime_default_passive_center_40_60_0_3pct"
+    assert fields["entry_split_order_policy_variant_id"] == "runtime_default_passive_center_40_60_offset_0pct_0_3pct"
+    assert (
+        fields["entry_split_order_variant_id"]
+        == "runtime_default_passive_center_40_60_offset_0pct_0_3pct__runtime_first_weight_40"
+    )
     assert fields["entry_split_order_price_offsets_ticks"] == "0,1"
     assert fields["entry_split_order_price_offsets_pct"] == "0.0,0.3"
-    assert [item["qty"] for item in orders] == [4, 3]
+    assert fields["entry_split_order_policy_original_qty_weight_min"] == 0.5
+    assert fields["entry_split_order_qty_weight_min"] == 0.4
+    assert fields["entry_split_order_qty_weight_max"] == 0.4
+    assert fields["entry_split_order_runtime_weight_adjustment_applied"] is True
+    assert fields["entry_split_order_passive_bias_reason"] == "passive_center_first_leg_cap"
+    assert [item["qty"] for item in orders] == [3, 4]
     assert [item["price"] for item in orders] == [1000, 997]
+
+
+def test_allocator_biases_ai_wait_high_spread_to_passive_leg(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    target_date = datetime.now(timezone(timedelta(hours=9))).date().isoformat()
+    policy_file = split_plan.policy_path(target_date)
+    policy_file.parent.mkdir(parents=True, exist_ok=True)
+    policy_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "entry_split_order_policy_v1",
+                "policy_version": "test-policy",
+                "source_date": target_date,
+                "buckets": {
+                    "passive_wide_or_weak": {
+                        "leg_count": 2,
+                        "price_offsets_ticks": [0, 1],
+                        "price_offsets_pct": [0.0, 0.3],
+                        "qty_weight_min": 0.5,
+                        "qty_weight_max": 0.5,
+                        "policy_mode": "bounded_equal_split_baseline",
+                        "split_variant_id": "equal_50_50_offset_0pct_0_3pct",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE", str(policy_file))
+
+    orders, fields = split_plan.apply_entry_split_order_policy(
+        [{"tag": "normal", "qty": 5, "price": 1000, "order_type_code": "00", "tif": "DAY"}],
+        latency_gate={
+            "spread_bps": 45,
+            "buy_pressure_10t": 50,
+            "latency_state": "SAFE",
+            "quote_stale": False,
+            "pre_submit_effective_quote_stale": False,
+            "entry_ai_submit_authority_action": "WAIT",
+            "reason": "mixed signals with stale quote and high spread",
+            "order_price": 1000,
+        },
+    )
+
+    assert fields["entry_split_order_policy_applied"] is True
+    assert fields["entry_split_order_passive_bias_applied"] is True
+    assert fields["entry_split_order_policy_variant_id"] == "equal_50_50_offset_0pct_0_3pct"
+    assert fields["entry_split_order_variant_id"] == "equal_50_50_offset_0pct_0_3pct__runtime_first_weight_20"
+    assert fields["entry_split_order_policy_original_qty_weight_min"] == 0.5
+    assert fields["entry_split_order_qty_weight_min"] == 0.2
+    assert fields["entry_split_order_qty_weight_max"] == 0.2
+    assert fields["entry_split_order_runtime_weight_adjustment_applied"] is True
+    assert fields["entry_split_order_passive_bias_reason"].startswith("ai_wait_with_")
+    assert [item["qty"] for item in orders] == [1, 4]
+    assert [item["price"] for item in orders] == [1000, 997]
+    assert sum(item["qty"] for item in orders) == 5
+
+
+def test_allocator_passive_centers_buy_action_without_wait_warning(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    target_date = datetime.now(timezone(timedelta(hours=9))).date().isoformat()
+    policy_file = split_plan.policy_path(target_date)
+    policy_file.parent.mkdir(parents=True, exist_ok=True)
+    policy_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "entry_split_order_policy_v1",
+                "policy_version": "test-policy",
+                "source_date": target_date,
+                "buckets": {
+                    "passive_wide_or_weak": {
+                        "leg_count": 2,
+                        "price_offsets_ticks": [0, 1],
+                        "price_offsets_pct": [0.0, 0.3],
+                        "qty_weight_min": 0.5,
+                        "qty_weight_max": 0.5,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE", str(policy_file))
+
+    orders, fields = split_plan.apply_entry_split_order_policy(
+        [{"tag": "normal", "qty": 5, "price": 1000, "order_type_code": "00", "tif": "DAY"}],
+        latency_gate={
+            "spread_bps": 45,
+            "buy_pressure_10t": 50,
+            "latency_state": "SAFE",
+            "entry_ai_submit_authority_action": "BUY",
+            "reason": "high spread but positive entry confirmation",
+            "order_price": 1000,
+        },
+    )
+
+    assert fields["entry_split_order_policy_applied"] is True
+    assert fields["entry_split_order_passive_bias_applied"] is True
+    assert fields["entry_split_order_passive_bias_reason"] == "passive_center_first_leg_cap"
+    assert fields["entry_split_order_policy_original_qty_weight_min"] == 0.5
+    assert fields["entry_split_order_qty_weight_min"] == 0.4
+    assert fields["entry_split_order_qty_weight_max"] == 0.4
+    assert fields["entry_split_order_runtime_weight_adjustment_applied"] is True
+    assert [item["qty"] for item in orders] == [2, 3]
 
 
 def test_allocator_allows_split_when_source_quote_stale_recovered_before_submit(monkeypatch, tmp_path):
