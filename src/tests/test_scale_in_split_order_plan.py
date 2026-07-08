@@ -65,12 +65,12 @@ def test_allocator_preserves_avg_down_qty_and_offsets(monkeypatch, tmp_path):
                     "context_bucket": "default",
                     "leg_count": 2,
                     "price_offsets_ticks": [0, 1],
-                    "price_offsets_pct": [0.0, 1.0],
+                    "price_offsets_pct": [0.0, 0.3],
                     "qty_weights": [0.7, 0.3],
                     "qty_weight_min": 0.5,
                     "qty_weight_max": 0.5,
                     "policy_mode": "bounded_equal_scale_in_split_baseline",
-                    "split_variant_id": "scale_in_equal_50_50_offset_0pct_1pct",
+                    "split_variant_id": "scale_in_equal_50_50_offset_0pct_0_3pct",
                 },
                 "buckets": {},
             }
@@ -93,8 +93,8 @@ def test_allocator_preserves_avg_down_qty_and_offsets(monkeypatch, tmp_path):
     assert min(order["qty"] for order in orders) >= 1
     assert [order["qty"] for order in orders] == [4, 1]
     assert orders[0]["price"] == 10000
-    assert orders[1]["price"] == 9900
-    assert fields["scale_in_split_order_price_offsets_pct"] == "0.0,1.0"
+    assert orders[1]["price"] == 9970
+    assert fields["scale_in_split_order_price_offsets_pct"] == "0.0,0.3"
 
 
 def test_allocator_skips_qty_one_pyramid_and_splits_market_avg_down(monkeypatch, tmp_path):
@@ -115,7 +115,7 @@ def test_allocator_skips_qty_one_pyramid_and_splits_market_avg_down(monkeypatch,
                     "qty_weight_min": 0.5,
                     "qty_weight_max": 0.5,
                     "policy_mode": "bounded_equal_scale_in_split_baseline",
-                    "split_variant_id": "scale_in_equal_50_50_offset_0pct_1pct",
+                    "split_variant_id": "scale_in_equal_50_50_offset_0pct_0_3pct",
                 },
                 "buckets": {},
             }
@@ -185,8 +185,8 @@ def test_allocator_runtime_default_uses_one_pct_when_policy_bucket_missing(monke
 
     assert fields["scale_in_split_order_policy_applied"] is True
     assert fields["scale_in_split_order_runtime_default_policy_applied"] is True
-    assert fields["scale_in_split_order_price_offsets_pct"] == "0.0,1.0"
-    assert [order["price"] for order in orders] == [10000, 9900]
+    assert fields["scale_in_split_order_price_offsets_pct"] == "0.0,0.3"
+    assert [order["price"] for order in orders] == [10000, 9970]
 
 
 def test_report_and_preopen_env_handoff(monkeypatch, tmp_path):
@@ -274,7 +274,7 @@ def test_report_selects_low_pct_touch_70_30_counterfactual(monkeypatch, tmp_path
     candidate = report["recommended_policy"]["candidates"][0]
 
     assert candidate["price_offsets_ticks"] == [0, 1]
-    assert candidate["price_offsets_pct"] == [0.0, 0.5]
+    assert candidate["price_offsets_pct"] == [0.0, 0.3]
     assert candidate["qty_weights"] == [0.7, 0.3]
     assert candidate["policy_mode"] == "counterfactual_tick_band_selector"
     assert candidate["post_submit_touch_rates"]["touch_1tick_rate"] == 1.0
@@ -313,9 +313,9 @@ def test_report_selects_70_30_when_touch_low_or_missed_upside_high(monkeypatch, 
     candidate = report["recommended_policy"]["candidates"][0]
 
     assert candidate["price_offsets_ticks"] == [0, 1]
-    assert candidate["price_offsets_pct"] == [0.0, 0.5]
+    assert candidate["price_offsets_pct"] == [0.0, 0.3]
     assert candidate["qty_weights"] == [0.7, 0.3]
-    assert candidate["selection_reason"] == "touch_0_5pct_low_or_missed_upside_high"
+    assert candidate["selection_reason"] == "touch_0_3pct_low_or_missed_upside_high"
 
 
 def test_report_allows_source_quality_gap_when_rows_are_excluded(monkeypatch, tmp_path):
@@ -384,11 +384,11 @@ def test_report_selects_0_2tick_60_40_when_two_tick_touch_high(monkeypatch, tmp_
     diagnostic = report["recommended_policy"]["diagnostic_candidates"][0]
 
     assert candidate["price_offsets_ticks"] == [0, 2]
-    assert candidate["price_offsets_pct"] == [0.0, 1.5]
+    assert candidate["price_offsets_pct"] == [0.0, 0.8]
     assert candidate["qty_weights"] == [0.6, 0.4]
-    assert candidate["selection_reason"] == "touch_1_5pct_high_with_low_missed_upside"
+    assert candidate["selection_reason"] == "touch_0_8pct_high_with_low_missed_upside"
     assert diagnostic["price_offsets_ticks"] == [0, 1, 2]
-    assert diagnostic["price_offsets_pct"] == [0.0, 1.0, 1.5]
+    assert diagnostic["price_offsets_pct"] == [0.0, 0.3, 0.8]
     assert diagnostic["runtime_apply_allowed"] is False
 
 

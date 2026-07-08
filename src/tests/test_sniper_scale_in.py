@@ -115,6 +115,20 @@ def _stale_holding_score_fields(score=50, *, now_ts=None):
     }
 
 
+def _fresh_submit_micro_fields():
+    return {
+        "micro_vwap_available": True,
+        "minute_candle_window_fresh": True,
+        "minute_candle_context_quality": "fresh_bar_window",
+        "tick_context_quality": "fresh_computed",
+        "tick_context_stale": False,
+        "tick_accel_source": "computed_10ticks",
+        "tick_aggressor_pressure_usable": True,
+        "tick_aggressor_trusted_count": 3,
+        "quote_stale": False,
+    }
+
+
 def _trusted_orderbook_touch_ticks(*, price=10_000, count=10, hhmm="10:00"):
     ticks = []
     for idx in range(count):
@@ -1548,6 +1562,29 @@ def test_real_weak_ai_micro_entry_block_does_not_block_untrusted_buy_pressure():
     assert decision["weak_ai_micro_entry_block_weak_micro"] is True
 
 
+def test_real_weak_ai_micro_entry_block_blocks_missing_micro_source_quality():
+    decision = state_handlers._evaluate_real_weak_ai_micro_entry_block(
+        strategy="SCALPING",
+        stock={"last_watching_ai_action": "WAIT", "last_watching_ai_score": 62.0},
+        latency_gate={"allowed": True, "decision": "ALLOW_NORMAL"},
+        latency_signal_score=62.0,
+        orderbook_fields={},
+        microstructure_fields={
+            "buy_pressure_10t": "12.0",
+            "tick_aggressor_pressure_usable": True,
+            "tick_aggressor_trusted_count": 2,
+        },
+    )
+
+    assert decision["blocked"] is True
+    assert decision["block_reason"] == "source_quality_unknown"
+    assert decision["broker_order_forbidden"] is True
+    assert decision["weak_ai_micro_entry_block_source_quality_state"] == "missing"
+    assert "orderbook_micro_state" in decision["weak_ai_micro_entry_block_missing_fields"]
+    assert "orderbook_micro_ofi_norm" in decision["weak_ai_micro_entry_block_missing_fields"]
+    assert "orderbook_micro_qi" in decision["weak_ai_micro_entry_block_missing_fields"]
+
+
 def test_real_weak_ai_micro_entry_block_keeps_strong_buy_context():
     decision = state_handlers._evaluate_real_weak_ai_micro_entry_block(
         strategy="SCALPING",
@@ -2729,6 +2766,65 @@ def test_rising_missed_one_share_submit_rechecks_pending_before_deposit(monkeypa
     assert state_handlers._submit_watching_triggered_entry(stock, "123456", {"curr": 10000}, 1, runtime) is False
 
 
+def test_rising_missed_one_share_submit_respects_runtime_cooldown_before_deposit(monkeypatch):
+    state_handlers.TRADING_RULES = CONFIG
+    logs = []
+
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", "true")
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "get_deposit",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("deposit should not be queried")),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 1,
+        "name": "RISING_COOLDOWN",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "rising_missed_one_share_entry_forced": True,
+        "rising_missed_one_share_scout": True,
+        "rising_missed_scout_upgrade_pending": True,
+        "forced_entry_qty": 14,
+        "forced_entry_reason": FORCED_ENTRY_REASON,
+        "target_buy_price": 13720,
+    }
+    runtime = {
+        "strategy": "SCALPING",
+        "ratio": 0.0,
+        "curr_price": 13720,
+        "liquidity_value": None,
+        "msg": "forced",
+        "now_ts": 1000.0,
+        "cooldowns": {"365660": "1120.0"},
+        "alerted_stocks": set(),
+        "forced_entry_reason": FORCED_ENTRY_REASON,
+    }
+
+    result = state_handlers._submit_watching_triggered_entry(
+        stock,
+        "365660",
+        {"curr": 13720},
+        1,
+        runtime,
+    )
+
+    assert result is False
+    assert stock.get("rising_missed_one_share_entry_forced") is None
+    assert stock.get("rising_missed_one_share_scout") is None
+    assert logs[-1][0] == "rising_missed_one_share_entry_submit_blocked"
+    assert logs[-1][1]["block_reason"] == "entry_cooldown_active"
+    assert logs[-1][1]["cooldown_remaining_sec"] == 120
+    assert logs[-1][1]["actual_order_submitted"] is False
+    assert logs[-1][1]["broker_order_forbidden"] is True
+    assert logs[-1][1]["decision_authority"] == "rising_missed_one_share_entry_cooldown_guard"
+
+
 def test_rising_missed_one_share_submit_rechecks_price_cap_before_deposit(monkeypatch):
     state_handlers.TRADING_RULES = CONFIG
     logs = []
@@ -3148,6 +3244,42 @@ def test_real_weak_pullback_entry_block_blocks_normalized_allow_normal_weak_with
     assert verdict["block_reason"] == "weak_momentum_caution_without_micro_confirmation"
     assert verdict["weak_pullback_entry_block_positive_signal_count"] == 0
     assert verdict["weak_pullback_entry_block_spread_ticks"] == 6
+
+
+def test_real_weak_pullback_entry_block_blocks_missing_micro_source(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_ENABLED=True,
+            SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_MICRO_POSITIVES=2,
+            SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_SPREAD_TICKS=5,
+        ),
+    )
+    monkeypatch.setattr(state_handlers, "_is_any_simulated_position", lambda *args, **kwargs: False)
+
+    verdict = state_handlers._evaluate_real_weak_pullback_entry_block(
+        strategy="SCALPING",
+        stock={"name": "missing-micro"},
+        latency_gate={
+            "latency_state": "CAUTION",
+            "decision": "ALLOW_NORMAL",
+            "conditional_1tick_real_override_context": {"spread_ticks": 6},
+        },
+        pre_ai_fields={
+            "strength_momentum_risk_state": "weak_momentum_context",
+            "strength_momentum_reason": "below_buy_ratio",
+        },
+        guard_fields={},
+        orderbook_fields={},
+    )
+
+    assert verdict["blocked"] is True
+    assert verdict["block_reason"] == "weak_pullback_micro_source_unavailable"
+    assert verdict["decision_authority"] == "real_buy_submit_source_quality_guard"
+    assert verdict["weak_pullback_entry_block_micro_confirmation_state"] == "micro_confirmation_missing"
+    assert "orderbook_micro_state" in verdict["weak_pullback_entry_block_missing_fields"]
 
 
 def test_real_weak_pullback_entry_block_blocks_caution_weak_even_without_spread_ticks(monkeypatch):
@@ -5555,6 +5687,11 @@ def test_execute_scale_in_order_partial_split_submit_keeps_pending(monkeypatch):
     send_calls = []
 
     def fake_send_buy_order(code, qty, price, order_type_code, *args, **kwargs):
+        if not send_calls:
+            assert stock["pending_add_order"] is True
+            assert stock["pending_add_qty"] == 4
+            assert stock["pending_add_ord_no"] == ""
+            assert stock["_add_receipt_requested_by_order_no"] == {}
         send_calls.append((code, qty, price, order_type_code))
         if len(send_calls) == 1:
             return {"return_code": "0", "ord_no": "A1"}
@@ -7500,6 +7637,130 @@ def test_dynamic_scale_in_qty_blocks_real_pyramid_not_evaluated_score_submit_aut
     assert details["qty_reason"] == "real_pyramid_ai_score_no_submit_authority:ai_score_unavailable"
     assert details["ai_score_available"] is False
     assert details["pyramid_ai_score_submit_authority"] is False
+
+
+def test_real_pyramid_score_50_retry_success_allows_dynamic_qty(monkeypatch):
+    rules = replace(
+        CONFIG,
+        MAX_POSITION_PCT=1.0,
+        INVEST_RATIO_SCALPING_MIN=0.10,
+        INVEST_RATIO_SCALPING_MAX=0.30,
+        SCALPING_SCALE_IN_DYNAMIC_QTY_ENABLED=True,
+        SCALPING_PYRAMID_MIN_AI_SCORE=70,
+    )
+    monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_tick_history_ka10003",
+        lambda *args, **kwargs: [{"time": "09:01:00", "price": 30_600, "volume": 10}],
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_minute_candles_ka10080",
+        lambda *args, **kwargs: [{"현재가": 30_600, "고가": 30_700, "저가": 30_500, "거래량": 1000}],
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_pre_submit_input_snapshot_needs_rest_orderbook_recheck",
+        lambda *args, **kwargs: False,
+    )
+
+    class FakeEngine:
+        def evaluate_scalping_holding_score(self, *args, **kwargs):
+            return {
+                "action": "HOLD",
+                "score": 72,
+                "holding_score_source": "live",
+                "holding_score_data_quality": "fresh",
+                "ai_result_source": "live",
+                "ai_parse_ok": True,
+                "ai_fallback_score_50": False,
+            }
+
+    stock = {
+        "name": "TEST",
+        "strategy": "SCALPING",
+        "buy_price": 30_100,
+        "buy_qty": 1,
+        "holding_ai_score_source": "holding_ai_not_called",
+        "holding_score_data_quality": "stale",
+        "holding_score_effective_usable": False,
+        "last_reversal_features": {
+            "buy_pressure_10t": 100.0,
+            "tick_acceleration_ratio": 4.25,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 30.43,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "tick_context_stale": False,
+            "quote_stale": False,
+            "tick_aggressor_trusted_count": 10,
+            "tick_aggressor_pressure_usable": True,
+        },
+        "actual_order_submitted": True,
+    }
+
+    retry_fields = state_handlers._retry_holding_ai_submit_authority_before_block(
+        stock=stock,
+        code="200710",
+        ws_data={"curr": 30_650, "best_bid": 30_600, "best_ask": 30_800},
+        ai_engine=FakeEngine(),
+        now_ts=1_000.0,
+        current_ai_score=50,
+        source_event_stage="scale_in_submit_authority_retry",
+        field_prefix="scale_in_ai_authority",
+    )
+
+    assert retry_fields["scale_in_ai_authority_input_retry_attempted"] is True
+    assert retry_fields["scale_in_ai_authority_input_retry_success"] is True
+    assert stock["holding_score_effective"] == 72
+    details = scale_in.describe_dynamic_scale_in_qty(
+        stock=stock,
+        resolved_price=30_600,
+        deposit=3_657_179,
+        add_type="PYRAMID",
+        strategy="SCALPING",
+        add_reason="scalping_pyramid_ok",
+        price_resolution={"allowed": True},
+        action={
+            "reason": "scalping_pyramid_ok",
+            "current_ai_score": 72,
+            "holding_score_source": "live",
+            "holding_score_data_quality": "fresh",
+            "holding_score_effective_usable": True,
+            "profit_rate": 1.59,
+            "peak_profit": 1.59,
+            **retry_fields,
+        },
+    )
+
+    assert details["qty"] > 0
+    assert details["pyramid_ai_score_submit_authority"] is True
+    assert details["scale_in_ai_authority_input_retry_success"] is True
+
+
+def test_holding_ai_submit_authority_retry_fails_closed_when_engine_missing(monkeypatch):
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
+    stock = {"name": "TEST", "strategy": "SCALPING"}
+
+    retry_fields = state_handlers._retry_holding_ai_submit_authority_before_block(
+        stock=stock,
+        code="200710",
+        ws_data={"curr": 30_650, "best_bid": 30_600, "best_ask": 30_800},
+        ai_engine=None,
+        now_ts=1_000.0,
+        current_ai_score=50,
+        source_event_stage="scale_in_submit_authority_retry",
+        field_prefix="scale_in_ai_authority",
+    )
+
+    assert retry_fields["scale_in_ai_authority_input_retry_attempted"] is False
+    assert retry_fields["scale_in_ai_authority_input_retry_success"] is False
+    assert retry_fields["scale_in_ai_authority_input_retry_reason"] == "ai_engine_unavailable"
+    assert retry_fields["scale_in_ai_authority_after_retry_block_reason"] == "ai_engine_unavailable"
 
 
 def test_dynamic_scale_in_qty_blocks_real_pyramid_holding_score_sentinel_mismatch(monkeypatch):
@@ -9879,7 +10140,7 @@ def test_watching_state_logs_latency_entry_price_guard(monkeypatch):
 
     class DummyAI:
         def analyze_target(self, *args, **kwargs):
-            return {"action": "BUY", "score": 90, "reason": "confirmed", "ai_result_source": "live", "ai_parse_ok": True}
+            return {"action": "BUY", "score": 90, "reason": "confirmed", "ai_result_source": "live", "ai_parse_ok": True, **_fresh_submit_micro_fields()}
 
     class DummyEventBus:
         def publish(self, *args, **kwargs):
@@ -10017,7 +10278,7 @@ def test_watching_state_blocks_quote_fresh_composite_negative_orderbook_micro(mo
 
     class DummyAI:
         def analyze_target(self, *args, **kwargs):
-            return {"action": "BUY", "score": 90, "reason": "confirmed", "ai_result_source": "live", "ai_parse_ok": True}
+            return {"action": "BUY", "score": 90, "reason": "confirmed", "ai_result_source": "live", "ai_parse_ok": True, **_fresh_submit_micro_fields()}
 
     class DummyEventBus:
         def publish(self, *args, **kwargs):
@@ -11051,12 +11312,13 @@ def test_score65_74_recovery_probe_bypasses_first_ai_big_bite_wait(monkeypatch):
                 "reason": "strong micro recovery probe",
                 "buy_pressure_10t": 88.14,
                 "curr_vs_micro_vwap_bp": 74.95,
-                "micro_vwap_available": True,
-                "minute_candle_window_fresh": True,
-                "minute_candle_context_quality": "fresh_bar_window",
-                "tick_acceleration_ratio": 0.0,
-                "quote_stale": False,
-            }
+                    "micro_vwap_available": True,
+                    "minute_candle_window_fresh": True,
+                    "minute_candle_context_quality": "fresh_bar_window",
+                    "tick_acceleration_ratio": 0.0,
+                    "quote_stale": False,
+                    **_fresh_submit_micro_fields(),
+                }
 
     class DummyEventBus:
         def publish(self, *args, **kwargs):
@@ -11221,7 +11483,7 @@ def test_watching_state_blocks_deep_below_bid_pre_submit_price(monkeypatch):
 
     class DummyAI:
         def analyze_target(self, *args, **kwargs):
-            return {"action": "BUY", "score": 90, "reason": "confirmed", "ai_result_source": "live", "ai_parse_ok": True}
+            return {"action": "BUY", "score": 90, "reason": "confirmed", "ai_result_source": "live", "ai_parse_ok": True, **_fresh_submit_micro_fields()}
 
     class DummyEventBus:
         def publish(self, *args, **kwargs):
@@ -11905,7 +12167,7 @@ def test_scalping_pre_ai_soft_gate_allows_ai_and_blocks_low_liquidity_at_submit(
 
         def analyze_target(self, _name, ws_data, *_args, **_kwargs):
             self.seen_context = ws_data.get("scalp_pre_ai_gate_context")
-            return {"action": "BUY", "score": 90, "reason": "confirmed", "ai_result_source": "live", "ai_parse_ok": True}
+            return {"action": "BUY", "score": 90, "reason": "confirmed", "ai_result_source": "live", "ai_parse_ok": True, **_fresh_submit_micro_fields()}
 
     class DummyEventBus:
         def publish(self, *args, **kwargs):
@@ -12055,6 +12317,7 @@ def test_pre_submit_liquidity_relief_allows_strong_bundle_submit(monkeypatch):
                 "reason": "strong bundle confirmed",
                 "ai_result_source": "live",
                 "ai_parse_ok": True,
+                **_fresh_submit_micro_fields(),
             }
 
     class DummyEventBus:
@@ -12572,7 +12835,7 @@ def test_scalping_overbought_reaches_ai_but_submit_requires_pullback_or_rebreak(
 
     class DummyAI:
         def analyze_target(self, *args, **kwargs):
-            return {"action": "BUY", "score": 91, "reason": "confirmed", "ai_result_source": "live", "ai_parse_ok": True}
+            return {"action": "BUY", "score": 91, "reason": "confirmed", "ai_result_source": "live", "ai_parse_ok": True, **_fresh_submit_micro_fields()}
 
     state_handlers.EVENT_BUS = type("DummyEventBus", (), {"publish": lambda self, *args, **kwargs: None})()
     logs = []
@@ -14899,6 +15162,59 @@ def test_publish_buy_signal_submission_notice_enqueues_once(monkeypatch):
     assert pipeline_stages == ["buy_signal_telegram_enqueued"]
 
 
+def test_publish_buy_signal_submission_notice_shows_requested_and_submitted_qty(monkeypatch):
+    published = []
+    pipeline_events = []
+
+    class DummyEventBus:
+        def publish(self, topic, payload):
+            published.append((topic, payload))
+
+    monkeypatch.setattr(state_handlers, "EVENT_BUS", DummyEventBus())
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda _stock, _code, stage, **fields: pipeline_events.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 1,
+        "name": "레몬헬스케어",
+        "entry_bundle_id": "365660-test-bundle",
+        "msg_audience": "ADMIN_ONLY",
+    }
+    latency_gate = {
+        "latency_state": "CAUTION",
+        "decision": "ALLOW_NORMAL",
+        "order_price": 13360,
+    }
+
+    state_handlers._publish_buy_signal_submission_notice(
+        stock,
+        "365660",
+        strategy="SCALPING",
+        curr_price=13400,
+        requested_qty=14,
+        submitted_qty=9,
+        submitted_leg_count=2,
+        entry_mode="normal",
+        latency_gate=latency_gate,
+    )
+
+    assert len(published) == 1
+    message = published[0][1]["message"]
+    assert "요청수량: `14주`" in message
+    assert "접수수량: `9주`" in message
+    assert "분할주문: `2 legs`" in message
+    assert stock["entry_submit_notice_pending"] is False
+    assert stock["entry_submit_notice_enqueued"] is True
+    stage, fields = pipeline_events[-1]
+    assert stage == "buy_signal_telegram_enqueued"
+    assert fields["requested_qty"] == 14
+    assert fields["submitted_qty"] == 9
+    assert fields["submitted_leg_count"] == 2
+
+
 def test_real_entry_panic_gap_weight_keeps_normal_market_price(monkeypatch):
     monkeypatch.setattr(state_handlers, "TRADING_RULES", replace(CONFIG, REAL_ENTRY_PANIC_GAP_WEIGHT_ENABLED=True))
     latency_gate = {"order_price": 9_950, "price_resolution_reason": "defensive_order_price"}
@@ -15820,6 +16136,76 @@ def test_split_entry_partial_fill_defers_buy_execution_telegram_until_bundle_ful
     assert final_snapshot["buy_qty"] == 19
 
 
+def test_split_entry_partial_fill_waits_for_submit_notice_then_flushes(monkeypatch):
+    receipts.ACTIVE_TARGETS = []
+    receipts.highest_prices = {}
+    receipts._get_fast_state = lambda code: None
+    receipts.DB = _DummyDB()
+    receipts.KIWOOM_TOKEN = "token"
+    entry_state.TERMINAL_ENTRY_ORDERS.clear()
+
+    thread_calls = []
+    telegram_events = []
+
+    class DummyThread:
+        def __init__(self, target=None, args=(), daemon=None):
+            thread_calls.append((target, args, daemon))
+
+        def start(self):
+            return None
+
+    class DummyEventBus:
+        def publish(self, event_name, payload):
+            telegram_events.append((event_name, payload))
+
+    monkeypatch.setattr(receipts.threading, "Thread", DummyThread)
+    monkeypatch.setattr(receipts, "event_bus", DummyEventBus())
+    monkeypatch.setattr(receipts.kiwoom_utils, "get_target_price_up", lambda price, pct: 13560)
+    monkeypatch.setattr(kiwoom_orders, "send_sell_order_market", lambda *args, **kwargs: {"ord_no": "TP1"})
+
+    stock = {
+        "id": 57,
+        "code": "365660",
+        "name": "레몬헬스케어",
+        "status": "BUY_ORDERED",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "buy_price": 0,
+        "buy_qty": 0,
+        "entry_mode": "normal",
+        "entry_requested_qty": 14,
+        "requested_buy_qty": 14,
+        "pending_buy_msg": "✅ **레몬헬스케어 (365660) rising missed scout 진입 주문 전송!**",
+        "entry_submit_notice_pending": True,
+        "entry_submit_notice_enqueued": False,
+        "pending_entry_orders": [
+            {"tag": "entry_split_primary", "qty": 5, "ord_no": "O1", "status": "OPEN", "filled_qty": 0},
+            {"tag": "entry_split_passive_1", "qty": 9, "ord_no": "O2", "status": "OPEN", "filled_qty": 0},
+        ],
+    }
+    receipts.ACTIVE_TARGETS.append(stock)
+
+    receipts.handle_real_execution({"code": "365660", "type": "BUY", "order_no": "O1", "price": 13360, "qty": 5})
+
+    assert stock["buy_qty"] == 5
+    assert telegram_events == []
+    assert stock["entry_partial_fill_deferred_notice"]["cum_filled_qty"] == 5
+    assert stock.get("entry_partial_fill_notified_qty") in (None, 0)
+    assert thread_calls[-1][1][3]["entry_partial_fill_pending"] is True
+
+    stock["entry_submit_notice_pending"] = False
+    stock["entry_submit_notice_enqueued"] = True
+
+    assert receipts.flush_deferred_entry_partial_fill_notice(stock) is True
+    assert len(telegram_events) == 1
+    message = telegram_events[0][1]["message"]
+    assert "부분 체결" in message
+    assert "`5/14주`" in message
+    assert "잔여:" in message
+    assert stock["entry_partial_fill_notified_qty"] == 5
+    assert "entry_partial_fill_deferred_notice" not in stock
+
+
 def test_split_entry_full_leg_partial_bundle_sends_partial_not_completion(monkeypatch):
     receipts.ACTIVE_TARGETS = []
     receipts.highest_prices = {}
@@ -16602,6 +16988,145 @@ def test_add_receipt_without_order_no_matches_single_pending_target(monkeypatch)
 
     assert target_stock["buy_qty"] == 15
     assert target_stock["add_count"] == 1
+
+
+def test_add_receipt_with_order_no_matches_pending_add_before_ordno_bind(monkeypatch):
+    receipts.ACTIVE_TARGETS = []
+    receipts.highest_prices = {}
+    receipts._get_fast_state = lambda code: None
+
+    history_calls = []
+    pipeline_events = []
+
+    monkeypatch.setattr(receipts, "_update_db_for_add", lambda *args, **kwargs: None)
+    monkeypatch.setattr(receipts, "record_add_history_event", lambda *args, **kwargs: history_calls.append(kwargs) or True)
+    monkeypatch.setattr(receipts, "_refresh_scalp_preset_exit_order", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        receipts,
+        "_log_holding_pipeline",
+        lambda name, code, target_id, stage, **fields: pipeline_events.append((stage, fields)),
+    )
+
+    target_stock = {
+        "id": 170,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 10000,
+        "buy_qty": 14,
+        "pending_add_order": True,
+        "pending_add_type": "AVG_DOWN",
+        "pending_add_reason": "late_loss_avg_down_retry",
+        "pending_add_qty": 33,
+        "pending_add_ord_no": "",
+        "add_count": 0,
+        "avg_down_count": 0,
+    }
+    receipts.ACTIVE_TARGETS.append(target_stock)
+
+    receipts.handle_real_execution(
+        {"code": "123456", "type": "BUY", "order_no": "A1", "price": 9500, "qty": 16}
+    )
+    receipts.handle_real_execution(
+        {"code": "123456", "type": "BUY", "order_no": "A1", "price": 9500, "qty": 16}
+    )
+
+    assert target_stock["buy_qty"] == 30
+    assert target_stock["pending_add_ord_no"] == "A1"
+    assert target_stock["add_odno"] == "A1"
+    assert target_stock["pending_add_order"] is True
+    assert target_stock["pending_add_filled_qty"] == 16
+    assert target_stock["scale_in_receipt_reconciled_before_ordno_bind"] is True
+    assert history_calls[-1]["order_no"] == "A1"
+    assert len(history_calls) == 1
+    assert history_calls[-1]["request_qty"] == 33
+    scale_in_events = [fields for stage, fields in pipeline_events if stage == "scale_in_executed"]
+    assert scale_in_events
+    assert scale_in_events[-1]["order_no"] == "A1"
+    assert scale_in_events[-1]["bundle_requested_qty"] == 33
+    assert scale_in_events[-1]["bundle_filled_qty"] == 16
+    assert len(scale_in_events) == 1
+    assert scale_in_events[-1]["order_requested_qty"] == 16
+    assert scale_in_events[-1]["order_filled_qty"] == 16
+    assert scale_in_events[-1]["scale_in_receipt_reconciled_before_ordno_bind"] is True
+
+
+def test_add_execution_caps_duplicate_split_leg_by_order_number(monkeypatch):
+    receipts.ACTIVE_TARGETS = []
+    receipts.highest_prices = {}
+    receipts._get_fast_state = lambda code: None
+
+    history_calls = []
+
+    monkeypatch.setattr(receipts, "_update_db_for_add", lambda *args, **kwargs: None)
+    monkeypatch.setattr(receipts, "record_add_history_event", lambda *args, **kwargs: history_calls.append(kwargs) or True)
+    monkeypatch.setattr(receipts, "_refresh_scalp_preset_exit_order", lambda *args, **kwargs: True)
+
+    target_stock = {
+        "id": 171,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 10000,
+        "buy_qty": 14,
+        "pending_add_order": True,
+        "pending_add_type": "AVG_DOWN",
+        "pending_add_reason": "late_loss_avg_down_retry",
+        "pending_add_qty": 33,
+        "pending_add_ord_no": "A1,A2",
+        "_add_receipt_requested_by_order_no": {"A1": 16, "A2": 17},
+        "add_count": 0,
+        "avg_down_count": 0,
+    }
+    receipts.ACTIVE_TARGETS.append(target_stock)
+
+    receipts.handle_real_execution(
+        {"code": "123456", "type": "BUY", "order_no": "A1", "price": 9500, "qty": 16}
+    )
+    receipts.handle_real_execution(
+        {"code": "123456", "type": "BUY", "order_no": "A1", "price": 9500, "qty": 16}
+    )
+    receipts.handle_real_execution(
+        {"code": "123456", "type": "BUY", "order_no": "A2", "price": 9490, "qty": 17}
+    )
+
+    assert target_stock["buy_qty"] == 47
+    assert target_stock["add_count"] == 1
+    assert target_stock["avg_down_count"] == 1
+    assert target_stock.get("pending_add_order") is None
+    assert [call["order_no"] for call in history_calls] == ["A1", "A2"]
+    assert [call["executed_qty"] for call in history_calls] == [16, 17]
+
+
+def test_order_notice_for_pending_add_binds_ordno_without_entry_odno(monkeypatch):
+    receipts.ACTIVE_TARGETS = []
+    receipts.highest_prices = {}
+    receipts._get_fast_state = lambda code: None
+    monkeypatch.setattr(receipts, "log_info", lambda *args, **kwargs: None)
+
+    target_stock = {
+        "id": 172,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 10000,
+        "buy_qty": 14,
+        "pending_add_order": True,
+        "pending_add_type": "AVG_DOWN",
+        "pending_add_qty": 33,
+        "pending_add_ord_no": "",
+    }
+    receipts.ACTIVE_TARGETS.append(target_stock)
+
+    receipts.handle_order_notice({"code": "123456", "type": "BUY", "order_no": "A1", "status": "접수"})
+
+    assert target_stock["pending_add_ord_no"] == "A1"
+    assert target_stock["add_odno"] == "A1"
+    assert "odno" not in target_stock
+    assert target_stock["pending_add_notice_by_order_no"]["A1"]["status"] == "접수"
 
 
 def test_add_execution_preserves_request_qty_on_final_fill(monkeypatch):
@@ -22869,6 +23394,65 @@ def test_first_touch_avgdown_decision_gate_ignores_unusable_ai_support(monkeypat
     assert blocked["fields"]["first_touch_avgdown_ai_score_submit_authority"] is False
     assert blocked["fields"]["first_touch_avgdown_ai_score_submit_authority_reason"] == "ai_score_unavailable"
     assert "ai_score_unusable_ignored" in blocked["fields"]["first_touch_avgdown_risk_signals"]
+
+
+def test_first_touch_avgdown_decision_gate_retries_holding_ai_score(monkeypatch):
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", CONFIG)
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_tick_history_ka10003",
+        lambda *args, **kwargs: [{"time": "09:01:00", "price": 10_000, "volume": 10}],
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_minute_candles_ka10080",
+        lambda *args, **kwargs: [{"현재가": 10_000, "고가": 10_100, "저가": 9_900, "거래량": 1000}],
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_pre_submit_input_snapshot_needs_rest_orderbook_recheck",
+        lambda *args, **kwargs: False,
+    )
+
+    class FakeEngine:
+        def evaluate_scalping_holding_score(self, *args, **kwargs):
+            return {
+                "action": "HOLD",
+                "score": 72,
+                "holding_score_source": "live",
+                "holding_score_data_quality": "fresh",
+                "ai_result_source": "live",
+                "ai_parse_ok": True,
+                "ai_fallback_score_50": False,
+            }
+
+    stock = {
+        "code": "123456",
+        "strategy": "SCALPING",
+        "holding_ai_score_source": "holding_ai_not_called",
+        "holding_score_data_quality": "stale",
+        "holding_score_effective_usable": False,
+        "holding_score_last_effective_at": 1.0,
+    }
+
+    allowed = state_handlers._evaluate_first_touch_avgdown_decision_gate(
+        stock=stock,
+        ws_data={"curr": 10_000, "best_bid": 9_990, "best_ask": 10_000},
+        context_fields={},
+        current_ai_score=50,
+        peak_profit=-0.23,
+        profit_rate=-3.42,
+        now_ts=1_000.0,
+        ai_engine=FakeEngine(),
+        code="123456",
+    )
+
+    assert allowed["allowed"] is True
+    assert allowed["fields"]["first_touch_avgdown_ai_authority_input_retry_attempted"] is True
+    assert allowed["fields"]["first_touch_avgdown_ai_authority_input_retry_success"] is True
+    assert allowed["fields"]["first_touch_avgdown_ai_score_submit_authority"] is True
+    assert stock["holding_score_effective"] == 72
 
 
 def test_first_touch_avgdown_decision_gate_rejects_ai_without_provenance(monkeypatch):

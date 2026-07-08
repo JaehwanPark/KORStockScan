@@ -304,9 +304,9 @@ def test_build_report_creates_bounded_equal_baseline_without_real_outcome(monkey
     )
     assert fields["entry_split_order_policy_applied"] is True
     assert [item["qty"] for item in orders] == [1, 1]
-    assert fields["entry_split_order_price_offsets_pct"] == "0.0,1.0"
-    assert [item["price"] for item in orders] == [1000, 990]
-    assert fields["entry_split_order_variant_id"] == "equal_50_50_offset_0pct_1pct"
+    assert fields["entry_split_order_price_offsets_pct"] == "0.0,0.3"
+    assert [item["price"] for item in orders] == [1000, 997]
+    assert fields["entry_split_order_variant_id"] == "equal_50_50_offset_0pct_0_3pct"
 
 
 def test_build_report_uses_split_variant_outcome_as_primary_ev(monkeypatch, tmp_path):
@@ -347,7 +347,7 @@ def test_build_report_uses_split_variant_outcome_as_primary_ev(monkeypatch, tmp_
                 "spread_bps": 18,
                 "buy_pressure_10t": 55,
                 "entry_split_order_policy_applied": True,
-                "entry_split_order_variant_id": "equal_50_50_offset_0pct_1pct",
+                "entry_split_order_variant_id": "equal_50_50_offset_0pct_0_3pct",
                 "entry_split_order_policy_mode": "bounded_equal_split_baseline",
                 "entry_split_order_leg_count": 2,
                 "entry_split_order_price_offsets_ticks": "0,1",
@@ -500,7 +500,7 @@ def test_post_sell_candidate_preserves_entry_split_variant_metadata(monkeypatch,
                 "entry_split_order_bucket": "balanced_normal",
                 "entry_split_order_policy_version": "entry_split_order_plan:test",
                 "entry_split_order_policy_mode": "bounded_equal_split_baseline",
-                "entry_split_order_variant_id": "equal_50_50_offset_0pct_1pct",
+                "entry_split_order_variant_id": "equal_50_50_offset_0pct_0_3pct",
                 "entry_split_order_leg_count": 2,
                 "entry_split_order_price_offsets_ticks": "0,1",
                 "entry_split_order_qty_weight_min": 0.5,
@@ -526,7 +526,7 @@ def test_post_sell_candidate_preserves_entry_split_variant_metadata(monkeypatch,
     assert payload is not None
     assert payload["actual_order_submitted"] is True
     assert payload["entry_split_order_policy_applied"] is True
-    assert payload["entry_split_order_variant_id"] == "equal_50_50_offset_0pct_1pct"
+    assert payload["entry_split_order_variant_id"] == "equal_50_50_offset_0pct_0_3pct"
     assert payload["entry_split_order_price_offsets_ticks"] == "0,1"
     assert payload["entry_split_order_runtime_default_policy_applied"] is True
 
@@ -601,12 +601,12 @@ def test_allocator_uses_runtime_default_for_missing_bucket_policy(monkeypatch, t
 
     assert fields["entry_split_order_policy_applied"] is True
     assert fields["entry_split_order_runtime_default_policy_applied"] is True
-    assert fields["entry_split_order_policy_mode"] == "runtime_default_equal_50_50_1pct"
-    assert fields["entry_split_order_variant_id"] == "runtime_default_equal_50_50_offset_0pct_1pct"
+    assert fields["entry_split_order_policy_mode"] == "runtime_default_equal_50_50_0_3pct"
+    assert fields["entry_split_order_variant_id"] == "runtime_default_equal_50_50_offset_0pct_0_3pct"
     assert fields["entry_split_order_price_offsets_ticks"] == "0,1"
-    assert fields["entry_split_order_price_offsets_pct"] == "0.0,1.0"
+    assert fields["entry_split_order_price_offsets_pct"] == "0.0,0.3"
     assert [item["qty"] for item in orders] == [4, 3]
-    assert [item["price"] for item in orders] == [1000, 990]
+    assert [item["price"] for item in orders] == [1000, 997]
 
 
 def test_allocator_allows_split_when_source_quote_stale_recovered_before_submit(monkeypatch, tmp_path):

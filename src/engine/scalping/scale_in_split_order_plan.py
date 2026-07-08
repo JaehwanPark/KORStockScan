@@ -27,14 +27,14 @@ POLICY_MODE_BOUNDED_EQUAL_BASELINE = "bounded_equal_scale_in_split_baseline"
 POLICY_MODE_COUNTERFACTUAL_TICK_BAND = "counterfactual_tick_band_selector"
 POLICY_MODE_MARKET_QTY_SPLIT_ONLY = "market_qty_split_only"
 POLICY_MODE_DIAGNOSTIC_THREE_LEG = "diagnostic_three_leg_tick_band"
-BASELINE_SPLIT_VARIANT_ID = "scale_in_equal_50_50_offset_0pct_1pct"
-COUNTERFACTUAL_70_30_VARIANT_ID = "scale_in_counterfactual_70_30_offset_0pct_0_5pct"
-COUNTERFACTUAL_50_50_VARIANT_ID = "scale_in_counterfactual_50_50_offset_0pct_1pct"
-COUNTERFACTUAL_60_40_VARIANT_ID = "scale_in_counterfactual_60_40_offset_0pct_1_5pct"
+BASELINE_SPLIT_VARIANT_ID = "scale_in_equal_50_50_offset_0pct_0_3pct"
+COUNTERFACTUAL_70_30_VARIANT_ID = "scale_in_counterfactual_70_30_offset_0pct_0_3pct"
+COUNTERFACTUAL_50_50_VARIANT_ID = "scale_in_counterfactual_50_50_offset_0pct_0_3pct"
+COUNTERFACTUAL_60_40_VARIANT_ID = "scale_in_counterfactual_60_40_offset_0pct_0_8pct"
 MARKET_QTY_SPLIT_VARIANT_ID = "scale_in_market_qty_split_50_50"
-DIAGNOSTIC_THREE_LEG_VARIANT_ID = "scale_in_diagnostic_50_25_25_offset_0pct_1pct_1_5pct"
-RUNTIME_FALLBACK_POLICY_MODE = "runtime_default_scale_in_equal_50_50_1pct"
-RUNTIME_FALLBACK_VARIANT_ID = "runtime_default_scale_in_equal_50_50_offset_0pct_1pct"
+DIAGNOSTIC_THREE_LEG_VARIANT_ID = "scale_in_diagnostic_50_25_25_offset_0pct_0_3pct_0_8pct"
+RUNTIME_FALLBACK_POLICY_MODE = "runtime_default_scale_in_equal_50_50_0_3pct"
+RUNTIME_FALLBACK_VARIANT_ID = "runtime_default_scale_in_equal_50_50_offset_0pct_0_3pct"
 COUNTERFACTUAL_WINDOW_SEC = 180
 ANCHOR_RECONSTRUCT_WINDOW_SEC = 5
 
@@ -427,7 +427,9 @@ def _counterfactual_for_anchor(
         "touch_0tick": False,
         "touch_1tick": False,
         "touch_2tick": False,
+        "touch_0_3pct": False,
         "touch_0_5pct": False,
+        "touch_0_8pct": False,
         "touch_1_0pct": False,
         "touch_1_5pct": False,
         "missed_upside_proxy": False,
@@ -469,7 +471,9 @@ def _counterfactual_for_anchor(
             "touch_0tick": min_price <= base_price,
             "touch_1tick": min_price <= base_price - tick,
             "touch_2tick": min_price <= base_price - (2 * tick),
+            "touch_0_3pct": down_pct >= 0.3,
             "touch_0_5pct": down_pct >= 0.5,
+            "touch_0_8pct": down_pct >= 0.8,
             "touch_1_0pct": down_pct >= 1.0,
             "touch_1_5pct": down_pct >= 1.5,
             "missed_upside_proxy": min_price > base_price - tick and (max_price or 0) >= base_price + tick,
@@ -538,7 +542,9 @@ def _counterfactual_summary(bucket_rows: list[dict[str, Any]], all_events: list[
         "touch_0tick_rate": rate("touch_0tick"),
         "touch_1tick_rate": rate("touch_1tick"),
         "touch_2tick_rate": rate("touch_2tick"),
+        "touch_0_3pct_rate": rate("touch_0_3pct"),
         "touch_0_5pct_rate": rate("touch_0_5pct"),
+        "touch_0_8pct_rate": rate("touch_0_8pct"),
         "touch_1_0pct_rate": rate("touch_1_0pct"),
         "touch_1_5pct_rate": rate("touch_1_5pct"),
         "missed_upside_proxy_rate": rate("missed_upside_proxy"),
@@ -567,7 +573,7 @@ def _selected_policy_from_counterfactual(summary: dict[str, Any]) -> dict[str, A
         return {
             "leg_count": 2,
             "price_offsets_ticks": [0, 1],
-            "price_offsets_pct": [0.0, 1.0],
+            "price_offsets_pct": [0.0, 0.3],
             "qty_weights": [0.5, 0.5],
             "qty_weight_min": 0.5,
             "qty_weight_max": 0.5,
@@ -578,59 +584,61 @@ def _selected_policy_from_counterfactual(summary: dict[str, Any]) -> dict[str, A
         }
     touch1 = _safe_float(summary.get("touch_1tick_rate"), 0.0) or 0.0
     touch2 = _safe_float(summary.get("touch_2tick_rate"), 0.0) or 0.0
+    touch03pct = _safe_float(summary.get("touch_0_3pct_rate"), 0.0) or 0.0
     touch05pct = _safe_float(summary.get("touch_0_5pct_rate"), 0.0) or 0.0
+    touch08pct = _safe_float(summary.get("touch_0_8pct_rate"), 0.0) or 0.0
     touch1pct = _safe_float(summary.get("touch_1_0pct_rate"), 0.0) or 0.0
     touch15pct = _safe_float(summary.get("touch_1_5pct_rate"), 0.0) or 0.0
     missed = _safe_float(summary.get("missed_upside_proxy_rate"), 0.0) or 0.0
-    if touch15pct >= 0.25 and missed < 0.40:
+    if (touch08pct >= 0.40 or touch15pct >= 0.25) and missed < 0.40:
         return {
             "leg_count": 2,
             "price_offsets_ticks": [0, 2],
-            "price_offsets_pct": [0.0, 1.5],
+            "price_offsets_pct": [0.0, 0.8],
             "qty_weights": [0.6, 0.4],
             "qty_weight_min": 0.6,
             "qty_weight_max": 0.4,
             "policy_mode": POLICY_MODE_COUNTERFACTUAL_TICK_BAND,
             "split_variant_id": COUNTERFACTUAL_60_40_VARIANT_ID,
-            "selection_reason": "touch_1_5pct_high_with_low_missed_upside",
+            "selection_reason": "touch_0_8pct_high_with_low_missed_upside",
             "runtime_apply_allowed": True,
         }
-    if touch05pct < 0.30 or touch1 < 0.30 or missed >= 0.40:
+    if touch03pct < 0.30 or touch05pct < 0.30 or touch1 < 0.30 or missed >= 0.40:
         return {
             "leg_count": 2,
             "price_offsets_ticks": [0, 1],
-            "price_offsets_pct": [0.0, 0.5],
+            "price_offsets_pct": [0.0, 0.3],
             "qty_weights": [0.7, 0.3],
             "qty_weight_min": 0.7,
             "qty_weight_max": 0.3,
             "policy_mode": POLICY_MODE_COUNTERFACTUAL_TICK_BAND,
             "split_variant_id": COUNTERFACTUAL_70_30_VARIANT_ID,
-            "selection_reason": "touch_0_5pct_low_or_missed_upside_high",
+            "selection_reason": "touch_0_3pct_low_or_missed_upside_high",
             "runtime_apply_allowed": True,
         }
-    if touch1pct >= 0.40 or (touch1 >= 0.70 and touch2 >= 0.40):
+    if touch08pct >= 0.40 or touch1pct >= 0.40 or (touch1 >= 0.70 and touch2 >= 0.40):
         return {
             "leg_count": 2,
             "price_offsets_ticks": [0, 1],
-            "price_offsets_pct": [0.0, 1.0],
+            "price_offsets_pct": [0.0, 0.3],
             "qty_weights": [0.5, 0.5],
             "qty_weight_min": 0.5,
             "qty_weight_max": 0.5,
             "policy_mode": POLICY_MODE_COUNTERFACTUAL_TICK_BAND,
             "split_variant_id": COUNTERFACTUAL_50_50_VARIANT_ID,
-            "selection_reason": "touch_1pct_ready_or_tick_band_high",
+            "selection_reason": "touch_0_8pct_ready_or_tick_band_high",
             "runtime_apply_allowed": True,
         }
     return {
         "leg_count": 2,
         "price_offsets_ticks": [0, 1],
-        "price_offsets_pct": [0.0, 1.0],
+        "price_offsets_pct": [0.0, 0.3],
         "qty_weights": [0.5, 0.5],
         "qty_weight_min": 0.5,
         "qty_weight_max": 0.5,
         "policy_mode": POLICY_MODE_COUNTERFACTUAL_TICK_BAND,
         "split_variant_id": COUNTERFACTUAL_50_50_VARIANT_ID,
-        "selection_reason": "touch_0_5pct_mid_range_pct_baseline",
+        "selection_reason": "touch_0_3pct_mid_range_pct_baseline",
         "runtime_apply_allowed": True,
     }
 
@@ -646,7 +654,7 @@ def _diagnostic_three_leg_candidate(bucket: str, summary: dict[str, Any]) -> dic
         "context_bucket": bucket,
         "leg_count": 3,
         "price_offsets_ticks": [0, 1, 2],
-        "price_offsets_pct": [0.0, 1.0, 1.5],
+        "price_offsets_pct": [0.0, 0.3, 0.8],
         "qty_weights": [0.5, 0.25, 0.25],
         "qty_weight_min": 0.5,
         "qty_weight_max": 0.25,
@@ -694,7 +702,9 @@ def _candidate_for_bucket(bucket: str, rows: list[dict[str, Any]], all_events: l
             "touch_0tick_rate": counterfactual.get("touch_0tick_rate"),
             "touch_1tick_rate": counterfactual.get("touch_1tick_rate"),
             "touch_2tick_rate": counterfactual.get("touch_2tick_rate"),
+            "touch_0_3pct_rate": counterfactual.get("touch_0_3pct_rate"),
             "touch_0_5pct_rate": counterfactual.get("touch_0_5pct_rate"),
+            "touch_0_8pct_rate": counterfactual.get("touch_0_8pct_rate"),
             "touch_1_0pct_rate": counterfactual.get("touch_1_0pct_rate"),
             "touch_1_5pct_rate": counterfactual.get("touch_1_5pct_rate"),
             "missed_upside_proxy_rate": counterfactual.get("missed_upside_proxy_rate"),
@@ -708,7 +718,7 @@ def _build_policy(target_date: str, candidates: list[dict[str, Any]]) -> dict[st
         "context_bucket": "default",
         "leg_count": 2,
         "price_offsets_ticks": [0, 1],
-        "price_offsets_pct": [0.0, 1.0],
+        "price_offsets_pct": [0.0, 0.3],
         "qty_weights": [0.5, 0.5],
         "qty_weight_min": 0.5,
         "qty_weight_max": 0.5,
@@ -952,7 +962,7 @@ def _runtime_default_bucket_policy(bucket: str) -> dict[str, Any]:
         "context_bucket": bucket,
         "leg_count": 2,
         "price_offsets_ticks": [0, 1],
-        "price_offsets_pct": [0.0, 1.0],
+        "price_offsets_pct": [0.0, 0.3],
         "qty_weights": [0.5, 0.5],
         "qty_weight_min": 0.5,
         "qty_weight_max": 0.5,

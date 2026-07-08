@@ -1763,6 +1763,10 @@ def describe_dynamic_scale_in_qty(
             ),
         }
     )
+    if isinstance(action, dict):
+        for key, value in action.items():
+            if key.startswith("scale_in_ai_authority_"):
+                details[key] = value
 
     raw_strategy = (strategy or "").upper()
     normalized_strategy = "SCALPING" if raw_strategy in {"SCALPING", "SCALP"} else raw_strategy

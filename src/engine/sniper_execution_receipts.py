@@ -137,6 +137,11 @@ _PENDING_ADD_META_KEYS = (
     "pending_add_counted",
     "pending_add_filled_qty",
     "pending_add_filled_amount",
+    "_add_receipt_requested_by_order_no",
+    "_add_receipt_filled_by_order_no",
+    "_add_receipt_filled_amount_by_order_no",
+    "pending_add_notice_by_order_no",
+    "scale_in_receipt_reconciled_before_ordno_bind",
     "add_order_time",
     "add_odno",
 )
@@ -163,6 +168,11 @@ _SELL_REVIVE_RESET_KEYS = (
     "requested_buy_qty",
     "_entry_receipt_filled_by_order_no",
     "_entry_receipt_requested_by_order_no",
+    "entry_partial_fill_notified_qty",
+    "entry_partial_fill_deferred_notice",
+    "entry_partial_fill_deferred_at",
+    "entry_submit_notice_pending",
+    "entry_submit_notice_enqueued",
     "buy_execution_notified",
     "trailing_stop_price",
     "hard_stop_price",
@@ -181,6 +191,11 @@ _SELL_COMPLETE_RESET_KEYS = (
     "requested_buy_qty",
     "_entry_receipt_filled_by_order_no",
     "_entry_receipt_requested_by_order_no",
+    "entry_partial_fill_notified_qty",
+    "entry_partial_fill_deferred_notice",
+    "entry_partial_fill_deferred_at",
+    "entry_submit_notice_pending",
+    "entry_submit_notice_enqueued",
     "buy_execution_notified",
     "trailing_stop_price",
     "hard_stop_price",
@@ -189,6 +204,10 @@ _SELL_COMPLETE_RESET_KEYS = (
 _ENTRY_RECEIPT_FILLED_BY_ORDER_KEY = "_entry_receipt_filled_by_order_no"
 _ENTRY_RECEIPT_REQUESTED_BY_ORDER_KEY = "_entry_receipt_requested_by_order_no"
 _ENTRY_RECEIPT_NO_ORDER_KEY = "__entry_without_order_no__"
+_ADD_RECEIPT_FILLED_BY_ORDER_KEY = "_add_receipt_filled_by_order_no"
+_ADD_RECEIPT_REQUESTED_BY_ORDER_KEY = "_add_receipt_requested_by_order_no"
+_ADD_RECEIPT_AMOUNT_BY_ORDER_KEY = "_add_receipt_filled_amount_by_order_no"
+_ADD_RECEIPT_NO_ORDER_KEY = "__add_without_order_no__"
 
 
 def bind_execution_dependencies(
@@ -293,6 +312,11 @@ def _entry_receipt_order_key(order_no: str) -> str:
     return normalized or _ENTRY_RECEIPT_NO_ORDER_KEY
 
 
+def _add_receipt_order_key(order_no: str) -> str:
+    normalized = str(order_no or "").strip()
+    return normalized or _ADD_RECEIPT_NO_ORDER_KEY
+
+
 def _entry_receipt_int_map(target_stock: dict[str, Any], key: str) -> dict[str, int]:
     raw_map = target_stock.get(key)
     if not isinstance(raw_map, dict):
@@ -304,6 +328,25 @@ def _entry_receipt_int_map(target_stock: dict[str, Any], key: str) -> dict[str, 
     if normalized is not raw_map:
         target_stock[key] = normalized
     return normalized
+
+
+def _pending_add_order_numbers(target_stock: dict[str, Any]) -> list[str]:
+    raw = str(target_stock.get("pending_add_ord_no", "") or "").strip()
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+def _append_pending_add_order_no(target_stock: dict[str, Any], order_no: str) -> bool:
+    normalized = str(order_no or "").strip()
+    if not normalized:
+        return False
+    order_nos = _pending_add_order_numbers(target_stock)
+    if normalized in order_nos:
+        return False
+    order_nos.append(normalized)
+    joined = ",".join(order_nos)
+    target_stock["pending_add_ord_no"] = joined
+    target_stock["add_odno"] = joined
+    return True
 
 
 def _resolve_entry_effective_fill_qty(
@@ -385,7 +428,7 @@ def _resolve_add_effective_fill(
     order_no: str,
     exec_price: int,
     exec_qty: int,
-) -> tuple[int, int, int, int]:
+) -> tuple[int, int, int, int, int, int, bool]:
     """Return the add-buy fill delta and effective incremental price.
 
     Kiwoom add-buy execution notices can arrive as cumulative order fill
@@ -397,51 +440,113 @@ def _resolve_add_effective_fill(
 
     raw_qty = int(exec_qty or 0)
     raw_price = int(exec_price or 0)
-    requested_qty = int(target_stock.get("pending_add_qty", 0) or 0)
-    already_filled = int(target_stock.get("pending_add_filled_qty", 0) or 0)
-    already_amount = int(target_stock.get("pending_add_filled_amount", 0) or 0)
+    bundle_requested_qty = int(target_stock.get("pending_add_qty", 0) or 0)
+    bundle_already_filled = int(target_stock.get("pending_add_filled_qty", 0) or 0)
+    bundle_already_amount = int(target_stock.get("pending_add_filled_amount", 0) or 0)
     if raw_qty <= 0:
-        return 0, raw_price, requested_qty, already_filled
+        return 0, raw_price, bundle_requested_qty, bundle_already_filled, 0, 0, False
 
-    if requested_qty <= 0:
+    order_key = _add_receipt_order_key(order_no)
+    requested_by_order = _entry_receipt_int_map(target_stock, _ADD_RECEIPT_REQUESTED_BY_ORDER_KEY)
+    filled_by_order = _entry_receipt_int_map(target_stock, _ADD_RECEIPT_FILLED_BY_ORDER_KEY)
+    amount_by_order = _entry_receipt_int_map(target_stock, _ADD_RECEIPT_AMOUNT_BY_ORDER_KEY)
+    pending_ord_nos = set(_pending_add_order_numbers(target_stock))
+    reconciled_before_ordno_bind = False
+
+    normalized_order_no = str(order_no or "").strip()
+    if normalized_order_no and normalized_order_no not in pending_ord_nos and not pending_ord_nos:
+        _append_pending_add_order_no(target_stock, normalized_order_no)
+        pending_ord_nos.add(normalized_order_no)
+        reconciled_before_ordno_bind = True
+        target_stock["scale_in_receipt_reconciled_before_ordno_bind"] = True
+
+    order_requested_qty = int(requested_by_order.get(order_key, 0) or 0)
+    if order_requested_qty <= 0:
+        if not normalized_order_no:
+            order_requested_qty = bundle_requested_qty
+        elif bundle_requested_qty > 0 and raw_qty >= bundle_requested_qty:
+            order_requested_qty = bundle_requested_qty
+        else:
+            order_requested_qty = raw_qty
+    elif (
+        normalized_order_no
+        and bundle_requested_qty > order_requested_qty
+        and order_requested_qty < raw_qty <= bundle_requested_qty
+    ):
+        order_requested_qty = raw_qty
+    if order_requested_qty > 0:
+        requested_by_order[order_key] = max(int(requested_by_order.get(order_key, 0) or 0), order_requested_qty)
+
+    order_already_filled = int(filled_by_order.get(order_key, 0) or 0)
+    order_already_amount = int(amount_by_order.get(order_key, 0) or 0)
+
+    if bundle_requested_qty <= 0:
         effective_qty = raw_qty
         effective_price = raw_price
     else:
-        remaining_qty = max(0, requested_qty - already_filled)
+        bundle_remaining_qty = max(0, bundle_requested_qty - bundle_already_filled)
+        order_remaining_qty = (
+            max(0, order_requested_qty - order_already_filled)
+            if order_requested_qty > 0
+            else bundle_remaining_qty
+        )
+        remaining_qty = min(bundle_remaining_qty, order_remaining_qty)
         if remaining_qty <= 0:
             log_info(
                 f"[ADD_FILL_IGNORED] {target_stock.get('name')}({code}) "
                 f"ord_no={order_no or '-'} raw_fill_qty={raw_qty} "
-                f"already_filled={already_filled}/{requested_qty} reason=duplicate_or_cumulative_receipt"
+                f"already_filled={bundle_already_filled}/{bundle_requested_qty} "
+                f"order_filled={order_already_filled}/{order_requested_qty} "
+                "reason=duplicate_or_cumulative_receipt"
             )
-            return 0, raw_price, requested_qty, already_filled
+            return (
+                0,
+                raw_price,
+                bundle_requested_qty,
+                bundle_already_filled,
+                order_requested_qty,
+                order_already_filled,
+                reconciled_before_ordno_bind,
+            )
 
         effective_qty = min(raw_qty, remaining_qty)
         effective_price = raw_price
 
-        if already_filled > 0 and raw_qty > remaining_qty and raw_qty <= requested_qty:
+        if order_already_filled > 0 and raw_qty > remaining_qty and order_requested_qty > 0 and raw_qty <= order_requested_qty:
             cumulative_amount = raw_price * raw_qty
-            delta_amount = cumulative_amount - already_amount
+            delta_amount = cumulative_amount - order_already_amount
             if delta_amount > 0:
                 effective_price = max(1, int(round(delta_amount / effective_qty)))
                 log_info(
                     f"[ADD_FILL_CUMULATIVE_NORMALIZED] {target_stock.get('name')}({code}) "
                     f"ord_no={order_no or '-'} raw_fill_qty={raw_qty} effective_fill_qty={effective_qty} "
                     f"raw_avg_price={raw_price} effective_price={effective_price} "
-                    f"already_filled={already_filled}/{requested_qty}"
+                    f"order_filled={order_already_filled}/{order_requested_qty}"
                 )
         elif effective_qty < raw_qty:
             log_info(
                 f"[ADD_FILL_CAPPED] {target_stock.get('name')}({code}) "
                 f"ord_no={order_no or '-'} raw_fill_qty={raw_qty} "
-                f"effective_fill_qty={effective_qty} already_filled={already_filled}/{requested_qty} "
+                f"effective_fill_qty={effective_qty} already_filled={bundle_already_filled}/{bundle_requested_qty} "
+                f"order_filled={order_already_filled}/{order_requested_qty} "
                 "reason=over_requested_receipt"
             )
 
-    new_filled = already_filled + effective_qty
-    target_stock["pending_add_filled_qty"] = new_filled
-    target_stock["pending_add_filled_amount"] = already_amount + (effective_price * effective_qty)
-    return effective_qty, effective_price, requested_qty, new_filled
+    new_order_filled = order_already_filled + effective_qty
+    new_bundle_filled = bundle_already_filled + effective_qty
+    filled_by_order[order_key] = new_order_filled
+    amount_by_order[order_key] = order_already_amount + (effective_price * effective_qty)
+    target_stock["pending_add_filled_qty"] = new_bundle_filled
+    target_stock["pending_add_filled_amount"] = bundle_already_amount + (effective_price * effective_qty)
+    return (
+        effective_qty,
+        effective_price,
+        bundle_requested_qty,
+        new_bundle_filled,
+        order_requested_qty,
+        new_order_filled,
+        reconciled_before_ordno_bind,
+    )
 
 
 def _clear_runtime_keys(target_stock: dict[str, Any], keys: tuple[str, ...]) -> None:
@@ -899,12 +1004,14 @@ def _execution_ignore_context(code: str, exec_type: str, order_no: str) -> str:
             str(order.get('ord_no', '') or '').strip() or '-'
             for order in pending_orders[:3]
         ]
+        pending_add_ord_no = str(stock.get("pending_add_ord_no", "") or "-")
         target_summaries.append(
-            "{status}:odno={odno}:sell_odno={sell_odno}:pending={pending}".format(
+            "{status}:odno={odno}:sell_odno={sell_odno}:pending={pending}:pending_add={pending_add}".format(
                 status=str(stock.get('status', '') or '-'),
                 odno=str(stock.get('odno', '') or '-'),
                 sell_odno=str(stock.get('sell_odno', '') or '-'),
                 pending="|".join(pending_ord_nos) if pending_ord_nos else '-',
+                pending_add=pending_add_ord_no,
             )
         )
     terminal_present = False
@@ -936,6 +1043,22 @@ def _apply_order_notice_to_target(target_stock, *, code, exec_type, order_no, st
     changed = False
 
     if exec_type == 'BUY':
+        if bool(target_stock.get("pending_add_order")) and str(target_stock.get("status") or "") == "HOLDING":
+            if order_no:
+                _append_pending_add_order_no(target_stock, order_no)
+                notices = target_stock.get("pending_add_notice_by_order_no")
+                if not isinstance(notices, dict):
+                    notices = {}
+                    target_stock["pending_add_notice_by_order_no"] = notices
+                notices[str(order_no)] = {"status": status, "notice_at": time.time()}
+                changed = True
+            if changed:
+                log_info(
+                    f"[ORDER_NOTICE_BOUND] {target_stock.get('name')}({code}) "
+                    f"type={exec_type} status={status} order_no={order_no}"
+                )
+            return
+
         pending_orders = target_stock.get('pending_entry_orders') or []
         exact_match = None
         blank_match = None
@@ -1152,6 +1275,93 @@ def _update_db_for_buy(target_id, exec_price, now, receipt_snapshot):
         log_error(f"🚨 [DB 에러] ID {target_id} BUY 처리 중 에러: {e}")
 
 
+def _publish_entry_partial_fill_message(
+    target_stock: dict[str, Any],
+    *,
+    avg_buy_price: float,
+    cum_filled_qty: int,
+    requested_entry_qty: int,
+    remaining_qty: int,
+    allow_defer: bool = True,
+) -> bool:
+    if requested_entry_qty <= 0 or cum_filled_qty <= 0 or cum_filled_qty >= requested_entry_qty:
+        return False
+
+    last_notified_qty = int(target_stock.get('entry_partial_fill_notified_qty', 0) or 0)
+    if cum_filled_qty <= last_notified_qty:
+        return False
+
+    if (
+        allow_defer
+        and bool(target_stock.get("entry_submit_notice_pending"))
+        and not bool(target_stock.get("entry_submit_notice_enqueued"))
+    ):
+        target_stock["entry_partial_fill_deferred_notice"] = {
+            "avg_buy_price": float(avg_buy_price or 0.0),
+            "cum_filled_qty": int(cum_filled_qty or 0),
+            "requested_entry_qty": int(requested_entry_qty or 0),
+            "remaining_qty": int(remaining_qty or 0),
+        }
+        target_stock["entry_partial_fill_deferred_at"] = time.time()
+        log_info(
+            f"[ENTRY_PARTIAL_FILL_NOTICE_DEFERRED_UNTIL_SUBMIT_NOTICE] "
+            f"{target_stock.get('name')}({target_stock.get('code')}) "
+            f"filled={cum_filled_qty}/{requested_entry_qty} remaining={remaining_qty}"
+        )
+        return False
+
+    pending_msg = target_stock.get('pending_buy_msg') or ''
+    if pending_msg:
+        partial_msg = pending_msg
+    else:
+        partial_msg = f"🛒 **[{target_stock.get('name') or '-'}]** 매수 부분 체결"
+    partial_msg += (
+        f"\n⏳ **부분 체결:** `{cum_filled_qty}/{requested_entry_qty}주`"
+        f" / **평균 체결가:** `{avg_buy_price:,.0f}원`"
+        f" / **잔여:** `{remaining_qty}주`"
+    )
+    if event_bus is None:
+        log_info(
+            f"[ENTRY_PARTIAL_FILL_NOTICE_SKIPPED] {target_stock.get('name')}({target_stock.get('code')}) "
+            "reason=event_bus_unavailable"
+        )
+        return False
+    try:
+        event_bus.publish(
+            'TELEGRAM_BROADCAST',
+            {
+                'message': partial_msg,
+                'audience': _receipt_audience(target_stock),
+                'parse_mode': 'Markdown',
+            },
+        )
+    except Exception as exc:
+        log_error(
+            f"[ENTRY_PARTIAL_FILL_NOTICE_FAILED] {target_stock.get('name')}({target_stock.get('code')}) "
+            f"error={exc}"
+        )
+        return False
+    target_stock['entry_partial_fill_notified_qty'] = int(cum_filled_qty or 0)
+    return True
+
+
+def flush_deferred_entry_partial_fill_notice(target_stock: dict[str, Any] | None) -> bool:
+    target_stock = target_stock if isinstance(target_stock, dict) else {}
+    deferred = target_stock.get("entry_partial_fill_deferred_notice")
+    if not isinstance(deferred, dict):
+        return False
+    target_stock.pop("entry_partial_fill_deferred_notice", None)
+    target_stock.pop("entry_partial_fill_deferred_at", None)
+    return _publish_entry_partial_fill_message(
+        target_stock,
+        avg_buy_price=float(deferred.get("avg_buy_price") or 0.0),
+        cum_filled_qty=int(deferred.get("cum_filled_qty") or 0),
+        requested_entry_qty=int(deferred.get("requested_entry_qty") or 0),
+        remaining_qty=int(deferred.get("remaining_qty") or 0),
+        allow_defer=False,
+    )
+
+
 def _update_db_for_add(target_id, exec_price, exec_qty, now, receipt_snapshot, add_type, count_increment):
     """비동기로 실행되는 추가매수 체결 DB 업데이트"""
     try:
@@ -1312,7 +1522,15 @@ def _handle_add_buy_execution(
     exec_qty: int,
     now: datetime,
 ) -> None:
-    effective_qty, effective_price, requested_qty, filled_qty = _resolve_add_effective_fill(
+    (
+        effective_qty,
+        effective_price,
+        requested_qty,
+        filled_qty,
+        order_requested_qty,
+        order_filled_qty,
+        reconciled_before_ordno_bind,
+    ) = _resolve_add_effective_fill(
         target_stock=target_stock,
         code=code,
         order_no=order_no,
@@ -1436,8 +1654,17 @@ def _handle_add_buy_execution(
         actual_order_submitted=True,
         broker_order_forbidden=False,
         add_type=add_type,
+        order_no=order_no or "-",
         fill_price=int(exec_price or 0),
         fill_qty=int(exec_qty or 0),
+        bundle_requested_qty=int(requested_qty or 0),
+        bundle_filled_qty=int(filled_qty or 0),
+        order_requested_qty=int(order_requested_qty or 0),
+        order_filled_qty=int(order_filled_qty or 0),
+        scale_in_receipt_reconciled_before_ordno_bind=bool(
+            reconciled_before_ordno_bind
+            or target_stock.get("scale_in_receipt_reconciled_before_ordno_bind")
+        ),
         new_avg_price=f"{float(new_avg or 0):.2f}",
         new_buy_qty=int(new_qty or 0),
         add_count=int(target_stock.get('add_count', 0) or 0),
@@ -1736,13 +1963,24 @@ def _handle_entry_buy_execution(
         buy_receipt_snapshot.get('buy_execution_notified', False)
     ) or entry_partial_fill_pending
     if entry_partial_fill_pending:
+        partial_notice_sent = _publish_entry_partial_fill_message(
+            target_stock,
+            avg_buy_price=float(new_avg or exec_price or 0),
+            cum_filled_qty=int(cum_filled_qty or 0),
+            requested_entry_qty=int(requested_entry_qty or 0),
+            remaining_qty=int(remaining_qty or 0),
+        )
         log_info(
             f"[ENTRY_PARTIAL_FILL_NOTICE_DEFERRED] {target_stock.get('name')}({code}) "
             f"filled={cum_filled_qty}/{requested_entry_qty} remaining={remaining_qty} "
+            f"partial_notice_sent={partial_notice_sent} "
             "reason=wait_full_entry_bundle_before_buy_execution_telegram"
         )
     elif not buy_receipt_snapshot.get('buy_execution_notified'):
         target_stock['buy_execution_notified'] = True
+        target_stock.pop('entry_partial_fill_notified_qty', None)
+        target_stock.pop('entry_partial_fill_deferred_notice', None)
+        target_stock.pop('entry_partial_fill_deferred_at', None)
         target_stock.pop('pending_buy_msg', None)
 
     threading.Thread(
@@ -1828,7 +2066,7 @@ def handle_real_execution(exec_data):
             pending_add = bool(target_stock.get('pending_add_order'))
             pending_ord_no = str(target_stock.get('pending_add_ord_no', '') or '').strip()
             pending_ord_nos = {part.strip() for part in pending_ord_no.split(',') if part.strip()}
-            is_add_fill = pending_add and (not order_no or order_no in pending_ord_nos)
+            is_add_fill = pending_add and (not order_no or order_no in pending_ord_nos or not pending_ord_nos)
 
             if is_add_fill:
                 _handle_add_buy_execution(
@@ -1839,6 +2077,12 @@ def handle_real_execution(exec_data):
                     exec_price=exec_price,
                     exec_qty=exec_qty,
                     now=now,
+                )
+            elif pending_add and str(target_stock.get('status') or '') == 'HOLDING':
+                log_info(
+                    f"[ADD_FILL_IGNORED] {target_stock.get('name')}({code}) "
+                    f"ord_no={order_no or '-'} pending_add_ord_no={pending_ord_no or '-'} "
+                    "reason=order_not_in_pending_add_bundle"
                 )
             else:
                 _handle_entry_buy_execution(

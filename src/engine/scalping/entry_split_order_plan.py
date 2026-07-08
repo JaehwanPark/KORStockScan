@@ -33,10 +33,10 @@ POST_SUBMIT_LOW_WINDOW_MINUTES = 10
 POLICY_MODE_REAL_PRIMARY_EV = "real_primary_ev_optimized"
 POLICY_MODE_BOUNDED_EQUAL_BASELINE = "bounded_equal_split_baseline"
 POLICY_MODE_POST_SUBMIT_TICK_BAND = "post_submit_tick_band_seed"
-BASELINE_SPLIT_VARIANT_ID = "equal_50_50_offset_0pct_1pct"
-PCT_BAND_3LEG_VARIANT_ID = "equal_3leg_offset_0pct_1pct_1_5pct"
-RUNTIME_FALLBACK_POLICY_MODE = "runtime_default_equal_50_50_1pct"
-RUNTIME_FALLBACK_VARIANT_ID = "runtime_default_equal_50_50_offset_0pct_1pct"
+BASELINE_SPLIT_VARIANT_ID = "equal_50_50_offset_0pct_0_3pct"
+PCT_BAND_3LEG_VARIANT_ID = "equal_3leg_offset_0pct_0_3pct_0_8pct"
+RUNTIME_FALLBACK_POLICY_MODE = "runtime_default_equal_50_50_0_3pct"
+RUNTIME_FALLBACK_VARIANT_ID = "runtime_default_equal_50_50_offset_0pct_0_3pct"
 ALLOWED_PRICE_CANDIDATES = {
     "resolved_order_price",
     "best_bid",
@@ -315,7 +315,7 @@ def _template_for_bucket(bucket: str) -> dict[str, Any]:
         "urgent_tight_spread": {
             "leg_count": 2,
             "price_offsets_ticks": [0, 1],
-            "price_offsets_pct": [0.0, 0.5],
+            "price_offsets_pct": [0.0, 0.3],
             "qty_weight_min": 0.65,
             "qty_weight_max": 0.85,
             "urgency_score": 0.82,
@@ -325,7 +325,7 @@ def _template_for_bucket(bucket: str) -> dict[str, Any]:
         "balanced_normal": {
             "leg_count": 2,
             "price_offsets_ticks": [0, 1],
-            "price_offsets_pct": [0.0, 1.0],
+            "price_offsets_pct": [0.0, 0.3],
             "qty_weight_min": 0.55,
             "qty_weight_max": 0.70,
             "urgency_score": 0.55,
@@ -335,7 +335,7 @@ def _template_for_bucket(bucket: str) -> dict[str, Any]:
         "passive_wide_or_weak": {
             "leg_count": 3,
             "price_offsets_ticks": [0, 1, 2],
-            "price_offsets_pct": [0.0, 1.0, 1.5],
+            "price_offsets_pct": [0.0, 0.3, 0.8],
             "qty_weight_min": 0.30,
             "qty_weight_max": 0.50,
             "urgency_score": 0.30,
@@ -362,7 +362,7 @@ def _bounded_equal_split_template(bucket: str) -> dict[str, Any]:
         {
             "leg_count": 2,
             "price_offsets_ticks": [0, 1],
-            "price_offsets_pct": [0.0, 1.0],
+            "price_offsets_pct": [0.0, 0.3],
             "qty_weight_min": 0.5,
             "qty_weight_max": 0.5,
             "price_candidates": ["resolved_order_price", "best_bid", "bid-1tick"],
@@ -382,7 +382,7 @@ def _post_submit_tick_band_template(bucket: str, tick_band: dict[str, Any]) -> d
             {
                 "leg_count": 3,
                 "price_offsets_ticks": [0, 1, 2],
-                "price_offsets_pct": [0.0, 1.0, 1.5],
+                "price_offsets_pct": [0.0, 0.3, 0.8],
                 "qty_weight_min": 0.34,
                 "qty_weight_max": 0.34,
                 "price_candidates": ["resolved_order_price", "best_bid", "bid-1tick", "bid-2tick"],
@@ -517,7 +517,9 @@ def _build_post_submit_low_tick_bands(
             "p90_down_pct": round(_percentile([int(value * 10000) for value in pct_values], 90) / 10000.0, 4)
             if pct_values
             else 0.0,
+            "touch_0_3pct_rate": _pct(sum(1 for value in pct_values if value >= 0.3), sample),
             "touch_0_5pct_rate": _pct(sum(1 for value in pct_values if value >= 0.5), sample),
+            "touch_0_8pct_rate": _pct(sum(1 for value in pct_values if value >= 0.8), sample),
             "touch_1_0pct_rate": _pct(sum(1 for value in pct_values if value >= 1.0), sample),
             "touch_1_5pct_rate": _pct(sum(1 for value in pct_values if value >= 1.5), sample),
             "no_pullback_rate": _pct(sum(1 for value in values if value <= 0), sample),
@@ -647,7 +649,7 @@ def _build_candidate_grid(
                 policy_mode = POLICY_MODE_POST_SUBMIT_TICK_BAND
                 policy_generation_reason = (
                     "real submit sample floor and post-submit observed low tick-band passed; "
-                    "open a qty-preserving 3-leg 0/1/2tick seed"
+                    "open a qty-preserving 3-leg 0/0.3/0.8pct seed"
                 )
             else:
                 floor_status = "pass_bounded_equal_split_baseline"
@@ -655,7 +657,7 @@ def _build_candidate_grid(
                 policy_mode = POLICY_MODE_BOUNDED_EQUAL_BASELINE
                 policy_generation_reason = (
                     "real submit sample floor passed, split-variant outcome is pending, and execution guards allow "
-                    "a qty-preserving 2-leg 50/50 1pct baseline"
+                    "a qty-preserving 2-leg 50/50 0.3pct baseline"
                 )
         elif real_count < SAMPLE_FLOOR_REAL:
             floor_status = "hold_sample"
@@ -803,7 +805,7 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
             "source_quality_gate": "observation_source_quality_audit_hard_block_rows_excluded",
             "policy_modes": {
                 POLICY_MODE_REAL_PRIMARY_EV: "real split-variant outcome EV-positive optimized split",
-                POLICY_MODE_BOUNDED_EQUAL_BASELINE: "real-submit-backed qty-preserving 2-leg 50/50 1pct baseline",
+                POLICY_MODE_BOUNDED_EQUAL_BASELINE: "real-submit-backed qty-preserving 2-leg 50/50 0.3pct baseline",
                 POLICY_MODE_POST_SUBMIT_TICK_BAND: "post-submit observed-low tick-band qty-preserving seed",
             },
             "post_submit_low_tick_band_contract": {
@@ -961,12 +963,12 @@ def _runtime_default_bucket_policy(bucket: str) -> dict[str, Any]:
         "context_bucket": bucket,
         "leg_count": 2,
         "price_offsets_ticks": [0, 1],
-        "price_offsets_pct": [0.0, 1.0],
+        "price_offsets_pct": [0.0, 0.3],
         "qty_weight_min": 0.5,
         "qty_weight_max": 0.5,
         "policy_mode": RUNTIME_FALLBACK_POLICY_MODE,
         "split_variant_id": RUNTIME_FALLBACK_VARIANT_ID,
-        "policy_generation_reason": "runtime fallback for policy bucket gap; qty-preserving 50/50 1pct seed",
+        "policy_generation_reason": "runtime fallback for policy bucket gap; qty-preserving 50/50 0.3pct seed",
     }
 
 
