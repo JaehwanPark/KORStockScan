@@ -8,26 +8,26 @@
 - risk_regime_threshold_mode: `dynamic_quantile`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-07-09T15:29:02`
-- latest_event_at: `2026-07-09T15:29:02`
+- as_of: `2026-07-09T20:15:59`
+- latest_event_at: `2026-07-09T19:59:56`
 - reasons: `no panic buying threshold breached`
 
 ## 패닉바잉 지표
 
-- evaluated_symbol_count: `210`
+- evaluated_symbol_count: `456`
 - panic_buy_active_count: `0`
 - panic_buy_watch_count: `0`
 - allow_tp_override_count: `0`
 - allow_runner_count: `0`
-- max_panic_buy_score: `0.45`
-- avg_confidence: `0.5119`
+- max_panic_buy_score: `0.4229`
+- avg_confidence: `0.474`
 
 ## 소진 지표
 
 - exhaustion_candidate_count: `0`
 - exhaustion_confirmed_count: `0`
 - force_exit_runner_count: `0`
-- max_exhaustion_score: `0.5024`
+- max_exhaustion_score: `0.4717`
 
 ## TP Counterfactual
 
@@ -43,14 +43,14 @@
 ## Microstructure Detector
 
 - input_universe: `entry_observation_only`
-- input_event_count: `45317`
-- excluded_holding_row_count: `7392`
+- input_event_count: `71183`
+- excluded_holding_row_count: `7388`
 - excluded_exit_sell_row_count: `115`
-- missing_orderbook_count: `159`
-- degraded_orderbook_count: `159`
-- missing_trade_aggressor_count: `119`
-- carried_orderbook_snapshot_count: `1055`
-- carried_trade_aggressor_snapshot_count: `832`
+- missing_orderbook_count: `364`
+- degraded_orderbook_count: `364`
+- missing_trade_aggressor_count: `322`
+- carried_orderbook_snapshot_count: `1389`
+- carried_trade_aggressor_snapshot_count: `818`
 - micro_cusum_triggered_symbol_count: `1`
 - micro_consensus_pass_symbol_count: `0`
 - micro_cusum_decision_authority: `source_quality_only`
@@ -61,7 +61,7 @@
 - market_panic_breadth_risk_on_advisory: `false`
 - market_panic_breadth_risk_off_advisory: `false`
 - market_panic_breadth_single_market_risk_on_advisory: `false`
-- market_panic_breadth_single_market_risk_off_advisory: `true`
+- market_panic_breadth_single_market_risk_off_advisory: `false`
 - market_wide_panic_buy_confirmed: `false`
 - market_panic_buy_interpretation: `normal`
 - market_breadth_decision_authority: `source_quality_only`

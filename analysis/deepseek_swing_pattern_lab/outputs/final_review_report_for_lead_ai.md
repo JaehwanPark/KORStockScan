@@ -2,11 +2,11 @@
 
 ## 판정
 
-- 분석 기간: `2026-07-08` ~ `2026-07-08`
+- 분석 기간: `2026-07-09` ~ `2026-07-09`
 - trade_rows: `0`
-- lifecycle_event_rows: `28`
+- lifecycle_event_rows: `11`
 - completed_valid_profit_rows: `0`
-- ofi_qi_rows: `19`
+- ofi_qi_rows: `6`
 - total_findings: `5`
 - code_improvement_orders: `3`
 - runtime_change: `False`
@@ -64,7 +64,7 @@
 - lifecycle_stage: `ofi_qi`
 - route: `defer_evidence`
 - mapped_family: `swing_entry_ofi_qi_execution_quality`
-- confidence: `consensus`
+- confidence: `solo`
 - runtime_effect: `False`
 - expected_ev_effect: If stale ratio > 0.3, consider instrumentation/observer enhancement.
 

@@ -1,20 +1,20 @@
 {
-  "timestamp": "2026-07-09T16:15:09.841428",
-  "vix_close": 16.899999618530273,
-  "vix_ma3": 16.1999994913737,
+  "timestamp": "2026-07-09T19:36:41.239430",
+  "vix_close": 16.8700008392334,
+  "vix_ma3": 16.633333206176758,
   "vix_peak_passed": false,
   "vix_two_day_down": false,
   "vix_extreme": false,
-  "wti_close": 73.26000213623047,
-  "wti_rsi": 39.85686404152174,
-  "wti_macd": -5.099873235070959,
-  "wti_macd_signal": -5.847601648878662,
+  "wti_close": 73.7699966430664,
+  "wti_rsi": 40.84159262890352,
+  "wti_macd": -5.059189912588309,
+  "wti_macd_signal": -5.839464984382132,
   "wti_dead_cross": false,
-  "wti_from_recent_high_pct": -18.627120815781684,
+  "wti_from_recent_high_pct": -18.06064906886302,
   "oil_reversal": true,
   "oil_pullback_relief": true,
-  "fng_value": 41.7428571428571,
-  "fng_prev": 42.3428571428571,
+  "fng_value": 41.5428571428572,
+  "fng_prev": 41.5428571428572,
   "fng_description": "fear",
   "fng_extreme_fear": false,
   "fng_recovery": false,
@@ -25,11 +25,11 @@
   "swing_recovery_gate_label": "INSUFFICIENT",
   "recovery_gate_reason": "oil_only_recovery_signal_insufficient",
   "oil_only_recovery_prior": true,
-  "market_regime_continuous_score": 57.7971,
+  "market_regime_continuous_score": 57.7471,
   "market_regime_continuous_label": "NEUTRAL",
   "market_regime_component_scores": {
-    "vix_level": 23.1,
-    "fear_greed_level": 6.6971,
+    "vix_level": 23.13,
+    "fear_greed_level": 6.6171,
     "domestic_breadth": 13.7,
     "oil_relief": 10.0,
     "local_model": 4.3
@@ -43,8 +43,8 @@
   ],
   "debug": {
     "oil_rsi_turned": false,
-    "fng_curr": 41.7428571428571,
-    "fng_prev": 42.3428571428571,
+    "fng_curr": 41.5428571428572,
+    "fng_prev": 41.5428571428572,
     "score_threshold": 70,
     "component_scores": {
       "vix": 0,
@@ -68,8 +68,8 @@
         "neutral_min_score": 45.0
       },
       "component_scores": {
-        "vix_level": 23.1,
-        "fear_greed_level": 6.6971,
+        "vix_level": 23.13,
+        "fear_greed_level": 6.6171,
         "domestic_breadth": 13.7,
         "oil_relief": 10.0,
         "local_model": 4.3
@@ -96,5 +96,5 @@
     "local_breadth_signal": "none"
   },
   "cached_session_date": "2026-07-09",
-  "cached_at": "2026-07-09T16:15:09.847747+09:00"
+  "cached_at": "2026-07-09T19:36:41.255045+09:00"
 }
