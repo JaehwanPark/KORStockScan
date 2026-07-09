@@ -398,6 +398,9 @@ HIGH_VOLUME_DIAGNOSTIC_STAGE_ROLES = {
     "order_leg_fail": "execution_quality_real_only",
     "swing_probe_state_restored": "ops_volume_diagnostic",
     "preset_exit_setup": "ops_volume_diagnostic",
+    "preset_exit_setup_disabled_trailing_unified": "ops_volume_diagnostic",
+    "preset_exit_sync_disabled_trailing_unified": "ops_volume_diagnostic",
+    "scalp_preset_tp_disabled_trailing_unified": "ops_volume_diagnostic",
     "swing_same_symbol_loss_reentry_cooldowns_restored": "ops_volume_diagnostic",
 }
 
@@ -2108,7 +2111,11 @@ def _reviewed_unknown_reason_for_stage_field(
             else normalized.get("entry_requested_qty")
         )
         requested_qty = str(requested_qty_value).strip()
-        if str(stage or "") in {"position_rebased_after_fill", "preset_exit_sync_ok"} and requested_qty in {
+        if str(stage or "") in {
+            "position_rebased_after_fill",
+            "preset_exit_sync_ok",
+            "preset_exit_sync_disabled_trailing_unified",
+        } and requested_qty in {
             "0",
             "0.0",
         }:

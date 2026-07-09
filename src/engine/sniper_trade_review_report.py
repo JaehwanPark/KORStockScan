@@ -36,6 +36,9 @@ _DISPLAY_STAGE_LABELS = {
     "position_rebased_after_fill": "체결 후 포지션 재산정",
     "preset_exit_sync_ok": "Preset 청산동기화 정상",
     "preset_exit_sync_mismatch": "Preset 청산동기화 불일치",
+    "preset_exit_setup_disabled_trailing_unified": "Preset TP 설치 비활성화",
+    "preset_exit_sync_disabled_trailing_unified": "Preset TP 동기화 비활성화",
+    "scalp_preset_tp_disabled_trailing_unified": "Preset TP 주문 취소 후 trailing 통일",
     "exit_signal": "청산 시그널",
     "sell_order_sent": "매도 주문 전송",
     "sell_order_failed": "매도 주문 실패",
@@ -929,6 +932,7 @@ def _build_fill_quality_summary(events: list[HoldingEvent]) -> dict:
     fill_quality_counts = Counter(str(event.fields.get("fill_quality") or "UNKNOWN") for event in rebased_events)
     sync_ok_events = [event for event in events if event.stage == "preset_exit_sync_ok"]
     sync_mismatch_events = [event for event in events if event.stage == "preset_exit_sync_mismatch"]
+    sync_disabled_events = [event for event in events if event.stage == "preset_exit_sync_disabled_trailing_unified"]
 
     mismatch_rows = []
     for event in sync_mismatch_events[-10:]:
@@ -955,6 +959,7 @@ def _build_fill_quality_summary(events: list[HoldingEvent]) -> dict:
             "unknown_fill_events": int(fill_quality_counts.get("UNKNOWN", 0)),
             "preset_exit_sync_ok_events": int(len(sync_ok_events)),
             "preset_exit_sync_mismatch_events": int(len(sync_mismatch_events)),
+            "preset_exit_sync_disabled_events": int(len(sync_disabled_events)),
             "preset_exit_sync_mismatch_rate": round(
                 (len(sync_mismatch_events) / max(1, (len(sync_ok_events) + len(sync_mismatch_events)))) * 100.0,
                 1,

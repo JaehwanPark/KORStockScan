@@ -4348,8 +4348,7 @@ def _restore_holding_runtime_state(targets):
             stock.setdefault("near_ai_exit_started_at", None)
             if is_default_position_tag(strategy, position_tag):
                 stock.setdefault("exit_mode", "SCALP_PRESET_TP")
-                if _safe_int(stock.get("preset_tp_price")) <= 0 and buy_price > 0:
-                    stock["preset_tp_price"] = kiwoom_utils.get_target_price_up(int(buy_price), 1.5)
+                stock["preset_tp_price"] = 0
 
                 base_stop = float(getattr(TRADING_RULES, "SCALP_PRESET_HARD_STOP_PCT", -0.7) or -0.7)
                 base_grace = int(getattr(TRADING_RULES, "SCALP_PRESET_HARD_STOP_GRACE_SEC", 0) or 0)

@@ -183,7 +183,7 @@ def test_restore_holding_runtime_state_rehydrates_scalping_defaults(monkeypatch)
     stock = targets[0]
 
     assert stock["exit_mode"] == "SCALP_PRESET_TP"
-    assert int(stock["preset_tp_price"]) > 10000
+    assert int(stock["preset_tp_price"]) == 0
     assert stock["hard_stop_pct"] == TRADING_RULES.SCALP_PRESET_HARD_STOP_PCT
     assert stock["buy_qty"] == 5
     assert stock["holding_started_at"] == "2026-04-08 09:10:00"

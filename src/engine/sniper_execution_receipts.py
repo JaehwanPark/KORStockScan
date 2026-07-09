@@ -1224,68 +1224,32 @@ def _is_ok_response(res):
 
 def _refresh_scalp_preset_exit_order(target_stock, code, total_qty):
     """
-    스캘핑 보유 수량이 바뀌면 preset TP 주문을 새 수량 기준으로 다시 맞춥니다.
+    Legacy compatibility hook for the removed SCALP preset TP route.
+
+    The runtime exit owner is now the generic SCALPING trailing flow.  This
+    helper no longer places a +1.5% preset sell order; it only cancels an
+    existing preset order if one is still tracked on the position.
     """
     from src.engine import kiwoom_orders
 
     preset_ord_no = str(target_stock.get('preset_tp_ord_no', '') or '').strip()
-    preset_tp_price = int(target_stock.get('preset_tp_price') or 0)
 
     if preset_ord_no:
         cancel_res = kiwoom_orders.send_cancel_order(code=code, orig_ord_no=preset_ord_no, token=KIWOOM_TOKEN, qty=0)
         if not _is_ok_response(cancel_res):
             log_error(
-                f"⚠️ [ADD_PROTECT] {target_stock.get('name')}({code}) 기존 preset TP 취소 실패. "
-                "added shares may remain partially unprotected."
+                f"⚠️ [SCALP_TRAILING_UNIFIED] {target_stock.get('name')}({code}) "
+                "legacy preset TP cancel failed; leaving tracked order number for retry."
             )
             return False
-
-    if preset_tp_price > 0:
-        tick = int(kiwoom_utils.get_tick_size(preset_tp_price))
-        if tick > 0:
-            normalized_price = int((preset_tp_price // tick) * tick)
-            if normalized_price != preset_tp_price:
-                log_info(
-                    f"[ENTRY_TP_REFRESH] {target_stock.get('name')}({code}) "
-                    f"preset_tp_price 정규화 {preset_tp_price} -> {normalized_price} (tick={tick})"
-                )
-            preset_tp_price = max(normalized_price, tick)
-            target_stock['preset_tp_price'] = preset_tp_price
-
-    if preset_tp_price <= 0 or total_qty <= 0:
-        if total_qty <= 0:
-            target_stock['preset_tp_qty'] = 0
-        return True
-
-    sell_res = kiwoom_orders.send_sell_order_market(
-        code=code,
-        qty=total_qty,
-        token=KIWOOM_TOKEN,
-        order_type="00",
-        price=preset_tp_price,
-    )
-    new_ord_no = sell_res.get('ord_no') if isinstance(sell_res, dict) else ''
-    if isinstance(sell_res, dict):
-        err_msg = str(sell_res.get('return_msg') or sell_res.get('err_msg') or '')
-        if ('매도가능수량' in err_msg) or ('잔고' in err_msg and '부족' in err_msg):
-            target_stock['preset_tp_ord_no'] = ''
-            target_stock['preset_tp_qty'] = 0
-            log_info(
-                f"[ENTRY_TP_REFRESH] {target_stock.get('name')}({code}) "
-                "보유수량 부족 응답 수신으로 preset TP를 비활성화합니다."
-            )
-            return True
-    target_stock['preset_tp_ord_no'] = new_ord_no
-    target_stock['preset_tp_qty'] = int(total_qty or 0)
-    if not new_ord_no:
-        log_error(
-            f"⚠️ [ADD_PROTECT] {target_stock.get('name')}({code}) refreshed preset TP order number missing."
-        )
-        return False
     log_info(
-        f"[ENTRY_TP_REFRESH] {target_stock.get('name')}({code}) qty={total_qty} "
-        f"tp_price={preset_tp_price} ord_no={new_ord_no}"
+        f"[SCALP_TRAILING_UNIFIED] {target_stock.get('name')}({code}) "
+        "preset TP order disabled; exit will be evaluated by scalp_trailing_take_profit."
     )
+    target_stock['preset_tp_ord_no'] = ''
+    target_stock['preset_tp_qty'] = 0
+    target_stock['preset_tp_price'] = 0
+    target_stock['protect_profit_pct'] = None
     return True
 
 
@@ -1846,8 +1810,7 @@ def _handle_entry_buy_execution(
         if base_buy_price <= 0:
             base_buy_price = exec_price
 
-        preset_tp_price = kiwoom_utils.get_target_price_up(base_buy_price, 1.5)
-        target_stock['preset_tp_price'] = preset_tp_price
+        target_stock['preset_tp_price'] = 0
         preset_tp_ord_no_before = str(target_stock.get('preset_tp_ord_no', '') or '').strip()
         preset_hard_stop_pct = float(getattr(TRADING_RULES, 'SCALP_PRESET_HARD_STOP_PCT', -0.7) or -0.7)
         preset_hard_stop_grace_sec = int(getattr(TRADING_RULES, 'SCALP_PRESET_HARD_STOP_GRACE_SEC', 0) or 0)
@@ -1900,36 +1863,30 @@ def _handle_entry_buy_execution(
         refreshed = _refresh_scalp_preset_exit_order(target_stock, code, sell_qty)
         preset_tp_ord_no_after = str(target_stock.get('preset_tp_ord_no', '') or '').strip()
         preset_tp_qty = int(target_stock.get('preset_tp_qty', 0) or 0)
+        preset_tp_price = int(target_stock.get('preset_tp_price') or 0)
 
         if not refreshed:
             preset_sync_status = "REFRESH_FAILED"
-            preset_sync_reason = "refresh_failed"
-        elif not preset_tp_ord_no_after:
-            preset_sync_status = "MISSING_ORD_NO"
-            preset_sync_reason = "missing_ord_no"
-        elif preset_tp_qty != sell_qty:
-            preset_sync_status = "QTY_MISMATCH"
-            preset_sync_reason = f"preset_tp_qty={preset_tp_qty},sell_qty={sell_qty}"
+            preset_sync_reason = "legacy_preset_cancel_failed"
         else:
-            preset_sync_status = "OK"
-            preset_sync_reason = "-"
+            preset_sync_status = "DISABLED_TRAILING_UNIFIED"
+            preset_sync_reason = "preset_tp_removed_trailing_unified"
 
-        if not refreshed or not target_stock.get('preset_tp_ord_no'):
-            log_error(f"⚠️ [SCALP 출구엔진] {target_stock.get('name')} 지정가 매도 주문번호 미수신. 보유 감시로 보강 필요.")
-        else:
-            log_info(
-                f"🎯 [SCALP 출구엔진 셋업] {target_stock.get('name')} "
-                f"+1.5% 지정가({preset_tp_price:,}원) {sell_qty}주 매도망 전개 완료."
-            )
-            _log_holding_pipeline(
-                target_stock.get('name'),
-                code,
-                target_id,
-                'preset_exit_setup',
-                preset_tp_price=int(preset_tp_price or 0),
-                qty=int(sell_qty or 0),
-                ord_no=str(target_stock.get('preset_tp_ord_no', '') or '-'),
-            )
+        log_info(
+            f"[SCALP_TRAILING_UNIFIED] {target_stock.get('name')} "
+            f"preset TP setup skipped; scalp_trailing_take_profit owns exit."
+        )
+        _log_holding_pipeline(
+            target_stock.get('name'),
+            code,
+            target_id,
+            'preset_exit_setup_disabled_trailing_unified',
+            preset_tp_price=int(preset_tp_price or 0),
+            qty=int(sell_qty or 0),
+            ord_no=preset_tp_ord_no_before or "-",
+            sync_status=preset_sync_status,
+            sync_reason=preset_sync_reason,
+        )
 
     _log_holding_pipeline(
         target_stock.get('name'),
@@ -1964,7 +1921,10 @@ def _handle_entry_buy_execution(
         new_qty=int(new_qty or 0),
     )
     if strategy == 'SCALPING' and is_default_position_tag(strategy, pos_tag):
-        sync_stage = 'preset_exit_sync_ok' if preset_sync_status == "OK" else 'preset_exit_sync_mismatch'
+        if preset_sync_status == "DISABLED_TRAILING_UNIFIED":
+            sync_stage = 'preset_exit_sync_disabled_trailing_unified'
+        else:
+            sync_stage = 'preset_exit_sync_ok' if preset_sync_status == "OK" else 'preset_exit_sync_mismatch'
         _log_holding_pipeline(
             target_stock.get('name'),
             code,

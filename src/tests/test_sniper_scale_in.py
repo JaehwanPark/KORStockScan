@@ -996,6 +996,10 @@ def test_rising_missed_normal_buy_bridge_allows_buy_without_forced_scout_fields(
     assert decision.log_fields["rising_missed_normal_buy_bridge_allowed"] is True
     assert decision.log_fields["rising_missed_normal_buy_bridge_uses_normal_sizing"] is True
     assert decision.log_fields["rising_missed_normal_buy_bridge_forced_scout_fields_used"] is False
+    assert decision.log_fields["rising_missed_filter_layer"] == "candidate_gate"
+    assert decision.log_fields["rising_missed_filter_owner"] == "rising_missed_candidate_gate"
+    assert decision.log_fields["rising_missed_filter_action"] == "candidate_allow"
+    assert decision.log_fields["rising_missed_opportunity_cost_policy"] == "balanced"
     assert "rising_missed_one_share_entry_forced_qty" not in decision.log_fields
     assert not any(key.startswith("rising_missed_scout_") for key in decision.log_fields)
 
@@ -1099,6 +1103,8 @@ def test_rising_missed_normal_buy_bridge_blocks_wait_action_and_safety_reasons()
     assert already_holding.reason == BLOCK_ALREADY_HOLDING
     assert price_cap.allowed is False
     assert price_cap.reason == BLOCK_PRICE_ABOVE_CAP
+    assert price_cap.log_fields["rising_missed_filter_layer"] == "candidate_gate"
+    assert price_cap.log_fields["rising_missed_filter_action"] == "candidate_block"
 
 
 def test_rising_missed_one_share_entry_uses_budget_cap_with_min_one_share():
@@ -1382,6 +1388,10 @@ def test_rising_missed_one_share_entry_blocks_price_above_cap():
     assert decision.reason == BLOCK_PRICE_ABOVE_CAP
     assert decision.log_fields["rising_missed_one_share_entry_price"] == MAX_ONE_SHARE_ENTRY_PRICE_KRW + 1
     assert decision.log_fields["rising_missed_one_share_entry_price_cap_krw"] == MAX_ONE_SHARE_ENTRY_PRICE_KRW
+    assert decision.log_fields["rising_missed_filter_layer"] == "candidate_gate"
+    assert decision.log_fields["rising_missed_filter_owner"] == "rising_missed_candidate_gate"
+    assert decision.log_fields["rising_missed_filter_action"] == "candidate_block"
+    assert decision.log_fields["rising_missed_opportunity_cost_policy"] == "balanced"
 
 
 def test_rising_missed_one_share_entry_excludes_upper_limit_proximity():
@@ -2181,6 +2191,10 @@ def test_scanner_fast_precheck_reallocates_not_rising_missed_without_recovery(mo
     assert fields["fast_precheck_reason"] == "rising_missed_not_rising_without_recovery_signal"
     assert fields["scanner_rising_missed_fast_reject_candidate"] is True
     assert fields["scanner_rising_missed_recovery_signal_present"] is False
+    assert fields["rising_missed_filter_layer"] == "scanner_watch_budget"
+    assert fields["rising_missed_filter_owner"] == "scanner_fast_precheck"
+    assert fields["rising_missed_filter_action"] == "budget_reallocated"
+    assert fields["rising_missed_opportunity_cost_policy"] == "balanced"
     assert fields["actual_order_submitted"] is False
     assert fields["broker_order_forbidden"] is True
 
@@ -2210,6 +2224,8 @@ def test_scanner_fast_precheck_does_not_reallocate_general_not_rising_class(monk
     assert fields["fast_precheck_result"] == "eligible_for_heavy_entry_eval"
     assert fields["scanner_rising_missed_fast_reject_candidate"] is False
     assert fields["scanner_rising_missed_source_marker_present"] is False
+    assert fields["rising_missed_filter_layer"] == "scanner_watch_budget"
+    assert fields["rising_missed_filter_action"] == "observe_only"
 
 
 def test_scanner_fast_precheck_keeps_missing_quote_as_source_quality_blocked(monkeypatch):
@@ -2238,6 +2254,8 @@ def test_scanner_fast_precheck_keeps_missing_quote_as_source_quality_blocked(mon
     assert fields["fast_precheck_result"] == "source_quality_blocked"
     assert fields["fast_precheck_reason"] == "missing_or_zero_curr"
     assert fields["scanner_rising_missed_fast_reject_candidate"] is True
+    assert fields["rising_missed_filter_layer"] == "scanner_watch_budget"
+    assert fields["rising_missed_filter_action"] == "observe_only"
 
 
 def test_scanner_fast_precheck_keeps_not_rising_missed_rebound_candidate(monkeypatch):
@@ -2269,6 +2287,41 @@ def test_scanner_fast_precheck_keeps_not_rising_missed_rebound_candidate(monkeyp
     assert fields["scanner_rising_missed_fast_reject_candidate"] is False
     assert fields["scanner_rising_missed_fast_reject_reason"] == "recovery_signal_present"
     assert fields["scanner_rising_missed_recovery_signal_present"] is True
+    assert fields["rising_missed_filter_layer"] == "scanner_watch_budget"
+    assert fields["rising_missed_filter_action"] == "observe_only"
+
+
+def test_scanner_fast_precheck_keeps_positive_recovery_candidate_despite_bad_tick_speed(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_FULL_EVAL_MIN_DELTA_PCT", "1.0")
+    stock = {
+        "id": 15,
+        "name": "SLOW_TICK_REBOUND",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "status": "WATCHING",
+        "rising_missed_class": "not_rising_missed",
+        "rising_missed_buy": True,
+        "scanner_promotion_reason": "price_jump_start_acceleration",
+        "source_signature": "PRICE_JUMP_START,REALTIME_RANK_START,VOLUME_SURGE_POSITIVE",
+        "first_seen_price": 10000,
+        "current_price": 10150,
+        "price_delta_since_first_seen_pct": 1.5,
+        "last_watching_ai_source_quality_fields": {
+            "tick_window_span_sec": 77,
+            "tick_acceleration_ratio": 0.778,
+        },
+    }
+
+    fields = state_handlers._scanner_fast_precheck_fields(
+        stock,
+        ws_data={"curr": 10150},
+        now_ts=1000.0,
+    )
+
+    assert fields["fast_precheck_result"] == "eligible_for_heavy_entry_eval"
+    assert fields["scanner_rising_missed_recovery_signal_present"] is True
+    assert fields["rising_missed_filter_layer"] == "scanner_watch_budget"
+    assert fields["rising_missed_filter_action"] == "observe_only"
 
 
 def test_rising_missed_scout_quality_guard_blocks_stale_recent_weak_ai_micro(monkeypatch):
@@ -2337,6 +2390,10 @@ def test_rising_missed_scout_quality_guard_blocks_stale_recent_weak_ai_micro(mon
     assert entry_logs[-1][1]["rising_missed_scout_quality_guard_recent_weak_ai_micro_block"] is True
     assert entry_logs[-1][1]["rising_missed_one_share_entry_forced_qty"] == 1
     assert entry_logs[-1][1]["rising_missed_scout_min_one_share_over_cap"] is True
+    assert entry_logs[-1][1]["rising_missed_filter_layer"] == "submit_safety"
+    assert entry_logs[-1][1]["rising_missed_filter_owner"] == "rising_missed_submit_safety"
+    assert entry_logs[-1][1]["rising_missed_filter_action"] == "pre_submit_block"
+    assert entry_logs[-1][1]["rising_missed_opportunity_cost_policy"] == "balanced"
     assert entry_logs[-1][1]["actual_order_submitted"] is False
     assert entry_logs[-1][1]["broker_order_forbidden"] is True
 
@@ -2762,6 +2819,108 @@ def _weak_rising_missed_reentry_stock(**overrides):
     return stock
 
 
+def test_rising_missed_tick_speed_guard_blocks_slow_tick_window(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_TICK_SPEED_ENTRY_GUARD_ENABLED", raising=False)
+    stock = _weak_rising_missed_reentry_stock(
+        last_watching_ai_source_quality_fields={
+            "tick_window_span_sec": 77,
+            "tick_acceleration_ratio": 1.20,
+        }
+    )
+
+    decision = state_handlers._evaluate_rising_missed_tick_speed_entry_guard(
+        stock=stock,
+        runtime={},
+        latency_gate={},
+        ws_data={},
+        orderbook_fields={},
+        microstructure_fields={},
+    )
+
+    assert decision["blocked"] is True
+    assert decision["block_reason"] == "tick_window_span_sec_ge_60"
+    assert decision["rising_missed_tick_window_slow"] is True
+    assert decision["rising_missed_tick_accel_slow"] is False
+    assert decision["rising_missed_filter_layer"] == "submit_safety"
+    assert decision["rising_missed_filter_action"] == "pre_submit_block"
+    assert decision["broker_order_forbidden"] is True
+
+
+def test_rising_missed_tick_speed_guard_blocks_subunit_acceleration(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_TICK_SPEED_ENTRY_GUARD_ENABLED", raising=False)
+    stock = {
+        "rising_missed_normal_buy_bridge_allowed": True,
+        "last_watching_ai_source_quality_fields": {
+            "tick_window_span_sec": 36,
+            "tick_acceleration_ratio": 0.778,
+        },
+    }
+
+    decision = state_handlers._evaluate_rising_missed_tick_speed_entry_guard(
+        stock=stock,
+        runtime={},
+        latency_gate={},
+        ws_data={},
+        orderbook_fields={},
+        microstructure_fields={},
+    )
+
+    assert decision["blocked"] is True
+    assert decision["block_reason"] == "tick_acceleration_ratio_lt_1"
+    assert decision["rising_missed_entry_lineage"] is True
+    assert decision["rising_missed_tick_window_slow"] is False
+    assert decision["rising_missed_tick_accel_slow"] is True
+    assert decision["rising_missed_filter_layer"] == "submit_safety"
+    assert decision["rising_missed_filter_owner"] == "rising_missed_submit_safety"
+    assert decision["rising_missed_filter_action"] == "pre_submit_block"
+    assert decision["rising_missed_opportunity_cost_policy"] == "balanced"
+
+
+def test_rising_missed_tick_speed_guard_blocks_missing_tick_context_with_forced_lineage(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_TICK_SPEED_ENTRY_GUARD_ENABLED", raising=False)
+
+    decision = state_handlers._evaluate_rising_missed_tick_speed_entry_guard(
+        stock={},
+        runtime={},
+        latency_gate={"decision": "ALLOW_NORMAL", "reason": "safe_normal_entry_allowed"},
+        ws_data={},
+        orderbook_fields={},
+        microstructure_fields={},
+        rising_missed_entry_lineage=True,
+    )
+
+    assert decision["blocked"] is True
+    assert decision["rising_missed_entry_lineage"] is True
+    assert decision["block_reason"] == "tick_window_span_sec_missing+tick_acceleration_ratio_missing"
+    assert decision["rising_missed_filter_layer"] == "submit_safety"
+    assert decision["rising_missed_filter_action"] == "pre_submit_block"
+    assert decision["broker_order_forbidden"] is True
+
+
+def test_rising_missed_tick_speed_guard_does_not_block_non_rising_missed(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_TICK_SPEED_ENTRY_GUARD_ENABLED", raising=False)
+
+    decision = state_handlers._evaluate_rising_missed_tick_speed_entry_guard(
+        stock={
+            "last_watching_ai_source_quality_fields": {
+                "tick_window_span_sec": 77,
+                "tick_acceleration_ratio": 0.778,
+            },
+        },
+        runtime={},
+        latency_gate={},
+        ws_data={},
+        orderbook_fields={},
+        microstructure_fields={},
+    )
+
+    assert decision["blocked"] is False
+    assert decision["rising_missed_entry_lineage"] is False
+    assert decision["broker_order_forbidden"] is False
+    assert decision["rising_missed_filter_layer"] == "submit_safety"
+    assert decision["rising_missed_filter_action"] == "observe_only"
+
+
 def test_rising_missed_weak_micro_reentry_blocks_prior_profitable_same_symbol(monkeypatch, tmp_path):
     data_dir = tmp_path / "data"
     _write_sell_completed_event(
@@ -2797,6 +2956,9 @@ def test_rising_missed_weak_micro_reentry_blocks_prior_profitable_same_symbol(mo
     assert decision["block_reason"] == "same_symbol_reentry_weak_microstructure"
     assert decision["prior_record_id"] == 15665
     assert decision["prior_profit_rate"] == "+3.27"
+    assert decision["rising_missed_filter_layer"] == "submit_safety"
+    assert decision["rising_missed_filter_owner"] == "rising_missed_submit_safety"
+    assert decision["rising_missed_filter_action"] == "pre_submit_block"
     assert decision["broker_order_forbidden"] is True
 
 
@@ -17562,7 +17724,7 @@ def test_sell_execution_thread_receives_snapshot_and_clears_live_notify_state(mo
     assert snapshot["buy_qty"] == 3
 
 
-def test_scalp_preset_tp_refreshes_to_latest_filled_qty(monkeypatch):
+def test_scalp_entry_uses_trailing_unified_without_preset_tp_order(monkeypatch):
     receipts.ACTIVE_TARGETS = []
     receipts.highest_prices = {}
     receipts._get_fast_state = lambda code: None
@@ -17616,9 +17778,12 @@ def test_scalp_preset_tp_refreshes_to_latest_filled_qty(monkeypatch):
     receipts.handle_real_execution({"code": "123456", "type": "BUY", "order_no": "O1", "price": 10000, "qty": 1})
     receipts.handle_real_execution({"code": "123456", "type": "BUY", "order_no": "O2", "price": 9990, "qty": 2})
 
-    assert sell_calls == [1, 3]
-    assert cancel_calls == ["TP1"]
-    assert stock["preset_tp_ord_no"] == "TP2"
+    assert sell_calls == []
+    assert cancel_calls == []
+    assert stock["exit_mode"] == "SCALP_PRESET_TP"
+    assert stock["preset_tp_ord_no"] == ""
+    assert stock["preset_tp_qty"] == 0
+    assert stock["preset_tp_price"] == 0
 
 
 def test_entry_submission_bundle_log_uses_actual_entry_mode(monkeypatch):
@@ -19056,6 +19221,82 @@ def test_scalp_preset_tp_hard_stop_does_not_avg_down_intercept(monkeypatch):
 
     assert stock["status"] == "SELL_ORDERED"
     assert not [stage for stage, _ in pipeline_logs if stage == "late_loss_avg_down_retry_candidate"]
+
+
+def test_legacy_preset_tp_position_flows_to_scalp_trailing(monkeypatch):
+    state_handlers.TRADING_RULES = replace(CONFIG, SCALE_IN_REQUIRE_HISTORY_TABLE=False)
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 10300}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+
+    pipeline_logs = []
+    cancel_calls = []
+    sell_calls = []
+
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: pipeline_logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_cancel_order",
+        lambda **kwargs: cancel_calls.append(kwargs) or {"return_code": "0"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_evaluate_holding_flow_override",
+        lambda *args, **kwargs: True,
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_smart_sell_order",
+        lambda **kwargs: sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "S1"},
+    )
+
+    stock = {
+        "id": 13,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 10000,
+        "buy_qty": 10,
+        "rt_ai_prob": 0.50,
+        "exit_mode": "SCALP_PRESET_TP",
+        "preset_tp_price": 10150,
+        "preset_tp_ord_no": "TP1",
+        "preset_tp_qty": 10,
+        "protect_profit_pct": 0.3,
+        "ai_review_done": True,
+    }
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 10220, "orderbook": {"bids": [{"price": 10220, "volume": 1000}]}},
+        admin_id=1,
+        market_regime="BULL",
+        radar=None,
+        ai_engine=None,
+        now_dt=datetime(2026, 7, 9, 10, 30, 0),
+    )
+
+    exit_logs = [fields for stage, fields in pipeline_logs if stage == "exit_signal"]
+    disabled_logs = [fields for stage, fields in pipeline_logs if stage == "scalp_preset_tp_disabled_trailing_unified"]
+
+    assert cancel_calls and cancel_calls[-1]["orig_ord_no"] == "TP1"
+    assert disabled_logs
+    assert stock["preset_tp_ord_no"] == ""
+    assert stock["protect_profit_pct"] is None
+    assert stock["status"] == "SELL_ORDERED"
+    assert stock["last_exit_rule"] == "scalp_trailing_take_profit"
+    assert sell_calls and sell_calls[-1]["qty"] == 10
+    assert exit_logs and exit_logs[-1]["exit_rule"] == "scalp_trailing_take_profit"
+    assert not [fields for fields in exit_logs if fields["exit_rule"] == "scalp_preset_protect_profit"]
 
 
 def test_scalp_preset_tp_discretionary_sell_open_time_block_logs_without_submit(monkeypatch):

@@ -1942,6 +1942,7 @@ def build_performance_tuning_report(
     fill_rebased_events = [e for e in holding_events if e.stage == "position_rebased_after_fill"]
     preset_sync_ok_events = [e for e in holding_events if e.stage == "preset_exit_sync_ok"]
     preset_sync_mismatch_events = [e for e in holding_events if e.stage == "preset_exit_sync_mismatch"]
+    preset_sync_disabled_events = [e for e in holding_events if e.stage == "preset_exit_sync_disabled_trailing_unified"]
     ai_overlap_events = [
         e
         for e in entry_events
@@ -2048,7 +2049,10 @@ def build_performance_tuning_report(
         if str(e.fields.get("quote_stale") or "").strip().lower() in {"false", "0", "no"}
     )
     fill_quality_counts = Counter(str(e.fields.get("fill_quality") or "UNKNOWN") for e in fill_rebased_events)
-    preset_sync_status_counts = Counter(str(e.fields.get("sync_status") or "-") for e in preset_sync_mismatch_events + preset_sync_ok_events)
+    preset_sync_status_counts = Counter(
+        str(e.fields.get("sync_status") or "-")
+        for e in preset_sync_mismatch_events + preset_sync_ok_events + preset_sync_disabled_events
+    )
     ai_overlap_blocked_stage_counts = Counter()
     ai_overlap_overbought_blocks = 0
     for event in ai_overlap_events:
@@ -2160,6 +2164,7 @@ def build_performance_tuning_report(
         "partial_fill_events": int(fill_quality_counts.get("PARTIAL_FILL", 0)),
         "preset_exit_sync_ok_events": int(len(preset_sync_ok_events)),
         "preset_exit_sync_mismatch_events": int(len(preset_sync_mismatch_events)),
+        "preset_exit_sync_disabled_events": int(len(preset_sync_disabled_events)),
         "preset_exit_sync_mismatch_rate": _ratio(
             len(preset_sync_mismatch_events),
             len(preset_sync_mismatch_events) + len(preset_sync_ok_events),

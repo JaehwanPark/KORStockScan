@@ -466,6 +466,7 @@ def test_performance_tuning_includes_phase01_scalping_metrics(monkeypatch):
         "[2026-04-03 09:33:01] [HOLDING_PIPELINE] 종목A(000001) stage=preset_exit_sync_ok id=1 sync_status=OK",
         "[2026-04-03 09:34:00] [HOLDING_PIPELINE] 종목B(000002) stage=position_rebased_after_fill id=2 fill_quality=PARTIAL_FILL",
         "[2026-04-03 09:34:01] [HOLDING_PIPELINE] 종목B(000002) stage=preset_exit_sync_mismatch id=2 sync_status=QTY_MISMATCH sync_reason=qty_mismatch",
+        "[2026-04-03 09:35:01] [HOLDING_PIPELINE] 종목C(000003) stage=preset_exit_sync_disabled_trailing_unified id=3 sync_status=DISABLED_TRAILING_UNIFIED sync_reason=preset_tp_removed_trailing_unified",
     ]
 
     def _fake_iter(log_path, *, target_date, marker):
@@ -528,6 +529,11 @@ def test_performance_tuning_includes_phase01_scalping_metrics(monkeypatch):
     assert report["metrics"]["full_fill_events"] == 1
     assert report["metrics"]["partial_fill_events"] == 1
     assert report["metrics"]["preset_exit_sync_mismatch_events"] == 1
+    assert report["metrics"]["preset_exit_sync_disabled_events"] == 1
+    assert any(
+        item["label"] == "DISABLED_TRAILING_UNIFIED"
+        for item in report["breakdowns"]["preset_exit_sync_status"]
+    )
     assert report["metrics"]["ai_overlap_blocked_events"] >= 1
     assert report["breakdowns"]["latency_reason_breakdown"][0]["label"] == "latency_state_danger"
 

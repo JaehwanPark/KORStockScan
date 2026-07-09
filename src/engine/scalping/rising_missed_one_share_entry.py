@@ -21,6 +21,11 @@ MAX_ONE_SHARE_ENTRY_PRICE_KRW = 1_000_000
 DEFAULT_RISING_MISSED_SCOUT_ENTRY_BUDGET_CAP_KRW = 200_000
 DEFAULT_RISING_MISSED_UPPER_LIMIT_EXCLUDE_PCT = 26.0
 DEFAULT_UPPER_LIMIT_PROXIMITY_BLOCK_PCT = 27.0
+RISING_MISSED_OPPORTUNITY_COST_POLICY = "balanced"
+RISING_MISSED_FILTER_LAYER_CANDIDATE_GATE = "candidate_gate"
+RISING_MISSED_FILTER_OWNER_CANDIDATE_GATE = "rising_missed_candidate_gate"
+RISING_MISSED_FILTER_ACTION_CANDIDATE_ALLOW = "candidate_allow"
+RISING_MISSED_FILTER_ACTION_CANDIDATE_BLOCK = "candidate_block"
 RISING_MISSED_CLASS_NOT_RISING = "not_rising_missed"
 RISING_MISSED_CLASS_SUBMITTED_RESOLVED = "submitted_resolved"
 RISING_MISSED_CLASS_RAW = "rising_missed_raw"
@@ -103,6 +108,19 @@ def _prior_log_fields(stock: dict[str, Any]) -> dict[str, Any]:
         "rising_missed_prior_reason": stock.get("rising_missed_prior_reason")
         or prior.get("reason")
         or "prior_not_attached",
+    }
+
+
+def _candidate_gate_filter_fields(*, allowed: bool = False) -> dict[str, Any]:
+    return {
+        "rising_missed_filter_layer": RISING_MISSED_FILTER_LAYER_CANDIDATE_GATE,
+        "rising_missed_filter_owner": RISING_MISSED_FILTER_OWNER_CANDIDATE_GATE,
+        "rising_missed_filter_action": (
+            RISING_MISSED_FILTER_ACTION_CANDIDATE_ALLOW
+            if allowed
+            else RISING_MISSED_FILTER_ACTION_CANDIDATE_BLOCK
+        ),
+        "rising_missed_opportunity_cost_policy": RISING_MISSED_OPPORTUNITY_COST_POLICY,
     }
 
 
@@ -280,6 +298,7 @@ def evaluate_rising_missed_one_share_entry(
         _safe_float(upper_limit_exclude_pct, DEFAULT_RISING_MISSED_UPPER_LIMIT_EXCLUDE_PCT),
     )
     base_fields = {
+        **_candidate_gate_filter_fields(allowed=False),
         "rising_missed_one_share_entry_enabled": bool(feature_enabled),
         "rising_missed_one_share_entry_positive_delta_pct": f"{delta_pct:.4f}",
         "rising_missed_one_share_entry_min_delta_pct": f"{float(min_delta_pct):.4f}",
@@ -404,7 +423,7 @@ def evaluate_rising_missed_one_share_entry(
         reason=FORCED_ENTRY_REASON,
         forced_qty=forced_qty,
         positive_delta_pct=delta_pct,
-        log_fields=base_fields,
+        log_fields={**base_fields, **_candidate_gate_filter_fields(allowed=True)},
     )
 
 
@@ -460,6 +479,7 @@ def evaluate_rising_missed_normal_buy_bridge(
         reason = BLOCK_ENTRY_AI_ACTION_NOT_BUY
     log_fields.update(
         {
+            **_candidate_gate_filter_fields(allowed=allowed),
             "rising_missed_normal_buy_bridge_enabled": bool(feature_enabled),
             "rising_missed_normal_buy_bridge_allowed": allowed,
             "rising_missed_normal_buy_bridge_reason": reason,

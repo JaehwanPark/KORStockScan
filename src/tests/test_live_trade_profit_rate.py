@@ -750,6 +750,45 @@ def test_ensure_runtime_target_recovers_order_refs_from_pipeline_logs(monkeypatc
     assert target["preset_tp_ord_no"] == "0036512"
 
 
+def test_ensure_runtime_target_ignores_trailing_unified_disabled_stage(monkeypatch):
+    monkeypatch.setattr(sniper_sync, "_iter_recovery_log_paths", lambda: ["pipeline.log"])
+    monkeypatch.setattr(
+        sniper_sync,
+        "_tail_text",
+        lambda path: "\n".join(
+            [
+                "[2026-07-09 10:31:04] [ENTRY_PIPELINE] 인텔리안테크(189300) stage=order_leg_sent id=2205 tag=fallback_main ord_no=0036511",
+                "[2026-07-09 10:31:05] [HOLDING_PIPELINE] 인텔리안테크(189300) stage=preset_exit_setup_disabled_trailing_unified id=2205 preset_tp_price=0 qty=1 ord_no=0036512",
+            ]
+        ),
+    )
+    sniper_sync.DB = _SyncDB([], [], [])
+    sniper_sync.ACTIVE_TARGETS = []
+    sniper_sync.EVENT_BUS = _Bus()
+
+    record = type(
+        "Record",
+        (),
+        {
+            "id": 2241,
+            "stock_code": "189300",
+            "stock_name": "인텔리안테크",
+            "strategy": "SCALPING",
+            "trade_type": "SCALP",
+            "position_tag": "SCALP_BASE",
+            "buy_qty": 7,
+            "buy_price": 133610.0,
+            "buy_time": datetime(2026, 7, 9, 10, 31, 5),
+            "scale_in_locked": False,
+        },
+    )()
+
+    target = sniper_sync._ensure_runtime_target(record)
+
+    assert target["odno"] == "0036511"
+    assert "preset_tp_ord_no" not in target
+
+
 def test_s15_candidate_does_not_store_expiry_in_profit_rate():
     session = _S15Session()
     s15.DB = _S15DB(session)

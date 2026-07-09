@@ -2812,7 +2812,7 @@ def test_scalp_sim_scale_in_window_expansion_returns_sim_only_action(monkeypatch
     assert action["decision_authority"] == "sim_observation_only"
 
 
-def test_scalp_simulator_preset_tp_sell_does_not_call_real_sell(monkeypatch):
+def test_scalp_simulator_preset_tp_touch_flows_to_trailing_without_real_sell(monkeypatch):
     holding_logs = []
     monkeypatch.setattr(
         state_handlers,
@@ -2862,11 +2862,15 @@ def test_scalp_simulator_preset_tp_sell_does_not_call_real_sell(monkeypatch):
         now_ts=1_060.0,
     )
 
-    assert stock["status"] == "COMPLETED"
-    assert stock["sell_price"] == 10_150
+    assert stock["status"] == "HOLDING"
     assert stock["actual_order_submitted"] is False
-    assert any(stage == "exit_signal" for stage, _ in holding_logs)
-    assert any(stage == "scalp_sim_sell_order_assumed_filled" for stage, _ in holding_logs)
+    assert stock["preset_tp_price"] == 0
+    assert not any(
+        fields.get("exit_rule") == "scalp_sim_preset_tp_touch"
+        for stage, fields in holding_logs
+        if stage == "exit_signal"
+    )
+    assert not any(stage == "scalp_sim_sell_order_assumed_filled" for stage, _ in holding_logs)
 
 
 def test_scalp_simulator_sell_profit_uses_assumed_fill_price(monkeypatch):

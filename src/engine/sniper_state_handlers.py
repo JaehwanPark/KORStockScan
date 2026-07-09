@@ -6936,9 +6936,7 @@ def _initialize_scalp_sim_holding_defaults(stock: dict, buy_price: int) -> None:
         set_fields.update(
             {
                 "exit_mode": "SCALP_PRESET_TP",
-                "preset_tp_price": kiwoom_utils.get_target_price_up(int(buy_price), 1.5)
-                if buy_price > 0
-                else 0,
+                "preset_tp_price": 0,
                 "hard_stop_pct": base_stop,
                 "hard_stop_grace_sec": base_grace,
                 "hard_stop_emergency_pct": base_emergency,
@@ -9858,6 +9856,44 @@ def _scanner_rising_missed_not_rising_fast_reject_fields(
     }
 
 
+def _rising_missed_filter_layer_fields(
+    *,
+    layer: str,
+    owner: str,
+    action: str,
+) -> dict[str, Any]:
+    return {
+        "rising_missed_filter_layer": layer,
+        "rising_missed_filter_owner": owner,
+        "rising_missed_filter_action": action,
+        "rising_missed_opportunity_cost_policy": "balanced",
+    }
+
+
+def _rising_missed_scanner_filter_fields(*, action: str) -> dict[str, Any]:
+    return _rising_missed_filter_layer_fields(
+        layer="scanner_watch_budget",
+        owner="scanner_fast_precheck",
+        action=action,
+    )
+
+
+def _rising_missed_candidate_filter_fields(*, allowed: bool) -> dict[str, Any]:
+    return _rising_missed_filter_layer_fields(
+        layer="candidate_gate",
+        owner="rising_missed_candidate_gate",
+        action="candidate_allow" if allowed else "candidate_block",
+    )
+
+
+def _rising_missed_submit_safety_filter_fields(*, blocked: bool) -> dict[str, Any]:
+    return _rising_missed_filter_layer_fields(
+        layer="submit_safety",
+        owner="rising_missed_submit_safety",
+        action="pre_submit_block" if blocked else "observe_only",
+    )
+
+
 def _ws_realtime_type_freshness_fields(ws_data: dict | None, *, now_ts: float | None = None) -> dict[str, Any]:
     ws_data = ws_data if isinstance(ws_data, dict) else {}
     now_value = time.time() if now_ts is None else float(now_ts)
@@ -10309,7 +10345,9 @@ def _scanner_fast_precheck_fields(
             if rising_stale_ws_relief
             else "fast_precheck_pass"
         )
+    scanner_filter_action = "budget_reallocated" if result == "budget_reallocated" else "observe_only"
     return {
+        **_rising_missed_scanner_filter_fields(action=scanner_filter_action),
         "scanner_promotion_id": scanner_fields.get("scanner_promotion_id")
         or "not_applicable_scanner_promotion_id",
         "scanner_promotion_emitted_epoch": scanner_fields.get("scanner_promotion_emitted_epoch")
@@ -12238,6 +12276,7 @@ def _evaluate_rising_missed_same_symbol_weak_micro_reentry_block(
 ) -> dict:
     enabled = _rising_missed_weak_micro_reentry_block_enabled()
     base = {
+        **_rising_missed_submit_safety_filter_fields(blocked=False),
         "blocked": False,
         "reason": "pass",
         "block_reason": "pass",
@@ -12308,6 +12347,7 @@ def _evaluate_rising_missed_same_symbol_weak_micro_reentry_block(
     )
     fields = {
         **base,
+        **_rising_missed_submit_safety_filter_fields(blocked=block),
         "blocked": block,
         "reason": "same_symbol_reentry_weak_microstructure" if block else "weak_micro_reentry_context_not_matched",
         "block_reason": "same_symbol_reentry_weak_microstructure" if block else "weak_micro_reentry_context_not_matched",
@@ -14747,6 +14787,99 @@ def _dispatch_scalp_preset_exit(
             'sell_target_price': curr_p,
         },
     )
+
+
+def _disable_scalp_preset_tp_order_for_trailing(stock: dict, code: str, reason: str) -> bool:
+    """Cancel legacy preset TP orders so generic scalp trailing owns exits."""
+    orig_ord_no = str((stock or {}).get('preset_tp_ord_no', '') or '').strip()
+    if not orig_ord_no:
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                'preset_tp_price': 0,
+                'preset_tp_qty': 0,
+                'protect_profit_pct': None,
+                'ai_review_done': False,
+                'ai_review_score': None,
+                'ai_review_action': None,
+            },
+        )
+        return True
+
+    last_attempt_at = _safe_float(stock.get('preset_tp_disable_cancel_attempted_at'), 0.0)
+    if (
+        str(stock.get('preset_tp_disable_cancel_attempted_ord_no') or '') == orig_ord_no
+        and time.time() - last_attempt_at < 5.0
+    ):
+        return False
+
+    try:
+        res = kiwoom_orders.send_cancel_order(
+            code=code,
+            orig_ord_no=orig_ord_no,
+            token=KIWOOM_TOKEN,
+            qty=0,
+        )
+    except Exception as exc:
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                'preset_tp_disable_cancel_attempted_ord_no': orig_ord_no,
+                'preset_tp_disable_cancel_attempted_at': time.time(),
+                'preset_tp_disable_cancel_status': 'exception',
+            },
+        )
+        log_error(
+            f"⚠️ [SCALP_TRAILING_UNIFIED] {stock.get('name', code)}({code}) "
+            f"legacy preset TP cancel exception: {exc}"
+        )
+        return False
+
+    if not _is_ok_response(res):
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                'preset_tp_disable_cancel_attempted_ord_no': orig_ord_no,
+                'preset_tp_disable_cancel_attempted_at': time.time(),
+                'preset_tp_disable_cancel_status': 'failed',
+            },
+        )
+        log_error(
+            f"⚠️ [SCALP_TRAILING_UNIFIED] {stock.get('name', code)}({code}) "
+            "legacy preset TP cancel failed; retry deferred."
+        )
+        return False
+
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            'preset_tp_ord_no': '',
+            'preset_tp_qty': 0,
+            'preset_tp_price': 0,
+            'protect_profit_pct': None,
+            'ai_review_done': False,
+            'ai_review_score': None,
+            'ai_review_action': None,
+            'preset_tp_disable_cancel_attempted_ord_no': orig_ord_no,
+            'preset_tp_disable_cancel_attempted_at': time.time(),
+            'preset_tp_disable_cancel_status': 'ok',
+        },
+    )
+    _log_holding_pipeline(
+        stock,
+        code,
+        "scalp_preset_tp_disabled_trailing_unified",
+        reason=reason,
+        canceled_ord_no=orig_ord_no,
+        actual_order_submitted=False,
+        broker_order_forbidden=False,
+        runtime_effect=True,
+    )
+    log_info(
+        f"[SCALP_TRAILING_UNIFIED] {stock.get('name', code)}({code}) "
+        f"legacy preset TP {orig_ord_no} canceled; scalp_trailing_take_profit owns exit."
+    )
+    return True
 
 
 def _get_best_levels_from_ws(ws_data):
@@ -17212,6 +17345,120 @@ def _rising_missed_scout_quality_guard_weak_ai_max_score() -> float:
     )
 
 
+def _rising_missed_tick_speed_entry_guard_enabled() -> bool:
+    return _env_bool("KORSTOCKSCAN_RISING_MISSED_TICK_SPEED_ENTRY_GUARD_ENABLED", True)
+
+
+def _rising_missed_tick_window_max_span_sec() -> float:
+    return 60.0
+
+
+def _rising_missed_min_tick_acceleration_ratio() -> float:
+    return 1.0
+
+
+def _rising_missed_tick_numeric_field(*sources: dict | None, key: str, aliases=None):
+    raw = _entry_submit_field(*sources, key=key, aliases=aliases or (), default=None)
+    value = _safe_float(raw, None)
+    return value, raw
+
+
+def _evaluate_rising_missed_tick_speed_entry_guard(
+    *,
+    stock: dict | None,
+    runtime: dict | None,
+    latency_gate: dict | None = None,
+    ws_data: dict | None = None,
+    orderbook_fields: dict | None = None,
+    microstructure_fields: dict | None = None,
+    rising_missed_entry_lineage: bool | None = None,
+) -> dict[str, Any]:
+    stock = stock if isinstance(stock, dict) else {}
+    runtime = runtime if isinstance(runtime, dict) else {}
+    latency_gate = latency_gate if isinstance(latency_gate, dict) else {}
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    orderbook_fields = orderbook_fields if isinstance(orderbook_fields, dict) else {}
+    microstructure_fields = microstructure_fields if isinstance(microstructure_fields, dict) else {}
+    source_quality_fields = stock.get("last_watching_ai_source_quality_fields")
+    source_quality_fields = source_quality_fields if isinstance(source_quality_fields, dict) else {}
+
+    enabled = _rising_missed_tick_speed_entry_guard_enabled()
+    is_rising_missed = (
+        bool(rising_missed_entry_lineage)
+        if rising_missed_entry_lineage is not None
+        else _has_rising_missed_entry_lineage(stock, runtime)
+    )
+    max_span_sec = _rising_missed_tick_window_max_span_sec()
+    min_accel_ratio = _rising_missed_min_tick_acceleration_ratio()
+    sources = (
+        latency_gate,
+        microstructure_fields,
+        orderbook_fields,
+        source_quality_fields,
+        runtime,
+        ws_data,
+        stock,
+    )
+    tick_window_span_sec, raw_window_span = _rising_missed_tick_numeric_field(
+        *sources,
+        key="tick_window_span_sec",
+        aliases=("late_entry_tick_window_span_sec",),
+    )
+    tick_acceleration_ratio, raw_accel_ratio = _rising_missed_tick_numeric_field(
+        *sources,
+        key="tick_acceleration_ratio",
+        aliases=("tick_accel", "late_entry_fresh_tick_acceleration_ratio"),
+    )
+    slow_window = tick_window_span_sec is not None and tick_window_span_sec >= max_span_sec
+    slow_accel = tick_acceleration_ratio is not None and tick_acceleration_ratio < min_accel_ratio
+    missing_window = tick_window_span_sec is None
+    missing_accel = tick_acceleration_ratio is None
+    reasons = []
+    if missing_window:
+        reasons.append("tick_window_span_sec_missing")
+    if missing_accel:
+        reasons.append("tick_acceleration_ratio_missing")
+    if slow_window:
+        reasons.append("tick_window_span_sec_ge_60")
+    if slow_accel:
+        reasons.append("tick_acceleration_ratio_lt_1")
+    blocked = bool(enabled and is_rising_missed and reasons)
+    block_reason = "+".join(reasons) if reasons else "tick_speed_guard_pass"
+    return {
+        **_rising_missed_submit_safety_filter_fields(blocked=blocked),
+        "blocked": blocked,
+        "reason": block_reason,
+        "block_reason": block_reason,
+        "rising_missed_tick_speed_entry_guard_enabled": bool(enabled),
+        "rising_missed_entry_lineage": bool(is_rising_missed),
+        "rising_missed_tick_window_span_sec": (
+            f"{tick_window_span_sec:.3f}" if tick_window_span_sec is not None else "-"
+        ),
+        "rising_missed_tick_window_span_sec_raw": raw_window_span if raw_window_span not in (None, "") else "-",
+        "rising_missed_tick_window_max_span_sec": f"{max_span_sec:.3f}",
+        "rising_missed_tick_window_slow": bool(slow_window),
+        "rising_missed_tick_acceleration_ratio": (
+            f"{tick_acceleration_ratio:.3f}" if tick_acceleration_ratio is not None else "-"
+        ),
+        "rising_missed_tick_acceleration_ratio_raw": raw_accel_ratio if raw_accel_ratio not in (None, "") else "-",
+        "rising_missed_min_tick_acceleration_ratio": f"{min_accel_ratio:.3f}",
+        "rising_missed_tick_accel_slow": bool(slow_accel),
+        "metric_role": "safety_veto" if blocked else "diagnostic",
+        "decision_authority": "real_scalping_rising_missed_tick_speed_guard",
+        "window_policy": "same_day_intraday_runtime_state",
+        "sample_floor": "not_applicable_runtime_guard",
+        "primary_decision_metric": "tick_window_span_sec_or_tick_acceleration_ratio",
+        "source_quality_gate": "rising_missed_tick_context_present",
+        "threshold_family": "rising_missed_tick_speed_entry_guard",
+        "gate_action": "pre_submit_block" if blocked else "observe_only",
+        "runtime_effect": bool(blocked),
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": bool(blocked),
+        "forbidden_uses": TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
+    }
+
+
 def _quote_stale_for_rising_missed_scout_quality_guard(
     stock: dict | None,
     ws_data: dict | None,
@@ -17440,6 +17687,7 @@ def _evaluate_rising_missed_scout_quality_guard(
     block_reason = "stale_quote_with_weak_ai_or_strength" if blocked else "quality_guard_pass"
     return {
         **(decision_log_fields or {}),
+        **_rising_missed_submit_safety_filter_fields(blocked=blocked),
         **quote_fields,
         **ai_fields,
         **strength_fields,
@@ -29234,6 +29482,92 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             extra_fields=weak_micro_reentry_block,
         )
         return False
+    rising_missed_tick_speed_guard = _evaluate_rising_missed_tick_speed_entry_guard(
+        stock=stock,
+        runtime=runtime,
+        latency_gate=latency_gate,
+        ws_data=ws_data,
+        orderbook_fields=entry_orderbook_micro_fields,
+        microstructure_fields=microstructure_submit_log_fields,
+        rising_missed_entry_lineage=bool(
+            forced_rising_missed_one_share or _has_rising_missed_entry_lineage(stock, runtime)
+        ),
+    )
+    if rising_missed_tick_speed_guard.get("blocked") and any(
+        reason in str(rising_missed_tick_speed_guard.get("block_reason") or "")
+        for reason in ("tick_window_span_sec_missing", "tick_acceleration_ratio_missing")
+    ):
+        retry_micro_fields = _refresh_pre_submit_micro_context_before_block(
+            stock=stock,
+            code=code,
+            ws_data=ws_data,
+            ai_engine=ai_engine,
+            now_ts=now_ts,
+        )
+        microstructure_submit_log_fields = _merge_entry_pipeline_field_groups(
+            microstructure_submit_log_fields,
+            retry_micro_fields,
+        )
+        rising_missed_tick_speed_guard = _evaluate_rising_missed_tick_speed_entry_guard(
+            stock=stock,
+            runtime=runtime,
+            latency_gate=latency_gate,
+            ws_data=ws_data,
+            orderbook_fields=entry_orderbook_micro_fields,
+            microstructure_fields=microstructure_submit_log_fields,
+            rising_missed_entry_lineage=bool(
+                forced_rising_missed_one_share or _has_rising_missed_entry_lineage(stock, runtime)
+            ),
+        )
+        rising_missed_tick_speed_guard.update(retry_micro_fields)
+    if rising_missed_tick_speed_guard.get("blocked"):
+        log_info(
+            f"[RISING_MISSED_TICK_SPEED_ENTRY_BLOCK] {stock.get('name')}({code}) "
+            f"window={rising_missed_tick_speed_guard.get('rising_missed_tick_window_span_sec')} "
+            f"accel={rising_missed_tick_speed_guard.get('rising_missed_tick_acceleration_ratio')} "
+            f"reason={rising_missed_tick_speed_guard.get('block_reason')}"
+        )
+        _mutate_stock_state(
+            stock,
+            pop_fields=[
+                "rising_missed_normal_buy_bridge_allowed",
+                "rising_missed_one_share_entry_forced",
+                "rising_missed_one_share_scout",
+                "rising_missed_scout_upgrade_pending",
+                "rising_missed_scout_upgrade_order_pending",
+                "forced_entry_qty",
+                "forced_entry_reason",
+                "target_buy_price",
+            ],
+        )
+        clear_signal_reference(stock)
+        _log_entry_pipeline(
+            stock,
+            code,
+            "rising_missed_tick_speed_entry_block",
+            forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON if forced_rising_missed_one_share else "-",
+            forced_entry_qty=forced_rising_missed_scout_qty,
+            **_merge_entry_pipeline_field_groups(
+                latency_price_snapshot,
+                entry_orderbook_micro_fields,
+                microstructure_submit_log_fields,
+                rising_missed_tick_speed_guard,
+            ),
+        )
+        _emit_scalp_entry_adm_snapshot(
+            stock,
+            code,
+            "rising_missed_tick_speed_entry_block",
+            ai_score=latency_signal_score,
+            chosen_action="WAIT_REQUOTE",
+            latency_gate=latency_gate,
+            price_snapshot=latency_price_snapshot,
+            orderbook_fields=entry_orderbook_micro_fields,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            extra_fields=rising_missed_tick_speed_guard,
+        )
+        return False
     if forced_rising_missed_one_share:
         planned_orders = collapse_to_one_share_order(
             planned_orders,
@@ -31339,6 +31673,7 @@ def _evaluate_rising_missed_normal_buy_bridge(
     ).upper()
     score_value = _safe_float(current_ai_score, 0.0)
     bridge_fields = {
+        **_rising_missed_candidate_filter_fields(allowed=False),
         "rising_missed_normal_buy_bridge_enabled": bool(feature_enabled),
         "rising_missed_normal_buy_bridge_allowed": False,
         "rising_missed_normal_buy_bridge_reason": "not_evaluated",
@@ -31395,6 +31730,7 @@ def _evaluate_rising_missed_normal_buy_bridge(
             "actual_order_submitted": False,
             "broker_order_forbidden": not bool(decision.allowed),
             "runtime_effect": bool(decision.allowed),
+            **_rising_missed_candidate_filter_fields(allowed=bool(decision.allowed)),
             "forbidden_uses": (
                 "threshold_mutation,order_guard_mutation,provider_change,bot_restart,"
                 "stale_submit_bypass,broker_guard_bypass,quantity_or_cap_change"
@@ -31637,7 +31973,10 @@ def _maybe_submit_rising_missed_one_share_entry(
                 primary_decision_metric="rising_missed_class",
                 source_quality_gate="rising_missed_watch_source_marker_present",
                 forbidden_uses=TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
-                **(decision.log_fields or {}),
+                **_merge_entry_pipeline_field_groups(
+                    decision.log_fields or {},
+                    _rising_missed_scanner_filter_fields(action="budget_reallocated"),
+                ),
             )
             return True
         return False
@@ -31669,6 +32008,7 @@ def _maybe_submit_rising_missed_one_share_entry(
             primary_decision_metric="last_exit_profit_rate",
             source_quality_gate="rising_missed_scout_exit_context_present",
             forbidden_uses=TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
+            **_rising_missed_candidate_filter_fields(allowed=False),
             **_rising_missed_same_day_reentry_log_fields(reentry_guard),
         )
         return True
@@ -34191,144 +34531,12 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 )
                 return
 
-        preset_tp_price = _safe_int(stock.get("preset_tp_price"), 0)
-        if _is_scalp_simulated_position(stock, strategy) and preset_tp_price > 0 and curr_p >= preset_tp_price:
-            _dispatch_scalp_preset_exit(
-                stock=stock,
-                code=code,
-                now_ts=now_ts,
-                curr_p=curr_p,
-                buy_p=buy_p,
-                profit_rate=profit_rate,
-                peak_profit=peak_profit,
-                strategy=strategy,
-                sell_reason_type="PROFIT",
-                reason="🎯 SCALP sim preset TP touch",
-                exit_rule="scalp_sim_preset_tp_touch",
-                ws_data=ws_data,
-                admin_id=admin_id,
-                market_regime=market_regime,
-            )
+        if not _disable_scalp_preset_tp_order_for_trailing(
+            stock,
+            code,
+            reason="preset_tp_removed_trailing_unified",
+        ):
             return
-
-        if profit_rate >= 0.8 and not stock.get('ai_review_done', False):
-            log_info(f"🤖 [SCALP 출구엔진] {stock['name']} +0.8% 도달! AI 1회 검문 실시...")
-            _mutate_stock_state(stock, set_fields={'ai_review_done': True})
-
-            if ai_engine:
-                try:
-                    recent_ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10)
-                    ai_decision = ai_engine.analyze_target(
-                        stock['name'],
-                        ws_data,
-                        recent_ticks,
-                        [],
-                        strategy="SCALPING",
-                        cache_profile="holding",
-                        prompt_profile="holding",
-                        metadata_extra={
-                            "record_id": stock.get("id"),
-                            "sim_record_id": stock.get("sim_record_id"),
-                            "sim_parent_record_id": stock.get("sim_parent_record_id"),
-                            "entry_adm_candidate_id": stock.get("entry_adm_candidate_id"),
-                            "source_event_stage": "holding_profit_review",
-                        },
-                    )
-                    ai_action = ai_decision.get('action', 'WAIT')
-                    ai_score = ai_decision.get('score', 50)
-
-                    _mutate_stock_state(
-                        stock,
-                        set_fields={
-                            'ai_review_action': ai_action,
-                            'ai_review_score': ai_score,
-                        },
-                    )
-
-                    # Holding/exit action schema(HOLD/TRIM/EXIT)는 action_v2로 전달된다.
-                    # 현 실행경로는 기존 호환을 위해 action(legacy: WAIT/SELL/DROP)을 함께 사용한다.
-                    if ai_action in ['SELL', 'DROP']:
-                        _log_holding_pipeline(
-                            stock,
-                            code,
-                            "scalp_preset_tp_ai_exit_action",
-                            ai_action_raw=ai_action,
-                            ai_reason_raw=ai_decision.get('reason', '-'),
-                            ai_action_used_for_exit=str(ai_action in ['SELL', 'DROP']).lower(),
-                            **_build_ai_ops_log_fields(
-                                ai_decision,
-                                ai_score_raw=ai_score,
-                                ai_score_after_bonus=ai_score,
-                                ai_cooldown_blocked=False,
-                            ),
-                        )
-                        log_info(
-                            "🛑 [SCALP 출구엔진 AI] 모멘텀 둔화 감지. 1.5% 포기 후 즉시 최유리(IOC) "
-                            "청산!"
-                        )
-                        _dispatch_scalp_preset_exit(
-                            stock=stock,
-                            code=code,
-                            now_ts=now_ts,
-                            curr_p=curr_p,
-                            buy_p=buy_p,
-                            profit_rate=profit_rate,
-                            peak_profit=peak_profit,
-                            strategy=strategy,
-                            sell_reason_type="MOMENTUM_DECAY",
-                            reason="🛑 SCALP 출구엔진 AI 모멘텀 둔화 즉시청산",
-                            exit_rule="scalp_preset_ai_review_exit",
-                            ws_data=ws_data,
-                            admin_id=admin_id,
-                            market_regime=market_regime,
-                        )
-                        return
-                    else:
-                        _log_holding_pipeline(
-                            stock,
-                            code,
-                            "scalp_preset_tp_ai_hold_action",
-                            ai_action_raw=ai_action,
-                            ai_reason_raw=ai_decision.get('reason', '-'),
-                            ai_action_used_for_exit="false",
-                            **_build_ai_ops_log_fields(
-                                ai_decision,
-                                ai_score_raw=ai_score,
-                                ai_score_after_bonus=ai_score,
-                                ai_cooldown_blocked=False,
-                            ),
-                        )
-                        log_info(
-                            "✅ [SCALP 출구엔진 AI] 돌파 모멘텀 유지(WAIT/BUY). 1.5% 유지, +0.3% 보호선 구축."
-                        )
-                        _mutate_stock_state(stock, set_fields={'protect_profit_pct': 0.3})
-                except Exception as e:
-                    log_error(f"⚠️ [SCALP 출구엔진 AI] 분석 실패: {e}. 기존 지정가 유지.")
-
-        protect_pct = stock.get('protect_profit_pct')
-        if protect_pct is not None and profit_rate <= protect_pct:
-            log_info(
-                f"🛡️ [SCALP 출구엔진] {stock['name']} +0.3% 보호선 이탈. 최유리(IOC) 약익절!"
-            )
-            _dispatch_scalp_preset_exit(
-                stock=stock,
-                code=code,
-                now_ts=now_ts,
-                curr_p=curr_p,
-                buy_p=buy_p,
-                profit_rate=profit_rate,
-                peak_profit=peak_profit,
-                strategy=strategy,
-                sell_reason_type="TRAILING",
-                reason=f"🛡️ SCALP 출구엔진 보호선 이탈 ({protect_pct:+.2f}%)",
-                exit_rule="scalp_preset_protect_profit",
-                ws_data=ws_data,
-                admin_id=admin_id,
-                market_regime=market_regime,
-            )
-            return
-
-        return
 
     is_sell_signal = False
     sell_reason_type = "PROFIT"
