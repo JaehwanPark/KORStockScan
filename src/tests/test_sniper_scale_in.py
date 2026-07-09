@@ -2032,6 +2032,245 @@ def test_rising_missed_one_share_hook_retries_not_evaluated_ai_before_block(monk
     assert entry_logs[-1][1]["rising_missed_one_share_entry_position_tag"] == "OPEN_RECLAIM"
 
 
+def test_rising_missed_one_share_hook_skips_retry_for_general_non_candidate_not_evaluated(monkeypatch):
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.TRADING_RULES = CONFIG
+    state_handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK.clear()
+
+    class DummyAI:
+        pass
+
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", "true")
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_rising_missed_same_day_reentry_guard",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("non-candidate should exit before reentry guard")
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_retry_entry_ai_submit_authority_before_block",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("non-candidate should not spend AI retry budget")
+        ),
+    )
+
+    stock = {
+        "id": 3,
+        "name": "NOT_RISING",
+        "strategy": "SCALPING",
+        "position_tag": "OPEN_RECLAIM",
+        "price_delta_since_first_seen_pct": 0.1,
+        "last_watching_ai_action": "not_evaluated",
+    }
+    runtime = {
+        "now_ts": 1000.0,
+        "current_ai_score": 50.0,
+        "ai_engine": DummyAI(),
+        "scout_upgrade_entry": False,
+    }
+
+    submitted = state_handlers._maybe_submit_rising_missed_one_share_entry(
+        stock,
+        "123456",
+        {"curr": 10000, "v_pw": 100.0},
+        admin_id=1,
+        runtime=runtime,
+        strategy="SCALPING",
+        pos_tag="OPEN_RECLAIM",
+        curr_price=10000,
+    )
+
+    assert submitted is False
+    assert "rising_missed_one_share_entry_forced" not in stock
+
+
+def test_rising_missed_watch_not_rising_candidate_consumes_without_watching_budget(monkeypatch):
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.TRADING_RULES = CONFIG
+    state_handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK.clear()
+
+    entry_logs = []
+
+    class DummyAI:
+        pass
+
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", "true")
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_rising_missed_same_day_reentry_guard",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("not-rising watch candidate should exit before reentry guard")
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_retry_entry_ai_submit_authority_before_block",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("not-rising watch candidate should not spend AI retry budget")
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: entry_logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 4,
+        "name": "WATCH_NOT_RISING",
+        "strategy": "SCALPING",
+        "position_tag": "OPEN_RECLAIM",
+        "price_delta_since_first_seen_pct": 0.1,
+        "rising_missed_buy": True,
+        "last_watching_ai_action": "not_evaluated",
+    }
+    runtime = {
+        "now_ts": 1000.0,
+        "current_ai_score": 50.0,
+        "ai_engine": DummyAI(),
+        "scout_upgrade_entry": False,
+    }
+
+    submitted = state_handlers._maybe_submit_rising_missed_one_share_entry(
+        stock,
+        "123456",
+        {"curr": 10000, "v_pw": 100.0},
+        admin_id=1,
+        runtime=runtime,
+        strategy="SCALPING",
+        pos_tag="OPEN_RECLAIM",
+        curr_price=10000,
+    )
+
+    assert submitted is True
+    assert "rising_missed_one_share_entry_forced" not in stock
+    assert entry_logs[-1][0] == "rising_missed_watch_not_rising_skipped"
+    assert entry_logs[-1][1]["rising_missed_class"] == "not_rising_missed"
+    assert entry_logs[-1][1]["decision_authority"] == "rising_missed_watch_budget_fast_reject"
+    assert entry_logs[-1][1]["actual_order_submitted"] is False
+
+
+def test_scanner_fast_precheck_reallocates_not_rising_missed_without_recovery(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_FULL_EVAL_MIN_DELTA_PCT", "1.0")
+    stock = {
+        "id": 11,
+        "name": "NOT_RISING_SCANNER",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "status": "WATCHING",
+        "rising_missed_class": "not_rising_missed",
+        "rising_missed_buy": True,
+        "scanner_promotion_reason": "price_jump_start_acceleration",
+        "source_signature": "PRICE_JUMP_START,REALTIME_RANK_START,VOLUME_SURGE_POSITIVE",
+        "first_seen_price": 10000,
+        "current_price": 9950,
+        "price_delta_since_first_seen_pct": -0.5,
+    }
+
+    fields = state_handlers._scanner_fast_precheck_fields(
+        stock,
+        ws_data={"curr": 9950},
+        now_ts=1000.0,
+    )
+
+    assert fields["fast_precheck_result"] == "budget_reallocated"
+    assert fields["fast_precheck_reason"] == "rising_missed_not_rising_without_recovery_signal"
+    assert fields["scanner_rising_missed_fast_reject_candidate"] is True
+    assert fields["scanner_rising_missed_recovery_signal_present"] is False
+    assert fields["actual_order_submitted"] is False
+    assert fields["broker_order_forbidden"] is True
+
+
+def test_scanner_fast_precheck_does_not_reallocate_general_not_rising_class(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_FULL_EVAL_MIN_DELTA_PCT", "1.0")
+    stock = {
+        "id": 13,
+        "name": "GENERAL_SCANNER",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "status": "WATCHING",
+        "rising_missed_class": "not_rising_missed",
+        "scanner_promotion_reason": "price_jump_start_acceleration",
+        "source_signature": "PRICE_JUMP_START,REALTIME_RANK_START,VOLUME_SURGE_POSITIVE",
+        "first_seen_price": 10000,
+        "current_price": 9950,
+        "price_delta_since_first_seen_pct": -0.5,
+    }
+
+    fields = state_handlers._scanner_fast_precheck_fields(
+        stock,
+        ws_data={"curr": 9950},
+        now_ts=1000.0,
+    )
+
+    assert fields["fast_precheck_result"] == "eligible_for_heavy_entry_eval"
+    assert fields["scanner_rising_missed_fast_reject_candidate"] is False
+    assert fields["scanner_rising_missed_source_marker_present"] is False
+
+
+def test_scanner_fast_precheck_keeps_missing_quote_as_source_quality_blocked(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_FULL_EVAL_MIN_DELTA_PCT", "1.0")
+    stock = {
+        "id": 14,
+        "name": "MISSING_QUOTE",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "status": "WATCHING",
+        "rising_missed_class": "not_rising_missed",
+        "rising_missed_buy": True,
+        "scanner_promotion_reason": "price_jump_start_acceleration",
+        "source_signature": "PRICE_JUMP_START,REALTIME_RANK_START,VOLUME_SURGE_POSITIVE",
+        "first_seen_price": 10000,
+        "current_price": 0,
+        "price_delta_since_first_seen_pct": -0.5,
+    }
+
+    fields = state_handlers._scanner_fast_precheck_fields(
+        stock,
+        ws_data={"curr": 0},
+        now_ts=1000.0,
+    )
+
+    assert fields["fast_precheck_result"] == "source_quality_blocked"
+    assert fields["fast_precheck_reason"] == "missing_or_zero_curr"
+    assert fields["scanner_rising_missed_fast_reject_candidate"] is True
+
+
+def test_scanner_fast_precheck_keeps_not_rising_missed_rebound_candidate(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_FULL_EVAL_MIN_DELTA_PCT", "1.0")
+    stock = {
+        "id": 12,
+        "name": "REBOUND_SCANNER",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "status": "WATCHING",
+        "rising_missed_class": "not_rising_missed",
+        "rising_missed_buy": True,
+        "scanner_promotion_reason": "price_jump_start_acceleration",
+        "source_signature": "PRICE_JUMP_START,REALTIME_RANK_START,VOLUME_SURGE_POSITIVE",
+        "first_seen_price": 10000,
+        "current_price": 9980,
+        "price_delta_since_first_seen_pct": -0.2,
+        "low_rebound_pct": 0.35,
+    }
+
+    fields = state_handlers._scanner_fast_precheck_fields(
+        stock,
+        ws_data={"curr": 9980},
+        now_ts=1000.0,
+    )
+
+    assert fields["fast_precheck_result"] == "eligible_for_heavy_entry_eval"
+    assert fields["fast_precheck_reason"] == "fast_precheck_pass"
+    assert fields["scanner_rising_missed_fast_reject_candidate"] is False
+    assert fields["scanner_rising_missed_fast_reject_reason"] == "recovery_signal_present"
+    assert fields["scanner_rising_missed_recovery_signal_present"] is True
+
+
 def test_rising_missed_scout_quality_guard_blocks_stale_recent_weak_ai_micro(monkeypatch):
     state_handlers.COOLDOWNS = {}
     state_handlers.ALERTED_STOCKS = set()

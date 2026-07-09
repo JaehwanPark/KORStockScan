@@ -2094,6 +2094,8 @@ def _scanner_watch_eviction_decision_from_pool_block(target, *, now_ts):
 
 def _scanner_watch_eviction_event_fields(target, *, decision):
     target = target or {}
+    fast_precheck_fields = decision.get("fast_precheck_fields")
+    fast_precheck_fields = fast_precheck_fields if isinstance(fast_precheck_fields, dict) else {}
     return {
         "metric_role": "runtime_watchlist_pool_management",
         "decision_authority": "real_scalping_scanner_watch_eviction_pool_management_only",
@@ -2137,6 +2139,31 @@ def _scanner_watch_eviction_event_fields(target, *, decision):
         "no_trade_last_ws_age_sec": decision.get("no_trade_last_ws_age_sec")
         or "not_applicable_no_trade_last_ws_age_sec",
         "cooldown_remaining_sec": decision.get("cooldown_remaining_sec", "not_applicable_cooldown_remaining_sec"),
+        "fast_precheck_result": decision.get("fast_precheck_result")
+        or fast_precheck_fields.get("fast_precheck_result")
+        or "not_applicable_fast_precheck_result",
+        "fast_precheck_reason": decision.get("fast_precheck_reason")
+        or fast_precheck_fields.get("fast_precheck_reason")
+        or "not_applicable_fast_precheck_reason",
+        "scanner_rising_missed_fast_reject_reason": fast_precheck_fields.get(
+            "scanner_rising_missed_fast_reject_reason",
+            "not_applicable_scanner_rising_missed_fast_reject_reason",
+        ),
+        "scanner_rising_missed_recovery_signal_present": bool(
+            fast_precheck_fields.get("scanner_rising_missed_recovery_signal_present")
+        ),
+        "scanner_rising_missed_low_rebound_pct": fast_precheck_fields.get(
+            "scanner_rising_missed_low_rebound_pct",
+            "not_applicable_scanner_rising_missed_low_rebound_pct",
+        ),
+        "scanner_rising_missed_positive_delta_pct": fast_precheck_fields.get(
+            "scanner_rising_missed_positive_delta_pct",
+            "not_applicable_scanner_rising_missed_positive_delta_pct",
+        ),
+        "scanner_rising_missed_min_delta_pct": fast_precheck_fields.get(
+            "scanner_rising_missed_min_delta_pct",
+            "not_applicable_scanner_rising_missed_min_delta_pct",
+        ),
         "runtime_record_id": target.get("id") or "not_applicable_runtime_record_id",
         "stock_code": str(target.get("code") or "").strip()[:6] or "not_applicable_stock_code",
         "target_status": target.get("status") or "not_applicable_target_status",
@@ -2202,6 +2229,37 @@ def _maybe_expire_scanner_watch_for_pool_block(target, code, targets, *, now_ts,
     decision = _scanner_watch_eviction_decision_from_pool_block(target, now_ts=now_ts)
     if not decision.get("should_evict"):
         return False
+    return _expire_scanner_watch_target(target, code, targets, decision=decision, emit_event_fn=emit_event_fn)
+
+
+def _maybe_expire_scanner_watch_for_fast_precheck_budget(
+    target,
+    code,
+    targets,
+    *,
+    now_ts,
+    emit_event_fn=None,
+):
+    fast_precheck_fields = dict((target or {}).get("_scanner_fast_precheck_fields") or {})
+    decision = {
+        "should_evict": True,
+        "eviction_reason": "rising_missed_not_rising_budget_reallocated",
+        "eviction_attempt_count": 1,
+        "terminal_stage": "scalping_scanner_fast_precheck",
+        "terminal_reason": fast_precheck_fields.get("fast_precheck_reason")
+        or "rising_missed_not_rising_without_recovery_signal",
+        "fresh_input_confirmed": False,
+        "stale_first_seen_epoch": "not_applicable_stale_first_seen_epoch",
+        "stale_age_sec": "not_applicable_stale_age_sec",
+        "ws_recovery_outcome": "not_applicable_ws_recovery_outcome",
+        "source_quality_detail_route": "scanner_rising_missed_budget_reallocated",
+        "scanner_source_quality_reallocation_candidate": False,
+        "fast_precheck_result": fast_precheck_fields.get("fast_precheck_result") or "budget_reallocated",
+        "fast_precheck_reason": fast_precheck_fields.get("fast_precheck_reason")
+        or "rising_missed_not_rising_without_recovery_signal",
+        "fast_precheck_fields": fast_precheck_fields,
+        "observed_epoch": f"{float(now_ts):.3f}",
+    }
     return _expire_scanner_watch_target(target, code, targets, decision=decision, emit_event_fn=emit_event_fn)
 
 
@@ -5740,6 +5798,9 @@ def run_sniper(is_test_mode=False):
                                 continue
                         if fast_precheck_result != "eligible_for_heavy_entry_eval":
                             skip_reason = (
+                                "scanner_fast_precheck_budget_reallocated"
+                                if fast_precheck_result == "budget_reallocated"
+                                else
                                 "scanner_fast_precheck_stability_pending"
                                 if fast_precheck_result == "stability_pending"
                                 else "scanner_fast_precheck_source_quality_blocked"
@@ -5802,6 +5863,14 @@ def run_sniper(is_test_mode=False):
                                     now_ts=heavy_queue_enter_epoch,
                                     stale_reason=fast_precheck_reason,
                                     recovery_fields=recovery_fields,
+                                    emit_event_fn=_defer_scanner_entry_pipeline_log,
+                                )
+                            elif fast_precheck_result == "budget_reallocated":
+                                _maybe_expire_scanner_watch_for_fast_precheck_budget(
+                                    stock,
+                                    code,
+                                    targets,
+                                    now_ts=heavy_queue_enter_epoch,
                                     emit_event_fn=_defer_scanner_entry_pipeline_log,
                                 )
                             continue

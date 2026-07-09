@@ -64,6 +64,7 @@ from src.engine.scalping_feature_packet import (
 )
 from src.engine.scalping.rising_missed_one_share_entry import (
     BLOCK_ALREADY_HOLDING as RISING_MISSED_BLOCK_ALREADY_HOLDING,
+    BLOCK_ENTRY_AI_NOT_EVALUATED as RISING_MISSED_BLOCK_ENTRY_AI_NOT_EVALUATED,
     BLOCK_NOT_CANDIDATE as RISING_MISSED_BLOCK_NOT_CANDIDATE,
     BLOCK_OPEN_PENDING as RISING_MISSED_BLOCK_OPEN_PENDING,
     BLOCK_PRICE_ABOVE_CAP as RISING_MISSED_BLOCK_PRICE_ABOVE_CAP,
@@ -74,6 +75,7 @@ from src.engine.scalping.rising_missed_one_share_entry import (
     FORCED_ENTRY_REASON as RISING_MISSED_FORCED_ENTRY_REASON,
     MAX_ONE_SHARE_ENTRY_PRICE_KRW as RISING_MISSED_MAX_ONE_SHARE_ENTRY_PRICE_KRW,
     RISING_MISSED_CLASS_RAW,
+    RISING_MISSED_CLASS_NOT_RISING,
     collapse_to_one_share_order,
     evaluate_rising_missed_normal_buy_bridge,
     evaluate_rising_missed_one_share_entry,
@@ -9791,6 +9793,71 @@ def _scanner_rising_relief_observation_fields(
     return fields
 
 
+def _scanner_rising_missed_not_rising_fast_reject_fields(
+    stock: dict | None,
+    ws_data: dict | None,
+) -> dict[str, Any]:
+    stock = stock if isinstance(stock, dict) else {}
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    positive_delta_pct = _scanner_positive_delta_pct(stock)
+    min_delta_pct = _scanner_rising_entry_min_delta_pct()
+    low_rebound_pct = max(
+        0.0,
+        _safe_float(stock.get("low_rebound_pct"), 0.0),
+        _safe_float(stock.get("LowReboundPct"), 0.0),
+    )
+    price_delta_pct = _safe_float(stock.get("price_delta_since_first_seen_pct"), 0.0)
+    comparable_delta_pct = _safe_float(stock.get("comparable_flu_delta_since_first_seen"), 0.0)
+    current_price = _safe_int(ws_data.get("curr") or stock.get("current_price_observed") or stock.get("current_price"), 0)
+    first_seen_price = _safe_int(stock.get("first_seen_price"), 0)
+    rebound_from_first_seen_pct = (
+        ((current_price - first_seen_price) / first_seen_price) * 100.0
+        if current_price > 0 and first_seen_price > 0
+        else None
+    )
+    rebound_signal_present = bool(
+        positive_delta_pct >= min_delta_pct
+        or low_rebound_pct > 0.0
+        or comparable_delta_pct >= min_delta_pct
+        or (rebound_from_first_seen_pct is not None and rebound_from_first_seen_pct >= min_delta_pct)
+    )
+    source_marker_present = bool(
+        _rising_missed_source_value_present(stock.get("_scanner_rising_entry_relief_reason"))
+        or _rising_missed_source_value_present(stock.get("rising_missed_buy"))
+        or _rising_missed_source_value_present(stock.get("rising_entry_relief_eligible"))
+        or _rising_missed_source_value_present(stock.get("rising_missed_lineage"))
+        or _rising_missed_source_value_present(stock.get("low_rebound_pct"))
+        or _rising_missed_source_value_present(stock.get("LowReboundPct"))
+        or "LOW_REBOUND_RISING_MISSED" in str(stock.get("source_signature") or "").upper()
+    )
+    rising_class = str(stock.get("rising_missed_class") or "").strip()
+    not_rising = bool(rising_class == RISING_MISSED_CLASS_NOT_RISING)
+    candidate = bool(source_marker_present and not_rising and not rebound_signal_present)
+    return {
+        "scanner_rising_missed_fast_reject_candidate": candidate,
+        "scanner_rising_missed_fast_reject_reason": (
+            "not_rising_missed_without_recovery_signal"
+            if candidate
+            else "recovery_signal_present"
+            if source_marker_present and not_rising
+            else "not_applicable"
+        ),
+        "scanner_rising_missed_source_marker_present": source_marker_present,
+        "scanner_rising_missed_class": rising_class or "-",
+        "scanner_rising_missed_positive_delta_pct": round(positive_delta_pct, 4),
+        "scanner_rising_missed_min_delta_pct": round(min_delta_pct, 4),
+        "scanner_rising_missed_low_rebound_pct": round(low_rebound_pct, 4),
+        "scanner_rising_missed_price_delta_since_first_seen_pct": round(price_delta_pct, 4),
+        "scanner_rising_missed_comparable_delta_pct": round(comparable_delta_pct, 4),
+        "scanner_rising_missed_rebound_from_first_seen_pct": (
+            round(rebound_from_first_seen_pct, 4)
+            if rebound_from_first_seen_pct is not None
+            else "not_available_rebound_from_first_seen_pct"
+        ),
+        "scanner_rising_missed_recovery_signal_present": rebound_signal_present,
+    }
+
+
 def _ws_realtime_type_freshness_fields(ws_data: dict | None, *, now_ts: float | None = None) -> dict[str, Any]:
     ws_data = ws_data if isinstance(ws_data, dict) else {}
     now_value = time.time() if now_ts is None else float(now_ts)
@@ -10200,9 +10267,16 @@ def _scanner_fast_precheck_fields(
         and _scanner_rising_entry_relief_eligible(stock)
         and _scanner_positive_delta_pct(stock) >= _scanner_rising_stale_ws_full_eval_min_delta_pct()
     )
+    rising_missed_fast_reject = _scanner_rising_missed_not_rising_fast_reject_fields(
+        stock,
+        ws_data,
+    )
     if curr <= 0:
         result = "source_quality_blocked"
         reason = "missing_or_zero_curr"
+    elif rising_missed_fast_reject.get("scanner_rising_missed_fast_reject_candidate"):
+        result = "budget_reallocated"
+        reason = "rising_missed_not_rising_without_recovery_signal"
     elif rest_quote_promotion_conflict:
         result = "stability_pending"
         reason = "rest_quote_conflicts_with_scanner_promotion"
@@ -10340,6 +10414,7 @@ def _scanner_fast_precheck_fields(
         "runtime_record_id": (stock or {}).get("id") or "not_applicable_runtime_record_id",
         "entry_armed_at_epoch": (stock or {}).get("entry_armed_at_epoch") or "not_applicable_entry_armed_at_epoch",
         "added_time": (stock or {}).get("added_time") or "not_applicable_added_time",
+        **rising_missed_fast_reject,
         **_scanner_rising_relief_observation_fields(stock),
     }
 
@@ -31157,6 +31232,28 @@ def _has_rising_missed_entry_lineage(stock: dict | None, runtime: dict | None = 
     return bool(rising_class and rising_class not in {"-", "not_rising_missed"})
 
 
+def _rising_missed_source_value_present(value) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    return bool(str(value).strip() and str(value).strip() != "-")
+
+
+def _has_rising_missed_watch_source_marker(stock: dict | None) -> bool:
+    stock = stock if isinstance(stock, dict) else {}
+    return bool(
+        _rising_missed_source_value_present(stock.get("_scanner_rising_entry_relief_reason"))
+        or _rising_missed_source_value_present(stock.get("rising_missed_buy"))
+        or _rising_missed_source_value_present(stock.get("rising_entry_relief_eligible"))
+        or _rising_missed_source_value_present(stock.get("rising_missed_lineage"))
+        or _rising_missed_source_value_present(stock.get("low_rebound_pct"))
+        or _rising_missed_source_value_present(stock.get("LowReboundPct"))
+        or "LOW_REBOUND_RISING_MISSED" in str(stock.get("source_signature") or "").upper()
+        or str(stock.get("rising_missed_class") or "").strip() == RISING_MISSED_CLASS_NOT_RISING
+    )
+
+
 def _evaluate_caution_weak_liquidity_entry_block(
     *,
     stock: dict | None,
@@ -31501,6 +31598,49 @@ def _maybe_submit_rising_missed_one_share_entry(
     feature_enabled = _rising_missed_one_share_entry_enabled()
     if not feature_enabled:
         return False
+    decision = evaluate_rising_missed_one_share_entry(
+        stock,
+        strategy=strategy,
+        position_tag=pos_tag,
+        feature_enabled=feature_enabled,
+        has_open_pending=_has_open_pending_entry_orders(stock),
+        already_holding=_already_holding_entry_position(stock),
+        positive_delta_pct=_scanner_positive_delta_pct(stock),
+        min_delta_pct=_scanner_rising_entry_min_delta_pct(),
+        current_price=curr_price,
+        max_entry_price_krw=_rising_missed_one_share_entry_max_price_krw(),
+        scout_budget_cap_krw=_rising_missed_scout_entry_budget_cap_krw(),
+        current_fluctuation_pct=_current_fluctuation_pct(stock, ws_data, runtime),
+        upper_limit_exclude_enabled=_rising_missed_upper_limit_exclude_enabled(),
+        upper_limit_exclude_pct=_rising_missed_upper_limit_exclude_pct(),
+    )
+    if decision.allowed is False and decision.reason == RISING_MISSED_BLOCK_NOT_CANDIDATE:
+        if (
+            _has_rising_missed_watch_source_marker(stock)
+            and str((decision.log_fields or {}).get("rising_missed_class") or "").strip()
+            == RISING_MISSED_CLASS_NOT_RISING
+        ):
+            _log_entry_pipeline(
+                stock,
+                code,
+                "rising_missed_watch_not_rising_skipped",
+                block_reason=decision.reason,
+                forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON,
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                runtime_effect=False,
+                allowed_runtime_apply=False,
+                decision_authority="rising_missed_watch_budget_fast_reject",
+                metric_role="funnel_count",
+                window_policy="same_day_intraday_runtime_state",
+                sample_floor="not_applicable_fast_reject",
+                primary_decision_metric="rising_missed_class",
+                source_quality_gate="rising_missed_watch_source_marker_present",
+                forbidden_uses=TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
+                **(decision.log_fields or {}),
+            )
+            return True
+        return False
     reentry_guard = evaluate_rising_missed_same_day_reentry_guard(
         code,
         _safe_float((runtime or {}).get("now_ts"), time.time()),
@@ -31532,29 +31672,32 @@ def _maybe_submit_rising_missed_one_share_entry(
             **_rising_missed_same_day_reentry_log_fields(reentry_guard),
         )
         return True
-    retry_fields = _maybe_retry_rising_missed_entry_ai_not_evaluated(
-        stock,
-        code,
-        ws_data,
-        runtime,
-        curr_price=curr_price,
-    )
-    decision = evaluate_rising_missed_one_share_entry(
-        stock,
-        strategy=strategy,
-        position_tag=pos_tag,
-        feature_enabled=feature_enabled,
-        has_open_pending=_has_open_pending_entry_orders(stock),
-        already_holding=_already_holding_entry_position(stock),
-        positive_delta_pct=_scanner_positive_delta_pct(stock),
-        min_delta_pct=_scanner_rising_entry_min_delta_pct(),
-        current_price=curr_price,
-        max_entry_price_krw=_rising_missed_one_share_entry_max_price_krw(),
-        scout_budget_cap_krw=_rising_missed_scout_entry_budget_cap_krw(),
-        current_fluctuation_pct=_current_fluctuation_pct(stock, ws_data, runtime),
-        upper_limit_exclude_enabled=_rising_missed_upper_limit_exclude_enabled(),
-        upper_limit_exclude_pct=_rising_missed_upper_limit_exclude_pct(),
-    )
+    retry_fields = {"rising_missed_entry_ai_retry_reason": "not_needed"}
+    if decision.allowed is False and decision.reason == RISING_MISSED_BLOCK_ENTRY_AI_NOT_EVALUATED:
+        retry_fields = _maybe_retry_rising_missed_entry_ai_not_evaluated(
+            stock,
+            code,
+            ws_data,
+            runtime,
+            curr_price=curr_price,
+        )
+        if retry_fields.get("rising_missed_entry_ai_retry_success"):
+            decision = evaluate_rising_missed_one_share_entry(
+                stock,
+                strategy=strategy,
+                position_tag=pos_tag,
+                feature_enabled=feature_enabled,
+                has_open_pending=_has_open_pending_entry_orders(stock),
+                already_holding=_already_holding_entry_position(stock),
+                positive_delta_pct=_scanner_positive_delta_pct(stock),
+                min_delta_pct=_scanner_rising_entry_min_delta_pct(),
+                current_price=curr_price,
+                max_entry_price_krw=_rising_missed_one_share_entry_max_price_krw(),
+                scout_budget_cap_krw=_rising_missed_scout_entry_budget_cap_krw(),
+                current_fluctuation_pct=_current_fluctuation_pct(stock, ws_data, runtime),
+                upper_limit_exclude_enabled=_rising_missed_upper_limit_exclude_enabled(),
+                upper_limit_exclude_pct=_rising_missed_upper_limit_exclude_pct(),
+            )
     decision_log_fields = dict(decision.log_fields or {})
     if retry_fields.get("rising_missed_entry_ai_retry_reason") != "not_needed":
         decision_log_fields.update(retry_fields)

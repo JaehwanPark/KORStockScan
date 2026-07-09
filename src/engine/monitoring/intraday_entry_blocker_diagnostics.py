@@ -804,6 +804,13 @@ def _blocker_taxonomy(
     latency_cause = latency_root_cause.strip().lower()
     delta = max_delta_pct if max_delta_pct is not None else 0.0
     if stage == "scalping_scanner_watch_eviction":
+        if reason == "rising_missed_not_rising_budget_reallocated":
+            return {
+                "class": "watch_budget_reallocated",
+                "actionable": False,
+                "major_blocker": False,
+                "route": "watch_budget_reallocated_after_rising_missed_not_rising_fast_reject",
+            }
         return {
             "class": "watch_budget_reallocated",
             "actionable": False,

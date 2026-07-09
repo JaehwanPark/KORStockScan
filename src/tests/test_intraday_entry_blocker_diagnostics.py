@@ -909,6 +909,48 @@ def test_build_report_marks_watch_eviction_as_budget_reallocated(tmp_path):
     ]
 
 
+def test_build_report_routes_rising_missed_not_rising_eviction_as_budget_reallocated(tmp_path):
+    path = tmp_path / "pipeline_events_2026-06-23.jsonl"
+    rows = [
+        _event("000001", "A", "scalping_scanner_candidate_promoted", {"price_delta_since_first_seen_pct": "0.00"}),
+        _event(
+            "000001",
+            "A",
+            "scalping_scanner_fast_precheck",
+            {
+                "fast_precheck_result": "budget_reallocated",
+                "fast_precheck_reason": "rising_missed_not_rising_without_recovery_signal",
+                "scanner_rising_missed_recovery_signal_present": "False",
+            },
+        ),
+        _event(
+            "000001",
+            "A",
+            "scalping_scanner_watch_eviction",
+            {
+                "eviction_reason": "rising_missed_not_rising_budget_reallocated",
+                "terminal_reason": "rising_missed_not_rising_without_recovery_signal",
+                "fast_precheck_result": "budget_reallocated",
+            },
+        ),
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(target_date="2026-06-23", pipeline_path=path, generated_at="fixed")
+
+    assert {
+        "class": "watch_budget_reallocated",
+        "route": "watch_budget_reallocated_after_rising_missed_not_rising_fast_reject",
+        "count": 1,
+    } in report["blocker_taxonomy"]["route_counts"]
+    assert {
+        "class": "watch_budget_reallocated",
+        "stage": "scalping_scanner_watch_eviction",
+        "reason": "rising_missed_not_rising_budget_reallocated",
+        "count": 1,
+    } in report["blocker_taxonomy"]["suppressed_non_actionable_counts"]
+
+
 def test_build_report_splits_low_ai_pressure_by_eval_freshness(tmp_path):
     path = tmp_path / "pipeline_events_2026-06-23.jsonl"
     rows = [
