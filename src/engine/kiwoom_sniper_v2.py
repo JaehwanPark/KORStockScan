@@ -299,7 +299,7 @@ _SCANNER_FULL_EVAL_PRESSURE_STATE = {
     "pressure_streak": 0,
     "relief_streak": 0,
 }
-SCANNER_WATCH_EVICTION_POLICY_VERSION = "scalping_scanner_watch_eviction_v5"
+SCANNER_WATCH_EVICTION_POLICY_VERSION = "scalping_scanner_watch_eviction_v6"
 SCANNER_WATCH_EVICTION_TERMINAL_MIN_COUNT = 2
 SCANNER_WATCH_EVICTION_PREFILTER_HARDGATE_STAGES = {
     "blocked_strength_momentum",
@@ -312,6 +312,10 @@ SCANNER_WATCH_EVICTION_COOLDOWN_MIN_REMAINING_SEC = 60
 SCANNER_WATCH_EVICTION_NO_TRADE_GRACE_SEC = 90.0
 SCANNER_WATCH_EVICTION_NO_TRADE_MIN_COUNT = 2
 SCANNER_WATCH_EVICTION_NO_TRADE_MAX_PER_LOOP = 4
+SCANNER_WATCH_EVICTION_QUEUE_LAG_MIN_SEC = 30.0
+SCANNER_WATCH_EVICTION_QUEUE_LAG_MIN_COUNT = 2
+SCANNER_WATCH_EVICTION_QUEUE_LAG_IMMEDIATE_SEC = 60.0
+SCANNER_WATCH_EVICTION_QUEUE_LAG_MAX_PER_LOOP = 4
 SCANNER_WATCH_EVICTION_AFTER_BUY_WINDOW_MIN_COUNT = 2
 SCANNER_WATCH_EVICTION_AFTER_BUY_WINDOW_MIN_AGE_SEC = 60.0
 SCANNER_WATCH_EVICTION_RISING_TERMINAL_RECHECK_DELAY_SEC = 5.0
@@ -1315,6 +1319,46 @@ def _scanner_no_trade_eviction_max_per_loop():
     return max(0, min(value, 20))
 
 
+def _scanner_queue_lag_eviction_enabled():
+    return _env_bool("KORSTOCKSCAN_SCANNER_QUEUE_LAG_EVICTION_ENABLED", True)
+
+
+def _scanner_queue_lag_eviction_min_sec():
+    raw = os.getenv("KORSTOCKSCAN_SCANNER_QUEUE_LAG_EVICTION_MIN_SEC", "")
+    try:
+        value = float(str(raw).strip()) if str(raw).strip() else SCANNER_WATCH_EVICTION_QUEUE_LAG_MIN_SEC
+    except Exception:
+        value = SCANNER_WATCH_EVICTION_QUEUE_LAG_MIN_SEC
+    return max(5.0, min(value, 300.0))
+
+
+def _scanner_queue_lag_eviction_min_count():
+    raw = os.getenv("KORSTOCKSCAN_SCANNER_QUEUE_LAG_EVICTION_MIN_COUNT", "")
+    try:
+        value = int(str(raw).strip()) if str(raw).strip() else SCANNER_WATCH_EVICTION_QUEUE_LAG_MIN_COUNT
+    except Exception:
+        value = SCANNER_WATCH_EVICTION_QUEUE_LAG_MIN_COUNT
+    return max(1, min(value, 20))
+
+
+def _scanner_queue_lag_eviction_immediate_sec():
+    raw = os.getenv("KORSTOCKSCAN_SCANNER_QUEUE_LAG_EVICTION_IMMEDIATE_SEC", "")
+    try:
+        value = float(str(raw).strip()) if str(raw).strip() else SCANNER_WATCH_EVICTION_QUEUE_LAG_IMMEDIATE_SEC
+    except Exception:
+        value = SCANNER_WATCH_EVICTION_QUEUE_LAG_IMMEDIATE_SEC
+    return max(_scanner_queue_lag_eviction_min_sec(), min(value, 600.0))
+
+
+def _scanner_queue_lag_eviction_max_per_loop():
+    raw = os.getenv("KORSTOCKSCAN_SCANNER_QUEUE_LAG_EVICTION_MAX_PER_LOOP", "")
+    try:
+        value = int(str(raw).strip()) if str(raw).strip() else SCANNER_WATCH_EVICTION_QUEUE_LAG_MAX_PER_LOOP
+    except Exception:
+        value = SCANNER_WATCH_EVICTION_QUEUE_LAG_MAX_PER_LOOP
+    return max(0, min(value, 20))
+
+
 def _scanner_after_buy_window_source_quality_eviction_enabled():
     return _env_bool("KORSTOCKSCAN_SCANNER_AFTER_BUY_WINDOW_SOURCE_QUALITY_EVICTION_ENABLED", True)
 
@@ -1698,6 +1742,14 @@ def _scanner_watch_reset_pool_block_eviction_state(target):
     target.pop("_scanner_watch_eviction_last_pool_block_observed_epoch", None)
 
 
+def _scanner_watch_reset_queue_lag_eviction_state(target):
+    if not isinstance(target, dict):
+        return
+    target.pop("_scanner_watch_queue_lag_count", None)
+    target.pop("_scanner_watch_queue_lag_first_observed_epoch", None)
+    target.pop("_scanner_watch_queue_lag_last_observed_epoch", None)
+
+
 def _scanner_watch_eviction_decision_from_terminal(target, *, now_ts):
     if not _is_scanner_watch_eviction_candidate(target):
         return {"should_evict": False, "eviction_attempt_count": 0}
@@ -2022,6 +2074,103 @@ def _scanner_watch_eviction_decision_from_no_trade(target, ws_data, *, now_ts):
     }
 
 
+def _scanner_watch_eviction_decision_from_queue_lag(target, *, now_ts, queue_lag_fields=None):
+    if not _scanner_queue_lag_eviction_enabled():
+        return {"should_evict": False, "eviction_attempt_count": 0}
+    if not _is_scanner_watch_eviction_candidate(target):
+        return {"should_evict": False, "eviction_attempt_count": 0}
+
+    queue_lag_fields = queue_lag_fields if isinstance(queue_lag_fields, dict) else {}
+    fast_precheck_result = str(
+        queue_lag_fields.get("fast_precheck_result")
+        or (target or {}).get("_scanner_fast_precheck_result")
+        or ""
+    )
+    fast_precheck_reason = str(
+        queue_lag_fields.get("fast_precheck_reason")
+        or (target or {}).get("_scanner_fast_precheck_reason")
+        or ""
+    )
+    if fast_precheck_result == "eligible_for_heavy_entry_eval":
+        _scanner_watch_reset_queue_lag_eviction_state(target)
+        return {
+            "should_evict": False,
+            "eviction_attempt_count": 0,
+            "eviction_reason": "scanner_queue_lag_heavy_eval_eligible",
+            "fresh_input_confirmed": True,
+            "fast_precheck_result": fast_precheck_result,
+            "fast_precheck_reason": fast_precheck_reason,
+        }
+
+    queue_lag_sec = _safe_float(queue_lag_fields.get("queue_lag_sec"), 0.0)
+    min_sec = _scanner_queue_lag_eviction_min_sec()
+    if queue_lag_sec < min_sec:
+        _scanner_watch_reset_queue_lag_eviction_state(target)
+        return {
+            "should_evict": False,
+            "eviction_attempt_count": 0,
+            "eviction_reason": "scanner_queue_lag_below_threshold",
+            "queue_lag_sec": round(queue_lag_sec, 3),
+            "queue_lag_min_sec": round(min_sec, 3),
+            "fresh_input_confirmed": False,
+            "fast_precheck_result": fast_precheck_result or "not_available",
+            "fast_precheck_reason": fast_precheck_reason or "not_available",
+        }
+
+    last_observed = _safe_float(target.get("_scanner_watch_queue_lag_last_observed_epoch"), 0.0)
+    if last_observed > 0 and float(now_ts) - last_observed < 5.0:
+        return {
+            "should_evict": False,
+            "eviction_attempt_count": _safe_int(target.get("_scanner_watch_queue_lag_count"), 0),
+            "eviction_reason": "scanner_queue_lag_confirmation_throttled",
+            "queue_lag_sec": round(queue_lag_sec, 3),
+            "queue_lag_min_sec": round(min_sec, 3),
+            "fresh_input_confirmed": False,
+            "fast_precheck_result": fast_precheck_result or "not_available",
+            "fast_precheck_reason": fast_precheck_reason or "not_available",
+        }
+
+    first_observed = _safe_float(target.get("_scanner_watch_queue_lag_first_observed_epoch"), 0.0)
+    if first_observed <= 0:
+        first_observed = float(now_ts)
+    attempt_count = _safe_int(target.get("_scanner_watch_queue_lag_count"), 0) + 1
+    target["_scanner_watch_queue_lag_first_observed_epoch"] = first_observed
+    target["_scanner_watch_queue_lag_last_observed_epoch"] = float(now_ts)
+    target["_scanner_watch_queue_lag_count"] = attempt_count
+
+    immediate_sec = _scanner_queue_lag_eviction_immediate_sec()
+    min_count = _scanner_queue_lag_eviction_min_count()
+    immediate = queue_lag_sec >= immediate_sec
+    return {
+        "should_evict": immediate or attempt_count >= min_count,
+        "eviction_reason": "scanner_queue_lag_budget_reallocated",
+        "eviction_attempt_count": attempt_count,
+        "terminal_stage": "scalping_scanner_runtime_queue_lag",
+        "terminal_reason": "runtime_queue_lag_repeated_or_immediate",
+        "fresh_input_confirmed": False,
+        "stale_first_seen_epoch": "not_applicable_stale_first_seen_epoch",
+        "stale_age_sec": "not_applicable_stale_age_sec",
+        "ws_recovery_outcome": "not_applicable_ws_recovery_outcome",
+        "source_quality_detail_route": "scanner_queue_lag_budget_reallocation",
+        "queue_lag_first_observed_epoch": f"{first_observed:.3f}",
+        "queue_lag_sec": round(queue_lag_sec, 3),
+        "queue_lag_min_sec": round(min_sec, 3),
+        "queue_lag_immediate_sec": round(immediate_sec, 3),
+        "queue_lag_min_count": min_count,
+        "queue_lag_immediate": immediate,
+        "queue_rank": queue_lag_fields.get("queue_rank", "not_available"),
+        "scanner_queue_rank": queue_lag_fields.get("scanner_queue_rank", "not_available"),
+        "watching_count": queue_lag_fields.get("watching_count", "not_available"),
+        "scanner_watching_count": queue_lag_fields.get("scanner_watching_count", "not_available"),
+        "queue_lag_anchor_field": queue_lag_fields.get("queue_lag_anchor_field")
+        or "entry_armed_at_epoch_or_added_time",
+        "fast_precheck_result": fast_precheck_result or "not_available",
+        "fast_precheck_reason": fast_precheck_reason or "not_available",
+        "fast_precheck_fields": dict((target or {}).get("_scanner_fast_precheck_fields") or {}),
+        "observed_epoch": f"{float(now_ts):.3f}",
+    }
+
+
 def _scanner_watch_eviction_decision_from_pool_block(target, *, now_ts):
     if not _is_scanner_watch_eviction_candidate(target):
         return {"should_evict": False, "eviction_attempt_count": 0}
@@ -2138,6 +2287,26 @@ def _scanner_watch_eviction_event_fields(target, *, decision):
         or "not_applicable_no_trade_received_types",
         "no_trade_last_ws_age_sec": decision.get("no_trade_last_ws_age_sec")
         or "not_applicable_no_trade_last_ws_age_sec",
+        "queue_lag_first_observed_epoch": decision.get("queue_lag_first_observed_epoch")
+        or "not_applicable_queue_lag_first_observed_epoch",
+        "queue_lag_sec": decision.get("queue_lag_sec")
+        or "not_applicable_queue_lag_sec",
+        "queue_lag_min_sec": decision.get("queue_lag_min_sec")
+        or "not_applicable_queue_lag_min_sec",
+        "queue_lag_immediate_sec": decision.get("queue_lag_immediate_sec")
+        or "not_applicable_queue_lag_immediate_sec",
+        "queue_lag_min_count": decision.get("queue_lag_min_count")
+        or "not_applicable_queue_lag_min_count",
+        "queue_lag_immediate": bool(decision.get("queue_lag_immediate")),
+        "queue_rank": decision.get("queue_rank", "not_applicable_queue_rank"),
+        "scanner_queue_rank": decision.get("scanner_queue_rank", "not_applicable_scanner_queue_rank"),
+        "watching_count": decision.get("watching_count", "not_applicable_watching_count"),
+        "scanner_watching_count": decision.get(
+            "scanner_watching_count",
+            "not_applicable_scanner_watching_count",
+        ),
+        "queue_lag_anchor_field": decision.get("queue_lag_anchor_field")
+        or "not_applicable_queue_lag_anchor_field",
         "cooldown_remaining_sec": decision.get("cooldown_remaining_sec", "not_applicable_cooldown_remaining_sec"),
         "fast_precheck_result": decision.get("fast_precheck_result")
         or fast_precheck_fields.get("fast_precheck_result")
@@ -2686,6 +2855,9 @@ def _reset_scanner_runtime_eval_state(target):
         "_scanner_fast_precheck_result",
         "_scanner_fast_precheck_reason",
         "_scanner_fast_precheck_fields",
+        "_scanner_watch_queue_lag_count",
+        "_scanner_watch_queue_lag_first_observed_epoch",
+        "_scanner_watch_queue_lag_last_observed_epoch",
         "_scanner_watching_runtime_skip_logged",
         "_scanner_rising_cooldown_recheck_after_epoch",
         "_scanner_rising_cutoff_recheck_after_epoch",
@@ -5024,6 +5196,8 @@ def run_sniper(is_test_mode=False):
             scanner_rest_quote_fallback_loop_count = 0
             scanner_no_trade_eviction_loop_limit = _scanner_no_trade_eviction_max_per_loop()
             scanner_no_trade_eviction_loop_count = 0
+            scanner_queue_lag_eviction_loop_limit = _scanner_queue_lag_eviction_max_per_loop()
+            scanner_queue_lag_eviction_loop_count = 0
 
             def _defer_scanner_entry_pipeline_log(stock_value, code_value, stage, fields):
                 deferred_scanner_pipeline_events.append(
@@ -5121,11 +5295,11 @@ def run_sniper(is_test_mode=False):
                 throttle_sec=10,
             ):
                 if not sniper_state_handlers._is_scanner_watching_runtime_observation_target(stock_value):
-                    return False
+                    return None
                 throttle = max(0, int(throttle_sec or 0))
                 last_logged = _safe_float(stock_value.get("_scanner_runtime_queue_lag_logged_at"), 0.0)
                 if throttle > 0 and float(now_value) - last_logged < throttle:
-                    return False
+                    return None
                 stock_value["_scanner_runtime_queue_lag_logged_at"] = float(now_value)
                 fields = sniper_state_handlers._scanner_runtime_queue_lag_fields(
                     stock_value,
@@ -5145,7 +5319,7 @@ def run_sniper(is_test_mode=False):
                     "scalping_scanner_runtime_queue_lag",
                     fields,
                 )
-                return True
+                return fields
 
             def _defer_emit_scanner_heavy_eval_lag(
                 stock_value,
@@ -5309,6 +5483,15 @@ def run_sniper(is_test_mode=False):
                 if scanner_no_trade_eviction_loop_count >= scanner_no_trade_eviction_loop_limit:
                     return False
                 scanner_no_trade_eviction_loop_count += 1
+                return True
+
+            def _scanner_queue_lag_hot_slot_eviction_allowed():
+                nonlocal scanner_queue_lag_eviction_loop_count
+                if scanner_queue_lag_eviction_loop_limit <= 0:
+                    return False
+                if scanner_queue_lag_eviction_loop_count >= scanner_queue_lag_eviction_loop_limit:
+                    return False
+                scanner_queue_lag_eviction_loop_count += 1
                 return True
 
             def _apply_subscription_recheck_snapshot_if_ready(ws_snapshot, recovery_fields, *, phase):
@@ -5672,7 +5855,7 @@ def run_sniper(is_test_mode=False):
                             watching_count=queue_context["watching_count"],
                             scanner_watching_count=queue_context["scanner_watching_count"],
                         )
-                        _defer_emit_scanner_runtime_queue_lag(
+                        queue_lag_fields = _defer_emit_scanner_runtime_queue_lag(
                             stock,
                             code,
                             now_value=heavy_queue_enter_epoch,
@@ -5865,14 +6048,39 @@ def run_sniper(is_test_mode=False):
                                     emit_event_fn=_defer_scanner_entry_pipeline_log,
                                 )
                             elif fast_precheck_result == "budget_reallocated":
-                                _maybe_expire_scanner_watch_for_fast_precheck_budget(
+                                if _maybe_expire_scanner_watch_for_fast_precheck_budget(
                                     stock,
                                     code,
                                     targets,
                                     now_ts=heavy_queue_enter_epoch,
                                     emit_event_fn=_defer_scanner_entry_pipeline_log,
+                                ):
+                                    continue
+                            if queue_lag_fields:
+                                queue_lag_decision = _scanner_watch_eviction_decision_from_queue_lag(
+                                    stock,
+                                    now_ts=heavy_queue_enter_epoch,
+                                    queue_lag_fields=queue_lag_fields,
                                 )
+                                if (
+                                    queue_lag_decision.get("should_evict")
+                                    and _scanner_queue_lag_hot_slot_eviction_allowed()
+                                    and _expire_scanner_watch_target(
+                                        stock,
+                                        code,
+                                        targets,
+                                        decision=queue_lag_decision,
+                                        emit_event_fn=_defer_scanner_entry_pipeline_log,
+                                    )
+                                ):
+                                    continue
                             continue
+                        if queue_lag_fields:
+                            _scanner_watch_eviction_decision_from_queue_lag(
+                                stock,
+                                now_ts=heavy_queue_enter_epoch,
+                                queue_lag_fields=queue_lag_fields,
+                            )
                         if _scanner_strength_recheck_waiting(stock, now_ts=heavy_queue_enter_epoch):
                             _scanner_watch_reset_terminal_eviction_state(stock)
                             recheck_after_epoch = _safe_float(

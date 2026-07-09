@@ -10418,6 +10418,13 @@ def _scanner_runtime_queue_lag_fields(
         "anchor_to_loop_sec": round(anchor_to_loop_sec, 3),
         "loop_to_emit_sec": round(loop_to_emit_sec, 3),
         "pre_emit_delay_sec": round(loop_to_emit_sec, 3),
+        "queue_lag_anchor_field": (
+            "entry_armed_at_epoch"
+            if armed_time > 0
+            else "added_time"
+            if added_time > 0
+            else "not_available"
+        ),
         "loop_started_epoch": f"{loop_epoch:.3f}",
         "queue_emit_epoch": f"{emit_epoch:.3f}",
         "target_status": stock.get("status") or "not_applicable_target_status",

@@ -707,6 +707,9 @@ def test_scalping_scanner_promoted_target_refresh_resets_eval_state(monkeypatch)
         "_scanner_fast_precheck_result": "eligible_for_heavy_entry_eval",
         "_scanner_fast_precheck_reason": "fast_precheck_pass",
         "_scanner_fast_precheck_fields": {"fast_precheck_result": "eligible_for_heavy_entry_eval"},
+        "_scanner_watch_queue_lag_count": 2,
+        "_scanner_watch_queue_lag_first_observed_epoch": 1490.0,
+        "_scanner_watch_queue_lag_last_observed_epoch": 1500.0,
         "_scanner_watching_runtime_skip_logged": {"scanner_full_eval_loop_budget_deferred": 1500.0},
     }
     older_never_eval = {
@@ -772,6 +775,9 @@ def test_scalping_scanner_promoted_target_refresh_resets_eval_state(monkeypatch)
         "_scanner_fast_precheck_result",
         "_scanner_fast_precheck_reason",
         "_scanner_fast_precheck_fields",
+        "_scanner_watch_queue_lag_count",
+        "_scanner_watch_queue_lag_first_observed_epoch",
+        "_scanner_watch_queue_lag_last_observed_epoch",
         "_scanner_watching_runtime_skip_logged",
     ):
         assert key not in existing
@@ -4460,6 +4466,116 @@ def test_scanner_no_trade_eviction_waits_for_realtime_type(monkeypatch):
     assert decision["should_evict"] is False
     assert decision["eviction_reason"] == "scanner_no_trade_waiting_realtime_type"
     assert "_scanner_watch_no_trade_count" not in target
+
+
+def test_scanner_queue_lag_eviction_reallocates_after_repeated_lag(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_QUEUE_LAG_EVICTION_MIN_SEC", "30")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_QUEUE_LAG_EVICTION_MIN_COUNT", "2")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_QUEUE_LAG_EVICTION_IMMEDIATE_SEC", "90")
+    target = _scanner_watch_stock(
+        code="005930",
+        entry_armed_at_epoch=1000.0,
+        _scanner_fast_precheck_result="stability_pending",
+        _scanner_fast_precheck_reason="scanner_fast_precheck_stability_pending",
+    )
+    fields = {
+        "queue_lag_sec": 35.0,
+        "queue_rank": 12,
+        "scanner_queue_rank": 8,
+        "watching_count": 20,
+        "scanner_watching_count": 16,
+        "queue_lag_anchor_field": "entry_armed_at_epoch",
+    }
+
+    first = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_queue_lag(
+        target,
+        now_ts=1035.0,
+        queue_lag_fields=fields,
+    )
+    second = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_queue_lag(
+        target,
+        now_ts=1045.0,
+        queue_lag_fields=fields,
+    )
+    event_fields = kiwoom_sniper_v2._scanner_watch_eviction_event_fields(target, decision=second)
+
+    assert first["should_evict"] is False
+    assert first["eviction_attempt_count"] == 1
+    assert second["should_evict"] is True
+    assert second["eviction_reason"] == "scanner_queue_lag_budget_reallocated"
+    assert second["terminal_stage"] == "scalping_scanner_runtime_queue_lag"
+    assert event_fields["decision_authority"] == "real_scalping_scanner_watch_eviction_pool_management_only"
+    assert event_fields["runtime_effect"] is True
+    assert event_fields["actual_order_submitted"] is False
+    assert event_fields["broker_order_forbidden"] is True
+    assert event_fields["queue_lag_sec"] == 35.0
+    assert event_fields["queue_lag_min_count"] == 2
+    assert event_fields["queue_lag_anchor_field"] == "entry_armed_at_epoch"
+
+
+def test_scanner_queue_lag_eviction_immediate_for_extreme_lag(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_QUEUE_LAG_EVICTION_MIN_SEC", "30")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_QUEUE_LAG_EVICTION_MIN_COUNT", "3")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_QUEUE_LAG_EVICTION_IMMEDIATE_SEC", "60")
+    target = _scanner_watch_stock(
+        code="005930",
+        _scanner_fast_precheck_result="source_quality_blocked",
+        _scanner_fast_precheck_reason="scanner_fast_precheck_source_quality_blocked",
+    )
+
+    decision = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_queue_lag(
+        target,
+        now_ts=1065.0,
+        queue_lag_fields={"queue_lag_sec": 65.0},
+    )
+
+    assert decision["should_evict"] is True
+    assert decision["eviction_attempt_count"] == 1
+    assert decision["queue_lag_immediate"] is True
+    assert decision["queue_lag_immediate_sec"] == 60.0
+
+
+def test_scanner_queue_lag_eviction_resets_when_heavy_eval_eligible(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_QUEUE_LAG_EVICTION_MIN_SEC", "30")
+    target = _scanner_watch_stock(
+        code="005930",
+        _scanner_watch_queue_lag_count=2,
+        _scanner_watch_queue_lag_first_observed_epoch=1035.0,
+        _scanner_watch_queue_lag_last_observed_epoch=1045.0,
+        _scanner_fast_precheck_result="eligible_for_heavy_entry_eval",
+        _scanner_fast_precheck_reason="fast_precheck_pass",
+    )
+
+    decision = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_queue_lag(
+        target,
+        now_ts=1065.0,
+        queue_lag_fields={"queue_lag_sec": 65.0},
+    )
+
+    assert decision["should_evict"] is False
+    assert decision["eviction_reason"] == "scanner_queue_lag_heavy_eval_eligible"
+    assert "_scanner_watch_queue_lag_count" not in target
+    assert "_scanner_watch_queue_lag_first_observed_epoch" not in target
+    assert "_scanner_watch_queue_lag_last_observed_epoch" not in target
+
+
+def test_scanner_queue_lag_eviction_can_be_disabled(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_QUEUE_LAG_EVICTION_ENABLED", "0")
+    target = _scanner_watch_stock(
+        code="005930",
+        _scanner_fast_precheck_result="stability_pending",
+        _scanner_fast_precheck_reason="scanner_fast_precheck_stability_pending",
+    )
+
+    decision = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_queue_lag(
+        target,
+        now_ts=1065.0,
+        queue_lag_fields={"queue_lag_sec": 65.0},
+    )
+
+    assert decision["should_evict"] is False
+    assert decision["eviction_attempt_count"] == 0
+    assert "_scanner_watch_queue_lag_count" not in target
 
 
 def test_ws_reg_budget_skipped_expires_scanner_hot_slot(monkeypatch):
