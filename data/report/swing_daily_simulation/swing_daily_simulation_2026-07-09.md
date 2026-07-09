@@ -4,7 +4,7 @@
 - recommendation_rows: `2` / live `2` / diagnostic `0`
 - recommendation_sources: `{'daily_recommendations_v2_csv': 2}`
 - db_recommendation_rows: `0`
-- source_signal_dates: `['2026-07-08']`
+- source_signal_dates: `['2026-07-09']`
 - simulated_count: `2`
 - closed_count: `0`
 - planned_or_open_count: `2`
@@ -36,7 +36,7 @@
 
 ## Runtime Entry Funnel
 
-- source: `/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-09.jsonl`
+- source: `/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-09.jsonl.gz`
 
 | stage | raw | unique_records | examples |
 | --- | ---: | ---: | --- |
@@ -45,5 +45,5 @@
 
 | code | name | source | status | guard | qty | entry | exit | net_ret | reason |
 | --- | --- | --- | --- | --- | ---: | --- | --- | ---: | --- |
-| `226320` | 잇츠한불 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
-| `298000` | 효성화학 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
+| `000810` | 삼성화재 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
+| `005935` | 삼성전자우 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
