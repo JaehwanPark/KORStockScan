@@ -9896,6 +9896,10 @@ def _rising_missed_submit_safety_filter_fields(*, blocked: bool) -> dict[str, An
 
 RISING_MISSED_SUBMIT_SAFETY_BACKOFF_SOURCE = "submit_safety_feedback"
 _RISING_MISSED_SUBMIT_SAFETY_BACKOFFS: dict[str, dict[str, Any]] = {}
+RISING_MISSED_CANDIDATE_GATE_BACKOFF_SOURCE = "candidate_gate_feedback"
+_RISING_MISSED_CANDIDATE_GATE_BACKOFFS: dict[str, dict[str, Any]] = {}
+SCANNER_WS_STALE_BACKOFF_SOURCE = "ws_stale_feedback"
+_SCANNER_WS_STALE_BACKOFFS: dict[str, dict[str, Any]] = {}
 
 
 def _rising_missed_submit_safety_backoff_key(stock: dict | None, code: str | None) -> str:
@@ -9903,6 +9907,362 @@ def _rising_missed_submit_safety_backoff_key(stock: dict | None, code: str | Non
     normalized_code = str(code or stock.get("code") or stock.get("stock_code") or "").strip()
     record_id = str(stock.get("id") or stock.get("record_id") or "").strip()
     return f"{normalized_code or '-'}:{record_id or '-'}"
+
+
+def _rising_missed_candidate_gate_backoff_key(stock: dict | None, code: str | None) -> str:
+    stock = stock if isinstance(stock, dict) else {}
+    normalized_code = str(code or stock.get("code") or stock.get("stock_code") or "").strip()
+    record_id = str(stock.get("id") or stock.get("record_id") or "").strip()
+    return f"{normalized_code or '-'}:{record_id or '-'}"
+
+
+def _scanner_ws_stale_backoff_key(stock: dict | None, code: str | None) -> str:
+    stock = stock if isinstance(stock, dict) else {}
+    normalized_code = str(code or stock.get("code") or stock.get("stock_code") or "").strip()
+    record_id = str(stock.get("id") or stock.get("record_id") or "").strip()
+    return f"{normalized_code or '-'}:{record_id or '-'}"
+
+
+def _scanner_ws_stale_backoff_reason_group(reason: str | None) -> str:
+    reason_text = str(reason or "").strip().lower()
+    if not reason_text:
+        return ""
+    if "persistent_no_tick_cooldown" in reason_text or "no_tick_cooldown" in reason_text or "stuck_cooldown" in reason_text:
+        return "persistent_no_tick_cooldown"
+    if (
+        "persistent_ws_gap" in reason_text
+        or "scanner_persistent_ws_gap_recovery" in reason_text
+        or "persistent_repair_batch" in reason_text
+    ):
+        return "persistent_ws_gap"
+    if "scanner_heavy_eval_stale_snapshot_recheck" in reason_text:
+        return "scanner_heavy_eval_stale_snapshot_recheck"
+    if "stale_ws_snapshot" in reason_text:
+        return "stale_ws_snapshot"
+    if "ws_snapshot_missing_or_zero" in reason_text or "missing_or_zero_curr" in reason_text:
+        return "ws_snapshot_missing_or_zero"
+    if "source_quality_unresolved" in reason_text:
+        return "source_quality_unresolved"
+    return ""
+
+
+def _scanner_ws_stale_backoff_base_sec(reason: str | None, count: int = 1) -> int:
+    group = _scanner_ws_stale_backoff_reason_group(reason)
+    if group == "persistent_no_tick_cooldown":
+        if int(count or 0) >= 2:
+            return max(0, _env_int("KORSTOCKSCAN_SCANNER_WS_STALE_BACKOFF_NO_TICK_COOLDOWN_REPEAT_SEC", 300))
+        return max(0, _env_int("KORSTOCKSCAN_SCANNER_WS_STALE_BACKOFF_NO_TICK_COOLDOWN_SEC", 240))
+    if group == "persistent_ws_gap":
+        if int(count or 0) >= 3:
+            return max(0, _env_int("KORSTOCKSCAN_SCANNER_WS_STALE_BACKOFF_PERSISTENT_GAP_REPEAT_SEC", 240))
+        return max(0, _env_int("KORSTOCKSCAN_SCANNER_WS_STALE_BACKOFF_PERSISTENT_GAP_SEC", 120))
+    if group == "scanner_heavy_eval_stale_snapshot_recheck":
+        if int(count or 0) >= 3:
+            return max(0, _env_int("KORSTOCKSCAN_SCANNER_WS_STALE_BACKOFF_HEAVY_RECHECK_REPEAT_SEC", 90))
+        return max(0, _env_int("KORSTOCKSCAN_SCANNER_WS_STALE_BACKOFF_HEAVY_RECHECK_SEC", 45))
+    if group == "stale_ws_snapshot":
+        if int(count or 0) >= 3:
+            return max(0, _env_int("KORSTOCKSCAN_SCANNER_WS_STALE_BACKOFF_STALE_WS_REPEAT_SEC", 90))
+        return max(0, _env_int("KORSTOCKSCAN_SCANNER_WS_STALE_BACKOFF_STALE_WS_SEC", 45))
+    if group == "ws_snapshot_missing_or_zero":
+        if int(count or 0) >= 3:
+            return max(0, _env_int("KORSTOCKSCAN_SCANNER_WS_STALE_BACKOFF_MISSING_ZERO_REPEAT_SEC", 60))
+        return max(0, _env_int("KORSTOCKSCAN_SCANNER_WS_STALE_BACKOFF_MISSING_ZERO_SEC", 45))
+    if group == "source_quality_unresolved":
+        return max(0, _env_int("KORSTOCKSCAN_SCANNER_WS_STALE_BACKOFF_SOURCE_QUALITY_SEC", 60))
+    return 0
+
+
+def _scanner_ws_stale_backoff_reason_from_skip(skip_reason: str | None, extra: dict | None = None) -> str:
+    extra = extra if isinstance(extra, dict) else {}
+    key = str(skip_reason or "unknown_skip")
+    candidates: list[Any] = [
+        extra.get("ws_recovery_outcome"),
+        extra.get("ws_repair_cycle_state"),
+        extra.get("ws_repair_batch_reason"),
+        extra.get("ws_repair_batch_source"),
+        extra.get("ws_recovery_action"),
+    ]
+    if key in {
+        "scanner_fast_precheck_stability_pending",
+        "scanner_fast_precheck_source_quality_blocked",
+    }:
+        candidates.append(extra.get("fast_precheck_reason"))
+    candidates.extend([extra.get("zero_context_blocker"), extra.get("source_quality_detail_route"), key])
+    for candidate in candidates:
+        if _scanner_ws_stale_backoff_reason_group(candidate):
+            return str(candidate)
+    return key
+
+
+def _record_scanner_ws_stale_backoff(
+    stock: dict | None,
+    code: str | None,
+    reason: str | None,
+    *,
+    now_ts: float | None = None,
+    source_stage: str = "",
+) -> dict[str, Any]:
+    stock = stock if isinstance(stock, dict) else {}
+    if not _is_scanner_watching_runtime_observation_target(stock):
+        return {}
+    group = _scanner_ws_stale_backoff_reason_group(reason)
+    if not group:
+        return {}
+    now_value = time.time() if now_ts is None else float(now_ts)
+    key = _scanner_ws_stale_backoff_key(stock, code)
+    existing = _SCANNER_WS_STALE_BACKOFFS.get(key)
+    existing_count = _safe_int((existing or {}).get("count"), 0)
+    existing_reason = str((existing or {}).get("reason") or "")
+    count = existing_count + 1 if existing_reason == group else 1
+    backoff_sec = _scanner_ws_stale_backoff_base_sec(group, count)
+    if backoff_sec <= 0:
+        return {}
+    until_ts = now_value + float(backoff_sec)
+    fields = {
+        "scanner_ws_stale_backoff_until": f"{until_ts:.3f}",
+        "scanner_ws_stale_backoff_reason": group,
+        "scanner_ws_stale_backoff_count": int(count),
+        "scanner_budget_reallocation_source": SCANNER_WS_STALE_BACKOFF_SOURCE,
+        "scanner_ws_stale_backoff_source_stage": source_stage or "scanner_ws_stale_feedback",
+        "scanner_ws_stale_backoff_sec": int(backoff_sec),
+    }
+    _SCANNER_WS_STALE_BACKOFFS[key] = {
+        "until": until_ts,
+        "reason": group,
+        "count": int(count),
+        "source_stage": source_stage or "scanner_ws_stale_feedback",
+    }
+    _mutate_stock_state(stock, set_fields=fields)
+    return fields
+
+
+def _clear_scanner_ws_stale_backoff(stock: dict | None, code: str | None) -> None:
+    stock = stock if isinstance(stock, dict) else {}
+    _SCANNER_WS_STALE_BACKOFFS.pop(_scanner_ws_stale_backoff_key(stock, code), None)
+    _mutate_stock_state(
+        stock,
+        pop_fields=[
+            "scanner_ws_stale_backoff_until",
+            "scanner_ws_stale_backoff_reason",
+            "scanner_ws_stale_backoff_count",
+            "scanner_budget_reallocation_source",
+            "scanner_ws_stale_backoff_source_stage",
+            "scanner_ws_stale_backoff_sec",
+        ],
+    )
+
+
+def _scanner_ws_stale_backoff_recovered(ws_data: dict | None) -> bool:
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    curr = _safe_int(ws_data.get("curr"), 0)
+    if curr <= 0:
+        return False
+    quote_age_sec = _get_ws_snapshot_age_sec(ws_data)
+    fresh_quote_max_sec = max(0.1, _env_float("SCALP_PRE_AI_MAX_WS_AGE_SEC", 3.0))
+    return bool(
+        quote_age_sec is not None
+        and quote_age_sec <= fresh_quote_max_sec
+        and not _boolish_true(ws_data.get("quote_stale"))
+    )
+
+
+def _scanner_ws_stale_backoff_fields(
+    stock: dict | None,
+    code: str | None,
+    ws_data: dict | None,
+    *,
+    now_ts: float,
+) -> dict[str, Any]:
+    stock = stock if isinstance(stock, dict) else {}
+    key = _scanner_ws_stale_backoff_key(stock, code)
+    cached = _SCANNER_WS_STALE_BACKOFFS.get(key)
+    stock_until = _safe_float(stock.get("scanner_ws_stale_backoff_until"), 0.0)
+    cached_until = _safe_float((cached or {}).get("until"), 0.0)
+    until_ts = max(stock_until, cached_until)
+    if until_ts <= 0:
+        return {}
+    if until_ts <= float(now_ts):
+        _clear_scanner_ws_stale_backoff(stock, code)
+        return {}
+    if _scanner_ws_stale_backoff_recovered(ws_data):
+        _clear_scanner_ws_stale_backoff(stock, code)
+        return {}
+    reason = str((cached or {}).get("reason") or stock.get("scanner_ws_stale_backoff_reason") or "")
+    count = max(
+        _safe_int((cached or {}).get("count"), 0),
+        _safe_int(stock.get("scanner_ws_stale_backoff_count"), 0),
+    )
+    return {
+        **_rising_missed_scanner_filter_fields(action="budget_reallocated"),
+        "fast_precheck_result": "budget_reallocated",
+        "fast_precheck_reason": "scanner_ws_stale_backoff_active",
+        "scanner_ws_stale_backoff_until": f"{until_ts:.3f}",
+        "scanner_ws_stale_backoff_reason": reason or "-",
+        "scanner_ws_stale_backoff_count": int(count or 0),
+        "scanner_ws_stale_backoff_remaining_sec": round(max(0.0, until_ts - float(now_ts)), 3),
+        "scanner_budget_reallocation_source": SCANNER_WS_STALE_BACKOFF_SOURCE,
+    }
+
+
+def _rising_missed_candidate_gate_backoff_reason_group(reason: str | None) -> str:
+    reason_text = str(reason or "").strip().lower()
+    if not reason_text:
+        return ""
+    if RISING_MISSED_BLOCK_UPPER_LIMIT_PROXIMITY in reason_text:
+        return RISING_MISSED_BLOCK_UPPER_LIMIT_PROXIMITY
+    if RISING_MISSED_BLOCK_PRICE_ABOVE_CAP in reason_text:
+        return RISING_MISSED_BLOCK_PRICE_ABOVE_CAP
+    if RISING_MISSED_BLOCK_OPEN_PENDING in reason_text:
+        return RISING_MISSED_BLOCK_OPEN_PENDING
+    if RISING_MISSED_BLOCK_ALREADY_HOLDING in reason_text:
+        return RISING_MISSED_BLOCK_ALREADY_HOLDING
+    return ""
+
+
+def _rising_missed_candidate_gate_backoff_base_sec(reason: str | None, count: int = 1) -> int:
+    group = _rising_missed_candidate_gate_backoff_reason_group(reason)
+    if group == RISING_MISSED_BLOCK_UPPER_LIMIT_PROXIMITY:
+        if int(count or 0) >= 3:
+            return max(0, _env_int("KORSTOCKSCAN_RISING_MISSED_CANDIDATE_BACKOFF_UPPER_LIMIT_REPEAT_SEC", 180))
+        return max(0, _env_int("KORSTOCKSCAN_RISING_MISSED_CANDIDATE_BACKOFF_UPPER_LIMIT_SEC", 120))
+    if group == RISING_MISSED_BLOCK_PRICE_ABOVE_CAP:
+        return max(0, _env_int("KORSTOCKSCAN_RISING_MISSED_CANDIDATE_BACKOFF_PRICE_CAP_SEC", 180))
+    if group == RISING_MISSED_BLOCK_OPEN_PENDING:
+        return max(0, _env_int("KORSTOCKSCAN_RISING_MISSED_CANDIDATE_BACKOFF_OPEN_PENDING_SEC", 60))
+    if group == RISING_MISSED_BLOCK_ALREADY_HOLDING:
+        return max(0, _env_int("KORSTOCKSCAN_RISING_MISSED_CANDIDATE_BACKOFF_HOLDING_SEC", 180))
+    return 0
+
+
+def _record_rising_missed_candidate_gate_backoff(
+    stock: dict | None,
+    code: str | None,
+    reason: str | None,
+    *,
+    now_ts: float | None = None,
+    source_stage: str = "",
+) -> dict[str, Any]:
+    stock = stock if isinstance(stock, dict) else {}
+    if not _has_rising_missed_watch_source_marker(stock):
+        return {}
+    group = _rising_missed_candidate_gate_backoff_reason_group(reason)
+    if not group:
+        return {}
+    now_value = time.time() if now_ts is None else float(now_ts)
+    key = _rising_missed_candidate_gate_backoff_key(stock, code)
+    existing = _RISING_MISSED_CANDIDATE_GATE_BACKOFFS.get(key)
+    existing_count = _safe_int((existing or {}).get("count"), 0)
+    existing_reason = str((existing or {}).get("reason") or "")
+    count = existing_count + 1 if existing_reason == group else 1
+    backoff_sec = _rising_missed_candidate_gate_backoff_base_sec(group, count)
+    if backoff_sec <= 0:
+        return {}
+    until_ts = now_value + float(backoff_sec)
+    fields = {
+        **_rising_missed_candidate_filter_fields(allowed=False),
+        "rising_missed_candidate_gate_backoff_until": f"{until_ts:.3f}",
+        "rising_missed_candidate_gate_backoff_reason": group,
+        "rising_missed_candidate_gate_backoff_count": int(count),
+        "rising_missed_budget_reallocation_source": RISING_MISSED_CANDIDATE_GATE_BACKOFF_SOURCE,
+        "rising_missed_candidate_gate_backoff_source_stage": source_stage or "candidate_gate_block",
+        "rising_missed_candidate_gate_backoff_sec": int(backoff_sec),
+    }
+    _RISING_MISSED_CANDIDATE_GATE_BACKOFFS[key] = {
+        "until": until_ts,
+        "reason": group,
+        "count": int(count),
+        "source_stage": source_stage or "candidate_gate_block",
+    }
+    _mutate_stock_state(stock, set_fields=fields)
+    return fields
+
+
+def _clear_rising_missed_candidate_gate_backoff(stock: dict | None, code: str | None) -> None:
+    stock = stock if isinstance(stock, dict) else {}
+    _RISING_MISSED_CANDIDATE_GATE_BACKOFFS.pop(
+        _rising_missed_candidate_gate_backoff_key(stock, code),
+        None,
+    )
+    _mutate_stock_state(
+        stock,
+        pop_fields=[
+            "rising_missed_candidate_gate_backoff_until",
+            "rising_missed_candidate_gate_backoff_reason",
+            "rising_missed_candidate_gate_backoff_count",
+            "rising_missed_budget_reallocation_source",
+            "rising_missed_candidate_gate_backoff_source_stage",
+            "rising_missed_candidate_gate_backoff_sec",
+        ],
+    )
+
+
+def _rising_missed_candidate_gate_backoff_recovered(
+    stock: dict | None,
+    ws_data: dict | None,
+    reason: str | None,
+) -> bool:
+    stock = stock if isinstance(stock, dict) else {}
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    group = _rising_missed_candidate_gate_backoff_reason_group(reason) or str(reason or "")
+    if group == RISING_MISSED_BLOCK_UPPER_LIMIT_PROXIMITY:
+        fluctuation_pct = 0.0
+        for source in (ws_data, stock):
+            for key in ("fluctuation", "fluctuation_rate", "flu_rate", "day_flu_rate"):
+                if key in source:
+                    fluctuation_pct = _safe_float(source.get(key), 0.0)
+                    break
+            if fluctuation_pct > 0:
+                break
+        threshold_pct = _rising_missed_upper_limit_exclude_pct()
+        return bool(threshold_pct > 0 and fluctuation_pct < threshold_pct)
+    if group == RISING_MISSED_BLOCK_PRICE_ABOVE_CAP:
+        curr_price = _safe_int(ws_data.get("curr") or stock.get("current_price"), 0)
+        cap_price = _rising_missed_one_share_entry_max_price_krw()
+        return bool(curr_price > 0 and (cap_price <= 0 or curr_price <= cap_price))
+    if group == RISING_MISSED_BLOCK_OPEN_PENDING:
+        return not _has_open_pending_entry_orders(stock)
+    if group == RISING_MISSED_BLOCK_ALREADY_HOLDING:
+        return not _already_holding_entry_position(stock)
+    return False
+
+
+def _rising_missed_candidate_gate_backoff_fields(
+    stock: dict | None,
+    code: str | None,
+    ws_data: dict | None,
+    *,
+    now_ts: float,
+) -> dict[str, Any]:
+    stock = stock if isinstance(stock, dict) else {}
+    key = _rising_missed_candidate_gate_backoff_key(stock, code)
+    cached = _RISING_MISSED_CANDIDATE_GATE_BACKOFFS.get(key)
+    stock_until = _safe_float(stock.get("rising_missed_candidate_gate_backoff_until"), 0.0)
+    cached_until = _safe_float((cached or {}).get("until"), 0.0)
+    until_ts = max(stock_until, cached_until)
+    if until_ts <= 0:
+        return {}
+    if until_ts <= float(now_ts):
+        _clear_rising_missed_candidate_gate_backoff(stock, code)
+        return {}
+    reason = str((cached or {}).get("reason") or stock.get("rising_missed_candidate_gate_backoff_reason") or "")
+    if _rising_missed_candidate_gate_backoff_recovered(stock, ws_data, reason):
+        _clear_rising_missed_candidate_gate_backoff(stock, code)
+        return {}
+    count = max(
+        _safe_int((cached or {}).get("count"), 0),
+        _safe_int(stock.get("rising_missed_candidate_gate_backoff_count"), 0),
+    )
+    return {
+        **_rising_missed_scanner_filter_fields(action="budget_reallocated"),
+        "fast_precheck_result": "budget_reallocated",
+        "fast_precheck_reason": "candidate_gate_backoff_active",
+        "rising_missed_candidate_gate_backoff_until": f"{until_ts:.3f}",
+        "rising_missed_candidate_gate_backoff_reason": reason or "-",
+        "rising_missed_candidate_gate_backoff_count": int(count or 0),
+        "rising_missed_candidate_gate_backoff_remaining_sec": round(max(0.0, until_ts - float(now_ts)), 3),
+        "rising_missed_budget_reallocation_source": RISING_MISSED_CANDIDATE_GATE_BACKOFF_SOURCE,
+    }
 
 
 def _rising_missed_submit_safety_backoff_reason_group(reason: str | None) -> str:
@@ -10340,14 +10700,26 @@ def emit_scanner_watching_runtime_skip(stock, code, *, skip_reason: str, now_ts:
     if key in SCANNER_WATCH_EVICTION_NON_TERMINAL_SKIP_REASONS:
         _reset_scanner_terminal_eviction_memory(stock)
     _remember_scanner_pool_block(stock, key, extra, now_ts=now_value)
+    scanner_ws_stale_backoff_reason = _scanner_ws_stale_backoff_reason_from_skip(key, extra)
+    scanner_ws_stale_backoff_group = _scanner_ws_stale_backoff_reason_group(scanner_ws_stale_backoff_reason)
+    throttle_key = f"{key}:{scanner_ws_stale_backoff_group}" if scanner_ws_stale_backoff_group else key
     logged = stock.setdefault("_scanner_watching_runtime_skip_logged", {})
     if not isinstance(logged, dict):
         logged = {}
         stock["_scanner_watching_runtime_skip_logged"] = logged
-    last_logged = _safe_float(logged.get(key), 0.0)
+    last_logged = _safe_float(logged.get(throttle_key), 0.0)
     if throttle > 0 and now_value - last_logged < throttle:
         return False
-    logged[key] = now_value
+    logged[throttle_key] = now_value
+    scanner_ws_stale_backoff_fields = _record_scanner_ws_stale_backoff(
+        stock,
+        code,
+        scanner_ws_stale_backoff_reason,
+        now_ts=now_value,
+        source_stage="scalping_scanner_watching_runtime_skip",
+    )
+    if scanner_ws_stale_backoff_fields:
+        extra = {**extra, **scanner_ws_stale_backoff_fields}
     _log_entry_pipeline(
         stock,
         code,
@@ -10598,15 +10970,33 @@ def _scanner_fast_precheck_fields(
         stock,
         ws_data,
     )
+    candidate_gate_backoff_fields = _rising_missed_candidate_gate_backoff_fields(
+        stock,
+        code,
+        ws_data,
+        now_ts=float(now_ts),
+    )
     submit_safety_backoff_fields = _rising_missed_submit_safety_backoff_fields(
         stock,
         code,
         ws_data,
         now_ts=float(now_ts),
     )
-    if curr <= 0:
+    scanner_ws_stale_backoff_fields = _scanner_ws_stale_backoff_fields(
+        stock,
+        code,
+        ws_data,
+        now_ts=float(now_ts),
+    )
+    if scanner_ws_stale_backoff_fields:
+        result = "budget_reallocated"
+        reason = "scanner_ws_stale_backoff_active"
+    elif curr <= 0:
         result = "source_quality_blocked"
         reason = "missing_or_zero_curr"
+    elif candidate_gate_backoff_fields:
+        result = "budget_reallocated"
+        reason = "candidate_gate_backoff_active"
     elif submit_safety_backoff_fields:
         result = "budget_reallocated"
         reason = "submit_safety_backoff_active"
@@ -10753,6 +11143,8 @@ def _scanner_fast_precheck_fields(
         "entry_armed_at_epoch": (stock or {}).get("entry_armed_at_epoch") or "not_applicable_entry_armed_at_epoch",
         "added_time": (stock or {}).get("added_time") or "not_applicable_added_time",
         **rising_missed_fast_reject,
+        **scanner_ws_stale_backoff_fields,
+        **candidate_gate_backoff_fields,
         **submit_safety_backoff_fields,
         **_scanner_rising_relief_observation_fields(stock),
     }
@@ -18824,6 +19216,387 @@ def _maybe_rebuild_zero_context_entry_planned_order(
         latency_gate["price_resolution_reason"] = "entry_price_zero_context_defensive_rebuild"
         _apply_entry_price_zero_context_fields(latency_gate, fields)
     return [rebuilt_order], fields
+
+
+OBSERVED_MARK_GAP_FORBIDDEN_USES = (
+    "threshold_mutation|provider_route_change|quantity_cap_change|broker_guard_bypass|"
+    "score_threshold_relaxation|hard_safety_override"
+)
+
+
+def _first_positive_int_from_fields(source: dict | None, keys: tuple[str, ...]) -> tuple[int, str]:
+    fields = source if isinstance(source, dict) else {}
+    for key in keys:
+        value = _coerce_int_value(fields.get(key))
+        if value > 0:
+            return value, key
+    return 0, ""
+
+
+def _price_gap_bps(left_price: int, right_price: int, *, basis_price: int | None = None) -> int:
+    left = _coerce_int_value(left_price)
+    right = _coerce_int_value(right_price)
+    basis = _coerce_int_value(basis_price) or right or left
+    if left <= 0 or right <= 0 or basis <= 0:
+        return 0
+    return int(round((abs(left - right) / float(basis)) * 10000.0))
+
+
+def _observed_mark_gap_price_supported(
+    *,
+    candidate_price: int,
+    latest_price: int,
+    best_bid: int,
+    best_ask: int,
+    max_gap_bps: int,
+) -> tuple[bool, str, int]:
+    candidate = _coerce_int_value(candidate_price)
+    latest = _coerce_int_value(latest_price)
+    bid = _coerce_int_value(best_bid)
+    ask = _coerce_int_value(best_ask)
+    max_bps = max(0, _coerce_int_value(max_gap_bps))
+    if candidate <= 0:
+        return False, "missing_candidate", 0
+    if bid > 0 and ask > 0 and bid <= ask and bid <= candidate <= ask:
+        return True, "fresh_bid_ask_bracket", candidate
+
+    evidence = []
+    if bid > 0 and ask > 0 and bid <= ask:
+        evidence.append(("fresh_best_bid", bid))
+        evidence.append(("fresh_best_ask", ask))
+        evidence.append(("fresh_bid_ask_mid", int(round((bid + ask) / 2.0))))
+    elif latest > 0:
+        evidence.append(("fresh_latest", latest))
+        if bid > 0:
+            evidence.append(("fresh_best_bid", bid))
+        if ask > 0:
+            evidence.append(("fresh_best_ask", ask))
+
+    for source, evidence_price in evidence:
+        if evidence_price > 0 and _price_gap_bps(candidate, evidence_price, basis_price=candidate) <= max_bps:
+            return True, source, evidence_price
+    return False, "not_supported_by_fresh_quote", 0
+
+
+def _observed_mark_gap_fresh_quote_fields(
+    ws_data: dict | None,
+    latency_gate: dict | None,
+    *,
+    now_ts: float,
+) -> dict[str, Any]:
+    ws = ws_data if isinstance(ws_data, dict) else {}
+    gate = latency_gate if isinstance(latency_gate, dict) else {}
+    max_quote_age_ms = _env_or_rule_int("SCALPING_ENTRY_SUBMIT_REVALIDATION_MAX_QUOTE_AGE_MS", 2000)
+    applied_ws_age = gate.get("pre_submit_ws_snapshot_refresh_age_ms", ws.get("pre_submit_ws_snapshot_refresh_age_ms"))
+    applied_ws = bool(gate.get("pre_submit_ws_snapshot_refresh_applied") or ws.get("pre_submit_ws_snapshot_refresh_applied"))
+    explicit_age_ms = None
+    source = "input_ws_snapshot"
+    if applied_ws:
+        explicit_age_ms = _safe_float(applied_ws_age, -1.0)
+        source = "pre_submit_ws_snapshot_refresh"
+    elif ws.get("observer_last_quote_age_ms") is not None:
+        explicit_age_ms = _safe_float(ws.get("observer_last_quote_age_ms"), -1.0)
+        source = "observer_orderbook_snapshot"
+    else:
+        quote_age_sec = _get_ws_snapshot_age_sec(ws)
+        if quote_age_sec is not None:
+            explicit_age_ms = max(0.0, float(quote_age_sec) * 1000.0)
+
+    if explicit_age_ms is not None and explicit_age_ms >= 0:
+        fresh = explicit_age_ms <= max_quote_age_ms
+        age_ms: float | None = round(explicit_age_ms, 3)
+    else:
+        fresh = False
+        age_ms = None
+
+    best_ask, best_bid = _get_best_levels_from_ws(ws)
+    if best_bid <= 0:
+        best_bid = _coerce_int_value(
+            gate.get("pre_submit_ws_snapshot_refresh_best_bid")
+            or gate.get("pre_submit_quote_refresh_best_bid")
+            or gate.get("best_bid_at_submit")
+            or gate.get("best_bid")
+        )
+    if best_ask <= 0:
+        best_ask = _coerce_int_value(
+            gate.get("pre_submit_ws_snapshot_refresh_best_ask")
+            or gate.get("pre_submit_quote_refresh_best_ask")
+            or gate.get("best_ask_at_submit")
+            or gate.get("best_ask")
+        )
+    latest_price = _coerce_int_value(
+        ws.get("curr")
+        or ws.get("last_trade_price")
+        or ws.get("current_price")
+        or gate.get("pre_submit_ws_snapshot_refresh_latest_price")
+        or gate.get("latest_price")
+    )
+    return {
+        "fresh": bool(fresh),
+        "source": source,
+        "age_ms": age_ms if age_ms is not None else "-",
+        "max_age_ms": max_quote_age_ms,
+        "best_bid": best_bid,
+        "best_ask": best_ask,
+        "latest_price": latest_price,
+        "now_ts": now_ts,
+    }
+
+
+def _build_observed_mark_gap_guard_fields(
+    ws_data,
+    latency_gate,
+    stock=None,
+    runtime=None,
+    now_ts=None,
+):
+    now = float(now_ts if now_ts is not None else time.time())
+    ws = ws_data if isinstance(ws_data, dict) else {}
+    gate = latency_gate if isinstance(latency_gate, dict) else {}
+    stock_fields = stock if isinstance(stock, dict) else {}
+    runtime_fields = runtime if isinstance(runtime, dict) else {}
+    warn_bps = max(0, _env_or_rule_int("ENTRY_OBSERVED_MARK_GAP_WARN_BPS", 60))
+    block_bps = max(warn_bps, _env_or_rule_int("ENTRY_OBSERVED_MARK_GAP_BLOCK_BPS", 120))
+
+    observed_price, observed_source = _first_positive_int_from_fields(
+        {**runtime_fields, **stock_fields, **gate, **ws},
+        ("current_price_observed", "current_price", "first_seen_price"),
+    )
+    mark_price, mark_source = _first_positive_int_from_fields(
+        {**runtime_fields, **stock_fields, **gate, **ws},
+        ("canonical_mark_price", "mark_price_at_submit", "latest_price"),
+    )
+    gap_abs = abs(observed_price - mark_price) if observed_price > 0 and mark_price > 0 else 0
+    gap_bps = _price_gap_bps(observed_price, mark_price, basis_price=mark_price)
+    fresh_quote = _observed_mark_gap_fresh_quote_fields(ws, gate, now_ts=now)
+
+    fields = {
+        "observed_mark_gap_bps": gap_bps,
+        "observed_mark_gap_abs": gap_abs,
+        "observed_mark_gap_state": "not_applicable",
+        "observed_mark_gap_action": "allow_mark_side",
+        "observed_mark_gap_reason": "missing_observed_or_mark",
+        "observed_mark_gap_observed_price": observed_price,
+        "observed_mark_gap_observed_source": observed_source or "-",
+        "observed_mark_gap_mark_price": mark_price,
+        "observed_mark_gap_mark_source": mark_source or "-",
+        "observed_mark_gap_warn_bps": warn_bps,
+        "observed_mark_gap_block_bps": block_bps,
+        "observed_mark_gap_fresh_quote_source": fresh_quote.get("source"),
+        "observed_mark_gap_fresh_quote_age_ms": fresh_quote.get("age_ms"),
+        "observed_mark_gap_fresh_quote_max_age_ms": fresh_quote.get("max_age_ms"),
+        "observed_mark_gap_fresh_quote_available": bool(fresh_quote.get("fresh")),
+        "observed_mark_gap_fresh_best_bid": _coerce_int_value(fresh_quote.get("best_bid")),
+        "observed_mark_gap_fresh_best_ask": _coerce_int_value(fresh_quote.get("best_ask")),
+        "observed_mark_gap_fresh_latest_price": _coerce_int_value(fresh_quote.get("latest_price")),
+        "observed_mark_gap_support_source": "not_evaluated",
+        "observed_mark_gap_supported_price": 0,
+        "observed_mark_gap_metric_role": "source_quality_gate",
+        "observed_mark_gap_decision_authority": "pre_submit_observed_mark_gap_guard",
+        "observed_mark_gap_window_policy": "same_submit_runtime_snapshot",
+        "observed_mark_gap_sample_floor": "not_applicable_single_submit_guard",
+        "observed_mark_gap_primary_decision_metric": "observed_mark_gap_bps",
+        "observed_mark_gap_source_quality_gate": "fresh_ws_orderbook_tick_internal_consistency",
+        "observed_mark_gap_forbidden_uses": OBSERVED_MARK_GAP_FORBIDDEN_USES,
+    }
+    if observed_price <= 0 or mark_price <= 0:
+        return fields
+    if gap_bps <= warn_bps:
+        fields.update(
+            {
+                "observed_mark_gap_state": "within_allow_gap",
+                "observed_mark_gap_action": "allow_mark_side",
+                "observed_mark_gap_reason": "gap_within_warn_threshold",
+            }
+        )
+        return fields
+
+    if not bool(fresh_quote.get("fresh")):
+        action = "block_submit" if gap_bps >= block_bps else "allow_mark_side"
+        fields.update(
+            {
+                "observed_mark_gap_state": "unresolved_gap",
+                "observed_mark_gap_action": action,
+                "observed_mark_gap_reason": (
+                    "observed_mark_gap_unresolved"
+                    if action == "block_submit"
+                    else "gap_warning_unresolved_below_block"
+                ),
+            }
+        )
+        return fields
+
+    observed_supported, observed_support_source, observed_supported_price = _observed_mark_gap_price_supported(
+        candidate_price=observed_price,
+        latest_price=_coerce_int_value(fresh_quote.get("latest_price")),
+        best_bid=_coerce_int_value(fresh_quote.get("best_bid")),
+        best_ask=_coerce_int_value(fresh_quote.get("best_ask")),
+        max_gap_bps=warn_bps,
+    )
+    mark_supported, mark_support_source, mark_supported_price = _observed_mark_gap_price_supported(
+        candidate_price=mark_price,
+        latest_price=_coerce_int_value(fresh_quote.get("latest_price")),
+        best_bid=_coerce_int_value(fresh_quote.get("best_bid")),
+        best_ask=_coerce_int_value(fresh_quote.get("best_ask")),
+        max_gap_bps=warn_bps,
+    )
+    fields.update(
+        {
+            "observed_mark_gap_observed_supported": bool(observed_supported),
+            "observed_mark_gap_mark_supported": bool(mark_supported),
+        }
+    )
+    if observed_supported and not mark_supported:
+        fields.update(
+            {
+                "observed_mark_gap_state": "observed_side_supported",
+                "observed_mark_gap_action": "recompute_from_observed_side",
+                "observed_mark_gap_reason": "fresh_quote_supports_observed_side",
+                "observed_mark_gap_support_source": observed_support_source,
+                "observed_mark_gap_supported_price": observed_supported_price,
+            }
+        )
+        return fields
+    if mark_supported and not observed_supported:
+        fields.update(
+            {
+                "observed_mark_gap_state": "mark_side_supported",
+                "observed_mark_gap_action": "allow_mark_side",
+                "observed_mark_gap_reason": "fresh_quote_supports_mark_side",
+                "observed_mark_gap_support_source": mark_support_source,
+                "observed_mark_gap_supported_price": mark_supported_price,
+            }
+        )
+        return fields
+
+    block = gap_bps >= block_bps
+    fields.update(
+        {
+            "observed_mark_gap_state": "ambiguous_gap" if observed_supported and mark_supported else "unresolved_gap",
+            "observed_mark_gap_action": "block_submit" if block else "allow_mark_side",
+            "observed_mark_gap_reason": (
+                "observed_mark_gap_unresolved"
+                if block
+                else "gap_warning_unresolved_below_block"
+            ),
+            "observed_mark_gap_support_source": (
+                "both_sides_supported" if observed_supported and mark_supported else "fresh_quote_support_missing"
+            ),
+        }
+    )
+    return fields
+
+
+def _observed_mark_gap_blocks_submit(fields: dict | None) -> bool:
+    return str((fields or {}).get("observed_mark_gap_action") or "").strip() == "block_submit"
+
+
+def _observed_mark_gap_requires_recompute(fields: dict | None) -> bool:
+    return str((fields or {}).get("observed_mark_gap_action") or "").strip() == "recompute_from_observed_side"
+
+
+def _append_submit_revalidation_warning(fields: dict, warning: str) -> None:
+    current = [item for item in str(fields.get("entry_submit_revalidation_warning") or "").split("|") if item]
+    if warning and warning not in current:
+        current.append(warning)
+    fields["entry_submit_revalidation_warning"] = "|".join(current)
+
+
+def _recompute_entry_plan_from_observed_mark_gap(
+    *,
+    latency_gate: dict | None,
+    planned_orders: list | None,
+    curr_price: int,
+    best_bid: int,
+    best_ask: int,
+    gap_fields: dict | None,
+) -> tuple[list, int, int, int, dict[str, Any]]:
+    fields = {
+        "observed_mark_gap_recompute_applied": False,
+        "observed_mark_gap_recompute_reason": "not_requested",
+        "observed_mark_gap_recomputed_order_price": 0,
+        "observed_mark_gap_recompute_basis_price": 0,
+    }
+    if not _observed_mark_gap_requires_recompute(gap_fields):
+        return list(planned_orders or []), curr_price, best_bid, best_ask, fields
+    gate = latency_gate if isinstance(latency_gate, dict) else {}
+    fresh_current = (
+        _coerce_int_value((gap_fields or {}).get("observed_mark_gap_observed_price"))
+        or _coerce_int_value((gap_fields or {}).get("observed_mark_gap_fresh_latest_price"))
+        or _coerce_int_value(curr_price)
+    )
+    fresh_bid = _coerce_int_value((gap_fields or {}).get("observed_mark_gap_fresh_best_bid")) or _coerce_int_value(best_bid)
+    fresh_ask = _coerce_int_value((gap_fields or {}).get("observed_mark_gap_fresh_best_ask")) or _coerce_int_value(best_ask)
+    if fresh_current <= 0 or fresh_bid <= 0 or (fresh_ask > 0 and fresh_ask < fresh_bid):
+        fields["observed_mark_gap_recompute_reason"] = "invalid_fresh_observed_context"
+        fields["observed_mark_gap_state"] = "recompute_failed"
+        fields["observed_mark_gap_action"] = "block_submit"
+        fields["observed_mark_gap_reason"] = "observed_mark_gap_recompute_failed"
+        return list(planned_orders or []), curr_price, best_bid, best_ask, fields
+
+    applied_bps = _coerce_int_value(gate.get("entry_price_gap_profile_bps"))
+    candidate_price, fresh_basis_fields = _fresh_entry_defensive_price_from_context(
+        latency_gate=gate,
+        current_price=fresh_current,
+        best_bid=fresh_bid,
+        applied_bps=applied_bps,
+    )
+    candidate_price = _coerce_int_value(candidate_price)
+    if candidate_price <= 0:
+        candidate_price = clamp_price_to_tick(fresh_bid)
+        fresh_basis_fields = {
+            **fresh_basis_fields,
+            "entry_price_fresh_basis_reason": "fallback_to_fresh_best_bid",
+        }
+    if fresh_ask > 0 and candidate_price > fresh_ask:
+        candidate_price = clamp_price_to_tick(fresh_ask)
+        fresh_basis_fields = {
+            **fresh_basis_fields,
+            "entry_price_fresh_basis_capped_to_best_ask": True,
+        }
+    candidate_price = clamp_price_to_tick(candidate_price)
+    if candidate_price <= 0:
+        fields["observed_mark_gap_recompute_reason"] = "invalid_recomputed_price"
+        fields["observed_mark_gap_state"] = "recompute_failed"
+        fields["observed_mark_gap_action"] = "block_submit"
+        fields["observed_mark_gap_reason"] = "observed_mark_gap_recompute_failed"
+        return list(planned_orders or []), curr_price, best_bid, best_ask, fields
+
+    adjusted_orders = []
+    for order in planned_orders or []:
+        next_order = dict(order or {})
+        if str(next_order.get("tif", "DAY") or "DAY").upper() != "IOC":
+            next_order["price"] = candidate_price
+        adjusted_orders.append(next_order)
+    if not adjusted_orders and candidate_price > 0:
+        adjusted_orders = list(planned_orders or [])
+
+    if isinstance(latency_gate, dict):
+        latency_gate["orders"] = adjusted_orders
+        latency_gate["order_price"] = candidate_price
+        latency_gate["latency_guarded_order_price"] = candidate_price
+        latency_gate["normal_defensive_order_price"] = candidate_price
+        latency_gate["latest_price"] = fresh_current
+        latency_gate["canonical_mark_price"] = fresh_current
+        latency_gate["price_resolution_reason"] = (
+            f"{latency_gate.get('price_resolution_reason') or 'defensive_order_price'}"
+            "|observed_mark_gap_recompute"
+        )
+        latency_gate.update(gap_fields or {})
+        latency_gate.update(fresh_basis_fields)
+
+    fields.update(
+        {
+            **fresh_basis_fields,
+            "observed_mark_gap_recompute_applied": True,
+            "observed_mark_gap_recompute_reason": "observed_side_fresh_quote_rebased",
+            "observed_mark_gap_recomputed_order_price": candidate_price,
+            "observed_mark_gap_recompute_basis_price": fresh_current,
+            "observed_mark_gap_recomputed_best_bid": fresh_bid,
+            "observed_mark_gap_recomputed_best_ask": fresh_ask,
+        }
+    )
+    return adjusted_orders, fresh_current, fresh_bid, fresh_ask, fields
 
 
 def _build_entry_submit_revalidation_fields(ws_data, latency_gate, *, now_ts=None):
@@ -29947,7 +30720,56 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             actual_order_submitted=False,
             broker_order_forbidden=False,
         )
+    observed_mark_gap_fields = _build_observed_mark_gap_guard_fields(
+        ws_data,
+        latency_gate,
+        stock=stock,
+        runtime=runtime,
+        now_ts=time.time(),
+    )
+    if _observed_mark_gap_requires_recompute(observed_mark_gap_fields):
+        planned_orders, curr_price, best_bid_at_submit, best_ask_at_submit, observed_mark_gap_recompute_fields = (
+            _recompute_entry_plan_from_observed_mark_gap(
+                latency_gate=latency_gate,
+                planned_orders=planned_orders,
+                curr_price=curr_price,
+                best_bid=best_bid_at_submit,
+                best_ask=best_ask_at_submit,
+                gap_fields=observed_mark_gap_fields,
+            )
+        )
+        observed_mark_gap_fields.update(observed_mark_gap_recompute_fields)
+        latency_gate.update(observed_mark_gap_fields)
+        latency_price_snapshot = _build_entry_price_snapshot_fields(
+            latency_gate,
+            request_price=latency_gate.get('order_price', 0),
+            curr_price=curr_price,
+            best_bid=best_bid_at_submit,
+            best_ask=best_ask_at_submit,
+        )
+        _log_entry_pipeline(
+            stock,
+            code,
+            "entry_observed_mark_gap_recomputed",
+            actual_order_submitted=False,
+            broker_order_forbidden=False,
+            runtime_effect=bool(observed_mark_gap_fields.get("observed_mark_gap_recompute_applied")),
+            **_merge_entry_pipeline_field_groups(
+                observed_mark_gap_fields,
+                latency_price_snapshot,
+            ),
+        )
     submit_revalidation_fields = _build_entry_submit_revalidation_fields(ws_data, latency_gate, now_ts=time.time())
+    submit_revalidation_fields.update(observed_mark_gap_fields)
+    if _observed_mark_gap_blocks_submit(submit_revalidation_fields):
+        submit_revalidation_fields["entry_submit_revalidation_observed_mark_gap_blocked"] = True
+        _append_submit_revalidation_warning(submit_revalidation_fields, "observed_mark_gap_unresolved")
+    elif _observed_mark_gap_requires_recompute(submit_revalidation_fields):
+        _append_submit_revalidation_warning(submit_revalidation_fields, "observed_mark_gap_recomputed")
+    elif _coerce_int_value(submit_revalidation_fields.get("observed_mark_gap_bps")) > _coerce_int_value(
+        submit_revalidation_fields.get("observed_mark_gap_warn_bps")
+    ):
+        _append_submit_revalidation_warning(submit_revalidation_fields, "observed_mark_gap_allowed")
     scalp_pre_ai_gate_context = runtime.get("scalp_pre_ai_gate_context") if isinstance(runtime.get("scalp_pre_ai_gate_context"), dict) else {}
     pre_ai_gate_submit_log_fields = _scalp_pre_ai_gate_context_log_fields(scalp_pre_ai_gate_context)
     liquidity_value = _real_pre_submit_liquidity_value(ws_data, runtime, liquidity_value)
@@ -30112,6 +30934,48 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         actual_order_submitted=False,
         broker_order_forbidden=False,
     )
+
+    if _observed_mark_gap_blocks_submit(submit_revalidation_fields):
+        log_info(
+            f"[ENTRY_SUBMIT_REVALIDATION_BLOCK] {stock.get('name')}({code}) "
+            f"reason=observed_mark_gap_unresolved "
+            f"gap_bps={submit_revalidation_fields.get('observed_mark_gap_bps')}"
+        )
+        clear_signal_reference(stock)
+        _log_entry_pipeline(
+            stock,
+            code,
+            "entry_submit_revalidation_block",
+            block_reason="observed_mark_gap_unresolved",
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            threshold_family="pre_submit_observed_mark_gap_guard",
+            **_merge_entry_pipeline_field_groups(
+                real_pre_submit_guard_fields,
+                submit_revalidation_fields,
+                latency_price_snapshot,
+                entry_orderbook_micro_fields,
+                swing_entry_micro_fields,
+            ),
+        )
+        _emit_scalp_entry_adm_snapshot(
+            stock,
+            code,
+            "entry_submit_revalidation_block",
+            ai_score=latency_signal_score,
+            chosen_action="WAIT_REQUOTE",
+            latency_gate=latency_gate,
+            submit_fields=submit_revalidation_fields,
+            price_snapshot=latency_price_snapshot,
+            orderbook_fields=entry_orderbook_micro_fields,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            extra_fields={
+                "block_reason": "observed_mark_gap_unresolved",
+                **observed_mark_gap_fields,
+            },
+        )
+        return False
 
     if _is_passive_probe_stale_submit_block(submit_revalidation_fields):
         log_info(
@@ -32395,6 +33259,13 @@ def _maybe_submit_rising_missed_one_share_entry(
     if retry_fields.get("rising_missed_entry_ai_retry_reason") != "not_needed":
         decision_log_fields.update(retry_fields)
     if decision.allowed is False and decision.reason != RISING_MISSED_BLOCK_NOT_CANDIDATE:
+        candidate_backoff_fields = _record_rising_missed_candidate_gate_backoff(
+            stock,
+            code,
+            decision.reason,
+            now_ts=_safe_float(runtime.get("now_ts"), time.time()),
+            source_stage="rising_missed_one_share_entry_blocked",
+        )
         _log_entry_pipeline(
             stock,
             code,
@@ -32404,7 +33275,7 @@ def _maybe_submit_rising_missed_one_share_entry(
             actual_order_submitted=False,
             broker_order_forbidden=True,
             runtime_effect=decision.reason == RISING_MISSED_BLOCK_PRICE_ABOVE_CAP,
-            **decision_log_fields,
+            **_merge_entry_pipeline_field_groups(decision_log_fields, candidate_backoff_fields),
         )
         return True
     if not decision.allowed:
@@ -33301,8 +34172,98 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
     micro = snapshot.get("orderbook_micro") if isinstance(snapshot.get("orderbook_micro"), dict) else {}
     micro_state = str(micro.get("micro_state") or order.get("orderbook_micro_state") or "")
     quote_age_ms = snapshot.get("observer_last_quote_age_ms")
+    quote_age_float = _safe_float(quote_age_ms, -1.0)
+    reprice_last_update_ts = now_ts - (quote_age_float / 1000.0) if quote_age_float >= 0 else 0.0
+    parent_mark_price = _coerce_int_value(
+        order.get("mark_price_at_submit")
+        or order.get("submitted_mark_price")
+        or order.get("latest_price_at_submit")
+        or stock.get("mark_price_at_submit")
+        or current_price
+    )
+    reprice_gap_ws_data = {
+        "curr": current_price,
+        "current_price_observed": _coerce_int_value(
+            stock.get("current_price_observed")
+            or stock.get("current_price")
+            or snapshot.get("current_price_observed")
+            or current_price
+        ),
+        "canonical_mark_price": parent_mark_price,
+        "latest_price": parent_mark_price,
+        "best_bid": best_bid,
+        "best_ask": best_ask,
+        "last_ws_update_ts": reprice_last_update_ts,
+        "observer_last_quote_age_ms": quote_age_ms,
+        "orderbook": {
+            "asks": [{"price": best_ask}] if best_ask > 0 else [],
+            "bids": [{"price": best_bid}] if best_bid > 0 else [],
+        },
+    }
+    observed_mark_gap_fields = _build_observed_mark_gap_guard_fields(
+        reprice_gap_ws_data,
+        {
+            **order,
+            "canonical_mark_price": parent_mark_price,
+            "mark_price_at_submit": parent_mark_price,
+            "latest_price": parent_mark_price,
+            "best_bid": best_bid,
+            "best_ask": best_ask,
+        },
+        stock=stock,
+        runtime={"current_price_observed": reprice_gap_ws_data["current_price_observed"]},
+        now_ts=now_ts,
+    )
+    if _observed_mark_gap_blocks_submit(observed_mark_gap_fields):
+        evaluated_fields = {
+            "runtime_family": ENTRY_REPRICE_RUNTIME_FAMILY,
+            "policy_version": ENTRY_REPRICE_POLICY_VERSION,
+            "reprice_allowed": False,
+            "block_reason": "observed_mark_gap_unresolved",
+            "reprice_order_price": 0,
+            **quote_refresh_fields,
+            **observed_mark_gap_fields,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "runtime_effect": False,
+            "timeout_sec": timeout_sec if timeout_sec is not None else "-",
+        }
+        if bundle_reprice:
+            evaluated_fields.update(
+                {
+                    "entry_reprice_bundle_compression": True,
+                    "entry_reprice_bundle_leg_count": len(orders_to_cancel),
+                    "entry_reprice_parent_order_nos": _entry_reprice_parent_order_nos(orders_to_cancel),
+                }
+            )
+        _log_entry_pipeline(stock, code, "entry_reprice_after_submit_evaluated", **evaluated_fields)
+        _log_entry_pipeline(stock, code, "entry_reprice_after_submit_blocked", **evaluated_fields)
+        with ENTRY_LOCK:
+            order["entry_reprice_evaluated"] = True
+            order["entry_reprice_block_reason"] = "observed_mark_gap_unresolved"
+            stock["entry_reprice_evaluated"] = True
+            stock["entry_reprice_block_reason"] = "observed_mark_gap_unresolved"
+        return "blocked"
+
+    decision_order = order
+    if _observed_mark_gap_requires_recompute(observed_mark_gap_fields):
+        observed_basis = (
+            _coerce_int_value(observed_mark_gap_fields.get("observed_mark_gap_observed_price"))
+            or _coerce_int_value(observed_mark_gap_fields.get("observed_mark_gap_fresh_latest_price"))
+            or current_price
+        )
+        decision_order = dict(order)
+        decision_order["mark_price_at_submit"] = observed_basis
+        decision_order["latest_price_at_submit"] = observed_basis
+        observed_mark_gap_fields.update(
+            {
+                "observed_mark_gap_recompute_applied": True,
+                "observed_mark_gap_recompute_reason": "entry_reprice_cap_rebased_to_observed_side",
+                "observed_mark_gap_recompute_basis_price": observed_basis,
+            }
+        )
     decision = evaluate_entry_reprice_after_submit(
-        order=order,
+        order=decision_order,
         strategy=strategy,
         elapsed_sec=elapsed_sec,
         best_bid=best_bid,
@@ -33325,6 +34286,7 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
     evaluated_fields = {
         **decision.as_log_fields(),
         **quote_refresh_fields,
+        **observed_mark_gap_fields,
         "actual_order_submitted": False,
         "broker_order_forbidden": False,
         "runtime_effect": False,
@@ -33360,6 +34322,7 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
     child_dmst_stex_tp = _entry_order_cancel_dmst_stex_tp(orders_to_cancel[0])
     request_fields = {
         **decision.as_log_fields(),
+        **observed_mark_gap_fields,
         "actual_order_submitted": False,
         "broker_order_forbidden": False,
         "runtime_effect": True,
@@ -33532,7 +34495,14 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
         "buy_pressure_10t": order.get("buy_pressure_10t"),
         "tick_aggressor_pressure_usable": order.get("tick_aggressor_pressure_usable"),
         "tick_aggressor_trusted_count": order.get("tick_aggressor_trusted_count"),
-        "mark_price_at_submit": order.get("mark_price_at_submit") or order.get("submitted_mark_price"),
+        "mark_price_at_submit": decision_order.get("mark_price_at_submit")
+        or order.get("mark_price_at_submit")
+        or order.get("submitted_mark_price"),
+        **{
+            key: value
+            for key, value in observed_mark_gap_fields.items()
+            if str(key).startswith("observed_mark_gap_")
+        },
     }
     with ENTRY_LOCK:
         stock["pending_entry_orders"] = [child_order]
@@ -33548,6 +34518,7 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
         code,
         "entry_reprice_resubmit_submitted",
         **decision.as_log_fields(),
+        **observed_mark_gap_fields,
         runtime_effect=True,
         actual_order_submitted=True,
         broker_order_forbidden=False,

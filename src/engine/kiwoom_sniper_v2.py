@@ -262,6 +262,10 @@ _SCANNER_HOT_RUNTIME_OVERRIDE_KEYS = frozenset(
         "KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_RELIEF_MS",
         "KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_COOLDOWN_SEC",
         "KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_RECOVERY_STREAK",
+        "KORSTOCKSCAN_SCANNER_FULL_EVAL_DEFERRED_EVICTION_ENABLED",
+        "KORSTOCKSCAN_SCANNER_FULL_EVAL_DEFERRED_EVICTION_MIN_COUNT",
+        "KORSTOCKSCAN_SCANNER_FULL_EVAL_DEFERRED_EVICTION_MIN_AGE_SEC",
+        "KORSTOCKSCAN_SCANNER_FULL_EVAL_DEFERRED_EVICTION_MAX_PER_LOOP",
         "KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE",
         "KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_CAP_ENABLED",
         "KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_MIN_ACTIVE",
@@ -299,7 +303,8 @@ _SCANNER_FULL_EVAL_PRESSURE_STATE = {
     "pressure_streak": 0,
     "relief_streak": 0,
 }
-SCANNER_WATCH_EVICTION_POLICY_VERSION = "scalping_scanner_watch_eviction_v6"
+_SCANNER_WATCH_FULL_EVAL_DEFERRED_STATE = {}
+SCANNER_WATCH_EVICTION_POLICY_VERSION = "scalping_scanner_watch_eviction_v7"
 SCANNER_WATCH_EVICTION_TERMINAL_MIN_COUNT = 2
 SCANNER_WATCH_EVICTION_PREFILTER_HARDGATE_STAGES = {
     "blocked_strength_momentum",
@@ -316,6 +321,9 @@ SCANNER_WATCH_EVICTION_QUEUE_LAG_MIN_SEC = 30.0
 SCANNER_WATCH_EVICTION_QUEUE_LAG_MIN_COUNT = 2
 SCANNER_WATCH_EVICTION_QUEUE_LAG_IMMEDIATE_SEC = 60.0
 SCANNER_WATCH_EVICTION_QUEUE_LAG_MAX_PER_LOOP = 4
+SCANNER_WATCH_EVICTION_FULL_EVAL_DEFERRED_MIN_COUNT = 3
+SCANNER_WATCH_EVICTION_FULL_EVAL_DEFERRED_MIN_AGE_SEC = 180.0
+SCANNER_WATCH_EVICTION_FULL_EVAL_DEFERRED_MAX_PER_LOOP = 4
 SCANNER_WATCH_EVICTION_AFTER_BUY_WINDOW_MIN_COUNT = 2
 SCANNER_WATCH_EVICTION_AFTER_BUY_WINDOW_MIN_AGE_SEC = 60.0
 SCANNER_WATCH_EVICTION_RISING_TERMINAL_RECHECK_DELAY_SEC = 5.0
@@ -1359,6 +1367,38 @@ def _scanner_queue_lag_eviction_max_per_loop():
     return max(0, min(value, 20))
 
 
+def _scanner_full_eval_deferred_eviction_enabled():
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCANNER_FULL_EVAL_DEFERRED_EVICTION_ENABLED")
+    return _env_bool_from_value(raw, True)
+
+
+def _scanner_full_eval_deferred_eviction_min_count():
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCANNER_FULL_EVAL_DEFERRED_EVICTION_MIN_COUNT")
+    try:
+        value = int(str(raw).strip()) if str(raw).strip() else SCANNER_WATCH_EVICTION_FULL_EVAL_DEFERRED_MIN_COUNT
+    except Exception:
+        value = SCANNER_WATCH_EVICTION_FULL_EVAL_DEFERRED_MIN_COUNT
+    return max(1, min(value, 20))
+
+
+def _scanner_full_eval_deferred_eviction_min_age_sec():
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCANNER_FULL_EVAL_DEFERRED_EVICTION_MIN_AGE_SEC")
+    try:
+        value = float(str(raw).strip()) if str(raw).strip() else SCANNER_WATCH_EVICTION_FULL_EVAL_DEFERRED_MIN_AGE_SEC
+    except Exception:
+        value = SCANNER_WATCH_EVICTION_FULL_EVAL_DEFERRED_MIN_AGE_SEC
+    return max(_scanner_fifo_new_promotion_grace_sec(), min(value, 900.0))
+
+
+def _scanner_full_eval_deferred_eviction_max_per_loop():
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCANNER_FULL_EVAL_DEFERRED_EVICTION_MAX_PER_LOOP")
+    try:
+        value = int(str(raw).strip()) if str(raw).strip() else SCANNER_WATCH_EVICTION_FULL_EVAL_DEFERRED_MAX_PER_LOOP
+    except Exception:
+        value = SCANNER_WATCH_EVICTION_FULL_EVAL_DEFERRED_MAX_PER_LOOP
+    return max(0, min(value, 20))
+
+
 def _scanner_after_buy_window_source_quality_eviction_enabled():
     return _env_bool("KORSTOCKSCAN_SCANNER_AFTER_BUY_WINDOW_SOURCE_QUALITY_EVICTION_ENABLED", True)
 
@@ -1615,7 +1655,12 @@ def _is_scanner_watch_eviction_candidate(target):
     target = target or {}
     if not _is_scanner_watching_target(target):
         return False
-    if target.get("buy_time") not in (None, "", 0):
+    buy_time_value = target.get("buy_time")
+    if buy_time_value not in (None, "", 0) and str(buy_time_value).strip().lower() not in {
+        "none",
+        "nan",
+        "nat",
+    }:
         return False
     if _safe_int(target.get("buy_qty"), 0) != 0:
         return False
@@ -1748,6 +1793,57 @@ def _scanner_watch_reset_queue_lag_eviction_state(target):
     target.pop("_scanner_watch_queue_lag_count", None)
     target.pop("_scanner_watch_queue_lag_first_observed_epoch", None)
     target.pop("_scanner_watch_queue_lag_last_observed_epoch", None)
+
+
+def _scanner_watch_reset_full_eval_deferred_eviction_state(target):
+    if not isinstance(target, dict):
+        return
+    target.pop("_scanner_watch_full_eval_deferred_count", None)
+    target.pop("_scanner_watch_full_eval_deferred_anchor_epoch", None)
+    target.pop("_scanner_watch_full_eval_deferred_first_observed_epoch", None)
+    target.pop("_scanner_watch_full_eval_deferred_last_observed_epoch", None)
+    cache_key = _scanner_watch_full_eval_deferred_state_key(target)
+    if cache_key:
+        _SCANNER_WATCH_FULL_EVAL_DEFERRED_STATE.pop(cache_key, None)
+
+
+def _scanner_watch_full_eval_deferred_state_key(target):
+    if not isinstance(target, dict):
+        return ""
+    record_id = str(target.get("id") or "").strip()
+    code = str(target.get("code") or "").strip()[:6]
+    if record_id and code:
+        return f"{record_id}:{code}"
+    if record_id:
+        return f"id:{record_id}"
+    if code:
+        return f"code:{code}"
+    return ""
+
+
+def _scanner_watch_preserve_full_eval_deferred_anchor(target, cache_key, anchor_epoch):
+    if not isinstance(target, dict) or anchor_epoch <= 0:
+        return
+    target.pop("_scanner_watch_full_eval_deferred_count", None)
+    target.pop("_scanner_watch_full_eval_deferred_first_observed_epoch", None)
+    target.pop("_scanner_watch_full_eval_deferred_last_observed_epoch", None)
+    target["_scanner_watch_full_eval_deferred_anchor_epoch"] = anchor_epoch
+    if cache_key:
+        _SCANNER_WATCH_FULL_EVAL_DEFERRED_STATE[cache_key] = {"anchor_epoch": anchor_epoch}
+
+
+def _prune_scanner_watch_full_eval_deferred_state(active_targets):
+    if not _SCANNER_WATCH_FULL_EVAL_DEFERRED_STATE:
+        return
+    active_keys = {
+        _scanner_watch_full_eval_deferred_state_key(target)
+        for target in active_targets or []
+        if _is_scanner_watch_eviction_candidate(target)
+    }
+    active_keys.discard("")
+    for key in list(_SCANNER_WATCH_FULL_EVAL_DEFERRED_STATE.keys()):
+        if key not in active_keys:
+            _SCANNER_WATCH_FULL_EVAL_DEFERRED_STATE.pop(key, None)
 
 
 def _scanner_watch_eviction_decision_from_terminal(target, *, now_ts):
@@ -2171,6 +2267,182 @@ def _scanner_watch_eviction_decision_from_queue_lag(target, *, now_ts, queue_lag
     }
 
 
+def _scanner_watch_eviction_decision_from_full_eval_deferred(target, *, now_ts, skip_fields=None):
+    if not _scanner_full_eval_deferred_eviction_enabled():
+        return {
+            "should_evict": False,
+            "eviction_attempt_count": 0,
+            "eviction_reason": "scanner_full_eval_deferred_disabled",
+        }
+    if not _is_scanner_watch_eviction_candidate(target):
+        return {
+            "should_evict": False,
+            "eviction_attempt_count": 0,
+            "eviction_reason": "scanner_full_eval_deferred_not_candidate",
+        }
+
+    skip_fields = skip_fields if isinstance(skip_fields, dict) else {}
+    skip_reason = str(skip_fields.get("skip_reason") or "")
+    if skip_reason != "scanner_full_eval_loop_budget_deferred":
+        _scanner_watch_reset_full_eval_deferred_eviction_state(target)
+        return {
+            "should_evict": False,
+            "eviction_attempt_count": 0,
+            "eviction_reason": "scanner_full_eval_deferred_not_applicable",
+        }
+
+    now_value = float(now_ts)
+    cache_key = _scanner_watch_full_eval_deferred_state_key(target)
+    cached_state = _SCANNER_WATCH_FULL_EVAL_DEFERRED_STATE.get(cache_key, {}) if cache_key else {}
+    if not isinstance(cached_state, dict):
+        cached_state = {}
+    target_anchor_epoch = _safe_float(target.get("entry_armed_at_epoch"), 0.0)
+    anchor_field = "entry_armed_at_epoch"
+    if target_anchor_epoch <= 0:
+        target_anchor_epoch = _safe_float(target.get("added_time"), 0.0)
+        anchor_field = "added_time"
+    cached_anchor_epoch = _safe_float(
+        target.get("_scanner_watch_full_eval_deferred_anchor_epoch")
+        or cached_state.get("anchor_epoch"),
+        0.0,
+    )
+    if cached_anchor_epoch > 0 and target_anchor_epoch > 0:
+        if cached_anchor_epoch < target_anchor_epoch:
+            anchor_epoch = cached_anchor_epoch
+            anchor_field = "full_eval_deferred_cached_anchor_epoch"
+        else:
+            anchor_epoch = target_anchor_epoch
+    elif cached_anchor_epoch > 0:
+        anchor_epoch = cached_anchor_epoch
+        anchor_field = "full_eval_deferred_cached_anchor_epoch"
+    else:
+        anchor_epoch = target_anchor_epoch
+    if anchor_epoch <= 0:
+        anchor_epoch = _safe_float(
+            target.get("_scanner_watch_full_eval_deferred_first_observed_epoch")
+            or cached_state.get("first_observed_epoch"),
+            0.0,
+        )
+        anchor_field = "full_eval_deferred_first_observed_epoch"
+    if anchor_epoch <= 0:
+        anchor_epoch = now_value
+        anchor_field = "full_eval_deferred_first_observed_epoch"
+
+    watch_age_sec = max(0.0, now_value - anchor_epoch) if anchor_epoch > 0 else 0.0
+    min_age_sec = _scanner_full_eval_deferred_eviction_min_age_sec()
+    min_count = _scanner_full_eval_deferred_eviction_min_count()
+    if watch_age_sec < min_age_sec:
+        _scanner_watch_preserve_full_eval_deferred_anchor(target, cache_key, anchor_epoch)
+        return {
+            "should_evict": False,
+            "eviction_attempt_count": 0,
+            "eviction_reason": "scanner_full_eval_deferred_new_promotion_grace",
+            "fresh_input_confirmed": True,
+            "full_eval_deferred_watch_age_sec": round(watch_age_sec, 3),
+            "full_eval_deferred_min_age_sec": round(min_age_sec, 3),
+            "full_eval_deferred_anchor_field": anchor_field,
+            "full_eval_deferred_state_source": "module_cache_and_target_dict",
+            "terminal_stage": "scalping_scanner_watching_runtime_skip",
+            "terminal_reason": skip_reason,
+        }
+
+    last_observed = _safe_float(
+        target.get("_scanner_watch_full_eval_deferred_last_observed_epoch")
+        or cached_state.get("last_observed_epoch"),
+        0.0,
+    )
+    if last_observed > 0 and now_value - last_observed < 5.0:
+        return {
+            "should_evict": False,
+            "eviction_attempt_count": _safe_int(
+                target.get("_scanner_watch_full_eval_deferred_count")
+                or cached_state.get("count"),
+                0,
+            ),
+            "eviction_reason": "scanner_full_eval_deferred_confirmation_throttled",
+            "fresh_input_confirmed": True,
+            "full_eval_deferred_watch_age_sec": round(watch_age_sec, 3),
+            "full_eval_deferred_min_age_sec": round(min_age_sec, 3),
+            "full_eval_deferred_anchor_field": anchor_field,
+            "full_eval_deferred_state_source": "module_cache_and_target_dict",
+            "terminal_stage": "scalping_scanner_watching_runtime_skip",
+            "terminal_reason": skip_reason,
+        }
+
+    first_observed = _safe_float(
+        target.get("_scanner_watch_full_eval_deferred_first_observed_epoch")
+        or cached_state.get("first_observed_epoch"),
+        0.0,
+    )
+    if first_observed <= 0:
+        first_observed = now_value
+    attempt_count = _safe_int(
+        target.get("_scanner_watch_full_eval_deferred_count")
+        or cached_state.get("count"),
+        0,
+    ) + 1
+    target["_scanner_watch_full_eval_deferred_first_observed_epoch"] = first_observed
+    target["_scanner_watch_full_eval_deferred_last_observed_epoch"] = now_value
+    target["_scanner_watch_full_eval_deferred_count"] = attempt_count
+    target["_scanner_watch_full_eval_deferred_anchor_epoch"] = anchor_epoch
+    if cache_key:
+        _SCANNER_WATCH_FULL_EVAL_DEFERRED_STATE[cache_key] = {
+            "anchor_epoch": anchor_epoch,
+            "first_observed_epoch": first_observed,
+            "last_observed_epoch": now_value,
+            "count": attempt_count,
+        }
+
+    fast_precheck_fields = dict((target or {}).get("_scanner_fast_precheck_fields") or {})
+    return {
+        "should_evict": attempt_count >= min_count,
+        "eviction_reason": "scanner_full_eval_budget_deferred_repeated",
+        "eviction_attempt_count": attempt_count,
+        "terminal_stage": "scalping_scanner_watching_runtime_skip",
+        "terminal_reason": skip_reason,
+        "fresh_input_confirmed": True,
+        "stale_first_seen_epoch": "not_applicable_stale_first_seen_epoch",
+        "stale_age_sec": "not_applicable_stale_age_sec",
+        "ws_recovery_outcome": "not_applicable_ws_recovery_outcome",
+        "source_quality_detail_route": "scanner_full_eval_budget_rotation",
+        "full_eval_deferred_first_observed_epoch": f"{first_observed:.3f}",
+        "full_eval_deferred_watch_age_sec": round(watch_age_sec, 3),
+        "full_eval_deferred_min_age_sec": round(min_age_sec, 3),
+        "full_eval_deferred_min_count": min_count,
+        "full_eval_deferred_anchor_field": anchor_field,
+        "full_eval_deferred_state_source": "module_cache_and_target_dict",
+        "queue_rank": skip_fields.get("queue_rank", "not_available"),
+        "scanner_queue_rank": skip_fields.get("scanner_queue_rank", "not_available"),
+        "watching_count": skip_fields.get("watching_count", "not_available"),
+        "scanner_watching_count": skip_fields.get("scanner_watching_count", "not_available"),
+        "scanner_full_eval_base_limit": skip_fields.get("scanner_full_eval_base_limit", "not_available"),
+        "scanner_full_eval_limit": skip_fields.get("scanner_full_eval_limit", "not_available"),
+        "scanner_full_eval_count": skip_fields.get("scanner_full_eval_count", "not_available"),
+        "scanner_rising_full_eval_extra_limit": skip_fields.get(
+            "scanner_rising_full_eval_extra_limit",
+            "not_available",
+        ),
+        "scanner_rising_full_eval_relief_count": skip_fields.get(
+            "scanner_rising_full_eval_relief_count",
+            "not_available",
+        ),
+        "fast_precheck_result": str(
+            skip_fields.get("fast_precheck_result")
+            or (target or {}).get("_scanner_fast_precheck_result")
+            or fast_precheck_fields.get("fast_precheck_result")
+            or "eligible_for_heavy_entry_eval"
+        ),
+        "fast_precheck_reason": str(
+            skip_fields.get("fast_precheck_reason")
+            or (target or {}).get("_scanner_fast_precheck_reason")
+            or fast_precheck_fields.get("fast_precheck_reason")
+            or "fast_precheck_pass"
+        ),
+        "fast_precheck_fields": fast_precheck_fields,
+        "observed_epoch": f"{now_value:.3f}",
+    }
+
+
 def _scanner_watch_eviction_decision_from_pool_block(target, *, now_ts):
     if not _is_scanner_watch_eviction_candidate(target):
         return {"should_evict": False, "eviction_attempt_count": 0}
@@ -2307,6 +2579,28 @@ def _scanner_watch_eviction_event_fields(target, *, decision):
         ),
         "queue_lag_anchor_field": decision.get("queue_lag_anchor_field")
         or "not_applicable_queue_lag_anchor_field",
+        "full_eval_deferred_first_observed_epoch": decision.get("full_eval_deferred_first_observed_epoch")
+        or "not_applicable_full_eval_deferred_first_observed_epoch",
+        "full_eval_deferred_watch_age_sec": decision.get("full_eval_deferred_watch_age_sec")
+        or "not_applicable_full_eval_deferred_watch_age_sec",
+        "full_eval_deferred_min_age_sec": decision.get("full_eval_deferred_min_age_sec")
+        or "not_applicable_full_eval_deferred_min_age_sec",
+        "full_eval_deferred_min_count": decision.get("full_eval_deferred_min_count")
+        or "not_applicable_full_eval_deferred_min_count",
+        "full_eval_deferred_anchor_field": decision.get("full_eval_deferred_anchor_field")
+        or "not_applicable_full_eval_deferred_anchor_field",
+        "full_eval_deferred_state_source": decision.get("full_eval_deferred_state_source")
+        or "not_applicable_full_eval_deferred_state_source",
+        "scanner_full_eval_base_limit": decision.get("scanner_full_eval_base_limit")
+        or "not_applicable_scanner_full_eval_base_limit",
+        "scanner_full_eval_limit": decision.get("scanner_full_eval_limit")
+        or "not_applicable_scanner_full_eval_limit",
+        "scanner_full_eval_count": decision.get("scanner_full_eval_count")
+        or "not_applicable_scanner_full_eval_count",
+        "scanner_rising_full_eval_extra_limit": decision.get("scanner_rising_full_eval_extra_limit")
+        or "not_applicable_scanner_rising_full_eval_extra_limit",
+        "scanner_rising_full_eval_relief_count": decision.get("scanner_rising_full_eval_relief_count")
+        or "not_applicable_scanner_rising_full_eval_relief_count",
         "cooldown_remaining_sec": decision.get("cooldown_remaining_sec", "not_applicable_cooldown_remaining_sec"),
         "fast_precheck_result": decision.get("fast_precheck_result")
         or fast_precheck_fields.get("fast_precheck_result")
@@ -5170,6 +5464,7 @@ def run_sniper(is_test_mode=False):
                 for t in targets
                 if _is_scanner_watching_target(t)
             }
+            _prune_scanner_watch_full_eval_deferred_state(targets)
             for stale_code in list(scanner_ws_repair_cycle_state_by_code.keys()):
                 if stale_code not in active_scanner_watch_codes:
                     scanner_ws_repair_cycle_state_by_code.pop(stale_code, None)
@@ -5198,6 +5493,8 @@ def run_sniper(is_test_mode=False):
             scanner_no_trade_eviction_loop_count = 0
             scanner_queue_lag_eviction_loop_limit = _scanner_queue_lag_eviction_max_per_loop()
             scanner_queue_lag_eviction_loop_count = 0
+            scanner_full_eval_deferred_eviction_loop_limit = _scanner_full_eval_deferred_eviction_max_per_loop()
+            scanner_full_eval_deferred_eviction_loop_count = 0
 
             def _defer_scanner_entry_pipeline_log(stock_value, code_value, stage, fields):
                 deferred_scanner_pipeline_events.append(
@@ -5494,6 +5791,18 @@ def run_sniper(is_test_mode=False):
                 scanner_queue_lag_eviction_loop_count += 1
                 return True
 
+            def _scanner_full_eval_deferred_hot_slot_eviction_allowed():
+                nonlocal scanner_full_eval_deferred_eviction_loop_count
+                if scanner_full_eval_deferred_eviction_loop_limit <= 0:
+                    return False
+                if (
+                    scanner_full_eval_deferred_eviction_loop_count
+                    >= scanner_full_eval_deferred_eviction_loop_limit
+                ):
+                    return False
+                scanner_full_eval_deferred_eviction_loop_count += 1
+                return True
+
             def _apply_subscription_recheck_snapshot_if_ready(ws_snapshot, recovery_fields, *, phase):
                 fields = dict(recovery_fields or {})
                 recheck_snapshot = fields.pop("_ws_subscription_recheck_snapshot", None)
@@ -5655,6 +5964,7 @@ def run_sniper(is_test_mode=False):
                             now_value=time.time(),
                             queue_enter_epoch=queue_enter_epoch,
                         )
+                    _scanner_watch_reset_full_eval_deferred_eviction_state(delayed_stock)
                     _flush_deferred_scanner_pipeline_events()
                     handle_watching_state(
                         delayed_stock,
@@ -6165,23 +6475,86 @@ def run_sniper(is_test_mode=False):
                                 )
                         if scanner_full_eval_count >= scanner_full_eval_limit and budget_source != "rising_full_eval_relief":
                             _scanner_watch_reset_terminal_eviction_state(stock)
+                            full_eval_deferred_fields = {
+                                "skip_reason": "scanner_full_eval_loop_budget_deferred",
+                                "now_ts": heavy_queue_enter_epoch,
+                                "ws_data": ws_data,
+                                "ws_manager_available": bool(WS_MANAGER),
+                                "queue_rank": queue_context["queue_rank_by_obj"].get(id(stock), 0),
+                                "scanner_queue_rank": queue_context["scanner_rank_by_obj"].get(id(stock), 0),
+                                "watching_count": queue_context["watching_count"],
+                                "scanner_watching_count": queue_context["scanner_watching_count"],
+                                "scanner_full_eval_base_limit": scanner_full_eval_base_limit,
+                                "scanner_full_eval_limit": scanner_full_eval_limit,
+                                "scanner_full_eval_count": scanner_full_eval_count,
+                                "scanner_rising_full_eval_extra_limit": scanner_rising_full_eval_extra_limit,
+                                "scanner_rising_full_eval_relief_count": scanner_rising_full_eval_relief_count,
+                                "fast_precheck_result": fast_precheck_result or "-",
+                                "fast_precheck_reason": fast_precheck_reason or "-",
+                            }
+                            full_eval_deferred_decision = (
+                                _scanner_watch_eviction_decision_from_full_eval_deferred(
+                                    stock,
+                                    now_ts=heavy_queue_enter_epoch,
+                                    skip_fields=full_eval_deferred_fields,
+                                )
+                            )
+                            full_eval_deferred_fields.update(
+                                {
+                                    "full_eval_deferred_eviction_reason": full_eval_deferred_decision.get(
+                                        "eviction_reason",
+                                        "not_available_full_eval_deferred_eviction_reason",
+                                    ),
+                                    "full_eval_deferred_should_evict": bool(
+                                        full_eval_deferred_decision.get("should_evict")
+                                    ),
+                                    "full_eval_deferred_attempt_count": full_eval_deferred_decision.get(
+                                        "eviction_attempt_count",
+                                        0,
+                                    ),
+                                    "full_eval_deferred_first_observed_epoch": full_eval_deferred_decision.get(
+                                        "full_eval_deferred_first_observed_epoch",
+                                        "not_available_full_eval_deferred_first_observed_epoch",
+                                    ),
+                                    "full_eval_deferred_watch_age_sec": full_eval_deferred_decision.get(
+                                        "full_eval_deferred_watch_age_sec",
+                                        "not_available_full_eval_deferred_watch_age_sec",
+                                    ),
+                                    "full_eval_deferred_min_age_sec": full_eval_deferred_decision.get(
+                                        "full_eval_deferred_min_age_sec",
+                                        "not_available_full_eval_deferred_min_age_sec",
+                                    ),
+                                    "full_eval_deferred_min_count": full_eval_deferred_decision.get(
+                                        "full_eval_deferred_min_count",
+                                        "not_available_full_eval_deferred_min_count",
+                                    ),
+                                    "full_eval_deferred_anchor_field": full_eval_deferred_decision.get(
+                                        "full_eval_deferred_anchor_field",
+                                        "not_available_full_eval_deferred_anchor_field",
+                                    ),
+                                    "full_eval_deferred_state_source": full_eval_deferred_decision.get(
+                                        "full_eval_deferred_state_source",
+                                        "not_available_full_eval_deferred_state_source",
+                                    ),
+                                }
+                            )
                             _defer_scanner_watching_runtime_skip(
                                 stock,
                                 code,
-                                skip_reason="scanner_full_eval_loop_budget_deferred",
-                                now_ts=heavy_queue_enter_epoch,
-                                ws_data=ws_data,
-                                ws_manager_available=bool(WS_MANAGER),
-                                queue_rank=queue_context["queue_rank_by_obj"].get(id(stock), 0),
-                                scanner_queue_rank=queue_context["scanner_rank_by_obj"].get(id(stock), 0),
-                                watching_count=queue_context["watching_count"],
-                                scanner_watching_count=queue_context["scanner_watching_count"],
-                                scanner_full_eval_base_limit=scanner_full_eval_base_limit,
-                                scanner_full_eval_limit=scanner_full_eval_limit,
-                                scanner_full_eval_count=scanner_full_eval_count,
-                                scanner_rising_full_eval_extra_limit=scanner_rising_full_eval_extra_limit,
-                                scanner_rising_full_eval_relief_count=scanner_rising_full_eval_relief_count,
+                                **full_eval_deferred_fields,
                             )
+                            if (
+                                full_eval_deferred_decision.get("should_evict")
+                                and _scanner_full_eval_deferred_hot_slot_eviction_allowed()
+                                and _expire_scanner_watch_target(
+                                    stock,
+                                    code,
+                                    targets,
+                                    decision=full_eval_deferred_decision,
+                                    emit_event_fn=_defer_scanner_entry_pipeline_log,
+                                )
+                            ):
+                                continue
                             continue
                         scanner_full_eval_count += 1
                         delayed_scanner_heavy_eval.append((stock, code, ws_data, heavy_queue_enter_epoch))

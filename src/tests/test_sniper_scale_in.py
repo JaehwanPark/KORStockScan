@@ -2458,6 +2458,325 @@ def test_rising_missed_submit_safety_backoff_repeated_stale_weak_extends_to_180_
     assert stock["rising_missed_submit_safety_backoff_count"] == 3
 
 
+def test_rising_missed_candidate_gate_backoff_upper_limit_reallocates_scanner_budget(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_CANDIDATE_BACKOFF_UPPER_LIMIT_SEC", raising=False)
+    state_handlers._RISING_MISSED_CANDIDATE_GATE_BACKOFFS.clear()
+    stock = _rising_missed_backoff_stock(fluctuation=28.0)
+
+    backoff_fields = state_handlers._record_rising_missed_candidate_gate_backoff(
+        stock,
+        "477850",
+        "upper_limit_proximity_entry_block",
+        now_ts=1000.0,
+        source_stage="rising_missed_one_share_entry_blocked",
+    )
+    fields = state_handlers._scanner_fast_precheck_fields(
+        stock,
+        code="477850",
+        ws_data={"curr": 10120, "fluctuation": 28.0},
+        now_ts=1001.0,
+    )
+
+    assert backoff_fields["rising_missed_candidate_gate_backoff_sec"] == 120
+    assert backoff_fields["rising_missed_filter_layer"] == "candidate_gate"
+    assert backoff_fields["rising_missed_filter_action"] == "candidate_block"
+    assert fields["fast_precheck_result"] == "budget_reallocated"
+    assert fields["fast_precheck_reason"] == "candidate_gate_backoff_active"
+    assert fields["rising_missed_filter_layer"] == "scanner_watch_budget"
+    assert fields["rising_missed_filter_owner"] == "scanner_fast_precheck"
+    assert fields["rising_missed_filter_action"] == "budget_reallocated"
+    assert fields["rising_missed_budget_reallocation_source"] == "candidate_gate_feedback"
+    assert fields["rising_missed_candidate_gate_backoff_reason"] == "upper_limit_proximity_entry_block"
+    assert "rising_missed_submit_safety_backoff_reason" not in fields
+
+
+def test_rising_missed_candidate_gate_backoff_recovery_allows_heavy_eval():
+    state_handlers._RISING_MISSED_CANDIDATE_GATE_BACKOFFS.clear()
+    stock = _rising_missed_backoff_stock(fluctuation=28.0)
+    state_handlers._record_rising_missed_candidate_gate_backoff(
+        stock,
+        "477850",
+        "upper_limit_proximity_entry_block",
+        now_ts=1000.0,
+        source_stage="rising_missed_one_share_entry_blocked",
+    )
+
+    fields = state_handlers._scanner_fast_precheck_fields(
+        stock,
+        code="477850",
+        ws_data={"curr": 10120, "fluctuation": 20.0},
+        now_ts=1005.0,
+    )
+
+    assert fields["fast_precheck_result"] == "eligible_for_heavy_entry_eval"
+    assert fields["fast_precheck_reason"] == "fast_precheck_pass"
+    assert "rising_missed_candidate_gate_backoff_until" not in stock
+
+
+def test_rising_missed_candidate_gate_backoff_excludes_dynamic_candidate_reason():
+    state_handlers._RISING_MISSED_CANDIDATE_GATE_BACKOFFS.clear()
+    stock = _rising_missed_backoff_stock()
+
+    fields = state_handlers._record_rising_missed_candidate_gate_backoff(
+        stock,
+        "477850",
+        "entry_ai_action_not_evaluated",
+        now_ts=1000.0,
+        source_stage="rising_missed_one_share_entry_blocked",
+    )
+
+    assert fields == {}
+    assert "rising_missed_candidate_gate_backoff_until" not in stock
+
+
+def test_rising_missed_candidate_gate_backoff_repeated_upper_limit_extends_to_180_sec():
+    state_handlers._RISING_MISSED_CANDIDATE_GATE_BACKOFFS.clear()
+    stock = _rising_missed_backoff_stock(fluctuation=28.0)
+
+    for idx in range(3):
+        fields = state_handlers._record_rising_missed_candidate_gate_backoff(
+            stock,
+            "477850",
+            "upper_limit_proximity_entry_block",
+            now_ts=1000.0 + idx,
+            source_stage="rising_missed_one_share_entry_blocked",
+        )
+
+    assert fields["rising_missed_candidate_gate_backoff_count"] == 3
+    assert fields["rising_missed_candidate_gate_backoff_sec"] == 180
+    assert stock["rising_missed_candidate_gate_backoff_count"] == 3
+
+
+def test_scanner_ws_stale_backoff_heavy_recheck_reallocates_scanner_budget(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_SCANNER_WS_STALE_BACKOFF_HEAVY_RECHECK_SEC", raising=False)
+    state_handlers._SCANNER_WS_STALE_BACKOFFS.clear()
+    entry_logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: entry_logs.append((stage, fields)),
+    )
+    stock = _rising_missed_backoff_stock()
+
+    emitted = state_handlers.emit_scanner_watching_runtime_skip(
+        stock,
+        "477850",
+        skip_reason="scanner_heavy_eval_stale_snapshot_recheck",
+        now_ts=1000.0,
+        ws_data={"curr": 10120},
+        throttle_sec=0,
+    )
+    fields = state_handlers._scanner_fast_precheck_fields(
+        stock,
+        code="477850",
+        ws_data={"curr": 10120},
+        now_ts=1001.0,
+    )
+
+    assert emitted is True
+    assert entry_logs[-1][0] == "scalping_scanner_watching_runtime_skip"
+    assert entry_logs[-1][1]["scanner_ws_stale_backoff_sec"] == 45
+    assert entry_logs[-1][1]["scanner_budget_reallocation_source"] == "ws_stale_feedback"
+    assert fields["fast_precheck_result"] == "budget_reallocated"
+    assert fields["fast_precheck_reason"] == "scanner_ws_stale_backoff_active"
+    assert fields["rising_missed_filter_layer"] == "scanner_watch_budget"
+    assert fields["rising_missed_filter_action"] == "budget_reallocated"
+    assert fields["scanner_budget_reallocation_source"] == "ws_stale_feedback"
+    assert fields["scanner_ws_stale_backoff_reason"] == "scanner_heavy_eval_stale_snapshot_recheck"
+    assert fields["actual_order_submitted"] is False
+    assert fields["broker_order_forbidden"] is True
+
+
+def test_scanner_ws_stale_backoff_fast_precheck_reason_records_stale_group(monkeypatch):
+    state_handlers._SCANNER_WS_STALE_BACKOFFS.clear()
+    entry_logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: entry_logs.append((stage, fields)),
+    )
+    stock = _rising_missed_backoff_stock()
+
+    state_handlers.emit_scanner_watching_runtime_skip(
+        stock,
+        "477850",
+        skip_reason="scanner_fast_precheck_stability_pending",
+        fast_precheck_reason="stale_ws_snapshot",
+        now_ts=1000.0,
+        ws_data={"curr": 10120},
+        throttle_sec=0,
+    )
+    fields = state_handlers._scanner_fast_precheck_fields(
+        stock,
+        code="477850",
+        ws_data={"curr": 10120},
+        now_ts=1001.0,
+    )
+
+    assert entry_logs[-1][1]["scanner_ws_stale_backoff_reason"] == "stale_ws_snapshot"
+    assert fields["fast_precheck_result"] == "budget_reallocated"
+    assert fields["fast_precheck_reason"] == "scanner_ws_stale_backoff_active"
+    assert fields["scanner_ws_stale_backoff_reason"] == "stale_ws_snapshot"
+
+
+def test_scanner_ws_stale_backoff_persistent_gap_uses_long_budget_reallocation(monkeypatch):
+    state_handlers._SCANNER_WS_STALE_BACKOFFS.clear()
+    entry_logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: entry_logs.append((stage, fields)),
+    )
+    stock = _rising_missed_backoff_stock()
+
+    state_handlers.emit_scanner_watching_runtime_skip(
+        stock,
+        "477850",
+        skip_reason="scanner_fast_precheck_stability_pending",
+        fast_precheck_reason="stale_ws_snapshot",
+        ws_recovery_outcome="persistent_ws_gap",
+        ws_repair_cycle_state="persistent_ws_gap",
+        ws_repair_batch_reason="persistent_ws_gap_repair_batch_queued",
+        now_ts=1000.0,
+        ws_data={"curr": 10120},
+        throttle_sec=0,
+    )
+    fields = state_handlers._scanner_fast_precheck_fields(
+        stock,
+        code="477850",
+        ws_data={"curr": 10120},
+        now_ts=1001.0,
+    )
+
+    assert entry_logs[-1][1]["scanner_ws_stale_backoff_reason"] == "persistent_ws_gap"
+    assert entry_logs[-1][1]["scanner_ws_stale_backoff_sec"] == 120
+    assert fields["fast_precheck_result"] == "budget_reallocated"
+    assert fields["fast_precheck_reason"] == "scanner_ws_stale_backoff_active"
+    assert fields["scanner_ws_stale_backoff_reason"] == "persistent_ws_gap"
+    assert fields["scanner_budget_reallocation_source"] == "ws_stale_feedback"
+
+
+def test_scanner_ws_stale_backoff_persistent_gap_not_hidden_by_stale_throttle(monkeypatch):
+    state_handlers._SCANNER_WS_STALE_BACKOFFS.clear()
+    entry_logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: entry_logs.append((stage, fields)),
+    )
+    stock = _rising_missed_backoff_stock()
+
+    first = state_handlers.emit_scanner_watching_runtime_skip(
+        stock,
+        "477850",
+        skip_reason="scanner_fast_precheck_stability_pending",
+        fast_precheck_reason="stale_ws_snapshot",
+        now_ts=1000.0,
+        ws_data={"curr": 10120},
+        throttle_sec=30,
+    )
+    second = state_handlers.emit_scanner_watching_runtime_skip(
+        stock,
+        "477850",
+        skip_reason="scanner_fast_precheck_stability_pending",
+        fast_precheck_reason="stale_ws_snapshot",
+        ws_recovery_outcome="persistent_ws_gap",
+        ws_repair_batch_reason="persistent_repair_batch_interval_active",
+        now_ts=1001.0,
+        ws_data={"curr": 10120},
+        throttle_sec=30,
+    )
+
+    assert first is True
+    assert second is True
+    assert entry_logs[-2][1]["scanner_ws_stale_backoff_reason"] == "stale_ws_snapshot"
+    assert entry_logs[-1][1]["scanner_ws_stale_backoff_reason"] == "persistent_ws_gap"
+    assert entry_logs[-1][1]["scanner_ws_stale_backoff_sec"] == 120
+
+
+def test_scanner_ws_stale_backoff_fresh_snapshot_recovery_allows_heavy_eval():
+    state_handlers._SCANNER_WS_STALE_BACKOFFS.clear()
+    stock = _rising_missed_backoff_stock()
+    state_handlers._record_scanner_ws_stale_backoff(
+        stock,
+        "477850",
+        "scanner_heavy_eval_stale_snapshot_recheck",
+        now_ts=1000.0,
+        source_stage="scalping_scanner_watching_runtime_skip",
+    )
+
+    fields = state_handlers._scanner_fast_precheck_fields(
+        stock,
+        code="477850",
+        ws_data={"curr": 10120, "last_ws_update_ts": time.time()},
+        now_ts=1005.0,
+    )
+
+    assert fields["fast_precheck_result"] == "eligible_for_heavy_entry_eval"
+    assert fields["fast_precheck_reason"] == "fast_precheck_pass"
+    assert "scanner_ws_stale_backoff_until" not in stock
+
+
+def test_scanner_ws_stale_backoff_repeated_heavy_recheck_extends_to_90_sec():
+    state_handlers._SCANNER_WS_STALE_BACKOFFS.clear()
+    stock = _rising_missed_backoff_stock()
+
+    for idx in range(3):
+        fields = state_handlers._record_scanner_ws_stale_backoff(
+            stock,
+            "477850",
+            "scanner_heavy_eval_stale_snapshot_recheck",
+            now_ts=1000.0 + idx,
+            source_stage="scalping_scanner_watching_runtime_skip",
+        )
+
+    assert fields["scanner_ws_stale_backoff_count"] == 3
+    assert fields["scanner_ws_stale_backoff_sec"] == 90
+    assert stock["scanner_ws_stale_backoff_count"] == 3
+
+
+def test_scanner_ws_stale_backoff_repeated_persistent_gap_extends_to_240_sec():
+    state_handlers._SCANNER_WS_STALE_BACKOFFS.clear()
+    stock = _rising_missed_backoff_stock()
+
+    for idx in range(3):
+        fields = state_handlers._record_scanner_ws_stale_backoff(
+            stock,
+            "477850",
+            "persistent_ws_gap",
+            now_ts=1000.0 + idx,
+            source_stage="scalping_scanner_watching_runtime_skip",
+        )
+
+    assert fields["scanner_ws_stale_backoff_count"] == 3
+    assert fields["scanner_ws_stale_backoff_sec"] == 240
+    assert stock["scanner_ws_stale_backoff_reason"] == "persistent_ws_gap"
+
+
+def test_scanner_ws_stale_backoff_no_tick_cooldown_extends_scanner_budget():
+    state_handlers._SCANNER_WS_STALE_BACKOFFS.clear()
+    stock = _rising_missed_backoff_stock()
+
+    first = state_handlers._record_scanner_ws_stale_backoff(
+        stock,
+        "477850",
+        "persistent_no_tick_cooldown",
+        now_ts=1000.0,
+        source_stage="scalping_scanner_watching_runtime_skip",
+    )
+    second = state_handlers._record_scanner_ws_stale_backoff(
+        stock,
+        "477850",
+        "persistent_no_tick_cooldown",
+        now_ts=1001.0,
+        source_stage="scalping_scanner_watching_runtime_skip",
+    )
+
+    assert first["scanner_ws_stale_backoff_sec"] == 240
+    assert second["scanner_ws_stale_backoff_count"] == 2
+    assert second["scanner_ws_stale_backoff_sec"] == 300
+
+
 def test_scanner_fast_precheck_keeps_not_rising_missed_rebound_candidate(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_FULL_EVAL_MIN_DELTA_PCT", "1.0")
     stock = {
@@ -15470,6 +15789,169 @@ def test_submit_revalidation_keeps_quote_consistency_block(monkeypatch):
     assert fields["entry_submit_revalidation_quote_freshness_override_applied"] is False
     assert fields["entry_submit_revalidation_warning"] == "stale_context_or_quote|quote_consistency_cross_source_gap"
     assert state_handlers._is_standard_stale_submit_block(fields) is True
+
+
+def test_observed_mark_gap_recomputes_gold_case_from_fresh_observed_side(monkeypatch):
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 100.0)
+    ws_data = {
+        "curr": 16510,
+        "current_price_observed": 16780,
+        "canonical_mark_price": 16510,
+        "best_bid": 16730,
+        "best_ask": 16750,
+        "last_ws_update_ts": 99.88,
+        "orderbook": {
+            "bids": [{"price": 16730}],
+            "asks": [{"price": 16750}],
+        },
+    }
+    latency_gate = {
+        "latest_price": 16510,
+        "canonical_mark_price": 16510,
+        "mark_price_at_submit": 16510,
+        "latency_guarded_order_price": 16460,
+        "normal_defensive_order_price": 16460,
+        "order_price": 16460,
+        "entry_price_gap_profile_bps": 30,
+        "orders": [{"tag": "normal", "qty": 12, "price": 16460, "tif": "DAY"}],
+    }
+
+    guard_fields = state_handlers._build_observed_mark_gap_guard_fields(
+        ws_data,
+        latency_gate,
+        now_ts=100.0,
+    )
+    planned_orders, curr_price, best_bid, best_ask, recompute_fields = (
+        state_handlers._recompute_entry_plan_from_observed_mark_gap(
+            latency_gate=latency_gate,
+            planned_orders=latency_gate["orders"],
+            curr_price=16510,
+            best_bid=16500,
+            best_ask=16550,
+            gap_fields=guard_fields,
+        )
+    )
+
+    assert guard_fields["observed_mark_gap_action"] == "recompute_from_observed_side"
+    assert guard_fields["observed_mark_gap_bps"] >= 120
+    assert recompute_fields["observed_mark_gap_recompute_applied"] is True
+    assert curr_price == 16780
+    assert best_bid == 16730
+    assert best_ask == 16750
+    assert planned_orders[0]["price"] > 16460
+    assert latency_gate["order_price"] == planned_orders[0]["price"]
+    assert latency_gate["canonical_mark_price"] == 16780
+
+
+def test_observed_mark_gap_recompute_failure_blocks_submit(monkeypatch):
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 100.0)
+    ws_data = {
+        "curr": 16780,
+        "current_price_observed": 16780,
+        "canonical_mark_price": 16510,
+        "best_bid": 0,
+        "best_ask": 0,
+        "last_ws_update_ts": 99.9,
+    }
+    latency_gate = {
+        "latest_price": 16510,
+        "canonical_mark_price": 16510,
+        "mark_price_at_submit": 16510,
+        "latency_guarded_order_price": 16460,
+        "normal_defensive_order_price": 16460,
+        "order_price": 16460,
+        "entry_price_gap_profile_bps": 30,
+        "orders": [{"tag": "normal", "qty": 12, "price": 16460, "tif": "DAY"}],
+    }
+
+    guard_fields = state_handlers._build_observed_mark_gap_guard_fields(
+        ws_data,
+        latency_gate,
+        now_ts=100.0,
+    )
+    _, curr_price, best_bid, best_ask, recompute_fields = (
+        state_handlers._recompute_entry_plan_from_observed_mark_gap(
+            latency_gate=latency_gate,
+            planned_orders=latency_gate["orders"],
+            curr_price=16510,
+            best_bid=0,
+            best_ask=0,
+            gap_fields=guard_fields,
+        )
+    )
+
+    assert guard_fields["observed_mark_gap_action"] == "recompute_from_observed_side"
+    assert recompute_fields["observed_mark_gap_recompute_applied"] is False
+    assert recompute_fields["observed_mark_gap_action"] == "block_submit"
+    assert recompute_fields["observed_mark_gap_reason"] == "observed_mark_gap_recompute_failed"
+    assert curr_price == 16510
+    assert best_bid == 0
+    assert best_ask == 0
+
+
+def test_observed_mark_gap_allows_when_fresh_quote_supports_mark_side(monkeypatch):
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 100.0)
+
+    fields = state_handlers._build_observed_mark_gap_guard_fields(
+        {
+            "curr": 16510,
+            "current_price_observed": 16780,
+            "canonical_mark_price": 16510,
+            "best_bid": 16500,
+            "best_ask": 16550,
+            "last_ws_update_ts": 99.9,
+        },
+        {"latest_price": 16510, "canonical_mark_price": 16510},
+        now_ts=100.0,
+    )
+
+    assert fields["observed_mark_gap_action"] == "allow_mark_side"
+    assert fields["observed_mark_gap_state"] == "mark_side_supported"
+    assert fields["observed_mark_gap_mark_supported"] is True
+    assert fields["observed_mark_gap_observed_supported"] is False
+
+
+def test_observed_mark_gap_blocks_when_large_gap_unresolved(monkeypatch):
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 100.0)
+
+    fields = state_handlers._build_observed_mark_gap_guard_fields(
+        {
+            "curr": 16510,
+            "current_price_observed": 16780,
+            "canonical_mark_price": 16510,
+            "best_bid": 0,
+            "best_ask": 0,
+        },
+        {"latest_price": 16510, "canonical_mark_price": 16510},
+        now_ts=100.0,
+    )
+
+    assert fields["observed_mark_gap_action"] == "block_submit"
+    assert fields["observed_mark_gap_reason"] == "observed_mark_gap_unresolved"
+    assert state_handlers._observed_mark_gap_blocks_submit(fields) is True
+
+
+def test_observed_mark_gap_small_gap_leaves_submit_revalidation_unchanged(monkeypatch):
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 100.0)
+
+    fields = state_handlers._build_observed_mark_gap_guard_fields(
+        {
+            "curr": 16510,
+            "current_price_observed": 16600,
+            "canonical_mark_price": 16510,
+            "best_bid": 16500,
+            "best_ask": 16550,
+            "last_ws_update_ts": 99.9,
+        },
+        {"latest_price": 16510, "canonical_mark_price": 16510},
+        now_ts=100.0,
+    )
+
+    assert fields["observed_mark_gap_bps"] <= 60
+    assert fields["observed_mark_gap_state"] == "within_allow_gap"
+    assert fields["observed_mark_gap_action"] == "allow_mark_side"
+    assert state_handlers._observed_mark_gap_requires_recompute(fields) is False
+    assert state_handlers._observed_mark_gap_blocks_submit(fields) is False
 
 
 def test_standard_stale_submit_revalidation_blocks_by_default():

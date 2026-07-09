@@ -710,6 +710,9 @@ def test_scalping_scanner_promoted_target_refresh_resets_eval_state(monkeypatch)
         "_scanner_watch_queue_lag_count": 2,
         "_scanner_watch_queue_lag_first_observed_epoch": 1490.0,
         "_scanner_watch_queue_lag_last_observed_epoch": 1500.0,
+        "_scanner_watch_full_eval_deferred_count": 2,
+        "_scanner_watch_full_eval_deferred_first_observed_epoch": 1490.0,
+        "_scanner_watch_full_eval_deferred_last_observed_epoch": 1500.0,
         "_scanner_watching_runtime_skip_logged": {"scanner_full_eval_loop_budget_deferred": 1500.0},
     }
     older_never_eval = {
@@ -781,6 +784,9 @@ def test_scalping_scanner_promoted_target_refresh_resets_eval_state(monkeypatch)
         "_scanner_watching_runtime_skip_logged",
     ):
         assert key not in existing
+    assert existing["_scanner_watch_full_eval_deferred_count"] == 2
+    assert existing["_scanner_watch_full_eval_deferred_first_observed_epoch"] == 1490.0
+    assert existing["_scanner_watch_full_eval_deferred_last_observed_epoch"] == 1500.0
     ordered = kiwoom_sniper_v2._runtime_iteration_targets(
         [older_never_eval, existing],
         now_ts=2001.0,
@@ -2275,7 +2281,7 @@ def test_scanner_rising_full_eval_relief_is_checked_before_budget_defer():
     source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
     budget_check_idx = source.index("if scanner_full_eval_count >= scanner_full_eval_limit:")
     relief_idx = source.index("relief_allowed = (", budget_check_idx)
-    skip_idx = source.index('skip_reason="scanner_full_eval_loop_budget_deferred"', relief_idx)
+    skip_idx = source.index('"skip_reason": "scanner_full_eval_loop_budget_deferred"', relief_idx)
     append_idx = source.index("delayed_scanner_heavy_eval.append", skip_idx)
 
     assert budget_check_idx < relief_idx < skip_idx < append_idx
@@ -4589,6 +4595,222 @@ def test_scanner_queue_lag_eviction_can_be_disabled(monkeypatch):
     assert decision["should_evict"] is False
     assert decision["eviction_attempt_count"] == 0
     assert "_scanner_watch_queue_lag_count" not in target
+
+
+def test_scanner_full_eval_deferred_eviction_reallocates_repeated_budget_defer(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_DEFERRED_EVICTION_MIN_COUNT", "3")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_DEFERRED_EVICTION_MIN_AGE_SEC", "120")
+    kiwoom_sniper_v2._SCANNER_WATCH_FULL_EVAL_DEFERRED_STATE.clear()
+    target = _scanner_watch_stock(
+        code="005930",
+        entry_armed_at_epoch=1000.0,
+        _scanner_fast_precheck_result="eligible_for_heavy_entry_eval",
+        _scanner_fast_precheck_reason="fast_precheck_pass",
+        _scanner_fast_precheck_fields={"fast_precheck_result": "eligible_for_heavy_entry_eval"},
+    )
+    fields = {
+        "skip_reason": "scanner_full_eval_loop_budget_deferred",
+        "queue_rank": 14,
+        "scanner_queue_rank": 9,
+        "watching_count": 20,
+        "scanner_watching_count": 16,
+        "scanner_full_eval_base_limit": 6,
+        "scanner_full_eval_limit": 4,
+        "scanner_full_eval_count": 4,
+        "scanner_rising_full_eval_extra_limit": 1,
+        "scanner_rising_full_eval_relief_count": 1,
+    }
+
+    first = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_full_eval_deferred(
+        target,
+        now_ts=1180.0,
+        skip_fields=fields,
+    )
+    second = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_full_eval_deferred(
+        target,
+        now_ts=1186.0,
+        skip_fields=fields,
+    )
+    third = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_full_eval_deferred(
+        target,
+        now_ts=1192.0,
+        skip_fields=fields,
+    )
+    event_fields = kiwoom_sniper_v2._scanner_watch_eviction_event_fields(target, decision=third)
+
+    assert first["should_evict"] is False
+    assert second["should_evict"] is False
+    assert third["should_evict"] is True
+    assert third["eviction_reason"] == "scanner_full_eval_budget_deferred_repeated"
+    assert third["terminal_stage"] == "scalping_scanner_watching_runtime_skip"
+    assert third["terminal_reason"] == "scanner_full_eval_loop_budget_deferred"
+    assert third["fresh_input_confirmed"] is True
+    assert event_fields["source_quality_detail_route"] == "scanner_full_eval_budget_rotation"
+    assert event_fields["full_eval_deferred_min_count"] == 3
+    assert event_fields["full_eval_deferred_anchor_field"] == "entry_armed_at_epoch"
+    assert event_fields["scanner_full_eval_limit"] == 4
+    assert event_fields["scanner_full_eval_count"] == 4
+    assert event_fields["runtime_effect"] is True
+    assert event_fields["actual_order_submitted"] is False
+    assert event_fields["broker_order_forbidden"] is True
+
+
+def test_scanner_watch_eviction_candidate_accepts_restored_null_buy_time_strings():
+    target = _scanner_watch_stock(code="005930", buy_time="NaT", buy_qty="0.0")
+
+    assert kiwoom_sniper_v2._is_scanner_watch_eviction_candidate(target) is True
+
+    target["buy_time"] = "2026-07-09 09:30:00"
+
+    assert kiwoom_sniper_v2._is_scanner_watch_eviction_candidate(target) is False
+
+
+def test_scanner_full_eval_deferred_eviction_accumulates_across_target_refresh(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_DEFERRED_EVICTION_MIN_COUNT", "3")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_DEFERRED_EVICTION_MIN_AGE_SEC", "120")
+    kiwoom_sniper_v2._SCANNER_WATCH_FULL_EVAL_DEFERRED_STATE.clear()
+    fields = {
+        "skip_reason": "scanner_full_eval_loop_budget_deferred",
+        "scanner_full_eval_limit": 4,
+        "scanner_full_eval_count": 5,
+    }
+
+    def _target():
+        return _scanner_watch_stock(
+            id=16197,
+            code="073240",
+            entry_armed_at_epoch=1000.0,
+            _scanner_fast_precheck_result="eligible_for_heavy_entry_eval",
+            _scanner_fast_precheck_reason="rising_stale_ws_snapshot_full_eval_relief",
+        )
+
+    first = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_full_eval_deferred(
+        _target(),
+        now_ts=1185.0,
+        skip_fields=fields,
+    )
+    second = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_full_eval_deferred(
+        _target(),
+        now_ts=1225.0,
+        skip_fields=fields,
+    )
+    third_target = _target()
+    third = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_full_eval_deferred(
+        third_target,
+        now_ts=1265.0,
+        skip_fields=fields,
+    )
+
+    assert first["eviction_attempt_count"] == 1
+    assert second["eviction_attempt_count"] == 2
+    assert third["should_evict"] is True
+    assert third["eviction_attempt_count"] == 3
+    assert third["full_eval_deferred_state_source"] == "module_cache_and_target_dict"
+    assert third_target["_scanner_watch_full_eval_deferred_count"] == 3
+
+
+def test_scanner_full_eval_deferred_uses_cached_anchor_when_refresh_moves_entry_epoch(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_DEFERRED_EVICTION_MIN_COUNT", "3")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_DEFERRED_EVICTION_MIN_AGE_SEC", "180")
+    kiwoom_sniper_v2._SCANNER_WATCH_FULL_EVAL_DEFERRED_STATE.clear()
+    fields = {
+        "skip_reason": "scanner_full_eval_loop_budget_deferred",
+        "scanner_full_eval_limit": 4,
+        "scanner_full_eval_count": 4,
+    }
+    first_target = _scanner_watch_stock(id=16197, code="073240", entry_armed_at_epoch=1000.0)
+    refreshed_target = _scanner_watch_stock(id=16197, code="073240", entry_armed_at_epoch=1130.0)
+
+    first = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_full_eval_deferred(
+        first_target,
+        now_ts=1175.0,
+        skip_fields=fields,
+    )
+    second = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_full_eval_deferred(
+        refreshed_target,
+        now_ts=1186.0,
+        skip_fields=fields,
+    )
+
+    assert first["eviction_reason"] == "scanner_full_eval_deferred_new_promotion_grace"
+    assert first_target["_scanner_watch_full_eval_deferred_anchor_epoch"] == 1000.0
+    assert second["eviction_attempt_count"] == 1
+    assert second["full_eval_deferred_watch_age_sec"] == 186.0
+    assert second["full_eval_deferred_anchor_field"] == "full_eval_deferred_cached_anchor_epoch"
+    assert refreshed_target["_scanner_watch_full_eval_deferred_anchor_epoch"] == 1000.0
+
+
+def test_scanner_full_eval_deferred_state_prunes_inactive_targets():
+    kiwoom_sniper_v2._SCANNER_WATCH_FULL_EVAL_DEFERRED_STATE.clear()
+    kiwoom_sniper_v2._SCANNER_WATCH_FULL_EVAL_DEFERRED_STATE.update(
+        {
+            "11:005930": {"count": 2},
+            "22:000660": {"count": 1},
+            "33:073240": {"count": 3},
+        }
+    )
+    active = [
+        _scanner_watch_stock(id=11, code="005930"),
+        _scanner_watch_stock(id=22, code="000660", status="EXPIRED"),
+        _scanner_watch_stock(id=33, code="073240", status="HOLDING", buy_qty=1),
+    ]
+
+    kiwoom_sniper_v2._prune_scanner_watch_full_eval_deferred_state(active)
+
+    assert kiwoom_sniper_v2._SCANNER_WATCH_FULL_EVAL_DEFERRED_STATE == {"11:005930": {"count": 2}}
+
+
+def test_scanner_full_eval_deferred_eviction_respects_new_promotion_grace(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_DEFERRED_EVICTION_MIN_AGE_SEC", "180")
+    kiwoom_sniper_v2._SCANNER_WATCH_FULL_EVAL_DEFERRED_STATE.clear()
+    target = _scanner_watch_stock(
+        code="005930",
+        entry_armed_at_epoch=1000.0,
+        _scanner_watch_full_eval_deferred_count=2,
+        _scanner_watch_full_eval_deferred_first_observed_epoch=1010.0,
+        _scanner_watch_full_eval_deferred_last_observed_epoch=1020.0,
+    )
+
+    decision = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_full_eval_deferred(
+        target,
+        now_ts=1070.0,
+        skip_fields={"skip_reason": "scanner_full_eval_loop_budget_deferred"},
+    )
+
+    assert decision["should_evict"] is False
+    assert decision["eviction_reason"] == "scanner_full_eval_deferred_new_promotion_grace"
+    assert decision["full_eval_deferred_watch_age_sec"] == 70.0
+    assert "_scanner_watch_full_eval_deferred_count" not in target
+    assert "_scanner_watch_full_eval_deferred_first_observed_epoch" not in target
+    assert "_scanner_watch_full_eval_deferred_last_observed_epoch" not in target
+    assert target["_scanner_watch_full_eval_deferred_anchor_epoch"] == 1000.0
+
+
+def test_scanner_full_eval_deferred_eviction_can_be_disabled(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_DEFERRED_EVICTION_ENABLED", "0")
+    kiwoom_sniper_v2._SCANNER_WATCH_FULL_EVAL_DEFERRED_STATE.clear()
+    target = _scanner_watch_stock(code="005930", entry_armed_at_epoch=1000.0)
+
+    decision = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_full_eval_deferred(
+        target,
+        now_ts=1300.0,
+        skip_fields={"skip_reason": "scanner_full_eval_loop_budget_deferred"},
+    )
+
+    assert decision["should_evict"] is False
+    assert decision["eviction_attempt_count"] == 0
+    assert "_scanner_watch_full_eval_deferred_count" not in target
+
+
+def test_run_sniper_full_eval_deferred_eviction_is_checked_before_deferred_skip_log():
+    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    fields_idx = source.index('skip_reason": "scanner_full_eval_loop_budget_deferred"')
+    decision_idx = source.index("_scanner_watch_eviction_decision_from_full_eval_deferred(", fields_idx)
+    diagnostic_idx = source.index('"full_eval_deferred_attempt_count"', decision_idx)
+    skip_idx = source.index("_defer_scanner_watching_runtime_skip(", diagnostic_idx)
+    expire_idx = source.index("_expire_scanner_watch_target(", decision_idx)
+
+    assert fields_idx < decision_idx < diagnostic_idx < skip_idx < expire_idx
 
 
 def test_ws_reg_budget_skipped_expires_scanner_hot_slot(monkeypatch):
