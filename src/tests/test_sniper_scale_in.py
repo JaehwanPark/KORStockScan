@@ -49,12 +49,14 @@ def _clear_scalp_loss_reentry_state(request, monkeypatch):
     state_handlers._RISING_MISSED_COMPLETED_SCALP_EVENT_CACHE.update(
         {"date": "", "path": "", "mtime_ns": 0, "size": 0, "rows_by_code": {}}
     )
+    state_handlers._RISING_MISSED_SUBMIT_SAFETY_BACKOFFS.clear()
     yield
     state_handlers._SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS.clear()
     state_handlers._SCALP_LOSS_REENTRY_EVENT_CACHE.update({"date": None, "events": []})
     state_handlers._RISING_MISSED_COMPLETED_SCALP_EVENT_CACHE.update(
         {"date": "", "path": "", "mtime_ns": 0, "size": 0, "rows_by_code": {}}
     )
+    state_handlers._RISING_MISSED_SUBMIT_SAFETY_BACKOFFS.clear()
 
 
 class _DummySession:
@@ -2256,6 +2258,204 @@ def test_scanner_fast_precheck_keeps_missing_quote_as_source_quality_blocked(mon
     assert fields["scanner_rising_missed_fast_reject_candidate"] is True
     assert fields["rising_missed_filter_layer"] == "scanner_watch_budget"
     assert fields["rising_missed_filter_action"] == "observe_only"
+
+
+def _rising_missed_backoff_stock(**overrides):
+    stock = {
+        "id": 9101,
+        "code": "477850",
+        "name": "BACKOFF_SCANNER",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "status": "WATCHING",
+        "rising_missed_buy": True,
+        "rising_missed_class": "rising_missed_raw",
+        "scanner_promotion_reason": "price_jump_start_acceleration",
+        "source_signature": "OPEN_TOP,PRICE_JUMP_START,REALTIME_RANK_START,VOLUME_SURGE_POSITIVE",
+        "first_seen_price": 10000,
+        "current_price": 10120,
+        "price_delta_since_first_seen_pct": 1.2,
+    }
+    stock.update(overrides)
+    return stock
+
+
+def test_rising_missed_submit_safety_backoff_stale_weak_reallocates_scanner_budget(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_SUBMIT_BACKOFF_STALE_WEAK_SEC", raising=False)
+    stock = _rising_missed_backoff_stock()
+
+    backoff_fields = state_handlers._record_rising_missed_submit_safety_backoff(
+        stock,
+        "477850",
+        "stale_quote_with_weak_ai_or_strength",
+        now_ts=1000.0,
+        source_stage="rising_missed_scout_quality_guard_blocked",
+    )
+    fields = state_handlers._scanner_fast_precheck_fields(
+        stock,
+        code="477850",
+        ws_data={"curr": 10120},
+        now_ts=1001.0,
+    )
+
+    assert backoff_fields["rising_missed_submit_safety_backoff_sec"] == 90
+    assert backoff_fields["rising_missed_filter_layer"] == "submit_safety"
+    assert backoff_fields["rising_missed_filter_action"] == "pre_submit_block"
+    assert fields["fast_precheck_result"] == "budget_reallocated"
+    assert fields["fast_precheck_reason"] == "submit_safety_backoff_active"
+    assert fields["rising_missed_filter_layer"] == "scanner_watch_budget"
+    assert fields["rising_missed_filter_owner"] == "scanner_fast_precheck"
+    assert fields["rising_missed_filter_action"] == "budget_reallocated"
+    assert fields["rising_missed_budget_reallocation_source"] == "submit_safety_feedback"
+    assert fields["actual_order_submitted"] is False
+    assert fields["broker_order_forbidden"] is True
+
+
+def test_rising_missed_submit_safety_backoff_tick_speed_feedback_not_scanner_preblock():
+    stock = _rising_missed_backoff_stock(
+        last_watching_ai_source_quality_fields={
+            "tick_window_span_sec": 77,
+            "tick_acceleration_ratio": 1.2,
+        }
+    )
+
+    backoff_fields = state_handlers._record_rising_missed_submit_safety_backoff(
+        stock,
+        "477850",
+        "tick_window_span_sec_ge_60",
+        now_ts=1000.0,
+        source_stage="rising_missed_tick_speed_entry_block",
+    )
+    fields = state_handlers._scanner_fast_precheck_fields(
+        stock,
+        code="477850",
+        ws_data={"curr": 10120},
+        now_ts=1005.0,
+    )
+
+    assert backoff_fields["rising_missed_submit_safety_backoff_reason"] == "tick_speed"
+    assert backoff_fields["rising_missed_submit_safety_backoff_sec"] == 60
+    assert fields["fast_precheck_result"] == "budget_reallocated"
+    assert fields["fast_precheck_reason"] == "submit_safety_backoff_active"
+    assert fields["rising_missed_submit_safety_backoff_reason"] == "tick_speed"
+
+
+def test_rising_missed_submit_safety_backoff_scout_quality_forced_lineage_before_flags():
+    stock = _rising_missed_backoff_stock(rising_missed_class="-")
+
+    backoff_fields = state_handlers._record_rising_missed_submit_safety_backoff(
+        stock,
+        "477850",
+        "stale_quote_with_weak_ai_or_strength",
+        now_ts=1000.0,
+        source_stage="rising_missed_scout_quality_guard_blocked",
+        rising_missed_entry_lineage=True,
+    )
+    fields = state_handlers._scanner_fast_precheck_fields(
+        stock,
+        code="477850",
+        ws_data={"curr": 10120},
+        now_ts=1005.0,
+    )
+
+    assert backoff_fields["rising_missed_submit_safety_backoff_lineage"] is True
+    assert fields["fast_precheck_result"] == "budget_reallocated"
+    assert fields["fast_precheck_reason"] == "submit_safety_backoff_active"
+    assert fields["rising_missed_budget_reallocation_source"] == "submit_safety_feedback"
+
+
+def test_rising_missed_submit_safety_backoff_latency_danger_only_for_rising_lineage():
+    rising_stock = _rising_missed_backoff_stock(code="024060")
+    general_stock = {
+        "id": 9102,
+        "code": "005380",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "status": "WATCHING",
+    }
+
+    rising_fields = state_handlers._record_rising_missed_submit_safety_backoff(
+        rising_stock,
+        "024060",
+        "latency_state_danger",
+        now_ts=1000.0,
+        source_stage="latency_block",
+    )
+    general_fields = state_handlers._record_rising_missed_submit_safety_backoff(
+        general_stock,
+        "005380",
+        "latency_state_danger",
+        now_ts=1000.0,
+        source_stage="latency_block",
+    )
+
+    assert rising_fields["rising_missed_submit_safety_backoff_sec"] == 60
+    assert rising_fields["rising_missed_submit_safety_backoff_reason"] == "latency_state_danger"
+    assert general_fields == {}
+    assert "rising_missed_submit_safety_backoff_until" not in general_stock
+
+
+def test_rising_missed_submit_safety_backoff_recovery_allows_heavy_eval():
+    stock = _rising_missed_backoff_stock(
+        last_watching_ai_source_quality_fields={
+            "tick_window_span_sec": 77,
+            "tick_acceleration_ratio": 0.7,
+        }
+    )
+    state_handlers._record_rising_missed_submit_safety_backoff(
+        stock,
+        "477850",
+        "tick_acceleration_ratio_lt_1",
+        now_ts=1000.0,
+        source_stage="rising_missed_tick_speed_entry_block",
+    )
+
+    stock["last_watching_ai_source_quality_fields"] = {
+        "tick_window_span_sec": 10,
+        "tick_acceleration_ratio": 1.15,
+    }
+    fields = state_handlers._scanner_fast_precheck_fields(
+        stock,
+        code="477850",
+        ws_data={"curr": 10120},
+        now_ts=1005.0,
+    )
+
+    assert fields["fast_precheck_result"] == "eligible_for_heavy_entry_eval"
+    assert fields["fast_precheck_reason"] == "fast_precheck_pass"
+    assert "rising_missed_submit_safety_backoff_until" not in stock
+
+
+def test_rising_missed_submit_safety_backoff_excludes_candidate_gate_reason():
+    stock = _rising_missed_backoff_stock()
+
+    fields = state_handlers._record_rising_missed_submit_safety_backoff(
+        stock,
+        "477850",
+        "price_above_one_share_entry_cap",
+        now_ts=1000.0,
+        source_stage="rising_missed_one_share_entry_blocked",
+    )
+
+    assert fields == {}
+    assert "rising_missed_submit_safety_backoff_until" not in stock
+
+
+def test_rising_missed_submit_safety_backoff_repeated_stale_weak_extends_to_180_sec():
+    stock = _rising_missed_backoff_stock()
+
+    for idx in range(3):
+        fields = state_handlers._record_rising_missed_submit_safety_backoff(
+            stock,
+            "477850",
+            "stale_quote_with_weak_ai_or_strength",
+            now_ts=1000.0 + idx,
+            source_stage="rising_missed_scout_quality_guard_blocked",
+        )
+
+    assert fields["rising_missed_submit_safety_backoff_count"] == 3
+    assert fields["rising_missed_submit_safety_backoff_sec"] == 180
+    assert stock["rising_missed_submit_safety_backoff_count"] == 3
 
 
 def test_scanner_fast_precheck_keeps_not_rising_missed_rebound_candidate(monkeypatch):

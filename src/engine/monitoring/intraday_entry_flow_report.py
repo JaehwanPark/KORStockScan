@@ -40,8 +40,14 @@ RISING_MISSED_FORCED_LINEAGE_STAGES = {
     "holding_started",
 }
 STALE_EVAL_QUOTE_AGE_MS = 3000.0
+STALE_WEAK_BORDERLINE_QUOTE_AGE_MS = 5000.0
+STALE_WEAK_MODERATE_QUOTE_AGE_MS = 10000.0
+STALE_WEAK_SEVERE_QUOTE_AGE_MS = 20000.0
+STALE_WEAK_RECHECK_DELTA_PCT = 3.0
 LATENCY_DANGER_SPREAD_RATIO_CAP = 0.0100
 LATENCY_DANGER_WS_AGE_MS_CAP = 450.0
+STALE_WEAK_REASON = "stale_quote_with_weak_ai_or_strength"
+LATENCY_DANGER_REASON = "latency_state_danger"
 FRESH_REFRESH_REASONS = {
     "input_snapshot_fresh",
     "latest_ws_snapshot_fresh",
@@ -235,6 +241,381 @@ def _latency_danger_event(fields: dict[str, Any]) -> dict[str, Any]:
             or fields.get("ofi_bucket")
             or ""
         ),
+    }
+
+
+def _record_id(row: dict[str, Any], fields: dict[str, Any]) -> str:
+    return str(row.get("record_id") or fields.get("record_id") or fields.get("runtime_record_id") or "").strip()
+
+
+def _is_rising_missed_event_lineage(row: dict[str, Any], fields: dict[str, Any]) -> bool:
+    stage = str(row.get("stage") or "")
+    if _is_rising_missed_forced_one_share_entry(stage, fields):
+        return True
+    for key in (
+        "forced_entry_reason",
+        "rising_missed_class",
+        "rising_missed_lineage",
+        "rising_missed_filter_owner",
+        "rising_missed_filter_layer",
+        "source_signature",
+        "scanner_promotion_reason",
+    ):
+        text = str(fields.get(key) or "").lower()
+        if "rising_missed" in text or "low_rebound_rising" in text:
+            return True
+    return False
+
+
+def _reason_matches(fields: dict[str, Any], reason: str) -> bool:
+    for key in ("reason", "block_reason", "blocked_reason", "policy_reason", "effective_reason"):
+        if str(fields.get(key) or "").strip() == reason:
+            return True
+    return False
+
+
+def _bucket(value: float | None, bounds: tuple[float, ...], labels: tuple[str, ...]) -> str:
+    if value is None:
+        return "missing"
+    for bound, label in zip(bounds, labels, strict=False):
+        if value <= bound:
+            return label
+    return labels[-1] if labels else "present"
+
+
+def _compact_counts(counter: Counter[str], *, limit: int = 12, key_name: str = "key") -> list[dict[str, Any]]:
+    return [{key_name: key or "-", "count": count} for key, count in counter.most_common(limit)]
+
+
+def _stale_weak_components(fields: dict[str, Any]) -> dict[str, bool]:
+    quote_age = _safe_float(fields.get("rising_missed_scout_quality_guard_quote_age_ms"))
+    max_quote_age = _safe_float(fields.get("rising_missed_scout_quality_guard_max_quote_age_ms"))
+    return {
+        "quote_stale": _boolish(fields.get("rising_missed_scout_quality_guard_quote_stale")),
+        "quote_age_stale": quote_age is not None and max_quote_age is not None and quote_age > max_quote_age,
+        "explicit_quote_stale": _boolish(fields.get("rising_missed_scout_quality_guard_explicit_quote_stale")),
+        "text_quote_stale": _boolish(fields.get("rising_missed_scout_quality_guard_text_quote_stale")),
+        "weak_ai": _boolish(fields.get("rising_missed_scout_quality_guard_weak_ai")),
+        "ai_unusable": _boolish(fields.get("rising_missed_scout_quality_guard_ai_unusable")),
+        "weak_strength": _boolish(fields.get("rising_missed_scout_quality_guard_weak_strength")),
+        "recent_weak_ai_micro_block": _boolish(
+            fields.get("rising_missed_scout_quality_guard_recent_weak_ai_micro_block")
+        ),
+    }
+
+
+def _stale_weak_quote_age_bucket(quote_age_ms: float | None) -> str:
+    if quote_age_ms is None:
+        return "missing"
+    if quote_age_ms <= STALE_EVAL_QUOTE_AGE_MS:
+        return "fresh_or_under_threshold"
+    if quote_age_ms <= STALE_WEAK_BORDERLINE_QUOTE_AGE_MS:
+        return "borderline_3_5s"
+    if quote_age_ms <= STALE_WEAK_MODERATE_QUOTE_AGE_MS:
+        return "moderate_5_10s"
+    if quote_age_ms <= STALE_WEAK_SEVERE_QUOTE_AGE_MS:
+        return "stale_10_20s"
+    return "severe_20s_plus"
+
+
+def _stale_weak_ai_source_bucket(fields: dict[str, Any], components: dict[str, bool]) -> str:
+    action = str(fields.get("rising_missed_scout_quality_guard_ai_action") or "-").strip().upper()
+    ai_score = _safe_float(fields.get("rising_missed_scout_quality_guard_ai_score"))
+    action_source = str(
+        fields.get("rising_missed_entry_ai_action_source")
+        or fields.get("entry_ai_action_source")
+        or fields.get("rising_missed_scout_quality_guard_ai_action_source")
+        or ""
+    ).strip().lower()
+    if action == "DROP":
+        return "ai_drop"
+    if components.get("ai_unusable"):
+        return "ai_unusable"
+    if action in {"", "-"} and ai_score is not None and ai_score <= 50.0 and action_source in {
+        "",
+        "-",
+        "missing",
+        "none",
+        "null",
+    }:
+        return "ai_missing_default50"
+    if components.get("weak_ai"):
+        return "ai_weak_score"
+    return "ai_other"
+
+
+def _main_blocker_label(report_row: dict[str, Any] | None) -> str:
+    if not report_row:
+        return "-"
+    stage = str(report_row.get("main_blocker_stage") or "-")
+    reason = str(report_row.get("main_blocker_reason") or "-")
+    return f"{stage}:{reason}"
+
+
+def _summarize_stale_candidate_group(
+    *,
+    code: str,
+    group: dict[str, Any],
+    report_row: dict[str, Any] | None,
+    next_action: str,
+) -> dict[str, Any]:
+    return {
+        "stock_code": code,
+        "stock_name": group.get("stock_name") or (report_row or {}).get("stock_name") or "",
+        "event_count": int(group.get("event_count") or 0),
+        "record_count": len(group.get("records") or set()),
+        "max_delta_since_first_seen_pct": (report_row or {}).get("max_delta_since_first_seen_pct"),
+        "rise_after_watch": (report_row or {}).get("rise_after_watch") or "unknown",
+        "main_blocker": _main_blocker_label(report_row),
+        "quote_age_ms": _metric_summary(group.get("quote_ages") or []),
+        "quote_age_over_max_ms": _metric_summary(group.get("quote_age_over_max") or []),
+        "quote_age_bucket_counts": _compact_counts(group.get("age_buckets") or Counter(), key_name="bucket"),
+        "ai_source_bucket_counts": _compact_counts(group.get("ai_source_buckets") or Counter(), key_name="bucket"),
+        "ai_action_counts": _compact_counts(group.get("ai_actions") or Counter(), key_name="action"),
+        "next_action": next_action,
+        "decision_authority": "source_only_recheck_candidate",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "forbidden_uses": [
+            "runtime_threshold_apply",
+            "intraday_runtime_apply",
+            "broker_guard_bypass",
+            "order_guard_relaxation",
+            "provider_route_change",
+            "bot_restart",
+        ],
+    }
+
+
+def _summarize_stale_weak_events(
+    events: list[dict[str, Any]],
+    report_rows_by_code: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    report_rows_by_code = report_rows_by_code or {}
+    component_counts: Counter[str] = Counter()
+    combo_counts: Counter[str] = Counter()
+    ai_action_counts: Counter[str] = Counter()
+    ai_source_bucket_counts: Counter[str] = Counter()
+    ai_score_buckets: Counter[str] = Counter()
+    quote_age_bucket_counts: Counter[str] = Counter()
+    strength_state_counts: Counter[str] = Counter()
+    prior_micro_state_counts: Counter[str] = Counter()
+    quote_ages: list[float] = []
+    quote_age_over_max: list[float] = []
+    ai_scores: list[float] = []
+    prior_ai_scores: list[float] = []
+    weak_micro_ages: list[float] = []
+    symbols: set[str] = set()
+    records: set[str] = set()
+    grouped_by_code: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {
+            "stock_name": "",
+            "event_count": 0,
+            "records": set(),
+            "quote_ages": [],
+            "quote_age_over_max": [],
+            "age_buckets": Counter(),
+            "ai_source_buckets": Counter(),
+            "ai_actions": Counter(),
+        }
+    )
+    for event in events:
+        row = event["row"]
+        fields = event["fields"]
+        code = str(row.get("stock_code") or "").strip()
+        if code:
+            symbols.add(code)
+            group = grouped_by_code[code]
+            group["stock_name"] = str(row.get("stock_name") or fields.get("stock_name") or group["stock_name"])
+            group["event_count"] += 1
+        else:
+            group = None
+        record_id = _record_id(row, fields)
+        if record_id:
+            records.add(record_id)
+            if group is not None:
+                group["records"].add(record_id)
+        components = _stale_weak_components(fields)
+        for key, enabled in components.items():
+            if enabled:
+                component_counts[key] += 1
+        combo = "+".join(key for key, enabled in components.items() if enabled) or "no_component_flag"
+        combo_counts[combo] += 1
+        ai_action = str(fields.get("rising_missed_scout_quality_guard_ai_action") or "-")
+        ai_action_counts[ai_action] += 1
+        ai_source_bucket = _stale_weak_ai_source_bucket(fields, components)
+        ai_source_bucket_counts[ai_source_bucket] += 1
+        strength_state_counts[str(fields.get("rising_missed_scout_quality_guard_strength_state") or "-")] += 1
+        prior_micro_state_counts[str(fields.get("rising_missed_scout_quality_guard_prior_weak_micro_state") or "-")] += 1
+        quote_age = _safe_float(fields.get("rising_missed_scout_quality_guard_quote_age_ms"))
+        if quote_age is not None:
+            quote_ages.append(quote_age)
+        quote_age_bucket = _stale_weak_quote_age_bucket(quote_age)
+        quote_age_bucket_counts[quote_age_bucket] += 1
+        max_quote_age = _safe_float(fields.get("rising_missed_scout_quality_guard_max_quote_age_ms"))
+        if quote_age is not None and max_quote_age is not None:
+            quote_age_over_max.append(quote_age - max_quote_age)
+        if group is not None:
+            group["age_buckets"][quote_age_bucket] += 1
+            group["ai_source_buckets"][ai_source_bucket] += 1
+            group["ai_actions"][ai_action] += 1
+            if quote_age is not None:
+                group["quote_ages"].append(quote_age)
+            if quote_age is not None and max_quote_age is not None:
+                group["quote_age_over_max"].append(quote_age - max_quote_age)
+        ai_score = _safe_float(fields.get("rising_missed_scout_quality_guard_ai_score"))
+        if ai_score is not None:
+            ai_scores.append(ai_score)
+            ai_score_buckets[_bucket(ai_score, (50.0, 60.0, 65.0), ("<=50", "51-60", "61-65", ">65"))] += 1
+        prior_ai_score = _safe_float(fields.get("rising_missed_scout_quality_guard_prior_weak_ai_score"))
+        if prior_ai_score is not None:
+            prior_ai_scores.append(prior_ai_score)
+        weak_micro_age = _safe_float(fields.get("rising_missed_scout_quality_guard_recent_weak_ai_micro_block_age_sec"))
+        if weak_micro_age is not None:
+            weak_micro_ages.append(weak_micro_age)
+    immediate_candidates: list[dict[str, Any]] = []
+    borderline_candidates: list[dict[str, Any]] = []
+    for code, group in grouped_by_code.items():
+        report_row = report_rows_by_code.get(code)
+        max_delta = _safe_float((report_row or {}).get("max_delta_since_first_seen_pct"))
+        has_borderline_age = bool((group.get("age_buckets") or Counter()).get("borderline_3_5s", 0) > 0)
+        if max_delta is not None and max_delta >= STALE_WEAK_RECHECK_DELTA_PCT:
+            immediate_candidates.append(
+                _summarize_stale_candidate_group(
+                    code=code,
+                    group=group,
+                    report_row=report_row,
+                    next_action="source_only_immediate_quote_refresh_and_ai_recheck_candidate",
+                )
+            )
+        if has_borderline_age:
+            borderline_candidates.append(
+                _summarize_stale_candidate_group(
+                    code=code,
+                    group=group,
+                    report_row=report_row,
+                    next_action="source_only_borderline_stale_quote_recheck_candidate",
+                )
+            )
+
+    def _candidate_sort_key(item: dict[str, Any]) -> tuple[float, int, float, str]:
+        max_delta = _safe_float(item.get("max_delta_since_first_seen_pct"))
+        quote_age_max = _safe_float((item.get("quote_age_ms") or {}).get("max"))
+        return (
+            -(max_delta if max_delta is not None else -999.0),
+            -int(item.get("event_count") or 0),
+            -(quote_age_max if quote_age_max is not None else -1.0),
+            str(item.get("stock_code") or ""),
+        )
+
+    immediate_candidates.sort(key=_candidate_sort_key)
+    borderline_candidates.sort(key=_candidate_sort_key)
+    return {
+        "event_count": len(events),
+        "symbol_count": len(symbols),
+        "record_count": len(records),
+        "component_counts": _compact_counts(component_counts, key_name="component"),
+        "component_combo_counts": _compact_counts(combo_counts, key_name="combo"),
+        "ai_action_counts": _compact_counts(ai_action_counts, key_name="action"),
+        "ai_source_bucket_counts": _compact_counts(ai_source_bucket_counts, key_name="bucket"),
+        "ai_score_bucket_counts": _compact_counts(ai_score_buckets, key_name="bucket"),
+        "quote_age_bucket_counts": _compact_counts(quote_age_bucket_counts, key_name="bucket"),
+        "strength_state_counts": _compact_counts(strength_state_counts, key_name="state"),
+        "prior_micro_state_counts": _compact_counts(prior_micro_state_counts, key_name="state"),
+        "quote_age_ms": _metric_summary(quote_ages),
+        "quote_age_over_max_ms": _metric_summary(quote_age_over_max),
+        "ai_score": _metric_summary(ai_scores),
+        "prior_weak_ai_score": _metric_summary(prior_ai_scores),
+        "recent_weak_ai_micro_block_age_sec": _metric_summary(weak_micro_ages),
+        "recheck_candidate_delta_threshold_pct": STALE_WEAK_RECHECK_DELTA_PCT,
+        "immediate_quote_refresh_ai_recheck_candidate_count": len(immediate_candidates),
+        "borderline_quote_recheck_candidate_count": len(borderline_candidates),
+        "immediate_quote_refresh_ai_recheck_candidates": immediate_candidates,
+        "borderline_quote_recheck_candidates": borderline_candidates,
+        "candidate_decision_authority": "source_only_recheck_candidate_no_runtime_mutation",
+        "candidate_runtime_effect": False,
+        "candidate_allowed_runtime_apply": False,
+    }
+
+
+def _summarize_latency_danger_events(events: list[dict[str, Any]]) -> dict[str, Any]:
+    symbols: set[str] = set()
+    records: set[str] = set()
+    stage_counts: Counter[str] = Counter()
+    cause_counts: Counter[str] = Counter()
+    detail_reason_counts: Counter[str] = Counter()
+    source_quality_counts: Counter[str] = Counter()
+    spread_bucket_counts: Counter[str] = Counter()
+    price_bucket_counts: Counter[str] = Counter()
+    signal_bucket_counts: Counter[str] = Counter()
+    relief_block_counts: Counter[str] = Counter()
+    canary_reason_counts: Counter[str] = Counter()
+    quote_stale_count = 0
+    fresh_effective_quote_count = 0
+    spread_ratios: list[float] = []
+    ws_ages: list[float] = []
+    spread_bps: list[float] = []
+    spread_ticks: list[float] = []
+    signal_scores: list[float] = []
+    ai_scores: list[float] = []
+    for event in events:
+        row = event["row"]
+        fields = event["fields"]
+        code = str(row.get("stock_code") or "").strip()
+        if code:
+            symbols.add(code)
+        record_id = _record_id(row, fields)
+        if record_id:
+            records.add(record_id)
+        stage_counts[str(row.get("stage") or "-")] += 1
+        latency_event = _latency_danger_event(fields)
+        cause_counts[str(latency_event.get("cause") or "other_danger")] += 1
+        detail_reason_counts[str(fields.get("latency_danger_detail_reason") or "-")] += 1
+        source_quality_counts[str(fields.get("latency_danger_source_quality_state") or "-")] += 1
+        spread_bucket_counts[str(fields.get("latency_spread_block_bucket") or "-")] += 1
+        price_bucket_counts[str(fields.get("latency_spread_block_price_bucket") or "-")] += 1
+        signal_bucket_counts[str(fields.get("latency_spread_block_signal_context_bucket") or "-")] += 1
+        relief_block_counts[str(fields.get("latency_relief_block_reason") or fields.get("latency_spread_relief_block_reason") or "-")] += 1
+        canary_reason_counts[str(fields.get("latency_canary_reason") or "-")] += 1
+        if any(
+            _boolish(fields.get(key))
+            for key in ("quote_stale", "quote_stale_at_submit", "pre_submit_effective_quote_stale")
+        ):
+            quote_stale_count += 1
+        elif _safe_float(fields.get("pre_submit_effective_quote_age_ms")) is not None:
+            fresh_effective_quote_count += 1
+        for values, key in (
+            (spread_ratios, "spread_ratio"),
+            (ws_ages, "ws_age_ms"),
+            (spread_bps, "latency_spread_block_spread_bps"),
+            (spread_ticks, "latency_spread_block_spread_ticks"),
+            (signal_scores, "latency_spread_relief_signal_score"),
+            (ai_scores, "ai_score"),
+        ):
+            value = _safe_float(fields.get(key))
+            if value is not None:
+                values.append(value)
+    return {
+        "event_count": len(events),
+        "symbol_count": len(symbols),
+        "record_count": len(records),
+        "quote_stale_event_count": quote_stale_count,
+        "fresh_effective_quote_event_count": fresh_effective_quote_count,
+        "stage_counts": _compact_counts(stage_counts, key_name="stage"),
+        "cause_counts": _compact_counts(cause_counts, key_name="cause"),
+        "detail_reason_counts": _compact_counts(detail_reason_counts, key_name="detail_reason"),
+        "source_quality_counts": _compact_counts(source_quality_counts, key_name="source_quality"),
+        "spread_bucket_counts": _compact_counts(spread_bucket_counts, key_name="bucket"),
+        "price_bucket_counts": _compact_counts(price_bucket_counts, key_name="bucket"),
+        "signal_context_bucket_counts": _compact_counts(signal_bucket_counts, key_name="bucket"),
+        "relief_block_reason_counts": _compact_counts(relief_block_counts, key_name="reason"),
+        "canary_reason_counts": _compact_counts(canary_reason_counts, key_name="reason"),
+        "spread_ratio": _metric_summary(spread_ratios),
+        "ws_age_ms": _metric_summary(ws_ages),
+        "spread_bps": _metric_summary(spread_bps),
+        "spread_ticks": _metric_summary(spread_ticks),
+        "relief_signal_score": _metric_summary(signal_scores),
+        "ai_score": _metric_summary(ai_scores),
     }
 
 
@@ -445,6 +826,8 @@ def build_report(
     forced_scout_event_count = 0
     forced_scout_symbols: set[str] = set()
     latest_forced_scout_at_by_code: dict[str, datetime] = {}
+    stale_weak_events: list[dict[str, Any]] = []
+    latency_danger_events: list[dict[str, Any]] = []
 
     grouped: dict[str, dict[str, Any]] = defaultdict(
         lambda: {
@@ -482,6 +865,11 @@ def build_report(
             (since_ts is not None and ts < since_ts) or (until_ts is not None and ts > until_ts)
         )
         stage = str(row.get("stage") or "")
+        if in_window and row.get("pipeline") == ENTRY_PIPELINE and _is_rising_missed_event_lineage(row, fields):
+            if _reason_matches(fields, STALE_WEAK_REASON):
+                stale_weak_events.append({"row": row, "fields": fields})
+            if _reason_matches(fields, LATENCY_DANGER_REASON):
+                latency_danger_events.append({"row": row, "fields": fields})
         if row.get("pipeline") == ENTRY_PIPELINE and code and _is_rising_missed_forced_one_share_entry(stage, fields):
             if ts is not None and (until_ts is None or ts <= until_ts):
                 forced_scout_symbols.add(code)
@@ -687,6 +1075,18 @@ def build_report(
             1 for row in rows if row["rise_after_watch"] == "rising" and row["stale_eval_count"] <= 0
         ),
         "stale_refresh_recovered_symbol_count": sum(1 for row in rows if row["stale_refresh_recovered_count"] > 0),
+        "rising_missed_stale_quote_weak_event_count": len(stale_weak_events),
+        "rising_missed_stale_quote_weak_symbol_count": len(
+            {str(event["row"].get("stock_code") or "").strip() for event in stale_weak_events if event["row"].get("stock_code")}
+        ),
+        "rising_missed_latency_danger_event_count": len(latency_danger_events),
+        "rising_missed_latency_danger_symbol_count": len(
+            {
+                str(event["row"].get("stock_code") or "").strip()
+                for event in latency_danger_events
+                if event["row"].get("stock_code")
+            }
+        ),
     }
     stale_eval_rollup = [
         {"stage": stage or "-", "count": count}
@@ -834,6 +1234,7 @@ def build_report(
             }
         )
     latency_danger_root_cause.sort(key=lambda item: int(item["event_count"]), reverse=True)
+    report_rows_by_code = {str(row.get("stock_code") or ""): row for row in rows if row.get("stock_code")}
     return {
         "report_type": "intraday_entry_flow_report",
         "schema_version": 1,
@@ -872,6 +1273,21 @@ def build_report(
         "stale_eval_category_rollup": stale_eval_category_rollup,
         "freshness_recheck_workorders": _freshness_workorders_from_diagnostic(diagnostic),
         "latency_danger_root_cause": latency_danger_root_cause,
+        "rising_missed_submit_safety_decomposition": {
+            STALE_WEAK_REASON: _summarize_stale_weak_events(stale_weak_events, report_rows_by_code),
+            LATENCY_DANGER_REASON: _summarize_latency_danger_events(latency_danger_events),
+            "decision_authority": "source_only_submit_safety_decomposition_no_runtime_mutation",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "forbidden_uses": [
+                "runtime_threshold_apply",
+                "intraday_runtime_apply",
+                "broker_guard_bypass",
+                "order_guard_relaxation",
+                "provider_route_change",
+                "bot_restart",
+            ],
+        },
         "rows": rows,
     }
 
@@ -897,6 +1313,46 @@ def _md_stat_pair(stats: dict[str, Any]) -> str:
     median = stats.get("median")
     max_value = stats.get("max")
     return f"{'-' if median is None else median}/{'-' if max_value is None else max_value}"
+
+
+def _md_counts(items: list[dict[str, Any]], label_key: str, *, limit: int = 8) -> str:
+    return ", ".join(f"{item.get(label_key)}={item.get('count')}" for item in items[:limit]) or "-"
+
+
+def _write_stale_recheck_candidate_table(
+    handle: Any,
+    candidates: list[dict[str, Any]],
+    *,
+    title: str,
+    limit: int = 12,
+) -> None:
+    if not candidates:
+        return
+    handle.write(f"\n#### {title}\n\n")
+    handle.write(
+        "|종목|events|records|maxΔ|rise|quote age med/max|over max med/max|age buckets|AI source|main blocker|next action|runtime|\n"
+    )
+    handle.write("|---|---:|---:|---:|---|---:|---:|---|---|---|---|---|\n")
+    for item in candidates[:limit]:
+        runtime_state = (
+            f"effect={bool(item.get('runtime_effect'))},"
+            f"apply={bool(item.get('allowed_runtime_apply'))}"
+        )
+        handle.write(
+            "|"
+            f"{_md_cell(item.get('stock_name') or '')}({_md_cell(item.get('stock_code') or '')})|"
+            f"{int(item.get('event_count') or 0)}|"
+            f"{int(item.get('record_count') or 0)}|"
+            f"{_format_pct(item.get('max_delta_since_first_seen_pct'))}|"
+            f"{_md_cell(item.get('rise_after_watch') or 'unknown')}|"
+            f"{_md_stat_pair(item.get('quote_age_ms') or {})}|"
+            f"{_md_stat_pair(item.get('quote_age_over_max_ms') or {})}|"
+            f"{_md_cell(_md_counts(item.get('quote_age_bucket_counts') or [], 'bucket', limit=4))}|"
+            f"{_md_cell(_md_counts(item.get('ai_source_bucket_counts') or [], 'bucket', limit=4))}|"
+            f"{_md_cell(item.get('main_blocker') or '-')}|"
+            f"{_md_cell(item.get('next_action') or '-')}|"
+            f"{runtime_state}|\n"
+        )
 
 
 def write_outputs(report: dict[str, Any], *, output_md: Path, output_csv: Path, max_rows: int = 100) -> None:
@@ -964,6 +1420,74 @@ def write_outputs(report: dict[str, Any], *, output_md: Path, output_csv: Path, 
         handle.write("\n## stale-eval category rollup\n\n")
         for item in report.get("stale_eval_category_rollup", [])[:12]:
             handle.write(f"- {item['count']}: `{item['category']}`\n")
+        decomposition = (
+            report.get("rising_missed_submit_safety_decomposition")
+            if isinstance(report.get("rising_missed_submit_safety_decomposition"), dict)
+            else {}
+        )
+        stale_weak = decomposition.get(STALE_WEAK_REASON) if isinstance(decomposition.get(STALE_WEAK_REASON), dict) else {}
+        latency_danger = (
+            decomposition.get(LATENCY_DANGER_REASON)
+            if isinstance(decomposition.get(LATENCY_DANGER_REASON), dict)
+            else {}
+        )
+        has_stale_weak = bool(stale_weak and int(stale_weak.get("event_count") or 0) > 0)
+        has_latency_danger = bool(latency_danger and int(latency_danger.get("event_count") or 0) > 0)
+        if has_stale_weak or has_latency_danger:
+            handle.write("\n## rising missed submit-safety decomposition\n\n")
+            handle.write(
+                f"- decision_authority: {decomposition.get('decision_authority', 'source_only_submit_safety_decomposition_no_runtime_mutation')}\n"
+            )
+            handle.write(f"- runtime_effect: {decomposition.get('runtime_effect', False)}\n")
+            handle.write(f"- allowed_runtime_apply: {decomposition.get('allowed_runtime_apply', False)}\n")
+        if has_stale_weak:
+            handle.write("\n### stale quote with weak AI or strength\n\n")
+            handle.write(
+                f"- events/symbols/records: {stale_weak.get('event_count', 0)}/"
+                f"{stale_weak.get('symbol_count', 0)}/{stale_weak.get('record_count', 0)}\n"
+            )
+            handle.write(f"- quote_age_ms med/max: {_md_stat_pair(stale_weak.get('quote_age_ms') or {})}\n")
+            handle.write(f"- quote_age_over_max_ms med/max: {_md_stat_pair(stale_weak.get('quote_age_over_max_ms') or {})}\n")
+            handle.write(f"- ai_score med/max: {_md_stat_pair(stale_weak.get('ai_score') or {})}\n")
+            handle.write(f"- quote age buckets: {_md_counts(stale_weak.get('quote_age_bucket_counts', []), 'bucket')}\n")
+            handle.write(f"- AI source buckets: {_md_counts(stale_weak.get('ai_source_bucket_counts', []), 'bucket')}\n")
+            handle.write(f"- components: {_md_counts(stale_weak.get('component_counts', []), 'component')}\n")
+            handle.write(f"- top combos: {_md_counts(stale_weak.get('component_combo_counts', []), 'combo', limit=5)}\n")
+            handle.write(f"- ai actions: {_md_counts(stale_weak.get('ai_action_counts', []), 'action', limit=6)}\n")
+            handle.write(
+                "- recheck candidates: "
+                f"immediate_quote_refresh_ai_recheck="
+                f"{stale_weak.get('immediate_quote_refresh_ai_recheck_candidate_count', 0)}, "
+                f"borderline_quote_recheck={stale_weak.get('borderline_quote_recheck_candidate_count', 0)}, "
+                f"delta_threshold_pct={stale_weak.get('recheck_candidate_delta_threshold_pct', STALE_WEAK_RECHECK_DELTA_PCT)}, "
+                f"authority={stale_weak.get('candidate_decision_authority', 'source_only_recheck_candidate_no_runtime_mutation')}, "
+                f"runtime_effect={stale_weak.get('candidate_runtime_effect', False)}, "
+                f"allowed_runtime_apply={stale_weak.get('candidate_allowed_runtime_apply', False)}\n"
+            )
+            _write_stale_recheck_candidate_table(
+                handle,
+                stale_weak.get("immediate_quote_refresh_ai_recheck_candidates") or [],
+                title="immediate quote refresh + AI recheck candidates",
+            )
+            _write_stale_recheck_candidate_table(
+                handle,
+                stale_weak.get("borderline_quote_recheck_candidates") or [],
+                title="borderline stale quote recheck candidates",
+            )
+        if has_latency_danger:
+            handle.write("\n### latency state danger\n\n")
+            handle.write(
+                f"- events/symbols/records: {latency_danger.get('event_count', 0)}/"
+                f"{latency_danger.get('symbol_count', 0)}/{latency_danger.get('record_count', 0)}\n"
+            )
+            handle.write(
+                f"- quote_stale/fresh_effective_quote: {latency_danger.get('quote_stale_event_count', 0)}/"
+                f"{latency_danger.get('fresh_effective_quote_event_count', 0)}\n"
+            )
+            handle.write(f"- spread_bps med/max: {_md_stat_pair(latency_danger.get('spread_bps') or {})}\n")
+            handle.write(f"- ws_age_ms med/max: {_md_stat_pair(latency_danger.get('ws_age_ms') or {})}\n")
+            handle.write(f"- causes: {_md_counts(latency_danger.get('cause_counts', []), 'cause', limit=6)}\n")
+            handle.write(f"- spread buckets: {_md_counts(latency_danger.get('spread_bucket_counts', []), 'bucket', limit=5)}\n")
         freshness_workorders = report.get("freshness_recheck_workorders") or []
         if freshness_workorders:
             handle.write("\n## bounded freshness recheck workorders\n\n")

@@ -1190,6 +1190,228 @@ def test_build_report_marks_wide_microstructure_latency_cause_below_ratio_cap(tm
     assert root["spread_ratio"] == {"min": 0.0096, "median": 0.0096, "max": 0.0096}
 
 
+def test_build_report_decomposes_rising_missed_submit_safety_reasons(tmp_path):
+    event_path = tmp_path / "events.jsonl"
+    diagnostic_path = tmp_path / "diag.json"
+    diagnostic_path.write_text(
+        json.dumps(
+            {
+                "summary": {"real_submit_symbol_count": 0},
+                "promoted_symbols": [
+                    {
+                        "stock_code": "352820",
+                        "stock_name": "하이브",
+                        "first_promoted_at": "2026-07-09T12:00:00",
+                        "last_event_at": "2026-07-09T12:04:00",
+                        "max_price_delta_since_first_seen_pct": 4.2,
+                        "dominant_actionable_blocker": {
+                            "stage": "rising_missed_scout_quality_guard_blocked",
+                            "reason": "stale_quote_with_weak_ai_or_strength",
+                            "count": 1,
+                            "class": "submit_safety_guard",
+                        },
+                    }
+                ],
+                "rising_missed_buy": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    rows = [
+        _event(
+            "352820",
+            "하이브",
+            "rising_missed_scout_quality_guard_blocked",
+            {
+                "forced_entry_reason": "rising_missed_one_share_entry",
+                "runtime_record_id": "r1",
+                "reason": "stale_quote_with_weak_ai_or_strength",
+                "block_reason": "stale_quote_with_weak_ai_or_strength",
+                "rising_missed_scout_quality_guard_quote_stale": "True",
+                "rising_missed_scout_quality_guard_quote_age_ms": "3732.0",
+                "rising_missed_scout_quality_guard_max_quote_age_ms": "3000.0",
+                "rising_missed_scout_quality_guard_weak_ai": "True",
+                "rising_missed_scout_quality_guard_ai_score": "50",
+                "rising_missed_scout_quality_guard_ai_action": "-",
+                "rising_missed_entry_ai_action_source": "missing",
+                "rising_missed_scout_quality_guard_weak_strength": "False",
+                "rising_missed_scout_quality_guard_recent_weak_ai_micro_block": "True",
+                "rising_missed_scout_quality_guard_recent_weak_ai_micro_block_age_sec": "55",
+                "rising_missed_scout_quality_guard_prior_weak_ai_score": "0",
+                "rising_missed_scout_quality_guard_prior_weak_micro_state": "neutral",
+            },
+            emitted_at="2026-07-09T12:01:00",
+        ),
+        _event(
+            "352820",
+            "하이브",
+            "latency_block",
+            {
+                "scanner_promotion_reason": "low_rebound_rising_missed_candidate",
+                "runtime_record_id": "r1",
+                "reason": "latency_state_danger",
+                "latency_state": "DANGER",
+                "latency_danger_reasons": "spread_too_wide",
+                "latency_danger_detail_reason": "spread_above_caution",
+                "latency_danger_source_quality_state": "fresh",
+                "quote_stale": "False",
+                "pre_submit_effective_quote_age_ms": "140",
+                "spread_ratio": "0.0132",
+                "ws_age_ms": "140",
+                "latency_spread_block_bucket": "true_wide_spread|signal_missing",
+                "latency_spread_block_price_bucket": "true_wide_spread",
+                "latency_spread_block_signal_context_bucket": "signal_missing",
+                "latency_spread_block_spread_bps": "132.0",
+                "latency_spread_block_spread_ticks": "6",
+                "latency_relief_block_reason": "low_signal",
+                "latency_canary_reason": "low_signal",
+                "latency_spread_relief_signal_score": "0",
+                "ai_score": "0",
+            },
+            emitted_at="2026-07-09T12:02:00",
+        ),
+    ]
+    event_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(
+        target_date="2026-07-09",
+        event_cache_path=event_path,
+        diagnostic_path=diagnostic_path,
+        since="2026-07-09T12:00:00",
+        generated_at="fixed",
+    )
+
+    assert report["summary"]["rising_missed_stale_quote_weak_event_count"] == 1
+    assert report["summary"]["rising_missed_latency_danger_event_count"] == 1
+    decomposition = report["rising_missed_submit_safety_decomposition"]
+    stale = decomposition["stale_quote_with_weak_ai_or_strength"]
+    assert stale["event_count"] == 1
+    assert stale["symbol_count"] == 1
+    assert stale["record_count"] == 1
+    assert {"component": "quote_stale", "count": 1} in stale["component_counts"]
+    assert {"component": "weak_ai", "count": 1} in stale["component_counts"]
+    assert {"component": "recent_weak_ai_micro_block", "count": 1} in stale["component_counts"]
+    assert stale["quote_age_ms"] == {"min": 3732.0, "median": 3732.0, "max": 3732.0}
+    assert stale["quote_age_over_max_ms"] == {"min": 732.0, "median": 732.0, "max": 732.0}
+    assert stale["quote_age_bucket_counts"] == [{"bucket": "borderline_3_5s", "count": 1}]
+    assert stale["ai_source_bucket_counts"] == [{"bucket": "ai_missing_default50", "count": 1}]
+    assert stale["immediate_quote_refresh_ai_recheck_candidate_count"] == 1
+    assert stale["borderline_quote_recheck_candidate_count"] == 1
+    assert stale["immediate_quote_refresh_ai_recheck_candidates"][0]["stock_code"] == "352820"
+    assert stale["immediate_quote_refresh_ai_recheck_candidates"][0]["max_delta_since_first_seen_pct"] == 4.2
+    assert stale["immediate_quote_refresh_ai_recheck_candidates"][0]["runtime_effect"] is False
+    assert stale["immediate_quote_refresh_ai_recheck_candidates"][0]["allowed_runtime_apply"] is False
+    latency = decomposition["latency_state_danger"]
+    assert latency["event_count"] == 1
+    assert latency["symbol_count"] == 1
+    assert latency["record_count"] == 1
+    assert latency["quote_stale_event_count"] == 0
+    assert latency["fresh_effective_quote_event_count"] == 1
+    assert latency["cause_counts"][0] == {"cause": "spread_too_wide", "count": 1}
+    assert latency["spread_bps"] == {"min": 132.0, "median": 132.0, "max": 132.0}
+
+
+def test_write_outputs_surfaces_rising_missed_submit_safety_decomposition(tmp_path):
+    report = {
+        "target_date": "2026-07-09",
+        "generated_at": "fixed",
+        "source_events": "events",
+        "source_diagnostic": "diag",
+        "event_window": {"since": "2026-07-09T12:00:00", "until": None},
+        "summary": {},
+        "blocker_rollup": [],
+        "rising_symbol_blocker_rollup": [],
+        "stale_eval_rollup": [],
+        "rows": [],
+        "rising_missed_submit_safety_decomposition": {
+            "decision_authority": "source_only_submit_safety_decomposition_no_runtime_mutation",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "stale_quote_with_weak_ai_or_strength": {
+                "event_count": 2,
+                "symbol_count": 1,
+                "record_count": 1,
+                "quote_age_ms": {"min": 3100.0, "median": 3200.0, "max": 3300.0},
+                "quote_age_over_max_ms": {"min": 100.0, "median": 200.0, "max": 300.0},
+                "ai_score": {"min": 50.0, "median": 55.0, "max": 60.0},
+                "quote_age_bucket_counts": [{"bucket": "borderline_3_5s", "count": 2}],
+                "ai_source_bucket_counts": [{"bucket": "ai_drop", "count": 2}],
+                "component_counts": [{"component": "quote_stale", "count": 2}],
+                "component_combo_counts": [{"combo": "quote_stale+weak_ai", "count": 2}],
+                "ai_action_counts": [{"action": "DROP", "count": 2}],
+                "recheck_candidate_delta_threshold_pct": 3.0,
+                "immediate_quote_refresh_ai_recheck_candidate_count": 1,
+                "borderline_quote_recheck_candidate_count": 1,
+                "candidate_decision_authority": "source_only_recheck_candidate_no_runtime_mutation",
+                "candidate_runtime_effect": False,
+                "candidate_allowed_runtime_apply": False,
+                "immediate_quote_refresh_ai_recheck_candidates": [
+                    {
+                        "stock_code": "352820",
+                        "stock_name": "하이브",
+                        "event_count": 2,
+                        "record_count": 1,
+                        "max_delta_since_first_seen_pct": 4.2,
+                        "rise_after_watch": "rising",
+                        "main_blocker": "rising_missed_scout_quality_guard_blocked:stale_quote_with_weak_ai_or_strength",
+                        "quote_age_ms": {"min": 3100.0, "median": 3200.0, "max": 3300.0},
+                        "quote_age_over_max_ms": {"min": 100.0, "median": 200.0, "max": 300.0},
+                        "quote_age_bucket_counts": [{"bucket": "borderline_3_5s", "count": 2}],
+                        "ai_source_bucket_counts": [{"bucket": "ai_drop", "count": 2}],
+                        "next_action": "source_only_immediate_quote_refresh_and_ai_recheck_candidate",
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                    }
+                ],
+                "borderline_quote_recheck_candidates": [
+                    {
+                        "stock_code": "352820",
+                        "stock_name": "하이브",
+                        "event_count": 2,
+                        "record_count": 1,
+                        "max_delta_since_first_seen_pct": 4.2,
+                        "rise_after_watch": "rising",
+                        "main_blocker": "rising_missed_scout_quality_guard_blocked:stale_quote_with_weak_ai_or_strength",
+                        "quote_age_ms": {"min": 3100.0, "median": 3200.0, "max": 3300.0},
+                        "quote_age_over_max_ms": {"min": 100.0, "median": 200.0, "max": 300.0},
+                        "quote_age_bucket_counts": [{"bucket": "borderline_3_5s", "count": 2}],
+                        "ai_source_bucket_counts": [{"bucket": "ai_drop", "count": 2}],
+                        "next_action": "source_only_borderline_stale_quote_recheck_candidate",
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                    }
+                ],
+            },
+            "latency_state_danger": {
+                "event_count": 1,
+                "symbol_count": 1,
+                "record_count": 1,
+                "quote_stale_event_count": 0,
+                "fresh_effective_quote_event_count": 1,
+                "spread_bps": {"min": 132.0, "median": 132.0, "max": 132.0},
+                "ws_age_ms": {"min": 140.0, "median": 140.0, "max": 140.0},
+                "cause_counts": [{"cause": "spread_too_wide", "count": 1}],
+                "spread_bucket_counts": [{"bucket": "true_wide_spread|signal_missing", "count": 1}],
+            },
+        },
+    }
+    md_path = tmp_path / "report.md"
+    csv_path = tmp_path / "report.csv"
+
+    write_outputs(report, output_md=md_path, output_csv=csv_path)
+
+    text = md_path.read_text(encoding="utf-8")
+    assert "## rising missed submit-safety decomposition" in text
+    assert "### stale quote with weak AI or strength" in text
+    assert "### latency state danger" in text
+    assert "quote age buckets: borderline_3_5s=2" in text
+    assert "AI source buckets: ai_drop=2" in text
+    assert "immediate quote refresh + AI recheck candidates" in text
+    assert "source_only_immediate_quote_refresh_and_ai_recheck_candidate" in text
+    assert "effect=False,apply=False" in text
+    assert "spread_too_wide=1" in text
+
+
 def test_build_report_uses_diagnostic_latency_root_cause_when_event_cache_missing(tmp_path):
     event_path = tmp_path / "events.jsonl"
     diagnostic_path = tmp_path / "diag.json"

@@ -514,7 +514,7 @@ def test_pending_order_refreshes_stale_observer_quote_from_ws(monkeypatch):
     assert float(evaluated["quote_age_ms"]) == 120.0
 
 
-def test_pending_order_multi_leg_blocks_without_cancel(monkeypatch):
+def test_pending_order_multi_leg_compresses_to_single_child(monkeypatch):
     import src.engine.sniper_state_handlers as handlers
 
     now = 1000.0
@@ -522,18 +522,165 @@ def test_pending_order_multi_leg_blocks_without_cancel(monkeypatch):
         "name": "테스트",
         "strategy": "SCALPING",
         "pending_entry_orders": [
-            {**_base_order(sent_at=now - 16.0, ord_no="0033470"), "tif": "DAY"},
-            {**_base_order(sent_at=now - 16.0, ord_no="0033471"), "tif": "DAY"},
+            {**_base_order(sent_at=now - 16.0, ord_no="0033470", qty=3, price=39750), "tag": "entry_split_primary", "tif": "DAY"},
+            {**_base_order(sent_at=now - 16.0, ord_no="0033471", qty=11, price=39700), "tag": "entry_split_passive_1", "tif": "DAY"},
+        ],
+    }
+    events = []
+    cancel_calls = []
+    buy_calls = []
+    monkeypatch.setattr(handlers.time, "time", lambda: now)
+    monkeypatch.setattr(
+        handlers.ORDERBOOK_STABILITY_OBSERVER,
+        "snapshot",
+        lambda code, now=None: {
+            "best_bid": 39855,
+            "best_ask": 39915,
+            "observer_healthy": True,
+            "unstable_quote_observed": False,
+            "observer_last_quote_age_ms": 120.0,
+            "orderbook_micro": {"micro_state": "neutral"},
+        },
+    )
+    monkeypatch.setattr(handlers, "_log_entry_pipeline", lambda stock, code, stage, **fields: events.append((stage, fields)))
+    monkeypatch.setattr(
+        handlers.kiwoom_orders,
+        "send_cancel_order",
+        lambda **kwargs: cancel_calls.append(kwargs) or {"return_code": "0", "ord_no": f"C{len(cancel_calls)}"},
+    )
+    monkeypatch.setattr(
+        handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: buy_calls.append((args, kwargs)) or {"return_code": "0", "ord_no": "0034000"},
+    )
+
+    assert handlers._maybe_reprice_pending_entry_order(stock, "466920", "SCALPING", timeout_sec=60) == "submitted"
+    assert [call["orig_ord_no"] for call in cancel_calls] == ["0033470", "0033471"]
+    assert buy_calls[0][0][1] == 14
+    assert len(stock["pending_entry_orders"]) == 1
+    child = stock["pending_entry_orders"][0]
+    assert child["ord_no"] == "0034000"
+    assert child["qty"] == 14
+    assert child["entry_reprice_parent_ord_no"] == "0033470,0033471"
+    assert child["entry_reprice_bundle_compression"] is True
+    assert child["entry_reprice_bundle_leg_count"] == 2
+    stages = [stage for stage, _ in events]
+    assert stages.count("entry_reprice_cancel_requested") == 2
+    assert stages.count("entry_reprice_cancel_confirmed") == 2
+    submitted = [fields for stage, fields in events if stage == "entry_reprice_resubmit_submitted"][-1]
+    assert submitted["entry_reprice_bundle_compression"] is True
+    assert submitted["entry_reprice_parent_order_nos"] == "0033470,0033471"
+
+
+def test_pending_order_multi_leg_partial_fill_blocks_without_cancel(monkeypatch):
+    import src.engine.sniper_state_handlers as handlers
+
+    now = 1000.0
+    stock = {
+        "name": "테스트",
+        "strategy": "SCALPING",
+        "pending_entry_orders": [
+            {**_base_order(sent_at=now - 16.0, ord_no="0033470", qty=3, filled_qty=1, status="PARTIAL"), "tif": "DAY"},
+            {**_base_order(sent_at=now - 16.0, ord_no="0033471", qty=11), "tif": "DAY"},
         ],
     }
     events = []
     monkeypatch.setattr(handlers.time, "time", lambda: now)
     monkeypatch.setattr(handlers, "_log_entry_pipeline", lambda stock, code, stage, **fields: events.append((stage, fields)))
     monkeypatch.setattr(handlers.kiwoom_orders, "send_cancel_order", lambda **kwargs: (_ for _ in ()).throw(AssertionError))
+    monkeypatch.setattr(handlers.kiwoom_orders, "send_buy_order", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError))
 
     assert handlers._maybe_reprice_pending_entry_order(stock, "466920", "SCALPING", timeout_sec=60) == "blocked"
-    assert stock["entry_reprice_multi_leg_block_logged"] is True
-    assert events[0][1]["block_reason"] == "multi_leg_pending_not_supported"
+    assert stock["entry_reprice_block_reason"] == "bundle_partial_fill_not_supported"
+    assert events[0][1]["block_reason"] == "bundle_partial_fill_not_supported"
+
+
+def test_pending_order_multi_leg_cancel_failure_does_not_resubmit(monkeypatch):
+    import src.engine.sniper_state_handlers as handlers
+
+    now = 1000.0
+    stock = {
+        "name": "테스트",
+        "strategy": "SCALPING",
+        "pending_entry_orders": [
+            {**_base_order(sent_at=now - 16.0, ord_no="0033470", qty=3), "tif": "DAY"},
+            {**_base_order(sent_at=now - 16.0, ord_no="0033471", qty=11), "tif": "DAY"},
+        ],
+    }
+    events = []
+    cancel_calls = []
+    monkeypatch.setattr(handlers.time, "time", lambda: now)
+    monkeypatch.setattr(
+        handlers.ORDERBOOK_STABILITY_OBSERVER,
+        "snapshot",
+        lambda code, now=None: {
+            "best_bid": 39855,
+            "best_ask": 39915,
+            "observer_healthy": True,
+            "unstable_quote_observed": False,
+            "observer_last_quote_age_ms": 120.0,
+            "orderbook_micro": {"micro_state": "neutral"},
+        },
+    )
+    monkeypatch.setattr(handlers, "_log_entry_pipeline", lambda stock, code, stage, **fields: events.append((stage, fields)))
+
+    def fake_cancel(**kwargs):
+        cancel_calls.append(kwargs)
+        if len(cancel_calls) == 1:
+            return {"return_code": "0", "ord_no": "C1"}
+        return {"return_code": "1", "return_msg": "cancel failed"}
+
+    monkeypatch.setattr(handlers.kiwoom_orders, "send_cancel_order", fake_cancel)
+    monkeypatch.setattr(handlers.kiwoom_orders, "send_buy_order", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError))
+
+    assert handlers._maybe_reprice_pending_entry_order(stock, "466920", "SCALPING", timeout_sec=60) == "failed"
+    assert [call["orig_ord_no"] for call in cancel_calls] == ["0033470", "0033471"]
+    assert stock["entry_reprice_block_reason"] == "bundle_cancel_partial_failure"
+    failed = [fields for stage, fields in events if stage == "entry_reprice_after_submit_failed"][-1]
+    assert failed["failure_reason"] == "bundle_cancel_partial_failure"
+
+
+def test_pending_order_multi_leg_post_cancel_fill_blocks_child(monkeypatch):
+    import src.engine.sniper_state_handlers as handlers
+
+    now = 1000.0
+    stock = {
+        "name": "테스트",
+        "strategy": "SCALPING",
+        "pending_entry_orders": [
+            {**_base_order(sent_at=now - 16.0, ord_no="0033470", qty=3), "tif": "DAY"},
+            {**_base_order(sent_at=now - 16.0, ord_no="0033471", qty=11), "tif": "DAY"},
+        ],
+    }
+    events = []
+    monkeypatch.setattr(handlers.time, "time", lambda: now)
+    monkeypatch.setattr(
+        handlers.ORDERBOOK_STABILITY_OBSERVER,
+        "snapshot",
+        lambda code, now=None: {
+            "best_bid": 39855,
+            "best_ask": 39915,
+            "observer_healthy": True,
+            "unstable_quote_observed": False,
+            "observer_last_quote_age_ms": 120.0,
+            "orderbook_micro": {"micro_state": "neutral"},
+        },
+    )
+    monkeypatch.setattr(handlers, "_log_entry_pipeline", lambda stock, code, stage, **fields: events.append((stage, fields)))
+
+    def fake_cancel(**kwargs):
+        if kwargs["orig_ord_no"] == "0033471":
+            stock["entry_filled_qty"] = 1
+        return {"return_code": "0", "ord_no": f"C{kwargs['orig_ord_no']}"}
+
+    monkeypatch.setattr(handlers.kiwoom_orders, "send_cancel_order", fake_cancel)
+    monkeypatch.setattr(handlers.kiwoom_orders, "send_buy_order", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError))
+
+    assert handlers._maybe_reprice_pending_entry_order(stock, "466920", "SCALPING", timeout_sec=60) == "failed"
+    assert stock["entry_reprice_block_reason"] == "bundle_fill_after_cancel_detected"
+    failed = [fields for stage, fields in events if stage == "entry_reprice_after_submit_failed"][-1]
+    assert failed["failure_stage"] == "post_cancel_fill_check"
+    assert failed["entry_reprice_filled_qty"] == 1
 
 
 def test_pending_order_resubmit_missing_order_no_clears_pending(monkeypatch):

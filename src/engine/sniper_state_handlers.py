@@ -9894,6 +9894,289 @@ def _rising_missed_submit_safety_filter_fields(*, blocked: bool) -> dict[str, An
     )
 
 
+RISING_MISSED_SUBMIT_SAFETY_BACKOFF_SOURCE = "submit_safety_feedback"
+_RISING_MISSED_SUBMIT_SAFETY_BACKOFFS: dict[str, dict[str, Any]] = {}
+
+
+def _rising_missed_submit_safety_backoff_key(stock: dict | None, code: str | None) -> str:
+    stock = stock if isinstance(stock, dict) else {}
+    normalized_code = str(code or stock.get("code") or stock.get("stock_code") or "").strip()
+    record_id = str(stock.get("id") or stock.get("record_id") or "").strip()
+    return f"{normalized_code or '-'}:{record_id or '-'}"
+
+
+def _rising_missed_submit_safety_backoff_reason_group(reason: str | None) -> str:
+    reason_text = str(reason or "").strip().lower()
+    if not reason_text:
+        return ""
+    if "stale_quote_with_weak_ai_or_strength" in reason_text:
+        return "stale_quote_with_weak_ai_or_strength"
+    if (
+        "tick_window_span_sec" in reason_text
+        or "tick_acceleration_ratio" in reason_text
+        or "tick_speed" in reason_text
+    ):
+        return "tick_speed"
+    if "latency_state_danger" in reason_text or reason_text == "danger":
+        return "latency_state_danger"
+    if "weak_ai_buy_pressure_micro_context" in reason_text or "weak_micro" in reason_text:
+        return "weak_micro"
+    if "source_quality" in reason_text or "missing" in reason_text or "unknown" in reason_text:
+        return "source_quality_missing_or_unknown"
+    return ""
+
+
+def _rising_missed_submit_safety_backoff_base_sec(reason: str | None, count: int = 1) -> int:
+    group = _rising_missed_submit_safety_backoff_reason_group(reason)
+    if group == "stale_quote_with_weak_ai_or_strength":
+        if int(count or 0) >= 3:
+            return max(0, _env_int("KORSTOCKSCAN_RISING_MISSED_SUBMIT_BACKOFF_STALE_WEAK_REPEAT_SEC", 180))
+        return max(0, _env_int("KORSTOCKSCAN_RISING_MISSED_SUBMIT_BACKOFF_STALE_WEAK_SEC", 90))
+    if group == "tick_speed":
+        return max(0, _env_int("KORSTOCKSCAN_RISING_MISSED_SUBMIT_BACKOFF_TICK_SPEED_SEC", 60))
+    if group == "latency_state_danger":
+        return max(0, _env_int("KORSTOCKSCAN_RISING_MISSED_SUBMIT_BACKOFF_LATENCY_DANGER_SEC", 60))
+    if group == "weak_micro":
+        return max(0, _env_int("KORSTOCKSCAN_RISING_MISSED_SUBMIT_BACKOFF_WEAK_MICRO_SEC", 90))
+    if group == "source_quality_missing_or_unknown":
+        return max(0, _env_int("KORSTOCKSCAN_RISING_MISSED_SUBMIT_BACKOFF_SOURCE_QUALITY_SEC", 120))
+    return 0
+
+
+def _record_rising_missed_submit_safety_backoff(
+    stock: dict | None,
+    code: str | None,
+    reason: str | None,
+    *,
+    now_ts: float | None = None,
+    source_stage: str = "",
+    runtime: dict | None = None,
+    rising_missed_entry_lineage: bool = False,
+) -> dict[str, Any]:
+    stock = stock if isinstance(stock, dict) else {}
+    if not (rising_missed_entry_lineage or _has_rising_missed_entry_lineage(stock, runtime)):
+        return {}
+    group = _rising_missed_submit_safety_backoff_reason_group(reason)
+    if not group:
+        return {}
+    now_value = time.time() if now_ts is None else float(now_ts)
+    key = _rising_missed_submit_safety_backoff_key(stock, code)
+    existing = _RISING_MISSED_SUBMIT_SAFETY_BACKOFFS.get(key)
+    existing_count = _safe_int((existing or {}).get("count"), 0)
+    existing_reason = str((existing or {}).get("reason") or "")
+    count = existing_count + 1 if existing_reason == group else 1
+    backoff_sec = _rising_missed_submit_safety_backoff_base_sec(group, count)
+    if backoff_sec <= 0:
+        return {}
+    until_ts = now_value + float(backoff_sec)
+    fields = {
+        **_rising_missed_submit_safety_filter_fields(blocked=True),
+        "rising_missed_submit_safety_backoff_until": f"{until_ts:.3f}",
+        "rising_missed_submit_safety_backoff_reason": group,
+        "rising_missed_submit_safety_backoff_count": int(count),
+        "rising_missed_budget_reallocation_source": RISING_MISSED_SUBMIT_SAFETY_BACKOFF_SOURCE,
+        "rising_missed_submit_safety_backoff_source_stage": source_stage or "submit_safety_block",
+        "rising_missed_submit_safety_backoff_sec": int(backoff_sec),
+        "rising_missed_submit_safety_backoff_lineage": True,
+    }
+    _RISING_MISSED_SUBMIT_SAFETY_BACKOFFS[key] = {
+        "until": until_ts,
+        "reason": group,
+        "count": int(count),
+        "source_stage": source_stage or "submit_safety_block",
+    }
+    _mutate_stock_state(stock, set_fields=fields)
+    return fields
+
+
+def _clear_rising_missed_submit_safety_backoff(stock: dict | None, code: str | None) -> None:
+    stock = stock if isinstance(stock, dict) else {}
+    _RISING_MISSED_SUBMIT_SAFETY_BACKOFFS.pop(
+        _rising_missed_submit_safety_backoff_key(stock, code),
+        None,
+    )
+    _mutate_stock_state(
+        stock,
+        pop_fields=[
+            "rising_missed_submit_safety_backoff_until",
+            "rising_missed_submit_safety_backoff_reason",
+            "rising_missed_submit_safety_backoff_count",
+            "rising_missed_budget_reallocation_source",
+            "rising_missed_submit_safety_backoff_source_stage",
+            "rising_missed_submit_safety_backoff_sec",
+            "rising_missed_submit_safety_backoff_lineage",
+        ],
+    )
+
+
+def _rising_missed_submit_safety_backoff_recovered(
+    stock: dict | None,
+    ws_data: dict | None,
+    reason: str | None,
+    *,
+    now_ts: float,
+) -> bool:
+    stock = stock if isinstance(stock, dict) else {}
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    reason_group = _rising_missed_submit_safety_backoff_reason_group(reason) or str(reason or "")
+    source_quality_fields = stock.get("last_watching_ai_source_quality_fields")
+    source_quality_fields = source_quality_fields if isinstance(source_quality_fields, dict) else {}
+
+    if reason_group == "tick_speed":
+        sources = (source_quality_fields, ws_data, stock)
+        tick_window_span_sec, _raw_window = _rising_missed_tick_numeric_field(
+            *sources,
+            key="tick_window_span_sec",
+            aliases=("late_entry_tick_window_span_sec",),
+        )
+        tick_acceleration_ratio, _raw_accel = _rising_missed_tick_numeric_field(
+            *sources,
+            key="tick_acceleration_ratio",
+            aliases=("tick_accel", "late_entry_fresh_tick_acceleration_ratio"),
+        )
+        return bool(
+            tick_window_span_sec is not None
+            and tick_acceleration_ratio is not None
+            and tick_window_span_sec < _rising_missed_tick_window_max_span_sec()
+            and tick_acceleration_ratio >= _rising_missed_min_tick_acceleration_ratio()
+        )
+
+    if reason_group == "latency_state_danger":
+        latency_state = str(
+            _entry_submit_field(
+                ws_data,
+                stock,
+                key="latency_state",
+                aliases=("latency_entry_state",),
+                default="",
+            )
+            or ""
+        ).strip().upper()
+        return latency_state in {"SAFE", "CAUTION"}
+
+    if reason_group == "weak_micro":
+        micro_state = str(
+            _entry_submit_field(
+                ws_data,
+                stock,
+                key="orderbook_micro_state",
+                aliases=("micro_state", "weak_ai_micro_entry_block_micro_state"),
+                default="",
+            )
+            or ""
+        ).strip().lower()
+        buy_pressure = _safe_float(
+            _entry_submit_field(
+                ws_data,
+                stock,
+                key="buy_pressure_10t",
+                aliases=("buy_pressure", "weak_ai_micro_entry_block_buy_pressure_10t"),
+                default=None,
+            ),
+            None,
+        )
+        return bool(micro_state in {"bullish", "strong_bullish"} or (buy_pressure is not None and buy_pressure > 30.0))
+
+    quote_age_sec = _get_ws_snapshot_age_sec(ws_data)
+    fresh_quote_max_sec = max(
+        0.1,
+        _env_float("KORSTOCKSCAN_RISING_MISSED_SUBMIT_BACKOFF_FRESH_QUOTE_MAX_SEC", 3.0),
+    )
+    fresh_quote = bool(
+        quote_age_sec is not None
+        and quote_age_sec <= fresh_quote_max_sec
+        and not _boolish_true(ws_data.get("quote_stale"))
+        and not _boolish_true(stock.get("quote_stale"))
+    )
+    if reason_group == "stale_quote_with_weak_ai_or_strength":
+        ai_score = _safe_float(
+            _entry_submit_field(
+                ws_data,
+                stock,
+                key="ai_score",
+                aliases=("current_ai_score", "last_watching_ai_score", "rt_ai_score"),
+                default=None,
+            ),
+            None,
+        )
+        ai_action = str(
+            _entry_submit_field(
+                ws_data,
+                stock,
+                key="ai_action",
+                aliases=("current_ai_action", "last_watching_ai_action", "entry_ai_action"),
+                default="",
+            )
+            or ""
+        ).strip().upper()
+        strength_value = _safe_float(
+            _entry_submit_field(
+                ws_data,
+                stock,
+                key="strength",
+                aliases=("v_pw", "vpw", "buy_strength"),
+                default=None,
+            ),
+            None,
+        )
+        ai_recovered = bool(ai_action == "BUY" or (ai_score is not None and ai_score > 60.0))
+        strength_recovered = bool(strength_value is not None and strength_value >= 100.0)
+        return bool(fresh_quote and (ai_recovered or strength_recovered))
+
+    if reason_group == "source_quality_missing_or_unknown":
+        has_curr = _safe_int(ws_data.get("curr") or stock.get("current_price"), 0) > 0
+        has_source_marker = bool(
+            _rising_missed_source_value_present(stock.get("rising_missed_buy"))
+            or _rising_missed_source_value_present(stock.get("rising_entry_relief_eligible"))
+            or _rising_missed_source_value_present(stock.get("rising_missed_lineage"))
+            or str(stock.get("source_signature") or "").strip()
+        )
+        return bool(fresh_quote and has_curr and has_source_marker)
+
+    return False
+
+
+def _rising_missed_submit_safety_backoff_fields(
+    stock: dict | None,
+    code: str | None,
+    ws_data: dict | None,
+    *,
+    now_ts: float,
+) -> dict[str, Any]:
+    stock = stock if isinstance(stock, dict) else {}
+    has_backoff_lineage = bool(stock.get("rising_missed_submit_safety_backoff_lineage"))
+    if not (has_backoff_lineage or _has_rising_missed_entry_lineage(stock)):
+        return {}
+    key = _rising_missed_submit_safety_backoff_key(stock, code)
+    cached = _RISING_MISSED_SUBMIT_SAFETY_BACKOFFS.get(key)
+    stock_until = _safe_float(stock.get("rising_missed_submit_safety_backoff_until"), 0.0)
+    cached_until = _safe_float((cached or {}).get("until"), 0.0)
+    until_ts = max(stock_until, cached_until)
+    if until_ts <= 0:
+        return {}
+    if until_ts <= float(now_ts):
+        _clear_rising_missed_submit_safety_backoff(stock, code)
+        return {}
+    reason = str((cached or {}).get("reason") or stock.get("rising_missed_submit_safety_backoff_reason") or "")
+    if _rising_missed_submit_safety_backoff_recovered(stock, ws_data, reason, now_ts=float(now_ts)):
+        _clear_rising_missed_submit_safety_backoff(stock, code)
+        return {}
+    count = max(
+        _safe_int((cached or {}).get("count"), 0),
+        _safe_int(stock.get("rising_missed_submit_safety_backoff_count"), 0),
+    )
+    return {
+        **_rising_missed_scanner_filter_fields(action="budget_reallocated"),
+        "fast_precheck_result": "budget_reallocated",
+        "fast_precheck_reason": "submit_safety_backoff_active",
+        "rising_missed_submit_safety_backoff_until": f"{until_ts:.3f}",
+        "rising_missed_submit_safety_backoff_reason": reason or "-",
+        "rising_missed_submit_safety_backoff_count": int(count or 0),
+        "rising_missed_submit_safety_backoff_remaining_sec": round(max(0.0, until_ts - float(now_ts)), 3),
+        "rising_missed_budget_reallocation_source": RISING_MISSED_SUBMIT_SAFETY_BACKOFF_SOURCE,
+    }
+
+
 def _ws_realtime_type_freshness_fields(ws_data: dict | None, *, now_ts: float | None = None) -> dict[str, Any]:
     ws_data = ws_data if isinstance(ws_data, dict) else {}
     now_value = time.time() if now_ts is None else float(now_ts)
@@ -10196,6 +10479,7 @@ def _scanner_fast_precheck_fields(
     stock,
     *,
     now_ts: float,
+    code: str | None = None,
     ws_data=None,
     queue_rank: int = 0,
     scanner_queue_rank: int = 0,
@@ -10307,9 +10591,18 @@ def _scanner_fast_precheck_fields(
         stock,
         ws_data,
     )
+    submit_safety_backoff_fields = _rising_missed_submit_safety_backoff_fields(
+        stock,
+        code,
+        ws_data,
+        now_ts=float(now_ts),
+    )
     if curr <= 0:
         result = "source_quality_blocked"
         reason = "missing_or_zero_curr"
+    elif submit_safety_backoff_fields:
+        result = "budget_reallocated"
+        reason = "submit_safety_backoff_active"
     elif rising_missed_fast_reject.get("scanner_rising_missed_fast_reject_candidate"):
         result = "budget_reallocated"
         reason = "rising_missed_not_rising_without_recovery_signal"
@@ -10453,6 +10746,7 @@ def _scanner_fast_precheck_fields(
         "entry_armed_at_epoch": (stock or {}).get("entry_armed_at_epoch") or "not_applicable_entry_armed_at_epoch",
         "added_time": (stock or {}).get("added_time") or "not_applicable_added_time",
         **rising_missed_fast_reject,
+        **submit_safety_backoff_fields,
         **_scanner_rising_relief_observation_fields(stock),
     }
 
@@ -10481,6 +10775,7 @@ def emit_scanner_fast_precheck(
     fields = _scanner_fast_precheck_fields(
         stock,
         now_ts=now_value,
+        code=code,
         ws_data=ws_data,
         queue_rank=queue_rank,
         scanner_queue_rank=scanner_queue_rank,
@@ -28961,6 +29256,18 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             ai_quote_stale=ai_source_quality_fields.get("quote_stale"),
             ai_quote_age_ms=ai_source_quality_fields.get("quote_age_ms"),
         )
+        latency_submit_backoff_fields = (
+            _record_rising_missed_submit_safety_backoff(
+                stock,
+                code,
+                "latency_state_danger",
+                now_ts=now_ts,
+                source_stage="latency_block",
+                runtime=runtime,
+            )
+            if str(latency_gate.get("latency_state") or "").strip().upper() == "DANGER"
+            else {}
+        )
         log_info(
             f"[LATENCY_ENTRY_BLOCK] {stock.get('name')}({code}) decision={latency_gate.get('decision')} "
             f"latency={latency_gate.get('latency_state')} reason={latency_gate.get('reason')} "
@@ -29078,6 +29385,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 "quote_stale",
             ),
             **effective_quote_log_fields,
+            **latency_submit_backoff_fields,
             **_without_entry_pipeline_fields(
                 _merge_entry_pipeline_field_groups(
                     _build_ai_overlap_log_fields(
@@ -29339,6 +29647,14 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         )
         pre_submit_micro_unavailable_guard.update(retry_micro_fields)
     if pre_submit_micro_unavailable_guard.get("blocked"):
+        pre_submit_micro_backoff_fields = _record_rising_missed_submit_safety_backoff(
+            stock,
+            code,
+            "source_quality_missing_or_unknown",
+            now_ts=now_ts,
+            source_stage="pre_submit_micro_unavailable_block",
+            runtime=runtime,
+        )
         log_info(
             f"[PRE_SUBMIT_MICRO_UNAVAILABLE_BLOCK] {stock.get('name')}({code}) "
             f"reason={pre_submit_micro_unavailable_guard.get('pre_submit_micro_unavailable_reason')}"
@@ -29355,6 +29671,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 entry_orderbook_micro_fields,
                 microstructure_submit_log_fields,
                 pre_submit_micro_unavailable_guard,
+                pre_submit_micro_backoff_fields,
             ),
         )
         _emit_scalp_entry_adm_snapshot(
@@ -29380,6 +29697,14 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         microstructure_fields=microstructure_submit_log_fields,
     )
     if weak_ai_micro_entry_block.get("blocked"):
+        weak_ai_micro_backoff_fields = _record_rising_missed_submit_safety_backoff(
+            stock,
+            code,
+            weak_ai_micro_entry_block.get("block_reason") or weak_ai_micro_entry_block.get("reason"),
+            now_ts=now_ts,
+            source_stage="real_weak_ai_micro_entry_block",
+            runtime=runtime,
+        )
         log_info(
             f"[REAL_WEAK_AI_MICRO_ENTRY_BLOCK] {stock.get('name')}({code}) "
             f"ai={weak_ai_micro_entry_block.get('weak_ai_micro_entry_block_ai_score')} "
@@ -29415,6 +29740,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 entry_orderbook_micro_fields,
                 microstructure_submit_log_fields,
                 weak_ai_micro_entry_block,
+                weak_ai_micro_backoff_fields,
             ),
         )
         _emit_scalp_entry_adm_snapshot(
@@ -29439,6 +29765,14 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         now_ts=now_ts,
     )
     if forced_rising_missed_one_share and weak_micro_reentry_block.get("blocked"):
+        weak_micro_reentry_backoff_fields = _record_rising_missed_submit_safety_backoff(
+            stock,
+            code,
+            weak_micro_reentry_block.get("block_reason") or "weak_micro",
+            now_ts=now_ts,
+            source_stage="rising_missed_same_symbol_weak_micro_reentry_blocked",
+            runtime=runtime,
+        )
         log_info(
             f"[RISING_MISSED_WEAK_MICRO_REENTRY_BLOCK] {stock.get('name')}({code}) "
             f"prior={weak_micro_reentry_block.get('prior_record_id')} "
@@ -29467,6 +29801,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 latency_price_snapshot,
                 entry_orderbook_micro_fields,
                 weak_micro_reentry_block,
+                weak_micro_reentry_backoff_fields,
             ),
         )
         _emit_scalp_entry_adm_snapshot(
@@ -29522,6 +29857,15 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         )
         rising_missed_tick_speed_guard.update(retry_micro_fields)
     if rising_missed_tick_speed_guard.get("blocked"):
+        tick_speed_backoff_fields = _record_rising_missed_submit_safety_backoff(
+            stock,
+            code,
+            rising_missed_tick_speed_guard.get("block_reason")
+            or rising_missed_tick_speed_guard.get("reason"),
+            now_ts=now_ts,
+            source_stage="rising_missed_tick_speed_entry_block",
+            runtime=runtime,
+        )
         log_info(
             f"[RISING_MISSED_TICK_SPEED_ENTRY_BLOCK] {stock.get('name')}({code}) "
             f"window={rising_missed_tick_speed_guard.get('rising_missed_tick_window_span_sec')} "
@@ -29553,6 +29897,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 entry_orderbook_micro_fields,
                 microstructure_submit_log_fields,
                 rising_missed_tick_speed_guard,
+                tick_speed_backoff_fields,
             ),
         )
         _emit_scalp_entry_adm_snapshot(
@@ -32066,13 +32411,22 @@ def _maybe_submit_rising_missed_one_share_entry(
         decision_log_fields,
     )
     if quality_guard.get("rising_missed_scout_quality_guard_blocked"):
+        scout_quality_backoff_fields = _record_rising_missed_submit_safety_backoff(
+            stock,
+            code,
+            quality_guard.get("block_reason") or quality_guard.get("reason"),
+            now_ts=_safe_float(runtime.get("now_ts"), time.time()),
+            source_stage="rising_missed_scout_quality_guard_blocked",
+            runtime=runtime,
+            rising_missed_entry_lineage=True,
+        )
         _log_entry_pipeline(
             stock,
             code,
             "rising_missed_scout_quality_guard_blocked",
             forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON,
             forced_entry_qty=int(decision.forced_qty or 1),
-            **quality_guard,
+            **_merge_entry_pipeline_field_groups(quality_guard, scout_quality_backoff_fields),
         )
         return True
 
@@ -32659,6 +33013,62 @@ def _open_reprice_candidate_orders(stock):
     return orders
 
 
+def _entry_reprice_parent_order_nos(orders: list[dict]) -> str:
+    return ",".join(
+        str((order or {}).get("ord_no") or "").strip()
+        for order in orders
+        if str((order or {}).get("ord_no") or "").strip()
+    )
+
+
+def _entry_reprice_has_partial_bundle_fill(orders: list[dict]) -> bool:
+    return any(
+        str((order or {}).get("status", "OPEN") or "OPEN").upper() == "PARTIAL"
+        or _coerce_int_value((order or {}).get("filled_qty")) > 0
+        for order in orders
+    )
+
+
+def _entry_reprice_bundle_synthetic_order(open_orders: list[dict]) -> dict:
+    primary = max(
+        open_orders,
+        key=lambda order: (
+            _coerce_int_value((order or {}).get("price")),
+            -_safe_float((order or {}).get("sent_at"), 0.0),
+        ),
+    )
+    synthetic = dict(primary)
+    total_remaining_qty = sum(
+        max(0, _coerce_int_value((order or {}).get("qty")) - _coerce_int_value((order or {}).get("filled_qty")))
+        for order in open_orders
+    )
+    order_nos = _entry_reprice_parent_order_nos(open_orders)
+    sent_times = [
+        _safe_float((order or {}).get("sent_at"), 0.0)
+        for order in open_orders
+        if _safe_float((order or {}).get("sent_at"), 0.0) > 0
+    ]
+    synthetic.update(
+        {
+            "tag": str(primary.get("tag") or "entry_reprice_bundle_compressed"),
+            "qty": total_remaining_qty,
+            "filled_qty": 0,
+            "price": max(_coerce_int_value((order or {}).get("price")) for order in open_orders),
+            "status": "OPEN",
+            "ord_no": order_nos,
+            "sent_at": min(sent_times) if sent_times else _safe_float(primary.get("sent_at"), 0.0),
+            "entry_reprice_attempt_count": max(
+                _coerce_int_value((order or {}).get("entry_reprice_attempt_count"))
+                for order in open_orders
+            ),
+            "entry_reprice_bundle_compression": True,
+            "entry_reprice_bundle_leg_count": len(open_orders),
+            "entry_reprice_parent_order_nos": order_nos,
+        }
+    )
+    return synthetic
+
+
 def _entry_reprice_latency_state_from_snapshot(snapshot: dict) -> str:
     if not isinstance(snapshot, dict) or not snapshot:
         return "DANGER"
@@ -32813,10 +33223,16 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
         return "not_applicable"
 
     open_orders = _open_reprice_candidate_orders(stock)
-    if not open_orders:
-        return "not_applicable"
-    if len(open_orders) != 1:
-        if not bool(stock.get("entry_reprice_multi_leg_block_logged")):
+    active_orders = _open_entry_split_orders(stock)
+    entry_bundle_filled_qty = _entry_bundle_filled_qty(stock)
+    if (
+        len(active_orders) > 1
+        and (
+            _entry_reprice_has_partial_bundle_fill(active_orders)
+            or entry_bundle_filled_qty > 0
+        )
+    ):
+        if not bool(stock.get("entry_reprice_evaluated")):
             _log_entry_pipeline(
                 stock,
                 code,
@@ -32826,14 +33242,31 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
                 actual_order_submitted=False,
                 broker_order_forbidden=False,
                 runtime_effect=False,
-                block_reason="multi_leg_pending_not_supported",
-                open_pending_leg_count=len(open_orders),
+                block_reason="bundle_partial_fill_not_supported",
+                open_pending_leg_count=len(active_orders),
+                entry_reprice_filled_qty=entry_bundle_filled_qty,
+                entry_reprice_parent_order_nos=_entry_reprice_parent_order_nos(active_orders),
             )
-            _mutate_stock_state(stock, set_fields={"entry_reprice_multi_leg_block_logged": True})
+            with ENTRY_LOCK:
+                stock["entry_reprice_evaluated"] = True
+                stock["entry_reprice_block_reason"] = "bundle_partial_fill_not_supported"
         return "blocked"
+    if not open_orders:
+        return "not_applicable"
+    if len(open_orders) == 1:
+        order = open_orders[0]
+        orders_to_cancel = [order]
+        bundle_reprice = False
+    else:
+        order = _entry_reprice_bundle_synthetic_order(open_orders)
+        orders_to_cancel = list(open_orders)
+        bundle_reprice = True
 
-    order = open_orders[0]
-    if bool(order.get("entry_reprice_evaluated")) or bool(stock.get("entry_reprice_evaluated")):
+    if (
+        bool(order.get("entry_reprice_evaluated"))
+        or bool(stock.get("entry_reprice_evaluated"))
+        or any(bool((cancel_order or {}).get("entry_reprice_evaluated")) for cancel_order in orders_to_cancel)
+    ):
         return "already_evaluated"
 
     now_ts = time.time()
@@ -32890,6 +33323,14 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
         "runtime_effect": False,
         "timeout_sec": timeout_sec if timeout_sec is not None else "-",
     }
+    if bundle_reprice:
+        evaluated_fields.update(
+            {
+                "entry_reprice_bundle_compression": True,
+                "entry_reprice_bundle_leg_count": len(orders_to_cancel),
+                "entry_reprice_parent_order_nos": _entry_reprice_parent_order_nos(orders_to_cancel),
+            }
+        )
     _log_entry_pipeline(stock, code, "entry_reprice_after_submit_evaluated", **evaluated_fields)
 
     terminal_block = decision.reason != "quote_stale"
@@ -32909,7 +33350,7 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
 
     parent_order_no = str(order.get("ord_no") or "").strip()
     qty = max(0, _coerce_int_value(order.get("qty")) - _coerce_int_value(order.get("filled_qty")))
-    cancel_dmst_stex_tp = _entry_order_cancel_dmst_stex_tp(order)
+    child_dmst_stex_tp = _entry_order_cancel_dmst_stex_tp(orders_to_cancel[0])
     request_fields = {
         **decision.as_log_fields(),
         "actual_order_submitted": False,
@@ -32917,45 +33358,93 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
         "runtime_effect": True,
         "parent_order_no": parent_order_no,
         "qty": qty,
-        "dmst_stex_tp": cancel_dmst_stex_tp,
+        "dmst_stex_tp": child_dmst_stex_tp,
     }
-    _log_entry_pipeline(stock, code, "entry_reprice_cancel_requested", **request_fields)
-    cancel_res = kiwoom_orders.send_cancel_order(
-        code=code,
-        orig_ord_no=parent_order_no,
-        token=KIWOOM_TOKEN,
-        qty=0,
-        dmst_stex_tp=cancel_dmst_stex_tp,
-    )
-    cancel_ok, cancel_msg, cancel_ord_no = _cancel_response_success(cancel_res)
-    if not cancel_ok:
+    if bundle_reprice:
+        request_fields.update(
+            {
+                "entry_reprice_bundle_compression": True,
+                "entry_reprice_bundle_leg_count": len(orders_to_cancel),
+                "entry_reprice_parent_order_nos": parent_order_no,
+            }
+        )
+    cancel_order_nos = []
+    for idx, cancel_order in enumerate(orders_to_cancel, 1):
+        cancel_parent_order_no = str(cancel_order.get("ord_no") or "").strip()
+        cancel_qty = max(
+            0,
+            _coerce_int_value(cancel_order.get("qty")) - _coerce_int_value(cancel_order.get("filled_qty")),
+        )
+        cancel_dmst_stex_tp = _entry_order_cancel_dmst_stex_tp(cancel_order)
+        cancel_fields = {
+            **request_fields,
+            "parent_order_no": cancel_parent_order_no,
+            "bundle_parent_order_no": parent_order_no,
+            "qty": cancel_qty,
+            "dmst_stex_tp": cancel_dmst_stex_tp,
+            "entry_reprice_cancel_leg_index": idx,
+        }
+        _log_entry_pipeline(stock, code, "entry_reprice_cancel_requested", **cancel_fields)
+        cancel_res = kiwoom_orders.send_cancel_order(
+            code=code,
+            orig_ord_no=cancel_parent_order_no,
+            token=KIWOOM_TOKEN,
+            qty=0,
+            dmst_stex_tp=cancel_dmst_stex_tp,
+        )
+        cancel_ok, cancel_msg, cancel_ord_no = _cancel_response_success(cancel_res)
+        if not cancel_ok:
+            failure_reason = "bundle_cancel_partial_failure" if bundle_reprice else "cancel_failed"
+            with ENTRY_LOCK:
+                order["entry_reprice_evaluated"] = True
+                order["entry_reprice_block_reason"] = failure_reason
+                cancel_order["entry_reprice_evaluated"] = True
+                cancel_order["entry_reprice_block_reason"] = failure_reason
+                stock["entry_reprice_evaluated"] = True
+                stock["entry_reprice_block_reason"] = failure_reason
+            _log_entry_pipeline(
+                stock,
+                code,
+                "entry_reprice_after_submit_failed",
+                **cancel_fields,
+                failure_stage="cancel",
+                failure_reason=failure_reason,
+                cancel_message=cancel_msg[:160],
+            )
+            return "failed"
+
+        cancel_order_nos.append(cancel_ord_no)
+        _log_entry_pipeline(
+            stock,
+            code,
+            "entry_reprice_cancel_confirmed",
+            **cancel_fields,
+            cancel_ord_no=cancel_ord_no,
+            cancel_message=cancel_msg[:160],
+        )
+        with ENTRY_LOCK:
+            cancel_order["status"] = "CANCELLED"
+            cancel_order["cancelled_at"] = time.time()
+            cancel_order["entry_reprice_cancel_ord_no"] = cancel_ord_no
+
+    post_cancel_filled_qty = _entry_bundle_filled_qty(stock)
+    if bundle_reprice and post_cancel_filled_qty > 0:
+        failure_reason = "bundle_fill_after_cancel_detected"
         with ENTRY_LOCK:
             order["entry_reprice_evaluated"] = True
-            order["entry_reprice_block_reason"] = "cancel_failed"
+            order["entry_reprice_block_reason"] = failure_reason
             stock["entry_reprice_evaluated"] = True
-            stock["entry_reprice_block_reason"] = "cancel_failed"
+            stock["entry_reprice_block_reason"] = failure_reason
         _log_entry_pipeline(
             stock,
             code,
             "entry_reprice_after_submit_failed",
             **request_fields,
-            failure_stage="cancel",
-            cancel_message=cancel_msg[:160],
+            failure_stage="post_cancel_fill_check",
+            failure_reason=failure_reason,
+            entry_reprice_filled_qty=post_cancel_filled_qty,
         )
         return "failed"
-
-    _log_entry_pipeline(
-        stock,
-        code,
-        "entry_reprice_cancel_confirmed",
-        **request_fields,
-        cancel_ord_no=cancel_ord_no,
-        cancel_message=cancel_msg[:160],
-    )
-    with ENTRY_LOCK:
-        order["status"] = "CANCELLED"
-        order["cancelled_at"] = time.time()
-        order["entry_reprice_cancel_ord_no"] = cancel_ord_no
 
     target_price = int(decision.target_price or 0)
     _log_entry_pipeline(
@@ -33007,10 +33496,10 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
         "order_type": "00",
         "status": "OPEN",
         "filled_qty": 0,
-        "dmst_stex_tp": cancel_dmst_stex_tp,
+        "dmst_stex_tp": child_dmst_stex_tp,
         "dmst_stex_tp_source": str(order.get("dmst_stex_tp_source") or "inherited"),
         "sent_at": time.time(),
-        "entry_order_lifecycle": "repriced_after_submit",
+        "entry_order_lifecycle": "bundle_repriced_after_submit" if bundle_reprice else "repriced_after_submit",
         "entry_passive_probe_applied": bool(order.get("entry_passive_probe_applied")),
         "best_bid_at_submit": best_bid,
         "best_ask_at_submit": best_ask,
@@ -33024,7 +33513,10 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
         "entry_reprice_attempt_count": _coerce_int_value(order.get("entry_reprice_attempt_count"), 1),
         "entry_reprice_parent_ord_no": parent_order_no,
         "entry_reprice_child_ord_no": child_order_no,
+        "entry_reprice_cancel_ord_no": ",".join(str(value or "").strip() for value in cancel_order_nos if str(value or "").strip()),
         "entry_reprice_evaluated": True,
+        "entry_reprice_bundle_compression": bool(bundle_reprice),
+        "entry_reprice_bundle_leg_count": len(orders_to_cancel) if bundle_reprice else 1,
         "ai_score": order.get("ai_score"),
         "entry_reprice_action": order.get("entry_reprice_action"),
         "entry_adm_recommended_action": order.get("entry_adm_recommended_action"),
@@ -33057,6 +33549,9 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
         broker_order_no=child_order_no,
         order_no=child_order_no,
         qty=qty,
+        entry_reprice_bundle_compression=bool(bundle_reprice),
+        entry_reprice_bundle_leg_count=len(orders_to_cancel) if bundle_reprice else 1,
+        entry_reprice_parent_order_nos=parent_order_no,
     )
     log_info(
         f"[ENTRY_REPRICE_AFTER_SUBMIT] {stock.get('name')}({code}) "
