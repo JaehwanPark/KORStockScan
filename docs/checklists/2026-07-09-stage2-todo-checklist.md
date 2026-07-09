@@ -74,6 +74,22 @@
   - 판정: `runtime_restart_required_after_no_defect_review`; 현재 실행 중인 봇에는 아직 반영되지 않았으므로 review gate 무결성 확인 후 우아한 재기동으로 런타임 반영한다.
   - 다음 액션: `graceful_restart_and_verify_rising_missed_filter_layer_fields`.
 
+- [x] `[RisingMissedSubmitSafetyBackoff0709] submit-safety 주요 병목 차단 후 scanner 예산 재배정` (`Due: 2026-07-09`, `Slot: INTRADAY`, `TimeWindow: 13:45~15:20`, `Track: ScalpingLogic`)
+  - Source: [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [test_sniper_scale_in.py](/home/ubuntu/KORStockScan/src/tests/test_sniper_scale_in.py), [Plan Rebase](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
+  - 판정 기준: rising_missed lineage가 `rising_missed_scout_quality_guard_blocked`, `rising_missed_tick_speed_entry_block`, `latency_block` DANGER, weak micro, source-quality missing/unknown submit block에서 차단되면 `rising_missed_submit_safety_backoff_*`를 기록하고, `scalping_scanner_fast_precheck`가 backoff active 동안 `scanner_watch_budget/budget_reallocated`, reason=`submit_safety_backoff_active`, `rising_missed_budget_reallocation_source=submit_safety_feedback`로 heavy eval 전에 종료한다. 회복 조건 충족 시 backoff를 해제하고 기존 heavy eval 흐름으로 복귀한다.
+  - 금지: 이 변경을 submit 기준 완화/강화, stale submit bypass, 일반 SCALPING 선차단, candidate_gate 차단 backoff, threshold/provider/order cap/broker guard 변경, EV/live-auto 승인 근거로 확대하지 않는다. 현대차 pending/order 복구 이슈는 별도 범위다.
+  - 실행 결과: submit-safety backoff module cache와 target dict 필드를 병행 기록하고 stale+weak 90초/3회 이상 180초, tick-speed 60초, latency DANGER 60초, weak micro 90초, source-quality missing/unknown 120초 기본값을 env override 가능하게 구현했다. candidate_gate 사유는 backoff로 기록하지 않는다. 재기동 후 10분 점검에서 latency DANGER backoff 기록은 확인됐고, scout quality guard가 forced scout lineage flag 설정 전 차단되는 경우 backoff lineage가 누락되는 갭을 추가 보완했다. Targeted validation: `test_sniper_scale_in.py -k "rising_missed_submit_safety_backoff or rising_missed_filter_layer or scanner_fast_precheck"`, `py_compile`, parser validation, `sync_docs_backlog_to_project --print-backlog-only --limit 500`, `git diff --check` pass.
+  - 판정: `runtime_restart_required_after_no_defect_review`; 현재 실행 중인 봇에는 아직 반영되지 않았으므로 review gate 무결성 확인 후 우아한 재기동으로 런타임 반영한다.
+  - 다음 액션: `graceful_restart_and_verify_rising_missed_submit_safety_backoff`.
+
+- [x] `[EntryRepriceMultiLegCompression0709] multi-leg pending reprice bundle compression 구현` (`Due: 2026-07-09`, `Slot: INTRADAY`, `TimeWindow: 12:45~15:20`, `Track: ScalpingLogic`)
+  - Source: [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [entry_reprice_after_submit.py](/home/ubuntu/KORStockScan/src/engine/scalping/entry_reprice_after_submit.py), [test_entry_reprice_after_submit.py](/home/ubuntu/KORStockScan/src/tests/test_entry_reprice_after_submit.py), [Plan Rebase](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
+  - 판정 기준: SCALPING real pending entry order가 multi-leg이고 전체 미체결이면 기존 `entry_reprice_after_submit` evaluator를 bundle synthetic order로 재사용해 허용 여부와 target price를 판단한다. 허용 시 open leg 전부 취소 후 잔량을 단일 child BUY order로 압축 재주문한다.
+  - 금지: 일반 BUY split 생성 정책 변경, CAUTION split suppress, threshold/provider/position cap/broker guard 완화, stale quote bypass, 부분체결 bundle reprice, cancel 실패 후 child 재주문을 열지 않는다.
+  - 실행 결과: `multi_leg_pending_not_supported` 차단 경로를 bundle compression 경로로 대체했다. `bundle_partial_fill_not_supported`는 broker call 없이 차단하고, `bundle_cancel_partial_failure`는 child 재주문 없이 fail-closed한다. 성공 child order에는 `entry_reprice_bundle_compression`, `entry_reprice_bundle_leg_count`, `entry_reprice_parent_ord_no`를 남긴다. Targeted validation: `test_entry_reprice_after_submit.py`, `src/tests -k "entry_reprice"`, `test_entry_reprice_after_submit.py test_sniper_scale_in.py -k "entry_reprice or pending_order"`, `py_compile`, `git diff --check` pass.
+  - 판정: `runtime_restart_required_after_no_defect_review`; 현재 실행 중인 봇에는 아직 반영되지 않았으므로 review gate 무결성 확인 후 우아한 재기동으로 런타임 반영한다.
+  - 다음 액션: `graceful_restart_and_verify_entry_reprice_bundle_compression`.
+
 - [ ] `[SimProbeIntradayCoverage0709] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-07-09`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
   - Source: [threshold_cycle_ev_2026-07-08.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-07-08.json)
   - 판정 기준: sim/probe 표본이 real execution과 분리되고 `actual_order_submitted=false` provenance가 유지되는지 확인한다.
@@ -139,3 +155,18 @@
 ```bash
 PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar
 ```
+
+<!-- AUTO_SERVER_COMPARISON_START -->
+### 본서버 vs songstockscan 자동 비교 (`2026-07-09 15:46:01`)
+
+- 기준: `profit-derived metrics are excluded by default because fallback-normalized values such as NULL -> 0 can distort comparison`
+- 상세 리포트: `data/report/server_comparison/server_comparison_2026-07-09.md`
+- `Trade Review`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Performance Tuning`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Post Sell Feedback`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Entry Pipeline Flow`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+<!-- AUTO_SERVER_COMPARISON_END -->

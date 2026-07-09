@@ -13,23 +13,23 @@
 
 ## 근거
 
-- as_of: `2026-07-09T12:20:02`
-- exit_signal unique: `9`
-- sell_order_sent unique: `3`
-- sell_completed unique: `3`
+- as_of: `2026-07-09T15:30:02`
+- exit_signal unique: `12`
+- sell_order_sent unique: `5`
+- sell_completed unique: `5`
 - real exit/sell_sent/sell_completed: `1` / `1` / `1`
-- non-real exit/sell_sent/sell_completed: `8` / `2` / `2`
-- sell_sent/exit_signal: `33.3%`
+- non-real exit/sell_sent/sell_completed: `11` / `4` / `4`
+- sell_sent/exit_signal: `41.7%`
 - real sell_sent/exit_signal: `100.0%`
-- non-real sell_sent/exit_signal: `25.0%`
+- non-real sell_sent/exit_signal: `36.4%`
 - flow defer events: `2`
 - AI holding cache MISS: `100.0%`
-- score50 origins: `{'fallback_score_50': 2, 'legacy_or_unclassified_score50': 448, 'post_call_source_quality_neutralized': 18}`
+- score50 origins: `{'fallback_score_50': 3, 'legacy_or_unclassified_score50': 797, 'not_called_neutral_unusable': 1, 'post_call_source_quality_neutralized': 46}`
 - score50 preflight/source-quality blocked: `0`
-- score50 raw-non50 neutralized: `18`
+- score50 raw-non50 neutralized: `46`
 - soft_stop rebound above sell 10m: `94.4%`
 - trailing missed-upside: `32.1%`
-- top reasons: `AI보유감시:cache_miss=165, soft_stop_grace=9, 청산신호:scalp_trailing_take_profit=5, 청산신호:scalp_soft_stop_pct=4, sell_order_sent=3`
+- top reasons: `AI보유감시:cache_miss=296, soft_stop_grace=10, 청산신호:scalp_trailing_take_profit=5, sell_order_sent=5, sell_completed=5`
 
 ## 금지된 자동변경
 
