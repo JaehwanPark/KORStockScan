@@ -58,6 +58,12 @@ from src.engine.scalping.watching_score_smoothing import (
     evaluate_watching_score,
     normalize_mode as normalize_watching_score_smoothing_mode,
 )
+from src.engine.scalping.micro_estimator_state import (
+    DEFAULT_STORE as DEFAULT_MICRO_ESTIMATOR_STORE,
+    MicroEstimatorStore,
+    estimate_orderbook_pressure,
+    feature_only_fields_from_snapshot,
+)
 from src.engine.scalping_feature_packet import (
     build_scalping_feature_audit_fields,
     extract_scalping_feature_packet,
@@ -130,6 +136,7 @@ from src.engine.lifecycle.ofi_ai_smoothing import (
     OfiSmoothingState,
     entry_skip_demotion_allowed,
     evaluate_ofi_smoothing,
+    micro_score_raw,
     ofi_smoothing_log_fields,
 )
 from src.engine.risk.manual_control_exclusion import (
@@ -9898,6 +9905,8 @@ RISING_MISSED_SUBMIT_SAFETY_BACKOFF_SOURCE = "submit_safety_feedback"
 _RISING_MISSED_SUBMIT_SAFETY_BACKOFFS: dict[str, dict[str, Any]] = {}
 RISING_MISSED_CANDIDATE_GATE_BACKOFF_SOURCE = "candidate_gate_feedback"
 _RISING_MISSED_CANDIDATE_GATE_BACKOFFS: dict[str, dict[str, Any]] = {}
+_SCALPING_MICRO_ESTIMATOR_STORE = DEFAULT_MICRO_ESTIMATOR_STORE
+_RISING_MISSED_MICRO_ESTIMATOR_STORE = _SCALPING_MICRO_ESTIMATOR_STORE
 SCANNER_WS_STALE_BACKOFF_SOURCE = "ws_stale_feedback"
 _SCANNER_WS_STALE_BACKOFFS: dict[str, dict[str, Any]] = {}
 
@@ -11845,6 +11854,22 @@ def _emit_stat_action_decision_snapshot(
     ):
         if key in action:
             fields[key] = action.get(key)
+    fields.update(
+        _prefixed_micro_estimator_fields(
+            stock,
+            "scale_in_micro_estimator_",
+            "holding_exit_micro_estimator_",
+            "holding_flow_micro_estimator_",
+        )
+    )
+    fields.update(
+        _prefixed_micro_estimator_fields(
+            action,
+            "scale_in_micro_estimator_",
+            "holding_exit_micro_estimator_",
+            "holding_flow_micro_estimator_",
+        )
+    )
 
     _log_holding_pipeline(stock, code, "stat_action_decision_snapshot", **fields)
     _mutate_stock_state(stock, set_fields={"last_stat_action_snapshot_ts": now_ts})
@@ -11907,6 +11932,7 @@ def _log_scale_in_arm_blocked(stock, code, *, arm, blocked_reason, profit_rate, 
         fields = _append_reversal_add_probe_fields(fields, probe)
     elif str(arm or "").upper() == "PYRAMID":
         fields = _append_pyramid_probe_fields(fields, probe)
+    fields.update(_prefixed_micro_estimator_fields(stock, "scale_in_micro_estimator_"))
     _log_holding_pipeline(
         stock,
         code,
@@ -11995,6 +12021,7 @@ def _append_pyramid_probe_fields(fields: dict, probe: dict | None) -> dict:
     ):
         if key in probe:
             merged[key] = probe.get(key)
+    merged.update(_prefixed_micro_estimator_fields(probe, "scale_in_micro_estimator_"))
     return merged
 
 
@@ -12064,6 +12091,7 @@ def _append_reversal_add_probe_fields(fields: dict, probe: dict | None) -> dict:
     ):
         if key in probe:
             merged[key] = probe.get(key)
+    merged.update(_prefixed_micro_estimator_fields(probe, "scale_in_micro_estimator_"))
     return merged
 
 
@@ -17097,6 +17125,42 @@ def _ofi_ai_smoothing_config() -> OfiSmoothingConfig:
     )
 
 
+def _holding_flow_micro_estimator_ofi_primary_enabled() -> bool:
+    return _env_bool("KORSTOCKSCAN_HOLDING_FLOW_MICRO_ESTIMATOR_OFI_PRIMARY_ENABLED", True)
+
+
+def _holding_flow_micro_estimator_ofi_proxy_enabled() -> bool:
+    return _env_bool("KORSTOCKSCAN_HOLDING_FLOW_MICRO_ESTIMATOR_OFI_PROXY_ENABLED", True)
+
+
+def _holding_flow_micro_estimator_ofi_min_confidence() -> float:
+    return max(
+        0.0,
+        _env_float(
+            "KORSTOCKSCAN_HOLDING_FLOW_MICRO_ESTIMATOR_OFI_MIN_CONFIDENCE",
+            _rising_missed_micro_estimator_min_confidence(),
+        ),
+    )
+
+
+def _holding_flow_micro_estimator_ofi_max_age_sec() -> float:
+    return max(
+        0.0,
+        _env_float("KORSTOCKSCAN_HOLDING_FLOW_MICRO_ESTIMATOR_OFI_MAX_AGE_SEC", 30.0),
+    )
+
+
+def _holding_flow_micro_estimator_proxy_min_confidence() -> float:
+    return max(
+        _holding_flow_micro_estimator_ofi_min_confidence(),
+        _env_float("KORSTOCKSCAN_HOLDING_FLOW_MICRO_ESTIMATOR_PROXY_MIN_CONFIDENCE", 0.50),
+    )
+
+
+def _holding_flow_micro_estimator_proxy_min_abs_ofi() -> float:
+    return max(0.0, _env_float("KORSTOCKSCAN_HOLDING_FLOW_MICRO_ESTIMATOR_PROXY_MIN_ABS_OFI", 0.20))
+
+
 def _load_holding_flow_ofi_state(stock: dict) -> OfiSmoothingState:
     return OfiSmoothingState(
         micro_score_raw=_safe_float(stock.get("holding_flow_ofi_micro_score_raw"), None),
@@ -17122,6 +17186,140 @@ def _store_holding_flow_ofi_state(stock: dict, state: OfiSmoothingState) -> None
             "holding_flow_ofi_reason": state.reason,
         },
     )
+
+
+def _micro_estimator_regime_from_score(score: float) -> str:
+    if score > 0.10:
+        return "bullish"
+    if score < -0.10:
+        return "bearish"
+    return "neutral"
+
+
+def _clamp_micro_estimator_ofi_value(value: float, low: float = -1.0, high: float = 1.0) -> float:
+    return max(low, min(high, float(value)))
+
+
+def _evaluate_holding_flow_micro_estimator_ofi_state(
+    stock: dict,
+    code: str,
+    *,
+    now_ts: float,
+) -> tuple[dict | None, OfiSmoothingState | None]:
+    if not _holding_flow_micro_estimator_ofi_primary_enabled():
+        return None, None
+    symbol = str(code or "").strip()
+    if not symbol:
+        return None, None
+
+    snapshot = _SCALPING_MICRO_ESTIMATOR_STORE.snapshot(symbol, now_ts=now_ts)
+    source_state = str(snapshot.get("source_state") or "default_prior")
+    if source_state in {"default_prior", "unusable"}:
+        return None, None
+
+    confidence = _safe_float(snapshot.get("confidence"), 0.0)
+    age_sec = _safe_float(snapshot.get("age_sec"), 0.0)
+    max_age_sec = _holding_flow_micro_estimator_ofi_max_age_sec()
+    if max_age_sec > 0 and age_sec > max_age_sec:
+        return None, None
+    if confidence < _holding_flow_micro_estimator_ofi_min_confidence():
+        return None, None
+
+    true_sample_count = _safe_int(snapshot.get("true_ofi_sample_count"), 0)
+    true_ofi = _safe_float(snapshot.get("true_ofi_ewma"), 0.0)
+    proxy_ofi = _safe_float(snapshot.get("depth_imbalance_ewma"), 0.0)
+    pressure = _safe_float(snapshot.get("pressure_ewma"), 50.0)
+    top_depth_ratio = _safe_float(snapshot.get("top_depth_ratio"), 0.0)
+
+    if true_sample_count > 0:
+        ofi_signal = _clamp_micro_estimator_ofi_value(true_ofi, -1.0, 1.0)
+        source_reason = "micro_estimator_true_ofi_primary"
+        source_kind = "true_ofi"
+    else:
+        if not _holding_flow_micro_estimator_ofi_proxy_enabled():
+            return None, None
+        if confidence < _holding_flow_micro_estimator_proxy_min_confidence():
+            return None, None
+        if abs(proxy_ofi) < _holding_flow_micro_estimator_proxy_min_abs_ofi():
+            return None, None
+        ofi_signal = _clamp_micro_estimator_ofi_value(proxy_ofi, -1.0, 1.0)
+        source_reason = "micro_estimator_depth_proxy_primary"
+        source_kind = "depth_imbalance_proxy"
+
+    cfg = _ofi_ai_smoothing_config()
+    pressure_signal = _clamp_micro_estimator_ofi_value((pressure - 50.0) / 50.0, -1.0, 1.0)
+    raw_weight = _clamp_micro_estimator_ofi_value(float(cfg.raw_weight), 0.0, 1.0)
+    age_ms = max(0.0, age_sec * 1000.0)
+    micro = {
+        "ready": True,
+        "reason": source_reason,
+        "sample_quote_count": _safe_int(snapshot.get("sample_count"), 0),
+        "qi": round(0.50 + (pressure_signal * 0.10), 6),
+        "qi_ewma": round(0.50 + (pressure_signal * 0.10), 6),
+        "ofi_norm": round(ofi_signal, 6),
+        "ofi_z": round(ofi_signal * 2.0, 6),
+        "depth_ewma": round(top_depth_ratio, 6),
+        "spread_ticks": 0,
+        "captured_at_ms": int(round((float(now_ts) - age_sec) * 1000.0)),
+        "snapshot_age_ms": round(float(age_ms), 3),
+        "observer_healthy": True,
+        "observer_missing_reason": "",
+        "observer_last_quote_age_ms": round(float(age_ms), 3),
+        "observer_last_trade_age_ms": round(float(age_ms), 3),
+        "micro_window_sec": round(float(age_sec), 3),
+        "micro_z_min_samples": (
+            true_sample_count if source_kind == "true_ofi" else _safe_int(snapshot.get("sample_count"), 0)
+        ),
+        "micro_lambda": raw_weight,
+        "ofi_threshold_source": "micro_estimator_state_v1",
+        "ofi_threshold_fallback_reason": source_state,
+        "ofi_symbol_sample_count": _safe_int(snapshot.get("sample_count"), 0),
+        "ofi_calibration_bucket": source_kind,
+        "ofi_bucket_key": source_kind,
+        "ofi_symbol_bullish_rate": round(max(0.0, ofi_signal), 6),
+        "ofi_symbol_bearish_rate": round(abs(min(0.0, ofi_signal)), 6),
+        "ofi_calibration_warning": "" if source_kind == "true_ofi" else "proxy_only_higher_floor",
+    }
+    raw_score_input = micro_score_raw(micro)
+    if raw_score_input is None:
+        return None, None
+    raw_score = _clamp_micro_estimator_ofi_value(float(raw_score_input), -1.0, 1.0)
+    micro["micro_state"] = _micro_estimator_regime_from_score(raw_score)
+
+    prev = _load_holding_flow_ofi_state(stock)
+    previous_smooth = prev.micro_score_smooth if prev.usable else 0.0
+    smooth = (previous_smooth * (1.0 - raw_weight)) + (raw_score * raw_weight)
+    bullish_count = prev.bullish_count if prev.usable else 0
+    bearish_count = prev.bearish_count if prev.usable else 0
+    regime = prev.regime if prev.usable else OFI_NEUTRAL
+    if smooth >= float(cfg.bullish_threshold):
+        bullish_count += 1
+        bearish_count = 0
+        if bullish_count >= max(1, int(cfg.persistence_required)):
+            regime = OFI_STABLE_BULLISH
+    elif smooth <= float(cfg.bearish_threshold):
+        bearish_count += 1
+        bullish_count = 0
+        if bearish_count >= max(1, int(cfg.persistence_required)):
+            regime = OFI_STABLE_BEARISH
+    else:
+        bullish_count = 0
+        bearish_count = 0
+        if regime == OFI_STABLE_BULLISH and smooth < float(cfg.release_threshold):
+            regime = OFI_NEUTRAL
+        elif regime == OFI_STABLE_BEARISH and smooth > -float(cfg.release_threshold):
+            regime = OFI_NEUTRAL
+
+    state = OfiSmoothingState(
+        micro_score_raw=round(float(raw_score), 6),
+        micro_score_smooth=round(float(smooth), 6),
+        regime=regime,
+        bullish_count=int(bullish_count),
+        bearish_count=int(bearish_count),
+        snapshot_age_ms=round(float(age_ms), 3),
+        reason=source_reason,
+    )
+    return micro, state
 
 
 def _evaluate_entry_skip_ofi_smoothing(orderbook_micro: dict | None) -> OfiSmoothingState:
@@ -17169,7 +17367,22 @@ def _build_live_orderbook_micro_context(code: str, *, curr_price: int) -> dict |
     return context
 
 
-def _evaluate_holding_flow_ofi_state(stock: dict, code: str, *, curr_price: int) -> tuple[dict | None, OfiSmoothingState]:
+def _evaluate_holding_flow_ofi_state(
+    stock: dict,
+    code: str,
+    *,
+    curr_price: int,
+    now_ts: float | None = None,
+) -> tuple[dict | None, OfiSmoothingState]:
+    micro_estimator_micro, micro_estimator_state = _evaluate_holding_flow_micro_estimator_ofi_state(
+        stock,
+        code,
+        now_ts=_safe_float(now_ts, time.time()),
+    )
+    if micro_estimator_state is not None:
+        _store_holding_flow_ofi_state(stock, micro_estimator_state)
+        return micro_estimator_micro, micro_estimator_state
+
     micro = _build_live_orderbook_micro_context(code, curr_price=curr_price)
     state = evaluate_ofi_smoothing(
         micro,
@@ -18038,6 +18251,195 @@ def _rising_missed_scout_quality_guard_weak_ai_max_score() -> float:
         0.0,
         _env_float("KORSTOCKSCAN_RISING_MISSED_SCOUT_QUALITY_GUARD_WEAK_AI_MAX_SCORE", 60.0),
     )
+
+
+def _rising_missed_scout_quality_guard_rest_estimator_enabled() -> bool:
+    legacy_default = _env_bool("KORSTOCKSCAN_RISING_MISSED_REST_QUOTE_ESTIMATOR_ENABLED", True)
+    return _env_bool("KORSTOCKSCAN_MICRO_ESTIMATOR_ENABLED", legacy_default)
+
+
+def _rising_missed_rest_estimator_min_ofi_norm() -> float:
+    legacy_default = _env_float(
+        "KORSTOCKSCAN_RISING_MISSED_REST_QUOTE_ESTIMATOR_MIN_OFI_NORM",
+        _env_float("KORSTOCKSCAN_RISING_MISSED_REST_ESTIMATOR_MIN_OFI_NORM", 0.10),
+    )
+    return _env_float("KORSTOCKSCAN_MICRO_ESTIMATOR_MIN_OFI_NORM", legacy_default)
+
+
+def _rising_missed_rest_estimator_min_pressure() -> float:
+    legacy_default = _env_float(
+        "KORSTOCKSCAN_RISING_MISSED_REST_QUOTE_ESTIMATOR_MIN_PRESSURE",
+        _env_float("KORSTOCKSCAN_RISING_MISSED_REST_ESTIMATOR_MIN_PRESSURE", 55.0),
+    )
+    return _env_float("KORSTOCKSCAN_MICRO_ESTIMATOR_MIN_PRESSURE", legacy_default)
+
+
+def _rising_missed_micro_estimator_min_confidence() -> float:
+    legacy_default = _env_float("KORSTOCKSCAN_RISING_MISSED_REST_QUOTE_ESTIMATOR_MIN_CONFIDENCE", 0.25)
+    return max(0.0, _env_float("KORSTOCKSCAN_MICRO_ESTIMATOR_MIN_CONFIDENCE", legacy_default))
+
+
+def _rising_missed_rest_estimator_probe_max_age_sec() -> float:
+    legacy_default = _env_float(
+        "KORSTOCKSCAN_RISING_MISSED_REST_QUOTE_ESTIMATOR_PROBE_MAX_AGE_SEC",
+        _env_float("KORSTOCKSCAN_RISING_MISSED_REST_ESTIMATOR_PROBE_MAX_AGE_SEC", 120.0),
+    )
+    return max(
+        1.0,
+        _env_float("KORSTOCKSCAN_MICRO_ESTIMATOR_PROBE_MAX_AGE_SEC", legacy_default),
+    )
+
+
+def _scalping_micro_estimator_feature_probe(stock: dict | None) -> tuple[dict, dict, float | None]:
+    stock_dict = stock if isinstance(stock, dict) else {}
+    reversal_features = stock_dict.get("last_reversal_features")
+    if isinstance(reversal_features, dict) and reversal_features:
+        observed_ts = _safe_float(reversal_features.get("feature_extracted_at"), 0.0)
+        return reversal_features, reversal_features, observed_ts if observed_ts > 0 else None
+
+    probe = stock_dict.get("last_watching_ai_feature_probe")
+    source_quality = stock_dict.get("last_watching_ai_source_quality_fields")
+    probe = probe if isinstance(probe, dict) else {}
+    source_quality = source_quality if isinstance(source_quality, dict) else {}
+    observed_ts = _safe_float(stock_dict.get("last_watching_ai_feature_probe_at"), 0.0)
+    return probe, source_quality, observed_ts if observed_ts > 0 else None
+
+
+def _micro_estimator_quote_source(source: dict | None) -> dict:
+    data = dict(source or {}) if isinstance(source, dict) else {}
+    orderbook = data.get("orderbook")
+    if not isinstance(orderbook, dict):
+        return data
+
+    bids = [level for level in (orderbook.get("bids") or []) if isinstance(level, dict)]
+    asks = [level for level in (orderbook.get("asks") or []) if isinstance(level, dict)]
+    if bids:
+        best_bid = _safe_float(bids[0].get("price"), 0.0)
+        best_bid_qty = _safe_float(bids[0].get("volume") or bids[0].get("qty") or bids[0].get("quantity"), 0.0)
+        if best_bid > 0:
+            data.setdefault("best_bid", best_bid)
+        if best_bid_qty > 0:
+            data.setdefault("best_bid_qty", best_bid_qty)
+        bid_total = sum(
+            _safe_float(level.get("volume") or level.get("qty") or level.get("quantity"), 0.0)
+            for level in bids
+        )
+        if bid_total > 0:
+            data.setdefault("bid_tot", bid_total)
+    if asks:
+        best_ask = _safe_float(asks[0].get("price"), 0.0)
+        best_ask_qty = _safe_float(asks[0].get("volume") or asks[0].get("qty") or asks[0].get("quantity"), 0.0)
+        if best_ask > 0:
+            data.setdefault("best_ask", best_ask)
+        if best_ask_qty > 0:
+            data.setdefault("best_ask_qty", best_ask_qty)
+        ask_total = sum(
+            _safe_float(level.get("volume") or level.get("qty") or level.get("quantity"), 0.0)
+            for level in asks
+        )
+        if ask_total > 0:
+            data.setdefault("ask_tot", ask_total)
+    return data
+
+
+def _scalping_micro_estimator_log_fields(
+    *,
+    stock: dict | None,
+    code: str,
+    ws_data: dict | None,
+    now_ts: float,
+    prefix: str,
+    consumer_stage: str,
+    tier: str = "hot",
+    rest_orderbook: bool = False,
+) -> dict[str, Any]:
+    fields: dict[str, Any] = {
+        f"{prefix}_update_enabled": _rising_missed_scout_quality_guard_rest_estimator_enabled(),
+        f"{prefix}_update_attempted": False,
+        f"{prefix}_update_applied": False,
+        f"{prefix}_update_reason": "not_needed",
+    }
+    if not fields[f"{prefix}_update_enabled"]:
+        fields[f"{prefix}_update_reason"] = "disabled"
+        return fields
+    symbol = str(code or "").strip()
+    if not symbol:
+        fields[f"{prefix}_update_reason"] = "missing_code"
+        return fields
+
+    fields[f"{prefix}_update_attempted"] = True
+    snapshot_before = _SCALPING_MICRO_ESTIMATOR_STORE.snapshot(symbol, now_ts=now_ts)
+    lazy_hydration = bool(
+        str(snapshot_before.get("tier") or "cold") == "cold"
+        or _safe_int(snapshot_before.get("sample_count"), 0) <= 0
+    )
+    _SCALPING_MICRO_ESTIMATOR_STORE.mark_candidate(
+        symbol,
+        tier=tier,
+        now_ts=now_ts,
+        reason=consumer_stage,
+    )
+
+    applied_sources: list[str] = []
+    source = _micro_estimator_quote_source(ws_data)
+    depth = estimate_orderbook_pressure(source)
+    if depth.get("total_depth", 0.0) > 0:
+        if rest_orderbook:
+            _SCALPING_MICRO_ESTIMATOR_STORE.update_from_rest_orderbook(
+                symbol,
+                source,
+                now_ts=now_ts,
+                tier=tier,
+            )
+            applied_sources.append("rest_orderbook")
+        else:
+            _SCALPING_MICRO_ESTIMATOR_STORE.update_from_ws_quote(
+                symbol,
+                source,
+                now_ts=now_ts,
+                tier=tier,
+            )
+            applied_sources.append("ws_quote")
+
+    probe, source_quality, observed_ts = _scalping_micro_estimator_feature_probe(stock)
+    if probe or source_quality:
+        _SCALPING_MICRO_ESTIMATOR_STORE.update_from_feature_probe(
+            symbol,
+            probe,
+            source_quality,
+            now_ts=now_ts,
+            observed_ts=observed_ts,
+            max_age_sec=_rising_missed_rest_estimator_probe_max_age_sec(),
+            tier=tier,
+        )
+        applied_sources.append("feature_probe")
+
+    snapshot = _SCALPING_MICRO_ESTIMATOR_STORE.snapshot(symbol, now_ts=now_ts)
+    feature_fields = feature_only_fields_from_snapshot(
+        snapshot,
+        prefix=prefix,
+        consumer_stage=consumer_stage,
+    )
+    fields.update(
+        {
+            f"{prefix}_update_applied": bool(applied_sources),
+            f"{prefix}_update_reason": "+".join(applied_sources) if applied_sources else "default_prior_marked",
+            f"{prefix}_lazy_hydration": lazy_hydration,
+            **feature_fields,
+        }
+    )
+    if isinstance(stock, dict):
+        _mutate_stock_state(stock, set_fields=feature_fields)
+    return fields
+
+
+def _prefixed_micro_estimator_fields(source: dict | None, *prefixes: str) -> dict:
+    data = source if isinstance(source, dict) else {}
+    return {
+        key: value
+        for key, value in data.items()
+        if any(str(key).startswith(prefix) for prefix in prefixes)
+    }
 
 
 def _rising_missed_tick_speed_entry_guard_enabled() -> bool:
@@ -24488,6 +24890,20 @@ def _evaluate_holding_flow_override(
     if not _holding_flow_override_applicable(strategy, exit_rule):
         return True
 
+    holding_flow_micro_estimator_fields = (
+        _scalping_micro_estimator_log_fields(
+            stock=stock,
+            code=code,
+            ws_data=ws_data,
+            now_ts=now_ts,
+            prefix="holding_flow_micro_estimator",
+            consumer_stage="holding_flow_override",
+            tier="hot",
+        )
+        if _is_scalp_strategy(strategy)
+        else {}
+    )
+
     if ai_engine is None or not hasattr(ai_engine, "evaluate_scalping_holding_flow"):
         _log_holding_pipeline(
             stock,
@@ -24504,6 +24920,7 @@ def _evaluate_holding_flow_override(
                 now_ts=now_ts,
             ),
             **_holding_flow_override_force_exit_contract_fields(),
+            **holding_flow_micro_estimator_fields,
         )
         return True
 
@@ -24571,6 +24988,7 @@ def _evaluate_holding_flow_override(
                 now_ts=now_ts,
             ),
             **_holding_flow_override_force_exit_contract_fields(),
+            **holding_flow_micro_estimator_fields,
         )
         return True
     if worsen_from_candidate >= worsen_pct:
@@ -24591,6 +25009,7 @@ def _evaluate_holding_flow_override(
                 now_ts=now_ts,
             ),
             **_holding_flow_override_force_exit_contract_fields(),
+            **holding_flow_micro_estimator_fields,
         )
         return True
     if exit_rule == "scalp_trailing_take_profit":
@@ -24626,6 +25045,7 @@ def _evaluate_holding_flow_override(
                     now_ts=now_ts,
                 ),
                 **_holding_flow_override_force_exit_contract_fields(),
+                **holding_flow_micro_estimator_fields,
             )
             return True
 
@@ -24791,7 +25211,12 @@ def _evaluate_holding_flow_override(
         and not state_change_review_requested
     ):
         if _rule_bool("HOLDING_FLOW_OFI_SMOOTHING_OVERRIDE_ENABLED", True):
-            orderbook_micro, ofi_state = _evaluate_holding_flow_ofi_state(stock, code, curr_price=curr_price)
+            orderbook_micro, ofi_state = _evaluate_holding_flow_ofi_state(
+                stock,
+                code,
+                curr_price=curr_price,
+                now_ts=now_ts,
+            )
             swing_exit_micro_fields = (
                 _build_swing_micro_log_fields(orderbook_micro, phase="exit")
                 if _is_swing_orderbook_micro_context_enabled(strategy)
@@ -24822,6 +25247,7 @@ def _evaluate_holding_flow_override(
                     bearish_confirm_worsen_pct=f"{bearish_confirm_worsen_pct:.2f}",
                     **ofi_smoothing_log_fields(ofi_state, prefix="holding_flow_ofi"),
                     **orderbook_micro_fields,
+                    **holding_flow_micro_estimator_fields,
                 )
                 _log_holding_pipeline(
                     stock,
@@ -24832,6 +25258,7 @@ def _evaluate_holding_flow_override(
                     flow_score=_safe_int(stock.get("holding_flow_override_last_score"), 0),
                     profit_rate=f"{profit_rate:+.2f}",
                     confirm_reason="ofi_stable_bearish_interval",
+                    **holding_flow_micro_estimator_fields,
                 )
                 return True
         features, has_features = _normalize_soft_stop_expert_features(stock)
@@ -24877,6 +25304,7 @@ def _evaluate_holding_flow_override(
             curr_vs_micro_vwap_bp=f"{curr_vs_micro_vwap_bp:.2f}" if curr_vs_micro_vwap_bp is not None else "-",
             **feature_micro_log_fields,
             **_build_observation_contract_fields("ops_volume_diagnostic"),
+            **holding_flow_micro_estimator_fields,
             **(
                 _build_swing_micro_log_fields(
                     _build_live_orderbook_micro_context(code, curr_price=curr_price),
@@ -24945,6 +25373,7 @@ def _evaluate_holding_flow_override(
                 now_ts=now_ts,
             ),
             **_holding_flow_override_force_exit_contract_fields(),
+            **holding_flow_micro_estimator_fields,
         )
         return True
 
@@ -24969,6 +25398,7 @@ def _evaluate_holding_flow_override(
                 now_ts=now_ts,
             ),
             **_holding_flow_override_force_exit_contract_fields(),
+            **holding_flow_micro_estimator_fields,
         )
         return True
 
@@ -24987,6 +25417,7 @@ def _evaluate_holding_flow_override(
                 now_ts=now_ts,
             ),
             **_holding_flow_override_force_exit_contract_fields(),
+            **holding_flow_micro_estimator_fields,
         )
         return True
 
@@ -25002,6 +25433,7 @@ def _evaluate_holding_flow_override(
         "held_sec": held_sec,
         "current_ai_score": current_ai_score,
         "worsen_pct": worsen_pct,
+        **holding_flow_micro_estimator_fields,
     }
     holding_flow_metadata = {
         "record_id": stock.get("record_id") or stock.get("id"),
@@ -25049,7 +25481,12 @@ def _evaluate_holding_flow_override(
     micro_log_fields = {}
     swing_exit_micro_fields = {}
     if _rule_bool("HOLDING_FLOW_OFI_SMOOTHING_OVERRIDE_ENABLED", True):
-        orderbook_micro, ofi_state = _evaluate_holding_flow_ofi_state(stock, code, curr_price=curr_price)
+        orderbook_micro, ofi_state = _evaluate_holding_flow_ofi_state(
+            stock,
+            code,
+            curr_price=curr_price,
+            now_ts=now_ts,
+        )
         ofi_log_fields = ofi_smoothing_log_fields(ofi_state, prefix="holding_flow_ofi")
         micro_log_fields = _build_orderbook_micro_log_fields(orderbook_micro)
     elif _is_swing_orderbook_micro_context_enabled(strategy):
@@ -25083,6 +25520,7 @@ def _evaluate_holding_flow_override(
         elapsed_sec=elapsed_sec,
         worsen_from_candidate=f"{worsen_from_candidate:.2f}",
         **_build_ai_ops_log_fields(flow_result),
+        **holding_flow_micro_estimator_fields,
         **swing_exit_micro_fields,
     )
     if parse_failed:
@@ -25100,6 +25538,7 @@ def _evaluate_holding_flow_override(
                 now_ts=now_ts,
             ),
             **_holding_flow_override_force_exit_contract_fields(),
+            **holding_flow_micro_estimator_fields,
         )
         return True
     if _rule_bool("HOLDING_FLOW_OFI_SMOOTHING_OVERRIDE_ENABLED", True) and ofi_state is not None:
@@ -25138,6 +25577,7 @@ def _evaluate_holding_flow_override(
                     **feature_micro_log_fields,
                     **ofi_log_fields,
                     **micro_log_fields_for_smoothing,
+                    **holding_flow_micro_estimator_fields,
                     **swing_exit_micro_fields,
                 )
                 ofi_no_change_logged = True
@@ -25198,6 +25638,7 @@ def _evaluate_holding_flow_override(
                     **feature_micro_log_fields,
                     **ofi_log_fields,
                     **micro_log_fields_for_smoothing,
+                    **holding_flow_micro_estimator_fields,
                     **swing_exit_micro_fields,
                 )
                 _log_holding_pipeline(
@@ -25221,6 +25662,7 @@ def _evaluate_holding_flow_override(
                     curr_vs_micro_vwap_bp=f"{curr_vs_micro_vwap_bp:.2f}" if curr_vs_micro_vwap_bp is not None else "-",
                     **feature_micro_log_fields,
                     **_build_observation_contract_fields("ops_volume_diagnostic"),
+                    **holding_flow_micro_estimator_fields,
                     **swing_exit_micro_fields,
                 )
                 _mark_recent_exit_candidate(
@@ -25269,6 +25711,7 @@ def _evaluate_holding_flow_override(
                 bearish_confirm_worsen_pct=f"{bearish_confirm_worsen_pct:.2f}",
                 **ofi_log_fields,
                 **micro_log_fields_for_smoothing,
+                **holding_flow_micro_estimator_fields,
                 **swing_exit_micro_fields,
             )
             _log_holding_pipeline(
@@ -25280,6 +25723,7 @@ def _evaluate_holding_flow_override(
                 flow_score=_safe_int(flow_result.get("score"), 0),
                 profit_rate=f"{profit_rate:+.2f}",
                 confirm_reason="ofi_stable_bearish",
+                **holding_flow_micro_estimator_fields,
             )
             return True
         if not ofi_no_change_logged:
@@ -25295,6 +25739,7 @@ def _evaluate_holding_flow_override(
                 profit_rate=f"{profit_rate:+.2f}",
                 **ofi_log_fields,
                 **micro_log_fields_for_smoothing,
+                **holding_flow_micro_estimator_fields,
                 **swing_exit_micro_fields,
             )
     if flow_action == "EXIT":
@@ -25306,6 +25751,7 @@ def _evaluate_holding_flow_override(
             flow_state=flow_state,
             flow_score=_safe_int(flow_result.get("score"), 0),
             profit_rate=f"{profit_rate:+.2f}",
+            **holding_flow_micro_estimator_fields,
         )
         return True
 
@@ -25348,6 +25794,7 @@ def _evaluate_holding_flow_override(
         curr_vs_micro_vwap_bp=f"{curr_vs_micro_vwap_bp:.2f}" if curr_vs_micro_vwap_bp is not None else "-",
         **feature_micro_log_fields,
         **_build_observation_contract_fields("ops_volume_diagnostic"),
+        **holding_flow_micro_estimator_fields,
         **swing_exit_micro_fields,
     )
     _mark_recent_exit_candidate(
@@ -32405,7 +32852,7 @@ def _build_gatekeeper_fast_snapshot(stock, ws_data, strategy, score):
     price_bucket = _price_bucket_step(curr_price)
     buy_exec = _coerce_int_value(ws_data.get('buy_exec_volume', 0))
     sell_exec = _coerce_int_value(ws_data.get('sell_exec_volume', 0))
-    
+
     return {
         "curr_price": _bucket_int(curr_price, price_bucket),
         "score": _floor_bucket_float(score, 5.0),
@@ -33032,6 +33479,394 @@ def _maybe_retry_rising_missed_entry_ai_not_evaluated(
     return fields
 
 
+def _rising_missed_quality_guard_explicit_negative_ai(quality_guard: dict | None) -> bool:
+    guard = quality_guard if isinstance(quality_guard, dict) else {}
+    action = str(guard.get("rising_missed_scout_quality_guard_ai_action") or "").strip().upper()
+    return action in {"DROP", "WAIT"}
+
+
+def _rising_missed_depth_estimator_from_rest_snapshot(refreshed_ws: dict | None) -> dict:
+    return estimate_orderbook_pressure(refreshed_ws)
+
+
+def _maybe_update_rising_missed_micro_estimator_from_fresh_ws(
+    stock: dict | None,
+    code: str,
+    ws_data: dict | None,
+    runtime: dict | None,
+    *,
+    consumer_stage: str,
+) -> dict[str, Any]:
+    now_ts = _safe_float((runtime or {}).get("now_ts"), time.time())
+    fields: dict[str, Any] = {
+        "rising_missed_micro_estimator_ws_update_enabled": _rising_missed_scout_quality_guard_rest_estimator_enabled(),
+        "rising_missed_micro_estimator_ws_update_attempted": False,
+        "rising_missed_micro_estimator_ws_update_applied": False,
+        "rising_missed_micro_estimator_ws_update_reason": "not_needed",
+        "rising_missed_micro_estimator_lazy_hydration": False,
+    }
+    if not fields["rising_missed_micro_estimator_ws_update_enabled"]:
+        fields["rising_missed_micro_estimator_ws_update_reason"] = "disabled"
+        return fields
+    if not isinstance(ws_data, dict) or not str(code or "").strip():
+        fields["rising_missed_micro_estimator_ws_update_reason"] = "missing_ws_or_code"
+        return fields
+    fields["rising_missed_micro_estimator_ws_update_attempted"] = True
+    quote_stale, quote_fields = _quote_stale_for_rising_missed_scout_quality_guard(stock, ws_data, runtime)
+    if quote_stale:
+        fields.update(quote_fields)
+        fields["rising_missed_micro_estimator_ws_update_reason"] = "ws_quote_stale"
+        return fields
+
+    depth = _rising_missed_depth_estimator_from_rest_snapshot(ws_data)
+    stock_dict = stock if isinstance(stock, dict) else {}
+    probe = stock_dict.get("last_watching_ai_feature_probe")
+    source_quality = stock_dict.get("last_watching_ai_source_quality_fields")
+    probe = probe if isinstance(probe, dict) else {}
+    source_quality = source_quality if isinstance(source_quality, dict) else {}
+    probe_at = _safe_float(stock_dict.get("last_watching_ai_feature_probe_at"), 0.0)
+    has_depth = bool(depth.get("total_depth", 0.0) > 0)
+    has_probe = bool(probe or source_quality)
+    if not has_depth and not has_probe:
+        fields["rising_missed_micro_estimator_ws_update_reason"] = "no_orderbook_depth_or_probe"
+        return fields
+
+    pre_snapshot = _RISING_MISSED_MICRO_ESTIMATOR_STORE.snapshot(code, now_ts=now_ts)
+    lazy_hydration = bool(
+        str(pre_snapshot.get("tier") or "cold") == "cold"
+        or _safe_int(pre_snapshot.get("sample_count"), 0) <= 0
+    )
+    _RISING_MISSED_MICRO_ESTIMATOR_STORE.mark_candidate(
+        code,
+        tier="hot",
+        now_ts=now_ts,
+        reason=consumer_stage,
+    )
+    if has_depth:
+        _RISING_MISSED_MICRO_ESTIMATOR_STORE.update_from_ws_quote(
+            code,
+            ws_data,
+            now_ts=now_ts,
+            tier="hot",
+        )
+    if has_probe:
+        _RISING_MISSED_MICRO_ESTIMATOR_STORE.update_from_feature_probe(
+            code,
+            probe,
+            source_quality,
+            now_ts=now_ts,
+            observed_ts=probe_at if probe_at > 0 else None,
+            max_age_sec=_rising_missed_rest_estimator_probe_max_age_sec(),
+            tier="hot",
+        )
+    snapshot = _RISING_MISSED_MICRO_ESTIMATOR_STORE.snapshot(code, now_ts=now_ts)
+    fields.update(
+        {
+            "rising_missed_micro_estimator_ws_update_applied": True,
+            "rising_missed_micro_estimator_ws_update_reason": "fresh_ws_or_probe_updated",
+            "rising_missed_micro_estimator_lazy_hydration": lazy_hydration,
+            **feature_only_fields_from_snapshot(
+                snapshot,
+                prefix="rising_missed_micro_estimator",
+                consumer_stage=consumer_stage,
+            ),
+        }
+    )
+    return fields
+
+
+def _maybe_supplement_rising_missed_scout_quality_guard_with_rest_estimator(
+    stock,
+    code,
+    ws_data,
+    runtime,
+    quality_guard: dict | None,
+    *,
+    strategy: str,
+) -> tuple[dict, dict | None]:
+    now_ts = _safe_float((runtime or {}).get("now_ts"), time.time())
+    fields = {
+        "rising_missed_rest_quote_estimator_enabled": _rising_missed_scout_quality_guard_rest_estimator_enabled(),
+        "rising_missed_rest_quote_estimator_attempted": False,
+        "rising_missed_rest_quote_estimator_applied": False,
+        "rising_missed_rest_quote_estimator_support": False,
+        "rising_missed_rest_quote_estimator_reason": "not_needed",
+        "rising_missed_rest_quote_estimator_source": "micro_estimator_state:ka10004_rest_orderbook+smoothed_micro_prior",
+        "rising_missed_rest_quote_estimator_source_quality_state": "not_evaluated",
+        "rising_missed_micro_estimator_policy_version": "-",
+        "rising_missed_micro_estimator_tier": "cold",
+        "rising_missed_micro_estimator_source_state": "not_evaluated",
+        "rising_missed_micro_estimator_confidence": "0.0000",
+        "rising_missed_micro_estimator_min_confidence": f"{_rising_missed_micro_estimator_min_confidence():.4f}",
+        "rising_missed_micro_estimator_sample_count": 0,
+        "rising_missed_micro_estimator_age_sec": "-",
+        "rising_missed_micro_estimator_lazy_hydration": False,
+        "rising_missed_rest_quote_estimator_forbidden_uses": TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
+    }
+    guard = quality_guard if isinstance(quality_guard, dict) else {}
+    if not fields["rising_missed_rest_quote_estimator_enabled"]:
+        fields["rising_missed_rest_quote_estimator_reason"] = "disabled"
+        return fields, None
+    if not bool(guard.get("rising_missed_scout_quality_guard_blocked")):
+        return fields, None
+    if str(guard.get("block_reason") or guard.get("reason") or "") != "stale_quote_with_weak_ai_or_strength":
+        return fields, None
+    fields["rising_missed_rest_quote_estimator_attempted"] = True
+    if _rising_missed_quality_guard_explicit_negative_ai(guard):
+        fields["rising_missed_rest_quote_estimator_reason"] = "explicit_ai_wait_or_drop"
+        fields["rising_missed_rest_quote_estimator_source_quality_state"] = "explicit_negative_ai_preserved"
+        return fields, None
+
+    pre_snapshot = _RISING_MISSED_MICRO_ESTIMATOR_STORE.snapshot(code, now_ts=now_ts)
+    lazy_hydration = bool(
+        str(pre_snapshot.get("tier") or "cold") == "cold"
+        or _safe_int(pre_snapshot.get("sample_count"), 0) <= 0
+    )
+    _RISING_MISSED_MICRO_ESTIMATOR_STORE.mark_candidate(
+        code,
+        tier="hot",
+        now_ts=now_ts,
+        reason="rising_missed_scout_quality_guard",
+    )
+    refreshed_ws, rest_fields = _pre_submit_refresh_rest_orderbook_snapshot(code, ws_data, strategy)
+    fields.update(_pre_submit_ws_snapshot_refresh_log_fields(rest_fields))
+    if not bool(rest_fields.get("pre_submit_rest_orderbook_refresh_applied")):
+        fields["rising_missed_rest_quote_estimator_reason"] = (
+            rest_fields.get("pre_submit_rest_orderbook_refresh_reason")
+            or "rest_orderbook_not_applied"
+        )
+        fields["rising_missed_rest_quote_estimator_source_quality_state"] = "rest_quote_unavailable"
+        return fields, None
+
+    _RISING_MISSED_MICRO_ESTIMATOR_STORE.update_from_rest_orderbook(
+        code,
+        refreshed_ws,
+        now_ts=now_ts,
+        tier="hot",
+    )
+    stock_dict = stock if isinstance(stock, dict) else {}
+    probe = stock_dict.get("last_watching_ai_feature_probe")
+    source_quality = stock_dict.get("last_watching_ai_source_quality_fields")
+    probe = probe if isinstance(probe, dict) else {}
+    source_quality = source_quality if isinstance(source_quality, dict) else {}
+    probe_at = _safe_float(stock_dict.get("last_watching_ai_feature_probe_at"), 0.0)
+    max_probe_age_sec = _rising_missed_rest_estimator_probe_max_age_sec()
+    if probe or source_quality:
+        _RISING_MISSED_MICRO_ESTIMATOR_STORE.update_from_feature_probe(
+            code,
+            probe,
+            source_quality,
+            now_ts=now_ts,
+            observed_ts=probe_at if probe_at > 0 else None,
+            max_age_sec=max_probe_age_sec,
+            tier="hot",
+        )
+    depth = _rising_missed_depth_estimator_from_rest_snapshot(refreshed_ws)
+    snapshot = _RISING_MISSED_MICRO_ESTIMATOR_STORE.snapshot(code, now_ts=now_ts)
+    estimated_pressure = _safe_float(snapshot.get("pressure_ewma"), float(depth["pressure"]))
+    estimated_ofi_norm = _safe_float(snapshot.get("ofi_ewma"), float(depth["ofi_norm"]))
+    estimator_confidence = _safe_float(snapshot.get("confidence"), 0.0)
+    min_ofi_norm = _rising_missed_rest_estimator_min_ofi_norm()
+    min_pressure = _rising_missed_rest_estimator_min_pressure()
+    min_confidence = _rising_missed_micro_estimator_min_confidence()
+    depth_support = bool(depth["total_depth"] > 0 and estimated_ofi_norm >= min_ofi_norm)
+    pressure_support = bool(estimated_pressure >= min_pressure)
+    confidence_support = bool(estimator_confidence >= min_confidence)
+    support = bool(confidence_support and (depth_support or pressure_support))
+    smoothing_age_sec = max(0.0, now_ts - probe_at) if probe_at > 0 else max_probe_age_sec
+    fields.update(
+        {
+            "rising_missed_rest_quote_estimator_applied": True,
+            "rising_missed_rest_quote_estimator_support": support,
+            "rising_missed_rest_quote_estimator_reason": (
+                "rest_anchored_estimate_support"
+                if support
+                else "rest_anchored_estimate_below_confidence_or_floor"
+            ),
+            "rising_missed_rest_quote_estimator_source_quality_state": snapshot.get("source_state")
+            or "rest_anchored_estimate",
+            "rising_missed_rest_quote_estimator_ofi_norm": f"{estimated_ofi_norm:.4f}",
+            "rising_missed_rest_quote_estimator_min_ofi_norm": f"{float(min_ofi_norm):.4f}",
+            "rising_missed_rest_quote_estimator_depth_pressure": f"{float(depth['pressure']):.2f}",
+            "rising_missed_rest_quote_estimator_smoothed_pressure": f"{estimated_pressure:.2f}",
+            "rising_missed_rest_quote_estimator_estimated_pressure": f"{estimated_pressure:.2f}",
+            "rising_missed_rest_quote_estimator_min_pressure": f"{float(min_pressure):.2f}",
+            "rising_missed_rest_quote_estimator_depth_source": depth["depth_source"],
+            "rising_missed_rest_quote_estimator_bid_depth": f"{float(depth['bid_depth']):.1f}",
+            "rising_missed_rest_quote_estimator_ask_depth": f"{float(depth['ask_depth']):.1f}",
+            "rising_missed_rest_quote_estimator_top_depth_ratio": f"{float(depth['top_depth_ratio']):.4f}",
+            "rising_missed_rest_quote_estimator_smoothing_source": snapshot.get("source_state")
+            or "rest_anchored_estimate",
+            "rising_missed_rest_quote_estimator_ofi_source": snapshot.get("ofi_source") or "-",
+            "rising_missed_rest_quote_estimator_true_ofi_ewma": (
+                f"{_safe_float(snapshot.get('true_ofi_ewma'), 0.0):.4f}"
+            ),
+            "rising_missed_rest_quote_estimator_depth_imbalance_ewma": (
+                f"{_safe_float(snapshot.get('depth_imbalance_ewma'), 0.0):.4f}"
+            ),
+            "rising_missed_rest_quote_estimator_smoothing_confidence": f"{estimator_confidence:.4f}",
+            "rising_missed_rest_quote_estimator_smoothing_age_sec": f"{smoothing_age_sec:.1f}",
+            "rising_missed_micro_estimator_policy_version": snapshot.get("policy_version") or "-",
+            "rising_missed_micro_estimator_tier": snapshot.get("tier") or "cold",
+            "rising_missed_micro_estimator_source_state": snapshot.get("source_state") or "-",
+            "rising_missed_micro_estimator_ofi_source": snapshot.get("ofi_source") or "-",
+            "rising_missed_micro_estimator_true_ofi_ewma": f"{_safe_float(snapshot.get('true_ofi_ewma'), 0.0):.4f}",
+            "rising_missed_micro_estimator_depth_imbalance_ewma": (
+                f"{_safe_float(snapshot.get('depth_imbalance_ewma'), 0.0):.4f}"
+            ),
+            "rising_missed_micro_estimator_confidence": f"{estimator_confidence:.4f}",
+            "rising_missed_micro_estimator_min_confidence": f"{min_confidence:.4f}",
+            "rising_missed_micro_estimator_sample_count": _safe_int(snapshot.get("sample_count"), 0),
+            "rising_missed_micro_estimator_true_ofi_sample_count": _safe_int(
+                snapshot.get("true_ofi_sample_count"), 0
+            ),
+            "rising_missed_micro_estimator_age_sec": f"{_safe_float(snapshot.get('age_sec'), 0.0):.1f}",
+            "rising_missed_micro_estimator_lazy_hydration": lazy_hydration,
+            "micro_estimator_source_state": snapshot.get("source_state") or "-",
+            "micro_estimator_ofi_source": snapshot.get("ofi_source") or "-",
+            "micro_estimator_confidence": f"{estimator_confidence:.4f}",
+            "micro_estimator_ofi_ewma": f"{estimated_ofi_norm:.4f}",
+            "micro_estimator_true_ofi_ewma": f"{_safe_float(snapshot.get('true_ofi_ewma'), 0.0):.4f}",
+            "micro_estimator_depth_imbalance_ewma": f"{_safe_float(snapshot.get('depth_imbalance_ewma'), 0.0):.4f}",
+            "micro_estimator_pressure_ewma": f"{estimated_pressure:.2f}",
+            "micro_estimator_sample_count": _safe_int(snapshot.get("sample_count"), 0),
+            "micro_estimator_true_ofi_sample_count": _safe_int(snapshot.get("true_ofi_sample_count"), 0),
+        }
+    )
+    enriched_ws = dict(refreshed_ws or {})
+    enriched_ws.update(
+        {
+            "rising_missed_rest_quote_estimator_applied": True,
+            "rising_missed_rest_quote_estimator_support": support,
+            "rising_missed_rest_quote_estimator_source_quality_state": snapshot.get("source_state")
+            or "rest_anchored_estimate",
+            "rising_missed_rest_quote_estimator_ofi_norm": estimated_ofi_norm,
+            "rising_missed_rest_quote_estimator_estimated_pressure": estimated_pressure,
+            "micro_estimator_source_state": snapshot.get("source_state") or "-",
+            "micro_estimator_ofi_source": snapshot.get("ofi_source") or "-",
+            "micro_estimator_confidence": estimator_confidence,
+            "micro_estimator_ofi_ewma": estimated_ofi_norm,
+            "micro_estimator_true_ofi_ewma": _safe_float(snapshot.get("true_ofi_ewma"), 0.0),
+            "micro_estimator_depth_imbalance_ewma": _safe_float(snapshot.get("depth_imbalance_ewma"), 0.0),
+            "micro_estimator_pressure_ewma": estimated_pressure,
+            "micro_estimator_sample_count": _safe_int(snapshot.get("sample_count"), 0),
+            "micro_estimator_true_ofi_sample_count": _safe_int(snapshot.get("true_ofi_sample_count"), 0),
+            "source_quality_state": "rest_anchored_estimate",
+            "source_quality_block_reason": "-",
+            "quote_age_ms": rest_fields.get("pre_submit_rest_orderbook_refresh_age_ms") or 0.0,
+            "buy_pressure_10t": f"{estimated_pressure:.3f}",
+            "net_aggressive_delta_10t": f"{float(depth['bid_depth'] - depth['ask_depth']):.3f}",
+            "tick_aggressor_pressure_usable": bool(support),
+            "tick_context_quality": "rest_anchored_estimate",
+            "quote_stale": False,
+        }
+    )
+    return fields, enriched_ws if support else None
+
+
+def _rising_missed_scout_quality_guard_ai_recheck_needed(quality_guard: dict | None) -> bool:
+    guard = quality_guard if isinstance(quality_guard, dict) else {}
+    if not bool(guard.get("rising_missed_scout_quality_guard_blocked")):
+        return False
+    if str(guard.get("block_reason") or guard.get("reason") or "") != "stale_quote_with_weak_ai_or_strength":
+        return False
+    if not bool(guard.get("rising_missed_scout_quality_guard_weak_ai")):
+        return False
+    action = str(guard.get("rising_missed_scout_quality_guard_ai_action") or "-").strip().upper()
+    if action == "DROP":
+        return False
+    score = _safe_float(guard.get("rising_missed_scout_quality_guard_ai_score"), 0.0)
+    return action in {"", "-", "NOT_EVALUATED", "UNAVAILABLE", "FAIL_CLOSED"} and score <= 50.0
+
+
+def _maybe_recheck_rising_missed_scout_quality_guard_with_rest_ai(
+    stock,
+    code,
+    ws_data,
+    runtime,
+    quality_guard: dict | None,
+    *,
+    strategy: str,
+) -> tuple[dict, dict | None]:
+    fields = {
+        "rising_missed_rest_quote_ai_recheck_enabled": _env_bool(
+            "KORSTOCKSCAN_RISING_MISSED_REST_QUOTE_AI_RECHECK_ENABLED",
+            True,
+        ),
+        "rising_missed_rest_quote_ai_recheck_attempted": False,
+        "rising_missed_rest_quote_ai_recheck_success": False,
+        "rising_missed_rest_quote_ai_recheck_reason": "not_needed",
+        "rising_missed_rest_quote_ai_recheck_source": "ka10004_rest_orderbook",
+        "rising_missed_rest_quote_ai_recheck_runtime_effect": False,
+        "rising_missed_rest_quote_ai_recheck_allowed_runtime_apply": False,
+        "rising_missed_rest_quote_ai_recheck_forbidden_uses": TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
+    }
+    if not fields["rising_missed_rest_quote_ai_recheck_enabled"]:
+        fields["rising_missed_rest_quote_ai_recheck_reason"] = "disabled"
+        return fields, None
+    if not _rising_missed_scout_quality_guard_ai_recheck_needed(quality_guard):
+        return fields, None
+    ai_engine = (runtime or {}).get("ai_engine")
+    if ai_engine is None or not hasattr(ai_engine, "analyze_target"):
+        fields["rising_missed_rest_quote_ai_recheck_reason"] = "ai_engine_unavailable"
+        return fields, None
+
+    fields["rising_missed_rest_quote_ai_recheck_attempted"] = True
+    refreshed_ws, rest_fields = _pre_submit_refresh_rest_orderbook_snapshot(code, ws_data, strategy)
+    fields.update(_pre_submit_ws_snapshot_refresh_log_fields(rest_fields))
+    if not bool(rest_fields.get("pre_submit_rest_orderbook_refresh_applied")):
+        fields["rising_missed_rest_quote_ai_recheck_reason"] = (
+            rest_fields.get("pre_submit_rest_orderbook_refresh_reason")
+            or "rest_orderbook_not_applied"
+        )
+        return fields, None
+
+    retry_fields = _retry_entry_ai_submit_authority_before_block(
+        stock=stock,
+        code=code,
+        ws_data=refreshed_ws,
+        ai_engine=ai_engine,
+        now_ts=_safe_float((runtime or {}).get("now_ts"), time.time()),
+        current_ai_score=(runtime or {}).get("current_ai_score"),
+    )
+    fields.update(
+        {
+            "rising_missed_rest_quote_ai_recheck_ai_attempted": bool(
+                retry_fields.get("pre_submit_entry_ai_authority_retry_attempted")
+            ),
+            "rising_missed_rest_quote_ai_recheck_ai_success": bool(
+                retry_fields.get("pre_submit_entry_ai_authority_retry_success")
+            ),
+            "rising_missed_rest_quote_ai_recheck_ai_reason": retry_fields.get(
+                "pre_submit_entry_ai_authority_retry_reason"
+            )
+            or "unknown",
+            "rising_missed_rest_quote_ai_recheck_ai_action": retry_fields.get(
+                "pre_submit_entry_ai_authority_retry_action"
+            )
+            or "not_evaluated",
+            "rising_missed_rest_quote_ai_recheck_ai_score": retry_fields.get(
+                "pre_submit_entry_ai_authority_retry_score"
+            )
+            or "0.0",
+            "rising_missed_rest_quote_ai_recheck_ai_result_source": retry_fields.get(
+                "pre_submit_entry_ai_authority_retry_result_source"
+            )
+            or "-",
+        }
+    )
+    if not bool(retry_fields.get("pre_submit_entry_ai_authority_retry_success")):
+        fields["rising_missed_rest_quote_ai_recheck_reason"] = fields[
+            "rising_missed_rest_quote_ai_recheck_ai_reason"
+        ]
+        return fields, None
+
+    fields["rising_missed_rest_quote_ai_recheck_success"] = True
+    fields["rising_missed_rest_quote_ai_recheck_reason"] = "rest_quote_fresh_ai_rechecked"
+    fields["rising_missed_rest_quote_ai_recheck_runtime_effect"] = True
+    return fields, refreshed_ws
+
+
 def _is_forced_rising_missed_initial_scout_entry(
     stock: dict | None,
     runtime: dict | None,
@@ -33281,6 +34116,16 @@ def _maybe_submit_rising_missed_one_share_entry(
     if not decision.allowed:
         return False
 
+    ws_estimator_fields = _maybe_update_rising_missed_micro_estimator_from_fresh_ws(
+        stock,
+        code,
+        ws_data,
+        runtime,
+        consumer_stage="rising_missed_candidate_gate_passed",
+    )
+    if ws_estimator_fields.get("rising_missed_micro_estimator_ws_update_reason") != "not_needed":
+        decision_log_fields.update(ws_estimator_fields)
+
     quality_guard = _evaluate_rising_missed_scout_quality_guard(
         stock,
         code,
@@ -33288,6 +34133,143 @@ def _maybe_submit_rising_missed_one_share_entry(
         runtime,
         decision_log_fields,
     )
+    if quality_guard.get("rising_missed_scout_quality_guard_blocked"):
+        estimator_fields, estimator_ws_data = _maybe_supplement_rising_missed_scout_quality_guard_with_rest_estimator(
+            stock,
+            code,
+            ws_data,
+            runtime,
+            quality_guard,
+            strategy=strategy,
+        )
+        if estimator_fields.get("rising_missed_rest_quote_estimator_reason") != "not_needed":
+            decision_log_fields.update(estimator_fields)
+            quality_guard.update(estimator_fields)
+        if estimator_ws_data is not None and estimator_fields.get("rising_missed_rest_quote_estimator_support"):
+            ws_data = estimator_ws_data
+            runtime = dict(runtime or {})
+            refreshed_curr_price = _safe_int(ws_data.get("curr"), curr_price)
+            if refreshed_curr_price > 0:
+                curr_price = refreshed_curr_price
+            decision = evaluate_rising_missed_one_share_entry(
+                stock,
+                strategy=strategy,
+                position_tag=pos_tag,
+                feature_enabled=feature_enabled,
+                has_open_pending=_has_open_pending_entry_orders(stock),
+                already_holding=_already_holding_entry_position(stock),
+                positive_delta_pct=_scanner_positive_delta_pct(stock),
+                min_delta_pct=_scanner_rising_entry_min_delta_pct(),
+                current_price=curr_price,
+                max_entry_price_krw=_rising_missed_one_share_entry_max_price_krw(),
+                scout_budget_cap_krw=_rising_missed_scout_entry_budget_cap_krw(),
+                current_fluctuation_pct=_current_fluctuation_pct(stock, ws_data, runtime),
+                upper_limit_exclude_enabled=_rising_missed_upper_limit_exclude_enabled(),
+                upper_limit_exclude_pct=_rising_missed_upper_limit_exclude_pct(),
+            )
+            decision_log_fields = dict(decision.log_fields or {})
+            decision_log_fields.update(estimator_fields)
+            if decision.allowed is False and decision.reason != RISING_MISSED_BLOCK_NOT_CANDIDATE:
+                candidate_backoff_fields = _record_rising_missed_candidate_gate_backoff(
+                    stock,
+                    code,
+                    decision.reason,
+                    now_ts=_safe_float(runtime.get("now_ts"), time.time()),
+                    source_stage="rising_missed_one_share_entry_blocked_after_rest_quote_estimator",
+                )
+                _log_entry_pipeline(
+                    stock,
+                    code,
+                    "rising_missed_one_share_entry_blocked",
+                    block_reason=decision.reason,
+                    forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON,
+                    actual_order_submitted=False,
+                    broker_order_forbidden=True,
+                    runtime_effect=decision.reason == RISING_MISSED_BLOCK_PRICE_ABOVE_CAP,
+                    **_merge_entry_pipeline_field_groups(decision_log_fields, candidate_backoff_fields),
+                )
+                return True
+            if not decision.allowed:
+                return False
+            quality_guard = _evaluate_rising_missed_scout_quality_guard(
+                stock,
+                code,
+                ws_data,
+                runtime,
+                decision_log_fields,
+            )
+    if quality_guard.get("rising_missed_scout_quality_guard_blocked"):
+        rest_ai_recheck_fields, refreshed_ws_data = _maybe_recheck_rising_missed_scout_quality_guard_with_rest_ai(
+            stock,
+            code,
+            ws_data,
+            runtime,
+            quality_guard,
+            strategy=strategy,
+        )
+        if rest_ai_recheck_fields.get("rising_missed_rest_quote_ai_recheck_reason") != "not_needed":
+            decision_log_fields.update(rest_ai_recheck_fields)
+            quality_guard.update(rest_ai_recheck_fields)
+        if rest_ai_recheck_fields.get("rising_missed_rest_quote_ai_recheck_attempted"):
+            if refreshed_ws_data is not None and rest_ai_recheck_fields.get(
+                "rising_missed_rest_quote_ai_recheck_success"
+            ):
+                ws_data = refreshed_ws_data
+                runtime = dict(runtime or {})
+                refreshed_curr_price = _safe_int(ws_data.get("curr"), curr_price)
+                if refreshed_curr_price > 0:
+                    curr_price = refreshed_curr_price
+                decision = evaluate_rising_missed_one_share_entry(
+                    stock,
+                    strategy=strategy,
+                    position_tag=pos_tag,
+                    feature_enabled=feature_enabled,
+                    has_open_pending=_has_open_pending_entry_orders(stock),
+                    already_holding=_already_holding_entry_position(stock),
+                    positive_delta_pct=_scanner_positive_delta_pct(stock),
+                    min_delta_pct=_scanner_rising_entry_min_delta_pct(),
+                    current_price=curr_price,
+                    max_entry_price_krw=_rising_missed_one_share_entry_max_price_krw(),
+                    scout_budget_cap_krw=_rising_missed_scout_entry_budget_cap_krw(),
+                    current_fluctuation_pct=_current_fluctuation_pct(stock, ws_data, runtime),
+                    upper_limit_exclude_enabled=_rising_missed_upper_limit_exclude_enabled(),
+                    upper_limit_exclude_pct=_rising_missed_upper_limit_exclude_pct(),
+                )
+                decision_log_fields = dict(decision.log_fields or {})
+                decision_log_fields.update(rest_ai_recheck_fields)
+                if decision.allowed is False and decision.reason != RISING_MISSED_BLOCK_NOT_CANDIDATE:
+                    candidate_backoff_fields = _record_rising_missed_candidate_gate_backoff(
+                        stock,
+                        code,
+                        decision.reason,
+                        now_ts=_safe_float(runtime.get("now_ts"), time.time()),
+                        source_stage="rising_missed_one_share_entry_blocked_after_rest_quote_ai_recheck",
+                    )
+                    _log_entry_pipeline(
+                        stock,
+                        code,
+                        "rising_missed_one_share_entry_blocked",
+                        block_reason=decision.reason,
+                        forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON,
+                        actual_order_submitted=False,
+                        broker_order_forbidden=True,
+                        runtime_effect=decision.reason == RISING_MISSED_BLOCK_PRICE_ABOVE_CAP,
+                        **_merge_entry_pipeline_field_groups(decision_log_fields, candidate_backoff_fields),
+                    )
+                    return True
+                if not decision.allowed:
+                    return False
+                runtime["current_ai_score"] = _safe_float(
+                    rest_ai_recheck_fields.get("rising_missed_rest_quote_ai_recheck_ai_score"),
+                    runtime.get("current_ai_score"),
+                )
+                quality_guard = _evaluate_rising_missed_scout_quality_guard(
+                    stock,
+                    code,
+                    ws_data,
+                    runtime,
+                    decision_log_fields,
+                )
     if quality_guard.get("rising_missed_scout_quality_guard_blocked"):
         scout_quality_backoff_fields = _record_rising_missed_submit_safety_backoff(
             stock,
@@ -35696,6 +36678,19 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
     _mutate_stock_state(stock, set_fields={"position_tag": pos_tag})
     if curr_p <= 0 or buy_p <= 0:
         return
+    holding_exit_micro_estimator_fields = (
+        _scalping_micro_estimator_log_fields(
+            stock=stock,
+            code=code,
+            ws_data=ws_data,
+            now_ts=now_ts,
+            prefix="holding_exit_micro_estimator",
+            consumer_stage="holding_state_quote_context",
+            tier="hot",
+        )
+        if strategy == "SCALPING"
+        else {}
+    )
     if _maybe_submit_rising_missed_scout_upgrade(
         stock,
         code,
@@ -36382,6 +37377,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                             "prior_data_quality": holding_score_ctx.get("data_quality", "insufficient"),
                             "prior_score_age_sec": holding_score_ctx.get("age_sec"),
                             "prior_effective_usable": holding_score_ctx.get("usable", False),
+                            **holding_exit_micro_estimator_fields,
                         }
                         if hasattr(ai_engine, "evaluate_scalping_holding_score"):
                             ai_decision = ai_engine.evaluate_scalping_holding_score(
@@ -40419,6 +41415,15 @@ def _evaluate_scale_in_signal(
             ai_engine=ai_engine,
             now_ts=now_ts,
         )
+        scale_in_micro_estimator_fields = _scalping_micro_estimator_log_fields(
+            stock=stock,
+            code=code,
+            ws_data=ws_data,
+            now_ts=now_ts,
+            prefix="scale_in_micro_estimator",
+            consumer_stage="scale_in_signal",
+            tier="hot",
+        )
         if feature_refresh_fields.get("scale_in_feature_refresh_attempted"):
             _log_holding_pipeline(
                 stock,
@@ -40436,6 +41441,7 @@ def _evaluate_scale_in_signal(
                 current_ai_score=f"{_safe_float(current_ai_score, 0.0):.0f}",
                 held_sec=_safe_int(held_sec, 0),
                 **feature_refresh_fields,
+                **scale_in_micro_estimator_fields,
             )
 
         scale_in_ai_retry_fields = {}
@@ -40515,6 +41521,7 @@ def _evaluate_scale_in_signal(
                     "current_ai_score": current_ai_score,
                     "is_new_high": is_new_high,
                     **scale_in_ai_retry_fields,
+                    **scale_in_micro_estimator_fields,
                 }
             )
             return pyramid
@@ -40527,6 +41534,7 @@ def _evaluate_scale_in_signal(
                     "current_ai_score": current_ai_score,
                     "held_sec": held_sec,
                     **scale_in_ai_retry_fields,
+                    **scale_in_micro_estimator_fields,
                 }
             )
             return reversal
@@ -40539,6 +41547,7 @@ def _evaluate_scale_in_signal(
             safety_context=stock if isinstance(stock, dict) else {},
         )
         if adm_scale_in.get("should_add"):
+            adm_scale_in.update(scale_in_micro_estimator_fields)
             return adm_scale_in
         return None
     elif raw_strategy in ('KOSPI_ML', 'KOSDAQ_ML'):
@@ -40856,6 +41865,28 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
     if scale_in_buy_reference_price > 0:
         ws_data = dict(ws_data or {})
         ws_data["passive_buy_price"] = int(scale_in_buy_reference_price)
+    scale_in_action_micro_estimator_fields = _prefixed_micro_estimator_fields(
+        action,
+        "scale_in_micro_estimator_",
+    )
+    scale_in_submit_micro_estimator_fields = (
+        _scalping_micro_estimator_log_fields(
+            stock=stock,
+            code=code,
+            ws_data=ws_data,
+            now_ts=time.time(),
+            prefix="scale_in_micro_estimator",
+            consumer_stage="scale_in_pre_submit",
+            tier="hot",
+            rest_orderbook=rest_orderbook_refresh_applied,
+        )
+        if strategy == "SCALPING"
+        else {}
+    )
+    scale_in_micro_estimator_fields = {
+        **scale_in_action_micro_estimator_fields,
+        **scale_in_submit_micro_estimator_fields,
+    }
     scale_in_quote_refresh_non_price_source_fields = {
         key: value for key, value in scale_in_quote_refresh_fields.items() if key != "price_source"
     }
@@ -40868,7 +41899,10 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         "passive_sell_price",
     )
     scale_in_micro_fields_without_authority_collisions = _without_event_field_collisions(
-        swing_scale_micro_fields,
+        {
+            **swing_scale_micro_fields,
+            **scale_in_micro_estimator_fields,
+        },
         "actual_order_submitted",
         "broker_order_forbidden",
         "canonical_mark_price",
@@ -41038,7 +42072,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             **scale_in_feature_quality_fields,
             **scale_in_quote_refresh_non_price_source_fields,
             **sim_funnel_fields,
-            **swing_scale_micro_fields,
+            **scale_in_micro_fields_without_authority_collisions,
         )
         log_info(
             f"[ADD_BLOCKED] {stock.get('name')}({code}) reason=scale_in_price_guard "
@@ -41180,6 +42214,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             **sim_budget_fields,
             **sim_funnel_fields,
             **swing_scale_micro_fields,
+            **scale_in_micro_estimator_fields,
         )
         log_info(
             f"[ADD_BLOCKED] {stock.get('name')}({code}) "
@@ -41207,6 +42242,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             "resolved_price": resolved_price,
             **scale_in_qty_budget_fields,
             **scale_in_feature_quality_fields,
+            **scale_in_micro_estimator_fields,
         }
 
     if strategy == 'SCALPING':
@@ -41249,6 +42285,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         **scale_in_quote_refresh_non_price_source_fields,
         **sim_budget_fields,
         **swing_scale_micro_fields,
+        **scale_in_micro_estimator_fields,
     )
     _log_holding_pipeline(
         stock,
@@ -41264,6 +42301,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         add_type=add_type,
         **scale_in_quote_refresh_non_price_source_fields,
         **swing_scale_micro_fields,
+        **scale_in_micro_estimator_fields,
     )
 
     if is_buy_side_paused():
@@ -41309,6 +42347,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             actual_order_submitted=False,
             broker_order_forbidden=bool(simulated_position),
             **scale_in_split_fields,
+            **scale_in_micro_estimator_fields,
         )
     scale_in_split_orders = _decorate_scale_in_split_leg_ttls(scale_in_split_orders, stock, strategy)
 
@@ -41364,6 +42403,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                         scale_in_candidate_funnel_state=("passive_filled" if touched else "passive_unfilled"),
                         runtime_effect="sim_passive_execution_diagnostic_only",
                         **sim_budget_fields,
+                        **scale_in_micro_estimator_fields,
                         **_scalp_sim_candidate_window_context_fields(stock),
                     ),
                 )
@@ -41416,6 +42456,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                         lifecycle_bucket_match_status="candidate_context_only",
                         runtime_ev_eligible=False,
                         runtime_effect=False,
+                        **scale_in_micro_estimator_fields,
                     ),
                 )
                 persist_scalp_simulator_state()
@@ -41445,6 +42486,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                     scale_in_candidate_funnel_state="marketable_filled",
                     runtime_effect="sim_shadow_tranche_only",
                     **sim_budget_fields,
+                    **scale_in_micro_estimator_fields,
                     **_scalp_sim_candidate_window_context_fields(stock),
                 ),
             )
@@ -41499,6 +42541,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                     qty_reason=qty_reason,
                     **scale_in_qty_budget_fields,
                     **sim_budget_fields,
+                    **scale_in_micro_estimator_fields,
                     **_scalp_sim_candidate_window_context_fields(stock),
                 ),
             )
@@ -41571,6 +42614,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                 qty_reason=qty_reason,
                 **scale_in_qty_budget_fields,
                 **sim_budget_fields,
+                **scale_in_micro_estimator_fields,
                 runtime_effect="simulated_holding_only",
                 **_scalp_sim_candidate_window_context_fields(stock),
             ),
@@ -41747,6 +42791,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             resolved_price=resolved_price,
             add_trigger=action.get("reason"),
             **_greenfield_block_fields(scale_in_greenfield_decision),
+            **scale_in_micro_estimator_fields,
         )
         return None
 
@@ -41776,6 +42821,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                 "add_type": add_type,
                 "scale_in_guard_reason": real_pyramid_micro_guard.get("reason"),
                 "trade_quality_signature_version": "scale_in_quality_v1",
+                **scale_in_micro_estimator_fields,
             },
         )
         log_info(
@@ -42023,6 +43069,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             "add_trigger": action.get("reason"),
             "partial_submit_failure": partial_submit_failure,
             **scale_in_split_fields,
+            **scale_in_micro_estimator_fields,
         },
     )
     return last_res

@@ -70,6 +70,144 @@ def _ws():
     }
 
 
+def test_holding_flow_ofi_prefers_micro_estimator_true_ofi(monkeypatch):
+    store = handlers.MicroEstimatorStore()
+    monkeypatch.setattr(handlers, "_SCALPING_MICRO_ESTIMATOR_STORE", store)
+    monkeypatch.setattr(
+        handlers,
+        "_ofi_ai_smoothing_config",
+        lambda: handlers.OfiSmoothingConfig(
+            raw_weight=1.0,
+            bullish_threshold=0.45,
+            bearish_threshold=-0.45,
+            release_threshold=0.15,
+            persistence_required=1,
+            stale_threshold_ms=700,
+        ),
+    )
+    for idx in range(15):
+        store.update_from_ws_quote(
+            "005930",
+            {
+                "best_bid": 10000 + idx,
+                "best_ask": 10020,
+                "best_bid_qty": 1000 + (idx * 1000),
+                "best_ask_qty": 1,
+                "quote_age_ms": 100.0,
+                "quote_stale": False,
+            },
+            now_ts=1000.0 + idx,
+            tier="hot",
+        )
+
+    stock = _stock()
+    micro, state = handlers._evaluate_holding_flow_ofi_state(
+        stock,
+        "005930",
+        curr_price=10000,
+        now_ts=1014.0,
+    )
+
+    assert micro["reason"] == "micro_estimator_true_ofi_primary"
+    assert micro["ofi_threshold_source"] == "micro_estimator_state_v1"
+    assert micro["ofi_calibration_bucket"] == "true_ofi"
+    assert state.reason == "micro_estimator_true_ofi_primary"
+    assert state.micro_score_raw == round(handlers.micro_score_raw(micro), 6)
+    assert state.regime == handlers.OFI_STABLE_BULLISH
+    assert stock["holding_flow_ofi_reason"] == "micro_estimator_true_ofi_primary"
+
+
+def test_holding_flow_ofi_falls_back_to_legacy_observer_without_micro_state(monkeypatch):
+    monkeypatch.setattr(handlers, "_SCALPING_MICRO_ESTIMATOR_STORE", handlers.MicroEstimatorStore())
+    monkeypatch.setattr(
+        handlers,
+        "_ofi_ai_smoothing_config",
+        lambda: handlers.OfiSmoothingConfig(
+            raw_weight=1.0,
+            bullish_threshold=0.45,
+            bearish_threshold=-0.45,
+            release_threshold=0.15,
+            persistence_required=1,
+            stale_threshold_ms=700,
+        ),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_build_live_orderbook_micro_context",
+        lambda code, *, curr_price: {
+            "ready": True,
+            "reason": "ready",
+            "micro_state": "bearish",
+            "observer_healthy": True,
+            "snapshot_age_ms": 100,
+            "ofi_z": -2.0,
+            "qi_ewma": 0.38,
+        },
+    )
+
+    stock = _stock()
+    micro, state = handlers._evaluate_holding_flow_ofi_state(
+        stock,
+        "005930",
+        curr_price=10000,
+        now_ts=1000.0,
+    )
+
+    assert micro["micro_state"] == "bearish"
+    assert state.reason == "ready"
+    assert state.regime == handlers.OFI_STABLE_BEARISH
+    assert stock["holding_flow_ofi_reason"] == "ready"
+
+
+def test_holding_flow_micro_estimator_reads_nested_orderbook_ws(monkeypatch):
+    store = handlers.MicroEstimatorStore()
+    monkeypatch.setattr(handlers, "_SCALPING_MICRO_ESTIMATOR_STORE", store)
+    monkeypatch.setattr(
+        handlers,
+        "_ofi_ai_smoothing_config",
+        lambda: handlers.OfiSmoothingConfig(
+            raw_weight=1.0,
+            bullish_threshold=0.45,
+            bearish_threshold=-0.45,
+            release_threshold=0.15,
+            persistence_required=1,
+            stale_threshold_ms=700,
+        ),
+    )
+    stock = _stock()
+    fields = {}
+    for idx in range(15):
+        fields = handlers._scalping_micro_estimator_log_fields(
+            stock=stock,
+            code="005930",
+            ws_data={
+                "curr": 10000 + idx,
+                "orderbook": {
+                    "bids": [{"price": 10000 + idx, "volume": 1000 + (idx * 1000)}],
+                    "asks": [{"price": 10020, "volume": 1}],
+                },
+                "quote_age_ms": 100.0,
+                "quote_stale": False,
+            },
+            now_ts=1000.0 + idx,
+            prefix="holding_flow_micro_estimator",
+            consumer_stage="holding_flow_override",
+            tier="hot",
+        )
+
+    assert fields["holding_flow_micro_estimator_update_applied"] is True
+    assert fields["holding_flow_micro_estimator_update_reason"] == "ws_quote"
+    assert fields["holding_flow_micro_estimator_true_ofi_sample_count"] > 0
+    micro, state = handlers._evaluate_holding_flow_ofi_state(
+        stock,
+        "005930",
+        curr_price=10000,
+        now_ts=1014.0,
+    )
+    assert micro["reason"] == "micro_estimator_true_ofi_primary"
+    assert state.regime == handlers.OFI_STABLE_BULLISH
+
+
 def test_soft_stop_candidate_with_flow_hold_defers_sell(monkeypatch):
     logs = []
     _patch_holding_context(monkeypatch, logs)
@@ -139,7 +277,7 @@ def test_flow_exit_is_debounced_by_stable_bullish_ofi(monkeypatch):
     monkeypatch.setattr(
         handlers,
         "_evaluate_holding_flow_ofi_state",
-        lambda stock, code, *, curr_price: (
+        lambda stock, code, *, curr_price, now_ts=None: (
             {"ready": True, "micro_state": "bullish", "observer_healthy": True, "snapshot_age_ms": 100},
             handlers.OfiSmoothingState(regime=handlers.OFI_STABLE_BULLISH, micro_score_smooth=0.62),
         ),
@@ -188,7 +326,7 @@ def test_flow_exit_bullish_ofi_debounce_count_limit_allows_sell(monkeypatch):
     monkeypatch.setattr(
         handlers,
         "_evaluate_holding_flow_ofi_state",
-        lambda stock, code, *, curr_price: (
+        lambda stock, code, *, curr_price, now_ts=None: (
             {"ready": True, "micro_state": "bullish", "observer_healthy": True, "snapshot_age_ms": 100},
             handlers.OfiSmoothingState(regime=handlers.OFI_STABLE_BULLISH, micro_score_smooth=0.62),
         ),
@@ -414,7 +552,7 @@ def test_flow_hold_is_confirmed_exit_by_stable_bearish_ofi_after_worsen(monkeypa
     monkeypatch.setattr(
         handlers,
         "_evaluate_holding_flow_ofi_state",
-        lambda stock, code, *, curr_price: (
+        lambda stock, code, *, curr_price, now_ts=None: (
             {"ready": True, "micro_state": "bearish", "observer_healthy": True, "snapshot_age_ms": 100},
             handlers.OfiSmoothingState(regime=handlers.OFI_STABLE_BEARISH, micro_score_smooth=-0.62),
         ),

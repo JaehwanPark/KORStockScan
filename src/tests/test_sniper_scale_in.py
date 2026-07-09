@@ -15,6 +15,11 @@ import src.engine.trade_pause_control as trade_pause_control
 import src.utils.runtime_flags as runtime_flags
 from src.engine import kiwoom_orders
 from src.engine.kiwoom_websocket import KiwoomWSManager
+from src.engine.scalping.micro_estimator_state import (
+    MicroEstimatorConfig,
+    MicroEstimatorStore,
+    feature_only_fields_from_snapshot,
+)
 from src.utils.constants import TRADING_RULES as CONFIG
 from src.engine.scalping.rising_missed_one_share_entry import (
     BLOCK_ALREADY_HOLDING,
@@ -50,6 +55,8 @@ def _clear_scalp_loss_reentry_state(request, monkeypatch):
         {"date": "", "path": "", "mtime_ns": 0, "size": 0, "rows_by_code": {}}
     )
     state_handlers._RISING_MISSED_SUBMIT_SAFETY_BACKOFFS.clear()
+    state_handlers._RISING_MISSED_MICRO_ESTIMATOR_STORE.clear()
+    state_handlers._SCALPING_MICRO_ESTIMATOR_STORE.clear()
     yield
     state_handlers._SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS.clear()
     state_handlers._SCALP_LOSS_REENTRY_EVENT_CACHE.update({"date": None, "events": []})
@@ -57,6 +64,8 @@ def _clear_scalp_loss_reentry_state(request, monkeypatch):
         {"date": "", "path": "", "mtime_ns": 0, "size": 0, "rows_by_code": {}}
     )
     state_handlers._RISING_MISSED_SUBMIT_SAFETY_BACKOFFS.clear()
+    state_handlers._RISING_MISSED_MICRO_ESTIMATOR_STORE.clear()
+    state_handlers._SCALPING_MICRO_ESTIMATOR_STORE.clear()
 
 
 class _DummySession:
@@ -2915,6 +2924,906 @@ def test_rising_missed_scout_quality_guard_blocks_stale_recent_weak_ai_micro(mon
     assert entry_logs[-1][1]["rising_missed_opportunity_cost_policy"] == "balanced"
     assert entry_logs[-1][1]["actual_order_submitted"] is False
     assert entry_logs[-1][1]["broker_order_forbidden"] is True
+
+
+def test_rising_missed_scout_quality_guard_rest_estimator_supplements_stale_default_ai(monkeypatch):
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.TRADING_RULES = CONFIG
+    state_handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK.clear()
+
+    submit_calls = []
+    entry_logs = []
+    now_ts = 1_783_471_000.0
+
+    def fake_rest_refresh(code, ws_data, strategy):
+        refreshed = {
+            **dict(ws_data or {}),
+            "curr": 10020,
+            "best_bid": 10010,
+            "best_ask": 10020,
+            "best_bid_qty": 900,
+            "best_ask_qty": 100,
+            "bid_tot": 9000,
+            "ask_tot": 1000,
+            "last_ws_update_ts": now_ts,
+            "quote_stale": False,
+        }
+        fields = {
+            "pre_submit_rest_orderbook_refresh_enabled": True,
+            "pre_submit_rest_orderbook_refresh_applied": True,
+            "pre_submit_rest_orderbook_refresh_reason": "rest_orderbook_fresh",
+            "pre_submit_rest_orderbook_refresh_source": "ka10004_rest_orderbook",
+            "pre_submit_rest_orderbook_refresh_age_ms": 0.0,
+            "pre_submit_rest_orderbook_refresh_best_bid": 10010,
+            "pre_submit_rest_orderbook_refresh_best_ask": 10020,
+            "pre_submit_rest_orderbook_refresh_latest_price": 10020,
+        }
+        refreshed.update(fields)
+        return refreshed, fields
+
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", "true")
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_rising_missed_same_day_reentry_guard",
+        lambda *args, **kwargs: {"allowed": True},
+    )
+    monkeypatch.setattr(state_handlers, "_pre_submit_refresh_rest_orderbook_snapshot", fake_rest_refresh)
+    monkeypatch.setattr(
+        state_handlers,
+        "_submit_watching_triggered_entry",
+        lambda stock, code, ws_data, admin_id, runtime: submit_calls.append((stock, code, ws_data, runtime)) or True,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: entry_logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 21,
+        "name": "REST_ESTIMATOR_RISING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_id": "scan-rest-estimator",
+        "price_delta_since_first_seen_pct": 3.2,
+        "last_watching_ai_score": 50.0,
+        "last_watching_ai_feature_probe": {"buy_pressure_10t": 58.0},
+        "last_watching_ai_feature_probe_at": now_ts - 5.0,
+    }
+
+    assert state_handlers._RISING_MISSED_MICRO_ESTIMATOR_STORE.snapshot("123458", now_ts=now_ts)["tier"] == "cold"
+
+    submitted = state_handlers._maybe_submit_rising_missed_one_share_entry(
+        stock,
+        "123458",
+        {"curr": 10000, "v_pw": 100.0, "source_quality_state": "diagnostic_quote_age_stale"},
+        admin_id=1,
+        runtime={"now_ts": now_ts, "current_ai_score": 50.0, "ai_engine": None, "scout_upgrade_entry": False},
+        strategy="SCALPING",
+        pos_tag="SCANNER",
+        curr_price=10000,
+    )
+
+    assert submitted is True
+    assert submit_calls
+    assert all(stage != "rising_missed_scout_quality_guard_blocked" for stage, _fields in entry_logs)
+    submitted_ws = submit_calls[-1][2]
+    assert submitted_ws["source_quality_state"] == "rest_anchored_estimate"
+    assert submitted_ws["rising_missed_rest_quote_estimator_support"] is True
+    assert submitted_ws["micro_estimator_source_state"] in {"rest_anchored_estimate", "smoothed_probe_estimate"}
+    assert submitted_ws["micro_estimator_ofi_source"] in {"depth_imbalance_proxy", "feature_probe_delta_hint"}
+    assert float(submitted_ws["micro_estimator_confidence"]) >= 0.25
+    assert float(submitted_ws["micro_estimator_ofi_ewma"]) >= 0.10
+    assert float(submitted_ws["buy_pressure_10t"]) >= 55.0
+    hydrated = state_handlers._RISING_MISSED_MICRO_ESTIMATOR_STORE.snapshot("123458", now_ts=now_ts)
+    assert hydrated["tier"] == "hot"
+    assert hydrated["source_state"] in {"rest_anchored_estimate", "smoothed_probe_estimate"}
+    assert hydrated["sample_count"] >= 1
+
+
+def test_rising_missed_micro_estimator_updates_from_fresh_ws_without_rest(monkeypatch):
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.TRADING_RULES = CONFIG
+    state_handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK.clear()
+
+    submit_calls = []
+    entry_logs = []
+    rest_calls = []
+    now_ts = 1_783_471_000.0
+
+    def fake_rest_refresh(code, ws_data, strategy):
+        rest_calls.append((code, ws_data, strategy))
+        return dict(ws_data or {}), {"pre_submit_rest_orderbook_refresh_applied": False}
+
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", "true")
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_rising_missed_same_day_reentry_guard",
+        lambda *args, **kwargs: {"allowed": True},
+    )
+    monkeypatch.setattr(state_handlers, "_pre_submit_refresh_rest_orderbook_snapshot", fake_rest_refresh)
+    monkeypatch.setattr(
+        state_handlers,
+        "_submit_watching_triggered_entry",
+        lambda stock, code, ws_data, admin_id, runtime: submit_calls.append((stock, code, ws_data, runtime)) or True,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: entry_logs.append((stage, fields)),
+    )
+
+    submitted = state_handlers._maybe_submit_rising_missed_one_share_entry(
+        {
+            "id": 24,
+            "name": "FRESH_WS_RISING",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "scanner_promotion_id": "scan-fresh-ws",
+            "price_delta_since_first_seen_pct": 3.2,
+            "last_watching_ai_score": 72.0,
+            "last_watching_ai_action": "BUY",
+        },
+        "123461",
+        {
+            "curr": 10000,
+            "v_pw": 100.0,
+            "quote_age_ms": 100.0,
+            "quote_stale": False,
+            "best_bid_qty": 800,
+            "best_ask_qty": 200,
+            "bid_tot": 8000,
+            "ask_tot": 2000,
+        },
+        admin_id=1,
+        runtime={"now_ts": now_ts, "current_ai_score": 72.0, "ai_engine": None, "scout_upgrade_entry": False},
+        strategy="SCALPING",
+        pos_tag="SCANNER",
+        curr_price=10000,
+    )
+
+    assert submitted is True
+    assert submit_calls
+    assert rest_calls == []
+    assert all(stage != "rising_missed_scout_quality_guard_blocked" for stage, _fields in entry_logs)
+    snapshot = state_handlers._RISING_MISSED_MICRO_ESTIMATOR_STORE.snapshot("123461", now_ts=now_ts)
+    assert snapshot["tier"] == "hot"
+    assert snapshot["source_state"] == "fresh_ws_estimate"
+    assert snapshot["ofi_source"] == "depth_imbalance_proxy"
+    assert snapshot["true_ofi_sample_count"] == 0
+    assert snapshot["confidence"] >= 0.25
+    assert snapshot["ofi_ewma"] >= 0.10
+
+
+def test_micro_estimator_state_defaults_rest_probe_ws_and_eviction():
+    store = MicroEstimatorStore(
+        MicroEstimatorConfig(
+            max_hot_symbols=1,
+            max_warm_symbols=1,
+            hot_ttl_sec=600.0,
+            warm_ttl_sec=180.0,
+            half_life_sec=60.0,
+            min_confidence=0.25,
+            min_ofi_norm=0.10,
+            min_pressure=55.0,
+        )
+    )
+
+    cold = store.snapshot("000001", now_ts=1000.0)
+    assert cold["tier"] == "cold"
+    assert cold["source_state"] == "default_prior"
+    assert cold["pressure_ewma"] == 50.0
+    assert len(store) == 0
+
+    store.update_from_rest_orderbook(
+        "000001",
+        {"best_bid_qty": 900, "best_ask_qty": 100, "bid_tot": 9000, "ask_tot": 1000},
+        now_ts=1000.0,
+        tier="hot",
+    )
+    rest_snapshot = store.snapshot("000001", now_ts=1000.0)
+    assert rest_snapshot["tier"] == "hot"
+    assert rest_snapshot["source_state"] == "rest_anchored_estimate"
+    assert rest_snapshot["ofi_source"] == "depth_imbalance_proxy"
+    assert rest_snapshot["true_ofi_sample_count"] == 0
+    assert rest_snapshot["confidence"] >= 0.25
+    assert rest_snapshot["ofi_ewma"] >= 0.10
+    assert rest_snapshot["depth_imbalance_ewma"] >= 0.10
+    assert rest_snapshot["pressure_ewma"] >= 55.0
+
+    true_store = MicroEstimatorStore()
+    true_store.update_from_ws_quote(
+        "000010",
+        {
+            "best_bid": 10000,
+            "best_ask": 10010,
+            "best_bid_qty": 100,
+            "best_ask_qty": 100,
+            "quote_age_ms": 100.0,
+            "quote_stale": False,
+        },
+        now_ts=1000.0,
+        tier="hot",
+    )
+    first_true_snapshot = true_store.snapshot("000010", now_ts=1000.0)
+    assert first_true_snapshot["ofi_source"] == "depth_imbalance_proxy"
+    assert first_true_snapshot["true_ofi_sample_count"] == 0
+    true_store.update_from_ws_quote(
+        "000010",
+        {
+            "best_bid": 10000,
+            "best_ask": 10010,
+            "best_bid_qty": 1000,
+            "best_ask_qty": 1,
+            "quote_age_ms": 100.0,
+            "quote_stale": False,
+        },
+        now_ts=1001.0,
+        tier="hot",
+    )
+    second_true_snapshot = true_store.snapshot("000010", now_ts=1001.0)
+    assert second_true_snapshot["source_state"] == "fresh_ws_order_flow_delta"
+    assert second_true_snapshot["ofi_source"] == "ws_order_flow_delta"
+    assert second_true_snapshot["true_ofi_sample_count"] == 1
+    assert second_true_snapshot["true_ofi_ewma"] > 0.10
+    assert second_true_snapshot["ofi_ewma"] == second_true_snapshot["true_ofi_ewma"]
+    true_store.update_from_feature_probe(
+        "000010",
+        {"buy_pressure_10t": 40.0, "net_aggressive_delta_10t": -900.0},
+        {},
+        now_ts=1002.0,
+        observed_ts=1001.0,
+        max_age_sec=120.0,
+        tier="hot",
+    )
+    probe_after_true_snapshot = true_store.snapshot("000010", now_ts=1002.0)
+    assert probe_after_true_snapshot["ofi_source"] == "previous_true_ofi"
+    assert probe_after_true_snapshot["ofi_ewma"] == probe_after_true_snapshot["true_ofi_ewma"]
+
+    store.update_from_feature_probe(
+        "000001",
+        {"buy_pressure_10t": 60.0, "net_aggressive_delta_10t": 500.0},
+        {},
+        now_ts=1010.0,
+        observed_ts=1005.0,
+        max_age_sec=120.0,
+        tier="hot",
+    )
+    probe_snapshot = store.snapshot("000001", now_ts=1010.0)
+    assert probe_snapshot["sample_count"] == 2
+    assert probe_snapshot["confidence"] >= 0.25
+
+    store.update_from_ws_quote(
+        "000001",
+        {"best_bid_qty": 1000, "best_ask_qty": 200, "quote_age_ms": 100.0, "quote_stale": False},
+        now_ts=1020.0,
+        tier="hot",
+    )
+    ws_snapshot = store.snapshot("000001", now_ts=1020.0)
+    assert ws_snapshot["source_state"] == "fresh_ws_estimate"
+    assert ws_snapshot["confidence"] >= rest_snapshot["confidence"]
+
+    robust_store = MicroEstimatorStore()
+    robust_store.update_from_ws_quote("000004", ["bad-payload"], now_ts=1020.0, tier="hot")
+    malformed_ws_snapshot = robust_store.snapshot("000004", now_ts=1020.0)
+    assert malformed_ws_snapshot["sample_count"] == 0
+    assert malformed_ws_snapshot["source_state"] == "default_prior"
+
+    store.mark_candidate("000002", tier="warm", now_ts=1021.0)
+    store.mark_candidate("000003", tier="warm", now_ts=1022.0)
+    assert store.snapshot("000001", now_ts=1022.0)["tier"] == "hot"
+    assert store.snapshot("000002", now_ts=1022.0)["tier"] == "cold"
+    assert store.snapshot("000003", now_ts=1022.0)["tier"] == "warm"
+
+    store.prune(2000.0)
+    assert store.snapshot("000001", now_ts=2000.0)["source_state"] == "default_prior"
+
+    store.update_from_rest_orderbook(
+        "000001",
+        {"best_bid_qty": 700, "best_ask_qty": 100},
+        now_ts=2001.0,
+        tier="hot",
+    )
+    rehydrated = store.snapshot("000001", now_ts=2001.0)
+    assert rehydrated["tier"] == "hot"
+    assert rehydrated["source_state"] == "rest_anchored_estimate"
+    assert rehydrated["sample_count"] == 1
+
+    feature_fields = feature_only_fields_from_snapshot(
+        rehydrated,
+        prefix="scale_in_micro_estimator",
+        consumer_stage="scale_in_quality_context",
+    )
+    assert feature_fields["scale_in_micro_estimator_decision_authority"] == "feature_only_micro_estimator_state"
+    assert feature_fields["scale_in_micro_estimator_standalone_order_authority"] is False
+    assert feature_fields["scale_in_micro_estimator_runtime_effect"] is False
+    assert feature_fields["scale_in_micro_estimator_ofi_source"] == "depth_imbalance_proxy"
+    assert feature_fields["scale_in_micro_estimator_true_ofi_sample_count"] == 0
+    assert "standalone_scale_in" in feature_fields["scale_in_micro_estimator_forbidden_uses"]
+
+
+def test_scale_in_micro_estimator_helper_persists_feature_only_fields():
+    now_ts = 1_783_472_000.0
+    stock = {
+        "id": 31,
+        "name": "SCALE_AUX",
+        "strategy": "SCALPING",
+        "last_reversal_features": {
+            "buy_pressure_10t": 63.0,
+            "net_aggressive_delta_10t": 450.0,
+            "feature_extracted_at": now_ts - 1.0,
+        },
+    }
+
+    fields = state_handlers._scalping_micro_estimator_log_fields(
+        stock=stock,
+        code="123470",
+        ws_data={
+            "curr": 10000,
+            "last_ws_update_ts": now_ts,
+            "quote_stale": False,
+            "quote_age_ms": 100.0,
+            "best_bid": 9990,
+            "best_ask": 10000,
+            "best_bid_qty": 700,
+            "best_ask_qty": 200,
+            "bid_tot": 7000,
+            "ask_tot": 2000,
+        },
+        now_ts=now_ts,
+        prefix="scale_in_micro_estimator",
+        consumer_stage="scale_in_signal",
+        tier="hot",
+    )
+
+    assert fields["scale_in_micro_estimator_update_applied"] is True
+    assert fields["scale_in_micro_estimator_decision_authority"] == "feature_only_micro_estimator_state"
+    assert fields["scale_in_micro_estimator_standalone_order_authority"] is False
+    assert fields["scale_in_micro_estimator_runtime_effect"] is False
+    assert "standalone_scale_in" in fields["scale_in_micro_estimator_forbidden_uses"]
+    assert stock["scale_in_micro_estimator_decision_authority"] == "feature_only_micro_estimator_state"
+    snapshot = state_handlers._SCALPING_MICRO_ESTIMATOR_STORE.snapshot("123470", now_ts=now_ts)
+    assert snapshot["tier"] == "hot"
+    assert snapshot["sample_count"] >= 1
+    assert snapshot["confidence"] >= 0.25
+
+
+def test_holding_flow_override_passes_micro_estimator_fields_to_ai(monkeypatch):
+    now_ts = 1_783_472_100.0
+    captured_ctx = {}
+    logs = []
+
+    class DummyAI:
+        def evaluate_scalping_holding_flow(
+            self,
+            name,
+            code,
+            ws_data,
+            recent_ticks,
+            recent_candles,
+            position_ctx,
+            **kwargs,
+        ):
+            captured_ctx.update(position_ctx)
+            return {
+                "action": "HOLD",
+                "score": 72,
+                "reason": "test_hold",
+                "flow_state": "UPTREND",
+                "evidence": ["supportive_micro_context"],
+            }
+
+    real_rule_bool = state_handlers._rule_bool
+
+    def fake_rule_bool(key, default=False):
+        if key in {"HOLDING_FLOW_OFI_SMOOTHING_OVERRIDE_ENABLED", "NEVER_GREEN_DEFER_CLAMP_ENABLED"}:
+            return False
+        return real_rule_bool(key, default)
+
+    monkeypatch.setattr(state_handlers, "_rule_bool", fake_rule_bool)
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_tick_history_ka10003",
+        lambda *args, **kwargs: [{"price": 10100, "volume": 10, "timestamp": now_ts}],
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_minute_candles_ka10080",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    proceed = state_handlers._evaluate_holding_flow_override(
+        stock={
+            "id": 32,
+            "name": "HOLD_AUX",
+            "strategy": "SCALPING",
+            "buy_price": 10000,
+            "last_reversal_features": {
+                "buy_pressure_10t": 62.0,
+                "net_aggressive_delta_10t": 320.0,
+                "feature_extracted_at": now_ts - 1.0,
+            },
+        },
+        code="123471",
+        strategy="SCALPING",
+        ws_data={
+            "curr": 10100,
+            "last_ws_update_ts": now_ts,
+            "quote_stale": False,
+            "quote_age_ms": 100.0,
+            "best_bid": 10090,
+            "best_ask": 10100,
+            "best_bid_qty": 900,
+            "best_ask_qty": 300,
+            "bid_tot": 9000,
+            "ask_tot": 3000,
+        },
+        ai_engine=DummyAI(),
+        exit_rule="scalp_trailing_take_profit",
+        sell_reason_type="TRAILING",
+        reason="test_exit_candidate",
+        profit_rate=1.0,
+        peak_profit=1.2,
+        drawdown=0.2,
+        current_ai_score=70.0,
+        held_sec=180,
+        curr_price=10100,
+        buy_price=10000,
+        now_ts=now_ts,
+    )
+
+    assert proceed is False
+    assert captured_ctx["holding_flow_micro_estimator_decision_authority"] == "feature_only_micro_estimator_state"
+    assert captured_ctx["holding_flow_micro_estimator_standalone_order_authority"] is False
+    assert captured_ctx["holding_flow_micro_estimator_runtime_effect"] is False
+    assert "standalone_exit" in captured_ctx["holding_flow_micro_estimator_forbidden_uses"]
+    assert any(stage == "holding_flow_override_defer_exit" for stage, _fields in logs)
+
+
+def test_rising_missed_micro_estimator_legacy_env_aliases(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_MICRO_ESTIMATOR_MIN_OFI_NORM", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_MICRO_ESTIMATOR_MIN_PRESSURE", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_MICRO_ESTIMATOR_MIN_CONFIDENCE", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_MICRO_ESTIMATOR_PROBE_MAX_AGE_SEC", raising=False)
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_REST_QUOTE_ESTIMATOR_MIN_OFI_NORM", "0.22")
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_REST_QUOTE_ESTIMATOR_MIN_PRESSURE", "61.5")
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_REST_QUOTE_ESTIMATOR_MIN_CONFIDENCE", "0.33")
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_REST_QUOTE_ESTIMATOR_PROBE_MAX_AGE_SEC", "77")
+
+    assert state_handlers._rising_missed_rest_estimator_min_ofi_norm() == 0.22
+    assert state_handlers._rising_missed_rest_estimator_min_pressure() == 61.5
+    assert state_handlers._rising_missed_micro_estimator_min_confidence() == 0.33
+    assert state_handlers._rising_missed_rest_estimator_probe_max_age_sec() == 77.0
+
+    monkeypatch.setenv("KORSTOCKSCAN_MICRO_ESTIMATOR_MIN_OFI_NORM", "0.18")
+    monkeypatch.setenv("KORSTOCKSCAN_MICRO_ESTIMATOR_MIN_PRESSURE", "57.0")
+    monkeypatch.setenv("KORSTOCKSCAN_MICRO_ESTIMATOR_MIN_CONFIDENCE", "0.44")
+    monkeypatch.setenv("KORSTOCKSCAN_MICRO_ESTIMATOR_PROBE_MAX_AGE_SEC", "88")
+
+    assert state_handlers._rising_missed_rest_estimator_min_ofi_norm() == 0.18
+    assert state_handlers._rising_missed_rest_estimator_min_pressure() == 57.0
+    assert state_handlers._rising_missed_micro_estimator_min_confidence() == 0.44
+    assert state_handlers._rising_missed_rest_estimator_probe_max_age_sec() == 88.0
+
+
+def test_rising_missed_rest_estimator_below_confidence_floor_blocks(monkeypatch):
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.TRADING_RULES = CONFIG
+    state_handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK.clear()
+
+    entry_logs = []
+    submit_calls = []
+    now_ts = 1_783_471_000.0
+
+    def fake_rest_refresh(code, ws_data, strategy):
+        refreshed = {
+            **dict(ws_data or {}),
+            "curr": 10020,
+            "best_bid": 10010,
+            "best_ask": 10020,
+            "best_bid_qty": 900,
+            "best_ask_qty": 100,
+            "bid_tot": 9000,
+            "ask_tot": 1000,
+            "last_ws_update_ts": now_ts,
+            "quote_stale": False,
+        }
+        fields = {
+            "pre_submit_rest_orderbook_refresh_enabled": True,
+            "pre_submit_rest_orderbook_refresh_applied": True,
+            "pre_submit_rest_orderbook_refresh_reason": "rest_orderbook_fresh",
+            "pre_submit_rest_orderbook_refresh_source": "ka10004_rest_orderbook",
+            "pre_submit_rest_orderbook_refresh_age_ms": 0.0,
+            "pre_submit_rest_orderbook_refresh_best_bid": 10010,
+            "pre_submit_rest_orderbook_refresh_best_ask": 10020,
+            "pre_submit_rest_orderbook_refresh_latest_price": 10020,
+        }
+        refreshed.update(fields)
+        return refreshed, fields
+
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_MICRO_ESTIMATOR_MIN_CONFIDENCE", "0.95")
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_rising_missed_same_day_reentry_guard",
+        lambda *args, **kwargs: {"allowed": True},
+    )
+    monkeypatch.setattr(state_handlers, "_pre_submit_refresh_rest_orderbook_snapshot", fake_rest_refresh)
+    monkeypatch.setattr(
+        state_handlers,
+        "_submit_watching_triggered_entry",
+        lambda *args, **kwargs: submit_calls.append(True) or True,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: entry_logs.append((stage, fields)),
+    )
+
+    submitted = state_handlers._maybe_submit_rising_missed_one_share_entry(
+        {
+            "id": 23,
+            "name": "REST_ESTIMATOR_LOW_CONF",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "scanner_promotion_id": "scan-rest-estimator-low-conf",
+            "price_delta_since_first_seen_pct": 3.2,
+            "last_watching_ai_score": 50.0,
+        },
+        "123460",
+        {"curr": 10000, "v_pw": 100.0, "source_quality_state": "diagnostic_quote_age_stale"},
+        admin_id=1,
+        runtime={"now_ts": now_ts, "current_ai_score": 50.0, "ai_engine": None, "scout_upgrade_entry": False},
+        strategy="SCALPING",
+        pos_tag="SCANNER",
+        curr_price=10000,
+    )
+
+    assert submitted is True
+    assert submit_calls == []
+    assert entry_logs[-1][0] == "rising_missed_scout_quality_guard_blocked"
+    assert entry_logs[-1][1]["rising_missed_rest_quote_estimator_reason"] == (
+        "rest_anchored_estimate_below_confidence_or_floor"
+    )
+    assert float(entry_logs[-1][1]["rising_missed_micro_estimator_confidence"]) < 0.95
+    assert entry_logs[-1][1]["rising_missed_micro_estimator_lazy_hydration"] is True
+
+
+def test_rising_missed_scout_quality_guard_rest_estimator_preserves_explicit_drop(monkeypatch):
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.TRADING_RULES = CONFIG
+    state_handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK.clear()
+
+    submit_calls = []
+    entry_logs = []
+    rest_calls = []
+    now_ts = 1_783_471_000.0
+
+    def fake_rest_refresh(code, ws_data, strategy):
+        rest_calls.append((code, ws_data, strategy))
+        refreshed = {
+            **dict(ws_data or {}),
+            "curr": 10020,
+            "best_bid": 10010,
+            "best_ask": 10020,
+            "best_bid_qty": 900,
+            "best_ask_qty": 100,
+            "bid_tot": 9000,
+            "ask_tot": 1000,
+            "last_ws_update_ts": now_ts,
+            "quote_stale": False,
+        }
+        return refreshed, {
+            "pre_submit_rest_orderbook_refresh_enabled": True,
+            "pre_submit_rest_orderbook_refresh_applied": True,
+            "pre_submit_rest_orderbook_refresh_reason": "rest_orderbook_fresh",
+            "pre_submit_rest_orderbook_refresh_source": "ka10004_rest_orderbook",
+            "pre_submit_rest_orderbook_refresh_age_ms": 0.0,
+            "pre_submit_rest_orderbook_refresh_best_bid": 10010,
+            "pre_submit_rest_orderbook_refresh_best_ask": 10020,
+            "pre_submit_rest_orderbook_refresh_latest_price": 10020,
+        }
+
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", "true")
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_rising_missed_same_day_reentry_guard",
+        lambda *args, **kwargs: {"allowed": True},
+    )
+    monkeypatch.setattr(state_handlers, "_pre_submit_refresh_rest_orderbook_snapshot", fake_rest_refresh)
+    monkeypatch.setattr(
+        state_handlers,
+        "_submit_watching_triggered_entry",
+        lambda *args, **kwargs: submit_calls.append(True) or True,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: entry_logs.append((stage, fields)),
+    )
+
+    submitted = state_handlers._maybe_submit_rising_missed_one_share_entry(
+        {
+            "id": 22,
+            "name": "REST_ESTIMATOR_DROP",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "scanner_promotion_id": "scan-rest-estimator-drop",
+            "price_delta_since_first_seen_pct": 3.2,
+            "last_watching_ai_action": "DROP",
+            "last_watching_ai_score": 72.0,
+        },
+        "123459",
+        {"curr": 10000, "v_pw": 100.0, "source_quality_state": "diagnostic_quote_age_stale"},
+        admin_id=1,
+        runtime={"now_ts": now_ts, "current_ai_score": 72.0, "ai_engine": None, "scout_upgrade_entry": False},
+        strategy="SCALPING",
+        pos_tag="SCANNER",
+        curr_price=10000,
+    )
+
+    assert submitted is True
+    assert submit_calls == []
+    assert rest_calls == []
+    assert entry_logs[-1][0] == "rising_missed_scout_quality_guard_blocked"
+    assert entry_logs[-1][1]["rising_missed_rest_quote_estimator_reason"] == "explicit_ai_wait_or_drop"
+    assert entry_logs[-1][1]["block_reason"] == "stale_quote_with_weak_ai_or_strength"
+
+
+def test_rising_missed_scout_quality_guard_rest_ai_recheck_submits_on_fresh_rest(monkeypatch):
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.TRADING_RULES = CONFIG
+    state_handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK.clear()
+
+    submit_calls = []
+    branch_calls = []
+    entry_logs = []
+    now_ts = 1_783_471_000.0
+
+    class DummyAI:
+        def analyze_target(self, *args, **kwargs):
+            return {"action": "BUY", "score": 72.0, "reason": "fresh rest recheck", "ai_result_source": "live"}
+
+    def fake_rest_refresh(code, ws_data, strategy):
+        refreshed = {
+            **dict(ws_data or {}),
+            "curr": 10020,
+            "best_bid": 10010,
+            "best_ask": 10020,
+            "last_ws_update_ts": now_ts,
+            "quote_stale": False,
+        }
+        fields = {
+            "pre_submit_rest_orderbook_refresh_enabled": True,
+            "pre_submit_rest_orderbook_refresh_applied": True,
+            "pre_submit_rest_orderbook_refresh_reason": "rest_orderbook_fresh",
+            "pre_submit_rest_orderbook_refresh_source": "ka10004_rest_orderbook",
+            "pre_submit_rest_orderbook_refresh_age_ms": 0.0,
+            "pre_submit_rest_orderbook_refresh_best_bid": 10010,
+            "pre_submit_rest_orderbook_refresh_best_ask": 10020,
+            "pre_submit_rest_orderbook_refresh_latest_price": 10020,
+        }
+        refreshed.update(fields)
+        return refreshed, fields
+
+    def fake_retry(*, stock, code, ws_data, ai_engine, now_ts, current_ai_score):
+        stock["last_watching_ai_action"] = "BUY"
+        stock["last_watching_ai_score"] = 72.0
+        stock["last_watching_ai_confirmed_at"] = now_ts
+        stock["last_watching_ai_result_source"] = "live"
+        return {
+            "pre_submit_entry_ai_authority_retry_attempted": True,
+            "pre_submit_entry_ai_authority_retry_success": True,
+            "pre_submit_entry_ai_authority_retry_reason": "ok",
+            "pre_submit_entry_ai_authority_retry_result_source": "live",
+            "pre_submit_entry_ai_authority_retry_action": "BUY",
+            "pre_submit_entry_ai_authority_retry_score": "72.0",
+        }
+
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", "true")
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_rising_missed_same_day_reentry_guard",
+        lambda *args, **kwargs: {"allowed": True},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_pre_submit_refresh_rest_orderbook_snapshot",
+        fake_rest_refresh,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_retry_entry_ai_submit_authority_before_block",
+        fake_retry,
+    )
+    monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_scalp_same_symbol_loss_reentry_guard",
+        lambda *args, **kwargs: {"allowed": True},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_handle_watching_strategy_branch",
+        lambda *args, **kwargs: branch_calls.append(True) or False,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_submit_watching_triggered_entry",
+        lambda stock, code, ws_data, admin_id, runtime: submit_calls.append((stock, code, ws_data, runtime)) or True,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: entry_logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 11,
+        "name": "REST_RECHECK_RISING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_id": "scan-rest-recheck",
+        "price_delta_since_first_seen_pct": 3.2,
+        "prob": 0.62,
+        "last_watching_ai_score": 50.0,
+    }
+
+    submitted = state_handlers._maybe_submit_rising_missed_one_share_entry(
+        stock,
+        "123456",
+        {
+            "curr": 10000,
+            "v_pw": 100.0,
+            "source_quality_state": "diagnostic_quote_age_stale",
+        },
+        admin_id=1,
+        runtime={"now_ts": now_ts, "current_ai_score": 50.0, "ai_engine": DummyAI(), "scout_upgrade_entry": False},
+        strategy="SCALPING",
+        pos_tag="SCANNER",
+        curr_price=10000,
+    )
+
+    assert submitted is True
+    assert submit_calls
+    assert branch_calls == []
+    assert all(stage != "rising_missed_scout_quality_guard_blocked" for stage, _fields in entry_logs)
+    assert stock["rising_missed_one_share_entry_forced"] is True
+    assert submit_calls[-1][2]["curr"] == 10020
+
+
+def test_rising_missed_scout_quality_guard_does_not_rest_recheck_ai_drop():
+    guard = {
+        "rising_missed_scout_quality_guard_blocked": True,
+        "block_reason": "stale_quote_with_weak_ai_or_strength",
+        "rising_missed_scout_quality_guard_weak_ai": True,
+        "rising_missed_scout_quality_guard_ai_score": "70.0",
+        "rising_missed_scout_quality_guard_ai_action": "DROP",
+    }
+
+    assert state_handlers._rising_missed_scout_quality_guard_ai_recheck_needed(guard) is False
+
+
+def test_rising_missed_scout_quality_guard_does_not_rest_recheck_explicit_wait():
+    guard = {
+        "rising_missed_scout_quality_guard_blocked": True,
+        "block_reason": "stale_quote_with_weak_ai_or_strength",
+        "rising_missed_scout_quality_guard_weak_ai": True,
+        "rising_missed_scout_quality_guard_ai_score": "62.0",
+        "rising_missed_scout_quality_guard_ai_action": "WAIT",
+    }
+
+    assert state_handlers._rising_missed_scout_quality_guard_ai_recheck_needed(guard) is False
+
+
+def test_rising_missed_rest_ai_recheck_reapplies_candidate_gate_price_cap(monkeypatch):
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.TRADING_RULES = CONFIG
+    state_handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK.clear()
+
+    entry_logs = []
+    submit_calls = []
+    now_ts = 1_783_471_000.0
+
+    class DummyAI:
+        def analyze_target(self, *args, **kwargs):
+            return {"action": "BUY", "score": 72.0, "reason": "fresh rest recheck", "ai_result_source": "live"}
+
+    def fake_rest_refresh(code, ws_data, strategy):
+        refreshed = {
+            **dict(ws_data or {}),
+            "curr": MAX_ONE_SHARE_ENTRY_PRICE_KRW + 10_000,
+            "best_bid": MAX_ONE_SHARE_ENTRY_PRICE_KRW + 9_000,
+            "best_ask": MAX_ONE_SHARE_ENTRY_PRICE_KRW + 10_000,
+            "last_ws_update_ts": now_ts,
+            "quote_stale": False,
+        }
+        fields = {
+            "pre_submit_rest_orderbook_refresh_enabled": True,
+            "pre_submit_rest_orderbook_refresh_applied": True,
+            "pre_submit_rest_orderbook_refresh_reason": "rest_orderbook_fresh",
+            "pre_submit_rest_orderbook_refresh_source": "ka10004_rest_orderbook",
+            "pre_submit_rest_orderbook_refresh_age_ms": 0.0,
+            "pre_submit_rest_orderbook_refresh_best_bid": MAX_ONE_SHARE_ENTRY_PRICE_KRW + 9_000,
+            "pre_submit_rest_orderbook_refresh_best_ask": MAX_ONE_SHARE_ENTRY_PRICE_KRW + 10_000,
+            "pre_submit_rest_orderbook_refresh_latest_price": MAX_ONE_SHARE_ENTRY_PRICE_KRW + 10_000,
+        }
+        refreshed.update(fields)
+        return refreshed, fields
+
+    def fake_retry(*, stock, code, ws_data, ai_engine, now_ts, current_ai_score):
+        stock["last_watching_ai_action"] = "BUY"
+        stock["last_watching_ai_score"] = 72.0
+        return {
+            "pre_submit_entry_ai_authority_retry_attempted": True,
+            "pre_submit_entry_ai_authority_retry_success": True,
+            "pre_submit_entry_ai_authority_retry_reason": "ok",
+            "pre_submit_entry_ai_authority_retry_result_source": "live",
+            "pre_submit_entry_ai_authority_retry_action": "BUY",
+            "pre_submit_entry_ai_authority_retry_score": "72.0",
+        }
+
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", "true")
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_rising_missed_same_day_reentry_guard",
+        lambda *args, **kwargs: {"allowed": True},
+    )
+    monkeypatch.setattr(state_handlers, "_pre_submit_refresh_rest_orderbook_snapshot", fake_rest_refresh)
+    monkeypatch.setattr(state_handlers, "_retry_entry_ai_submit_authority_before_block", fake_retry)
+    monkeypatch.setattr(
+        state_handlers,
+        "_submit_watching_triggered_entry",
+        lambda *args, **kwargs: submit_calls.append(True) or True,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: entry_logs.append((stage, fields)),
+    )
+
+    submitted = state_handlers._maybe_submit_rising_missed_one_share_entry(
+        {
+            "id": 12,
+            "name": "REST_RECHECK_CAP",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "scanner_promotion_id": "scan-rest-cap",
+            "price_delta_since_first_seen_pct": 3.2,
+            "last_watching_ai_score": 50.0,
+        },
+        "123457",
+        {"curr": 10000, "v_pw": 100.0, "source_quality_state": "diagnostic_quote_age_stale"},
+        admin_id=1,
+        runtime={"now_ts": now_ts, "current_ai_score": 50.0, "ai_engine": DummyAI(), "scout_upgrade_entry": False},
+        strategy="SCALPING",
+        pos_tag="SCANNER",
+        curr_price=10000,
+    )
+
+    assert submitted is True
+    assert submit_calls == []
+    assert entry_logs[-1][0] == "rising_missed_one_share_entry_blocked"
+    assert entry_logs[-1][1]["block_reason"] == BLOCK_PRICE_ABOVE_CAP
+    assert entry_logs[-1][1]["rising_missed_rest_quote_ai_recheck_success"] is True
 
 
 def test_rising_missed_one_share_hook_allows_initial_scout_before_first_touch_avgdown_gate(monkeypatch):
