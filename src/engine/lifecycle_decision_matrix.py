@@ -1815,6 +1815,15 @@ def _load_scalp_sim_panic_rows(target_date: str) -> tuple[list[dict[str, Any]], 
             "mae_10m_pct": profit,
             "close_10m_pct": profit,
         } if not exclude_from_ev else {"exit_rule": fields.get("exit_rule")}
+        if source_stage in SCALP_SIM_CONTEXT_NOOP_EXIT_STAGES:
+            labels.update(
+                {
+                    "exit_rule": fields.get("exit_rule") or f"{source_stage}_not_applicable",
+                    "sim_post_sell_outcome": "outcome_not_applicable_context_noop",
+                    "outcome": "outcome_not_applicable_context_noop",
+                    "profit_not_applicable_reason": "context_noop_excluded_from_ev",
+                }
+            )
         scale_in_arm = _scale_in_arm_from_fields(source_stage, fields) if matrix_stage == "scale_in" else ""
         scale_in_blocker_namespace = (
             _scale_in_blocker_namespace(source_stage, fields, scale_in_arm) if matrix_stage == "scale_in" else ""
@@ -3358,12 +3367,46 @@ def _holding_bucket_features(row: dict[str, Any]) -> dict[str, str]:
     }
 
 
+SCALP_SIM_CONTEXT_NOOP_EXIT_STAGES = {
+    "scalp_sim_euphoria_context_noop",
+    "scalp_sim_panic_context_warning",
+}
+
+
+def _exit_row_is_context_noop(row: dict[str, Any]) -> bool:
+    source_stage = str(row.get("source_stage") or "").strip()
+    if source_stage not in SCALP_SIM_CONTEXT_NOOP_EXIT_STAGES:
+        return False
+    features = row.get("runtime_features") if isinstance(row.get("runtime_features"), dict) else {}
+    labels = row.get("labels") if isinstance(row.get("labels"), dict) else {}
+    runtime_effect = str(features.get("runtime_effect") or "").strip().lower()
+    panic_status = str(features.get("panic_context_status") or "").strip().upper()
+    euphoria_status = str(features.get("euphoria_context_status") or "").strip().upper()
+    return (
+        bool(features.get("exclude_from_ev"))
+        or labels.get("profit_not_applicable_reason") == "context_noop_excluded_from_ev"
+        or runtime_effect in {"sim_noop_context_not_ok", "sim_noop_context_blocked"}
+        or (panic_status not in {"", "OK"})
+        or (euphoria_status not in {"", "OK"})
+    )
+
+
+def _exit_rule_bucket(row: dict[str, Any]) -> str:
+    labels = row.get("labels") if isinstance(row.get("labels"), dict) else {}
+    features = row.get("runtime_features") if isinstance(row.get("runtime_features"), dict) else {}
+    if _exit_row_is_context_noop(row) and _source_missing_value(labels.get("exit_rule")):
+        return f"{row.get('source_stage')}_not_applicable"
+    return _bucket_value(labels.get("exit_rule") or features.get("chosen_action"), "exit_rule_unknown")
+
+
 def _exit_outcome_bucket(row: dict[str, Any]) -> str:
     labels = row.get("labels") if isinstance(row.get("labels"), dict) else {}
     features = row.get("runtime_features") if isinstance(row.get("runtime_features"), dict) else {}
     outcome = labels.get("sim_post_sell_outcome") or labels.get("outcome")
     if not _source_missing_value(outcome):
         return _bucket_value(outcome, "outcome_unknown")
+    if _exit_row_is_context_noop(row):
+        return "outcome_not_applicable_context_noop"
     source_stage = str(row.get("source_stage") or "").strip()
     exit_rule = str(labels.get("exit_rule") or features.get("chosen_action") or "").strip()
     if (
@@ -3374,19 +3417,25 @@ def _exit_outcome_bucket(row: dict[str, Any]) -> str:
     return "outcome_unknown"
 
 
-def _exit_bucket_features(row: dict[str, Any]) -> dict[str, str]:
+def _exit_profit_bucket(row: dict[str, Any]) -> str:
+    if _exit_row_is_context_noop(row):
+        return "profit_not_applicable_context_noop"
     labels = row.get("labels") if isinstance(row.get("labels"), dict) else {}
     features = row.get("runtime_features") if isinstance(row.get("runtime_features"), dict) else {}
+    return _numeric_band(
+        labels.get("profit_rate") if labels.get("profit_rate") is not None else features.get("profit_rate_live"),
+        prefix="profit",
+        cuts=[(-0.7, "lt_neg070"), (-0.1, "neg070_neg010"), (0.8, "neg010_pos080"), (1.5, "pos080_pos150"), (3.0, "pos150_pos300")],
+        unknown="profit_unknown",
+    )
+
+
+def _exit_bucket_features(row: dict[str, Any]) -> dict[str, str]:
     return {
         "exit_source_stage": _bucket_value(row.get("source_stage"), "exit_source_unknown"),
-        "exit_rule": _bucket_value(labels.get("exit_rule") or features.get("chosen_action"), "exit_rule_unknown"),
+        "exit_rule": _exit_rule_bucket(row),
         "exit_outcome": _exit_outcome_bucket(row),
-        "profit_band": _numeric_band(
-            labels.get("profit_rate") if labels.get("profit_rate") is not None else features.get("profit_rate_live"),
-            prefix="profit",
-            cuts=[(-0.7, "lt_neg070"), (-0.1, "neg070_neg010"), (0.8, "neg010_pos080"), (1.5, "pos080_pos150"), (3.0, "pos150_pos300")],
-            unknown="profit_unknown",
-        ),
+        "profit_band": _exit_profit_bucket(row),
     }
 
 

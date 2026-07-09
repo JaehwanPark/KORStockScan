@@ -6525,6 +6525,7 @@ def test_contract_missing_threshold_creates_workorder():
                     "contract_missing_count": 5,
                     "active_seed_prefix_matched_parent_missing_count": 0,
                     "active_seed_matched_none_count": 5,
+                    "eligible_active_seed_matched_none_count": 2,
                     "natural_no_match_count": 10,
                     "panic_scale_in_stage_excluded_count": 3,
                     "hypothesis_matched_but_parent_bucket_no_match_count": 0,
@@ -6541,6 +6542,8 @@ def test_contract_missing_threshold_creates_workorder():
     orders = mod._sim_fill_and_match_report_contract_orders(ev_report)
     gap_ids = [o["order_id"] for o in orders]
     assert "order_active_seed_or_ldm_match_missing_contract_gap" in gap_ids
+    gap = next(o for o in orders if o["order_id"] == "order_active_seed_or_ldm_match_missing_contract_gap")
+    assert "eligible_active_seed_matched_none_count=2" in gap["evidence"]
 
 
 def test_contract_missing_threshold_reads_top_level_scalp_simulator():

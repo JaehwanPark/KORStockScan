@@ -3895,6 +3895,54 @@ def test_duplicate_not_in_lifecycle_eligible_stages():
     assert target._is_lifecycle_match_eligible_stage("scalp_sim_holding_started")
 
 
+def test_lifecycle_match_aggregation_separates_raw_missing_from_decision_gap():
+    from src.engine import daily_threshold_cycle_report as target
+
+    events = [
+        {
+            "stage": "scalp_sim_duplicate_buy_signal",
+            "fields": {"simulation_book": "scalp_ai_buy_all"},
+        },
+        {
+            "stage": "scalp_sim_entry_armed",
+            "fields": {
+                "simulation_book": "scalp_ai_buy_all",
+                "lifecycle_bucket_match_status": "matched",
+                "active_seed_matched": True,
+            },
+        },
+        {
+            "stage": "scalp_sim_holding_started",
+            "fields": {
+                "simulation_book": "scalp_ai_buy_all",
+                "active_seed_matched": False,
+            },
+        },
+        {
+            "stage": "scalp_sim_pre_submit_liquidity_guard_would_pass",
+            "fields": {
+                "simulation_book": "scalp_ai_buy_all",
+                "actual_order_submitted": "False",
+                "broker_order_forbidden": "True",
+                "decision_authority": "sim_submit_path_observation_only",
+            },
+        },
+    ]
+
+    result = target._sim_lifecycle_bucket_match_aggregation(events)
+
+    assert result["missing_count"] == 3
+    assert result["raw_missing_count_scope"] == "all_scalp_sim_events_compatibility_counter"
+    assert result["eligible_lifecycle_match_event_count"] == 3
+    assert result["eligible_lifecycle_match_observed_count"] == 1
+    assert result["eligible_lifecycle_match_gap_count"] == 1
+    assert result["decision_missing_count"] == 1
+    assert result["decision_missing_count_scope"] == "eligible_lifecycle_match_events_only"
+    assert result["candidate_context_only_count"] == 1
+    assert result["not_instrumented_count"] == 1
+    assert result["eligible_active_seed_matched_none_count"] == 1
+
+
 def test_producer_parent_catalog_missing_reason_flow():
     from src.engine import daily_threshold_cycle_report as target
 

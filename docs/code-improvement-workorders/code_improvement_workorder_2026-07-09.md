@@ -28,9 +28,9 @@
 - stage_hook_workorder_discovery: `/home/ubuntu/KORStockScan/data/report/stage_hook_workorder_discovery/stage_hook_workorder_discovery_2026-07-09.json`
 - stage_hook_runtime_scaffold: `/home/ubuntu/KORStockScan/data/report/stage_hook_runtime_scaffold/stage_hook_runtime_scaffold_2026-07-09.json`
 - buy_funnel_sentinel: `/home/ubuntu/KORStockScan/data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-07-09.json`
-- generated_at: `2026-07-09T20:47:12+09:00`
-- generation_id: `2026-07-09-5ad689f9aa0d`
-- source_hash: `5ad689f9aa0d85ee247ef64cef78921c92128455464c719628d2a4ef9254b9eb`
+- generated_at: `2026-07-09T21:10:01+09:00`
+- generation_id: `2026-07-09-f0214d7d16f1`
+- source_hash: `f0214d7d16f1f80fce2e8e30b5beb1acc1cf0780fa429ebbd5489d4bb1ac267b`
 
 ## 운영 원칙
 
@@ -52,15 +52,15 @@
 ## Snapshot Lineage
 
 - previous_exists: `True`
-- previous_generation_id: `2026-07-09-53d25e394925`
-- previous_source_hash: `53d25e394925152b25e0ecf3b66eeae4bdfb243b6906f86b060310e04f1d4762`
+- previous_generation_id: `2026-07-09-8858ac65ee30`
+- previous_source_hash: `8858ac65ee30c73892b9a39b0b58edeeb6c4cc8b9b692ba2567191abc5a99c2f`
 - new_order_ids: `[]`
 - removed_order_ids: `[]`
 - decision_changed_order_ids: `[]`
 
 ## Summary
 
-- source_order_count: `151`
+- source_order_count: `150`
 - scalping_source_order_count: `10`
 - swing_source_order_count: `8`
 - swing_entry_bottleneck_primary: `SWING_ENTRY_BOTTLENECK_OBSERVE`
@@ -82,17 +82,17 @@
 - entry_submit_drought_selected: `False`
 - entry_submit_drought_handoff_missing: `False`
 - panic_lifecycle_source_order_count: `2`
-- selected_order_count: `109`
+- selected_order_count: `108`
 - non_selected_order_count: `42`
-- source_decision_counts: `{'attach_existing_family': 137, 'design_family_candidate': 3, 'defer_evidence': 8, 'reject': 3}`
-- selected_decision_counts: `{'attach_existing_family': 106, 'defer_evidence': 3}`
-- selected_route_counts: `{'existing_family': 102, 'ai_review_coverage_review': 1, 'positive_source_only_review': 1, 'source_dimension_rollup': 1, 'join_gap_enrichment': 1, 'instrumentation_order': 3}`
+- source_decision_counts: `{'attach_existing_family': 138, 'design_family_candidate': 3, 'defer_evidence': 6, 'reject': 3}`
+- selected_decision_counts: `{'attach_existing_family': 107, 'defer_evidence': 1}`
+- selected_route_counts: `{'existing_family': 104, 'ai_review_coverage_review': 1, 'positive_source_only_review': 1, 'source_dimension_rollup': 1, 'instrumentation_order': 1}`
 - selected_implement_now_route_count: `0`
-- selected_runtime_effect_false_count: `109`
+- selected_runtime_effect_false_count: `108`
 - selected_unimplemented_runtime_effect_false_count: `0`
 - selected_unimplemented_route_counts: `{}`
-- selected_terminal_non_implement_runtime_effect_false_count: `8`
-- selected_terminal_non_implement_route_counts: `{'existing_family': 1, 'ai_review_coverage_review': 1, 'positive_source_only_review': 1, 'source_dimension_rollup': 1, 'join_gap_enrichment': 1, 'instrumentation_order': 3}`
+- selected_terminal_non_implement_runtime_effect_false_count: `5`
+- selected_terminal_non_implement_route_counts: `{'existing_family': 1, 'ai_review_coverage_review': 1, 'positive_source_only_review': 1, 'source_dimension_rollup': 1, 'instrumentation_order': 1}`
 - selected_implement_now_existing_implementation_count: `0`
 - selected_implement_now_existing_implementation_order_ids: `[]`
 - selected_implement_now_new_runtime_effect_false_count: `0`
@@ -101,16 +101,16 @@
 - repeat_unresolved_escalated_order_ids: `[]`
 - repeat_unresolved_structural_blocker_count: `0`
 - repeat_unresolved_structural_blocker_order_ids: `[]`
-- root_cause_closure_status_counts: `{'handoff_closed_root_cause_open': 20, 'implementation_done': 1, 'root_cause_closed': 80}`
+- root_cause_closure_status_counts: `{'handoff_closed_root_cause_open': 20, 'implementation_done': 1, 'root_cause_closed': 82}`
 - implementation_done_count: `1`
 - artifact_regeneration_required_count: `0`
 - handoff_closed_root_cause_open_count: `20`
-- root_cause_closed_count: `80`
+- root_cause_closed_count: `82`
 - needs_followup_workorder_count: `0`
 - root_cause_open_top: `[{'order_id': 'order_conversion_lane_key_lineage_active_arm_1661ca30f0d594fd', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': None}, {'order_id': 'order_conversion_lane_key_lineage_active_arm_167e2213662b0147', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': None}, {'order_id': 'order_conversion_lane_key_lineage_active_arm_2c44a9b1dd392eb3', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': None}, {'order_id': 'order_conversion_lane_key_lineage_active_arm_2d256010e69684c1', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': None}, {'order_id': 'order_conversion_lane_key_lineage_active_arm_400bb07e38eb1ab2', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': None}, {'order_id': 'order_conversion_lane_key_lineage_active_arm_431cb98e1d4adfce', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': None}, {'order_id': 'order_conversion_lane_key_lineage_active_arm_518e85a70ac730e3', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': None}, {'order_id': 'order_conversion_lane_key_lineage_active_arm_52e8c1f2d0e05882', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': None}, {'order_id': 'order_conversion_lane_key_lineage_active_arm_5ed5448f4e3ccb60', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': None}, {'order_id': 'order_conversion_lane_key_lineage_active_arm_665f8e1098e38541', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': None}]`
-- selected_terminal_non_implement_longstanding_count: `7`
-- selected_terminal_non_implement_longstanding_order_ids: `['order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_overnight_sell_today_rule_scalp_sim_overnight_sell_tod_d982edbd', 'order_lifecycle_quiet_gap_ai_review_coverage_rollup', 'order_lifecycle_quiet_gap_positive_source_only_rollup', 'order_lifecycle_source_dimension_gap_rollup', 'order_lifecycle_source_dimension_join_gap_enrichment', 'order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_euphoria_context_noop_rule_exit_rule_unknown_outcome_o_5f592cef', 'order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_panic_context_warning_rule_exit_rule_unknown_outcome_o_58a13326']`
-- selected_longstanding_non_implement_disposition_counts: `{'keep_visible_by_design': 5, 'review_required': 2}`
+- selected_terminal_non_implement_longstanding_count: `4`
+- selected_terminal_non_implement_longstanding_order_ids: `['order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_overnight_sell_today_rule_scalp_sim_overnight_sell_tod_d982edbd', 'order_lifecycle_quiet_gap_ai_review_coverage_rollup', 'order_lifecycle_quiet_gap_positive_source_only_rollup', 'order_lifecycle_source_dimension_gap_rollup']`
+- selected_longstanding_non_implement_disposition_counts: `{'keep_visible_by_design': 4}`
 - selected_longstanding_non_implement_action_required_order_ids: `[]`
 - non_selected_decision_counts: `{'attach_existing_family': 31, 'design_family_candidate': 3, 'defer_evidence': 5, 'reject': 3}`
 - non_selected_longstanding_non_implement_disposition_counts: `{'implemented_with_provenance': 29, 'review_required': 8}`
@@ -258,7 +258,46 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - data_quality_effect: `False`
 - tuning_axis_effect: `False`
 - expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
-- evidence: `bucket_id=source_contract:source_added:entry:source_key_entry`, `source_bucket_id=source_contract:source_added:entry:6d966faa56`, `canonical_bucket=source_contract:source_added:entry`, `legacy_raw_bucket_key=entry`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=keep_existing_bucket`, `ai_tier2_taxonomy_decision=instrumentation_gap`, `ai_tier2_selected_source=hybrid`, `source_bucket_kind=source_quality_gap`, `stage=source_contract`, `classification_state=runtime_blocked_contract_gap`, `bucket_relation=existing_bucket_refinement`, `recommended_action=update_source_contract_or_taxonomy`, `recommended_resolution=instrumentation_gap`, `source_dimension_gap=`, `missing_dimension_keys=[]`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=None`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- evidence: `bucket_id=source_contract:source_added:entry:source_key_entry`, `source_bucket_id=source_contract:source_added:entry:6d966faa56`, `canonical_bucket=source_contract:source_added:entry`, `legacy_raw_bucket_key=entry`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=keep_existing_bucket`, `ai_tier2_taxonomy_decision=keep_bucket`, `ai_tier2_selected_source=hybrid`, `source_bucket_kind=source_quality_gap`, `stage=source_contract`, `classification_state=runtime_blocked_contract_gap`, `bucket_relation=existing_bucket_refinement`, `recommended_action=update_source_contract_or_taxonomy`, `recommended_resolution=update_source_contract_or_taxonomy`, `source_dimension_gap=`, `missing_dimension_keys=[]`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=None`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `implemented_source_quality_contract_available`
+- root_cause_closure_status: `root_cause_closed`
+- implementation_provenance: `{"actual_order_submitted": false, "ai_tier2_taxonomy_decision": "keep_bucket", "allowed_runtime_apply": false, "broker_order_forbidden": true, "decision_authority": "source_contract_drift_detection", "evidence_grade": "source_only", "implementation_type": "lifecycle_source_contract_drift_source_only_provenance", "root_cause_closure_status_hint": "root_cause_closed", "runtime_effect": false, "source_bucket_kind": "source_quality_gap", "source_contract_change_count": 14, "source_contract_status": "warning", "transition_target": "source_only_keep_collecting"}`
+- repeat_unresolved_escalation: `-`
+- longstanding_non_implement_review: `-`
+- longstanding_non_implement_action: `-`
+- structural_blocker_escalation: `-`
+- automation_reentry: Next postclose workorder should preserve implementation_status=implemented_source_quality_contract_available and use the source metrics as provenance only.
+
+실행 기준:
+
+- 기존 threshold family의 source metric/provenance를 보강한다.
+- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
+- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
+
+### 3. `order_lifecycle_bucket_discovery_source_contract_source_contract_source_added_institutional_flow_context_5ffac855c5_ea33d1b2`
+
+- title: Lifecycle bucket discovery follow-up: source_contract:source_added:institutional_flow_context:source_key_institutional_flow_context
+- decision: `attach_existing_family`
+- decision_reason: instrumentation/report/provenance implementation status is implemented_source_quality_contract_available; keep the order as existing-family source evidence instead of re-implementing
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `source_contract`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `existing_family`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `bucket_classifier_hook_or_taxonomy_gap`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=source_contract:source_added:institutional_flow_context:source_key_institutional_flow_context`, `source_bucket_id=source_contract:source_added:institutional_flow_context:5ffac855c5`, `canonical_bucket=source_contract:source_added:institutional_flow_context`, `legacy_raw_bucket_key=institutional_flow_context`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=keep_existing_bucket`, `ai_tier2_taxonomy_decision=instrumentation_gap`, `ai_tier2_selected_source=ai_tier2`, `source_bucket_kind=source_quality_gap`, `stage=source_contract`, `classification_state=runtime_blocked_contract_gap`, `bucket_relation=new_bucket_candidate`, `recommended_action=update_source_contract_or_taxonomy`, `recommended_resolution=instrumentation_gap`, `source_dimension_gap=`, `missing_dimension_keys=[]`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=None`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
 - parity_contract: -
 - next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
 - files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
@@ -278,7 +317,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 3. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_10_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_25002a6e`
+### 4. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_10_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_25002a6e`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_ai:fef5ae20be
 - decision: `attach_existing_family`
@@ -317,7 +356,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 4. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_11_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_65b143ae`
+### 5. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_11_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_65b143ae`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_ai_:f2f2f3d14e
 - decision: `attach_existing_family`
@@ -356,7 +395,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 5. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_12_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_2ad7fdfe`
+### 6. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_12_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_2ad7fdfe`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_sca:53da8da968
 - decision: `attach_existing_family`
@@ -395,7 +434,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 6. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_13_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_33392fe5`
+### 7. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_13_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_33392fe5`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_sca:90d7915256
 - decision: `attach_existing_family`
@@ -434,7 +473,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 7. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_14_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_25002a6e`
+### 8. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_14_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_25002a6e`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_ai:fef5ae20be
 - decision: `attach_existing_family`
@@ -473,7 +512,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 8. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_15_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_2dd03a07`
+### 9. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_15_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_2dd03a07`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_sca:c69a7be5bd
 - decision: `attach_existing_family`
@@ -512,7 +551,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 9. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_16_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_0445b78f`
+### 10. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_16_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_0445b78f`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_ai:12b48c8f43
 - decision: `attach_existing_family`
@@ -551,7 +590,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 10. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_17_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_b5237a42`
+### 11. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_17_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_b5237a42`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blo:70a865069d
 - decision: `attach_existing_family`
@@ -590,7 +629,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 11. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_18_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_65b143ae`
+### 12. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_18_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_65b143ae`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_ai_:f2f2f3d14e
 - decision: `attach_existing_family`
@@ -629,7 +668,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 12. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_19_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_1ac4644b`
+### 13. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_19_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_1ac4644b`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_ai_c:1f003a0132
 - decision: `attach_existing_family`
@@ -668,7 +707,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 13. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_1_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_b5237a42`
+### 14. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_1_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_b5237a42`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blo:70a865069d
 - decision: `attach_existing_family`
@@ -707,7 +746,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 14. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_20_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_b5237a42`
+### 15. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_20_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_b5237a42`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blo:70a865069d
 - decision: `attach_existing_family`
@@ -746,7 +785,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 15. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_2_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_0cf08fc8`
+### 16. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_2_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_0cf08fc8`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_sca:96c1793987
 - decision: `attach_existing_family`
@@ -785,7 +824,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 16. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_3_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_b5237a42`
+### 17. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_3_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_b5237a42`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blo:70a865069d
 - decision: `attach_existing_family`
@@ -824,7 +863,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 17. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_4_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_86ded646`
+### 18. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_4_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_86ded646`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blo:3e8b7ec710
 - decision: `attach_existing_family`
@@ -863,7 +902,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 18. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_5_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_9cb11ea2`
+### 19. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_5_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_9cb11ea2`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_sc:a4de6797c9
 - decision: `attach_existing_family`
@@ -902,7 +941,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 19. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_6_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_2dd03a07`
+### 20. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_6_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_2dd03a07`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_sca:c69a7be5bd
 - decision: `attach_existing_family`
@@ -941,7 +980,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 20. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_7_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_93cef898`
+### 21. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_7_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_93cef898`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_sc:672652b010
 - decision: `attach_existing_family`
@@ -980,7 +1019,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 21. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_8_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_25002a6e`
+### 22. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_8_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_25002a6e`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_ai:fef5ae20be
 - decision: `attach_existing_family`
@@ -1019,7 +1058,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 22. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_9_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_b5237a42`
+### 23. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_9_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_b5237a42`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blo:70a865069d
 - decision: `attach_existing_family`
@@ -1058,7 +1097,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 23. `order_stage_hook_workorder_discovery_stage_hook_holding_flow_runner_debounce_guard`
+### 24. `order_stage_hook_workorder_discovery_stage_hook_holding_flow_runner_debounce_guard`
 
 - title: Implement stage hook: holding_flow_runner_debounce_guard
 - decision: `attach_existing_family`
@@ -1112,7 +1151,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 24. `order_stage_hook_workorder_discovery_stage_hook_plateau_breakdown_exit_arbitration_probe`
+### 25. `order_stage_hook_workorder_discovery_stage_hook_plateau_breakdown_exit_arbitration_probe`
 
 - title: Implement stage hook: plateau_breakdown_exit_arbitration_probe
 - decision: `attach_existing_family`
@@ -1166,7 +1205,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 25. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_overnight_sell_today_rule_scalp_sim_overnight_sell_tod_d982edbd`
+### 26. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_overnight_sell_today_rule_scalp_sim_overnight_sell_tod_d982edbd`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=scalp_sim_overnight_sell_today|rule=scalp_sim_overnight_sell_today|outcome=outcome_unknown|profit=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1205,7 +1244,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 26. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_partial_sell_order_assumed_filled_rule_scalp_sim_panic_73281913`
+### 27. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_partial_sell_order_assumed_filled_rule_scalp_sim_panic_73281913`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=scalp_sim_partial_sell_order_assumed_filled|rule=scalp_sim_panic_lifecycle_partial_exit|outcome=outcome_not_applicable_partial_exit|profit=profit_neg070_neg010
 - decision: `attach_existing_family`
@@ -1244,7 +1283,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 27. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_partial_sell_order_assumed_filled_rule_scalp_sim_panic_823fe278`
+### 28. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_partial_sell_order_assumed_filled_rule_scalp_sim_panic_823fe278`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=scalp_sim_partial_sell_order_assumed_filled|rule=scalp_sim_panic_lifecycle_partial_exit|outcome=outcome_not_applicable_partial_exit|profit=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1283,7 +1322,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 28. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_missed_bb293be8`
+### 29. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_missed_bb293be8`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=sim_post_sell_evaluation|rule=scalp_soft_stop_pct|outcome=MISSED_UPSIDE|profit=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1322,7 +1361,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 29. `order_lifecycle_exit_bucket_exit_outcome_good_exit_3dbc5d03`
+### 30. `order_lifecycle_exit_bucket_exit_outcome_good_exit_3dbc5d03`
 
 - title: LDM exit bucket source-quality follow-up: exit_outcome=GOOD_EXIT
 - decision: `attach_existing_family`
@@ -1341,7 +1380,7 @@ Stage hook candidate:
 - data_quality_effect: `False`
 - tuning_axis_effect: `False`
 - expected_ev_effect: Keep exit stage buckets visible as child evidence while parent lifecycle flow owns promotion EV.
-- evidence: `workorder_id=exit_bucket_source_quality_8`, `bucket_type=exit_outcome`, `bucket_key=GOOD_EXIT`, `reason=exit_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`, `recommended_route=candidate_tighten_or_exclude`, `runtime_effect=false`, `allowed_runtime_apply=false`, `stage_only_live_promotion_forbidden=true`
+- evidence: `workorder_id=exit_bucket_source_quality_6`, `bucket_type=exit_outcome`, `bucket_key=GOOD_EXIT`, `reason=exit_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`, `recommended_route=candidate_tighten_or_exclude`, `runtime_effect=false`, `allowed_runtime_apply=false`, `stage_only_live_promotion_forbidden=true`
 - parity_contract: -
 - next_postclose_metric: exit_bucket_attribution bucket/workorder counts, identity join rate, and complete lifecycle flow count remain visible in downstream reports.
 - files_likely_touched: -
@@ -1361,7 +1400,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 30. `order_lifecycle_exit_bucket_exit_outcome_outcome_not_applicable_partial_exit_92629206`
+### 31. `order_lifecycle_exit_bucket_exit_outcome_outcome_not_applicable_partial_exit_92629206`
 
 - title: LDM exit bucket source-quality follow-up: exit_outcome=outcome_not_applicable_partial_exit
 - decision: `attach_existing_family`
@@ -1380,7 +1419,7 @@ Stage hook candidate:
 - data_quality_effect: `False`
 - tuning_axis_effect: `False`
 - expected_ev_effect: Keep exit stage buckets visible as child evidence while parent lifecycle flow owns promotion EV.
-- evidence: `workorder_id=exit_bucket_source_quality_7`, `bucket_type=exit_outcome`, `bucket_key=outcome_not_applicable_partial_exit`, `reason=exit_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`, `recommended_route=candidate_tighten_or_exclude`, `runtime_effect=false`, `allowed_runtime_apply=false`, `stage_only_live_promotion_forbidden=true`
+- evidence: `workorder_id=exit_bucket_source_quality_5`, `bucket_type=exit_outcome`, `bucket_key=outcome_not_applicable_partial_exit`, `reason=exit_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`, `recommended_route=candidate_tighten_or_exclude`, `runtime_effect=false`, `allowed_runtime_apply=false`, `stage_only_live_promotion_forbidden=true`
 - parity_contract: -
 - next_postclose_metric: exit_bucket_attribution bucket/workorder counts, identity join rate, and complete lifecycle flow count remain visible in downstream reports.
 - files_likely_touched: -
@@ -1400,7 +1439,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 31. `order_lifecycle_exit_bucket_exit_rule_scalp_sim_panic_lifecycle_partial_exit_0c0dba15`
+### 32. `order_lifecycle_exit_bucket_exit_rule_scalp_sim_panic_lifecycle_partial_exit_0c0dba15`
 
 - title: LDM exit bucket source-quality follow-up: exit_rule=scalp_sim_panic_lifecycle_partial_exit
 - decision: `attach_existing_family`
@@ -1419,7 +1458,7 @@ Stage hook candidate:
 - data_quality_effect: `False`
 - tuning_axis_effect: `False`
 - expected_ev_effect: Keep exit stage buckets visible as child evidence while parent lifecycle flow owns promotion EV.
-- evidence: `workorder_id=exit_bucket_source_quality_10`, `bucket_type=exit_rule`, `bucket_key=scalp_sim_panic_lifecycle_partial_exit`, `reason=exit_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`, `recommended_route=candidate_tighten_or_exclude`, `runtime_effect=false`, `allowed_runtime_apply=false`, `stage_only_live_promotion_forbidden=true`
+- evidence: `workorder_id=exit_bucket_source_quality_8`, `bucket_type=exit_rule`, `bucket_key=scalp_sim_panic_lifecycle_partial_exit`, `reason=exit_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`, `recommended_route=candidate_tighten_or_exclude`, `runtime_effect=false`, `allowed_runtime_apply=false`, `stage_only_live_promotion_forbidden=true`
 - parity_contract: -
 - next_postclose_metric: exit_bucket_attribution bucket/workorder counts, identity join rate, and complete lifecycle flow count remain visible in downstream reports.
 - files_likely_touched: -
@@ -1439,7 +1478,85 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 32. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_wait_profit_profit_lt_neg070_he_ed505a3f`
+### 33. `order_lifecycle_exit_bucket_exit_rule_scalp_soft_stop_pct_3249621d`
+
+- title: LDM exit bucket source-quality follow-up: exit_rule=scalp_soft_stop_pct
+- decision: `attach_existing_family`
+- decision_reason: instrumentation/report/provenance implementation status is implemented; keep the order as existing-family source evidence instead of re-implementing
+- source_report_type: `lifecycle_decision_matrix_exit_bucket_attribution`
+- lifecycle_stage: `exit`
+- target_subsystem: `lifecycle_decision_matrix`
+- route: `existing_family`
+- mapped_family: `lifecycle_decision_matrix_runtime`
+- threshold_family: `lifecycle_decision_matrix_runtime`
+- improvement_type: `exit_bucket_source_quality_child_evidence`
+- confidence: `daily_ldm_source`
+- priority: `2`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Keep exit stage buckets visible as child evidence while parent lifecycle flow owns promotion EV.
+- evidence: `workorder_id=exit_bucket_source_quality_9`, `bucket_type=exit_rule`, `bucket_key=scalp_soft_stop_pct`, `reason=exit_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`, `recommended_route=candidate_tighten_or_exclude`, `runtime_effect=false`, `allowed_runtime_apply=false`, `stage_only_live_promotion_forbidden=true`
+- parity_contract: -
+- next_postclose_metric: exit_bucket_attribution bucket/workorder counts, identity join rate, and complete lifecycle flow count remain visible in downstream reports.
+- files_likely_touched: -
+- acceptance_tests: -
+- implementation_status: `implemented`
+- root_cause_closure_status: `root_cause_closed`
+- implementation_provenance: `{"ai_inference_proposal": {"allowed_runtime_apply": false, "bucket_key": "scalp_soft_stop_pct", "bucket_type": "exit_rule", "decision_point": "exit_bucket_classification", "deterministic_decision": "candidate_tighten_or_exclude", "model": "gpt-5.4-mini", "proposal_type": "ai_inference_parallel_review_required", "reason": "parallel_ai_inference_for_deterministic_bucket_decision", "reasoning_effort": "medium", "review_contract": {"ai_has_promotion_authority": false, "model": "gpt-5.4", "reasoning_effort": "low", "runtime_effect": false}, "runtime_effect": false, "source_quality_gate": "pass"}, "recommended_resolution": "none", "source_field_coverage": {}, "unknown_reason_counts": {}}`
+- repeat_unresolved_escalation: `-`
+- longstanding_non_implement_review: `-`
+- longstanding_non_implement_action: `-`
+- structural_blocker_escalation: `-`
+- automation_reentry: Next postclose workorder should preserve implementation_status=implemented and use the source metrics as provenance only.
+
+실행 기준:
+
+- 기존 threshold family의 source metric/provenance를 보강한다.
+- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
+- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
+
+### 34. `order_lifecycle_exit_bucket_exit_rule_scalp_trailing_take_profit_da54cd65`
+
+- title: LDM exit bucket source-quality follow-up: exit_rule=scalp_trailing_take_profit
+- decision: `attach_existing_family`
+- decision_reason: instrumentation/report/provenance implementation status is implemented; keep the order as existing-family source evidence instead of re-implementing
+- source_report_type: `lifecycle_decision_matrix_exit_bucket_attribution`
+- lifecycle_stage: `exit`
+- target_subsystem: `lifecycle_decision_matrix`
+- route: `existing_family`
+- mapped_family: `lifecycle_decision_matrix_runtime`
+- threshold_family: `lifecycle_decision_matrix_runtime`
+- improvement_type: `exit_bucket_source_quality_child_evidence`
+- confidence: `daily_ldm_source`
+- priority: `2`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Keep exit stage buckets visible as child evidence while parent lifecycle flow owns promotion EV.
+- evidence: `workorder_id=exit_bucket_source_quality_10`, `bucket_type=exit_rule`, `bucket_key=scalp_trailing_take_profit`, `reason=exit_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`, `recommended_route=candidate_recovery_or_relax`, `runtime_effect=false`, `allowed_runtime_apply=false`, `stage_only_live_promotion_forbidden=true`
+- parity_contract: -
+- next_postclose_metric: exit_bucket_attribution bucket/workorder counts, identity join rate, and complete lifecycle flow count remain visible in downstream reports.
+- files_likely_touched: -
+- acceptance_tests: -
+- implementation_status: `implemented`
+- root_cause_closure_status: `root_cause_closed`
+- implementation_provenance: `{"ai_inference_proposal": {"allowed_runtime_apply": false, "bucket_key": "scalp_trailing_take_profit", "bucket_type": "exit_rule", "decision_point": "exit_bucket_classification", "deterministic_decision": "candidate_recovery_or_relax", "model": "gpt-5.4-mini", "proposal_type": "ai_inference_parallel_review_required", "reason": "parallel_ai_inference_for_deterministic_bucket_decision", "reasoning_effort": "medium", "review_contract": {"ai_has_promotion_authority": false, "model": "gpt-5.4", "reasoning_effort": "low", "runtime_effect": false}, "runtime_effect": false, "source_quality_gate": "pass"}, "recommended_resolution": "none", "source_field_coverage": {}, "unknown_reason_counts": {}}`
+- repeat_unresolved_escalation: `-`
+- longstanding_non_implement_review: `-`
+- longstanding_non_implement_action: `-`
+- structural_blocker_escalation: `-`
+- automation_reentry: Next postclose workorder should preserve implementation_status=implemented and use the source metrics as provenance only.
+
+실행 기준:
+
+- 기존 threshold family의 source metric/provenance를 보강한다.
+- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
+- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
+
+### 35. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_wait_profit_profit_lt_neg070_he_ed505a3f`
 
 - title: LDM holding bucket source-quality follow-up: combo_holding_flow=source=scalp_sim_holding_started|action=WAIT|profit=profit_lt_neg070|held=held_not_applicable_at_start
 - decision: `attach_existing_family`
@@ -1478,7 +1595,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 33. `order_lifecycle_holding_bucket_held_bucket_held_not_applicable_at_start_508784a3`
+### 36. `order_lifecycle_holding_bucket_held_bucket_held_not_applicable_at_start_508784a3`
 
 - title: LDM holding bucket source-quality follow-up: held_bucket=held_not_applicable_at_start
 - decision: `attach_existing_family`
@@ -1517,7 +1634,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 34. `order_lifecycle_holding_bucket_holding_action_wait_c26d74df`
+### 37. `order_lifecycle_holding_bucket_holding_action_wait_c26d74df`
 
 - title: LDM holding bucket source-quality follow-up: holding_action=WAIT
 - decision: `attach_existing_family`
@@ -1556,7 +1673,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 35. `order_lifecycle_holding_bucket_holding_source_stage_scalp_sim_holding_started_78913f30`
+### 38. `order_lifecycle_holding_bucket_holding_source_stage_scalp_sim_holding_started_78913f30`
 
 - title: LDM holding bucket source-quality follow-up: holding_source_stage=scalp_sim_holding_started
 - decision: `attach_existing_family`
@@ -1595,7 +1712,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 36. `order_lifecycle_holding_bucket_profit_band_profit_lt_neg070_711f1b3f`
+### 39. `order_lifecycle_holding_bucket_profit_band_profit_lt_neg070_711f1b3f`
 
 - title: LDM holding bucket source-quality follow-up: profit_band=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1634,7 +1751,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 37. `order_swing_ldm_selection_discovery_arm_attribution_bottom_rebound_next_open_entry_equal_notional_fixed_10d_manufacture_of_basic_che`
+### 40. `order_swing_ldm_selection_discovery_arm_attribution_bottom_rebound_next_open_entry_equal_notional_fixed_10d_manufacture_of_basic_che`
 
 - title: Swing LDM source field follow-up: bottom_rebound_next_open_entry|equal_notional|fixed_10d|Manufacture of Basic Chemicals|-|RUNNER
 - decision: `attach_existing_family`
@@ -1673,7 +1790,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 38. `order_swing_ldm_selection_discovery_arm_attribution_bottom_rebound_next_open_entry_equal_notional_fixed_10d_manufacture_of_telecommu`
+### 41. `order_swing_ldm_selection_discovery_arm_attribution_bottom_rebound_next_open_entry_equal_notional_fixed_10d_manufacture_of_telecommu`
 
 - title: Swing LDM source field follow-up: bottom_rebound_next_open_entry|equal_notional|fixed_10d|Manufacture of Telecommunication and Broadcasting Apparatuses|-|RUNNER
 - decision: `attach_existing_family`
@@ -1712,7 +1829,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 39. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_parts_and_a`
+### 42. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_parts_and_a`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|risk_capped|mae_stop_time_stop|Manufacture of Parts and Accessories for Motor Vehicles(New Products)|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -1751,7 +1868,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 40. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_audio_publishing_and_original_master_rec`
+### 43. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_audio_publishing_and_original_master_rec`
 
 - title: Swing LDM source field follow-up: next_open_entry|equal_notional|fixed_5d|Audio Publishing and Original Master Recordings|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -1790,7 +1907,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 41. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_data_processing_hosting_and_related_acti`
+### 44. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_data_processing_hosting_and_related_acti`
 
 - title: Swing LDM source field follow-up: next_open_entry|equal_notional|fixed_5d|Data Processing, Hosting and Related activities; Web Portals|SNS(Social Network Service),게임_모바일|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -1829,7 +1946,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 42. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_insurance_보험_생명보험_diagnostic`
+### 45. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_insurance_보험_생명보험_diagnostic`
 
 - title: Swing LDM source field follow-up: next_open_entry|equal_notional|fixed_5d|Insurance|보험_생명보험|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -1868,7 +1985,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 43. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_basic_chemicals_2차전지_소재_양`
+### 46. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_basic_chemicals_2차전지_소재_양`
 
 - title: Swing LDM source field follow-up: next_open_entry|equal_notional|fixed_5d|Manufacture of Basic Chemicals|2차전지_소재(양극화물질등),온실가스배출저감|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -1907,7 +2024,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 44. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_basic_precious_and_non_fe`
+### 47. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_basic_precious_and_non_fe`
 
 - title: Swing LDM source field follow-up: next_open_entry|equal_notional|fixed_5d|Manufacture of Basic Precious and Non-ferrous Metals|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -1946,7 +2063,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 45. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_electric_lamps_and_bulbs_`
+### 48. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_electric_lamps_and_bulbs_`
 
 - title: Swing LDM source field follow-up: next_open_entry|equal_notional|fixed_5d|Manufacture of Electric Lamps and Bulbs|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -1985,7 +2102,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 46. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_electronic_components_스마트`
+### 49. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_electronic_components_스마트`
 
 - title: Swing LDM source field follow-up: next_open_entry|equal_notional|fixed_5d|Manufacture of Electronic Components|스마트폰_삼성전자관련주,휴대폰_베트남현지법인,휴대폰_카메라|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2024,7 +2141,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 47. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_other_chemical_products_2`
+### 50. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_other_chemical_products_2`
 
 - title: Swing LDM source field follow-up: next_open_entry|equal_notional|fixed_5d|Manufacture of Other Chemical Products|2차전지_소재(양극화물질등)|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2063,7 +2180,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 48. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_other_chemical_products_n`
+### 51. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_other_chemical_products_n`
 
 - title: Swing LDM source field follow-up: next_open_entry|equal_notional|fixed_5d|Manufacture of Other Chemical Products|NaN|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2102,7 +2219,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 49. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_parts_and_accessories_for`
+### 52. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_parts_and_accessories_for`
 
 - title: Swing LDM source field follow-up: next_open_entry|equal_notional|fixed_5d|Manufacture of Parts and Accessories for Motor Vehicles(New Products)|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2141,7 +2258,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 50. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_primary_battery_and_secon`
+### 53. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_primary_battery_and_secon`
 
 - title: Swing LDM source field follow-up: next_open_entry|equal_notional|fixed_5d|Manufacture of primary battery and secondary battery|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2180,7 +2297,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 51. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_semiconductor_diagnostic`
+### 54. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_semiconductor_diagnostic`
 
 - title: Swing LDM source field follow-up: next_open_entry|equal_notional|fixed_5d|Manufacture of Semiconductor|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2219,7 +2336,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 52. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_banking_and_savings_institutions_은`
+### 55. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_banking_and_savings_institutions_은`
 
 - title: Swing LDM source field follow-up: next_open_entry|volatility_adjusted|fixed_10d|Banking and Savings Institutions|은행|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2258,7 +2375,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 53. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_building_construction_건설_국내주택_건설_해`
+### 56. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_building_construction_건설_국내주택_건설_해`
 
 - title: Swing LDM source field follow-up: next_open_entry|volatility_adjusted|fixed_10d|Building Construction|건설_국내주택,건설_해외건설|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2297,7 +2414,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 54. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_computer_programming_system_integr`
+### 57. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_computer_programming_system_integr`
 
 - title: Swing LDM source field follow-up: next_open_entry|volatility_adjusted|fixed_10d|Computer programming, System Integration and Management Services|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2336,7 +2453,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 55. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_data_processing_hosting_and_relate`
+### 58. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_data_processing_hosting_and_relate`
 
 - title: Swing LDM source field follow-up: next_open_entry|volatility_adjusted|fixed_10d|Data Processing, Hosting and Related activities; Web Portals|SNS(Social Network Service),게임_모바일|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2375,7 +2492,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 56. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_manufacture_of_electric_motors_gen`
+### 59. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_manufacture_of_electric_motors_gen`
 
 - title: Swing LDM source field follow-up: next_open_entry|volatility_adjusted|fixed_10d|Manufacture of Electric Motors, Generators and Transforming, Distributing and Controlling Apparatus of Electricity|NaN|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2414,7 +2531,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 57. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_manufacture_of_parts_and_accessori`
+### 60. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_manufacture_of_parts_and_accessori`
 
 - title: Swing LDM source field follow-up: next_open_entry|volatility_adjusted|fixed_10d|Manufacture of Parts and Accessories for Motor Vehicles(New Products)|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2453,7 +2570,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 58. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_manufacture_of_plastic_products_di`
+### 61. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_manufacture_of_plastic_products_di`
 
 - title: Swing LDM source field follow-up: next_open_entry|volatility_adjusted|fixed_10d|Manufacture of Plastic Products|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2492,7 +2609,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 59. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_manufacture_of_special_purpose_mac`
+### 62. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_manufacture_of_special_purpose_mac`
 
 - title: Swing LDM source field follow-up: next_open_entry|volatility_adjusted|fixed_10d|Manufacture of Special-Purpose Machinery|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2531,7 +2648,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 60. `order_swing_lifecycle_bucket_discovery_swing_bucket_selection_discovery_arm_attribution_bottom_rebound_next_open_entry_`
+### 63. `order_swing_lifecycle_bucket_discovery_swing_bucket_selection_discovery_arm_attribution_bottom_rebound_next_open_entry_`
 
 - title: Swing lifecycle bucket discovery handoff follow-up: swing_bucket_selection_discovery_arm_attribution_bottom_rebound_next_open_entry_equal_notional_fixed_10d_manufacture_a1679627f7a1
 - decision: `attach_existing_family`
@@ -2570,7 +2687,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 61. `order_swing_lifecycle_bucket_discovery_swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confiden`
+### 64. `order_swing_lifecycle_bucket_discovery_swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confiden`
 
 - title: Swing lifecycle bucket discovery handoff follow-up: swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manuf_95ca38dcdcfa
 - decision: `attach_existing_family`
@@ -2609,7 +2726,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 62. `order_swing_lifecycle_bucket_discovery_swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_cap`
+### 65. `order_swing_lifecycle_bucket_discovery_swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_cap`
 
 - title: Swing lifecycle bucket discovery handoff follow-up: swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_o_044b6c899b11
 - decision: `attach_existing_family`
@@ -2648,7 +2765,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 63. `order_swing_lifecycle_bucket_discovery_swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_`
+### 66. `order_swing_lifecycle_bucket_discovery_swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_`
 
 - title: Swing lifecycle bucket discovery handoff follow-up: swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_electric_lam_672a0f93e4b0
 - decision: `attach_existing_family`
@@ -2687,7 +2804,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 64. `order_swing_lifecycle_bucket_discovery_swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adju`
+### 67. `order_swing_lifecycle_bucket_discovery_swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adju`
 
 - title: Swing lifecycle bucket discovery handoff follow-up: swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_manufacture_of_electr_f0aa568a019a
 - decision: `attach_existing_family`
@@ -2726,7 +2843,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 65. `order_swing_lifecycle_bucket_discovery_swing_ldm_selection_discovery_arm_attribution_bottom_rebound_next_open_entry_equ`
+### 68. `order_swing_lifecycle_bucket_discovery_swing_ldm_selection_discovery_arm_attribution_bottom_rebound_next_open_entry_equ`
 
 - title: Swing lifecycle bucket discovery handoff follow-up: swing_ldm_selection_discovery_arm_attribution_bottom_rebound_next_open_entry_equal_notional_fixed_10d_manufacture_of_telecommu
 - decision: `attach_existing_family`
@@ -2765,7 +2882,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 66. `order_swing_lifecycle_bucket_discovery_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped`
+### 69. `order_swing_lifecycle_bucket_discovery_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped`
 
 - title: Swing lifecycle bucket discovery handoff follow-up: swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_parts_and_a
 - decision: `attach_existing_family`
@@ -2804,7 +2921,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 67. `order_swing_lifecycle_bucket_discovery_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fix`
+### 70. `order_swing_lifecycle_bucket_discovery_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fix`
 
 - title: Swing lifecycle bucket discovery handoff follow-up: swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_electric_lamps_and_bulbs_
 - decision: `attach_existing_family`
@@ -2843,7 +2960,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 68. `order_swing_lifecycle_bucket_discovery_swing_ldm_selection_discovery_arm_attribution_next_open_entry_volatility_adjuste`
+### 71. `order_swing_lifecycle_bucket_discovery_swing_ldm_selection_discovery_arm_attribution_next_open_entry_volatility_adjuste`
 
 - title: Swing lifecycle bucket discovery handoff follow-up: swing_ldm_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_manufacture_of_electric_motors_gen
 - decision: `attach_existing_family`
@@ -2882,7 +2999,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 69. `order_lifecycle_bucket_discovery_source_contract_source_contract_bucket_type_added_scale_in_bucket_attribution_9ba1aafdf_9d538bc0`
+### 72. `order_lifecycle_bucket_discovery_source_contract_source_contract_bucket_type_added_scale_in_bucket_attribution_9ba1aafdf_9d538bc0`
 
 - title: Lifecycle bucket discovery follow-up: source_contract:bucket_type_added:scale_in_bucket_attribution:bucket_type_peak_profit_band
 - decision: `attach_existing_family`
@@ -2921,7 +3038,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 70. `order_lifecycle_bucket_discovery_source_contract_source_contract_dimension_key_added_scale_in_bucket_attribution_cc4d6a2_1694246a`
+### 73. `order_lifecycle_bucket_discovery_source_contract_source_contract_dimension_key_added_scale_in_bucket_attribution_cc4d6a2_1694246a`
 
 - title: Lifecycle bucket discovery follow-up: source_contract:dimension_key_added:scale_in_bucket_attribution:dimension_key_peak_profit_band
 - decision: `attach_existing_family`
@@ -2960,46 +3077,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 71. `order_lifecycle_bucket_discovery_source_contract_source_contract_source_added_institutional_flow_context_5ffac855c5_ea33d1b2`
-
-- title: Lifecycle bucket discovery follow-up: source_contract:source_added:institutional_flow_context:source_key_institutional_flow_context
-- decision: `attach_existing_family`
-- decision_reason: instrumentation/report/provenance implementation status is implemented_source_quality_contract_available; keep the order as existing-family source evidence instead of re-implementing
-- source_report_type: `lifecycle_bucket_discovery`
-- lifecycle_stage: `source_contract`
-- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
-- route: `existing_family`
-- mapped_family: `lifecycle_bucket_discovery`
-- threshold_family: `lifecycle_bucket_discovery`
-- improvement_type: `bucket_classifier_hook_or_taxonomy_gap`
-- confidence: `postclose_discovery_source`
-- priority: `3`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
-- evidence: `bucket_id=source_contract:source_added:institutional_flow_context:source_key_institutional_flow_context`, `source_bucket_id=source_contract:source_added:institutional_flow_context:5ffac855c5`, `canonical_bucket=source_contract:source_added:institutional_flow_context`, `legacy_raw_bucket_key=institutional_flow_context`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=keep_existing_bucket`, `ai_tier2_taxonomy_decision=keep_bucket`, `ai_tier2_selected_source=hybrid`, `source_bucket_kind=source_only_observation`, `stage=source_contract`, `classification_state=new_bucket_candidate`, `bucket_relation=new_bucket_candidate`, `recommended_action=update_source_contract_or_taxonomy`, `recommended_resolution=update_source_contract_or_taxonomy`, `source_dimension_gap=`, `missing_dimension_keys=[]`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=None`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
-- parity_contract: -
-- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
-- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
-- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
-- implementation_status: `implemented_source_quality_contract_available`
-- root_cause_closure_status: `root_cause_closed`
-- implementation_provenance: `{"actual_order_submitted": false, "ai_tier2_taxonomy_decision": "keep_bucket", "allowed_runtime_apply": false, "broker_order_forbidden": true, "decision_authority": "source_contract_drift_detection", "evidence_grade": "source_only", "implementation_type": "lifecycle_source_contract_drift_source_only_provenance", "root_cause_closure_status_hint": "root_cause_closed", "runtime_effect": false, "source_bucket_kind": "source_only_observation", "source_contract_change_count": 14, "source_contract_status": "warning", "transition_target": "source_only_keep_collecting"}`
-- repeat_unresolved_escalation: `-`
-- longstanding_non_implement_review: `-`
-- longstanding_non_implement_action: `-`
-- structural_blocker_escalation: `-`
-- automation_reentry: Next postclose workorder should preserve implementation_status=implemented_source_quality_contract_available and use the source metrics as provenance only.
-
-실행 기준:
-
-- 기존 threshold family의 source metric/provenance를 보강한다.
-- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
-- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
-
-### 72. `order_lifecycle_bucket_discovery_source_contract_source_contract_source_added_lifecycle_ai_context_attribution_8b12f01b1_9babb2aa`
+### 74. `order_lifecycle_bucket_discovery_source_contract_source_contract_source_added_lifecycle_ai_context_attribution_8b12f01b1_9babb2aa`
 
 - title: Lifecycle bucket discovery follow-up: source_contract:source_added:lifecycle_ai_context_attribution:source_key_lifecycle_ai_context_attribution
 - decision: `attach_existing_family`
@@ -3038,7 +3116,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 73. `order_lifecycle_bucket_discovery_source_contract_source_contract_source_added_scale_in_attribution_792528d29e_26882fab`
+### 75. `order_lifecycle_bucket_discovery_source_contract_source_contract_source_added_scale_in_attribution_792528d29e_26882fab`
 
 - title: Lifecycle bucket discovery follow-up: source_contract:source_added:scale_in_attribution:source_key_scale_in_attribution
 - decision: `attach_existing_family`
@@ -3077,7 +3155,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 74. `order_lifecycle_bucket_discovery_source_contract_source_contract_source_added_scale_in_counterfactual_enrichment_24ee129_fd57bc5e`
+### 76. `order_lifecycle_bucket_discovery_source_contract_source_contract_source_added_scale_in_counterfactual_enrichment_24ee129_fd57bc5e`
 
 - title: Lifecycle bucket discovery follow-up: source_contract:source_added:scale_in_counterfactual_enrichment:source_key_scale_in_counterfactual_enrichment
 - decision: `attach_existing_family`
@@ -3116,7 +3194,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 75. `order_lifecycle_bucket_discovery_source_contract_source_contract_source_added_scalp_sim_holding_1fe719177c_fd139e2f`
+### 77. `order_lifecycle_bucket_discovery_source_contract_source_contract_source_added_scalp_sim_holding_1fe719177c_fd139e2f`
 
 - title: Lifecycle bucket discovery follow-up: source_contract:source_added:scalp_sim_holding:source_key_scalp_sim_holding
 - decision: `attach_existing_family`
@@ -3155,7 +3233,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 76. `order_lifecycle_bucket_discovery_source_contract_source_contract_source_added_scalp_sim_overnight_bbc5c8073f_257a405b`
+### 78. `order_lifecycle_bucket_discovery_source_contract_source_contract_source_added_scalp_sim_overnight_bbc5c8073f_257a405b`
 
 - title: Lifecycle bucket discovery follow-up: source_contract:source_added:scalp_sim_overnight:source_key_scalp_sim_overnight
 - decision: `attach_existing_family`
@@ -3194,7 +3272,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 77. `order_lifecycle_bucket_discovery_source_contract_source_contract_source_added_scalp_sim_panic_2d758895e8_81675d4e`
+### 79. `order_lifecycle_bucket_discovery_source_contract_source_contract_source_added_scalp_sim_panic_2d758895e8_81675d4e`
 
 - title: Lifecycle bucket discovery follow-up: source_contract:source_added:scalp_sim_panic:source_key_scalp_sim_panic
 - decision: `attach_existing_family`
@@ -3233,7 +3311,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 78. `order_lifecycle_bucket_discovery_source_contract_source_contract_source_added_scalp_sim_scale_in_266afa66b7_db34dbf4`
+### 80. `order_lifecycle_bucket_discovery_source_contract_source_contract_source_added_scalp_sim_scale_in_266afa66b7_db34dbf4`
 
 - title: Lifecycle bucket discovery follow-up: source_contract:source_added:scalp_sim_scale_in:source_key_scalp_sim_scale_in
 - decision: `attach_existing_family`
@@ -3272,7 +3350,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 79. `order_lifecycle_bucket_discovery_source_contract_source_contract_source_added_scalp_sim_submit_4337b300b2_f26bf08c`
+### 81. `order_lifecycle_bucket_discovery_source_contract_source_contract_source_added_scalp_sim_submit_4337b300b2_f26bf08c`
 
 - title: Lifecycle bucket discovery follow-up: source_contract:source_added:scalp_sim_submit:source_key_scalp_sim_submit
 - decision: `attach_existing_family`
@@ -3311,7 +3389,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 80. `order_lifecycle_bucket_discovery_source_contract_source_contract_source_added_sim_post_sell_db99eef989_ca206e88`
+### 82. `order_lifecycle_bucket_discovery_source_contract_source_contract_source_added_sim_post_sell_db99eef989_ca206e88`
 
 - title: Lifecycle bucket discovery follow-up: source_contract:source_added:sim_post_sell:source_key_sim_post_sell
 - decision: `attach_existing_family`
@@ -3350,7 +3428,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 81. `order_lifecycle_bucket_discovery_source_contract_source_contract_source_added_wait6579_c8aa00f461_fe6d9d76`
+### 83. `order_lifecycle_bucket_discovery_source_contract_source_contract_source_added_wait6579_c8aa00f461_fe6d9d76`
 
 - title: Lifecycle bucket discovery follow-up: source_contract:source_added:wait6579:source_key_wait6579
 - decision: `attach_existing_family`
@@ -3389,7 +3467,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 82. `order_lifecycle_quiet_gap_ai_review_coverage_rollup`
+### 84. `order_lifecycle_quiet_gap_ai_review_coverage_rollup`
 
 - title: Lifecycle quiet gap AI review coverage review
 - decision: `attach_existing_family`
@@ -3408,7 +3486,7 @@ Stage hook candidate:
 - data_quality_effect: `False`
 - tuning_axis_effect: `False`
 - expected_ev_effect: Keep quiet source-quality gaps visible without treating every rollup as an immediate code patch requirement.
-- evidence: `quiet_gap_count=358`, `rollup_required_count=358`, `sim_live_connected_quiet_gap_count=0`, `quiet_gap_type_counts={'parent_conflict_child': 2, 'exclusion_dimension_candidate': 1, 'positive_source_only_keep_collecting': 355, 'ai_review_parsed_low_coverage': 1}`, `ai_review_coverage={'status': 'parsed', 'shard_count': 5, 'parsed_shard_count': 4, 'reviewed_candidate_count': 4, 'low_coverage': True}`, `runtime_effect=false`, `allowed_runtime_apply=false`
+- evidence: `quiet_gap_count=359`, `rollup_required_count=359`, `sim_live_connected_quiet_gap_count=0`, `quiet_gap_type_counts={'parent_conflict_child': 2, 'exclusion_dimension_candidate': 1, 'positive_source_only_keep_collecting': 356, 'ai_review_parsed_low_coverage': 1}`, `ai_review_coverage={'status': 'parsed', 'shard_count': 5, 'parsed_shard_count': 4, 'reviewed_candidate_count': 4, 'low_coverage': True}`, `runtime_effect=false`, `allowed_runtime_apply=false`
 - parity_contract: -
 - next_postclose_metric: quiet_gap_summary rollup counts remain visible until explicitly resolved.
 - files_likely_touched: -
@@ -3428,7 +3506,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 83. `order_lifecycle_quiet_gap_parent_conflict_rollup`
+### 85. `order_lifecycle_quiet_gap_parent_conflict_rollup`
 
 - title: Lifecycle quiet gap parent conflict/exclusion review
 - decision: `attach_existing_family`
@@ -3447,7 +3525,7 @@ Stage hook candidate:
 - data_quality_effect: `False`
 - tuning_axis_effect: `False`
 - expected_ev_effect: Keep quiet source-quality gaps visible without treating every rollup as an immediate code patch requirement.
-- evidence: `quiet_gap_count=358`, `rollup_required_count=358`, `sim_live_connected_quiet_gap_count=0`, `quiet_gap_type_counts={'parent_conflict_child': 2, 'exclusion_dimension_candidate': 1, 'positive_source_only_keep_collecting': 355, 'ai_review_parsed_low_coverage': 1}`, `ai_review_coverage={'status': 'parsed', 'shard_count': 5, 'parsed_shard_count': 4, 'reviewed_candidate_count': 4, 'low_coverage': True}`, `runtime_effect=false`, `allowed_runtime_apply=false`, `parent_conflict_resolution_count=1`, `resolution_states={'resolution_blocked_source_quality': 1}`, `sim_eligible_after_resolution=0`
+- evidence: `quiet_gap_count=359`, `rollup_required_count=359`, `sim_live_connected_quiet_gap_count=0`, `quiet_gap_type_counts={'parent_conflict_child': 2, 'exclusion_dimension_candidate': 1, 'positive_source_only_keep_collecting': 356, 'ai_review_parsed_low_coverage': 1}`, `ai_review_coverage={'status': 'parsed', 'shard_count': 5, 'parsed_shard_count': 4, 'reviewed_candidate_count': 4, 'low_coverage': True}`, `runtime_effect=false`, `allowed_runtime_apply=false`, `parent_conflict_resolution_count=1`, `resolution_states={'resolution_blocked_source_quality': 1}`, `sim_eligible_after_resolution=0`
 - parity_contract: -
 - next_postclose_metric: quiet_gap_summary rollup counts remain visible until explicitly resolved.
 - files_likely_touched: -
@@ -3467,7 +3545,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 84. `order_lifecycle_quiet_gap_positive_source_only_rollup`
+### 86. `order_lifecycle_quiet_gap_positive_source_only_rollup`
 
 - title: Lifecycle quiet gap positive source-only review
 - decision: `attach_existing_family`
@@ -3486,7 +3564,7 @@ Stage hook candidate:
 - data_quality_effect: `False`
 - tuning_axis_effect: `False`
 - expected_ev_effect: Keep quiet source-quality gaps visible without treating every rollup as an immediate code patch requirement.
-- evidence: `quiet_gap_count=358`, `rollup_required_count=358`, `sim_live_connected_quiet_gap_count=0`, `quiet_gap_type_counts={'parent_conflict_child': 2, 'exclusion_dimension_candidate': 1, 'positive_source_only_keep_collecting': 355, 'ai_review_parsed_low_coverage': 1}`, `ai_review_coverage={'status': 'parsed', 'shard_count': 5, 'parsed_shard_count': 4, 'reviewed_candidate_count': 4, 'low_coverage': True}`, `runtime_effect=false`, `allowed_runtime_apply=false`
+- evidence: `quiet_gap_count=359`, `rollup_required_count=359`, `sim_live_connected_quiet_gap_count=0`, `quiet_gap_type_counts={'parent_conflict_child': 2, 'exclusion_dimension_candidate': 1, 'positive_source_only_keep_collecting': 356, 'ai_review_parsed_low_coverage': 1}`, `ai_review_coverage={'status': 'parsed', 'shard_count': 5, 'parsed_shard_count': 4, 'reviewed_candidate_count': 4, 'low_coverage': True}`, `runtime_effect=false`, `allowed_runtime_apply=false`
 - parity_contract: -
 - next_postclose_metric: quiet_gap_summary rollup counts remain visible until explicitly resolved.
 - files_likely_touched: -
@@ -3506,7 +3584,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 85. `order_lifecycle_source_dimension_gap_rollup`
+### 87. `order_lifecycle_source_dimension_gap_rollup`
 
 - title: None
 - decision: `attach_existing_family`
@@ -3525,7 +3603,7 @@ Stage hook candidate:
 - data_quality_effect: `False`
 - tuning_axis_effect: `False`
 - expected_ev_effect: Keep repeated source-dimension gaps visible without treating not-applicable or absorbed dimensions as immediate code defects.
-- evidence: `rollup_only_gap_count=47`, `unknown_source_dimensions=6`, `recommended_resolution_counts={'explicit_lifecycle_flow_source_only_blocker': 40, 'entry_label_not_applicable': 1, 'mark_not_applicable_explicitly': 1, 'join_labels_before_bucket_decision': 4, 'source_quality_blocked_missing_runtime_features_ai_score': 1}`, `missing_dimension_key_counts={'entry': 14, 'exit': 70, 'holding': 60, 'submit': 40}`, `runtime_effect=false`, `allowed_runtime_apply=false`
+- evidence: `rollup_only_gap_count=42`, `unknown_source_dimensions=2`, `recommended_resolution_counts={'explicit_lifecycle_flow_source_only_blocker': 39, 'entry_label_not_applicable': 1, 'mark_not_applicable_explicitly': 1, 'source_quality_blocked_missing_runtime_features_ai_score': 1}`, `missing_dimension_key_counts={'entry': 14, 'exit': 68, 'holding': 58, 'submit': 38}`, `runtime_effect=false`, `allowed_runtime_apply=false`
 - parity_contract: -
 - next_postclose_metric: source_dimension_gap_summary rollup/actionable counts remain visible.
 - files_likely_touched: -
@@ -3545,46 +3623,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 86. `order_lifecycle_source_dimension_join_gap_enrichment`
-
-- title: None
-- decision: `attach_existing_family`
-- decision_reason: source-dimension gap rollup is visibility evidence; actionable emit/backfill gaps are tracked by dedicated lifecycle_bucket_discovery implement_now orders
-- source_report_type: `lifecycle_bucket_discovery_source_dimension_rollup`
-- lifecycle_stage: `multi_stage`
-- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
-- route: `join_gap_enrichment`
-- mapped_family: `lifecycle_bucket_discovery`
-- threshold_family: `lifecycle_bucket_discovery`
-- improvement_type: `source_dimension_join_gap_enrichment`
-- confidence: `postclose_discovery_source`
-- priority: `3`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: Keep LDM bucket label/join gaps visible as source-quality provenance before any bucket decision or runtime apply interpretation.
-- evidence: `join_gap_candidate_count=4`, `join_gap_stage_counts={'exit': 4}`, `join_gap_bucket_type_counts={'combo_exit_result': 2, 'exit_rule': 1, 'profit_band': 1}`, `join_gap_recommended_resolution_counts={'join_labels_before_bucket_decision': 4}`, `join_gap_missing_dimension_key_counts={}`, `recommended_next_action=enrich_bucket_label_or_join_key_before_bucket_decision`, `runtime_effect=false`, `allowed_runtime_apply=false`
-- parity_contract: -
-- next_postclose_metric: source_dimension_gap_summary.join_gap_enrichment candidate_count is tracked until explicitly closed.
-- files_likely_touched: -
-- acceptance_tests: -
-- implementation_status: `terminal_existing_family_evidence`
-- root_cause_closure_status: `-`
-- implementation_provenance: `-`
-- repeat_unresolved_escalation: `-`
-- longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "terminal_existing_family_evidence", "previous_route": "join_gap_enrichment", "repeat_count": 3, "repeat_key": "order_lifecycle_source_dimension_join_gap_enrichment", "repeat_signature": "sig:lifecycle_bucket_discovery_source_dimension_rollup|lifecycle_bucket_discovery_taxonomy_provenance|multi_stage|source_dimension_join_gap_enrichment|lifecycle_bucket_discovery|unknown", "review_disposition": "keep_visible_by_design"}`
-- longstanding_non_implement_action: `-`
-- structural_blocker_escalation: `-`
-- automation_reentry: Next postclose checklist/workorder should keep source_dimension_gap_summary visible until actionable gaps are resolved or explicitly marked not applicable.
-
-실행 기준:
-
-- 기존 threshold family의 source metric/provenance를 보강한다.
-- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
-- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
-
-### 87. `order_conversion_lane_key_lineage_active_arm_1661ca30f0d594fd`
+### 88. `order_conversion_lane_key_lineage_active_arm_1661ca30f0d594fd`
 
 - title: Conversion lane blocker follow-up: key_lineage active_arm_1661ca30f0d594fd
 - decision: `attach_existing_family`
@@ -3623,7 +3662,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 88. `order_conversion_lane_key_lineage_active_arm_167e2213662b0147`
+### 89. `order_conversion_lane_key_lineage_active_arm_167e2213662b0147`
 
 - title: Conversion lane blocker follow-up: key_lineage active_arm_167e2213662b0147
 - decision: `attach_existing_family`
@@ -3662,7 +3701,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 89. `order_conversion_lane_key_lineage_active_arm_2c44a9b1dd392eb3`
+### 90. `order_conversion_lane_key_lineage_active_arm_2c44a9b1dd392eb3`
 
 - title: Conversion lane blocker follow-up: key_lineage active_arm_2c44a9b1dd392eb3
 - decision: `attach_existing_family`
@@ -3701,7 +3740,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 90. `order_conversion_lane_key_lineage_active_arm_2d256010e69684c1`
+### 91. `order_conversion_lane_key_lineage_active_arm_2d256010e69684c1`
 
 - title: Conversion lane blocker follow-up: key_lineage active_arm_2d256010e69684c1
 - decision: `attach_existing_family`
@@ -3740,7 +3779,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 91. `order_conversion_lane_key_lineage_active_arm_400bb07e38eb1ab2`
+### 92. `order_conversion_lane_key_lineage_active_arm_400bb07e38eb1ab2`
 
 - title: Conversion lane blocker follow-up: key_lineage active_arm_400bb07e38eb1ab2
 - decision: `attach_existing_family`
@@ -3779,7 +3818,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 92. `order_conversion_lane_key_lineage_active_arm_431cb98e1d4adfce`
+### 93. `order_conversion_lane_key_lineage_active_arm_431cb98e1d4adfce`
 
 - title: Conversion lane blocker follow-up: key_lineage active_arm_431cb98e1d4adfce
 - decision: `attach_existing_family`
@@ -3818,7 +3857,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 93. `order_conversion_lane_key_lineage_active_arm_518e85a70ac730e3`
+### 94. `order_conversion_lane_key_lineage_active_arm_518e85a70ac730e3`
 
 - title: Conversion lane blocker follow-up: key_lineage active_arm_518e85a70ac730e3
 - decision: `attach_existing_family`
@@ -3857,7 +3896,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 94. `order_conversion_lane_key_lineage_active_arm_52e8c1f2d0e05882`
+### 95. `order_conversion_lane_key_lineage_active_arm_52e8c1f2d0e05882`
 
 - title: Conversion lane blocker follow-up: key_lineage active_arm_52e8c1f2d0e05882
 - decision: `attach_existing_family`
@@ -3896,7 +3935,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 95. `order_conversion_lane_key_lineage_active_arm_5ed5448f4e3ccb60`
+### 96. `order_conversion_lane_key_lineage_active_arm_5ed5448f4e3ccb60`
 
 - title: Conversion lane blocker follow-up: key_lineage active_arm_5ed5448f4e3ccb60
 - decision: `attach_existing_family`
@@ -3935,7 +3974,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 96. `order_conversion_lane_key_lineage_active_arm_665f8e1098e38541`
+### 97. `order_conversion_lane_key_lineage_active_arm_665f8e1098e38541`
 
 - title: Conversion lane blocker follow-up: key_lineage active_arm_665f8e1098e38541
 - decision: `attach_existing_family`
@@ -3974,7 +4013,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 97. `order_conversion_lane_key_lineage_active_arm_82f4bc68bb168a83`
+### 98. `order_conversion_lane_key_lineage_active_arm_82f4bc68bb168a83`
 
 - title: Conversion lane blocker follow-up: key_lineage active_arm_82f4bc68bb168a83
 - decision: `attach_existing_family`
@@ -4013,7 +4052,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 98. `order_conversion_lane_key_lineage_active_arm_854bf28c673b840a`
+### 99. `order_conversion_lane_key_lineage_active_arm_854bf28c673b840a`
 
 - title: Conversion lane blocker follow-up: key_lineage active_arm_854bf28c673b840a
 - decision: `attach_existing_family`
@@ -4052,7 +4091,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 99. `order_conversion_lane_key_lineage_active_arm_888ade47545aacbc`
+### 100. `order_conversion_lane_key_lineage_active_arm_888ade47545aacbc`
 
 - title: Conversion lane blocker follow-up: key_lineage active_arm_888ade47545aacbc
 - decision: `attach_existing_family`
@@ -4091,7 +4130,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 100. `order_conversion_lane_key_lineage_active_arm_89383c15a79e92ee`
+### 101. `order_conversion_lane_key_lineage_active_arm_89383c15a79e92ee`
 
 - title: Conversion lane blocker follow-up: key_lineage active_arm_89383c15a79e92ee
 - decision: `attach_existing_family`
@@ -4130,7 +4169,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 101. `order_conversion_lane_key_lineage_active_arm_8ca13269eecf5f8e`
+### 102. `order_conversion_lane_key_lineage_active_arm_8ca13269eecf5f8e`
 
 - title: Conversion lane blocker follow-up: key_lineage active_arm_8ca13269eecf5f8e
 - decision: `attach_existing_family`
@@ -4169,7 +4208,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 102. `order_conversion_lane_key_lineage_active_arm_8eb6698f81674caf`
+### 103. `order_conversion_lane_key_lineage_active_arm_8eb6698f81674caf`
 
 - title: Conversion lane blocker follow-up: key_lineage active_arm_8eb6698f81674caf
 - decision: `attach_existing_family`
@@ -4208,7 +4247,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 103. `order_conversion_lane_key_lineage_active_arm_a0d18f8d00f97208`
+### 104. `order_conversion_lane_key_lineage_active_arm_a0d18f8d00f97208`
 
 - title: Conversion lane blocker follow-up: key_lineage active_arm_a0d18f8d00f97208
 - decision: `attach_existing_family`
@@ -4247,7 +4286,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 104. `order_conversion_lane_key_lineage_active_arm_af0dff677e6a12e4`
+### 105. `order_conversion_lane_key_lineage_active_arm_af0dff677e6a12e4`
 
 - title: Conversion lane blocker follow-up: key_lineage active_arm_af0dff677e6a12e4
 - decision: `attach_existing_family`
@@ -4286,7 +4325,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 105. `order_conversion_lane_key_lineage_active_arm_b460665611c8fde0`
+### 106. `order_conversion_lane_key_lineage_active_arm_b460665611c8fde0`
 
 - title: Conversion lane blocker follow-up: key_lineage active_arm_b460665611c8fde0
 - decision: `attach_existing_family`
@@ -4325,7 +4364,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 106. `order_conversion_lane_key_lineage_active_arm_ba238963f55dedbe`
+### 107. `order_conversion_lane_key_lineage_active_arm_ba238963f55dedbe`
 
 - title: Conversion lane blocker follow-up: key_lineage active_arm_ba238963f55dedbe
 - decision: `attach_existing_family`
@@ -4364,83 +4403,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 107. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_euphoria_context_noop_rule_exit_rule_unknown_outcome_o_5f592cef`
-
-- title: LDM exit bucket source-quality follow-up: combo_exit_result=source=scalp_sim_euphoria_context_noop|rule=exit_rule_unknown|outcome=outcome_unknown|profit=profit_unknown
-- decision: `defer_evidence`
-- decision_reason: not code-actionable in this cycle: no files_likely_touched and no runnable acceptance tests
-- source_report_type: `lifecycle_decision_matrix_exit_bucket_attribution`
-- lifecycle_stage: `exit`
-- target_subsystem: `lifecycle_decision_matrix`
-- route: `instrumentation_order`
-- mapped_family: `lifecycle_decision_matrix_runtime`
-- threshold_family: `lifecycle_decision_matrix_runtime`
-- improvement_type: `exit_bucket_source_quality_child_evidence`
-- confidence: `daily_ldm_source`
-- priority: `2`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: Keep exit stage buckets visible as child evidence while parent lifecycle flow owns promotion EV.
-- evidence: `workorder_id=exit_bucket_source_quality_5`, `bucket_type=combo_exit_result`, `bucket_key=source=scalp_sim_euphoria_context_noop|rule=exit_rule_unknown|outcome=outcome_unknown|profit=profit_unknown`, `reason=exit_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`, `recommended_route=source_quality_workorder`, `runtime_effect=false`, `allowed_runtime_apply=false`, `stage_only_live_promotion_forbidden=true`
-- parity_contract: -
-- next_postclose_metric: exit_bucket_attribution bucket/workorder counts, identity join rate, and complete lifecycle flow count remain visible in downstream reports.
-- files_likely_touched: -
-- acceptance_tests: -
-- implementation_status: `terminal_deferred_evidence`
-- root_cause_closure_status: `-`
-- implementation_provenance: `{"ai_inference_proposal": {"allowed_runtime_apply": false, "bucket_key": "source=scalp_sim_euphoria_context_noop|rule=exit_rule_unknown|outcome=outcome_unknown|profit=profit_unknown", "bucket_type": "combo_exit_result", "decision_point": "exit_bucket_classification", "deterministic_decision": "source_quality_workorder", "model": "gpt-5.4-mini", "proposal_type": "ai_inference_parallel_review_required", "reason": "parallel_ai_inference_for_deterministic_bucket_decision", "reasoning_effort": "medium", "review_contract": {"ai_has_promotion_authority": false, "model": "gpt-5.4", "reasoning_effort": "low", "runtime_effect": false}, "runtime_effect": false, "source_quality_gate": "hold_sample"}, "recommended_resolution": "join_labels_before_bucket_decision", "source_field_coverage": {"outcome": {"coverage_rate": 1.0, "present_count": 12, "sample_count": 12, "source_fields": ["source_stage", "labels.exit_rule", "runtime_features.chosen_action", "labels.sim_post_sell_outcome", "labels.outcome", "labels.profit_rate"]}, "profit": {"coverage_rate": 1.0, "present_count": 12, "sample_count": 12, "source_fields": ["source_stage", "labels.exit_rule", "runtime_features.chosen_action", "labels.sim_post_sell_outcome", "labels.outcome", "labels.profit_rate"]}, "rule": {"coverage_rate": 1.0, "present_count": 12, "sample_count": 12, "source_fields": ["source_stage", "labels.exit_rule", "runtime_features.chosen_action", "labels.sim_post_sell_outcome", "labels.outcome", "labels.profit_rate"]}}, "unknown_reason_counts": {"join_gap": 3}}`
-- repeat_unresolved_escalation: `-`
-- longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "defer_evidence", "previous_implementation_status": "terminal_deferred_evidence", "previous_route": "instrumentation_order", "repeat_count": 9, "repeat_key": "order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_euphoria_context_noop_rule_exit_rule_unknown_outcome_o_5f592cef", "repeat_signature": "sig:lifecycle_decision_matrix_exit_bucket_attribution|lifecycle_decision_matrix|exit|exit_bucket_source_quality_child_evidence|lifecycle_decision_matrix_runtime|ldm_exit_bucket_source_quality_follow_up_combo_exit_result_source_scalp_sim_euph", "review_disposition": "review_required"}`
-- longstanding_non_implement_action: `-`
-- structural_blocker_escalation: `-`
-- automation_reentry: Keep the item out of the canonical implement_now queue; regenerated postclose reports and runner terminal dispositions must preserve the non-implement decision.
-
-실행 기준:
-
-- 구현하지 말고 부족한 evidence와 다음 확인 artifact를 명시한다.
-- 필요한 경우 report warning 또는 다음 pattern lab 재평가 항목으로만 남긴다.
-
-### 108. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_panic_context_warning_rule_exit_rule_unknown_outcome_o_58a13326`
-
-- title: LDM exit bucket source-quality follow-up: combo_exit_result=source=scalp_sim_panic_context_warning|rule=exit_rule_unknown|outcome=outcome_unknown|profit=profit_unknown
-- decision: `defer_evidence`
-- decision_reason: not code-actionable in this cycle: no files_likely_touched and no runnable acceptance tests
-- source_report_type: `lifecycle_decision_matrix_exit_bucket_attribution`
-- lifecycle_stage: `exit`
-- target_subsystem: `lifecycle_decision_matrix`
-- route: `instrumentation_order`
-- mapped_family: `lifecycle_decision_matrix_runtime`
-- threshold_family: `lifecycle_decision_matrix_runtime`
-- improvement_type: `exit_bucket_source_quality_child_evidence`
-- confidence: `daily_ldm_source`
-- priority: `2`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: Keep exit stage buckets visible as child evidence while parent lifecycle flow owns promotion EV.
-- evidence: `workorder_id=exit_bucket_source_quality_6`, `bucket_type=combo_exit_result`, `bucket_key=source=scalp_sim_panic_context_warning|rule=exit_rule_unknown|outcome=outcome_unknown|profit=profit_unknown`, `reason=exit_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`, `recommended_route=source_quality_workorder`, `runtime_effect=false`, `allowed_runtime_apply=false`, `stage_only_live_promotion_forbidden=true`
-- parity_contract: -
-- next_postclose_metric: exit_bucket_attribution bucket/workorder counts, identity join rate, and complete lifecycle flow count remain visible in downstream reports.
-- files_likely_touched: -
-- acceptance_tests: -
-- implementation_status: `terminal_deferred_evidence`
-- root_cause_closure_status: `-`
-- implementation_provenance: `{"ai_inference_proposal": {"allowed_runtime_apply": false, "bucket_key": "source=scalp_sim_panic_context_warning|rule=exit_rule_unknown|outcome=outcome_unknown|profit=profit_unknown", "bucket_type": "combo_exit_result", "decision_point": "exit_bucket_classification", "deterministic_decision": "source_quality_workorder", "model": "gpt-5.4-mini", "proposal_type": "ai_inference_parallel_review_required", "reason": "parallel_ai_inference_for_deterministic_bucket_decision", "reasoning_effort": "medium", "review_contract": {"ai_has_promotion_authority": false, "model": "gpt-5.4", "reasoning_effort": "low", "runtime_effect": false}, "runtime_effect": false, "source_quality_gate": "hold_sample"}, "recommended_resolution": "join_labels_before_bucket_decision", "source_field_coverage": {"outcome": {"coverage_rate": 1.0, "present_count": 520, "sample_count": 520, "source_fields": ["source_stage", "labels.exit_rule", "runtime_features.chosen_action", "labels.sim_post_sell_outcome", "labels.outcome", "labels.profit_rate"]}, "profit": {"coverage_rate": 1.0, "present_count": 520, "sample_count": 520, "source_fields": ["source_stage", "labels.exit_rule", "runtime_features.chosen_action", "labels.sim_post_sell_outcome", "labels.outcome", "labels.profit_rate"]}, "rule": {"coverage_rate": 1.0, "present_count": 520, "sample_count": 520, "source_fields": ["source_stage", "labels.exit_rule", "runtime_features.chosen_action", "labels.sim_post_sell_outcome", "labels.outcome", "labels.profit_rate"]}}, "unknown_reason_counts": {"join_gap": 3}}`
-- repeat_unresolved_escalation: `-`
-- longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "defer_evidence", "previous_implementation_status": "terminal_deferred_evidence", "previous_route": "instrumentation_order", "repeat_count": 9, "repeat_key": "order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_panic_context_warning_rule_exit_rule_unknown_outcome_o_58a13326", "repeat_signature": "sig:lifecycle_decision_matrix_exit_bucket_attribution|lifecycle_decision_matrix|exit|exit_bucket_source_quality_child_evidence|lifecycle_decision_matrix_runtime|ldm_exit_bucket_source_quality_follow_up_combo_exit_result_source_scalp_sim_pani", "review_disposition": "review_required"}`
-- longstanding_non_implement_action: `-`
-- structural_blocker_escalation: `-`
-- automation_reentry: Keep the item out of the canonical implement_now queue; regenerated postclose reports and runner terminal dispositions must preserve the non-implement decision.
-
-실행 기준:
-
-- 구현하지 말고 부족한 evidence와 다음 확인 artifact를 명시한다.
-- 필요한 경우 report warning 또는 다음 pattern lab 재평가 항목으로만 남긴다.
-
-### 109. `order_lifecycle_exit_bucket_exit_outcome_outcome_unknown_40c2ecc3`
+### 108. `order_lifecycle_exit_bucket_exit_outcome_outcome_unknown_40c2ecc3`
 
 - title: LDM exit bucket source-quality follow-up: exit_outcome=outcome_unknown
 - decision: `defer_evidence`
@@ -4459,14 +4422,14 @@ Stage hook candidate:
 - data_quality_effect: `False`
 - tuning_axis_effect: `False`
 - expected_ev_effect: Keep exit stage buckets visible as child evidence while parent lifecycle flow owns promotion EV.
-- evidence: `workorder_id=exit_bucket_source_quality_9`, `bucket_type=exit_outcome`, `bucket_key=outcome_unknown`, `reason=exit_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`, `recommended_route=source_quality_workorder`, `runtime_effect=false`, `allowed_runtime_apply=false`, `stage_only_live_promotion_forbidden=true`
+- evidence: `workorder_id=exit_bucket_source_quality_7`, `bucket_type=exit_outcome`, `bucket_key=outcome_unknown`, `reason=exit_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`, `recommended_route=source_quality_workorder`, `runtime_effect=false`, `allowed_runtime_apply=false`, `stage_only_live_promotion_forbidden=true`
 - parity_contract: -
 - next_postclose_metric: exit_bucket_attribution bucket/workorder counts, identity join rate, and complete lifecycle flow count remain visible in downstream reports.
 - files_likely_touched: -
 - acceptance_tests: -
 - implementation_status: `terminal_deferred_evidence`
 - root_cause_closure_status: `-`
-- implementation_provenance: `{"ai_inference_proposal": {"allowed_runtime_apply": false, "bucket_key": "outcome_unknown", "bucket_type": "exit_outcome", "decision_point": "exit_bucket_classification", "deterministic_decision": "source_quality_workorder", "model": "gpt-5.4-mini", "proposal_type": "ai_inference_parallel_review_required", "reason": "parallel_ai_inference_for_deterministic_bucket_decision", "reasoning_effort": "medium", "review_contract": {"ai_has_promotion_authority": false, "model": "gpt-5.4", "reasoning_effort": "low", "runtime_effect": false}, "runtime_effect": false, "source_quality_gate": "hold_sample"}, "recommended_resolution": "emit_or_backfill_source_field", "source_field_coverage": {"exit_outcome": {"coverage_rate": 0.0, "present_count": 0, "sample_count": 534, "source_fields": ["labels.sim_post_sell_outcome", "labels.outcome"]}}, "unknown_reason_counts": {"missing_source_field": 1}}`
+- implementation_provenance: `{"ai_inference_proposal": {"allowed_runtime_apply": false, "bucket_key": "outcome_unknown", "bucket_type": "exit_outcome", "decision_point": "exit_bucket_classification", "deterministic_decision": "source_quality_workorder", "model": "gpt-5.4-mini", "proposal_type": "ai_inference_parallel_review_required", "reason": "parallel_ai_inference_for_deterministic_bucket_decision", "reasoning_effort": "medium", "review_contract": {"ai_has_promotion_authority": false, "model": "gpt-5.4", "reasoning_effort": "low", "runtime_effect": false}, "runtime_effect": false, "source_quality_gate": "hold_sample"}, "recommended_resolution": "emit_or_backfill_source_field", "source_field_coverage": {"exit_outcome": {"coverage_rate": 0.0, "present_count": 0, "sample_count": 2, "source_fields": ["labels.sim_post_sell_outcome", "labels.outcome"]}}, "unknown_reason_counts": {"missing_source_field": 1}}`
 - repeat_unresolved_escalation: `-`
 - longstanding_non_implement_review: `-`
 - longstanding_non_implement_action: `-`

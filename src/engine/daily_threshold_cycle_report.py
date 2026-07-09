@@ -3777,6 +3777,10 @@ def _sim_lifecycle_bucket_match_aggregation(events: list[dict]) -> dict:
     natural_no_match_count = 0
     contract_missing_count = 0
     not_instrumented_count = 0
+    eligible_event_count = 0
+    eligible_observed_count = 0
+    eligible_contract_gap_count = 0
+    eligible_active_seed_none_count = 0
     bridge_breakdown: Counter[str] = Counter()
 
     def _active_seed_tri_state(value: Any) -> str:
@@ -3798,6 +3802,9 @@ def _sim_lifecycle_bucket_match_aggregation(events: list[dict]) -> dict:
     for event in sim_events:
         fields = _event_fields(event)
         stage = str(event.get("stage") or "")
+        eligible_stage = _is_lifecycle_match_eligible_stage(stage)
+        if eligible_stage:
+            eligible_event_count += 1
         raw_match_status = str(fields.get("lifecycle_bucket_match_status") or "missing").strip() or "missing"
         raw_match_status_counts[raw_match_status] += 1
 
@@ -3811,6 +3818,8 @@ def _sim_lifecycle_bucket_match_aggregation(events: list[dict]) -> dict:
         active_seed_state = _active_seed_tri_state(active_seed_val)
         if active_seed_state == "none":
             active_seed_none_count += 1
+            if eligible_stage:
+                eligible_active_seed_none_count += 1
         elif active_seed_state == "false":
             active_seed_false_count += 1
         elif active_seed_state == "true":
@@ -3825,15 +3834,20 @@ def _sim_lifecycle_bucket_match_aggregation(events: list[dict]) -> dict:
         reclassified_status_counts[reclassified] += 1
 
         if reclassified == "matched":
-            pass
+            if eligible_stage:
+                eligible_observed_count += 1
         elif reclassified == "matched_entry_child_bridge":
             entry_child_bridged_count += 1
+            if eligible_stage:
+                eligible_observed_count += 1
             bucket_id = str(fields.get("lifecycle_bucket_bucket_id") or "").strip()
             bridge_breakdown[bucket_id or "bridge_applied"] += 1
         elif reclassified == "panic_scale_in_stage_excluded":
             panic_excluded_count += 1
         elif reclassified == "active_seed_prefix_matched_parent_missing":
             prefix_matched_parent_missing_count += 1
+            if eligible_stage:
+                eligible_contract_gap_count += 1
             if _field_bool(fields.get("ldm_hypothesis_matched")):
                 hypo_no_match += 1
         elif reclassified == "natural_no_match":
@@ -3842,6 +3856,8 @@ def _sim_lifecycle_bucket_match_aggregation(events: list[dict]) -> dict:
                 hypo_no_match += 1
         elif reclassified == "contract_missing":
             contract_missing_count += 1
+            if eligible_stage:
+                eligible_contract_gap_count += 1
         elif reclassified == "not_instrumented":
             not_instrumented_count += 1
 
@@ -3851,6 +3867,12 @@ def _sim_lifecycle_bucket_match_aggregation(events: list[dict]) -> dict:
         "matched_count": reclassified_status_counts.get("matched", 0),
         "matched_entry_child_bridge_count": entry_child_bridged_count,
         "matched_entry_child_bridge_breakdown": dict(bridge_breakdown),
+        "eligible_lifecycle_match_event_count": eligible_event_count,
+        "eligible_lifecycle_match_observed_count": eligible_observed_count,
+        "eligible_lifecycle_match_gap_count": eligible_contract_gap_count,
+        "eligible_lifecycle_match_gap_rate": round(eligible_contract_gap_count / eligible_event_count, 4)
+        if eligible_event_count
+        else 0.0,
         "no_match_count": raw_match_status_counts.get("no_match", 0),
         "natural_no_match_count": natural_no_match_count,
         "panic_scale_in_stage_excluded_count": panic_excluded_count,
@@ -3861,10 +3883,14 @@ def _sim_lifecycle_bucket_match_aggregation(events: list[dict]) -> dict:
         "policy_missing_count": reclassified_status_counts.get("policy_missing", 0),
         "candidate_context_only_count": reclassified_status_counts.get("candidate_context_only", 0),
         "missing_count": raw_match_status_counts.get("missing", 0),
+        "raw_missing_count_scope": "all_scalp_sim_events_compatibility_counter",
+        "decision_missing_count": eligible_contract_gap_count,
+        "decision_missing_count_scope": "eligible_lifecycle_match_events_only",
         "hypothesis_matched_but_parent_bucket_no_match_count": hypo_no_match,
         "active_seed_matched_true_count": active_seed_true_count,
         "active_seed_matched_false_count": active_seed_false_count,
         "active_seed_matched_none_count": active_seed_none_count,
+        "eligible_active_seed_matched_none_count": eligible_active_seed_none_count,
         "active_seed_match_source_alias_used_count": active_seed_alias_used,
         "active_seed_match_alias_fields": "scalp_sim_active_priority_seed_matched",
         "active_seed_false_policy": "natural_no_match_candidate_taxonomy_handoff_diagnosis_target",

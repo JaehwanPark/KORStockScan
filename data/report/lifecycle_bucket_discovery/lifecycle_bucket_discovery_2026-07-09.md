@@ -5,17 +5,17 @@
 - source_contract_status: `warning` / changes: `14`
 - ai_two_pass_review: `parsed` / model: `sharded` / tier: `tier2`
 - ai_review_shards: `4` / `5` parsed, reviewed_candidates=`4`
-- surfaced_candidate_count: `68`
-- canonical/legacy buckets: `186` / `415`
-- dual_proposals: deterministic=`438` ai=`11` hybrid_selected=`11`
-- absorbed/source_quality_blocker: `266` / `0`
-- lifecycle_flow_parent_granularity: `target_pass` level=`L2_default` parents=`32` target=`30-60`
-- lifecycle_flow_absorbed_children: child=`50` sample=`1093` conflict_parents=`1`
-- ldm_refinement_pressure: input=`4` consumed=`4` closures=`{'new_parent_candidate_created': 2, 'parent_refinement_candidate_created': 2}`
+- surfaced_candidate_count: `67`
+- canonical/legacy buckets: `187` / `414`
+- dual_proposals: deterministic=`437` ai=`11` hybrid_selected=`10`
+- absorbed/source_quality_blocker: `264` / `0`
+- lifecycle_flow_parent_granularity: `target_pass` level=`L2_default` parents=`31` target=`30-60`
+- lifecycle_flow_absorbed_children: child=`49` sample=`1092` conflict_parents=`1`
+- ldm_refinement_pressure: input=`4` consumed=`4` closures=`{'new_parent_candidate_created': 3, 'parent_refinement_candidate_created': 1}`
 - sim_auto_approved_count: `4`
 - lifecycle_flow_sim_probe_candidate_count: `4`
-- source_dimension_gap_count: `47` / actionable_unknown_gap_count: `0`
-- quiet_gap_count: `358` / sim_live_connected: `0`
+- source_dimension_gap_count: `42` / actionable_unknown_gap_count: `0`
+- quiet_gap_count: `359` / sim_live_connected: `0`
 - live_auto_apply_ready_count: `0`
 - human_intervention_required: `False`
 - warnings: `['source_contract_drift_warning']`
@@ -48,21 +48,21 @@
 - ai_tier2_proposal_count: `4`
 - comparative_review_count: `4`
 - audit_status: `pass`
-- audit_issues: `[]`
+- audit_issues: `['Current AI Tier2 placeholder rejects due to proposal unavailability; that is not a valid taxonomy judgment for this stable existing bucket.', 'Comparison should select deterministic keep_bucket rather than placeholder reject.']`
 - audit_reason: `sharded review aggregate`
 
 ### AI Review Shards
-- `live_contract_review` status=`skipped_empty` candidates=`0` omitted=`0` context_chars=`41287`
-- `lifecycle_flow_review` status=`parsed` candidates=`1` omitted=`49` context_chars=`47854`
-- `sim_policy_review` status=`parsed` candidates=`1` omitted=`5` context_chars=`44785`
-- `gap_workorder_review` status=`parsed` candidates=`1` omitted=`13` context_chars=`44821`
-- `taxonomy_discovery_review` status=`parsed` candidates=`1` omitted=`12` context_chars=`45004`
+- `live_contract_review` status=`skipped_empty` candidates=`0` omitted=`0` context_chars=`40630`
+- `lifecycle_flow_review` status=`parsed` candidates=`1` omitted=`48` context_chars=`47197`
+- `sim_policy_review` status=`parsed` candidates=`1` omitted=`5` context_chars=`44128`
+- `gap_workorder_review` status=`parsed` candidates=`1` omitted=`13` context_chars=`44164`
+- `taxonomy_discovery_review` status=`parsed` candidates=`1` omitted=`12` context_chars=`44347`
 
 ### Source Dimension Gap Enrichment
-- gap_count: `47` / actionable_unknown_gap_count: `0`
-- join_gap_candidate_count: `4` / sampled: `4`
-- join_gap_stage_counts: `{'exit': 4}`
-- join_gap_bucket_type_counts: `{'combo_exit_result': 2, 'exit_rule': 1, 'profit_band': 1}`
+- gap_count: `42` / actionable_unknown_gap_count: `0`
+- join_gap_candidate_count: `0` / sampled: `0`
+- join_gap_stage_counts: `{}`
+- join_gap_bucket_type_counts: `{}`
 - join_gap_recommended_next_action: `enrich_bucket_label_or_join_key_before_bucket_decision`
 
 - `lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holding_missing_scale_in_scale_in_arm_avg_down` stage=`lifecycle_flow` state=`source_only_keep_collecting` action=`keep_collecting` relation=`existing_bucket_refinement` canonical=`lifecycle_flow:combo_lifecycle_flow:entry=entry_observed|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed` joined=`433` ev=`-1.358` ai_final=`-` taxonomy=`absorb_as_dimension`
@@ -78,13 +78,13 @@
 - `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale` stage=`lifecycle_flow` state=`source_only_keep_collecting` action=`tighten_or_exclude` relation=`existing_bucket_refinement` canonical=`lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed` joined=`1` ev=`-1.3812` ai_final=`-` taxonomy=`absorb_as_dimension`
 - `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_scalp_entry_action_decision_snapshot_stale_s` stage=`lifecycle_flow` state=`source_only_keep_collecting` action=`tighten_or_exclude` relation=`existing_bucket_refinement` canonical=`lifecycle_flow:combo_lifecycle_flow:entry=score_mid_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed` joined=`1` ev=`-4.7933` ai_final=`-` taxonomy=`absorb_as_dimension`
 - `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_scalp_entry_action_decision_snapshot_stale_s` stage=`lifecycle_flow` state=`lifecycle_flow_sim_probe_candidate` action=`hold_no_edge` relation=`existing_bucket_refinement` canonical=`lifecycle_flow:combo_lifecycle_flow:entry=score_mid_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed` joined=`1` ev=`0.2149` ai_final=`-` taxonomy=`absorb_as_dimension`
-- `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_wait6579_ev_cohort_stale_fresh_or_unflagged_` stage=`lifecycle_flow` state=`source_only_keep_collecting` action=`keep_collecting` relation=`existing_bucket_refinement` canonical=`lifecycle_flow:combo_lifecycle_flow:entry=score_mid_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed` joined=`1` ev=`0.8097` ai_final=`-` taxonomy=`absorb_as_dimension`
 - `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_block_liquidit` stage=`lifecycle_flow` state=`source_only_keep_collecting` action=`tighten_or_exclude` relation=`existing_bucket_refinement` canonical=`lifecycle_flow:combo_lifecycle_flow:entry=entry_observed|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed` joined=`1` ev=`-2.3218` ai_final=`-` taxonomy=`absorb_as_dimension`
 - `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_scalp_entry_action_decision_snapshot_stale_` stage=`lifecycle_flow` state=`lifecycle_flow_sim_probe_candidate` action=`relax_or_recover` relation=`existing_bucket_refinement` canonical=`lifecycle_flow:combo_lifecycle_flow:entry=entry_observed|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed` joined=`1` ev=`1.9895` ai_final=`-` taxonomy=`absorb_as_dimension`
 - `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_scalp_entry_action_decision_snapshot_stale_` stage=`lifecycle_flow` state=`lifecycle_flow_sim_probe_candidate` action=`relax_or_recover` relation=`existing_bucket_refinement` canonical=`lifecycle_flow:combo_lifecycle_flow:entry=entry_observed|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed` joined=`1` ev=`1.3047` ai_final=`-` taxonomy=`absorb_as_dimension`
 - `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_scalp_entry_action_decision_snapshot_stale_` stage=`lifecycle_flow` state=`source_only_keep_collecting` action=`keep_collecting` relation=`existing_bucket_refinement` canonical=`lifecycle_flow:combo_lifecycle_flow:entry=entry_observed|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed` joined=`1` ev=`-1.53` ai_final=`-` taxonomy=`absorb_as_dimension`
 - `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_ai_confirmed_stale_fresh_liquidity_liquidi` stage=`lifecycle_flow` state=`source_only_keep_collecting` action=`keep_collecting` relation=`existing_bucket_refinement` canonical=`lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed` joined=`0` ev=`None` ai_final=`-` taxonomy=`absorb_as_dimension`
 - `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_ai_confirmed_stale_fresh_liquidity_liquidi` stage=`lifecycle_flow` state=`source_only_keep_collecting` action=`keep_collecting` relation=`existing_bucket_refinement` canonical=`lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed` joined=`0` ev=`None` ai_final=`-` taxonomy=`absorb_as_dimension`
+- `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_ai_confirmed_stale_stale_high_liquidity_li` stage=`lifecycle_flow` state=`source_only_keep_collecting` action=`keep_collecting` relation=`existing_bucket_refinement` canonical=`lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed` joined=`0` ev=`None` ai_final=`-` taxonomy=`absorb_as_dimension`
 
 ## 다음 액션
 - `sim_auto_approved` bucket은 다음 PREOPEN sim policy에 자동 반영한다.

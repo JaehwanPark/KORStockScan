@@ -2180,6 +2180,24 @@ def test_lifecycle_matrix_keeps_panic_lifecycle_source_contract_and_euphoria_spl
                 "euphoria_context_status": "SOURCE_QUALITY_BLOCKED",
             },
         },
+        {
+            "stage": "scalp_sim_panic_context_warning",
+            "stock_code": "000003",
+            "emitted_at": "2026-05-20T10:02:00+09:00",
+            "fields": {
+                "simulation_book": "scalp_ai_buy_all",
+                "source_family": "panic_lifecycle_actuator",
+                "family_type": "sim_lifecycle_source",
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "decision_authority": "sim_observation_only",
+                "risk_context_owner": "panic_sell",
+                "risk_direction": "risk_off_panic",
+                "action_namespace": "panic_lifecycle",
+                "runtime_effect": "sim_noop_context_not_ok",
+                "panic_context_status": "SOURCE_QUALITY_BLOCKED",
+            },
+        },
     ]
     (pipeline_dir / "pipeline_events_2026-05-20.jsonl").write_text(
         "\n".join(json.dumps(event, ensure_ascii=False) for event in events),
@@ -2189,7 +2207,7 @@ def test_lifecycle_matrix_keeps_panic_lifecycle_source_contract_and_euphoria_spl
     report = mod.build_lifecycle_decision_matrix_report("2026-05-20")
 
     rows = [row for row in report["examples"] if row["source"] == "scalp_sim_panic_pipeline_events"]
-    assert len(rows) == 2
+    assert len(rows) == 3
     euphoria_row = next(row for row in rows if row["runtime_features"].get("euphoria_action_type"))
     features = euphoria_row["runtime_features"]
     assert features["source_family"] == "panic_lifecycle_actuator"
@@ -2201,6 +2219,21 @@ def test_lifecycle_matrix_keeps_panic_lifecycle_source_contract_and_euphoria_spl
     noop_row = next(row for row in rows if row["runtime_features"].get("exclude_from_ev"))
     assert noop_row["stage_ev_composite_pct"] is None
     assert noop_row["outcome_joined"] is False
+    assert mod._exit_bucket_features(noop_row) == {
+        "exit_source_stage": "scalp_sim_euphoria_context_noop",
+        "exit_rule": "scalp_sim_euphoria_context_noop_not_applicable",
+        "exit_outcome": "outcome_not_applicable_context_noop",
+        "profit_band": "profit_not_applicable_context_noop",
+    }
+    panic_noop = next(row for row in rows if row["source_stage"] == "scalp_sim_panic_context_warning")
+    assert mod._exit_bucket_features(panic_noop) == {
+        "exit_source_stage": "scalp_sim_panic_context_warning",
+        "exit_rule": "scalp_sim_panic_context_warning_not_applicable",
+        "exit_outcome": "outcome_not_applicable_context_noop",
+        "profit_band": "profit_not_applicable_context_noop",
+    }
+    exit_workorders = report["exit_bucket_attribution"]["code_improvement_workorders"]
+    assert all("context_noop" not in str(item.get("bucket_key")) for item in exit_workorders)
 
 
 def test_lifecycle_matrix_emits_entry_bucket_attribution_workorders(tmp_path, monkeypatch):

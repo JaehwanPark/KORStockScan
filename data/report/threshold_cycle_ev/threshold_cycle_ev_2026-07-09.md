@@ -2,9 +2,9 @@
 
 ## Summary
 - status: `warning`
-- warning_count: `9`
+- warning_count: `11`
 - source_quality: status=`pass` allowed=`True`
-- samples real/sim: `6` / `102`
+- samples real/sim: `101` / `102`
 - live_auto_ready_count: `0`
 - primary_verdict: `real_primary_evidence_present`
 
@@ -14,15 +14,15 @@
 - selected_families: `soft_stop_whipsaw_confirmation, entry_split_order_plan, scale_in_split_order_plan, score65_74_recovery_probe, scalping_scanner_real_source_guard_runtime, score65_74_recovery_probe_strong_micro_override_runtime, entry_price_gap_profile_runtime, profit_stagnation_exit_runtime, latency_spread_relief_real_operator_override, quote_consistency_normalization, scalp_sim_candidate_window_expansion, scalp_sim_ai_budget_manager, ai_watching_score_smoothing_report_only, lifecycle_decision_matrix_runtime, weak_pullback_entry_block_runtime, early_accel_recheck_runtime, real_pyramid_scale_in_quality_guard_runtime, sell_side_open_time_block_runtime, pre_submit_liquidity_relief_runtime, entry_opportunity_recheck_runtime, weak_context_late_entry_guard_runtime, rising_missed_normal_buy_bridge, persistent_operator_overrides_2026_06_26`
 
 ## Daily EV
-- completed: `6` / open: `0`
-- win/loss: `3` / `3` (`50.0`%)
-- avg_profit_rate: `-0.07`%
-- realized_pnl_krw: `-3708`
+- completed: `0` / open: `0`
+- win/loss: `0` / `0` (`0.0`%)
+- avg_profit_rate: `0.0`%
+- realized_pnl_krw: `0`
 - full_fill_completed_avg_profit_rate: `0.0`%
 
 ## Entry Funnel
-- budget_pass_to_submitted: `13` / `288` (`4.51`%)
-- latency pass/block: `19` / `194`
+- budget_pass_to_submitted: `0` / `0` (`0.0`%)
+- latency pass/block: `0` / `0`
 - latency submit routing: `latency_classifier_runtime_semantics_gap`
 - latency recommended action: `reject` (`recovery_count=0 below floor=28`)
 - latency profile generation: `{'mode': 'grid_quantile_search', 'profile_count': 405, 'age_cap_ms': 1500, 'jitter_cap_ms': 1500, 'spread_cap_ratio': 0.012, 'counterfactual_sample_floor': 3, 'recovery_event_floor_ratio': 0.1}`
@@ -30,14 +30,14 @@
 - recovery attempts/cf sample/cf ev: `0` / `0` / `None`%
 - recovered/lost labels: `0` / `0`
 - stale/broker override excluded: `0` / `0`
-- full/partial fill: `2` / `7`
+- full/partial fill: `0` / `0`
 - entry_split_order_plan: status=`pass` candidates=`1` policy=`entry_split_order_plan:2026-07-09:ed4d6e5127`
 - scale_in_split_order_plan: status=`pass` candidates=`2` policy=`scale_in_split_order_plan:2026-07-09:9568e17b68e9`
 
 ## Holding Exit
-- holding_reviews: `496`
-- exit_signals: `18`
-- holding_review_ms_p95: `4089.0`
+- holding_reviews: `0`
+- exit_signals: `0`
+- holding_review_ms_p95: `0.0`
 
 ## Scalp Simulator
 - authority: `equal_weight` / fill_policy: `signal_inclusive_best_ask_v1`
@@ -52,11 +52,11 @@
 - post_sell_mfe_mae_10m: mfe=`1.4513`% / mae=`-4.614`% / close=`0.2564`%
 
 ## Missed Probe Counterfactual
-- book: `scalp_score65_74_probe_counterfactual` / role: `missed_buy_probe_counterfactual`
-- total/score65_74: `1` / `0`
-- avg_expected_ev: `0.6956`% / score65_74_avg_expected_ev: `0.0`%
-- actual_order_submitted: `False` / broker_order_forbidden: `True`
-- authority: `missed_probe_ev_only_not_broker_execution`
+- book: `-` / role: `-`
+- total/score65_74: `None` / `None`
+- avg_expected_ev: `None`% / score65_74_avg_expected_ev: `None`%
+- actual_order_submitted: `None` / broker_order_forbidden: `None`
+- authority: `-`
 
 ## Scalp Entry ADM
 - artifact: `/home/ubuntu/KORStockScan/data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_2026-07-09.json`
@@ -73,31 +73,31 @@
 ## Lifecycle Decision Matrix
 - artifact: `/home/ubuntu/KORStockScan/data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_2026-07-09.json`
 - status: `pass` / version: `lifecycle_decision_matrix_v1_2026-07-09`
-- total/joined: `1244` / `542`
+- total/joined: `1243` / `541`
 - policy_pass/promote_ready: `4` / `0`
-- lifecycle_flow buckets/complete/runtime/workorders: `50` / `10` / `0` / `20`
-- holding/exit buckets: `17` / `36`
+- lifecycle_flow buckets/complete/runtime/workorders: `49` / `10` / `0` / `20`
+- holding/exit buckets: `17` / `38`
 - holding/exit workorders: `5` / `10`
 - lifecycle identity missing/join_rate: `0` / `1.0`
-- lifecycle complete_flow_rate: `0.0091`
-- incomplete_flow_reason_counts: `{'missing_submit': 1055, 'missing_holding': 1072, 'missing_exit': 538, 'candidate_id_only': 1019, 'missing_entry': 1023, 'sim_record_id_only': 16, 'scale_in_noise_only': 478, 'postclose_exit_without_entry': 545}`
+- lifecycle complete_flow_rate: `0.0092`
+- incomplete_flow_reason_counts: `{'missing_submit': 1054, 'missing_holding': 1071, 'missing_exit': 537, 'missing_entry': 1023, 'sim_record_id_only': 16, 'scale_in_noise_only': 478, 'candidate_id_only': 1018, 'postclose_exit_without_entry': 545}`
 - fixed_threshold_roles: `{'hard_safety': ['broker_submit_guard', 'stale_quote_submit_block', 'price_freshness_guard', 'hard_stop', 'protect_stop', 'emergency_stop', 'account_order_cooldown_qty_guard'], 'baseline_prior': ['BUY_SCORE_THRESHOLD', 'VPW_MIN_SCORE', 'strength_momentum_cutoff', 'entry_score_cutoff'], 'bounded_tunable': ['SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION', 'SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION', 'SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION', 'score65_74_recovery_probe', 'soft_stop_whipsaw_confirmation', 'holding_flow_override', 'scale_in_price_guard'], 'legacy_archive': ['fallback_scout_main', 'fallback_single', 'latency_fallback_split_entry', 'legacy_latency_composite', 'closed_shadow_axes']}`
-- policy_entries: `[{'stage': 'entry', 'sample': 126, 'joined_sample': 5, 'stage_ev_composite_pct': -0.0433, 'confidence': 0.0198, 'selected_action': 'WAIT_REQUOTE', 'source_quality_gate': 'hold_sample', 'promote_ready': False}, {'stage': 'submit', 'sample': 45, 'joined_sample': 13, 'stage_ev_composite_pct': -0.4773, 'confidence': 0.3756, 'selected_action': 'NO_CHANGE', 'source_quality_gate': 'pass', 'promote_ready': False}, {'stage': 'holding', 'sample': 24, 'joined_sample': 13, 'stage_ev_composite_pct': -1.1943, 'confidence': 0.7042, 'selected_action': 'EXIT', 'source_quality_gate': 'pass', 'promote_ready': False}, {'stage': 'scale_in', 'sample': 491, 'joined_sample': 485, 'stage_ev_composite_pct': -1.1616, 'confidence': 1.0, 'selected_action': 'NO_CHANGE', 'source_quality_gate': 'pass', 'promote_ready': False}, {'stage': 'exit', 'sample': 558, 'joined_sample': 26, 'stage_ev_composite_pct': -1.0692, 'confidence': 0.1211, 'selected_action': 'EXIT', 'source_quality_gate': 'pass', 'promote_ready': False}]`
+- policy_entries: `[{'stage': 'entry', 'sample': 125, 'joined_sample': 4, 'stage_ev_composite_pct': -0.2565, 'confidence': 0.0128, 'selected_action': 'WAIT_REQUOTE', 'source_quality_gate': 'hold_sample', 'promote_ready': False}, {'stage': 'submit', 'sample': 45, 'joined_sample': 13, 'stage_ev_composite_pct': -0.4773, 'confidence': 0.3756, 'selected_action': 'NO_CHANGE', 'source_quality_gate': 'pass', 'promote_ready': False}, {'stage': 'holding', 'sample': 24, 'joined_sample': 13, 'stage_ev_composite_pct': -1.1943, 'confidence': 0.7042, 'selected_action': 'EXIT', 'source_quality_gate': 'pass', 'promote_ready': False}, {'stage': 'scale_in', 'sample': 491, 'joined_sample': 485, 'stage_ev_composite_pct': -1.1616, 'confidence': 1.0, 'selected_action': 'NO_CHANGE', 'source_quality_gate': 'pass', 'promote_ready': False}, {'stage': 'exit', 'sample': 558, 'joined_sample': 26, 'stage_ev_composite_pct': -1.0692, 'confidence': 0.1211, 'selected_action': 'EXIT', 'source_quality_gate': 'pass', 'promote_ready': False}]`
 
 ## Lifecycle Bucket Discovery
 - artifact: `/home/ubuntu/KORStockScan/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_2026-07-09.json`
 - status: `pass` / human_intervention_required: `False`
-- candidates/surfaced: `438` / `68`
-- sim_auto/live_auto/new_bucket: `4` / `0` / `13`
+- candidates/surfaced: `437` / `67`
+- sim_auto/live_auto/new_bucket: `4` / `0` / `12`
 - role/window: `new_pattern_detection` / `same_day_source_bundle_plus_rolling_threshold_cycle_consumer`
-- parent_count/granularity/conflict: `32` / `target_pass` / `1`
-- positive_parent/sample_ready/conflict: `5` / `0` / `0`
-- active_positive_seed/nonpositive_seed: `3` / `0`
+- parent_count/granularity/conflict: `31` / `target_pass` / `1`
+- positive_parent/sample_ready/conflict: `4` / `0` / `0`
+- active_positive_seed/nonpositive_seed: `2` / `0`
 - positive_sim_auto/nonpositive_sim_auto: `4` / `4`
-- state_counts: `{'source_only_keep_collecting': 416, 'lifecycle_flow_sim_probe_candidate': 4, 'sim_auto_approved': 4, 'runtime_blocked_contract_gap': 1, 'new_bucket_candidate': 13}`
+- state_counts: `{'source_only_keep_collecting': 414, 'lifecycle_flow_sim_probe_candidate': 4, 'automation_handoff_gap': 1, 'sim_auto_approved': 4, 'runtime_blocked_contract_gap': 2, 'new_bucket_candidate': 12}`
 - top_surfaced: `[{'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holding_missing_scale_in_scale_in_arm_avg_down', 'stage': 'lifecycle_flow', 'classification_state': 'source_only_keep_collecting', 'live_auto_apply_family': None, 'recommended_action': 'keep_collecting', 'joined_sample': 433, 'source_quality_adjusted_ev_pct': -1.358}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holding_missing_scale_in_scale_in_arm_pyramid_', 'stage': 'lifecycle_flow', 'classification_state': 'source_only_keep_collecting', 'live_auto_apply_family': None, 'recommended_action': 'keep_collecting', 'joined_sample': 39, 'source_quality_adjusted_ev_pct': 0.9778}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holding_missing_scale_in_scale_in_arm_avg_down', 'stage': 'lifecycle_flow', 'classification_state': 'source_only_keep_collecting', 'live_auto_apply_family': None, 'recommended_action': 'keep_collecting', 'joined_sample': 9, 'source_quality_adjusted_ev_pct': -1.1178}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holding_combo_holding_flow_source_scalp_sim_ov', 'stage': 'lifecycle_flow', 'classification_state': 'source_only_keep_collecting', 'live_auto_apply_family': None, 'recommended_action': 'keep_collecting', 'joined_sample': 2, 'source_quality_adjusted_ev_pct': -1.265}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holding_missing_scale_in_scale_in_arm_pyramid_', 'stage': 'lifecycle_flow', 'classification_state': 'source_only_keep_collecting', 'live_auto_apply_family': None, 'recommended_action': 'keep_collecting', 'joined_sample': 2, 'source_quality_adjusted_ev_pct': -0.205}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_ai_confirmed_stale_fresh_liquidity_liquidi', 'stage': 'lifecycle_flow', 'classification_state': 'source_only_keep_collecting', 'live_auto_apply_family': None, 'recommended_action': 'tighten_or_exclude', 'joined_sample': 1, 'source_quality_adjusted_ev_pct': -2.9899}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_ai_confirmed_stale_fresh_liquidity_liquidi', 'stage': 'lifecycle_flow', 'classification_state': 'source_only_keep_collecting', 'live_auto_apply_family': None, 'recommended_action': 'tighten_or_exclude', 'joined_sample': 1, 'source_quality_adjusted_ev_pct': -1.2667}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_ai_confirmed_stale_stale_high_liquidity_li', 'stage': 'lifecycle_flow', 'classification_state': 'lifecycle_flow_sim_probe_candidate', 'live_auto_apply_family': None, 'recommended_action': 'relax_or_recover', 'joined_sample': 1, 'source_quality_adjusted_ev_pct': 0.9467}]`
 - top_sample_ready_positive_parent_buckets: `[]`
-- top_active_positive_seeds: `[{'active_seed_id': 'active_seed_dcd8fdaa26695704', 'parent_ev_pct': 0.9467, 'parent_joined_sample': 1, 'complete_flow_count': 1, 'observable_prefix': {'entry_score_parent': 'score_watch_recovery', 'entry_source_parent': 'entry_source_observed_other', 'submit_quality_parent': 'submit_revalidation_ok'}, 'active_collection_reason': 'positive_ev_parent_active_sim_collection', 'live_conversion_blocked_reason': '', 'positive_ev_stage_sampling_plan': {'schema_version': 'positive_ev_stage_sampling_plan_v1', 'sampling_scope': 'positive_ev_parent_stage_completion', 'sample_goal_per_bucket': 10, 'complete_flow_goal_per_bucket': 5, 'current_parent_joined_sample': 1, 'current_complete_flow_count': 1, 'additional_parent_sample_needed': 9, 'additional_complete_flow_needed': 4, 'runtime_match_fields': {'entry_score_parent': 'score_watch_recovery', 'entry_source_parent': 'entry_source_observed_other', 'submit_quality_parent': 'submit_revalidation_ok'}, 'runtime_match_forbidden_fields': ['exit_outcome_parent', 'major_holding_parent', 'scale_in_parent'], 'stage_targets': [{'stage': 'entry', 'goal': 'revisit_positive_prefix_candidates', 'match_role': 'runtime_observable_prefix'}, {'stage': 'submit', 'goal': 'preserve_pre_submit_guard_verdict_and_revalidation', 'match_role': 'runtime_observable_prefix_when_available'}, {'stage': 'holding', 'goal': 'attach_holding_outcome_to_candidate_identity', 'match_role': 'post_observation_validation_only'}, {'stage': 'exit', 'goal': 'attach_exit_outcome_to_candidate_identity', 'match_role': 'post_observation_validation_only'}, {'stage': 'scale_in', 'goal': 'separate_none_avg_down_pyramid_observation', 'match_role': 'post_observation_validation_only'}], 'priority_reason': 'eligible_positive_parent_needs_complete_flow', 'runtime_effect': False, 'allowed_runtime_apply': False, 'actual_order_submitted': False, 'broker_order_forbidden': True}, 'child_conflict_stratified_targets': {'schema_version': 'child_conflict_stratified_sampling_v1', 'enabled': False, 'sample_goal_per_conflict_child': 5, 'strata': [], 'resolution_policy': 'collect_until_child_floor_before_exclusion_or_live_authority', 'runtime_match_fields': {'entry_score_parent': 'score_watch_recovery', 'entry_source_parent': 'entry_source_observed_other', 'submit_quality_parent': 'submit_revalidation_ok'}, 'post_observation_dimensions_only': ['holding', 'exit', 'scale_in', 'profit'], 'runtime_consumption_allowed': False, 'runtime_effect': False, 'allowed_runtime_apply': False, 'actual_order_submitted': False, 'broker_order_forbidden': True}, 'stage_counterfactual_variant_count': 5}, {'active_seed_id': 'active_seed_7cf1c198fc1e5246', 'parent_ev_pct': 0.8097, 'parent_joined_sample': 1, 'complete_flow_count': 0, 'observable_prefix': {'entry_score_parent': 'score_mid_recovery', 'entry_source_parent': 'entry_source_wait6579'}, 'active_collection_reason': 'positive_ev_parent_needs_sim_collection', 'live_conversion_blocked_reason': 'incomplete_lifecycle_flow', 'positive_ev_stage_sampling_plan': {'schema_version': 'positive_ev_stage_sampling_plan_v1', 'sampling_scope': 'positive_ev_parent_stage_completion', 'sample_goal_per_bucket': 10, 'complete_flow_goal_per_bucket': 5, 'current_parent_joined_sample': 1, 'current_complete_flow_count': 0, 'additional_parent_sample_needed': 9, 'additional_complete_flow_needed': 5, 'runtime_match_fields': {'entry_score_parent': 'score_mid_recovery', 'entry_source_parent': 'entry_source_wait6579'}, 'runtime_match_forbidden_fields': ['exit_outcome_parent', 'major_holding_parent', 'scale_in_parent'], 'stage_targets': [{'stage': 'entry', 'goal': 'revisit_positive_prefix_candidates', 'match_role': 'runtime_observable_prefix'}, {'stage': 'submit', 'goal': 'preserve_pre_submit_guard_verdict_and_revalidation', 'match_role': 'runtime_observable_prefix_when_available'}, {'stage': 'holding', 'goal': 'attach_holding_outcome_to_candidate_identity', 'match_role': 'post_observation_validation_only'}, {'stage': 'exit', 'goal': 'attach_exit_outcome_to_candidate_identity', 'match_role': 'post_observation_validation_only'}, {'stage': 'scale_in', 'goal': 'separate_none_avg_down_pyramid_observation', 'match_role': 'post_observation_validation_only'}], 'priority_reason': 'eligible_positive_parent_needs_complete_flow', 'runtime_effect': False, 'allowed_runtime_apply': False, 'actual_order_submitted': False, 'broker_order_forbidden': True}, 'child_conflict_stratified_targets': {'schema_version': 'child_conflict_stratified_sampling_v1', 'enabled': False, 'sample_goal_per_conflict_child': 5, 'strata': [], 'resolution_policy': 'collect_until_child_floor_before_exclusion_or_live_authority', 'runtime_match_fields': {'entry_score_parent': 'score_mid_recovery', 'entry_source_parent': 'entry_source_wait6579'}, 'post_observation_dimensions_only': ['holding', 'exit', 'scale_in', 'profit'], 'runtime_consumption_allowed': False, 'runtime_effect': False, 'allowed_runtime_apply': False, 'actual_order_submitted': False, 'broker_order_forbidden': True}, 'stage_counterfactual_variant_count': 5}, {'active_seed_id': 'active_seed_1fc6245cf630af1c', 'parent_ev_pct': 0.2149, 'parent_joined_sample': 1, 'complete_flow_count': 1, 'observable_prefix': {'entry_score_parent': 'score_mid_recovery', 'entry_source_parent': 'entry_source_action_decision', 'submit_quality_parent': 'submit_revalidation_ok'}, 'active_collection_reason': 'previous_active_first_fail_grace', 'live_conversion_blocked_reason': '', 'positive_ev_stage_sampling_plan': {'schema_version': 'positive_ev_stage_sampling_plan_v1', 'sampling_scope': 'positive_ev_parent_stage_completion', 'sample_goal_per_bucket': 10, 'complete_flow_goal_per_bucket': 5, 'current_parent_joined_sample': 1, 'current_complete_flow_count': 1, 'additional_parent_sample_needed': 9, 'additional_complete_flow_needed': 4, 'runtime_match_fields': {'entry_score_parent': 'score_mid_recovery', 'entry_source_parent': 'entry_source_action_decision', 'submit_quality_parent': 'submit_revalidation_ok'}, 'runtime_match_forbidden_fields': ['exit_outcome_parent', 'major_holding_parent', 'scale_in_parent'], 'stage_targets': [{'stage': 'entry', 'goal': 'revisit_positive_prefix_candidates', 'match_role': 'runtime_observable_prefix'}, {'stage': 'submit', 'goal': 'preserve_pre_submit_guard_verdict_and_revalidation', 'match_role': 'runtime_observable_prefix_when_available'}, {'stage': 'holding', 'goal': 'attach_holding_outcome_to_candidate_identity', 'match_role': 'post_observation_validation_only'}, {'stage': 'exit', 'goal': 'attach_exit_outcome_to_candidate_identity', 'match_role': 'post_observation_validation_only'}, {'stage': 'scale_in', 'goal': 'separate_none_avg_down_pyramid_observation', 'match_role': 'post_observation_validation_only'}], 'priority_reason': 'eligible_positive_parent_needs_complete_flow', 'runtime_effect': False, 'allowed_runtime_apply': False, 'actual_order_submitted': False, 'broker_order_forbidden': True}, 'child_conflict_stratified_targets': {'schema_version': 'child_conflict_stratified_sampling_v1', 'enabled': False, 'sample_goal_per_conflict_child': 5, 'strata': [], 'resolution_policy': 'collect_until_child_floor_before_exclusion_or_live_authority', 'runtime_match_fields': {'entry_score_parent': 'score_mid_recovery', 'entry_source_parent': 'entry_source_action_decision', 'submit_quality_parent': 'submit_revalidation_ok'}, 'post_observation_dimensions_only': ['holding', 'exit', 'scale_in', 'profit'], 'runtime_consumption_allowed': False, 'runtime_effect': False, 'allowed_runtime_apply': False, 'actual_order_submitted': False, 'broker_order_forbidden': True}, 'stage_counterfactual_variant_count': 5}]`
+- top_active_positive_seeds: `[{'active_seed_id': 'active_seed_dcd8fdaa26695704', 'parent_ev_pct': 0.9467, 'parent_joined_sample': 1, 'complete_flow_count': 1, 'observable_prefix': {'entry_score_parent': 'score_watch_recovery', 'entry_source_parent': 'entry_source_observed_other', 'submit_quality_parent': 'submit_revalidation_ok'}, 'active_collection_reason': 'positive_ev_parent_active_sim_collection', 'live_conversion_blocked_reason': '', 'positive_ev_stage_sampling_plan': {'schema_version': 'positive_ev_stage_sampling_plan_v1', 'sampling_scope': 'positive_ev_parent_stage_completion', 'sample_goal_per_bucket': 10, 'complete_flow_goal_per_bucket': 5, 'current_parent_joined_sample': 1, 'current_complete_flow_count': 1, 'additional_parent_sample_needed': 9, 'additional_complete_flow_needed': 4, 'runtime_match_fields': {'entry_score_parent': 'score_watch_recovery', 'entry_source_parent': 'entry_source_observed_other', 'submit_quality_parent': 'submit_revalidation_ok'}, 'runtime_match_forbidden_fields': ['exit_outcome_parent', 'major_holding_parent', 'scale_in_parent'], 'stage_targets': [{'stage': 'entry', 'goal': 'revisit_positive_prefix_candidates', 'match_role': 'runtime_observable_prefix'}, {'stage': 'submit', 'goal': 'preserve_pre_submit_guard_verdict_and_revalidation', 'match_role': 'runtime_observable_prefix_when_available'}, {'stage': 'holding', 'goal': 'attach_holding_outcome_to_candidate_identity', 'match_role': 'post_observation_validation_only'}, {'stage': 'exit', 'goal': 'attach_exit_outcome_to_candidate_identity', 'match_role': 'post_observation_validation_only'}, {'stage': 'scale_in', 'goal': 'separate_none_avg_down_pyramid_observation', 'match_role': 'post_observation_validation_only'}], 'priority_reason': 'eligible_positive_parent_needs_complete_flow', 'runtime_effect': False, 'allowed_runtime_apply': False, 'actual_order_submitted': False, 'broker_order_forbidden': True}, 'child_conflict_stratified_targets': {'schema_version': 'child_conflict_stratified_sampling_v1', 'enabled': False, 'sample_goal_per_conflict_child': 5, 'strata': [], 'resolution_policy': 'collect_until_child_floor_before_exclusion_or_live_authority', 'runtime_match_fields': {'entry_score_parent': 'score_watch_recovery', 'entry_source_parent': 'entry_source_observed_other', 'submit_quality_parent': 'submit_revalidation_ok'}, 'post_observation_dimensions_only': ['holding', 'exit', 'scale_in', 'profit'], 'runtime_consumption_allowed': False, 'runtime_effect': False, 'allowed_runtime_apply': False, 'actual_order_submitted': False, 'broker_order_forbidden': True}, 'stage_counterfactual_variant_count': 5}, {'active_seed_id': 'active_seed_1fc6245cf630af1c', 'parent_ev_pct': 0.2149, 'parent_joined_sample': 1, 'complete_flow_count': 1, 'observable_prefix': {'entry_score_parent': 'score_mid_recovery', 'entry_source_parent': 'entry_source_action_decision', 'submit_quality_parent': 'submit_revalidation_ok'}, 'active_collection_reason': 'previous_active_first_fail_grace', 'live_conversion_blocked_reason': '', 'positive_ev_stage_sampling_plan': {'schema_version': 'positive_ev_stage_sampling_plan_v1', 'sampling_scope': 'positive_ev_parent_stage_completion', 'sample_goal_per_bucket': 10, 'complete_flow_goal_per_bucket': 5, 'current_parent_joined_sample': 1, 'current_complete_flow_count': 1, 'additional_parent_sample_needed': 9, 'additional_complete_flow_needed': 4, 'runtime_match_fields': {'entry_score_parent': 'score_mid_recovery', 'entry_source_parent': 'entry_source_action_decision', 'submit_quality_parent': 'submit_revalidation_ok'}, 'runtime_match_forbidden_fields': ['exit_outcome_parent', 'major_holding_parent', 'scale_in_parent'], 'stage_targets': [{'stage': 'entry', 'goal': 'revisit_positive_prefix_candidates', 'match_role': 'runtime_observable_prefix'}, {'stage': 'submit', 'goal': 'preserve_pre_submit_guard_verdict_and_revalidation', 'match_role': 'runtime_observable_prefix_when_available'}, {'stage': 'holding', 'goal': 'attach_holding_outcome_to_candidate_identity', 'match_role': 'post_observation_validation_only'}, {'stage': 'exit', 'goal': 'attach_exit_outcome_to_candidate_identity', 'match_role': 'post_observation_validation_only'}, {'stage': 'scale_in', 'goal': 'separate_none_avg_down_pyramid_observation', 'match_role': 'post_observation_validation_only'}], 'priority_reason': 'eligible_positive_parent_needs_complete_flow', 'runtime_effect': False, 'allowed_runtime_apply': False, 'actual_order_submitted': False, 'broker_order_forbidden': True}, 'child_conflict_stratified_targets': {'schema_version': 'child_conflict_stratified_sampling_v1', 'enabled': False, 'sample_goal_per_conflict_child': 5, 'strata': [], 'resolution_policy': 'collect_until_child_floor_before_exclusion_or_live_authority', 'runtime_match_fields': {'entry_score_parent': 'score_mid_recovery', 'entry_source_parent': 'entry_source_action_decision', 'submit_quality_parent': 'submit_revalidation_ok'}, 'post_observation_dimensions_only': ['holding', 'exit', 'scale_in', 'profit'], 'runtime_consumption_allowed': False, 'runtime_effect': False, 'allowed_runtime_apply': False, 'actual_order_submitted': False, 'broker_order_forbidden': True}, 'stage_counterfactual_variant_count': 5}]`
 - top_positive_sim_auto_approved: `[{'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_scalp_entry_action_decision_snapshot_stale_', 'classification_state': 'lifecycle_flow_sim_probe_candidate', 'stage': 'lifecycle_flow', 'bucket_type': 'combo_lifecycle_flow', 'source_quality_adjusted_ev_pct': 1.9895, 'joined_sample': 1, 'sample': 1}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_scalp_entry_action_decision_snapshot_stale_', 'classification_state': 'lifecycle_flow_sim_probe_candidate', 'stage': 'lifecycle_flow', 'bucket_type': 'combo_lifecycle_flow', 'source_quality_adjusted_ev_pct': 1.3047, 'joined_sample': 1, 'sample': 1}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_ai_confirmed_stale_stale_high_liquidity_li', 'classification_state': 'lifecycle_flow_sim_probe_candidate', 'stage': 'lifecycle_flow', 'bucket_type': 'combo_lifecycle_flow', 'source_quality_adjusted_ev_pct': 0.9467, 'joined_sample': 1, 'sample': 1}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_scalp_entry_action_decision_snapshot_stale_s', 'classification_state': 'lifecycle_flow_sim_probe_candidate', 'stage': 'lifecycle_flow', 'bucket_type': 'combo_lifecycle_flow', 'source_quality_adjusted_ev_pct': 0.2149, 'joined_sample': 1, 'sample': 1}]`
 - top_nonpositive_sim_auto_approved: `[{'bucket_id': 'holding:stage_policy:holding_weighted_adm_v1', 'classification_state': 'sim_auto_approved', 'stage': 'holding', 'bucket_type': 'stage_policy', 'source_quality_adjusted_ev_pct': -1.1943, 'joined_sample': 13, 'sample': 24}, {'bucket_id': 'scale_in:stage_policy:scale_in_weighted_adm_v1', 'classification_state': 'sim_auto_approved', 'stage': 'scale_in', 'bucket_type': 'stage_policy', 'source_quality_adjusted_ev_pct': -1.1616, 'joined_sample': 485, 'sample': 491}, {'bucket_id': 'exit:stage_policy:exit_weighted_adm_v1', 'classification_state': 'sim_auto_approved', 'stage': 'exit', 'bucket_type': 'stage_policy', 'source_quality_adjusted_ev_pct': -1.0692, 'joined_sample': 26, 'sample': 558}, {'bucket_id': 'submit:stage_policy:submit_weighted_adm_v1', 'classification_state': 'sim_auto_approved', 'stage': 'submit', 'bucket_type': 'stage_policy', 'source_quality_adjusted_ev_pct': -0.4773, 'joined_sample': 13, 'sample': 45}]`
 
@@ -195,8 +195,8 @@
 ## Code Improvement Workorder
 - artifact: `/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-07-09.json`
 - markdown: `/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-07-09.md`
-- selected_order_count: `109`
-- decision_counts: `{'attach_existing_family': 137, 'design_family_candidate': 3, 'defer_evidence': 8, 'reject': 3}`
+- selected_order_count: `108`
+- decision_counts: `{'attach_existing_family': 138, 'design_family_candidate': 3, 'defer_evidence': 6, 'reject': 3}`
 
 ## Approval Requests
 - none
@@ -208,12 +208,12 @@
 ## Code Improvement Top Orders
 - `order_latency_canary_tag_완화_1축_canary_승인` decision=`attach_existing_family` subsystem=`runtime_instrumentation`
 - `order_lifecycle_bucket_discovery_source_contract_source_contract_source_added_entry_6d966faa56_fea3e535` decision=`attach_existing_family` subsystem=`lifecycle_bucket_discovery_taxonomy_provenance`
-- `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_10_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_25002a6e` decision=`attach_existing_family` subsystem=`lifecycle_decision_matrix`
+- `order_lifecycle_bucket_discovery_source_contract_source_contract_source_added_institutional_flow_context_5ffac855c5_ea33d1b2` decision=`attach_existing_family` subsystem=`lifecycle_bucket_discovery_taxonomy_provenance`
 
-- `soft_stop_whipsaw_confirmation`: `adjust_up` sample=`961/10`
+- `soft_stop_whipsaw_confirmation`: `adjust_up` sample=`23/10`
 - `holding_flow_ofi_smoothing`: `hold_sample` sample=`6/20`
-- `protect_trailing_smoothing`: `adjust_down` sample=`56/20`
-- `trailing_continuation`: `freeze` sample=`838/20`
+- `protect_trailing_smoothing`: `hold` sample=`56/20`
+- `trailing_continuation`: `freeze` sample=`56/20`
 - `market_regime_continuous_thresholds`: `hold_sample` sample=`9/10`
 - `pre_submit_price_guard`: `hold` sample=`0/1`
 - `dynamic_entry_price_resolver`: `hold_sample` sample=`65/20`
@@ -221,16 +221,18 @@
 - `scale_in_split_order_plan`: `adjust_up` sample=`4/0`
 - `entry_price_execution_quality`: `hold` sample=`69/5`
 - `score65_74_recovery_probe`: `hold` sample=`13/20`
-- `strength_momentum_soft_gate_p1`: `hold` sample=`2778/20`
-- `overbought_pullback_guard_p1`: `hold` sample=`295/20`
-- `liquidity_pre_submit_guard_p1`: `hold` sample=`549/20`
-- `bad_entry_refined_canary`: `adjust_up` sample=`41233/10`
-- `holding_exit_decision_matrix_advisory`: `hold_no_edge` sample=`0/1`
-- `lifecycle_decision_matrix_runtime`: `adjust_up` sample=`1244/20`
-- `scale_in_price_guard`: `hold` sample=`709/20`
-- `position_sizing_dynamic_formula`: `hold_sample` sample=`205/30`
+- `strength_momentum_soft_gate_p1`: `hold` sample=`125/20`
+- `overbought_pullback_guard_p1`: `hold_sample` sample=`9/20`
+- `liquidity_pre_submit_guard_p1`: `hold` sample=`26/20`
+- `bad_entry_refined_canary`: `hold_sample` sample=`1001/10`
+- `holding_exit_decision_matrix_advisory`: `hold_sample` sample=`14/1`
+- `lifecycle_decision_matrix_runtime`: `adjust_up` sample=`1243/20`
+- `scale_in_price_guard`: `hold` sample=`22/20`
+- `position_sizing_dynamic_formula`: `hold_sample` sample=`101/30`
 
 ## Warnings
+- `trade_review_missing`
+- `performance_tuning_missing`
 - `scalp_entry_adm:joined_sample_below_sample_floor`
 - `lifecycle_bucket_discovery:source_contract_drift_warning`
 - `lifecycle_bucket_discovery:source_contract_drift_warning`

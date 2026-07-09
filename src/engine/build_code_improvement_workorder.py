@@ -4326,6 +4326,10 @@ def _sim_fill_and_match_report_contract_orders(ev_report: dict[str, Any], source
     has_canonical_fill_price_gap = unpriced_no_canonical_total > 0
 
     active_seed_none = _safe_int(lifecycle_match.get("active_seed_matched_none_count"), 0)
+    eligible_active_seed_none = _safe_int(
+        lifecycle_match.get("eligible_active_seed_matched_none_count"),
+        active_seed_none,
+    )
     contract_missing = _safe_int(lifecycle_match.get("contract_missing_count"), 0)
     not_instrumented = _safe_int(lifecycle_match.get("not_instrumented_count"), 0)
     prefix_parent_missing = _safe_int(lifecycle_match.get("active_seed_prefix_matched_parent_missing_count"), 0)
@@ -4397,7 +4401,8 @@ def _sim_fill_and_match_report_contract_orders(ev_report: dict[str, Any], source
                 f"contract_missing_count={contract_missing} (lifecycle-eligible stages only)",
                 f"not_instrumented_count={not_instrumented} (excluded: diagnostic/observation stages without lifecycle contract requirement)",
                 f"active_seed_prefix_matched_parent_missing_count={prefix_parent_missing}",
-                f"active_seed_matched_none_count={active_seed_none}",
+                f"active_seed_matched_none_count={active_seed_none} (raw compatibility counter)",
+                f"eligible_active_seed_matched_none_count={eligible_active_seed_none}",
                 f"natural_no_match_count={natural_no_match} (excluded from workorder trigger)",
                 f"panic_scale_in_stage_excluded_count={panic_excluded} (excluded from workorder trigger)",
                 f"hypothesis_matched_but_parent_bucket_no_match_count={hypothesis_no_match} (includes natural_no_match + prefix_matched_parent_missing)",
