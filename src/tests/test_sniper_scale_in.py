@@ -9419,6 +9419,81 @@ def test_recent_pyramid_add_suppresses_scalp_trailing(monkeypatch):
     assert any(stage == "pyramid_post_add_trailing_grace" for stage, _ in calls["stages"])
 
 
+def test_scalp_trailing_uses_peak_start_after_profit_falls_below_safe_profit(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    class _RulesProxy:
+        def __getattr__(self, name):
+            overrides = {
+                "SCALE_IN_REQUIRE_HISTORY_TABLE": False,
+                "SCALP_SAFE_PROFIT": 1.0,
+                "SCALP_TRAILING_START_PCT": 0.6,
+                "SCALP_TRAILING_LIMIT_WEAK": 0.4,
+                "SCALP_TRAILING_LIMIT_STRONG": 0.8,
+                "SCALP_MFE_PROTECT_EXIT_ENABLED": True,
+                "SCALP_MFE_PROTECT_MIN_GIVEBACK_PCT": 0.55,
+            }
+            if name in overrides:
+                return overrides[name]
+            return getattr(CONFIG, name)
+
+    state_handlers.TRADING_RULES = _RulesProxy()
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 10136}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+
+    sell_calls = []
+    pipeline_logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": False, "reason": "test_no_add"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: pipeline_logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_smart_sell_order",
+        lambda **kwargs: sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "S1"},
+    )
+
+    stock = {
+        "id": 1,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 10000,
+        "buy_qty": 10,
+        "rt_ai_prob": 0.50,
+    }
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 10095, "orderbook": {"bids": [{"price": 10095, "volume": 1000}]}},
+        admin_id=1,
+        market_regime="BULL",
+        now_ts=1_000_000.0,
+        now_dt=datetime(2026, 7, 9, 12, 20, 0),
+        radar=None,
+        ai_engine=None,
+    )
+
+    exit_logs = [fields for stage, fields in pipeline_logs if stage == "exit_signal"]
+    assert sell_calls
+    assert stock["last_exit_rule"] == "scalp_trailing_take_profit"
+    assert exit_logs and exit_logs[-1]["exit_rule"] == "scalp_trailing_take_profit"
+    assert float(str(exit_logs[-1]["profit_rate"]).replace("+", "")) < 1.0
+    assert "peak=+" in exit_logs[-1]["reason"]
+
+
 def test_protect_trailing_uses_smoothing_not_single_tick(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 
@@ -23565,6 +23640,7 @@ def test_same_symbol_loss_reentry_cooldown_targets_loss_exits_only():
         == 3600
     )
     assert state_handlers._resolve_same_symbol_loss_reentry_cooldown_sec("scalp_trailing_take_profit", 1.2) == 0
+    assert state_handlers._resolve_same_symbol_loss_reentry_cooldown_sec("scalp_trailing_take_profit", -0.2) == 3600
     assert state_handlers._resolve_same_symbol_loss_reentry_cooldown_sec("protect_trailing_stop", 0.19) == 0
 
 

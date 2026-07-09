@@ -11453,6 +11453,7 @@ def _resolve_same_symbol_loss_reentry_cooldown_sec(exit_rule: str | None, profit
         "scalp_soft_stop_pct",
         "scalp_preset_hard_stop_pct",
         "protect_trailing_stop",
+        "scalp_trailing_take_profit",
         "scalp_bad_entry_refined_canary",
         "scalp_mfe_protect_exit",
         "reversal_add_post_eval_fail",
@@ -35563,6 +35564,8 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
         else:
             dynamic_stop_pct = soft_stop_pct
             dynamic_trailing_limit = _rule_float('SCALP_TRAILING_LIMIT_WEAK', 0.4)
+        scalp_trailing_start_pct = _rule_float('SCALP_TRAILING_START_PCT', safe_profit_pct)
+        scalp_trailing_peak_armed = peak_profit >= scalp_trailing_start_pct
         _evaluate_scalp_profit_stagnation_exit(
             stock,
             strategy=strategy,
@@ -36509,8 +36512,10 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             )
             exit_rule = "scalp_scanner_fallback_retrace_exit"
 
-        elif not is_sell_signal and profit_rate >= safe_profit_pct:
+        elif not is_sell_signal and (profit_rate >= safe_profit_pct or scalp_trailing_peak_armed):
             if (
+                profit_rate >= safe_profit_pct
+                and
                 holding_score_negative_exit_usable
                 and current_ai_score < momentum_decay_score_limit
                 and held_sec >= momentum_decay_min_hold_sec
@@ -36523,7 +36528,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 )
                 exit_rule = "scalp_ai_momentum_decay"
 
-            elif drawdown >= dynamic_trailing_limit:
+            elif scalp_trailing_peak_armed and drawdown >= dynamic_trailing_limit:
                 in_pyramid_trailing_grace, _, _ = _pyramid_post_add_trailing_grace(stock, now_ts)
                 if in_pyramid_trailing_grace:
                     _log_pyramid_post_add_trailing_grace(
@@ -36537,17 +36542,25 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     )
                 else:
                     is_sell_signal = True
-                    sell_reason_type = "TRAILING"
-                    reason = f"🔥 고점 대비 밀림 (-{drawdown:.2f}%). 트레일링 익절 (+{profit_rate:.2f}%)"
+                    sell_reason_type = "LOSS" if profit_rate < 0 else "TRAILING"
+                    trailing_label = "트레일링 손실방어" if profit_rate < 0 else "트레일링 익절"
+                    reason = (
+                        f"🔥 고점 대비 밀림 (-{drawdown:.2f}%). "
+                        f"{trailing_label} ({profit_rate:+.2f}%, peak={peak_profit:+.2f}%)"
+                    )
                     exit_rule = "scalp_trailing_take_profit"
             else:
-                stagnation_exit = _evaluate_scalp_profit_stagnation_exit(
-                    stock,
-                    strategy=strategy,
-                    profit_rate=profit_rate,
-                    peak_profit=peak_profit,
-                    current_ai_score=current_ai_score,
-                    now_ts=now_ts,
+                stagnation_exit = (
+                    _evaluate_scalp_profit_stagnation_exit(
+                        stock,
+                        strategy=strategy,
+                        profit_rate=profit_rate,
+                        peak_profit=peak_profit,
+                        current_ai_score=current_ai_score,
+                        now_ts=now_ts,
+                    )
+                    if profit_rate >= safe_profit_pct
+                    else {}
                 )
                 if stagnation_exit.get("should_exit"):
                     is_sell_signal = True
