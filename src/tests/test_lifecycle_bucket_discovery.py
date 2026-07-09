@@ -1419,6 +1419,32 @@ def test_scale_in_ai_score_unknown_keeps_source_quality_blocker_provenance():
     assert summary["rollup_candidates"][0]["source_dimension_gap_provenance"]["sample_count"] == 167
 
 
+def test_scale_in_held_unknown_is_source_only_observation_rollup():
+    candidate = mod._candidate_from_bucket(
+        "scale_in",
+        {
+            "bucket_type": "held_bucket",
+            "bucket_key": "held_unknown",
+            "sample": 12,
+            "joined_sample": 0,
+            "source_quality_gate": "hold_sample",
+            "recommended_route": "hold_sample",
+            "unknown_dimension_counts": {"held_bucket": 12},
+            "unknown_reason_counts": {"missing_source_field": 12},
+        },
+    )
+
+    assert candidate["source_dimension_gap"] == ""
+    assert candidate["missing_dimension_keys"] == []
+    assert candidate["recommended_resolution"] == mod.SCALE_IN_HELD_BUCKET_OBSERVATION_RESOLUTION
+    assert candidate["runtime_effect"] is False
+    assert candidate["allowed_runtime_apply"] is False
+
+    summary = mod._source_dimension_gap_summary([candidate])
+    assert summary["actionable_unknown_gap_count"] == 0
+    assert summary["rollup_only_gap_count"] == 0
+
+
 def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path, monkeypatch):
     ldm_dir = tmp_path / "ldm"
     report_dir = tmp_path / "report"

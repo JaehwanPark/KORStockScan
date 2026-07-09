@@ -447,6 +447,10 @@ def _classified_source_only_warning_present(context: dict[str, Any], warning: st
     return any(str(item) == warning for item in threshold_warnings)
 
 
+def _source_context_or_threshold_warning_closed(context: dict[str, Any], warning: str) -> bool:
+    return _classified_source_only_warning_present(context, warning) or _feedback_handoff_closed(context)
+
+
 def _is_resolved_classified_source_quality_warning_gap(item: dict[str, Any], context: dict[str, Any]) -> bool:
     final_state = str(item.get("final_state") or "")
     review_id = str(item.get("review_id") or "").strip().lower()
@@ -515,7 +519,7 @@ def _is_resolved_classified_source_quality_warning_gap(item: dict[str, Any], con
             and source_wrapper.get("exists") is True
             and summary.get("source_contract_status") == "warning"
             and "source_contract_drift_warning" in [str(item) for item in source_warnings]
-            and _classified_source_only_warning_present(
+            and _source_context_or_threshold_warning_closed(
                 context,
                 "lifecycle_bucket_discovery:source_contract_drift_warning",
             )
@@ -526,7 +530,7 @@ def _is_resolved_classified_source_quality_warning_gap(item: dict[str, Any], con
             source.get("runtime_effect") is False
             and source.get("allowed_runtime_apply") is False
             and "pending_future_quotes" in [str(item) for item in source.get("warnings", [])]
-            and _classified_source_only_warning_present(
+            and _source_context_or_threshold_warning_closed(
                 context,
                 "swing_strategy_discovery:pending_future_quotes",
             )
@@ -543,6 +547,11 @@ def _is_resolved_classified_source_quality_warning_gap(item: dict[str, Any], con
         or "entry admission metric" in reason
     ):
         source = _source_summary(context, "scalping_pattern_lab_automation")
+        source_ev_summary = (
+            source.get("ev_report_summary")
+            if isinstance(source.get("ev_report_summary"), dict)
+            else {}
+        )
         source_only_warning = any(
             _classified_source_only_warning_present(context, warning)
             for warning in (
@@ -550,12 +559,25 @@ def _is_resolved_classified_source_quality_warning_gap(item: dict[str, Any], con
                 "scalp_entry_adm:joined_sample_below_sample_floor",
                 "scalp_entry_adm:unknown_bucket_source_quality_gap",
             )
-        )
+        ) or source_ev_summary.get("scalp_entry_adm_status") == "warning"
         return (
             source.get("runtime_effect") is False
             and source.get("allowed_runtime_apply") is False
             and source_only_warning
-            and _threshold_ev_warnings_are_classified_source_only(context)
+            and (
+                _source_context_or_threshold_warning_closed(
+                    context,
+                    "scalp_entry_adm:ai_numeric_consistency_rows_excluded_from_aggregates",
+                )
+                or _source_context_or_threshold_warning_closed(
+                    context,
+                    "scalp_entry_adm:joined_sample_below_sample_floor",
+                )
+                or _source_context_or_threshold_warning_closed(
+                    context,
+                    "scalp_entry_adm:unknown_bucket_source_quality_gap",
+                )
+            )
         )
     if review_id == "swing_lifecycle_decision_matrix_warnings" or swing_lifecycle_source_only_context or (
         ("pending future quotes" in reason or "pending_future_quotes" in reason)

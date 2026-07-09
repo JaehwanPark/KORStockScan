@@ -100,6 +100,109 @@ def test_pattern_lab_ai_review_embeds_feedback_handoff_summary(tmp_path, monkeyp
     assert "automation_handoff_gap" in handoff["interpretation_hint"]
 
 
+def test_pattern_lab_ai_review_resolves_source_only_warnings_before_late_bound_threshold_ev(
+    tmp_path,
+    monkeypatch,
+):
+    report_dir = tmp_path / "data" / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    _write_json(
+        report_dir / "pattern_lab_currentness_audit" / "pattern_lab_currentness_audit_2026-05-15.json",
+        {
+            "status": "pass",
+            "summary": {
+                "consumed_feedback_source_count": 8,
+                "missing_feedback_source_count": 0,
+            },
+            "checks": [],
+        },
+    )
+    _write_json(
+        report_dir / "scalping_pattern_lab_automation" / "scalping_pattern_lab_automation_2026-05-15.json",
+        {
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "ev_report_summary": {
+                "scalp_entry_adm_status": "warning",
+                "scalp_entry_adm_joined_sample": 10,
+            },
+        },
+    )
+    source_payloads = {
+        "lifecycle_decision_matrix": {"status": "pass", "runtime_effect": False},
+        "lifecycle_bucket_discovery": {
+            "status": "pass",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "summary": {"source_contract_status": "warning"},
+            "warnings": ["source_contract_drift_warning"],
+        },
+        "swing_lifecycle_decision_matrix": {"status": "pass", "runtime_effect": False},
+        "swing_lifecycle_bucket_discovery": {
+            "status": "pass",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        },
+        "swing_strategy_discovery_ev": {
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "warnings": ["pending_future_quotes"],
+        },
+    }
+    for label, payload in source_payloads.items():
+        _write_json(report_dir / label / f"{label}_2026-05-15.json", payload)
+
+    raw_response = {
+        "schema_version": 1,
+        "interpretation": {"review_items": [], "source_feedback_status": "warning"},
+        "audit": {
+            "status": "correction_required",
+            "issues": [
+                "scalp_entry_adm_status_warning",
+                "lifecycle_bucket_discovery_source_contract_drift",
+                "swing_strategy_discovery_pending_quotes",
+            ],
+            "forbidden_use_violations": [],
+        },
+        "final_conclusions": [
+            {
+                "review_id": "scalp_entry_adm_status_warning",
+                "domain": "scalping",
+                "final_state": "source_quality_gap",
+                "final_decision": "block_runtime_use",
+                "reason": "scalp_entry_adm_status='warning' with only 10 joined samples.",
+            },
+            {
+                "review_id": "lifecycle_bucket_discovery_source_contract_drift",
+                "domain": "scalping",
+                "final_state": "source_quality_gap",
+                "final_decision": "block_runtime_use",
+                "reason": "lifecycle_bucket_discovery reports source_contract_drift_warning.",
+            },
+            {
+                "review_id": "swing_strategy_discovery_pending_quotes",
+                "domain": "swing",
+                "final_state": "source_quality_gap",
+                "final_decision": "block_runtime_use",
+                "reason": "swing_strategy_discovery_ev has pending_future_quotes.",
+            },
+        ],
+    }
+
+    report = mod.build_pattern_lab_ai_review_report("2026-05-15", provider="openai", ai_raw_response=raw_response)
+
+    assert report["status"] == "pass"
+    assert report["summary"]["audit_status"] == "pass"
+    assert report["code_improvement_orders"] == []
+    conclusions = report["ai_two_pass_review"]["final_conclusions"]
+    assert {item["final_state"] for item in conclusions} == {"source_only_keep_collecting"}
+    assert {
+        item["source_context_resolution"]["status"]
+        for item in conclusions
+    } == {"resolved_by_classified_source_quality_warning"}
+    assert all(item["source_context_resolution"]["runtime_effect"] is False for item in conclusions)
+
+
 def test_pattern_lab_ai_review_resolves_generic_handoff_gap_when_feedback_sources_closed(tmp_path, monkeypatch):
     report_dir = tmp_path / "data" / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)

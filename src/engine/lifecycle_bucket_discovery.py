@@ -203,6 +203,7 @@ LEGACY_DAILY_LDM_SOURCE_KEY = "daily_lifecycle_decision_matrix_reports"
 CANONICAL_PER_DATE_SOURCE_KEY = "per_date_sources"
 SCALE_IN_AI_SCORE_SOURCE_MISSING_GAP = "scale_in_ai_score_source_missing"
 SCALE_IN_AI_SCORE_SOURCE_MISSING_RESOLUTION = "source_quality_blocked_missing_runtime_features_ai_score"
+SCALE_IN_HELD_BUCKET_OBSERVATION_RESOLUTION = "scale_in_held_bucket_observation_rollup"
 SOURCE_CONTRACT_SECTION_SCHEMAS: dict[str, dict[str, tuple[str, ...]]] = {
     "lifecycle_flow_bucket_attribution": {
         "bucket_types": ("combo_lifecycle_flow",),
@@ -414,7 +415,14 @@ SOURCE_CONTRACT_SECTION_SCHEMAS: dict[str, dict[str, tuple[str, ...]]] = {
         "dimension_keys": ("exit_outcome", "exit_rule", "exit_source_stage", "outcome", "profit", "profit_band", "rule", "source"),
     },
     "scale_in_bucket_attribution": {
-        "bucket_types": ("ai_score_band", "ai_score_source", "arm", "blocker_namespace", "blocker_reason"),
+        "bucket_types": (
+            "ai_score_band",
+            "ai_score_source",
+            "arm",
+            "blocker_namespace",
+            "blocker_reason",
+            "held_bucket",
+        ),
         "bucket_fields": (
             "bucket_key",
             "bucket_type",
@@ -446,7 +454,15 @@ SOURCE_CONTRACT_SECTION_SCHEMAS: dict[str, dict[str, tuple[str, ...]]] = {
             "unknown_dimension_counts",
             "unknown_reason_counts",
         ),
-        "dimension_keys": ("ai_score_band", "ai_score_source", "arm", "blocker_namespace", "blocker_reason"),
+        "dimension_keys": (
+            "ai_score_band",
+            "ai_score_source",
+            "arm",
+            "blocker_namespace",
+            "blocker_reason",
+            "held",
+            "held_bucket",
+        ),
     },
     "overnight_bucket_attribution": {
         "bucket_types": (
@@ -896,6 +912,8 @@ def _recommended_resolution(candidate_state: str, bucket: dict[str, Any]) -> str
         return "explicit_lifecycle_flow_source_only_blocker"
     if _scale_in_ai_score_source_missing(bucket):
         return SCALE_IN_AI_SCORE_SOURCE_MISSING_RESOLUTION
+    if _scale_in_held_bucket_unknown_rollup(bucket):
+        return SCALE_IN_HELD_BUCKET_OBSERVATION_RESOLUTION
     existing = str(bucket.get("recommended_resolution") or "").strip()
     if existing and existing != "none":
         return existing
@@ -931,6 +949,15 @@ def _actionable_unknown_source_dimension_gap(
     if taxonomy.get("missing_dimension_keys"):
         return True
     text = str(bucket_key or "").strip().lower()
+    if _scale_in_held_bucket_unknown_rollup(
+        {
+            **bucket,
+            "stage": stage,
+            "bucket_type": bucket_type,
+            "bucket_key": bucket_key,
+        }
+    ):
+        return False
     if _scale_in_ai_score_source_missing(
         {
             **bucket,
@@ -949,6 +976,18 @@ def _actionable_unknown_source_dimension_gap(
     if stage == "lifecycle_flow" or bucket_type == "combo_lifecycle_flow":
         return False
     return "_unknown" in text or "unknown_" in text
+
+
+def _scale_in_held_bucket_unknown_rollup(bucket: dict[str, Any]) -> bool:
+    if str(bucket.get("stage") or "") != "scale_in":
+        return False
+    if str(bucket.get("bucket_type") or "") != "held_bucket":
+        return False
+    text = str(bucket.get("bucket_key") or "").strip().lower()
+    if text not in {"held_unknown", "unknown", "missing", "none", "null"}:
+        return False
+    reasons = bucket.get("unknown_reason_counts") if isinstance(bucket.get("unknown_reason_counts"), dict) else {}
+    return bool(reasons) or "unknown" in text
 
 
 def _scale_in_ai_score_source_missing(bucket: dict[str, Any]) -> bool:
