@@ -3780,6 +3780,7 @@ def _sim_lifecycle_bucket_match_aggregation(events: list[dict]) -> dict:
     eligible_event_count = 0
     eligible_observed_count = 0
     eligible_contract_gap_count = 0
+    eligible_policy_missing_count = 0
     eligible_active_seed_none_count = 0
     bridge_breakdown: Counter[str] = Counter()
 
@@ -3858,6 +3859,10 @@ def _sim_lifecycle_bucket_match_aggregation(events: list[dict]) -> dict:
             contract_missing_count += 1
             if eligible_stage:
                 eligible_contract_gap_count += 1
+        elif reclassified == "policy_missing":
+            if eligible_stage:
+                eligible_policy_missing_count += 1
+                eligible_contract_gap_count += 1
         elif reclassified == "not_instrumented":
             not_instrumented_count += 1
 
@@ -3878,6 +3883,7 @@ def _sim_lifecycle_bucket_match_aggregation(events: list[dict]) -> dict:
         "panic_scale_in_stage_excluded_count": panic_excluded_count,
         "active_seed_prefix_matched_parent_missing_count": prefix_matched_parent_missing_count,
         "contract_missing_count": contract_missing_count,
+        "eligible_policy_missing_count": eligible_policy_missing_count,
         "not_instrumented_count": not_instrumented_count,
         "not_instrumented_count_scope": "non-lifecycle-match-eligible diagnostic/observation stages where lifecycle fields are not required",
         "policy_missing_count": reclassified_status_counts.get("policy_missing", 0),

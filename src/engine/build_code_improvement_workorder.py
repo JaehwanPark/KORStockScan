@@ -4331,6 +4331,10 @@ def _sim_fill_and_match_report_contract_orders(ev_report: dict[str, Any], source
         active_seed_none,
     )
     contract_missing = _safe_int(lifecycle_match.get("contract_missing_count"), 0)
+    policy_missing = _safe_int(
+        lifecycle_match.get("eligible_policy_missing_count"),
+        _safe_int(lifecycle_match.get("policy_missing_count"), 0),
+    )
     not_instrumented = _safe_int(lifecycle_match.get("not_instrumented_count"), 0)
     prefix_parent_missing = _safe_int(lifecycle_match.get("active_seed_prefix_matched_parent_missing_count"), 0)
     natural_no_match = _safe_int(lifecycle_match.get("natural_no_match_count"), 0)
@@ -4385,20 +4389,25 @@ def _sim_fill_and_match_report_contract_orders(ev_report: dict[str, Any], source
             ],
         })
 
-    if contract_missing >= _LDM_MATCH_MISSING_ORDER_THRESHOLD or prefix_parent_missing >= _LDM_MATCH_MISSING_ORDER_THRESHOLD:
+    if (
+        contract_missing >= _LDM_MATCH_MISSING_ORDER_THRESHOLD
+        or policy_missing >= _LDM_MATCH_MISSING_ORDER_THRESHOLD
+        or prefix_parent_missing >= _LDM_MATCH_MISSING_ORDER_THRESHOLD
+    ):
         orders.append({
             **base,
             "order_id": "order_active_seed_or_ldm_match_missing_contract_gap",
-            "title": "Contract missing or active seed parent bridge missing above threshold",
+            "title": "Contract/policy missing or active seed parent bridge missing above threshold",
             "priority": 1,
             "route": "source_quality_gap",
             "mapped_family": "lifecycle_decision_matrix_runtime",
             "threshold_family": "lifecycle_decision_matrix_runtime",
             "improvement_type": "active_seed_ldm_match_contract_gap",
             "confidence": "postclose_threshold_ev_source",
-            "intent": "contract_missing indicates required instrumentation gap; prefix_matched_parent_missing indicates active seed prefix found but parent lifecycle-flow approved row not closed. Both must be diagnosed.",
+            "intent": "contract_missing indicates required instrumentation gap; policy_missing indicates policy/catalog handoff is unavailable for eligible lifecycle events; prefix_matched_parent_missing indicates active seed prefix found but parent lifecycle-flow approved row not closed. These must be diagnosed.",
             "evidence": [
                 f"contract_missing_count={contract_missing} (lifecycle-eligible stages only)",
+                f"eligible_policy_missing_count={policy_missing}",
                 f"not_instrumented_count={not_instrumented} (excluded: diagnostic/observation stages without lifecycle contract requirement)",
                 f"active_seed_prefix_matched_parent_missing_count={prefix_parent_missing}",
                 f"active_seed_matched_none_count={active_seed_none} (raw compatibility counter)",
@@ -4408,7 +4417,7 @@ def _sim_fill_and_match_report_contract_orders(ev_report: dict[str, Any], source
                 f"hypothesis_matched_but_parent_bucket_no_match_count={hypothesis_no_match} (includes natural_no_match + prefix_matched_parent_missing)",
                 f"ldm_match_missing_order_threshold={_LDM_MATCH_MISSING_ORDER_THRESHOLD}",
             ],
-            "next_postclose_metric": "contract_missing_count < threshold AND prefix_parent_missing_count < threshold",
+            "next_postclose_metric": "contract_missing_count < threshold AND eligible_policy_missing_count < threshold AND prefix_parent_missing_count < threshold",
             "files_likely_touched": [
                 "src/engine/daily_threshold_cycle_report.py",
                 "src/engine/observation_source_quality_audit.py",

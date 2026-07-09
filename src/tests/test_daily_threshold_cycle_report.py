@@ -3943,6 +3943,27 @@ def test_lifecycle_match_aggregation_separates_raw_missing_from_decision_gap():
     assert result["eligible_active_seed_matched_none_count"] == 1
 
 
+def test_lifecycle_match_aggregation_counts_policy_missing_as_decision_gap():
+    from src.engine import daily_threshold_cycle_report as target
+
+    result = target._sim_lifecycle_bucket_match_aggregation(
+        [
+            {
+                "stage": "scalp_sim_entry_armed",
+                "fields": {
+                    "simulation_book": "scalp_ai_buy_all",
+                    "lifecycle_bucket_match_status": "policy_missing",
+                },
+            }
+        ]
+    )
+
+    assert result["policy_missing_count"] == 1
+    assert result["eligible_policy_missing_count"] == 1
+    assert result["eligible_lifecycle_match_gap_count"] == 1
+    assert result["decision_missing_count"] == 1
+
+
 def test_producer_parent_catalog_missing_reason_flow():
     from src.engine import daily_threshold_cycle_report as target
 

@@ -6597,6 +6597,41 @@ def test_contract_missing_below_threshold_no_workorder():
     assert "order_active_seed_or_ldm_match_missing_contract_gap" not in gap_ids
 
 
+def test_policy_missing_threshold_creates_workorder():
+    ev_report = {
+        "calibration": {
+            "scalp_simulator": {
+                "lifecycle_bucket_match_aggregation": {
+                    "contract_missing_count": 0,
+                    "eligible_policy_missing_count": 5,
+                    "active_seed_prefix_matched_parent_missing_count": 0,
+                    "active_seed_matched_none_count": 5,
+                    "eligible_active_seed_matched_none_count": 5,
+                    "natural_no_match_count": 0,
+                    "panic_scale_in_stage_excluded_count": 0,
+                    "hypothesis_matched_but_parent_bucket_no_match_count": 0,
+                },
+                "swing_micro_source_quality": {
+                    "provenance_gap_count": 0,
+                    "missing_ws_quote_source_count": 0,
+                    "ready_count": 0,
+                },
+            },
+        },
+        "family_reports": [],
+    }
+
+    orders = mod._sim_fill_and_match_report_contract_orders(ev_report)
+
+    gap = next(
+        order
+        for order in orders
+        if order["order_id"] == "order_active_seed_or_ldm_match_missing_contract_gap"
+    )
+    assert "eligible_policy_missing_count=5" in gap["evidence"]
+    assert "eligible_policy_missing_count < threshold" in gap["next_postclose_metric"]
+
+
 def test_prefix_parent_missing_creates_workorder():
     ev_report = {
         "calibration": {
