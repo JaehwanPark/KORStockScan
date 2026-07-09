@@ -2371,6 +2371,19 @@ def test_run_sniper_defers_scanner_precheck_and_lag_event_emits_until_loop_tail(
     assert direct_heavy_emit == -1
 
 
+def test_run_sniper_checks_queue_lag_eviction_before_stale_recovery():
+    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    loop_idx = source.index('for stock in queue_context["iteration_targets"]:')
+    queue_call_idx = source.index("queue_lag_fields = _defer_emit_scanner_runtime_queue_lag(", loop_idx)
+    fast_result_idx = source.index('fast_precheck_result = str(stock.get("_scanner_fast_precheck_result")', queue_call_idx)
+    queue_decision_idx = source.index("_scanner_watch_eviction_decision_from_queue_lag(", fast_result_idx)
+    stale_recovery_idx = source.index("scanner_fast_precheck_stale_ws_recovery", fast_result_idx)
+    late_queue_decision_idx = source.index("_scanner_watch_eviction_decision_from_queue_lag(", stale_recovery_idx)
+
+    assert queue_call_idx < fast_result_idx < queue_decision_idx < stale_recovery_idx
+    assert stale_recovery_idx < late_queue_decision_idx
+
+
 def test_scanner_pipeline_events_flush_before_heavy_eval_handler():
     source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
     flush_def_idx = source.index("def _flush_delayed_scanner_heavy_eval")

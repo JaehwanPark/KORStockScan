@@ -5874,6 +5874,24 @@ def run_sniper(is_test_mode=False):
                         fast_precheck_stale_like = (
                             fast_precheck_reason in SCANNER_WATCH_EVICTION_STALE_REASONS
                         )
+                        if fast_precheck_result != "eligible_for_heavy_entry_eval" and queue_lag_fields:
+                            queue_lag_decision = _scanner_watch_eviction_decision_from_queue_lag(
+                                stock,
+                                now_ts=heavy_queue_enter_epoch,
+                                queue_lag_fields=queue_lag_fields,
+                            )
+                            if (
+                                queue_lag_decision.get("should_evict")
+                                and _scanner_queue_lag_hot_slot_eviction_allowed()
+                                and _expire_scanner_watch_target(
+                                    stock,
+                                    code,
+                                    targets,
+                                    decision=queue_lag_decision,
+                                    emit_event_fn=_defer_scanner_entry_pipeline_log,
+                                )
+                            ):
+                                continue
                         if fast_precheck_result != "eligible_for_heavy_entry_eval" and fast_precheck_stale_like:
                             rest_quote_allowed, rest_quote_deferred_reason = _scanner_rest_quote_recovery_options(
                                 stock,
