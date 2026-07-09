@@ -11,7 +11,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import time
 from datetime import datetime, timedelta
-from math import log10
+from math import ceil, log10
 
 # 💡 Level 1 & 2 공통 모듈 임포트
 from src.utils import kiwoom_utils
@@ -29,9 +29,14 @@ LOW_REBOUND_RISING_MISSED_SOURCE = "LOW_REBOUND_RISING_MISSED"
 LOW_REBOUND_RISING_MISSED_SOURCE_FAMILY = "rising_missed_low_rebound_source_v1"
 LOW_REBOUND_RISING_MISSED_ROLE = "rising_missed_low_rebound_candidate"
 LOW_REBOUND_RISING_MISSED_LINEAGE = "low_rebound_from_intraday_low"
+HIGH_PROXIMITY_CONFIRMATION_SOURCE = "HIGH_PROXIMITY_CONFIRMATION"
+NEW_HIGH_CONFIRMATION_SOURCE = "NEW_HIGH_CONFIRMATION"
+BREAKOUT_CONFIRMATION_SOURCES = {HIGH_PROXIMITY_CONFIRMATION_SOURCE, NEW_HIGH_CONFIRMATION_SOURCE}
 RANK_CHANGE_SIGN_AUTHORITY_DEFAULT = "raw_unverified_not_decision_input"
-SCANNER_PROMOTION_POLICY_VERSION = "scanner_priority_v3_20260708_under10000_priority_demote"
+SCANNER_PROMOTION_POLICY_VERSION = "scanner_priority_v6_20260709_breakout_confirmation_enrichment"
 SCANNER_UNDER_10000_PRIORITY_PRICE_CEILING = 10000
+SCANNER_UNDER_10000_VOLUME_SURGE_RANK_PCT_DEFAULT = 0.40
+SCANNER_UNDER_10000_VOLUME_SURGE_RANK_MIN_COUNT_DEFAULT = 10
 PRIMARY_RISING_START_SOURCES = {
     "REALTIME_RANK_START",
     "PRICE_JUMP_START",
@@ -284,8 +289,15 @@ def _recent_low_rebound_codes(recent_picks, low_rebound_targets=None):
     for code, meta in (recent_picks or {}).items():
         sources = set((meta or {}).get("last_source_signature") or [])
         if LOW_REBOUND_RISING_MISSED_SOURCE in sources:
-            recent_price = _safe_positive_int((meta or {}).get("last_price") or (meta or {}).get("first_price"))
-            if 0 < recent_price < SCANNER_UNDER_10000_PRIORITY_PRICE_CEILING:
+            recent_target = {
+                "Price": (meta or {}).get("last_price") or (meta or {}).get("first_price"),
+                "SourceSet": sources,
+                "VolumeSurgeMatched": (meta or {}).get("last_volume_surge_matched"),
+                "VolumeSurgeRank": (meta or {}).get("last_volume_surge_rank"),
+                "VolumeSurgeRankPct": (meta or {}).get("last_volume_surge_rank_pct"),
+                "VolumeSurgeUniverseSize": (meta or {}).get("last_volume_surge_universe_size"),
+            }
+            if _under_10000_runtime_priority_rank(recent_target) > 0:
                 continue
             norm_code = str(code or "").strip()[:6]
             if norm_code:
@@ -439,15 +451,17 @@ def _source_priority(source):
         "VOLUME_SURGE_POSITIVE": 2,
         "BID_IMBALANCE_SURGE": 3,
         "VI_TRIGGERED": 4,
-        "VI+VALUE": 5,
-        "SUPERNOVA+VALUE": 6,
-        "BOTH": 7,
-        "SUPERNOVA": 8,
-        LOW_REBOUND_RISING_MISSED_SOURCE: 9,
-        "BOTH+VALUE": 10,
-        "OPEN_TOP": 11,
-        "VALUE_TOP": 12,
-    }.get(str(source or "OPEN_TOP"), 12)
+        NEW_HIGH_CONFIRMATION_SOURCE: 5,
+        HIGH_PROXIMITY_CONFIRMATION_SOURCE: 6,
+        "VI+VALUE": 7,
+        "SUPERNOVA+VALUE": 8,
+        "BOTH": 9,
+        "SUPERNOVA": 10,
+        LOW_REBOUND_RISING_MISSED_SOURCE: 11,
+        "BOTH+VALUE": 12,
+        "OPEN_TOP": 13,
+        "VALUE_TOP": 14,
+    }.get(str(source or "OPEN_TOP"), 14)
 
 
 def _safe_float(value, default=0.0):
@@ -556,9 +570,91 @@ def _candidate_priority_price(target):
     return 0
 
 
+def _under_10000_volume_surge_rank_pct():
+    raw_value = os.getenv(
+        "KORSTOCKSCAN_SCALP_SCANNER_UNDER_10000_VOLUME_SURGE_RANK_PCT",
+        str(SCANNER_UNDER_10000_VOLUME_SURGE_RANK_PCT_DEFAULT),
+    )
+    try:
+        return min(1.0, max(0.0, float(raw_value)))
+    except (TypeError, ValueError):
+        log_error(
+            "⚠️ KORSTOCKSCAN_SCALP_SCANNER_UNDER_10000_VOLUME_SURGE_RANK_PCT 값이 잘못되어 기본값을 사용합니다: "
+            f"{raw_value} -> {SCANNER_UNDER_10000_VOLUME_SURGE_RANK_PCT_DEFAULT}"
+        )
+        return SCANNER_UNDER_10000_VOLUME_SURGE_RANK_PCT_DEFAULT
+
+
+def _under_10000_volume_surge_rank_min_count():
+    raw_value = os.getenv(
+        "KORSTOCKSCAN_SCALP_SCANNER_UNDER_10000_VOLUME_SURGE_RANK_MIN_COUNT",
+        str(SCANNER_UNDER_10000_VOLUME_SURGE_RANK_MIN_COUNT_DEFAULT),
+    )
+    try:
+        return max(0, int(float(raw_value)))
+    except (TypeError, ValueError):
+        log_error(
+            "⚠️ KORSTOCKSCAN_SCALP_SCANNER_UNDER_10000_VOLUME_SURGE_RANK_MIN_COUNT 값이 잘못되어 기본값을 사용합니다: "
+            f"{raw_value} -> {SCANNER_UNDER_10000_VOLUME_SURGE_RANK_MIN_COUNT_DEFAULT}"
+        )
+        return SCANNER_UNDER_10000_VOLUME_SURGE_RANK_MIN_COUNT_DEFAULT
+
+
+def _has_under_10000_volume_surge_rank_relief(target):
+    if not bool((target or {}).get("VolumeSurgeMatched")):
+        return False
+    rank = _safe_positive_int((target or {}).get("VolumeSurgeRank"))
+    if rank <= 0:
+        return False
+    universe_size = _safe_positive_int((target or {}).get("VolumeSurgeUniverseSize"))
+    rank_pct_limit = _under_10000_volume_surge_rank_pct()
+    min_count = _under_10000_volume_surge_rank_min_count()
+    rank_limit = max(min_count, int(ceil(universe_size * rank_pct_limit))) if universe_size > 0 else min_count
+    if rank <= rank_limit:
+        return True
+    rank_pct = _safe_float((target or {}).get("VolumeSurgeRankPct"))
+    return rank_pct > 0.0 and rank_pct <= rank_pct_limit
+
+
+def _has_volume_surge_source_evidence(target, *, positive_only=False):
+    target = target or {}
+    source_set = set(_source_signature(target))
+    if positive_only:
+        if "VOLUME_SURGE_POSITIVE" not in source_set:
+            return False
+    elif not (
+        {"VOLUME_SURGE_POSITIVE", "VOLUME_SURGE_RAW", LOW_REBOUND_RISING_MISSED_SOURCE} & source_set
+        or bool(target.get("VolumeSurgeMatched"))
+    ):
+        return False
+    if bool(target.get("VolumeSurgeMatched")):
+        return True
+    return (
+        _safe_float(target.get("VolumeSurgeRate", target.get("SpikeRate"))) > 0.0
+        or _safe_positive_int(target.get("VolumeSurgeQty", target.get("SurgeQty"))) > 0
+        or _safe_positive_int(target.get("VolumeSurgeTradeQty", target.get("TradeQty"))) > 0
+    )
+
+
+def _has_positive_volume_surge_source_evidence(target):
+    return _has_volume_surge_source_evidence(target, positive_only=True)
+
+
+def _has_under_10000_liquidity_relief(target):
+    target = target or {}
+    source_set = set(_source_signature(target))
+    if "VALUE_TOP" in source_set:
+        return True
+    if _has_volume_surge_source_evidence(target):
+        return True
+    return _has_under_10000_volume_surge_rank_relief(target)
+
+
 def _under_10000_runtime_priority_rank(target):
     price = _candidate_priority_price(target)
-    return 1 if 0 < price < SCANNER_UNDER_10000_PRIORITY_PRICE_CEILING else 0
+    if not 0 < price < SCANNER_UNDER_10000_PRIORITY_PRICE_CEILING:
+        return 0
+    return 0 if _has_under_10000_liquidity_relief(target) else 1
 
 
 def _low_rebound_min_pct():
@@ -582,6 +678,8 @@ def _candidate_current_change_rate(target):
         "LowReboundDisplayChangeRate",
         "RealtimeRankFluRate",
         "VolumeSurgeFluRate",
+        "HighProximityFluRate",
+        "NewHighFluRate",
         "ValueFluRate",
         "FluRate",
         "flu_rate",
@@ -673,6 +771,8 @@ def _representative_source(source_set):
         "PRICE_JUMP_START",
         "VOLUME_SURGE_POSITIVE",
         "BID_IMBALANCE_SURGE",
+        NEW_HIGH_CONFIRMATION_SOURCE,
+        HIGH_PROXIMITY_CONFIRMATION_SOURCE,
     ):
         if source in sources:
             return source
@@ -746,6 +846,16 @@ def _scanner_flu_metric(target):
         if has_rate:
             return rate, "bid_imbalance_flu_rate", "BID_IMBALANCE_SURGE"
 
+    if NEW_HIGH_CONFIRMATION_SOURCE in source_set:
+        rate, has_rate = _scanner_rate_from_field(target, "NewHighFluRate")
+        if has_rate:
+            return rate, "new_high_flu_rate", NEW_HIGH_CONFIRMATION_SOURCE
+
+    if HIGH_PROXIMITY_CONFIRMATION_SOURCE in source_set:
+        rate, has_rate = _scanner_rate_from_field(target, "HighProximityFluRate")
+        if has_rate:
+            return rate, "high_proximity_flu_rate", HIGH_PROXIMITY_CONFIRMATION_SOURCE
+
     if source_set and source_set.issubset({"OPEN_TOP", "VALUE_TOP"}):
         open_rate, has_open = _scanner_rate_from_field(target, "OpenFluRate")
         if has_open:
@@ -796,6 +906,10 @@ def _scanner_candidate_role(target):
             return "late_confirmation"
     if source_set & PRIMARY_RISING_START_SOURCES:
         return "early_discovery"
+    if source_set & BREAKOUT_CONFIRMATION_SOURCES and source_set.issubset(
+        BREAKOUT_CONFIRMATION_SOURCES | {"VALUE_TOP", "OPEN_TOP"}
+    ):
+        return "late_confirmation"
     if source_set == {"VALUE_TOP"}:
         return "liquidity_enrichment_only"
     if source_set in (
@@ -816,6 +930,8 @@ def _rising_start_score(target):
         "PRICE_JUMP_START": 690.0,
         "VOLUME_SURGE_POSITIVE": 650.0,
         "BID_IMBALANCE_SURGE": 610.0,
+        NEW_HIGH_CONFIRMATION_SOURCE: 560.0,
+        HIGH_PROXIMITY_CONFIRMATION_SOURCE: 540.0,
         LOW_REBOUND_RISING_MISSED_SOURCE: 520.0,
         "VI_TRIGGERED": 360.0,
         "OPEN_TOP": 120.0,
@@ -840,6 +956,9 @@ def _rising_start_score(target):
     trade_value = _safe_positive_int(target.get("TradeValue"))
     trade_value_score = min(160.0, log10(max(trade_value, 1)) * 22.0) if trade_value > 0 else 0.0
     source_count_score = min(240.0, max(0, len(source_set) - 1) * 70.0)
+    breakout_confirmation_score = 0.0
+    if source_set & BREAKOUT_CONFIRMATION_SOURCES and source_set & {"PRICE_JUMP_START", "VOLUME_SURGE_POSITIVE"}:
+        breakout_confirmation_score = 180.0
 
     return (
         best_source_bias
@@ -853,6 +972,7 @@ def _rising_start_score(target):
         + priority_score
         + trade_value_score
         + source_count_score
+        + breakout_confirmation_score
     )
 
 
@@ -894,6 +1014,12 @@ def _scanner_priority_profile(target, previous=None):
     price_jump_confirmed = "PRICE_JUMP_START" in source_set and bool(
         source_set & {"REALTIME_RANK_START", "VOLUME_SURGE_POSITIVE"}
     )
+    price_jump_breakout_confirmed = (
+        "PRICE_JUMP_START" in source_set
+        and "VOLUME_SURGE_POSITIVE" in source_set
+        and bool(source_set & BREAKOUT_CONFIRMATION_SOURCES)
+    )
+    price_jump_confirmed = price_jump_confirmed or price_jump_breakout_confirmed
 
     if LOW_REBOUND_RISING_MISSED_SOURCE in source_set:
         tier = "tier_c_volume_confirmation"
@@ -914,6 +1040,8 @@ def _scanner_priority_profile(target, previous=None):
         tier = "tier_a_acceleration_confirmed"
         if jump_rate >= max(0.3, min_spike / 200.0):
             reason = "price_jump_start_acceleration"
+        elif price_jump_breakout_confirmed:
+            reason = "price_jump_breakout_confirmation"
         elif price_jump_confirmed:
             reason = "price_jump_multisource_confirmation"
         elif rank_jump >= min_rank_jump:
@@ -938,6 +1066,13 @@ def _scanner_priority_profile(target, previous=None):
         reason = acceleration_reason or "volume_surge_positive_source_present"
         base_score = 2200.0
         demoted_reason = ""
+    elif source_set & BREAKOUT_CONFIRMATION_SOURCES and source_set.issubset(
+        BREAKOUT_CONFIRMATION_SOURCES | {"VALUE_TOP", "OPEN_TOP"}
+    ):
+        tier = "tier_d_late_rank_only"
+        reason = "breakout_confirmation_only_source"
+        base_score = 1000.0
+        demoted_reason = "breakout_confirmation_requires_price_or_volume_source"
     elif strong_accel:
         tier = "tier_a_acceleration_confirmed"
         if rank_jump >= min_rank_jump:
@@ -1056,6 +1191,8 @@ def _freshness_score(target):
         "VI_TRIGGERED": 560.0,
         "BOTH": 520.0,
         "SUPERNOVA": 460.0,
+        NEW_HIGH_CONFIRMATION_SOURCE: 420.0,
+        HIGH_PROXIMITY_CONFIRMATION_SOURCE: 400.0,
         "BOTH+VALUE": 430.0,
         LOW_REBOUND_RISING_MISSED_SOURCE: 360.0,
         "VALUE_TOP": 180.0,
@@ -1094,6 +1231,21 @@ def _freshness_score(target):
         + vi_score
         + source_count_score
     )
+
+
+def _merge_best_rank_metadata(current, raw_target, prefix):
+    rank_key = f"{prefix}Rank"
+    rank = _safe_positive_int((raw_target or {}).get(rank_key))
+    if rank <= 0:
+        return
+    current_rank = _safe_positive_int((current or {}).get(rank_key))
+    if current_rank > 0 and rank >= current_rank:
+        return
+    current[f"{prefix}Matched"] = bool((raw_target or {}).get(f"{prefix}Matched", True))
+    current[rank_key] = rank
+    current[f"{prefix}RankPct"] = _safe_float((raw_target or {}).get(f"{prefix}RankPct"))
+    current[f"{prefix}UniverseSize"] = _safe_positive_int((raw_target or {}).get(f"{prefix}UniverseSize"))
+    current[f"{prefix}SortType"] = str((raw_target or {}).get(f"{prefix}SortType") or "")
 
 
 def _merge_candidate(candidate_pool, raw_target, source):
@@ -1177,6 +1329,7 @@ def _merge_candidate(candidate_pool, raw_target, source):
             current.get("PriceJumpTradeQty", 0), _safe_positive_int(raw_target.get("TradeQty"))
         )
         current["PreSig"] = raw_target.get("PreSig", current.get("PreSig", ""))
+        _merge_best_rank_metadata(current, raw_target, "PriceJump")
     elif source == "VOLUME_SURGE_POSITIVE":
         if raw_flu_present:
             current["VolumeSurgeFluRate"] = raw_flu_rate
@@ -1216,6 +1369,38 @@ def _merge_candidate(candidate_pool, raw_target, source):
             elif "ViStaticDisparityRate" in current:
                 current["ViFluRate"] = current["ViStaticDisparityRate"]
                 current.setdefault("ViFluRateMetric", "vi_static_disparity_rate")
+    elif source == HIGH_PROXIMITY_CONFIRMATION_SOURCE:
+        if raw_flu_present:
+            current["HighProximityFluRate"] = raw_flu_rate
+        current["HighProximityTradeQty"] = max(
+            current.get("HighProximityTradeQty", 0), _safe_positive_int(raw_target.get("TradeQty"))
+        )
+        current["TodayHighPrice"] = max(
+            current.get("TodayHighPrice", 0), _safe_positive_int(raw_target.get("TodayHighPrice"))
+        )
+        current["TodayLowPrice"] = max(
+            current.get("TodayLowPrice", 0), _safe_positive_int(raw_target.get("TodayLowPrice"))
+        )
+        if raw_target.get("HighProximityDistancePct") not in (None, ""):
+            current["HighProximityDistancePct"] = _safe_float(raw_target.get("HighProximityDistancePct"))
+        current["PreSig"] = raw_target.get("PreSig", current.get("PreSig", ""))
+        _merge_best_rank_metadata(current, raw_target, "HighProximity")
+    elif source == NEW_HIGH_CONFIRMATION_SOURCE:
+        if raw_flu_present:
+            current["NewHighFluRate"] = raw_flu_rate
+        current["NewHighTradeQty"] = max(
+            current.get("NewHighTradeQty", 0), _safe_positive_int(raw_target.get("TradeQty"))
+        )
+        current["NewHighPrevTradeQtyRatio"] = max(
+            current.get("NewHighPrevTradeQtyRatio", 0.0), _safe_float(raw_target.get("PrevTradeQtyRatio"))
+        )
+        current["NewHighPrice"] = max(current.get("NewHighPrice", 0), _safe_positive_int(raw_target.get("NewHighPrice")))
+        current["NewLowPrice"] = max(current.get("NewLowPrice", 0), _safe_positive_int(raw_target.get("NewLowPrice")))
+        current["NewHighPeriodDays"] = max(
+            current.get("NewHighPeriodDays", 0), _safe_positive_int(raw_target.get("NewHighPeriodDays"))
+        )
+        current["PreSig"] = raw_target.get("PreSig", current.get("PreSig", ""))
+        _merge_best_rank_metadata(current, raw_target, "NewHigh")
     elif source == LOW_REBOUND_RISING_MISSED_SOURCE:
         current["SourceFamily"] = LOW_REBOUND_RISING_MISSED_SOURCE_FAMILY
         current["RisingMissedLineage"] = (
@@ -1240,6 +1425,19 @@ def _merge_candidate(candidate_pool, raw_target, source):
     current["PriorityScore"] = max(current.get("PriorityScore", 0.0), _safe_float(raw_target.get("PriorityScore", raw_target.get("priority_score"))))
     current["SpikeRate"] = max(current.get("SpikeRate", 0.0), _safe_float(raw_target.get("SpikeRate", raw_target.get("spike_rate"))))
     current["TradeValue"] = max(current.get("TradeValue", 0), _safe_positive_int(raw_target.get("TradeValue", raw_target.get("trade_value"))))
+    volume_surge_rank = _safe_positive_int(raw_target.get("VolumeSurgeRank"))
+    if volume_surge_rank > 0 and (
+        _safe_positive_int(current.get("VolumeSurgeRank")) <= 0
+        or volume_surge_rank < _safe_positive_int(current.get("VolumeSurgeRank"))
+    ):
+        current["VolumeSurgeMatched"] = True
+        current["VolumeSurgeRank"] = volume_surge_rank
+        current["VolumeSurgeRankPct"] = _safe_float(raw_target.get("VolumeSurgeRankPct"))
+        current["VolumeSurgeUniverseSize"] = _safe_positive_int(raw_target.get("VolumeSurgeUniverseSize"))
+        current["VolumeSurgeSortType"] = str(raw_target.get("VolumeSurgeSortType") or "")
+    _merge_best_rank_metadata(current, raw_target, "PriceJump")
+    _merge_best_rank_metadata(current, raw_target, "HighProximity")
+    _merge_best_rank_metadata(current, raw_target, "NewHigh")
     current["VIMotionCount"] = max(current.get("VIMotionCount", 0), _safe_positive_int(raw_target.get("VIMotionCount")))
 
     price = _safe_positive_int(raw_target.get("Price", raw_target.get("cur_prc")))
@@ -1276,6 +1474,8 @@ def build_candidate_pool(
     price_jump_targets=None,
     volume_surge_targets=None,
     bid_imbalance_targets=None,
+    high_proximity_targets=None,
+    new_high_targets=None,
     soaring_targets=None,
     supernova_targets=None,
     value_targets=None,
@@ -1291,6 +1491,10 @@ def build_candidate_pool(
         _merge_candidate(candidate_pool, target, "VOLUME_SURGE_POSITIVE")
     for target in bid_imbalance_targets or []:
         _merge_candidate(candidate_pool, target, "BID_IMBALANCE_SURGE")
+    for target in high_proximity_targets or []:
+        _merge_candidate(candidate_pool, target, HIGH_PROXIMITY_CONFIRMATION_SOURCE)
+    for target in new_high_targets or []:
+        _merge_candidate(candidate_pool, target, NEW_HIGH_CONFIRMATION_SOURCE)
     for target in soaring_targets or []:
         _merge_candidate(candidate_pool, target, "OPEN_TOP")
     for target in supernova_targets or []:
@@ -1316,8 +1520,8 @@ def rank_candidates(candidate_pool):
         return sorted(
             candidate_pool.values(),
             key=lambda item: (
-                tier_rank.get(_scanner_priority_profile(item).get("scanner_priority_tier"), 8),
                 _under_10000_runtime_priority_rank(item),
+                tier_rank.get(_scanner_priority_profile(item).get("scanner_priority_tier"), 8),
                 -_scanner_priority_profile(item).get("scanner_priority_score", 0.0),
                 _source_priority(item.get("Source")),
                 -_safe_float(item.get("FluRate")),
@@ -1359,6 +1563,10 @@ def _scanner_candidate_pre_filter_reason(target):
         if flu_rate <= 0:
             return "non_positive_liquidity_only_source"
         return "liquidity_only_source_not_seed"
+    if source_set & BREAKOUT_CONFIRMATION_SOURCES and source_set.issubset(
+        BREAKOUT_CONFIRMATION_SOURCES | {"VALUE_TOP", "OPEN_TOP"}
+    ):
+        return "breakout_confirmation_only_source_not_seed"
     if source_set in ({"VI_TRIGGERED"}, {"VI_TRIGGERED", "VALUE_TOP"}):
         return "vi_secondary_confirmation_only"
     if flu_rate <= 0:
@@ -1679,6 +1887,10 @@ def _remember_pick(recent_picks, target, now_ts):
         "last_flu_rate_metric": current_flu_metric,
         "last_flu_rate_source": current_flu_source,
         "last_price": _safe_positive_int(target.get("Price")),
+        "last_volume_surge_matched": bool(target.get("VolumeSurgeMatched")),
+        "last_volume_surge_rank": _safe_positive_int(target.get("VolumeSurgeRank")),
+        "last_volume_surge_rank_pct": _safe_float(target.get("VolumeSurgeRankPct")),
+        "last_volume_surge_universe_size": _safe_positive_int(target.get("VolumeSurgeUniverseSize")),
         "scanner_probe_state": "promoted",
         **_scanner_priority_profile(target, previous),
     }
@@ -1716,6 +1928,10 @@ def _remember_guard_block(recent_picks, target, now_ts, reason):
         "last_flu_rate_metric": current_flu_metric,
         "last_flu_rate_source": current_flu_source,
         "last_price": _safe_positive_int(target.get("Price")),
+        "last_volume_surge_matched": bool(target.get("VolumeSurgeMatched")),
+        "last_volume_surge_rank": _safe_positive_int(target.get("VolumeSurgeRank")),
+        "last_volume_surge_rank_pct": _safe_float(target.get("VolumeSurgeRankPct")),
+        "last_volume_surge_universe_size": _safe_positive_int(target.get("VolumeSurgeUniverseSize")),
         "scanner_probe_state": "first_seen_probe",
         "last_observed_at": now_ts,
         **_scanner_priority_profile(target, previous),
@@ -2170,10 +2386,34 @@ def _positive_volume_surge_from_raw(raw_targets, limit=60):
     return positive
 
 
+def _annotate_source_rank(raw_targets, *, prefix, sort_type):
+    targets = [dict(item or {}) for item in (raw_targets or []) if item]
+    universe_size = len(targets)
+    annotated = []
+    for index, item in enumerate(targets, start=1):
+        item[f"{prefix}Matched"] = True
+        item[f"{prefix}Rank"] = index
+        item[f"{prefix}RankPct"] = round(index / universe_size, 6) if universe_size > 0 else 0.0
+        item[f"{prefix}UniverseSize"] = universe_size
+        item[f"{prefix}SortType"] = sort_type
+        annotated.append(item)
+    return annotated
+
+
+def _annotate_volume_surge_rank(raw_targets):
+    return _annotate_source_rank(
+        raw_targets,
+        prefix="VolumeSurge",
+        sort_type="ka10023_sort_tp_1_surge_qty_desc",
+    )
+
+
 def _merge_low_rebound_universe(universe, targets, source):
     for raw_target in targets or []:
         code = kiwoom_utils.normalize_stock_code((raw_target or {}).get("Code", (raw_target or {}).get("code", "")))
         if not code:
+            continue
+        if source not in LOW_REBOUND_BASE_SOURCES and code not in universe:
             continue
         current = universe.setdefault(
             code,
@@ -2196,7 +2436,7 @@ def _merge_low_rebound_universe(universe, targets, source):
         if price > 0:
             current["Price"] = price
         change_rate, has_change_rate = _candidate_current_change_rate(raw_target)
-        if has_change_rate:
+        if has_change_rate and source in LOW_REBOUND_BASE_SOURCES:
             current["LowReboundDisplayChangeRate"] = change_rate
         current["PriorityScore"] = max(
             _safe_float(current.get("PriorityScore")),
@@ -2210,6 +2450,29 @@ def _merge_low_rebound_universe(universe, targets, source):
             _safe_float(current.get("SpikeRate")),
             _safe_float((raw_target or {}).get("SpikeRate", (raw_target or {}).get("spike_rate"))),
         )
+        volume_surge_rank = _safe_positive_int((raw_target or {}).get("VolumeSurgeRank"))
+        if volume_surge_rank > 0 and (
+            _safe_positive_int(current.get("VolumeSurgeRank")) <= 0
+            or volume_surge_rank < _safe_positive_int(current.get("VolumeSurgeRank"))
+        ):
+            current["VolumeSurgeMatched"] = True
+            current["VolumeSurgeRank"] = volume_surge_rank
+            current["VolumeSurgeRankPct"] = _safe_float((raw_target or {}).get("VolumeSurgeRankPct"))
+            current["VolumeSurgeUniverseSize"] = _safe_positive_int((raw_target or {}).get("VolumeSurgeUniverseSize"))
+            current["VolumeSurgeSortType"] = str((raw_target or {}).get("VolumeSurgeSortType") or "")
+        _merge_best_rank_metadata(current, raw_target, "PriceJump")
+        _merge_best_rank_metadata(current, raw_target, "HighProximity")
+        _merge_best_rank_metadata(current, raw_target, "NewHigh")
+        if source == HIGH_PROXIMITY_CONFIRMATION_SOURCE:
+            current["HighProximityFluRate"] = _safe_float((raw_target or {}).get("FluRate"))
+            current["HighProximityDistancePct"] = _safe_float((raw_target or {}).get("HighProximityDistancePct"))
+            current["TodayHighPrice"] = _safe_positive_int((raw_target or {}).get("TodayHighPrice"))
+            current["TodayLowPrice"] = _safe_positive_int((raw_target or {}).get("TodayLowPrice"))
+        elif source == NEW_HIGH_CONFIRMATION_SOURCE:
+            current["NewHighFluRate"] = _safe_float((raw_target or {}).get("FluRate"))
+            current["NewHighPrice"] = _safe_positive_int((raw_target or {}).get("NewHighPrice"))
+            current["NewLowPrice"] = _safe_positive_int((raw_target or {}).get("NewLowPrice"))
+            current["NewHighPeriodDays"] = _safe_positive_int((raw_target or {}).get("NewHighPeriodDays"))
 
 
 def _is_low_rebound_prefetch_product_allowed(target):
@@ -2218,10 +2481,9 @@ def _is_low_rebound_prefetch_product_allowed(target):
         return False
     price = _safe_positive_int((target or {}).get("Price"))
     min_price = _safe_positive_int(getattr(TRADING_RULES, "MIN_PRICE", 0))
-    if min_price > 0 and 0 < price < min_price:
+    if min_price > 0 and 0 < price < min_price and not _has_volume_surge_source_evidence(target):
         return False
     return True
-
 
 def _low_rebound_prefetch_rank_key(target):
     source_set = set((target or {}).get("SourceSet") or [])
@@ -2249,11 +2511,21 @@ def _low_rebound_prefetch_rank_key(target):
     )
 
 
-def _build_low_rebound_universe(realtime_rank_targets=None, raw_volume_surge_targets=None, value_targets=None):
+def _build_low_rebound_universe(
+    realtime_rank_targets=None,
+    raw_volume_surge_targets=None,
+    value_targets=None,
+    price_jump_targets=None,
+    high_proximity_targets=None,
+    new_high_targets=None,
+):
     universe = {}
     _merge_low_rebound_universe(universe, raw_volume_surge_targets, "VOLUME_SURGE_RAW")
     _merge_low_rebound_universe(universe, value_targets, "VALUE_TOP")
     _merge_low_rebound_universe(universe, realtime_rank_targets, "REALTIME_RANK_START")
+    _merge_low_rebound_universe(universe, price_jump_targets, "PRICE_JUMP_START")
+    _merge_low_rebound_universe(universe, high_proximity_targets, HIGH_PROXIMITY_CONFIRMATION_SOURCE)
+    _merge_low_rebound_universe(universe, new_high_targets, NEW_HIGH_CONFIRMATION_SOURCE)
     return sorted(
         universe.values(),
         key=_low_rebound_prefetch_rank_key,
@@ -2309,6 +2581,9 @@ def _build_low_rebound_rising_missed_targets(
     realtime_rank_targets=None,
     raw_volume_surge_targets=None,
     value_targets=None,
+    price_jump_targets=None,
+    high_proximity_targets=None,
+    new_high_targets=None,
     emit_observation=False,
 ):
     candidates = []
@@ -2319,6 +2594,9 @@ def _build_low_rebound_rising_missed_targets(
         realtime_rank_targets=realtime_rank_targets,
         raw_volume_surge_targets=raw_volume_surge_targets,
         value_targets=value_targets,
+        price_jump_targets=price_jump_targets,
+        high_proximity_targets=high_proximity_targets,
+        new_high_targets=new_high_targets,
     )
     fetch_cap = _low_rebound_candle_fetch_cap()
     prefetch_targets, prefetch_stats, selection_reasons = _select_low_rebound_prefetch_targets(universe, fetch_cap)
@@ -2428,6 +2706,34 @@ def _build_low_rebound_rising_missed_targets(
                 "PriorityScore": _safe_float(target.get("PriorityScore")),
                 "TradeValue": _safe_positive_int(target.get("TradeValue")),
                 "SpikeRate": _safe_float(target.get("SpikeRate")),
+                "VolumeSurgeMatched": bool(target.get("VolumeSurgeMatched")),
+                "VolumeSurgeRank": _safe_positive_int(target.get("VolumeSurgeRank")),
+                "VolumeSurgeRankPct": _safe_float(target.get("VolumeSurgeRankPct")),
+                "VolumeSurgeUniverseSize": _safe_positive_int(target.get("VolumeSurgeUniverseSize")),
+                "VolumeSurgeSortType": str(target.get("VolumeSurgeSortType") or ""),
+                "PriceJumpMatched": bool(target.get("PriceJumpMatched")),
+                "PriceJumpRank": _safe_positive_int(target.get("PriceJumpRank")),
+                "PriceJumpRankPct": _safe_float(target.get("PriceJumpRankPct")),
+                "PriceJumpUniverseSize": _safe_positive_int(target.get("PriceJumpUniverseSize")),
+                "PriceJumpSortType": str(target.get("PriceJumpSortType") or ""),
+                "HighProximityMatched": bool(target.get("HighProximityMatched")),
+                "HighProximityRank": _safe_positive_int(target.get("HighProximityRank")),
+                "HighProximityRankPct": _safe_float(target.get("HighProximityRankPct")),
+                "HighProximityUniverseSize": _safe_positive_int(target.get("HighProximityUniverseSize")),
+                "HighProximitySortType": str(target.get("HighProximitySortType") or ""),
+                "HighProximityFluRate": _safe_float(target.get("HighProximityFluRate")),
+                "HighProximityDistancePct": _safe_float(target.get("HighProximityDistancePct")),
+                "TodayHighPrice": _safe_positive_int(target.get("TodayHighPrice")),
+                "TodayLowPrice": _safe_positive_int(target.get("TodayLowPrice")),
+                "NewHighMatched": bool(target.get("NewHighMatched")),
+                "NewHighRank": _safe_positive_int(target.get("NewHighRank")),
+                "NewHighRankPct": _safe_float(target.get("NewHighRankPct")),
+                "NewHighUniverseSize": _safe_positive_int(target.get("NewHighUniverseSize")),
+                "NewHighSortType": str(target.get("NewHighSortType") or ""),
+                "NewHighFluRate": _safe_float(target.get("NewHighFluRate")),
+                "NewHighPrice": _safe_positive_int(target.get("NewHighPrice")),
+                "NewLowPrice": _safe_positive_int(target.get("NewLowPrice")),
+                "NewHighPeriodDays": _safe_positive_int(target.get("NewHighPeriodDays")),
             }
         )
     if emit_observation:
@@ -2515,12 +2821,18 @@ def run_scalper_iteration(
         minutes=3,
         limit=60,
     )
+    price_jump_targets = _annotate_source_rank(
+        price_jump_targets,
+        prefix="PriceJump",
+        sort_type="ka10019_flu_tp_1_recent_jump_desc",
+    )
     raw_volume_surge_targets = _fetch_scan_source(
         "ka10023 거래량급증 raw",
         kiwoom_utils.scan_volume_spike_ka10023,
         token,
         mrkt_tp="000",
     )
+    raw_volume_surge_targets = _annotate_volume_surge_rank(raw_volume_surge_targets)
     volume_surge_targets = _positive_volume_surge_from_raw(raw_volume_surge_targets, limit=supernova_limit)
     bid_imbalance_targets = _fetch_scan_source(
         "ka10021 호가잔량급증",
@@ -2529,6 +2841,32 @@ def run_scalper_iteration(
         mrkt_tp="000",
         minutes=3,
         limit=60,
+    )
+    high_proximity_targets = _fetch_scan_source(
+        "ka10018 고가근접",
+        kiwoom_utils.get_high_price_proximity_ka10018,
+        token,
+        mrkt_tp="000",
+        proximity="10",
+        limit=60,
+    )
+    high_proximity_targets = _annotate_source_rank(
+        high_proximity_targets,
+        prefix="HighProximity",
+        sort_type="ka10018_high_low_tp_1_alacc_rt_10_return_order",
+    )
+    new_high_targets = _fetch_scan_source(
+        "ka10016 신고가",
+        kiwoom_utils.get_new_high_ka10016,
+        token,
+        mrkt_tp="000",
+        period_days=20,
+        limit=60,
+    )
+    new_high_targets = _annotate_source_rank(
+        new_high_targets,
+        prefix="NewHigh",
+        sort_type="ka10016_ntl_tp_1_dt_20_return_order",
     )
     soaring_targets = _fetch_scan_source(
         "ka10028 시가대비 상위",
@@ -2556,6 +2894,9 @@ def run_scalper_iteration(
         realtime_rank_targets=realtime_rank_targets,
         raw_volume_surge_targets=raw_volume_surge_targets,
         value_targets=value_targets,
+        price_jump_targets=price_jump_targets,
+        high_proximity_targets=high_proximity_targets,
+        new_high_targets=new_high_targets,
         emit_observation=True,
     )
 
@@ -2564,6 +2905,8 @@ def run_scalper_iteration(
         price_jump_targets=price_jump_targets,
         volume_surge_targets=volume_surge_targets,
         bid_imbalance_targets=bid_imbalance_targets,
+        high_proximity_targets=high_proximity_targets,
+        new_high_targets=new_high_targets,
         soaring_targets=soaring_targets,
         value_targets=value_targets,
         vi_targets=vi_targets,

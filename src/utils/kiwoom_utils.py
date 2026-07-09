@@ -1607,17 +1607,17 @@ def get_margin_daily_ka10013_df(token, code, base_dt=None, is_nxt=None):
     df = df[~df.index.duplicated(keep='first')]
     return df.sort_index()
 
-def get_top_fluctuation_ka10027(token, mrkt_tp="000", trde_qty_cnd="0100", limit=50):
+def get_top_fluctuation_ka10027(token, mrkt_tp="000", trde_qty_cnd=None, limit=50):
     """
     [ka10027] 전일대비등락률상위요청
     - mrkt_tp: "000"(전체), "001"(코스피), "101"(코스닥)
-    - trde_qty_cnd: "0100"(10만주 이상) 등
+    - trde_qty_cnd: "0000"(전체조회) 등
     """
     url = get_api_url("/api/dostk/rkinfo")
     payload = {
         "mrkt_tp": mrkt_tp,
         "sort_tp": "1",
-        "trde_qty_cnd": trde_qty_cnd,
+        "trde_qty_cnd": str(trde_qty_cnd or os.getenv("KORSTOCKSCAN_KA10027_TRDE_QTY_CND", "0000")),
         "stk_cnd": "0",
         "crd_cnd": "0",
         "updown_incls": "1",
@@ -1661,7 +1661,7 @@ def get_top_fluctuation_ka10027(token, mrkt_tp="000", trde_qty_cnd="0100", limit
 
     return cleaned_list
 
-def get_top_open_fluctuation_ka10028(token, mrkt_tp="000", trde_qty_cnd="0100", limit=50):
+def get_top_open_fluctuation_ka10028(token, mrkt_tp="000", trde_qty_cnd=None, limit=50):
     """
     [ka10028] 시가대비 등락률 상위 요청 (장중 진짜 주도주 포착용)
     - URL: /api/dostk/stkinfo
@@ -1670,7 +1670,7 @@ def get_top_open_fluctuation_ka10028(token, mrkt_tp="000", trde_qty_cnd="0100", 
     url = get_api_url("/api/dostk/stkinfo")
     payload = {
         "sort_tp": "1",           # 1: 시가 기준
-        "trde_qty_cnd": trde_qty_cnd, 
+        "trde_qty_cnd": str(trde_qty_cnd or os.getenv("KORSTOCKSCAN_KA10028_TRDE_QTY_CND", "0000")),
         "mrkt_tp": mrkt_tp,
         "updown_incls": "1",      # 상하한가 포함
         "stk_cnd": "0",           # 0: 전체 (필요시 4: 우선주+관리주 제외 로 변경 추천)
@@ -1889,7 +1889,7 @@ def get_realtime_item_rank_ka00198(token, qry_tp="5", limit=60):
     return cleaned_list
 
 
-def get_price_jump_ka10019(token, mrkt_tp="000", minutes=3, limit=60):
+def get_price_jump_ka10019(token, mrkt_tp="000", minutes=3, limit=60, trde_qty_tp=None):
     """
     [ka10019] 가격급등락.
     최근 n분 급등 시작 후보를 정규화한다.
@@ -1900,7 +1900,7 @@ def get_price_jump_ka10019(token, mrkt_tp="000", minutes=3, limit=60):
         "flu_tp": "1",
         "tm_tp": "1",
         "tm": str(minutes),
-        "trde_qty_tp": "00050",
+        "trde_qty_tp": str(trde_qty_tp or os.getenv("KORSTOCKSCAN_KA10019_TRDE_QTY_TP", "00000")),
         "stk_cnd": "4",
         "crd_cnd": "0",
         "pric_cnd": "0",
@@ -1932,6 +1932,110 @@ def get_price_jump_ka10019(token, mrkt_tp="000", minutes=3, limit=60):
             'PreSig': item.get('pred_pre_sig', ''),
             'PreSigDirection': _pred_pre_signal_direction(item.get('pred_pre_sig')),
             'Source': 'PRICE_JUMP_START',
+        })
+    return cleaned_list
+
+
+def get_high_price_proximity_ka10018(token, mrkt_tp="000", proximity="10", limit=60, trde_qty_tp=None):
+    """
+    [ka10018] 고저가근접.
+    Scanner enrichment only: returns symbols near the intraday high.
+    """
+    url = get_api_url("/api/dostk/stkinfo")
+    payload = {
+        "high_low_tp": "1",
+        "alacc_rt": str(proximity or "10"),
+        "mrkt_tp": mrkt_tp,
+        "trde_qty_tp": str(trde_qty_tp or os.getenv("KORSTOCKSCAN_KA10018_TRDE_QTY_TP", "00000")),
+        "stk_cnd": "1",
+        "crd_cnd": "0",
+        "stex_tp": "3",
+    }
+
+    try:
+        results = fetch_kiwoom_api_continuous(
+            url=url, token=token, api_id='ka10018', payload=payload, use_continuous=False
+        )
+    except Exception as e:
+        log_info(f"⚠️ [ka10018] 고가근접 조회 실패: {e}")
+        return []
+
+    cleaned_list = []
+    items = _extract_rank_items(results, ("high_low_pric_alacc", "data"))
+    for item in items[:limit]:
+        code = normalize_stock_code(item.get('stk_cd', item.get('code', '')))
+        if not code:
+            continue
+        current_price = _scanner_to_int(item.get('cur_prc', item.get('price')))
+        today_high = _scanner_to_int(item.get('tdy_high_pric'))
+        distance_pct = 0.0
+        if current_price > 0 and today_high > 0:
+            distance_pct = round(((current_price - today_high) / today_high) * 100.0, 4)
+        cleaned_list.append({
+            'Code': code,
+            'Name': item.get('stk_nm', item.get('name', '')),
+            'Price': current_price,
+            'FluRate': _scanner_to_signed_float(item.get('flu_rt', item.get('change_rate'))),
+            'TradeQty': _scanner_to_int(item.get('trde_qty')),
+            'AskPrice': _scanner_to_int(item.get('sel_bid')),
+            'BidPrice': _scanner_to_int(item.get('buy_bid')),
+            'TodayHighPrice': today_high,
+            'TodayLowPrice': _scanner_to_int(item.get('tdy_low_pric')),
+            'HighProximityDistancePct': distance_pct,
+            'PreSig': item.get('pred_pre_sig', ''),
+            'PreSigDirection': _pred_pre_signal_direction(item.get('pred_pre_sig')),
+            'Source': 'HIGH_PROXIMITY_CONFIRMATION',
+        })
+    return cleaned_list
+
+
+def get_new_high_ka10016(token, mrkt_tp="000", period_days=20, limit=60, trde_qty_tp=None):
+    """
+    [ka10016] 신고저가.
+    Scanner enrichment only: returns new-high confirmation rows.
+    """
+    url = get_api_url("/api/dostk/stkinfo")
+    payload = {
+        "mrkt_tp": mrkt_tp,
+        "ntl_tp": "1",
+        "high_low_close_tp": "1",
+        "stk_cnd": "1",
+        "trde_qty_tp": str(trde_qty_tp or os.getenv("KORSTOCKSCAN_KA10016_TRDE_QTY_TP", "00000")),
+        "crd_cnd": "0",
+        "updown_incls": "0",
+        "dt": str(period_days or 20),
+        "stex_tp": "3",
+    }
+
+    try:
+        results = fetch_kiwoom_api_continuous(
+            url=url, token=token, api_id='ka10016', payload=payload, use_continuous=False
+        )
+    except Exception as e:
+        log_info(f"⚠️ [ka10016] 신고가 조회 실패: {e}")
+        return []
+
+    cleaned_list = []
+    items = _extract_rank_items(results, ("ntl_pric", "data"))
+    for item in items[:limit]:
+        code = normalize_stock_code(item.get('stk_cd', item.get('code', '')))
+        if not code:
+            continue
+        cleaned_list.append({
+            'Code': code,
+            'Name': item.get('stk_nm', item.get('name', '')),
+            'Price': _scanner_to_int(item.get('cur_prc', item.get('price'))),
+            'FluRate': _scanner_to_signed_float(item.get('flu_rt', item.get('change_rate'))),
+            'TradeQty': _scanner_to_int(item.get('trde_qty')),
+            'PrevTradeQtyRatio': _scanner_to_signed_float(item.get('pred_trde_qty_pre_rt')),
+            'AskPrice': _scanner_to_int(item.get('sel_bid')),
+            'BidPrice': _scanner_to_int(item.get('buy_bid')),
+            'NewHighPrice': _scanner_to_int(item.get('high_pric')),
+            'NewLowPrice': _scanner_to_int(item.get('low_pric')),
+            'NewHighPeriodDays': int(_scanner_to_int(period_days) or 20),
+            'PreSig': item.get('pred_pre_sig', ''),
+            'PreSigDirection': _pred_pre_signal_direction(item.get('pred_pre_sig')),
+            'Source': 'NEW_HIGH_CONFIRMATION',
         })
     return cleaned_list
 
@@ -2082,7 +2186,7 @@ def get_stock_orderbook_ka10004(token, code):
     }
 
 
-def get_bid_balance_surge_ka10021(token, mrkt_tp="000", minutes=3, limit=60):
+def get_bid_balance_surge_ka10021(token, mrkt_tp="000", minutes=3, limit=60, trde_qty_tp=None):
     """
     [ka10021] 호가잔량급증.
     매수잔량 급증을 상승 시작 pressure 후보로 정규화한다.
@@ -2094,7 +2198,7 @@ def get_bid_balance_surge_ka10021(token, mrkt_tp="000", minutes=3, limit=60):
         "sort_tp": "2",
         "tm_tp": "1",
         "tm": str(minutes),
-        "trde_qty_tp": "5",
+        "trde_qty_tp": str(trde_qty_tp or os.getenv("KORSTOCKSCAN_KA10021_TRDE_QTY_TP", "1")),
         "stk_cnd": "4",
         "stex_tp": "3",
     }
@@ -2140,11 +2244,11 @@ def get_vi_triggered_ka10054(token, mrkt_tp="000", limit=60):
         "stk_cd": "",
         "motn_tp": "0",
         "skip_stk": "111111111",
-        "trde_qty_tp": "1",
-        "min_trde_qty": "100000",
+        "trde_qty_tp": "0",
+        "min_trde_qty": "0",
         "max_trde_qty": "0",
-        "trde_prica_tp": "1",
-        "min_trde_prica": "1000",
+        "trde_prica_tp": "0",
+        "min_trde_prica": "0",
         "max_trde_prica": "0",
         "motn_drc": "1",
         "stex_tp": "3",
@@ -2207,7 +2311,7 @@ def get_vi_triggered_ka10054(token, mrkt_tp="000", limit=60):
     return cleaned_list
 
 
-def scan_volume_spike_ka10023(token, mrkt_tp="000"):
+def scan_volume_spike_ka10023(token, mrkt_tp="000", trde_qty_tp=None, pric_tp=None):
     """[ka10023] 최근 n분간 거래량이 급증한 종목 스캔 (현재가 포함)"""
     url = get_api_url("/api/dostk/rkinfo")
     payload = {
@@ -2215,9 +2319,9 @@ def scan_volume_spike_ka10023(token, mrkt_tp="000"):
         "tm_tp": "1",          # 💡 [수정] 1: 분단위 조회
         "tm": "5",             # 💡 [추가] 5분 입력 (최근 5분간 급증)
         "sort_tp": "1",        # 1: 급증량 기준
-        "trde_qty_tp": "50",   # 50: 5만주 이상
+        "trde_qty_tp": str(trde_qty_tp or os.getenv("KORSTOCKSCAN_KA10023_TRDE_QTY_TP", "5")),   # 5: 5천주 이상
         "stk_cnd": "4",        # 4:관리종목,우선주제외
-        "pric_tp": "6",        # 6:5천원이상
+        "pric_tp": str(pric_tp or os.getenv("KORSTOCKSCAN_KA10023_PRICE_TP", "0")),        # 0: 전체조회
         "stex_tp": "3"         # 3: 통합(KRX+NXT)
     }
     
@@ -2281,13 +2385,14 @@ def get_positive_volume_surge_ka10023(token, mrkt_tp="000", limit=60):
             break
     return positive
 
-def scan_orderbook_spike_ka10021(token, mrkt_tp="101"):
+def scan_orderbook_spike_ka10021(token, mrkt_tp="101", trde_qty_tp=None):
     """[ka10021] 호가창에 갑자기 거대 물량이 쌓인 종목 스캔"""
     url = get_api_url("/api/dostk/rkinfo")
-    # 명세서 기준: 코스닥(101), 매수호가급증(1), 5분(5), 5만주이상(50)
+    # 명세서 기준: 코스닥(101), 매수호가급증(1), 5분(5), 1천주 이상(1)
     payload = {
         "mrkt_tp": mrkt_tp, "trde_tp": "1", "tm_tp": "5",
-        "trde_qty_tp": "50", "stk_cnd": "0", "stex_tp": "1"
+        "trde_qty_tp": str(trde_qty_tp or os.getenv("KORSTOCKSCAN_KA10021_TRDE_QTY_TP", "1")),
+        "stk_cnd": "0", "stex_tp": "1"
     }
     
     # 💡 1회성 조회 래퍼 적용 (429 자동 방어)
@@ -2888,37 +2993,14 @@ def is_trading_day():
 
 def is_valid_stock(code, name, token=None, current_price=0):
     """
-    [공통 필터] 불순물 종목 및 저가주를 완벽하게 걸러냅니다.
+    [공통 필터] 불순물 종목을 걸러냅니다.
     스팩(SPAC), ETF(KODEX 포함), ETN, 우선주, 리츠 등을 제외하여 순수 상장 주식만 매매 엔진에 전달합니다.
+    가격/유동성 조건은 scanner priority 또는 submit safety guard에서 별도로 판단합니다.
     """
     name_upper = name.upper()
-    min_price_limit = TRADING_RULES.MIN_PRICE
 
     # ==========================================
-    # 🚨 1. 가격 필터링 (동전주/저가주 제외)
-    # ==========================================
-    # 방법 A: 스캐너에서 가격을 넘겨준 경우 (초고속 컷오프)
-    if current_price > 0:
-        if current_price < min_price_limit:
-            return False
-            
-    # 방법 B: 가격은 안 넘어왔지만 token이 있는 경우 (API 직접 호출)
-    elif token:
-        try:
-            # 같은 모듈 내의 일봉 차트 함수 호출
-            df = get_daily_ohlcv_ka10081_df(token, code)
-            if not df.empty:
-                # 가장 최근 날짜의 종가를 가져옵니다
-                last_price = df['Close'].iloc[-1]
-                if last_price < min_price_limit:
-                    return False
-        except Exception as e:
-            log_error(f"is_valid_stock 처리 중 예외 발생: {e} (코드: {code})")
-            # 통신 에러 시 봇이 멈추지 않도록 일단 통과시킵니다 (실시간 웹소켓이 나중에 걸러줌)
-            pass 
-
-    # ==========================================
-    # 2. 이름 기반 필터링 (KODEX 포함 제외 목록)
+    # 1. 이름 기반 필터링 (KODEX 포함 제외 목록)
     # ==========================================
     invalid_keywords = [
         '스팩', 'ETF', 'ETN', 'TIGER', 'KBSTAR', 'KODEX',
@@ -2930,14 +3012,14 @@ def is_valid_stock(code, name, token=None, current_price=0):
         if keyword in name_upper:
             return False
 
-    # 3. 우선주 필터링 (이름 끝자리 및 코드 번호 규칙)
+    # 2. 우선주 필터링 (이름 끝자리 및 코드 번호 규칙)
     if name.endswith(('우', '우B', '우C')):
         return False
 
     if len(str(code)) == 6 and str(code)[-1] != '0':
         return False
 
-    # 4. 파생상품 및 기타 예외 처리
+    # 3. 파생상품 및 기타 예외 처리
     derivative_keywords = ['선물', '레버리지', '블룸버그', 'VIX', '인버스']
     for keyword in derivative_keywords:
         if keyword in name_upper:

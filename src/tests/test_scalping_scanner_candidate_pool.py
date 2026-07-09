@@ -66,6 +66,10 @@ def test_is_valid_stock_blocks_fund_prefix_products():
         assert kiwoom_utils.is_valid_stock(f"00{idx:04d}", name, current_price=10000) is False
 
 
+def test_is_valid_stock_allows_low_price_common_stock():
+    assert kiwoom_utils.is_valid_stock("000020", "LOW_REAL", current_price=3900) is True
+
+
 def test_promote_candidates_skips_when_active_scanner_cap_reached(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "1")
     db = _DB()
@@ -251,6 +255,106 @@ def test_promote_candidates_does_not_reserve_under_10000_low_rebound(monkeypatch
     assert _event_payloads(event_bus, "COMMAND_WS_REG") == [
         {"codes": ["000001", "100002"], "source": "scalping_scanner_promote"}
     ]
+
+
+def test_promote_candidates_reserves_under_10000_low_rebound_with_liquidity(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "2")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_LOW_REBOUND_ACTIVE_FLOOR", "0")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_LOW_REBOUND_RESERVE_SLOTS", "1")
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(scalping_scanner, "_scanner_candidate_pre_filter_reason", lambda target: "")
+    monkeypatch.setattr(scalping_scanner, "_should_promote_candidate", lambda *args, **kwargs: True)
+    monkeypatch.setattr(scalping_scanner, "_scanner_real_source_guard_decision", lambda *args, **kwargs: {"blocked": False})
+    db = _DB()
+    event_bus = _EventBus()
+
+    ranked_targets = [
+        {"Code": "000001", "Name": "GENERAL1", "Price": 12000, "Source": "PRICE_JUMP_START"},
+        {"Code": "000002", "Name": "GENERAL2", "Price": 13000, "Source": "PRICE_JUMP_START"},
+        {
+            "Code": "100001",
+            "Name": "LOW_UNDER_LIQUID",
+            "Price": 9900,
+            "Source": scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE,
+            "SourceSet": {scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE, "VOLUME_SURGE_POSITIVE"},
+            "LowReboundPct": 3.0,
+            "IntradayLowPrice": 9400,
+            "IntradayHighPrice": 11000,
+            "DistanceFromIntradayHighPct": -10.0,
+            "LowReboundBaseSourceSignature": "VOLUME_SURGE_RAW",
+            "VolumeSurgeMatched": True,
+            "VolumeSurgeRank": 3,
+            "VolumeSurgeRankPct": 0.15,
+            "VolumeSurgeUniverseSize": 20,
+        },
+    ]
+
+    codes, _ = scalping_scanner.promote_candidates(
+        db,
+        event_bus,
+        ranked_targets,
+        {},
+        max_new_codes=12,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=1000.0,
+    )
+
+    assert codes == ["000001", "100001"]
+    assert _event_payloads(event_bus, "COMMAND_WS_REG") == [
+        {"codes": ["000001", "100001"], "source": "scalping_scanner_promote"}
+    ]
+
+
+def test_promote_candidates_passes_low_price_to_product_filter(monkeypatch):
+    calls = []
+
+    def fake_is_valid_stock(code, name, **kwargs):
+        calls.append((code, kwargs))
+        return True
+
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "2")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_LOW_REBOUND_ACTIVE_FLOOR", "0")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_LOW_REBOUND_RESERVE_SLOTS", "1")
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", fake_is_valid_stock)
+    monkeypatch.setattr(scalping_scanner, "_scanner_candidate_pre_filter_reason", lambda target: "")
+    monkeypatch.setattr(scalping_scanner, "_should_promote_candidate", lambda *args, **kwargs: True)
+    monkeypatch.setattr(scalping_scanner, "_scanner_real_source_guard_decision", lambda *args, **kwargs: {"blocked": False})
+    db = _DB()
+    event_bus = _EventBus()
+
+    ranked_targets = [
+        {
+            "Code": "100000",
+            "Name": "LOW_VOLUME_SURGE",
+            "Price": 3900,
+            "Source": scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE,
+            "SourceSet": {scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE, "VOLUME_SURGE_RAW"},
+            "LowReboundPct": 3.0,
+            "IntradayLowPrice": 3600,
+            "IntradayHighPrice": 4500,
+            "DistanceFromIntradayHighPct": -13.3,
+            "LowReboundBaseSourceSignature": "VOLUME_SURGE_RAW",
+            "VolumeSurgeMatched": True,
+            "VolumeSurgeRank": 4,
+            "VolumeSurgeRankPct": 0.2,
+            "VolumeSurgeUniverseSize": 20,
+        },
+    ]
+
+    codes, _ = scalping_scanner.promote_candidates(
+        db,
+        event_bus,
+        ranked_targets,
+        {},
+        max_new_codes=12,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=1000.0,
+    )
+
+    assert codes == ["100000"]
+    assert calls == [("100000", {"token": "TOKEN", "current_price": 3900.0})]
 
 
 def test_low_rebound_floor_replaces_old_general_watching_without_increasing_cap(monkeypatch):
@@ -640,6 +744,282 @@ def test_scanner_priority_tiering_sorts_under_10000_after_same_tier(monkeypatch)
     )
 
 
+def test_scanner_priority_tiering_keeps_under_10000_liquid_candidate_in_score_order(monkeypatch):
+    monkeypatch.setattr(
+        scalping_scanner,
+        "TRADING_RULES",
+        SimpleNamespace(
+            SCALP_SCANNER_PRIORITY_TIERING_ENABLED=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_REALTIME_RANK_ONLY=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_BID_IMBALANCE_ONLY=True,
+            SCALP_SCANNER_ACCEL_MIN_RANK_JUMP=10,
+            SCALP_SCANNER_ACCEL_MIN_SPIKE_RATE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_PRIORITY_SCORE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_CNTR_STR=110.0,
+        ),
+    )
+    candidates = {
+        "000001": {
+            "Code": "000001",
+            "Name": "UNDER_LIQUID",
+            "Price": 9900,
+            "Source": "PRICE_JUMP_START",
+            "SourceSet": {"PRICE_JUMP_START", "VOLUME_SURGE_POSITIVE"},
+            "PriceJumpFluRate": 5.0,
+            "JumpRate": 0.1,
+            "VolumeSurgeMatched": True,
+            "VolumeSurgeRank": 3,
+            "VolumeSurgeRankPct": 0.15,
+            "VolumeSurgeUniverseSize": 20,
+        },
+        "000002": {
+            "Code": "000002",
+            "Name": "TENK",
+            "Price": 10000,
+            "Source": "PRICE_JUMP_START",
+            "SourceSet": {"PRICE_JUMP_START"},
+            "PriceJumpFluRate": 1.0,
+            "JumpRate": 0.1,
+        },
+    }
+
+    ranked = scalping_scanner.rank_candidates(candidates)
+
+    assert [item["Code"] for item in ranked] == ["000001", "000002"]
+
+
+def test_scanner_priority_tiering_demotes_under_10000_volume_source_without_volume_metrics(monkeypatch):
+    monkeypatch.setattr(
+        scalping_scanner,
+        "TRADING_RULES",
+        SimpleNamespace(
+            SCALP_SCANNER_PRIORITY_TIERING_ENABLED=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_REALTIME_RANK_ONLY=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_BID_IMBALANCE_ONLY=True,
+            SCALP_SCANNER_ACCEL_MIN_RANK_JUMP=10,
+            SCALP_SCANNER_ACCEL_MIN_SPIKE_RATE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_PRIORITY_SCORE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_CNTR_STR=110.0,
+        ),
+    )
+    candidates = {
+        "000001": {
+            "Code": "000001",
+            "Name": "UNDER_VOLUME_SOURCE_ONLY",
+            "Price": 9900,
+            "Source": "PRICE_JUMP_START",
+            "SourceSet": {"PRICE_JUMP_START", "VOLUME_SURGE_POSITIVE"},
+            "PriceJumpFluRate": 5.0,
+            "JumpRate": 0.1,
+            "TradeValue": 0,
+        },
+        "000002": {
+            "Code": "000002",
+            "Name": "TENK",
+            "Price": 10000,
+            "Source": "PRICE_JUMP_START",
+            "SourceSet": {"PRICE_JUMP_START"},
+            "PriceJumpFluRate": 1.0,
+            "JumpRate": 0.1,
+        },
+    }
+
+    ranked = scalping_scanner.rank_candidates(candidates)
+
+    assert [item["Code"] for item in ranked] == ["000002", "000001"]
+
+
+def test_scanner_priority_tiering_keeps_under_10000_positive_volume_surge_candidate(monkeypatch):
+    monkeypatch.setattr(
+        scalping_scanner,
+        "TRADING_RULES",
+        SimpleNamespace(
+            SCALP_SCANNER_PRIORITY_TIERING_ENABLED=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_REALTIME_RANK_ONLY=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_BID_IMBALANCE_ONLY=True,
+            SCALP_SCANNER_ACCEL_MIN_RANK_JUMP=10,
+            SCALP_SCANNER_ACCEL_MIN_SPIKE_RATE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_PRIORITY_SCORE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_CNTR_STR=110.0,
+        ),
+    )
+    candidates = {
+        "000001": {
+            "Code": "000001",
+            "Name": "UNDER_VOLUME_SURGE",
+            "Price": 3900,
+            "Source": "PRICE_JUMP_START",
+            "SourceSet": {"PRICE_JUMP_START", "VOLUME_SURGE_POSITIVE"},
+            "PriceJumpFluRate": 3.0,
+            "JumpRate": 0.5,
+            "VolumeSurgeFluRate": 1.8,
+            "VolumeSurgeRate": 120.0,
+            "VolumeSurgeQty": 4000,
+        },
+        "000002": {
+            "Code": "000002",
+            "Name": "TENK",
+            "Price": 10000,
+            "Source": "PRICE_JUMP_START",
+            "SourceSet": {"PRICE_JUMP_START"},
+            "PriceJumpFluRate": 1.0,
+            "JumpRate": 0.1,
+        },
+    }
+
+    ranked = scalping_scanner.rank_candidates(candidates)
+
+    assert scalping_scanner._under_10000_runtime_priority_rank(candidates["000001"]) == 0
+    assert [item["Code"] for item in ranked] == ["000001", "000002"]
+
+
+def test_volume_surge_rank_annotation_controls_under_10000_relief(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_UNDER_10000_VOLUME_SURGE_RANK_PCT", "0.40")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_UNDER_10000_VOLUME_SURGE_RANK_MIN_COUNT", "0")
+    raw_targets = [
+        {"Code": f"00000{index}", "Name": f"RAW{index}", "Price": 9900, "FluRate": 1.0, "PreSig": "2"}
+        for index in range(1, 6)
+    ]
+    annotated = scalping_scanner._annotate_volume_surge_rank(raw_targets)
+    positive = scalping_scanner._positive_volume_surge_from_raw(annotated, limit=5)
+    pool = {}
+    for target in positive:
+        scalping_scanner._merge_candidate(pool, target, "VOLUME_SURGE_POSITIVE")
+
+    assert pool["000001"]["VolumeSurgeRank"] == 1
+    assert pool["000003"]["VolumeSurgeRank"] == 3
+    assert scalping_scanner._under_10000_runtime_priority_rank(pool["000001"]) == 0
+    assert scalping_scanner._under_10000_runtime_priority_rank(pool["000003"]) == 0
+
+
+def test_breakout_confirmation_sources_do_not_relieve_under_10000_without_volume_rank(monkeypatch):
+    monkeypatch.setattr(
+        scalping_scanner,
+        "TRADING_RULES",
+        SimpleNamespace(
+            SCALP_SCANNER_PRIORITY_TIERING_ENABLED=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_REALTIME_RANK_ONLY=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_BID_IMBALANCE_ONLY=True,
+            SCALP_SCANNER_ACCEL_MIN_RANK_JUMP=10,
+            SCALP_SCANNER_ACCEL_MIN_SPIKE_RATE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_PRIORITY_SCORE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_CNTR_STR=110.0,
+        ),
+    )
+    pool = scalping_scanner.build_candidate_pool(
+        price_jump_targets=[
+            {
+                "Code": "000001",
+                "Name": "UNDER_BREAKOUT",
+                "Price": 9900,
+                "FluRate": 5.0,
+                "JumpRate": 0.1,
+                "PriceJumpRank": 1,
+            }
+        ],
+        high_proximity_targets=[
+            {
+                "Code": "000001",
+                "Name": "UNDER_BREAKOUT",
+                "Price": 9900,
+                "FluRate": 5.0,
+                "TodayHighPrice": 9900,
+                "HighProximityRank": 1,
+            }
+        ],
+    )
+
+    target = pool["000001"]
+
+    assert scalping_scanner._under_10000_runtime_priority_rank(target) == 1
+    assert scalping_scanner._scanner_priority_profile(target)["scanner_priority_tier"] == "tier_b_price_jump_candidate"
+    assert scalping_scanner._scanner_candidate_pre_filter_reason(
+        {
+            "Code": "000002",
+            "Price": 12000,
+            "Source": scalping_scanner.HIGH_PROXIMITY_CONFIRMATION_SOURCE,
+            "SourceSet": {scalping_scanner.HIGH_PROXIMITY_CONFIRMATION_SOURCE},
+            "HighProximityFluRate": 3.0,
+        }
+    ) == "breakout_confirmation_only_source_not_seed"
+
+
+def test_value_top_only_role_is_not_breakout_confirmation(monkeypatch):
+    monkeypatch.setattr(
+        scalping_scanner,
+        "TRADING_RULES",
+        SimpleNamespace(SCALP_SCANNER_PRIORITY_TIERING_ENABLED=False),
+    )
+    target = {"Code": "000001", "Source": "VALUE_TOP", "SourceSet": {"VALUE_TOP"}, "ValueFluRate": 1.0}
+
+    assert scalping_scanner._scanner_candidate_role(target) == "liquidity_enrichment_only"
+    assert scalping_scanner._scanner_priority_profile(target)["scanner_priority_reason"] == (
+        "late_rank_or_liquidity_only_source"
+    )
+
+
+def test_breakout_confirmation_boosts_price_jump_volume_candidate(monkeypatch):
+    monkeypatch.setattr(
+        scalping_scanner,
+        "TRADING_RULES",
+        SimpleNamespace(
+            SCALP_SCANNER_PRIORITY_TIERING_ENABLED=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_REALTIME_RANK_ONLY=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_BID_IMBALANCE_ONLY=True,
+            SCALP_SCANNER_ACCEL_MIN_RANK_JUMP=10,
+            SCALP_SCANNER_ACCEL_MIN_SPIKE_RATE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_PRIORITY_SCORE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_CNTR_STR=110.0,
+        ),
+    )
+    base = {
+        "Code": "000001",
+        "Name": "BASE",
+        "Price": 12000,
+        "FluRate": 1.5,
+        "JumpRate": 0.1,
+    }
+    pool = scalping_scanner.build_candidate_pool(
+        price_jump_targets=[base, {**base, "Code": "000002", "Name": "CONF"}],
+        volume_surge_targets=[
+            {
+                "Code": "000001",
+                "Name": "BASE",
+                "Price": 12000,
+                "FluRate": 1.5,
+                "SpikeRate": 10.0,
+                "VolumeSurgeRank": 1,
+            },
+            {
+                "Code": "000002",
+                "Name": "CONF",
+                "Price": 12000,
+                "FluRate": 1.5,
+                "SpikeRate": 10.0,
+                "VolumeSurgeRank": 2,
+            },
+        ],
+        new_high_targets=[
+            {
+                "Code": "000002",
+                "Name": "CONF",
+                "Price": 12000,
+                "FluRate": 1.5,
+                "NewHighPrice": 12000,
+                "NewHighRank": 1,
+                "NewHighPeriodDays": 20,
+            }
+        ],
+    )
+
+    ranked = scalping_scanner.rank_candidates(pool)
+
+    assert [item["Code"] for item in ranked] == ["000002", "000001"]
+    assert scalping_scanner._scanner_priority_profile(pool["000002"])["scanner_priority_reason"] == (
+        "price_jump_breakout_confirmation"
+    )
+
+
 def test_scanner_priority_non_tier_sorts_under_10000_after_price_band(monkeypatch):
     monkeypatch.setattr(
         scalping_scanner,
@@ -669,6 +1049,41 @@ def test_scanner_priority_non_tier_sorts_under_10000_after_price_band(monkeypatc
     ranked = scalping_scanner.rank_candidates(candidates)
 
     assert [item["Code"] for item in ranked] == ["000002", "000001"]
+
+
+def test_scanner_priority_non_tier_keeps_under_10000_liquid_candidate_in_score_order(monkeypatch):
+    monkeypatch.setattr(
+        scalping_scanner,
+        "TRADING_RULES",
+        SimpleNamespace(SCALP_SCANNER_PRIORITY_TIERING_ENABLED=False),
+    )
+    candidates = {
+        "000001": {
+            "Code": "000001",
+            "Name": "UNDER_LIQUID",
+            "Price": 9900,
+            "Source": "PRICE_JUMP_START",
+            "SourceSet": {"PRICE_JUMP_START", "VOLUME_SURGE_POSITIVE"},
+            "PriceJumpFluRate": 8.0,
+            "JumpRate": 1.0,
+            "VolumeSurgeMatched": True,
+            "VolumeSurgeRank": 3,
+            "VolumeSurgeRankPct": 0.15,
+            "VolumeSurgeUniverseSize": 20,
+        },
+        "000002": {
+            "Code": "000002",
+            "Name": "TENK",
+            "Price": 10000,
+            "Source": "OPEN_TOP",
+            "SourceSet": {"OPEN_TOP"},
+            "OpenFluRate": 1.0,
+        },
+    }
+
+    ranked = scalping_scanner.rank_candidates(candidates)
+
+    assert [item["Code"] for item in ranked] == ["000001", "000002"]
 
 
 def test_scanner_priority_tiering_blocks_rank_only_first_seen(monkeypatch):
@@ -1387,6 +1802,7 @@ def test_scanner_blocks_demoted_open_price_jump_when_probe_declines(monkeypatch)
 def test_ka10028_open_pric_pre_is_preserved_as_rate(monkeypatch):
     def fake_fetch(**kwargs):
         assert kwargs["api_id"] == "ka10028"
+        assert kwargs["payload"]["trde_qty_cnd"] == "0000"
         return [
             {
                 "open_pric_pre_flu_rt": [
@@ -1424,6 +1840,10 @@ def test_ka10028_open_pric_pre_is_preserved_as_rate(monkeypatch):
 def test_ka10054_vi_rates_are_split_by_metric(monkeypatch):
     def fake_fetch(**kwargs):
         assert kwargs["api_id"] == "ka10054"
+        assert kwargs["payload"]["trde_qty_tp"] == "0"
+        assert kwargs["payload"]["min_trde_qty"] == "0"
+        assert kwargs["payload"]["trde_prica_tp"] == "0"
+        assert kwargs["payload"]["min_trde_prica"] == "0"
         return [
             {
                 "motn_stk": [
@@ -1705,6 +2125,8 @@ def test_ka10019_price_jump_start_preserves_jump_metrics(monkeypatch):
         assert kwargs["api_id"] == "ka10019"
         assert kwargs["payload"]["flu_tp"] == "1"
         assert kwargs["payload"]["tm"] == "3"
+        assert kwargs["payload"]["trde_qty_tp"] == "00000"
+        assert kwargs["payload"]["pric_cnd"] == "0"
         return [
             {
                 "pric_jmpflu": [
@@ -1752,6 +2174,40 @@ def test_ka10023_positive_volume_surge_filters_non_positive(monkeypatch):
     assert rows[0]["Source"] == "VOLUME_SURGE_POSITIVE"
 
 
+def test_ka10023_volume_surge_uses_lowest_api_volume_and_all_price_defaults(monkeypatch):
+    def fake_fetch(**kwargs):
+        assert kwargs["api_id"] == "ka10023"
+        assert kwargs["payload"]["sort_tp"] == "1"
+        assert kwargs["payload"]["trde_qty_tp"] == "5"
+        assert kwargs["payload"]["pric_tp"] == "0"
+        return [
+            {
+                "trde_qty_sdnin": [
+                    {
+                        "stk_cd": "000003",
+                        "stk_nm": "LOW_PRICE_SURGE",
+                        "cur_prc": "+3900",
+                        "flu_rt": "+1.25",
+                        "sdnin_rt": "+120.0",
+                        "now_trde_qty": "7000",
+                        "prev_trde_qty": "3000",
+                        "sdnin_qty": "4000",
+                        "pred_pre_sig": "2",
+                    }
+                ]
+            }
+        ]
+
+    monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fake_fetch)
+
+    rows = kiwoom_utils.scan_volume_spike_ka10023("TOKEN")
+
+    assert rows[0]["Code"] == "000003"
+    assert rows[0]["Price"] == 3900
+    assert rows[0]["SpikeRate"] == 120.0
+    assert rows[0]["TradeQty"] == 7000
+
+
 def test_low_rebound_negative_display_candidate_builds_from_intraday_low(monkeypatch):
     calls = []
 
@@ -1781,6 +2237,74 @@ def test_low_rebound_negative_display_candidate_builds_from_intraday_low(monkeyp
     assert row["DistanceFromIntradayHighPct"] == -1.35
     assert row["NegativeDisplayRebound"] is True
     assert row["RisingMissedLineage"] == "low_rebound_from_intraday_low"
+
+
+def test_low_rebound_preserves_breakout_confirmation_enrichment(monkeypatch):
+    def fake_candles(_token, code, limit=420):
+        return [
+            {"체결시간": "20260709090100", "현재가": 10000, "고가": 10100, "저가": 10000},
+            {"체결시간": "20260709090200", "현재가": 10260, "고가": 10400, "저가": 10120},
+        ]
+
+    monkeypatch.setattr(kiwoom_utils, "get_minute_candles_ka10080", fake_candles)
+
+    rows = scalping_scanner._build_low_rebound_rising_missed_targets(
+        "TOKEN",
+        raw_volume_surge_targets=[
+            {
+                "Code": "000001",
+                "Name": "LOW_CONF",
+                "Price": 10240,
+                "FluRate": -0.4,
+                "SpikeRate": 130.0,
+                "VolumeSurgeMatched": True,
+                "VolumeSurgeRank": 2,
+                "VolumeSurgeRankPct": 0.2,
+                "VolumeSurgeUniverseSize": 10,
+            }
+        ],
+        high_proximity_targets=[
+            {
+                "Code": "000001",
+                "Name": "LOW_CONF",
+                "Price": 10240,
+                "FluRate": 2.4,
+                "TodayHighPrice": 10400,
+                "TodayLowPrice": 10000,
+                "HighProximityDistancePct": -1.54,
+                "HighProximityMatched": True,
+                "HighProximityRank": 4,
+                "HighProximityRankPct": 0.4,
+                "HighProximityUniverseSize": 10,
+            }
+        ],
+        new_high_targets=[
+            {
+                "Code": "000001",
+                "Name": "LOW_CONF",
+                "Price": 10240,
+                "FluRate": 0.4,
+                "NewHighPrice": 10400,
+                "NewLowPrice": 10000,
+                "NewHighPeriodDays": 20,
+                "NewHighMatched": True,
+                "NewHighRank": 3,
+                "NewHighRankPct": 0.3,
+                "NewHighUniverseSize": 10,
+            }
+        ],
+    )
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["LowReboundDisplayChangeRate"] == -0.4
+    assert row["VolumeSurgeRank"] == 2
+    assert row["HighProximityMatched"] is True
+    assert row["HighProximityRank"] == 4
+    assert row["HighProximityDistancePct"] == -1.54
+    assert row["NewHighMatched"] is True
+    assert row["NewHighRank"] == 3
+    assert row["NewHighPeriodDays"] == 20
 
 
 def test_low_rebound_source_observation_emits_cap_independent_summary(monkeypatch):
@@ -2127,12 +2651,47 @@ def test_low_rebound_prefetch_skips_etf_products_before_candle_fetch(monkeypatch
     assert [row["Code"] for row in rows] == ["000010"]
 
 
+def test_low_rebound_prefetch_keeps_under_min_price_with_volume_surge_evidence(monkeypatch):
+    calls = []
+
+    def fake_candles(_token, code, limit=420):
+        calls.append(code)
+        return [
+            {"현재가": 3600, "고가": 3650, "저가": 3500},
+            {"현재가": 3900, "고가": 4100, "저가": 3550},
+        ]
+
+    monkeypatch.setattr(kiwoom_utils, "get_minute_candles_ka10080", fake_candles)
+
+    rows = scalping_scanner._build_low_rebound_rising_missed_targets(
+        "TOKEN",
+        raw_volume_surge_targets=[
+            {
+                "Code": "000020",
+                "Name": "LOW_REAL",
+                "Price": 3900,
+                "FluRate": -0.2,
+                "SpikeRate": 120.0,
+                "VolumeSurgeMatched": True,
+                "VolumeSurgeRank": 3,
+                "VolumeSurgeRankPct": 0.15,
+                "VolumeSurgeUniverseSize": 20,
+            },
+        ],
+    )
+
+    assert calls == ["000020"]
+    assert [row["Code"] for row in rows] == ["000020"]
+    assert rows[0]["Price"] == 3900
+
+
 def test_ka10021_bid_balance_surge_is_normalized(monkeypatch):
     def fake_fetch(**kwargs):
         assert kwargs["api_id"] == "ka10021"
         assert kwargs["payload"]["trde_tp"] == "1"
         assert kwargs["payload"]["tm_tp"] == "1"
         assert kwargs["payload"]["tm"] == "3"
+        assert kwargs["payload"]["trde_qty_tp"] == "1"
         return [
             {
                 "bid_req_sdnin": [
@@ -2162,6 +2721,102 @@ def test_ka10021_bid_balance_surge_is_normalized(monkeypatch):
     assert rows[0]["BidSurgeRate"] == 95.5
     assert rows[0]["TotalBuyQty"] == 321000
     assert rows[0]["Source"] == "BID_IMBALANCE_SURGE"
+
+
+def test_ka10018_high_price_proximity_is_normalized(monkeypatch):
+    def fake_fetch(**kwargs):
+        assert kwargs["api_id"] == "ka10018"
+        assert kwargs["url"].endswith("/api/dostk/stkinfo")
+        assert kwargs["payload"]["high_low_tp"] == "1"
+        assert kwargs["payload"]["alacc_rt"] == "10"
+        assert kwargs["payload"]["trde_qty_tp"] == "00000"
+        return [
+            {
+                "high_low_pric_alacc": [
+                    {
+                        "stk_cd": "A000001",
+                        "stk_nm": "HIGH",
+                        "cur_prc": "+9900",
+                        "pred_pre_sig": "2",
+                        "flu_rt": "+1.23",
+                        "trde_qty": "123456",
+                        "tdy_high_pric": "+10000",
+                        "tdy_low_pric": "9200",
+                    }
+                ]
+            }
+        ]
+
+    monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fake_fetch)
+
+    rows = kiwoom_utils.get_high_price_proximity_ka10018("TOKEN", proximity="10")
+
+    assert rows == [
+        {
+            "Code": "000001",
+            "Name": "HIGH",
+            "Price": 9900,
+            "FluRate": 1.23,
+            "TradeQty": 123456,
+            "AskPrice": 0,
+            "BidPrice": 0,
+            "TodayHighPrice": 10000,
+            "TodayLowPrice": 9200,
+            "HighProximityDistancePct": -1.0,
+            "PreSig": "2",
+            "PreSigDirection": "positive",
+            "Source": "HIGH_PROXIMITY_CONFIRMATION",
+        }
+    ]
+
+
+def test_ka10016_new_high_is_normalized(monkeypatch):
+    def fake_fetch(**kwargs):
+        assert kwargs["api_id"] == "ka10016"
+        assert kwargs["url"].endswith("/api/dostk/stkinfo")
+        assert kwargs["payload"]["ntl_tp"] == "1"
+        assert kwargs["payload"]["dt"] == "20"
+        assert kwargs["payload"]["trde_qty_tp"] == "00000"
+        return [
+            {
+                "ntl_pric": [
+                    {
+                        "stk_cd": "000002",
+                        "stk_nm": "NEW",
+                        "cur_prc": "+12000",
+                        "pred_pre_sig": "2",
+                        "flu_rt": "+2.34",
+                        "trde_qty": "234567",
+                        "pred_trde_qty_pre_rt": "+140.5",
+                        "high_pric": "+12000",
+                        "low_pric": "10000",
+                    }
+                ]
+            }
+        ]
+
+    monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fake_fetch)
+
+    rows = kiwoom_utils.get_new_high_ka10016("TOKEN", period_days=20)
+
+    assert rows == [
+        {
+            "Code": "000002",
+            "Name": "NEW",
+            "Price": 12000,
+            "FluRate": 2.34,
+            "TradeQty": 234567,
+            "PrevTradeQtyRatio": 140.5,
+            "AskPrice": 0,
+            "BidPrice": 0,
+            "NewHighPrice": 12000,
+            "NewLowPrice": 10000,
+            "NewHighPeriodDays": 20,
+            "PreSig": "2",
+            "PreSigDirection": "positive",
+            "Source": "NEW_HIGH_CONFIRMATION",
+        }
+    ]
 
 
 def test_ka10004_stock_orderbook_is_normalized(monkeypatch):
