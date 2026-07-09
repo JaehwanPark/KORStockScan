@@ -24,6 +24,7 @@ from src.engine.sniper_time import (
     is_scalping_buy_time_allowed,
     scalping_buy_time_block_reason,
 )
+from src.engine.scalping.micro_estimator_state import DEFAULT_STORE as MICRO_ESTIMATOR_STORE
 from src.trading.entry.orderbook_stability_observer import ORDERBOOK_STABILITY_OBSERVER
 
 
@@ -180,6 +181,25 @@ def _ws_hot_or_env_value(name):
     if hot_value not in (None, ""):
         return hot_value
     return os.getenv(name, "")
+
+
+def _env_bool(name, default):
+    raw = os.getenv(name)
+    if raw is None:
+        return bool(default)
+    text = str(raw).strip().lower()
+    if text in {"1", "true", "t", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "f", "no", "n", "off"}:
+        return False
+    return bool(default)
+
+
+def _micro_estimator_ws_observation_enabled():
+    return _env_bool(
+        "KORSTOCKSCAN_MICRO_ESTIMATOR_WS_OBSERVATION_ENABLED",
+        _env_bool("KORSTOCKSCAN_MICRO_ESTIMATOR_ENABLED", True),
+    )
 
 
 class KiwoomWSManager:
@@ -1126,6 +1146,58 @@ class KiwoomWSManager:
             }
         return self.realtime_data[item_code]
 
+    def _update_micro_estimator_from_orderbook(self, item_code, target, *, now_ts):
+        if not _micro_estimator_ws_observation_enabled():
+            return
+
+        def positive_int(value):
+            try:
+                parsed = int(float(value or 0))
+            except (TypeError, ValueError):
+                return 0
+            return parsed if parsed > 0 else 0
+
+        orderbook = target.get("orderbook") if isinstance(target, dict) else {}
+        asks = orderbook.get("asks") if isinstance(orderbook, dict) else []
+        bids = orderbook.get("bids") if isinstance(orderbook, dict) else []
+        if not asks or not bids:
+            return
+        best_ask = positive_int((asks[0] or {}).get("price"))
+        best_bid = positive_int((bids[0] or {}).get("price"))
+        best_ask_qty = positive_int((asks[0] or {}).get("volume"))
+        best_bid_qty = positive_int((bids[0] or {}).get("volume"))
+        ask_tot = positive_int(target.get("ask_tot")) or sum(positive_int((level or {}).get("volume")) for level in asks)
+        bid_tot = positive_int(target.get("bid_tot")) or sum(positive_int((level or {}).get("volume")) for level in bids)
+        if best_ask <= 0 or best_bid <= 0 or best_ask_qty <= 0 or best_bid_qty <= 0:
+            return
+        quote = {
+            "best_bid": best_bid,
+            "best_ask": best_ask,
+            "best_bid_qty": best_bid_qty,
+            "best_ask_qty": best_ask_qty,
+            "bid_tot": bid_tot,
+            "ask_tot": ask_tot,
+            "quote_age_ms": 0.0,
+            "quote_stale": False,
+            "source_quality_state": "fresh_ws_orderbook_observation",
+        }
+        try:
+            state = MICRO_ESTIMATOR_STORE.update_from_ws_quote(
+                item_code,
+                quote,
+                now_ts=float(now_ts),
+                tier="warm",
+            )
+        except Exception as exc:
+            log_error(f"[MICRO_ESTIMATOR_WS_OBSERVATION] update failed code={item_code}: {exc}")
+            return
+        target["micro_estimator_ws_observation_ts"] = float(now_ts)
+        target["micro_estimator_ws_observation_source"] = "0D_orderbook"
+        target["micro_estimator_ws_observation_sample_count"] = int(getattr(state, "sample_count", 0) or 0)
+        target["micro_estimator_ws_observation_true_ofi_sample_count"] = int(
+            getattr(state, "true_ofi_sample_count", 0) or 0
+        )
+
     @staticmethod
     def _has_orderbook(target):
         ob = target.get('orderbook') or {}
@@ -1974,6 +2046,11 @@ class KiwoomWSManager:
                                     best_ask=best_ask,
                                     best_bid=best_bid,
                                     now_ms=int(time.time() * 1000),
+                                )
+                                self._update_micro_estimator_from_orderbook(
+                                    item_code,
+                                    target,
+                                    now_ts=time.time(),
                                 )
                             
                             # '0w' 프로그램 매매 데이터 파싱

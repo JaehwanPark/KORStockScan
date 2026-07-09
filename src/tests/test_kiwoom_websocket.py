@@ -290,6 +290,56 @@ def test_realtime_0b_uses_fresh_synced_top_of_book_cache(monkeypatch):
     assert tick["best_bid"] == 10100
 
 
+def test_realtime_0d_updates_micro_estimator_store(monkeypatch):
+    now = _epoch_at_090010()
+    monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: now)
+    store = kiwoom_websocket.MICRO_ESTIMATOR_STORE.__class__()
+    monkeypatch.setattr(kiwoom_websocket, "MICRO_ESTIMATOR_STORE", store)
+    manager = KiwoomWSManager("test-token")
+    manager.subscribed_codes = {"005930"}
+
+    asyncio.run(
+        manager._handle_message(
+            json.dumps(
+                {
+                    "trnm": "REAL",
+                    "data": [
+                        {
+                            "type": "0D",
+                            "item": "005930",
+                            "values": {
+                                "41": "10110",
+                                "61": "100",
+                                "51": "10100",
+                                "71": "100",
+                            },
+                        },
+                        {
+                            "type": "0D",
+                            "item": "005930",
+                            "values": {
+                                "41": "10110",
+                                "61": "1",
+                                "51": "10101",
+                                "71": "1000",
+                            },
+                        },
+                    ],
+                }
+            )
+        )
+    )
+
+    snapshot = store.snapshot("005930", now_ts=now)
+    latest = manager.get_latest_data("005930")
+    assert snapshot["source_state"] == "fresh_ws_order_flow_delta"
+    assert snapshot["true_ofi_sample_count"] == 1
+    assert snapshot["sample_count"] == 2
+    assert snapshot["confidence"] >= 0.80
+    assert latest["micro_estimator_ws_observation_source"] == "0D_orderbook"
+    assert latest["micro_estimator_ws_observation_true_ofi_sample_count"] == 1
+
+
 def test_0b_cached_top_of_book_age_is_not_refreshed_by_cache_use():
     now = _epoch_at_090010()
     manager = KiwoomWSManager("test-token")
