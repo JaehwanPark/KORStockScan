@@ -134,12 +134,12 @@ def _tick_aggressor_pressure_usable_from_fields(fields: dict[str, Any] | None) -
 def _latency_buy_pressure_value(ws_data: dict[str, Any] | None, stock: dict[str, Any] | None) -> float:
     ws = ws_data if isinstance(ws_data, dict) else {}
     item = stock if isinstance(stock, dict) else {}
-    if ws.get("buy_ratio") not in (None, ""):
-        return _to_float(ws.get("buy_ratio"), 0.0)
     if ws.get("buy_pressure_10t") not in (None, "") and _tick_aggressor_pressure_usable_from_fields(ws):
         return _to_float(ws.get("buy_pressure_10t"), 0.0)
     if item.get("buy_pressure_10t") not in (None, "") and _tick_aggressor_pressure_usable_from_fields(item):
         return _to_float(item.get("buy_pressure_10t"), 0.0)
+    if ws.get("buy_ratio") not in (None, ""):
+        return _to_float(ws.get("buy_ratio"), 0.0)
     return 0.0
 
 
@@ -1147,6 +1147,198 @@ def _latency_opportunity_source_support(stock: dict[str, Any] | None, ws_data: d
     return False
 
 
+def _first_present_float(*values: Any, default: float = 0.0) -> float:
+    for value in values:
+        if value not in (None, "", "-"):
+            return _to_float(value, default)
+    return default
+
+
+def _first_present_int(*values: Any, default: int = 0) -> int:
+    for value in values:
+        if value not in (None, "", "-"):
+            return int(_to_float(value, float(default)))
+    return default
+
+
+def _signed_trade_side_and_volume_from_tick(tick: Any) -> tuple[str, float]:
+    if not isinstance(tick, dict):
+        return "UNKNOWN", 0.0
+    values = tick.get("values") if isinstance(tick.get("values"), dict) else {}
+    raw_signed_qty = (
+        tick.get("aggressor_aux_raw_15")
+        or tick.get("signed_trade_volume")
+        or tick.get("signed_qty")
+        or values.get("15")
+    )
+    raw_text = str(raw_signed_qty or "").replace(",", "").strip()
+    if raw_text.startswith("+"):
+        return "BUY", abs(_to_float(raw_text, 0.0))
+    if raw_text.startswith("-"):
+        return "SELL", abs(_to_float(raw_text, 0.0))
+    if (
+        str(tick.get("aggressor_source") or "") == "kiwoom_rest_ka10084_signed_trade_qty"
+        and str(tick.get("aggressor_side") or "").upper() in {"BUY", "SELL"}
+        and raw_text
+    ):
+        return str(tick.get("aggressor_side") or "").upper(), abs(_to_float(raw_text, 0.0))
+    return "UNKNOWN", 0.0
+
+
+def _iter_signed_tape_ticks(*sources: dict[str, Any]) -> list[dict[str, Any]]:
+    ticks: list[dict[str, Any]] = []
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        recent_ticks = source.get("recent_trade_ticks")
+        recent_added = False
+        if recent_ticks is not None:
+            for tick in recent_ticks:
+                if isinstance(tick, dict):
+                    ticks.append(tick)
+                    recent_added = True
+        rest_ticks = source.get("rest_signed_trade_ticks")
+        if rest_ticks is not None:
+            for tick in rest_ticks:
+                if isinstance(tick, dict):
+                    ticks.append(tick)
+                    recent_added = True
+        if recent_added:
+            continue
+        last_tick = source.get("last_trade_tick")
+        if isinstance(last_tick, dict):
+            ticks.append(last_tick)
+    return ticks
+
+
+def _latency_signed_tape_fields(
+    stock: dict[str, Any] | None,
+    ws_data: dict[str, Any] | None,
+) -> dict[str, Any]:
+    item = stock if isinstance(stock, dict) else {}
+    ws = ws_data if isinstance(ws_data, dict) else {}
+    window = max(
+        1,
+        int(_to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_SIGNED_TAPE_WINDOW"), 5.0)),
+    )
+    min_samples = max(
+        1,
+        int(_to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_SIGNED_TAPE_MIN_SAMPLES"), 3.0)),
+    )
+    max_buy_ratio = max(
+        0.0,
+        min(
+            100.0,
+            _to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_SIGNED_TAPE_MAX_BUY_RATIO"), 45.0),
+        ),
+    )
+    rows: list[tuple[str, float]] = []
+    for tick in _iter_signed_tape_ticks(ws, item):
+        side, volume = _signed_trade_side_and_volume_from_tick(tick)
+        if side in {"BUY", "SELL"} and volume > 0:
+            rows.append((side, volume))
+        if len(rows) >= window:
+            break
+
+    buy_volume = sum(volume for side, volume in rows if side == "BUY")
+    sell_volume = sum(volume for side, volume in rows if side == "SELL")
+    buy_count = sum(1 for side, _volume in rows if side == "BUY")
+    sell_count = sum(1 for side, _volume in rows if side == "SELL")
+    sample_count = len(rows)
+    total_volume = buy_volume + sell_volume
+    buy_ratio = (buy_volume / total_volume * 100.0) if total_volume > 0 else 50.0
+    sell_dominated = bool(
+        sample_count >= min_samples
+        and sell_count > buy_count
+        and sell_volume > buy_volume
+        and buy_ratio <= max_buy_ratio
+    )
+    latest_side = rows[0][0] if rows else "UNKNOWN"
+    latest_buy_single = _first_present_float(ws.get("buy_exec_single"), item.get("buy_exec_single"), default=0.0)
+    latest_sell_single = _first_present_float(ws.get("sell_exec_single"), item.get("sell_exec_single"), default=0.0)
+    latest_single_sell_dominated = latest_sell_single > latest_buy_single and latest_sell_single > 0
+    return {
+        "latency_true_ofi_direct_canary_signed_tape_window": window,
+        "latency_true_ofi_direct_canary_signed_tape_min_samples": min_samples,
+        "latency_true_ofi_direct_canary_signed_tape_max_buy_ratio": round(max_buy_ratio, 3),
+        "latency_true_ofi_direct_canary_signed_tape_sample_count": sample_count,
+        "latency_true_ofi_direct_canary_signed_tape_buy_count": buy_count,
+        "latency_true_ofi_direct_canary_signed_tape_sell_count": sell_count,
+        "latency_true_ofi_direct_canary_signed_tape_buy_volume": int(buy_volume),
+        "latency_true_ofi_direct_canary_signed_tape_sell_volume": int(sell_volume),
+        "latency_true_ofi_direct_canary_signed_tape_net_buy_volume": int(buy_volume - sell_volume),
+        "latency_true_ofi_direct_canary_signed_tape_buy_ratio": round(float(buy_ratio), 3),
+        "latency_true_ofi_direct_canary_signed_tape_latest_side": latest_side,
+        "latency_true_ofi_direct_canary_signed_tape_sell_dominated": sell_dominated,
+        "latency_true_ofi_direct_canary_signed_tape_latest_buy_single": int(latest_buy_single),
+        "latency_true_ofi_direct_canary_signed_tape_latest_sell_single": int(latest_sell_single),
+        "latency_true_ofi_direct_canary_signed_tape_latest_single_sell_dominated": bool(latest_single_sell_dominated),
+    }
+
+
+def _latency_direct_canary_tape_pressure_fields(
+    stock: dict[str, Any] | None,
+    ws_data: dict[str, Any] | None,
+) -> dict[str, Any]:
+    item = stock if isinstance(stock, dict) else {}
+    ws = ws_data if isinstance(ws_data, dict) else {}
+    min_buy_pressure = max(
+        0.0,
+        _to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MIN_BUY_PRESSURE"), 55.0),
+    )
+    min_trusted_ticks = max(
+        1,
+        int(_to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MIN_TRUSTED_TICKS"), 3.0)),
+    )
+    pressure_usable = _tick_aggressor_pressure_usable_from_fields(ws) or _tick_aggressor_pressure_usable_from_fields(item)
+    trusted_count = max(
+        _first_present_int(ws.get("tick_aggressor_trusted_count"), ws.get("microstructure_reaction_tick_aggressor_trusted_count")),
+        _first_present_int(item.get("tick_aggressor_trusted_count"), item.get("microstructure_reaction_tick_aggressor_trusted_count")),
+    )
+    buy_pressure = _latency_buy_pressure_value(ws, item)
+    buy_exec_volume = _first_present_float(ws.get("buy_exec_volume"), item.get("buy_exec_volume"), default=0.0)
+    sell_exec_volume = _first_present_float(ws.get("sell_exec_volume"), item.get("sell_exec_volume"), default=0.0)
+    net_buy_exec_volume = _first_present_float(
+        ws.get("net_buy_exec_volume"),
+        item.get("net_buy_exec_volume"),
+        default=(buy_exec_volume - sell_exec_volume) if (buy_exec_volume > 0 or sell_exec_volume > 0) else 0.0,
+    )
+    large_sell = _truthy(ws.get("large_sell_print_detected")) or _truthy(item.get("large_sell_print_detected"))
+    signed_tape_fields = _latency_signed_tape_fields(item, ws)
+    fields = {
+        "latency_true_ofi_direct_canary_min_buy_pressure": round(min_buy_pressure, 3),
+        "latency_true_ofi_direct_canary_min_trusted_ticks": min_trusted_ticks,
+        "latency_true_ofi_direct_canary_tape_pressure_usable": bool(pressure_usable),
+        "latency_true_ofi_direct_canary_tape_trusted_count": trusted_count,
+        "latency_true_ofi_direct_canary_tape_buy_pressure": round(float(buy_pressure or 0.0), 3),
+        "latency_true_ofi_direct_canary_tape_buy_exec_volume": int(buy_exec_volume),
+        "latency_true_ofi_direct_canary_tape_sell_exec_volume": int(sell_exec_volume),
+        "latency_true_ofi_direct_canary_tape_net_buy_exec_volume": int(net_buy_exec_volume),
+        "latency_true_ofi_direct_canary_large_sell_print_detected": bool(large_sell),
+        "latency_true_ofi_direct_canary_tape_support_ok": False,
+        "latency_true_ofi_direct_canary_tape_block_reason": "not_evaluated",
+        **signed_tape_fields,
+    }
+    if large_sell:
+        fields["latency_true_ofi_direct_canary_tape_block_reason"] = "large_sell_print_detected"
+        return fields
+    if fields["latency_true_ofi_direct_canary_signed_tape_sell_dominated"]:
+        fields["latency_true_ofi_direct_canary_tape_block_reason"] = "signed_tape_sell_dominated"
+        return fields
+    if not pressure_usable or trusted_count < min_trusted_ticks:
+        fields["latency_true_ofi_direct_canary_tape_block_reason"] = "tape_pressure_unavailable"
+        return fields
+    if (buy_exec_volume > 0 or sell_exec_volume > 0) and net_buy_exec_volume <= 0:
+        fields["latency_true_ofi_direct_canary_tape_block_reason"] = "sell_dominated_tape"
+        return fields
+    if buy_pressure < min_buy_pressure:
+        fields["latency_true_ofi_direct_canary_tape_block_reason"] = "buy_pressure_below_floor"
+        return fields
+    fields["latency_true_ofi_direct_canary_tape_support_ok"] = True
+    fields["latency_true_ofi_direct_canary_tape_block_reason"] = "tape_support_ok"
+    return fields
+
+
 def _latency_false_negative_runtime_estimator_context(code: str) -> dict[str, Any]:
     context = {
         "latency_false_negative_remeasure_source_state": "not_evaluated",
@@ -1381,6 +1573,7 @@ def _latency_true_ofi_direct_canary_fields(
         or delta_pct >= min_delta_pct
         or _latency_opportunity_source_support(stock, ws_data)
     )
+    tape_fields = _latency_direct_canary_tape_pressure_fields(stock, ws_data)
     micro_state = str(
         (ws_data or {}).get("orderbook_micro_state")
         or (stock or {}).get("orderbook_micro_state")
@@ -1424,6 +1617,7 @@ def _latency_true_ofi_direct_canary_fields(
         "latency_true_ofi_direct_canary_opportunity_supported": bool(opportunity_supported),
         "latency_true_ofi_direct_canary_rising_missed_lineage": _latency_rising_missed_lineage(stock),
         "latency_true_ofi_direct_canary_micro_state": micro_state or "-",
+        **tape_fields,
     }
     if not enabled:
         return fields
@@ -1478,6 +1672,12 @@ def _latency_true_ofi_direct_canary_fields(
         return fields
     if not opportunity_supported:
         fields["latency_true_ofi_direct_canary_reason"] = "opportunity_signal_below_floor"
+        return fields
+    if not fields["latency_true_ofi_direct_canary_tape_support_ok"]:
+        fields["latency_true_ofi_direct_canary_reason"] = str(
+            fields.get("latency_true_ofi_direct_canary_tape_block_reason")
+            or "tape_pressure_unavailable"
+        )
         return fields
     fields.update(
         {

@@ -650,6 +650,8 @@ class TradingConfig:
     SHALLOW_VOLATILITY_AVG_DOWN_MIN_TICK_ACCEL: float = 1.05
     SHALLOW_VOLATILITY_AVG_DOWN_MIN_MICRO_VWAP_BP: float = 0.0
     SHALLOW_VOLATILITY_AVG_DOWN_MAX_QUOTE_AGE_MS: float = 1500.0
+    SHALLOW_VOLATILITY_AVG_DOWN_MAX_PER_POSITION: int = 3
+    SHALLOW_VOLATILITY_AVG_DOWN_COOLDOWN_SEC: int = 90
     SCALP_LOSS_FALLBACK_ENABLED: bool = True        # 운영 override: 손절 직전 ADM/fallback 추가매수 실전 적용
     SCALP_LOSS_FALLBACK_OBSERVE_ONLY: bool = False  # 운영 override: 후보 기록에 그치지 않고 scale-in safety 후 실행
     SCALP_LOSS_FALLBACK_ALLOWED_REASONS: tuple = (
@@ -1928,6 +1930,8 @@ def _build_trading_rules() -> TradingConfig:
     env_shallow_volatility_avg_down_min_tick_accel = _env_float("KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_TICK_ACCEL")
     env_shallow_volatility_avg_down_min_micro_vwap_bp = _env_float("KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_MICRO_VWAP_BP")
     env_shallow_volatility_avg_down_max_quote_age_ms = _env_float("KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MAX_QUOTE_AGE_MS")
+    env_shallow_volatility_avg_down_max_per_position = _env_int("KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MAX_PER_POSITION")
+    env_shallow_volatility_avg_down_cooldown_sec = _env_int("KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_COOLDOWN_SEC")
     env_bad_entry_observe_enabled = _env_bool("KORSTOCKSCAN_SCALP_BAD_ENTRY_BLOCK_OBSERVE_ENABLED")
     env_bad_entry_refined_enabled = _env_bool("KORSTOCKSCAN_SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED")
     env_bad_entry_refined_min_hold = _env_int("KORSTOCKSCAN_SCALP_BAD_ENTRY_REFINED_MIN_HOLD_SEC")
@@ -2753,6 +2757,12 @@ def _build_trading_rules() -> TradingConfig:
             SHALLOW_VOLATILITY_AVG_DOWN_MAX_QUOTE_AGE_MS=env_shallow_volatility_avg_down_max_quote_age_ms
             if env_shallow_volatility_avg_down_max_quote_age_ms is not None
             else config.SHALLOW_VOLATILITY_AVG_DOWN_MAX_QUOTE_AGE_MS,
+            SHALLOW_VOLATILITY_AVG_DOWN_MAX_PER_POSITION=env_shallow_volatility_avg_down_max_per_position
+            if env_shallow_volatility_avg_down_max_per_position is not None
+            else config.SHALLOW_VOLATILITY_AVG_DOWN_MAX_PER_POSITION,
+            SHALLOW_VOLATILITY_AVG_DOWN_COOLDOWN_SEC=env_shallow_volatility_avg_down_cooldown_sec
+            if env_shallow_volatility_avg_down_cooldown_sec is not None
+            else config.SHALLOW_VOLATILITY_AVG_DOWN_COOLDOWN_SEC,
             SCALP_BAD_ENTRY_BLOCK_OBSERVE_ENABLED=env_bad_entry_observe_enabled
             if env_bad_entry_observe_enabled is not None
             else config.SCALP_BAD_ENTRY_BLOCK_OBSERVE_ENABLED,

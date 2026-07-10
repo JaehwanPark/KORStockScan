@@ -2689,6 +2689,83 @@ def get_tick_history_ka10003(token, code, limit=10):
     )
 
 
+def _parse_signed_int(value, default=0):
+    if value in (None, ""):
+        return default
+    try:
+        return int(float(str(value).replace(",", "").replace("+", "").strip()))
+    except (ValueError, TypeError):
+        return default
+
+
+def get_recent_signed_trades_ka10084(token, code, limit=10, tm=""):
+    """
+    [ka10084] 당일전일체결요청.
+
+    This is a bounded REST fallback for recent signed tape diagnostics.  The
+    signed quantity is official provider data, but this helper returns it as
+    auxiliary negative-veto provenance only; consumers must not use it as BUY
+    support or pressure math.
+    """
+    req_code = get_effective_kiwoom_code(code)
+    limit_int = max(1, int(limit or 10))
+    request_tm = str(tm or "").strip()
+    cache_key = (str(req_code), limit_int, request_tm or datetime.now().strftime("%H%M"))
+    cached = _cache_get("ka10084_signed_trades", cache_key)
+    if cached is not None:
+        return cached
+
+    url = get_api_url("/api/dostk/stkinfo")
+    payload = {
+        "stk_cd": str(req_code),
+        "tdy_pred": "1",
+        "tic_min": "0",
+        "tm": request_tm,
+    }
+    results = fetch_kiwoom_api_continuous(
+        url=url,
+        token=token,
+        api_id="ka10084",
+        payload=payload,
+        use_continuous=False,
+    )
+
+    rows = []
+    received_at = time.time()
+    if results and isinstance(results[0], dict):
+        data = results[0].get("tdy_pred_cntr", [])
+        if isinstance(data, list):
+            for item in data[:limit_int]:
+                if not isinstance(item, dict):
+                    continue
+                signed_qty = _parse_signed_int(item.get("cntr_trde_qty"), 0)
+                side = "BUY" if signed_qty > 0 else "SELL" if signed_qty < 0 else "UNKNOWN"
+                rows.append(
+                    {
+                        "time": item.get("tm", ""),
+                        "price": abs(_parse_signed_int(item.get("cur_prc"), 0)),
+                        "volume": abs(signed_qty),
+                        "signed_trade_volume": str(item.get("cntr_trde_qty") or signed_qty),
+                        "aggressor_aux_raw_15": str(item.get("cntr_trde_qty") or signed_qty),
+                        "aggressor_side": side,
+                        "aggressor_source": "kiwoom_rest_ka10084_signed_trade_qty",
+                        "aggressor_aux_pressure_usable": False,
+                        "rest_signed_tape_source": "ka10084",
+                        "rest_signed_tape_received_at": received_at,
+                        "strength": item.get("cntr_str"),
+                        "acc_vol": abs(_parse_signed_int(item.get("acc_trde_qty"), 0)),
+                        "raw": item,
+                    }
+                )
+
+    return _cache_set(
+        "ka10084_signed_trades",
+        cache_key,
+        rows,
+        getattr(TRADING_RULES, "KIWOOM_TICK_CACHE_TTL_SEC", 2.0),
+    )
+
+
 # 📝 TODO: 추후 RSI/MACD 보조지표 계산이 필요할 경우, 
 # AI 속도 최적화를 위해 걸어둔 limit=5를 30~50으로 넉넉하게 늘려줄 것.
 def _normalize_ka10080_time(raw_time):

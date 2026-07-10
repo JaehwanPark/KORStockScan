@@ -97,6 +97,20 @@
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
+## 장중 사용자 지시 구현 기록
+
+- [x] `[MarketDataFreshnessEnvelope0710] scanner/pre-AI/submit 판정 입력데이터 freshness envelope 구현 및 검증` (`Due: 2026-07-10`, `Slot: INTRADAY`, `TimeWindow: implemented_on_user_request`, `Track: ScalpingLogic`)
+  - Source: [market_data_enrichment.py](/home/ubuntu/KORStockScan/src/engine/scalping/market_data_enrichment.py), [kiwoom_sniper_v2.py](/home/ubuntu/KORStockScan/src/engine/kiwoom_sniper_v2.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [kiwoom-api-data-contract.md](/home/ubuntu/KORStockScan/docs/kiwoom-api-data-contract.md)
+  - 판정 결과: `implemented_validated`. WS/REST orderbook/REST signed tape envelope를 rising-missed scanner hot 후보 fast-precheck 전에 생성하고, scanner/pre-AI/submit 로그에 표준 `market_data_*` 필드를 남긴다.
+  - 금지: REST signed tape와 REST orderbook은 BUY 근거, pressure math, threshold/provider/order-cap 변경, broker guard bypass, real execution quality approval 근거로 쓰지 않는다.
+  - 검증: `test_market_data_enrichment`, scanner fast-precheck, scout quality guard, tick-speed guard, py_compile, docs backlog dry-run, `git diff --check`로 닫는다.
+
+- [x] `[MarketDataRetryCleanup0710] post-block submit retry 경로 제거 및 envelope 우선 정책 정리` (`Due: 2026-07-10`, `Slot: INTRADAY`, `TimeWindow: implemented_on_user_request`, `Track: ScalpingLogic`)
+  - Source: [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [test_sniper_entry_latency.py](/home/ubuntu/KORStockScan/src/tests/test_sniper_entry_latency.py), [test_sniper_scale_in.py](/home/ubuntu/KORStockScan/src/tests/test_sniper_scale_in.py), [kiwoom-api-data-contract.md](/home/ubuntu/KORStockScan/docs/kiwoom-api-data-contract.md)
+  - 판정 결과: `implemented_validated`. submit 직전 secondary recheck, direct-canary REST tape recheck, rising-missed REST estimator/REST AI recheck, latency false-negative runtime repass를 제거하고 refreshed input은 envelope 또는 다음 scanner loop로만 들어오게 고정한다.
+  - 금지: 제거된 retry를 env override로 재개하지 않는다. REST orderbook/signed tape는 BUY 근거, pressure math, threshold/provider/order-cap 변경, broker guard bypass, real execution quality approval 근거로 쓰지 않는다.
+  - 검증: `test_sniper_entry_latency`, `test_sniper_scale_in`, `test_market_data_enrichment`, py_compile, docs backlog dry-run, `git diff --check`, `$korstockscan-review-gate` 통과 후 우아한 재기동으로 닫는다.
+
 ## Project/Calendar 동기화
 
 문서/checklist를 수정했으면 parser 검증은 실행하고, Project/Calendar 동기화는 사용자가 아래 명령으로 수동 실행한다.
@@ -104,3 +118,18 @@
 ```bash
 PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar
 ```
+
+<!-- AUTO_SERVER_COMPARISON_START -->
+### 본서버 vs songstockscan 자동 비교 (`2026-07-10 15:47:10`)
+
+- 기준: `profit-derived metrics are excluded by default because fallback-normalized values such as NULL -> 0 can distort comparison`
+- 상세 리포트: `data/report/server_comparison/server_comparison_2026-07-10.md`
+- `Trade Review`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Performance Tuning`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Post Sell Feedback`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Entry Pipeline Flow`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+<!-- AUTO_SERVER_COMPARISON_END -->

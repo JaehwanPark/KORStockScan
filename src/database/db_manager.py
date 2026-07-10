@@ -81,7 +81,10 @@ class DBManager:
                 conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS avg_down_count INTEGER DEFAULT 0;"))
                 conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS pyramid_count INTEGER DEFAULT 0;"))
                 conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS last_add_type TEXT;"))
+                conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS last_add_reason TEXT;"))
                 conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS last_add_at TIMESTAMP;"))
+                conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS shallow_volatility_avg_down_count INTEGER DEFAULT 0;"))
+                conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS shallow_volatility_avg_down_last_at TIMESTAMP;"))
                 conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS scale_in_locked BOOLEAN DEFAULT false;"))
                 conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS hard_stop_price DOUBLE PRECISION;"))
                 conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS trailing_stop_price DOUBLE PRECISION;"))
@@ -500,7 +503,8 @@ class DBManager:
                         id, rec_date as date, stock_code as code, stock_name as name, 
                         trade_type as type, status, strategy, position_tag, prob, nxt, 
                         buy_price, buy_qty, buy_time, sell_price, sell_time, profit_rate,
-                        add_count, avg_down_count, pyramid_count, last_add_type, last_add_at,
+                        add_count, avg_down_count, pyramid_count, last_add_type, last_add_reason, last_add_at,
+                        shallow_volatility_avg_down_count, shallow_volatility_avg_down_last_at,
                         scale_in_locked, hard_stop_price, trailing_stop_price,
                         entry_armed_at_epoch,
                         (
@@ -621,6 +625,17 @@ class DBManager:
                 t['add_count'] = _safe_int(t.get('add_count'))
                 t['avg_down_count'] = _safe_int(t.get('avg_down_count'))
                 t['pyramid_count'] = _safe_int(t.get('pyramid_count'))
+                t['last_add_reason'] = str(t.get('last_add_reason') or '').strip()
+                t['shallow_volatility_avg_down_count'] = _safe_int(t.get('shallow_volatility_avg_down_count'))
+                try:
+                    shallow_last_at = t.get('shallow_volatility_avg_down_last_at')
+                    t['shallow_volatility_avg_down_last_at'] = (
+                        float(pd.to_datetime(shallow_last_at).timestamp())
+                        if shallow_last_at is not None and not pd.isna(shallow_last_at)
+                        else 0.0
+                    )
+                except Exception:
+                    t['shallow_volatility_avg_down_last_at'] = 0.0
                 t['scale_in_locked'] = _safe_bool(t.get('scale_in_locked'), default=False)
                 t['hard_stop_price'] = _safe_float(t.get('hard_stop_price'))
                 t['trailing_stop_price'] = _safe_float(t.get('trailing_stop_price'))

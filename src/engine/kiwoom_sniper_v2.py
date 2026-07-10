@@ -59,6 +59,7 @@ from src.engine.risk.manual_control_exclusion import (
     normalize_manual_control_exclusion_code,
 )
 from src.engine.scalping.rising_missed_selection_prior import rising_missed_selection_rank_delta
+from src.engine.scalping.market_data_enrichment import build_market_data_enrichment
 from src.engine.scalping.entry_ai_gate import (
     entry_buy_decision_allowed,
     evaluate_ai_score_prior,
@@ -238,6 +239,8 @@ _SCANNER_REST_QUOTE_FALLBACK_POSITIVE_RESERVE_CALLS = 2
 _SCANNER_REST_QUOTE_FALLBACK_FAILURE_COOLDOWN_SEC = 30.0
 _SCANNER_REST_QUOTE_FALLBACK_STATE = {"call_epochs": [], "cooldown_until": 0.0}
 _SCANNER_REST_QUOTE_FALLBACK_LOCK = threading.Lock()
+_SCANNER_MARKET_DATA_ENRICHMENT_CACHE: dict[str, dict] = {}
+_SCANNER_MARKET_DATA_ENRICHMENT_LOCK = threading.Lock()
 _SCANNER_REST_QUOTE_FALLBACK_DEFER_SEC = 5.0
 _SCANNER_REST_QUOTE_FALLBACK_DYNAMIC_PRESSURE_WINDOW_SEC = 30.0
 _SCANNER_REST_QUOTE_FALLBACK_DYNAMIC_BOOST_TTL_SEC = 45.0
@@ -249,6 +252,9 @@ _SCANNER_HOT_RUNTIME_OVERRIDE_KEYS = frozenset(
         "KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_PER_LOOP",
         "KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_DYNAMIC_MAX_EXTRA_CALLS",
         "KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_DEFER_SEC",
+        "KORSTOCKSCAN_SCANNER_MARKET_DATA_ENRICHMENT_ENABLED",
+        "KORSTOCKSCAN_SCANNER_MARKET_DATA_ENRICHMENT_CACHE_TTL_SEC",
+        "KORSTOCKSCAN_SCANNER_MARKET_DATA_ENRICHMENT_HOT_DELTA_PCT",
         "KORSTOCKSCAN_SCANNER_WS_REPAIR_CYCLE_WAIT_SEC",
         "KORSTOCKSCAN_SCANNER_WS_REPAIR_CYCLE_PERSISTENT_SEC",
         "KORSTOCKSCAN_SCANNER_WS_PERSISTENT_REPAIR_MIN_INTERVAL_SEC",
@@ -3867,6 +3873,130 @@ def _scanner_rest_quote_fallback_defer_sec():
     return max(1.0, min(value, 30.0))
 
 
+def _scanner_market_data_enrichment_enabled():
+    return _env_bool("KORSTOCKSCAN_SCANNER_MARKET_DATA_ENRICHMENT_ENABLED", True)
+
+
+def _scanner_market_data_enrichment_cache_ttl_sec():
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCANNER_MARKET_DATA_ENRICHMENT_CACHE_TTL_SEC")
+    try:
+        value = float(str(raw).strip()) if str(raw).strip() else 1.5
+    except Exception:
+        value = 1.5
+    return max(0.2, min(value, 5.0))
+
+
+def _scanner_market_data_enrichment_hot_delta_pct():
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCANNER_MARKET_DATA_ENRICHMENT_HOT_DELTA_PCT")
+    try:
+        value = float(str(raw).strip()) if str(raw).strip() else 2.0
+    except Exception:
+        value = 2.0
+    return max(0.0, min(value, 20.0))
+
+
+def _scanner_ws_quote_age_ms(ws_data, now_ts):
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    for key in ("quote_age_ms", "ws_age_ms", "pre_submit_effective_quote_age_ms"):
+        value = ws_data.get(key)
+        if value in (None, "", "-"):
+            continue
+        parsed = _safe_float(value, -1.0)
+        if parsed >= 0:
+            return float(parsed)
+    for key in ("last_ws_update_ts", "received_at", "received_ts", "timestamp", "ts"):
+        parsed = _safe_float(ws_data.get(key), 0.0)
+        if parsed > 0:
+            if parsed > 10_000_000_000:
+                parsed = parsed / 1000.0
+            return max(0.0, (float(now_ts) - parsed) * 1000.0)
+    return None
+
+
+def _scanner_boolish_true(value):
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    return text in {"1", "true", "yes", "y", "on", "stale"}
+
+
+def _scanner_market_data_enrichment_candidate(stock, ws_data, now_ts):
+    if not _scanner_market_data_enrichment_enabled():
+        return False
+    if not _is_scanner_watching_target(stock):
+        return False
+    if not _scanner_is_rising_entry_relief_candidate(stock):
+        return False
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    curr = _safe_int(ws_data.get("curr"), 0)
+    quote_age_ms = _scanner_ws_quote_age_ms(ws_data, now_ts)
+    stale_or_missing = (
+        curr <= 0
+        or quote_age_ms is None
+        or quote_age_ms > 3000.0
+        or str(ws_data.get("quote_state") or "").strip().lower() in {"stale", "missing"}
+        or any(
+            _scanner_boolish_true(ws_data.get(key))
+            for key in ("quote_stale", "stale_quote", "context_stale")
+        )
+    )
+    hot_delta = _scanner_positive_delta_value(stock) >= _scanner_market_data_enrichment_hot_delta_pct()
+    return bool(stale_or_missing or hot_delta)
+
+
+def _scanner_market_data_enrichment_cached(code, now_ts):
+    norm_code = str(code or "").strip()[:6]
+    if not norm_code:
+        return None
+    with _SCANNER_MARKET_DATA_ENRICHMENT_LOCK:
+        cached = _SCANNER_MARKET_DATA_ENRICHMENT_CACHE.get(norm_code)
+        if not isinstance(cached, dict):
+            return None
+        if float(now_ts) > _safe_float(cached.get("expires_at"), 0.0):
+            _SCANNER_MARKET_DATA_ENRICHMENT_CACHE.pop(norm_code, None)
+            return None
+        return dict(cached)
+
+
+def _scanner_market_data_enrichment_store(code, now_ts, rest_orderbook, rest_signed_ticks):
+    norm_code = str(code or "").strip()[:6]
+    if not norm_code:
+        return
+    ttl = _scanner_market_data_enrichment_cache_ttl_sec()
+    with _SCANNER_MARKET_DATA_ENRICHMENT_LOCK:
+        _SCANNER_MARKET_DATA_ENRICHMENT_CACHE[norm_code] = {
+            "expires_at": float(now_ts) + ttl,
+            "rest_orderbook": dict(rest_orderbook or {}),
+            "rest_signed_ticks": list(rest_signed_ticks or []),
+        }
+
+
+def _fetch_scanner_market_data_enrichment_packet(code, now_ts):
+    if not KIWOOM_TOKEN:
+        return {}, [], {"market_data_enrichment_fetch_reason": "kiwoom_token_missing"}
+    rest_orderbook = {}
+    rest_signed_ticks = []
+    fields = {"market_data_enrichment_fetch_reason": "fetch_attempted"}
+    try:
+        rest_orderbook = kiwoom_utils.get_stock_orderbook_ka10004(KIWOOM_TOKEN, code) or {}
+    except Exception as exc:
+        fields["market_data_enrichment_orderbook_error"] = str(exc)[:160]
+        log_error(f"[SCANNER_MARKET_DATA_ENRICHMENT] ka10004 failed ({code}): {exc}")
+    try:
+        rest_signed_ticks = kiwoom_utils.get_recent_signed_trades_ka10084(
+            KIWOOM_TOKEN,
+            code,
+            limit=10,
+        ) or []
+    except Exception as exc:
+        fields["market_data_enrichment_signed_tape_error"] = str(exc)[:160]
+        log_error(f"[SCANNER_MARKET_DATA_ENRICHMENT] ka10084 failed ({code}): {exc}")
+    if rest_orderbook or rest_signed_ticks:
+        _scanner_market_data_enrichment_store(code, now_ts, rest_orderbook, rest_signed_ticks)
+        fields["market_data_enrichment_fetch_reason"] = "rest_packet_fetched"
+    return rest_orderbook, rest_signed_ticks, fields
+
+
 def _scanner_ws_repair_cycle_wait_sec():
     raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCANNER_WS_REPAIR_CYCLE_WAIT_SEC")
     try:
@@ -4174,6 +4304,8 @@ def _reset_scanner_rest_quote_fallback_rate_limit_for_tests():
         _SCANNER_REST_QUOTE_FALLBACK_STATE["rate_limited_epochs"] = []
         _SCANNER_REST_QUOTE_FALLBACK_STATE["dynamic_extra_calls"] = 0
         _SCANNER_REST_QUOTE_FALLBACK_STATE["dynamic_boost_until"] = 0.0
+    with _SCANNER_MARKET_DATA_ENRICHMENT_LOCK:
+        _SCANNER_MARKET_DATA_ENRICHMENT_CACHE.clear()
 
 
 def _fetch_rest_quote_snapshot_for_ws_gap(code, now_ts):
@@ -4799,6 +4931,16 @@ def _restore_holding_runtime_state(targets):
         stock["add_count"] = _safe_int(stock.get("add_count"))
         stock["avg_down_count"] = _safe_int(stock.get("avg_down_count"))
         stock["pyramid_count"] = _safe_int(stock.get("pyramid_count"))
+        stock["last_add_reason"] = str(stock.get("last_add_reason") or "").strip()
+        stock["shallow_volatility_avg_down_count"] = _safe_int(stock.get("shallow_volatility_avg_down_count"))
+        shallow_last_at = stock.get("shallow_volatility_avg_down_last_at")
+        try:
+            if hasattr(shallow_last_at, "timestamp"):
+                stock["shallow_volatility_avg_down_last_at"] = float(shallow_last_at.timestamp())
+            else:
+                stock["shallow_volatility_avg_down_last_at"] = _safe_float(shallow_last_at)
+        except Exception:
+            stock["shallow_volatility_avg_down_last_at"] = 0.0
         stock["scale_in_locked"] = bool(stock.get("scale_in_locked", False))
         stock["hard_stop_price"] = _safe_float(stock.get("hard_stop_price"))
         stock["trailing_stop_price"] = _safe_float(stock.get("trailing_stop_price"))
@@ -5774,6 +5916,83 @@ def run_sniper(is_test_mode=False):
                         scanner_rest_quote_fallback_loop_count += 1
                 return allowed, deferred_reason
 
+            def _scanner_market_data_enrichment_for_fast_precheck(
+                stock_value,
+                code_value,
+                ws_snapshot,
+                now_value,
+            ):
+                nonlocal scanner_rest_quote_fallback_loop_count
+                ws_snapshot = ws_snapshot if isinstance(ws_snapshot, dict) else {}
+                if not _scanner_market_data_enrichment_candidate(stock_value, ws_snapshot, now_value):
+                    return ws_snapshot, {}
+                cached = _scanner_market_data_enrichment_cached(code_value, now_value)
+                packet_fields = {
+                    "market_data_enrichment_attempted": True,
+                    "market_data_enrichment_packet_source": "scanner_fast_precheck",
+                }
+                if cached:
+                    enriched_ws, envelope_fields = build_market_data_enrichment(
+                        ws_data=ws_snapshot,
+                        rest_orderbook=cached.get("rest_orderbook"),
+                        rest_signed_ticks=cached.get("rest_signed_ticks"),
+                        candidate_metadata={
+                            "source_signature": (stock_value or {}).get("source_signature")
+                            or (stock_value or {}).get("scanner_promotion_reason")
+                            or "scanner_fast_precheck",
+                        },
+                        now_ts=now_value,
+                    )
+                    packet_fields.update(envelope_fields)
+                    packet_fields["market_data_enrichment_packet_source"] = "scanner_cache"
+                    enriched_ws.update(packet_fields)
+                    return enriched_ws, packet_fields
+                if scanner_rest_quote_fallback_loop_count >= scanner_rest_quote_fallback_loop_limit:
+                    enriched_ws, envelope_fields = build_market_data_enrichment(
+                        ws_data=ws_snapshot,
+                        candidate_metadata={"source_signature": "scanner_loop_budget_deferred"},
+                        now_ts=now_value,
+                    )
+                    packet_fields.update(envelope_fields)
+                    packet_fields["market_data_enrichment_fetch_reason"] = "rest_quote_loop_budget_deferred"
+                    enriched_ws.update(packet_fields)
+                    return enriched_ws, packet_fields
+                rate_allowed, rate_reason = _scanner_rest_quote_fallback_rate_limit(
+                    now_value,
+                    priority=True,
+                )
+                if not rate_allowed:
+                    enriched_ws, envelope_fields = build_market_data_enrichment(
+                        ws_data=ws_snapshot,
+                        candidate_metadata={"source_signature": "scanner_rate_limited"},
+                        now_ts=now_value,
+                    )
+                    packet_fields.update(envelope_fields)
+                    packet_fields["market_data_enrichment_fetch_reason"] = rate_reason
+                    enriched_ws.update(packet_fields)
+                    return enriched_ws, packet_fields
+                scanner_rest_quote_fallback_loop_count += 1
+                rest_orderbook, rest_signed_ticks, fetch_fields = _fetch_scanner_market_data_enrichment_packet(
+                    code_value,
+                    now_value,
+                )
+                enriched_ws, envelope_fields = build_market_data_enrichment(
+                    ws_data=ws_snapshot,
+                    rest_orderbook=rest_orderbook,
+                    rest_signed_ticks=rest_signed_ticks,
+                    candidate_metadata={
+                        "source_signature": (stock_value or {}).get("source_signature")
+                        or (stock_value or {}).get("scanner_promotion_reason")
+                        or "scanner_fast_precheck",
+                    },
+                    now_ts=now_value,
+                )
+                packet_fields.update(envelope_fields)
+                packet_fields.update(fetch_fields)
+                packet_fields["market_data_enrichment_rate_limit_reason"] = rate_reason
+                enriched_ws.update(packet_fields)
+                return enriched_ws, packet_fields
+
             def _scanner_no_trade_hot_slot_eviction_allowed():
                 nonlocal scanner_no_trade_eviction_loop_count
                 if scanner_no_trade_eviction_loop_limit <= 0:
@@ -6156,6 +6375,18 @@ def run_sniper(is_test_mode=False):
                                 ).items()
                             }
                         )
+                        ws_data, market_data_enrichment_fields = (
+                            _scanner_market_data_enrichment_for_fast_precheck(
+                                stock,
+                                code,
+                                ws_data,
+                                heavy_queue_enter_epoch,
+                            )
+                        )
+                        if market_data_enrichment_fields:
+                            stock["_scanner_market_data_enrichment_fields"] = dict(
+                                market_data_enrichment_fields
+                            )
                         _defer_emit_scanner_fast_precheck(
                             stock,
                             code,

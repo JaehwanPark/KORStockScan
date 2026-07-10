@@ -1,0 +1,165 @@
+from src.engine.scalping.market_data_enrichment import (
+    CONFLICTED,
+    FRESH_WS,
+    REST_ENRICHED,
+    SIGNED_TAPE_BUY_DOMINATED,
+    SIGNED_TAPE_SELL_DOMINATED,
+    build_market_data_enrichment,
+)
+
+
+def _rest_orderbook(price=10000):
+    return {
+        "source": "ka10004_rest_orderbook",
+        "curr": price,
+        "best_ask": price + 10,
+        "best_bid": price - 10,
+        "best_ask_qty": 120,
+        "best_bid_qty": 140,
+        "rest_received_ts": 1000.0,
+        "orderbook": {
+            "asks": [{"price": price + 10, "qty": 120}],
+            "bids": [{"price": price - 10, "qty": 140}],
+        },
+    }
+
+
+def test_market_data_enrichment_uses_fresh_ws_without_rest():
+    ws_data = {
+        "curr": 10000,
+        "best_ask": 10010,
+        "best_bid": 9990,
+        "last_ws_update_ts": 1000.0,
+    }
+
+    enriched, fields = build_market_data_enrichment(ws_data=ws_data, now_ts=1000.2)
+
+    assert fields["market_data_freshness_state"] == FRESH_WS
+    assert fields["market_data_enrichment_applied"] is False
+    assert fields["market_data_effective_price_source"] == "ws"
+    assert enriched["curr"] == 10000
+
+
+def test_market_data_enrichment_promotes_stale_ws_to_rest_enriched_quote():
+    ws_data = {
+        "curr": 9900,
+        "best_ask": 9910,
+        "best_bid": 9890,
+        "last_ws_update_ts": 990.0,
+        "quote_stale": True,
+    }
+
+    enriched, fields = build_market_data_enrichment(
+        ws_data=ws_data,
+        rest_orderbook=_rest_orderbook(10000),
+        now_ts=1000.0,
+    )
+
+    assert fields["market_data_freshness_state"] == REST_ENRICHED
+    assert fields["market_data_orderbook_state"] == REST_ENRICHED
+    assert fields["market_data_effective_price_source"] == "ka10004_rest_orderbook"
+    assert enriched["curr"] == 10000
+    assert enriched["quote_refresh_source"] == "ka10004_rest_orderbook"
+
+
+def test_market_data_enrichment_uses_ka10004_mid_price_when_current_price_missing():
+    ws_data = {
+        "curr": 9900,
+        "best_ask": 9910,
+        "best_bid": 9890,
+        "last_ws_update_ts": 990.0,
+        "quote_stale": True,
+    }
+    rest_snapshot = _rest_orderbook(10000)
+    rest_snapshot["curr"] = 0
+    rest_snapshot["rest_mid_price"] = 10000
+
+    enriched, fields = build_market_data_enrichment(
+        ws_data=ws_data,
+        rest_orderbook=rest_snapshot,
+        now_ts=1000.0,
+    )
+
+    assert fields["market_data_freshness_state"] == REST_ENRICHED
+    assert enriched["curr"] == 10000
+    assert enriched["best_ask"] == 10010
+    assert enriched["best_bid"] == 9990
+
+
+def test_market_data_enrichment_marks_large_ws_rest_gap_conflicted():
+    ws_data = {
+        "curr": 10000,
+        "best_ask": 10010,
+        "best_bid": 9990,
+        "last_ws_update_ts": 1000.0,
+    }
+
+    _enriched, fields = build_market_data_enrichment(
+        ws_data=ws_data,
+        rest_orderbook=_rest_orderbook(11000),
+        now_ts=1000.1,
+        max_ws_rest_gap_bps=100.0,
+    )
+
+    assert fields["market_data_freshness_state"] == CONFLICTED
+    assert fields["market_data_orderbook_state"] == CONFLICTED
+    assert fields["market_data_effective_price_source"] == "ws_rest_conflicted"
+
+
+def test_market_data_enrichment_rejects_ka10004_without_receive_timestamp_as_fresh():
+    ws_data = {
+        "curr": 9900,
+        "best_ask": 9910,
+        "best_bid": 9890,
+        "last_ws_update_ts": 990.0,
+        "quote_stale": True,
+    }
+    rest_snapshot = _rest_orderbook(10000)
+    rest_snapshot.pop("rest_received_ts")
+
+    _enriched, fields = build_market_data_enrichment(
+        ws_data=ws_data,
+        rest_orderbook=rest_snapshot,
+        now_ts=1000.0,
+    )
+
+    assert fields["market_data_freshness_state"] == "stale"
+    assert fields["market_data_orderbook_state"] == "stale"
+
+
+def test_market_data_signed_tape_sell_dominated_is_negative_veto_provenance_only():
+    ticks = [
+        {"aggressor_side": "SELL", "signed_trade_volume": "-100"},
+        {"aggressor_side": "SELL", "signed_trade_volume": "-90"},
+        {"aggressor_side": "SELL", "signed_trade_volume": "-80"},
+        {"aggressor_side": "BUY", "signed_trade_volume": "+20"},
+    ]
+
+    enriched, fields = build_market_data_enrichment(
+        ws_data={},
+        rest_signed_ticks=ticks,
+        now_ts=1000.0,
+    )
+
+    assert fields["market_data_signed_tape_state"] == SIGNED_TAPE_SELL_DOMINATED
+    assert fields["market_data_rest_signed_tape_pressure_usable"] is False
+    assert "buy_pressure_10t" not in enriched
+
+
+def test_market_data_signed_tape_buy_dominated_does_not_create_buy_pressure():
+    ticks = [
+        {"aggressor_side": "BUY", "signed_trade_volume": "+100"},
+        {"aggressor_side": "BUY", "signed_trade_volume": "+90"},
+        {"aggressor_side": "BUY", "signed_trade_volume": "+80"},
+        {"aggressor_side": "SELL", "signed_trade_volume": "-20"},
+    ]
+
+    enriched, fields = build_market_data_enrichment(
+        ws_data={},
+        rest_signed_ticks=ticks,
+        now_ts=1000.0,
+    )
+
+    assert fields["market_data_signed_tape_state"] == SIGNED_TAPE_BUY_DOMINATED
+    assert fields["market_data_rest_signed_tape_pressure_usable"] is False
+    assert "buy_pressure_10t" not in enriched

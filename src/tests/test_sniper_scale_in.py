@@ -55,6 +55,7 @@ def _clear_scalp_loss_reentry_state(request, monkeypatch):
         {"date": "", "path": "", "mtime_ns": 0, "size": 0, "rows_by_code": {}}
     )
     state_handlers._RISING_MISSED_SUBMIT_SAFETY_BACKOFFS.clear()
+    state_handlers._RISING_MISSED_SIGNED_TAPE_SCANNER_BACKOFFS.clear()
     state_handlers._RISING_MISSED_MICRO_ESTIMATOR_STORE.clear()
     state_handlers._SCALPING_MICRO_ESTIMATOR_STORE.clear()
     yield
@@ -64,6 +65,7 @@ def _clear_scalp_loss_reentry_state(request, monkeypatch):
         {"date": "", "path": "", "mtime_ns": 0, "size": 0, "rows_by_code": {}}
     )
     state_handlers._RISING_MISSED_SUBMIT_SAFETY_BACKOFFS.clear()
+    state_handlers._RISING_MISSED_SIGNED_TAPE_SCANNER_BACKOFFS.clear()
     state_handlers._RISING_MISSED_MICRO_ESTIMATOR_STORE.clear()
     state_handlers._SCALPING_MICRO_ESTIMATOR_STORE.clear()
 
@@ -2290,6 +2292,131 @@ def test_scanner_fast_precheck_keeps_missing_quote_as_source_quality_blocked(mon
     assert fields["rising_missed_filter_action"] == "observe_only"
 
 
+def test_scanner_fast_precheck_rest_enriched_quote_keeps_heavy_eval_candidate(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_FULL_EVAL_MIN_DELTA_PCT", "1.0")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_REST_QUOTE_FULL_EVAL_MIN_DELTA_PCT", "3.0")
+    stock = {
+        "id": 15,
+        "name": "REST_ENRICHED_SCANNER",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "status": "WATCHING",
+        "rising_missed_class": "rising_missed_raw",
+        "rising_missed_buy": True,
+        "scanner_promotion_reason": "price_jump_start_acceleration",
+        "source_signature": "PRICE_JUMP_START,REALTIME_RANK_START,VOLUME_SURGE_POSITIVE",
+        "first_seen_price": 10000,
+        "current_price": 10400,
+        "price_delta_since_first_seen_pct": 4.0,
+    }
+
+    fields = state_handlers._scanner_fast_precheck_fields(
+        stock,
+        ws_data={
+            "curr": 10400,
+            "quote_age_ms": 250.0,
+            "market_data_enrichment_applied": True,
+            "market_data_freshness_state": "rest_enriched",
+            "market_data_orderbook_state": "rest_enriched",
+            "market_data_effective_quote_age_ms": 250.0,
+            "market_data_effective_price_source": "ka10004_rest_orderbook",
+        },
+        now_ts=1000.0,
+    )
+
+    assert fields["fast_precheck_result"] == "eligible_for_heavy_entry_eval"
+    assert fields["fast_precheck_reason"] == "rising_rest_quote_recovery_without_realtime_strength"
+    assert fields["market_data_freshness_state"] == "rest_enriched"
+    assert fields["fast_precheck_rest_quote_relief_applied"] is True
+
+
+def test_scanner_fast_precheck_market_data_conflict_blocks_heavy_eval(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_FULL_EVAL_MIN_DELTA_PCT", "1.0")
+    stock = {
+        "id": 16,
+        "name": "CONFLICTED_SCANNER",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "status": "WATCHING",
+        "rising_missed_class": "rising_missed_raw",
+        "rising_missed_buy": True,
+        "scanner_promotion_reason": "price_jump_start_acceleration",
+        "source_signature": "PRICE_JUMP_START,REALTIME_RANK_START,VOLUME_SURGE_POSITIVE",
+        "first_seen_price": 10000,
+        "current_price": 10400,
+        "price_delta_since_first_seen_pct": 4.0,
+    }
+
+    fields = state_handlers._scanner_fast_precheck_fields(
+        stock,
+        ws_data={
+            "curr": 10400,
+            "market_data_enrichment_applied": True,
+            "market_data_freshness_state": "conflicted",
+            "market_data_orderbook_state": "conflicted",
+            "market_data_ws_rest_gap_bps": 250.0,
+        },
+        now_ts=1000.0,
+    )
+
+    assert fields["fast_precheck_result"] == "stability_pending"
+    assert fields["fast_precheck_reason"] == "market_data_ws_rest_conflicted"
+    assert fields["market_data_ws_rest_gap_bps"] == 250.0
+
+
+def test_scanner_fast_precheck_sell_dominated_signed_tape_reallocates_budget(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_FULL_EVAL_MIN_DELTA_PCT", "1.0")
+    stock = {
+        "id": 17,
+        "name": "SELL_TAPE_SCANNER",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "status": "WATCHING",
+        "rising_missed_class": "rising_missed_raw",
+        "rising_missed_buy": True,
+        "scanner_promotion_reason": "price_jump_start_acceleration",
+        "source_signature": "PRICE_JUMP_START,REALTIME_RANK_START,VOLUME_SURGE_POSITIVE",
+        "first_seen_price": 10000,
+        "current_price": 10400,
+        "price_delta_since_first_seen_pct": 4.0,
+    }
+
+    fields = state_handlers._scanner_fast_precheck_fields(
+        stock,
+        ws_data={
+            "curr": 10400,
+            "market_data_enrichment_applied": True,
+            "market_data_freshness_state": "fresh_ws",
+            "market_data_signed_tape_state": "sell_dominated",
+            "market_data_rest_signed_tape_pressure_usable": False,
+        },
+        now_ts=1000.0,
+    )
+
+    assert fields["fast_precheck_result"] == "budget_reallocated"
+    assert fields["fast_precheck_reason"] == "signed_tape_sell_dominated"
+    assert fields["rising_missed_filter_layer"] == "scanner_watch_budget"
+    assert fields["rising_missed_filter_action"] == "budget_reallocated"
+    assert fields["market_data_rest_signed_tape_pressure_usable"] is False
+    assert fields["rising_missed_budget_reallocation_source"] == "market_data_signed_tape_feedback"
+    assert fields["rising_missed_signed_tape_scanner_backoff_reason"] == "signed_tape_sell_dominated"
+
+    backoff_fields = state_handlers._scanner_fast_precheck_fields(
+        stock,
+        ws_data={
+            "curr": 10400,
+            "market_data_enrichment_applied": True,
+            "market_data_freshness_state": "fresh_ws",
+            "market_data_signed_tape_state": "sell_dominated",
+            "market_data_rest_signed_tape_pressure_usable": False,
+        },
+        now_ts=1001.0,
+    )
+
+    assert backoff_fields["fast_precheck_result"] == "budget_reallocated"
+    assert backoff_fields["fast_precheck_reason"] == "signed_tape_sell_dominated_backoff_active"
+
+
 def _rising_missed_backoff_stock(**overrides):
     stock = {
         "id": 9101,
@@ -2977,6 +3104,39 @@ def test_scanner_fast_precheck_keeps_positive_recovery_candidate_despite_bad_tic
     assert fields["rising_missed_filter_action"] == "observe_only"
 
 
+def test_rising_missed_scout_quality_guard_rest_envelope_clears_stale_weak_evidence(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_SCOUT_QUALITY_GUARD_ENABLED", raising=False)
+    stock = {
+        "last_watching_ai_score": 45,
+        "last_watching_ai_action": "WAIT",
+        "last_watching_ai_source_quality_fields": {
+            "source_quality_state": "fresh_rest_enriched",
+        },
+    }
+    ws_data = {
+        "curr": 10000,
+        "quote_stale": True,
+        "market_data_enrichment_applied": True,
+        "market_data_freshness_state": "rest_enriched",
+        "market_data_orderbook_state": "rest_enriched",
+        "market_data_effective_quote_age_ms": 400.0,
+        "market_data_effective_price_source": "ka10004_rest_orderbook",
+    }
+
+    decision = state_handlers._evaluate_rising_missed_scout_quality_guard(
+        stock,
+        "123456",
+        ws_data,
+        {"now_ts": 1000.0},
+        {},
+    )
+
+    assert decision["rising_missed_scout_quality_guard_blocked"] is False
+    assert decision["rising_missed_scout_quality_guard_quote_stale"] is False
+    assert decision["market_data_freshness_state"] == "rest_enriched"
+    assert decision["block_reason"] == "quality_guard_pass"
+
+
 def test_rising_missed_scout_quality_guard_blocks_stale_recent_weak_ai_micro(monkeypatch):
     state_handlers.COOLDOWNS = {}
     state_handlers.ALERTED_STOCKS = set()
@@ -3051,7 +3211,7 @@ def test_rising_missed_scout_quality_guard_blocks_stale_recent_weak_ai_micro(mon
     assert entry_logs[-1][1]["broker_order_forbidden"] is True
 
 
-def test_rising_missed_scout_quality_guard_rest_estimator_supplements_stale_default_ai(monkeypatch):
+def test_rising_missed_scout_quality_guard_no_rest_estimator_after_block(monkeypatch):
     state_handlers.COOLDOWNS = {}
     state_handlers.ALERTED_STOCKS = set()
     state_handlers.TRADING_RULES = CONFIG
@@ -3059,9 +3219,11 @@ def test_rising_missed_scout_quality_guard_rest_estimator_supplements_stale_defa
 
     submit_calls = []
     entry_logs = []
+    rest_calls = []
     now_ts = 1_783_471_000.0
 
     def fake_rest_refresh(code, ws_data, strategy):
+        rest_calls.append((code, ws_data, strategy))
         refreshed = {
             **dict(ws_data or {}),
             "curr": 10020,
@@ -3132,20 +3294,17 @@ def test_rising_missed_scout_quality_guard_rest_estimator_supplements_stale_defa
     )
 
     assert submitted is True
-    assert submit_calls
-    assert all(stage != "rising_missed_scout_quality_guard_blocked" for stage, _fields in entry_logs)
-    submitted_ws = submit_calls[-1][2]
-    assert submitted_ws["source_quality_state"] == "rest_anchored_estimate"
-    assert submitted_ws["rising_missed_rest_quote_estimator_support"] is True
-    assert submitted_ws["micro_estimator_source_state"] in {"rest_anchored_estimate", "smoothed_probe_estimate"}
-    assert submitted_ws["micro_estimator_ofi_source"] in {"depth_imbalance_proxy", "feature_probe_delta_hint"}
-    assert float(submitted_ws["micro_estimator_confidence"]) >= 0.25
-    assert float(submitted_ws["micro_estimator_ofi_ewma"]) >= 0.10
-    assert float(submitted_ws["buy_pressure_10t"]) >= 55.0
+    assert submit_calls == []
+    assert rest_calls == []
+    assert entry_logs[-1][0] == "rising_missed_scout_quality_guard_blocked"
+    assert entry_logs[-1][1]["rising_missed_quality_guard_recheck_policy"] == (
+        "removed_market_data_envelope_first"
+    )
+    assert entry_logs[-1][1]["rising_missed_quality_guard_recheck_attempted"] is False
+    assert entry_logs[-1][1]["block_reason"] == "stale_quote_with_weak_ai_or_strength"
     hydrated = state_handlers._RISING_MISSED_MICRO_ESTIMATOR_STORE.snapshot("123458", now_ts=now_ts)
-    assert hydrated["tier"] == "hot"
-    assert hydrated["source_state"] in {"rest_anchored_estimate", "smoothed_probe_estimate"}
-    assert hydrated["sample_count"] >= 1
+    assert hydrated["tier"] == "cold"
+    assert hydrated["sample_count"] == 0
 
 
 def test_rising_missed_micro_estimator_updates_from_fresh_ws_without_rest(monkeypatch):
@@ -3541,7 +3700,7 @@ def test_rising_missed_micro_estimator_legacy_env_aliases(monkeypatch):
     assert state_handlers._rising_missed_rest_estimator_probe_max_age_sec() == 88.0
 
 
-def test_rising_missed_rest_estimator_below_confidence_floor_blocks(monkeypatch):
+def test_rising_missed_quality_guard_block_does_not_call_rest_estimator(monkeypatch):
     state_handlers.COOLDOWNS = {}
     state_handlers.ALERTED_STOCKS = set()
     state_handlers.TRADING_RULES = CONFIG
@@ -3549,9 +3708,11 @@ def test_rising_missed_rest_estimator_below_confidence_floor_blocks(monkeypatch)
 
     entry_logs = []
     submit_calls = []
+    rest_calls = []
     now_ts = 1_783_471_000.0
 
     def fake_rest_refresh(code, ws_data, strategy):
+        rest_calls.append((code, ws_data, strategy))
         refreshed = {
             **dict(ws_data or {}),
             "curr": 10020,
@@ -3618,15 +3779,15 @@ def test_rising_missed_rest_estimator_below_confidence_floor_blocks(monkeypatch)
 
     assert submitted is True
     assert submit_calls == []
+    assert rest_calls == []
     assert entry_logs[-1][0] == "rising_missed_scout_quality_guard_blocked"
-    assert entry_logs[-1][1]["rising_missed_rest_quote_estimator_reason"] == (
-        "rest_anchored_estimate_below_confidence_or_floor"
+    assert "rising_missed_rest_quote_estimator_reason" not in entry_logs[-1][1]
+    assert entry_logs[-1][1]["rising_missed_quality_guard_recheck_policy"] == (
+        "removed_market_data_envelope_first"
     )
-    assert float(entry_logs[-1][1]["rising_missed_micro_estimator_confidence"]) < 0.95
-    assert entry_logs[-1][1]["rising_missed_micro_estimator_lazy_hydration"] is True
 
 
-def test_rising_missed_scout_quality_guard_rest_estimator_preserves_explicit_drop(monkeypatch):
+def test_rising_missed_scout_quality_guard_preserves_explicit_drop_without_rest_recheck(monkeypatch):
     state_handlers.COOLDOWNS = {}
     state_handlers.ALERTED_STOCKS = set()
     state_handlers.TRADING_RULES = CONFIG
@@ -3705,11 +3866,12 @@ def test_rising_missed_scout_quality_guard_rest_estimator_preserves_explicit_dro
     assert submit_calls == []
     assert rest_calls == []
     assert entry_logs[-1][0] == "rising_missed_scout_quality_guard_blocked"
-    assert entry_logs[-1][1]["rising_missed_rest_quote_estimator_reason"] == "explicit_ai_wait_or_drop"
+    assert "rising_missed_rest_quote_estimator_reason" not in entry_logs[-1][1]
+    assert entry_logs[-1][1]["rising_missed_quality_guard_recheck_attempted"] is False
     assert entry_logs[-1][1]["block_reason"] == "stale_quote_with_weak_ai_or_strength"
 
 
-def test_rising_missed_scout_quality_guard_rest_ai_recheck_submits_on_fresh_rest(monkeypatch):
+def test_rising_missed_scout_quality_guard_does_not_rest_ai_recheck_after_block(monkeypatch):
     state_handlers.COOLDOWNS = {}
     state_handlers.ALERTED_STOCKS = set()
     state_handlers.TRADING_RULES = CONFIG
@@ -3718,6 +3880,8 @@ def test_rising_missed_scout_quality_guard_rest_ai_recheck_submits_on_fresh_rest
     submit_calls = []
     branch_calls = []
     entry_logs = []
+    rest_calls = []
+    retry_calls = []
     now_ts = 1_783_471_000.0
 
     class DummyAI:
@@ -3725,6 +3889,7 @@ def test_rising_missed_scout_quality_guard_rest_ai_recheck_submits_on_fresh_rest
             return {"action": "BUY", "score": 72.0, "reason": "fresh rest recheck", "ai_result_source": "live"}
 
     def fake_rest_refresh(code, ws_data, strategy):
+        rest_calls.append((code, ws_data, strategy))
         refreshed = {
             **dict(ws_data or {}),
             "curr": 10020,
@@ -3747,6 +3912,7 @@ def test_rising_missed_scout_quality_guard_rest_ai_recheck_submits_on_fresh_rest
         return refreshed, fields
 
     def fake_retry(*, stock, code, ws_data, ai_engine, now_ts, current_ai_score):
+        retry_calls.append((stock, code, ws_data, ai_engine, now_ts, current_ai_score))
         stock["last_watching_ai_action"] = "BUY"
         stock["last_watching_ai_score"] = 72.0
         stock["last_watching_ai_confirmed_at"] = now_ts
@@ -3826,129 +3992,16 @@ def test_rising_missed_scout_quality_guard_rest_ai_recheck_submits_on_fresh_rest
     )
 
     assert submitted is True
-    assert submit_calls
-    assert branch_calls == []
-    assert all(stage != "rising_missed_scout_quality_guard_blocked" for stage, _fields in entry_logs)
-    assert stock["rising_missed_one_share_entry_forced"] is True
-    assert submit_calls[-1][2]["curr"] == 10020
-
-
-def test_rising_missed_scout_quality_guard_does_not_rest_recheck_ai_drop():
-    guard = {
-        "rising_missed_scout_quality_guard_blocked": True,
-        "block_reason": "stale_quote_with_weak_ai_or_strength",
-        "rising_missed_scout_quality_guard_weak_ai": True,
-        "rising_missed_scout_quality_guard_ai_score": "70.0",
-        "rising_missed_scout_quality_guard_ai_action": "DROP",
-    }
-
-    assert state_handlers._rising_missed_scout_quality_guard_ai_recheck_needed(guard) is False
-
-
-def test_rising_missed_scout_quality_guard_does_not_rest_recheck_explicit_wait():
-    guard = {
-        "rising_missed_scout_quality_guard_blocked": True,
-        "block_reason": "stale_quote_with_weak_ai_or_strength",
-        "rising_missed_scout_quality_guard_weak_ai": True,
-        "rising_missed_scout_quality_guard_ai_score": "62.0",
-        "rising_missed_scout_quality_guard_ai_action": "WAIT",
-    }
-
-    assert state_handlers._rising_missed_scout_quality_guard_ai_recheck_needed(guard) is False
-
-
-def test_rising_missed_rest_ai_recheck_reapplies_candidate_gate_price_cap(monkeypatch):
-    state_handlers.COOLDOWNS = {}
-    state_handlers.ALERTED_STOCKS = set()
-    state_handlers.TRADING_RULES = CONFIG
-    state_handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK.clear()
-
-    entry_logs = []
-    submit_calls = []
-    now_ts = 1_783_471_000.0
-
-    class DummyAI:
-        def analyze_target(self, *args, **kwargs):
-            return {"action": "BUY", "score": 72.0, "reason": "fresh rest recheck", "ai_result_source": "live"}
-
-    def fake_rest_refresh(code, ws_data, strategy):
-        refreshed = {
-            **dict(ws_data or {}),
-            "curr": MAX_ONE_SHARE_ENTRY_PRICE_KRW + 10_000,
-            "best_bid": MAX_ONE_SHARE_ENTRY_PRICE_KRW + 9_000,
-            "best_ask": MAX_ONE_SHARE_ENTRY_PRICE_KRW + 10_000,
-            "last_ws_update_ts": now_ts,
-            "quote_stale": False,
-        }
-        fields = {
-            "pre_submit_rest_orderbook_refresh_enabled": True,
-            "pre_submit_rest_orderbook_refresh_applied": True,
-            "pre_submit_rest_orderbook_refresh_reason": "rest_orderbook_fresh",
-            "pre_submit_rest_orderbook_refresh_source": "ka10004_rest_orderbook",
-            "pre_submit_rest_orderbook_refresh_age_ms": 0.0,
-            "pre_submit_rest_orderbook_refresh_best_bid": MAX_ONE_SHARE_ENTRY_PRICE_KRW + 9_000,
-            "pre_submit_rest_orderbook_refresh_best_ask": MAX_ONE_SHARE_ENTRY_PRICE_KRW + 10_000,
-            "pre_submit_rest_orderbook_refresh_latest_price": MAX_ONE_SHARE_ENTRY_PRICE_KRW + 10_000,
-        }
-        refreshed.update(fields)
-        return refreshed, fields
-
-    def fake_retry(*, stock, code, ws_data, ai_engine, now_ts, current_ai_score):
-        stock["last_watching_ai_action"] = "BUY"
-        stock["last_watching_ai_score"] = 72.0
-        return {
-            "pre_submit_entry_ai_authority_retry_attempted": True,
-            "pre_submit_entry_ai_authority_retry_success": True,
-            "pre_submit_entry_ai_authority_retry_reason": "ok",
-            "pre_submit_entry_ai_authority_retry_result_source": "live",
-            "pre_submit_entry_ai_authority_retry_action": "BUY",
-            "pre_submit_entry_ai_authority_retry_score": "72.0",
-        }
-
-    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", "true")
-    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
-    monkeypatch.setattr(
-        state_handlers,
-        "evaluate_rising_missed_same_day_reentry_guard",
-        lambda *args, **kwargs: {"allowed": True},
-    )
-    monkeypatch.setattr(state_handlers, "_pre_submit_refresh_rest_orderbook_snapshot", fake_rest_refresh)
-    monkeypatch.setattr(state_handlers, "_retry_entry_ai_submit_authority_before_block", fake_retry)
-    monkeypatch.setattr(
-        state_handlers,
-        "_submit_watching_triggered_entry",
-        lambda *args, **kwargs: submit_calls.append(True) or True,
-    )
-    monkeypatch.setattr(
-        state_handlers,
-        "_log_entry_pipeline",
-        lambda stock, code, stage, **fields: entry_logs.append((stage, fields)),
-    )
-
-    submitted = state_handlers._maybe_submit_rising_missed_one_share_entry(
-        {
-            "id": 12,
-            "name": "REST_RECHECK_CAP",
-            "strategy": "SCALPING",
-            "position_tag": "SCANNER",
-            "scanner_promotion_id": "scan-rest-cap",
-            "price_delta_since_first_seen_pct": 3.2,
-            "last_watching_ai_score": 50.0,
-        },
-        "123457",
-        {"curr": 10000, "v_pw": 100.0, "source_quality_state": "diagnostic_quote_age_stale"},
-        admin_id=1,
-        runtime={"now_ts": now_ts, "current_ai_score": 50.0, "ai_engine": DummyAI(), "scout_upgrade_entry": False},
-        strategy="SCALPING",
-        pos_tag="SCANNER",
-        curr_price=10000,
-    )
-
-    assert submitted is True
     assert submit_calls == []
-    assert entry_logs[-1][0] == "rising_missed_one_share_entry_blocked"
-    assert entry_logs[-1][1]["block_reason"] == BLOCK_PRICE_ABOVE_CAP
-    assert entry_logs[-1][1]["rising_missed_rest_quote_ai_recheck_success"] is True
+    assert rest_calls == []
+    assert retry_calls == []
+    assert branch_calls == []
+    assert stock.get("rising_missed_one_share_entry_forced") is None
+    assert entry_logs[-1][0] == "rising_missed_scout_quality_guard_blocked"
+    assert entry_logs[-1][1]["rising_missed_quality_guard_recheck_policy"] == (
+        "removed_market_data_envelope_first"
+    )
+    assert "rising_missed_rest_quote_ai_recheck_success" not in entry_logs[-1][1]
 
 
 def test_rising_missed_one_share_hook_allows_initial_scout_before_first_touch_avgdown_gate(monkeypatch):
@@ -7967,6 +8020,12 @@ def test_reversal_add_post_eval_starts_on_execution_receipt(monkeypatch, pending
 
     assert target_stock["reversal_add_state"] == "POST_ADD_EVAL"
     assert target_stock["reversal_add_executed_at"] > 0
+    assert target_stock["last_add_reason"] == pending_add_reason
+    if pending_add_reason == "shallow_volatility_avg_down":
+        assert target_stock["shallow_volatility_avg_down_count"] == 1
+        assert target_stock["shallow_volatility_avg_down_last_at"] > 0
+    else:
+        assert "shallow_volatility_avg_down_count" not in target_stock
 
 
 def test_add_execution_rebases_highest_price_after_pyramid(monkeypatch):
@@ -8012,7 +8071,10 @@ def test_update_db_for_add_does_not_touch_detached_record_after_commit(monkeypat
             self.avg_down_count = 1
             self.pyramid_count = 0
             self.last_add_type = None
+            self.last_add_reason = None
             self.last_add_at = None
+            self.shallow_volatility_avg_down_count = 0
+            self.shallow_volatility_avg_down_last_at = None
             self.scale_in_locked = False
             self.trailing_stop_price = None
             self.hard_stop_price = None
@@ -8080,6 +8142,9 @@ def test_update_db_for_add_does_not_touch_detached_record_after_commit(monkeypat
             "buy_qty": 8,
             "add_count": 2,
             "avg_down_count": 2,
+            "last_add_reason": "shallow_volatility_avg_down",
+            "shallow_volatility_avg_down_count": 1,
+            "shallow_volatility_avg_down_last_at": 1_775_765_514.0,
             "msg_audience": "ADMIN_ONLY",
         },
         add_type="AVG_DOWN",
@@ -8088,6 +8153,9 @@ def test_update_db_for_add_does_not_touch_detached_record_after_commit(monkeypat
 
     assert record.__dict__["buy_price"] == 9800
     assert record.__dict__["buy_qty"] == 8
+    assert record.__dict__["last_add_reason"] == "shallow_volatility_avg_down"
+    assert record.__dict__["shallow_volatility_avg_down_count"] == 1
+    assert record.__dict__["shallow_volatility_avg_down_last_at"] == datetime.fromtimestamp(1_775_765_514.0)
     assert len(receipts.event_bus.published) == 1
     assert receipts.event_bus.published[0][1]["message"].startswith("➕ 추가매수 체결")
     assert "누적 추가매수: 2회" in receipts.event_bus.published[0][1]["message"]
@@ -25236,6 +25304,118 @@ def test_shallow_volatility_avg_down_accepts_fresh_shallow_rebound():
         scale_in.TRADING_RULES = CONFIG
 
 
+def test_shallow_volatility_avg_down_allows_dedicated_retries_after_cooldown(monkeypatch):
+    stock = _reversal_add_stock({
+        "reversal_add_ai_bottom": 70,
+        "reversal_add_ai_history": [70, 68, 67, 66],
+        "reversal_add_profit_floor": -0.80,
+        "shallow_volatility_avg_down_count": 2,
+        "shallow_volatility_avg_down_last_at": 900.0,
+        "avg_down_count": 2,
+        "last_add_type": "AVG_DOWN",
+        "last_add_reason": "shallow_volatility_avg_down",
+        "last_reversal_features": {
+            "buy_pressure_10t": 91.0,
+            "tick_acceleration_ratio": 1.12,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 3.5,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "tick_context_quality": "live_tick",
+            "tick_context_stale": False,
+            "tick_latest_age_ms": 250,
+            "tick_aggressor_trusted_count": 5,
+            "tick_aggressor_pressure_usable": True,
+            "quote_stale": False,
+            "quote_age_ms": 450,
+        },
+    })
+    from src.utils.constants import TRADING_RULES as CONFIG
+    scale_in.TRADING_RULES = _reversal_add_rules(
+        SCALP_STOP=-2.0,
+        SHALLOW_VOLATILITY_AVG_DOWN_ENABLED=True,
+        SHALLOW_VOLATILITY_AVG_DOWN_MAX_PER_POSITION=3,
+        SHALLOW_VOLATILITY_AVG_DOWN_COOLDOWN_SEC=90,
+        AGGRESSIVE_REVERSAL_ADD_ENABLED=False,
+    )
+    monkeypatch.setattr(scale_in.time, "time", lambda: 1_000.0)
+    try:
+        result = scale_in.evaluate_scalping_reversal_add(stock, profit_rate=-0.58, current_ai_score=72, held_sec=55)
+        assert result["should_add"] is True
+        assert result["reason"] == "shallow_volatility_avg_down"
+        assert result["probe"]["shallow_used_count"] == 2
+        assert result["probe"]["shallow_max_per_position"] == 3
+        assert result["probe"]["shallow_cooldown_elapsed_sec"] == 100.0
+    finally:
+        scale_in.TRADING_RULES = CONFIG
+
+
+def test_shallow_volatility_avg_down_blocks_count_and_cooldown(monkeypatch):
+    base_stock = _reversal_add_stock({
+        "reversal_add_ai_bottom": 70,
+        "reversal_add_ai_history": [70, 68, 67, 66],
+        "reversal_add_profit_floor": -0.80,
+        "last_reversal_features": {
+            "buy_pressure_10t": 91.0,
+            "tick_acceleration_ratio": 1.12,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 3.5,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "tick_context_quality": "live_tick",
+            "tick_context_stale": False,
+            "tick_latest_age_ms": 250,
+            "tick_aggressor_trusted_count": 5,
+            "tick_aggressor_pressure_usable": True,
+            "quote_stale": False,
+            "quote_age_ms": 450,
+        },
+    })
+    from src.utils.constants import TRADING_RULES as CONFIG
+    scale_in.TRADING_RULES = _reversal_add_rules(
+        SCALP_STOP=-2.0,
+        SHALLOW_VOLATILITY_AVG_DOWN_ENABLED=True,
+        SHALLOW_VOLATILITY_AVG_DOWN_MAX_PER_POSITION=3,
+        SHALLOW_VOLATILITY_AVG_DOWN_COOLDOWN_SEC=90,
+        AGGRESSIVE_REVERSAL_ADD_ENABLED=False,
+    )
+    monkeypatch.setattr(scale_in.time, "time", lambda: 1_000.0)
+    try:
+        count_blocked = scale_in.evaluate_scalping_reversal_add(
+            {
+                **base_stock,
+                "shallow_volatility_avg_down_count": 3,
+                "shallow_volatility_avg_down_last_at": 800.0,
+            },
+            profit_rate=-0.58,
+            current_ai_score=72,
+            held_sec=55,
+        )
+        assert count_blocked["should_add"] is False
+        assert count_blocked["shallow_volatility_blocked_reason"] == (
+            "shallow_volatility_max_per_position_reached(3/3)"
+        )
+
+        cooldown_blocked = scale_in.evaluate_scalping_reversal_add(
+            {
+                **base_stock,
+                "shallow_volatility_avg_down_count": 1,
+                "shallow_volatility_avg_down_last_at": 950.0,
+            },
+            profit_rate=-0.58,
+            current_ai_score=72,
+            held_sec=55,
+        )
+        assert cooldown_blocked["should_add"] is False
+        assert cooldown_blocked["shallow_volatility_blocked_reason"] == (
+            "shallow_volatility_cooldown_active(50.0<90)"
+        )
+    finally:
+        scale_in.TRADING_RULES = CONFIG
+
+
 def test_shallow_volatility_avg_down_preempts_aggressive_when_stop_touch_mode_needs_reason():
     stock = _reversal_add_stock({
         "reversal_add_ai_bottom": 70,
@@ -26748,6 +26928,27 @@ def test_stop_line_touch_mandatory_avg_down_includes_ollix_like_case(monkeypatch
     assert inferred_prior_avg_down["should_retry"] is False
     assert inferred_prior_avg_down["reason"] == "already_used"
     assert inferred_prior_avg_down["used_count"] == 1
+
+    shallow_prior_avg_down = state_handlers._evaluate_stop_line_touch_mandatory_avg_down(
+        {
+            **stock_without_count,
+            "avg_down_count": 1,
+            "shallow_volatility_avg_down_count": 1,
+            "last_add_type": "AVG_DOWN",
+            "last_add_reason": "shallow_volatility_avg_down",
+            "reversal_add_used": True,
+        },
+        strategy="SCALPING",
+        sell_reason_type="LOSS",
+        exit_rule="scalp_soft_stop_pct",
+        profit_rate=-3.65,
+        peak_profit=0.31,
+        current_ai_score=50,
+        held_sec=1_494,
+        dynamic_stop_pct=-3.00,
+    )
+    assert shallow_prior_avg_down["should_retry"] is True
+    assert shallow_prior_avg_down["used_count"] == 0
 
 
 def test_first_touch_avgdown_decision_gate_blocks_repeated_blockers_without_recovery(monkeypatch):

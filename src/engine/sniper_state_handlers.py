@@ -174,6 +174,10 @@ from src.engine.scalping.entry_reprice_after_submit import (
     RUNTIME_FAMILY as ENTRY_REPRICE_RUNTIME_FAMILY,
     evaluate_entry_reprice_after_submit,
 )
+from src.engine.scalping.market_data_enrichment import (
+    build_market_data_enrichment,
+    market_data_enrichment_log_fields,
+)
 from src.engine.scalping.entry_opportunity_recheck import (
     EntryOpportunityRecheckState,
     evaluate_blocked_ai_score_recheck,
@@ -239,18 +243,30 @@ def _mark_entry_opportunity_recheck_outcome(
 def _defensive_avg_down_used_count(stock: dict | None) -> int:
     if not isinstance(stock, dict):
         return 0
+    last_add_reason = str(stock.get("last_add_reason") or "").strip()
+    shallow_count = max(0, _safe_int(stock.get("shallow_volatility_avg_down_count"), 0))
+    if last_add_reason == _SHALLOW_VOLATILITY_AVG_DOWN_REASON:
+        shallow_count = max(shallow_count, 1)
+    non_shallow_avg_down_count = max(
+        0,
+        _safe_int(stock.get("avg_down_count"), 0) - shallow_count,
+    )
     used_count = max(
         _safe_int(stock.get("stop_line_touch_avg_down_count"), 0),
-        _safe_int(stock.get("avg_down_count"), 0),
+        non_shallow_avg_down_count,
         _safe_int(stock.get("late_loss_avg_down_retry_count"), 0),
     )
     if bool(stock.get("stop_line_touch_avg_down_used")) and used_count <= 0:
         used_count = 1
     if bool(stock.get("late_loss_avg_down_retry_used")) and used_count <= 0:
         used_count = 1
-    if bool(stock.get("reversal_add_used")) and used_count <= 0:
+    if bool(stock.get("reversal_add_used")) and last_add_reason != _SHALLOW_VOLATILITY_AVG_DOWN_REASON and used_count <= 0:
         used_count = 1
-    if str(stock.get("last_add_type") or "").strip().upper() == "AVG_DOWN" and used_count <= 0:
+    if (
+        str(stock.get("last_add_type") or "").strip().upper() == "AVG_DOWN"
+        and last_add_reason != _SHALLOW_VOLATILITY_AVG_DOWN_REASON
+        and used_count <= 0
+    ):
         used_count = 1
     return used_count
 
@@ -9755,6 +9771,32 @@ _LATENCY_FALSE_NEGATIVE_REMEASURE_LOG_KEYS = (
     "latency_true_ofi_direct_canary_opportunity_supported",
     "latency_true_ofi_direct_canary_rising_missed_lineage",
     "latency_true_ofi_direct_canary_micro_state",
+    "latency_true_ofi_direct_canary_min_buy_pressure",
+    "latency_true_ofi_direct_canary_min_trusted_ticks",
+    "latency_true_ofi_direct_canary_tape_pressure_usable",
+    "latency_true_ofi_direct_canary_tape_trusted_count",
+    "latency_true_ofi_direct_canary_tape_buy_pressure",
+    "latency_true_ofi_direct_canary_tape_buy_exec_volume",
+    "latency_true_ofi_direct_canary_tape_sell_exec_volume",
+    "latency_true_ofi_direct_canary_tape_net_buy_exec_volume",
+    "latency_true_ofi_direct_canary_large_sell_print_detected",
+    "latency_true_ofi_direct_canary_tape_support_ok",
+    "latency_true_ofi_direct_canary_tape_block_reason",
+    "latency_true_ofi_direct_canary_signed_tape_window",
+    "latency_true_ofi_direct_canary_signed_tape_min_samples",
+    "latency_true_ofi_direct_canary_signed_tape_max_buy_ratio",
+    "latency_true_ofi_direct_canary_signed_tape_sample_count",
+    "latency_true_ofi_direct_canary_signed_tape_buy_count",
+    "latency_true_ofi_direct_canary_signed_tape_sell_count",
+    "latency_true_ofi_direct_canary_signed_tape_buy_volume",
+    "latency_true_ofi_direct_canary_signed_tape_sell_volume",
+    "latency_true_ofi_direct_canary_signed_tape_net_buy_volume",
+    "latency_true_ofi_direct_canary_signed_tape_buy_ratio",
+    "latency_true_ofi_direct_canary_signed_tape_latest_side",
+    "latency_true_ofi_direct_canary_signed_tape_sell_dominated",
+    "latency_true_ofi_direct_canary_signed_tape_latest_buy_single",
+    "latency_true_ofi_direct_canary_signed_tape_latest_sell_single",
+    "latency_true_ofi_direct_canary_signed_tape_latest_single_sell_dominated",
 )
 
 
@@ -9780,21 +9822,8 @@ def _latency_false_negative_remeasure_runtime_enabled() -> bool:
     return str(raw or "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def _latency_false_negative_remeasure_repass_enabled() -> bool:
-    return str(
-        os.getenv("KORSTOCKSCAN_LATENCY_FALSE_NEGATIVE_REMEASURE_REPASS_ENABLED") or ""
-    ).strip().lower() in {"1", "true", "yes", "y", "on"}
-
-
 def _pre_submit_secondary_recheck_enabled() -> bool:
-    raw = os.getenv("KORSTOCKSCAN_PRE_SUBMIT_SECONDARY_RECHECK_ENABLED")
-    return str(raw or "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "y",
-        "on",
-    }
+    return False
 
 
 def _intraday_entry_price_discovery_enabled() -> bool:
@@ -10232,6 +10261,7 @@ _SCALPING_MICRO_ESTIMATOR_STORE = DEFAULT_MICRO_ESTIMATOR_STORE
 _RISING_MISSED_MICRO_ESTIMATOR_STORE = _SCALPING_MICRO_ESTIMATOR_STORE
 SCANNER_WS_STALE_BACKOFF_SOURCE = "ws_stale_feedback"
 _SCANNER_WS_STALE_BACKOFFS: dict[str, dict[str, Any]] = {}
+_RISING_MISSED_SIGNED_TAPE_SCANNER_BACKOFFS: dict[str, dict[str, Any]] = {}
 
 
 def _rising_missed_submit_safety_backoff_key(stock: dict | None, code: str | None) -> str:
@@ -10253,6 +10283,86 @@ def _scanner_ws_stale_backoff_key(stock: dict | None, code: str | None) -> str:
     normalized_code = str(code or stock.get("code") or stock.get("stock_code") or "").strip()
     record_id = str(stock.get("id") or stock.get("record_id") or "").strip()
     return f"{normalized_code or '-'}:{record_id or '-'}"
+
+
+def _rising_missed_signed_tape_backoff_sec() -> int:
+    return max(
+        5,
+        min(
+            _env_int("KORSTOCKSCAN_RISING_MISSED_SIGNED_TAPE_SCANNER_BACKOFF_SEC", 30),
+            180,
+        ),
+    )
+
+
+def _clear_rising_missed_signed_tape_scanner_backoff(stock: dict | None, code: str | None) -> None:
+    key = _scanner_ws_stale_backoff_key(stock, code)
+    _RISING_MISSED_SIGNED_TAPE_SCANNER_BACKOFFS.pop(key, None)
+    if isinstance(stock, dict):
+        for field in (
+            "rising_missed_signed_tape_scanner_backoff_until",
+            "rising_missed_signed_tape_scanner_backoff_reason",
+            "rising_missed_signed_tape_scanner_backoff_sec",
+        ):
+            stock.pop(field, None)
+
+
+def _rising_missed_signed_tape_scanner_backoff_fields(
+    stock: dict | None,
+    code: str | None,
+    ws_data: dict | None,
+    *,
+    now_ts: float,
+) -> dict[str, Any]:
+    stock = stock if isinstance(stock, dict) else {}
+    state = str((ws_data or {}).get("market_data_signed_tape_state") or "").strip().lower()
+    key = _scanner_ws_stale_backoff_key(stock, code)
+    cached = _RISING_MISSED_SIGNED_TAPE_SCANNER_BACKOFFS.get(key)
+    until_ts = max(
+        _safe_float((cached or {}).get("until"), 0.0),
+        _safe_float(stock.get("rising_missed_signed_tape_scanner_backoff_until"), 0.0),
+    )
+    if state and state != "sell_dominated":
+        _clear_rising_missed_signed_tape_scanner_backoff(stock, code)
+        return {}
+    if until_ts <= float(now_ts):
+        _clear_rising_missed_signed_tape_scanner_backoff(stock, code)
+        return {}
+    return {
+        "fast_precheck_reason": "signed_tape_sell_dominated_backoff_active",
+        "rising_missed_budget_reallocation_source": "market_data_signed_tape_feedback",
+        "rising_missed_signed_tape_scanner_backoff_until": f"{until_ts:.3f}",
+        "rising_missed_signed_tape_scanner_backoff_reason": "signed_tape_sell_dominated",
+        "rising_missed_signed_tape_scanner_backoff_remaining_sec": round(
+            max(0.0, until_ts - float(now_ts)),
+            3,
+        ),
+    }
+
+
+def _record_rising_missed_signed_tape_scanner_backoff(
+    stock: dict | None,
+    code: str | None,
+    *,
+    now_ts: float,
+) -> dict[str, Any]:
+    stock = stock if isinstance(stock, dict) else {}
+    backoff_sec = _rising_missed_signed_tape_backoff_sec()
+    until_ts = float(now_ts) + float(backoff_sec)
+    key = _scanner_ws_stale_backoff_key(stock, code)
+    _RISING_MISSED_SIGNED_TAPE_SCANNER_BACKOFFS[key] = {
+        "until": until_ts,
+        "reason": "signed_tape_sell_dominated",
+    }
+    fields = {
+        "rising_missed_budget_reallocation_source": "market_data_signed_tape_feedback",
+        "rising_missed_signed_tape_scanner_backoff_until": f"{until_ts:.3f}",
+        "rising_missed_signed_tape_scanner_backoff_reason": "signed_tape_sell_dominated",
+        "rising_missed_signed_tape_scanner_backoff_sec": int(backoff_sec),
+    }
+    if isinstance(stock, dict):
+        stock.update(fields)
+    return fields
 
 
 def _scanner_ws_stale_backoff_reason_group(reason: str | None) -> str:
@@ -11355,6 +11465,16 @@ def _scanner_fast_precheck_fields(
     scanner_watching_count: int = 0,
 ) -> dict[str, Any]:
     ws_data = ws_data if isinstance(ws_data, dict) else {}
+    market_data_fields = market_data_enrichment_log_fields(ws_data)
+    market_data_freshness_state = str(
+        ws_data.get("market_data_freshness_state") or ""
+    ).strip().lower()
+    market_data_orderbook_state = str(
+        ws_data.get("market_data_orderbook_state") or ""
+    ).strip().lower()
+    market_data_signed_tape_state = str(
+        ws_data.get("market_data_signed_tape_state") or ""
+    ).strip().lower()
     scanner_fields = _scanner_promotion_correlation_fields(stock)
     added_time = _safe_float((stock or {}).get("added_time"), 0.0)
     armed_time = _safe_float((stock or {}).get("entry_armed_at_epoch"), 0.0)
@@ -11425,6 +11545,12 @@ def _scanner_fast_precheck_fields(
         and not fresh_realtime_evidence
         and not subscription_recheck_fresh_realtime_evidence
     )
+    market_data_rest_enriched_recovery = (
+        market_data_freshness_state == "rest_enriched"
+        and market_data_orderbook_state == "rest_enriched"
+        and not fresh_realtime_evidence
+        and not subscription_recheck_fresh_realtime_evidence
+    )
     rest_quote_anchor_price = _scanner_rest_quote_recovery_anchor_price(scanner_fields)
     rest_quote_anchor_gap_max_pct = _scanner_rest_quote_recovery_anchor_gap_max_pct()
     rest_quote_anchor_gap_pct = (
@@ -11438,9 +11564,11 @@ def _scanner_fast_precheck_fields(
         and curr > 0
         and rest_quote_anchor_gap_pct > rest_quote_anchor_gap_max_pct
     )
+    market_data_conflicted = market_data_freshness_state == "conflicted"
     rising_rest_quote_relief = (
-        rest_quote_only_recovery
+        (rest_quote_only_recovery or market_data_rest_enriched_recovery)
         and not rest_quote_promotion_conflict
+        and not market_data_conflicted
         and _scanner_rising_rest_quote_full_eval_relief_enabled()
         and _scanner_rising_entry_relief_eligible(stock)
         and _scanner_positive_delta_pct(stock) >= _scanner_rising_rest_quote_full_eval_min_delta_pct()
@@ -11451,6 +11579,7 @@ def _scanner_fast_precheck_fields(
         and not rising_realtime_relief
         and not rising_subscription_recheck_relief
         and not rest_quote_only_recovery
+        and not market_data_rest_enriched_recovery
         and _scanner_rising_stale_ws_full_eval_relief_enabled()
         and _scanner_rising_entry_relief_eligible(stock)
         and _scanner_positive_delta_pct(stock) >= _scanner_rising_stale_ws_full_eval_min_delta_pct()
@@ -11466,6 +11595,12 @@ def _scanner_fast_precheck_fields(
         now_ts=float(now_ts),
     )
     submit_safety_backoff_fields = _rising_missed_submit_safety_backoff_fields(
+        stock,
+        code,
+        ws_data,
+        now_ts=float(now_ts),
+    )
+    signed_tape_scanner_backoff_fields = _rising_missed_signed_tape_scanner_backoff_fields(
         stock,
         code,
         ws_data,
@@ -11495,6 +11630,23 @@ def _scanner_fast_precheck_fields(
     elif submit_safety_backoff_fields:
         result = "budget_reallocated"
         reason = "submit_safety_backoff_active"
+    elif signed_tape_scanner_backoff_fields:
+        result = "budget_reallocated"
+        reason = "signed_tape_sell_dominated_backoff_active"
+    elif market_data_conflicted:
+        result = "stability_pending"
+        reason = "market_data_ws_rest_conflicted"
+    elif (
+        market_data_signed_tape_state == "sell_dominated"
+        and _scanner_rising_entry_relief_eligible(stock)
+    ):
+        signed_tape_scanner_backoff_fields = _record_rising_missed_signed_tape_scanner_backoff(
+            stock,
+            code,
+            now_ts=float(now_ts),
+        )
+        result = "budget_reallocated"
+        reason = "signed_tape_sell_dominated"
     elif rising_missed_fast_reject.get("scanner_rising_missed_fast_reject_candidate"):
         result = "budget_reallocated"
         reason = "rising_missed_not_rising_without_recovery_signal"
@@ -11533,6 +11685,7 @@ def _scanner_fast_precheck_fields(
     scanner_filter_action = "budget_reallocated" if result == "budget_reallocated" else "observe_only"
     return {
         **_rising_missed_scanner_filter_fields(action=scanner_filter_action),
+        **market_data_fields,
         "scanner_promotion_id": scanner_fields.get("scanner_promotion_id")
         or "not_applicable_scanner_promotion_id",
         "scanner_promotion_emitted_epoch": scanner_fields.get("scanner_promotion_emitted_epoch")
@@ -11584,8 +11737,10 @@ def _scanner_fast_precheck_fields(
         "fast_precheck_rest_quote_consistency_status": (
             "conflicts_with_scanner_promotion"
             if rest_quote_promotion_conflict
+            else "market_data_ws_rest_conflicted"
+            if market_data_conflicted
             else "pass"
-            if rest_quote_only_recovery
+            if rest_quote_only_recovery or market_data_rest_enriched_recovery
             else "not_applicable_rest_quote_consistency"
         ),
         "fast_precheck_stale_ws_relief_applied": bool(rising_stale_ws_relief),
@@ -11649,6 +11804,7 @@ def _scanner_fast_precheck_fields(
         **scanner_ws_stale_backoff_fields,
         **candidate_gate_backoff_fields,
         **submit_safety_backoff_fields,
+        **signed_tape_scanner_backoff_fields,
         **_scanner_rising_relief_observation_fields(stock),
     }
 
@@ -16947,15 +17103,6 @@ def _pre_submit_ws_snapshot_refresh_log_fields(source: dict | None) -> dict:
         "pre_submit_ws_snapshot_refresh_latest_price": _safe_int(
             data.get("pre_submit_ws_snapshot_refresh_latest_price"), 0
         ),
-        "pre_submit_observer_unhealthy_refresh_attempted": bool(
-            data.get("pre_submit_observer_unhealthy_refresh_attempted")
-        ),
-        "pre_submit_observer_unhealthy_refresh_applied": bool(
-            data.get("pre_submit_observer_unhealthy_refresh_applied")
-        ),
-        "pre_submit_observer_unhealthy_refresh_reason": data.get(
-            "pre_submit_observer_unhealthy_refresh_reason"
-        ),
         "pre_submit_rest_orderbook_refresh_enabled": bool(data.get("pre_submit_rest_orderbook_refresh_enabled")),
         "pre_submit_rest_orderbook_refresh_applied": bool(data.get("pre_submit_rest_orderbook_refresh_applied")),
         "pre_submit_rest_orderbook_refresh_reason": data.get("pre_submit_rest_orderbook_refresh_reason"),
@@ -17018,130 +17165,6 @@ def _pre_submit_effective_quote_log_fields(
         "pre_submit_ai_input_quote_age_ms": ai_quote_age_ms,
         "pre_submit_refresh_recovered_stale_ai_context": recovered,
     }
-
-
-def _latency_gate_observer_unhealthy(latency_gate: dict | None) -> bool:
-    if not isinstance(latency_gate, dict):
-        return False
-    snapshot = latency_gate.get("orderbook_stability")
-    if not isinstance(snapshot, dict):
-        return False
-    if bool(snapshot.get("observer_healthy", True)):
-        return False
-    reason = str(snapshot.get("observer_missing_reason") or "").strip().lower()
-    return reason not in {"", "ok", "none"}
-
-
-def _latency_gate_needs_stale_quote_rest_recheck(latency_gate: dict | None) -> bool:
-    if not isinstance(latency_gate, dict):
-        return False
-    if str(latency_gate.get("latency_state") or "").upper() != "DANGER":
-        return False
-    danger_reasons = str(latency_gate.get("latency_danger_reasons") or "").lower()
-    return (
-        bool(latency_gate.get("quote_stale"))
-        or "quote_stale" in danger_reasons
-        or "ws_age_too_high" in danger_reasons
-    )
-
-
-def _latency_gate_needs_false_negative_remeasure(latency_gate: dict | None) -> bool:
-    if not isinstance(latency_gate, dict):
-        return False
-    return (
-        _latency_false_negative_remeasure_repass_enabled()
-        and bool(latency_gate.get("latency_false_negative_remeasure_enqueued"))
-        and not bool(latency_gate.get("allowed"))
-        and str(latency_gate.get("decision") or "").upper() == "REJECT_DANGER"
-        and not bool(latency_gate.get("pre_submit_rest_orderbook_refresh_applied"))
-    )
-
-
-def _apply_latency_false_negative_bounded_remeasure(
-    *,
-    stock: dict,
-    code: str,
-    ws_data: dict | None,
-    strategy: str,
-    real_buy_qty: int,
-    curr_price: int,
-    final_price: int,
-    latency_signal_strength: float,
-    latency_gate: dict,
-) -> tuple[dict | None, int, int, dict]:
-    if not _latency_gate_needs_false_negative_remeasure(latency_gate):
-        latency_gate.setdefault(
-            "latency_false_negative_remeasure_repass_enabled",
-            _latency_false_negative_remeasure_repass_enabled(),
-        )
-        latency_gate.setdefault("latency_false_negative_remeasure_repass_attempted", False)
-        latency_gate.setdefault("latency_false_negative_remeasure_repass_applied", False)
-        latency_gate.setdefault(
-            "latency_false_negative_remeasure_repass_reason",
-            (
-                "runtime_repass_disabled"
-                if bool(latency_gate.get("latency_false_negative_remeasure_enqueued"))
-                else "not_enqueued"
-            ),
-        )
-        return ws_data, curr_price, final_price, latency_gate
-
-    previous_decision = str(latency_gate.get("decision") or "")
-    previous_reason = str(latency_gate.get("reason") or "")
-    refreshed_ws_data, rest_recheck_fields = _pre_submit_refresh_rest_orderbook_snapshot(
-        code,
-        ws_data,
-        strategy,
-    )
-    rest_applied = bool((rest_recheck_fields or {}).get("pre_submit_rest_orderbook_refresh_applied"))
-    rest_recheck_reason = str(
-        (rest_recheck_fields or {}).get("pre_submit_rest_orderbook_refresh_reason")
-        or "rest_recheck_failed"
-    )
-    remeasure_fields = {
-        "latency_false_negative_remeasure_repass_enabled": True,
-        "latency_false_negative_remeasure_repass_attempted": True,
-        "latency_false_negative_remeasure_repass_applied": rest_applied,
-        "latency_false_negative_remeasure_decision_authority": (
-            "operator_runtime_override_latency_false_negative_repass"
-        ),
-        "latency_false_negative_remeasure_runtime_effect": rest_applied,
-        "latency_false_negative_remeasure_allowed_runtime_apply": rest_applied,
-        "latency_false_negative_remeasure_repass_reason": (
-            "rest_orderbook_fresh_repass" if rest_applied else rest_recheck_reason
-        ),
-        "latency_false_negative_remeasure_previous_decision": previous_decision,
-        "latency_false_negative_remeasure_previous_reason": previous_reason,
-        "latency_false_negative_remeasure_repass_decision": previous_decision,
-        "latency_false_negative_remeasure_repass_latency_state": latency_gate.get("latency_state"),
-    }
-    if not rest_applied:
-        latency_gate.update(rest_recheck_fields or {})
-        latency_gate.update(remeasure_fields)
-        return ws_data, curr_price, final_price, latency_gate
-
-    curr_price = _safe_int(refreshed_ws_data.get("curr"), curr_price)
-    if str(strategy or "").upper() == "SCALPING":
-        final_price = int(float(stock.get("target_buy_price", curr_price) or curr_price))
-    refreshed_gate = evaluate_live_buy_entry(
-        stock=stock,
-        code=code,
-        ws_data=refreshed_ws_data,
-        strategy_id=strategy,
-        planned_qty=real_buy_qty,
-        signal_price=curr_price,
-        signal_strength=latency_signal_strength,
-        target_buy_price=final_price if str(strategy or "").upper() == "SCALPING" else 0,
-    )
-    refreshed_gate.update(rest_recheck_fields or {})
-    remeasure_fields.update(
-        {
-            "latency_false_negative_remeasure_repass_decision": refreshed_gate.get("decision"),
-            "latency_false_negative_remeasure_repass_latency_state": refreshed_gate.get("latency_state"),
-        }
-    )
-    refreshed_gate.update(remeasure_fields)
-    return refreshed_ws_data, curr_price, final_price, refreshed_gate
 
 
 def _compute_price_below_bid_bps(price, best_bid):
@@ -19137,6 +19160,7 @@ def _evaluate_rising_missed_tick_speed_entry_guard(
     microstructure_fields = microstructure_fields if isinstance(microstructure_fields, dict) else {}
     source_quality_fields = stock.get("last_watching_ai_source_quality_fields")
     source_quality_fields = source_quality_fields if isinstance(source_quality_fields, dict) else {}
+    market_data_fields = market_data_enrichment_log_fields(ws_data)
 
     enabled = _rising_missed_tick_speed_entry_guard_enabled()
     is_rising_missed = (
@@ -19182,6 +19206,7 @@ def _evaluate_rising_missed_tick_speed_entry_guard(
     block_reason = "+".join(reasons) if reasons else "tick_speed_guard_pass"
     return {
         **_rising_missed_submit_safety_filter_fields(blocked=blocked),
+        **market_data_fields,
         "blocked": blocked,
         "reason": block_reason,
         "block_reason": block_reason,
@@ -19265,8 +19290,28 @@ def _quote_stale_for_rising_missed_scout_quality_guard(
         if quote_age_sec is not None:
             quote_age_ms = quote_age_sec * 1000.0
     age_stale = quote_age_ms is not None and quote_age_ms > max_age_ms
+    market_data_fields = market_data_enrichment_log_fields(ws_data)
+    market_data_state = str(ws_data.get("market_data_freshness_state") or "").strip().lower()
+    market_data_orderbook_state = str(ws_data.get("market_data_orderbook_state") or "").strip().lower()
+    market_data_effective_quote_age_ms = _safe_float(
+        ws_data.get("market_data_effective_quote_age_ms"),
+        None,
+    )
+    if (
+        market_data_state == "rest_enriched"
+        and market_data_orderbook_state == "rest_enriched"
+        and market_data_effective_quote_age_ms is not None
+        and market_data_effective_quote_age_ms <= max_age_ms
+    ):
+        explicit_stale = False
+        text_stale = False
+        age_stale = False
+        quote_age_ms = market_data_effective_quote_age_ms if market_data_effective_quote_age_ms is not None else quote_age_ms
+    elif market_data_state == "conflicted":
+        explicit_stale = True
     stale = bool(explicit_stale or text_stale or age_stale)
     return stale, {
+        **market_data_fields,
         "rising_missed_scout_quality_guard_quote_stale": stale,
         "rising_missed_scout_quality_guard_quote_age_ms": (
             f"{quote_age_ms:.1f}" if quote_age_ms is not None else "-"
@@ -31066,7 +31111,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     )
     ws_data, pre_submit_ws_snapshot_refresh = _pre_submit_refresh_real_ws_snapshot(code, ws_data, strategy)
     pre_submit_rest_orderbook_refresh = {}
-    rest_refresh_attempted = False
     rising_missed_rest_recheck_for_ws_stale = (
         str(strategy or "").upper() in {"SCALPING", "SCALP"}
         and _has_rising_missed_watch_source_marker(stock)
@@ -31087,7 +31131,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         )
         if rising_missed_rest_recheck_for_ws_stale:
             pre_submit_rest_orderbook_refresh["rising_missed_pre_submit_rest_recheck_for_ws_stale"] = True
-        rest_refresh_attempted = True
     if pre_submit_ws_snapshot_refresh.get("pre_submit_ws_snapshot_refresh_applied"):
         curr_price = _safe_int(ws_data.get("curr"), curr_price)
         if strategy == 'SCALPING':
@@ -31109,107 +31152,21 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         {
             "pre_submit_secondary_recheck_enabled": secondary_recheck_enabled,
             "pre_submit_secondary_recheck_policy": (
-                "explicit_env_enabled" if secondary_recheck_enabled else "disabled_default_single_refresh_only"
+                "removed_market_data_envelope_primary_refresh_only"
             ),
         }
     )
-    if (
-        secondary_recheck_enabled
-        and _latency_gate_observer_unhealthy(latency_gate)
-        and not bool(latency_gate.get("pre_submit_ws_snapshot_refresh_applied"))
-        and not bool(latency_gate.get("pre_submit_rest_orderbook_refresh_applied"))
-        and bool(latency_gate.get("pre_submit_ws_snapshot_refresh_enabled"))
-    ):
-        refreshed_ws_data, observer_recheck_fields = _pre_submit_refresh_real_ws_snapshot(code, ws_data, strategy)
-        observer_recheck_fields.update(
-            {
-                "pre_submit_observer_unhealthy_refresh_attempted": True,
-                "pre_submit_observer_unhealthy_refresh_applied": bool(
-                    observer_recheck_fields.get("pre_submit_ws_snapshot_refresh_applied")
-                ),
-                "pre_submit_observer_unhealthy_refresh_reason": observer_recheck_fields.get(
-                    "pre_submit_ws_snapshot_refresh_reason"
-                ),
-            }
-        )
-        if observer_recheck_fields.get("pre_submit_ws_snapshot_refresh_applied"):
-            ws_data = refreshed_ws_data
-            curr_price = _safe_int(ws_data.get("curr"), curr_price)
-            if strategy == 'SCALPING':
-                final_price = int(float(stock.get('target_buy_price', curr_price) or curr_price))
-            latency_gate = evaluate_live_buy_entry(
-                stock=stock,
-                code=code,
-                ws_data=ws_data,
-                strategy_id=strategy,
-                planned_qty=real_buy_qty,
-                signal_price=curr_price,
-                signal_strength=latency_signal_strength,
-                target_buy_price=final_price if strategy == 'SCALPING' else 0,
-            )
-            latency_gate.update(latency_false_negative_report_fields)
-        latency_gate.update(observer_recheck_fields)
-    if (
-        secondary_recheck_enabled
-        and _latency_gate_needs_stale_quote_rest_recheck(latency_gate)
-        and not bool(latency_gate.get("pre_submit_ws_snapshot_refresh_applied"))
-        and not bool(latency_gate.get("pre_submit_rest_orderbook_refresh_applied"))
-    ):
-        refreshed_ws_data, rest_recheck_fields = _pre_submit_refresh_rest_orderbook_snapshot(code, ws_data, strategy)
-        rest_refresh_attempted = True
-        if rest_recheck_fields.get("pre_submit_rest_orderbook_refresh_applied"):
-            ws_data = refreshed_ws_data
-            curr_price = _safe_int(ws_data.get("curr"), curr_price)
-            if strategy == 'SCALPING':
-                final_price = int(float(stock.get('target_buy_price', curr_price) or curr_price))
-            latency_gate = evaluate_live_buy_entry(
-                stock=stock,
-                code=code,
-                ws_data=ws_data,
-                strategy_id=strategy,
-                planned_qty=real_buy_qty,
-                signal_price=curr_price,
-                signal_strength=latency_signal_strength,
-                target_buy_price=final_price if strategy == 'SCALPING' else 0,
-            )
-            latency_gate.update(latency_false_negative_report_fields)
-        latency_gate.update(rest_recheck_fields)
-    if (
-        secondary_recheck_enabled
-        and _latency_gate_observer_unhealthy(latency_gate)
-        and not bool(latency_gate.get("pre_submit_ws_snapshot_refresh_applied"))
-        and not bool(latency_gate.get("pre_submit_rest_orderbook_refresh_applied"))
-        and not rest_refresh_attempted
-    ):
-        refreshed_ws_data, rest_recheck_fields = _pre_submit_refresh_rest_orderbook_snapshot(code, ws_data, strategy)
-        if rest_recheck_fields.get("pre_submit_rest_orderbook_refresh_applied"):
-            ws_data = refreshed_ws_data
-            curr_price = _safe_int(ws_data.get("curr"), curr_price)
-            if strategy == 'SCALPING':
-                final_price = int(float(stock.get('target_buy_price', curr_price) or curr_price))
-            latency_gate = evaluate_live_buy_entry(
-                stock=stock,
-                code=code,
-                ws_data=ws_data,
-                strategy_id=strategy,
-                planned_qty=real_buy_qty,
-                signal_price=curr_price,
-                signal_strength=latency_signal_strength,
-                target_buy_price=final_price if strategy == 'SCALPING' else 0,
-            )
-            latency_gate.update(latency_false_negative_report_fields)
-        latency_gate.update(rest_recheck_fields)
-    ws_data, curr_price, final_price, latency_gate = _apply_latency_false_negative_bounded_remeasure(
-        stock=stock,
-        code=code,
+    ws_data, market_data_pre_submit_fields = build_market_data_enrichment(
         ws_data=ws_data,
-        strategy=strategy,
-        real_buy_qty=real_buy_qty,
-        curr_price=curr_price,
-        final_price=final_price,
-        latency_signal_strength=latency_signal_strength,
-        latency_gate=latency_gate,
+        rest_signed_ticks=(ws_data or {}).get("rest_signed_trade_ticks"),
+        candidate_metadata={"source": "pre_submit"},
+        now_ts=time.time(),
     )
+    latency_gate.update(market_data_pre_submit_fields)
+    latency_gate.setdefault("latency_false_negative_remeasure_repass_enabled", False)
+    latency_gate.setdefault("latency_false_negative_remeasure_repass_attempted", False)
+    latency_gate.setdefault("latency_false_negative_remeasure_repass_applied", False)
+    latency_gate.setdefault("latency_false_negative_remeasure_repass_reason", "removed_market_data_envelope_first")
     latency_gate.update(latency_false_negative_report_fields)
     _mutate_stock_state(
         stock,
@@ -33549,6 +33506,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 bundle_price_snapshot,
                 swing_entry_micro_fields,
                 _panic_gap_weight_log_fields(latency_gate),
+                _latency_false_negative_remeasure_log_fields(latency_gate),
             ),
             "quote_stale",
         ),
@@ -34371,12 +34329,6 @@ def _maybe_retry_rising_missed_entry_ai_not_evaluated(
     return fields
 
 
-def _rising_missed_quality_guard_explicit_negative_ai(quality_guard: dict | None) -> bool:
-    guard = quality_guard if isinstance(quality_guard, dict) else {}
-    action = str(guard.get("rising_missed_scout_quality_guard_ai_action") or "").strip().upper()
-    return action in {"DROP", "WAIT"}
-
-
 def _rising_missed_depth_estimator_from_rest_snapshot(refreshed_ws: dict | None) -> dict:
     return estimate_orderbook_pressure(refreshed_ws)
 
@@ -34465,298 +34417,6 @@ def _maybe_update_rising_missed_micro_estimator_from_fresh_ws(
         }
     )
     return fields
-
-
-def _maybe_supplement_rising_missed_scout_quality_guard_with_rest_estimator(
-    stock,
-    code,
-    ws_data,
-    runtime,
-    quality_guard: dict | None,
-    *,
-    strategy: str,
-) -> tuple[dict, dict | None]:
-    now_ts = _safe_float((runtime or {}).get("now_ts"), time.time())
-    fields = {
-        "rising_missed_rest_quote_estimator_enabled": _rising_missed_scout_quality_guard_rest_estimator_enabled(),
-        "rising_missed_rest_quote_estimator_attempted": False,
-        "rising_missed_rest_quote_estimator_applied": False,
-        "rising_missed_rest_quote_estimator_support": False,
-        "rising_missed_rest_quote_estimator_reason": "not_needed",
-        "rising_missed_rest_quote_estimator_source": "micro_estimator_state:ka10004_rest_orderbook+smoothed_micro_prior",
-        "rising_missed_rest_quote_estimator_source_quality_state": "not_evaluated",
-        "rising_missed_micro_estimator_policy_version": "-",
-        "rising_missed_micro_estimator_tier": "cold",
-        "rising_missed_micro_estimator_source_state": "not_evaluated",
-        "rising_missed_micro_estimator_confidence": "0.0000",
-        "rising_missed_micro_estimator_min_confidence": f"{_rising_missed_micro_estimator_min_confidence():.4f}",
-        "rising_missed_micro_estimator_sample_count": 0,
-        "rising_missed_micro_estimator_age_sec": "-",
-        "rising_missed_micro_estimator_lazy_hydration": False,
-        "rising_missed_rest_quote_estimator_forbidden_uses": TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
-    }
-    guard = quality_guard if isinstance(quality_guard, dict) else {}
-    if not fields["rising_missed_rest_quote_estimator_enabled"]:
-        fields["rising_missed_rest_quote_estimator_reason"] = "disabled"
-        return fields, None
-    if not bool(guard.get("rising_missed_scout_quality_guard_blocked")):
-        return fields, None
-    if str(guard.get("block_reason") or guard.get("reason") or "") != "stale_quote_with_weak_ai_or_strength":
-        return fields, None
-    fields["rising_missed_rest_quote_estimator_attempted"] = True
-    if _rising_missed_quality_guard_explicit_negative_ai(guard):
-        fields["rising_missed_rest_quote_estimator_reason"] = "explicit_ai_wait_or_drop"
-        fields["rising_missed_rest_quote_estimator_source_quality_state"] = "explicit_negative_ai_preserved"
-        return fields, None
-
-    pre_snapshot = _RISING_MISSED_MICRO_ESTIMATOR_STORE.snapshot(code, now_ts=now_ts)
-    lazy_hydration = bool(
-        str(pre_snapshot.get("tier") or "cold") == "cold"
-        or _safe_int(pre_snapshot.get("sample_count"), 0) <= 0
-    )
-    _RISING_MISSED_MICRO_ESTIMATOR_STORE.mark_candidate(
-        code,
-        tier="hot",
-        now_ts=now_ts,
-        reason="rising_missed_scout_quality_guard",
-    )
-    refreshed_ws, rest_fields = _pre_submit_refresh_rest_orderbook_snapshot(code, ws_data, strategy)
-    fields.update(_pre_submit_ws_snapshot_refresh_log_fields(rest_fields))
-    if not bool(rest_fields.get("pre_submit_rest_orderbook_refresh_applied")):
-        fields["rising_missed_rest_quote_estimator_reason"] = (
-            rest_fields.get("pre_submit_rest_orderbook_refresh_reason")
-            or "rest_orderbook_not_applied"
-        )
-        fields["rising_missed_rest_quote_estimator_source_quality_state"] = "rest_quote_unavailable"
-        return fields, None
-
-    _RISING_MISSED_MICRO_ESTIMATOR_STORE.update_from_rest_orderbook(
-        code,
-        refreshed_ws,
-        now_ts=now_ts,
-        tier="hot",
-    )
-    stock_dict = stock if isinstance(stock, dict) else {}
-    probe = stock_dict.get("last_watching_ai_feature_probe")
-    source_quality = stock_dict.get("last_watching_ai_source_quality_fields")
-    probe = probe if isinstance(probe, dict) else {}
-    source_quality = source_quality if isinstance(source_quality, dict) else {}
-    probe_at = _safe_float(stock_dict.get("last_watching_ai_feature_probe_at"), 0.0)
-    max_probe_age_sec = _rising_missed_rest_estimator_probe_max_age_sec()
-    if probe or source_quality:
-        _RISING_MISSED_MICRO_ESTIMATOR_STORE.update_from_feature_probe(
-            code,
-            probe,
-            source_quality,
-            now_ts=now_ts,
-            observed_ts=probe_at if probe_at > 0 else None,
-            max_age_sec=max_probe_age_sec,
-            tier="hot",
-        )
-    depth = _rising_missed_depth_estimator_from_rest_snapshot(refreshed_ws)
-    snapshot = _RISING_MISSED_MICRO_ESTIMATOR_STORE.snapshot(code, now_ts=now_ts)
-    estimated_pressure = _safe_float(snapshot.get("pressure_ewma"), float(depth["pressure"]))
-    estimated_ofi_norm = _safe_float(snapshot.get("ofi_ewma"), float(depth["ofi_norm"]))
-    estimator_confidence = _safe_float(snapshot.get("confidence"), 0.0)
-    min_ofi_norm = _rising_missed_rest_estimator_min_ofi_norm()
-    min_pressure = _rising_missed_rest_estimator_min_pressure()
-    min_confidence = _rising_missed_micro_estimator_min_confidence()
-    depth_support = bool(depth["total_depth"] > 0 and estimated_ofi_norm >= min_ofi_norm)
-    pressure_support = bool(estimated_pressure >= min_pressure)
-    confidence_support = bool(estimator_confidence >= min_confidence)
-    support = bool(confidence_support and (depth_support or pressure_support))
-    smoothing_age_sec = max(0.0, now_ts - probe_at) if probe_at > 0 else max_probe_age_sec
-    fields.update(
-        {
-            "rising_missed_rest_quote_estimator_applied": True,
-            "rising_missed_rest_quote_estimator_support": support,
-            "rising_missed_rest_quote_estimator_reason": (
-                "rest_anchored_estimate_support"
-                if support
-                else "rest_anchored_estimate_below_confidence_or_floor"
-            ),
-            "rising_missed_rest_quote_estimator_source_quality_state": snapshot.get("source_state")
-            or "rest_anchored_estimate",
-            "rising_missed_rest_quote_estimator_ofi_norm": f"{estimated_ofi_norm:.4f}",
-            "rising_missed_rest_quote_estimator_min_ofi_norm": f"{float(min_ofi_norm):.4f}",
-            "rising_missed_rest_quote_estimator_depth_pressure": f"{float(depth['pressure']):.2f}",
-            "rising_missed_rest_quote_estimator_smoothed_pressure": f"{estimated_pressure:.2f}",
-            "rising_missed_rest_quote_estimator_estimated_pressure": f"{estimated_pressure:.2f}",
-            "rising_missed_rest_quote_estimator_min_pressure": f"{float(min_pressure):.2f}",
-            "rising_missed_rest_quote_estimator_depth_source": depth["depth_source"],
-            "rising_missed_rest_quote_estimator_bid_depth": f"{float(depth['bid_depth']):.1f}",
-            "rising_missed_rest_quote_estimator_ask_depth": f"{float(depth['ask_depth']):.1f}",
-            "rising_missed_rest_quote_estimator_top_depth_ratio": f"{float(depth['top_depth_ratio']):.4f}",
-            "rising_missed_rest_quote_estimator_smoothing_source": snapshot.get("source_state")
-            or "rest_anchored_estimate",
-            "rising_missed_rest_quote_estimator_ofi_source": snapshot.get("ofi_source") or "-",
-            "rising_missed_rest_quote_estimator_true_ofi_ewma": (
-                f"{_safe_float(snapshot.get('true_ofi_ewma'), 0.0):.4f}"
-            ),
-            "rising_missed_rest_quote_estimator_depth_imbalance_ewma": (
-                f"{_safe_float(snapshot.get('depth_imbalance_ewma'), 0.0):.4f}"
-            ),
-            "rising_missed_rest_quote_estimator_smoothing_confidence": f"{estimator_confidence:.4f}",
-            "rising_missed_rest_quote_estimator_smoothing_age_sec": f"{smoothing_age_sec:.1f}",
-            "rising_missed_micro_estimator_policy_version": snapshot.get("policy_version") or "-",
-            "rising_missed_micro_estimator_tier": snapshot.get("tier") or "cold",
-            "rising_missed_micro_estimator_source_state": snapshot.get("source_state") or "-",
-            "rising_missed_micro_estimator_ofi_source": snapshot.get("ofi_source") or "-",
-            "rising_missed_micro_estimator_true_ofi_ewma": f"{_safe_float(snapshot.get('true_ofi_ewma'), 0.0):.4f}",
-            "rising_missed_micro_estimator_depth_imbalance_ewma": (
-                f"{_safe_float(snapshot.get('depth_imbalance_ewma'), 0.0):.4f}"
-            ),
-            "rising_missed_micro_estimator_confidence": f"{estimator_confidence:.4f}",
-            "rising_missed_micro_estimator_min_confidence": f"{min_confidence:.4f}",
-            "rising_missed_micro_estimator_sample_count": _safe_int(snapshot.get("sample_count"), 0),
-            "rising_missed_micro_estimator_true_ofi_sample_count": _safe_int(
-                snapshot.get("true_ofi_sample_count"), 0
-            ),
-            "rising_missed_micro_estimator_age_sec": f"{_safe_float(snapshot.get('age_sec'), 0.0):.1f}",
-            "rising_missed_micro_estimator_lazy_hydration": lazy_hydration,
-            "micro_estimator_source_state": snapshot.get("source_state") or "-",
-            "micro_estimator_ofi_source": snapshot.get("ofi_source") or "-",
-            "micro_estimator_confidence": f"{estimator_confidence:.4f}",
-            "micro_estimator_ofi_ewma": f"{estimated_ofi_norm:.4f}",
-            "micro_estimator_true_ofi_ewma": f"{_safe_float(snapshot.get('true_ofi_ewma'), 0.0):.4f}",
-            "micro_estimator_depth_imbalance_ewma": f"{_safe_float(snapshot.get('depth_imbalance_ewma'), 0.0):.4f}",
-            "micro_estimator_pressure_ewma": f"{estimated_pressure:.2f}",
-            "micro_estimator_sample_count": _safe_int(snapshot.get("sample_count"), 0),
-            "micro_estimator_true_ofi_sample_count": _safe_int(snapshot.get("true_ofi_sample_count"), 0),
-        }
-    )
-    enriched_ws = dict(refreshed_ws or {})
-    enriched_ws.update(
-        {
-            "rising_missed_rest_quote_estimator_applied": True,
-            "rising_missed_rest_quote_estimator_support": support,
-            "rising_missed_rest_quote_estimator_source_quality_state": snapshot.get("source_state")
-            or "rest_anchored_estimate",
-            "rising_missed_rest_quote_estimator_ofi_norm": estimated_ofi_norm,
-            "rising_missed_rest_quote_estimator_estimated_pressure": estimated_pressure,
-            "micro_estimator_source_state": snapshot.get("source_state") or "-",
-            "micro_estimator_ofi_source": snapshot.get("ofi_source") or "-",
-            "micro_estimator_confidence": estimator_confidence,
-            "micro_estimator_ofi_ewma": estimated_ofi_norm,
-            "micro_estimator_true_ofi_ewma": _safe_float(snapshot.get("true_ofi_ewma"), 0.0),
-            "micro_estimator_depth_imbalance_ewma": _safe_float(snapshot.get("depth_imbalance_ewma"), 0.0),
-            "micro_estimator_pressure_ewma": estimated_pressure,
-            "micro_estimator_sample_count": _safe_int(snapshot.get("sample_count"), 0),
-            "micro_estimator_true_ofi_sample_count": _safe_int(snapshot.get("true_ofi_sample_count"), 0),
-            "source_quality_state": "rest_anchored_estimate",
-            "source_quality_block_reason": "-",
-            "quote_age_ms": rest_fields.get("pre_submit_rest_orderbook_refresh_age_ms") or 0.0,
-            "buy_pressure_10t": f"{estimated_pressure:.3f}",
-            "net_aggressive_delta_10t": f"{float(depth['bid_depth'] - depth['ask_depth']):.3f}",
-            "tick_aggressor_pressure_usable": bool(support),
-            "tick_context_quality": "rest_anchored_estimate",
-            "quote_stale": False,
-        }
-    )
-    return fields, enriched_ws if support else None
-
-
-def _rising_missed_scout_quality_guard_ai_recheck_needed(quality_guard: dict | None) -> bool:
-    guard = quality_guard if isinstance(quality_guard, dict) else {}
-    if not bool(guard.get("rising_missed_scout_quality_guard_blocked")):
-        return False
-    if str(guard.get("block_reason") or guard.get("reason") or "") != "stale_quote_with_weak_ai_or_strength":
-        return False
-    if not bool(guard.get("rising_missed_scout_quality_guard_weak_ai")):
-        return False
-    action = str(guard.get("rising_missed_scout_quality_guard_ai_action") or "-").strip().upper()
-    if action == "DROP":
-        return False
-    score = _safe_float(guard.get("rising_missed_scout_quality_guard_ai_score"), 0.0)
-    return action in {"", "-", "NOT_EVALUATED", "UNAVAILABLE", "FAIL_CLOSED"} and score <= 50.0
-
-
-def _maybe_recheck_rising_missed_scout_quality_guard_with_rest_ai(
-    stock,
-    code,
-    ws_data,
-    runtime,
-    quality_guard: dict | None,
-    *,
-    strategy: str,
-) -> tuple[dict, dict | None]:
-    fields = {
-        "rising_missed_rest_quote_ai_recheck_enabled": _env_bool(
-            "KORSTOCKSCAN_RISING_MISSED_REST_QUOTE_AI_RECHECK_ENABLED",
-            True,
-        ),
-        "rising_missed_rest_quote_ai_recheck_attempted": False,
-        "rising_missed_rest_quote_ai_recheck_success": False,
-        "rising_missed_rest_quote_ai_recheck_reason": "not_needed",
-        "rising_missed_rest_quote_ai_recheck_source": "ka10004_rest_orderbook",
-        "rising_missed_rest_quote_ai_recheck_runtime_effect": False,
-        "rising_missed_rest_quote_ai_recheck_allowed_runtime_apply": False,
-        "rising_missed_rest_quote_ai_recheck_forbidden_uses": TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
-    }
-    if not fields["rising_missed_rest_quote_ai_recheck_enabled"]:
-        fields["rising_missed_rest_quote_ai_recheck_reason"] = "disabled"
-        return fields, None
-    if not _rising_missed_scout_quality_guard_ai_recheck_needed(quality_guard):
-        return fields, None
-    ai_engine = (runtime or {}).get("ai_engine")
-    if ai_engine is None or not hasattr(ai_engine, "analyze_target"):
-        fields["rising_missed_rest_quote_ai_recheck_reason"] = "ai_engine_unavailable"
-        return fields, None
-
-    fields["rising_missed_rest_quote_ai_recheck_attempted"] = True
-    refreshed_ws, rest_fields = _pre_submit_refresh_rest_orderbook_snapshot(code, ws_data, strategy)
-    fields.update(_pre_submit_ws_snapshot_refresh_log_fields(rest_fields))
-    if not bool(rest_fields.get("pre_submit_rest_orderbook_refresh_applied")):
-        fields["rising_missed_rest_quote_ai_recheck_reason"] = (
-            rest_fields.get("pre_submit_rest_orderbook_refresh_reason")
-            or "rest_orderbook_not_applied"
-        )
-        return fields, None
-
-    retry_fields = _retry_entry_ai_submit_authority_before_block(
-        stock=stock,
-        code=code,
-        ws_data=refreshed_ws,
-        ai_engine=ai_engine,
-        now_ts=_safe_float((runtime or {}).get("now_ts"), time.time()),
-        current_ai_score=(runtime or {}).get("current_ai_score"),
-    )
-    fields.update(
-        {
-            "rising_missed_rest_quote_ai_recheck_ai_attempted": bool(
-                retry_fields.get("pre_submit_entry_ai_authority_retry_attempted")
-            ),
-            "rising_missed_rest_quote_ai_recheck_ai_success": bool(
-                retry_fields.get("pre_submit_entry_ai_authority_retry_success")
-            ),
-            "rising_missed_rest_quote_ai_recheck_ai_reason": retry_fields.get(
-                "pre_submit_entry_ai_authority_retry_reason"
-            )
-            or "unknown",
-            "rising_missed_rest_quote_ai_recheck_ai_action": retry_fields.get(
-                "pre_submit_entry_ai_authority_retry_action"
-            )
-            or "not_evaluated",
-            "rising_missed_rest_quote_ai_recheck_ai_score": retry_fields.get(
-                "pre_submit_entry_ai_authority_retry_score"
-            )
-            or "0.0",
-            "rising_missed_rest_quote_ai_recheck_ai_result_source": retry_fields.get(
-                "pre_submit_entry_ai_authority_retry_result_source"
-            )
-            or "-",
-        }
-    )
-    if not bool(retry_fields.get("pre_submit_entry_ai_authority_retry_success")):
-        fields["rising_missed_rest_quote_ai_recheck_reason"] = fields[
-            "rising_missed_rest_quote_ai_recheck_ai_reason"
-        ]
-        return fields, None
-
-    fields["rising_missed_rest_quote_ai_recheck_success"] = True
-    fields["rising_missed_rest_quote_ai_recheck_reason"] = "rest_quote_fresh_ai_rechecked"
-    fields["rising_missed_rest_quote_ai_recheck_runtime_effect"] = True
-    return fields, refreshed_ws
 
 
 def _is_forced_rising_missed_initial_scout_entry(
@@ -35026,143 +34686,12 @@ def _maybe_submit_rising_missed_one_share_entry(
         decision_log_fields,
     )
     if quality_guard.get("rising_missed_scout_quality_guard_blocked"):
-        estimator_fields, estimator_ws_data = _maybe_supplement_rising_missed_scout_quality_guard_with_rest_estimator(
-            stock,
-            code,
-            ws_data,
-            runtime,
-            quality_guard,
-            strategy=strategy,
+        quality_guard.update(
+            {
+                "rising_missed_quality_guard_recheck_policy": "removed_market_data_envelope_first",
+                "rising_missed_quality_guard_recheck_attempted": False,
+            }
         )
-        if estimator_fields.get("rising_missed_rest_quote_estimator_reason") != "not_needed":
-            decision_log_fields.update(estimator_fields)
-            quality_guard.update(estimator_fields)
-        if estimator_ws_data is not None and estimator_fields.get("rising_missed_rest_quote_estimator_support"):
-            ws_data = estimator_ws_data
-            runtime = dict(runtime or {})
-            refreshed_curr_price = _safe_int(ws_data.get("curr"), curr_price)
-            if refreshed_curr_price > 0:
-                curr_price = refreshed_curr_price
-            decision = evaluate_rising_missed_one_share_entry(
-                stock,
-                strategy=strategy,
-                position_tag=pos_tag,
-                feature_enabled=feature_enabled,
-                has_open_pending=_has_open_pending_entry_orders(stock),
-                already_holding=_already_holding_entry_position(stock),
-                positive_delta_pct=_scanner_positive_delta_pct(stock),
-                min_delta_pct=_scanner_rising_entry_min_delta_pct(),
-                current_price=curr_price,
-                max_entry_price_krw=_rising_missed_one_share_entry_max_price_krw(),
-                scout_budget_cap_krw=_rising_missed_scout_entry_budget_cap_krw(),
-                current_fluctuation_pct=_current_fluctuation_pct(stock, ws_data, runtime),
-                upper_limit_exclude_enabled=_rising_missed_upper_limit_exclude_enabled(),
-                upper_limit_exclude_pct=_rising_missed_upper_limit_exclude_pct(),
-            )
-            decision_log_fields = dict(decision.log_fields or {})
-            decision_log_fields.update(estimator_fields)
-            if decision.allowed is False and decision.reason != RISING_MISSED_BLOCK_NOT_CANDIDATE:
-                candidate_backoff_fields = _record_rising_missed_candidate_gate_backoff(
-                    stock,
-                    code,
-                    decision.reason,
-                    now_ts=_safe_float(runtime.get("now_ts"), time.time()),
-                    source_stage="rising_missed_one_share_entry_blocked_after_rest_quote_estimator",
-                )
-                _log_entry_pipeline(
-                    stock,
-                    code,
-                    "rising_missed_one_share_entry_blocked",
-                    block_reason=decision.reason,
-                    forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON,
-                    actual_order_submitted=False,
-                    broker_order_forbidden=True,
-                    runtime_effect=decision.reason == RISING_MISSED_BLOCK_PRICE_ABOVE_CAP,
-                    **_merge_entry_pipeline_field_groups(decision_log_fields, candidate_backoff_fields),
-                )
-                return True
-            if not decision.allowed:
-                return False
-            quality_guard = _evaluate_rising_missed_scout_quality_guard(
-                stock,
-                code,
-                ws_data,
-                runtime,
-                decision_log_fields,
-            )
-    if quality_guard.get("rising_missed_scout_quality_guard_blocked"):
-        rest_ai_recheck_fields, refreshed_ws_data = _maybe_recheck_rising_missed_scout_quality_guard_with_rest_ai(
-            stock,
-            code,
-            ws_data,
-            runtime,
-            quality_guard,
-            strategy=strategy,
-        )
-        if rest_ai_recheck_fields.get("rising_missed_rest_quote_ai_recheck_reason") != "not_needed":
-            decision_log_fields.update(rest_ai_recheck_fields)
-            quality_guard.update(rest_ai_recheck_fields)
-        if rest_ai_recheck_fields.get("rising_missed_rest_quote_ai_recheck_attempted"):
-            if refreshed_ws_data is not None and rest_ai_recheck_fields.get(
-                "rising_missed_rest_quote_ai_recheck_success"
-            ):
-                ws_data = refreshed_ws_data
-                runtime = dict(runtime or {})
-                refreshed_curr_price = _safe_int(ws_data.get("curr"), curr_price)
-                if refreshed_curr_price > 0:
-                    curr_price = refreshed_curr_price
-                decision = evaluate_rising_missed_one_share_entry(
-                    stock,
-                    strategy=strategy,
-                    position_tag=pos_tag,
-                    feature_enabled=feature_enabled,
-                    has_open_pending=_has_open_pending_entry_orders(stock),
-                    already_holding=_already_holding_entry_position(stock),
-                    positive_delta_pct=_scanner_positive_delta_pct(stock),
-                    min_delta_pct=_scanner_rising_entry_min_delta_pct(),
-                    current_price=curr_price,
-                    max_entry_price_krw=_rising_missed_one_share_entry_max_price_krw(),
-                    scout_budget_cap_krw=_rising_missed_scout_entry_budget_cap_krw(),
-                    current_fluctuation_pct=_current_fluctuation_pct(stock, ws_data, runtime),
-                    upper_limit_exclude_enabled=_rising_missed_upper_limit_exclude_enabled(),
-                    upper_limit_exclude_pct=_rising_missed_upper_limit_exclude_pct(),
-                )
-                decision_log_fields = dict(decision.log_fields or {})
-                decision_log_fields.update(rest_ai_recheck_fields)
-                if decision.allowed is False and decision.reason != RISING_MISSED_BLOCK_NOT_CANDIDATE:
-                    candidate_backoff_fields = _record_rising_missed_candidate_gate_backoff(
-                        stock,
-                        code,
-                        decision.reason,
-                        now_ts=_safe_float(runtime.get("now_ts"), time.time()),
-                        source_stage="rising_missed_one_share_entry_blocked_after_rest_quote_ai_recheck",
-                    )
-                    _log_entry_pipeline(
-                        stock,
-                        code,
-                        "rising_missed_one_share_entry_blocked",
-                        block_reason=decision.reason,
-                        forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON,
-                        actual_order_submitted=False,
-                        broker_order_forbidden=True,
-                        runtime_effect=decision.reason == RISING_MISSED_BLOCK_PRICE_ABOVE_CAP,
-                        **_merge_entry_pipeline_field_groups(decision_log_fields, candidate_backoff_fields),
-                    )
-                    return True
-                if not decision.allowed:
-                    return False
-                runtime["current_ai_score"] = _safe_float(
-                    rest_ai_recheck_fields.get("rising_missed_rest_quote_ai_recheck_ai_score"),
-                    runtime.get("current_ai_score"),
-                )
-                quality_guard = _evaluate_rising_missed_scout_quality_guard(
-                    stock,
-                    code,
-                    ws_data,
-                    runtime,
-                    decision_log_fields,
-                )
-    if quality_guard.get("rising_missed_scout_quality_guard_blocked"):
         scout_quality_backoff_fields = _record_rising_missed_submit_safety_backoff(
             stock,
             code,

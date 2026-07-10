@@ -1075,31 +1075,6 @@ def test_real_pre_submit_ws_snapshot_refresh_honors_explicit_operator_off(monkey
     assert refreshed["curr"] == 10_000
 
 
-def test_latency_gate_observer_unhealthy_detection():
-    assert state_handlers._latency_gate_observer_unhealthy(
-        {"orderbook_stability": {"observer_healthy": False, "observer_missing_reason": "missing_trade"}}
-    ) is True
-    assert state_handlers._latency_gate_observer_unhealthy(
-        {"orderbook_stability": {"observer_healthy": True, "observer_missing_reason": "ok"}}
-    ) is False
-    assert state_handlers._latency_gate_observer_unhealthy({}) is False
-
-
-def test_latency_gate_stale_quote_rest_recheck_detection():
-    assert state_handlers._latency_gate_needs_stale_quote_rest_recheck(
-        {"latency_state": "DANGER", "quote_stale": True, "latency_danger_reasons": "quote_stale,ws_age_too_high"}
-    ) is True
-    assert state_handlers._latency_gate_needs_stale_quote_rest_recheck(
-        {"latency_state": "DANGER", "latency_danger_reasons": "ws_age_too_high"}
-    ) is True
-    assert state_handlers._latency_gate_needs_stale_quote_rest_recheck(
-        {"latency_state": "CAUTION", "quote_stale": True, "latency_danger_reasons": "quote_stale"}
-    ) is False
-    assert state_handlers._latency_gate_needs_stale_quote_rest_recheck(
-        {"latency_state": "DANGER", "latency_danger_reasons": "spread_too_wide"}
-    ) is False
-
-
 def test_latency_false_negative_report_marker_defaults_disabled(monkeypatch, tmp_path):
     target_date = "2026-07-10"
     report_dir = tmp_path / "report" / "rising_missed_intraday_feedback"
@@ -1198,62 +1173,16 @@ def test_latency_false_negative_report_marker_loads_ready_and_clears_stale(monke
     assert "latency_false_negative_report_canary_grade" not in stock
 
 
-def test_latency_false_negative_runtime_repass_defaults_fail_closed(monkeypatch):
-    monkeypatch.delenv("KORSTOCKSCAN_LATENCY_FALSE_NEGATIVE_REMEASURE_REPASS_ENABLED", raising=False)
-    gate = {
-        "allowed": False,
-        "decision": "REJECT_DANGER",
-        "latency_false_negative_remeasure_enqueued": True,
-        "pre_submit_rest_orderbook_refresh_applied": False,
-    }
-
-    assert state_handlers._latency_gate_needs_false_negative_remeasure(gate) is False
-
-    ws_data, curr_price, final_price, updated_gate = (
-        state_handlers._apply_latency_false_negative_bounded_remeasure(
-            stock={},
-            code="123456",
-            ws_data={"curr": 1000},
-            strategy="SCALPING",
-            real_buy_qty=1,
-            curr_price=1000,
-            final_price=1000,
-            latency_signal_strength=0.0,
-            latency_gate=gate,
-        )
-    )
-
-    assert ws_data == {"curr": 1000}
-    assert curr_price == 1000
-    assert final_price == 1000
-    assert updated_gate["latency_false_negative_remeasure_repass_enabled"] is False
-    assert updated_gate["latency_false_negative_remeasure_repass_attempted"] is False
-    assert updated_gate["latency_false_negative_remeasure_repass_reason"] == "runtime_repass_disabled"
-
-
-def test_latency_false_negative_intraday_repass_flag_no_longer_opens_gate(monkeypatch):
-    monkeypatch.delenv("KORSTOCKSCAN_LATENCY_FALSE_NEGATIVE_REMEASURE_REPASS_ENABLED", raising=False)
-    gate = {
-        "allowed": False,
-        "decision": "REJECT_DANGER",
-        "latency_false_negative_remeasure_enqueued": True,
-        "latency_false_negative_remeasure_intraday_repass_allowed": True,
-        "pre_submit_rest_orderbook_refresh_applied": False,
-    }
-
-    assert state_handlers._latency_gate_needs_false_negative_remeasure(gate) is False
-
-
 def test_pre_submit_secondary_recheck_defaults_disabled(monkeypatch):
     monkeypatch.delenv("KORSTOCKSCAN_PRE_SUBMIT_SECONDARY_RECHECK_ENABLED", raising=False)
 
     assert state_handlers._pre_submit_secondary_recheck_enabled() is False
 
 
-def test_pre_submit_secondary_recheck_requires_explicit_env(monkeypatch):
+def test_pre_submit_secondary_recheck_env_no_longer_opens_gate(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_PRE_SUBMIT_SECONDARY_RECHECK_ENABLED", "true")
 
-    assert state_handlers._pre_submit_secondary_recheck_enabled() is True
+    assert state_handlers._pre_submit_secondary_recheck_enabled() is False
 
 
 def test_caution_stale_negative_micro_submit_block_matches_ceylab_pattern(monkeypatch):
@@ -1403,18 +1332,6 @@ def test_intraday_entry_price_discovery_reprice_chooses_fresher_rest(monkeypatch
     assert snapshot["best_bid"] == 10_010
     assert snapshot["best_ask"] == 10_020
     assert snapshot["last_trade_price"] == 10_020
-
-
-def test_latency_false_negative_runtime_repass_requires_explicit_env(monkeypatch):
-    monkeypatch.setenv("KORSTOCKSCAN_LATENCY_FALSE_NEGATIVE_REMEASURE_REPASS_ENABLED", "true")
-    gate = {
-        "allowed": False,
-        "decision": "REJECT_DANGER",
-        "latency_false_negative_remeasure_enqueued": True,
-        "pre_submit_rest_orderbook_refresh_applied": False,
-    }
-
-    assert state_handlers._latency_gate_needs_false_negative_remeasure(gate) is True
 
 
 def test_real_pre_submit_rest_orderbook_refresh_uses_ka10004_fresh_snapshot(monkeypatch):
@@ -2706,6 +2623,12 @@ def test_latency_true_ofi_direct_canary_allows_high_opportunity_without_report_m
         ws_data={
             "curr": 10_020,
             "last_ws_update_ts": now_ts,
+            "tick_aggressor_pressure_usable": True,
+            "tick_aggressor_trusted_count": 10,
+            "buy_pressure_10t": 68.0,
+            "buy_exec_volume": 680,
+            "sell_exec_volume": 320,
+            "net_buy_exec_volume": 360,
             "orderbook": {
                 "asks": [{"price": 10_080, "volume": 100}],
                 "bids": [{"price": 10_020, "volume": 100}],
@@ -2723,8 +2646,263 @@ def test_latency_true_ofi_direct_canary_allows_high_opportunity_without_report_m
     assert result["latency_true_ofi_direct_canary_applied"] is True
     assert result["latency_true_ofi_direct_canary_reason"] == "direct_canary_true_ofi_false_negative_allow"
     assert result["latency_true_ofi_direct_canary_relief_runtime_enabled"] is True
+    assert result["latency_true_ofi_direct_canary_tape_support_ok"] is True
     assert result["latency_false_negative_remeasure_enqueued"] is False
     assert result["latency_false_negative_remeasure_reason"] == "report_ready_for_recheck_missing"
+
+
+def test_latency_true_ofi_direct_canary_blocks_sell_dominated_tape(monkeypatch):
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=True,
+            SCALP_LATENCY_SPREAD_RELIEF_TAGS=("OTHER",),
+            SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED=False,
+            SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_GUARD_CANARY_ENABLED=False,
+            SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=False,
+        ),
+    )
+    monkeypatch.delenv("KORSTOCKSCAN_LATENCY_FALSE_NEGATIVE_REMEASURE_REPASS_ENABLED", raising=False)
+    now_ts = time.time()
+    monkeypatch.setattr(
+        entry_latency_module,
+        "MICRO_ESTIMATOR_STORE",
+        SimpleNamespace(
+            snapshot=lambda code, *, now_ts: {
+                "source_state": "fresh_ws_order_flow_delta",
+                "confidence": 0.91,
+                "true_ofi_ewma": -0.001,
+                "true_ofi_sample_count": 1900,
+                "last_ws_ts": now_ts - 0.07,
+            }
+        ),
+    )
+
+    result = evaluate_live_buy_entry(
+        stock={
+            "name": "TEST",
+            "position_tag": "SCANNER",
+            "rising_missed_entry_lineage": True,
+            "source_signature": "LOW_REBOUND_RISING_MISSED,BID_IMBALANCE_SURGE",
+            "price_delta_since_first_seen_pct": "5.31",
+        },
+        code="123456_true_ofi_direct_canary_sell_tape",
+        ws_data={
+            "curr": 7_320,
+            "last_ws_update_ts": now_ts,
+            "tick_aggressor_pressure_usable": True,
+            "tick_aggressor_trusted_count": 10,
+            "buy_pressure_10t": 4.13,
+            "buy_exec_volume": 9_121_202,
+            "sell_exec_volume": 11_951_515,
+            "net_buy_exec_volume": -2_830_313,
+            "orderbook_micro_state": "neutral",
+            "orderbook": {
+                "asks": [{"price": 7_370, "volume": 5_575}],
+                "bids": [{"price": 7_320, "volume": 32_238}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=27,
+        signal_price=7_320,
+        signal_strength=0.70,
+    )
+
+    assert result["decision"] == "REJECT_DANGER"
+    assert result["allowed"] is False
+    assert result["latency_true_ofi_direct_canary_applied"] is False
+    assert result["latency_true_ofi_direct_canary_reason"] == "sell_dominated_tape"
+    assert result["latency_true_ofi_direct_canary_tape_support_ok"] is False
+    assert result["latency_true_ofi_direct_canary_tape_net_buy_exec_volume"] < 0
+
+
+def test_latency_true_ofi_direct_canary_blocks_recent_signed_sell_tape(monkeypatch):
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=True,
+            SCALP_LATENCY_SPREAD_RELIEF_TAGS=("OTHER",),
+            SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED=False,
+            SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_GUARD_CANARY_ENABLED=False,
+            SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=False,
+        ),
+    )
+    monkeypatch.delenv("KORSTOCKSCAN_LATENCY_FALSE_NEGATIVE_REMEASURE_REPASS_ENABLED", raising=False)
+    now_ts = time.time()
+    monkeypatch.setattr(
+        entry_latency_module,
+        "MICRO_ESTIMATOR_STORE",
+        SimpleNamespace(
+            snapshot=lambda code, *, now_ts: {
+                "source_state": "fresh_ws_order_flow_delta",
+                "confidence": 0.91,
+                "true_ofi_ewma": 0.001,
+                "true_ofi_sample_count": 1900,
+                "last_ws_ts": now_ts - 0.07,
+            }
+        ),
+    )
+
+    result = evaluate_live_buy_entry(
+        stock={
+            "name": "TEST",
+            "position_tag": "SCANNER",
+            "rising_missed_entry_lineage": True,
+            "source_signature": "LOW_REBOUND_RISING_MISSED,BID_IMBALANCE_SURGE",
+            "price_delta_since_first_seen_pct": "5.31",
+        },
+        code="123456_true_ofi_direct_canary_signed_sell_tape",
+        ws_data={
+            "curr": 7_320,
+            "last_ws_update_ts": now_ts,
+            "tick_aggressor_pressure_usable": True,
+            "tick_aggressor_trusted_count": 10,
+            "buy_pressure_10t": 68.0,
+            "buy_exec_volume": 15_000,
+            "sell_exec_volume": 8_000,
+            "net_buy_exec_volume": 7_000,
+            "recent_trade_ticks": [
+                {"aggressor_aux_raw_15": "-200", "volume": 200},
+                {"aggressor_aux_raw_15": "-150", "volume": 150},
+                {"aggressor_aux_raw_15": "+50", "volume": 50},
+            ],
+            "orderbook_micro_state": "neutral",
+            "orderbook": {
+                "asks": [{"price": 7_370, "volume": 5_575}],
+                "bids": [{"price": 7_320, "volume": 32_238}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=27,
+        signal_price=7_320,
+        signal_strength=0.70,
+    )
+
+    assert result["decision"] == "REJECT_DANGER"
+    assert result["allowed"] is False
+    assert result["latency_true_ofi_direct_canary_applied"] is False
+    assert result["latency_true_ofi_direct_canary_reason"] == "signed_tape_sell_dominated"
+    assert result["latency_true_ofi_direct_canary_signed_tape_sell_dominated"] is True
+    assert result["latency_true_ofi_direct_canary_signed_tape_sell_count"] == 2
+    assert result["latency_true_ofi_direct_canary_signed_tape_net_buy_volume"] < 0
+
+
+def test_latency_true_ofi_direct_canary_blocks_rest_signed_sell_tape(monkeypatch):
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=True,
+            SCALP_LATENCY_SPREAD_RELIEF_TAGS=("OTHER",),
+            SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED=False,
+            SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_GUARD_CANARY_ENABLED=False,
+            SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=False,
+        ),
+    )
+    monkeypatch.delenv("KORSTOCKSCAN_LATENCY_FALSE_NEGATIVE_REMEASURE_REPASS_ENABLED", raising=False)
+    now_ts = time.time()
+    monkeypatch.setattr(
+        entry_latency_module,
+        "MICRO_ESTIMATOR_STORE",
+        SimpleNamespace(
+            snapshot=lambda code, *, now_ts: {
+                "source_state": "fresh_ws_order_flow_delta",
+                "confidence": 0.91,
+                "true_ofi_ewma": 0.001,
+                "true_ofi_sample_count": 1900,
+                "last_ws_ts": now_ts - 0.07,
+            }
+        ),
+    )
+
+    result = evaluate_live_buy_entry(
+        stock={
+            "name": "TEST",
+            "position_tag": "SCANNER",
+            "rising_missed_entry_lineage": True,
+            "source_signature": "LOW_REBOUND_RISING_MISSED,BID_IMBALANCE_SURGE",
+            "price_delta_since_first_seen_pct": "5.31",
+        },
+        code="123456_true_ofi_direct_canary_rest_signed_sell_tape",
+        ws_data={
+            "curr": 7_320,
+            "last_ws_update_ts": now_ts,
+            "tick_aggressor_pressure_usable": True,
+            "tick_aggressor_trusted_count": 10,
+            "buy_pressure_10t": 68.0,
+            "buy_exec_volume": 15_000,
+            "sell_exec_volume": 8_000,
+            "net_buy_exec_volume": 7_000,
+            "rest_signed_trade_ticks": [
+                {"signed_trade_volume": "-200", "volume": 200, "rest_signed_tape_source": "ka10084"},
+                {"signed_trade_volume": "-150", "volume": 150, "rest_signed_tape_source": "ka10084"},
+                {"signed_trade_volume": "+50", "volume": 50, "rest_signed_tape_source": "ka10084"},
+            ],
+            "orderbook_micro_state": "neutral",
+            "orderbook": {
+                "asks": [{"price": 7_370, "volume": 5_575}],
+                "bids": [{"price": 7_320, "volume": 32_238}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=27,
+        signal_price=7_320,
+        signal_strength=0.70,
+    )
+
+    assert result["decision"] == "REJECT_DANGER"
+    assert result["allowed"] is False
+    assert result["latency_true_ofi_direct_canary_applied"] is False
+    assert result["latency_true_ofi_direct_canary_reason"] == "signed_tape_sell_dominated"
+    assert result["latency_true_ofi_direct_canary_signed_tape_sell_count"] == 2
+    assert result["latency_true_ofi_direct_canary_signed_tape_net_buy_volume"] < 0
+
+
+def test_rest_signed_tape_counts_unsigned_buy_rows_with_rest_side():
+    fields = entry_latency_module._latency_signed_tape_fields(
+        {},
+        {
+            "rest_signed_trade_ticks": [
+                {
+                    "signed_trade_volume": "120",
+                    "aggressor_side": "BUY",
+                    "aggressor_source": "kiwoom_rest_ka10084_signed_trade_qty",
+                },
+                {
+                    "signed_trade_volume": "-80",
+                    "aggressor_side": "SELL",
+                    "aggressor_source": "kiwoom_rest_ka10084_signed_trade_qty",
+                },
+                {
+                    "signed_trade_volume": "-20",
+                    "aggressor_side": "SELL",
+                    "aggressor_source": "kiwoom_rest_ka10084_signed_trade_qty",
+                },
+            ]
+        },
+    )
+
+    assert fields["latency_true_ofi_direct_canary_signed_tape_sample_count"] == 3
+    assert fields["latency_true_ofi_direct_canary_signed_tape_buy_count"] == 1
+    assert fields["latency_true_ofi_direct_canary_signed_tape_buy_volume"] == 120
+    assert fields["latency_true_ofi_direct_canary_signed_tape_sell_dominated"] is False
 
 
 def test_latency_true_ofi_direct_canary_keeps_wide_spread_blocked(monkeypatch):
@@ -3257,7 +3435,19 @@ def test_latency_wide_spread_passive_requote_blocks_low_buy_pressure(monkeypatch
     assert result["latency_danger_reasons"] == "spread_too_wide"
 
 
-def test_latency_buy_pressure_prefers_provider_buy_ratio_over_provenance_gate():
+def test_latency_buy_pressure_prefers_trusted_ten_tick_pressure_over_provider_ratio():
+    assert (
+        entry_latency_module._latency_buy_pressure_value(
+            {
+                "buy_ratio": 83.0,
+                "buy_pressure_10t": 21.0,
+                "tick_aggressor_pressure_usable": True,
+                "tick_aggressor_trusted_count": 3,
+            },
+            {"buy_pressure_10t": 20.0, "tick_aggressor_pressure_usable": False},
+        )
+        == 21.0
+    )
     assert (
         entry_latency_module._latency_buy_pressure_value(
             {"buy_ratio": 83.0, "tick_aggressor_pressure_usable": False},

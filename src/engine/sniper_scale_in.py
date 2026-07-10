@@ -1339,6 +1339,14 @@ def _build_shallow_volatility_avg_down_probe(stock, profit_rate, held_sec):
     min_tick_accel = float(getattr(TRADING_RULES, 'SHALLOW_VOLATILITY_AVG_DOWN_MIN_TICK_ACCEL', 1.05))
     min_micro_vwap_bp = float(getattr(TRADING_RULES, 'SHALLOW_VOLATILITY_AVG_DOWN_MIN_MICRO_VWAP_BP', 0.0))
     max_quote_age_ms = float(getattr(TRADING_RULES, 'SHALLOW_VOLATILITY_AVG_DOWN_MAX_QUOTE_AGE_MS', 1500.0))
+    max_per_position = max(
+        0,
+        int(getattr(TRADING_RULES, 'SHALLOW_VOLATILITY_AVG_DOWN_MAX_PER_POSITION', 3) or 0),
+    )
+    cooldown_sec = max(
+        0,
+        int(getattr(TRADING_RULES, 'SHALLOW_VOLATILITY_AVG_DOWN_COOLDOWN_SEC', 90) or 0),
+    )
     stop_line_pct = float(getattr(TRADING_RULES, 'SCALP_STOP', -1.5))
 
     source_quality = reversal_feature_source_quality(feat)
@@ -1348,6 +1356,11 @@ def _build_shallow_volatility_avg_down_probe(stock, profit_rate, held_sec):
     quote_age_raw = source_quality.get("quote_age_ms")
     quote_age_ms = None if quote_age_raw == "-" else _safe_float(quote_age_raw, None)
     large_sell_print = bool(feat.get('large_sell_print_detected', True))
+    used_count = max(0, _safe_int(stock.get('shallow_volatility_avg_down_count'), 0))
+    last_at = _safe_float(stock.get('shallow_volatility_avg_down_last_at'), 0.0)
+    now_ts = time.time()
+    cooldown_elapsed_sec = None if last_at <= 0 else max(0.0, now_ts - last_at)
+    cooldown_ok = cooldown_sec <= 0 or cooldown_elapsed_sec is None or cooldown_elapsed_sec >= cooldown_sec
     return {
         "reason": _SHALLOW_VOLATILITY_AVG_DOWN_REASON,
         "profit_rate": round(float(profit_rate), 4),
@@ -1374,6 +1387,13 @@ def _build_shallow_volatility_avg_down_probe(stock, profit_rate, held_sec):
         "quote_age_ms_numeric": "-" if quote_age_ms is None else round(float(quote_age_ms), 3),
         "max_quote_age_ms": round(max_quote_age_ms, 3),
         "quote_age_ok": quote_age_ms is not None and quote_age_ms <= max_quote_age_ms,
+        "used_count": used_count,
+        "max_per_position": max_per_position,
+        "count_ok": max_per_position > 0 and used_count < max_per_position,
+        "cooldown_sec": cooldown_sec,
+        "last_at": "-" if last_at <= 0 else round(last_at, 3),
+        "cooldown_elapsed_sec": "-" if cooldown_elapsed_sec is None else round(cooldown_elapsed_sec, 3),
+        "cooldown_ok": cooldown_ok,
         "has_reversal_features": bool(feat),
         **source_quality,
     }
@@ -1383,6 +1403,12 @@ def _check_shallow_volatility_avg_down(stock, profit_rate, held_sec):
     if not bool(getattr(TRADING_RULES, 'SHALLOW_VOLATILITY_AVG_DOWN_ENABLED', False)):
         return "shallow_volatility_avg_down_disabled", _build_shallow_volatility_avg_down_probe(stock, profit_rate, held_sec)
     probe = _build_shallow_volatility_avg_down_probe(stock, profit_rate, held_sec)
+    if probe["max_per_position"] <= 0:
+        return "shallow_volatility_max_per_position_zero", probe
+    if not probe["count_ok"]:
+        return f"shallow_volatility_max_per_position_reached({probe['used_count']}/{probe['max_per_position']})", probe
+    if not probe["cooldown_ok"]:
+        return f"shallow_volatility_cooldown_active({probe['cooldown_elapsed_sec']}<{probe['cooldown_sec']})", probe
     if not probe["has_reversal_features"]:
         return "shallow_volatility_features_missing", probe
     if not probe["pnl_ok"]:

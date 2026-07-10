@@ -121,6 +121,9 @@ _ADD_RECEIPT_SNAPSHOT_KEYS = (
     "pre_add_qty",
     "scale_in_locked",
     "scalp_live_simulator",
+    "last_add_reason",
+    "shallow_volatility_avg_down_count",
+    "shallow_volatility_avg_down_last_at",
     "simulation_book",
     "simulation_owner",
     "strategy",
@@ -1401,7 +1404,18 @@ def _update_db_for_add(target_id, exec_price, exec_qty, now, receipt_snapshot, a
             record.avg_down_count = int(receipt_snapshot.get('avg_down_count', record.avg_down_count or 0) or 0)
             record.pyramid_count = int(receipt_snapshot.get('pyramid_count', record.pyramid_count or 0) or 0)
             record.last_add_type = add_type
+            record.last_add_reason = str(receipt_snapshot.get('last_add_reason') or '').strip()
             record.last_add_at = now
+            record.shallow_volatility_avg_down_count = int(
+                receipt_snapshot.get(
+                    'shallow_volatility_avg_down_count',
+                    getattr(record, 'shallow_volatility_avg_down_count', 0) or 0,
+                )
+                or 0
+            )
+            shallow_last_at = float(receipt_snapshot.get('shallow_volatility_avg_down_last_at') or 0.0)
+            if shallow_last_at > 0:
+                record.shallow_volatility_avg_down_last_at = datetime.fromtimestamp(shallow_last_at)
             record.scale_in_locked = bool(receipt_snapshot.get('scale_in_locked', False))
             add_count_after = int(record.add_count or 0)
 
@@ -1582,12 +1596,14 @@ def _handle_add_buy_execution(
     target_stock['pre_add_qty'] = int(old_qty or 0)
     target_stock['post_add_qty'] = int(new_qty or 0)
     target_stock['last_add_type'] = add_type
+    pending_add_reason = str(target_stock.get('pending_add_reason') or '').strip()
+    target_stock['last_add_reason'] = pending_add_reason
     target_stock['last_add_at'] = now
-    target_stock['last_add_time'] = time.time()
+    now_ts = time.time()
+    target_stock['last_add_time'] = now_ts
     if (
         add_type == 'AVG_DOWN'
-        and str(target_stock.get('pending_add_reason') or '').strip()
-        in {'reversal_add_ok', 'aggressive_reversal_add_ok', 'shallow_volatility_avg_down'}
+        and pending_add_reason in {'reversal_add_ok', 'aggressive_reversal_add_ok', 'shallow_volatility_avg_down'}
     ):
         target_stock['reversal_add_state'] = 'POST_ADD_EVAL'
         target_stock['reversal_add_executed_at'] = now.timestamp()
@@ -1602,6 +1618,11 @@ def _handle_add_buy_execution(
         target_stock['add_count'] = int(target_stock.get('add_count', 0) or 0) + 1
         if add_type == 'AVG_DOWN':
             target_stock['avg_down_count'] = int(target_stock.get('avg_down_count', 0) or 0) + 1
+            if pending_add_reason == 'shallow_volatility_avg_down':
+                target_stock['shallow_volatility_avg_down_count'] = (
+                    int(target_stock.get('shallow_volatility_avg_down_count', 0) or 0) + 1
+                )
+                target_stock['shallow_volatility_avg_down_last_at'] = now_ts
         elif add_type == 'PYRAMID':
             target_stock['pyramid_count'] = int(target_stock.get('pyramid_count', 0) or 0) + 1
         target_stock['pending_add_counted'] = True
@@ -1693,6 +1714,10 @@ def _handle_add_buy_execution(
         new_avg_price=f"{float(new_avg or 0):.2f}",
         new_buy_qty=int(new_qty or 0),
         add_count=int(target_stock.get('add_count', 0) or 0),
+        avg_down_count=int(target_stock.get('avg_down_count', 0) or 0),
+        add_reason=pending_add_reason or "-",
+        shallow_volatility_avg_down_count=int(target_stock.get('shallow_volatility_avg_down_count', 0) or 0),
+        shallow_volatility_avg_down_last_at=target_stock.get('shallow_volatility_avg_down_last_at', '-'),
         reversal_add_state=target_stock.get('reversal_add_state', '-'),
         reversal_add_executed_at=target_stock.get('reversal_add_executed_at', '-'),
     )

@@ -29,10 +29,16 @@ quantity guards.
   time. Cache usage must be logged.
 - Field `15` signed trade volume may be retained as auxiliary provenance, but it
   is not a hard aggressor source and must not replace orderbook-touch evidence
-  for pressure math.
+  for pressure math or BUY support.
 - Runtime stores field `15` interpretation only in additive
   `aggressor_aux_*` fields. It must not overwrite `aggressor_side`, `dir`, or
   `aggressor_source`, and `aggressor_aux_pressure_usable` must remain false.
+- A bounded submit-safety consumer may use repeated official signed `15`
+  SELL prints only as negative-veto provenance for latency direct-canary
+  interpretation. This use must log separate `signed_tape_*` provenance, must
+  require a minimum sample count, and must not create BUY support, pressure
+  math, scale-in support, exit authority, threshold mutation, provider changes,
+  or order-cap changes.
 - Runtime may also store a weighted auxiliary observation score from `15`,
   `1030`, `1031`, `13`, `228`, and previous tick price. This score is empirical
   diagnostics only. It does not promote the row to trusted pressure, and it
@@ -54,6 +60,24 @@ quantity guards.
   it to `orderbook_touch`. It remains untrusted unless the original source is a
   trusted 0B orderbook-touch or explicitly trusted provider-declared side.
 
+## ka10084
+
+- `ka10084` today/prior trade rows expose signed `cntr_trde_qty`.
+- Runtime may use `ka10084` only through the scanner/pre-AI/submit freshness
+  envelope or historical log consumers. It is no longer called as a submit-time
+  direct-canary retry/fallback.
+- Scanner/pre-AI freshness envelope may attach bounded recent `ka10084` rows as
+  signed-tape provenance. This consumer may only classify
+  `sell_dominated` as scanner budget reallocation or submit-safety negative
+  context.
+- `ka10084` signed rows are auxiliary negative-veto provenance. Repeated recent
+  SELL rows may block or annotate direct-canary interpretation when already
+  present in the freshness envelope, especially when 0B tape is stale or
+  missing.
+- `ka10084` must not create BUY support, pressure math, scale-in support, exit
+  authority, threshold mutation, provider changes, order-cap changes, or broker
+  guard bypass.
+
 ## Aggressor Pressure Field Contract
 
 | Field | Meaning | Required provenance | Runtime use | Postclose use |
@@ -64,7 +88,8 @@ quantity guards.
 | `tick_aggressor_source_counts` | Diagnostic source distribution for all inferred tick rows. | Additive provenance field. | Logging and source-quality only. | Used to diagnose contamination paths. |
 | `tick_aggressor_trusted_count` | Count of pressure rows allowed into buy/sell volume math. | Derived from trusted source allowlist. | Must be positive for directional pressure support. | Required by pressure-consuming source-quality contracts. |
 | `tick_aggressor_pressure_usable` | Boolean pressure usability gate. | Derived from trusted pressure rows. | False means neutral/insufficient, not bearish. | False plus a pressure value is a hard source-quality exclusion for pressure-consuming stages. |
-| `aggressor_aux_*` | Auxiliary interpretation of non-authoritative fields such as signed 0B volume `15`, execution imbalance `1030`/`1031`, cumulative volume delta `13`, trade strength `228`, and previous price movement. | `aggressor_aux_pressure_usable=false`. | Display/provenance only; never pressure support or blocker. | Source-quality diagnostics only. |
+| `aggressor_aux_*` | Auxiliary interpretation of non-authoritative fields such as signed 0B volume `15`, execution imbalance `1030`/`1031`, cumulative volume delta `13`, trade strength `228`, and previous price movement. | `aggressor_aux_pressure_usable=false`. | Display/provenance only; never pressure support. Repeated official signed `15` SELL rows may only add negative direct-canary provenance through separately logged `signed_tape_*` fields. | Source-quality diagnostics only. |
+| `signed_tape_*` | Bounded negative submit-safety view of official signed tape over a short recent window. | Raw signed `15` values from 0B `recent_trade_ticks` or `last_trade_tick`, or freshness-envelope REST `ka10084.cntr_trde_qty`; minimum sample count required. | May block or annotate latency direct-canary interpretation when the signed tape is sell-dominated; submit-time REST retry is forbidden. | Source-quality diagnostics and false-positive review only; not EV/apply support by itself. |
 | `microstructure_reaction_context_status` | Reaction context quality. | Requires fresh orderbook, enough ticks, and usable pressure. | `source_quality_partial` is neutral unusable. | Preserved as report-only feature context. |
 
 ### Producer To Consumer Trace
@@ -73,6 +98,8 @@ quantity guards.
 | --- | --- | --- | --- | --- |
 | 0B websocket trade event | `recent_trade_ticks[].aggressor_source=orderbook_touch|cached_orderbook_touch`, `best_ask`, `best_bid`, cache/sync fields | `scalping_feature_packet`, `microstructure_reaction_context` | `pipeline_events` feature/audit fields | Trusted only when quote is complete, fresh, and synchronized. |
 | `ka10003` tick history | `aggressor_source=price_change_heuristic`, compatibility `dir` | Tick acceleration and price-change diagnostics only | Briefing/provenance diagnostics only | Forbidden as buy/sell pressure source. |
+| `ka10084` signed trade envelope input | `rest_signed_trade_ticks[].signed_trade_volume`, `aggressor_source=kiwoom_rest_ka10084_signed_trade_qty` | Scanner budget reallocation, submit-safety negative provenance, and latency true-OFI direct-canary interpretation only | False-positive/source-quality diagnostics only | Forbidden as BUY support, pressure math, or submit-time retry. |
+| market-data freshness envelope | `market_data_freshness_state`, `market_data_orderbook_state`, `market_data_signed_tape_state`, `market_data_effective_price_source` | Scanner fast-precheck, rising-missed scout quality, submit-safety provenance | Source-quality diagnostics only | REST orderbook may repair stale quote/depth freshness; REST signed tape may only reallocate scanner budget or add negative-veto provenance. Forbidden as BUY support, pressure math, threshold/provider/order-cap change, broker guard bypass, or real execution-quality approval. |
 | `microstructure_reaction_context` | `tick_aggressor_*`, `buy_pressure_pct`, `source_quality_partial` | Entry reaction, scale-in quality snapshots, holding/exit matrix | `microstructure_reaction_context_YYYY-MM-DD`, source-quality audit | Unusable pressure returns neutral scores and source-quality provenance. |
 | `scalping_feature_packet` | `buy_pressure_10t`, `net_aggressive_delta_10t`, `tick_aggressor_*`, `microstructure_reaction_*` | AI compact payload, entry gates, AVG_DOWN/PYRAMID/REVERSAL_ADD gates | `pipeline_events`, `observation_source_quality_audit`, backtests/calibration | Additive provenance fields must travel with pressure values. |
 | `observation_source_quality_audit` | `tick_aggressor_pressure_usable_contract` row exclusion | None; postclose only | Entry recheck, scale-in feedback/calibration, threshold apply preflight | Pressure-consuming candidate rows with unusable provenance are excluded before EV/apply. |
@@ -82,7 +109,7 @@ quantity guards.
 | Path | Risk | Current handling |
 | --- | --- | --- |
 | Source-less `dir` / `side` treated as true aggressor | False buy/sell pressure and false scale-in support/block | Infer as `declared_tick_side_untrusted`, pressure neutral. |
-| Signed 0B volume `15` or weighted auxiliary score used as a pressure fallback | Empirical auxiliary signs and weights could become false taker-side pressure | Preserve only as `aggressor_aux_*`; pressure usable remains false. |
+| Signed 0B volume `15` or weighted auxiliary score used as a pressure fallback | Empirical auxiliary signs and weights could become false taker-side pressure | Preserve pressure math only as orderbook-touch. `15` may only create short-window negative `signed_tape_*` direct-canary provenance; pressure usable remains false. |
 | `price_change_heuristic` with later best bid/ask attached | Heuristic could be promoted to orderbook-touch | Infer as `UNKNOWN` with `quote_with_untrusted_aggressor_source`. |
 | Heuristic-only pressure interpreted as bearish | False negative entry/scale-in/exit evidence | `buy_pressure_10t=50.0`, `net_aggressive_delta_10t=0`, `tick_aggressor_pressure_usable=false`. |
 | Microstructure reaction computed with no trusted pressure rows | Favorable/risk reaction from untrusted sides | `microstructure_reaction_context_status=source_quality_partial`, neutral scores. |
@@ -180,6 +207,11 @@ quantity guards.
   `pre_submit_rest_orderbook_refresh_age_ms`. If the receive timestamp is
   missing, runtime must treat the REST orderbook as time-unknown/stale and keep
   `bid_req_base_tm` only as raw provenance.
+- Scanner/pre-AI/submit market-data freshness envelope may use `ka10004` to
+  repair stale or missing WS quote/depth input and to classify WS/REST conflict.
+  This is freshness/provenance only; it must not relax threshold, provider,
+  broker, order cap, stale quote, account/order/quantity/cooldown, or submit
+  safety guards.
 
 ## Realtime Freshness And Snapshot Backfill
 
