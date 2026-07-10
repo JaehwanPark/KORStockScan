@@ -2466,6 +2466,16 @@ def test_scanner_fast_precheck_not_eligible_skips_before_heavy_eval():
     assert ws_reg_idx < recovered_idx < recheck_idx < waiting_idx
 
 
+def test_scanner_fast_precheck_deferred_call_preserves_code_for_backoff_lookup():
+    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    helper_idx = source.index("def _defer_emit_scanner_fast_precheck(")
+    fields_call_idx = source.index("sniper_state_handlers._scanner_fast_precheck_fields(", helper_idx)
+    code_arg_idx = source.index("code=code_value", fields_call_idx)
+    ws_arg_idx = source.index("ws_data=ws_snapshot", fields_call_idx)
+
+    assert fields_call_idx < code_arg_idx < ws_arg_idx
+
+
 def test_scanner_fast_precheck_is_flushed_before_non_scanner_targets():
     source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
     transition_flush_idx = source.index("and not _is_scanner_watching_target(stock)")

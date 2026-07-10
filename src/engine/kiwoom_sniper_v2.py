@@ -5545,6 +5545,7 @@ def run_sniper(is_test_mode=False):
                 fields = sniper_state_handlers._scanner_fast_precheck_fields(
                     stock_value,
                     now_ts=float(now_value),
+                    code=code_value,
                     ws_data=ws_snapshot,
                     queue_rank=queue_rank,
                     scanner_queue_rank=scanner_queue_rank,

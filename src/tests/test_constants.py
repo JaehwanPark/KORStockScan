@@ -64,6 +64,11 @@ def test_reversal_add_runtime_env_overrides(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_REVERSAL_ADD_MAX_HOLD_SEC", "480")
     monkeypatch.setenv("KORSTOCKSCAN_REVERSAL_ADD_MIN_AI_RECOVERY_DELTA", "10")
     monkeypatch.setenv("KORSTOCKSCAN_REVERSAL_ADD_VWAP_BP_MIN", "5")
+    monkeypatch.setenv("KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_ENABLED", "false")
+    monkeypatch.setenv("KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_PNL_MIN", "-1.4")
+    monkeypatch.setenv("KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_PNL_MAX", "-0.35")
+    monkeypatch.setenv("KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE", "88")
+    monkeypatch.setenv("KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MAX_QUOTE_AGE_MS", "900")
 
     reloaded = importlib.reload(constants)
 
@@ -73,6 +78,11 @@ def test_reversal_add_runtime_env_overrides(monkeypatch):
     assert reloaded.TRADING_RULES.REVERSAL_ADD_MAX_HOLD_SEC == 480
     assert reloaded.TRADING_RULES.REVERSAL_ADD_MIN_AI_RECOVERY_DELTA == 10
     assert reloaded.TRADING_RULES.REVERSAL_ADD_VWAP_BP_MIN == 5
+    assert reloaded.TRADING_RULES.SHALLOW_VOLATILITY_AVG_DOWN_ENABLED is False
+    assert reloaded.TRADING_RULES.SHALLOW_VOLATILITY_AVG_DOWN_PNL_MIN == -1.4
+    assert reloaded.TRADING_RULES.SHALLOW_VOLATILITY_AVG_DOWN_PNL_MAX == -0.35
+    assert reloaded.TRADING_RULES.SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE == 88
+    assert reloaded.TRADING_RULES.SHALLOW_VOLATILITY_AVG_DOWN_MAX_QUOTE_AGE_MS == 900
 
 
 def test_rising_missed_normal_buy_bridge_default_off_and_env_override(monkeypatch):

@@ -16,6 +16,20 @@ REPORT_DIR = PROJECT_ROOT / "data" / "report" / "rising_missed_intraday_feedback
 KST = timezone(timedelta(hours=9))
 FORCED_REASON = "rising_missed_one_share_entry"
 AVG_DOWN_FAIL_FLOOR = 2
+FORCED_SUBMIT_LINEAGE_JOIN_WINDOW_MINUTES = 15
+LATENCY_FALSE_NEGATIVE_MIN_MFE_PCT = 3.0
+LATENCY_FALSE_NEGATIVE_MAX_MAE_ABS_PCT = 1.5
+LATENCY_FALSE_NEGATIVE_BUCKETS = {
+    "latency_true_ofi_below_floor",
+    "latency_true_ofi_samples_below_floor",
+    "latency_spread_above_caution",
+    "latency_spread_above_caution_below_guard_cap",
+}
+LATENCY_CANARY_MIN_REVIEW_SCORE_PCT = 2.0
+LATENCY_CANARY_TRUE_OFI_MIN_SAMPLE_COUNT = 100
+LATENCY_CANARY_FRESH_WS_MAX_AGE_MS = 150.0
+LATENCY_CANARY_TRUE_OFI_NEAR_ZERO_FLOOR = -0.10
+LATENCY_CANARY_SPREAD_ONLY_MAX_SPREAD_BPS = 90.0
 FORBIDDEN_USES = [
     "runtime_threshold_mutation",
     "intraday_runtime_apply",
@@ -66,6 +80,57 @@ def _optional_boolish(value: Any) -> bool | None:
 def _fields(row: dict[str, Any]) -> dict[str, Any]:
     fields = row.get("fields")
     return fields if isinstance(fields, dict) else {}
+
+
+def _event_ts(row: dict[str, Any]) -> str:
+    return str(row.get("emitted_at") or row.get("timestamp") or row.get("ts") or "")
+
+
+def _parse_ts(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _event_code(row: dict[str, Any]) -> str:
+    fields = _fields(row)
+    return str(row.get("stock_code") or fields.get("stock_code") or row.get("code") or "").strip()
+
+
+def _event_name(row: dict[str, Any]) -> str:
+    fields = _fields(row)
+    return str(row.get("stock_name") or fields.get("stock_name") or _event_code(row) or "").strip()
+
+
+def _event_price(row: dict[str, Any]) -> float | None:
+    fields = _fields(row)
+    for key in (
+        "current_price_observed",
+        "current_price",
+        "latest_price",
+        "mark_price_at_submit",
+        "canonical_mark_price",
+        "rising_missed_one_share_entry_price",
+        "submitted_order_price",
+        "first_seen_price",
+    ):
+        price = _safe_float(fields.get(key))
+        if price is not None and price > 0:
+            return price
+    return None
+
+
+def _event_delta_pct(row: dict[str, Any]) -> float | None:
+    fields = _fields(row)
+    return _safe_float(
+        fields.get("price_delta_since_first_seen_pct")
+        or fields.get("scanner_rising_missed_price_delta_since_first_seen_pct")
+        or fields.get("rising_missed_one_share_entry_positive_delta_pct")
+    )
 
 
 def _pipeline_path(target_date: str) -> Path:
@@ -357,6 +422,168 @@ def _build_first_touch_regression_rows(
     return rows
 
 
+def _forced_submit_join_key(
+    row: dict[str, Any],
+    candidates: dict[str, dict[str, Any]],
+    by_code: dict[str, list[dict[str, Any]]],
+) -> str | None:
+    record_id = str(row.get("record_id") or "").strip()
+    if record_id in candidates:
+        return record_id
+    code = _event_code(row)
+    event_dt = _parse_ts(_event_ts(row))
+    if not code or event_dt is None:
+        return None
+    best: tuple[datetime, str] | None = None
+    for candidate in by_code.get(code, []):
+        candidate_dt = _parse_ts(candidate.get("first_rising_ts"))
+        if candidate_dt is None or candidate_dt > event_dt:
+            continue
+        if event_dt - candidate_dt > timedelta(minutes=FORCED_SUBMIT_LINEAGE_JOIN_WINDOW_MINUTES):
+            continue
+        candidate_record_id = str(candidate.get("record_id") or "").strip()
+        if not candidate_record_id:
+            continue
+        if best is None or candidate_dt > best[0]:
+            best = (candidate_dt, candidate_record_id)
+    return best[1] if best else None
+
+
+def _build_forced_submit_lineage_rows(
+    forced: dict[str, dict[str, Any]],
+    pipeline_path: Path,
+) -> list[dict[str, Any]]:
+    candidates: dict[str, dict[str, Any]] = {
+        record_id: {
+            **entry,
+            "record_id": record_id,
+            "order_plan_forced_seen": False,
+            "order_plan_forced_count": 0,
+            "order_leg_request_count": 0,
+            "order_leg_sent_count": 0,
+            "order_bundle_submitted_count": 0,
+            "buy_signal_telegram_enqueued_count": 0,
+            "entry_reprice_after_submit_evaluated_count": 0,
+            "entry_reprice_after_submit_blocked_count": 0,
+            "entry_order_cancel_requested_count": 0,
+            "entry_order_cancel_confirmed_count": 0,
+            "order_no_list": [],
+            "submitted_price_list": [],
+            "submit_lineage_join_method": "record_id",
+        }
+        for record_id, entry in forced.items()
+    }
+    by_code: dict[str, list[dict[str, Any]]] = {}
+    for item in candidates.values():
+        code = str(item.get("stock_code") or "").strip()
+        if code:
+            by_code.setdefault(code, []).append(item)
+    for rows in by_code.values():
+        rows.sort(key=lambda item: str(item.get("first_rising_ts") or ""))
+
+    lineage_stages = {
+        "rising_missed_one_share_entry_order_plan_forced",
+        "order_leg_request",
+        "order_leg_sent",
+        "buy_signal_telegram_enqueued",
+        "order_bundle_submitted",
+        "entry_reprice_after_submit_evaluated",
+        "entry_reprice_after_submit_blocked",
+        "entry_order_cancel_requested",
+        "entry_order_cancel_confirmed",
+    }
+    for row in iter_jsonl(pipeline_path):
+        stage = str(row.get("stage") or "")
+        if stage not in lineage_stages:
+            continue
+        join_key = _forced_submit_join_key(row, candidates, by_code)
+        if not join_key or join_key not in candidates:
+            continue
+        item = candidates[join_key]
+        if str(row.get("record_id") or "").strip() != join_key:
+            item["submit_lineage_join_method"] = "code_time_window"
+        fields = _fields(row)
+        ts = _event_ts(row)
+        if stage == "rising_missed_one_share_entry_order_plan_forced":
+            item["order_plan_forced_seen"] = True
+            item["order_plan_forced_count"] += 1
+            item["order_plan_first_ts"] = item.get("order_plan_first_ts") or ts
+            item["order_plan_last_ts"] = ts
+            planned_price = fields.get("planned_order_price")
+            if planned_price not in (None, ""):
+                item["planned_order_price"] = planned_price
+            forced_qty = fields.get("forced_entry_qty")
+            if forced_qty not in (None, ""):
+                item["forced_entry_qty"] = forced_qty
+        elif stage == "order_leg_request":
+            item["order_leg_request_count"] += 1
+            item["order_leg_request_last_ts"] = ts
+            price = fields.get("submitted_order_price") or fields.get("order_price") or fields.get("price")
+            if price not in (None, ""):
+                item["submitted_price_list"].append(str(price))
+        elif stage == "order_leg_sent":
+            item["order_leg_sent_count"] += 1
+            item["order_leg_sent_last_ts"] = ts
+            order_no = fields.get("order_no") or fields.get("ord_no") or fields.get("broker_order_no")
+            if order_no not in (None, ""):
+                item["order_no_list"].append(str(order_no))
+        elif stage == "buy_signal_telegram_enqueued":
+            item["buy_signal_telegram_enqueued_count"] += 1
+            item["buy_signal_telegram_enqueued_last_ts"] = ts
+        elif stage == "order_bundle_submitted" and _boolish(fields.get("actual_order_submitted")):
+            item["entry_order_submitted"] = True
+            item["order_bundle_submitted_count"] += 1
+            item["order_bundle_submitted_last_ts"] = ts
+            item["entry_order_last_submitted_ts"] = ts
+            order_no = fields.get("order_no") or fields.get("ord_no") or fields.get("broker_order_no")
+            if order_no not in (None, ""):
+                item["primary_order_no"] = str(order_no)
+            order_price = fields.get("order_price") or fields.get("submitted_order_price")
+            if order_price not in (None, ""):
+                item["submitted_order_price"] = order_price
+        elif stage == "entry_reprice_after_submit_evaluated":
+            item["entry_reprice_after_submit_evaluated_count"] += 1
+            item["entry_reprice_after_submit_last_reason"] = fields.get("block_reason") or fields.get("reason")
+            item["entry_reprice_after_submit_last_ts"] = ts
+        elif stage == "entry_reprice_after_submit_blocked":
+            item["entry_reprice_after_submit_blocked_count"] += 1
+            item["entry_reprice_after_submit_last_reason"] = fields.get("block_reason") or fields.get("reason")
+            item["entry_reprice_after_submit_blocked_last_ts"] = ts
+        elif stage == "entry_order_cancel_requested":
+            item["entry_order_cancel_requested_count"] += 1
+            item["entry_order_cancel_requested_last_ts"] = ts
+        elif stage == "entry_order_cancel_confirmed":
+            item["entry_order_cancel_confirmed_count"] += 1
+            item["entry_order_cancel_confirmed_last_ts"] = ts
+
+    rows: list[dict[str, Any]] = []
+    for item in candidates.values():
+        if not (
+            item.get("order_plan_forced_seen")
+            or item.get("order_leg_request_count")
+            or item.get("order_leg_sent_count")
+            or item.get("order_bundle_submitted_count")
+        ):
+            continue
+        item["entry_order_submitted"] = bool(item.get("entry_order_submitted"))
+        item["order_no_list"] = ",".join(dict.fromkeys(item.get("order_no_list") or []))
+        item["submitted_price_list"] = ",".join(dict.fromkeys(item.get("submitted_price_list") or []))
+        item["actual_order_submitted"] = False
+        item["broker_order_forbidden"] = True
+        item["runtime_effect"] = False
+        item["allowed_runtime_apply"] = False
+        item["decision_authority"] = "source_only_rising_missed_submit_lineage"
+        item["forbidden_uses"] = FORBIDDEN_USES
+        rows.append(item)
+    rows.sort(
+        key=lambda item: (
+            str(item.get("order_plan_first_ts") or item.get("order_bundle_submitted_last_ts") or ""),
+            str(item.get("record_id") or ""),
+        )
+    )
+    return rows
+
+
 def _first_touch_ai_provenance_missing(item: dict[str, Any]) -> bool:
     if item.get("first_touch_avgdown_ai_score") is None and item.get("first_touch_ai_score") is None:
         return False
@@ -493,6 +720,549 @@ def _count_first_touch_source_quality(rows: list[dict[str, Any]]) -> dict[str, i
     }
 
 
+def _field_reason(fields: dict[str, Any]) -> str:
+    return str(
+        fields.get("block_reason")
+        or fields.get("reason")
+        or fields.get("latency_spread_relief_micro_estimator_reason")
+        or fields.get("rising_missed_submit_safety_backoff_reason")
+        or fields.get("scanner_ws_stale_backoff_reason")
+        or ""
+    ).strip()
+
+
+def _quote_age_ms(fields: dict[str, Any]) -> float | None:
+    for key in (
+        "rising_missed_scout_quality_guard_quote_age_ms",
+        "quote_consistency_ws_age_ms",
+        "quote_age_ms",
+        "pre_submit_quote_refresh_age_ms",
+    ):
+        value = _safe_float(fields.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _classify_stale_quote_block(fields: dict[str, Any]) -> tuple[str, list[str]]:
+    components: list[str] = []
+    quote_age = _quote_age_ms(fields)
+    max_quote_age = _safe_float(fields.get("rising_missed_scout_quality_guard_max_quote_age_ms")) or 3000.0
+    quote_stale = _boolish(fields.get("rising_missed_scout_quality_guard_quote_stale")) or (
+        quote_age is not None and quote_age > max_quote_age
+    )
+    if quote_stale:
+        components.append("quote_age_stale")
+
+    rest_applied = _boolish(fields.get("pre_submit_rest_orderbook_refresh_applied"))
+    rest_success = _boolish(fields.get("rising_missed_rest_quote_ai_recheck_success"))
+    if rest_applied:
+        components.append("rest_orderbook_fresh")
+    elif str(fields.get("pre_submit_rest_orderbook_refresh_enabled") or "").strip():
+        components.append("rest_orderbook_unavailable")
+    if _boolish(fields.get("rising_missed_rest_quote_ai_recheck_attempted")):
+        components.append("ai_recheck_attempted")
+    if rest_success:
+        components.append("ai_recheck_success")
+
+    ai_action = str(
+        fields.get("rising_missed_scout_quality_guard_ai_action")
+        or fields.get("rising_missed_rest_quote_ai_recheck_ai_action")
+        or fields.get("rising_missed_entry_ai_action")
+        or ""
+    ).strip().upper()
+    if ai_action in {"WAIT", "DROP"}:
+        components.append(f"ai_{ai_action.lower()}")
+    elif _boolish(fields.get("rising_missed_scout_quality_guard_weak_ai")):
+        components.append("weak_ai_score")
+
+    if _boolish(fields.get("rising_missed_scout_quality_guard_weak_strength")):
+        components.append("weak_strength")
+    if _boolish(fields.get("rising_missed_scout_quality_guard_recent_weak_ai_micro_block")):
+        components.append("recent_weak_ai_micro")
+    if _boolish(fields.get("rising_missed_scout_quality_guard_weak_evidence")):
+        components.append("weak_evidence")
+
+    micro_reason = str(fields.get("latency_spread_relief_micro_estimator_reason") or "").strip()
+    if micro_reason:
+        components.append(f"true_ofi_{micro_reason}")
+
+    if "rest_orderbook_unavailable" in components:
+        return "rest_or_quote_unavailable", components
+    if "ai_drop" in components:
+        return "ai_drop_after_refresh", components
+    if "ai_wait" in components:
+        return "ai_wait_after_refresh", components
+    if any(item.startswith("true_ofi_true_ofi_below_floor") for item in components):
+        return "true_ofi_below_floor", components
+    if "weak_ai_score" in components:
+        return "weak_ai_score", components
+    if quote_stale and not any(item.startswith("ai_") or item.startswith("weak_") for item in components):
+        return "quote_age_only", components
+    return "stale_quote_with_weak_evidence", components
+
+
+def _classify_submit_safety_block(row: dict[str, Any]) -> tuple[str, str, list[str]]:
+    fields = _fields(row)
+    stage = str(row.get("stage") or "")
+    reason = _field_reason(fields)
+    if stage == "rising_missed_scout_quality_guard_blocked" and reason == "stale_quote_with_weak_ai_or_strength":
+        bucket, components = _classify_stale_quote_block(fields)
+        return reason, bucket, components
+    if stage == "latency_block":
+        micro_reason = str(fields.get("latency_spread_relief_micro_estimator_reason") or "").strip()
+        detail = str(fields.get("latency_danger_detail_reason") or fields.get("latency_danger_reasons") or "").strip()
+        components = [item for item in (detail, micro_reason) if item]
+        if micro_reason == "true_ofi_below_floor":
+            return reason or "latency_state_danger", "latency_true_ofi_below_floor", components
+        return reason or "latency_state_danger", f"latency_{micro_reason or detail or 'unspecified'}", components
+    if stage == "real_weak_ai_micro_entry_block":
+        micro_state = str(fields.get("orderbook_micro_state") or "").strip()
+        components = [item for item in (micro_state, reason) if item]
+        return reason or "weak_ai_micro", f"weak_ai_micro_{micro_state or 'unspecified'}", components
+    return reason or "unspecified", reason or stage or "unspecified", []
+
+
+def _submit_safety_block_row(row: dict[str, Any]) -> dict[str, Any]:
+    fields = _fields(row)
+    reason, bucket, components = _classify_submit_safety_block(row)
+    price = _event_price(row)
+    quote_age = _quote_age_ms(fields)
+    return {
+        "ts": _event_ts(row),
+        "stage": row.get("stage"),
+        "record_id": str(row.get("record_id") or "").strip(),
+        "stock_code": _event_code(row),
+        "stock_name": _event_name(row),
+        "reason": reason,
+        "blocker_bucket": bucket,
+        "components": components,
+        "price_delta_since_first_seen_pct": _event_delta_pct(row),
+        "block_price": price,
+        "mfe_after_block_pct": None,
+        "mae_after_block_pct": None,
+        "post_block_price_event_count": 0,
+        "quote_age_ms": quote_age,
+        "quote_age_sec": round(quote_age / 1000.0, 3) if quote_age is not None else None,
+        "max_quote_age_ms": _safe_float(fields.get("rising_missed_scout_quality_guard_max_quote_age_ms")),
+        "ai_action": fields.get("rising_missed_scout_quality_guard_ai_action")
+        or fields.get("rising_missed_rest_quote_ai_recheck_ai_action")
+        or fields.get("rising_missed_entry_ai_action"),
+        "ai_score": _safe_float(
+            fields.get("rising_missed_scout_quality_guard_ai_score")
+            or fields.get("rising_missed_rest_quote_ai_recheck_ai_score")
+            or fields.get("ai_score")
+        ),
+        "rest_refresh_applied": _optional_boolish(fields.get("pre_submit_rest_orderbook_refresh_applied")),
+        "rest_refresh_reason": fields.get("pre_submit_rest_orderbook_refresh_reason"),
+        "ws_age_ms": _safe_float(fields.get("ws_age_ms") or fields.get("quote_consistency_ws_age_ms")),
+        "spread_bps": _safe_float(fields.get("latency_spread_block_spread_bps")),
+        "spread_ratio": _safe_float(fields.get("spread_ratio")),
+        "true_ofi_ewma": _safe_float(fields.get("latency_spread_relief_micro_estimator_true_ofi_ewma")),
+        "true_ofi_sample_count": _safe_int(fields.get("latency_spread_relief_micro_estimator_true_ofi_sample_count")),
+        "true_ofi_reason": fields.get("latency_spread_relief_micro_estimator_reason"),
+        "source_signature": fields.get("source_signature"),
+        "scanner_promotion_reason": fields.get("scanner_promotion_reason"),
+        "decision_authority": "source_only_submit_safety_blocker_attribution",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "forbidden_uses": FORBIDDEN_USES,
+    }
+
+
+def _update_block_mfe_mae(block: dict[str, Any], price: float | None) -> None:
+    base = _safe_float(block.get("block_price"))
+    if base is None or base <= 0 or price is None or price <= 0:
+        return
+    move_pct = ((price - base) / base) * 100.0
+    block["post_block_price_event_count"] = _safe_int(block.get("post_block_price_event_count")) + 1
+    block["mfe_after_block_pct"] = (
+        round(move_pct, 4)
+        if block.get("mfe_after_block_pct") is None
+        else round(max(float(block["mfe_after_block_pct"]), move_pct), 4)
+    )
+    block["mae_after_block_pct"] = (
+        round(move_pct, 4)
+        if block.get("mae_after_block_pct") is None
+        else round(min(float(block["mae_after_block_pct"]), move_pct), 4)
+    )
+
+
+def _is_submit_safety_block(row: dict[str, Any]) -> bool:
+    fields = _fields(row)
+    stage = str(row.get("stage") or "")
+    lineage = (
+        str(fields.get("forced_entry_reason") or "") == FORCED_REASON
+        or _boolish(fields.get("rising_missed_submit_safety_backoff_lineage"))
+        or any(str(key).startswith("rising_missed_") for key in fields)
+    )
+    if not lineage:
+        return False
+    if stage in {
+        "rising_missed_scout_quality_guard_blocked",
+        "latency_block",
+        "real_weak_ai_micro_entry_block",
+        "rising_missed_tick_speed_entry_block",
+    }:
+        return True
+    return str(fields.get("rising_missed_filter_layer") or "") == "submit_safety" and (
+        stage.endswith("_block") or stage.endswith("_blocked")
+    )
+
+
+def _is_backoff_event(row: dict[str, Any]) -> bool:
+    fields = _fields(row)
+    if str(row.get("stage") or "") != "scalping_scanner_fast_precheck":
+        return False
+    return str(fields.get("fast_precheck_result") or "") == "budget_reallocated"
+
+
+def _build_submit_safety_and_backoff_audit(pipeline_path: Path) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    submit_blocks: list[dict[str, Any]] = []
+    open_submit_blocks_by_code: dict[str, list[dict[str, Any]]] = {}
+    backoff_by_code: dict[str, dict[str, Any]] = {}
+    reason_counts: Counter[str] = Counter()
+    bucket_counts: Counter[str] = Counter()
+    component_counts: Counter[str] = Counter()
+    source_counts: Counter[str] = Counter()
+    latest_seen_ts: datetime | None = None
+
+    for row in iter_jsonl(pipeline_path):
+        code = _event_code(row)
+        if not code:
+            continue
+        fields = _fields(row)
+        stage = str(row.get("stage") or "")
+        ts = _event_ts(row)
+        parsed_ts = _parse_ts(ts)
+        if parsed_ts is not None and (latest_seen_ts is None or parsed_ts > latest_seen_ts):
+            latest_seen_ts = parsed_ts
+        price = _event_price(row)
+        delta = _event_delta_pct(row)
+
+        for block in open_submit_blocks_by_code.get(code, []):
+            _update_block_mfe_mae(block, price)
+
+        if code in backoff_by_code:
+            backoff = backoff_by_code[code]
+            if delta is not None:
+                current = backoff.get("max_delta_after_last_backoff_pct")
+                backoff["max_delta_after_last_backoff_pct"] = (
+                    delta if current is None else max(float(current), delta)
+                )
+                backoff["max_delta_after_last_backoff_ts"] = ts
+            if stage == "scalping_scanner_fast_precheck" and fields.get("fast_precheck_result") == "eligible_for_heavy_entry_eval":
+                backoff["fast_pass_after_last_backoff_count"] += 1
+                backoff["first_fast_pass_after_last_backoff_ts"] = (
+                    backoff.get("first_fast_pass_after_last_backoff_ts") or ts
+                )
+            if stage == "scalping_scanner_candidate_promoted":
+                backoff["promoted_after_last_backoff_count"] += 1
+                backoff["first_promoted_after_last_backoff_ts"] = (
+                    backoff.get("first_promoted_after_last_backoff_ts") or ts
+                )
+            if stage == "scalping_scanner_heavy_eval_lag":
+                backoff["heavy_eval_after_last_backoff_count"] += 1
+                backoff["first_heavy_eval_after_last_backoff_ts"] = (
+                    backoff.get("first_heavy_eval_after_last_backoff_ts") or ts
+                )
+
+        if _is_submit_safety_block(row):
+            block = _submit_safety_block_row(row)
+            submit_blocks.append(block)
+            open_submit_blocks_by_code.setdefault(code, []).append(block)
+            reason_counts[block["reason"]] += 1
+            bucket_counts[block["blocker_bucket"]] += 1
+            for component in block.get("components") or []:
+                component_counts[str(component)] += 1
+            source = fields.get("scanner_budget_reallocation_source") or fields.get("rising_missed_budget_reallocation_source")
+            if source:
+                source_counts[str(source)] += 1
+
+        if _is_backoff_event(row):
+            source = fields.get("scanner_budget_reallocation_source") or fields.get("rising_missed_budget_reallocation_source")
+            reason = fields.get("fast_precheck_reason") or fields.get("scanner_ws_stale_backoff_reason") or fields.get(
+                "rising_missed_submit_safety_backoff_reason"
+            )
+            source_counts[str(source or "unknown")] += 1
+            backoff_by_code[code] = {
+                "stock_code": code,
+                "stock_name": _event_name(row),
+                "last_backoff_ts": ts,
+                "last_backoff_reason": reason,
+                "last_backoff_source": source,
+                "last_backoff_delta_pct": delta,
+                "max_delta_after_last_backoff_pct": delta,
+                "max_delta_after_last_backoff_ts": ts if delta is not None else None,
+                "fast_pass_after_last_backoff_count": 0,
+                "promoted_after_last_backoff_count": 0,
+                "heavy_eval_after_last_backoff_count": 0,
+                "decision_authority": "source_only_backoff_opportunity_audit",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "forbidden_uses": FORBIDDEN_USES,
+            }
+
+    for block in submit_blocks:
+        components = block.get("components")
+        if isinstance(components, list):
+            block["components"] = ",".join(str(item) for item in components)
+    audit_rows = sorted(
+        backoff_by_code.values(),
+        key=lambda item: (
+            -1.0 * (_safe_float(item.get("max_delta_after_last_backoff_pct")) or -999999.0),
+            str(item.get("last_backoff_ts") or ""),
+        ),
+    )
+    for item in audit_rows:
+        recovered = bool(
+            item.get("fast_pass_after_last_backoff_count")
+            or item.get("promoted_after_last_backoff_count")
+            or item.get("heavy_eval_after_last_backoff_count")
+        )
+        max_delta = _safe_float(item.get("max_delta_after_last_backoff_pct"))
+        last_backoff_ts = _parse_ts(item.get("last_backoff_ts"))
+        age_sec = None
+        if latest_seen_ts is not None and last_backoff_ts is not None:
+            age_sec = max(0.0, (latest_seen_ts - last_backoff_ts).total_seconds())
+        item["last_backoff_observation_age_sec"] = round(age_sec, 3) if age_sec is not None else None
+        item["backoff_observation_state"] = (
+            "mature_unrecovered"
+            if age_sec is not None and age_sec >= 180.0 and not recovered
+            else "active_or_recovered"
+        )
+        item["recovered_eval_after_last_backoff"] = recovered
+        item["potential_backoff_opportunity_loss"] = bool(
+            max_delta is not None
+            and max_delta >= 1.0
+            and not recovered
+            and age_sec is not None
+            and age_sec >= 180.0
+        )
+
+    summary = {
+        "submit_safety_block_count": len(submit_blocks),
+        "submit_safety_reason_counts": [{"reason": key, "count": value} for key, value in reason_counts.most_common()],
+        "submit_safety_bucket_counts": [
+            {"blocker_bucket": key, "count": value} for key, value in bucket_counts.most_common()
+        ],
+        "submit_safety_component_counts": [
+            {"component": key, "count": value} for key, value in component_counts.most_common()
+        ],
+        "budget_reallocation_source_counts": [
+            {"source": key, "count": value} for key, value in source_counts.most_common()
+        ],
+        "backoff_audit_symbol_count": len(audit_rows),
+        "backoff_recovered_eval_symbol_count": sum(1 for item in audit_rows if item["recovered_eval_after_last_backoff"]),
+        "backoff_active_positive_delta_symbol_count": sum(
+            1
+            for item in audit_rows
+            if (_safe_float(item.get("max_delta_after_last_backoff_pct")) or 0.0) >= 1.0
+            and not item["recovered_eval_after_last_backoff"]
+            and item.get("backoff_observation_state") == "active_or_recovered"
+        ),
+        "potential_backoff_opportunity_loss_count": sum(
+            1 for item in audit_rows if item["potential_backoff_opportunity_loss"]
+        ),
+    }
+    return summary, submit_blocks, audit_rows
+
+
+def _latency_false_negative_review_bucket(block: dict[str, Any]) -> str | None:
+    if str(block.get("stage") or "") != "latency_block":
+        return None
+    blocker_bucket = str(block.get("blocker_bucket") or "")
+    true_ofi_reason = str(block.get("true_ofi_reason") or "")
+    components = str(block.get("components") or "")
+    if blocker_bucket in {"latency_true_ofi_below_floor", "latency_true_ofi_samples_below_floor"}:
+        return "true_ofi_false_negative_candidate"
+    if true_ofi_reason in {"true_ofi_below_floor", "true_ofi_samples_below_floor"}:
+        return "true_ofi_false_negative_candidate"
+    if blocker_bucket in {"latency_spread_above_caution", "latency_spread_above_caution_below_guard_cap"}:
+        return "spread_caution_false_negative_candidate"
+    if "spread_above_caution" in components:
+        return "spread_caution_false_negative_candidate"
+    return None
+
+
+def _build_latency_false_negative_review(
+    submit_blocks: list[dict[str, Any]],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    rows: list[dict[str, Any]] = []
+    bucket_counts: Counter[str] = Counter()
+    for block in submit_blocks:
+        review_bucket = _latency_false_negative_review_bucket(block)
+        if review_bucket is None:
+            continue
+        blocker_bucket = str(block.get("blocker_bucket") or "")
+        if blocker_bucket not in LATENCY_FALSE_NEGATIVE_BUCKETS:
+            components = str(block.get("components") or "")
+            if "spread_above_caution" not in components and "true_ofi_below_floor" not in components:
+                continue
+        mfe = _safe_float(block.get("mfe_after_block_pct"))
+        mae = _safe_float(block.get("mae_after_block_pct"))
+        if mfe is None or mae is None:
+            continue
+        if mfe < LATENCY_FALSE_NEGATIVE_MIN_MFE_PCT or mae < -LATENCY_FALSE_NEGATIVE_MAX_MAE_ABS_PCT:
+            continue
+        bucket_counts[review_bucket] += 1
+        rows.append(
+            {
+                "ts": block.get("ts"),
+                "stage": block.get("stage"),
+                "record_id": block.get("record_id"),
+                "stock_code": block.get("stock_code"),
+                "stock_name": block.get("stock_name"),
+                "review_bucket": review_bucket,
+                "review_reason": "latency_submit_safety_block_high_mfe_low_mae",
+                "blocker_bucket": blocker_bucket,
+                "reason": block.get("reason"),
+                "components": block.get("components"),
+                "block_price": block.get("block_price"),
+                "mfe_after_block_pct": mfe,
+                "mae_after_block_pct": mae,
+                "post_block_price_event_count": block.get("post_block_price_event_count"),
+                "price_delta_since_first_seen_pct": block.get("price_delta_since_first_seen_pct"),
+                "quote_age_sec": block.get("quote_age_sec"),
+                "ws_age_ms": block.get("ws_age_ms"),
+                "spread_bps": block.get("spread_bps"),
+                "spread_ratio": block.get("spread_ratio"),
+                "true_ofi_ewma": block.get("true_ofi_ewma"),
+                "true_ofi_sample_count": block.get("true_ofi_sample_count"),
+                "true_ofi_reason": block.get("true_ofi_reason"),
+                "ai_action": block.get("ai_action"),
+                "ai_score": block.get("ai_score"),
+                "source_signature": block.get("source_signature"),
+                "scanner_promotion_reason": block.get("scanner_promotion_reason"),
+                "decision_authority": "source_only_latency_false_negative_review",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "forbidden_uses": FORBIDDEN_USES,
+            }
+        )
+    rows.sort(
+        key=lambda item: (
+            -1.0 * (_safe_float(item.get("mfe_after_block_pct")) or -999999.0),
+            _safe_float(item.get("mae_after_block_pct")) or -999999.0,
+            str(item.get("ts") or ""),
+        )
+    )
+    summary = {
+        "latency_false_negative_review_count": len(rows),
+        "latency_false_negative_true_ofi_count": bucket_counts.get("true_ofi_false_negative_candidate", 0),
+        "latency_false_negative_spread_only_count": bucket_counts.get(
+            "spread_caution_false_negative_candidate", 0
+        ),
+        "latency_false_negative_review_bucket_counts": [
+            {"review_bucket": key, "count": value} for key, value in bucket_counts.most_common()
+        ],
+        "latency_false_negative_min_mfe_pct": LATENCY_FALSE_NEGATIVE_MIN_MFE_PCT,
+        "latency_false_negative_max_mae_abs_pct": LATENCY_FALSE_NEGATIVE_MAX_MAE_ABS_PCT,
+    }
+    return summary, rows
+
+
+def _latency_canary_cohort(row: dict[str, Any]) -> str:
+    review_bucket = str(row.get("review_bucket") or "")
+    if review_bucket == "true_ofi_false_negative_candidate":
+        return "true_ofi_near_zero_false_negative"
+    if review_bucket == "spread_caution_false_negative_candidate":
+        return "spread_only_false_negative"
+    return "unclassified_latency_false_negative"
+
+
+def _latency_canary_grade(row: dict[str, Any], review_score: float) -> tuple[str, str]:
+    cohort = _latency_canary_cohort(row)
+    ws_age = _safe_float(row.get("ws_age_ms"))
+    spread_bps = _safe_float(row.get("spread_bps"))
+    true_ofi = _safe_float(row.get("true_ofi_ewma"))
+    sample_count = _safe_int(row.get("true_ofi_sample_count"))
+    if ws_age is None or ws_age > LATENCY_CANARY_FRESH_WS_MAX_AGE_MS:
+        return "hold_sample", "ws_age_not_fresh_enough_for_canary_recheck"
+    if review_score < LATENCY_CANARY_MIN_REVIEW_SCORE_PCT:
+        return "hold_sample", "post_block_mfe_mae_score_below_canary_floor"
+    if cohort == "true_ofi_near_zero_false_negative":
+        if sample_count < LATENCY_CANARY_TRUE_OFI_MIN_SAMPLE_COUNT:
+            return "hold_sample", "true_ofi_sample_count_below_canary_floor"
+        if true_ofi is None:
+            return "hold_sample", "true_ofi_missing"
+        if true_ofi < LATENCY_CANARY_TRUE_OFI_NEAR_ZERO_FLOOR:
+            return "observe_only", "true_ofi_still_materially_negative"
+        return "ready_for_recheck", "true_ofi_near_zero_or_positive_with_fresh_ws"
+    if cohort == "spread_only_false_negative":
+        if spread_bps is None:
+            return "hold_sample", "spread_bps_missing"
+        if spread_bps > LATENCY_CANARY_SPREAD_ONLY_MAX_SPREAD_BPS:
+            return "observe_wide_spread", "spread_bps_above_spread_only_canary_cap"
+        return "ready_for_recheck", "spread_only_false_negative_with_fresh_ws_and_bounded_spread"
+    return "hold_sample", "unclassified_latency_false_negative"
+
+
+def _build_latency_false_negative_canary_candidates(
+    review_rows: list[dict[str, Any]],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    rows: list[dict[str, Any]] = []
+    cohort_counts: Counter[str] = Counter()
+    grade_counts: Counter[str] = Counter()
+    for item in review_rows:
+        mfe = _safe_float(item.get("mfe_after_block_pct"))
+        mae = _safe_float(item.get("mae_after_block_pct"))
+        if mfe is None or mae is None:
+            continue
+        review_score = round(mfe - abs(mae), 4)
+        cohort = _latency_canary_cohort(item)
+        grade, reason = _latency_canary_grade(item, review_score)
+        cohort_counts[cohort] += 1
+        grade_counts[grade] += 1
+        rows.append(
+            {
+                **item,
+                "canary_candidate_family": "latency_false_negative_canary_candidate",
+                "canary_cohort": cohort,
+                "canary_grade": grade,
+                "canary_reason": reason,
+                "canary_primary_review_score_pct": review_score,
+                "canary_min_review_score_pct": LATENCY_CANARY_MIN_REVIEW_SCORE_PCT,
+                "canary_true_ofi_min_sample_count": LATENCY_CANARY_TRUE_OFI_MIN_SAMPLE_COUNT,
+                "canary_fresh_ws_max_age_ms": LATENCY_CANARY_FRESH_WS_MAX_AGE_MS,
+                "canary_spread_only_max_spread_bps": LATENCY_CANARY_SPREAD_ONLY_MAX_SPREAD_BPS,
+                "canary_next_action": (
+                    "bounded_latency_remeasure_enqueue"
+                    if grade == "ready_for_recheck"
+                    else "source_only_accumulate_more_false_negative_samples"
+                ),
+                "decision_authority": "source_only_latency_false_negative_canary_candidate",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "forbidden_uses": FORBIDDEN_USES,
+            }
+        )
+    rows.sort(
+        key=lambda row: (
+            0 if row.get("canary_grade") == "ready_for_recheck" else 1,
+            -1.0 * (_safe_float(row.get("canary_primary_review_score_pct")) or -999999.0),
+            str(row.get("ts") or ""),
+        )
+    )
+    summary = {
+        "latency_false_negative_canary_candidate_count": len(rows),
+        "latency_false_negative_canary_ready_count": grade_counts.get("ready_for_recheck", 0),
+        "latency_false_negative_canary_observe_wide_spread_count": grade_counts.get("observe_wide_spread", 0),
+        "latency_false_negative_canary_hold_sample_count": grade_counts.get("hold_sample", 0),
+        "latency_false_negative_canary_cohort_counts": [
+            {"canary_cohort": key, "count": value} for key, value in cohort_counts.most_common()
+        ],
+        "latency_false_negative_canary_grade_counts": [
+            {"canary_grade": key, "count": value} for key, value in grade_counts.most_common()
+        ],
+        "latency_false_negative_canary_min_review_score_pct": LATENCY_CANARY_MIN_REVIEW_SCORE_PCT,
+        "latency_false_negative_canary_true_ofi_min_sample_count": LATENCY_CANARY_TRUE_OFI_MIN_SAMPLE_COUNT,
+        "latency_false_negative_canary_fresh_ws_max_age_ms": LATENCY_CANARY_FRESH_WS_MAX_AGE_MS,
+        "latency_false_negative_canary_spread_only_max_spread_bps": LATENCY_CANARY_SPREAD_ONLY_MAX_SPREAD_BPS,
+    }
+    return summary, rows
+
+
 def build_report(
     target_date: str,
     *,
@@ -550,11 +1320,21 @@ def build_report(
 
     rows.sort(key=lambda item: (str(item.get("first_avg_down_ge2_ts") or ""), str(item.get("record_id") or "")))
     first_touch_rows = _build_first_touch_regression_rows(forced, pipeline_path)
+    submit_lineage_rows = _build_forced_submit_lineage_rows(forced, pipeline_path)
     label_counts = Counter(str(item.get("feedback_label") or "unknown") for item in rows)
     first_touch_label_counts = Counter(
         str(item.get("first_touch_regression_label") or "unknown") for item in first_touch_rows
     )
     first_touch_source_quality_counts = _count_first_touch_source_quality(first_touch_rows)
+    submit_backoff_summary, submit_safety_rows, backoff_audit_rows = _build_submit_safety_and_backoff_audit(
+        pipeline_path
+    )
+    latency_false_negative_summary, latency_false_negative_rows = _build_latency_false_negative_review(
+        submit_safety_rows
+    )
+    latency_canary_summary, latency_canary_rows = _build_latency_false_negative_canary_candidates(
+        latency_false_negative_rows
+    )
     if first_touch_source_quality_counts["first_touch_ai_provenance_missing_count"]:
         source_quality_status = "first_touch_ai_provenance_missing"
     if first_touch_source_quality_counts["first_touch_ai_provenance_unusable_count"]:
@@ -655,7 +1435,58 @@ def build_report(
                     "fresh_minute_candle_micro_vwap_provenance_when_used"
                 ),
                 "forbidden_uses": FORBIDDEN_USES,
-            }
+            },
+            "rising_missed_submit_lineage": {
+                "metric_role": "source_only_rising_missed_submit_lineage",
+                "decision_authority": "source_only_rising_missed_submit_lineage",
+                "window_policy": "same_day_intraday_pipeline_events_continuously_updated",
+                "sample_floor": "1_forced_rising_missed_entry_with_order_plan_or_submit_event",
+                "primary_decision_metric": "rising_missed_entry_submitted_count",
+                "source_quality_gate": (
+                    "record_id_or_code_time_window_joined_forced_rising_missed_entry_and_submit_events"
+                ),
+                "forbidden_uses": FORBIDDEN_USES,
+            },
+            "rising_missed_submit_safety_blocker_breakdown": {
+                "metric_role": "source_only_submit_safety_blocker_attribution",
+                "decision_authority": "source_only_submit_safety_blocker_attribution",
+                "window_policy": "same_day_intraday_pipeline_events_continuously_updated",
+                "sample_floor": "1_submit_safety_block_event",
+                "primary_decision_metric": "submit_safety_bucket_counts",
+                "source_quality_gate": "pipeline_event_submit_safety_fields_with_quote_ai_micro_provenance",
+                "forbidden_uses": FORBIDDEN_USES,
+            },
+            "rising_missed_backoff_opportunity_audit": {
+                "metric_role": "source_only_backoff_opportunity_audit",
+                "decision_authority": "source_only_backoff_opportunity_audit",
+                "window_policy": "same_day_intraday_pipeline_events_continuously_updated",
+                "sample_floor": "1_fast_precheck_budget_reallocated_event",
+                "primary_decision_metric": "potential_backoff_opportunity_loss_count",
+                "source_quality_gate": "code_joined_fast_precheck_backoff_and_later_runtime_observation_events",
+                "forbidden_uses": FORBIDDEN_USES,
+            },
+            "rising_missed_latency_false_negative_review": {
+                "metric_role": "source_only_latency_false_negative_review",
+                "decision_authority": "source_only_latency_false_negative_review",
+                "window_policy": "same_day_intraday_pipeline_events_continuously_updated",
+                "sample_floor": "1_latency_submit_safety_block_with_high_mfe_low_mae",
+                "primary_decision_metric": "latency_false_negative_review_count",
+                "source_quality_gate": (
+                    "submit_safety_blocker_rows_with_post_block_mfe_mae_and_latency_micro_provenance"
+                ),
+                "forbidden_uses": FORBIDDEN_USES,
+            },
+            "rising_missed_latency_false_negative_canary_candidate": {
+                "metric_role": "source_only_latency_false_negative_canary_candidate",
+                "decision_authority": "source_only_latency_false_negative_canary_candidate",
+                "window_policy": "same_day_intraday_pipeline_events_continuously_updated",
+                "sample_floor": "1_latency_false_negative_review_row",
+                "primary_decision_metric": "latency_false_negative_canary_ready_count",
+                "source_quality_gate": (
+                    "latency_false_negative_review_rows_with_spread_true_ofi_ws_age_and_post_block_mfe_mae"
+                ),
+                "forbidden_uses": FORBIDDEN_USES,
+            },
         },
         "source_paths": {"pipeline_events": str(resolved_pipeline_path)},
         "source_quality": {
@@ -667,6 +1498,19 @@ def build_report(
             "forced_rising_missed_record_count": len(forced),
             "holding_record_count": len(holding_by_record),
             "rising_missed_avg_down_ge2_count": len(rows),
+            "rising_missed_submit_lineage_record_count": len(submit_lineage_rows),
+            "rising_missed_order_plan_forced_count": sum(
+                _safe_int(item.get("order_plan_forced_count")) for item in submit_lineage_rows
+            ),
+            "rising_missed_entry_submitted_count": sum(
+                1 for item in submit_lineage_rows if item.get("entry_order_submitted")
+            ),
+            "rising_missed_order_bundle_submitted_count": sum(
+                _safe_int(item.get("order_bundle_submitted_count")) for item in submit_lineage_rows
+            ),
+            "rising_missed_order_leg_sent_count": sum(
+                _safe_int(item.get("order_leg_sent_count")) for item in submit_lineage_rows
+            ),
             "first_touch_regression_record_count": len(first_touch_rows),
             "first_touch_entry_submitted_count": sum(1 for item in first_touch_rows if item.get("entry_order_submitted")),
             "first_touch_avg_down_submitted_count": sum(
@@ -691,10 +1535,18 @@ def build_report(
             "feedback_label_counts": [
                 {"feedback_label": key, "count": value} for key, value in label_counts.most_common()
             ],
+            **submit_backoff_summary,
+            **latency_false_negative_summary,
+            **latency_canary_summary,
             "code_improvement_order_count": len(code_improvement_orders),
         },
         "records": rows[:100],
+        "rising_missed_submit_lineage_rows": submit_lineage_rows[:200],
         "first_touch_regression_rows": first_touch_rows[:200],
+        "submit_safety_blocker_rows": submit_safety_rows[:200],
+        "backoff_opportunity_audit_rows": backoff_audit_rows[:200],
+        "latency_false_negative_review_rows": latency_false_negative_rows[:200],
+        "latency_false_negative_canary_candidate_rows": latency_canary_rows[:200],
         "code_improvement_orders": code_improvement_orders,
     }
 
@@ -718,6 +1570,13 @@ def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path)
         f"- forced_rising_missed_record_count: {summary.get('forced_rising_missed_record_count')}",
         f"- holding_record_count: {summary.get('holding_record_count')}",
         f"- rising_missed_avg_down_ge2_count: {summary.get('rising_missed_avg_down_ge2_count')}",
+        f"- rising_missed_submit_lineage_record_count: "
+        f"{summary.get('rising_missed_submit_lineage_record_count')}",
+        f"- rising_missed_order_plan_forced_count: {summary.get('rising_missed_order_plan_forced_count')}",
+        f"- rising_missed_entry_submitted_count: {summary.get('rising_missed_entry_submitted_count')}",
+        f"- rising_missed_order_bundle_submitted_count: "
+        f"{summary.get('rising_missed_order_bundle_submitted_count')}",
+        f"- rising_missed_order_leg_sent_count: {summary.get('rising_missed_order_leg_sent_count')}",
         f"- first_touch_regression_record_count: {summary.get('first_touch_regression_record_count')}",
         f"- first_touch_entry_submitted_count: {summary.get('first_touch_entry_submitted_count')}",
         f"- first_touch_avg_down_submitted_count: {summary.get('first_touch_avg_down_submitted_count')}",
@@ -735,11 +1594,127 @@ def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path)
         f"- first_touch_micro_provenance_unusable_count: {summary.get('first_touch_micro_provenance_unusable_count')}",
         f"- initial_quality_fail_count: {summary.get('initial_quality_fail_count')}",
         f"- scale_in_rescue_warning_count: {summary.get('scale_in_rescue_warning_count')}",
+        f"- submit_safety_block_count: {summary.get('submit_safety_block_count')}",
+        f"- backoff_audit_symbol_count: {summary.get('backoff_audit_symbol_count')}",
+        f"- backoff_recovered_eval_symbol_count: {summary.get('backoff_recovered_eval_symbol_count')}",
+        f"- backoff_active_positive_delta_symbol_count: "
+        f"{summary.get('backoff_active_positive_delta_symbol_count')}",
+        f"- potential_backoff_opportunity_loss_count: {summary.get('potential_backoff_opportunity_loss_count')}",
+        f"- latency_false_negative_review_count: {summary.get('latency_false_negative_review_count')}",
+        f"- latency_false_negative_true_ofi_count: {summary.get('latency_false_negative_true_ofi_count')}",
+        f"- latency_false_negative_spread_only_count: "
+        f"{summary.get('latency_false_negative_spread_only_count')}",
+        f"- latency_false_negative_canary_candidate_count: "
+        f"{summary.get('latency_false_negative_canary_candidate_count')}",
+        f"- latency_false_negative_canary_ready_count: "
+        f"{summary.get('latency_false_negative_canary_ready_count')}",
+        f"- latency_false_negative_canary_observe_wide_spread_count: "
+        f"{summary.get('latency_false_negative_canary_observe_wide_spread_count')}",
+        f"- latency_false_negative_canary_hold_sample_count: "
+        f"{summary.get('latency_false_negative_canary_hold_sample_count')}",
         f"- code_improvement_order_count: {summary.get('code_improvement_order_count')}",
         "",
-        "## First Touch Regression",
-        "",
     ]
+    if report.get("rising_missed_submit_lineage_rows"):
+        lines.extend(
+            [
+                "## Rising Missed Submit Lineage",
+                "",
+            ]
+        )
+        for item in report.get("rising_missed_submit_lineage_rows") or []:
+            lines.append(
+                "- record_id={record_id} code={stock_code} name={stock_name} "
+                "entry_submitted={entry_order_submitted} plan_count={order_plan_forced_count} "
+                "leg_request_count={order_leg_request_count} leg_sent_count={order_leg_sent_count} "
+                "bundle_count={order_bundle_submitted_count} primary_order_no={primary_order_no} "
+                "planned_price={planned_order_price} submitted_price={submitted_order_price} "
+                "reprice_block_count={entry_reprice_after_submit_blocked_count} "
+                "reprice_reason={entry_reprice_after_submit_last_reason} "
+                "cancel_confirmed_count={entry_order_cancel_confirmed_count} "
+                "join={submit_lineage_join_method}".format(
+                    **{
+                        **item,
+                        "primary_order_no": item.get("primary_order_no") or item.get("order_no_list") or "-",
+                        "planned_order_price": item.get("planned_order_price") or "-",
+                        "submitted_order_price": item.get("submitted_order_price")
+                        or item.get("submitted_price_list")
+                        or "-",
+                        "entry_reprice_after_submit_last_reason": (
+                            item.get("entry_reprice_after_submit_last_reason") or "-"
+                        ),
+                    }
+                )
+            )
+        lines.append("")
+    lines.extend(["## Submit Safety Blockers", ""])
+    for item in report.get("submit_safety_blocker_rows") or []:
+        lines.append(
+            "- ts={ts} code={stock_code} name={stock_name} stage={stage} reason={reason} "
+            "bucket={blocker_bucket} components={components} delta={price_delta_since_first_seen_pct} "
+            "mfe_after={mfe_after_block_pct} mae_after={mae_after_block_pct} "
+            "quote_age_sec={quote_age_sec} ai_action={ai_action} ai_score={ai_score} "
+            "true_ofi={true_ofi_ewma} true_ofi_reason={true_ofi_reason} "
+            "spread_bps={spread_bps}".format(**item)
+        )
+    lines.extend(
+        [
+            "",
+            "## Backoff Opportunity Audit",
+            "",
+        ]
+    )
+    for item in report.get("backoff_opportunity_audit_rows") or []:
+        lines.append(
+            "- code={stock_code} name={stock_name} last_backoff={last_backoff_ts} "
+            "reason={last_backoff_reason} source={last_backoff_source} "
+            "max_delta_after={max_delta_after_last_backoff_pct} "
+            "recovered_eval={recovered_eval_after_last_backoff} "
+            "potential_loss={potential_backoff_opportunity_loss} "
+            "state={backoff_observation_state} age_sec={last_backoff_observation_age_sec} "
+            "pass_after={fast_pass_after_last_backoff_count} "
+            "promoted_after={promoted_after_last_backoff_count} "
+            "heavy_after={heavy_eval_after_last_backoff_count}".format(**item)
+        )
+    lines.extend(
+        [
+            "",
+            "## Latency False Negative Review",
+            "",
+        ]
+    )
+    for item in report.get("latency_false_negative_review_rows") or []:
+        lines.append(
+            "- ts={ts} code={stock_code} name={stock_name} review_bucket={review_bucket} "
+            "blocker_bucket={blocker_bucket} mfe_after={mfe_after_block_pct} "
+            "mae_after={mae_after_block_pct} spread_bps={spread_bps} "
+            "true_ofi={true_ofi_ewma} true_ofi_reason={true_ofi_reason} "
+            "samples={true_ofi_sample_count} ws_age_ms={ws_age_ms} "
+            "decision_authority={decision_authority}".format(**item)
+        )
+    lines.extend(
+        [
+            "",
+            "## Latency False Negative Canary Candidates",
+            "",
+        ]
+    )
+    for item in report.get("latency_false_negative_canary_candidate_rows") or []:
+        lines.append(
+            "- ts={ts} code={stock_code} name={stock_name} cohort={canary_cohort} "
+            "grade={canary_grade} score={canary_primary_review_score_pct} "
+            "mfe_after={mfe_after_block_pct} mae_after={mae_after_block_pct} "
+            "spread_bps={spread_bps} true_ofi={true_ofi_ewma} samples={true_ofi_sample_count} "
+            "ws_age_ms={ws_age_ms} reason={canary_reason} next_action={canary_next_action} "
+            "decision_authority={decision_authority}".format(**item)
+        )
+    lines.extend(
+        [
+            "",
+            "## First Touch Regression",
+            "",
+        ]
+    )
     for item in report.get("first_touch_regression_rows") or []:
         blocker_counts = item.get("blocker_counts_before_first_touch") or {}
         top_blockers = ",".join(f"{key}={value}" for key, value in list(blocker_counts.items())[:4])

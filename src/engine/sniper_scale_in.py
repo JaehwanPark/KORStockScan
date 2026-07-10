@@ -9,10 +9,12 @@ from src.utils import kiwoom_utils
 _DEFAULT_SCALE_IN_RATIO = 0.50
 _DEFAULT_SWING_PYRAMID_RATIO = 0.30
 _STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON = "stop_line_touch_mandatory_avg_down"
+_SHALLOW_VOLATILITY_AVG_DOWN_REASON = "shallow_volatility_avg_down"
 _SCALPING_AVG_DOWN_SPECIAL_REASONS = {
     "reversal_add_ok",
     "late_loss_avg_down_retry",
     "aggressive_reversal_add_ok",
+    _SHALLOW_VOLATILITY_AVG_DOWN_REASON,
     _STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON,
 }
 _SCALE_IN_RULES = {
@@ -31,6 +33,12 @@ _SCALE_IN_RULES = {
     ("SCALPING", "AVG_DOWN", "aggressive_reversal_add_ok"): {
         "ratio_rule": "AGGRESSIVE_REVERSAL_ADD_SIZE_RATIO",
         "default_ratio": 0.50,
+        "floor_rule": "REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED",
+        "floor_default": True,
+    },
+    ("SCALPING", "AVG_DOWN", _SHALLOW_VOLATILITY_AVG_DOWN_REASON): {
+        "ratio_rule": "REVERSAL_ADD_SIZE_RATIO",
+        "default_ratio": 0.33,
         "floor_rule": "REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED",
         "floor_default": True,
     },
@@ -1321,6 +1329,83 @@ def _check_aggressive_reversal_add(stock, profit_rate, current_ai_score, held_se
     return None
 
 
+def _build_shallow_volatility_avg_down_probe(stock, profit_rate, held_sec):
+    feat = stock.get('last_reversal_features', {}) or {}
+    pnl_min = float(getattr(TRADING_RULES, 'SHALLOW_VOLATILITY_AVG_DOWN_PNL_MIN', -1.20))
+    pnl_max = float(getattr(TRADING_RULES, 'SHALLOW_VOLATILITY_AVG_DOWN_PNL_MAX', -0.30))
+    min_hold = int(getattr(TRADING_RULES, 'SHALLOW_VOLATILITY_AVG_DOWN_MIN_HOLD_SEC', 15))
+    max_hold = int(getattr(TRADING_RULES, 'SHALLOW_VOLATILITY_AVG_DOWN_MAX_HOLD_SEC', 240))
+    min_buy_pressure = float(getattr(TRADING_RULES, 'SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE', 85.0))
+    min_tick_accel = float(getattr(TRADING_RULES, 'SHALLOW_VOLATILITY_AVG_DOWN_MIN_TICK_ACCEL', 1.05))
+    min_micro_vwap_bp = float(getattr(TRADING_RULES, 'SHALLOW_VOLATILITY_AVG_DOWN_MIN_MICRO_VWAP_BP', 0.0))
+    max_quote_age_ms = float(getattr(TRADING_RULES, 'SHALLOW_VOLATILITY_AVG_DOWN_MAX_QUOTE_AGE_MS', 1500.0))
+    stop_line_pct = float(getattr(TRADING_RULES, 'SCALP_STOP', -1.5))
+
+    source_quality = reversal_feature_source_quality(feat)
+    buy_pressure = _safe_float(feat.get('buy_pressure_10t'), 0.0)
+    tick_accel = _safe_float(feat.get('tick_acceleration_ratio'), 0.0)
+    micro_vwap_bp = _safe_float(feat.get('curr_vs_micro_vwap_bp'), -999.0)
+    quote_age_raw = source_quality.get("quote_age_ms")
+    quote_age_ms = None if quote_age_raw == "-" else _safe_float(quote_age_raw, None)
+    large_sell_print = bool(feat.get('large_sell_print_detected', True))
+    return {
+        "reason": _SHALLOW_VOLATILITY_AVG_DOWN_REASON,
+        "profit_rate": round(float(profit_rate), 4),
+        "pnl_min": round(pnl_min, 4),
+        "pnl_max": round(pnl_max, 4),
+        "pnl_ok": pnl_min <= profit_rate <= pnl_max,
+        "stop_line_pct": round(stop_line_pct, 4),
+        "above_stop_line_ok": profit_rate > stop_line_pct,
+        "held_sec": int(held_sec),
+        "min_hold_sec": min_hold,
+        "max_hold_sec": max_hold,
+        "hold_ok": min_hold <= held_sec <= max_hold,
+        "buy_pressure_10t": round(float(buy_pressure), 4),
+        "min_buy_pressure": round(min_buy_pressure, 4),
+        "buy_pressure_ok": buy_pressure >= min_buy_pressure,
+        "tick_acceleration_ratio": round(float(tick_accel), 4),
+        "min_tick_accel": round(min_tick_accel, 4),
+        "tick_accel_ok": tick_accel >= min_tick_accel,
+        "curr_vs_micro_vwap_bp": round(float(micro_vwap_bp), 4),
+        "min_micro_vwap_bp": round(min_micro_vwap_bp, 4),
+        "micro_vwap_ok": micro_vwap_bp >= min_micro_vwap_bp,
+        "large_sell_print_detected": large_sell_print,
+        "large_sell_absent_ok": not large_sell_print,
+        "quote_age_ms_numeric": "-" if quote_age_ms is None else round(float(quote_age_ms), 3),
+        "max_quote_age_ms": round(max_quote_age_ms, 3),
+        "quote_age_ok": quote_age_ms is not None and quote_age_ms <= max_quote_age_ms,
+        "has_reversal_features": bool(feat),
+        **source_quality,
+    }
+
+
+def _check_shallow_volatility_avg_down(stock, profit_rate, held_sec):
+    if not bool(getattr(TRADING_RULES, 'SHALLOW_VOLATILITY_AVG_DOWN_ENABLED', False)):
+        return "shallow_volatility_avg_down_disabled", _build_shallow_volatility_avg_down_probe(stock, profit_rate, held_sec)
+    probe = _build_shallow_volatility_avg_down_probe(stock, profit_rate, held_sec)
+    if not probe["has_reversal_features"]:
+        return "shallow_volatility_features_missing", probe
+    if not probe["pnl_ok"]:
+        return f"shallow_volatility_pnl_out_of_range({profit_rate:.2f})", probe
+    if not probe["above_stop_line_ok"]:
+        return "shallow_volatility_at_or_below_stop_line", probe
+    if not probe["hold_ok"]:
+        return f"shallow_volatility_hold_sec_out_of_range({held_sec}s)", probe
+    if probe["reversal_feature_stale"]:
+        return "shallow_volatility_features_stale:" + probe["reversal_feature_stale_reason"], probe
+    if not probe["quote_age_ok"]:
+        return "shallow_volatility_quote_age_missing_or_stale", probe
+    if not probe["buy_pressure_ok"]:
+        return f"shallow_volatility_buy_pressure_not_met({probe['buy_pressure_10t']:.2f})", probe
+    if not probe["tick_accel_ok"]:
+        return f"shallow_volatility_tick_accel_not_met({probe['tick_acceleration_ratio']:.2f})", probe
+    if not probe["large_sell_absent_ok"]:
+        return "shallow_volatility_large_sell_detected", probe
+    if not probe["micro_vwap_ok"]:
+        return f"shallow_volatility_micro_vwap_not_met({probe['curr_vs_micro_vwap_bp']:.2f})", probe
+    return None, probe
+
+
 def _build_reversal_add_probe(stock, profit_rate, current_ai_score, held_sec):
     pnl_min = float(getattr(TRADING_RULES, 'REVERSAL_ADD_PNL_MIN', -0.45))
     pnl_max = float(getattr(TRADING_RULES, 'REVERSAL_ADD_PNL_MAX', -0.10))
@@ -1430,6 +1515,18 @@ def evaluate_scalping_reversal_add(stock, profit_rate, current_ai_score, held_se
     )
     for reason in reasons:
         if reason:
+            shallow_reason, shallow_probe = _check_shallow_volatility_avg_down(stock, profit_rate, held_sec)
+            result["shallow_volatility_probe"] = shallow_probe
+            if shallow_reason is None:
+                result["should_add"] = True
+                result["add_type"] = "AVG_DOWN"
+                result["reason"] = _SHALLOW_VOLATILITY_AVG_DOWN_REASON
+                result["blocked_standard_reason"] = reason
+                result["probe"] = {
+                    **probe,
+                    **{f"shallow_{key}": value for key, value in shallow_probe.items()},
+                }
+                return result
             aggressive_reason = _check_aggressive_reversal_add(stock, profit_rate, current_ai_score, held_sec)
             if aggressive_reason is None:
                 result["should_add"] = True
@@ -1439,6 +1536,7 @@ def evaluate_scalping_reversal_add(stock, profit_rate, current_ai_score, held_se
                 return result
             result["reason"] = reason
             result["aggressive_blocked_reason"] = aggressive_reason
+            result["shallow_volatility_blocked_reason"] = shallow_reason
             return result
 
     result["should_add"] = True
@@ -1459,6 +1557,7 @@ def resolve_scale_in_order_price(stock, ws_data, action, *, strategy=None, curr_
     add_type = (action.get("add_type") or "").upper()
     add_reason = str(action.get("reason") or "")
     late_loss_retry = add_reason == "late_loss_avg_down_retry"
+    shallow_volatility_avg_down = add_reason == _SHALLOW_VOLATILITY_AVG_DOWN_REASON
     sim_scale_in_observation = action.get("source") == "scalp_sim_scale_in_window_expansion"
     stop_line_touched = bool(
         action.get("stop_line_touched")
@@ -1552,7 +1651,11 @@ def resolve_scale_in_order_price(stock, ws_data, action, *, strategy=None, curr_
     if add_type == "AVG_DOWN":
         min_micro_vwap = float(getattr(TRADING_RULES, "REVERSAL_ADD_VWAP_BP_MIN", -5.0) or -5.0)
         result["min_micro_vwap_bps"] = min_micro_vwap
-        micro_supported_avg_down = add_reason in {"reversal_add_ok", "aggressive_reversal_add_ok"}
+        micro_supported_avg_down = add_reason in {
+            "reversal_add_ok",
+            "aggressive_reversal_add_ok",
+            _SHALLOW_VOLATILITY_AVG_DOWN_REASON,
+        }
         if (micro_supported_avg_down or late_loss_retry) and feature_quality["reversal_feature_stale"]:
             result["reason"] = "micro_context_stale:" + feature_quality["reversal_feature_stale_reason"]
             return result
@@ -1566,6 +1669,7 @@ def resolve_scale_in_order_price(stock, ws_data, action, *, strategy=None, curr_
     if (
         add_type == "AVG_DOWN"
         and not sim_scale_in_observation
+        and not shallow_volatility_avg_down
         and bool(getattr(TRADING_RULES, "SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED", False))
     ):
         result["reason"] = "stop_line_not_touched"

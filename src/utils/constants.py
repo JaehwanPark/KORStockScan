@@ -641,6 +641,15 @@ class TradingConfig:
     AGGRESSIVE_REVERSAL_ADD_MIN_BUY_PRESSURE: float = 85.0
     AGGRESSIVE_REVERSAL_ADD_VWAP_BP_MIN: float = -12.0
     AGGRESSIVE_REVERSAL_ADD_SIZE_RATIO: float = 0.50
+    SHALLOW_VOLATILITY_AVG_DOWN_ENABLED: bool = True  # 얕은 손실+반등+매수세 회복+fresh 데이터 AVG_DOWN
+    SHALLOW_VOLATILITY_AVG_DOWN_PNL_MIN: float = -1.20
+    SHALLOW_VOLATILITY_AVG_DOWN_PNL_MAX: float = -0.30
+    SHALLOW_VOLATILITY_AVG_DOWN_MIN_HOLD_SEC: int = 15
+    SHALLOW_VOLATILITY_AVG_DOWN_MAX_HOLD_SEC: int = 240
+    SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE: float = 85.0
+    SHALLOW_VOLATILITY_AVG_DOWN_MIN_TICK_ACCEL: float = 1.05
+    SHALLOW_VOLATILITY_AVG_DOWN_MIN_MICRO_VWAP_BP: float = 0.0
+    SHALLOW_VOLATILITY_AVG_DOWN_MAX_QUOTE_AGE_MS: float = 1500.0
     SCALP_LOSS_FALLBACK_ENABLED: bool = True        # 운영 override: 손절 직전 ADM/fallback 추가매수 실전 적용
     SCALP_LOSS_FALLBACK_OBSERVE_ONLY: bool = False  # 운영 override: 후보 기록에 그치지 않고 scale-in safety 후 실행
     SCALP_LOSS_FALLBACK_ALLOWED_REASONS: tuple = (
@@ -1910,6 +1919,15 @@ def _build_trading_rules() -> TradingConfig:
     env_aggressive_reversal_add_min_buy_pressure = _env_float("KORSTOCKSCAN_AGGRESSIVE_REVERSAL_ADD_MIN_BUY_PRESSURE")
     env_aggressive_reversal_add_vwap_bp_min = _env_float("KORSTOCKSCAN_AGGRESSIVE_REVERSAL_ADD_VWAP_BP_MIN")
     env_aggressive_reversal_add_size_ratio = _env_float("KORSTOCKSCAN_AGGRESSIVE_REVERSAL_ADD_SIZE_RATIO")
+    env_shallow_volatility_avg_down_enabled = _env_bool("KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_ENABLED")
+    env_shallow_volatility_avg_down_pnl_min = _env_float("KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_PNL_MIN")
+    env_shallow_volatility_avg_down_pnl_max = _env_float("KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_PNL_MAX")
+    env_shallow_volatility_avg_down_min_hold_sec = _env_int("KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_HOLD_SEC")
+    env_shallow_volatility_avg_down_max_hold_sec = _env_int("KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MAX_HOLD_SEC")
+    env_shallow_volatility_avg_down_min_buy_pressure = _env_float("KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE")
+    env_shallow_volatility_avg_down_min_tick_accel = _env_float("KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_TICK_ACCEL")
+    env_shallow_volatility_avg_down_min_micro_vwap_bp = _env_float("KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_MICRO_VWAP_BP")
+    env_shallow_volatility_avg_down_max_quote_age_ms = _env_float("KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MAX_QUOTE_AGE_MS")
     env_bad_entry_observe_enabled = _env_bool("KORSTOCKSCAN_SCALP_BAD_ENTRY_BLOCK_OBSERVE_ENABLED")
     env_bad_entry_refined_enabled = _env_bool("KORSTOCKSCAN_SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED")
     env_bad_entry_refined_min_hold = _env_int("KORSTOCKSCAN_SCALP_BAD_ENTRY_REFINED_MIN_HOLD_SEC")
@@ -2708,6 +2726,33 @@ def _build_trading_rules() -> TradingConfig:
             AGGRESSIVE_REVERSAL_ADD_SIZE_RATIO=env_aggressive_reversal_add_size_ratio
             if env_aggressive_reversal_add_size_ratio is not None
             else config.AGGRESSIVE_REVERSAL_ADD_SIZE_RATIO,
+            SHALLOW_VOLATILITY_AVG_DOWN_ENABLED=env_shallow_volatility_avg_down_enabled
+            if env_shallow_volatility_avg_down_enabled is not None
+            else config.SHALLOW_VOLATILITY_AVG_DOWN_ENABLED,
+            SHALLOW_VOLATILITY_AVG_DOWN_PNL_MIN=env_shallow_volatility_avg_down_pnl_min
+            if env_shallow_volatility_avg_down_pnl_min is not None
+            else config.SHALLOW_VOLATILITY_AVG_DOWN_PNL_MIN,
+            SHALLOW_VOLATILITY_AVG_DOWN_PNL_MAX=env_shallow_volatility_avg_down_pnl_max
+            if env_shallow_volatility_avg_down_pnl_max is not None
+            else config.SHALLOW_VOLATILITY_AVG_DOWN_PNL_MAX,
+            SHALLOW_VOLATILITY_AVG_DOWN_MIN_HOLD_SEC=env_shallow_volatility_avg_down_min_hold_sec
+            if env_shallow_volatility_avg_down_min_hold_sec is not None
+            else config.SHALLOW_VOLATILITY_AVG_DOWN_MIN_HOLD_SEC,
+            SHALLOW_VOLATILITY_AVG_DOWN_MAX_HOLD_SEC=env_shallow_volatility_avg_down_max_hold_sec
+            if env_shallow_volatility_avg_down_max_hold_sec is not None
+            else config.SHALLOW_VOLATILITY_AVG_DOWN_MAX_HOLD_SEC,
+            SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE=env_shallow_volatility_avg_down_min_buy_pressure
+            if env_shallow_volatility_avg_down_min_buy_pressure is not None
+            else config.SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE,
+            SHALLOW_VOLATILITY_AVG_DOWN_MIN_TICK_ACCEL=env_shallow_volatility_avg_down_min_tick_accel
+            if env_shallow_volatility_avg_down_min_tick_accel is not None
+            else config.SHALLOW_VOLATILITY_AVG_DOWN_MIN_TICK_ACCEL,
+            SHALLOW_VOLATILITY_AVG_DOWN_MIN_MICRO_VWAP_BP=env_shallow_volatility_avg_down_min_micro_vwap_bp
+            if env_shallow_volatility_avg_down_min_micro_vwap_bp is not None
+            else config.SHALLOW_VOLATILITY_AVG_DOWN_MIN_MICRO_VWAP_BP,
+            SHALLOW_VOLATILITY_AVG_DOWN_MAX_QUOTE_AGE_MS=env_shallow_volatility_avg_down_max_quote_age_ms
+            if env_shallow_volatility_avg_down_max_quote_age_ms is not None
+            else config.SHALLOW_VOLATILITY_AVG_DOWN_MAX_QUOTE_AGE_MS,
             SCALP_BAD_ENTRY_BLOCK_OBSERVE_ENABLED=env_bad_entry_observe_enabled
             if env_bad_entry_observe_enabled is not None
             else config.SCALP_BAD_ENTRY_BLOCK_OBSERVE_ENABLED,

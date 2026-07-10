@@ -345,6 +345,101 @@ def test_pending_order_uses_current_observer_latency_not_submit_latency(monkeypa
     assert evaluated["latency_state"] == "DANGER"
 
 
+def test_pending_order_intraday_discovery_relieves_reprice_latency_danger(monkeypatch):
+    import src.engine.sniper_state_handlers as handlers
+
+    now = 1000.0
+    stock = {
+        "name": "이수페타시스",
+        "strategy": "SCALPING",
+        "current_price_observed": 104900,
+        "pending_entry_orders": [
+            {
+                **_base_order(
+                    sent_at=now - 26.0,
+                    ord_no="0036283",
+                    qty=1,
+                    price=104500,
+                    ai_score=70.0,
+                    buy_pressure_10t=98.26,
+                    tick_aggressor_trusted_count=10,
+                    mark_price_at_submit=104600,
+                ),
+                "tag": "normal",
+                "tif": "DAY",
+            }
+        ],
+    }
+    events = []
+    cancel_calls = []
+    buy_calls = []
+    snapshot = {
+        "best_bid": 104800,
+        "best_ask": 105200,
+        "last_trade_price": 104600,
+        "observer_healthy": False,
+        "observer_missing_reason": "stale_quote",
+        "unstable_quote_observed": False,
+        "observer_last_quote_age_ms": 462.5,
+        "orderbook_micro": {"micro_state": "neutral"},
+    }
+    quote_fields = {
+        "entry_reprice_quote_refresh_enabled": True,
+        "entry_reprice_quote_refresh_applied": False,
+        "entry_reprice_quote_refresh_source": "none",
+        "entry_reprice_quote_refresh_reason": "rest_best_levels_invalid",
+        "quote_consistency_family": "quote_consistency_normalization",
+        "quote_consistency_state": "ok",
+        "quote_consistency_runtime_action": "allow",
+        "quote_consistency_age_ms": 0.114,
+        "quote_consistency_ws_age_ms": 522.179,
+        "quote_consistency_rest_age_ms": 0.114,
+        "quote_consistency_entry_blocked": False,
+    }
+
+    monkeypatch.setenv("KORSTOCKSCAN_INTRADAY_ENTRY_PRICE_DISCOVERY_ENABLED", "true")
+    monkeypatch.setattr(handlers.time, "time", lambda: now)
+    monkeypatch.setattr(handlers.ORDERBOOK_STABILITY_OBSERVER, "snapshot", lambda code, now=None: dict(snapshot))
+    monkeypatch.setattr(
+        handlers,
+        "_entry_reprice_refresh_snapshot",
+        lambda code, snapshot_arg, stock_arg, order_arg, strategy_arg, now_ts: (dict(snapshot), dict(quote_fields)),
+    )
+    monkeypatch.setattr(handlers, "_log_entry_pipeline", lambda stock, code, stage, **fields: events.append((stage, fields)))
+    monkeypatch.setattr(
+        handlers.kiwoom_orders,
+        "send_cancel_order",
+        lambda **kwargs: cancel_calls.append(kwargs) or {"return_code": "0", "ord_no": "0036413"},
+    )
+    monkeypatch.setattr(
+        handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: buy_calls.append((args, kwargs)) or {"return_code": "0", "ord_no": "0037000"},
+    )
+
+    assert handlers._maybe_reprice_pending_entry_order(stock, "007660", "SCALPING", timeout_sec=60) == "submitted"
+    assert cancel_calls[-1]["orig_ord_no"] == "0036283"
+    assert buy_calls[-1][0][2] == 104800
+    evaluated = [fields for stage, fields in events if stage == "entry_reprice_after_submit_evaluated"][0]
+    assert evaluated["entry_reprice_operator_latency_relief_applied"] is True
+    assert evaluated["entry_reprice_latency_state_original"] == "DANGER"
+    assert evaluated["entry_reprice_latency_state_effective"] == "CAUTION"
+    assert evaluated["latency_state"] == "CAUTION"
+    assert evaluated["reprice_order_price"] == 104800
+    cancel_event = [fields for stage, fields in events if stage == "entry_reprice_cancel_requested"][0]
+    assert cancel_event["entry_reprice_operator_latency_relief_applied"] is True
+    assert cancel_event["entry_reprice_latency_state_original"] == "DANGER"
+    assert cancel_event["entry_reprice_latency_state_effective"] == "CAUTION"
+    submitted_event = [fields for stage, fields in events if stage == "entry_reprice_resubmit_submitted"][0]
+    assert submitted_event["entry_reprice_operator_latency_relief_applied"] is True
+    assert submitted_event["entry_reprice_latency_state_original"] == "DANGER"
+    assert submitted_event["entry_reprice_latency_state_effective"] == "CAUTION"
+    child_order = stock["pending_entry_orders"][0]
+    assert child_order["entry_reprice_operator_latency_relief_applied"] is True
+    assert child_order["entry_reprice_latency_state_original"] == "DANGER"
+    assert child_order["entry_reprice_latency_state_effective"] == "CAUTION"
+
+
 def test_pending_order_missing_trade_with_fresh_quote_is_caution(monkeypatch):
     import src.engine.sniper_state_handlers as handlers
 

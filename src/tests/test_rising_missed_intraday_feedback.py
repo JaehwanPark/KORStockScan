@@ -471,6 +471,82 @@ def test_build_report_captures_real_entry_submit_separately_from_first_touch_avg
     assert row["entry_fill_seen_count"] == 1
     assert row["first_touch_avg_down_submitted"] is False
     assert row["avg_down_submitted_event_count"] == 0
+    assert report["summary"]["rising_missed_submit_lineage_record_count"] == 1
+    assert report["summary"]["rising_missed_entry_submitted_count"] == 1
+    assert report["summary"]["rising_missed_order_bundle_submitted_count"] == 1
+    submit_row = report["rising_missed_submit_lineage_rows"][0]
+    assert submit_row["entry_order_submitted"] is True
+    assert submit_row["order_bundle_submitted_count"] == 1
+    assert submit_row["submit_lineage_join_method"] == "record_id"
+
+
+def test_build_report_joins_forced_plan_to_submit_by_code_time_when_lineage_fields_missing(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-10.jsonl"
+    rows = [
+        _event(
+            701,
+            "000701",
+            "lineage-missing",
+            "rising_missed_one_share_entry",
+            {
+                "forced_entry_reason": "rising_missed_one_share_entry",
+                "source_signature": "OPEN_TOP,REALTIME_RANK_START,VALUE_TOP",
+            },
+            emitted_at="2026-07-10T10:00:00",
+        ),
+        _event(
+            701,
+            "000701",
+            "lineage-missing",
+            "rising_missed_one_share_entry_order_plan_forced",
+            {
+                "planned_order_price": "170100",
+                "forced_entry_qty": "1",
+            },
+            emitted_at="2026-07-10T10:00:02",
+        ),
+        _event(
+            999,
+            "000701",
+            "lineage-missing",
+            "order_leg_sent",
+            {
+                "order_no": "0027316",
+                "source_signature": "OPEN_TOP,REALTIME_RANK_START,VALUE_TOP",
+            },
+            emitted_at="2026-07-10T10:00:05",
+        ),
+        _event(
+            999,
+            "000701",
+            "lineage-missing",
+            "order_bundle_submitted",
+            {
+                "actual_order_submitted": True,
+                "broker_order_forbidden": False,
+                "order_no": "0027316",
+                "order_price": "170100",
+                "source_signature": "OPEN_TOP,REALTIME_RANK_START,VALUE_TOP",
+            },
+            emitted_at="2026-07-10T10:00:08",
+        ),
+    ]
+    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+
+    report = mod.build_report("2026-07-10", pipeline_path=pipeline_path, generated_at="fixed")
+
+    assert report["summary"]["rising_missed_submit_lineage_record_count"] == 1
+    assert report["summary"]["rising_missed_order_plan_forced_count"] == 1
+    assert report["summary"]["rising_missed_entry_submitted_count"] == 1
+    assert report["summary"]["rising_missed_order_leg_sent_count"] == 1
+    row = report["rising_missed_submit_lineage_rows"][0]
+    assert row["record_id"] == "701"
+    assert row["submit_lineage_join_method"] == "code_time_window"
+    assert row["primary_order_no"] == "0027316"
+    assert row["submitted_order_price"] == "170100"
+    assert row["actual_order_submitted"] is False
+    assert row["broker_order_forbidden"] is True
+    assert row["decision_authority"] == "source_only_rising_missed_submit_lineage"
 
 
 def test_first_touch_regression_blocks_source_quality_when_ai_provenance_missing(tmp_path):
@@ -668,3 +744,343 @@ def test_first_touch_regression_blocks_source_quality_when_micro_vwap_provenance
 
     assert report["source_quality"]["status"] == "first_touch_micro_provenance_missing"
     assert report["summary"]["first_touch_micro_provenance_missing_count"] == 1
+
+
+def test_submit_safety_breakdown_and_backoff_opportunity_audit_are_source_only(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-10.jsonl"
+    rows = [
+        _event(
+            701,
+            "000701",
+            "stale-ai-wait",
+            "rising_missed_scout_quality_guard_blocked",
+            {
+                "forced_entry_reason": "rising_missed_one_share_entry",
+                "block_reason": "stale_quote_with_weak_ai_or_strength",
+                "current_price": "1000",
+                "price_delta_since_first_seen_pct": "1.20",
+                "rising_missed_scout_quality_guard_quote_age_ms": "4500",
+                "rising_missed_scout_quality_guard_max_quote_age_ms": "3000",
+                "rising_missed_scout_quality_guard_quote_stale": True,
+                "rising_missed_scout_quality_guard_weak_evidence": True,
+                "rising_missed_scout_quality_guard_ai_action": "WAIT",
+                "rising_missed_scout_quality_guard_ai_score": "58",
+                "pre_submit_rest_orderbook_refresh_enabled": True,
+                "pre_submit_rest_orderbook_refresh_applied": True,
+                "pre_submit_rest_orderbook_refresh_reason": "rest_orderbook_fresh",
+                "rising_missed_rest_quote_ai_recheck_attempted": True,
+                "rising_missed_rest_quote_ai_recheck_success": True,
+            },
+            emitted_at="2026-07-10T09:00:00",
+        ),
+        _event(
+            701,
+            "000701",
+            "stale-ai-wait",
+            "scalping_scanner_candidate_observed",
+            {"current_price": "1030", "price_delta_since_first_seen_pct": "2.00"},
+            emitted_at="2026-07-10T09:01:00",
+        ),
+        _event(
+            702,
+            "000702",
+            "true-ofi-block",
+            "latency_block",
+            {
+                "forced_entry_reason": "rising_missed_one_share_entry",
+                "reason": "latency_state_danger",
+                "current_price": "2000",
+                "price_delta_since_first_seen_pct": "2.50",
+                "ws_age_ms": "40",
+                "spread_ratio": "0.007",
+                "latency_danger_detail_reason": "spread_above_caution_below_guard_cap",
+                "latency_spread_block_spread_bps": "70.0",
+                "latency_spread_relief_micro_estimator_reason": "true_ofi_below_floor",
+                "latency_spread_relief_micro_estimator_true_ofi_ewma": "-0.12",
+                "latency_spread_relief_micro_estimator_true_ofi_sample_count": "120",
+            },
+            emitted_at="2026-07-10T09:02:00",
+        ),
+        _event(
+            703,
+            "000703",
+            "ignored-normal",
+            "latency_block",
+            {"reason": "latency_state_danger", "current_price": "3000"},
+            emitted_at="2026-07-10T09:02:30",
+        ),
+        _event(
+            704,
+            "000704",
+            "recovered",
+            "scalping_scanner_fast_precheck",
+            {
+                "fast_precheck_result": "budget_reallocated",
+                "fast_precheck_reason": "scanner_ws_stale_backoff_active",
+                "scanner_budget_reallocation_source": "ws_stale_feedback",
+                "price_delta_since_first_seen_pct": "1.00",
+                "scanner_rising_missed_source_marker_present": True,
+            },
+            emitted_at="2026-07-10T09:03:00",
+        ),
+        _event(
+            704,
+            "000704",
+            "recovered",
+            "scalping_scanner_fast_precheck",
+            {
+                "fast_precheck_result": "eligible_for_heavy_entry_eval",
+                "fast_precheck_reason": "fast_precheck_pass",
+                "price_delta_since_first_seen_pct": "1.40",
+            },
+            emitted_at="2026-07-10T09:04:00",
+        ),
+        _event(
+            705,
+            "000705",
+            "not-recovered",
+            "scalping_scanner_fast_precheck",
+            {
+                "fast_precheck_result": "budget_reallocated",
+                "fast_precheck_reason": "submit_safety_backoff_active",
+                "rising_missed_budget_reallocation_source": "submit_safety_feedback",
+                "price_delta_since_first_seen_pct": "1.10",
+                "scanner_rising_missed_source_marker_present": True,
+            },
+            emitted_at="2026-07-10T09:05:00",
+        ),
+        _event(
+            705,
+            "000705",
+            "not-recovered",
+            "scalping_scanner_watching_runtime_skip",
+            {"price_delta_since_first_seen_pct": "2.20"},
+            emitted_at="2026-07-10T09:06:00",
+        ),
+        _event(
+            799,
+            "000799",
+            "clock-anchor",
+            "scalping_scanner_runtime_target_attach",
+            {"price_delta_since_first_seen_pct": "0.00"},
+            emitted_at="2026-07-10T09:09:00",
+        ),
+    ]
+    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+
+    report = mod.build_report("2026-07-10", pipeline_path=pipeline_path, generated_at="fixed")
+
+    assert report["summary"]["submit_safety_block_count"] == 2
+    assert report["summary"]["potential_backoff_opportunity_loss_count"] == 1
+    bucket_counts = {
+        item["blocker_bucket"]: item["count"] for item in report["summary"]["submit_safety_bucket_counts"]
+    }
+    assert bucket_counts == {"ai_wait_after_refresh": 1, "latency_true_ofi_below_floor": 1}
+    stale_row = report["submit_safety_blocker_rows"][0]
+    assert stale_row["reason"] == "stale_quote_with_weak_ai_or_strength"
+    assert stale_row["quote_age_sec"] == 4.5
+    assert stale_row["mfe_after_block_pct"] == 3.0
+    assert stale_row["runtime_effect"] is False
+    latency_row = report["submit_safety_blocker_rows"][1]
+    assert latency_row["true_ofi_reason"] == "true_ofi_below_floor"
+    assert latency_row["spread_bps"] == 70.0
+    backoff_rows = {item["stock_code"]: item for item in report["backoff_opportunity_audit_rows"]}
+    assert backoff_rows["000704"]["recovered_eval_after_last_backoff"] is True
+    assert backoff_rows["000705"]["potential_backoff_opportunity_loss"] is True
+    assert backoff_rows["000705"]["backoff_observation_state"] == "mature_unrecovered"
+    assert report["summary"]["backoff_active_positive_delta_symbol_count"] == 0
+    assert (
+        report["metric_contracts"]["rising_missed_submit_safety_blocker_breakdown"]["decision_authority"]
+        == "source_only_submit_safety_blocker_attribution"
+    )
+
+
+def test_latency_false_negative_review_selects_only_high_mfe_low_mae_latency_blocks(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-10.jsonl"
+    rows = [
+        _event(
+            801,
+            "000801",
+            "true-ofi-candidate",
+            "latency_block",
+            {
+                "forced_entry_reason": "rising_missed_one_share_entry",
+                "reason": "latency_state_danger",
+                "current_price": "1000",
+                "ws_age_ms": "80",
+                "latency_danger_detail_reason": "spread_above_caution_below_guard_cap",
+                "latency_spread_block_spread_bps": "62.0",
+                "latency_spread_relief_micro_estimator_reason": "true_ofi_below_floor",
+                "latency_spread_relief_micro_estimator_true_ofi_ewma": "-0.04",
+                "latency_spread_relief_micro_estimator_true_ofi_sample_count": "120",
+            },
+            emitted_at="2026-07-10T09:10:00",
+        ),
+        _event(
+            801,
+            "000801",
+            "true-ofi-candidate",
+            "scalping_scanner_candidate_observed",
+            {"current_price": "990"},
+            emitted_at="2026-07-10T09:10:20",
+        ),
+        _event(
+            801,
+            "000801",
+            "true-ofi-candidate",
+            "scalping_scanner_candidate_observed",
+            {"current_price": "1045"},
+            emitted_at="2026-07-10T09:10:40",
+        ),
+        _event(
+            802,
+            "000802",
+            "spread-candidate",
+            "latency_block",
+            {
+                "forced_entry_reason": "rising_missed_one_share_entry",
+                "reason": "latency_state_danger",
+                "current_price": "2000",
+                "ws_age_ms": "70",
+                "latency_danger_detail_reason": "spread_above_caution",
+                "latency_spread_block_spread_bps": "55.0",
+            },
+            emitted_at="2026-07-10T09:11:00",
+        ),
+        _event(
+            802,
+            "000802",
+            "spread-candidate",
+            "scalping_scanner_candidate_observed",
+            {"current_price": "1980"},
+            emitted_at="2026-07-10T09:11:20",
+        ),
+        _event(
+            802,
+            "000802",
+            "spread-candidate",
+            "scalping_scanner_candidate_observed",
+            {"current_price": "2070"},
+            emitted_at="2026-07-10T09:11:40",
+        ),
+        _event(
+            803,
+            "000803",
+            "wide-mae",
+            "latency_block",
+            {
+                "forced_entry_reason": "rising_missed_one_share_entry",
+                "reason": "latency_state_danger",
+                "current_price": "3000",
+                "latency_danger_detail_reason": "spread_above_caution",
+                "latency_spread_block_spread_bps": "58.0",
+            },
+            emitted_at="2026-07-10T09:12:00",
+        ),
+        _event(
+            803,
+            "000803",
+            "wide-mae",
+            "scalping_scanner_candidate_observed",
+            {"current_price": "2910"},
+            emitted_at="2026-07-10T09:12:20",
+        ),
+        _event(
+            803,
+            "000803",
+            "wide-mae",
+            "scalping_scanner_candidate_observed",
+            {"current_price": "3120"},
+            emitted_at="2026-07-10T09:12:40",
+        ),
+        _event(
+            804,
+            "000804",
+            "stale-not-latency",
+            "rising_missed_scout_quality_guard_blocked",
+            {
+                "forced_entry_reason": "rising_missed_one_share_entry",
+                "block_reason": "stale_quote_with_weak_ai_or_strength",
+                "current_price": "1000",
+                "rising_missed_scout_quality_guard_quote_age_ms": "5000",
+                "rising_missed_scout_quality_guard_ai_action": "WAIT",
+            },
+            emitted_at="2026-07-10T09:13:00",
+        ),
+        _event(
+            804,
+            "000804",
+            "stale-not-latency",
+            "scalping_scanner_candidate_observed",
+            {"current_price": "1100"},
+            emitted_at="2026-07-10T09:13:20",
+        ),
+        _event(
+            805,
+            "000805",
+            "wide-spread-observe",
+            "latency_block",
+            {
+                "forced_entry_reason": "rising_missed_one_share_entry",
+                "reason": "latency_state_danger",
+                "current_price": "4000",
+                "ws_age_ms": "80",
+                "latency_danger_detail_reason": "spread_above_caution",
+                "latency_spread_block_spread_bps": "130.0",
+            },
+            emitted_at="2026-07-10T09:14:00",
+        ),
+        _event(
+            805,
+            "000805",
+            "wide-spread-observe",
+            "scalping_scanner_candidate_observed",
+            {"current_price": "4000"},
+            emitted_at="2026-07-10T09:14:10",
+        ),
+        _event(
+            805,
+            "000805",
+            "wide-spread-observe",
+            "scalping_scanner_candidate_observed",
+            {"current_price": "4160"},
+            emitted_at="2026-07-10T09:14:20",
+        ),
+    ]
+    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+
+    report = mod.build_report("2026-07-10", pipeline_path=pipeline_path, generated_at="fixed")
+
+    assert report["summary"]["latency_false_negative_review_count"] == 3
+    assert report["summary"]["latency_false_negative_true_ofi_count"] == 1
+    assert report["summary"]["latency_false_negative_spread_only_count"] == 2
+    rows_by_code = {item["stock_code"]: item for item in report["latency_false_negative_review_rows"]}
+    assert set(rows_by_code) == {"000801", "000802", "000805"}
+    assert rows_by_code["000801"]["review_bucket"] == "true_ofi_false_negative_candidate"
+    assert rows_by_code["000801"]["mfe_after_block_pct"] == 4.5
+    assert rows_by_code["000801"]["mae_after_block_pct"] == -1.0
+    assert rows_by_code["000802"]["review_bucket"] == "spread_caution_false_negative_candidate"
+    assert rows_by_code["000802"]["mfe_after_block_pct"] == 3.5
+    assert rows_by_code["000802"]["mae_after_block_pct"] == -1.0
+    assert rows_by_code["000801"]["runtime_effect"] is False
+    assert rows_by_code["000801"]["allowed_runtime_apply"] is False
+    assert (
+        report["metric_contracts"]["rising_missed_latency_false_negative_review"]["decision_authority"]
+        == "source_only_latency_false_negative_review"
+    )
+    canary_rows_by_code = {
+        item["stock_code"]: item for item in report["latency_false_negative_canary_candidate_rows"]
+    }
+    assert canary_rows_by_code["000801"]["canary_cohort"] == "true_ofi_near_zero_false_negative"
+    assert canary_rows_by_code["000801"]["canary_grade"] == "ready_for_recheck"
+    assert canary_rows_by_code["000801"]["canary_primary_review_score_pct"] == 3.5
+    assert canary_rows_by_code["000802"]["canary_cohort"] == "spread_only_false_negative"
+    assert canary_rows_by_code["000802"]["canary_grade"] == "ready_for_recheck"
+    assert canary_rows_by_code["000805"]["canary_grade"] == "observe_wide_spread"
+    assert report["summary"]["latency_false_negative_canary_candidate_count"] == 3
+    assert report["summary"]["latency_false_negative_canary_ready_count"] == 2
+    assert report["summary"]["latency_false_negative_canary_observe_wide_spread_count"] == 1
+    assert (
+        report["metric_contracts"]["rising_missed_latency_false_negative_canary_candidate"]["decision_authority"]
+        == "source_only_latency_false_negative_canary_candidate"
+    )

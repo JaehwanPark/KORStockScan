@@ -1693,6 +1693,27 @@ def test_real_weak_ai_micro_entry_block_blocks_missing_micro_source_quality():
     assert "orderbook_micro_qi" in decision["weak_ai_micro_entry_block_missing_fields"]
 
 
+def test_real_weak_ai_micro_entry_block_splits_missing_buy_pressure_when_orderbook_strong():
+    decision = state_handlers._evaluate_real_weak_ai_micro_entry_block(
+        strategy="SCALPING",
+        stock={"last_watching_ai_action": "WAIT", "last_watching_ai_score": 0.0},
+        latency_gate={"allowed": True, "decision": "ALLOW_NORMAL"},
+        latency_signal_score=0.0,
+        orderbook_fields={
+            "orderbook_micro_state": "neutral",
+            "orderbook_micro_ofi_norm": 1.468254,
+            "orderbook_micro_qi": 0.871795,
+        },
+        microstructure_fields={},
+    )
+
+    assert decision["blocked"] is False
+    assert decision["block_reason"] == "source_missing_but_orderbook_strong_observe"
+    assert decision["weak_ai_micro_entry_block_missing_fields"] == "buy_pressure_10t"
+    assert decision["weak_ai_micro_entry_block_missing_buy_pressure_orderbook_strong"] is True
+    assert decision["source_quality_gate"] == "weak_ai_micro_missing_buy_pressure_split"
+
+
 def test_real_weak_ai_micro_entry_block_keeps_strong_buy_context():
     decision = state_handlers._evaluate_real_weak_ai_micro_entry_block(
         strategy="SCALPING",
@@ -2320,6 +2341,41 @@ def test_rising_missed_submit_safety_backoff_stale_weak_reallocates_scanner_budg
     assert fields["broker_order_forbidden"] is True
 
 
+def test_rising_missed_submit_safety_backoff_stale_weak_high_delta_rechecks_heavy_eval(monkeypatch):
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_RISING_MISSED_SUBMIT_BACKOFF_POSITIVE_DELTA_RECHECK_ENABLED",
+        raising=False,
+    )
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_RISING_MISSED_SUBMIT_BACKOFF_POSITIVE_DELTA_RECHECK_MIN_PCT",
+        raising=False,
+    )
+    stock = _rising_missed_backoff_stock(
+        current_price=10345,
+        price_delta_since_first_seen_pct=3.45,
+    )
+
+    state_handlers._record_rising_missed_submit_safety_backoff(
+        stock,
+        "477850",
+        "stale_quote_with_weak_ai_or_strength",
+        now_ts=1000.0,
+        source_stage="rising_missed_scout_quality_guard_blocked",
+    )
+    fields = state_handlers._scanner_fast_precheck_fields(
+        stock,
+        code="477850",
+        ws_data={"curr": 10345},
+        now_ts=1005.0,
+    )
+
+    assert fields["fast_precheck_result"] == "eligible_for_heavy_entry_eval"
+    assert fields["fast_precheck_reason"] == "fast_precheck_pass"
+    assert fields["rising_missed_filter_layer"] == "scanner_watch_budget"
+    assert fields["rising_missed_filter_action"] == "observe_only"
+    assert "rising_missed_submit_safety_backoff_until" not in stock
+
+
 def test_rising_missed_submit_safety_backoff_tick_speed_feedback_not_scanner_preblock():
     stock = _rising_missed_backoff_stock(
         last_watching_ai_source_quality_fields={
@@ -2594,6 +2650,75 @@ def test_scanner_ws_stale_backoff_heavy_recheck_reallocates_scanner_budget(monke
     assert fields["scanner_ws_stale_backoff_reason"] == "scanner_heavy_eval_stale_snapshot_recheck"
     assert fields["actual_order_submitted"] is False
     assert fields["broker_order_forbidden"] is True
+
+
+def test_scanner_ws_stale_backoff_strong_promotion_recheck_allows_heavy_eval(monkeypatch):
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_SCANNER_WS_STALE_BACKOFF_STRONG_PROMOTION_RECHECK_ENABLED",
+        raising=False,
+    )
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_SCANNER_WS_STALE_BACKOFF_STRONG_PROMOTION_RECHECK_MIN_DELTA_PCT",
+        raising=False,
+    )
+    state_handlers._SCANNER_WS_STALE_BACKOFFS.clear()
+    stock = _rising_missed_backoff_stock(
+        code="999991",
+        current_price=1866,
+        current_price_observed=1866,
+        price_delta_since_first_seen_pct=6.14,
+        source_signature="BID_IMBALANCE_SURGE,OPEN_TOP,PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+    )
+
+    state_handlers._record_scanner_ws_stale_backoff(
+        stock,
+        "999991",
+        "scanner_heavy_eval_stale_snapshot_recheck",
+        now_ts=1000.0,
+        source_stage="scalping_scanner_watching_runtime_skip",
+    )
+    fields = state_handlers._scanner_fast_precheck_fields(
+        stock,
+        code="999991",
+        ws_data={"curr": 1866},
+        now_ts=1001.0,
+    )
+
+    assert fields["fast_precheck_result"] == "eligible_for_heavy_entry_eval"
+    assert fields["fast_precheck_ws_stale_backoff_recheck_applied"] is True
+    assert fields["fast_precheck_ws_stale_backoff_recheck_reason"] == "strong_promotion_fresh_or_rest_recheck"
+    assert stock["scanner_ws_stale_backoff_recheck_applied"] is True
+    assert "scanner_ws_stale_backoff_until" not in stock
+
+
+def test_scanner_ws_stale_backoff_strong_promotion_does_not_clear_persistent_gap():
+    state_handlers._SCANNER_WS_STALE_BACKOFFS.clear()
+    stock = _rising_missed_backoff_stock(
+        code="999992",
+        current_price=1866,
+        current_price_observed=1866,
+        price_delta_since_first_seen_pct=6.14,
+        source_signature="BID_IMBALANCE_SURGE,OPEN_TOP,PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+    )
+
+    state_handlers._record_scanner_ws_stale_backoff(
+        stock,
+        "999992",
+        "persistent_ws_gap",
+        now_ts=1000.0,
+        source_stage="scalping_scanner_watching_runtime_skip",
+    )
+    fields = state_handlers._scanner_fast_precheck_fields(
+        stock,
+        code="999992",
+        ws_data={"curr": 1866},
+        now_ts=1001.0,
+    )
+
+    assert fields["fast_precheck_result"] == "budget_reallocated"
+    assert fields["fast_precheck_reason"] == "scanner_ws_stale_backoff_active"
+    assert fields["fast_precheck_ws_stale_backoff_recheck_applied"] is False
+    assert stock["scanner_ws_stale_backoff_reason"] == "persistent_ws_gap"
 
 
 def test_scanner_ws_stale_backoff_fast_precheck_reason_records_stale_group(monkeypatch):
@@ -7801,7 +7926,8 @@ def test_add_count_increment_once_on_partial_fills(monkeypatch):
     assert target_stock["avg_down_count"] == 1
 
 
-def test_reversal_add_post_eval_starts_on_execution_receipt(monkeypatch):
+@pytest.mark.parametrize("pending_add_reason", ["reversal_add_ok", "shallow_volatility_avg_down"])
+def test_reversal_add_post_eval_starts_on_execution_receipt(monkeypatch, pending_add_reason):
     receipts.ACTIVE_TARGETS = []
     receipts.highest_prices = {}
     receipts._get_fast_state = lambda code: None
@@ -7826,7 +7952,7 @@ def test_reversal_add_post_eval_starts_on_execution_receipt(monkeypatch):
         "buy_qty": 1,
         "pending_add_order": True,
         "pending_add_type": "AVG_DOWN",
-        "pending_add_reason": "reversal_add_ok",
+        "pending_add_reason": pending_add_reason,
         "pending_add_qty": 1,
         "pending_add_ord_no": "123",
         "add_count": 0,
@@ -25063,6 +25189,131 @@ def test_aggressive_reversal_add_blocks_kistron_like_collapse():
         scale_in.TRADING_RULES = CONFIG
 
 
+def test_shallow_volatility_avg_down_accepts_fresh_shallow_rebound():
+    stock = _reversal_add_stock({
+        "reversal_add_ai_bottom": 70,
+        "reversal_add_ai_history": [70, 68, 67, 66],
+        "reversal_add_profit_floor": -0.80,
+        "last_reversal_features": {
+            "buy_pressure_10t": 91.0,
+            "tick_acceleration_ratio": 1.12,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 3.5,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "tick_context_quality": "live_tick",
+            "tick_context_stale": False,
+            "tick_latest_age_ms": 250,
+            "tick_aggressor_trusted_count": 5,
+            "tick_aggressor_pressure_usable": True,
+            "quote_stale": False,
+            "quote_age_ms": 450,
+        },
+    })
+    from src.utils.constants import TRADING_RULES as CONFIG
+    scale_in.TRADING_RULES = _reversal_add_rules(
+        SCALP_STOP=-2.0,
+        SHALLOW_VOLATILITY_AVG_DOWN_ENABLED=True,
+        SHALLOW_VOLATILITY_AVG_DOWN_PNL_MIN=-1.20,
+        SHALLOW_VOLATILITY_AVG_DOWN_PNL_MAX=-0.30,
+        SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE=85.0,
+        SHALLOW_VOLATILITY_AVG_DOWN_MIN_TICK_ACCEL=1.05,
+        SHALLOW_VOLATILITY_AVG_DOWN_MIN_MICRO_VWAP_BP=0.0,
+        SHALLOW_VOLATILITY_AVG_DOWN_MAX_QUOTE_AGE_MS=1500.0,
+        AGGRESSIVE_REVERSAL_ADD_ENABLED=False,
+    )
+    try:
+        result = scale_in.evaluate_scalping_reversal_add(stock, profit_rate=-0.58, current_ai_score=72, held_sec=55)
+        assert result["should_add"] is True
+        assert result["add_type"] == "AVG_DOWN"
+        assert result["reason"] == "shallow_volatility_avg_down"
+        assert result["blocked_standard_reason"] == "ai_not_recovering"
+        assert result["probe"]["shallow_reversal_feature_source_quality"] == "usable"
+        assert result["probe"]["shallow_buy_pressure_ok"] is True
+        assert result["probe"]["shallow_above_stop_line_ok"] is True
+    finally:
+        scale_in.TRADING_RULES = CONFIG
+
+
+def test_shallow_volatility_avg_down_preempts_aggressive_when_stop_touch_mode_needs_reason():
+    stock = _reversal_add_stock({
+        "reversal_add_ai_bottom": 70,
+        "reversal_add_ai_history": [70, 68, 67, 66],
+        "reversal_add_profit_floor": -0.80,
+        "last_reversal_features": {
+            "buy_pressure_10t": 95.0,
+            "tick_acceleration_ratio": 1.12,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 4.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "tick_context_quality": "live_tick",
+            "tick_context_stale": False,
+            "tick_latest_age_ms": 250,
+            "tick_aggressor_trusted_count": 5,
+            "tick_aggressor_pressure_usable": True,
+            "quote_stale": False,
+            "quote_age_ms": 450,
+        },
+    })
+    from src.utils.constants import TRADING_RULES as CONFIG
+    scale_in.TRADING_RULES = _reversal_add_rules(
+        SCALP_STOP=-2.0,
+        SHALLOW_VOLATILITY_AVG_DOWN_ENABLED=True,
+        AGGRESSIVE_REVERSAL_ADD_ENABLED=True,
+        AGGRESSIVE_REVERSAL_ADD_PNL_MIN=-0.70,
+        AGGRESSIVE_REVERSAL_ADD_PNL_MAX=-0.10,
+        AGGRESSIVE_REVERSAL_ADD_MIN_AI_SCORE=80,
+        AGGRESSIVE_REVERSAL_ADD_MIN_BUY_PRESSURE=85.0,
+        AGGRESSIVE_REVERSAL_ADD_VWAP_BP_MIN=-12.0,
+    )
+    try:
+        result = scale_in.evaluate_scalping_reversal_add(stock, profit_rate=-0.58, current_ai_score=72, held_sec=55)
+        assert result["should_add"] is True
+        assert result["reason"] == "shallow_volatility_avg_down"
+    finally:
+        scale_in.TRADING_RULES = CONFIG
+
+
+def test_shallow_volatility_avg_down_blocks_stale_quote():
+    stock = _reversal_add_stock({
+        "reversal_add_ai_bottom": 70,
+        "reversal_add_ai_history": [70, 68, 67, 66],
+        "last_reversal_features": {
+            "buy_pressure_10t": 91.0,
+            "tick_acceleration_ratio": 1.12,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 3.5,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "tick_context_quality": "live_tick",
+            "tick_context_stale": False,
+            "tick_latest_age_ms": 250,
+            "tick_aggressor_trusted_count": 5,
+            "tick_aggressor_pressure_usable": True,
+            "quote_stale": True,
+            "quote_age_ms": 4500,
+        },
+    })
+    from src.utils.constants import TRADING_RULES as CONFIG
+    scale_in.TRADING_RULES = _reversal_add_rules(
+        SCALP_STOP=-2.0,
+        SHALLOW_VOLATILITY_AVG_DOWN_ENABLED=True,
+        SHALLOW_VOLATILITY_AVG_DOWN_MAX_QUOTE_AGE_MS=1500.0,
+        AGGRESSIVE_REVERSAL_ADD_ENABLED=False,
+    )
+    try:
+        result = scale_in.evaluate_scalping_reversal_add(stock, profit_rate=-0.58, current_ai_score=72, held_sec=55)
+        assert result["should_add"] is False
+        assert result["reason"] == "low_broken"
+        assert result["shallow_volatility_blocked_reason"].startswith("shallow_volatility_features_stale:")
+    finally:
+        scale_in.TRADING_RULES = CONFIG
+
+
 # TC-6: 정상 조건 모두 충족 → 트리거
 def test_reversal_add_tc6_all_conditions_met():
     stock = _reversal_add_stock({
@@ -26636,6 +26887,138 @@ def test_first_touch_avgdown_decision_gate_retries_holding_ai_score(monkeypatch)
     assert allowed["fields"]["first_touch_avgdown_ai_authority_input_retry_success"] is True
     assert allowed["fields"]["first_touch_avgdown_ai_score_submit_authority"] is True
     assert stock["holding_score_effective"] == 72
+
+
+def test_first_touch_avgdown_decision_gate_allows_partial_ai_retry_loss_relief(monkeypatch):
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", CONFIG)
+    monkeypatch.setattr(
+        state_handlers,
+        "_retry_holding_ai_submit_authority_before_block",
+        lambda **kwargs: {
+            "first_touch_avgdown_ai_authority_input_retry_attempted": True,
+            "first_touch_avgdown_ai_authority_input_retry_success": False,
+            "first_touch_avgdown_ai_authority_input_retry_reason": "holding_score_data_quality_partial",
+            "first_touch_avgdown_ai_authority_input_retry_result_source": "live",
+            "first_touch_avgdown_ai_authority_input_retry_score": 68.0,
+            "first_touch_avgdown_ai_authority_source_quality_state": "unusable",
+            "first_touch_avgdown_ai_authority_missing_fields": "-",
+            "first_touch_avgdown_ai_authority_after_retry_block_reason": "holding_score_data_quality_partial",
+            "first_touch_avgdown_ai_authority_input_retry_quote_refresh_applied": True,
+            "first_touch_avgdown_ai_authority_input_retry_quote_refresh_reason": "rest_orderbook_fresh",
+            "first_touch_avgdown_ai_authority_input_retry_tick_count": 10,
+            "first_touch_avgdown_ai_authority_input_retry_candle_count": 40,
+            "first_touch_avgdown_ai_authority_input_retry_data_quality": "partial",
+            "first_touch_avgdown_ai_authority_input_retry_parse_ok": True,
+            "first_touch_avgdown_ai_authority_input_retry_fallback_score_50": False,
+        },
+    )
+    stock = {
+        "strategy": "SCALPING",
+        "holding_score_effective_usable": False,
+        "holding_score_data_quality": "stale",
+        "holding_score_source": "holding_ai_not_called",
+        "holding_score_last_effective_at": 1.0,
+    }
+
+    allowed = state_handlers._evaluate_first_touch_avgdown_decision_gate(
+        stock=stock,
+        ws_data={"curr": 10_000, "best_bid": 9_939, "best_ask": 10_061},
+        context_fields={
+            "strength_momentum_risk_state": "weak_momentum_context",
+            "strength_momentum_reason": "below_window_buy_value",
+            "current_vpw": 104.11,
+            "base_vpw": 104.15,
+            "vpw_delta": -0.04,
+            "liquidity_value": 228,
+            "min_liquidity": 20_000,
+        },
+        current_ai_score=50,
+        peak_profit=0.24,
+        profit_rate=-4.67,
+        now_ts=1_000.0,
+    )
+
+    assert allowed["allowed"] is True
+    assert allowed["reason"] == "recovery_support_confirmed"
+    assert "ai_retry_partial_recovery" in allowed["fields"]["first_touch_avgdown_support_signals"]
+    assert "liquidity_below_min" in allowed["fields"]["first_touch_avgdown_risk_signals"]
+    assert "spread_too_wide" in allowed["fields"]["first_touch_avgdown_risk_signals"]
+    assert allowed["fields"]["first_touch_avgdown_ai_retry_partial_recovery"] is True
+
+
+def test_first_touch_avgdown_decision_gate_blocks_partial_ai_retry_on_severe_spread(monkeypatch):
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", CONFIG)
+    monkeypatch.setattr(
+        state_handlers,
+        "_retry_holding_ai_submit_authority_before_block",
+        lambda **kwargs: {
+            "first_touch_avgdown_ai_authority_input_retry_attempted": True,
+            "first_touch_avgdown_ai_authority_input_retry_success": False,
+            "first_touch_avgdown_ai_authority_input_retry_result_source": "live",
+            "first_touch_avgdown_ai_authority_input_retry_score": 68.0,
+            "first_touch_avgdown_ai_authority_input_retry_quote_refresh_applied": True,
+            "first_touch_avgdown_ai_authority_input_retry_tick_count": 10,
+            "first_touch_avgdown_ai_authority_input_retry_data_quality": "partial",
+            "first_touch_avgdown_ai_authority_input_retry_parse_ok": True,
+            "first_touch_avgdown_ai_authority_input_retry_fallback_score_50": False,
+        },
+    )
+    stock = {
+        "strategy": "SCALPING",
+        "holding_score_effective_usable": False,
+        "holding_score_data_quality": "stale",
+        "holding_score_source": "holding_ai_not_called",
+        "holding_score_last_effective_at": 1.0,
+    }
+
+    blocked = state_handlers._evaluate_first_touch_avgdown_decision_gate(
+        stock=stock,
+        ws_data={"curr": 10_000, "best_bid": 9_900, "best_ask": 10_100},
+        context_fields={"liquidity_value": 228, "min_liquidity": 20_000},
+        current_ai_score=50,
+        peak_profit=0.24,
+        profit_rate=-4.67,
+        now_ts=1_000.0,
+    )
+
+    assert blocked["allowed"] is False
+    assert blocked["reason"] == "liquidity_or_spread_block"
+    assert blocked["fields"]["first_touch_avgdown_ai_retry_partial_recovery"] is True
+
+
+def test_first_touch_avgdown_decision_gate_partial_retry_does_not_bypass_sentinel(monkeypatch):
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", CONFIG)
+    monkeypatch.setattr(
+        state_handlers,
+        "_retry_holding_ai_submit_authority_before_block",
+        lambda **kwargs: {
+            "first_touch_avgdown_ai_authority_input_retry_attempted": True,
+            "first_touch_avgdown_ai_authority_input_retry_success": False,
+            "first_touch_avgdown_ai_authority_input_retry_reason": "holding_score_data_quality_partial",
+            "first_touch_avgdown_ai_authority_input_retry_result_source": "live",
+            "first_touch_avgdown_ai_authority_input_retry_score": 68.0,
+            "first_touch_avgdown_ai_authority_input_retry_quote_refresh_applied": True,
+            "first_touch_avgdown_ai_authority_input_retry_tick_count": 10,
+            "first_touch_avgdown_ai_authority_input_retry_candle_count": 40,
+            "first_touch_avgdown_ai_authority_input_retry_data_quality": "partial",
+            "first_touch_avgdown_ai_authority_input_retry_parse_ok": True,
+            "first_touch_avgdown_ai_authority_input_retry_fallback_score_50": False,
+        },
+    )
+
+    blocked = state_handlers._evaluate_first_touch_avgdown_decision_gate(
+        stock={"strategy": "SCALPING", **_fresh_holding_score_fields(50, now_ts=1_000.0)},
+        ws_data={"curr": 10_000, "best_bid": 9_990, "best_ask": 10_000},
+        context_fields={},
+        current_ai_score=72,
+        peak_profit=0.75,
+        profit_rate=-3.42,
+        now_ts=1_000.0,
+    )
+
+    assert blocked["allowed"] is False
+    assert blocked["reason"] == "ai_score_no_submit_authority:holding_score_sentinel_50"
+    assert blocked["fields"]["first_touch_avgdown_ai_retry_partial_recovery"] is False
 
 
 def test_first_touch_avgdown_decision_gate_rejects_ai_without_provenance(monkeypatch):
@@ -28754,6 +29137,40 @@ def test_avg_down_price_resolver_stale_micro_blocks_reversal_add_not_late_retry(
     assert late["allowed"] is False
     assert late["reason"].startswith("micro_context_stale:")
     assert late.get("late_loss_avg_down_retry_micro_vwap_bypass") is None
+
+
+def test_shallow_volatility_price_resolver_bypasses_stop_line_touch_requirement(monkeypatch):
+    original = scale_in.TRADING_RULES
+    scale_in.TRADING_RULES = replace(
+        CONFIG,
+        SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=True,
+        REVERSAL_ADD_VWAP_BP_MIN=-5.0,
+    )
+    stock = {
+        "strategy": "SCALPING",
+        "last_reversal_features": _trusted_reversal_features(curr_vs_micro_vwap_bp=2.0),
+    }
+    ws_data = {
+        "curr": 105_100,
+        "best_bid": 105_000,
+        "best_ask": 105_200,
+    }
+    try:
+        resolved = scale_in.resolve_scale_in_order_price(
+            stock=stock,
+            ws_data=ws_data,
+            action={"add_type": "AVG_DOWN", "reason": "shallow_volatility_avg_down"},
+            strategy="SCALPING",
+            curr_price=105_100,
+        )
+    finally:
+        scale_in.TRADING_RULES = original
+
+    assert resolved["allowed"] is True
+    assert resolved["reason"] == "scale_in_price_resolved"
+    assert resolved["order_price"] == 104_900
+    assert resolved["price_source"] == "best_bid_discount"
+    assert resolved["stop_line_touched"] is False
 
 
 def test_avg_down_price_resolver_discounts_best_bid_for_high_price_recovery(monkeypatch):

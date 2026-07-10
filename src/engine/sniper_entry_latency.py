@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from datetime import UTC, datetime
 from typing import Any
 
+from src.engine.scalping.micro_estimator_state import DEFAULT_STORE as MICRO_ESTIMATOR_STORE
 from src.trading.config.entry_config import EntryConfig
 from src.trading.entry.entry_policy import EntryPolicy
 from src.trading.entry.entry_types import EntryDecision
@@ -48,6 +50,21 @@ _CACHE_LOCK = threading.RLock()
 _LATENCY_MONITOR = LatencyMonitor(_CONFIG)
 _ENTRY_POLICY = EntryPolicy(_CONFIG)
 _NORMAL_BUILDER = NormalEntryBuilder(_CONFIG)
+
+_LATENCY_FALSE_NEGATIVE_REMEASURE_AUTHORITY = (
+    "source_only_latency_false_negative_bounded_remeasure_enqueue"
+)
+_LATENCY_FALSE_NEGATIVE_REMEASURE_FORBIDDEN_USES = (
+    "standalone_buy,submit_safety_bypass,stale_submit_bypass,broker_guard_bypass,"
+    "threshold_mutation,provider_route_change,quantity_or_cap_change,position_cap_release"
+)
+_LATENCY_TRUE_OFI_DIRECT_CANARY_AUTHORITY = (
+    "operator_runtime_override_latency_true_ofi_false_negative_direct_canary"
+)
+_LATENCY_TRUE_OFI_DIRECT_CANARY_FORBIDDEN_USES = (
+    "stale_submit_bypass,broker_guard_bypass,threshold_mutation,provider_route_change,"
+    "quantity_or_cap_change,position_cap_release,wide_spread_bypass,explicit_ai_veto_bypass"
+)
 
 
 def _safe_price_int(value: Any) -> int:
@@ -211,7 +228,20 @@ def _normal_weak_defensive_bps() -> int:
 
 
 def _aggressive_entry_price_override_enabled() -> bool:
-    return bool(getattr(TRADING_RULES, "SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED", False))
+    operator_enabled = str(
+        os.getenv("KORSTOCKSCAN_INTRADAY_ENTRY_PRICE_DISCOVERY_ENABLED") or ""
+    ).strip().lower() in {"1", "true", "yes", "y", "on"}
+    return operator_enabled or bool(getattr(TRADING_RULES, "SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED", False))
+
+
+def _intraday_entry_price_discovery_enabled() -> bool:
+    return str(os.getenv("KORSTOCKSCAN_INTRADAY_ENTRY_PRICE_DISCOVERY_ENABLED") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "y",
+        "on",
+    }
 
 
 def _dynamic_entry_price_resolver_live_selected() -> bool:
@@ -275,7 +305,7 @@ def _defensive_missed_upside_aggressive_entry_override(
 ) -> dict[str, Any]:
     if not _aggressive_entry_price_override_enabled():
         return {"applied": False, "reason": "disabled"}
-    if _dynamic_entry_price_resolver_live_selected():
+    if _dynamic_entry_price_resolver_live_selected() and not _intraday_entry_price_discovery_enabled():
         return {"applied": False, "reason": "dynamic_entry_price_resolver_live_selected"}
     if "defensive_missed_upside_v1" not in _aggressive_entry_price_override_types():
         return {"applied": False, "reason": "type_disabled"}
@@ -322,6 +352,7 @@ def _defensive_missed_upside_aggressive_entry_override(
         "applied": True,
         "type": "defensive_missed_upside_v1",
         "reason": "defensive_price_missed_upside_best_bid_near",
+        "operator_intraday_entry_price_discovery": _intraday_entry_price_discovery_enabled(),
         "target_mode": target_mode,
         "target_price": int(target_price),
         "minus_ticks": minus_ticks,
@@ -348,7 +379,7 @@ def _reference_target_cap_missed_upside_aggressive_entry_override(
 ) -> dict[str, Any]:
     if not _aggressive_entry_price_override_enabled():
         return {"applied": False, "reason": "disabled"}
-    if _dynamic_entry_price_resolver_live_selected():
+    if _dynamic_entry_price_resolver_live_selected() and not _intraday_entry_price_discovery_enabled():
         return {"applied": False, "reason": "dynamic_entry_price_resolver_live_selected"}
     if "reference_target_cap_missed_upside_v1" not in _aggressive_entry_price_override_types():
         return {"applied": False, "reason": "type_disabled"}
@@ -407,6 +438,7 @@ def _reference_target_cap_missed_upside_aggressive_entry_override(
         "applied": True,
         "type": "reference_target_cap_missed_upside_v1",
         "reason": "reference_target_cap_missed_upside_best_bid_near",
+        "operator_intraday_entry_price_discovery": _intraday_entry_price_discovery_enabled(),
         "target_mode": target_mode,
         "target_price": int(target_price),
         "minus_ticks": minus_ticks,
@@ -602,6 +634,33 @@ def _normalize_signal_score(signal_strength: Any) -> float:
     return score
 
 
+def _clamp_float(value: float, low: float, high: float) -> float:
+    return max(low, min(high, float(value)))
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _latency_micro_estimator_all_scalping_enabled() -> bool:
+    return _truthy(
+        os.getenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_ALL_SCALPING_ENABLED")
+    )
+
+
+def _latency_micro_estimator_allowed_tags() -> set[str]:
+    raw_tags = os.getenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_TAGS")
+    if raw_tags is None:
+        return {
+            str(tag).strip().upper()
+            for tag in (getattr(TRADING_RULES, "SCALP_LATENCY_SPREAD_RELIEF_TAGS", ()) or ())
+            if str(tag).strip()
+        }
+    return {item.strip().upper() for item in raw_tags.split(",") if item.strip()}
+
+
 def _score_candidate_from_source(source: dict[str, Any] | None, prefix: str) -> tuple[float | None, str]:
     fields = source if isinstance(source, dict) else {}
     zero_candidate = ""
@@ -630,8 +689,265 @@ def _score_candidate_from_source(source: dict[str, Any] | None, prefix: str) -> 
     return None, ""
 
 
+def _latency_explicit_negative_ai_action(
+    stock: dict[str, Any] | None,
+    ws_data: dict[str, Any] | None,
+) -> str:
+    """Return an explicit AI veto; unknown or missing action is not a veto."""
+
+    for source in (stock, ws_data):
+        fields = source if isinstance(source, dict) else {}
+        for key in (
+            "rising_missed_entry_ai_action",
+            "entry_ai_action",
+            "ai_action",
+            "action",
+            "last_ai_action",
+            "current_ai_action",
+            "last_watching_ai_action",
+            "score_prior_action",
+        ):
+            action = str(fields.get(key) or "").strip().upper()
+            if action in {"DROP", "WAIT"}:
+                return action
+    return ""
+
+
+def _latency_micro_estimator_relief_signal_candidate(
+    code: str,
+    *,
+    position_tag: str,
+) -> dict[str, Any]:
+    """Build a spread-relief signal from fresh, accumulated true OFI only.
+
+    The state is intentionally a supplemental source.  A candidate must have
+    multiple best-level deltas from the shared WS store; depth-imbalance proxy
+    or REST-only snapshots cannot produce this signal.
+    """
+
+    enabled = _truthy(os.getenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_ENABLED"))
+    all_scalping_enabled = _latency_micro_estimator_all_scalping_enabled()
+    result: dict[str, Any] = {
+        "latency_spread_relief_micro_estimator_enabled": enabled,
+        "latency_spread_relief_micro_estimator_eligible": False,
+        "latency_spread_relief_micro_estimator_reason": "disabled" if not enabled else "not_evaluated",
+        "latency_spread_relief_micro_estimator_score": 0.0,
+        "latency_spread_relief_micro_estimator_source_state": "not_evaluated",
+        "latency_spread_relief_micro_estimator_confidence": 0.0,
+        "latency_spread_relief_micro_estimator_true_ofi_ewma": 0.0,
+        "latency_spread_relief_micro_estimator_pressure_ewma": 50.0,
+        "latency_spread_relief_micro_estimator_top_depth_ratio": 0.0,
+        "latency_spread_relief_micro_estimator_true_ofi_sample_count": 0,
+        "latency_spread_relief_micro_estimator_ws_age_ms": -1.0,
+        "latency_spread_relief_micro_estimator_all_scalping_enabled": all_scalping_enabled,
+        "latency_spread_relief_micro_estimator_metric_role": "source_quality_gate",
+        "latency_spread_relief_micro_estimator_decision_authority": (
+            "supplemental_signal_for_existing_latency_spread_relief_canary"
+        ),
+        "latency_spread_relief_micro_estimator_window_policy": "fresh_ws_runtime_state",
+        "latency_spread_relief_micro_estimator_sample_floor": "true_ofi_samples>=configured_min",
+        "latency_spread_relief_micro_estimator_primary_decision_metric": "not_applicable_source_supplement",
+        "latency_spread_relief_micro_estimator_source_quality_gate": "fresh_ws_true_ofi_and_depth_contract",
+        "latency_spread_relief_micro_estimator_runtime_effect": False,
+        "latency_spread_relief_micro_estimator_allowed_runtime_apply": False,
+        "latency_spread_relief_micro_estimator_forbidden_uses": (
+            "standalone_buy,hard_safety_bypass,broker_guard_bypass,threshold_mutation,"
+            "provider_route_change,quantity_or_cap_change"
+        ),
+    }
+    if not enabled or not str(code or "").strip():
+        if enabled:
+            result["latency_spread_relief_micro_estimator_reason"] = "missing_code"
+        return result
+
+    allowed_tags = _latency_micro_estimator_allowed_tags()
+    normalized_tag = str(position_tag or "").strip().upper()
+    result["latency_spread_relief_micro_estimator_allowed_tags"] = ",".join(sorted(allowed_tags))
+    if not all_scalping_enabled and allowed_tags and normalized_tag not in allowed_tags:
+        result["latency_spread_relief_micro_estimator_reason"] = "tag_not_allowed"
+        return result
+
+    now_ts = time.time()
+    try:
+        snapshot = MICRO_ESTIMATOR_STORE.snapshot(str(code), now_ts=now_ts)
+    except Exception:
+        result["latency_spread_relief_micro_estimator_reason"] = "snapshot_unavailable"
+        return result
+    if not isinstance(snapshot, dict):
+        result["latency_spread_relief_micro_estimator_reason"] = "snapshot_unavailable"
+        return result
+
+    confidence = _to_float(snapshot.get("confidence"), 0.0)
+    true_ofi = _to_float(snapshot.get("true_ofi_ewma"), 0.0)
+    pressure = _to_float(snapshot.get("pressure_ewma"), 50.0)
+    depth_ratio = _to_float(snapshot.get("top_depth_ratio"), 0.0)
+    true_sample_count = int(_to_float(snapshot.get("true_ofi_sample_count"), 0.0))
+    last_ws_ts = _to_float(snapshot.get("last_ws_ts"), 0.0)
+    ws_age_ms = max(0.0, (now_ts - last_ws_ts) * 1000.0) if last_ws_ts > 0 else -1.0
+    result.update(
+        {
+            "latency_spread_relief_micro_estimator_source_state": str(
+                snapshot.get("source_state") or "default_prior"
+            ),
+            "latency_spread_relief_micro_estimator_confidence": round(confidence, 4),
+            "latency_spread_relief_micro_estimator_true_ofi_ewma": round(true_ofi, 4),
+            "latency_spread_relief_micro_estimator_pressure_ewma": round(pressure, 3),
+            "latency_spread_relief_micro_estimator_top_depth_ratio": round(depth_ratio, 4),
+            "latency_spread_relief_micro_estimator_true_ofi_sample_count": true_sample_count,
+            "latency_spread_relief_micro_estimator_ws_age_ms": round(ws_age_ms, 3),
+        }
+    )
+
+    min_confidence = max(
+        0.70,
+        _to_float(os.getenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_MIN_CONFIDENCE"), 0.70),
+    )
+    min_true_ofi_samples = max(
+        8,
+        int(
+            _to_float(
+                os.getenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_MIN_TRUE_OFI_SAMPLES"),
+                8.0,
+            )
+        ),
+    )
+    min_true_ofi = max(
+        0.20,
+        _to_float(
+            os.getenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_MIN_TRUE_OFI"),
+            0.20,
+        ),
+    )
+    min_pressure = max(
+        65.0,
+        _to_float(
+            os.getenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_MIN_PRESSURE"),
+            65.0,
+        ),
+    )
+    min_depth_ratio = max(
+        1.05,
+        _to_float(
+            os.getenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_MIN_TOP_DEPTH_RATIO"),
+            1.05,
+        ),
+    )
+    freshness_cap_ms = float(_CONFIG.max_ws_age_ms_for_caution or 700)
+    max_ws_age_ms = min(
+        freshness_cap_ms,
+        max(
+            1.0,
+            _to_float(
+                os.getenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_MAX_WS_AGE_MS"),
+                freshness_cap_ms,
+            ),
+        ),
+    )
+    result.update(
+        {
+            "latency_spread_relief_micro_estimator_min_confidence": round(min_confidence, 4),
+            "latency_spread_relief_micro_estimator_min_true_ofi_samples": min_true_ofi_samples,
+            "latency_spread_relief_micro_estimator_min_true_ofi": round(min_true_ofi, 4),
+            "latency_spread_relief_micro_estimator_min_pressure": round(min_pressure, 3),
+            "latency_spread_relief_micro_estimator_min_top_depth_ratio": round(min_depth_ratio, 4),
+            "latency_spread_relief_micro_estimator_max_ws_age_ms": round(max_ws_age_ms, 3),
+        }
+    )
+    if ws_age_ms < 0 or ws_age_ms > max_ws_age_ms:
+        result["latency_spread_relief_micro_estimator_reason"] = "ws_state_stale_or_missing"
+        return result
+    if true_sample_count < min_true_ofi_samples:
+        result["latency_spread_relief_micro_estimator_reason"] = "true_ofi_samples_below_floor"
+        return result
+    if confidence < min_confidence:
+        result["latency_spread_relief_micro_estimator_reason"] = "confidence_below_floor"
+        return result
+    if true_ofi < min_true_ofi:
+        result["latency_spread_relief_micro_estimator_reason"] = "true_ofi_below_floor"
+        return result
+    if pressure < min_pressure:
+        result["latency_spread_relief_micro_estimator_reason"] = "pressure_below_floor"
+        return result
+    if depth_ratio < min_depth_ratio:
+        result["latency_spread_relief_micro_estimator_reason"] = "top_depth_ratio_below_floor"
+        return result
+
+    true_ofi_component = _clamp_float(true_ofi / max(min_true_ofi * 2.0, 0.40), 0.0, 1.0)
+    pressure_component = _clamp_float((pressure - 50.0) / 20.0, 0.0, 1.0)
+    depth_component = _clamp_float((depth_ratio - 1.0) / 0.25, 0.0, 1.0)
+    confidence_component = _clamp_float(confidence, 0.0, 1.0)
+    score = _clamp_float(
+        50.0
+        + (20.0 * true_ofi_component)
+        + (15.0 * pressure_component)
+        + (10.0 * depth_component)
+        + (15.0 * confidence_component),
+        0.0,
+        100.0,
+    )
+    result.update(
+        {
+            "latency_spread_relief_micro_estimator_eligible": True,
+            "latency_spread_relief_micro_estimator_reason": "fresh_true_ofi_support",
+            "latency_spread_relief_micro_estimator_score": round(score, 3),
+        }
+    )
+    return result
+
+
+def _latency_micro_relief_signal_candidate(
+    stock: dict[str, Any] | None,
+    ws_data: dict[str, Any] | None,
+) -> tuple[float | None, str, str]:
+    for source, prefix in ((ws_data, "ws"), (stock, "stock")):
+        fields = source if isinstance(source, dict) else {}
+        if not fields:
+            continue
+        ready = _truthy(fields.get("orderbook_micro_ready")) or str(
+            fields.get("orderbook_micro_reason") or ""
+        ).strip().lower() == "ready"
+        if not ready:
+            continue
+        healthy_raw = fields.get("orderbook_micro_observer_healthy")
+        if healthy_raw not in (None, "", "None") and not _truthy(healthy_raw):
+            continue
+        snapshot_age_ms = _to_float(
+            fields.get("orderbook_micro_snapshot_age_ms"),
+            _to_float(fields.get("orderbook_micro_observer_last_quote_age_ms"), 999999.0),
+        )
+        if snapshot_age_ms > float(_CONFIG.max_ws_age_ms_for_caution or 0):
+            continue
+        sample_count = int(_to_float(fields.get("orderbook_micro_sample_quote_count"), 0.0))
+        min_samples = int(_to_float(fields.get("orderbook_micro_micro_z_min_samples"), 20.0))
+        if sample_count < max(3, min_samples):
+            continue
+
+        ofi_z = _to_float(fields.get("orderbook_micro_ofi_z"), -999999.0)
+        ofi_norm = _to_float(fields.get("orderbook_micro_ofi_norm"), -999999.0)
+        bull_threshold = abs(_to_float(fields.get("orderbook_micro_ofi_bull_threshold"), 1.2)) or 1.2
+        if ofi_z > -999998.0:
+            ofi_component = _clamp_float(ofi_z / bull_threshold, -1.0, 1.0)
+        elif ofi_norm > -999998.0:
+            ofi_component = _clamp_float(ofi_norm / bull_threshold, -1.0, 1.0)
+        else:
+            ofi_component = 0.0
+
+        qi_value = _to_float(
+            fields.get("orderbook_micro_qi_ewma"),
+            _to_float(fields.get("orderbook_micro_qi"), -999999.0),
+        )
+        qi_component = 0.0
+        if qi_value > -999998.0:
+            qi_component = _clamp_float((qi_value - 0.50) / 0.20, -1.0, 1.0)
+
+        score = _clamp_float(50.0 + (25.0 * ofi_component) + (25.0 * qi_component), 0.0, 100.0)
+        return score, f"{prefix}.orderbook_micro_ofi_qi", ""
+    return None, "", "orderbook_micro_not_ready"
+
+
 def _latency_relief_signal_provenance(
     *,
+    code: str,
     signal_strength: Any,
     stock: dict[str, Any] | None,
     ws_data: dict[str, Any] | None,
@@ -639,6 +955,18 @@ def _latency_relief_signal_provenance(
     input_score = _normalize_signal_score(signal_strength)
     stock_score, stock_source = _score_candidate_from_source(stock, "stock")
     ws_score, ws_source = _score_candidate_from_source(ws_data, "ws")
+    explicit_negative_ai_action = _latency_explicit_negative_ai_action(stock, ws_data)
+    stock_fields = stock if isinstance(stock, dict) else {}
+    estimator = _latency_micro_estimator_relief_signal_candidate(
+        code,
+        position_tag=str(
+            stock_fields.get("position_tag")
+            or stock_fields.get("entry_momentum_tag")
+            or stock_fields.get("momentum_tag")
+            or ""
+        ),
+    )
+    micro_score, micro_source, micro_gap = _latency_micro_relief_signal_candidate(stock, ws_data)
     candidate_score: float | None = None
     candidate_source = ""
     for score, score_source in ((stock_score, stock_source), (ws_score, ws_source)):
@@ -650,24 +978,44 @@ def _latency_relief_signal_provenance(
         candidate_score = stock_score if stock_score is not None else ws_score
         candidate_source = stock_source or ws_source
 
-    if input_score > 0:
+    if explicit_negative_ai_action:
+        state = "explicit_negative_ai"
+        source = f"explicit_ai_{explicit_negative_ai_action.lower()}"
+        gap = "explicit_ai_wait_or_drop"
+        effective_score = 0.0
+    elif input_score > 0:
         state = "fresh"
         source = "input_signal_strength"
         gap = ""
+        effective_score = input_score
+    elif estimator.get("latency_spread_relief_micro_estimator_eligible"):
+        state = "fresh"
+        source = "micro_estimator.true_ofi_ewma"
+        gap = ""
+        effective_score = _to_float(estimator.get("latency_spread_relief_micro_estimator_score"), 0.0)
+    elif micro_score is not None:
+        state = "fresh"
+        source = micro_source
+        gap = ""
+        effective_score = micro_score
     elif candidate_score is None:
         state = "missing"
         source = "missing"
         gap = "signal_strength_missing"
+        effective_score = 0.0
     elif candidate_score > 0:
         state = "source_gap"
         source = "input_signal_strength_zero"
         gap = "prior_ai_available_but_signal_strength_zero"
+        effective_score = 0.0
     else:
         state = "unusable"
         source = "input_signal_strength_zero"
         gap = "candidate_ai_score_zero_or_unusable"
+        effective_score = 0.0
 
     return {
+        "latency_spread_relief_signal_score": round(float(effective_score), 3),
         "latency_spread_relief_signal_score_source": source,
         "latency_spread_relief_signal_source_quality_state": state,
         "latency_spread_relief_candidate_ai_score": (
@@ -675,6 +1023,9 @@ def _latency_relief_signal_provenance(
         ),
         "latency_spread_relief_candidate_ai_score_source": candidate_source,
         "latency_spread_relief_source_quality_gap": gap,
+        "latency_spread_relief_explicit_negative_ai_action": explicit_negative_ai_action or "",
+        "latency_spread_relief_orderbook_micro_gap": micro_gap,
+        **estimator,
     }
 
 
@@ -706,7 +1057,7 @@ def _latency_spread_block_buckets(
     else:
         price_bucket = "spread_not_above_caution"
 
-    if signal_source_quality_state in {"missing", "unusable", "source_gap"}:
+    if signal_source_quality_state in {"missing", "unusable", "source_gap", "explicit_negative_ai"}:
         signal_bucket = f"signal_{signal_source_quality_state}"
     else:
         signal_bucket = "signal_fresh"
@@ -722,6 +1073,421 @@ def _latency_spread_block_buckets(
         "latency_spread_block_spread_bps": spread_bps,
         "latency_spread_block_spread_ticks": spread_ticks,
     }
+
+
+def _latency_false_negative_remeasure_enabled() -> bool:
+    raw = os.getenv("KORSTOCKSCAN_LATENCY_FALSE_NEGATIVE_REMEASURE_ENABLED")
+    return True if raw is None else _truthy(raw)
+
+
+def _latency_false_negative_report_ready(stock: dict[str, Any] | None) -> bool:
+    fields = stock if isinstance(stock, dict) else {}
+    grade = str(
+        fields.get("latency_false_negative_canary_grade")
+        or fields.get("latency_false_negative_report_canary_grade")
+        or fields.get("latency_false_negative_remeasure_grade")
+        or ""
+    ).strip()
+    return grade == "ready_for_recheck"
+
+
+def _latency_true_ofi_direct_canary_enabled() -> bool:
+    raw = os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ENABLED")
+    return True if raw is None else _truthy(raw)
+
+
+def _latency_opportunity_price_delta_pct(
+    stock: dict[str, Any] | None,
+    ws_data: dict[str, Any] | None,
+) -> float:
+    fields: list[Any] = []
+    for source in (stock or {}, ws_data or {}):
+        fields.extend(
+            [
+                source.get("price_delta_since_first_seen_pct"),
+                source.get("comparable_flu_delta_since_first_seen"),
+                source.get("fluctuation"),
+                source.get("fluctuation_rate"),
+                source.get("change_rate"),
+            ]
+        )
+    values = [_to_float(value, 0.0) for value in fields if value not in (None, "", "-")]
+    return max(values) if values else 0.0
+
+
+def _latency_rising_missed_lineage(stock: dict[str, Any] | None) -> bool:
+    fields = stock if isinstance(stock, dict) else {}
+    source_signature = str(fields.get("source_signature") or "").upper()
+    promotion_reason = str(fields.get("scanner_promotion_reason") or "").lower()
+    forced_reason = str(fields.get("forced_entry_reason") or "").lower()
+    lineage = str(fields.get("rising_missed_lineage") or "").strip().lower()
+    return (
+        _truthy(fields.get("rising_missed_entry_lineage"))
+        or _truthy(fields.get("rising_missed_one_share_entry_forced"))
+        or _truthy(fields.get("rising_missed_one_share_scout"))
+        or bool(lineage)
+        or "rising_missed" in promotion_reason
+        or "rising_missed" in forced_reason
+        or "LOW_REBOUND_RISING_MISSED" in source_signature
+    )
+
+
+def _latency_opportunity_source_support(stock: dict[str, Any] | None, ws_data: dict[str, Any] | None) -> bool:
+    markers = {
+        "PRICE_JUMP_START",
+        "NEW_HIGH_CONFIRMATION",
+        "REALTIME_RANK_START",
+        "VALUE_TOP",
+        "VOLUME_SURGE_POSITIVE",
+    }
+    for source in (stock or {}, ws_data or {}):
+        source_signature = str(source.get("source_signature") or "").upper()
+        if any(marker in source_signature for marker in markers):
+            return True
+    return False
+
+
+def _latency_false_negative_runtime_estimator_context(code: str) -> dict[str, Any]:
+    context = {
+        "latency_false_negative_remeasure_source_state": "not_evaluated",
+        "latency_false_negative_remeasure_true_ofi_ewma": 0.0,
+        "latency_false_negative_remeasure_true_ofi_sample_count": 0,
+        "latency_false_negative_remeasure_ws_age_ms": -1.0,
+        "latency_false_negative_remeasure_estimator_confidence": 0.0,
+    }
+    if not str(code or "").strip():
+        context["latency_false_negative_remeasure_source_state"] = "missing_code"
+        return context
+    now_ts = time.time()
+    try:
+        snapshot = MICRO_ESTIMATOR_STORE.snapshot(str(code), now_ts=now_ts)
+    except Exception:
+        context["latency_false_negative_remeasure_source_state"] = "snapshot_unavailable"
+        return context
+    if not isinstance(snapshot, dict):
+        context["latency_false_negative_remeasure_source_state"] = "snapshot_unavailable"
+        return context
+    last_ws_ts = _to_float(snapshot.get("last_ws_ts"), 0.0)
+    ws_age_ms = max(0.0, (now_ts - last_ws_ts) * 1000.0) if last_ws_ts > 0 else -1.0
+    context.update(
+        {
+            "latency_false_negative_remeasure_source_state": str(
+                snapshot.get("source_state") or "default_prior"
+            ),
+            "latency_false_negative_remeasure_true_ofi_ewma": round(
+                _to_float(snapshot.get("true_ofi_ewma"), 0.0), 4
+            ),
+            "latency_false_negative_remeasure_true_ofi_sample_count": int(
+                _to_float(snapshot.get("true_ofi_sample_count"), 0.0)
+            ),
+            "latency_false_negative_remeasure_ws_age_ms": round(ws_age_ms, 3),
+            "latency_false_negative_remeasure_estimator_confidence": round(
+                _to_float(snapshot.get("confidence"), 0.0),
+                4,
+            ),
+        }
+    )
+    return context
+
+
+def _latency_false_negative_bounded_remeasure_fields(
+    *,
+    code: str,
+    stock: dict[str, Any] | None,
+    ws_data: dict[str, Any] | None,
+    strategy_id: str,
+    policy_decision: EntryDecision,
+    effective_decision: EntryDecision,
+    latency_status,
+    danger_reasons: list[str] | None,
+    spread_bps: float,
+) -> dict[str, Any]:
+    enabled = _latency_false_negative_remeasure_enabled()
+    estimator_context = _latency_false_negative_runtime_estimator_context(code) if enabled else {}
+    min_review_score_pct = max(
+        0.0,
+        _to_float(os.getenv("KORSTOCKSCAN_LATENCY_FALSE_NEGATIVE_REMEASURE_MIN_REVIEW_SCORE_PCT"), 2.0),
+    )
+    min_samples = max(
+        1,
+        int(_to_float(os.getenv("KORSTOCKSCAN_LATENCY_FALSE_NEGATIVE_REMEASURE_MIN_TRUE_OFI_SAMPLES"), 100.0)),
+    )
+    max_ws_age_ms = max(
+        1.0,
+        _to_float(os.getenv("KORSTOCKSCAN_LATENCY_FALSE_NEGATIVE_REMEASURE_MAX_WS_AGE_MS"), 150.0),
+    )
+    true_ofi_floor = _to_float(
+        os.getenv("KORSTOCKSCAN_LATENCY_FALSE_NEGATIVE_REMEASURE_TRUE_OFI_FLOOR"),
+        -0.10,
+    )
+    max_spread_bps = max(
+        1.0,
+        _to_float(os.getenv("KORSTOCKSCAN_LATENCY_FALSE_NEGATIVE_REMEASURE_MAX_SPREAD_BPS"), 90.0),
+    )
+    fields: dict[str, Any] = {
+        "latency_false_negative_remeasure_enabled": enabled,
+        "latency_false_negative_remeasure_candidate": False,
+        "latency_false_negative_remeasure_candidate_source": "none",
+        "latency_false_negative_remeasure_enqueued": False,
+        "latency_false_negative_remeasure_reason": "disabled" if not enabled else "not_evaluated",
+        "latency_false_negative_remeasure_cohort": "not_applicable",
+        "latency_false_negative_remeasure_grade": "not_applicable",
+        "latency_false_negative_remeasure_next_action": "none",
+        "latency_false_negative_remeasure_metric_role": "source_only_runtime_remeasure_enqueue",
+        "latency_false_negative_remeasure_decision_authority": _LATENCY_FALSE_NEGATIVE_REMEASURE_AUTHORITY,
+        "latency_false_negative_remeasure_window_policy": (
+            "same_day_ready_for_recheck_report_plus_fresh_runtime_state"
+        ),
+        "latency_false_negative_remeasure_sample_floor": (
+            "report_ready_for_recheck_and_runtime_true_ofi_samples>=floor"
+        ),
+        "latency_false_negative_remeasure_primary_decision_metric": (
+            "ready_for_recheck_grade_with_runtime_spread_true_ofi_freshness"
+        ),
+        "latency_false_negative_remeasure_source_quality_gate": (
+            "fresh_quote_and_fresh_true_ofi_with_bounded_spread_or_bounded_report_spread_only"
+        ),
+        "latency_false_negative_remeasure_runtime_effect": False,
+        "latency_false_negative_remeasure_allowed_runtime_apply": False,
+        "latency_false_negative_remeasure_forbidden_uses": _LATENCY_FALSE_NEGATIVE_REMEASURE_FORBIDDEN_USES,
+        "latency_false_negative_remeasure_min_review_score_pct": round(min_review_score_pct, 3),
+        "latency_false_negative_remeasure_min_true_ofi_samples": min_samples,
+        "latency_false_negative_remeasure_max_ws_age_ms": round(max_ws_age_ms, 3),
+        "latency_false_negative_remeasure_true_ofi_floor": round(true_ofi_floor, 4),
+        "latency_false_negative_remeasure_max_spread_bps": round(max_spread_bps, 3),
+        "latency_false_negative_remeasure_spread_bps": round(float(spread_bps or 0.0), 3),
+        **estimator_context,
+    }
+    if not enabled:
+        return fields
+    if str(strategy_id or "").upper() not in {"SCALPING", "SCALP"}:
+        fields["latency_false_negative_remeasure_reason"] = "non_scalping"
+        return fields
+    if policy_decision != EntryDecision.REJECT_DANGER or effective_decision != EntryDecision.REJECT_DANGER:
+        fields["latency_false_negative_remeasure_reason"] = "not_blocked_by_latency_danger"
+        return fields
+    if bool(getattr(latency_status, "quote_stale", False)):
+        fields["latency_false_negative_remeasure_reason"] = "quote_stale"
+        return fields
+    explicit_negative_ai_action = _latency_explicit_negative_ai_action(stock, ws_data)
+    if explicit_negative_ai_action:
+        fields["latency_false_negative_remeasure_reason"] = (
+            f"explicit_ai_{explicit_negative_ai_action.lower()}_veto"
+        )
+        return fields
+
+    normalized_reasons = _normalized_reason_set(danger_reasons or _latency_danger_reasons(latency_status))
+    spread_reasons = {
+        "spread_above_caution_below_guard_cap",
+        "spread_above_caution",
+        "spread_too_wide",
+    }
+    if not normalized_reasons or not normalized_reasons.issubset(spread_reasons):
+        fields["latency_false_negative_remeasure_reason"] = "non_spread_latency_danger"
+        return fields
+    if float(spread_bps or 0.0) > max_spread_bps:
+        fields["latency_false_negative_remeasure_reason"] = "spread_bps_above_remeasure_cap"
+        fields["latency_false_negative_remeasure_grade"] = "observe_wide_spread"
+        return fields
+
+    true_ofi = _to_float(fields.get("latency_false_negative_remeasure_true_ofi_ewma"), 0.0)
+    sample_count = int(_to_float(fields.get("latency_false_negative_remeasure_true_ofi_sample_count"), 0.0))
+    ws_age_ms = _to_float(fields.get("latency_false_negative_remeasure_ws_age_ms"), -1.0)
+    true_ofi_ready = (
+        sample_count >= min_samples
+        and 0.0 <= ws_age_ms <= max_ws_age_ms
+        and true_ofi >= true_ofi_floor
+    )
+    if not _latency_false_negative_report_ready(stock):
+        fields["latency_false_negative_remeasure_reason"] = "report_ready_for_recheck_missing"
+        return fields
+    report_cohort = str(
+        (stock or {}).get("latency_false_negative_canary_cohort")
+        or (stock or {}).get("latency_false_negative_report_canary_cohort")
+        or ""
+    )
+    if not true_ofi_ready and "spread_only" not in report_cohort:
+        fields["latency_false_negative_remeasure_reason"] = "runtime_true_ofi_recheck_not_ready"
+        fields["latency_false_negative_remeasure_grade"] = "hold_sample"
+        return fields
+
+    fields.update(
+        {
+            "latency_false_negative_remeasure_candidate": True,
+            "latency_false_negative_remeasure_enqueued": True,
+            "latency_false_negative_remeasure_candidate_source": "intraday_feedback_report",
+            "latency_false_negative_remeasure_reason": (
+                "true_ofi_near_zero_or_positive_with_fresh_ws"
+                if true_ofi_ready
+                else "spread_only_report_ready_with_bounded_spread"
+            ),
+            "latency_false_negative_remeasure_cohort": (
+                "true_ofi_near_zero_false_negative"
+                if true_ofi_ready
+                else "spread_only_false_negative"
+            ),
+            "latency_false_negative_remeasure_grade": "ready_for_recheck",
+            "latency_false_negative_remeasure_next_action": "bounded_latency_remeasure_enqueue",
+        }
+    )
+    return fields
+
+
+def _latency_true_ofi_direct_canary_fields(
+    *,
+    stock: dict[str, Any] | None,
+    ws_data: dict[str, Any] | None,
+    strategy_id: str,
+    policy_decision: EntryDecision,
+    effective_decision: EntryDecision,
+    latency_status,
+    danger_reasons: list[str] | None,
+    spread_bps: float,
+    signal_score: float,
+    micro_estimator_reason: str,
+    estimator_context: dict[str, Any],
+    danger_relief_forbidden: bool,
+) -> dict[str, Any]:
+    enabled = _latency_true_ofi_direct_canary_enabled()
+    min_samples = max(
+        1,
+        int(_to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MIN_SAMPLES"), 75.0)),
+    )
+    max_ws_age_ms = max(
+        1.0,
+        _to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MAX_WS_AGE_MS"), 180.0),
+    )
+    max_spread_bps = max(
+        1.0,
+        _to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MAX_SPREAD_BPS"), 85.0),
+    )
+    min_true_ofi = _to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MIN_TRUE_OFI"), -0.09)
+    max_true_ofi = _to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MAX_TRUE_OFI"), 0.12)
+    min_signal_score = max(
+        0.0,
+        _to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MIN_SIGNAL_SCORE"), 70.0),
+    )
+    min_delta_pct = max(
+        0.0,
+        _to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MIN_DELTA_PCT"), 3.0),
+    )
+    true_ofi = _to_float(estimator_context.get("latency_false_negative_remeasure_true_ofi_ewma"), 0.0)
+    sample_count = int(_to_float(estimator_context.get("latency_false_negative_remeasure_true_ofi_sample_count"), 0.0))
+    ws_age_ms = _to_float(estimator_context.get("latency_false_negative_remeasure_ws_age_ms"), -1.0)
+    source_state = str(estimator_context.get("latency_false_negative_remeasure_source_state") or "").strip().lower()
+    delta_pct = _latency_opportunity_price_delta_pct(stock, ws_data)
+    opportunity_supported = (
+        float(signal_score or 0.0) >= min_signal_score
+        or delta_pct >= min_delta_pct
+        or _latency_opportunity_source_support(stock, ws_data)
+    )
+    micro_state = str(
+        (ws_data or {}).get("orderbook_micro_state")
+        or (stock or {}).get("orderbook_micro_state")
+        or ""
+    ).strip().lower()
+    micro_reason = str(micro_estimator_reason or "").strip().lower()
+    derived_true_ofi_below_floor = (
+        micro_reason == "true_ofi_below_floor"
+        or (
+            micro_reason in {"", "disabled", "not_evaluated"}
+            and true_ofi < 0.20
+        )
+    )
+    fields: dict[str, Any] = {
+        "latency_true_ofi_direct_canary_enabled": enabled,
+        "latency_true_ofi_direct_canary_applied": False,
+        "latency_true_ofi_direct_canary_reason": "disabled" if not enabled else "not_evaluated",
+        "latency_true_ofi_direct_canary_decision_authority": _LATENCY_TRUE_OFI_DIRECT_CANARY_AUTHORITY,
+        "latency_true_ofi_direct_canary_runtime_effect": False,
+        "latency_true_ofi_direct_canary_allowed_runtime_apply": False,
+        "latency_true_ofi_direct_canary_forbidden_uses": _LATENCY_TRUE_OFI_DIRECT_CANARY_FORBIDDEN_USES,
+        "latency_true_ofi_direct_canary_relief_runtime_enabled": not danger_relief_forbidden,
+        "latency_true_ofi_direct_canary_min_samples": min_samples,
+        "latency_true_ofi_direct_canary_max_ws_age_ms": round(max_ws_age_ms, 3),
+        "latency_true_ofi_direct_canary_max_spread_bps": round(max_spread_bps, 3),
+        "latency_true_ofi_direct_canary_min_true_ofi": round(min_true_ofi, 4),
+        "latency_true_ofi_direct_canary_max_true_ofi": round(max_true_ofi, 4),
+        "latency_true_ofi_direct_canary_min_signal_score": round(min_signal_score, 3),
+        "latency_true_ofi_direct_canary_min_delta_pct": round(min_delta_pct, 3),
+        "latency_true_ofi_direct_canary_signal_score": round(float(signal_score or 0.0), 3),
+        "latency_true_ofi_direct_canary_price_delta_pct": round(delta_pct, 4),
+        "latency_true_ofi_direct_canary_spread_bps": round(float(spread_bps or 0.0), 3),
+        "latency_true_ofi_direct_canary_true_ofi_ewma": round(true_ofi, 4),
+        "latency_true_ofi_direct_canary_true_ofi_sample_count": sample_count,
+        "latency_true_ofi_direct_canary_ws_age_ms": round(ws_age_ms, 3),
+        "latency_true_ofi_direct_canary_source_state": source_state or "not_evaluated",
+        "latency_true_ofi_direct_canary_micro_reason": micro_reason or "not_evaluated",
+        "latency_true_ofi_direct_canary_derived_reason": (
+            "true_ofi_below_floor" if derived_true_ofi_below_floor else "not_true_ofi_below_floor"
+        ),
+        "latency_true_ofi_direct_canary_opportunity_supported": bool(opportunity_supported),
+        "latency_true_ofi_direct_canary_rising_missed_lineage": _latency_rising_missed_lineage(stock),
+        "latency_true_ofi_direct_canary_micro_state": micro_state or "-",
+    }
+    if not enabled:
+        return fields
+    if danger_relief_forbidden:
+        fields["latency_true_ofi_direct_canary_reason"] = "latency_relief_runtime_disabled"
+        return fields
+    if str(strategy_id or "").upper() not in {"SCALPING", "SCALP"}:
+        fields["latency_true_ofi_direct_canary_reason"] = "non_scalping"
+        return fields
+    if not fields["latency_true_ofi_direct_canary_rising_missed_lineage"]:
+        fields["latency_true_ofi_direct_canary_reason"] = "non_rising_missed_lineage"
+        return fields
+    if policy_decision != EntryDecision.REJECT_DANGER or effective_decision != EntryDecision.REJECT_DANGER:
+        fields["latency_true_ofi_direct_canary_reason"] = "not_blocked_by_latency_danger"
+        return fields
+    if bool(getattr(latency_status, "quote_stale", False)):
+        fields["latency_true_ofi_direct_canary_reason"] = "quote_stale"
+        return fields
+    explicit_negative_ai_action = _latency_explicit_negative_ai_action(stock, ws_data)
+    if explicit_negative_ai_action:
+        fields["latency_true_ofi_direct_canary_reason"] = f"explicit_ai_{explicit_negative_ai_action.lower()}_veto"
+        return fields
+    normalized_reasons = _normalized_reason_set(danger_reasons or _latency_danger_reasons(latency_status))
+    spread_reasons = {
+        "spread_above_caution_below_guard_cap",
+        "spread_above_caution",
+        "spread_too_wide",
+    }
+    if not normalized_reasons or not normalized_reasons.issubset(spread_reasons):
+        fields["latency_true_ofi_direct_canary_reason"] = "non_spread_latency_danger"
+        return fields
+    if not derived_true_ofi_below_floor:
+        fields["latency_true_ofi_direct_canary_reason"] = "not_true_ofi_below_floor"
+        return fields
+    if source_state in {"", "not_evaluated", "missing_code", "snapshot_unavailable"}:
+        fields["latency_true_ofi_direct_canary_reason"] = "true_ofi_source_unavailable"
+        return fields
+    if sample_count < min_samples:
+        fields["latency_true_ofi_direct_canary_reason"] = "true_ofi_samples_below_floor"
+        return fields
+    if not (0.0 <= ws_age_ms <= max_ws_age_ms):
+        fields["latency_true_ofi_direct_canary_reason"] = "ws_age_above_direct_canary_cap"
+        return fields
+    if float(spread_bps or 0.0) > max_spread_bps:
+        fields["latency_true_ofi_direct_canary_reason"] = "spread_bps_above_direct_canary_cap"
+        return fields
+    if not (min_true_ofi <= true_ofi <= max_true_ofi):
+        fields["latency_true_ofi_direct_canary_reason"] = "true_ofi_outside_near_zero_band"
+        return fields
+    if micro_state in {"bearish", "strong_bearish"}:
+        fields["latency_true_ofi_direct_canary_reason"] = "bearish_orderbook_micro_state"
+        return fields
+    if not opportunity_supported:
+        fields["latency_true_ofi_direct_canary_reason"] = "opportunity_signal_below_floor"
+        return fields
+    fields.update(
+        {
+            "latency_true_ofi_direct_canary_applied": True,
+            "latency_true_ofi_direct_canary_reason": "direct_canary_true_ofi_false_negative_allow",
+            "latency_true_ofi_direct_canary_runtime_effect": True,
+            "latency_true_ofi_direct_canary_allowed_runtime_apply": True,
+        }
+    )
+    return fields
 
 
 def _normalized_reason_set(values: Any) -> set[str]:
@@ -744,8 +1510,11 @@ def _latency_danger_reasons(latency_status) -> list[str]:
         reasons.append("ws_age_too_high")
     if int(getattr(latency_status, "ws_jitter_ms", 0) or 0) > max_ws_jitter_ms:
         reasons.append("ws_jitter_too_high")
-    if _to_float(getattr(latency_status, "spread_ratio", 0.0), 0.0) > max_spread_ratio:
+    spread_ratio = _to_float(getattr(latency_status, "spread_ratio", 0.0), 0.0)
+    if spread_ratio > max_spread_ratio:
         reasons.append("spread_too_wide")
+    elif not reasons and spread_ratio > _to_float(_CONFIG.max_spread_ratio_for_caution, 0.0):
+        reasons.append("spread_above_caution_below_guard_cap")
     if not reasons:
         reasons.append("other_danger")
     return reasons
@@ -954,6 +1723,7 @@ def _should_apply_latency_spread_relief_canary(
     signal_price: int,
     latest_price: int,
     danger_reasons: list[str] | None = None,
+    allow_true_ofi_all_scalping_scope: bool = False,
 ) -> tuple[bool, str]:
     if not bool(getattr(TRADING_RULES, "SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED", False)):
         return False, "disabled"
@@ -963,7 +1733,8 @@ def _should_apply_latency_spread_relief_canary(
         return False, "quote_stale"
 
     normalized_reasons = _normalized_reason_set(danger_reasons or _latency_danger_reasons(latency_status))
-    if normalized_reasons != {"spread_too_wide"}:
+    spread_relief_reasons = {"spread_too_wide", "spread_above_caution_below_guard_cap"}
+    if len(normalized_reasons) != 1 or not normalized_reasons.issubset(spread_relief_reasons):
         return False, "spread_only_required"
 
     allow_tags = {
@@ -972,7 +1743,7 @@ def _should_apply_latency_spread_relief_canary(
         if str(tag).strip()
     }
     normalized_tag = str(position_tag or "").strip().upper()
-    if allow_tags and normalized_tag not in allow_tags:
+    if allow_tags and normalized_tag not in allow_tags and not allow_true_ofi_all_scalping_scope:
         return False, "tag_not_allowed"
 
     configured_min_signal = _to_float(
@@ -1298,7 +2069,13 @@ def _should_apply_latency_quote_fresh_composite_canary(
         return False, "quote_stale"
 
     normalized_reasons = _normalized_reason_set(danger_reasons or _latency_danger_reasons(latency_status))
-    quote_fresh_reasons = {"other_danger", "ws_age_too_high", "ws_jitter_too_high", "spread_too_wide"}
+    quote_fresh_reasons = {
+        "other_danger",
+        "ws_age_too_high",
+        "ws_jitter_too_high",
+        "spread_too_wide",
+        "spread_above_caution_below_guard_cap",
+    }
     if not normalized_reasons or not normalized_reasons.issubset(quote_fresh_reasons):
         return False, "quote_fresh_family_required"
 
@@ -1370,7 +2147,13 @@ def _should_apply_latency_signal_quality_quote_composite_canary(
         return False, "quote_stale"
 
     normalized_reasons = _normalized_reason_set(danger_reasons or _latency_danger_reasons(latency_status))
-    quote_fresh_reasons = {"other_danger", "ws_age_too_high", "ws_jitter_too_high", "spread_too_wide"}
+    quote_fresh_reasons = {
+        "other_danger",
+        "ws_age_too_high",
+        "ws_jitter_too_high",
+        "spread_too_wide",
+        "spread_above_caution_below_guard_cap",
+    }
     if not normalized_reasons or not normalized_reasons.issubset(quote_fresh_reasons):
         return False, "quote_fresh_family_required"
 
@@ -1462,7 +2245,13 @@ def _should_apply_latency_mechanical_momentum_relief_canary(
         return False, "quote_stale"
 
     normalized_reasons = _normalized_reason_set(danger_reasons or _latency_danger_reasons(latency_status))
-    quote_fresh_reasons = {"other_danger", "ws_age_too_high", "ws_jitter_too_high", "spread_too_wide"}
+    quote_fresh_reasons = {
+        "other_danger",
+        "ws_age_too_high",
+        "ws_jitter_too_high",
+        "spread_too_wide",
+        "spread_above_caution_below_guard_cap",
+    }
     if not normalized_reasons or not normalized_reasons.issubset(quote_fresh_reasons):
         return False, "quote_fresh_family_required"
 
@@ -1948,16 +2737,33 @@ def evaluate_live_buy_entry(
         or stock.get("momentum_tag")
         or ""
     )
+    spread_relief_signal_provenance = _latency_relief_signal_provenance(
+        code=code,
+        signal_strength=signal_strength,
+        stock=stock,
+        ws_data=ws_data,
+    )
+    spread_relief_signal_score = _to_float(
+        spread_relief_signal_provenance.get("latency_spread_relief_signal_score"),
+        _normalize_signal_score(signal_strength),
+    )
+    true_ofi_all_scalping_scope = bool(
+        spread_relief_signal_provenance.get("latency_spread_relief_micro_estimator_all_scalping_enabled")
+        and spread_relief_signal_provenance.get("latency_spread_relief_micro_estimator_eligible")
+        and spread_relief_signal_provenance.get("latency_spread_relief_signal_score_source")
+        == "micro_estimator.true_ofi_ewma"
+    )
     if policy.decision == EntryDecision.REJECT_DANGER and not danger_relief_forbidden and effective_decision == EntryDecision.REJECT_DANGER:
         spread_relief_ok, spread_relief_reason = _should_apply_latency_spread_relief_canary(
             code=code,
             strategy_id=strategy_id,
             position_tag=spread_relief_tag,
-            signal_strength=float(signal_strength or 0.0),
+            signal_strength=spread_relief_signal_score,
             latency_status=latency,
             signal_price=frozen_price,
             latest_price=latest_price,
             danger_reasons=latency_danger_reasons.split(","),
+            allow_true_ofi_all_scalping_scope=true_ofi_all_scalping_scope,
         )
         if spread_relief_ok:
             latency_canary_applied = True
@@ -1966,7 +2772,7 @@ def evaluate_live_buy_entry(
             effective_reason = "latency_spread_relief_normal_override"
             log_info(
                 f"[LATENCY_SPREAD_RELIEF_CANARY] {stock.get('name')}({code}) "
-                f"tag={spread_relief_tag} signal_score={_normalize_signal_score(signal_strength):.1f} "
+                f"tag={spread_relief_tag} signal_score={spread_relief_signal_score:.1f} "
                 f"ws_age_ms={latency.ws_age_ms} ws_jitter_ms={latency.ws_jitter_ms} "
                 f"spread_ratio={latency.spread_ratio:.6f} "
                 f"danger_reasons={latency_danger_reasons}"
@@ -2095,11 +2901,6 @@ def evaluate_live_buy_entry(
     spread_relief_configured_min_signal, spread_relief_effective_min_signal = (
         _latency_spread_relief_signal_score_floors()
     )
-    spread_relief_signal_provenance = _latency_relief_signal_provenance(
-        signal_strength=signal_strength,
-        stock=stock,
-        ws_data=ws_data,
-    )
     spread_block_buckets = _latency_spread_block_buckets(
         latency_status=latency,
         latest_price=latest_price,
@@ -2109,6 +2910,47 @@ def evaluate_live_buy_entry(
             spread_relief_signal_provenance.get("latency_spread_relief_signal_source_quality_state") or ""
         ),
     )
+    latency_false_negative_remeasure_fields = _latency_false_negative_bounded_remeasure_fields(
+        code=code,
+        stock=stock,
+        ws_data=ws_data,
+        strategy_id=strategy_id,
+        policy_decision=policy.decision,
+        effective_decision=effective_decision,
+        latency_status=latency,
+        danger_reasons=latency_danger_reasons.split(","),
+        spread_bps=_to_float(spread_block_buckets.get("latency_spread_block_spread_bps"), 0.0),
+    )
+    latency_true_ofi_direct_canary_fields = _latency_true_ofi_direct_canary_fields(
+        stock=stock,
+        ws_data=ws_data,
+        strategy_id=strategy_id,
+        policy_decision=policy.decision,
+        effective_decision=effective_decision,
+        latency_status=latency,
+        danger_reasons=latency_danger_reasons.split(","),
+        spread_bps=_to_float(spread_block_buckets.get("latency_spread_block_spread_bps"), 0.0),
+        signal_score=_normalize_signal_score(signal_strength),
+        micro_estimator_reason=str(
+            spread_relief_signal_provenance.get("latency_spread_relief_micro_estimator_reason") or ""
+        ),
+        estimator_context=latency_false_negative_remeasure_fields,
+        danger_relief_forbidden=danger_relief_forbidden,
+    )
+    if latency_true_ofi_direct_canary_fields.get("latency_true_ofi_direct_canary_applied"):
+        latency_canary_applied = True
+        latency_canary_reason = "latency_true_ofi_direct_canary_applied"
+        effective_decision = EntryDecision.ALLOW_NORMAL
+        effective_reason = "latency_true_ofi_false_negative_direct_canary_normal_override"
+        log_info(
+            f"[LATENCY_TRUE_OFI_DIRECT_CANARY] {stock.get('name')}({code}) "
+            f"tag={stock.get('position_tag')} signal_score={_normalize_signal_score(signal_strength):.1f} "
+            f"delta={latency_true_ofi_direct_canary_fields.get('latency_true_ofi_direct_canary_price_delta_pct')} "
+            f"spread_bps={latency_true_ofi_direct_canary_fields.get('latency_true_ofi_direct_canary_spread_bps')} "
+            f"true_ofi={latency_true_ofi_direct_canary_fields.get('latency_true_ofi_direct_canary_true_ofi_ewma')} "
+            f"samples={latency_true_ofi_direct_canary_fields.get('latency_true_ofi_direct_canary_true_ofi_sample_count')} "
+            f"ws_age_ms={latency_true_ofi_direct_canary_fields.get('latency_true_ofi_direct_canary_ws_age_ms')}"
+        )
     result = {
         "allowed": False,
         "decision": effective_decision.value,
@@ -2158,13 +3000,14 @@ def evaluate_live_buy_entry(
         ),
         "latency_canary_applied": latency_canary_applied,
         "latency_canary_reason": latency_canary_reason,
-        "latency_spread_relief_signal_score": round(_normalize_signal_score(signal_strength), 3),
         "latency_spread_relief_configured_min_signal_score": round(spread_relief_configured_min_signal, 3),
         "latency_spread_relief_effective_min_signal_score": round(spread_relief_effective_min_signal, 3),
         "latency_spread_relief_tag": spread_relief_tag,
         "latency_spread_relief_block_reason": latency_spread_relief_block_reason,
         **spread_relief_signal_provenance,
         **spread_block_buckets,
+        **latency_false_negative_remeasure_fields,
+        **latency_true_ofi_direct_canary_fields,
         "latency_relief_attempted": bool(policy.decision == EntryDecision.REJECT_DANGER and not danger_relief_forbidden),
         "latency_relief_block_reason": (
             latency_canary_reason
@@ -2297,6 +3140,9 @@ def evaluate_live_buy_entry(
                         "aggressive_entry_price_override_applied": True,
                         "aggressive_entry_price_override_type": override_type,
                         "aggressive_entry_price_override_reason": str(aggressive_override.get("reason")),
+                        "aggressive_entry_price_operator_intraday_discovery": bool(
+                            aggressive_override.get("operator_intraday_entry_price_discovery")
+                        ),
                         "aggressive_entry_price_original_profile": str(aggressive_override.get("original_profile")),
                         "aggressive_entry_price_original_bps": int(aggressive_override.get("original_bps") or applied_bps),
                         "aggressive_entry_price_target_mode": str(aggressive_override.get("target_mode")),
@@ -2395,6 +3241,11 @@ def evaluate_live_buy_entry(
                 (gap_profile.get("context") or {}).get("aggressive_entry_price_override_reason", "")
                 if isinstance(gap_profile.get("context"), dict)
                 else ""
+            )
+            result["aggressive_entry_price_operator_intraday_discovery"] = bool(
+                (gap_profile.get("context") or {}).get("aggressive_entry_price_operator_intraday_discovery", False)
+                if isinstance(gap_profile.get("context"), dict)
+                else False
             )
             result["aggressive_entry_price_override_skip_reason"] = str(
                 (gap_profile.get("context") or {}).get("aggressive_entry_price_override_skip_reason", "")
