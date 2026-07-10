@@ -6387,6 +6387,8 @@ def run_sniper(is_test_mode=False):
                             stock["_scanner_market_data_enrichment_fields"] = dict(
                                 market_data_enrichment_fields
                             )
+                            stock["_scanner_market_data_enrichment_ws_data"] = dict(ws_data or {})
+                            stock["_scanner_market_data_enrichment_stored_at"] = heavy_queue_enter_epoch
                         _defer_emit_scanner_fast_precheck(
                             stock,
                             code,

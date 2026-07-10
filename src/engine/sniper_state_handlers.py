@@ -19322,6 +19322,78 @@ def _quote_stale_for_rising_missed_scout_quality_guard(
     }
 
 
+def _scanner_market_data_enrichment_consumer_ttl_sec() -> float:
+    return max(
+        0.2,
+        min(
+            _env_float("KORSTOCKSCAN_SCANNER_MARKET_DATA_ENRICHMENT_CONSUMER_TTL_SEC", 5.0),
+            10.0,
+        ),
+    )
+
+
+def _merge_scanner_market_data_enrichment_into_ws_data(
+    stock: dict | None,
+    ws_data: dict | None,
+    runtime: dict | None,
+) -> dict:
+    """Carry scanner freshness-envelope input into downstream submit-safety consumers."""
+    stock = stock if isinstance(stock, dict) else {}
+    runtime = runtime if isinstance(runtime, dict) else {}
+    merged = dict(ws_data or {})
+    cached_ws = stock.get("_scanner_market_data_enrichment_ws_data")
+    cached_fields = stock.get("_scanner_market_data_enrichment_fields")
+    cached_ws = cached_ws if isinstance(cached_ws, dict) else {}
+    cached_fields = cached_fields if isinstance(cached_fields, dict) else {}
+    if not cached_ws and not cached_fields:
+        return merged
+
+    now_ts = _safe_float(runtime.get("now_ts"), time.time())
+    stored_at = _safe_float(stock.get("_scanner_market_data_enrichment_stored_at"), None)
+    ttl_sec = _scanner_market_data_enrichment_consumer_ttl_sec()
+    age_sec = None if stored_at is None else max(0.0, now_ts - stored_at)
+    state = str(
+        cached_fields.get("market_data_freshness_state")
+        or cached_ws.get("market_data_freshness_state")
+        or ""
+    ).strip()
+    active = bool(
+        state in {"fresh_ws", "rest_enriched", "conflicted"}
+        and age_sec is not None
+        and age_sec <= ttl_sec
+    )
+    consumer_fields = {
+        "market_data_enrichment_consumer": "rising_missed_submit_safety",
+        "market_data_enrichment_consumer_ttl_sec": f"{ttl_sec:.3f}",
+        "market_data_enrichment_consumer_age_sec": f"{age_sec:.3f}" if age_sec is not None else "-",
+        "market_data_enrichment_consumer_result": "applied" if active else "skipped",
+        "market_data_enrichment_consumer_skip_reason": (
+            "not_applicable"
+            if active
+            else (
+                "missing_stored_at"
+                if age_sec is None
+                else "expired"
+                if age_sec > ttl_sec
+                else "missing_or_unusable_state"
+            )
+        ),
+    }
+    if not active:
+        merged.update(consumer_fields)
+        return merged
+
+    merged.update(cached_ws)
+    merged.update(cached_fields)
+    age_increment_ms = float(age_sec) * 1000.0 if age_sec is not None else 0.0
+    for key in ("quote_age_ms", "ws_age_ms", "market_data_effective_quote_age_ms"):
+        parsed = _safe_float(merged.get(key), None)
+        if parsed is not None:
+            merged[key] = round(max(0.0, parsed + age_increment_ms), 3)
+    merged.update(consumer_fields)
+    return merged
+
+
 def _rising_missed_scout_recent_weak_ai_micro_block_fields(
     stock: dict | None,
     *,
@@ -34538,6 +34610,7 @@ def _maybe_submit_rising_missed_one_share_entry(
     feature_enabled = _rising_missed_one_share_entry_enabled()
     if not feature_enabled:
         return False
+    ws_data = _merge_scanner_market_data_enrichment_into_ws_data(stock, ws_data, runtime)
     decision = evaluate_rising_missed_one_share_entry(
         stock,
         strategy=strategy,
@@ -34643,6 +34716,7 @@ def _maybe_submit_rising_missed_one_share_entry(
                 upper_limit_exclude_pct=_rising_missed_upper_limit_exclude_pct(),
             )
     decision_log_fields = dict(decision.log_fields or {})
+    decision_log_fields.update(market_data_enrichment_log_fields(ws_data))
     if retry_fields.get("rising_missed_entry_ai_retry_reason") != "not_needed":
         decision_log_fields.update(retry_fields)
     if decision.allowed is False and decision.reason != RISING_MISSED_BLOCK_NOT_CANDIDATE:

@@ -3307,6 +3307,168 @@ def test_rising_missed_scout_quality_guard_no_rest_estimator_after_block(monkeyp
     assert hydrated["sample_count"] == 0
 
 
+def test_rising_missed_submit_safety_consumes_cached_scanner_envelope(monkeypatch):
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.TRADING_RULES = CONFIG
+    state_handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK.clear()
+
+    submit_calls = []
+    entry_logs = []
+    now_ts = 1_783_471_000.0
+
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_MARKET_DATA_ENRICHMENT_CONSUMER_TTL_SEC", "5")
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_rising_missed_same_day_reentry_guard",
+        lambda *args, **kwargs: {"allowed": True},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_submit_watching_triggered_entry",
+        lambda stock, code, ws_data, admin_id, runtime: submit_calls.append((stock, code, ws_data, runtime)) or True,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: entry_logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 25,
+        "name": "CACHED_ENVELOPE_RISING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_id": "scan-cached-envelope",
+        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        "price_delta_since_first_seen_pct": 3.2,
+        "last_watching_ai_score": 50.0,
+        "last_watching_ai_action": "WAIT",
+        "_scanner_market_data_enrichment_stored_at": now_ts - 1.0,
+        "_scanner_market_data_enrichment_fields": {
+            "market_data_enrichment_applied": True,
+            "market_data_enrichment_sources": "ws,ka10004,ka10084",
+            "market_data_freshness_state": "rest_enriched",
+            "market_data_orderbook_state": "rest_enriched",
+            "market_data_effective_quote_age_ms": 400.0,
+            "market_data_effective_price_source": "ka10004_rest_orderbook",
+        },
+        "_scanner_market_data_enrichment_ws_data": {
+            "curr": 10020,
+            "quote_age_ms": 400.0,
+            "quote_stale": False,
+            "best_bid": 10010,
+            "best_ask": 10020,
+            "best_bid_qty": 900,
+            "best_ask_qty": 100,
+            "bid_tot": 9000,
+            "ask_tot": 1000,
+            "market_data_enrichment_applied": True,
+            "market_data_enrichment_sources": "ws,ka10004,ka10084",
+            "market_data_freshness_state": "rest_enriched",
+            "market_data_orderbook_state": "rest_enriched",
+            "market_data_effective_quote_age_ms": 400.0,
+            "market_data_effective_price_source": "ka10004_rest_orderbook",
+        },
+    }
+
+    submitted = state_handlers._maybe_submit_rising_missed_one_share_entry(
+        stock,
+        "123459",
+        {
+            "curr": 10000,
+            "v_pw": 100.0,
+            "source_quality_state": "diagnostic_quote_age_stale",
+            "quote_age_ms": 8000.0,
+            "quote_stale": True,
+        },
+        admin_id=1,
+        runtime={"now_ts": now_ts, "current_ai_score": 50.0, "ai_engine": None, "scout_upgrade_entry": False},
+        strategy="SCALPING",
+        pos_tag="SCANNER",
+        curr_price=10000,
+    )
+
+    assert submitted is True
+    assert submit_calls
+    assert all(stage != "rising_missed_scout_quality_guard_blocked" for stage, _fields in entry_logs)
+    submit_ws = submit_calls[-1][2]
+    assert submit_ws["market_data_freshness_state"] == "rest_enriched"
+    assert submit_ws["market_data_enrichment_consumer_result"] == "applied"
+    assert submit_ws["quote_stale"] is False
+    assert submit_ws["quote_age_ms"] == 1400.0
+    assert submit_ws["market_data_effective_quote_age_ms"] == 1400.0
+    assert entry_logs[-1][0] == "rising_missed_one_share_entry"
+    assert entry_logs[-1][1]["market_data_freshness_state"] == "rest_enriched"
+    assert entry_logs[-1][1]["market_data_enrichment_consumer_result"] == "applied"
+
+
+def test_rising_missed_submit_safety_ignores_expired_cached_scanner_envelope(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_MARKET_DATA_ENRICHMENT_CONSUMER_TTL_SEC", "5")
+    stock = {
+        "_scanner_market_data_enrichment_stored_at": 990.0,
+        "_scanner_market_data_enrichment_fields": {
+            "market_data_freshness_state": "rest_enriched",
+            "market_data_orderbook_state": "rest_enriched",
+            "market_data_effective_quote_age_ms": 200.0,
+        },
+    }
+
+    merged = state_handlers._merge_scanner_market_data_enrichment_into_ws_data(
+        stock,
+        {"curr": 10000, "quote_age_ms": 9000.0, "quote_stale": True},
+        {"now_ts": 1000.0},
+    )
+
+    assert merged["quote_stale"] is True
+    assert merged["quote_age_ms"] == 9000.0
+    assert merged["market_data_enrichment_consumer_result"] == "skipped"
+    assert merged["market_data_enrichment_consumer_skip_reason"] == "expired"
+
+
+def test_rising_missed_submit_safety_cached_envelope_ages_before_guard(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_MARKET_DATA_ENRICHMENT_CONSUMER_TTL_SEC", "5")
+    stock = {
+        "last_watching_ai_score": 50.0,
+        "last_watching_ai_action": "WAIT",
+        "_scanner_market_data_enrichment_stored_at": 996.0,
+        "_scanner_market_data_enrichment_fields": {
+            "market_data_freshness_state": "rest_enriched",
+            "market_data_orderbook_state": "rest_enriched",
+            "market_data_effective_quote_age_ms": 400.0,
+        },
+        "_scanner_market_data_enrichment_ws_data": {
+            "curr": 10000,
+            "quote_age_ms": 400.0,
+            "quote_stale": False,
+            "market_data_freshness_state": "rest_enriched",
+            "market_data_orderbook_state": "rest_enriched",
+            "market_data_effective_quote_age_ms": 400.0,
+        },
+    }
+
+    merged = state_handlers._merge_scanner_market_data_enrichment_into_ws_data(
+        stock,
+        {"curr": 10000, "source_quality_state": "diagnostic_quote_age_stale"},
+        {"now_ts": 1000.0},
+    )
+    decision = state_handlers._evaluate_rising_missed_scout_quality_guard(
+        stock,
+        "123460",
+        merged,
+        {"now_ts": 1000.0},
+        {},
+    )
+
+    assert merged["market_data_enrichment_consumer_result"] == "applied"
+    assert merged["market_data_effective_quote_age_ms"] == 4400.0
+    assert decision["rising_missed_scout_quality_guard_blocked"] is True
+    assert decision["rising_missed_scout_quality_guard_quote_stale"] is True
+    assert decision["block_reason"] == "stale_quote_with_weak_ai_or_strength"
+
+
 def test_rising_missed_micro_estimator_updates_from_fresh_ws_without_rest(monkeypatch):
     state_handlers.COOLDOWNS = {}
     state_handlers.ALERTED_STOCKS = set()
