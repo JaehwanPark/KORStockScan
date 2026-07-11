@@ -361,6 +361,22 @@ def test_emit_pipeline_event_compacts_submit_stage_threshold_stream(monkeypatch,
             "submitted_order_price": "10000",
             "microstructure_reaction_context_status": "ok",
             "microstructure_reaction_context_hash": "abc123",
+            "ka10003_buy_dominance_observation_source_counts": "{'1030_1031_split': 2}",
+            "ka10003_buy_dominance_observation_trade_value_source_counts": "{'1313': 1}",
+            "ka10003_buy_dominance_observation_inside_spread_count": "1",
+            "ka10003_buy_dominance_observation_split_vs_15_mismatch_count": "1",
+            "v_pw_source": "ka10046_rest_fallback",
+            "v_pw_runtime_support_usable": "False",
+            "ka10046_strength_source": "ka10046_rest_strength_trend",
+            "ka10046_strength_rest_received_ts_ms": "1780000001000",
+            "market_data_signed_tape_state": "sell_dominated",
+            "market_data_signed_tape_sample_count": "3",
+            "market_data_rest_signed_tape_pressure_usable": "False",
+            "rest_signed_trade_ticks": "[{'signed_trade_volume': '-100', 'rest_signed_tape_source': 'ka10084'}]",
+            "latency_true_ofi_direct_canary_signed_tape_sample_count": "3",
+            "latency_true_ofi_direct_canary_signed_tape_sell_dominated": "True",
+            "latency_true_ofi_direct_canary_signed_tape_net_buy_volume": "-250",
+            "latency_true_ofi_direct_canary_tape_block_reason": "signed_tape_sell_dominated",
             **{f"extra_field_{idx}": str(idx) for idx in range(50)},
         },
     )
@@ -375,6 +391,22 @@ def test_emit_pipeline_event_compacts_submit_stage_threshold_stream(monkeypatch,
     assert compact_fields["field_projection"] == "submit_compact_v1"
     assert int(compact_fields["full_field_count"]) > len(compact_fields)
     assert int(compact_fields["omitted_field_count"]) > 0
+    assert compact_fields["ka10003_buy_dominance_observation_source_counts"] == "{'1030_1031_split': 2}"
+    assert compact_fields["ka10003_buy_dominance_observation_trade_value_source_counts"] == "{'1313': 1}"
+    assert compact_fields["ka10003_buy_dominance_observation_inside_spread_count"] == "1"
+    assert compact_fields["ka10003_buy_dominance_observation_split_vs_15_mismatch_count"] == "1"
+    assert compact_fields["v_pw_source"] == "ka10046_rest_fallback"
+    assert compact_fields["v_pw_runtime_support_usable"] == "False"
+    assert compact_fields["ka10046_strength_source"] == "ka10046_rest_strength_trend"
+    assert compact_fields["ka10046_strength_rest_received_ts_ms"] == "1780000001000"
+    assert compact_fields["market_data_signed_tape_state"] == "sell_dominated"
+    assert compact_fields["market_data_signed_tape_sample_count"] == "3"
+    assert compact_fields["market_data_rest_signed_tape_pressure_usable"] == "False"
+    assert compact_fields["rest_signed_trade_ticks"] == "[{'signed_trade_volume': '-100', 'rest_signed_tape_source': 'ka10084'}]"
+    assert compact_fields["latency_true_ofi_direct_canary_signed_tape_sample_count"] == "3"
+    assert compact_fields["latency_true_ofi_direct_canary_signed_tape_sell_dominated"] == "True"
+    assert compact_fields["latency_true_ofi_direct_canary_signed_tape_net_buy_volume"] == "-250"
+    assert compact_fields["latency_true_ofi_direct_canary_tape_block_reason"] == "signed_tape_sell_dominated"
     assert "extra_field_49" not in compact_fields
 
 

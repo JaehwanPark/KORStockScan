@@ -340,12 +340,17 @@ def get_api_url(endpoint):
     return url
 
 
+def _split_kiwoom_market_suffix(code: str) -> tuple[str, str]:
+    raw = str(code or "").strip().upper().replace(".0", "")
+    for suffix in ("_AL", "_NX"):
+        if raw.endswith(suffix):
+            return raw[:-3], suffix
+    return raw, ""
+
+
 def normalize_stock_code(code: str) -> str:
-    """종목코드를 6자리 기준으로 정규화합니다. (_AL, A-prefix 허용)"""
-    raw = str(code or "").strip().upper()
-    raw = raw.replace('.0', '')
-    if raw.endswith('_AL'):
-        raw = raw[:-3]
+    """종목코드를 6자리 기준으로 정규화합니다. (_AL/_NX, A-prefix 허용)"""
+    raw, _suffix = _split_kiwoom_market_suffix(code)
     if raw.startswith('A') and len(raw) >= 7:
         raw = raw[1:]
     digits = ''.join(ch for ch in raw if ch.isdigit())
@@ -353,37 +358,15 @@ def normalize_stock_code(code: str) -> str:
 
 
 def get_effective_kiwoom_code(code: str, db=None, is_nxt=None) -> str:
-    """최신 거래일의 is_nxt 플래그를 참고해 Kiwoom 요청용 코드를 반환합니다."""
+    """최신 거래일의 is_nxt 플래그를 참고해 Kiwoom 요청용 코드를 반환합니다.
+
+    Explicit Kiwoom market suffixes from REST/WS contracts are preserved:
+    ``000000_NX`` for NXT-only and ``000000_AL`` for integrated KRX+NXT.
+    """
+    _raw, explicit_suffix = _split_kiwoom_market_suffix(code)
     normalized = normalize_stock_code(code)
-
-    if is_nxt is None:
-        try:
-            if db is None:
-                from src.database.db_manager import DBManager
-                db = DBManager()
-            is_nxt = db.get_latest_is_nxt(normalized)
-        except Exception as e:
-            log_info(f"⚠️ get_effective_kiwoom_code DB 조회 실패 [{normalized}]: {e}")
-            is_nxt = False
-
-    return f"{normalized}_AL" if bool(is_nxt) else normalized
-
-
-def normalize_stock_code(code: str) -> str:
-    """종목코드를 6자리 기준으로 정규화합니다. (_AL, A-prefix 허용)"""
-    raw = str(code or "").strip().upper()
-    raw = raw.replace('.0', '')
-    if raw.endswith('_AL'):
-        raw = raw[:-3]
-    if raw.startswith('A') and len(raw) >= 7:
-        raw = raw[1:]
-    digits = ''.join(ch for ch in raw if ch.isdigit())
-    return digits[-6:].zfill(6) if digits else raw
-
-
-def get_effective_kiwoom_code(code: str, db=None, is_nxt=None) -> str:
-    """최신 거래일의 is_nxt 플래그를 참고해 Kiwoom 요청용 코드를 반환합니다."""
-    normalized = normalize_stock_code(code)
+    if explicit_suffix:
+        return f"{normalized}{explicit_suffix}"
 
     if is_nxt is None:
         try:
@@ -2556,15 +2539,42 @@ def check_execution_strength_ka10046(token, code):
 
     payload = {"stk_cd": str(req_code)}
  
+    received_ts = time.time()
     results = fetch_kiwoom_api_continuous(
         url=url, token=token, api_id='ka10046', payload=payload, use_continuous=False
     )
+    rest_received_ts = time.time()
     
     # 💡 기본 반환 규격 (에러 방어용)
     res_data = {
         'is_strong': False, 'strength': 0.0,
         's5': 0.0, 's20': 0.0, 's60': 0.0,
-        'acc_amt': 0, 'trde_qty': 0, 'flu_rt': 0.0
+        'acc_amt': 0, 'trde_qty': 0, 'flu_rt': 0.0,
+        'source': 'ka10046_rest_strength_trend',
+        'strength_source': 'ka10046_rest',
+        'metric_role': 'source_quality_gate',
+        'decision_authority': 'strength_trend_rest_fallback_source_only',
+        'runtime_effect': False,
+        'allowed_runtime_apply': False,
+        'source_time_basis': 'response_received_epoch_ms',
+        'rest_request_ts': received_ts,
+        'rest_received_ts': rest_received_ts,
+        'rest_received_ts_ms': int(rest_received_ts * 1000),
+        'window_policy': 'rest_aggregate_strength_trend_ttl_limited',
+        'sample_floor': 'not_standalone_runtime_signal',
+        'primary_decision_metric': 'source_quality_adjusted_ev_pct',
+        'source_quality_gate': 'prefer_ws_0b_window_when_fresh_else_rest_context_only',
+        'forbidden_uses': [
+            'standalone_buy_support',
+            'submit_permission',
+            'pressure_math',
+            'threshold_mutation',
+            'provider_route_change',
+            'bot_restart',
+            'order_cap_change',
+            'broker_guard_bypass',
+            'real_execution_quality_approval',
+        ],
     }
     
     if results and (data := results[0].get('cntr_str_tm', [])):
@@ -3611,6 +3621,11 @@ def summarize_ticks_for_realtime_ka10003(token, code, limit=20):
         "price_change_heuristic_tick_count": 0,
         "unknown_aggressor_tick_count": 0,
         "ka10003_buy_dominance_observation": {},
+        "ka10003_buy_dominance_observation_source_counts": {},
+        "ka10003_buy_dominance_observation_trade_value_source_counts": {},
+        "ka10003_buy_dominance_observation_inside_spread_count": 0,
+        "ka10003_buy_dominance_observation_split_vs_15_evaluable_count": 0,
+        "ka10003_buy_dominance_observation_split_vs_15_mismatch_count": 0,
     }
     if not ticks:
         return res
@@ -3621,10 +3636,29 @@ def summarize_ticks_for_realtime_ka10003(token, code, limit=20):
         if isinstance(tick, dict) and isinstance(tick.get("raw"), dict)
     ]
     if raw_cntr_infr:
-        res["ka10003_buy_dominance_observation"] = compute_buy_dominance_from_ka10003_entries(
+        observation = compute_buy_dominance_from_ka10003_entries(
             raw_cntr_infr,
             limit=limit,
             include_inside=False,
+        )
+        res["ka10003_buy_dominance_observation"] = observation
+        res["ka10003_buy_dominance_observation_source_counts"] = dict(
+            observation.get("source_counts") or {}
+        )
+        res["ka10003_buy_dominance_observation_trade_value_source_counts"] = dict(
+            observation.get("trade_value_source_counts") or {}
+        )
+        res["ka10003_buy_dominance_observation_inside_spread_count"] = _coerce_int(
+            observation.get("inside_spread_count"),
+            0,
+        )
+        res["ka10003_buy_dominance_observation_split_vs_15_evaluable_count"] = _coerce_int(
+            observation.get("split_vs_15_evaluable_count"),
+            0,
+        )
+        res["ka10003_buy_dominance_observation_split_vs_15_mismatch_count"] = _coerce_int(
+            observation.get("split_vs_15_mismatch_count"),
+            0,
         )
 
     source_counts = {}
@@ -3750,7 +3784,14 @@ def build_realtime_analysis_context(
     ws_data = ws_data or {}
     quant_metrics = quant_metrics or {}
 
-    curr_price = _coerce_int(ws_data.get("curr"), 0)
+    curr_price = _coerce_int(
+        ws_data.get("curr")
+        or ws_data.get("curr_price")
+        or ws_data.get("current_price")
+        or ws_data.get("last_trade_price")
+        or ws_data.get("price"),
+        0,
+    )
     fluctuation = _coerce_float(ws_data.get("fluctuation"), 0.0)
     today_vol = _coerce_int(ws_data.get("volume"), 0)
     ask_tot = _coerce_int(ws_data.get("ask_tot"), 0)
@@ -3768,8 +3809,6 @@ def build_realtime_analysis_context(
     minute_candles = get_minute_candles_ka10080(token, code, limit=40)
     daily_df = get_daily_ohlcv_ka10081_df(token, code)
 
-    if curr_price <= 0:
-        curr_price = _coerce_int(strength_pack.get("acc_amt"), 0)
     if today_vol <= 0:
         today_vol = _coerce_int(strength_pack.get("trde_qty"), 0)
     if fluctuation == 0.0:
@@ -3907,7 +3946,16 @@ def build_realtime_analysis_context(
     else:
         program_flow_desc = "프로그램 혼조"
 
-    v_pw_now = _coerce_float(ws_data.get("v_pw"), 0.0) or _coerce_float(strength_pack.get("strength"), 0.0)
+    ws_v_pw_now = _coerce_float(ws_data.get("v_pw"), 0.0)
+    rest_v_pw_now = _coerce_float(strength_pack.get("strength"), 0.0)
+    v_pw_now = ws_v_pw_now or rest_v_pw_now
+    if ws_v_pw_now > 0:
+        v_pw_source = "ws_0b"
+    elif rest_v_pw_now > 0:
+        v_pw_source = "ka10046_rest_fallback"
+    else:
+        v_pw_source = "missing"
+    v_pw_runtime_support_usable = v_pw_source == "ws_0b"
     v_pw_1m = _coerce_float(strength_pack.get("s5"), 0.0)
     v_pw_3m = _coerce_float(strength_pack.get("s20"), 0.0)
     v_pw_5m = _coerce_float(strength_pack.get("s60"), 0.0)
@@ -3955,8 +4003,10 @@ def build_realtime_analysis_context(
         flow_score = min(100.0, max(0.0, 50.0 + (program_pack.get("net_qty", 0) / 10000.0)))
     if orderbook_score == 0.0:
         orderbook_score = 60.0 if bid_tot >= ask_tot else 45.0
-    if timing_score == 0.0:
+    if timing_score == 0.0 and v_pw_runtime_support_usable:
         timing_score = min(100.0, max(0.0, 50.0 + (v_pw_now - 100.0))) if v_pw_now > 0 else 50.0
+    elif timing_score == 0.0:
+        timing_score = 50.0
 
     ctx = {
         "captured_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -3982,13 +4032,46 @@ def build_realtime_analysis_context(
         "vol_ratio": vol_ratio,
         "today_turnover": today_turnover,
         "v_pw_now": v_pw_now,
+        "v_pw_source": v_pw_source,
+        "v_pw_runtime_support_usable": v_pw_runtime_support_usable,
+        "v_pw_ws_value": ws_v_pw_now,
+        "v_pw_rest_value": rest_v_pw_now,
         "v_pw_1m": v_pw_1m,
         "v_pw_3m": v_pw_3m,
         "v_pw_5m": v_pw_5m,
+        "ka10046_strength_source": strength_pack.get("source", "ka10046_rest_strength_trend"),
+        "ka10046_strength_decision_authority": strength_pack.get(
+            "decision_authority",
+            "strength_trend_rest_fallback_source_only",
+        ),
+        "ka10046_strength_runtime_effect": bool(strength_pack.get("runtime_effect", False)),
+        "ka10046_strength_rest_received_ts_ms": _coerce_int(
+            strength_pack.get("rest_received_ts_ms"),
+            0,
+        ),
         "buy_ratio_now": _coerce_float(tick_pack.get("buy_ratio_now"), 0.0),
         "buy_ratio_1m": _coerce_float(tick_pack.get("buy_ratio_1m"), 0.0),
         "buy_ratio_3m": _coerce_float(tick_pack.get("buy_ratio_3m"), 0.0),
         "trade_qty_signed_now": _coerce_int(tick_pack.get("trade_qty_signed_now"), 0),
+        "ka10003_buy_dominance_observation": tick_pack.get("ka10003_buy_dominance_observation") or {},
+        "ka10003_buy_dominance_observation_source_counts": (
+            tick_pack.get("ka10003_buy_dominance_observation_source_counts") or {}
+        ),
+        "ka10003_buy_dominance_observation_trade_value_source_counts": (
+            tick_pack.get("ka10003_buy_dominance_observation_trade_value_source_counts") or {}
+        ),
+        "ka10003_buy_dominance_observation_inside_spread_count": _coerce_int(
+            tick_pack.get("ka10003_buy_dominance_observation_inside_spread_count"),
+            0,
+        ),
+        "ka10003_buy_dominance_observation_split_vs_15_evaluable_count": _coerce_int(
+            tick_pack.get("ka10003_buy_dominance_observation_split_vs_15_evaluable_count"),
+            0,
+        ),
+        "ka10003_buy_dominance_observation_split_vs_15_mismatch_count": _coerce_int(
+            tick_pack.get("ka10003_buy_dominance_observation_split_vs_15_mismatch_count"),
+            0,
+        ),
         "prog_net_qty": _coerce_int(ws_data.get("prog_net_qty"), 0) or _coerce_int(program_pack.get("net_qty"), 0),
         "prog_delta_qty": _coerce_int(ws_data.get("prog_delta_qty"), 0),
         "prog_buy_qty": prog_buy_qty,

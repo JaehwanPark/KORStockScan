@@ -64,6 +64,12 @@ def test_build_report_splits_subscription_stale_from_trade_tick_quiet(tmp_path):
                         "last_trade_cum_volume": 1234,
                         "repair_recommended": False,
                         "repair_reason": "none",
+                        "registered_items": ["000101", "000101_AL"],
+                        "registered_item_quota_units": 2,
+                        "registered_market_suffixes": ["", "_AL"],
+                        "registered_market_routes": ["krx_regular", "krx_nxt_integrated"],
+                        "registered_route_counts": {"krx_regular": 1, "krx_nxt_integrated": 1},
+                        "multi_route_registered": True,
                     },
                     {
                         "stock_code": "000202",
@@ -71,6 +77,12 @@ def test_build_report_splits_subscription_stale_from_trade_tick_quiet(tmp_path):
                         "repair_recommended": True,
                         "repair_reason": "subscription_stale",
                         "last_receive_age_sec": 61.0,
+                        "registered_items": ["000202_NX"],
+                        "registered_item_quota_units": 1,
+                        "registered_market_suffixes": ["_NX"],
+                        "registered_market_routes": ["nxt_only"],
+                        "registered_route_counts": {"nxt_only": 1},
+                        "multi_route_registered": False,
                     },
                 ]
             },
@@ -94,6 +106,20 @@ def test_build_report_splits_subscription_stale_from_trade_tick_quiet(tmp_path):
     assert report["pipeline_counts"]["fresh_0d_stale_0b"] == 1
     assert report["snapshot_summary"]["trade_tick_quiet_count"] == 1
     assert report["snapshot_summary"]["repair_recommended_count"] == 1
+    assert report["snapshot_summary"]["registered_item_quota_units"] == 3
+    assert report["snapshot_summary"]["registered_route_counts"] == {
+        "krx_nxt_integrated": 1,
+        "krx_regular": 1,
+        "nxt_only": 1,
+    }
+    assert report["snapshot_summary"]["registered_market_suffix_counts"] == {
+        "KRX": 1,
+        "_AL": 1,
+        "_NX": 1,
+    }
+    assert report["snapshot_summary"]["multi_route_registered_count"] == 1
+    assert report["snapshot_summary"]["route_repair_policy"] == "remove_then_reg_required_for_route_transition"
+    assert report["snapshot_summary"]["top_multi_route_symbols"][0]["stock_code"] == "000101"
     order_ids = {item["order_id"] for item in report["workorder_directives"]}
     assert "order_ws_subscription_stale_repair_observability" in order_ids
     assert "order_ws_trade_tick_quiet_low_liquidity_classification" in order_ids

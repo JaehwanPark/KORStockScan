@@ -49,7 +49,61 @@ CONTEXT_KEYS = (
     "kiwoom_0b_1030_1031_vs_15_evaluable_count",
     "kiwoom_0b_1030_1031_vs_15_mismatch_count",
     "kiwoom_0b_1030_1031_vs_15_mismatch_rate_pct",
+    "ka10003_buy_dominance_observation",
+    "ka10003_buy_dominance_observation_source_counts",
+    "ka10003_buy_dominance_observation_trade_value_source_counts",
+    "ka10003_buy_dominance_observation_inside_spread_count",
+    "ka10003_buy_dominance_observation_split_vs_15_evaluable_count",
+    "ka10003_buy_dominance_observation_split_vs_15_mismatch_count",
+    "v_pw_now",
+    "v_pw_source",
+    "v_pw_runtime_support_usable",
+    "v_pw_ws_value",
+    "v_pw_rest_value",
+    "ka10046_strength_source",
+    "ka10046_strength_decision_authority",
+    "ka10046_strength_runtime_effect",
+    "ka10046_strength_rest_received_ts_ms",
+    "market_data_signed_tape_state",
+    "market_data_signed_tape_sample_count",
+    "market_data_signed_tape_buy_count",
+    "market_data_signed_tape_sell_count",
+    "market_data_signed_tape_buy_volume",
+    "market_data_signed_tape_sell_volume",
+    "market_data_signed_tape_buy_ratio_pct",
+    "market_data_rest_signed_tape_pressure_usable",
+    "rest_signed_trade_ticks",
+    "latency_true_ofi_direct_canary_signed_tape_window",
+    "latency_true_ofi_direct_canary_signed_tape_min_samples",
+    "latency_true_ofi_direct_canary_signed_tape_max_buy_ratio",
+    "latency_true_ofi_direct_canary_signed_tape_sample_count",
+    "latency_true_ofi_direct_canary_signed_tape_buy_count",
+    "latency_true_ofi_direct_canary_signed_tape_sell_count",
+    "latency_true_ofi_direct_canary_signed_tape_buy_volume",
+    "latency_true_ofi_direct_canary_signed_tape_sell_volume",
+    "latency_true_ofi_direct_canary_signed_tape_net_buy_volume",
+    "latency_true_ofi_direct_canary_signed_tape_buy_ratio",
+    "latency_true_ofi_direct_canary_signed_tape_latest_side",
+    "latency_true_ofi_direct_canary_signed_tape_sell_dominated",
+    "latency_true_ofi_direct_canary_signed_tape_latest_buy_single",
+    "latency_true_ofi_direct_canary_signed_tape_latest_sell_single",
+    "latency_true_ofi_direct_canary_signed_tape_latest_single_sell_dominated",
+    "latency_true_ofi_direct_canary_tape_block_reason",
+    "latency_true_ofi_direct_canary_tape_support_ok",
+    "quote_stale",
+    "quote_age_ms",
+    "quote_age_at_submit_ms",
+    "ws_age_ms",
+    "market_data_freshness_state",
 )
+
+GENERIC_FRESHNESS_CONTEXT_KEYS = {
+    "quote_stale",
+    "quote_age_ms",
+    "quote_age_at_submit_ms",
+    "ws_age_ms",
+    "market_data_freshness_state",
+}
 
 FORBIDDEN_USES = [
     "standalone_buy",
@@ -113,6 +167,21 @@ def _dict_counter(value: Any) -> Counter:
             if isinstance(parsed, dict):
                 return Counter({str(key): int(_safe_float(count, 0.0)) for key, count in parsed.items()})
     return Counter()
+
+
+def _list_value(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("[") and text.endswith("]"):
+            try:
+                parsed = ast.literal_eval(text)
+            except (SyntaxError, ValueError):
+                parsed = None
+            if isinstance(parsed, list):
+                return parsed
+    return []
 
 
 def _safe_hhmmss_to_seconds(value: Any) -> int | None:
@@ -734,7 +803,7 @@ def _iter_jsonl(path: Path):
 
 
 def _has_context(fields: dict[str, Any]) -> bool:
-    return any(key in fields for key in CONTEXT_KEYS)
+    return any(key in fields for key in CONTEXT_KEYS if key not in GENERIC_FRESHNESS_CONTEXT_KEYS)
 
 
 def _row_from_event(event: dict[str, Any]) -> dict[str, Any] | None:
@@ -759,6 +828,33 @@ def _row_from_event(event: dict[str, Any]) -> dict[str, Any] | None:
         ),
     }
     row.update({key: fields.get(key) for key in CONTEXT_KEYS})
+    observation = fields.get("ka10003_buy_dominance_observation")
+    if isinstance(observation, dict):
+        row["ka10003_buy_dominance_observation_source_counts"] = (
+            row.get("ka10003_buy_dominance_observation_source_counts")
+            or observation.get("source_counts")
+            or {}
+        )
+        row["ka10003_buy_dominance_observation_trade_value_source_counts"] = (
+            row.get("ka10003_buy_dominance_observation_trade_value_source_counts")
+            or observation.get("trade_value_source_counts")
+            or {}
+        )
+        row["ka10003_buy_dominance_observation_inside_spread_count"] = (
+            row.get("ka10003_buy_dominance_observation_inside_spread_count")
+            if row.get("ka10003_buy_dominance_observation_inside_spread_count") not in (None, "")
+            else observation.get("inside_spread_count")
+        )
+        row["ka10003_buy_dominance_observation_split_vs_15_evaluable_count"] = (
+            row.get("ka10003_buy_dominance_observation_split_vs_15_evaluable_count")
+            if row.get("ka10003_buy_dominance_observation_split_vs_15_evaluable_count") not in (None, "")
+            else observation.get("split_vs_15_evaluable_count")
+        )
+        row["ka10003_buy_dominance_observation_split_vs_15_mismatch_count"] = (
+            row.get("ka10003_buy_dominance_observation_split_vs_15_mismatch_count")
+            if row.get("ka10003_buy_dominance_observation_split_vs_15_mismatch_count") not in (None, "")
+            else observation.get("split_vs_15_mismatch_count")
+        )
     return row
 
 
@@ -771,6 +867,62 @@ def _sum_counter_rows(rows: list[dict[str, Any]], key: str) -> dict[str, int]:
     for row in rows:
         counter.update(_dict_counter(row.get(key)))
     return dict(sorted(counter.items()))
+
+
+def _field_counter(rows: list[dict[str, Any]], key: str, *, default: str = "missing") -> dict[str, int]:
+    return dict(sorted(Counter(str(row.get(key) or default) for row in rows).items()))
+
+
+def _rest_signed_trade_tick_count(rows: list[dict[str, Any]]) -> int:
+    return sum(len(_list_value(row.get("rest_signed_trade_ticks"))) for row in rows)
+
+
+def _rest_signed_trade_tick_source_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
+    counter: Counter = Counter()
+    for row in rows:
+        for tick in _list_value(row.get("rest_signed_trade_ticks")):
+            if not isinstance(tick, dict):
+                counter["unparsed"] += 1
+                continue
+            source = (
+                tick.get("rest_signed_tape_source")
+                or tick.get("aggressor_source")
+                or tick.get("source")
+                or "unknown"
+            )
+            counter[str(source)] += 1
+    return dict(sorted(counter.items()))
+
+
+def _quote_freshness_state(row: dict[str, Any]) -> str:
+    raw_state = str(row.get("market_data_freshness_state") or "").strip().lower()
+    if raw_state in {"fresh", "stale", "missing", "unknown"}:
+        return raw_state
+    if "quote_stale" in row:
+        if _safe_bool(row.get("quote_stale"), False):
+            return "stale"
+        return "fresh"
+    age_candidates = (
+        row.get("quote_age_ms"),
+        row.get("quote_age_at_submit_ms"),
+        row.get("ws_age_ms"),
+    )
+    ages = [_safe_float(value, -1.0) for value in age_candidates]
+    ages = [age for age in ages if age >= 0]
+    if not ages:
+        return "unknown"
+    return "stale" if min(ages) > 1200.0 else "fresh"
+
+
+def _strength_diff_rows(rows: list[dict[str, Any]]) -> list[float]:
+    diffs: list[float] = []
+    for row in rows:
+        ws_value = _safe_float(row.get("v_pw_ws_value"), 0.0)
+        rest_value = _safe_float(row.get("v_pw_rest_value"), 0.0)
+        if ws_value <= 0 or rest_value <= 0:
+            continue
+        diffs.append(abs(ws_value - rest_value))
+    return diffs
 
 
 def _latest_rows_by_stock(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -793,6 +945,13 @@ def build_microstructure_reaction_context_report(target_date: str) -> dict[str, 
     stage_counts = Counter(str(row.get("stage") or "-") for row in rows)
     real_rows = [row for row in rows if row.get("actual_order_submitted") is True]
     latest_stock_rows = _latest_rows_by_stock(rows)
+    v_pw_source_counts = _field_counter(rows, "v_pw_source")
+    ka10046_fallback_rows = [row for row in rows if str(row.get("v_pw_source") or "") == "ka10046_rest_fallback"]
+    ka10046_fallback_quote_freshness_counts = dict(
+        sorted(Counter(_quote_freshness_state(row) for row in ka10046_fallback_rows).items())
+    )
+    strength_diffs = _strength_diff_rows(rows)
+    strength_divergence20_count = sum(1 for value in strength_diffs if value >= 20.0)
     window_trade_value_1313_count = _sum_int(rows, "tick_trade_value_1313_count")
     window_trade_value_1313_missing_count = _sum_int(rows, "tick_trade_value_1313_missing_count")
     window_trade_volume_mismatch_evaluable_count = _sum_int(
@@ -813,6 +972,14 @@ def build_microstructure_reaction_context_report(target_date: str) -> dict[str, 
         latest_stock_rows,
         "kiwoom_0b_1030_1031_vs_15_mismatch_count",
     )
+    ka10003_split_vs_15_evaluable_count = _sum_int(
+        rows,
+        "ka10003_buy_dominance_observation_split_vs_15_evaluable_count",
+    )
+    ka10003_split_vs_15_mismatch_count = _sum_int(
+        rows,
+        "ka10003_buy_dominance_observation_split_vs_15_mismatch_count",
+    )
     summary = {
         "available": bool(rows),
         "row_count": len(rows),
@@ -823,6 +990,90 @@ def build_microstructure_reaction_context_report(target_date: str) -> dict[str, 
         "source_quality_counts": dict(sorted(source_quality_counts.items())),
         "stage_counts": dict(sorted(stage_counts.items())),
         "real_submitted_count": len(real_rows),
+        "v_pw_source_counts": v_pw_source_counts,
+        "v_pw_rest_fallback_count": v_pw_source_counts.get("ka10046_rest_fallback", 0),
+        "v_pw_ws_0b_count": v_pw_source_counts.get("ws_0b", 0),
+        "v_pw_missing_count": v_pw_source_counts.get("missing", 0),
+        "v_pw_rest_fallback_rate_pct": _rate_pct(
+            v_pw_source_counts.get("ka10046_rest_fallback", 0),
+            len(rows),
+        ),
+        "v_pw_runtime_support_unusable_count": sum(
+            1
+            for row in rows
+            if "v_pw_runtime_support_usable" in row
+            and not _safe_bool(row.get("v_pw_runtime_support_usable"), False)
+        ),
+        "ka10046_rest_fallback_quote_freshness_counts": ka10046_fallback_quote_freshness_counts,
+        "ka10046_rest_fallback_with_fresh_quote_count": ka10046_fallback_quote_freshness_counts.get("fresh", 0),
+        "ka10046_rest_fallback_with_stale_quote_count": ka10046_fallback_quote_freshness_counts.get("stale", 0),
+        "ka10046_strength_runtime_effect_true_count": sum(
+            1 for row in rows if _safe_bool(row.get("ka10046_strength_runtime_effect"), False)
+        ),
+        "ka10046_strength_missing_received_ts_count": sum(
+            1
+            for row in rows
+            if str(row.get("ka10046_strength_source") or "") == "ka10046_rest_strength_trend"
+            and _safe_int(row.get("ka10046_strength_rest_received_ts_ms"), 0) <= 0
+        ),
+        "ka10046_0b_strength_compare_evaluable_count": len(strength_diffs),
+        "ka10046_0b_strength_abs_diff_avg": round(sum(strength_diffs) / len(strength_diffs), 3)
+        if strength_diffs
+        else 0.0,
+        "ka10046_0b_strength_abs_diff_max": round(max(strength_diffs), 3) if strength_diffs else 0.0,
+        "ka10046_0b_strength_divergence20_count": strength_divergence20_count,
+        "ka10046_0b_strength_divergence20_rate_pct": _rate_pct(
+            strength_divergence20_count,
+            len(strength_diffs),
+        ),
+        "market_data_signed_tape_state_counts": _field_counter(rows, "market_data_signed_tape_state"),
+        "market_data_signed_tape_sample_count_total": _sum_int(rows, "market_data_signed_tape_sample_count"),
+        "market_data_signed_tape_buy_count_total": _sum_int(rows, "market_data_signed_tape_buy_count"),
+        "market_data_signed_tape_sell_count_total": _sum_int(rows, "market_data_signed_tape_sell_count"),
+        "market_data_signed_tape_buy_volume_total": _sum_int(rows, "market_data_signed_tape_buy_volume"),
+        "market_data_signed_tape_sell_volume_total": _sum_int(rows, "market_data_signed_tape_sell_volume"),
+        "market_data_rest_signed_tape_pressure_usable_true_count": sum(
+            1 for row in rows if _safe_bool(row.get("market_data_rest_signed_tape_pressure_usable"), False)
+        ),
+        "rest_signed_trade_ticks_row_count": _rest_signed_trade_tick_count(rows),
+        "rest_signed_trade_ticks_source_counts": _rest_signed_trade_tick_source_counts(rows),
+        "latency_true_ofi_direct_canary_signed_tape_sample_count_total": _sum_int(
+            rows,
+            "latency_true_ofi_direct_canary_signed_tape_sample_count",
+        ),
+        "latency_true_ofi_direct_canary_signed_tape_buy_count_total": _sum_int(
+            rows,
+            "latency_true_ofi_direct_canary_signed_tape_buy_count",
+        ),
+        "latency_true_ofi_direct_canary_signed_tape_sell_count_total": _sum_int(
+            rows,
+            "latency_true_ofi_direct_canary_signed_tape_sell_count",
+        ),
+        "latency_true_ofi_direct_canary_signed_tape_net_buy_volume_sum": _sum_int(
+            rows,
+            "latency_true_ofi_direct_canary_signed_tape_net_buy_volume",
+        ),
+        "latency_true_ofi_direct_canary_signed_tape_latest_side_counts": _field_counter(
+            rows,
+            "latency_true_ofi_direct_canary_signed_tape_latest_side",
+        ),
+        "latency_true_ofi_direct_canary_signed_tape_sell_dominated_count": sum(
+            1
+            for row in rows
+            if _safe_bool(row.get("latency_true_ofi_direct_canary_signed_tape_sell_dominated"), False)
+        ),
+        "latency_true_ofi_direct_canary_signed_tape_latest_single_sell_dominated_count": sum(
+            1
+            for row in rows
+            if _safe_bool(
+                row.get("latency_true_ofi_direct_canary_signed_tape_latest_single_sell_dominated"),
+                False,
+            )
+        ),
+        "latency_true_ofi_direct_canary_tape_block_reason_counts": _field_counter(
+            rows,
+            "latency_true_ofi_direct_canary_tape_block_reason",
+        ),
         "tick_aggressor_source_counts": _sum_counter_rows(rows, "tick_aggressor_source_counts"),
         "tick_trade_value_source_counts": _sum_counter_rows(rows, "tick_trade_value_source_counts"),
         "tick_trade_value_1313_count": window_trade_value_1313_count,
@@ -856,6 +1107,24 @@ def build_microstructure_reaction_context_report(target_date: str) -> dict[str, 
         "kiwoom_0b_1030_1031_vs_15_mismatch_rate_pct": _rate_pct(
             cumulative_mismatch_count,
             cumulative_mismatch_evaluable_count,
+        ),
+        "ka10003_buy_dominance_observation_source_counts": _sum_counter_rows(
+            rows,
+            "ka10003_buy_dominance_observation_source_counts",
+        ),
+        "ka10003_buy_dominance_observation_trade_value_source_counts": _sum_counter_rows(
+            rows,
+            "ka10003_buy_dominance_observation_trade_value_source_counts",
+        ),
+        "ka10003_buy_dominance_observation_inside_spread_count": _sum_int(
+            rows,
+            "ka10003_buy_dominance_observation_inside_spread_count",
+        ),
+        "ka10003_buy_dominance_observation_split_vs_15_evaluable_count": ka10003_split_vs_15_evaluable_count,
+        "ka10003_buy_dominance_observation_split_vs_15_mismatch_count": ka10003_split_vs_15_mismatch_count,
+        "ka10003_buy_dominance_observation_split_vs_15_mismatch_rate_pct": _rate_pct(
+            ka10003_split_vs_15_mismatch_count,
+            ka10003_split_vs_15_evaluable_count,
         ),
         "avg_ask_sweep_score": _avg_score(rows, "microstructure_reaction_ask_sweep_score"),
         "avg_post_sweep_hold_score": _avg_score(rows, "microstructure_reaction_post_sweep_hold_score"),
@@ -921,6 +1190,30 @@ def render_microstructure_reaction_context_markdown(report: dict[str, Any]) -> s
         f"- entry_reaction_quality_counts: `{summary.get('entry_reaction_quality_counts') or {}}`",
         f"- source_quality_counts: `{summary.get('source_quality_counts') or {}}`",
         f"- stage_counts: `{summary.get('stage_counts') or {}}`",
+        f"- v_pw_source_counts: `{summary.get('v_pw_source_counts') or {}}`",
+        f"- v_pw_rest_fallback_rate_pct: `{summary.get('v_pw_rest_fallback_rate_pct')}`",
+        f"- v_pw_runtime_support_unusable_count: `{summary.get('v_pw_runtime_support_unusable_count')}`",
+        f"- ka10046_rest_fallback_quote_freshness_counts: `{summary.get('ka10046_rest_fallback_quote_freshness_counts') or {}}`",
+        f"- ka10046_strength_runtime_effect_true_count: `{summary.get('ka10046_strength_runtime_effect_true_count')}`",
+        f"- ka10046_strength_missing_received_ts_count: `{summary.get('ka10046_strength_missing_received_ts_count')}`",
+        "- ka10046_0b_strength_diff: "
+        f"avg=`{summary.get('ka10046_0b_strength_abs_diff_avg')}` "
+        f"max=`{summary.get('ka10046_0b_strength_abs_diff_max')}` "
+        f"divergence20=`{summary.get('ka10046_0b_strength_divergence20_count')}` / "
+        f"`{summary.get('ka10046_0b_strength_compare_evaluable_count')}` "
+        f"(`{summary.get('ka10046_0b_strength_divergence20_rate_pct')}`%)",
+        f"- market_data_signed_tape_state_counts: `{summary.get('market_data_signed_tape_state_counts') or {}}`",
+        f"- market_data_signed_tape_sample_count_total: `{summary.get('market_data_signed_tape_sample_count_total')}`",
+        f"- market_data_rest_signed_tape_pressure_usable_true_count: `{summary.get('market_data_rest_signed_tape_pressure_usable_true_count')}`",
+        f"- rest_signed_trade_ticks_row_count: `{summary.get('rest_signed_trade_ticks_row_count')}`",
+        f"- rest_signed_trade_ticks_source_counts: `{summary.get('rest_signed_trade_ticks_source_counts') or {}}`",
+        "- latency_true_ofi_direct_canary_signed_tape: "
+        f"sample_total=`{summary.get('latency_true_ofi_direct_canary_signed_tape_sample_count_total')}` "
+        f"net_buy_volume_sum=`{summary.get('latency_true_ofi_direct_canary_signed_tape_net_buy_volume_sum')}` "
+        f"sell_dominated=`{summary.get('latency_true_ofi_direct_canary_signed_tape_sell_dominated_count')}` "
+        f"latest_single_sell_dominated=`{summary.get('latency_true_ofi_direct_canary_signed_tape_latest_single_sell_dominated_count')}`",
+        f"- latency_true_ofi_direct_canary_signed_tape_latest_side_counts: `{summary.get('latency_true_ofi_direct_canary_signed_tape_latest_side_counts') or {}}`",
+        f"- latency_true_ofi_direct_canary_tape_block_reason_counts: `{summary.get('latency_true_ofi_direct_canary_tape_block_reason_counts') or {}}`",
         f"- tick_aggressor_source_counts: `{summary.get('tick_aggressor_source_counts') or {}}`",
         f"- tick_trade_value_source_counts: `{summary.get('tick_trade_value_source_counts') or {}}`",
         f"- tick_trade_value_1313_missing_rate_pct: `{summary.get('tick_trade_value_1313_missing_rate_pct')}`",
@@ -937,6 +1230,13 @@ def render_microstructure_reaction_context_markdown(report: dict[str, Any]) -> s
         f"`{summary.get('kiwoom_0b_1030_1031_vs_15_mismatch_count')}` / "
         f"`{summary.get('kiwoom_0b_1030_1031_vs_15_evaluable_count')}` "
         f"(`{summary.get('kiwoom_0b_1030_1031_vs_15_mismatch_rate_pct')}`%)",
+        f"- ka10003_buy_dominance_observation_source_counts: `{summary.get('ka10003_buy_dominance_observation_source_counts') or {}}`",
+        f"- ka10003_buy_dominance_observation_trade_value_source_counts: `{summary.get('ka10003_buy_dominance_observation_trade_value_source_counts') or {}}`",
+        f"- ka10003_buy_dominance_observation_inside_spread_count: `{summary.get('ka10003_buy_dominance_observation_inside_spread_count')}`",
+        "- ka10003_buy_dominance_observation_split_vs_15_mismatch: "
+        f"`{summary.get('ka10003_buy_dominance_observation_split_vs_15_mismatch_count')}` / "
+        f"`{summary.get('ka10003_buy_dominance_observation_split_vs_15_evaluable_count')}` "
+        f"(`{summary.get('ka10003_buy_dominance_observation_split_vs_15_mismatch_rate_pct')}`%)",
         f"- avg_ask_sweep_score: `{summary.get('avg_ask_sweep_score')}`",
         f"- avg_post_sweep_hold_score: `{summary.get('avg_post_sweep_hold_score')}`",
         f"- avg_bid_replenishment_score: `{summary.get('avg_bid_replenishment_score')}`",

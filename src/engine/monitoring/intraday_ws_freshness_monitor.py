@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import time
 from collections import Counter, defaultdict
@@ -89,6 +90,44 @@ def _boolish(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _listish(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("[") and text.endswith("]"):
+            try:
+                parsed = json.loads(text)
+            except Exception:
+                try:
+                    parsed = ast.literal_eval(text)
+                except Exception:
+                    parsed = None
+            if isinstance(parsed, list):
+                return parsed
+    return []
+
+
+def _dictish(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("{") and text.endswith("}"):
+            try:
+                parsed = json.loads(text)
+            except Exception:
+                try:
+                    parsed = ast.literal_eval(text)
+                except Exception:
+                    parsed = None
+            if isinstance(parsed, dict):
+                return parsed
+    return {}
 
 
 def _flatten_event(row: dict[str, Any]) -> dict[str, Any]:
@@ -256,13 +295,24 @@ def _pipeline_event_class(row: dict[str, Any], *, stale_ms: float) -> dict[str, 
 def _snapshot_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     states: Counter = Counter()
     repair_reasons: Counter = Counter()
+    route_counts: Counter = Counter()
+    suffix_counts: Counter = Counter()
     quiet_rows: list[dict[str, Any]] = []
     repair_rows: list[dict[str, Any]] = []
+    multi_route_rows: list[dict[str, Any]] = []
+    quota_units = 0
     for row in rows:
         state = str(row.get("freshness_state") or "unknown")
         states[state] += 1
         reason = str(row.get("repair_reason") or "none")
         repair_reasons[reason] += 1
+        quota_units += int(_to_float(row.get("registered_item_quota_units"), 0.0) or 0)
+        for route, count in _dictish(row.get("registered_route_counts")).items():
+            route_counts[str(route)] += int(_to_float(count, 0.0) or 0)
+        for suffix in _listish(row.get("registered_market_suffixes")):
+            suffix_counts[str(suffix) or "KRX"] += 1
+        if _boolish(row.get("multi_route_registered")):
+            multi_route_rows.append(row)
         if _boolish(row.get("trade_tick_quiet")):
             quiet_rows.append(row)
         if _boolish(row.get("repair_recommended")):
@@ -278,6 +328,12 @@ def _snapshot_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "trade_tick_quiet_count": len(quiet_rows),
         "trade_tick_quiet_rate_pct": _rate_pct(len(quiet_rows), total),
         "repair_recommended_count": len(repair_rows),
+        "registered_item_quota_units": quota_units,
+        "registered_route_counts": dict(route_counts),
+        "registered_market_suffix_counts": dict(suffix_counts),
+        "multi_route_registered_count": len(multi_route_rows),
+        "multi_route_registered_rate_pct": _rate_pct(len(multi_route_rows), total),
+        "route_repair_policy": "remove_then_reg_required_for_route_transition",
         "top_trade_tick_quiet_symbols": [
             {
                 "stock_code": str(row.get("stock_code") or ""),
@@ -295,6 +351,15 @@ def _snapshot_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 "last_receive_age_sec": row.get("last_receive_age_sec"),
             }
             for row in repair_rows[:20]
+        ],
+        "top_multi_route_symbols": [
+            {
+                "stock_code": str(row.get("stock_code") or ""),
+                "registered_items": row.get("registered_items") or [],
+                "registered_market_routes": row.get("registered_market_routes") or [],
+                "registered_item_quota_units": row.get("registered_item_quota_units"),
+            }
+            for row in multi_route_rows[:20]
         ],
     }
 

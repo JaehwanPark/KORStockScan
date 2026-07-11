@@ -87,6 +87,14 @@ quantity guards.
   `inside_spread_count`, and `split_vs_15_mismatch_count`, but it must not fill
   `buy_pressure_10t`, `net_aggressive_delta_10t`, `tick_aggressor_trusted_count`,
   or submit/entry/scale-in pressure fields.
+- Runtime context flattens those observation counters as
+  `ka10003_buy_dominance_observation_source_counts`,
+  `ka10003_buy_dominance_observation_trade_value_source_counts`,
+  `ka10003_buy_dominance_observation_inside_spread_count`,
+  `ka10003_buy_dominance_observation_split_vs_15_evaluable_count`, and
+  `ka10003_buy_dominance_observation_split_vs_15_mismatch_count` so postclose
+  source-quality reports can automatically measure source mix, 1313 fallback
+  use, inside-spread frequency, and 1030/1031-vs-15 mismatch rate.
 - Briefings may display the heuristic source/quality, but must not present it
   as confirmed BUY/SELL trade direction.
 - Adding best bid/ask to a `price_change_heuristic` tick later must not promote
@@ -110,6 +118,40 @@ quantity guards.
 - `ka10084` must not create BUY support, pressure math, scale-in support, exit
   authority, threshold mutation, provider changes, order-cap changes, or broker
   guard bypass.
+- Intraday observation is automated through pipeline event fields and the
+  postclose `microstructure_reaction_context` source-only report:
+  `market_data_signed_tape_state`,
+  `market_data_rest_signed_tape_pressure_usable`, `rest_signed_trade_ticks`,
+  and `latency_true_ofi_direct_canary_signed_tape_*`. These fields are
+  provenance/source-quality diagnostics only; a nonzero
+  `market_data_rest_signed_tape_pressure_usable=true` count is a contract
+  violation to review, not runtime approval.
+
+## ka10046
+
+- `ka10046` strength trend uses `/api/dostk/mrkcond` with `api-id=ka10046`
+  and returns server-side aggregate strength trend rows such as `cntr_str_tm`.
+- Websocket 0B remains the primary input for live short-window strength,
+  trade-value, signed tape, and split-volume windows. `ka10046` may only fill
+  realtime context as `ka10046_rest_fallback` when fresh 0B-derived strength is
+  absent or stale.
+- When `v_pw_source=ka10046_rest_fallback`, runtime context must set
+  `v_pw_runtime_support_usable=false`; the REST value may be displayed and
+  audited but must not create a positive timing score by itself.
+- Runtime context preserves `v_pw_ws_value` and `v_pw_rest_value` separately so
+  postclose source-quality reports can measure WS 0B vs `ka10046` divergence
+  without changing runtime authority.
+- `ka10046` rows carry `source=ka10046_rest_strength_trend`,
+  `decision_authority=strength_trend_rest_fallback_source_only`, and
+  `runtime_effect=false`. Its receive timestamp is client-side
+  `rest_received_ts_ms`; REST aggregate row time must not be treated as
+  sub-second quote freshness.
+- `acc_trde_prica` is cumulative trade amount. It may populate
+  `today_turnover`, but it must never backfill `curr_price` or executable quote
+  fields.
+- `ka10046` must not create standalone BUY support, pressure math, submit
+  permission, threshold mutation, provider changes, order-cap changes, bot
+  restart authority, broker guard bypass, or real execution-quality approval.
 
 ## Aggressor Pressure Field Contract
 
@@ -133,8 +175,9 @@ quantity guards.
 | Producer | Intermediate artifact/log field | Runtime consumers | Postclose consumers | Contract |
 | --- | --- | --- | --- | --- |
 | 0B websocket trade event | `recent_trade_ticks[].aggressor_source=kiwoom_0b_signed_trade_volume` when FID15 has an explicit sign, plus `signed_trade_volume`, `buyer_vol`, `seller_vol`, `tick_trade_value_source`, `aggressor_touch_*`, `best_ask`, `best_bid`, cache/sync fields | `scalping_feature_packet`, `microstructure_reaction_context`, strength momentum | `pipeline_events` feature/audit fields | Explicit signed FID15 is primary taker-side provenance. `1030/1031` are preferred split volumes for packet volume/value fallback, and `1313` is primary momentary value. When the sign is missing or neutral, trusted fallback remains `orderbook_touch|cached_orderbook_touch` only when quote is complete, fresh, and synchronized. |
-| `ka10003` tick history | `aggressor_source=price_change_heuristic`, compatibility `dir`, optional `ka10003_buy_dominance_observation` from raw `cntr_infr` | Tick acceleration and price-change diagnostics only | Briefing/provenance/source-quality diagnostics only | Forbidden as buy/sell pressure source. Split/signed/quote-touch observation stays `source_quality_only` and cannot become pressure math or submit support. |
-| `ka10084` signed trade envelope input | `rest_signed_trade_ticks[].signed_trade_volume`, `aggressor_source=kiwoom_rest_ka10084_signed_trade_qty` | Scanner budget reallocation, submit-safety negative provenance, and latency true-OFI direct-canary interpretation only | False-positive/source-quality diagnostics only | Forbidden as BUY support, pressure math, or submit-time retry. |
+| `ka10003` tick history | `aggressor_source=price_change_heuristic`, compatibility `dir`, optional `ka10003_buy_dominance_observation` from raw `cntr_infr`, plus flat `ka10003_buy_dominance_observation_*` counters | Tick acceleration and price-change diagnostics only | Briefing/provenance/source-quality diagnostics and `microstructure_reaction_context` source-count aggregation | Forbidden as buy/sell pressure source. Split/signed/quote-touch observation stays `source_quality_only` and cannot become pressure math or submit support. |
+| `ka10084` signed trade envelope input | `rest_signed_trade_ticks[].signed_trade_volume`, `aggressor_source=kiwoom_rest_ka10084_signed_trade_qty`, `market_data_signed_tape_state`, `market_data_rest_signed_tape_pressure_usable`, `latency_true_ofi_direct_canary_signed_tape_*` | Scanner budget reallocation, submit-safety negative provenance, and latency true-OFI direct-canary interpretation only | False-positive/source-quality diagnostics only; `microstructure_reaction_context` aggregates state counts, REST tick source counts, pressure-usable true violations, signed-tape sell-dominated counts, latest-side counts, and tape block reasons. | Forbidden as BUY support, pressure math, or submit-time retry. |
+| `ka10046` strength trend | `v_pw_source=ka10046_rest_fallback`, `v_pw_runtime_support_usable=false`, `v_pw_ws_value`, `v_pw_rest_value`, `ka10046_strength_*`, `rest_received_ts_ms`, aggregate `strength/s5/s20/s60/acc_amt/trde_qty` | Realtime context fallback/provenance only when WS 0B strength is absent; `acc_amt` may fill turnover only; REST fallback cannot create positive timing score by itself | `microstructure_reaction_context` source-quality summary aggregates fallback rate, fallback quote freshness, missing receive timestamp, runtime-effect violations, and WS-vs-REST strength divergence | REST aggregate strength is delayed/source-only. Forbidden as standalone BUY support, pressure math, executable price, submit permission, runtime apply, or safety bypass. |
 | market-data freshness envelope | `market_data_freshness_state`, `market_data_orderbook_state`, `market_data_signed_tape_state`, `market_data_effective_price_source` | Scanner fast-precheck, rising-missed scout quality, submit-safety provenance | Source-quality diagnostics only | REST orderbook may repair stale quote/depth freshness; REST signed tape may only reallocate scanner budget or add negative-veto provenance. Forbidden as BUY support, pressure math, threshold/provider/order-cap change, broker guard bypass, or real execution-quality approval. |
 | `microstructure_reaction_context` | `tick_aggressor_*`, `buy_pressure_pct`, `source_quality_partial` | Entry reaction, scale-in quality snapshots, holding/exit matrix | `microstructure_reaction_context_YYYY-MM-DD`, source-quality audit | Unusable pressure returns neutral scores and source-quality provenance. |
 | `scalping_feature_packet` | `buy_pressure_10t`, `net_aggressive_delta_10t`, `tick_aggressor_*`, `microstructure_reaction_*` | AI compact payload, entry gates, AVG_DOWN/PYRAMID/REVERSAL_ADD gates | `pipeline_events`, `observation_source_quality_audit`, backtests/calibration | Additive provenance fields must travel with pressure values. |
@@ -248,6 +291,10 @@ quantity guards.
   This is freshness/provenance only; it must not relax threshold, provider,
   broker, order cap, stale quote, account/order/quantity/cooldown, or submit
   safety guards.
+- REST and WebSocket market suffixes are aligned: explicit `000000_NX` and
+  `000000_AL` request codes must be preserved when the caller supplies them.
+  DB-derived NXT detection may choose `_AL`, but it must not strip an explicit
+  `_NX` route request.
 
 ## Realtime Freshness And Snapshot Backfill
 
@@ -264,6 +311,12 @@ quantity guards.
   examples. Until Kiwoom confirms otherwise, count each REG item as quota usage;
   KRX/NXT alternate-route items such as `_NX` or `_AL` are treated as separate
   items even when they point to the same symbol.
+- WebSocket REG item strings are route-specific. Empty suffix, `_NX`, and
+  `_AL` are separate subscription items and must be explicitly registered when
+  needed. Runtime freshness snapshots expose `registered_market_suffixes`,
+  `registered_market_routes`, `registered_route_counts`,
+  `registered_item_quota_units`, and `multi_route_registered` so route coverage
+  and duplicate quota use can be reviewed without changing trading authority.
 - `refresh=1` is treated as append/keep-existing behavior, not full
   replacement. Route transitions such as NXT premarket to KRX regular session
   should REMOVE the old route item and then REG the target route. Reusing
@@ -298,6 +351,9 @@ quantity guards.
 
 ## ka10080 and ka10081
 
+- `ka10080` is implemented through `/api/dostk/chart` with `api-id=ka10080`.
+  The current minute-candle request payload is `stk_cd`, `tic_scope=1`,
+  `upd_stkpc_tp=1`, and same-day `base_dt`.
 - Continuation is controlled by response `cont-yn` and `next-key`.
 - Client code must sort final merged rows oldest to latest:
   - `ka10080`: by `cntr_tm`.
@@ -305,6 +361,10 @@ quantity guards.
 - `ka10080.cntr_tm` and `ka10081.dt` are chart bar timestamps, not current quote
   freshness authority. Runtime quote freshness must still come from websocket or
   REST receive timestamps.
+- `ka10080` must not be used as a sub-second 0B/0D stale-recovery substitute.
+  Short-window 5s/10s pressure, tick acceleration, quote freshness, and signed
+  tape decisions remain websocket-first; bounded `ka10004`/`ka10084` snapshots
+  may be used only under their separate REST provenance contracts.
 - `ka10080` minute candles carry additive `source_timestamp` and
   `source_time_basis=ka10080_cntr_tm_bar_timestamp`. Feature packet consumers may
   use micro VWAP/MA5 only when the latest minute bar is fresh relative to the

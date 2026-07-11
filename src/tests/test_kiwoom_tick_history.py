@@ -177,6 +177,15 @@ def test_summarize_ticks_for_realtime_ka10003_attaches_source_only_raw_observati
     assert observation["buy_volume"] == 30.0
     assert observation["sell_volume"] == 10.0
     assert observation["source_counts"] == {"1030_1031_split": 1}
+    assert summary["ka10003_buy_dominance_observation_source_counts"] == {
+        "1030_1031_split": 1
+    }
+    assert summary["ka10003_buy_dominance_observation_trade_value_source_counts"] == {
+        "1313": 1
+    }
+    assert summary["ka10003_buy_dominance_observation_inside_spread_count"] == 0
+    assert summary["ka10003_buy_dominance_observation_split_vs_15_evaluable_count"] == 1
+    assert summary["ka10003_buy_dominance_observation_split_vs_15_mismatch_count"] == 0
 
 
 def test_get_recent_signed_trades_ka10084_preserves_signed_quantities(monkeypatch):

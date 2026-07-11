@@ -70,6 +70,30 @@ def test_ka10080_continuous_pages_are_sorted_oldest_to_latest(monkeypatch):
     assert calls[0]["max_pages"] >= 2
 
 
+def test_ka10080_preserves_explicit_nxt_market_suffix(monkeypatch):
+    _clear_market_data_cache()
+    monkeypatch.setattr(kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+
+    calls = []
+
+    def fake_fetch(**kwargs):
+        calls.append(kwargs)
+        return (
+            [{"stk_min_pole_chart_qry": [{"cntr_tm": "20260703090100", "cur_prc": "101"}]}],
+            {"api_id": "ka10080"},
+        )
+
+    monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fake_fetch)
+
+    candles, meta = kiwoom_utils.get_minute_candles_ka10080_with_meta("token", "A005930_NX", limit=1)
+
+    assert calls[0]["url"] == "https://example.test/api/dostk/chart"
+    assert calls[0]["api_id"] == "ka10080"
+    assert calls[0]["payload"]["stk_cd"] == "005930_NX"
+    assert candles[0]["현재가"] == 101
+    assert meta["api_id"] == "ka10080"
+
+
 def test_ka10081_dataframe_keeps_source_meta_and_sorts_index(monkeypatch):
     _clear_market_data_cache()
     monkeypatch.setattr(kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
@@ -239,6 +263,51 @@ def test_legacy_realtime_hot_stocks_preserves_signed_rank_delta(monkeypatch):
     assert rows[0]["prev_flu"] == 0.10
 
 
+def test_ka10046_strength_trend_is_rest_source_only_with_received_timestamp(monkeypatch):
+    _clear_market_data_cache()
+    monkeypatch.setattr(kiwoom_utils, "get_effective_kiwoom_code", lambda code: code)
+    monkeypatch.setattr(kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+    monkeypatch.setattr(kiwoom_utils.time, "sleep", lambda *_args, **_kwargs: None)
+
+    captured = {}
+
+    def fake_fetch(**kwargs):
+        captured.update(kwargs)
+        return [
+            {
+                "cntr_str_tm": [
+                    {
+                        "cntr_str": "121.5",
+                        "cntr_str_5min": "118.2",
+                        "cntr_str_20min": "112.4",
+                        "cntr_str_60min": "104.0",
+                        "acc_trde_prica": "12,345,000",
+                        "trde_qty": "1234",
+                        "flu_rt": "+1.25",
+                    }
+                ]
+            }
+        ]
+
+    monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fake_fetch)
+
+    row = kiwoom_utils.check_execution_strength_ka10046("token", "005930")
+
+    assert captured["url"] == "https://example.test/api/dostk/mrkcond"
+    assert captured["api_id"] == "ka10046"
+    assert captured["payload"] == {"stk_cd": "005930"}
+    assert captured["use_continuous"] is False
+    assert row["strength"] == 121.5
+    assert row["acc_amt"] == 12345000
+    assert row["source"] == "ka10046_rest_strength_trend"
+    assert row["decision_authority"] == "strength_trend_rest_fallback_source_only"
+    assert row["runtime_effect"] is False
+    assert row["allowed_runtime_apply"] is False
+    assert row["source_time_basis"] == "response_received_epoch_ms"
+    assert row["rest_received_ts_ms"] > 0
+    assert "standalone_buy_support" in row["forbidden_uses"]
+
+
 def test_realtime_analysis_context_uses_first_ask_level_as_best_ask(monkeypatch):
     monkeypatch.setattr(
         kiwoom_utils,
@@ -269,6 +338,77 @@ def test_realtime_analysis_context_uses_first_ask_level_as_best_ask(monkeypatch)
 
     assert ctx["best_ask"] == 10010
     assert ctx["best_bid"] == 9990
+
+
+def test_realtime_analysis_context_marks_ka10046_fallback_without_price_leak(monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "check_execution_strength_ka10046",
+        lambda *_args, **_kwargs: {
+            "source": "ka10046_rest_strength_trend",
+            "strength": 120,
+            "s5": 118,
+            "s20": 116,
+            "s60": 114,
+            "acc_amt": 987654321,
+            "trde_qty": 3000,
+            "flu_rt": 1.2,
+            "runtime_effect": False,
+            "decision_authority": "strength_trend_rest_fallback_source_only",
+            "rest_received_ts_ms": 1780000000000,
+        },
+    )
+    monkeypatch.setattr(kiwoom_utils, "get_program_flow_realtime", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(kiwoom_utils, "get_investor_flow_summary_ka10059", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "summarize_ticks_for_realtime_ka10003",
+        lambda *_args, **_kwargs: {"buy_ratio_now": 50.0, "buy_ratio_1m": 50.0, "buy_ratio_3m": 50.0, "tape_bias": "중립"},
+    )
+    monkeypatch.setattr(kiwoom_utils, "get_minute_candles_ka10080", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(kiwoom_utils, "get_daily_ohlcv_ka10081_df", lambda *_args, **_kwargs: pd.DataFrame())
+
+    ctx = kiwoom_utils.build_realtime_analysis_context("token", "005930", {"volume": 0})
+
+    assert ctx["curr_price"] == 0
+    assert ctx["today_turnover"] == 987654321
+    assert ctx["today_vol"] == 3000
+    assert ctx["v_pw_now"] == 120
+    assert ctx["v_pw_source"] == "ka10046_rest_fallback"
+    assert ctx["v_pw_runtime_support_usable"] is False
+    assert ctx["v_pw_ws_value"] == 0.0
+    assert ctx["v_pw_rest_value"] == 120
+    assert ctx["timing_score"] == 50.0
+    assert ctx["ka10046_strength_source"] == "ka10046_rest_strength_trend"
+    assert ctx["ka10046_strength_decision_authority"] == "strength_trend_rest_fallback_source_only"
+    assert ctx["ka10046_strength_runtime_effect"] is False
+    assert ctx["ka10046_strength_rest_received_ts_ms"] == 1780000000000
+
+
+def test_realtime_analysis_context_prefers_ws_strength_source(monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "check_execution_strength_ka10046",
+        lambda *_args, **_kwargs: {"strength": 120, "s5": 118, "s20": 116, "s60": 114, "acc_amt": 0, "trde_qty": 0, "flu_rt": 0},
+    )
+    monkeypatch.setattr(kiwoom_utils, "get_program_flow_realtime", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(kiwoom_utils, "get_investor_flow_summary_ka10059", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "summarize_ticks_for_realtime_ka10003",
+        lambda *_args, **_kwargs: {"buy_ratio_now": 50.0, "buy_ratio_1m": 50.0, "buy_ratio_3m": 50.0, "tape_bias": "중립"},
+    )
+    monkeypatch.setattr(kiwoom_utils, "get_minute_candles_ka10080", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(kiwoom_utils, "get_daily_ohlcv_ka10081_df", lambda *_args, **_kwargs: pd.DataFrame())
+
+    ctx = kiwoom_utils.build_realtime_analysis_context("token", "005930", {"curr": 10000, "v_pw": 131.0})
+
+    assert ctx["v_pw_now"] == 131.0
+    assert ctx["v_pw_source"] == "ws_0b"
+    assert ctx["v_pw_runtime_support_usable"] is True
+    assert ctx["v_pw_ws_value"] == 131.0
+    assert ctx["v_pw_rest_value"] == 120
+    assert ctx["timing_score"] == 81.0
 
 
 def test_strength_shadow_feedback_uses_first_ask_level_as_best_ask(monkeypatch):

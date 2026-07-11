@@ -1122,6 +1122,25 @@ def test_send_reg_uses_exchange_aware_items_for_nxt(monkeypatch):
     assert manager.subscribed_codes == {"039490"}
 
 
+def test_send_reg_preserves_explicit_nxt_only_item(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    fake_ws = _FakeWS([])
+    manager.websocket = fake_ws
+    manager._session_ready.set()
+
+    monkeypatch.setattr(
+        "src.utils.kiwoom_utils.get_effective_kiwoom_code",
+        lambda code: code,
+    )
+
+    asyncio.run(manager._send_reg(["039490_NX"]))
+
+    payload = json.loads(fake_ws.sent[0])
+    assert payload["data"][0]["item"] == ["039490_NX"]
+    assert manager.subscribed_codes == {"039490"}
+    assert manager._registered_items_by_code["039490"] == ("039490_NX",)
+
+
 def test_send_reg_uses_single_effective_route_by_default(monkeypatch):
     manager = KiwoomWSManager("test-token")
     fake_ws = _FakeWS([])
@@ -1701,6 +1720,15 @@ def test_subscription_freshness_snapshot_classifies_no_tick_stale_and_fresh(monk
     assert rows["000003"]["freshness_state"] == "fresh"
     assert rows["000003"]["last_receive_age_sec"] == 4.0
     assert rows["000003"]["registered_item_count"] == 2
+    assert rows["000003"]["registered_item_quota_units"] == 2
+    assert rows["000003"]["registered_market_suffixes"] == ["", "_AL"]
+    assert rows["000003"]["registered_market_routes"] == ["krx_regular", "krx_nxt_integrated"]
+    assert rows["000003"]["registered_route_counts"] == {
+        "krx_nxt_integrated": 1,
+        "krx_regular": 1,
+    }
+    assert rows["000003"]["multi_route_registered"] is True
+    assert rows["000003"]["route_repair_policy"] == "remove_then_reg_required_for_route_transition"
     assert rows["000003"]["decision_authority"] == "ws_freshness_source_quality_only"
     assert rows["000003"]["broker_order_forbidden"] is True
     assert rows["000004"]["freshness_state"] == "fresh"

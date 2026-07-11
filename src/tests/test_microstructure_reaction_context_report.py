@@ -49,6 +49,49 @@ def test_microstructure_reaction_context_report_preserves_contract_and_keys(tmp_
                             "kiwoom_0b_trade_volume_source_counts": "{'1030_1031_sum': 10}",
                             "kiwoom_0b_1030_1031_vs_15_evaluable_count": 10,
                             "kiwoom_0b_1030_1031_vs_15_mismatch_count": 2,
+                            "ka10003_buy_dominance_observation": {
+                                "source_counts": {"1030_1031_split": 2, "signed_volume": 1},
+                                "trade_value_source_counts": {"1313": 2, "calc_price_x_volume": 1},
+                                "inside_spread_count": 1,
+                                "split_vs_15_evaluable_count": 2,
+                                "split_vs_15_mismatch_count": 1,
+                            },
+                            "v_pw_now": 131.0,
+                            "v_pw_source": "ws_0b",
+                            "v_pw_runtime_support_usable": True,
+                            "v_pw_ws_value": 131.0,
+                            "v_pw_rest_value": 109.0,
+                            "ka10046_strength_source": "ka10046_rest_strength_trend",
+                            "ka10046_strength_decision_authority": "strength_trend_rest_fallback_source_only",
+                            "ka10046_strength_runtime_effect": False,
+                            "ka10046_strength_rest_received_ts_ms": 1780000000000,
+                            "market_data_signed_tape_state": "sell_dominated",
+                            "market_data_signed_tape_sample_count": 3,
+                            "market_data_signed_tape_buy_count": 1,
+                            "market_data_signed_tape_sell_count": 2,
+                            "market_data_signed_tape_buy_volume": 100,
+                            "market_data_signed_tape_sell_volume": 350,
+                            "market_data_signed_tape_buy_ratio_pct": 22.222,
+                            "market_data_rest_signed_tape_pressure_usable": False,
+                            "rest_signed_trade_ticks": [
+                                {"signed_trade_volume": "-200", "rest_signed_tape_source": "ka10084"},
+                                {"signed_trade_volume": "+100", "rest_signed_tape_source": "ka10084"},
+                            ],
+                            "latency_true_ofi_direct_canary_signed_tape_sample_count": 3,
+                            "latency_true_ofi_direct_canary_signed_tape_buy_count": 1,
+                            "latency_true_ofi_direct_canary_signed_tape_sell_count": 2,
+                            "latency_true_ofi_direct_canary_signed_tape_buy_volume": 100,
+                            "latency_true_ofi_direct_canary_signed_tape_sell_volume": 350,
+                            "latency_true_ofi_direct_canary_signed_tape_net_buy_volume": -250,
+                            "latency_true_ofi_direct_canary_signed_tape_buy_ratio": 22.222,
+                            "latency_true_ofi_direct_canary_signed_tape_latest_side": "SELL",
+                            "latency_true_ofi_direct_canary_signed_tape_sell_dominated": True,
+                            "latency_true_ofi_direct_canary_signed_tape_latest_buy_single": 0,
+                            "latency_true_ofi_direct_canary_signed_tape_latest_sell_single": 200,
+                            "latency_true_ofi_direct_canary_signed_tape_latest_single_sell_dominated": True,
+                            "latency_true_ofi_direct_canary_tape_block_reason": "signed_tape_sell_dominated",
+                            "latency_true_ofi_direct_canary_tape_support_ok": False,
+                            "quote_stale": False,
                         },
                     }
                 ),
@@ -88,6 +131,55 @@ def test_microstructure_reaction_context_report_preserves_contract_and_keys(tmp_
                             "kiwoom_0b_trade_volume_source_counts": "{'15_abs': 3}",
                             "kiwoom_0b_1030_1031_vs_15_evaluable_count": 0,
                             "kiwoom_0b_1030_1031_vs_15_mismatch_count": 0,
+                            "ka10003_buy_dominance_observation_source_counts": "{'inside_excluded': 3}",
+                            "ka10003_buy_dominance_observation_trade_value_source_counts": "{'calc_price_x_volume': 3}",
+                            "ka10003_buy_dominance_observation_inside_spread_count": 3,
+                            "ka10003_buy_dominance_observation_split_vs_15_evaluable_count": 0,
+                            "ka10003_buy_dominance_observation_split_vs_15_mismatch_count": 0,
+                            "v_pw_now": 120.0,
+                            "v_pw_source": "ka10046_rest_fallback",
+                            "v_pw_runtime_support_usable": False,
+                            "v_pw_ws_value": 0.0,
+                            "v_pw_rest_value": 120.0,
+                            "ka10046_strength_source": "ka10046_rest_strength_trend",
+                            "ka10046_strength_decision_authority": "strength_trend_rest_fallback_source_only",
+                            "ka10046_strength_runtime_effect": False,
+                            "ka10046_strength_rest_received_ts_ms": 1780000001000,
+                            "market_data_signed_tape_state": "mixed",
+                            "market_data_signed_tape_sample_count": 2,
+                            "market_data_signed_tape_buy_count": 1,
+                            "market_data_signed_tape_sell_count": 1,
+                            "market_data_signed_tape_buy_volume": 90,
+                            "market_data_signed_tape_sell_volume": 80,
+                            "market_data_signed_tape_buy_ratio_pct": 52.941,
+                            "market_data_rest_signed_tape_pressure_usable": False,
+                            "rest_signed_trade_ticks": "[{'signed_trade_volume': '-80', 'rest_signed_tape_source': 'ka10084'}]",
+                            "latency_true_ofi_direct_canary_signed_tape_sample_count": 2,
+                            "latency_true_ofi_direct_canary_signed_tape_buy_count": 1,
+                            "latency_true_ofi_direct_canary_signed_tape_sell_count": 1,
+                            "latency_true_ofi_direct_canary_signed_tape_buy_volume": 90,
+                            "latency_true_ofi_direct_canary_signed_tape_sell_volume": 80,
+                            "latency_true_ofi_direct_canary_signed_tape_net_buy_volume": 10,
+                            "latency_true_ofi_direct_canary_signed_tape_buy_ratio": 52.941,
+                            "latency_true_ofi_direct_canary_signed_tape_latest_side": "BUY",
+                            "latency_true_ofi_direct_canary_signed_tape_sell_dominated": False,
+                            "latency_true_ofi_direct_canary_signed_tape_latest_buy_single": 90,
+                            "latency_true_ofi_direct_canary_signed_tape_latest_sell_single": 0,
+                            "latency_true_ofi_direct_canary_signed_tape_latest_single_sell_dominated": False,
+                            "latency_true_ofi_direct_canary_tape_support_ok": True,
+                            "quote_stale": True,
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "stage": "latency_block",
+                        "stock_code": "A111111",
+                        "record_id": "quote-only",
+                        "emitted_at": "2026-05-31T09:03:00+09:00",
+                        "fields": {
+                            "quote_stale": True,
+                            "ws_age_ms": 5000,
                         },
                     }
                 ),
@@ -109,6 +201,48 @@ def test_microstructure_reaction_context_report_preserves_contract_and_keys(tmp_
     assert report["summary"]["row_count"] == 2
     assert report["summary"]["ok_count"] == 1
     assert report["summary"]["real_submitted_count"] == 1
+    assert report["summary"]["v_pw_source_counts"] == {
+        "ka10046_rest_fallback": 1,
+        "ws_0b": 1,
+    }
+    assert report["summary"]["v_pw_rest_fallback_count"] == 1
+    assert report["summary"]["v_pw_ws_0b_count"] == 1
+    assert report["summary"]["v_pw_rest_fallback_rate_pct"] == 50.0
+    assert report["summary"]["v_pw_runtime_support_unusable_count"] == 1
+    assert report["summary"]["ka10046_rest_fallback_quote_freshness_counts"] == {"stale": 1}
+    assert report["summary"]["ka10046_rest_fallback_with_stale_quote_count"] == 1
+    assert report["summary"]["ka10046_strength_runtime_effect_true_count"] == 0
+    assert report["summary"]["ka10046_strength_missing_received_ts_count"] == 0
+    assert report["summary"]["ka10046_0b_strength_compare_evaluable_count"] == 1
+    assert report["summary"]["ka10046_0b_strength_abs_diff_avg"] == 22.0
+    assert report["summary"]["ka10046_0b_strength_divergence20_count"] == 1
+    assert report["summary"]["ka10046_0b_strength_divergence20_rate_pct"] == 100.0
+    assert report["summary"]["market_data_signed_tape_state_counts"] == {
+        "mixed": 1,
+        "sell_dominated": 1,
+    }
+    assert report["summary"]["market_data_signed_tape_sample_count_total"] == 5
+    assert report["summary"]["market_data_signed_tape_buy_count_total"] == 2
+    assert report["summary"]["market_data_signed_tape_sell_count_total"] == 3
+    assert report["summary"]["market_data_signed_tape_buy_volume_total"] == 190
+    assert report["summary"]["market_data_signed_tape_sell_volume_total"] == 430
+    assert report["summary"]["market_data_rest_signed_tape_pressure_usable_true_count"] == 0
+    assert report["summary"]["rest_signed_trade_ticks_row_count"] == 3
+    assert report["summary"]["rest_signed_trade_ticks_source_counts"] == {"ka10084": 3}
+    assert report["summary"]["latency_true_ofi_direct_canary_signed_tape_sample_count_total"] == 5
+    assert report["summary"]["latency_true_ofi_direct_canary_signed_tape_buy_count_total"] == 2
+    assert report["summary"]["latency_true_ofi_direct_canary_signed_tape_sell_count_total"] == 3
+    assert report["summary"]["latency_true_ofi_direct_canary_signed_tape_net_buy_volume_sum"] == -240
+    assert report["summary"]["latency_true_ofi_direct_canary_signed_tape_latest_side_counts"] == {
+        "BUY": 1,
+        "SELL": 1,
+    }
+    assert report["summary"]["latency_true_ofi_direct_canary_signed_tape_sell_dominated_count"] == 1
+    assert report["summary"]["latency_true_ofi_direct_canary_signed_tape_latest_single_sell_dominated_count"] == 1
+    assert report["summary"]["latency_true_ofi_direct_canary_tape_block_reason_counts"] == {
+        "missing": 1,
+        "signed_tape_sell_dominated": 1,
+    }
     assert report["rows"][0]["stock_code"] == "005930"
     assert report["rows"][1]["sim_record_id"] == "sim-1"
     assert report["rows"][1]["sim_parent_record_id"] == "parent-1"
@@ -130,5 +264,17 @@ def test_microstructure_reaction_context_report_preserves_contract_and_keys(tmp_
         "calc_price_x_15_abs": 3,
     }
     assert report["summary"]["kiwoom_0b_1030_1031_vs_15_mismatch_rate_pct"] == 20.0
+    assert report["summary"]["ka10003_buy_dominance_observation_source_counts"] == {
+        "1030_1031_split": 2,
+        "inside_excluded": 3,
+        "signed_volume": 1,
+    }
+    assert report["summary"]["ka10003_buy_dominance_observation_trade_value_source_counts"] == {
+        "1313": 2,
+        "calc_price_x_volume": 4,
+    }
+    assert report["summary"]["ka10003_buy_dominance_observation_inside_spread_count"] == 4
+    assert report["summary"]["ka10003_buy_dominance_observation_split_vs_15_mismatch_count"] == 1
+    assert report["summary"]["ka10003_buy_dominance_observation_split_vs_15_mismatch_rate_pct"] == 50.0
     assert (report_dir / "microstructure_reaction_context_2026-05-31.json").exists()
     assert (report_dir / "microstructure_reaction_context_2026-05-31.md").exists()

@@ -634,6 +634,32 @@ class KiwoomWSManager:
             return f"{canonical_code}_NX"
         return None
 
+    @staticmethod
+    def _ws_item_market_suffix(item):
+        raw = str(item or '').strip().upper()
+        if raw.endswith('_AL'):
+            return '_AL'
+        if raw.endswith('_NX'):
+            return '_NX'
+        return ''
+
+    @classmethod
+    def _ws_item_route(cls, item):
+        suffix = cls._ws_item_market_suffix(item)
+        if suffix == '_AL':
+            return 'krx_nxt_integrated'
+        if suffix == '_NX':
+            return 'nxt_only'
+        return 'krx_regular'
+
+    @classmethod
+    def _ws_item_route_counts(cls, items):
+        counts = {}
+        for item in items or ():
+            route = cls._ws_item_route(item)
+            counts[route] = counts.get(route, 0) + 1
+        return dict(sorted(counts.items()))
+
     def _parse_order_execution_notice(self, values):
         status = str(values.get('913', '')).strip()
         code = str(values.get('9001', '')).replace('A', '').strip()
@@ -1002,6 +1028,13 @@ class KiwoomWSManager:
                 ) else 0.0
                 age_sec = round(max(0.0, now_value - last_receive_ts), 3) if last_receive_ts > 0 else None
                 registered_items = tuple(self._registered_items_by_code.get(code) or ())
+                registered_route_counts = self._ws_item_route_counts(registered_items)
+                registered_market_suffixes = [
+                    self._ws_item_market_suffix(item) for item in registered_items
+                ]
+                registered_market_routes = [
+                    self._ws_item_route(item) for item in registered_items
+                ]
                 subscribed = code in self.subscribed_codes
                 if not subscribed:
                     freshness_state = "unsubscribed"
@@ -1054,6 +1087,12 @@ class KiwoomWSManager:
                         ),
                         "registered_items": list(registered_items),
                         "registered_item_count": len(registered_items),
+                        "registered_item_quota_units": len(registered_items),
+                        "registered_market_suffixes": registered_market_suffixes,
+                        "registered_market_routes": registered_market_routes,
+                        "registered_route_counts": registered_route_counts,
+                        "multi_route_registered": len(set(registered_market_routes)) > 1,
+                        "route_repair_policy": "remove_then_reg_required_for_route_transition",
                         "total_registered_item_count": registered_item_count,
                         "repair_recommended": subscribed and freshness_state in {"no_tick", "stale"},
                         "repair_reason": repair_reason,

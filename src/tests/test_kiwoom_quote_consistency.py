@@ -39,3 +39,33 @@ def test_ka10004_orderbook_does_not_publish_best_ask_as_curr(monkeypatch):
     assert snapshot["rest_age_ms"] == 0
     assert snapshot["age_ms"] == 0
     assert snapshot["rest_received_ts_ms"] > 0
+
+
+def test_ka10004_preserves_explicit_nxt_market_suffix(monkeypatch):
+    calls = []
+
+    def fake_fetch_kiwoom_api_continuous(**kwargs):
+        calls.append(kwargs)
+        return [
+            {
+                "bid_req_base_tm": "093001",
+                "sel_fpr_bid": "10100",
+                "sel_fpr_req": "120",
+                "buy_fpr_bid": "10000",
+                "buy_fpr_req": "240",
+            }
+        ]
+
+    monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fake_fetch_kiwoom_api_continuous)
+
+    snapshot = kiwoom_utils.get_stock_orderbook_ka10004("token", "005930_NX")
+
+    assert calls[0]["payload"]["stk_cd"] == "005930_NX"
+    assert snapshot["stock_code"] == "005930"
+    assert snapshot["request_code"] == "005930_NX"
+
+
+def test_effective_kiwoom_code_preserves_explicit_market_suffix():
+    assert kiwoom_utils.normalize_stock_code("A005930_NX") == "005930"
+    assert kiwoom_utils.get_effective_kiwoom_code("A005930_NX", is_nxt=False) == "005930_NX"
+    assert kiwoom_utils.get_effective_kiwoom_code("005930_AL", is_nxt=False) == "005930_AL"
