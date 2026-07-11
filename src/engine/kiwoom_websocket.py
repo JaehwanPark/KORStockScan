@@ -898,7 +898,27 @@ class KiwoomWSManager:
                     for value in type_ts.values()
                     if isinstance(value, (int, float)) and float(value) > 0
                 ]
+                realtime_type_age_sec = {}
+                for realtime_type in ("0B", "0D", "0w", "0F"):
+                    raw_type_ts = type_ts.get(realtime_type)
+                    type_receive_ts = (
+                        float(raw_type_ts)
+                        if isinstance(raw_type_ts, (int, float)) and float(raw_type_ts) > 0
+                        else 0.0
+                    )
+                    realtime_type_age_sec[realtime_type] = (
+                        round(max(0.0, now_value - type_receive_ts), 3)
+                        if type_receive_ts > 0
+                        else None
+                    )
                 last_ws_update_ts = float(target.get("last_ws_update_ts") or 0.0)
+                last_trade_tick = target.get("last_trade_tick")
+                last_trade_tick = last_trade_tick if isinstance(last_trade_tick, dict) else {}
+                last_trade_cum_volume = (
+                    self._safe_abs_int(last_trade_tick.get("cum_volume"), None)
+                    if last_trade_tick.get("cum_volume") not in (None, "")
+                    else None
+                )
                 last_receive_ts = max([last_ws_update_ts] + numeric_type_ts) if (
                     last_ws_update_ts > 0 or numeric_type_ts
                 ) else 0.0
@@ -913,6 +933,27 @@ class KiwoomWSManager:
                     freshness_state = "stale"
                 else:
                     freshness_state = "fresh"
+                non_trade_type_fresh = any(
+                    type_age is not None and type_age < stale_after_sec
+                    for type_age in (
+                        realtime_type_age_sec["0D"],
+                        realtime_type_age_sec["0w"],
+                        realtime_type_age_sec["0F"],
+                    )
+                )
+                last_0b_age_sec = realtime_type_age_sec["0B"]
+                trade_tick_quiet = bool(
+                    subscribed
+                    and freshness_state == "fresh"
+                    and non_trade_type_fresh
+                    and (last_0b_age_sec is None or last_0b_age_sec >= stale_after_sec)
+                )
+                if subscribed and freshness_state == "no_tick":
+                    repair_reason = "subscription_no_tick"
+                elif subscribed and freshness_state == "stale":
+                    repair_reason = "subscription_stale"
+                else:
+                    repair_reason = "none"
                 rows.append(
                     {
                         "stock_code": code,
@@ -922,10 +963,22 @@ class KiwoomWSManager:
                         "last_receive_age_sec": age_sec,
                         "stale_after_sec": stale_after_sec,
                         "received_types": sorted(list(target.get("received_types") or [])),
+                        "last_0b_age_sec": last_0b_age_sec,
+                        "last_0d_age_sec": realtime_type_age_sec["0D"],
+                        "last_0w_age_sec": realtime_type_age_sec["0w"],
+                        "last_0f_age_sec": realtime_type_age_sec["0F"],
+                        "last_trade_cum_volume": last_trade_cum_volume,
+                        "trade_tick_quiet": trade_tick_quiet,
+                        "trade_tick_quiet_reason": (
+                            "fresh_non_trade_ws_without_fresh_0b"
+                            if trade_tick_quiet
+                            else "none"
+                        ),
                         "registered_items": list(registered_items),
                         "registered_item_count": len(registered_items),
                         "total_registered_item_count": registered_item_count,
                         "repair_recommended": subscribed and freshness_state in {"no_tick", "stale"},
+                        "repair_reason": repair_reason,
                         "recommended_repair": (
                             "remove_then_reg_backoff"
                             if subscribed and freshness_state in {"no_tick", "stale"}

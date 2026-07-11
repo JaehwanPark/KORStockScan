@@ -1516,11 +1516,12 @@ def test_real_payload_with_exchange_suffix_updates_canonical_snapshot():
 def test_subscription_freshness_snapshot_classifies_no_tick_stale_and_fresh(monkeypatch):
     manager = KiwoomWSManager("test-token")
     monkeypatch.setenv("KORSTOCKSCAN_WS_FRESHNESS_STALE_SEC", "30")
-    manager.subscribed_codes.update({"000001", "000002", "000003"})
+    manager.subscribed_codes.update({"000001", "000002", "000003", "000004"})
     manager._registered_items_by_code = {
         "000001": ("000001",),
         "000002": ("000002",),
         "000003": ("000003", "000003_AL"),
+        "000004": ("000004",),
     }
     manager.realtime_data["000002"] = {
         "last_ws_update_ts": 950.0,
@@ -1532,19 +1533,37 @@ def test_subscription_freshness_snapshot_classifies_no_tick_stale_and_fresh(monk
         "last_realtime_type_ts": {"0B": 995.0, "0D": 996.0},
         "received_types": {"0B", "0D"},
     }
+    manager.realtime_data["000004"] = {
+        "last_ws_update_ts": 996.0,
+        "last_realtime_type_ts": {"0B": 950.0, "0D": 996.0},
+        "last_trade_tick": {"ts": 950.0, "cum_volume": "1,234"},
+        "received_types": {"0B", "0D"},
+    }
 
     snapshot = manager.get_subscription_freshness_snapshot(now_ts=1000.0)
     rows = {row["stock_code"]: row for row in snapshot["rows"]}
 
     assert rows["000001"]["freshness_state"] == "no_tick"
     assert rows["000001"]["repair_recommended"] is True
+    assert rows["000001"]["repair_reason"] == "subscription_no_tick"
     assert rows["000002"]["freshness_state"] == "stale"
     assert rows["000002"]["last_receive_age_sec"] == 50.0
+    assert rows["000002"]["repair_reason"] == "subscription_stale"
     assert rows["000003"]["freshness_state"] == "fresh"
     assert rows["000003"]["last_receive_age_sec"] == 4.0
     assert rows["000003"]["registered_item_count"] == 2
     assert rows["000003"]["decision_authority"] == "ws_freshness_source_quality_only"
     assert rows["000003"]["broker_order_forbidden"] is True
+    assert rows["000004"]["freshness_state"] == "fresh"
+    assert rows["000004"]["last_receive_age_sec"] == 4.0
+    assert rows["000004"]["last_0b_age_sec"] == 50.0
+    assert rows["000004"]["last_0d_age_sec"] == 4.0
+    assert rows["000004"]["last_trade_cum_volume"] == 1234
+    assert rows["000004"]["repair_recommended"] is False
+    assert rows["000004"]["repair_reason"] == "none"
+    assert rows["000004"]["recommended_repair"] == "none"
+    assert rows["000004"]["trade_tick_quiet"] is True
+    assert rows["000004"]["trade_tick_quiet_reason"] == "fresh_non_trade_ws_without_fresh_0b"
 
     filtered = manager.get_subscription_freshness_snapshot(["999999"], now_ts=1000.0)
     assert filtered["rows"][0]["freshness_state"] == "unsubscribed"
