@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import gzip
 import hashlib
 import json
@@ -30,6 +31,24 @@ CONTEXT_KEYS = (
     "microstructure_reaction_entry_reaction_quality",
     "microstructure_reaction_source_quality",
     "microstructure_reaction_context_hash",
+    "tick_trade_value_source_counts",
+    "tick_trade_value_1313_count",
+    "tick_trade_value_1313_missing_count",
+    "tick_trade_value_1313_missing_rate_pct",
+    "trade_volume_source_counts",
+    "trade_volume_1030_1031_vs_15_evaluable_count",
+    "trade_volume_1030_1031_vs_15_mismatch_count",
+    "trade_volume_1030_1031_vs_15_mismatch_rate_pct",
+    "tick_aggressor_source_counts",
+    "kiwoom_0b_aux_observed_count",
+    "kiwoom_0b_1313_present_count",
+    "kiwoom_0b_1313_missing_count",
+    "kiwoom_0b_1313_missing_rate_pct",
+    "kiwoom_0b_trade_value_source_counts",
+    "kiwoom_0b_trade_volume_source_counts",
+    "kiwoom_0b_1030_1031_vs_15_evaluable_count",
+    "kiwoom_0b_1030_1031_vs_15_mismatch_count",
+    "kiwoom_0b_1030_1031_vs_15_mismatch_rate_pct",
 )
 
 FORBIDDEN_USES = [
@@ -75,6 +94,25 @@ def _safe_bool(value: Any, default: bool = False) -> bool:
 
 def _clamp_score(value: float) -> int:
     return int(max(0, min(100, round(value))))
+
+
+def _rate_pct(numerator: int, denominator: int) -> float:
+    return round((numerator / denominator) * 100.0, 3) if denominator > 0 else 0.0
+
+
+def _dict_counter(value: Any) -> Counter:
+    if isinstance(value, dict):
+        return Counter({str(key): int(_safe_float(count, 0.0)) for key, count in value.items()})
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("{") and text.endswith("}"):
+            try:
+                parsed = ast.literal_eval(text)
+            except (SyntaxError, ValueError):
+                parsed = None
+            if isinstance(parsed, dict):
+                return Counter({str(key): int(_safe_float(count, 0.0)) for key, count in parsed.items()})
+    return Counter()
 
 
 def _safe_hhmmss_to_seconds(value: Any) -> int | None:
@@ -139,6 +177,7 @@ def _tick_best_bid(tick: dict[str, Any]) -> float:
 TRUSTED_AGGRESSOR_SOURCES = {
     "orderbook_touch",
     "cached_orderbook_touch",
+    "kiwoom_0b_signed_trade_volume",
     "provider_declared_side",
     "exchange_declared_side",
     "trusted_declared_side",
@@ -182,6 +221,20 @@ def infer_tick_aggressor_side(tick: dict[str, Any] | None) -> dict[str, Any]:
     trade_price = _tick_price(tick)
     best_ask = _tick_best_ask(tick)
     best_bid = _tick_best_bid(tick)
+    if explicit in {"BUY", "SELL"} and declared_source == "kiwoom_0b_signed_trade_volume":
+        return {
+            "side": explicit,
+            "source": declared_source,
+            "quality": declared_quality or "signed_trade_volume",
+            "declared_side": explicit,
+            "trade_price": trade_price,
+            "best_ask": best_ask,
+            "best_bid": best_bid,
+            "touch_side": str(tick.get("aggressor_touch_side") or "UNKNOWN"),
+            "touch_source": str(tick.get("aggressor_touch_source") or ""),
+            "touch_quality": str(tick.get("aggressor_touch_quality") or ""),
+            "touch_confirms_signed": tick.get("aggressor_touch_confirms_signed"),
+        }
     if trade_price > 0 and (best_ask > 0 or best_bid > 0):
         raw_inline_quote = not declared_source and not quote_source and ("27" in tick or "28" in tick)
         trusted_touch_source = (
@@ -362,6 +415,32 @@ def precompute_microstructure_reaction_inputs(
     tick_age_ms = _age_ms_from_hhmmss(tick_latest_time, now=now) if tick_latest_time else None
     tick_secs = [_safe_hhmmss_to_seconds(tick.get("time")) for tick in ticks]
     aggressor_rows = [infer_tick_aggressor_side(tick) for tick in ticks]
+    tick_trade_value_source_counts = Counter(
+        str(tick.get("tick_trade_value_source") or "unknown")
+        for tick in ticks
+        if "tick_trade_value_source" in tick
+    )
+    tick_trade_value_observed_count = sum(tick_trade_value_source_counts.values())
+    tick_trade_value_1313_count = tick_trade_value_source_counts.get("1313", 0)
+    tick_trade_value_1313_missing_count = max(
+        0,
+        tick_trade_value_observed_count - tick_trade_value_1313_count,
+    )
+    trade_volume_source_counts = Counter(
+        str(tick.get("volume_source") or tick.get("trade_volume_source") or "unknown")
+        for tick in ticks
+        if "volume_source" in tick or "trade_volume_source" in tick
+    )
+    trade_volume_mismatch_rows = [
+        tick
+        for tick in ticks
+        if "trade_volume_1030_1031_vs_15_mismatch" in tick
+    ]
+    trade_volume_mismatch_count = sum(
+        1
+        for tick in trade_volume_mismatch_rows
+        if _safe_bool(tick.get("trade_volume_1030_1031_vs_15_mismatch"), False)
+    )
     pressure_rows = [
         (tick, inferred)
         for tick, inferred in zip(ticks, aggressor_rows)
@@ -453,6 +532,20 @@ def precompute_microstructure_reaction_inputs(
         "tick_aggressor_rows": aggressor_rows,
         "tick_aggressor_source_counts": dict(Counter(str(row.get("source") or "unknown") for row in aggressor_rows)),
         "tick_aggressor_quality_counts": dict(Counter(str(row.get("quality") or "unknown") for row in aggressor_rows)),
+        "tick_trade_value_source_counts": dict(sorted(tick_trade_value_source_counts.items())),
+        "tick_trade_value_1313_count": int(tick_trade_value_1313_count),
+        "tick_trade_value_1313_missing_count": int(tick_trade_value_1313_missing_count),
+        "tick_trade_value_1313_missing_rate_pct": _rate_pct(
+            tick_trade_value_1313_missing_count,
+            tick_trade_value_observed_count,
+        ),
+        "trade_volume_source_counts": dict(sorted(trade_volume_source_counts.items())),
+        "trade_volume_1030_1031_vs_15_evaluable_count": len(trade_volume_mismatch_rows),
+        "trade_volume_1030_1031_vs_15_mismatch_count": int(trade_volume_mismatch_count),
+        "trade_volume_1030_1031_vs_15_mismatch_rate_pct": _rate_pct(
+            trade_volume_mismatch_count,
+            len(trade_volume_mismatch_rows),
+        ),
         "tick_aggressor_unknown_count": sum(1 for row in aggressor_rows if row.get("side") not in {"BUY", "SELL"}),
         "tick_aggressor_orderbook_touch_count": sum(1 for row in aggressor_rows if row.get("source") == "orderbook_touch"),
         "tick_aggressor_cached_orderbook_touch_count": sum(
@@ -669,6 +762,27 @@ def _row_from_event(event: dict[str, Any]) -> dict[str, Any] | None:
     return row
 
 
+def _sum_int(rows: list[dict[str, Any]], key: str) -> int:
+    return sum(_safe_int(row.get(key), 0) for row in rows)
+
+
+def _sum_counter_rows(rows: list[dict[str, Any]], key: str) -> dict[str, int]:
+    counter: Counter = Counter()
+    for row in rows:
+        counter.update(_dict_counter(row.get(key)))
+    return dict(sorted(counter.items()))
+
+
+def _latest_rows_by_stock(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    latest: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        stock_code = str(row.get("stock_code") or "").strip()
+        if not stock_code:
+            continue
+        latest[stock_code] = row
+    return list(latest.values())
+
+
 def build_microstructure_reaction_context_report(target_date: str) -> dict[str, Any]:
     target_date = str(target_date).strip()
     path = _event_path(target_date)
@@ -678,6 +792,27 @@ def build_microstructure_reaction_context_report(target_date: str) -> dict[str, 
     source_quality_counts = Counter(str(row.get("microstructure_reaction_source_quality") or "-") for row in rows)
     stage_counts = Counter(str(row.get("stage") or "-") for row in rows)
     real_rows = [row for row in rows if row.get("actual_order_submitted") is True]
+    latest_stock_rows = _latest_rows_by_stock(rows)
+    window_trade_value_1313_count = _sum_int(rows, "tick_trade_value_1313_count")
+    window_trade_value_1313_missing_count = _sum_int(rows, "tick_trade_value_1313_missing_count")
+    window_trade_volume_mismatch_evaluable_count = _sum_int(
+        rows,
+        "trade_volume_1030_1031_vs_15_evaluable_count",
+    )
+    window_trade_volume_mismatch_count = _sum_int(
+        rows,
+        "trade_volume_1030_1031_vs_15_mismatch_count",
+    )
+    cumulative_0b_count = _sum_int(latest_stock_rows, "kiwoom_0b_aux_observed_count")
+    cumulative_1313_missing_count = _sum_int(latest_stock_rows, "kiwoom_0b_1313_missing_count")
+    cumulative_mismatch_evaluable_count = _sum_int(
+        latest_stock_rows,
+        "kiwoom_0b_1030_1031_vs_15_evaluable_count",
+    )
+    cumulative_mismatch_count = _sum_int(
+        latest_stock_rows,
+        "kiwoom_0b_1030_1031_vs_15_mismatch_count",
+    )
     summary = {
         "available": bool(rows),
         "row_count": len(rows),
@@ -688,6 +823,40 @@ def build_microstructure_reaction_context_report(target_date: str) -> dict[str, 
         "source_quality_counts": dict(sorted(source_quality_counts.items())),
         "stage_counts": dict(sorted(stage_counts.items())),
         "real_submitted_count": len(real_rows),
+        "tick_aggressor_source_counts": _sum_counter_rows(rows, "tick_aggressor_source_counts"),
+        "tick_trade_value_source_counts": _sum_counter_rows(rows, "tick_trade_value_source_counts"),
+        "tick_trade_value_1313_count": window_trade_value_1313_count,
+        "tick_trade_value_1313_missing_count": window_trade_value_1313_missing_count,
+        "tick_trade_value_1313_missing_rate_pct": _rate_pct(
+            window_trade_value_1313_missing_count,
+            window_trade_value_1313_count + window_trade_value_1313_missing_count,
+        ),
+        "trade_volume_source_counts": _sum_counter_rows(rows, "trade_volume_source_counts"),
+        "trade_volume_1030_1031_vs_15_evaluable_count": window_trade_volume_mismatch_evaluable_count,
+        "trade_volume_1030_1031_vs_15_mismatch_count": window_trade_volume_mismatch_count,
+        "trade_volume_1030_1031_vs_15_mismatch_rate_pct": _rate_pct(
+            window_trade_volume_mismatch_count,
+            window_trade_volume_mismatch_evaluable_count,
+        ),
+        "kiwoom_0b_latest_stock_count": len(latest_stock_rows),
+        "kiwoom_0b_aux_observed_count": cumulative_0b_count,
+        "kiwoom_0b_1313_present_count": _sum_int(latest_stock_rows, "kiwoom_0b_1313_present_count"),
+        "kiwoom_0b_1313_missing_count": cumulative_1313_missing_count,
+        "kiwoom_0b_1313_missing_rate_pct": _rate_pct(cumulative_1313_missing_count, cumulative_0b_count),
+        "kiwoom_0b_trade_value_source_counts": _sum_counter_rows(
+            latest_stock_rows,
+            "kiwoom_0b_trade_value_source_counts",
+        ),
+        "kiwoom_0b_trade_volume_source_counts": _sum_counter_rows(
+            latest_stock_rows,
+            "kiwoom_0b_trade_volume_source_counts",
+        ),
+        "kiwoom_0b_1030_1031_vs_15_evaluable_count": cumulative_mismatch_evaluable_count,
+        "kiwoom_0b_1030_1031_vs_15_mismatch_count": cumulative_mismatch_count,
+        "kiwoom_0b_1030_1031_vs_15_mismatch_rate_pct": _rate_pct(
+            cumulative_mismatch_count,
+            cumulative_mismatch_evaluable_count,
+        ),
         "avg_ask_sweep_score": _avg_score(rows, "microstructure_reaction_ask_sweep_score"),
         "avg_post_sweep_hold_score": _avg_score(rows, "microstructure_reaction_post_sweep_hold_score"),
         "avg_bid_replenishment_score": _avg_score(rows, "microstructure_reaction_bid_replenishment_score"),
@@ -752,6 +921,22 @@ def render_microstructure_reaction_context_markdown(report: dict[str, Any]) -> s
         f"- entry_reaction_quality_counts: `{summary.get('entry_reaction_quality_counts') or {}}`",
         f"- source_quality_counts: `{summary.get('source_quality_counts') or {}}`",
         f"- stage_counts: `{summary.get('stage_counts') or {}}`",
+        f"- tick_aggressor_source_counts: `{summary.get('tick_aggressor_source_counts') or {}}`",
+        f"- tick_trade_value_source_counts: `{summary.get('tick_trade_value_source_counts') or {}}`",
+        f"- tick_trade_value_1313_missing_rate_pct: `{summary.get('tick_trade_value_1313_missing_rate_pct')}`",
+        f"- trade_volume_source_counts: `{summary.get('trade_volume_source_counts') or {}}`",
+        "- trade_volume_1030_1031_vs_15_mismatch: "
+        f"`{summary.get('trade_volume_1030_1031_vs_15_mismatch_count')}` / "
+        f"`{summary.get('trade_volume_1030_1031_vs_15_evaluable_count')}` "
+        f"(`{summary.get('trade_volume_1030_1031_vs_15_mismatch_rate_pct')}`%)",
+        f"- kiwoom_0b_latest_stock_count: `{summary.get('kiwoom_0b_latest_stock_count')}`",
+        f"- kiwoom_0b_trade_value_source_counts: `{summary.get('kiwoom_0b_trade_value_source_counts') or {}}`",
+        f"- kiwoom_0b_1313_missing_rate_pct: `{summary.get('kiwoom_0b_1313_missing_rate_pct')}`",
+        f"- kiwoom_0b_trade_volume_source_counts: `{summary.get('kiwoom_0b_trade_volume_source_counts') or {}}`",
+        "- kiwoom_0b_1030_1031_vs_15_mismatch: "
+        f"`{summary.get('kiwoom_0b_1030_1031_vs_15_mismatch_count')}` / "
+        f"`{summary.get('kiwoom_0b_1030_1031_vs_15_evaluable_count')}` "
+        f"(`{summary.get('kiwoom_0b_1030_1031_vs_15_mismatch_rate_pct')}`%)",
         f"- avg_ask_sweep_score: `{summary.get('avg_ask_sweep_score')}`",
         f"- avg_post_sweep_hold_score: `{summary.get('avg_post_sweep_hold_score')}`",
         f"- avg_bid_replenishment_score: `{summary.get('avg_bid_replenishment_score')}`",

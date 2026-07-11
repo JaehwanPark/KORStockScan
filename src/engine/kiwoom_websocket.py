@@ -321,6 +321,84 @@ class KiwoomWSManager:
         return "UNKNOWN", "signed_trade_volume_missing_or_neutral"
 
     @staticmethod
+    def _primary_signed_trade_volume_quality(auxiliary_quality):
+        text = str(auxiliary_quality or "").strip()
+        if text.endswith("_auxiliary"):
+            return text[: -len("_auxiliary")]
+        return text or "signed_trade_volume_missing_or_neutral"
+
+    @staticmethod
+    def _parse_0b_auxiliary_fields(values, *, trade_price=0):
+        values = values if isinstance(values, dict) else {}
+        buy_qty = KiwoomWSManager._safe_abs_int(values.get('1031'), None)
+        sell_qty = KiwoomWSManager._safe_abs_int(values.get('1030'), None)
+        signed_qty_abs = KiwoomWSManager._safe_abs_int(values.get('15'), None)
+        price = KiwoomWSManager._safe_abs_int(trade_price or values.get('10'), 0)
+        split_qty_available = buy_qty is not None and sell_qty is not None
+        split_qty_sum = int((buy_qty or 0) + (sell_qty or 0)) if split_qty_available else None
+
+        trade_value = KiwoomWSManager._safe_abs_int(values.get('1313'), None)
+        trade_value_source = "1313" if trade_value is not None and trade_value > 0 else "unknown"
+        fallback_volume_source = "none"
+        fallback_volume = None
+        if trade_value_source == "unknown":
+            if split_qty_sum is not None and split_qty_sum > 0:
+                fallback_volume = split_qty_sum
+                fallback_volume_source = "1030_1031_sum"
+            elif signed_qty_abs is not None and signed_qty_abs > 0:
+                fallback_volume = signed_qty_abs
+                fallback_volume_source = "15_abs"
+            if price > 0 and fallback_volume is not None and fallback_volume > 0:
+                trade_value = int(price * fallback_volume)
+                trade_value_source = f"calc_price_x_{fallback_volume_source}"
+            else:
+                trade_value = 0
+
+        if split_qty_sum is not None and split_qty_sum > 0:
+            trade_volume = split_qty_sum
+            trade_volume_source = "1030_1031_sum"
+        elif signed_qty_abs is not None and signed_qty_abs > 0:
+            trade_volume = signed_qty_abs
+            trade_volume_source = "15_abs"
+        else:
+            trade_volume = 0
+            trade_volume_source = "unknown"
+
+        mismatch = (
+            split_qty_sum is not None
+            and signed_qty_abs is not None
+            and split_qty_sum != signed_qty_abs
+        )
+        mismatch_delta = (
+            int(split_qty_sum - signed_qty_abs)
+            if split_qty_sum is not None and signed_qty_abs is not None
+            else None
+        )
+        return {
+            "buy_qty": int(buy_qty or 0),
+            "sell_qty": int(sell_qty or 0),
+            "signed_qty_abs": int(signed_qty_abs or 0),
+            "split_qty_sum": int(split_qty_sum or 0),
+            "split_qty_available": bool(split_qty_available),
+            "trade_volume": int(trade_volume or 0),
+            "trade_volume_source": trade_volume_source,
+            "trade_value": int(trade_value or 0),
+            "trade_value_source": trade_value_source,
+            "trade_value_fallback_volume_source": fallback_volume_source,
+            "split_qty_vs_15_evaluable": bool(split_qty_sum is not None and signed_qty_abs is not None),
+            "split_qty_vs_15_mismatch": bool(mismatch),
+            "split_qty_vs_15_delta": mismatch_delta,
+        }
+
+    @staticmethod
+    def _increment_counter_dict(counter, key):
+        if not isinstance(counter, dict):
+            counter = {}
+        text = str(key or "unknown")
+        counter[text] = int(counter.get(text) or 0) + 1
+        return counter
+
+    @staticmethod
     def _infer_trade_auxiliary_score(values, *, previous_tick=None):
         values = values if isinstance(values, dict) else {}
         previous_tick = previous_tick if isinstance(previous_tick, dict) else {}
@@ -1116,7 +1194,7 @@ class KiwoomWSManager:
                 rows.append((seq, name))
         return rows
 
-    def _append_strength_momentum(self, target, *, current_price, current_vpw, signed_qty, tick_value, buy_ratio, buy_qty, sell_qty):
+    def _append_strength_momentum(self, target, *, current_price, current_vpw, signed_qty, tick_value, buy_ratio, buy_qty, sell_qty, tick_value_source="unknown"):
         history = target.get('strength_momentum_history')
         if not isinstance(history, deque):
             maxlen = int(getattr(TRADING_RULES, 'SCALP_VPW_HISTORY_MAXLEN', 120) or 120)
@@ -1149,6 +1227,7 @@ class KiwoomWSManager:
             'buy_exec_qty_cum': int(buy_qty or 0),
             'sell_exec_qty_cum': int(sell_qty or 0),
             'tick_value': int(tick_value or 0),
+            'tick_value_source': str(tick_value_source or "unknown"),
             'buy_tick_value': int(buy_tick_value or 0),
             'sell_tick_value': int(sell_tick_value or 0),
             'buy_ratio': float(buy_ratio or 0.0),
@@ -1177,9 +1256,20 @@ class KiwoomWSManager:
                 'foreign_broker_buy_est_delta_qty': 0,
                 'foreign_broker_net_est_qty': 0,
                 'foreign_broker_net_est_delta_qty': 0,
-                'tick_trade_value': 0, 'cum_trade_value': 0,
+                'tick_trade_value': 0, 'tick_trade_value_source': 'unknown',
+                'tick_trade_value_fallback_volume_source': 'none', 'cum_trade_value': 0,
                 'buy_exec_volume': 0, 'sell_exec_volume': 0,
                 'buy_ratio': 0.0, 'net_buy_exec_volume': 0,
+                'trade_volume_source': 'unknown',
+                'trade_volume_1030_1031_vs_15_mismatch': False,
+                'trade_volume_1030_1031_vs_15_delta': None,
+                'kiwoom_0b_aux_observed_count': 0,
+                'kiwoom_0b_1313_present_count': 0,
+                'kiwoom_0b_1313_missing_count': 0,
+                'kiwoom_0b_trade_value_source_counts': {},
+                'kiwoom_0b_trade_volume_source_counts': {},
+                'kiwoom_0b_1030_1031_vs_15_evaluable_count': 0,
+                'kiwoom_0b_1030_1031_vs_15_mismatch_count': 0,
                 'sell_exec_single': 0, 'buy_exec_single': 0,
                 'net_bid_depth': 0, 'bid_depth_ratio': 0.0,
                 'net_ask_depth': 0, 'ask_depth_ratio': 0.0,
@@ -1935,12 +2025,51 @@ class KiwoomWSManager:
                                 current_price = target.get('curr', 0)
                                 trade_price = safe_int(values.get('10'), current_price)
                                 current_vpw = target.get('v_pw', 0.0)
-                                tick_value = safe_int(values.get('1313'), 0)
-                                if tick_value <= 0 and current_price > 0 and signed_qty != 0:
-                                    tick_value = abs(int(current_price * abs(signed_qty)))
-                                buy_qty = safe_int(values.get('1031'), 0)
-                                sell_qty = safe_int(values.get('1030'), 0)
+                                aux_fields = self._parse_0b_auxiliary_fields(values, trade_price=trade_price)
+                                tick_value = aux_fields["trade_value"]
+                                buy_qty = aux_fields["buy_qty"]
+                                sell_qty = aux_fields["sell_qty"]
+                                trade_volume = aux_fields["trade_volume"]
                                 buy_ratio = self._safe_float(values.get('1032'), 0.0)
+                                target['tick_trade_value'] = tick_value
+                                target['tick_trade_value_source'] = aux_fields["trade_value_source"]
+                                target['tick_trade_value_fallback_volume_source'] = aux_fields[
+                                    "trade_value_fallback_volume_source"
+                                ]
+                                target['trade_volume_source'] = aux_fields["trade_volume_source"]
+                                target['trade_volume_1030_1031_vs_15_mismatch'] = aux_fields[
+                                    "split_qty_vs_15_mismatch"
+                                ]
+                                target['trade_volume_1030_1031_vs_15_delta'] = aux_fields[
+                                    "split_qty_vs_15_delta"
+                                ]
+                                target['kiwoom_0b_aux_observed_count'] = int(
+                                    target.get('kiwoom_0b_aux_observed_count') or 0
+                                ) + 1
+                                if aux_fields["trade_value_source"] == "1313":
+                                    target['kiwoom_0b_1313_present_count'] = int(
+                                        target.get('kiwoom_0b_1313_present_count') or 0
+                                    ) + 1
+                                else:
+                                    target['kiwoom_0b_1313_missing_count'] = int(
+                                        target.get('kiwoom_0b_1313_missing_count') or 0
+                                    ) + 1
+                                target['kiwoom_0b_trade_value_source_counts'] = self._increment_counter_dict(
+                                    target.get('kiwoom_0b_trade_value_source_counts'),
+                                    aux_fields["trade_value_source"],
+                                )
+                                target['kiwoom_0b_trade_volume_source_counts'] = self._increment_counter_dict(
+                                    target.get('kiwoom_0b_trade_volume_source_counts'),
+                                    aux_fields["trade_volume_source"],
+                                )
+                                if aux_fields["split_qty_vs_15_evaluable"]:
+                                    target['kiwoom_0b_1030_1031_vs_15_evaluable_count'] = int(
+                                        target.get('kiwoom_0b_1030_1031_vs_15_evaluable_count') or 0
+                                    ) + 1
+                                    if aux_fields["split_qty_vs_15_mismatch"]:
+                                        target['kiwoom_0b_1030_1031_vs_15_mismatch_count'] = int(
+                                            target.get('kiwoom_0b_1030_1031_vs_15_mismatch_count') or 0
+                                        ) + 1
                                 inline_best_ask = safe_int(values.get('27'), 0)
                                 inline_best_bid = safe_int(values.get('28'), 0)
                                 tick_time = str(values.get('20') or datetime.now().strftime('%H%M%S'))
@@ -1963,14 +2092,14 @@ class KiwoomWSManager:
                                     }
                                 )
                                 if quote_complete:
-                                    aggressor_side, aggressor_quality = self._infer_trade_aggressor_from_touch(
+                                    touch_side, touch_quality = self._infer_trade_aggressor_from_touch(
                                         trade_price,
                                         best_ask,
                                         best_bid,
                                     )
                                 else:
-                                    aggressor_side = "UNKNOWN"
-                                    aggressor_quality = "missing_best_quote"
+                                    touch_side = "UNKNOWN"
+                                    touch_quality = "missing_best_quote"
                                 previous_tick = (
                                     target['recent_trade_ticks'][0]
                                     if isinstance(target.get('recent_trade_ticks'), deque)
@@ -1981,32 +2110,51 @@ class KiwoomWSManager:
                                     values,
                                     previous_tick=previous_tick,
                                 )
+                                signed_side, signed_quality = self._infer_signed_trade_volume_auxiliary(values.get('15'))
+                                touch_source = (
+                                    'orderbook_touch'
+                                    if quote_resolution["quote_source"] == '0B_inline_best_quote'
+                                    else 'cached_orderbook_touch'
+                                    if quote_resolution["cache_used"]
+                                    else 'missing_best_quote'
+                                )
+                                touch_quality_value = (
+                                    touch_quality
+                                    if quote_resolution["quote_source"] == '0B_inline_best_quote'
+                                    else f"cached_quote_{touch_quality}"
+                                    if quote_resolution["cache_used"]
+                                    else touch_quality
+                                )
+                                if signed_side in {"BUY", "SELL"}:
+                                    aggressor_side = signed_side
+                                    aggressor_source = "kiwoom_0b_signed_trade_volume"
+                                    aggressor_quality = self._primary_signed_trade_volume_quality(signed_quality)
+                                else:
+                                    aggressor_side = touch_side
+                                    aggressor_source = touch_source
+                                    aggressor_quality = touch_quality_value
+                                touch_confirms_signed = None
+                                if signed_side in {"BUY", "SELL"} and touch_side in {"BUY", "SELL"}:
+                                    touch_confirms_signed = signed_side == touch_side
                                 normalized_tick = {
                                     'time': tick_time,
                                     'price': trade_price,
-                                    'volume': abs(int(signed_qty or 0)),
+                                    'volume': int(trade_volume or 0),
+                                    'volume_source': aux_fields["trade_volume_source"],
                                     'dir': aggressor_side,
                                     'aggressor_side': aggressor_side,
-                                    'aggressor_source': (
-                                        'orderbook_touch'
-                                        if quote_resolution["quote_source"] == '0B_inline_best_quote'
-                                        else 'cached_orderbook_touch'
-                                        if quote_resolution["cache_used"]
-                                        else 'missing_best_quote'
-                                    ),
-                                    'aggressor_quality': (
-                                        aggressor_quality
-                                        if quote_resolution["quote_source"] == '0B_inline_best_quote'
-                                        else f"cached_quote_{aggressor_quality}"
-                                        if quote_resolution["cache_used"]
-                                        else aggressor_quality
-                                    ),
+                                    'aggressor_source': aggressor_source,
+                                    'aggressor_quality': aggressor_quality,
                                     'aggressor_quote_source': quote_resolution["quote_source"],
                                     'aggressor_tick_sync': quote_resolution["tick_sync"],
                                     'aggressor_cache_used': quote_resolution["cache_used"],
                                     'aggressor_quote_age_ms': quote_resolution["quote_age_ms"],
                                     'aggressor_tob_miss_count': quote_resolution["tob_miss_count"],
                                     'aggressor_backoff_active': quote_resolution["backoff_active"],
+                                    'aggressor_touch_side': touch_side,
+                                    'aggressor_touch_source': touch_source,
+                                    'aggressor_touch_quality': touch_quality_value,
+                                    'aggressor_touch_confirms_signed': touch_confirms_signed,
                                     'aggressor_aux_side': aux_context["side"],
                                     'aggressor_aux_source': (
                                         'weighted_auxiliary_observation'
@@ -2019,6 +2167,23 @@ class KiwoomWSManager:
                                     'aggressor_aux_components': aux_context["components"],
                                     'aggressor_aux_pressure_usable': False,
                                     'aggressor_aux_raw_15': str(values.get('15') or ''),
+                                    'signed_trade_volume': str(values.get('15') or ''),
+                                    'buyer_vol': buy_qty,
+                                    'seller_vol': sell_qty,
+                                    'buy_ratio_1032': str(values.get('1032') or ''),
+                                    'tick_trade_value': tick_value,
+                                    'tick_trade_value_source': aux_fields["trade_value_source"],
+                                    'tick_trade_value_fallback_volume_source': aux_fields[
+                                        "trade_value_fallback_volume_source"
+                                    ],
+                                    'trade_volume_1030_1031_sum': aux_fields["split_qty_sum"],
+                                    'trade_volume_1030_1031_available': aux_fields["split_qty_available"],
+                                    'trade_volume_1030_1031_vs_15_mismatch': aux_fields[
+                                        "split_qty_vs_15_mismatch"
+                                    ],
+                                    'trade_volume_1030_1031_vs_15_delta': aux_fields[
+                                        "split_qty_vs_15_delta"
+                                    ],
                                     'best_ask': best_ask,
                                     'best_bid': best_bid,
                                     'cum_volume': safe_int(values.get('13'), 0),
@@ -2044,6 +2209,7 @@ class KiwoomWSManager:
                                     current_vpw=current_vpw,
                                     signed_qty=signed_qty,
                                     tick_value=tick_value,
+                                    tick_value_source=aux_fields["trade_value_source"],
                                     buy_ratio=buy_ratio,
                                     buy_qty=buy_qty,
                                     sell_qty=sell_qty,

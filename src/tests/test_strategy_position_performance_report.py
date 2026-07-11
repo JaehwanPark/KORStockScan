@@ -190,3 +190,106 @@ def test_strategy_position_report_falls_back_without_db(monkeypatch):
 
     assert report["sections"]["top_winners"][0]["stock_code"] == "111111"
     assert report["sections"]["top_losers"][0]["stock_code"] == "222222"
+
+
+def test_scanner_discovery_type_performance_section(monkeypatch):
+    monkeypatch.setattr(
+        report_mod,
+        "build_trade_review_report",
+        lambda target_date, since_time=None, top_n=100000, scope="entered": {
+            "meta": {"warnings": []},
+            "sections": {
+                "recent_trades": [
+                    {
+                        "id": 11,
+                        "rec_date": target_date,
+                        "code": "111111",
+                        "name": "가격급등",
+                        "status": "COMPLETED",
+                        "strategy": "SCALPING",
+                        "position_tag": "SCANNER",
+                        "buy_price": 1000,
+                        "buy_qty": 1,
+                        "buy_time": "2026-04-06 09:10:00",
+                        "sell_price": 1020,
+                        "sell_time": "2026-04-06 09:20:00",
+                        "profit_rate": 2.0,
+                        "realized_pnl_krw": 20,
+                        "holding_seconds": 600,
+                        "exit_signal": {"exit_rule": "take_profit", "sell_reason_type": "PROFIT"},
+                    },
+                    {
+                        "id": 12,
+                        "rec_date": target_date,
+                        "code": "222222",
+                        "name": "저점반등",
+                        "status": "COMPLETED",
+                        "strategy": "SCALPING",
+                        "position_tag": "SCANNER",
+                        "buy_price": 1000,
+                        "buy_qty": 1,
+                        "buy_time": "2026-04-06 10:10:00",
+                        "sell_price": 990,
+                        "sell_time": "2026-04-06 10:20:00",
+                        "profit_rate": -1.0,
+                        "realized_pnl_krw": -10,
+                        "holding_seconds": 600,
+                        "exit_signal": {"exit_rule": "stop_loss", "sell_reason_type": "LOSS"},
+                    },
+                ]
+            },
+        },
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "_load_scanner_promotion_events",
+        lambda target_date: {
+            "111111": [
+                {
+                    "emitted_at": report_mod._parse_datetime("2026-04-06T09:00:00"),
+                    "scanner_discovery_type": "price_jump_acceleration",
+                    "scanner_promotion_reason": "price_jump_start_acceleration",
+                    "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+                    "scanner_source_role": "early_discovery",
+                    "scanner_priority_tier": "tier_a_acceleration_confirmed",
+                }
+            ],
+            "222222": [
+                {
+                    "emitted_at": report_mod._parse_datetime("2026-04-06T10:00:00"),
+                    "scanner_discovery_type": "low_rebound_rising_missed",
+                    "scanner_promotion_reason": "low_rebound_rising_missed_candidate",
+                    "source_signature": "LOW_REBOUND_RISING_MISSED",
+                    "scanner_source_role": "rising_missed_low_rebound_candidate",
+                    "scanner_priority_tier": "tier_c_volume_confirmation",
+                    "rising_missed_lineage": "low_rebound_from_intraday_low",
+                }
+            ],
+        },
+    )
+
+    facts, _warnings = report_mod._build_trade_fact_rows("2026-04-06")
+    summary_rows = report_mod._aggregate_daily_rows(facts)
+    report = report_mod._build_report_payload(
+        "2026-04-06",
+        [
+            {
+                **fact,
+                "buy_time": fact["buy_time"].strftime("%Y-%m-%d %H:%M:%S") if fact["buy_time"] else "",
+                "sell_time": fact["sell_time"].strftime("%Y-%m-%d %H:%M:%S") if fact["sell_time"] else "",
+            }
+            for fact in facts
+        ],
+        [{**row, "rec_date": row["rec_date"].isoformat()} for row in summary_rows],
+    )
+
+    scanner_rows = {
+        row["scanner_discovery_type"]: row
+        for row in report["sections"]["scanner_discovery_rows"]
+    }
+    assert report["summary"]["scanner_discovery_type_count"] == 2
+    assert report["summary"]["scanner_provenance_matched_count"] == 2
+    assert scanner_rows["price_jump_acceleration"]["realized_pnl_krw"] == 20
+    assert scanner_rows["price_jump_acceleration"]["top_promotion_reason"] == "price_jump_start_acceleration"
+    assert scanner_rows["low_rebound_rising_missed"]["realized_pnl_krw"] == -10
+    assert scanner_rows["low_rebound_rising_missed"]["provenance_missing_count"] == 0

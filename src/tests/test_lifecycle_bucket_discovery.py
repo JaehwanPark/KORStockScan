@@ -1445,6 +1445,35 @@ def test_scale_in_held_unknown_is_source_only_observation_rollup():
     assert summary["rollup_only_gap_count"] == 0
 
 
+def test_scale_in_source_dimension_unknowns_are_observation_rollups():
+    candidates = [
+        mod._candidate_from_bucket(
+            "scale_in",
+            {
+                "bucket_type": bucket_type,
+                "bucket_key": bucket_key,
+                "sample": 1,
+                "joined_sample": 0,
+                "source_quality_gate": "hold_sample",
+                "recommended_route": "hold_sample",
+                "unknown_dimension_counts": {bucket_type: 1},
+                "unknown_reason_counts": {"missing_source_field": 1},
+            },
+        )
+        for bucket_type, bucket_key in sorted(mod.SCALE_IN_SOURCE_DIMENSION_ROLLUP_BUCKETS)
+    ]
+
+    assert {item["source_dimension_gap"] for item in candidates} == {""}
+    assert {item["recommended_resolution"] for item in candidates} == {
+        mod.SCALE_IN_SOURCE_DIMENSION_OBSERVATION_RESOLUTION
+    }
+    assert all(item["runtime_effect"] is False for item in candidates)
+    assert all(item["allowed_runtime_apply"] is False for item in candidates)
+
+    summary = mod._source_dimension_gap_summary(candidates)
+    assert summary["actionable_unknown_gap_count"] == 0
+
+
 def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path, monkeypatch):
     ldm_dir = tmp_path / "ldm"
     report_dir = tmp_path / "report"

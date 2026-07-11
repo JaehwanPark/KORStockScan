@@ -201,6 +201,32 @@ def test_cached_orderbook_touch_source_is_preserved():
     assert inferred["quality"] == "cached_quote_touch_or_crossed_ask"
 
 
+def test_kiwoom_0b_signed_trade_volume_source_is_trusted_before_touch_fallback():
+    inferred = infer_tick_aggressor_side(
+        {
+            "time": "09:00:10",
+            "price": 10100,
+            "volume": 100,
+            "best_ask": 10110,
+            "best_bid": 10100,
+            "aggressor_side": "BUY",
+            "aggressor_source": "kiwoom_0b_signed_trade_volume",
+            "aggressor_quality": "signed_trade_volume_positive",
+            "aggressor_quote_source": "0B_inline_best_quote",
+            "aggressor_touch_side": "SELL",
+            "aggressor_touch_source": "orderbook_touch",
+            "aggressor_touch_quality": "touch_or_crossed_bid",
+            "aggressor_touch_confirms_signed": False,
+        }
+    )
+
+    assert inferred["side"] == "BUY"
+    assert inferred["source"] == "kiwoom_0b_signed_trade_volume"
+    assert inferred["quality"] == "signed_trade_volume_positive"
+    assert inferred["touch_side"] == "SELL"
+    assert inferred["touch_confirms_signed"] is False
+
+
 def test_source_less_declared_side_is_not_pressure_usable():
     snapshot = precompute_microstructure_reaction_inputs(
         _ws_data(),

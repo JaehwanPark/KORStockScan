@@ -1623,6 +1623,63 @@ def test_ai_ops_log_fields_preserve_tick_acceleration_ratio_raw_precision():
     assert fields["tick_acceleration_ratio"] == "2.000"
 
 
+def test_scalp_entry_snapshot_marks_final_submit_safety_block(monkeypatch):
+    logs = []
+
+    def fake_emit(event_type, stock_name, code, stage, *, record_id=None, fields=None):
+        logs.append((event_type, stock_name, code, stage, record_id, fields or {}))
+
+    monkeypatch.setattr(handlers, "emit_pipeline_event", fake_emit)
+
+    stock = {
+        "id": "R-WEAK-MICRO",
+        "name": "가온전선",
+        "strategy": "SCALPING",
+        "last_watching_ai_action": "WAIT",
+        "last_watching_ai_score": 50.0,
+    }
+    handlers._emit_scalp_entry_adm_snapshot(
+        stock,
+        "000500",
+        "real_weak_ai_micro_entry_block",
+        ai_score=50.0,
+        chosen_action="NO_BUY_AI",
+        latency_gate={
+            "allowed": True,
+            "decision": "ALLOW_NORMAL",
+            "reason": "safe_normal_entry_allowed",
+            "latency_state": "SAFE",
+        },
+        orderbook_fields={
+            "orderbook_micro_state": "neutral",
+            "orderbook_micro_ofi_norm": "0.0389",
+            "orderbook_micro_qi": "0.2873",
+        },
+        actual_order_submitted=False,
+        broker_order_forbidden=True,
+        extra_fields={
+            "blocked": True,
+            "runtime_effect": True,
+            "block_reason": "source_quality_unknown",
+            "weak_ai_micro_entry_block_missing_fields": "buy_pressure_10t",
+            "weak_ai_micro_entry_block_buy_pressure_10t": "-",
+        },
+    )
+
+    assert logs
+    event_type, _name, _code, stage, record_id, fields = logs[0]
+    assert event_type == "ENTRY_PIPELINE"
+    assert stage == "scalp_entry_action_decision_snapshot"
+    assert record_id == "R-WEAK-MICRO"
+    assert fields["source_stage"] == "real_weak_ai_micro_entry_block"
+    assert fields["entry_action_latency_reason"] == "safe_normal_entry_allowed"
+    assert fields["entry_action_final_decision"] == "BLOCKED"
+    assert fields["entry_action_final_blocked"] is True
+    assert fields["entry_action_final_block_reason"] == "source_quality_unknown"
+    assert fields["buy_pressure_10t"] == "-"
+    assert fields["weak_ai_micro_entry_block_buy_pressure_10t"] == "-"
+
+
 def test_ai_ops_log_fields_mark_numeric_inconsistency_as_no_runtime_authority():
     fields = handlers._build_ai_ops_log_fields(
         {

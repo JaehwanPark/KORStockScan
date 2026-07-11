@@ -1103,6 +1103,42 @@ def test_observation_source_quality_audit_reviews_propagated_sim_liquidity_unkno
     ] == "reviewed_sim_liquidity_not_available"
 
 
+def test_observation_source_quality_audit_reviews_rising_missed_submit_backoff_reason(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-07-10",
+        [
+            _event(
+                "real_weak_ai_micro_entry_block",
+                {
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "decision_authority": "source_quality_only",
+                    "runtime_effect": False,
+                    "rising_missed_submit_safety_backoff_reason": "source_quality_missing_or_unknown",
+                },
+                record_id=1,
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-07-10")
+
+    assert report["summary"]["unknown_token_stage_count"] == 0
+    assert report["summary"]["reviewed_unknown_token_stage_count"] == 1
+    reviewed = report["reviewed_unknown_token_findings"][0]
+    assert reviewed["stage"] == "real_weak_ai_micro_entry_block"
+    assert reviewed["runtime_effect"] is False
+    fields = {item["field"]: item for item in reviewed["fields"]}
+    assert fields["rising_missed_submit_safety_backoff_reason"]["reviewed_reason"] == (
+        "reviewed_rising_missed_submit_safety_backoff_source_quality_provenance"
+    )
+
+
 def test_observation_source_quality_audit_reviews_unknown_fill_quality_without_requested_qty(
     monkeypatch,
     tmp_path,

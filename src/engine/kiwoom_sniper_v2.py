@@ -268,6 +268,7 @@ _SCANNER_HOT_RUNTIME_OVERRIDE_KEYS = frozenset(
         "KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_RELIEF_MS",
         "KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_COOLDOWN_SEC",
         "KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_RECOVERY_STREAK",
+        "KORSTOCKSCAN_SCANNER_COMMON_WATCH_BUDGET_PRIORITY_ENABLED",
         "KORSTOCKSCAN_SCANNER_FULL_EVAL_DEFERRED_EVICTION_ENABLED",
         "KORSTOCKSCAN_SCANNER_FULL_EVAL_DEFERRED_EVICTION_MIN_COUNT",
         "KORSTOCKSCAN_SCANNER_FULL_EVAL_DEFERRED_EVICTION_MIN_AGE_SEC",
@@ -2908,6 +2909,168 @@ def _scanner_rising_full_eval_extra_per_loop():
     return max(0, min(value, 40))
 
 
+def _scanner_common_watch_budget_priority_enabled():
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCANNER_COMMON_WATCH_BUDGET_PRIORITY_ENABLED")
+    return _env_bool_from_value(raw, True)
+
+
+def _scanner_first_present_value(target, *keys):
+    target = target or {}
+    for key in keys:
+        value = target.get(key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _scanner_common_watch_budget_priority_fields(target):
+    target = target or {}
+    source_signature = str(target.get("source_signature") or "").upper()
+    strong_source_tokens = {
+        "BID_IMBALANCE_SURGE",
+        "LOW_REBOUND_RISING_MISSED",
+        "NEW_HIGH_CONFIRMATION",
+        "OPEN_TOP",
+        "PRICE_JUMP_START",
+        "REALTIME_RANK_START",
+        "VALUE_TOP",
+        "VI_TRIGGERED",
+        "VOLUME_SURGE_POSITIVE",
+    }
+    source_hits = sorted(token for token in strong_source_tokens if token in source_signature)
+    source_score = min(len(source_hits), 3)
+
+    buy_pressure = _safe_float(
+        _scanner_first_present_value(
+            target,
+            "buy_pressure_10t",
+            "last_buy_pressure_10t",
+            "late_entry_fresh_buy_pressure_10t",
+        ),
+        None,
+    )
+    net_delta = _safe_float(
+        _scanner_first_present_value(
+            target,
+            "net_aggressive_delta_10t",
+            "late_entry_fresh_net_aggressive_delta_10t",
+        ),
+        None,
+    )
+    supply_pass = (
+        (buy_pressure is not None and buy_pressure >= 68.0)
+        or (net_delta is not None and net_delta > 0.0)
+        or "BID_IMBALANCE_SURGE" in source_hits
+    )
+
+    tick_accel = _safe_float(
+        _scanner_first_present_value(
+            target,
+            "tick_acceleration_ratio",
+            "tick_accel",
+            "late_entry_fresh_tick_acceleration_ratio",
+        ),
+        None,
+    )
+    tick_window_span = _safe_float(
+        _scanner_first_present_value(target, "tick_window_span_sec", "late_entry_tick_window_span_sec"),
+        None,
+    )
+    speed_pass = (
+        (tick_accel is not None and tick_accel >= 1.0)
+        and (tick_window_span is None or tick_window_span < 60.0)
+    )
+
+    volume_ratio = _safe_float(target.get("volume_ratio_pct"), None)
+    volume_pass = (
+        (volume_ratio is not None and volume_ratio >= 150.0)
+        or "VALUE_TOP" in source_hits
+        or "VOLUME_SURGE_POSITIVE" in source_hits
+    )
+
+    quote_age_ms = _safe_float(_scanner_first_present_value(target, "quote_age_ms", "last_quote_age_ms"), None)
+    quote_stale_raw = str(target.get("quote_stale") or target.get("context_stale") or "").strip().lower()
+    quote_stale = quote_stale_raw in {"1", "true", "yes", "stale"}
+    freshness_pass = (quote_age_ms is not None and quote_age_ms <= 3000.0) and not quote_stale
+
+    score = source_score
+    score += 2 if supply_pass else 0
+    score += 2 if speed_pass else 0
+    score += 1 if volume_pass else 0
+    score += 1 if freshness_pass else 0
+    if quote_stale or (quote_age_ms is not None and quote_age_ms > 3000.0):
+        score -= 2
+    if tick_accel is not None and tick_accel < 0.8:
+        score -= 1
+    score = max(0, min(score, 9))
+
+    if not _scanner_common_watch_budget_priority_enabled():
+        tier = "disabled"
+    elif score >= 6:
+        tier = "high_priority_watch"
+    elif score >= 3:
+        tier = "standard_watch"
+    else:
+        tier = "low_budget_observe"
+
+    missing_axes = []
+    if buy_pressure is None and net_delta is None and "BID_IMBALANCE_SURGE" not in source_hits:
+        missing_axes.append("supply")
+    if tick_accel is None and tick_window_span is None:
+        missing_axes.append("speed")
+    if volume_ratio is None and "VALUE_TOP" not in source_hits and "VOLUME_SURGE_POSITIVE" not in source_hits:
+        missing_axes.append("volume")
+    if quote_age_ms is None and not quote_stale_raw:
+        missing_axes.append("freshness")
+
+    return {
+        "scanner_common_watch_budget_priority_enabled": _scanner_common_watch_budget_priority_enabled(),
+        "scanner_common_watch_budget_priority_tier": tier,
+        "scanner_common_watch_budget_priority_score": score,
+        "scanner_common_watch_budget_source_hits": ",".join(source_hits) if source_hits else "-",
+        "scanner_common_watch_budget_supply_pass": bool(supply_pass),
+        "scanner_common_watch_budget_speed_pass": bool(speed_pass),
+        "scanner_common_watch_budget_volume_pass": bool(volume_pass),
+        "scanner_common_watch_budget_freshness_pass": bool(freshness_pass),
+        "scanner_common_watch_budget_missing_axes": ",".join(missing_axes) if missing_axes else "-",
+        "scanner_common_watch_budget_buy_pressure_10t": (
+            round(float(buy_pressure), 4) if buy_pressure is not None else "-"
+        ),
+        "scanner_common_watch_budget_net_aggressive_delta_10t": (
+            round(float(net_delta), 4) if net_delta is not None else "-"
+        ),
+        "scanner_common_watch_budget_tick_acceleration_ratio": (
+            round(float(tick_accel), 4) if tick_accel is not None else "-"
+        ),
+        "scanner_common_watch_budget_tick_window_span_sec": (
+            round(float(tick_window_span), 4) if tick_window_span is not None else "-"
+        ),
+        "scanner_common_watch_budget_volume_ratio_pct": (
+            round(float(volume_ratio), 4) if volume_ratio is not None else "-"
+        ),
+        "scanner_common_watch_budget_quote_age_ms": (
+            round(float(quote_age_ms), 4) if quote_age_ms is not None else "-"
+        ),
+        "scanner_common_watch_budget_quote_stale": bool(quote_stale),
+        "scanner_common_watch_budget_authority": "scanner_watch_budget_runtime_priority",
+        "scanner_common_watch_budget_forbidden_uses": (
+            "broker_submit_bypass,order_guard_relaxation,threshold_mutation,"
+            "provider_route_change,bot_restart,real_execution_quality_approval"
+        ),
+    }
+
+
+def _scanner_common_watch_budget_priority_score(target):
+    if not _scanner_common_watch_budget_priority_enabled():
+        return 0
+    return _safe_int(
+        _scanner_common_watch_budget_priority_fields(target).get(
+            "scanner_common_watch_budget_priority_score"
+        ),
+        0,
+    )
+
+
 def _scanner_rising_cooldown_eviction_relief_enabled():
     return _env_bool("KORSTOCKSCAN_SCANNER_RISING_COOLDOWN_EVICTION_RELIEF_ENABLED", False)
 
@@ -3413,8 +3576,8 @@ def _scalping_fifo_overflow_candidates(scalp_fifo_targets, now_ts):
                 return (3, last_full_eval, armed_epoch)
             return (4, armed_epoch)
         if last_full_eval > 0:
-            return (6, last_full_eval, armed_epoch)
-        return (7, armed_epoch)
+            return (6, _scanner_common_watch_budget_priority_score(target), last_full_eval, armed_epoch)
+        return (7, _scanner_common_watch_budget_priority_score(target), armed_epoch)
 
     return sorted(list(scalp_fifo_targets or []), key=_overflow_rank)
 
@@ -3489,10 +3652,12 @@ def _runtime_iteration_targets(targets, now_ts):
             cooldown_waiting = _scanner_cooldown_recheck_waiting(target, now_ts=now_ts)
             positive_delta = _scanner_positive_delta_value(target)
             selection_delta = rising_missed_selection_rank_delta(target)
+            watch_budget_score = _scanner_common_watch_budget_priority_score(target)
             under_10000_priority = _under_10000_runtime_priority_rank(target)
             recency_key = (
                 2 if cooldown_waiting else (0 if pending_recheck or rising_recheck else 1),
                 under_10000_priority,
+                -watch_budget_score,
                 -selection_delta,
                 0 if last_full_eval <= 0 else 1,
                 -positive_delta,
@@ -6725,6 +6890,7 @@ def run_sniper(is_test_mode=False):
                                 "scanner_rising_full_eval_relief_count": scanner_rising_full_eval_relief_count,
                                 "fast_precheck_result": fast_precheck_result or "-",
                                 "fast_precheck_reason": fast_precheck_reason or "-",
+                                **_scanner_common_watch_budget_priority_fields(stock),
                             }
                             full_eval_deferred_decision = (
                                 _scanner_watch_eviction_decision_from_full_eval_deferred(

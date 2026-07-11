@@ -94,7 +94,7 @@ def _epoch_at_090010():
     return datetime(2026, 7, 3, 9, 0, 10).timestamp()
 
 
-def test_realtime_0b_stores_orderbook_touch_aggressor_tick(monkeypatch):
+def test_realtime_0b_stores_signed_trade_volume_primary_with_touch_provenance(monkeypatch):
     monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: _epoch_at_090010())
     manager = KiwoomWSManager("test-token")
     manager.subscribed_codes = {"005930"}
@@ -126,23 +126,28 @@ def test_realtime_0b_stores_orderbook_touch_aggressor_tick(monkeypatch):
     latest = manager.get_latest_data("005930")
     tick = latest["recent_trade_ticks"][0]
     assert tick["dir"] == "BUY"
-    assert tick["aggressor_source"] == "orderbook_touch"
-    assert tick["aggressor_quality"] == "touch_or_crossed_ask"
+    assert tick["aggressor_source"] == "kiwoom_0b_signed_trade_volume"
+    assert tick["aggressor_quality"] == "signed_trade_volume_positive"
     assert tick["aggressor_quote_source"] == "0B_inline_best_quote"
     assert tick["aggressor_tick_sync"] is True
     assert tick["aggressor_cache_used"] is False
     assert tick["aggressor_tob_miss_count"] == 0
     assert tick["aggressor_backoff_active"] is False
+    assert tick["aggressor_touch_side"] == "BUY"
+    assert tick["aggressor_touch_source"] == "orderbook_touch"
+    assert tick["aggressor_touch_quality"] == "touch_or_crossed_ask"
+    assert tick["aggressor_touch_confirms_signed"] is True
     assert tick["aggressor_aux_side"] == "BUY"
     assert tick["aggressor_aux_source"] == "weighted_auxiliary_observation"
     assert tick["aggressor_aux_pressure_usable"] is False
     assert tick["aggressor_aux_raw_15"] == "+120"
+    assert tick["signed_trade_volume"] == "+120"
     assert tick["best_ask"] == 10110
     assert tick["best_bid"] == 10100
     assert latest["last_trade_tick"]["price"] == 10110
 
 
-def test_signed_trade_volume_auxiliary_does_not_replace_orderbook_touch(monkeypatch):
+def test_signed_trade_volume_primary_classifies_without_orderbook_touch(monkeypatch):
     monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: _epoch_at_090010())
     manager = KiwoomWSManager("test-token")
     manager.subscribed_codes = {"005930"}
@@ -171,14 +176,138 @@ def test_signed_trade_volume_auxiliary_does_not_replace_orderbook_touch(monkeypa
     )
 
     tick = manager.get_latest_data("005930")["recent_trade_ticks"][0]
-    assert tick["dir"] == "UNKNOWN"
-    assert tick["aggressor_side"] == "UNKNOWN"
-    assert tick["aggressor_source"] == "missing_best_quote"
+    assert tick["dir"] == "BUY"
+    assert tick["aggressor_side"] == "BUY"
+    assert tick["aggressor_source"] == "kiwoom_0b_signed_trade_volume"
+    assert tick["aggressor_quality"] == "signed_trade_volume_positive"
+    assert tick["aggressor_touch_side"] == "UNKNOWN"
+    assert tick["aggressor_touch_source"] == "missing_best_quote"
+    assert tick["aggressor_touch_quality"] == "missing_best_quote"
+    assert tick["aggressor_touch_confirms_signed"] is None
     assert tick["aggressor_aux_side"] == "BUY"
     assert tick["aggressor_aux_source"] == "weighted_auxiliary_observation"
     assert tick["aggressor_aux_quality"] == "signed_trade_volume_positive_auxiliary"
     assert tick["aggressor_aux_score"] == 3.0
     assert tick["aggressor_aux_pressure_usable"] is False
+
+
+def test_signed_trade_volume_primary_records_orderbook_touch_conflict(monkeypatch):
+    monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: _epoch_at_090010())
+    manager = KiwoomWSManager("test-token")
+    manager.subscribed_codes = {"005930"}
+
+    asyncio.run(
+        manager._handle_message(
+            json.dumps(
+                {
+                    "trnm": "REAL",
+                    "data": [
+                        {
+                            "type": "0B",
+                            "item": "005930",
+                            "values": {
+                                "10": "10100",
+                                "15": "+80",
+                                "20": "090010",
+                                "27": "10110",
+                                "28": "10100",
+                            },
+                        },
+                    ],
+                }
+            )
+        )
+    )
+
+    tick = manager.get_latest_data("005930")["recent_trade_ticks"][0]
+    assert tick["dir"] == "BUY"
+    assert tick["aggressor_source"] == "kiwoom_0b_signed_trade_volume"
+    assert tick["aggressor_quality"] == "signed_trade_volume_positive"
+    assert tick["aggressor_touch_side"] == "SELL"
+    assert tick["aggressor_touch_source"] == "orderbook_touch"
+    assert tick["aggressor_touch_quality"] == "touch_or_crossed_bid"
+    assert tick["aggressor_touch_confirms_signed"] is False
+
+
+def test_0b_auxiliary_fields_prefer_1313_and_fallback_to_split_volume():
+    parsed = KiwoomWSManager._parse_0b_auxiliary_fields(
+        {"10": "+1000", "15": "+40", "1030": "20", "1031": "30", "1032": "60.0"},
+        trade_price=1000,
+    )
+    assert parsed["buy_qty"] == 30
+    assert parsed["sell_qty"] == 20
+    assert parsed["trade_volume"] == 50
+    assert parsed["trade_volume_source"] == "1030_1031_sum"
+    assert parsed["trade_value"] == 50000
+    assert parsed["trade_value_source"] == "calc_price_x_1030_1031_sum"
+    assert parsed["trade_value_fallback_volume_source"] == "1030_1031_sum"
+    assert parsed["split_qty_vs_15_mismatch"] is True
+    assert parsed["split_qty_vs_15_delta"] == 10
+
+    with_1313 = KiwoomWSManager._parse_0b_auxiliary_fields(
+        {"10": "1000", "15": "+40", "1030": "20", "1031": "30", "1313": "123456"},
+        trade_price=1000,
+    )
+    assert with_1313["trade_value"] == 123456
+    assert with_1313["trade_value_source"] == "1313"
+    assert with_1313["trade_value_fallback_volume_source"] == "none"
+
+
+def test_realtime_0b_logs_trade_value_fallback_and_volume_mismatch(monkeypatch):
+    monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: _epoch_at_090010())
+    manager = KiwoomWSManager("test-token")
+    manager.subscribed_codes = {"005930"}
+
+    asyncio.run(
+        manager._handle_message(
+            json.dumps(
+                {
+                    "trnm": "REAL",
+                    "data": [
+                        {
+                            "type": "0B",
+                            "item": "005930",
+                            "values": {
+                                "10": "1000",
+                                "15": "+40",
+                                "20": "090010",
+                                "27": "1000",
+                                "28": "990",
+                                "1030": "20",
+                                "1031": "30",
+                                "1032": "60.0",
+                            },
+                        },
+                    ],
+                }
+            )
+        )
+    )
+
+    latest = manager.get_latest_data("005930")
+    tick = latest["recent_trade_ticks"][0]
+    momentum = latest["strength_momentum_history"][0]
+    assert tick["volume"] == 50
+    assert tick["volume_source"] == "1030_1031_sum"
+    assert tick["buyer_vol"] == 30
+    assert tick["seller_vol"] == 20
+    assert tick["tick_trade_value"] == 50000
+    assert tick["tick_trade_value_source"] == "calc_price_x_1030_1031_sum"
+    assert tick["tick_trade_value_fallback_volume_source"] == "1030_1031_sum"
+    assert tick["trade_volume_1030_1031_vs_15_mismatch"] is True
+    assert tick["trade_volume_1030_1031_vs_15_delta"] == 10
+    assert latest["tick_trade_value"] == 50000
+    assert latest["tick_trade_value_source"] == "calc_price_x_1030_1031_sum"
+    assert latest["trade_volume_1030_1031_vs_15_mismatch"] is True
+    assert latest["kiwoom_0b_aux_observed_count"] == 1
+    assert latest["kiwoom_0b_1313_present_count"] == 0
+    assert latest["kiwoom_0b_1313_missing_count"] == 1
+    assert latest["kiwoom_0b_trade_value_source_counts"] == {"calc_price_x_1030_1031_sum": 1}
+    assert latest["kiwoom_0b_trade_volume_source_counts"] == {"1030_1031_sum": 1}
+    assert latest["kiwoom_0b_1030_1031_vs_15_evaluable_count"] == 1
+    assert latest["kiwoom_0b_1030_1031_vs_15_mismatch_count"] == 1
+    assert momentum["tick_value"] == 50000
+    assert momentum["tick_value_source"] == "calc_price_x_1030_1031_sum"
 
 
 def test_trade_auxiliary_score_uses_exec_imbalance_cum_volume_and_prev_price(monkeypatch):
@@ -229,8 +358,10 @@ def test_trade_auxiliary_score_uses_exec_imbalance_cum_volume_and_prev_price(mon
     )
 
     tick = manager.get_latest_data("005930")["recent_trade_ticks"][0]
-    assert tick["dir"] == "UNKNOWN"
-    assert tick["aggressor_source"] == "missing_best_quote"
+    assert tick["dir"] == "BUY"
+    assert tick["aggressor_source"] == "kiwoom_0b_signed_trade_volume"
+    assert tick["aggressor_quality"] == "signed_trade_volume_positive"
+    assert tick["aggressor_touch_source"] == "missing_best_quote"
     assert tick["aggressor_aux_side"] == "BUY"
     assert tick["aggressor_aux_quality"] == "weighted_auxiliary_observation"
     assert tick["aggressor_aux_pressure_usable"] is False
@@ -281,11 +412,16 @@ def test_realtime_0b_uses_fresh_synced_top_of_book_cache(monkeypatch):
 
     tick = manager.get_latest_data("005930")["recent_trade_ticks"][0]
     assert tick["dir"] == "SELL"
-    assert tick["aggressor_source"] == "cached_orderbook_touch"
+    assert tick["aggressor_source"] == "kiwoom_0b_signed_trade_volume"
+    assert tick["aggressor_quality"] == "signed_trade_volume_negative"
     assert tick["aggressor_cache_used"] is True
     assert tick["aggressor_quote_source"] == "cached_top_of_book_ttl"
     assert tick["aggressor_quote_age_ms"] == 0
     assert tick["aggressor_tick_sync"] is True
+    assert tick["aggressor_touch_side"] == "SELL"
+    assert tick["aggressor_touch_source"] == "cached_orderbook_touch"
+    assert tick["aggressor_touch_quality"] == "cached_quote_touch_or_crossed_bid"
+    assert tick["aggressor_touch_confirms_signed"] is True
     assert tick["best_ask"] == 10110
     assert tick["best_bid"] == 10100
 
@@ -407,15 +543,18 @@ def test_realtime_0b_rejects_stale_or_unsynced_top_of_book_cache(monkeypatch):
     )
 
     tick = manager.get_latest_data("005930")["recent_trade_ticks"][0]
-    assert tick["dir"] == "UNKNOWN"
-    assert tick["aggressor_source"] == "missing_best_quote"
+    assert tick["dir"] == "BUY"
+    assert tick["aggressor_source"] == "kiwoom_0b_signed_trade_volume"
+    assert tick["aggressor_quality"] == "signed_trade_volume_positive"
     assert tick["aggressor_cache_used"] is False
     assert tick["aggressor_tick_sync"] is False
     assert tick["aggressor_tob_miss_count"] == 1
     assert tick["aggressor_backoff_active"] is True
+    assert tick["aggressor_touch_side"] == "UNKNOWN"
+    assert tick["aggressor_touch_source"] == "missing_best_quote"
 
 
-def test_realtime_0b_partial_inline_quote_without_cache_is_unknown(monkeypatch):
+def test_realtime_0b_partial_inline_quote_keeps_signed_primary_without_cache(monkeypatch):
     monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: _epoch_at_090010())
     manager = KiwoomWSManager("test-token")
     manager.subscribed_codes = {"005930"}
@@ -444,14 +583,17 @@ def test_realtime_0b_partial_inline_quote_without_cache_is_unknown(monkeypatch):
     )
 
     tick = manager.get_latest_data("005930")["recent_trade_ticks"][0]
-    assert tick["dir"] == "UNKNOWN"
-    assert tick["aggressor_source"] == "missing_best_quote"
-    assert tick["aggressor_quality"] == "missing_best_quote"
+    assert tick["dir"] == "BUY"
+    assert tick["aggressor_source"] == "kiwoom_0b_signed_trade_volume"
+    assert tick["aggressor_quality"] == "signed_trade_volume_positive"
     assert tick["aggressor_quote_source"] == "partial_inline_best_quote"
     assert tick["aggressor_cache_used"] is False
     assert tick["aggressor_tick_sync"] is True
     assert tick["aggressor_tob_miss_count"] == 1
     assert tick["aggressor_backoff_active"] is True
+    assert tick["aggressor_touch_side"] == "UNKNOWN"
+    assert tick["aggressor_touch_source"] == "missing_best_quote"
+    assert tick["aggressor_touch_quality"] == "missing_best_quote"
     assert tick["best_ask"] == 10110
     assert tick["best_bid"] == 0
 
@@ -493,13 +635,17 @@ def test_realtime_0b_partial_inline_quote_uses_fresh_missing_side_cache(monkeypa
 
     tick = manager.get_latest_data("005930")["recent_trade_ticks"][0]
     assert tick["dir"] == "BUY"
-    assert tick["aggressor_source"] == "cached_orderbook_touch"
-    assert tick["aggressor_quality"] == "cached_quote_touch_or_crossed_ask"
+    assert tick["aggressor_source"] == "kiwoom_0b_signed_trade_volume"
+    assert tick["aggressor_quality"] == "signed_trade_volume_positive"
     assert tick["aggressor_quote_source"] == "cached_top_of_book_ttl"
     assert tick["aggressor_cache_used"] is True
     assert tick["aggressor_tick_sync"] is True
     assert tick["aggressor_tob_miss_count"] == 0
     assert tick["aggressor_backoff_active"] is False
+    assert tick["aggressor_touch_side"] == "BUY"
+    assert tick["aggressor_touch_source"] == "cached_orderbook_touch"
+    assert tick["aggressor_touch_quality"] == "cached_quote_touch_or_crossed_ask"
+    assert tick["aggressor_touch_confirms_signed"] is True
     assert tick["best_ask"] == 10110
     assert tick["best_bid"] == 10100
 
@@ -540,12 +686,15 @@ def test_realtime_0b_incomplete_cache_does_not_create_cached_touch(monkeypatch):
     )
 
     tick = manager.get_latest_data("005930")["recent_trade_ticks"][0]
-    assert tick["dir"] == "UNKNOWN"
-    assert tick["aggressor_source"] == "missing_best_quote"
-    assert tick["aggressor_quality"] == "missing_best_quote"
+    assert tick["dir"] == "BUY"
+    assert tick["aggressor_source"] == "kiwoom_0b_signed_trade_volume"
+    assert tick["aggressor_quality"] == "signed_trade_volume_positive"
     assert tick["aggressor_quote_source"] == "missing_best_quote"
     assert tick["aggressor_cache_used"] is False
     assert tick["aggressor_tob_miss_count"] == 1
+    assert tick["aggressor_touch_side"] == "UNKNOWN"
+    assert tick["aggressor_touch_source"] == "missing_best_quote"
+    assert tick["aggressor_touch_quality"] == "missing_best_quote"
     assert tick["best_ask"] == 10110
     assert tick["best_bid"] == 0
 

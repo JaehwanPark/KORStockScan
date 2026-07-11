@@ -446,6 +446,121 @@ def test_extract_scalping_feature_packet_prefers_cached_orderbook_touch_ws_ticks
     assert compact["aggressor_quality"]["cached_orderbook_touch"] == 5
 
 
+def test_extract_scalping_feature_packet_prefers_signed_0b_ws_ticks_without_touch_count():
+    ws_data = _sample_ws_data()
+    ws_data.update(
+        {
+            "kiwoom_0b_aux_observed_count": 7,
+            "kiwoom_0b_1313_present_count": 3,
+            "kiwoom_0b_1313_missing_count": 4,
+            "kiwoom_0b_trade_value_source_counts": {"1313": 3, "calc_price_x_1030_1031_sum": 4},
+            "kiwoom_0b_trade_volume_source_counts": {"1030_1031_sum": 6, "15_abs": 1},
+            "kiwoom_0b_1030_1031_vs_15_evaluable_count": 6,
+            "kiwoom_0b_1030_1031_vs_15_mismatch_count": 2,
+        }
+    )
+    ws_data["recent_trade_ticks"] = [
+        {
+            "time": "09:00:10",
+            "price": 10110,
+            "volume": 100,
+            "aggressor_side": "BUY",
+            "aggressor_source": "kiwoom_0b_signed_trade_volume",
+            "aggressor_quality": "signed_trade_volume_positive",
+            "signed_trade_volume": "+100",
+            "tick_trade_value_source": "1313",
+            "volume_source": "1030_1031_sum",
+            "trade_volume_1030_1031_vs_15_mismatch": False,
+        },
+        {
+            "time": "09:00:09",
+            "price": 10110,
+            "volume": 80,
+            "aggressor_side": "BUY",
+            "aggressor_source": "kiwoom_0b_signed_trade_volume",
+            "aggressor_quality": "signed_trade_volume_positive",
+            "signed_trade_volume": "+80",
+            "tick_trade_value_source": "calc_price_x_1030_1031_sum",
+            "volume_source": "1030_1031_sum",
+            "trade_volume_1030_1031_vs_15_mismatch": True,
+        },
+        {
+            "time": "09:00:08",
+            "price": 10100,
+            "volume": 40,
+            "aggressor_side": "SELL",
+            "aggressor_source": "kiwoom_0b_signed_trade_volume",
+            "aggressor_quality": "signed_trade_volume_negative",
+            "signed_trade_volume": "-40",
+            "tick_trade_value_source": "1313",
+            "volume_source": "15_abs",
+            "trade_volume_1030_1031_vs_15_mismatch": False,
+        },
+        {
+            "time": "09:00:07",
+            "price": 10110,
+            "volume": 60,
+            "aggressor_side": "BUY",
+            "aggressor_source": "kiwoom_0b_signed_trade_volume",
+            "aggressor_quality": "signed_trade_volume_positive",
+            "signed_trade_volume": "+60",
+            "tick_trade_value_source": "calc_price_x_15_abs",
+            "volume_source": "1030_1031_sum",
+            "trade_volume_1030_1031_vs_15_mismatch": True,
+        },
+        {
+            "time": "09:00:06",
+            "price": 10105,
+            "volume": 20,
+            "aggressor_side": "BUY",
+            "aggressor_source": "kiwoom_0b_signed_trade_volume",
+            "aggressor_quality": "signed_trade_volume_positive",
+            "signed_trade_volume": "+20",
+            "tick_trade_value_source": "calc_price_x_1030_1031_sum",
+            "volume_source": "1030_1031_sum",
+            "trade_volume_1030_1031_vs_15_mismatch": False,
+        },
+    ]
+    rest_ticks = [
+        {
+            "time": "09:00:10",
+            "price": 10100,
+            "volume": 999,
+            "dir": "SELL",
+            "aggressor_source": "price_change_heuristic",
+            "strength": 120.0,
+        }
+        for _ in range(10)
+    ]
+
+    packet = extract_scalping_feature_packet(
+        ws_data,
+        rest_ticks,
+        _sample_candles(),
+        now=datetime.strptime("09:00:12", "%H:%M:%S"),
+    )
+
+    assert packet["buy_pressure_10t"] == 86.67
+    assert packet["net_aggressive_delta_10t"] == 220
+    assert packet["tick_aggressor_orderbook_touch_count"] == 0
+    assert packet["tick_aggressor_cached_orderbook_touch_count"] == 0
+    assert packet["tick_aggressor_source_counts"]["kiwoom_0b_signed_trade_volume"] == 5
+    assert packet["tick_aggressor_trusted_count"] == 5
+    assert packet["tick_aggressor_pressure_usable"] is True
+    assert packet["tick_trade_value_source_counts"] == {
+        "1313": 2,
+        "calc_price_x_1030_1031_sum": 2,
+        "calc_price_x_15_abs": 1,
+    }
+    assert packet["tick_trade_value_1313_missing_count"] == 3
+    assert packet["tick_trade_value_1313_missing_rate_pct"] == 60.0
+    assert packet["trade_volume_source_counts"] == {"1030_1031_sum": 4, "15_abs": 1}
+    assert packet["trade_volume_1030_1031_vs_15_mismatch_count"] == 2
+    assert packet["trade_volume_1030_1031_vs_15_mismatch_rate_pct"] == 40.0
+    assert packet["kiwoom_0b_1313_missing_rate_pct"] == 57.143
+    assert packet["kiwoom_0b_1030_1031_vs_15_mismatch_rate_pct"] == 33.333
+
+
 def test_extract_scalping_feature_packet_excludes_price_change_heuristic_from_pressure():
     ticks = [
         {
@@ -584,6 +699,10 @@ def test_build_scalping_feature_audit_fields_marks_sent_flags():
     assert fields["microstructure_reaction_tick_aggressor_pressure_usable"] is True
     assert fields["microstructure_reaction_tick_aggressor_trusted_count"] > 0
     assert fields["microstructure_reaction_ask_sweep_score"] >= 0
+    assert "tick_trade_value_source_counts" in fields
+    assert "trade_volume_source_counts" in fields
+    assert "kiwoom_0b_1313_missing_rate_pct" in fields
+    assert "kiwoom_0b_1030_1031_vs_15_mismatch_rate_pct" in fields
 
 
 def test_entry_reason_consistency_flags_position_pass_described_as_fail():

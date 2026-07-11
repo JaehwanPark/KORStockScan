@@ -9,30 +9,34 @@ quantity guards.
 
 ## 0B Trade Aggressor
 
-- Prefer the 0B event's trade price `10`, best ask `27`, and best bid `28`.
-- Kiwoom's provided 0B spec does not define a separate direct
-  BUY-aggressor/SELL-aggressor field. Related fields include `10` current
-  price, `27` best ask, `28` best bid, `15` signed trade volume, `228` trade
-  strength, and `9081` exchange code.
-- BUY aggressor is inferred only when trade price touches or crosses best ask.
-- SELL aggressor is inferred only when trade price touches or crosses best bid.
+- Prefer the 0B event's explicit signed trade volume `15` when it starts with
+  `+` or `-`. `+` is BUY taker-side pressure and `-` is SELL taker-side
+  pressure.
+- Preserve the 0B event's trade price `10`, best ask `27`, and best bid `28` as
+  touch/cross validation fields. BUY touch is inferred when trade price touches
+  or crosses best ask. SELL touch is inferred when trade price touches or
+  crosses best bid.
+- When signed `15` is explicit, runtime stores `aggressor_source` as
+  `kiwoom_0b_signed_trade_volume` and preserves the quote comparison in
+  `aggressor_touch_*`. If signed `15` conflicts with the touch/cross result,
+  the signed side remains primary and `aggressor_touch_confirms_signed=false`
+  is logged for source-quality review.
+- When signed `15` is missing or neutral, trusted fallback may use 0B inline
+  `10`/`27`/`28` touch evidence or a fresh synchronized top-of-book cache.
 - In this codebase, `BUY`/`SELL` aggressor means marketable taker-side pressure
-  for buy/sell pressure math. Kiwoom support wording may describe
-  `10 == 27` as a sell-price-side print and `10 == 28` as a buy-price-side
-  print; do not flip this codebase's taker-side pressure labels unless Kiwoom
-  supplies a direct aggressor-side field or an explicit mapping for taker-side
-  semantics.
+  for buy/sell pressure math. `10 == 27` is BUY touch/cross evidence and
+  `10 == 28` is SELL touch/cross evidence when the signed `15` field is not
+  available.
 - Inside-spread trades, missing trade price, missing best quote, stale cached
-  quotes, or unsynced ticks are `UNKNOWN`.
+  quotes, or unsynced ticks are `UNKNOWN` only for the touch/cross fallback.
+  They do not erase an explicit signed `15` side.
 - If `27` or `28` is empty or zero, runtime may use a per-code Top-of-Book cache
   only when the cache is fresh and the tick time is synchronized with receive
   time. Cache usage must be logged.
-- Field `15` signed trade volume may be retained as auxiliary provenance, but it
-  is not a hard aggressor source and must not replace orderbook-touch evidence
-  for pressure math or BUY support.
-- Runtime stores field `15` interpretation only in additive
-  `aggressor_aux_*` fields. It must not overwrite `aggressor_side`, `dir`, or
-  `aggressor_source`, and `aggressor_aux_pressure_usable` must remain false.
+- Runtime also stores field `15` in additive `aggressor_aux_*` fields for
+  diagnostics. `aggressor_aux_pressure_usable` remains false because pressure
+  authority belongs to the primary `aggressor_source` contract, not to the
+  auxiliary weighted score.
 - A bounded submit-safety consumer may use repeated official signed `15`
   SELL prints only as negative-veto provenance for latency direct-canary
   interpretation. This use must log separate `signed_tape_*` provenance, must
@@ -42,8 +46,28 @@ quantity guards.
 - Runtime may also store a weighted auxiliary observation score from `15`,
   `1030`, `1031`, `13`, `228`, and previous tick price. This score is empirical
   diagnostics only. It does not promote the row to trusted pressure, and it
-  cannot support entry/scale-in/exit gates unless a later postclose contract and
-  source-quality gate explicitly promote a bounded consumer.
+  cannot support entry/scale-in/exit gates by itself.
+- Runtime parses 0B auxiliary volume/value fields with this priority:
+  `1031` is BUY execution volume, `1030` is SELL execution volume, and `1032`
+  is the raw buy-ratio field. When both `1030` and `1031` are present, their
+  sum is the preferred tick volume for packet-level calculations. If the
+  `1030+1031` sum differs from `abs(15)`, preserve
+  `trade_volume_1030_1031_vs_15_mismatch` and delta provenance instead of
+  silently normalizing one side.
+- Runtime uses 0B `1313` as the primary momentary trade value. If `1313` is
+  missing or invalid, it falls back to `abs(price) * (1030+1031)` when both
+  split volumes are available, then `abs(price) * abs(15)` when split volumes
+  are unavailable. Fallback values are approximate and must carry
+  `tick_trade_value_source` plus `tick_trade_value_fallback_volume_source`.
+- Runtime accumulates 0B parser provenance in the websocket snapshot as
+  `kiwoom_0b_1313_missing_rate_pct`, `kiwoom_0b_trade_value_source_counts`,
+  `kiwoom_0b_trade_volume_source_counts`, and
+  `kiwoom_0b_1030_1031_vs_15_mismatch_rate_pct`. Feature packets also carry
+  recent-window `tick_trade_value_source_counts`, `trade_volume_source_counts`,
+  `trade_volume_1030_1031_vs_15_mismatch_rate_pct`, and
+  `tick_aggressor_source_counts`. These fields are source-quality/report-only
+  instrumentation and cannot create BUY, submit, threshold, provider, bot, or
+  cap authority.
 - Do not fall back from missing orderbook-touch evidence to price-change
   direction. Price-change direction is compatibility metadata, not aggressor
   source evidence.
@@ -54,6 +78,15 @@ quantity guards.
   buy/sell aggressor source.
 - `aggressor_source=price_change_heuristic` must be excluded from buy/sell
   pressure and AI compact directional evidence.
+- Raw `cntr_infr` rows may be summarized by
+  `ka10003_buy_dominance_observation` only as `source_quality_only`: use
+  `1031/1030` split quantities first when present, signed `15` or
+  `cntr_trde_qty` second, and quote-touch comparison only when the original row
+  carries best ask/bid fields. Inside-spread rows are excluded by default.
+- The observation may log `source_counts`, `trade_value_source_counts`,
+  `inside_spread_count`, and `split_vs_15_mismatch_count`, but it must not fill
+  `buy_pressure_10t`, `net_aggressive_delta_10t`, `tick_aggressor_trusted_count`,
+  or submit/entry/scale-in pressure fields.
 - Briefings may display the heuristic source/quality, but must not present it
   as confirmed BUY/SELL trade direction.
 - Adding best bid/ask to a `price_change_heuristic` tick later must not promote
@@ -82,13 +115,16 @@ quantity guards.
 
 | Field | Meaning | Required provenance | Runtime use | Postclose use |
 | --- | --- | --- | --- | --- |
-| `aggressor_side` / `dir` | Raw or normalized side label from the producer. | Trusted only with `aggressor_source` in `orderbook_touch`, `cached_orderbook_touch`, `provider_declared_side`, `exchange_declared_side`, `trusted_declared_side`, or `declared_aggressor_side`. | Source-less side labels are display/provenance only. | Source-less side labels cannot support tuning candidates. |
+| `aggressor_side` / `dir` | Raw or normalized side label from the producer. | Trusted only with `aggressor_source` in `kiwoom_0b_signed_trade_volume`, `orderbook_touch`, `cached_orderbook_touch`, `provider_declared_side`, `exchange_declared_side`, `trusted_declared_side`, or `declared_aggressor_side`. | Source-less side labels are display/provenance only. | Source-less side labels cannot support tuning candidates. |
 | `buy_pressure_10t` | BUY aggressive volume share over trusted pressure rows. Neutral `50.0` when no trusted pressure rows exist. | `tick_aggressor_pressure_usable=true` or `tick_aggressor_trusted_count>0`. | May support entry/scale-in only when provenance is usable and other guards pass. | Rows using this field with unusable provenance are source-quality exclusions. |
 | `net_aggressive_delta_10t` | Trusted BUY volume minus trusted SELL volume. Neutral `0` when no trusted pressure rows exist. | Same as `buy_pressure_10t`. | Must not interpret heuristic-only ticks as sell/buy pressure. | Same exclusion rule as `buy_pressure_10t`. |
 | `tick_aggressor_source_counts` | Diagnostic source distribution for all inferred tick rows. | Additive provenance field. | Logging and source-quality only. | Used to diagnose contamination paths. |
 | `tick_aggressor_trusted_count` | Count of pressure rows allowed into buy/sell volume math. | Derived from trusted source allowlist. | Must be positive for directional pressure support. | Required by pressure-consuming source-quality contracts. |
 | `tick_aggressor_pressure_usable` | Boolean pressure usability gate. | Derived from trusted pressure rows. | False means neutral/insufficient, not bearish. | False plus a pressure value is a hard source-quality exclusion for pressure-consuming stages. |
-| `aggressor_aux_*` | Auxiliary interpretation of non-authoritative fields such as signed 0B volume `15`, execution imbalance `1030`/`1031`, cumulative volume delta `13`, trade strength `228`, and previous price movement. | `aggressor_aux_pressure_usable=false`. | Display/provenance only; never pressure support. Repeated official signed `15` SELL rows may only add negative direct-canary provenance through separately logged `signed_tape_*` fields. | Source-quality diagnostics only. |
+| `aggressor_aux_*` | Auxiliary interpretation of non-primary fields such as execution imbalance `1030`/`1031`, cumulative volume delta `13`, trade strength `228`, and previous price movement. The same raw 0B `15` value is preserved as auxiliary provenance but the explicit `+`/`-` sign is the primary `kiwoom_0b_signed_trade_volume` side when present. | `aggressor_aux_pressure_usable=false`. | Display/provenance only; never separate pressure support. Repeated official signed `15` SELL rows may only add negative direct-canary provenance through separately logged `signed_tape_*` fields. | Source-quality diagnostics only. |
+| `tick_trade_value` / `tick_trade_value_source` | Momentary 0B trade value and its derivation. | Prefer `1313`; fallback only as `calc_price_x_1030_1031_sum` then `calc_price_x_15_abs`. | May feed strength momentum only with source provenance. | Fallback source is required for source-quality review and unit/range checks. |
+| `trade_volume_1030_1031_vs_15_mismatch` | Whether split volume sum differs from signed `15` absolute volume. | Requires both `1030/1031` and `15` parsed. | Diagnostic/source-quality only; not a trading signal. | Used to measure vendor packet pattern and decide future parser refinements. |
+| `kiwoom_0b_*` parser counters | Latest websocket cumulative snapshot for actual received 0B packet provenance. | Updated only by the 0B websocket parser. | Source-quality/report-only observation of `1313` absence, value/volume source mix, and split-vs-15 mismatch. | Must not be interpreted as edge, BUY support, submit permission, threshold mutation, provider route change, bot restart, or cap release. |
 | `signed_tape_*` | Bounded negative submit-safety view of official signed tape over a short recent window. | Raw signed `15` values from 0B `recent_trade_ticks` or `last_trade_tick`, or freshness-envelope REST `ka10084.cntr_trde_qty`; minimum sample count required. | May block or annotate latency direct-canary interpretation when the signed tape is sell-dominated; submit-time REST retry is forbidden. | Source-quality diagnostics and false-positive review only; not EV/apply support by itself. |
 | `microstructure_reaction_context_status` | Reaction context quality. | Requires fresh orderbook, enough ticks, and usable pressure. | `source_quality_partial` is neutral unusable. | Preserved as report-only feature context. |
 
@@ -96,8 +132,8 @@ quantity guards.
 
 | Producer | Intermediate artifact/log field | Runtime consumers | Postclose consumers | Contract |
 | --- | --- | --- | --- | --- |
-| 0B websocket trade event | `recent_trade_ticks[].aggressor_source=orderbook_touch|cached_orderbook_touch`, `best_ask`, `best_bid`, cache/sync fields | `scalping_feature_packet`, `microstructure_reaction_context` | `pipeline_events` feature/audit fields | Trusted only when quote is complete, fresh, and synchronized. |
-| `ka10003` tick history | `aggressor_source=price_change_heuristic`, compatibility `dir` | Tick acceleration and price-change diagnostics only | Briefing/provenance diagnostics only | Forbidden as buy/sell pressure source. |
+| 0B websocket trade event | `recent_trade_ticks[].aggressor_source=kiwoom_0b_signed_trade_volume` when FID15 has an explicit sign, plus `signed_trade_volume`, `buyer_vol`, `seller_vol`, `tick_trade_value_source`, `aggressor_touch_*`, `best_ask`, `best_bid`, cache/sync fields | `scalping_feature_packet`, `microstructure_reaction_context`, strength momentum | `pipeline_events` feature/audit fields | Explicit signed FID15 is primary taker-side provenance. `1030/1031` are preferred split volumes for packet volume/value fallback, and `1313` is primary momentary value. When the sign is missing or neutral, trusted fallback remains `orderbook_touch|cached_orderbook_touch` only when quote is complete, fresh, and synchronized. |
+| `ka10003` tick history | `aggressor_source=price_change_heuristic`, compatibility `dir`, optional `ka10003_buy_dominance_observation` from raw `cntr_infr` | Tick acceleration and price-change diagnostics only | Briefing/provenance/source-quality diagnostics only | Forbidden as buy/sell pressure source. Split/signed/quote-touch observation stays `source_quality_only` and cannot become pressure math or submit support. |
 | `ka10084` signed trade envelope input | `rest_signed_trade_ticks[].signed_trade_volume`, `aggressor_source=kiwoom_rest_ka10084_signed_trade_qty` | Scanner budget reallocation, submit-safety negative provenance, and latency true-OFI direct-canary interpretation only | False-positive/source-quality diagnostics only | Forbidden as BUY support, pressure math, or submit-time retry. |
 | market-data freshness envelope | `market_data_freshness_state`, `market_data_orderbook_state`, `market_data_signed_tape_state`, `market_data_effective_price_source` | Scanner fast-precheck, rising-missed scout quality, submit-safety provenance | Source-quality diagnostics only | REST orderbook may repair stale quote/depth freshness; REST signed tape may only reallocate scanner budget or add negative-veto provenance. Forbidden as BUY support, pressure math, threshold/provider/order-cap change, broker guard bypass, or real execution-quality approval. |
 | `microstructure_reaction_context` | `tick_aggressor_*`, `buy_pressure_pct`, `source_quality_partial` | Entry reaction, scale-in quality snapshots, holding/exit matrix | `microstructure_reaction_context_YYYY-MM-DD`, source-quality audit | Unusable pressure returns neutral scores and source-quality provenance. |
@@ -109,7 +145,7 @@ quantity guards.
 | Path | Risk | Current handling |
 | --- | --- | --- |
 | Source-less `dir` / `side` treated as true aggressor | False buy/sell pressure and false scale-in support/block | Infer as `declared_tick_side_untrusted`, pressure neutral. |
-| Signed 0B volume `15` or weighted auxiliary score used as a pressure fallback | Empirical auxiliary signs and weights could become false taker-side pressure | Preserve pressure math only as orderbook-touch. `15` may only create short-window negative `signed_tape_*` direct-canary provenance; pressure usable remains false. |
+| Weighted auxiliary score used as a pressure fallback | Empirical auxiliary weights could become false taker-side pressure | Use only explicit signed 0B `15` primary provenance or trusted orderbook touch. Keep `aggressor_aux_pressure_usable=false`. |
 | `price_change_heuristic` with later best bid/ask attached | Heuristic could be promoted to orderbook-touch | Infer as `UNKNOWN` with `quote_with_untrusted_aggressor_source`. |
 | Heuristic-only pressure interpreted as bearish | False negative entry/scale-in/exit evidence | `buy_pressure_10t=50.0`, `net_aggressive_delta_10t=0`, `tick_aggressor_pressure_usable=false`. |
 | Microstructure reaction computed with no trusted pressure rows | Favorable/risk reaction from untrusted sides | `microstructure_reaction_context_status=source_quality_partial`, neutral scores. |
@@ -177,7 +213,7 @@ quantity guards.
 
 | Item | Confirmation result | Current safe policy |
 | --- | --- | --- |
-| Direct aggressor-side field beyond 0B orderbook touch | Provided 0B spec has no separate direct BUY-aggressor/SELL-aggressor field. Use trade price `10` vs best ask/bid `27`/`28` as the official practical replacement. | Keep orderbook-touch inference with quote freshness/sync checks; `15` is auxiliary provenance only. |
+| 0B aggressor-side field priority | FID15 signed trade volume provides explicit signed taker-side evidence when it starts with `+` or `-`; trade price `10` vs best ask/bid `27`/`28` remains the practical quote-touch fallback and validation path. | Use `15` as primary `kiwoom_0b_signed_trade_volume` when signed. Preserve `10`/`27`/`28` comparison in `aggressor_touch_*`; when `15` is missing or neutral, use orderbook-touch inference only with quote freshness/sync checks. |
 | `rank_chg_sign` official codes | Provided docs still do not specify the field. Observed/expected values are `+`, `-`, empty, and candidate `N`; `+/-` should match signed `rank_chg`, while empty has repeatedly matched `rank_chg=0` during operating samples. | Preserve raw sign plus derived source-quality diagnostics only; scoring uses signed numeric `rank_chg`, and raw sign still has no entry/priority/live authority. |
 | `bid_req_base_tm` exchange/server timing semantics | Practical examples show `HHmmss` such as `162000`, despite some documentation ambiguity. Exchange-time basis is plausible but not explicitly guaranteed. Precision is seconds, not milliseconds. | Treat as quote reference-time provenance and optional lag diagnostic only. Runtime freshness still requires REST receive timestamp/age; do not use `bid_req_base_tm` alone for millisecond freshness or submit authority. |
 

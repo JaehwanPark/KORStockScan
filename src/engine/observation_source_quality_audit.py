@@ -2041,6 +2041,17 @@ def _reviewed_unknown_reason_for_stage_field(
             or stale_reason in {"-", "features_missing", "micro_vwap_unavailable"}
         )
 
+    def _is_reviewed_rising_missed_submit_safety_backoff_source_quality() -> bool:
+        if str(key or "") != "rising_missed_submit_safety_backoff_reason":
+            return False
+        if stage not in {
+            "scalping_scanner_fast_precheck",
+            "real_weak_ai_micro_entry_block",
+            "pre_submit_micro_unavailable_block",
+        }:
+            return False
+        return str(value or "").strip().lower() == "source_quality_missing_or_unknown"
+
     def _is_reviewed_entry_adm_bucket_provenance() -> bool:
         if stage not in {"scalp_entry_action_decision_snapshot", "ai_confirmed"}:
             return False
@@ -2077,6 +2088,8 @@ def _reviewed_unknown_reason_for_stage_field(
         return "reviewed_holding_score_preflight_not_available"
     if _is_reviewed_first_touch_quote_stale_not_available():
         return "reviewed_first_touch_quote_stale_not_available"
+    if _is_reviewed_rising_missed_submit_safety_backoff_source_quality():
+        return "reviewed_rising_missed_submit_safety_backoff_source_quality_provenance"
     if str(key or "") in {"tick_context_stale", "quote_stale"} and _is_reviewed_stale_flag_not_available():
         return "reviewed_stale_flag_not_available"
     if str(key or "") in {

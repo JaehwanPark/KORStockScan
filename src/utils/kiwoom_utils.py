@@ -2678,7 +2678,8 @@ def get_tick_history_ka10003(token, code, limit=10):
                 'aggressor_quality': direction_quality,
                 'flu_rate': to_f(item.get('pre_rt')),       # 대비율
                 'strength': to_f(item.get('cntr_str')),     # 체결강도
-                'acc_vol': to_i(item.get('acc_trde_qty'))   # 누적거래량
+                'acc_vol': to_i(item.get('acc_trde_qty')),  # 누적거래량
+                'raw': item,
             })
             
     return _cache_set(
@@ -2696,6 +2697,199 @@ def _parse_signed_int(value, default=0):
         return int(float(str(value).replace(",", "").replace("+", "").strip()))
     except (ValueError, TypeError):
         return default
+
+
+def _parse_abs_int_or_none(value):
+    if value in (None, ""):
+        return None
+    try:
+        return abs(int(float(str(value).replace(",", "").replace("+", "").strip())))
+    except (ValueError, TypeError):
+        return None
+
+
+def _signed_field_sign(value):
+    text = str(value or "").strip()
+    if text.startswith("+"):
+        return 1
+    if text.startswith("-"):
+        return -1
+    return 0
+
+
+def _first_abs_int(row, *keys):
+    source = row.get("values") if isinstance(row.get("values"), dict) else row
+    if not isinstance(source, dict):
+        return None
+    for key in keys:
+        parsed = _parse_abs_int_or_none(source.get(key))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _first_raw(row, *keys):
+    source = row.get("values") if isinstance(row.get("values"), dict) else row
+    if not isinstance(source, dict):
+        return ""
+    for key in keys:
+        value = source.get(key)
+        if value not in (None, ""):
+            return value
+    return ""
+
+
+def compute_buy_dominance_from_ka10003_entries(entries, limit=100, include_inside=False):
+    """
+    Source-quality-only buy-dominance observer for raw ka10003 ``cntr_infr`` rows.
+
+    Official split fields (1031 BUY execution volume, 1030 SELL execution
+    volume) win when present. Signed 15/cntr_trde_qty is the next source. Quote
+    touch is used only when best ask/bid are present. Inside-spread rows are
+    excluded by default to avoid false pressure.
+    """
+    source_rows = entries if isinstance(entries, list) else []
+    limit_int = max(1, int(limit or 100))
+    rows = [row for row in source_rows[:limit_int] if isinstance(row, dict)]
+    buy_volume = 0.0
+    sell_volume = 0.0
+    buy_trade_value = 0.0
+    sell_trade_value = 0.0
+    total_trade_value = 0.0
+    source_counts = {
+        "1030_1031_split": 0,
+        "signed_volume": 0,
+        "quote_touch": 0,
+        "inside_excluded": 0,
+        "inside_split": 0,
+        "undetermined": 0,
+    }
+    trade_value_source_counts = {"1313": 0, "calc_price_x_volume": 0, "unknown": 0}
+    split_vs_15_evaluable_count = 0
+    split_vs_15_mismatch_count = 0
+
+    def _trade_value(row, volume):
+        value_1313 = _first_abs_int(row, "1313", "tick_trade_value", "trade_value")
+        if value_1313 is not None:
+            trade_value_source_counts["1313"] += 1
+            return float(value_1313), "1313"
+        price = _first_abs_int(row, "cur_prc", "10", "price")
+        if price is not None and volume is not None:
+            trade_value_source_counts["calc_price_x_volume"] += 1
+            return float(price * volume), "calc_price_x_volume"
+        trade_value_source_counts["unknown"] += 1
+        return 0.0, "unknown"
+
+    for row in rows:
+        buyer_1031 = _first_abs_int(row, "1031", "buyer_vol", "buy_exec_volume")
+        seller_1030 = _first_abs_int(row, "1030", "seller_vol", "sell_exec_volume")
+        signed_raw = _first_raw(row, "15", "cntr_trde_qty", "signed_trade_volume")
+        signed_abs = _parse_abs_int_or_none(signed_raw)
+        split_available = buyer_1031 is not None or seller_1030 is not None
+
+        if split_available:
+            buy_qty = float(buyer_1031 or 0)
+            sell_qty = float(seller_1030 or 0)
+            volume = buy_qty + sell_qty
+            if signed_abs is not None:
+                split_vs_15_evaluable_count += 1
+                if int(volume) != int(signed_abs):
+                    split_vs_15_mismatch_count += 1
+            trade_value, _source = _trade_value(row, volume)
+            if volume > 0 and trade_value > 0:
+                buy_trade_value += trade_value * (buy_qty / volume)
+                sell_trade_value += trade_value * (sell_qty / volume)
+                total_trade_value += trade_value
+            buy_volume += buy_qty
+            sell_volume += sell_qty
+            source_counts["1030_1031_split"] += 1
+            continue
+
+        if signed_abs is None or signed_abs <= 0:
+            source_counts["undetermined"] += 1
+            continue
+
+        sign = _signed_field_sign(signed_raw)
+        if sign > 0:
+            trade_value, _source = _trade_value(row, signed_abs)
+            buy_volume += float(signed_abs)
+            buy_trade_value += trade_value
+            total_trade_value += trade_value
+            source_counts["signed_volume"] += 1
+            continue
+        if sign < 0:
+            trade_value, _source = _trade_value(row, signed_abs)
+            sell_volume += float(signed_abs)
+            sell_trade_value += trade_value
+            total_trade_value += trade_value
+            source_counts["signed_volume"] += 1
+            continue
+
+        price = _first_abs_int(row, "cur_prc", "10", "price")
+        ask = _first_abs_int(row, "pri_sel_bid_unit", "27", "best_ask")
+        bid = _first_abs_int(row, "pri_buy_bid_unit", "28", "best_bid")
+        if price is None or ask is None or bid is None:
+            source_counts["undetermined"] += 1
+            continue
+
+        if price >= ask:
+            trade_value, _source = _trade_value(row, signed_abs)
+            buy_volume += float(signed_abs)
+            buy_trade_value += trade_value
+            total_trade_value += trade_value
+            source_counts["quote_touch"] += 1
+        elif price <= bid:
+            trade_value, _source = _trade_value(row, signed_abs)
+            sell_volume += float(signed_abs)
+            sell_trade_value += trade_value
+            total_trade_value += trade_value
+            source_counts["quote_touch"] += 1
+        elif include_inside:
+            trade_value, _source = _trade_value(row, signed_abs)
+            half_volume = float(signed_abs) / 2.0
+            buy_volume += half_volume
+            sell_volume += half_volume
+            buy_trade_value += trade_value / 2.0
+            sell_trade_value += trade_value / 2.0
+            total_trade_value += trade_value
+            source_counts["inside_split"] += 1
+        else:
+            source_counts["inside_excluded"] += 1
+
+    total_volume = buy_volume + sell_volume
+    buy_ratio = (buy_volume / total_volume) if total_volume > 0 else None
+    buy_dominance = ((buy_volume - sell_volume) / total_volume) if total_volume > 0 else None
+    return {
+        "metric_role": "source_quality_gate",
+        "decision_authority": "source_quality_only",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "forbidden_uses": [
+            "standalone_buy",
+            "broker_guard_bypass",
+            "threshold_mutation",
+            "provider_route_change",
+            "bot_restart",
+            "cap_release",
+        ],
+        "ticks": len(rows),
+        "include_inside": bool(include_inside),
+        "buy_volume": buy_volume,
+        "sell_volume": sell_volume,
+        "buy_trade_value": buy_trade_value,
+        "sell_trade_value": sell_trade_value,
+        "total_trade_value": total_trade_value,
+        "buy_ratio": buy_ratio,
+        "buy_dominance": buy_dominance,
+        "source_counts": {key: value for key, value in source_counts.items() if value},
+        "trade_value_source_counts": {
+            key: value for key, value in trade_value_source_counts.items() if value
+        },
+        "split_vs_15_evaluable_count": split_vs_15_evaluable_count,
+        "split_vs_15_mismatch_count": split_vs_15_mismatch_count,
+        "inside_spread_count": source_counts["inside_excluded"] + source_counts["inside_split"],
+        "undetermined_count": source_counts["undetermined"],
+    }
 
 
 def get_recent_signed_trades_ka10084(token, code, limit=10, tm=""):
@@ -3416,9 +3610,22 @@ def summarize_ticks_for_realtime_ka10003(token, code, limit=20):
         "aggressor_source_counts": {},
         "price_change_heuristic_tick_count": 0,
         "unknown_aggressor_tick_count": 0,
+        "ka10003_buy_dominance_observation": {},
     }
     if not ticks:
         return res
+
+    raw_cntr_infr = [
+        tick.get("raw")
+        for tick in ticks
+        if isinstance(tick, dict) and isinstance(tick.get("raw"), dict)
+    ]
+    if raw_cntr_infr:
+        res["ka10003_buy_dominance_observation"] = compute_buy_dominance_from_ka10003_entries(
+            raw_cntr_infr,
+            limit=limit,
+            include_inside=False,
+        )
 
     source_counts = {}
     buy_qty = 0

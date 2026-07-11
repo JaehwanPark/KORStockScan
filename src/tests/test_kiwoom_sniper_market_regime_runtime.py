@@ -120,6 +120,91 @@ def test_current_market_regime_code_falls_back_to_neutral(monkeypatch):
     assert kiwoom_sniper_v2._current_market_regime_code() == "NEUTRAL"
 
 
+def test_scanner_common_watch_budget_priority_scores_source_supply_speed(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_SCANNER_COMMON_WATCH_BUDGET_PRIORITY_ENABLED", raising=False)
+    target = {
+        "source_signature": "VALUE_TOP,BID_IMBALANCE_SURGE,PRICE_JUMP_START",
+        "buy_pressure_10t": "72.5",
+        "net_aggressive_delta_10t": "1200",
+        "tick_acceleration_ratio": "1.15",
+        "tick_window_span_sec": "28",
+        "volume_ratio_pct": "220",
+        "quote_age_ms": "420",
+    }
+
+    fields = kiwoom_sniper_v2._scanner_common_watch_budget_priority_fields(target)
+
+    assert fields["scanner_common_watch_budget_priority_enabled"] is True
+    assert fields["scanner_common_watch_budget_priority_tier"] == "high_priority_watch"
+    assert fields["scanner_common_watch_budget_priority_score"] >= 6
+    assert fields["scanner_common_watch_budget_supply_pass"] is True
+    assert fields["scanner_common_watch_budget_speed_pass"] is True
+    assert fields["scanner_common_watch_budget_volume_pass"] is True
+    assert fields["scanner_common_watch_budget_freshness_pass"] is True
+    assert fields["scanner_common_watch_budget_authority"] == "scanner_watch_budget_runtime_priority"
+    assert "threshold_mutation" in fields["scanner_common_watch_budget_forbidden_uses"]
+
+
+def test_runtime_iteration_prioritizes_common_watch_budget_before_plain_scanner(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_SCANNER_COMMON_WATCH_BUDGET_PRIORITY_ENABLED", raising=False)
+    low = _scanner_watch_stock(
+        code="000002",
+        added_time=1000.0,
+        entry_armed_at_epoch=1000.0,
+        source_signature="",
+        tick_acceleration_ratio="0.5",
+        quote_age_ms="5000",
+    )
+    high = _scanner_watch_stock(
+        code="000001",
+        added_time=999.0,
+        entry_armed_at_epoch=999.0,
+        source_signature="VALUE_TOP,BID_IMBALANCE_SURGE,PRICE_JUMP_START",
+        buy_pressure_10t="75",
+        tick_acceleration_ratio="1.2",
+        tick_window_span_sec="12",
+        volume_ratio_pct="240",
+        quote_age_ms="100",
+    )
+
+    ordered = kiwoom_sniper_v2._runtime_iteration_targets([low, high], now_ts=1010.0)
+
+    assert ordered[0] is high
+    assert ordered[1] is low
+
+
+def test_scanner_fifo_overflow_preserves_high_common_watch_budget_priority(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_SCANNER_COMMON_WATCH_BUDGET_PRIORITY_ENABLED", raising=False)
+    low = _scanner_watch_stock(
+        code="000012",
+        added_time=1000.0,
+        entry_armed_at_epoch=1000.0,
+        _scanner_last_full_eval_epoch=1200.0,
+        price_delta_since_first_seen_pct="1.5",
+        source_signature="",
+        tick_acceleration_ratio="0.5",
+        quote_age_ms="5000",
+    )
+    high = _scanner_watch_stock(
+        code="000011",
+        added_time=999.0,
+        entry_armed_at_epoch=999.0,
+        _scanner_last_full_eval_epoch=1200.0,
+        price_delta_since_first_seen_pct="1.5",
+        source_signature="VALUE_TOP,BID_IMBALANCE_SURGE,PRICE_JUMP_START",
+        buy_pressure_10t="75",
+        tick_acceleration_ratio="1.2",
+        tick_window_span_sec="12",
+        volume_ratio_pct="240",
+        quote_age_ms="100",
+    )
+
+    overflow_order = kiwoom_sniper_v2._scalping_fifo_overflow_candidates([high, low], now_ts=2000.0)
+
+    assert overflow_order[0] is low
+    assert overflow_order[-1] is high
+
+
 def test_scanner_ws_reg_recovery_throttle_keeps_state_by_source_and_code(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_WS_REG_RECOVERY_CODE_TTL_SEC", "20")
     last_emit_ts = {}
@@ -3609,6 +3694,7 @@ def test_scanner_rest_quote_budget_hot_reloads_operator_override_file(tmp_path, 
                 "export KORSTOCKSCAN_SCANNER_FULL_EVAL_BACKLOG_EXTRA_PER_LOOP=10",
                 "export KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_ENABLED=false",
                 "export KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_MIN_LIMIT=9",
+                "export KORSTOCKSCAN_SCANNER_COMMON_WATCH_BUDGET_PRIORITY_ENABLED=false",
                 "export KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE=28",
                 "export KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_CAP_ENABLED=true",
                 "export KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_MIN_ACTIVE=14",
@@ -3637,6 +3723,7 @@ def test_scanner_rest_quote_budget_hot_reloads_operator_override_file(tmp_path, 
     assert kiwoom_sniper_v2._scanner_full_eval_auto_pressure_enabled() is False
     assert kiwoom_sniper_v2._scanner_full_eval_auto_pressure_min_limit(28) == 9
     assert kiwoom_sniper_v2._scanner_full_eval_effective_limit({"scanner_watching_count": 40}) == 28
+    assert kiwoom_sniper_v2._scanner_common_watch_budget_priority_enabled() is False
     assert kiwoom_sniper_v2._scalping_fifo_base_max_active() == 28
     assert kiwoom_sniper_v2._scalping_dynamic_watch_cap_enabled() is True
     assert kiwoom_sniper_v2._scalping_dynamic_watch_cap_min(28) == 14
@@ -3660,6 +3747,7 @@ def test_scanner_rest_quote_budget_hot_reloads_operator_override_file(tmp_path, 
                 "export KORSTOCKSCAN_SCANNER_FULL_EVAL_BACKLOG_EXTRA_PER_LOOP=3",
                 "export KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_ENABLED=true",
                 "export KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_MIN_LIMIT=5",
+                "export KORSTOCKSCAN_SCANNER_COMMON_WATCH_BUDGET_PRIORITY_ENABLED=true",
                 "export KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE=20",
                 "export KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_MIN_ACTIVE=12",
                 "export KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_COOLDOWN_SEC=5",
@@ -3679,6 +3767,7 @@ def test_scanner_rest_quote_budget_hot_reloads_operator_override_file(tmp_path, 
     assert kiwoom_sniper_v2._scanner_full_eval_auto_pressure_enabled() is True
     assert kiwoom_sniper_v2._scanner_full_eval_auto_pressure_min_limit(12) == 5
     assert kiwoom_sniper_v2._scanner_full_eval_effective_limit({"scanner_watching_count": 40}) == 12
+    assert kiwoom_sniper_v2._scanner_common_watch_budget_priority_enabled() is True
     assert kiwoom_sniper_v2._scalping_fifo_base_max_active() == 20
     assert kiwoom_sniper_v2._scalping_dynamic_watch_cap_min(20) == 12
     assert kiwoom_sniper_v2._scalping_dynamic_watch_cap_cooldown_sec() == 5.0

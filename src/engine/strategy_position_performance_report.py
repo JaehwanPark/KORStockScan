@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date, datetime
+import json
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import delete
@@ -16,6 +18,21 @@ from src.engine.sniper_trade_review_report import build_trade_review_report
 
 
 _DB = DBManager()
+_PIPELINE_EVENTS_DIR = Path("data/pipeline_events")
+_SCANNER_PROMOTION_STAGES = {
+    "scalping_scanner_candidate_promoted",
+    "scalping_scanner_runtime_target_attach",
+}
+_NOT_APPLICABLE_VALUES = {
+    "",
+    "-",
+    "none",
+    "null",
+    "not_applicable",
+    "not_applicable_scanner_promotion_id",
+    "not_applicable_scanner_promotion_reason",
+    "not_applicable_source_signature",
+}
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -40,6 +57,11 @@ def _parse_datetime(value: Any) -> datetime | None:
     raw = str(value or "").strip()
     if not raw:
         return None
+    if "T" in raw:
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00")).replace(tzinfo=None)
+        except Exception:
+            pass
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
         try:
             return datetime.strptime(raw, fmt)
@@ -53,6 +75,149 @@ def _parse_date(value: Any) -> date:
     if raw:
         return datetime.strptime(raw[:10], "%Y-%m-%d").date()
     return datetime.now().date()
+
+
+def _clean_scanner_value(value: Any) -> str:
+    text = str(value or "").strip()
+    if text.lower() in _NOT_APPLICABLE_VALUES:
+        return ""
+    return text
+
+
+def _scanner_discovery_type(fields: dict[str, Any]) -> str:
+    reason = _clean_scanner_value(fields.get("scanner_promotion_reason")).lower()
+    source_signature = _clean_scanner_value(fields.get("source_signature")).upper()
+    source_role = _clean_scanner_value(
+        fields.get("scanner_source_role") or fields.get("scanner_candidate_role")
+    ).lower()
+    priority_tier = _clean_scanner_value(fields.get("scanner_priority_tier")).lower()
+    lineage = _clean_scanner_value(fields.get("rising_missed_lineage")).lower()
+
+    if lineage or "LOW_REBOUND_RISING_MISSED" in source_signature or "low_rebound" in reason:
+        return "low_rebound_rising_missed"
+    if reason in {"price_jump_multisource_confirmation"}:
+        return "price_volume_confirmation"
+    if reason in {"price_jump_breakout_confirmation"}:
+        return "price_breakout_confirmation"
+    if reason in {"price_jump_start_acceleration", "new_price_jump_start_source"}:
+        return "price_jump_acceleration"
+    if "rank_jump" in reason or "realtime_rank" in reason:
+        return "rank_acceleration"
+    if "execution_strength" in reason:
+        return "execution_strength"
+    if reason in {"spike_rate_acceleration", "priority_score_acceleration"}:
+        return "general_acceleration"
+    if "BID_IMBALANCE_SURGE" in source_signature and source_signature == "BID_IMBALANCE_SURGE":
+        return "bid_imbalance_only"
+    if source_role in {"late_confirmation", "liquidity_enrichment_only"} or priority_tier == "tier_d_late_rank_only":
+        return "late_rank_or_liquidity"
+    if reason:
+        return reason
+    if priority_tier:
+        return priority_tier
+    return "unknown_scanner_provenance"
+
+
+def _load_scanner_promotion_events(target_date: str) -> dict[str, list[dict[str, Any]]]:
+    path = _PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl"
+    by_code: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    if not path.exists():
+        return by_code
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            try:
+                event = json.loads(line)
+            except Exception:
+                continue
+            if event.get("stage") not in _SCANNER_PROMOTION_STAGES:
+                continue
+            fields = event.get("fields") if isinstance(event.get("fields"), dict) else {}
+            promotion_reason = _clean_scanner_value(fields.get("scanner_promotion_reason"))
+            source_signature = _clean_scanner_value(fields.get("source_signature"))
+            promotion_id = _clean_scanner_value(fields.get("scanner_promotion_id"))
+            if not (promotion_reason or source_signature or promotion_id):
+                continue
+            stock_code = str(event.get("stock_code") or fields.get("stock_code") or "").strip()[:10]
+            if not stock_code:
+                continue
+            emitted_at = _parse_datetime(event.get("emitted_at") or event.get("event_time"))
+            payload = {
+                "stock_code": stock_code,
+                "emitted_at": emitted_at,
+                "scanner_promotion_id": promotion_id,
+                "scanner_promotion_reason": promotion_reason,
+                "source_signature": source_signature,
+                "scanner_source_role": _clean_scanner_value(
+                    fields.get("scanner_source_role") or fields.get("scanner_candidate_role")
+                ),
+                "scanner_priority_tier": _clean_scanner_value(fields.get("scanner_priority_tier")),
+                "rising_missed_lineage": _clean_scanner_value(fields.get("rising_missed_lineage")),
+            }
+            payload["scanner_discovery_type"] = _scanner_discovery_type(payload)
+            by_code[stock_code].append(payload)
+    for events in by_code.values():
+        events.sort(key=lambda item: item.get("emitted_at") or datetime.min)
+    return by_code
+
+
+def _select_scanner_event_for_trade(
+    fact: dict[str, Any],
+    events_by_code: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any] | None:
+    if fact.get("strategy") != "SCALPING" or fact.get("position_tag") != "SCANNER":
+        return None
+    events = events_by_code.get(str(fact.get("stock_code") or "").strip()[:10]) or []
+    if not events:
+        return None
+    buy_time = fact.get("buy_time")
+    if isinstance(buy_time, str):
+        buy_time = _parse_datetime(buy_time)
+    if isinstance(buy_time, datetime):
+        before = [event for event in events if event.get("emitted_at") and event["emitted_at"] <= buy_time]
+        if before:
+            return before[-1]
+    return events[-1]
+
+
+def _enrich_scanner_provenance(
+    facts: list[dict[str, Any]],
+    target_date: str,
+) -> list[dict[str, Any]]:
+    events_by_code = _load_scanner_promotion_events(target_date)
+    enriched: list[dict[str, Any]] = []
+    for fact in facts:
+        row = dict(fact)
+        event = _select_scanner_event_for_trade(row, events_by_code)
+        if event:
+            row.update(
+                {
+                    "scanner_provenance_status": "matched",
+                    "scanner_discovery_type": event.get("scanner_discovery_type") or "unknown_scanner_provenance",
+                    "scanner_promotion_id": event.get("scanner_promotion_id") or "",
+                    "scanner_promotion_reason": event.get("scanner_promotion_reason") or "",
+                    "scanner_source_signature": event.get("source_signature") or "",
+                    "scanner_source_role": event.get("scanner_source_role") or "",
+                    "scanner_priority_tier": event.get("scanner_priority_tier") or "",
+                    "rising_missed_lineage": event.get("rising_missed_lineage") or "",
+                }
+            )
+        elif row.get("strategy") == "SCALPING" and row.get("position_tag") == "SCANNER":
+            row.update(
+                {
+                    "scanner_provenance_status": "missing",
+                    "scanner_discovery_type": "unknown_scanner_provenance",
+                    "scanner_promotion_id": "",
+                    "scanner_promotion_reason": "",
+                    "scanner_source_signature": "",
+                    "scanner_source_role": "",
+                    "scanner_priority_tier": "",
+                    "rising_missed_lineage": "",
+                }
+            )
+        else:
+            row["scanner_provenance_status"] = "not_applicable"
+        enriched.append(row)
+    return enriched
 
 
 def _build_trade_fact_rows(target_date: str) -> tuple[list[dict[str, Any]], list[str]]:
@@ -99,7 +264,7 @@ def _build_trade_fact_rows(target_date: str) -> tuple[list[dict[str, Any]], list
                 "gatekeeper_allow_entry": bool(gatekeeper.get("allow_entry")) if gatekeeper else None,
             }
         )
-    return facts, warnings
+    return _enrich_scanner_provenance(facts, target_date), warnings
 
 
 def _aggregate_daily_rows(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -148,6 +313,65 @@ def _format_bucket_label(row: dict[str, Any] | None) -> str:
     if not row:
         return "-"
     return f"{row.get('strategy')}/{row.get('position_tag')}"
+
+
+def _build_scanner_discovery_rows(fact_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for fact in fact_rows:
+        if fact.get("strategy") == "SCALPING" and fact.get("position_tag") == "SCANNER":
+            grouped[str(fact.get("scanner_discovery_type") or "unknown_scanner_provenance")].append(fact)
+
+    rows: list[dict[str, Any]] = []
+    for discovery_type, items in grouped.items():
+        completed = [item for item in items if item.get("status") == "COMPLETED"]
+        profits = [_safe_float(item.get("profit_rate")) for item in completed]
+        pnl = int(sum(_safe_int(item.get("realized_pnl_krw")) for item in completed))
+        wins = sum(1 for value in profits if value > 0)
+        losses = sum(1 for value in profits if value < 0)
+        flats = sum(1 for value in profits if value == 0)
+        reason_counts: dict[str, int] = defaultdict(int)
+        signature_counts: dict[str, int] = defaultdict(int)
+        matched_count = 0
+        for item in items:
+            if item.get("scanner_provenance_status") == "matched":
+                matched_count += 1
+            reason = str(item.get("scanner_promotion_reason") or "").strip()
+            signature = str(item.get("scanner_source_signature") or "").strip()
+            if reason:
+                reason_counts[reason] += 1
+            if signature:
+                signature_counts[signature] += 1
+        best = max(completed, key=lambda item: _safe_float(item.get("profit_rate")), default=None)
+        worst = min(completed, key=lambda item: _safe_float(item.get("profit_rate")), default=None)
+        rows.append(
+            {
+                "scanner_discovery_type": discovery_type,
+                "entered_count": len(items),
+                "completed_count": len(completed),
+                "open_count": len(items) - len(completed),
+                "win_count": wins,
+                "loss_count": losses,
+                "flat_count": flats,
+                "win_rate": round((wins / len(completed)) * 100, 1) if completed else 0.0,
+                "avg_profit_rate": round(sum(profits) / len(profits), 2) if profits else 0.0,
+                "realized_pnl_krw": pnl,
+                "expectancy_krw": int(round(pnl / len(completed))) if completed else 0,
+                "provenance_matched_count": matched_count,
+                "provenance_missing_count": len(items) - matched_count,
+                "top_promotion_reason": max(reason_counts.items(), key=lambda item: item[1])[0] if reason_counts else "",
+                "top_source_signature": max(signature_counts.items(), key=lambda item: item[1])[0] if signature_counts else "",
+                "best_trade_code": str(best.get("stock_code") or "") if best else "",
+                "best_trade_name": str(best.get("stock_name") or "") if best else "",
+                "best_profit_rate": round(_safe_float(best.get("profit_rate")), 2) if best else None,
+                "worst_trade_code": str(worst.get("stock_code") or "") if worst else "",
+                "worst_trade_name": str(worst.get("stock_name") or "") if worst else "",
+                "worst_profit_rate": round(_safe_float(worst.get("profit_rate")), 2) if worst else None,
+                "decision_authority": "scanner_discovery_performance_report_only",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+            }
+        )
+    return sorted(rows, key=lambda item: (item["realized_pnl_krw"], item["completed_count"]), reverse=True)
 
 
 def _build_kpis(rows: list[dict[str, Any]], fact_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -270,6 +494,7 @@ def _build_report_payload(target_date: str, fact_rows: list[dict[str, Any]], row
         [row for row in fact_rows if row["status"] == "COMPLETED" and row["profit_rate"] < 0],
         key=lambda item: item["profit_rate"],
     )[:5]
+    scanner_discovery_rows = _build_scanner_discovery_rows(fact_rows)
 
     return {
         "date": target_date,
@@ -281,6 +506,13 @@ def _build_report_payload(target_date: str, fact_rows: list[dict[str, Any]], row
             "completed_count": sum(row["completed_count"] for row in rows),
             "open_count": sum(row["open_count"] for row in rows),
             "realized_pnl_krw": int(sum(row["realized_pnl_krw"] for row in rows)),
+            "scanner_discovery_type_count": len(scanner_discovery_rows),
+            "scanner_provenance_matched_count": sum(
+                int(row.get("provenance_matched_count") or 0) for row in scanner_discovery_rows
+            ),
+            "scanner_provenance_missing_count": sum(
+                int(row.get("provenance_missing_count") or 0) for row in scanner_discovery_rows
+            ),
         },
         "kpis": _build_kpis(rows, fact_rows),
         "strategy_totals": sorted(strategy_totals.values(), key=lambda item: item["realized_pnl_krw"], reverse=True),
@@ -288,8 +520,14 @@ def _build_report_payload(target_date: str, fact_rows: list[dict[str, Any]], row
         "sections": {
             "top_winners": top_winners,
             "top_losers": top_losers,
+            "scanner_discovery_rows": scanner_discovery_rows,
         },
     }
+
+
+def _trade_fact_db_payload(fact: dict[str, Any]) -> dict[str, Any]:
+    allowed = {column.name for column in TradePerformanceFact.__table__.columns}
+    return {key: value for key, value in fact.items() if key in allowed}
 
 
 def sync_trade_performance_for_date(target_date: str) -> dict[str, Any]:
@@ -307,7 +545,7 @@ def sync_trade_performance_for_date(target_date: str) -> dict[str, Any]:
         if facts:
             session.bulk_insert_mappings(
                 TradePerformanceFact,
-                [{**fact, "synced_at": synced_at} for fact in facts],
+                [{**_trade_fact_db_payload(fact), "synced_at": synced_at} for fact in facts],
             )
         if summary_rows:
             session.bulk_insert_mappings(
@@ -418,6 +656,7 @@ def build_strategy_position_performance_report(target_date: str, *, refresh: boo
             }
             for fact in facts
         ]
+        fact_rows = _enrich_scanner_provenance(fact_rows, target_date)
         return _build_report_payload(target_date, fact_rows, rows)
     except Exception:
         facts, _warnings = _build_trade_fact_rows(target_date)

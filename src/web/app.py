@@ -3379,6 +3379,7 @@ def strategy_performance_preview():
     kpis = _report_list(report, 'kpis')
     strategy_totals = _report_list(report, 'strategy_totals')
     rows = _report_list(report, 'rows')
+    scanner_discovery_rows = _report_list(report, 'sections', 'scanner_discovery_rows')
     top_winners = _report_list(report, 'sections', 'top_winners')
     top_losers = _report_list(report, 'sections', 'top_losers')
 
@@ -3517,6 +3518,45 @@ def strategy_performance_preview():
         </div>
 
         <div class="card" style="margin-top: 16px;">
+          <h2>SCANNER 내부 탐색유형별 성과</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>탐색유형</th>
+                <th>진입</th>
+                <th>종료</th>
+                <th>승/패/보합</th>
+                <th>승률</th>
+                <th>평균 손익률</th>
+                <th>기대손익</th>
+                <th>실현손익</th>
+                <th>provenance</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in scanner_discovery_rows %}
+                <tr>
+                  <td>
+                    {{ row.scanner_discovery_type }}
+                    {% if row.top_promotion_reason %}<br><span class="muted">{{ row.top_promotion_reason }}</span>{% endif %}
+                  </td>
+                  <td>{{ row.entered_count }}</td>
+                  <td>{{ row.completed_count }} / 미종료 {{ row.open_count }}</td>
+                  <td>{{ row.win_count }} / {{ row.loss_count }} / {{ row.flat_count }}</td>
+                  <td>{{ "%.1f"|format(row.win_rate) }}%</td>
+                  <td class="{% if row.avg_profit_rate > 0 %}good{% elif row.avg_profit_rate < 0 %}bad{% endif %}">{{ "%+.2f"|format(row.avg_profit_rate) }}%</td>
+                  <td class="{% if row.expectancy_krw > 0 %}good{% elif row.expectancy_krw < 0 %}bad{% endif %}">{{ "{:,}".format(row.expectancy_krw) }}원</td>
+                  <td class="{% if row.realized_pnl_krw > 0 %}good{% elif row.realized_pnl_krw < 0 %}bad{% endif %}">{{ "{:,}".format(row.realized_pnl_krw) }}원</td>
+                  <td>{{ row.provenance_matched_count }} matched / {{ row.provenance_missing_count }} missing</td>
+                </tr>
+              {% else %}
+                <tr><td colspan="9" class="muted">SCANNER 내부 탐색유형 조인 데이터가 없습니다.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="card" style="margin-top: 16px;">
           <h2>전략 × 포지션태그 상세</h2>
           <table>
             <thead>
@@ -3608,6 +3648,7 @@ def strategy_performance_preview():
         kpis=kpis,
         strategy_totals=strategy_totals,
         rows=rows,
+        scanner_discovery_rows=scanner_discovery_rows,
         top_winners=top_winners,
         top_losers=top_losers,
     )

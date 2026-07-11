@@ -24,6 +24,12 @@ def _safe_number(value, default=0.0):
         return default
 
 
+def _rate_pct(numerator, denominator):
+    denominator = int(_safe_number(denominator, 0))
+    numerator = int(_safe_number(numerator, 0))
+    return round((numerator / denominator) * 100.0, 3) if denominator > 0 else 0.0
+
+
 def _time_to_seconds(value) -> int | None:
     text = str(value or "").strip()
     if not text:
@@ -202,6 +208,8 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
     tick_latest_age_ms = snapshot.get("tick_age_ms")
     tick_aggressor_source_counts = snapshot.get("tick_aggressor_source_counts") or {}
     tick_aggressor_quality_counts = snapshot.get("tick_aggressor_quality_counts") or {}
+    tick_trade_value_source_counts = snapshot.get("tick_trade_value_source_counts") or {}
+    trade_volume_source_counts = snapshot.get("trade_volume_source_counts") or {}
     tick_aggressor_orderbook_touch_count = int(snapshot.get("tick_aggressor_orderbook_touch_count") or 0)
     tick_aggressor_cached_orderbook_touch_count = int(
         snapshot.get("tick_aggressor_cached_orderbook_touch_count") or 0
@@ -210,6 +218,14 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
     tick_aggressor_unknown_count = int(snapshot.get("tick_aggressor_unknown_count") or 0)
     tick_aggressor_trusted_count = int(snapshot.get("tick_aggressor_trusted_count") or 0)
     tick_aggressor_pressure_usable = bool(snapshot.get("tick_aggressor_pressure_usable", False))
+    kiwoom_0b_aux_observed_count = int(ws_data.get("kiwoom_0b_aux_observed_count") or 0)
+    kiwoom_0b_1313_missing_count = int(ws_data.get("kiwoom_0b_1313_missing_count") or 0)
+    kiwoom_0b_1030_1031_vs_15_evaluable_count = int(
+        ws_data.get("kiwoom_0b_1030_1031_vs_15_evaluable_count") or 0
+    )
+    kiwoom_0b_1030_1031_vs_15_mismatch_count = int(
+        ws_data.get("kiwoom_0b_1030_1031_vs_15_mismatch_count") or 0
+    )
     tick_window_span_sec = None
     tick_accel_source = "no_ticks"
 
@@ -356,6 +372,36 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
         "tick_window_sample_count": tick_sample_count,
         "tick_aggressor_source_counts": tick_aggressor_source_counts,
         "tick_aggressor_quality_counts": tick_aggressor_quality_counts,
+        "tick_trade_value_source_counts": tick_trade_value_source_counts,
+        "tick_trade_value_1313_count": int(snapshot.get("tick_trade_value_1313_count") or 0),
+        "tick_trade_value_1313_missing_count": int(snapshot.get("tick_trade_value_1313_missing_count") or 0),
+        "tick_trade_value_1313_missing_rate_pct": snapshot.get("tick_trade_value_1313_missing_rate_pct", 0.0),
+        "trade_volume_source_counts": trade_volume_source_counts,
+        "trade_volume_1030_1031_vs_15_evaluable_count": int(
+            snapshot.get("trade_volume_1030_1031_vs_15_evaluable_count") or 0
+        ),
+        "trade_volume_1030_1031_vs_15_mismatch_count": int(
+            snapshot.get("trade_volume_1030_1031_vs_15_mismatch_count") or 0
+        ),
+        "trade_volume_1030_1031_vs_15_mismatch_rate_pct": snapshot.get(
+            "trade_volume_1030_1031_vs_15_mismatch_rate_pct",
+            0.0,
+        ),
+        "kiwoom_0b_aux_observed_count": kiwoom_0b_aux_observed_count,
+        "kiwoom_0b_1313_present_count": int(ws_data.get("kiwoom_0b_1313_present_count") or 0),
+        "kiwoom_0b_1313_missing_count": kiwoom_0b_1313_missing_count,
+        "kiwoom_0b_1313_missing_rate_pct": _rate_pct(
+            kiwoom_0b_1313_missing_count,
+            kiwoom_0b_aux_observed_count,
+        ),
+        "kiwoom_0b_trade_value_source_counts": ws_data.get("kiwoom_0b_trade_value_source_counts") or {},
+        "kiwoom_0b_trade_volume_source_counts": ws_data.get("kiwoom_0b_trade_volume_source_counts") or {},
+        "kiwoom_0b_1030_1031_vs_15_evaluable_count": kiwoom_0b_1030_1031_vs_15_evaluable_count,
+        "kiwoom_0b_1030_1031_vs_15_mismatch_count": kiwoom_0b_1030_1031_vs_15_mismatch_count,
+        "kiwoom_0b_1030_1031_vs_15_mismatch_rate_pct": _rate_pct(
+            kiwoom_0b_1030_1031_vs_15_mismatch_count,
+            kiwoom_0b_1030_1031_vs_15_evaluable_count,
+        ),
         "tick_aggressor_orderbook_touch_count": tick_aggressor_orderbook_touch_count,
         "tick_aggressor_cached_orderbook_touch_count": tick_aggressor_cached_orderbook_touch_count,
         "tick_aggressor_price_heuristic_count": tick_aggressor_price_heuristic_count,
@@ -408,7 +454,8 @@ def _select_recent_ticks_for_feature_packet(ws_data, recent_ticks, *, now=None):
     touch_count = int(snapshot.get("tick_aggressor_orderbook_touch_count") or 0) + int(
         snapshot.get("tick_aggressor_cached_orderbook_touch_count") or 0
     )
-    if age_ms is None or age_ms > 5000 or touch_count <= 0:
+    trusted_count = int(snapshot.get("tick_aggressor_trusted_count") or 0)
+    if age_ms is None or age_ms > 5000 or (touch_count <= 0 and trusted_count <= 0):
         return rest_ticks
     return ws_ticks
 
@@ -435,6 +482,41 @@ def build_scalping_feature_audit_fields(packet):
         "tick_window_sample_count": payload.get("tick_window_sample_count", "-"),
         "tick_aggressor_source_counts": payload.get("tick_aggressor_source_counts", {}),
         "tick_aggressor_quality_counts": payload.get("tick_aggressor_quality_counts", {}),
+        "tick_trade_value_source_counts": payload.get("tick_trade_value_source_counts", {}),
+        "tick_trade_value_1313_count": payload.get("tick_trade_value_1313_count", 0),
+        "tick_trade_value_1313_missing_count": payload.get("tick_trade_value_1313_missing_count", 0),
+        "tick_trade_value_1313_missing_rate_pct": payload.get("tick_trade_value_1313_missing_rate_pct", 0.0),
+        "trade_volume_source_counts": payload.get("trade_volume_source_counts", {}),
+        "trade_volume_1030_1031_vs_15_evaluable_count": payload.get(
+            "trade_volume_1030_1031_vs_15_evaluable_count",
+            0,
+        ),
+        "trade_volume_1030_1031_vs_15_mismatch_count": payload.get(
+            "trade_volume_1030_1031_vs_15_mismatch_count",
+            0,
+        ),
+        "trade_volume_1030_1031_vs_15_mismatch_rate_pct": payload.get(
+            "trade_volume_1030_1031_vs_15_mismatch_rate_pct",
+            0.0,
+        ),
+        "kiwoom_0b_aux_observed_count": payload.get("kiwoom_0b_aux_observed_count", 0),
+        "kiwoom_0b_1313_present_count": payload.get("kiwoom_0b_1313_present_count", 0),
+        "kiwoom_0b_1313_missing_count": payload.get("kiwoom_0b_1313_missing_count", 0),
+        "kiwoom_0b_1313_missing_rate_pct": payload.get("kiwoom_0b_1313_missing_rate_pct", 0.0),
+        "kiwoom_0b_trade_value_source_counts": payload.get("kiwoom_0b_trade_value_source_counts", {}),
+        "kiwoom_0b_trade_volume_source_counts": payload.get("kiwoom_0b_trade_volume_source_counts", {}),
+        "kiwoom_0b_1030_1031_vs_15_evaluable_count": payload.get(
+            "kiwoom_0b_1030_1031_vs_15_evaluable_count",
+            0,
+        ),
+        "kiwoom_0b_1030_1031_vs_15_mismatch_count": payload.get(
+            "kiwoom_0b_1030_1031_vs_15_mismatch_count",
+            0,
+        ),
+        "kiwoom_0b_1030_1031_vs_15_mismatch_rate_pct": payload.get(
+            "kiwoom_0b_1030_1031_vs_15_mismatch_rate_pct",
+            0.0,
+        ),
         "tick_aggressor_orderbook_touch_count": payload.get("tick_aggressor_orderbook_touch_count", 0),
         "tick_aggressor_cached_orderbook_touch_count": payload.get(
             "tick_aggressor_cached_orderbook_touch_count", 0

@@ -35,6 +35,20 @@ def test_microstructure_reaction_context_report_preserves_contract_and_keys(tmp_
                             "microstructure_reaction_entry_reaction_quality": "favorable_reaction",
                             "microstructure_reaction_source_quality": "fresh_short_window",
                             "microstructure_reaction_context_hash": "abc123",
+                            "tick_aggressor_source_counts": "{'kiwoom_0b_signed_trade_volume': 5}",
+                            "tick_trade_value_source_counts": "{'1313': 3, 'calc_price_x_1030_1031_sum': 2}",
+                            "tick_trade_value_1313_count": 3,
+                            "tick_trade_value_1313_missing_count": 2,
+                            "trade_volume_source_counts": "{'1030_1031_sum': 5}",
+                            "trade_volume_1030_1031_vs_15_evaluable_count": 5,
+                            "trade_volume_1030_1031_vs_15_mismatch_count": 1,
+                            "kiwoom_0b_aux_observed_count": 10,
+                            "kiwoom_0b_1313_present_count": 6,
+                            "kiwoom_0b_1313_missing_count": 4,
+                            "kiwoom_0b_trade_value_source_counts": "{'1313': 6, 'calc_price_x_1030_1031_sum': 4}",
+                            "kiwoom_0b_trade_volume_source_counts": "{'1030_1031_sum': 10}",
+                            "kiwoom_0b_1030_1031_vs_15_evaluable_count": 10,
+                            "kiwoom_0b_1030_1031_vs_15_mismatch_count": 2,
                         },
                     }
                 ),
@@ -60,6 +74,20 @@ def test_microstructure_reaction_context_report_preserves_contract_and_keys(tmp_
                             "microstructure_reaction_entry_reaction_quality": "neutral_unusable",
                             "microstructure_reaction_source_quality": "stale_tick_or_quote",
                             "microstructure_reaction_context_hash": "def456",
+                            "tick_aggressor_source_counts": "{'missing_best_quote': 5}",
+                            "tick_trade_value_source_counts": "{'calc_price_x_15_abs': 5}",
+                            "tick_trade_value_1313_count": 0,
+                            "tick_trade_value_1313_missing_count": 5,
+                            "trade_volume_source_counts": "{'15_abs': 5}",
+                            "trade_volume_1030_1031_vs_15_evaluable_count": 0,
+                            "trade_volume_1030_1031_vs_15_mismatch_count": 0,
+                            "kiwoom_0b_aux_observed_count": 3,
+                            "kiwoom_0b_1313_present_count": 0,
+                            "kiwoom_0b_1313_missing_count": 3,
+                            "kiwoom_0b_trade_value_source_counts": "{'calc_price_x_15_abs': 3}",
+                            "kiwoom_0b_trade_volume_source_counts": "{'15_abs': 3}",
+                            "kiwoom_0b_1030_1031_vs_15_evaluable_count": 0,
+                            "kiwoom_0b_1030_1031_vs_15_mismatch_count": 0,
                         },
                     }
                 ),
@@ -85,5 +113,22 @@ def test_microstructure_reaction_context_report_preserves_contract_and_keys(tmp_
     assert report["rows"][1]["sim_record_id"] == "sim-1"
     assert report["rows"][1]["sim_parent_record_id"] == "parent-1"
     assert report["rows"][1]["broker_order_forbidden"] is True
+    assert report["summary"]["tick_aggressor_source_counts"] == {
+        "kiwoom_0b_signed_trade_volume": 5,
+        "missing_best_quote": 5,
+    }
+    assert report["summary"]["tick_trade_value_1313_missing_count"] == 7
+    assert report["summary"]["tick_trade_value_1313_missing_rate_pct"] == 70.0
+    assert report["summary"]["trade_volume_1030_1031_vs_15_mismatch_count"] == 1
+    assert report["summary"]["trade_volume_1030_1031_vs_15_mismatch_rate_pct"] == 20.0
+    assert report["summary"]["kiwoom_0b_aux_observed_count"] == 13
+    assert report["summary"]["kiwoom_0b_1313_missing_count"] == 7
+    assert report["summary"]["kiwoom_0b_1313_missing_rate_pct"] == 53.846
+    assert report["summary"]["kiwoom_0b_trade_value_source_counts"] == {
+        "1313": 6,
+        "calc_price_x_1030_1031_sum": 4,
+        "calc_price_x_15_abs": 3,
+    }
+    assert report["summary"]["kiwoom_0b_1030_1031_vs_15_mismatch_rate_pct"] == 20.0
     assert (report_dir / "microstructure_reaction_context_2026-05-31.json").exists()
     assert (report_dir / "microstructure_reaction_context_2026-05-31.md").exists()

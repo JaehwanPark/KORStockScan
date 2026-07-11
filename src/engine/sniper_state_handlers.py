@@ -12161,6 +12161,43 @@ def _emit_scalp_entry_adm_snapshot(
             for key, value in payload.items():
                 if key not in fields and value is not None:
                     fields[key] = value
+    latency_reason = None
+    if isinstance(latency_gate, dict):
+        latency_reason = latency_gate.get("reason") or latency_gate.get("block_reason")
+    if latency_reason not in (None, "", "-"):
+        fields.setdefault("entry_action_latency_reason", latency_reason)
+    explicit_extra_block = bool(
+        isinstance(extra_fields, dict)
+        and (
+            _truthy_field(extra_fields.get("blocked"))
+            or extra_fields.get("block_reason") not in (None, "", "-")
+        )
+    )
+    runtime_effective_block = bool(
+        (explicit_extra_block or _truthy_field(fields.get("runtime_effect")))
+        and _truthy_field(fields.get("broker_order_forbidden"))
+        and not _truthy_field(fields.get("actual_order_submitted"))
+    )
+    final_block_reason = (
+        fields.get("block_reason")
+        or fields.get("entry_submit_revalidation_block_reason")
+        or fields.get("pre_submit_block_reason")
+        or fields.get("reason")
+        or stage
+    )
+    if runtime_effective_block:
+        fields["entry_action_final_decision"] = "BLOCKED"
+        fields["entry_action_final_blocked"] = True
+        fields["entry_action_final_block_reason"] = str(final_block_reason or stage)
+        fields["entry_action_final_reason"] = str(final_block_reason or stage)
+    elif _truthy_field(fields.get("actual_order_submitted")):
+        fields["entry_action_final_decision"] = "SUBMITTED"
+        fields["entry_action_final_blocked"] = False
+        fields["entry_action_final_reason"] = "order_submitted"
+    else:
+        fields["entry_action_final_decision"] = "OBSERVE_ONLY"
+        fields["entry_action_final_blocked"] = False
+        fields["entry_action_final_reason"] = str(fields.get("reason") or stage)
     ai_input_quote_stale = fields.get("quote_stale")
     ai_input_quote_age_ms = fields.get("quote_age_ms")
     fields = _ensure_ai_source_quality_fields(
@@ -12205,7 +12242,7 @@ def _emit_scalp_entry_adm_snapshot(
         "recent_5tick_seconds": "-",
         "prev_5tick_seconds": "-",
         "tick_accel_effective_recent_5tick_seconds": "-",
-        "buy_pressure_10t": 50.0,
+        "buy_pressure_10t": "-" if runtime_effective_block else 50.0,
         "curr_vs_micro_vwap_bp": 0.0,
         "curr_vs_ma5_bp": 0.0,
         "micro_vwap_available": False,
