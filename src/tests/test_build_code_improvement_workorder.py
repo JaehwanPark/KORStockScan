@@ -3247,6 +3247,94 @@ def test_build_code_improvement_workorder_preserves_observability_order_source(t
     assert order["allowed_runtime_apply"] is False
 
 
+def test_build_code_improvement_workorder_consumes_microstructure_reaction_context_orders(
+    tmp_path, monkeypatch
+):
+    automation_dir = tmp_path / "automation"
+    microstructure_dir = tmp_path / "microstructure_reaction_context"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    automation_dir.mkdir()
+    microstructure_dir.mkdir()
+    target_date = "2026-05-16"
+    (automation_dir / f"scalping_pattern_lab_automation_{target_date}.json").write_text(
+        json.dumps({"date": target_date, "code_improvement_orders": []}),
+        encoding="utf-8",
+    )
+    (microstructure_dir / f"microstructure_reaction_context_{target_date}.json").write_text(
+        json.dumps(
+            {
+                "date": target_date,
+                "report_type": "microstructure_reaction_context",
+                "runtime_effect": False,
+                "code_improvement_orders": [
+                    {
+                        "order_id": "order_microstructure_ka10046_received_timestamp_gap",
+                        "title": "ka10046 REST strength received timestamp gap",
+                        "target_subsystem": "market_data_provenance",
+                        "priority": 1,
+                        "route": "instrumentation_order",
+                        "runtime_effect": True,
+                        "allowed_runtime_apply": True,
+                        "actual_order_submitted": True,
+                        "broker_order_forbidden": False,
+                        "files_likely_touched": [
+                            "src/engine/scalping/microstructure_reaction_context.py"
+                        ],
+                        "acceptance_tests": [
+                            "PYTHONPATH=. .venv/bin/pytest -q "
+                            "src/tests/test_microstructure_reaction_context_report.py"
+                        ],
+                    },
+                    {
+                        "order_id": "order_microstructure_signed_tape_runtime_candidate_review",
+                        "title": "signed tape runtime candidate review",
+                        "target_subsystem": "scalping_entry_source_quality",
+                        "priority": 2,
+                        "route": "auto_family_candidate",
+                        "candidate_family": "microstructure_signed_tape_runtime_candidate",
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
+    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-observation-audit")
+    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
+    monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness")
+    monkeypatch.setattr(mod, "MICROSTRUCTURE_REACTION_CONTEXT_DIR", microstructure_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder(target_date, max_orders=5)
+
+    order_by_id = {order["order_id"]: order for order in report["orders"]}
+    timestamp_order = order_by_id["order_microstructure_ka10046_received_timestamp_gap"]
+    assert timestamp_order["source_report_type"] == "microstructure_reaction_context"
+    assert timestamp_order["decision"] == "implement_now"
+    assert timestamp_order["runtime_effect"] is False
+    assert timestamp_order["allowed_runtime_apply"] is False
+    assert timestamp_order["actual_order_submitted"] is False
+    assert timestamp_order["broker_order_forbidden"] is True
+    candidate_order = order_by_id["order_microstructure_signed_tape_runtime_candidate_review"]
+    assert candidate_order["decision"] == "design_family_candidate"
+    assert candidate_order["allowed_runtime_apply"] is False
+    assert report["summary"]["microstructure_reaction_context_source_order_count"] == 2
+    assert report["source"]["microstructure_reaction_context"] == str(
+        microstructure_dir / f"microstructure_reaction_context_{target_date}.json"
+    )
+    markdown = (doc_dir / f"code_improvement_workorder_{target_date}.md").read_text(encoding="utf-8")
+    assert "microstructure_reaction_context_source_order_count" in markdown
+    assert "order_microstructure_ka10046_received_timestamp_gap" in markdown
+
+
 def test_build_code_improvement_workorder_consumes_pattern_lab_ai_review(tmp_path, monkeypatch):
     automation_dir = tmp_path / "automation"
     ai_review_dir = tmp_path / "ai-review"

@@ -2450,6 +2450,74 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
                 if isinstance(microstructure_reaction_summary.get("source_quality_counts"), dict)
                 else {}
             ),
+            "v_pw_source_counts": (
+                microstructure_reaction_summary.get("v_pw_source_counts")
+                if isinstance(microstructure_reaction_summary.get("v_pw_source_counts"), dict)
+                else {}
+            ),
+            "v_pw_rest_fallback_rate_pct": _safe_float(
+                microstructure_reaction_summary.get("v_pw_rest_fallback_rate_pct"),
+                None,
+            ),
+            "ka10046_strength_runtime_effect_true_count": _safe_int(
+                microstructure_reaction_summary.get("ka10046_strength_runtime_effect_true_count"),
+                0,
+            )
+            or 0,
+            "ka10046_strength_missing_received_ts_count": _safe_int(
+                microstructure_reaction_summary.get("ka10046_strength_missing_received_ts_count"),
+                0,
+            )
+            or 0,
+            "market_data_signed_tape_state_counts": (
+                microstructure_reaction_summary.get("market_data_signed_tape_state_counts")
+                if isinstance(microstructure_reaction_summary.get("market_data_signed_tape_state_counts"), dict)
+                else {}
+            ),
+            "market_data_rest_signed_tape_pressure_usable_true_count": _safe_int(
+                microstructure_reaction_summary.get("market_data_rest_signed_tape_pressure_usable_true_count"),
+                0,
+            )
+            or 0,
+            "rest_signed_trade_ticks_row_count": _safe_int(
+                microstructure_reaction_summary.get("rest_signed_trade_ticks_row_count"),
+                0,
+            )
+            or 0,
+            "rest_signed_trade_ticks_source_counts": (
+                microstructure_reaction_summary.get("rest_signed_trade_ticks_source_counts")
+                if isinstance(microstructure_reaction_summary.get("rest_signed_trade_ticks_source_counts"), dict)
+                else {}
+            ),
+            "ka10003_buy_dominance_observation_source_counts": (
+                microstructure_reaction_summary.get("ka10003_buy_dominance_observation_source_counts")
+                if isinstance(microstructure_reaction_summary.get("ka10003_buy_dominance_observation_source_counts"), dict)
+                else {}
+            ),
+            "ka10003_buy_dominance_observation_trade_value_source_counts": (
+                microstructure_reaction_summary.get("ka10003_buy_dominance_observation_trade_value_source_counts")
+                if isinstance(microstructure_reaction_summary.get("ka10003_buy_dominance_observation_trade_value_source_counts"), dict)
+                else {}
+            ),
+            "ka10003_buy_dominance_observation_inside_spread_count": _safe_int(
+                microstructure_reaction_summary.get("ka10003_buy_dominance_observation_inside_spread_count"),
+                0,
+            )
+            or 0,
+            "ka10003_buy_dominance_observation_split_vs_15_mismatch_rate_pct": _safe_float(
+                microstructure_reaction_summary.get("ka10003_buy_dominance_observation_split_vs_15_mismatch_rate_pct"),
+                None,
+            ),
+            "code_improvement_order_count": _safe_int(
+                microstructure_reaction_summary.get("code_improvement_order_count"),
+                0,
+            )
+            or 0,
+            "top_code_improvement_orders": (
+                microstructure_reaction_summary.get("top_code_improvement_orders")
+                if isinstance(microstructure_reaction_summary.get("top_code_improvement_orders"), list)
+                else []
+            ),
             "avg_ask_sweep_score": _safe_float(microstructure_reaction_summary.get("avg_ask_sweep_score"), None),
             "avg_post_sweep_hold_score": _safe_float(
                 microstructure_reaction_summary.get("avg_post_sweep_hold_score"), None

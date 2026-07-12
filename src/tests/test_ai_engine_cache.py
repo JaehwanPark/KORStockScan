@@ -273,6 +273,14 @@ def test_holding_score_v2_payload_contains_position_pnl_and_source_quality(monke
             "buy_qty": 1,
             "position_tag": "SCALP",
             "entry_source": "live_buy",
+            "entry_time_context": {
+                "entry_liquidity_score": 71,
+                "fillability_score": 64,
+                "order_flow_pressure_score": 58,
+                "entry_momentum_score": 55,
+                "entry_context_quality": "partial",
+                "ai_input_source_quality_status": "evaluated",
+            },
             "avg_down_count": 0,
             "pyramid_count": 0,
         },
@@ -282,6 +290,10 @@ def test_holding_score_v2_payload_contains_position_pnl_and_source_quality(monke
     payload = json.loads(captured["user_input"])
     assert payload["input_schema"] == "holding_score_v2"
     assert payload["position_context"]["record_id"] == "REC-1"
+    assert payload["entry_time_context"]["context_role"] == "entry_time_provenance_only"
+    assert payload["entry_time_context"]["current_flow_evidence"] is False
+    assert payload["entry_time_context"]["entry_liquidity_score"] == 71
+    assert payload["entry_time_context"]["entry_context_quality"] == "partial"
     assert payload["pnl_context"]["drawdown_from_peak_pct"] == 0.3
     assert "market_flow_features" in payload
     assert "compact_features" in payload["market_flow_features"]
@@ -1649,8 +1661,8 @@ def test_condition_entry_and_exit_reuse_scalping_routes(monkeypatch):
     exit_result = engine.evaluate_condition_exit("조건주", "000001", ws_data, recent_ticks, recent_candles, profile, 1.2, 2.1, 78)
 
     assert used_models == ["tier1-model", "tier1-model"]
-    assert used_prompts == [SCALPING_WATCHING_HOT_SYSTEM_PROMPT, SCALPING_HOLDING_SYSTEM_PROMPT]
-    assert used_schemas == ["entry_v1", "holding_exit_v1"]
+    assert used_prompts == [SCALPING_WATCHING_HOT_SYSTEM_PROMPT, SCALPING_HOLDING_SCORE_SYSTEM_PROMPT]
+    assert used_schemas == ["entry_v1", "holding_score_v2"]
     assert entry["decision"] == "BUY"
     assert entry["confidence"] == 88
     assert exit_result["decision"] == "TRIM"

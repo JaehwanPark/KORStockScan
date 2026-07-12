@@ -122,6 +122,101 @@ SCORE_BACKFILL_KEY_FIELDS = (
     "order_response_ord_no",
 )
 
+ENTRY_REPLAY_NUMERIC_FIELDS = (
+    "latest_strength",
+    "entry_liquidity_score",
+    "fillability_score",
+    "top1_bid_notional",
+    "top1_ask_notional",
+    "top3_bid_notional",
+    "top3_ask_notional",
+    "order_flow_pressure_score",
+    "entry_momentum_score",
+    "buy_pressure_10t",
+    "net_aggressive_delta_10t",
+    "same_price_buy_absorption",
+    "tick_acceleration_ratio",
+    "tick_acceleration_ratio_raw",
+    "tick_accel_effective_recent_5tick_seconds",
+    "recent_5tick_seconds",
+    "prev_5tick_seconds",
+    "tick_sample_count",
+    "tick_window_sample_count",
+    "tick_window_span_sec",
+    "tick_aggressor_trusted_count",
+    "tick_aggressor_price_heuristic_count",
+    "tick_aggressor_unknown_count",
+    "curr_vs_micro_vwap_bp",
+    "curr_vs_ma5_bp",
+    "micro_vwap_value",
+    "ma5_value",
+    "top1_depth_ratio",
+    "top3_depth_ratio",
+    "orderbook_total_ratio",
+    "microprice_edge_bp",
+    "ask_depth_ratio",
+    "net_ask_depth",
+    "spread_bp",
+    "volume_ratio_pct",
+    "distance_from_day_high_pct",
+    "intraday_range_pct",
+    "tick_trade_value_1313_count",
+    "tick_trade_value_1313_missing_count",
+    "tick_trade_value_1313_missing_rate_pct",
+    "microstructure_reaction_tick_trade_value_recent_sum",
+    "microstructure_reaction_tick_trade_value_prev_sum",
+    "microstructure_reaction_ask_sweep_score",
+    "microstructure_reaction_post_sweep_hold_score",
+    "microstructure_reaction_bid_replenishment_score",
+    "microstructure_reaction_wall_replenishment_risk_score",
+    "microstructure_reaction_vi_proximity_risk",
+)
+
+ENTRY_REPLAY_BOOL_FIELDS = (
+    "tick_aggressor_pressure_usable",
+    "tick_context_stale",
+    "quote_stale",
+    "micro_vwap_available",
+    "ma5_available",
+    "minute_candle_window_fresh",
+    "large_sell_print_detected",
+    "large_buy_print_detected",
+    "would_fill_now",
+    "quote_depth_present",
+    "quote_fresh_for_entry",
+    "tick_acceleration_ratio_sent",
+    "same_price_buy_absorption_sent",
+    "large_sell_print_detected_sent",
+    "ask_depth_ratio_sent",
+    "microstructure_reaction_context_sent",
+    "tick_source_quality_fields_sent",
+)
+
+ENTRY_REPLAY_TEXT_FIELDS = (
+    "scalp_feature_packet_version",
+    "ai_input_schema",
+    "ai_input_contract_mode",
+    "ai_input_source_quality_status",
+    "ai_input_source_quality_reason",
+    "entry_liquidity_status",
+    "entry_order_flow_status",
+    "order_flow_pressure_source",
+    "entry_momentum_status",
+    "entry_context_quality",
+    "entry_context_missing_features",
+    "tick_latest_time",
+    "tick_accel_source",
+    "tick_context_quality",
+    "quote_age_source",
+    "minute_candle_context_quality",
+    "minute_candle_reference_source",
+    "minute_candle_source_time_basis",
+    "microstructure_reaction_context_version",
+    "microstructure_reaction_context_status",
+    "microstructure_reaction_entry_reaction_quality",
+    "microstructure_reaction_source_quality",
+)
+
 
 def report_paths(target_date: str) -> tuple[Path, Path]:
     base = ADM_REPORT_DIR / f"scalp_entry_action_decision_matrix_{target_date}"
@@ -155,6 +250,22 @@ def _safe_bool(value: Any, default: bool = False) -> bool:
     if raw in {"0", "false", "no", "n", "off"}:
         return False
     return default
+
+
+def _optional_bool(value: Any) -> bool | str | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    raw = str(value).strip()
+    if raw in {"", "-", "None", "none", "null"}:
+        return None
+    lowered = raw.lower()
+    if lowered in {"1", "true", "yes", "y", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "n", "off"}:
+        return False
+    return raw
 
 
 def _nonempty(value: Any) -> str:
@@ -607,6 +718,9 @@ def _base_row(event: dict[str, Any]) -> dict[str, Any]:
         "quote_age_ms": _safe_float(fields.get("quote_age_ms") or fields.get("quote_age_at_submit_ms"), None),
         "latency_state": _nonempty(fields.get("latency_state") or fields.get("latency")),
         "latency_reason": _nonempty(fields.get("latency_reason") or fields.get("latency_danger_reasons") or fields.get("reason")),
+        **{key: _safe_float(fields.get(key), None) for key in ENTRY_REPLAY_NUMERIC_FIELDS},
+        **{key: _optional_bool(fields.get(key)) for key in ENTRY_REPLAY_BOOL_FIELDS},
+        **{key: _nonempty(fields.get(key)) for key in ENTRY_REPLAY_TEXT_FIELDS},
         "entry_submit_revalidation_warning": _optional_flag_reason(fields.get("entry_submit_revalidation_warning")),
         "entry_submit_revalidation_block": _optional_flag_reason(fields.get("entry_submit_revalidation_block")),
         "best_bid": _safe_float(fields.get("best_bid") or fields.get("best_bid_at_submit"), None),

@@ -47,6 +47,7 @@ RISING_MISSED_NORMAL_BUY_BRIDGE_CANDIDATE_DIR = (
     REPORT_DIR / "rising_missed_normal_buy_bridge_candidate_discovery"
 )
 ONE_SHARE_THRESHOLD_OPPORTUNITY_DIR = REPORT_DIR / "one_share_threshold_opportunity"
+MICROSTRUCTURE_REACTION_CONTEXT_DIR = REPORT_DIR / "microstructure_reaction_context"
 CODE_IMPROVEMENT_WORKORDER_DIR = PROJECT_ROOT / "docs" / "code-improvement-workorders"
 CODE_IMPROVEMENT_WORKORDER_REPORT_DIR = REPORT_DIR / "code_improvement_workorder"
 WORKORDER_SCHEMA_VERSION = 1
@@ -216,6 +217,10 @@ def rising_missed_normal_buy_bridge_candidate_report_path(target_date: str) -> P
 
 def one_share_threshold_opportunity_report_path(target_date: str) -> Path:
     return ONE_SHARE_THRESHOLD_OPPORTUNITY_DIR / f"one_share_threshold_opportunity_{target_date}.json"
+
+
+def microstructure_reaction_context_report_path(target_date: str) -> Path:
+    return MICROSTRUCTURE_REACTION_CONTEXT_DIR / f"microstructure_reaction_context_{target_date}.json"
 
 
 def _conversion_rank_by_candidate(conversion_lane: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -1410,6 +1415,7 @@ def _workorder_isolated_source_mode() -> bool:
         OBSERVATION_SOURCE_QUALITY_AUDIT_DIR,
         CODEBASE_PERFORMANCE_WORKORDER_DIR,
         PATTERN_LAB_CURRENTNESS_AUDIT_DIR,
+        MICROSTRUCTURE_REACTION_CONTEXT_DIR,
         BUY_FUNNEL_SENTINEL_DIR,
         PRODUCER_GAP_DISCOVERY_DIR,
         STAGE_HOOK_WORKORDER_DISCOVERY_DIR,
@@ -6496,6 +6502,11 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         one_share_threshold_opportunity_path,
         isolated_source_mode=isolated_source_mode,
     )
+    microstructure_reaction_context_path = microstructure_reaction_context_report_path(target_date)
+    microstructure_reaction_context = _load_source_json(
+        microstructure_reaction_context_path,
+        isolated_source_mode=isolated_source_mode,
+    )
     conversion_rank = _conversion_rank_by_candidate(conversion_lane)
     calibration_source_path = _calibration_report_path_from_ev(ev_report)
     calibration_report = _calibration_report_from_ev(ev_report)
@@ -6526,6 +6537,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         "rising_missed_classifier_prior": rising_missed_classifier_prior_path,
         "rising_missed_normal_buy_bridge_candidate_discovery": rising_missed_normal_buy_bridge_candidate_path,
         "one_share_threshold_opportunity": one_share_threshold_opportunity_path,
+        "microstructure_reaction_context": microstructure_reaction_context_path,
     }
     source_paths = {
         label: path
@@ -6650,6 +6662,18 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     one_share_threshold_orders = _one_share_threshold_opportunity_followup_orders(
         one_share_threshold_opportunity
     )
+    microstructure_reaction_orders = [
+        {
+            **item,
+            "source_report_type": item.get("source_report_type") or "microstructure_reaction_context",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        }
+        for item in (microstructure_reaction_context.get("code_improvement_orders") or [])
+        if isinstance(item, dict)
+    ]
     buy_funnel_sentinel_orders = _buy_funnel_sentinel_followup_orders(
         buy_funnel_sentinel,
         lifecycle_report=lifecycle_report,
@@ -6718,6 +6742,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         *rising_missed_classifier_prior_orders,
         *rising_missed_normal_buy_bridge_orders,
         *one_share_threshold_orders,
+        *microstructure_reaction_orders,
         *lifecycle_entry_bucket_orders,
         *lifecycle_submit_bucket_orders,
         *lifecycle_flow_bucket_orders,
@@ -7087,6 +7112,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
                 "rising_missed_normal_buy_bridge_candidate_discovery"
             ),
             "one_share_threshold_opportunity": source_ref("one_share_threshold_opportunity"),
+            "microstructure_reaction_context": source_ref("microstructure_reaction_context"),
             "threshold_cycle_calibration": source_ref("threshold_cycle_calibration"),
         },
         "source_fingerprint": source_fingerprint["files"],
@@ -7133,6 +7159,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
                 rising_missed_normal_buy_bridge_orders
             ),
             "one_share_threshold_opportunity_source_order_count": len(one_share_threshold_orders),
+            "microstructure_reaction_context_source_order_count": len(microstructure_reaction_orders),
             "producer_gap_discovery_high_priority_selected": bool(
                 {
                     str(order.get("order_id"))
@@ -7323,6 +7350,7 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- stage_hook_workorder_discovery: `{source.get('stage_hook_workorder_discovery') or '-'}`",
         f"- stage_hook_runtime_scaffold: `{source.get('stage_hook_runtime_scaffold') or '-'}`",
         f"- buy_funnel_sentinel: `{source.get('buy_funnel_sentinel') or '-'}`",
+        f"- microstructure_reaction_context: `{source.get('microstructure_reaction_context') or '-'}`",
         f"- generated_at: `{report.get('generated_at')}`",
         f"- generation_id: `{report.get('generation_id')}`",
         f"- source_hash: `{report.get('source_hash')}`",
@@ -7368,6 +7396,7 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- pattern_lab_ai_review_source_order_count: `{summary.get('pattern_lab_ai_review_source_order_count')}`",
         f"- threshold_ev_source_order_count: `{summary.get('threshold_ev_source_order_count')}`",
         f"- entry_hurdle_backtest_source_order_count: `{summary.get('entry_hurdle_backtest_source_order_count')}`",
+        f"- microstructure_reaction_context_source_order_count: `{summary.get('microstructure_reaction_context_source_order_count')}`",
         f"- lifecycle_submit_bucket_source_order_count: `{summary.get('lifecycle_submit_bucket_source_order_count')}`",
         f"- lifecycle_holding_exit_bucket_source_order_count: `{summary.get('lifecycle_holding_exit_bucket_source_order_count')}`",
         f"- pipeline_event_verbosity_source_order_count: `{summary.get('pipeline_event_verbosity_source_order_count')}`",

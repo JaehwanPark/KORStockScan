@@ -96,6 +96,13 @@ def test_route_mode_for_gpt5_nano_is_off_after_micro_removal():
     assert profile is None
 
 
+def test_route_mode_for_gpt54_nano_is_off_after_fast_model_update():
+    route_mode, profile = mod.route_mode_for_model("gpt-5.4-nano")
+
+    assert route_mode == "off"
+    assert profile is None
+
+
 def test_lite_v2_profile_defaults_to_inference_profile(monkeypatch):
     monkeypatch.delenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_V2_MODEL_ID", raising=False)
 

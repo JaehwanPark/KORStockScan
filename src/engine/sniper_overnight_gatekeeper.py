@@ -110,6 +110,67 @@ def _safe_int(value, default=0):
         return default
 
 
+def _entry_time_context_from_mem_stock(mem_stock):
+    if not isinstance(mem_stock, dict):
+        return {}
+    source_quality = (
+        mem_stock.get("last_watching_ai_source_quality_fields")
+        if isinstance(mem_stock.get("last_watching_ai_source_quality_fields"), dict)
+        else {}
+    )
+    feature_probe = (
+        mem_stock.get("last_watching_ai_feature_probe")
+        if isinstance(mem_stock.get("last_watching_ai_feature_probe"), dict)
+        else {}
+    )
+    keys = (
+        "entry_liquidity_score",
+        "entry_liquidity_status",
+        "fillability_score",
+        "would_fill_now",
+        "quote_depth_present",
+        "quote_fresh_for_entry",
+        "order_flow_pressure_score",
+        "entry_order_flow_status",
+        "order_flow_pressure_source",
+        "entry_momentum_score",
+        "entry_momentum_status",
+        "entry_context_quality",
+        "entry_context_missing_features",
+        "ai_input_source_quality_status",
+        "ai_input_source_quality_reason",
+        "tick_context_quality",
+        "tick_context_stale",
+        "quote_age_ms",
+        "quote_stale",
+        "buy_pressure_10t",
+        "net_aggressive_delta_10t",
+        "tick_acceleration_ratio",
+        "curr_vs_micro_vwap_bp",
+        "micro_vwap_available",
+        "minute_candle_window_fresh",
+        "top3_depth_ratio",
+        "spread_bp",
+    )
+    context = {}
+    for key in keys:
+        for source in (source_quality, feature_probe, mem_stock):
+            if isinstance(source, dict) and key in source:
+                value = source.get(key)
+                if value is not None and str(value).strip() not in {"", "-", "None", "none", "null"}:
+                    context[key] = value
+                    break
+    observed_at = _safe_float(mem_stock.get("last_watching_ai_feature_probe_at"), 0.0)
+    if observed_at > 0:
+        context["observed_at"] = observed_at
+        context["age_sec"] = f"{max(0.0, time.time() - observed_at):.3f}"
+    if context:
+        context["source"] = "last_watching_ai_source_quality_fields"
+        context["context_role"] = "entry_time_provenance_only"
+        context["current_flow_evidence"] = False
+    return context
+
+
 def _eod_label() -> str:
     raw = str(getattr(TRADING_RULES, "SCALPING_OVERNIGHT_DECISION_TIME", "15:10:00") or "15:10:00")
     return raw[:5] if len(raw) >= 5 else "15:10"
@@ -473,6 +534,7 @@ def _apply_overnight_flow_override(record, mem_stock, ws_data, ctx, decision, ai
         "day_high": _safe_float(ctx.get("day_high", ctx.get("high_price")), 0.0),
         "worsen_pct": worsen_pct,
         "eod_liquidity_risk": ctx.get("liquidity_risk", ctx.get("order_status_note", "-")),
+        "entry_time_context": _entry_time_context_from_mem_stock(mem_stock),
     }
     flow_result = ai_engine.evaluate_scalping_holding_flow(
         name,

@@ -276,5 +276,27 @@ def test_microstructure_reaction_context_report_preserves_contract_and_keys(tmp_
     assert report["summary"]["ka10003_buy_dominance_observation_inside_spread_count"] == 4
     assert report["summary"]["ka10003_buy_dominance_observation_split_vs_15_mismatch_count"] == 1
     assert report["summary"]["ka10003_buy_dominance_observation_split_vs_15_mismatch_rate_pct"] == 50.0
+    assert report["summary"]["code_improvement_order_count"] == 2
+    assert [item["order_id"] for item in report["summary"]["top_code_improvement_orders"]] == [
+        "order_microstructure_signed_tape_runtime_candidate_review",
+        "order_microstructure_ka10003_split_vs_15_observation_review",
+    ]
+    order_by_id = {order["order_id"]: order for order in report["code_improvement_orders"]}
+    signed_tape_order = order_by_id["order_microstructure_signed_tape_runtime_candidate_review"]
+    assert signed_tape_order["route"] == "auto_family_candidate"
+    assert "mapped_family" not in signed_tape_order
+    assert signed_tape_order["candidate_family"] == "microstructure_signed_tape_runtime_candidate"
+    assert signed_tape_order["runtime_effect"] is False
+    assert signed_tape_order["allowed_runtime_apply"] is False
+    assert signed_tape_order["actual_order_submitted"] is False
+    assert signed_tape_order["broker_order_forbidden"] is True
+    assert signed_tape_order["implementation_provenance"]["requires_separate_runtime_apply_candidate"] is True
+    ka10003_order = order_by_id["order_microstructure_ka10003_split_vs_15_observation_review"]
+    assert ka10003_order["route"] == "instrumentation_order"
+    assert ka10003_order["runtime_effect"] is False
+    assert ka10003_order["allowed_runtime_apply"] is False
+    markdown = (report_dir / "microstructure_reaction_context_2026-05-31.md").read_text(encoding="utf-8")
+    assert "code_improvement_order_count" in markdown
+    assert "order_microstructure_signed_tape_runtime_candidate_review" in markdown
     assert (report_dir / "microstructure_reaction_context_2026-05-31.json").exists()
     assert (report_dir / "microstructure_reaction_context_2026-05-31.md").exists()

@@ -2870,6 +2870,23 @@ class GPTSniperEngine:
         latest_tick = ticks[0] if ticks else {}
         hot_feature_keys = (
             "latest_strength",
+            "entry_liquidity_score",
+            "entry_liquidity_status",
+            "fillability_score",
+            "would_fill_now",
+            "top1_bid_notional",
+            "top1_ask_notional",
+            "top3_bid_notional",
+            "top3_ask_notional",
+            "quote_depth_present",
+            "quote_fresh_for_entry",
+            "order_flow_pressure_score",
+            "entry_order_flow_status",
+            "order_flow_pressure_source",
+            "entry_momentum_score",
+            "entry_momentum_status",
+            "entry_context_quality",
+            "entry_context_missing_features",
             "buy_pressure_10t",
             "net_aggressive_delta_10t",
             "same_price_buy_absorption",
@@ -3744,6 +3761,112 @@ class GPTSniperEngine:
             },
         }
 
+    def _compact_entry_context_features(self, ws_data, recent_ticks, recent_candles, price_ctx=None):
+        keys = (
+            "entry_liquidity_score",
+            "entry_liquidity_status",
+            "fillability_score",
+            "would_fill_now",
+            "quote_depth_present",
+            "quote_fresh_for_entry",
+            "order_flow_pressure_score",
+            "entry_order_flow_status",
+            "order_flow_pressure_source",
+            "entry_momentum_score",
+            "entry_momentum_status",
+            "entry_context_quality",
+            "entry_context_missing_features",
+            "buy_pressure_10t",
+            "net_aggressive_delta_10t",
+            "tick_acceleration_ratio",
+            "curr_vs_micro_vwap_bp",
+            "micro_vwap_available",
+            "minute_candle_window_fresh",
+            "quote_age_ms",
+            "quote_stale",
+            "top3_depth_ratio",
+            "spread_bp",
+        )
+        ws = ws_data if isinstance(ws_data, dict) else {}
+        ctx = price_ctx if isinstance(price_ctx, dict) else {}
+        nested_ctx = ctx.get("entry_context_features") if isinstance(ctx.get("entry_context_features"), dict) else {}
+        try:
+            packet = extract_scalping_feature_packet(ws, recent_ticks or [], recent_candles or [])
+        except Exception:
+            packet = {}
+        summary = {}
+        for key in keys:
+            for source in (nested_ctx, packet, ctx, ws):
+                if isinstance(source, dict) and key in source:
+                    value = source.get(key)
+                    if value is not None and str(value).strip() not in {"", "-", "None", "none", "null"}:
+                        summary[key] = value
+                        break
+        summary.update(
+            {
+                "context_role": "pre_submit_entry_quality_context",
+                "runtime_authority": "advisory_input_only",
+                "forbidden_use": "standalone_buy_submit_or_guard_bypass",
+            }
+        )
+        if not any(key in summary for key in keys):
+            summary["status"] = "not_available"
+        return summary
+
+    def _compact_entry_time_context(self, position_ctx):
+        ctx = position_ctx if isinstance(position_ctx, dict) else {}
+        raw = ctx.get("entry_time_context") if isinstance(ctx.get("entry_time_context"), dict) else {}
+        keys = (
+            "entry_liquidity_score",
+            "entry_liquidity_status",
+            "fillability_score",
+            "would_fill_now",
+            "quote_depth_present",
+            "quote_fresh_for_entry",
+            "order_flow_pressure_score",
+            "entry_order_flow_status",
+            "order_flow_pressure_source",
+            "entry_momentum_score",
+            "entry_momentum_status",
+            "entry_context_quality",
+            "entry_context_missing_features",
+            "ai_input_source_quality_status",
+            "ai_input_source_quality_reason",
+            "tick_context_quality",
+            "tick_context_stale",
+            "quote_age_ms",
+            "quote_stale",
+            "buy_pressure_10t",
+            "net_aggressive_delta_10t",
+            "tick_acceleration_ratio",
+            "curr_vs_micro_vwap_bp",
+            "micro_vwap_available",
+            "minute_candle_window_fresh",
+            "top3_depth_ratio",
+            "spread_bp",
+        )
+        summary = {}
+        for key in keys:
+            for source in (raw, ctx):
+                if isinstance(source, dict) and key in source:
+                    value = source.get(key)
+                    if value is not None and str(value).strip() not in {"", "-", "None", "none", "null"}:
+                        summary[key] = value
+                        break
+        for key in ("observed_at", "age_sec", "source"):
+            if key in raw:
+                summary[key] = raw.get(key)
+        summary.update(
+            {
+                "context_role": "entry_time_provenance_only",
+                "current_flow_evidence": False,
+                "runtime_authority": "explain_bad_entry_vs_live_deterioration_only",
+            }
+        )
+        if not any(key in summary for key in keys):
+            summary["status"] = "not_available"
+        return summary
+
     def _price_bps_from_bid(self, price, best_bid):
         price_value = self._safe_float(price, 0.0)
         bid_value = self._safe_float(best_bid, 0.0)
@@ -3821,6 +3944,12 @@ class GPTSniperEngine:
                 "ofi": compact_ctx["orderbook_micro"].get("ofi"),
                 "qi": compact_ctx["orderbook_micro"].get("qi"),
             },
+            "entry_context_features": self._compact_entry_context_features(
+                ws_data,
+                recent_ticks,
+                recent_candles,
+                price_ctx=ctx,
+            ),
             "price_context": compact_ctx,
             "tick_summary": self._summarize_tick_windows(recent_ticks, windows=(5, 10, 20)),
             "candle_summary": self._summarize_candle_windows(recent_candles, windows=(3, 5, 10)),
@@ -3846,6 +3975,12 @@ class GPTSniperEngine:
             "recent_ticks": self._compact_entry_price_ticks(recent_ticks),
             "recent_candles": self._compact_entry_price_candles(recent_candles),
             "price_context": self._compact_entry_price_context(price_ctx),
+            "entry_context_features": self._compact_entry_context_features(
+                ws_data,
+                recent_ticks,
+                recent_candles,
+                price_ctx=price_ctx,
+            ),
         }
         return json.dumps(payload, ensure_ascii=True, separators=(",", ":"), default=str)
 
@@ -4924,9 +5059,11 @@ class GPTSniperEngine:
                 "buy_qty": int(self._safe_float(ctx.get("buy_qty"), 0.0)),
                 "position_tag": ctx.get("position_tag", "-"),
                 "entry_source": ctx.get("entry_source", "-"),
+                "condition_profile": ctx.get("condition_profile", "-"),
                 "avg_down_count": int(self._safe_float(ctx.get("avg_down_count"), 0.0)),
                 "pyramid_count": int(self._safe_float(ctx.get("pyramid_count"), 0.0)),
             },
+            "entry_time_context": self._compact_entry_time_context(ctx),
             "pnl_context": {
                 "profit_rate": round(profit_rate, 4),
                 "peak_profit": round(peak_profit, 4),
@@ -5277,6 +5414,7 @@ class GPTSniperEngine:
                 "distance_from_day_high_pct": round(distance_from_day_high, 4),
                 "allowed_worsen_pct": self._safe_float(ctx.get("worsen_pct", 0.80), 0.80),
             },
+            "entry_time_context": self._compact_entry_time_context(ctx),
             "prior_flow_reviews": prior_reviews,
             "deterministic_guard_state": {
                 "candidate_exit_rule": ctx.get("exit_rule", "-"),
@@ -5337,6 +5475,12 @@ class GPTSniperEngine:
             if str(decision_kind or "") == "overnight_sell_today"
             else "For intraday exit-candidate re-checks, request only 30-90 seconds. Choose HOLD/TRIM only with strong evidence."
         )
+        entry_time_context = json.dumps(
+            self._compact_entry_time_context(ctx),
+            ensure_ascii=True,
+            separators=(",", ":"),
+            default=str,
+        )
         return f"""
 [DECISION_TYPE]
 - kind: {decision_kind}
@@ -5354,6 +5498,9 @@ class GPTSniperEngine:
 - current_ai_score: {self._safe_float(ctx.get('current_ai_score', ctx.get('score', 0.0))):.1f}
 - distance_from_day_high_pct: {distance_from_day_high:+.2f}
 - allowed_worsen_pct: {self._safe_float(ctx.get('worsen_pct', 0.80)):.2f}
+
+[ENTRY_TIME_CONTEXT]
+{entry_time_context}
 
 [RECENT_FLOW_REVIEW]
 {self._format_flow_history(flow_history)}
@@ -5750,16 +5897,45 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
             }
 
     def evaluate_condition_exit(self, stock_name, stock_code, ws_data, recent_ticks, recent_candles, condition_profile, profit_rate, peak_profit, current_ai_score):
-        """조건검색식 청산 판단: 전용 prompt 없이 scalping holding route의 exit alias를 재사용한다."""
+        """조건검색식 청산 판단: scalping holding score contract에 명시적 PnL context를 전달한다."""
         try:
-            result = self.analyze_target(
+            profile = condition_profile if isinstance(condition_profile, dict) else {}
+            curr_price = 0
+            if isinstance(ws_data, dict):
+                curr_price = int(self._safe_float(ws_data.get("curr", ws_data.get("current_price", 0)), 0))
+            position_ctx = {
+                "record_id": profile.get("record_id"),
+                "buy_price": profile.get("buy_price") or profile.get("avg_price"),
+                "curr_price": curr_price,
+                "profit_rate": profit_rate,
+                "peak_profit": peak_profit,
+                "drawdown_from_peak_pct": max(0.0, self._safe_float(peak_profit, 0.0) - self._safe_float(profit_rate, 0.0)),
+                "held_sec": int(self._safe_float(profile.get("held_sec", profile.get("held_minutes", 0) or 0), 0)),
+                "buy_qty": int(self._safe_float(profile.get("buy_qty", 0), 0)),
+                "position_tag": profile.get("position_tag", "CONDITION"),
+                "entry_source": "condition_exit",
+                "condition_profile": {
+                    "name": profile.get("name"),
+                    "strategy": profile.get("strategy"),
+                    "condition_id": profile.get("condition_id"),
+                },
+                "prior_score": current_ai_score,
+                "prior_effective_score": current_ai_score,
+                "prior_score_source": "condition_exit_arg",
+                "prior_data_quality": "partial",
+                "prior_effective_usable": True,
+            }
+            result = self.evaluate_scalping_holding_score(
                 stock_name,
+                stock_code,
                 ws_data,
                 recent_ticks,
                 recent_candles,
-                strategy="SCALPING",
-                cache_profile="condition_exit",
-                prompt_profile="exit",
+                position_ctx,
+                metadata_extra={
+                    "source_event_stage": "condition_exit",
+                    "condition_profile_name": profile.get("name"),
+                },
             )
             return normalize_condition_exit_from_scalping_result(result)
         except Exception as e:

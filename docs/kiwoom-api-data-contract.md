@@ -95,6 +95,10 @@ quantity guards.
   `ka10003_buy_dominance_observation_split_vs_15_mismatch_count` so postclose
   source-quality reports can automatically measure source mix, 1313 fallback
   use, inside-spread frequency, and 1030/1031-vs-15 mismatch rate.
+- When the split-vs-15 observation is evaluable, postclose
+  `microstructure_reaction_context` may create a source-only
+  `instrumentation_order` for parser/provenance review. That order remains
+  `runtime_effect=false` and cannot promote `ka10003` to pressure authority.
 - Briefings may display the heuristic source/quality, but must not present it
   as confirmed BUY/SELL trade direction.
 - Adding best bid/ask to a `price_change_heuristic` tick later must not promote
@@ -126,6 +130,10 @@ quantity guards.
   provenance/source-quality diagnostics only; a nonzero
   `market_data_rest_signed_tape_pressure_usable=true` count is a contract
   violation to review, not runtime approval.
+- Postclose workorders may use these counts to request source-only monitoring,
+  negative-veto design review, or forbidden-use repair. They must not enable
+  BUY support, pressure math, submit-time REST retry, or broker guard bypass
+  without a separate guarded runtime candidate.
 
 ## ka10046
 
@@ -152,6 +160,11 @@ quantity guards.
 - `ka10046` must not create standalone BUY support, pressure math, submit
   permission, threshold mutation, provider changes, order-cap changes, bot
   restart authority, broker guard bypass, or real execution-quality approval.
+- Postclose `microstructure_reaction_context` automatically emits source-only
+  workorders when `ka10046_strength_runtime_effect_true_count` or
+  `ka10046_strength_missing_received_ts_count` is nonzero. These workorders
+  close instrumentation/provenance gaps only and do not authorize runtime
+  application.
 
 ## Aggressor Pressure Field Contract
 

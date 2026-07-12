@@ -24,10 +24,206 @@ def _safe_number(value, default=0.0):
         return default
 
 
+def _clamp(value, min_value=0.0, max_value=100.0):
+    return max(min_value, min(max_value, float(value)))
+
+
 def _rate_pct(numerator, denominator):
     denominator = int(_safe_number(denominator, 0))
     numerator = int(_safe_number(numerator, 0))
     return round((numerator / denominator) * 100.0, 3) if denominator > 0 else 0.0
+
+
+def _entry_liquidity_features(
+    *,
+    curr_price,
+    spread_bp,
+    top1_depth_ratio,
+    top3_depth_ratio,
+    best_ask_vol,
+    best_bid_vol,
+    top3_ask_vol,
+    top3_bid_vol,
+    quote_stale,
+    quote_age_ms,
+    quote_stale_threshold_ms,
+    asks,
+    bids,
+):
+    orderbook_present = bool(asks and bids)
+    top1_bid_notional = float(best_bid_vol or 0) * float(curr_price or 0)
+    top1_ask_notional = float(best_ask_vol or 0) * float(curr_price or 0)
+    top3_bid_notional = float(top3_bid_vol or 0) * float(curr_price or 0)
+    top3_ask_notional = float(top3_ask_vol or 0) * float(curr_price or 0)
+    score = 100.0
+    if not orderbook_present:
+        score -= 55.0
+    if quote_age_ms is None:
+        score -= 20.0
+    elif quote_stale:
+        score -= 40.0
+    if spread_bp >= 30:
+        score -= 30.0
+    elif spread_bp >= 15:
+        score -= 18.0
+    elif spread_bp >= 8:
+        score -= 8.0
+    if top3_depth_ratio >= 3.0:
+        score -= 28.0
+    elif top3_depth_ratio >= 1.8:
+        score -= 18.0
+    elif top3_depth_ratio >= 1.35:
+        score -= 8.0
+    if top3_bid_notional <= 0:
+        score -= 20.0
+    elif top3_bid_notional < 20_000_000:
+        score -= 12.0
+    score = round(_clamp(score), 1)
+    if not orderbook_present:
+        status = "unknown"
+    elif quote_stale:
+        status = "stale"
+    elif score >= 75:
+        status = "good"
+    elif score >= 50:
+        status = "thin"
+    else:
+        status = "adverse"
+    fillability_score = round(
+        _clamp(
+            score
+            - (10.0 if top1_depth_ratio >= 1.5 else 0.0)
+            - (10.0 if spread_bp >= 15 else 0.0)
+            + (5.0 if top1_bid_notional >= 50_000_000 else 0.0)
+        ),
+        1,
+    )
+    would_fill_now = bool(orderbook_present and quote_age_ms is not None and not quote_stale and fillability_score >= 60)
+    return {
+        "entry_liquidity_score": score,
+        "entry_liquidity_status": status,
+        "fillability_score": fillability_score,
+        "would_fill_now": would_fill_now,
+        "top1_bid_notional": round(top1_bid_notional, 1),
+        "top1_ask_notional": round(top1_ask_notional, 1),
+        "top3_bid_notional": round(top3_bid_notional, 1),
+        "top3_ask_notional": round(top3_ask_notional, 1),
+        "quote_depth_present": orderbook_present,
+        "quote_fresh_for_entry": bool(orderbook_present and quote_age_ms is not None and not quote_stale),
+        "quote_stale_threshold_ms": quote_stale_threshold_ms,
+    }
+
+
+def _entry_order_flow_features(
+    *,
+    buy_pressure_10t,
+    net_aggressive_delta_10t,
+    tick_aggressor_pressure_usable,
+    tick_aggressor_trusted_count,
+    large_sell_print_detected,
+    large_buy_print_detected,
+):
+    has_pressure = bool(tick_aggressor_pressure_usable or tick_aggressor_trusted_count > 0)
+    if not has_pressure:
+        score = 50.0
+        status = "unknown"
+    else:
+        delta_component = _clamp(50.0 + (float(net_aggressive_delta_10t or 0) / 20.0), 0.0, 100.0)
+        score = (float(buy_pressure_10t or 50.0) * 0.65) + (delta_component * 0.35)
+        if large_buy_print_detected:
+            score += 6.0
+        if large_sell_print_detected:
+            score -= 14.0
+        score = round(_clamp(score), 1)
+        if score >= 68:
+            status = "supportive"
+        elif score <= 42:
+            status = "adverse"
+        else:
+            status = "neutral"
+    return {
+        "order_flow_pressure_score": score,
+        "entry_order_flow_status": status,
+        "order_flow_pressure_source": "trusted_aggressor" if has_pressure else "untrusted_or_missing",
+    }
+
+
+def _entry_momentum_features(
+    *,
+    tick_acceleration_ratio,
+    price_change_10t_pct,
+    curr_vs_micro_vwap_bp,
+    micro_vwap_available,
+    latest_strength,
+    tick_context_quality,
+):
+    score = 50.0
+    if tick_acceleration_ratio >= 2.0:
+        score += 18.0
+    elif tick_acceleration_ratio >= 1.2:
+        score += 10.0
+    elif tick_acceleration_ratio > 0 and tick_acceleration_ratio < 0.75:
+        score -= 10.0
+    if price_change_10t_pct > 0.15:
+        score += 10.0
+    elif price_change_10t_pct < -0.15:
+        score -= 10.0
+    if micro_vwap_available and curr_vs_micro_vwap_bp > 8:
+        score += 10.0
+    elif micro_vwap_available and curr_vs_micro_vwap_bp < -8:
+        score -= 10.0
+    if latest_strength >= 140:
+        score += 8.0
+    elif latest_strength < 85:
+        score -= 8.0
+    if str(tick_context_quality or "").startswith("stale") or tick_context_quality in {"missing_ticks", "missing_tick_time"}:
+        score -= 12.0
+    score = round(_clamp(score), 1)
+    if score >= 68:
+        status = "accelerating"
+    elif score <= 42:
+        status = "fading"
+    else:
+        status = "flat"
+    return {
+        "entry_momentum_score": score,
+        "entry_momentum_status": status,
+    }
+
+
+def _entry_context_quality_features(
+    *,
+    tick_context_quality,
+    quote_age_ms,
+    quote_stale,
+    quote_depth_present,
+    tick_aggressor_pressure_usable,
+    micro_vwap_available,
+    minute_candle_window_fresh,
+):
+    missing = []
+    if tick_context_quality in {"missing_ticks", "missing_tick_time"}:
+        missing.append("tick_context")
+    if quote_age_ms is None or quote_stale:
+        missing.append("quote_freshness")
+    if not quote_depth_present:
+        missing.append("quote_depth")
+    if not tick_aggressor_pressure_usable:
+        missing.append("order_flow_pressure")
+    if not micro_vwap_available:
+        missing.append("micro_vwap")
+    if not minute_candle_window_fresh:
+        missing.append("minute_candle")
+    if not missing:
+        quality = "complete"
+    elif "quote_freshness" in missing or "tick_context" in missing:
+        quality = "stale" if len(missing) <= 2 else "insufficient"
+    else:
+        quality = "partial"
+    return {
+        "entry_context_quality": quality,
+        "entry_context_missing_features": ",".join(missing),
+    }
 
 
 def _time_to_seconds(value) -> int | None:
@@ -345,6 +541,46 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
         now=now,
         precomputed=snapshot,
     )
+    liquidity_features = _entry_liquidity_features(
+        curr_price=curr_price,
+        spread_bp=spread_bp,
+        top1_depth_ratio=top1_depth_ratio,
+        top3_depth_ratio=top3_depth_ratio,
+        best_ask_vol=best_ask_vol,
+        best_bid_vol=best_bid_vol,
+        top3_ask_vol=top3_ask_vol,
+        top3_bid_vol=top3_bid_vol,
+        quote_stale=quote_stale,
+        quote_age_ms=quote_age_ms,
+        quote_stale_threshold_ms=quote_stale_threshold_ms,
+        asks=asks,
+        bids=bids,
+    )
+    order_flow_features = _entry_order_flow_features(
+        buy_pressure_10t=buy_pressure_10t,
+        net_aggressive_delta_10t=net_aggressive_delta_10t,
+        tick_aggressor_pressure_usable=tick_aggressor_pressure_usable,
+        tick_aggressor_trusted_count=tick_aggressor_trusted_count,
+        large_sell_print_detected=large_sell_print_detected,
+        large_buy_print_detected=large_buy_print_detected,
+    )
+    momentum_features = _entry_momentum_features(
+        tick_acceleration_ratio=tick_acceleration_ratio,
+        price_change_10t_pct=price_change_10t_pct,
+        curr_vs_micro_vwap_bp=curr_vs_micro_vwap_bp,
+        micro_vwap_available=micro_vwap_available,
+        latest_strength=_safe_number(latest_strength, 0.0),
+        tick_context_quality=tick_context_quality,
+    )
+    context_quality_features = _entry_context_quality_features(
+        tick_context_quality=tick_context_quality,
+        quote_age_ms=quote_age_ms,
+        quote_stale=quote_stale,
+        quote_depth_present=liquidity_features["quote_depth_present"],
+        tick_aggressor_pressure_usable=tick_aggressor_pressure_usable,
+        micro_vwap_available=micro_vwap_available,
+        minute_candle_window_fresh=minute_candle_window_fresh,
+    )
 
     return {
         "packet_version": SCALP_FEATURE_PACKET_VERSION,
@@ -435,6 +671,10 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
         "minute_candle_stale_threshold_ms": SCALP_FEATURE_PACKET_MINUTE_CANDLE_STALE_MS,
         "ask_depth_ratio": ask_depth_ratio,
         "net_ask_depth": net_ask_depth,
+        **liquidity_features,
+        **order_flow_features,
+        **momentum_features,
+        **context_quality_features,
         **microstructure_reaction,
     }
 
@@ -537,6 +777,38 @@ def build_scalping_feature_audit_fields(packet):
         "quote_age_source": payload.get("quote_age_source", "missing"),
         "quote_stale_threshold_ms": payload.get("quote_stale_threshold_ms", SCALP_FEATURE_PACKET_QUOTE_STALE_MS),
         "quote_stale": payload.get("quote_stale", "not_available_quote_age"),
+        "entry_liquidity_score": payload.get("entry_liquidity_score", "-"),
+        "entry_liquidity_status": payload.get("entry_liquidity_status", "-"),
+        "fillability_score": payload.get("fillability_score", "-"),
+        "would_fill_now": payload.get("would_fill_now", False),
+        "top1_bid_notional": payload.get("top1_bid_notional", "-"),
+        "top1_ask_notional": payload.get("top1_ask_notional", "-"),
+        "top3_bid_notional": payload.get("top3_bid_notional", "-"),
+        "top3_ask_notional": payload.get("top3_ask_notional", "-"),
+        "quote_depth_present": payload.get("quote_depth_present", False),
+        "quote_fresh_for_entry": payload.get("quote_fresh_for_entry", False),
+        "order_flow_pressure_score": payload.get("order_flow_pressure_score", "-"),
+        "entry_order_flow_status": payload.get("entry_order_flow_status", "-"),
+        "order_flow_pressure_source": payload.get("order_flow_pressure_source", "-"),
+        "entry_momentum_score": payload.get("entry_momentum_score", "-"),
+        "entry_momentum_status": payload.get("entry_momentum_status", "-"),
+        "entry_context_quality": payload.get("entry_context_quality", "-"),
+        "entry_context_missing_features": payload.get("entry_context_missing_features", "-"),
+        "latest_strength": payload.get("latest_strength", "-"),
+        "spread_bp": payload.get("spread_bp", "-"),
+        "top1_depth_ratio": payload.get("top1_depth_ratio", "-"),
+        "top3_depth_ratio": payload.get("top3_depth_ratio", "-"),
+        "orderbook_total_ratio": payload.get("orderbook_total_ratio", "-"),
+        "ask_depth_ratio": payload.get("ask_depth_ratio", "-"),
+        "net_ask_depth": payload.get("net_ask_depth", "-"),
+        "microprice_edge_bp": payload.get("microprice_edge_bp", "-"),
+        "net_aggressive_delta_10t": payload.get("net_aggressive_delta_10t", "-"),
+        "same_price_buy_absorption": payload.get("same_price_buy_absorption", "-"),
+        "large_sell_print_detected": payload.get("large_sell_print_detected", False),
+        "large_buy_print_detected": payload.get("large_buy_print_detected", False),
+        "distance_from_day_high_pct": payload.get("distance_from_day_high_pct", "-"),
+        "intraday_range_pct": payload.get("intraday_range_pct", "-"),
+        "volume_ratio_pct": payload.get("volume_ratio_pct", "-"),
         "recent_5tick_seconds": payload.get("recent_5tick_seconds", "-"),
         "prev_5tick_seconds": payload.get("prev_5tick_seconds", "-"),
         "tick_acceleration_ratio": payload.get("tick_acceleration_ratio", "-"),
@@ -545,6 +817,8 @@ def build_scalping_feature_audit_fields(packet):
         "micro_vwap_available": payload.get("micro_vwap_available", False),
         "curr_vs_ma5_bp": payload.get("curr_vs_ma5_bp", "-"),
         "ma5_available": payload.get("ma5_available", False),
+        "micro_vwap_value": payload.get("micro_vwap_value", "-"),
+        "ma5_value": payload.get("ma5_value", "-"),
         "minute_candle_latest_time": payload.get("minute_candle_latest_time", "-"),
         "minute_candle_latest_age_ms": payload.get("minute_candle_latest_age_ms", "-"),
         "minute_candle_context_quality": payload.get("minute_candle_context_quality", "unknown"),
@@ -562,6 +836,12 @@ def build_scalping_feature_audit_fields(packet):
         ),
         "microstructure_reaction_tick_aggressor_trusted_count": payload.get(
             "microstructure_reaction_tick_aggressor_trusted_count", 0
+        ),
+        "microstructure_reaction_tick_trade_value_recent_sum": payload.get(
+            "microstructure_reaction_tick_trade_value_recent_sum", 0
+        ),
+        "microstructure_reaction_tick_trade_value_prev_sum": payload.get(
+            "microstructure_reaction_tick_trade_value_prev_sum", 0
         ),
         "microstructure_reaction_ask_sweep_score": payload.get("microstructure_reaction_ask_sweep_score", 50),
         "microstructure_reaction_post_sweep_hold_score": payload.get("microstructure_reaction_post_sweep_hold_score", 50),

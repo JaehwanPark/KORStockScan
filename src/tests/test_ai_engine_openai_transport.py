@@ -381,6 +381,44 @@ def test_gpt5_nano_always_uses_openai_after_micro_removal(monkeypatch):
     assert "bedrock_primary_used" not in meta
 
 
+def test_gpt54_nano_always_uses_openai_after_fast_model_update(monkeypatch):
+    engine = _build_engine()
+    provider_called = {"value": False}
+
+    def _fake_create(**kwargs):
+        return SimpleNamespace(output_text='{"action":"WAIT","score":61,"reason":"openai"}')
+
+    class Provider:
+        def converse(self, **kwargs):
+            provider_called["value"] = True
+            raise AssertionError("gpt-5.4-nano must not route to Bedrock")
+
+    engine.client = SimpleNamespace(responses=SimpleNamespace(create=_fake_create))
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "primary")
+    monkeypatch.setattr(bedrock_nova_provider, "runtime_provider", lambda: Provider())
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(openai_module.TRADING_RULES, OPENAI_TRANSPORT_MODE="http"),
+    )
+
+    result = GPTSniperEngine._call_openai_safe(
+        engine,
+        "PROMPT",
+        "payload",
+        require_json=True,
+        context_name="test",
+        model_override="gpt-5.4-nano",
+        endpoint_name="analyze_target",
+    )
+
+    assert result["reason"] == "openai"
+    assert provider_called["value"] is False
+    meta = engine._consume_last_transport_meta()
+    assert meta["openai_transport_mode"] == "http"
+    assert "bedrock_primary_used" not in meta
+
+
 def test_bedrock_primary_routes_gpt54_mini_independently(monkeypatch):
     engine = _build_engine()
     captured = {}
@@ -1025,6 +1063,11 @@ def test_entry_price_compact_input_reduces_payload_across_large_sample(monkeypat
         assert parsed["price_context"]["orderbook_micro"]["qi"] == price_ctx["orderbook_micro"]["qi"]
         assert parsed["price_context"]["orderbook_micro"]["top_depth_ratio"] == price_ctx["orderbook_micro"]["top_depth_ratio"]
         assert parsed["price_context"]["orderbook_micro"]["spread_bp"] == price_ctx["orderbook_micro"]["spread_bp"]
+        assert parsed["entry_context_features"]["context_role"] == "pre_submit_entry_quality_context"
+        assert "entry_liquidity_score" in parsed["entry_context_features"]
+        assert "fillability_score" in parsed["entry_context_features"]
+        assert "order_flow_pressure_score" in parsed["entry_context_features"]
+        assert "entry_context_quality" in parsed["entry_context_features"]
         assert len(parsed["recent_ticks"]) <= 20
         assert len(parsed["recent_candles"]) <= 20
         assert "unused_snapshot" not in compact_payload
@@ -1264,6 +1307,11 @@ def test_ai_hot_path_v2_inputs_are_structured_json_across_large_sample(monkeypat
         assert entry_price["input_schema"] == "entry_price_v2"
         assert entry_price["price_context"]["resolved_order_price"] == price_ctx["resolved_order_price"]
         assert entry_price["candidate_prices"]["defensive_order_price"] == price_ctx["defensive_order_price"]
+        assert entry_price["entry_context_features"]["context_role"] == "pre_submit_entry_quality_context"
+        assert "entry_liquidity_score" in entry_price["entry_context_features"]
+        assert "fillability_score" in entry_price["entry_context_features"]
+        assert "order_flow_pressure_score" in entry_price["entry_context_features"]
+        assert "entry_context_quality" in entry_price["entry_context_features"]
         assert "quote_change" in entry_price
         assert "fill_probability_hints" in entry_price
         assert len(entry_price["recent_ticks_latest_first"]) <= 5
@@ -1276,6 +1324,8 @@ def test_ai_hot_path_v2_inputs_are_structured_json_across_large_sample(monkeypat
 
         assert holding_flow["input_schema"] == "holding_flow_v2"
         assert holding_flow["position"]["current_price"] == ws_data["curr"]
+        assert holding_flow["entry_time_context"]["context_role"] == "entry_time_provenance_only"
+        assert holding_flow["entry_time_context"]["status"] == "not_available"
         assert holding_flow["deterministic_guard_state"]["system_guards_remain_authoritative"] is True
         assert holding_flow["runtime_advisory_context"]["holding_exit_matrix"] == "matrix_context"
         assert holding_flow["runtime_advisory_context"]["lifecycle_ai"] == "lifecycle_context"
@@ -1588,17 +1638,7 @@ def test_openai_usage_meta_is_exposed_for_pipeline_events(monkeypatch):
     assert result["openai_reasoning_tokens"] == 8
 
 
-def test_openai_reasoning_effort_auto_uses_none_for_gpt54_mini(monkeypatch):
-    engine = _build_engine()
-    engine.current_model_name = "gpt-5.4-mini"
-    calls = []
-
-    def _fake_create(**kwargs):
-        calls.append(kwargs)
-        return SimpleNamespace(output_text='{"action":"WAIT","score":50,"reason":"ok"}')
-
-    engine.client = SimpleNamespace(responses=SimpleNamespace(create=_fake_create))
-
+def test_openai_reasoning_effort_auto_uses_none_for_gpt54_family(monkeypatch):
     monkeypatch.setattr(
         openai_module,
         "TRADING_RULES",
@@ -1609,17 +1649,27 @@ def test_openai_reasoning_effort_auto_uses_none_for_gpt54_mini(monkeypatch):
         ),
     )
 
-    GPTSniperEngine._call_openai_safe(
-        engine,
-        "PROMPT",
-        "payload",
-        require_json=True,
-        context_name="json",
-        endpoint_name="analyze_target",
-        symbol="000001",
-    )
+    for model_name in ("gpt-5.4-mini", "gpt-5.4-nano"):
+        engine = _build_engine()
+        engine.current_model_name = model_name
+        calls = []
 
-    assert calls[0]["reasoning"] == {"effort": "none"}
+        def _fake_create(**kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(output_text='{"action":"WAIT","score":50,"reason":"ok"}')
+
+        engine.client = SimpleNamespace(responses=SimpleNamespace(create=_fake_create))
+        GPTSniperEngine._call_openai_safe(
+            engine,
+            "PROMPT",
+            "payload",
+            require_json=True,
+            context_name="json",
+            endpoint_name="analyze_target",
+            symbol="000001",
+        )
+
+        assert calls[0]["reasoning"] == {"effort": "none"}
 
 
 def test_openai_scalping_market_data_uses_compact_json_payload(monkeypatch):
@@ -1695,6 +1745,12 @@ def test_openai_scalping_entry_hot_input_reduces_prompt_payload(monkeypatch):
     assert "orderbook_top3" not in parsed
     assert "prompt_context" not in hot_payload
     assert parsed["runtime_context"]["entry_adm"]["entry_adm_bucket_token"] == "bucket-a"
+    assert parsed["features"]["entry_liquidity_status"] in {"good", "thin"}
+    assert "fillability_score" in parsed["features"]
+    assert "order_flow_pressure_score" in parsed["features"]
+    assert "entry_order_flow_status" in parsed["features"]
+    assert "entry_momentum_score" in parsed["features"]
+    assert "entry_context_quality" in parsed["features"]
     assert len(hot_payload) < int(len(compact_payload) * 0.6)
 
 

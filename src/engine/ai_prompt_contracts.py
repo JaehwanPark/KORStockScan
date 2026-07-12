@@ -106,10 +106,11 @@ DROP when multiple deterioration signals align or source quality makes entry uns
 Do not infer news, fundamentals, investor flow, missing ticks, or missing candles.
 
 Core groups:
-- Supply-demand: buy_pressure_10t, net_aggressive_delta_10t, same_price_buy_absorption
-- Speed: tick_acceleration_ratio, recent_5tick_seconds, prev_5tick_seconds
+- Supply-demand: buy_pressure_10t, net_aggressive_delta_10t, same_price_buy_absorption, order_flow_pressure_score
+- Speed: tick_acceleration_ratio, recent_5tick_seconds, prev_5tick_seconds, entry_momentum_score
 - Position: curr_vs_micro_vwap_bp, curr_vs_ma5_bp, distance_from_day_high_pct
-- Risk: large_sell_print_detected, top3_depth_ratio, spread_bp, quote_stale
+- Liquidity/fillability: entry_liquidity_score, fillability_score, quote_depth_present, quote_fresh_for_entry
+- Risk: large_sell_print_detected, top3_depth_ratio, spread_bp, quote_stale, entry_context_quality
 
 [Scoring]
 - 75-100 BUY: valid immediate entry
@@ -131,6 +132,7 @@ You are a pre-submit scalping order-price classifier for Korean equities.
 The BUY/submitted candidate already passed entry checks. Do not re-decide BUY vs WAIT.
 Decide only how the order price should be submitted now.
 Focus only on price, chase risk, fill probability, and quote freshness.
+If `entry_context_features` is present, use it only as pre-submit liquidity/fillability/source-quality context.
 
 [Decision Rules]
 1. `reference_target_price` is advisory, not authoritative.
@@ -140,6 +142,7 @@ Focus only on price, chase risk, fill probability, and quote freshness.
 5. If uncertain, choose USE_DEFENSIVE. If submission is clearly unfavorable, choose SKIP.
 6. If `price_context.orderbook_micro` is ready and `micro_state=bearish`, use it as SKIP evidence unless execution strength, latency, or price context contradicts it.
 7. If orderbook micro is neutral or insufficient, do not SKIP based only on OFI/QI.
+8. If entry_context_features shows stale or insufficient source quality, prefer USE_DEFENSIVE or SKIP over price improvement.
 
 [Actions]
 - USE_DEFENSIVE: use `defensive_order_price`.
@@ -277,6 +280,7 @@ Score an already-open position. Do not reuse entry logic. Do not decide order pr
 [Input Contract]
 The user input is JSON with `input_schema=holding_score_v2`.
 Use these groups together: position_context, pnl_context, market_flow_features, source_quality, prior_score_context, and hard_guard_context.
+If `entry_time_context` is present, treat it as historical provenance only. Do not treat entry-time support as current flow support.
 
 [Score Meaning]
 - 80-100: continuation favored. Position PnL, peak behavior, drawdown, held time, and fresh flow support holding or adding confidence.
@@ -309,6 +313,7 @@ SCALPING_HOLDING_FLOW_SYSTEM_PROMPT = """
 You are a scalping holding/overnight flow classifier.
 Decide whether full exit now improves expected value by using the longer input window and recent flow-review history, not a single score cutoff.
 Do not change entry, order price, provider route, quantity, or hard guard policy.
+If entry-time context is present, use it only to distinguish bad-entry provenance from current deterioration.
 
 [Decision Rules]
 1. `score` is confidence only. Do not choose HOLD/TRIM/EXIT from a score bucket alone.

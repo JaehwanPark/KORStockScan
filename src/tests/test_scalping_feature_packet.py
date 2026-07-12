@@ -694,10 +694,64 @@ def test_build_scalping_feature_audit_fields_marks_sent_flags():
     assert fields["tick_context_stale"] is False
     assert fields["tick_context_quality"] == "fresh_computed"
     assert fields["quote_stale"] == "not_available_quote_age"
+    assert fields["entry_liquidity_status"] in {"good", "thin"}
+    assert fields["entry_liquidity_score"] >= 50
+    assert fields["fillability_score"] >= 40
+    assert fields["would_fill_now"] is False
+    assert fields["quote_depth_present"] is True
+    assert fields["order_flow_pressure_score"] >= 50
+    assert fields["entry_order_flow_status"] == "supportive"
+    assert fields["entry_momentum_score"] >= 50
+    assert fields["entry_momentum_status"] == "accelerating"
+    assert fields["entry_context_quality"] in {"partial", "stale", "complete"}
+    assert fields["latest_strength"] == packet["latest_strength"]
+    assert fields["spread_bp"] == packet["spread_bp"]
+    assert fields["top1_depth_ratio"] == packet["top1_depth_ratio"]
+    assert fields["top3_depth_ratio"] == packet["top3_depth_ratio"]
+    assert fields["orderbook_total_ratio"] == packet["orderbook_total_ratio"]
+    assert fields["ask_depth_ratio"] == packet["ask_depth_ratio"]
+    assert fields["net_ask_depth"] == packet["net_ask_depth"]
+    assert fields["net_aggressive_delta_10t"] == packet["net_aggressive_delta_10t"]
+    assert fields["same_price_buy_absorption"] == packet["same_price_buy_absorption"]
+    assert fields["large_sell_print_detected"] == packet["large_sell_print_detected"]
+    assert fields["large_buy_print_detected"] == packet["large_buy_print_detected"]
+    assert fields["distance_from_day_high_pct"] == packet["distance_from_day_high_pct"]
+    assert fields["intraday_range_pct"] == packet["intraday_range_pct"]
+    assert fields["volume_ratio_pct"] == packet["volume_ratio_pct"]
     assert fields["microstructure_reaction_context_sent"] is True
     assert fields["microstructure_reaction_context_status"] == "ok"
     assert fields["microstructure_reaction_tick_aggressor_pressure_usable"] is True
     assert fields["microstructure_reaction_tick_aggressor_trusted_count"] > 0
+
+
+def test_entry_context_summary_features_are_complete_when_quote_and_flow_are_fresh():
+    now = datetime(2026, 5, 15, 9, 0, 12)
+    packet = extract_scalping_feature_packet(
+        {
+            **_sample_ws_data(),
+            "last_ws_update_ts": (now - timedelta(milliseconds=300)).timestamp(),
+        },
+        _sample_ticks(),
+        _sample_candles(),
+        now=now,
+    )
+    fields = build_scalping_feature_audit_fields(packet)
+
+    assert packet["entry_liquidity_status"] == "good"
+    assert packet["entry_liquidity_score"] == 84.0
+    assert packet["fillability_score"] == 74.0
+    assert packet["would_fill_now"] is True
+    assert packet["quote_depth_present"] is True
+    assert packet["quote_fresh_for_entry"] is True
+    assert packet["order_flow_pressure_score"] == 79.5
+    assert packet["entry_order_flow_status"] == "supportive"
+    assert packet["entry_momentum_score"] == 88.0
+    assert packet["entry_momentum_status"] == "accelerating"
+    assert packet["entry_context_quality"] == "complete"
+    assert packet["entry_context_missing_features"] == ""
+    assert fields["entry_liquidity_status"] == "good"
+    assert fields["fillability_score"] == 74.0
+    assert fields["entry_context_quality"] == "complete"
     assert fields["microstructure_reaction_ask_sweep_score"] >= 0
     assert "tick_trade_value_source_counts" in fields
     assert "trade_volume_source_counts" in fields

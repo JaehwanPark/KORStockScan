@@ -69,7 +69,7 @@
   - `SCALPING_WATCHING_SYSTEM_PROMPT`, `SCALPING_HOLDING_SYSTEM_PROMPT`, legacy `SCALPING_SYSTEM_PROMPT`: Tier1 fast.
   - `SCALPING_ENTRY_PRICE_PROMPT`, `SCALPING_HOLDING_FLOW_SYSTEM_PROMPT`, `SCALPING_OVERNIGHT_DECISION_PROMPT`, `SCALPING_EXIT_SYSTEM_PROMPT`, realtime gatekeeper/report: Tier2 balanced/report.
   - EOD/장후 심층 후보 선정: Tier3 deep.
-  - OpenAI runtime 기본값은 `GPT_FAST_MODEL=gpt-5-nano`, `GPT_REPORT_MODEL=gpt-5.4-mini`, `GPT_DEEP_MODEL=gpt-5.4`로 분리한다. Threshold AI correction은 runtime tier와 분리해 `GPT_THRESHOLD_CORRECTION_MODEL=gpt-5.5`, fallback `gpt-5.4 -> gpt-5.4-mini`를 사용한다.
+  - OpenAI runtime 기본값은 `GPT_FAST_MODEL=gpt-5-nano`, `OPENAI_REASONING_EFFORT=minimal`, `GPT_REPORT_MODEL=gpt-5.4-mini`, `GPT_DEEP_MODEL=gpt-5.4`로 분리한다. Threshold AI correction은 runtime tier와 분리해 `GPT_THRESHOLD_CORRECTION_MODEL=gpt-5.5`, fallback `gpt-5.4 -> gpt-5.4-mini`를 사용한다.
 - 호출 interval 기본값:
   - WATCHING 재평가: `AI_WATCHING_COOLDOWN=90초`.
   - HOLDING 일반: `AI_HOLDING_MIN_COOLDOWN=45초`, `AI_HOLDING_MAX_COOLDOWN=180초`.

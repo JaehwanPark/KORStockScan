@@ -16,7 +16,7 @@
 | `SCALPING_OVERNIGHT_DECISION_PROMPT` | Tier2 balanced | 15:20 오버나이트 1차 판단 |
 | `EOD_TOMORROW_LEADER_JSON_PROMPT` | Tier3 deep | 장후 심층 후보 선정 |
 
-- OpenAI runtime tier 기본값은 `FAST=gpt-5-nano`, `REPORT=gpt-5.4-mini`, `DEEP=gpt-5.4`다. Threshold AI correction은 별도 proposal layer로 `gpt-5.5 -> gpt-5.4 -> gpt-5.4-mini` fallback을 사용한다.
+- OpenAI runtime tier 기본값은 `FAST=gpt-5-nano`, `reasoning=minimal`, `REPORT=gpt-5.4-mini`, `DEEP=gpt-5.4`다. Threshold AI correction은 별도 proposal layer로 `gpt-5.5 -> gpt-5.4 -> gpt-5.4-mini` fallback을 사용한다.
 - 호출 interval 기본값은 WATCHING `90초`, HOLDING 일반 `45~180초`, HOLDING critical `20~45초`다.
 - `prompt_profile` 개선작업은 코드에는 남아 있지만, 4/22 이후 `shared`/`exit`/canary prompt 정리 항목이 5월 체크리스트에 재등록되지 않아 추적이 끊겼다. 정리 후보는 `2026-05-06` `AIEngineFlagOffBacklog0506`에서 cleanup/backlog/live 유지로 재분류한다.
 - Tier1 fast 경로의 prompt 문자열은 `상위 1%`, `프랍 트레이더`, `극강 공격적`, 장황한 해석 역할극을 제거하고, enum action contract와 핵심 피처 기준만 남기는 방향으로 정리한다.

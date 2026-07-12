@@ -114,6 +114,20 @@ FORBIDDEN_USES = [
     "cap_release",
 ]
 
+WORKORDER_FORBIDDEN_USES = [
+    "standalone_buy",
+    "submit_permission",
+    "pressure_math",
+    "broker_guard_bypass",
+    "stale_quote_guard_bypass",
+    "order_guard_relaxation",
+    "threshold_mutation",
+    "provider_route_change",
+    "bot_restart",
+    "cap_release",
+    "real_execution_quality_approval",
+]
+
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
     try:
@@ -925,6 +939,145 @@ def _strength_diff_rows(rows: list[dict[str, Any]]) -> list[float]:
     return diffs
 
 
+def _microstructure_code_improvement_orders(summary: dict[str, Any], report_path: Path) -> list[dict[str, Any]]:
+    orders: list[dict[str, Any]] = []
+
+    def base_order(order_id: str, title: str, *, route: str, improvement_type: str, evidence: list[str]) -> dict[str, Any]:
+        order = {
+            "order_id": order_id,
+            "title": title,
+            "source_report_type": "microstructure_reaction_context",
+            "target_subsystem": "runtime_instrumentation",
+            "lifecycle_stage": "entry_source_quality",
+            "route": route,
+            "threshold_family": "microstructure_reaction_context",
+            "improvement_type": improvement_type,
+            "priority": 2,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "decision_authority": "entry_confidence_modifier_source_only",
+            "metric_role": "source_quality_gate",
+            "primary_decision_metric": "source_quality_adjusted_ev_pct",
+            "source_quality_gate": "microstructure source contract and forbidden-use counters",
+            "forbidden_uses": list(WORKORDER_FORBIDDEN_USES),
+            "evidence": [
+                *evidence,
+                "runtime_effect=false",
+                "allowed_runtime_apply=false",
+                "actual_order_submitted=false",
+                "broker_order_forbidden=true",
+            ],
+            "expected_ev_effect": (
+                "Close market-data provenance gaps before any later bounded runtime family can consume "
+                "microstructure evidence."
+            ),
+            "files_likely_touched": [
+                "src/engine/scalping/microstructure_reaction_context.py",
+                "src/engine/scalping/market_data_enrichment.py",
+                "src/utils/pipeline_event_logger.py",
+                "src/engine/build_code_improvement_workorder.py",
+            ],
+            "acceptance_tests": [
+                "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_microstructure_reaction_context_report.py src/tests/test_market_data_enrichment.py src/tests/test_pipeline_event_logger.py src/tests/test_build_code_improvement_workorder.py",
+                "regenerated microstructure_reaction_context keeps runtime_effect=false and allowed_runtime_apply=false",
+                "postclose code_improvement_workorder includes or explicitly closes this source-only order",
+            ],
+            "source_paths": [str(report_path)],
+            "implementation_provenance": {
+                "implementation_type": "microstructure_source_quality_workorder_handoff",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "requires_separate_runtime_apply_candidate": True,
+            },
+        }
+        if route == "auto_family_candidate":
+            order["candidate_family"] = "microstructure_signed_tape_runtime_candidate"
+        else:
+            order["mapped_family"] = "microstructure_reaction_context"
+        return order
+
+    if _safe_int(summary.get("market_data_rest_signed_tape_pressure_usable_true_count"), 0) > 0:
+        orders.append(
+            base_order(
+                "order_microstructure_rest_signed_tape_pressure_authority_violation",
+                "REST signed tape pressure authority violation",
+                route="instrumentation_order",
+                improvement_type="source_quality_forbidden_use_violation",
+                evidence=[
+                    "market_data_rest_signed_tape_pressure_usable_true_count="
+                    f"{summary.get('market_data_rest_signed_tape_pressure_usable_true_count')}",
+                    "REST signed tape must remain negative-veto/source-quality provenance only",
+                ],
+            )
+        )
+
+    if _safe_int(summary.get("ka10046_strength_runtime_effect_true_count"), 0) > 0:
+        orders.append(
+            base_order(
+                "order_microstructure_ka10046_runtime_effect_violation",
+                "ka10046 REST strength runtime-effect violation",
+                route="instrumentation_order",
+                improvement_type="source_quality_forbidden_use_violation",
+                evidence=[
+                    f"ka10046_strength_runtime_effect_true_count={summary.get('ka10046_strength_runtime_effect_true_count')}",
+                    "ka10046 REST strength fallback must not create runtime support by itself",
+                ],
+            )
+        )
+
+    if _safe_int(summary.get("ka10046_strength_missing_received_ts_count"), 0) > 0:
+        orders.append(
+            base_order(
+                "order_microstructure_ka10046_received_timestamp_gap",
+                "ka10046 REST strength received timestamp gap",
+                route="instrumentation_order",
+                improvement_type="source_quality_timestamp_provenance_gap",
+                evidence=[
+                    f"ka10046_strength_missing_received_ts_count={summary.get('ka10046_strength_missing_received_ts_count')}",
+                    "REST aggregate row time cannot substitute for client receive timestamp",
+                ],
+            )
+        )
+
+    if _safe_int(summary.get("row_count"), 0) > 0 and _safe_int(summary.get("rest_signed_trade_ticks_row_count"), 0) > 0:
+        orders.append(
+            base_order(
+                "order_microstructure_signed_tape_runtime_candidate_review",
+                "signed tape runtime candidate review from source-quality observation",
+                route="auto_family_candidate",
+                improvement_type="runtime_candidate_design_review",
+                evidence=[
+                    f"rest_signed_trade_ticks_row_count={summary.get('rest_signed_trade_ticks_row_count')}",
+                    f"market_data_signed_tape_state_counts={summary.get('market_data_signed_tape_state_counts') or {}}",
+                    "candidate review only; no runtime apply until separate PREOPEN guard and family contract",
+                ],
+            )
+        )
+
+    if _safe_int(summary.get("ka10003_buy_dominance_observation_split_vs_15_evaluable_count"), 0) > 0:
+        orders.append(
+            base_order(
+                "order_microstructure_ka10003_split_vs_15_observation_review",
+                "ka10003 split-vs-15 observation review",
+                route="instrumentation_order",
+                improvement_type="source_quality_observation_review",
+                evidence=[
+                    "ka10003_buy_dominance_observation_split_vs_15_evaluable_count="
+                    f"{summary.get('ka10003_buy_dominance_observation_split_vs_15_evaluable_count')}",
+                    "ka10003_buy_dominance_observation_split_vs_15_mismatch_rate_pct="
+                    f"{summary.get('ka10003_buy_dominance_observation_split_vs_15_mismatch_rate_pct')}",
+                    "ka10003 remains observation-only and must not fill trusted pressure fields",
+                ],
+            )
+        )
+
+    return orders
+
+
 def _latest_rows_by_stock(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     latest: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -1133,6 +1286,18 @@ def build_microstructure_reaction_context_report(target_date: str) -> dict[str, 
             [_safe_int(row.get("microstructure_reaction_vi_proximity_risk"), 0) for row in rows] or [0]
         ),
     }
+    json_path, md_path = report_paths(target_date)
+    code_improvement_orders = _microstructure_code_improvement_orders(summary, json_path)
+    summary["code_improvement_order_count"] = len(code_improvement_orders)
+    summary["top_code_improvement_orders"] = [
+        {
+            "order_id": order.get("order_id"),
+            "title": order.get("title"),
+            "route": order.get("route"),
+            "improvement_type": order.get("improvement_type"),
+        }
+        for order in code_improvement_orders[:5]
+    ]
     report = {
         "schema_version": 1,
         "date": target_date,
@@ -1150,6 +1315,7 @@ def build_microstructure_reaction_context_report(target_date: str) -> dict[str, 
         "sources": {"pipeline_events": str(path) if path.exists() else None},
         "summary": summary,
         "rows": rows[:500],
+        "code_improvement_orders": code_improvement_orders,
         "warnings": [
             message
             for message in [
@@ -1160,7 +1326,6 @@ def build_microstructure_reaction_context_report(target_date: str) -> dict[str, 
         ],
     }
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    json_path, md_path = report_paths(target_date)
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     md_path.write_text(render_microstructure_reaction_context_markdown(report), encoding="utf-8")
     return report
@@ -1242,6 +1407,8 @@ def render_microstructure_reaction_context_markdown(report: dict[str, Any]) -> s
         f"- avg_bid_replenishment_score: `{summary.get('avg_bid_replenishment_score')}`",
         f"- max_vi_proximity_risk: `{summary.get('max_vi_proximity_risk')}`",
         f"- warnings: `{report.get('warnings') or []}`",
+        f"- code_improvement_order_count: `{summary.get('code_improvement_order_count')}`",
+        f"- top_code_improvement_orders: `{summary.get('top_code_improvement_orders') or []}`",
     ]
     return "\n".join(lines) + "\n"
 

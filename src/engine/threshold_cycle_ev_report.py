@@ -1541,6 +1541,54 @@ def _microstructure_reaction_context_summary(target_date: str) -> tuple[dict[str
                 if isinstance(summary.get("source_quality_counts"), dict)
                 else {}
             ),
+            "v_pw_source_counts": summary.get("v_pw_source_counts") if isinstance(summary.get("v_pw_source_counts"), dict) else {},
+            "v_pw_rest_fallback_rate_pct": summary.get("v_pw_rest_fallback_rate_pct"),
+            "ka10046_strength_runtime_effect_true_count": _safe_int(
+                summary.get("ka10046_strength_runtime_effect_true_count"),
+                0,
+            ),
+            "ka10046_strength_missing_received_ts_count": _safe_int(
+                summary.get("ka10046_strength_missing_received_ts_count"),
+                0,
+            ),
+            "market_data_signed_tape_state_counts": (
+                summary.get("market_data_signed_tape_state_counts")
+                if isinstance(summary.get("market_data_signed_tape_state_counts"), dict)
+                else {}
+            ),
+            "market_data_rest_signed_tape_pressure_usable_true_count": _safe_int(
+                summary.get("market_data_rest_signed_tape_pressure_usable_true_count"),
+                0,
+            ),
+            "rest_signed_trade_ticks_row_count": _safe_int(summary.get("rest_signed_trade_ticks_row_count"), 0),
+            "rest_signed_trade_ticks_source_counts": (
+                summary.get("rest_signed_trade_ticks_source_counts")
+                if isinstance(summary.get("rest_signed_trade_ticks_source_counts"), dict)
+                else {}
+            ),
+            "ka10003_buy_dominance_observation_source_counts": (
+                summary.get("ka10003_buy_dominance_observation_source_counts")
+                if isinstance(summary.get("ka10003_buy_dominance_observation_source_counts"), dict)
+                else {}
+            ),
+            "ka10003_buy_dominance_observation_trade_value_source_counts": (
+                summary.get("ka10003_buy_dominance_observation_trade_value_source_counts")
+                if isinstance(summary.get("ka10003_buy_dominance_observation_trade_value_source_counts"), dict)
+                else {}
+            ),
+            "ka10003_buy_dominance_observation_inside_spread_count": _safe_int(
+                summary.get("ka10003_buy_dominance_observation_inside_spread_count"),
+                0,
+            ),
+            "ka10003_buy_dominance_observation_split_vs_15_mismatch_rate_pct": summary.get(
+                "ka10003_buy_dominance_observation_split_vs_15_mismatch_rate_pct"
+            ),
+            "code_improvement_order_count": _safe_int(summary.get("code_improvement_order_count"), 0),
+            "top_code_improvement_orders": (
+                summary.get("top_code_improvement_orders")
+                if isinstance(summary.get("top_code_improvement_orders"), list)
+                else []
+            ),
             "avg_ask_sweep_score": summary.get("avg_ask_sweep_score"),
             "avg_post_sweep_hold_score": summary.get("avg_post_sweep_hold_score"),
             "avg_bid_replenishment_score": summary.get("avg_bid_replenishment_score"),

@@ -665,6 +665,121 @@ def test_scalp_entry_adm_runtime_maps_runtime_context_without_unknown_buckets(tm
     assert "unknown" not in fields["entry_adm_bucket_token"]
 
 
+def test_scalp_entry_adm_row_preserves_live_entry_replay_context_fields():
+    row = mod._base_row(
+        {
+            "stage": "scalp_entry_action_decision_snapshot",
+            "stock_code": "123456",
+            "stock_name": "CTX",
+            "record_id": "RCTX",
+            "emitted_at": "2026-05-18T09:10:00",
+            "fields": {
+                "source_stage": "ai_confirmed",
+                "chosen_action": "BUY_NOW",
+                "ai_score": "78",
+                "scalp_feature_packet_version": "scalp_feature_packet_v2",
+                "ai_input_schema": "entry_screen_hot_v1",
+                "ai_input_contract_mode": "structured_json",
+                "ai_input_source_quality_status": "evaluated",
+                "ai_input_source_quality_reason": "tick_audit_present",
+                "entry_liquidity_score": "84.0",
+                "entry_liquidity_status": "good",
+                "fillability_score": "74.0",
+                "would_fill_now": "true",
+                "top1_bid_notional": "30300000",
+                "top1_ask_notional": "45450000",
+                "top3_bid_notional": "121200000",
+                "top3_ask_notional": "166650000",
+                "quote_depth_present": "true",
+                "quote_fresh_for_entry": "true",
+                "order_flow_pressure_score": "79.5",
+                "entry_order_flow_status": "supportive",
+                "order_flow_pressure_source": "trusted_aggressor",
+                "entry_momentum_score": "88.0",
+                "entry_momentum_status": "accelerating",
+                "entry_context_quality": "complete",
+                "entry_context_missing_features": "",
+                "latest_strength": "151.2",
+                "buy_pressure_10t": "73.5",
+                "net_aggressive_delta_10t": "41",
+                "same_price_buy_absorption": "6",
+                "tick_acceleration_ratio": "2.25",
+                "tick_acceleration_ratio_raw": "2.11",
+                "tick_accel_effective_recent_5tick_seconds": "1.2",
+                "recent_5tick_seconds": "1.2",
+                "prev_5tick_seconds": "2.7",
+                "tick_sample_count": "10",
+                "tick_window_span_sec": "4.2",
+                "tick_aggressor_pressure_usable": "true",
+                "tick_aggressor_trusted_count": "7",
+                "tick_context_quality": "trusted_orderbook_touch",
+                "tick_context_stale": "false",
+                "tick_accel_source": "recent_ticks",
+                "quote_age_source": "ws_snapshot",
+                "curr_vs_micro_vwap_bp": "18.4",
+                "curr_vs_ma5_bp": "9.5",
+                "micro_vwap_available": "true",
+                "ma5_available": "true",
+                "minute_candle_context_quality": "fresh",
+                "minute_candle_window_fresh": "true",
+                "micro_vwap_value": "10010",
+                "ma5_value": "10002",
+                "top1_depth_ratio": "0.91",
+                "top3_depth_ratio": "0.84",
+                "orderbook_total_ratio": "0.92",
+                "microprice_edge_bp": "2.4",
+                "ask_depth_ratio": "0.45",
+                "net_ask_depth": "-1200",
+                "spread_bp": "4.1",
+                "volume_ratio_pct": "220.5",
+                "distance_from_day_high_pct": "-0.35",
+                "intraday_range_pct": "8.2",
+                "large_sell_print_detected": "false",
+                "large_buy_print_detected": "true",
+                "microstructure_reaction_context_status": "ok",
+                "microstructure_reaction_entry_reaction_quality": "supportive",
+                "microstructure_reaction_source_quality": "fresh",
+                "microstructure_reaction_tick_trade_value_recent_sum": "1500000",
+                "microstructure_reaction_tick_trade_value_prev_sum": "700000",
+                "microstructure_reaction_ask_sweep_score": "2",
+                "microstructure_reaction_post_sweep_hold_score": "3",
+                "microstructure_reaction_bid_replenishment_score": "4",
+                "microstructure_reaction_wall_replenishment_risk_score": "1",
+                "microstructure_reaction_vi_proximity_risk": "0",
+            },
+        }
+    )
+
+    assert row["scalp_feature_packet_version"] == "scalp_feature_packet_v2"
+    assert row["ai_input_schema"] == "entry_screen_hot_v1"
+    assert row["ai_input_contract_mode"] == "structured_json"
+    assert row["entry_liquidity_score"] == 84.0
+    assert row["entry_liquidity_status"] == "good"
+    assert row["fillability_score"] == 74.0
+    assert row["would_fill_now"] is True
+    assert row["quote_depth_present"] is True
+    assert row["quote_fresh_for_entry"] is True
+    assert row["order_flow_pressure_score"] == 79.5
+    assert row["entry_order_flow_status"] == "supportive"
+    assert row["order_flow_pressure_source"] == "trusted_aggressor"
+    assert row["entry_momentum_score"] == 88.0
+    assert row["entry_momentum_status"] == "accelerating"
+    assert row["entry_context_quality"] == "complete"
+    assert row["buy_pressure_10t"] == 73.5
+    assert row["tick_acceleration_ratio"] == 2.25
+    assert row["curr_vs_micro_vwap_bp"] == 18.4
+    assert row["top1_depth_ratio"] == 0.91
+    assert row["top3_depth_ratio"] == 0.84
+    assert row["microprice_edge_bp"] == 2.4
+    assert row["tick_aggressor_pressure_usable"] is True
+    assert row["tick_context_stale"] is False
+    assert row["micro_vwap_available"] is True
+    assert row["large_buy_print_detected"] is True
+    assert row["microstructure_reaction_entry_reaction_quality"] == "supportive"
+    assert row["microstructure_reaction_tick_trade_value_recent_sum"] == 1500000.0
+    assert row["microstructure_reaction_bid_replenishment_score"] == 4.0
+
+
 def test_scalp_entry_adm_runtime_ignores_pressure_without_trusted_aggressor_provenance():
     assert (
         runtime_mod._risk_context_bucket(
