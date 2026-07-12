@@ -42,7 +42,14 @@ from src.engine.scalping.rising_missed_one_share_entry import (
 
 
 @pytest.fixture(autouse=True)
-def _clear_scalp_loss_reentry_state(request, monkeypatch):
+def _clear_scalp_loss_reentry_state(request, monkeypatch, tmp_path):
+    manual_control_exclusion_file = tmp_path / "manual_control_excluded_codes.default.txt"
+    manual_control_exclusion_file.write_text("", encoding="utf-8")
+    monkeypatch.delenv("KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_WATCH_EXCLUDED_CODES", raising=False)
+    monkeypatch.setenv("KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES_FILE", str(manual_control_exclusion_file))
+    monkeypatch.delenv("KORSTOCKSCAN_WATCH_EXCLUDED_CODES_FILE", raising=False)
+    monkeypatch.setenv("KORSTOCKSCAN_MANUAL_CONTROL_OPEN_LOSS_EXCLUSION_WINDOW_SEC", "0")
     if request.node.name != "test_scalp_same_symbol_loss_reentry_guard_hydrates_from_pipeline_events":
         monkeypatch.setattr(
             state_handlers,
@@ -1150,17 +1157,17 @@ def test_rising_missed_one_share_entry_uses_budget_cap_with_min_one_share():
         has_open_pending=False,
         already_holding=False,
         min_delta_pct=0.5,
-        current_price=220_000,
+        current_price=420_000,
         scout_budget_cap_krw=DEFAULT_RISING_MISSED_SCOUT_ENTRY_BUDGET_CAP_KRW,
     )
 
     assert budget_capped.allowed is True
-    assert budget_capped.forced_qty == 10
+    assert budget_capped.forced_qty == 20
     assert budget_capped.log_fields["rising_missed_scout_sizing_mode"] == "capped_budget_min_one_share"
-    assert budget_capped.log_fields["rising_missed_scout_budget_cap_krw"] == 200_000
-    assert budget_capped.log_fields["rising_missed_scout_budget_qty"] == 10
+    assert budget_capped.log_fields["rising_missed_scout_budget_cap_krw"] == 400_000
+    assert budget_capped.log_fields["rising_missed_scout_budget_qty"] == 20
     assert budget_capped.log_fields["rising_missed_scout_min_one_share_applied"] is False
-    assert budget_capped.log_fields["rising_missed_one_share_entry_forced_qty"] == 10
+    assert budget_capped.log_fields["rising_missed_one_share_entry_forced_qty"] == 20
     assert min_one_share.allowed is True
     assert min_one_share.forced_qty == 1
     assert min_one_share.log_fields["rising_missed_scout_budget_qty"] == 0
@@ -1414,7 +1421,7 @@ def test_rising_missed_one_share_entry_excludes_upper_limit_proximity():
             "position_tag": "SCANNER",
             "scanner_promotion_id": "scan-0",
             "price_delta_since_first_seen_pct": 2.0,
-            "fluctuation": 25.9,
+            "fluctuation": 21.9,
         },
         strategy="SCALPING",
         position_tag="SCANNER",
@@ -1430,7 +1437,7 @@ def test_rising_missed_one_share_entry_excludes_upper_limit_proximity():
             "position_tag": "SCANNER",
             "scanner_promotion_id": "scan-1",
             "price_delta_since_first_seen_pct": 2.0,
-            "fluctuation": 26.0,
+            "fluctuation": 22.0,
         },
         strategy="SCALPING",
         position_tag="SCANNER",
@@ -1446,9 +1453,9 @@ def test_rising_missed_one_share_entry_excludes_upper_limit_proximity():
     assert decision.reason == BLOCK_UPPER_LIMIT_PROXIMITY
     assert decision.log_fields["rising_missed_class"] == RISING_MISSED_CLASS_SOURCE_QUALITY_EXCLUDED
     assert decision.log_fields["rising_missed_one_share_eligible"] is False
-    assert decision.log_fields["rising_missed_one_share_entry_fluctuation_pct"] == "26.00"
-    assert decision.log_fields["rising_missed_one_share_entry_upper_limit_exclude_pct"] == "26.00"
-    assert decision.log_fields["rising_missed_one_share_entry_upper_limit_gap_to_limit_pct"] == "4.00"
+    assert decision.log_fields["rising_missed_one_share_entry_fluctuation_pct"] == "22.00"
+    assert decision.log_fields["rising_missed_one_share_entry_upper_limit_exclude_pct"] == "22.00"
+    assert decision.log_fields["rising_missed_one_share_entry_upper_limit_gap_to_limit_pct"] == "8.00"
 
 
 def test_upper_limit_submit_hard_block_keeps_default_27_pct_boundary(monkeypatch):
@@ -1991,9 +1998,9 @@ def test_rising_missed_one_share_hook_bypasses_watching_soft_branch(monkeypatch)
     assert submitted_stock["rising_missed_one_share_entry_forced"] is True
     assert submitted_stock["rising_missed_one_share_scout"] is True
     assert submitted_stock["rising_missed_scout_upgrade_pending"] is True
-    assert submitted_stock["forced_entry_qty"] == 20
+    assert submitted_stock["forced_entry_qty"] == 40
     assert submitted_stock["forced_entry_reason"] == FORCED_ENTRY_REASON
-    assert runtime["forced_entry_qty"] == 20
+    assert runtime["forced_entry_qty"] == 40
     assert runtime["forced_entry_reason"] == FORCED_ENTRY_REASON
 
 
@@ -25454,7 +25461,7 @@ def test_shallow_volatility_avg_down_accepts_fresh_shallow_rebound():
         AGGRESSIVE_REVERSAL_ADD_ENABLED=False,
     )
     try:
-        result = scale_in.evaluate_scalping_reversal_add(stock, profit_rate=-0.58, current_ai_score=72, held_sec=55)
+        result = scale_in.evaluate_scalping_reversal_add(stock, profit_rate=-0.58, current_ai_score=72, held_sec=75)
         assert result["should_add"] is True
         assert result["add_type"] == "AVG_DOWN"
         assert result["reason"] == "shallow_volatility_avg_down"
@@ -25503,7 +25510,7 @@ def test_shallow_volatility_avg_down_allows_dedicated_retries_after_cooldown(mon
     )
     monkeypatch.setattr(scale_in.time, "time", lambda: 1_000.0)
     try:
-        result = scale_in.evaluate_scalping_reversal_add(stock, profit_rate=-0.58, current_ai_score=72, held_sec=55)
+        result = scale_in.evaluate_scalping_reversal_add(stock, profit_rate=-0.58, current_ai_score=72, held_sec=75)
         assert result["should_add"] is True
         assert result["reason"] == "shallow_volatility_avg_down"
         assert result["probe"]["shallow_used_count"] == 2
@@ -25612,7 +25619,7 @@ def test_shallow_volatility_avg_down_preempts_aggressive_when_stop_touch_mode_ne
         AGGRESSIVE_REVERSAL_ADD_VWAP_BP_MIN=-12.0,
     )
     try:
-        result = scale_in.evaluate_scalping_reversal_add(stock, profit_rate=-0.58, current_ai_score=72, held_sec=55)
+        result = scale_in.evaluate_scalping_reversal_add(stock, profit_rate=-0.58, current_ai_score=72, held_sec=75)
         assert result["should_add"] is True
         assert result["reason"] == "shallow_volatility_avg_down"
     finally:
@@ -25648,7 +25655,7 @@ def test_shallow_volatility_avg_down_blocks_stale_quote():
         AGGRESSIVE_REVERSAL_ADD_ENABLED=False,
     )
     try:
-        result = scale_in.evaluate_scalping_reversal_add(stock, profit_rate=-0.58, current_ai_score=72, held_sec=55)
+        result = scale_in.evaluate_scalping_reversal_add(stock, profit_rate=-0.58, current_ai_score=72, held_sec=75)
         assert result["should_add"] is False
         assert result["reason"] == "low_broken"
         assert result["shallow_volatility_blocked_reason"].startswith("shallow_volatility_features_stale:")
@@ -26972,8 +26979,8 @@ def test_late_loss_avg_down_retry_uses_reversal_qty_rule(monkeypatch):
 def test_stop_line_touch_mandatory_avg_down_includes_ollix_like_case(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
-        SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=True,
-        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=3,
+        DEEP_RECOVERY_AVG_DOWN_ENABLED=True,
+        DEEP_RECOVERY_AVG_DOWN_MAX_PER_POSITION=1,
     )
     stock = {
         "id": 13961,
@@ -26984,6 +26991,22 @@ def test_stop_line_touch_mandatory_avg_down_includes_ollix_like_case(monkeypatch
         "buy_price": 166_300,
         "buy_qty": 8,
         "actual_order_submitted": True,
+        "last_reversal_features": {
+            "buy_pressure_10t": 82.0,
+            "tick_acceleration_ratio": 1.08,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 1.5,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "tick_context_quality": "live_tick",
+            "tick_context_stale": False,
+            "tick_latest_age_ms": 250,
+            "tick_aggressor_trusted_count": 5,
+            "tick_aggressor_pressure_usable": True,
+            "quote_stale": False,
+            "quote_age_ms": 450,
+        },
         **_fresh_holding_score_fields(70, now_ts=1_000.0),
     }
 
@@ -26994,15 +27017,15 @@ def test_stop_line_touch_mandatory_avg_down_includes_ollix_like_case(monkeypatch
         exit_rule="scalp_soft_stop_pct",
         profit_rate=-3.65,
         peak_profit=0.31,
-        current_ai_score=50,
-        held_sec=1_494,
+        current_ai_score=70,
+        held_sec=180,
         dynamic_stop_pct=-3.00,
     )
 
     assert result["should_retry"] is True
-    assert result["reason"] == "stop_line_touch_mandatory_avg_down"
+    assert result["reason"] == "deep_recovery_avg_down"
     assert result["action"]["add_type"] == "AVG_DOWN"
-    assert result["action"]["reason"] == "stop_line_touch_mandatory_avg_down"
+    assert result["action"]["reason"] == "deep_recovery_avg_down"
     assert result["action"]["stop_line_touched"] is True
     assert result["action"]["stop_line_pct"] == -3.00
     assert result["action"]["stop_line_source"] == "scalp_soft_stop_pct"
@@ -27014,8 +27037,8 @@ def test_stop_line_touch_mandatory_avg_down_includes_ollix_like_case(monkeypatch
         exit_rule="scalp_hard_stop_pct",
         profit_rate=-3.65,
         peak_profit=0.31,
-        current_ai_score=50,
-        held_sec=1_494,
+        current_ai_score=70,
+        held_sec=180,
         dynamic_stop_pct=-2.50,
     )
     assert hard_stop_touch["should_retry"] is True
@@ -27031,15 +27054,15 @@ def test_stop_line_touch_mandatory_avg_down_includes_ollix_like_case(monkeypatch
         exit_rule="scalp_soft_stop_pct",
         profit_rate=-3.65,
         peak_profit=0.31,
-        current_ai_score=50,
-        held_sec=1_494,
+        current_ai_score=70,
+        held_sec=180,
         dynamic_stop_pct=-3.00,
     )
     assert second_allowed["should_retry"] is False
     assert second_allowed["reason"] == "already_used"
     assert second_allowed["used_count"] == 1
     assert second_allowed["max_per_position"] == 1
-    assert second_allowed["configured_max_per_position"] == 3
+    assert second_allowed["configured_max_per_position"] == 1
 
     stock["stop_line_touch_avg_down_count"] = 3
     already_used = state_handlers._evaluate_stop_line_touch_mandatory_avg_down(
@@ -27049,8 +27072,8 @@ def test_stop_line_touch_mandatory_avg_down_includes_ollix_like_case(monkeypatch
         exit_rule="scalp_soft_stop_pct",
         profit_rate=-3.65,
         peak_profit=0.31,
-        current_ai_score=50,
-        held_sec=1_494,
+        current_ai_score=70,
+        held_sec=180,
         dynamic_stop_pct=-3.00,
     )
     assert already_used["should_retry"] is False
@@ -27069,8 +27092,8 @@ def test_stop_line_touch_mandatory_avg_down_includes_ollix_like_case(monkeypatch
         exit_rule="scalp_soft_stop_pct",
         profit_rate=-3.65,
         peak_profit=0.31,
-        current_ai_score=50,
-        held_sec=1_494,
+        current_ai_score=70,
+        held_sec=180,
         dynamic_stop_pct=-3.00,
     )
     assert inferred_first_used["should_retry"] is True
@@ -27083,8 +27106,8 @@ def test_stop_line_touch_mandatory_avg_down_includes_ollix_like_case(monkeypatch
         exit_rule="scalp_soft_stop_pct",
         profit_rate=-3.65,
         peak_profit=0.31,
-        current_ai_score=50,
-        held_sec=1_494,
+        current_ai_score=70,
+        held_sec=180,
         dynamic_stop_pct=-3.00,
     )
     assert inferred_prior_avg_down["should_retry"] is False
@@ -27105,8 +27128,8 @@ def test_stop_line_touch_mandatory_avg_down_includes_ollix_like_case(monkeypatch
         exit_rule="scalp_soft_stop_pct",
         profit_rate=-3.65,
         peak_profit=0.31,
-        current_ai_score=50,
-        held_sec=1_494,
+        current_ai_score=70,
+        held_sec=180,
         dynamic_stop_pct=-3.00,
     )
     assert shallow_prior_avg_down["should_retry"] is True
@@ -27833,8 +27856,8 @@ def test_first_touch_avgdown_decision_gate_context_micro_uses_stock_freshness(mo
 def test_stop_line_touch_mandatory_avg_down_submits_before_grace(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
-        SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=True,
-        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=3,
+        DEEP_RECOVERY_AVG_DOWN_ENABLED=True,
+        DEEP_RECOVERY_AVG_DOWN_MAX_PER_POSITION=1,
     )
     stock = {
         "id": 13961,
@@ -27845,6 +27868,22 @@ def test_stop_line_touch_mandatory_avg_down_submits_before_grace(monkeypatch):
         "buy_price": 166_300,
         "buy_qty": 8,
         "actual_order_submitted": True,
+        "last_reversal_features": {
+            "buy_pressure_10t": 82.0,
+            "tick_acceleration_ratio": 1.08,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 1.5,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "tick_context_quality": "live_tick",
+            "tick_context_stale": False,
+            "tick_latest_age_ms": 250,
+            "tick_aggressor_trusted_count": 5,
+            "tick_aggressor_pressure_usable": True,
+            "quote_stale": False,
+            "quote_age_ms": 450,
+        },
         **_fresh_holding_score_fields(70, now_ts=1_000.0),
     }
     pipeline_events = []
@@ -27878,7 +27917,7 @@ def test_stop_line_touch_mandatory_avg_down_submits_before_grace(monkeypatch):
         profit_rate=-3.65,
         peak_profit=0.31,
         current_ai_score=70,
-        held_sec=1_494,
+        held_sec=180,
         dynamic_stop_pct=-3.00,
         now_ts=1_000.0,
         context_fields={"sell_intercept_context": "soft_stop_touch_before_grace"},
@@ -27888,22 +27927,26 @@ def test_stop_line_touch_mandatory_avg_down_submits_before_grace(monkeypatch):
     assert stock["stop_line_touch_avg_down_used"] is True
     assert stock["stop_line_touch_avg_down_count"] == 1
     assert gate_calls[-1][1]["bypass_scalping_buy_window"] is True
-    assert add_calls[0]["action"]["reason"] == "stop_line_touch_mandatory_avg_down"
+    assert add_calls[0]["action"]["reason"] == "deep_recovery_avg_down"
     assert add_calls[0]["action"]["stop_line_touched"] is True
     by_stage = {stage: fields for stage, fields in pipeline_events}
     assert "stop_line_touch_mandatory_avg_down_candidate" in by_stage
+    assert by_stage["stop_line_touch_mandatory_avg_down_candidate"]["threshold_family"] == "deep_recovery_avg_down"
+    assert by_stage["stop_line_touch_mandatory_avg_down_candidate"]["add_reason"] == "deep_recovery_avg_down"
     assert by_stage["stop_line_touch_mandatory_avg_down_candidate"]["first_touch_avgdown_decision_allowed"] is True
     assert by_stage["stop_line_touch_mandatory_avg_down_candidate"]["first_touch_avgdown_decision_authority"] == (
         "real_scalping_first_touch_avgdown_decision_gate"
     )
     assert by_stage["stop_line_touch_mandatory_avg_down_submitted"]["actual_order_submitted"] is True
+    assert by_stage["stop_line_touch_mandatory_avg_down_submitted"]["add_reason"] == "deep_recovery_avg_down"
 
 
 def test_stop_line_touch_avgdown_blocks_score_50_before_real_submit(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
-        SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=True,
-        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=3,
+        DEEP_RECOVERY_AVG_DOWN_ENABLED=True,
+        DEEP_RECOVERY_AVG_DOWN_PNL_MAX=-3.00,
+        DEEP_RECOVERY_AVG_DOWN_MIN_AI_SCORE=1,
     )
     stock = {
         "id": 14731,
@@ -27914,6 +27957,12 @@ def test_stop_line_touch_avgdown_blocks_score_50_before_real_submit(monkeypatch)
         "buy_price": 37_600,
         "buy_qty": 1,
         "actual_order_submitted": True,
+        "last_reversal_features": _trusted_reversal_features(
+            buy_pressure_10t=82.0,
+            tick_acceleration_ratio=1.08,
+            large_sell_print_detected=False,
+            curr_vs_micro_vwap_bp=-4.0,
+        ),
         **_fresh_holding_score_fields(50, now_ts=1_000.0),
     }
     pipeline_events = []
@@ -27974,8 +28023,8 @@ def test_stop_line_touch_avgdown_blocks_score_50_before_real_submit(monkeypatch)
 def test_stop_line_touch_first_touch_avgdown_decision_blocks_submit(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
-        SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=True,
-        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=3,
+        DEEP_RECOVERY_AVG_DOWN_ENABLED=True,
+        DEEP_RECOVERY_AVG_DOWN_MAX_HOLD_SEC=2_000,
     )
     stock = {
         "id": 15102,
@@ -27986,6 +28035,13 @@ def test_stop_line_touch_first_touch_avgdown_decision_blocks_submit(monkeypatch)
         "buy_price": 18_000,
         "buy_qty": 1,
         "actual_order_submitted": True,
+        "last_reversal_features": _trusted_reversal_features(
+            buy_pressure_10t=82.0,
+            tick_acceleration_ratio=1.08,
+            large_sell_print_detected=False,
+            curr_vs_micro_vwap_bp=-4.0,
+        ),
+        **_fresh_holding_score_fields(66, now_ts=1_000.0),
         "trade_quality_block_history": [
             {"stage": "blocked_strength_momentum", "ts": 995.0, "risk_state": "weak_momentum_context"}
             for _ in range(9)
@@ -28041,8 +28097,9 @@ def test_stop_line_touch_first_touch_avgdown_decision_blocks_submit(monkeypatch)
 def test_stop_line_touch_avgdown_rechecks_after_exit_defer_block(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
-        SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=True,
-        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=3,
+        DEEP_RECOVERY_AVG_DOWN_ENABLED=True,
+        DEEP_RECOVERY_AVG_DOWN_PNL_MAX=-3.00,
+        DEEP_RECOVERY_AVG_DOWN_MAX_HOLD_SEC=1_000,
     )
     stock = {
         "id": 15647,
@@ -28053,6 +28110,12 @@ def test_stop_line_touch_avgdown_rechecks_after_exit_defer_block(monkeypatch):
         "buy_price": 45_000,
         "buy_qty": 1,
         "actual_order_submitted": True,
+        "last_reversal_features": _trusted_reversal_features(
+            buy_pressure_10t=82.0,
+            tick_acceleration_ratio=1.08,
+            large_sell_print_detected=False,
+            curr_vs_micro_vwap_bp=-4.0,
+        ),
         **_fresh_holding_score_fields(72, now_ts=1_000.0),
     }
     pipeline_events = []
@@ -28114,7 +28177,7 @@ def test_stop_line_touch_avgdown_rechecks_after_exit_defer_block(monkeypatch):
         "reason": "liquidity_or_spread_block",
     }
     assert second["submitted"] is True
-    assert add_calls[0]["action"]["reason"] == "stop_line_touch_mandatory_avg_down"
+    assert add_calls[0]["action"]["reason"] == "deep_recovery_avg_down"
     assert "first_touch_avgdown_decision_blocked" not in stock
     blocked_events = [
         fields
@@ -28135,8 +28198,9 @@ def test_stop_line_touch_avgdown_rechecks_after_exit_defer_block(monkeypatch):
 def test_stop_line_touch_avgdown_recheck_blocks_when_exit_defer_inactive(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
-        SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=True,
-        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=3,
+        DEEP_RECOVERY_AVG_DOWN_ENABLED=True,
+        DEEP_RECOVERY_AVG_DOWN_PNL_MAX=-3.00,
+        DEEP_RECOVERY_AVG_DOWN_MAX_HOLD_SEC=1_000,
     )
     stock = {
         "id": 15648,
@@ -28153,6 +28217,12 @@ def test_stop_line_touch_avgdown_recheck_blocks_when_exit_defer_inactive(monkeyp
         "recent_scale_in_exit_candidate_rule": "holding_flow_override_defer_exit",
         "recent_scale_in_exit_candidate_stage": "holding_flow_override_defer_exit",
         "recent_scale_in_exit_candidate_ts": 990.0,
+        "last_reversal_features": _trusted_reversal_features(
+            buy_pressure_10t=82.0,
+            tick_acceleration_ratio=1.08,
+            large_sell_print_detected=False,
+            curr_vs_micro_vwap_bp=1.5,
+        ),
         **_fresh_holding_score_fields(72, now_ts=1_000.0),
     }
     pipeline_events = []
@@ -28208,8 +28278,8 @@ def test_stop_line_touch_avgdown_recheck_blocks_when_exit_defer_inactive(monkeyp
 def test_rising_missed_first_touch_avgdown_uses_current_strength_context(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
-        SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=True,
-        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=3,
+        DEEP_RECOVERY_AVG_DOWN_ENABLED=True,
+        DEEP_RECOVERY_AVG_DOWN_MIN_AI_SCORE=1,
     )
     stock = {
         "id": 15103,
@@ -28224,6 +28294,13 @@ def test_rising_missed_first_touch_avgdown_uses_current_strength_context(monkeyp
         "rising_missed_one_share_entry_forced": True,
         "forced_entry_qty": 1,
         "forced_entry_reason": FORCED_ENTRY_REASON,
+        "last_reversal_features": _trusted_reversal_features(
+            buy_pressure_10t=82.0,
+            tick_acceleration_ratio=1.08,
+            large_sell_print_detected=False,
+            curr_vs_micro_vwap_bp=-4.0,
+        ),
+        **_fresh_holding_score_fields(58, now_ts=1_000.0),
     }
     pipeline_events = []
     monkeypatch.setattr(
@@ -28354,8 +28431,8 @@ def test_pyramid_runtime_prior_blocks_source_quality_gap(monkeypatch, tmp_path):
 def test_stop_line_touch_first_touch_avgdown_logs_missing_runtime_prior(monkeypatch, tmp_path):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
-        SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=True,
-        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=3,
+        DEEP_RECOVERY_AVG_DOWN_ENABLED=True,
+        DEEP_RECOVERY_AVG_DOWN_PNL_MAX=-3.00,
     )
     monkeypatch.setattr(state_handlers, "_FIRST_TOUCH_RUNTIME_PRIOR_REPORT_DIR", tmp_path)
     stock = {
@@ -28367,6 +28444,12 @@ def test_stop_line_touch_first_touch_avgdown_logs_missing_runtime_prior(monkeypa
         "buy_price": 10_000,
         "buy_qty": 1,
         "actual_order_submitted": True,
+        "last_reversal_features": _trusted_reversal_features(
+            buy_pressure_10t=82.0,
+            tick_acceleration_ratio=1.08,
+            large_sell_print_detected=False,
+            curr_vs_micro_vwap_bp=1.5,
+        ),
         **_fresh_holding_score_fields(65, now_ts=1_000.0),
     }
     pipeline_events = []
@@ -28551,8 +28634,10 @@ def test_hard_stop_qty_budget_block_does_not_auto_exclude_manual_control(monkeyp
 def test_soft_stop_line_touch_avg_down_defer_waits_for_extra_dip(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
-        SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=True,
-        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=3,
+        DEEP_RECOVERY_AVG_DOWN_ENABLED=True,
+        DEEP_RECOVERY_AVG_DOWN_PNL_MAX=-3.00,
+        DEEP_RECOVERY_AVG_DOWN_MAX_HOLD_SEC=2_000,
+        DEEP_RECOVERY_AVG_DOWN_MIN_AI_SCORE=1,
         SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_ENABLED=True,
         SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_MAX_SEC=3,
         SCALP_STOP_LINE_TOUCH_AVG_DOWN_EXTRA_DIP_PCT=0.20,
@@ -28567,6 +28652,12 @@ def test_soft_stop_line_touch_avg_down_defer_waits_for_extra_dip(monkeypatch):
         "buy_price": 9_880,
         "buy_qty": 1,
         "actual_order_submitted": True,
+        "last_reversal_features": _trusted_reversal_features(
+            buy_pressure_10t=82.0,
+            tick_acceleration_ratio=1.08,
+            large_sell_print_detected=False,
+            curr_vs_micro_vwap_bp=1.5,
+        ),
         **_fresh_holding_score_fields(62, now_ts=1_000.0),
     }
     pipeline_events = []
@@ -28648,7 +28739,7 @@ def test_soft_stop_line_touch_avg_down_defer_waits_for_extra_dip(monkeypatch):
     assert second["deferred"] is True
     assert second["reason"] == "soft_stop_price_improvement_waiting"
     assert third["submitted"] is True
-    assert add_calls[0]["action"]["reason"] == "stop_line_touch_mandatory_avg_down"
+    assert add_calls[0]["action"]["reason"] == "deep_recovery_avg_down"
     assert "stop_line_touch_avg_down_defer_started_at" not in stock
     by_stage = {stage: fields for stage, fields in pipeline_events}
     deferred = by_stage["stop_line_touch_avg_down_price_improvement_deferred"]
@@ -28662,8 +28753,10 @@ def test_soft_stop_line_touch_avg_down_defer_waits_for_extra_dip(monkeypatch):
 def test_hard_stop_line_touch_avg_down_forbidden_before_real_submit(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
-        SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=True,
-        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=3,
+        DEEP_RECOVERY_AVG_DOWN_ENABLED=True,
+        DEEP_RECOVERY_AVG_DOWN_PNL_MAX=-3.00,
+        DEEP_RECOVERY_AVG_DOWN_MAX_HOLD_SEC=2_000,
+        DEEP_RECOVERY_AVG_DOWN_MIN_AI_SCORE=1,
         SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_ENABLED=True,
         SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_MAX_SEC=3,
         SCALP_STOP_LINE_TOUCH_AVG_DOWN_EXTRA_DIP_PCT=0.20,
@@ -28678,6 +28771,12 @@ def test_hard_stop_line_touch_avg_down_forbidden_before_real_submit(monkeypatch)
         "buy_price": 9_880,
         "buy_qty": 1,
         "actual_order_submitted": True,
+        "last_reversal_features": _trusted_reversal_features(
+            buy_pressure_10t=82.0,
+            tick_acceleration_ratio=1.08,
+            large_sell_print_detected=False,
+            curr_vs_micro_vwap_bp=1.5,
+        ),
         **_fresh_holding_score_fields(62, now_ts=1_000.0),
     }
     pipeline_events = []
@@ -28744,8 +28843,10 @@ def test_hard_stop_line_touch_avg_down_forbidden_before_real_submit(monkeypatch)
 def test_soft_stop_line_touch_avg_down_defer_submits_after_sparse_loop(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
-        SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=True,
-        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=3,
+        DEEP_RECOVERY_AVG_DOWN_ENABLED=True,
+        DEEP_RECOVERY_AVG_DOWN_PNL_MAX=-3.00,
+        DEEP_RECOVERY_AVG_DOWN_MAX_HOLD_SEC=2_000,
+        DEEP_RECOVERY_AVG_DOWN_MIN_AI_SCORE=1,
         SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_ENABLED=True,
         SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_MAX_SEC=3,
         SCALP_STOP_LINE_TOUCH_AVG_DOWN_EXTRA_DIP_PCT=0.20,
@@ -28760,6 +28861,12 @@ def test_soft_stop_line_touch_avg_down_defer_submits_after_sparse_loop(monkeypat
         "buy_price": 9_880,
         "buy_qty": 1,
         "actual_order_submitted": True,
+        "last_reversal_features": _trusted_reversal_features(
+            buy_pressure_10t=82.0,
+            tick_acceleration_ratio=1.08,
+            large_sell_print_detected=False,
+            curr_vs_micro_vwap_bp=1.5,
+        ),
         **_fresh_holding_score_fields(62, now_ts=1_000.0),
     }
     pipeline_events = []
@@ -28817,7 +28924,7 @@ def test_soft_stop_line_touch_avg_down_defer_submits_after_sparse_loop(monkeypat
 
     assert first["deferred"] is True
     assert sparse_retouch["submitted"] is True
-    assert add_calls[0]["action"]["reason"] == "stop_line_touch_mandatory_avg_down"
+    assert add_calls[0]["action"]["reason"] == "deep_recovery_avg_down"
     assert "stop_line_touch_avg_down_defer_started_at" not in stock
     deferred_events = [
         fields
@@ -28832,8 +28939,10 @@ def test_soft_stop_line_touch_avg_down_defer_submits_after_sparse_loop(monkeypat
 def test_soft_stop_line_touch_avg_down_defer_clears_when_stop_line_recovers(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
-        SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=True,
-        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=3,
+        DEEP_RECOVERY_AVG_DOWN_ENABLED=True,
+        DEEP_RECOVERY_AVG_DOWN_PNL_MAX=-3.00,
+        DEEP_RECOVERY_AVG_DOWN_MAX_HOLD_SEC=2_000,
+        DEEP_RECOVERY_AVG_DOWN_MIN_AI_SCORE=1,
         SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_ENABLED=True,
         SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_MAX_SEC=3,
         SCALP_STOP_LINE_TOUCH_AVG_DOWN_EXTRA_DIP_PCT=0.20,
@@ -28848,6 +28957,12 @@ def test_soft_stop_line_touch_avg_down_defer_clears_when_stop_line_recovers(monk
         "buy_price": 9_880,
         "buy_qty": 1,
         "actual_order_submitted": True,
+        "last_reversal_features": _trusted_reversal_features(
+            buy_pressure_10t=82.0,
+            tick_acceleration_ratio=1.08,
+            large_sell_print_detected=False,
+            curr_vs_micro_vwap_bp=1.5,
+        ),
     }
     monkeypatch.setattr(
         state_handlers,
@@ -28960,8 +29075,7 @@ def test_stop_line_touch_mandatory_avg_down_logs_not_eligible(monkeypatch):
 def test_stop_line_touch_mandatory_avg_down_waits_on_rest_quote_only_recovery(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
-        SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=True,
-        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=3,
+        DEEP_RECOVERY_AVG_DOWN_ENABLED=True,
     )
     stock = {
         "id": 14720,
@@ -28973,6 +29087,12 @@ def test_stop_line_touch_mandatory_avg_down_waits_on_rest_quote_only_recovery(mo
         "buy_qty": 7,
         "actual_order_submitted": True,
         "holding_rest_quote_only_recovery": True,
+        "last_reversal_features": _trusted_reversal_features(
+            buy_pressure_10t=82.0,
+            tick_acceleration_ratio=1.08,
+            large_sell_print_detected=False,
+            curr_vs_micro_vwap_bp=1.5,
+        ),
     }
     pipeline_events = []
     add_calls = []
@@ -29050,8 +29170,8 @@ def test_stop_line_touch_mandatory_avg_down_waits_on_rest_quote_only_recovery(mo
 def test_stop_line_touch_mandatory_avg_down_uses_fresh_rest_orderbook_confirmation(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
-        SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=True,
-        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=3,
+        DEEP_RECOVERY_AVG_DOWN_ENABLED=True,
+        DEEP_RECOVERY_AVG_DOWN_MAX_HOLD_SEC=4_000,
     )
     stock = {
         "id": 14733,
@@ -29063,6 +29183,12 @@ def test_stop_line_touch_mandatory_avg_down_uses_fresh_rest_orderbook_confirmati
         "buy_qty": 30,
         "actual_order_submitted": True,
         "holding_rest_quote_only_recovery": True,
+        "last_reversal_features": _trusted_reversal_features(
+            buy_pressure_10t=82.0,
+            tick_acceleration_ratio=1.08,
+            large_sell_print_detected=False,
+            curr_vs_micro_vwap_bp=1.5,
+        ),
         **_fresh_holding_score_fields(70, now_ts=1_000.0),
     }
     pipeline_events = []

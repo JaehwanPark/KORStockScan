@@ -1618,7 +1618,7 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "first_touch_avgdown_decision_reason",
             "first_touch_avgdown_decision_authority",
         ),
-        decision_authority="real_scalping_stop_line_touch_intercept",
+        decision_authority="real_scalping_deep_recovery_intercept",
     ),
     "stop_line_touch_mandatory_avg_down_candidate": StageContract(
         required_fields=(
@@ -1647,7 +1647,7 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "first_touch_avgdown_decision_reason",
             "first_touch_avgdown_decision_authority",
         ),
-        decision_authority="real_scalping_stop_line_touch_intercept",
+        decision_authority="real_scalping_deep_recovery_intercept",
     ),
     "stop_line_touch_mandatory_avg_down_submitted": StageContract(
         required_fields=(
@@ -1678,7 +1678,7 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "ord_no",
             "retry_count",
         ),
-        decision_authority="real_scalping_stop_line_touch_intercept",
+        decision_authority="real_scalping_deep_recovery_intercept",
     ),
     "scale_in_price_resolved": StageContract(
         required_fields=("price_source", "virtual_budget_override", "budget_authority", *ORDERBOOK_MICRO_FIELDS),

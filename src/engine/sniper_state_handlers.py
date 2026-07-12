@@ -200,11 +200,13 @@ ACTIVE_TARGETS = None
 WS_MANAGER = None
 _GREENFIELD_TELEGRAM_KEYS: set[str] = set()
 _STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON = "stop_line_touch_mandatory_avg_down"
+_DEEP_RECOVERY_AVG_DOWN_REASON = "deep_recovery_avg_down"
 _SHALLOW_VOLATILITY_AVG_DOWN_REASON = "shallow_volatility_avg_down"
 _REAL_AVG_DOWN_REVERSAL_REASONS = {
     "reversal_add_ok",
     "aggressive_reversal_add_ok",
     _SHALLOW_VOLATILITY_AVG_DOWN_REASON,
+    _DEEP_RECOVERY_AVG_DOWN_REASON,
 }
 _ENTRY_OPPORTUNITY_RECHECK_STATE = EntryOpportunityRecheckState()
 _FIRST_TOUCH_RUNTIME_PRIOR_REPORT_DIR = (
@@ -2298,7 +2300,7 @@ def _evaluate_stop_line_touch_mandatory_avg_down(
     held_sec: int,
     dynamic_stop_pct: float,
 ) -> dict:
-    if not _rule_bool("SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED", False):
+    if not _rule_bool("DEEP_RECOVERY_AVG_DOWN_ENABLED", True):
         return {"should_retry": False, "reason": "disabled"}
     if not isinstance(stock, dict) or not _is_scalp_strategy(strategy):
         return {"should_retry": False, "reason": "not_real_scalping"}
@@ -2327,10 +2329,74 @@ def _evaluate_stop_line_touch_mandatory_avg_down(
             "stop_line_pct": stop_pct,
         }
 
-    configured_max_per_position = max(0, _rule_int("SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION", 2))
-    # Stop-line-touch mandatory AVG_DOWN is a one-shot defensive intercept for all SCALPING positions.
-    # The broader late-loss retry path keeps its configured max in _evaluate_late_loss_avg_down_retry.
-    max_per_position = min(configured_max_per_position, 1) if configured_max_per_position > 0 else 0
+    pnl_min = _rule_float("DEEP_RECOVERY_AVG_DOWN_PNL_MIN", -4.0)
+    pnl_max = _rule_float("DEEP_RECOVERY_AVG_DOWN_PNL_MAX", -3.25)
+    if not (pnl_min <= current_profit <= pnl_max):
+        return {
+            "should_retry": False,
+            "reason": "deep_recovery_pnl_out_of_range",
+            "profit_rate": current_profit,
+            "pnl_min": pnl_min,
+            "pnl_max": pnl_max,
+        }
+    min_hold = max(0, _rule_int("DEEP_RECOVERY_AVG_DOWN_MIN_HOLD_SEC", 120))
+    max_hold = max(min_hold, _rule_int("DEEP_RECOVERY_AVG_DOWN_MAX_HOLD_SEC", 480))
+    if not (min_hold <= held_sec <= max_hold):
+        return {
+            "should_retry": False,
+            "reason": "deep_recovery_hold_sec_out_of_range",
+            "held_sec": held_sec,
+            "min_hold_sec": min_hold,
+            "max_hold_sec": max_hold,
+        }
+    min_ai = _rule_float("DEEP_RECOVERY_AVG_DOWN_MIN_AI_SCORE", 60.0)
+    max_ai = _rule_float("DEEP_RECOVERY_AVG_DOWN_MAX_AI_SCORE", 74.0)
+    if not (min_ai <= current_ai_score <= max_ai):
+        return {
+            "should_retry": False,
+            "reason": "deep_recovery_ai_score_out_of_range",
+            "current_ai_score": current_ai_score,
+            "min_ai_score": min_ai,
+            "max_ai_score": max_ai,
+        }
+    feat = stock.get("last_reversal_features", {}) if isinstance(stock, dict) else {}
+    feature_quality = reversal_feature_source_quality(feat if isinstance(feat, dict) else {})
+    if not feat:
+        return {"should_retry": False, "reason": "deep_recovery_features_missing"}
+    if feature_quality.get("reversal_feature_stale"):
+        return {
+            "should_retry": False,
+            "reason": "deep_recovery_features_stale:" + str(feature_quality.get("reversal_feature_stale_reason")),
+            **feature_quality,
+        }
+    quote_age_raw = feature_quality.get("quote_age_ms")
+    quote_age_ms = None if quote_age_raw == "-" else _safe_float(quote_age_raw, None)
+    max_quote_age = _rule_float("DEEP_RECOVERY_AVG_DOWN_MAX_QUOTE_AGE_MS", 1500.0)
+    if quote_age_ms is None or quote_age_ms > max_quote_age:
+        return {
+            "should_retry": False,
+            "reason": "deep_recovery_quote_age_missing_or_stale",
+            "quote_age_ms": quote_age_raw,
+            "max_quote_age_ms": max_quote_age,
+        }
+    buy_pressure = _safe_float(feat.get("buy_pressure_10t"), 0.0)
+    tick_accel = _safe_float(feat.get("tick_acceleration_ratio"), 0.0)
+    micro_vwap_bp = _safe_float(feat.get("curr_vs_micro_vwap_bp"), -999.0)
+    large_sell = bool(feat.get("large_sell_print_detected", True))
+    min_buy_pressure = _rule_float("DEEP_RECOVERY_AVG_DOWN_MIN_BUY_PRESSURE", 70.0)
+    min_tick_accel = _rule_float("DEEP_RECOVERY_AVG_DOWN_MIN_TICK_ACCEL", 1.0)
+    min_micro_vwap = _rule_float("DEEP_RECOVERY_AVG_DOWN_MIN_MICRO_VWAP_BP", -5.0)
+    if buy_pressure < min_buy_pressure:
+        return {"should_retry": False, "reason": "deep_recovery_buy_pressure_not_met", "buy_pressure_10t": buy_pressure}
+    if tick_accel < min_tick_accel:
+        return {"should_retry": False, "reason": "deep_recovery_tick_accel_not_met", "tick_acceleration_ratio": tick_accel}
+    if large_sell:
+        return {"should_retry": False, "reason": "deep_recovery_large_sell_detected"}
+    if micro_vwap_bp < min_micro_vwap:
+        return {"should_retry": False, "reason": "deep_recovery_micro_vwap_not_met", "curr_vs_micro_vwap_bp": micro_vwap_bp}
+
+    configured_max_per_position = max(0, _rule_int("DEEP_RECOVERY_AVG_DOWN_MAX_PER_POSITION", 1))
+    max_per_position = configured_max_per_position
     used_count = _defensive_avg_down_used_count(stock)
     if max_per_position <= 0:
         return {"should_retry": False, "reason": "max_per_position_zero"}
@@ -2345,21 +2411,31 @@ def _evaluate_stop_line_touch_mandatory_avg_down(
 
     return {
         "should_retry": True,
-        "reason": _STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON,
+        "reason": _DEEP_RECOVERY_AVG_DOWN_REASON,
         "add_type": "AVG_DOWN",
+        "pnl_min": pnl_min,
+        "pnl_max": pnl_max,
+        "min_hold_sec": min_hold,
+        "max_hold_sec": max_hold,
         "profit_rate": current_profit,
         "peak_profit": peak_profit,
         "stop_line_pct": stop_pct,
         "current_ai_score": current_ai_score,
         "held_sec": held_sec,
+        "buy_pressure_10t": buy_pressure,
+        "tick_acceleration_ratio": tick_accel,
+        "curr_vs_micro_vwap_bp": micro_vwap_bp,
+        "quote_age_ms": quote_age_ms,
+        "post_add_take_profit_pct": _rule_float("DEEP_RECOVERY_AVG_DOWN_POST_ADD_TAKE_PROFIT_PCT", 0.30),
+        "emergency_pct": _rule_float("DEEP_RECOVERY_AVG_DOWN_EMERGENCY_PCT", -5.50),
         "used_count": used_count,
         "max_per_position": max_per_position,
         "configured_max_per_position": configured_max_per_position,
         "action": {
             "should_add": True,
             "add_type": "AVG_DOWN",
-            "reason": _STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON,
-            "source": "stop_line_touch_mandatory_avg_down",
+            "reason": _DEEP_RECOVERY_AVG_DOWN_REASON,
+            "source": "deep_recovery_avg_down",
             "profit_rate": current_profit,
             "peak_profit": peak_profit,
             "current_ai_score": current_ai_score,
@@ -3442,13 +3518,13 @@ def _attempt_stop_line_touch_mandatory_avg_down(
                 stock,
                 code,
                 "stop_line_touch_mandatory_avg_down_not_eligible",
-                threshold_family="stop_line_touch_mandatory_avg_down",
-                decision_source="STOP_LINE_TOUCH_MANDATORY_AVG_DOWN",
-                decision_authority="real_scalping_stop_line_touch_intercept",
+                threshold_family="deep_recovery_avg_down",
+                decision_source="DEEP_RECOVERY_AVG_DOWN",
+                decision_authority="real_scalping_deep_recovery_intercept",
                 metric_role="bounded_tunable",
                 window_policy="same_day_intraday_runtime",
-                sample_floor="not_applicable_operator_override",
-                primary_decision_metric="stop_line_touch",
+                sample_floor="postclose_rolling_real_deep_recovery_required",
+                primary_decision_metric="post_add_mfe_30m_pct",
                 source_quality_gate="real_holding_stop_line_touch_and_scale_in_guards_present",
                 runtime_effect=True,
                 allowed_runtime_apply=True,
@@ -3467,7 +3543,8 @@ def _attempt_stop_line_touch_mandatory_avg_down(
                 gate_reason=reason,
                 block_reason=reason,
                 add_type="AVG_DOWN",
-                add_reason=_STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON,
+                add_reason=_DEEP_RECOVERY_AVG_DOWN_REASON,
+                replaced_legacy_add_reason=_STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON,
                 actual_order_submitted=False,
                 broker_order_forbidden=True,
                 **context_fields,
@@ -3517,13 +3594,13 @@ def _attempt_stop_line_touch_mandatory_avg_down(
         bypass_scale_in_cooldown=True,
     )
     retry_common_fields = {
-        "threshold_family": "stop_line_touch_mandatory_avg_down",
-        "decision_source": "STOP_LINE_TOUCH_MANDATORY_AVG_DOWN",
-        "decision_authority": "real_scalping_stop_line_touch_intercept",
+        "threshold_family": "deep_recovery_avg_down",
+        "decision_source": "DEEP_RECOVERY_AVG_DOWN",
+        "decision_authority": "real_scalping_deep_recovery_intercept",
         "metric_role": "bounded_tunable",
         "window_policy": "same_day_intraday_runtime",
-        "sample_floor": "not_applicable_operator_override",
-        "primary_decision_metric": "stop_line_touch",
+        "sample_floor": "postclose_rolling_real_deep_recovery_required",
+        "primary_decision_metric": "post_add_mfe_30m_pct",
         "source_quality_gate": "real_holding_stop_line_touch_and_scale_in_guards_present",
         "runtime_effect": True,
         "allowed_runtime_apply": True,
@@ -3541,7 +3618,10 @@ def _attempt_stop_line_touch_mandatory_avg_down(
         "gate_allowed": bool(retry_gate.get("allowed")),
         "gate_reason": retry_gate.get("reason", "-"),
         "add_type": "AVG_DOWN",
-        "add_reason": _STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON,
+        "add_reason": _DEEP_RECOVERY_AVG_DOWN_REASON,
+        "replaced_legacy_add_reason": _STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON,
+        "deep_recovery_post_add_take_profit_pct": stop_touch_avg_down.get("post_add_take_profit_pct"),
+        "deep_recovery_emergency_pct": stop_touch_avg_down.get("emergency_pct"),
         "actual_order_submitted": False,
         "broker_order_forbidden": False,
         **(context_fields or {}),
@@ -16862,6 +16942,7 @@ def _retry_holding_ai_submit_authority_before_block(
         "peak_profit": (stock or {}).get("peak_profit"),
         "buy_qty": (stock or {}).get("buy_qty"),
         "position_tag": (stock or {}).get("position_tag"),
+        "entry_time_context": _build_entry_time_context_from_stock(stock),
         "prior_score": (stock or {}).get("holding_score_raw", current_ai_score),
         "prior_effective_score": (stock or {}).get("holding_score_effective", current_ai_score),
         "prior_score_source": (stock or {}).get("holding_score_source")
@@ -24312,6 +24393,27 @@ def _build_ai_ops_log_fields(
         "tick_window_span_sec",
         "quote_age_ms",
         "quote_stale_threshold_ms",
+        "top1_bid_notional",
+        "top1_ask_notional",
+        "top3_bid_notional",
+        "top3_ask_notional",
+        "latest_strength",
+        "spread_bp",
+        "top1_depth_ratio",
+        "top3_depth_ratio",
+        "orderbook_total_ratio",
+        "ask_depth_ratio",
+        "net_ask_depth",
+        "microprice_edge_bp",
+        "net_aggressive_delta_10t",
+        "same_price_buy_absorption",
+        "distance_from_day_high_pct",
+        "intraday_range_pct",
+        "volume_ratio_pct",
+        "micro_vwap_value",
+        "ma5_value",
+        "microstructure_reaction_tick_trade_value_recent_sum",
+        "microstructure_reaction_tick_trade_value_prev_sum",
         "microstructure_reaction_ask_sweep_score",
         "microstructure_reaction_post_sweep_hold_score",
         "microstructure_reaction_bid_replenishment_score",
@@ -24330,6 +24432,10 @@ def _build_ai_ops_log_fields(
         "recent_5tick_seconds",
         "prev_5tick_seconds",
         "tick_acceleration_ratio",
+        "entry_liquidity_score",
+        "fillability_score",
+        "order_flow_pressure_score",
+        "entry_momentum_score",
         "buy_pressure_10t",
         "curr_vs_micro_vwap_bp",
         "curr_vs_ma5_bp",
@@ -24345,6 +24451,12 @@ def _build_ai_ops_log_fields(
         "tick_accel_source",
         "tick_context_quality",
         "quote_age_source",
+        "entry_liquidity_status",
+        "entry_order_flow_status",
+        "order_flow_pressure_source",
+        "entry_momentum_status",
+        "entry_context_quality",
+        "entry_context_missing_features",
         "ai_input_source_quality_status",
         "ai_input_source_quality_reason",
         "pre_ai_ws_snapshot_refresh_reason",
@@ -24363,6 +24475,11 @@ def _build_ai_ops_log_fields(
         "tick_context_stale",
         "quote_stale",
         "tick_aggressor_pressure_usable",
+        "would_fill_now",
+        "quote_depth_present",
+        "quote_fresh_for_entry",
+        "large_sell_print_detected",
+        "large_buy_print_detected",
     ):
         if field_name in payload:
             raw_value = payload.get(field_name)
@@ -24516,6 +24633,10 @@ def _build_tick_source_quality_log_fields(feature_probe):
         "tick_window_span_sec",
         "quote_age_ms",
         "minute_candle_latest_age_ms",
+        "top1_bid_notional",
+        "top1_ask_notional",
+        "top3_bid_notional",
+        "top3_ask_notional",
         "microstructure_reaction_ask_sweep_score",
         "microstructure_reaction_post_sweep_hold_score",
         "microstructure_reaction_bid_replenishment_score",
@@ -24533,6 +24654,12 @@ def _build_tick_source_quality_log_fields(feature_probe):
         "tick_accel_source",
         "tick_context_quality",
         "quote_age_source",
+        "entry_liquidity_status",
+        "entry_order_flow_status",
+        "order_flow_pressure_source",
+        "entry_momentum_status",
+        "entry_context_quality",
+        "entry_context_missing_features",
         "minute_candle_context_quality",
         "microstructure_reaction_context_version",
         "microstructure_reaction_context_status",
@@ -24548,6 +24675,11 @@ def _build_tick_source_quality_log_fields(feature_probe):
         "tick_aggressor_pressure_usable",
         "micro_vwap_available",
         "minute_candle_window_fresh",
+        "would_fill_now",
+        "quote_depth_present",
+        "quote_fresh_for_entry",
+        "large_sell_print_detected",
+        "large_buy_print_detected",
     ):
         if field_name in payload:
             raw_value = payload.get(field_name)
@@ -24566,6 +24698,10 @@ def _build_tick_source_quality_log_fields(feature_probe):
         "recent_5tick_seconds",
         "prev_5tick_seconds",
         "tick_acceleration_ratio",
+        "entry_liquidity_score",
+        "fillability_score",
+        "order_flow_pressure_score",
+        "entry_momentum_score",
         "buy_pressure_10t",
         "curr_vs_micro_vwap_bp",
         "curr_vs_ma5_bp",
@@ -24579,6 +24715,67 @@ def _build_tick_source_quality_log_fields(feature_probe):
     if out:
         out["tick_source_quality_fields_sent"] = True
     return out
+
+
+def _build_entry_time_context_from_stock(stock: dict | None) -> dict:
+    if not isinstance(stock, dict):
+        return {}
+    source_quality = (
+        stock.get("last_watching_ai_source_quality_fields")
+        if isinstance(stock.get("last_watching_ai_source_quality_fields"), dict)
+        else {}
+    )
+    feature_probe = (
+        stock.get("last_watching_ai_feature_probe")
+        if isinstance(stock.get("last_watching_ai_feature_probe"), dict)
+        else {}
+    )
+    keys = (
+        "entry_liquidity_score",
+        "entry_liquidity_status",
+        "fillability_score",
+        "would_fill_now",
+        "quote_depth_present",
+        "quote_fresh_for_entry",
+        "order_flow_pressure_score",
+        "entry_order_flow_status",
+        "order_flow_pressure_source",
+        "entry_momentum_score",
+        "entry_momentum_status",
+        "entry_context_quality",
+        "entry_context_missing_features",
+        "ai_input_source_quality_status",
+        "ai_input_source_quality_reason",
+        "tick_context_quality",
+        "tick_context_stale",
+        "quote_age_ms",
+        "quote_stale",
+        "buy_pressure_10t",
+        "net_aggressive_delta_10t",
+        "tick_acceleration_ratio",
+        "curr_vs_micro_vwap_bp",
+        "micro_vwap_available",
+        "minute_candle_window_fresh",
+        "top3_depth_ratio",
+        "spread_bp",
+    )
+    context = {}
+    for key in keys:
+        for source in (source_quality, feature_probe, stock):
+            if isinstance(source, dict) and key in source:
+                value = source.get(key)
+                if value is not None and str(value).strip() not in {"", "-", "None", "none", "null"}:
+                    context[key] = value
+                    break
+    observed_at = _safe_float(stock.get("last_watching_ai_feature_probe_at"), 0.0)
+    if observed_at > 0:
+        context["observed_at"] = observed_at
+        context["age_sec"] = f"{max(0.0, time.time() - observed_at):.3f}"
+    if context:
+        context["source"] = "last_watching_ai_source_quality_fields"
+        context["context_role"] = "entry_time_provenance_only"
+        context["current_flow_evidence"] = False
+    return context
 
 
 def _build_observation_contract_fields(metric_role: str) -> dict:
@@ -26342,6 +26539,7 @@ def _evaluate_holding_flow_override(
         "held_sec": held_sec,
         "current_ai_score": current_ai_score,
         "worsen_pct": worsen_pct,
+        "entry_time_context": _build_entry_time_context_from_stock(stock),
         **holding_flow_micro_estimator_fields,
     }
     holding_flow_metadata = {
@@ -38044,6 +38242,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                             "buy_qty": stock.get("buy_qty"),
                             "position_tag": stock.get("position_tag"),
                             "entry_source": stock.get("entry_source") or stock.get("source_event_stage") or "-",
+                            "entry_time_context": _build_entry_time_context_from_stock(stock),
                             "avg_down_count": stock.get("avg_down_count", 0),
                             "pyramid_count": stock.get("pyramid_count", 0),
                             "prior_score": stock.get("holding_score_raw", current_ai_score),
@@ -41486,12 +41685,12 @@ def _rollback_unfilled_defensive_avg_down_usage(stock, reason: str | None = None
 
     rollback_fields: dict[str, object] = {}
     rollback_kind = None
-    if add_reason == _STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON:
+    if add_reason in {_STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON, _DEEP_RECOVERY_AVG_DOWN_REASON}:
         current_count = _safe_int(stock.get('stop_line_touch_avg_down_count'), 0)
         if current_count <= 0:
             return False
         next_count = max(0, current_count - 1)
-        rollback_kind = 'stop_line_touch_mandatory_avg_down'
+        rollback_kind = 'deep_recovery_avg_down' if add_reason == _DEEP_RECOVERY_AVG_DOWN_REASON else 'stop_line_touch_mandatory_avg_down'
         rollback_fields['stop_line_touch_avg_down_count'] = next_count
         if next_count <= 0:
             rollback_fields['stop_line_touch_avg_down_used'] = False
@@ -42397,6 +42596,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         if add_type == "AVG_DOWN"
         and add_reason in {
             _STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON,
+            _DEEP_RECOVERY_AVG_DOWN_REASON,
             "late_loss_avg_down_retry",
         }
         else None
@@ -42599,6 +42799,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         and add_reason
         in {
             _STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON,
+            _DEEP_RECOVERY_AVG_DOWN_REASON,
             "late_loss_avg_down_retry",
         }
     )

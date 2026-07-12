@@ -35,6 +35,7 @@ KRX_REGULAR_CLOSE = datetime_time(hour=15, minute=30)
 _DEFENSIVE_BUY_TIME_BLOCK_OVERRIDE_REASONS = frozenset(
     {
         "stop_line_touch_mandatory_avg_down",
+        "deep_recovery_avg_down",
         "late_loss_avg_down_retry",
     }
 )

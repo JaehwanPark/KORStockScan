@@ -357,6 +357,20 @@ class TradingConfig:
     SCALP_LATE_LOSS_AVG_DOWN_MIN_HOLD_SEC: int = 30
     SCALP_LATE_LOSS_AVG_DOWN_MIN_AI_SCORE: int = 60
     SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION: int = 3
+    DEEP_RECOVERY_AVG_DOWN_ENABLED: bool = True
+    DEEP_RECOVERY_AVG_DOWN_PNL_MIN: float = -4.00
+    DEEP_RECOVERY_AVG_DOWN_PNL_MAX: float = -3.25
+    DEEP_RECOVERY_AVG_DOWN_MIN_HOLD_SEC: int = 120
+    DEEP_RECOVERY_AVG_DOWN_MAX_HOLD_SEC: int = 480
+    DEEP_RECOVERY_AVG_DOWN_MIN_AI_SCORE: int = 60
+    DEEP_RECOVERY_AVG_DOWN_MAX_AI_SCORE: int = 74
+    DEEP_RECOVERY_AVG_DOWN_MIN_BUY_PRESSURE: float = 70.0
+    DEEP_RECOVERY_AVG_DOWN_MIN_TICK_ACCEL: float = 1.0
+    DEEP_RECOVERY_AVG_DOWN_MIN_MICRO_VWAP_BP: float = -5.0
+    DEEP_RECOVERY_AVG_DOWN_MAX_QUOTE_AGE_MS: float = 1500.0
+    DEEP_RECOVERY_AVG_DOWN_MAX_PER_POSITION: int = 1
+    DEEP_RECOVERY_AVG_DOWN_POST_ADD_TAKE_PROFIT_PCT: float = 0.30
+    DEEP_RECOVERY_AVG_DOWN_EMERGENCY_PCT: float = -5.50
     SCALP_PRESET_HARD_STOP_PCT: float = -0.7  # SCALP_PRESET_TP 기본 손절선
     SCALP_PRESET_HARD_STOP_GRACE_SEC: int = 0  # SCALP_PRESET_TP 공통 유예시간(초)
     SCALP_PRESET_HARD_STOP_EMERGENCY_PCT: float = -1.2  # 유예 중에도 강제 청산하는 비상 손절선
@@ -642,16 +656,18 @@ class TradingConfig:
     AGGRESSIVE_REVERSAL_ADD_VWAP_BP_MIN: float = -12.0
     AGGRESSIVE_REVERSAL_ADD_SIZE_RATIO: float = 0.50
     SHALLOW_VOLATILITY_AVG_DOWN_ENABLED: bool = True  # 얕은 손실+반등+매수세 회복+fresh 데이터 AVG_DOWN
-    SHALLOW_VOLATILITY_AVG_DOWN_PNL_MIN: float = -1.20
+    SHALLOW_VOLATILITY_AVG_DOWN_PNL_MIN: float = -0.70
     SHALLOW_VOLATILITY_AVG_DOWN_PNL_MAX: float = -0.30
-    SHALLOW_VOLATILITY_AVG_DOWN_MIN_HOLD_SEC: int = 15
-    SHALLOW_VOLATILITY_AVG_DOWN_MAX_HOLD_SEC: int = 240
+    SHALLOW_VOLATILITY_AVG_DOWN_MIN_HOLD_SEC: int = 60
+    SHALLOW_VOLATILITY_AVG_DOWN_MAX_HOLD_SEC: int = 120
+    SHALLOW_VOLATILITY_AVG_DOWN_OBSERVATION_MAX_HOLD_SEC: int = 240
     SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE: float = 85.0
     SHALLOW_VOLATILITY_AVG_DOWN_MIN_TICK_ACCEL: float = 1.05
     SHALLOW_VOLATILITY_AVG_DOWN_MIN_MICRO_VWAP_BP: float = 0.0
     SHALLOW_VOLATILITY_AVG_DOWN_MAX_QUOTE_AGE_MS: float = 1500.0
-    SHALLOW_VOLATILITY_AVG_DOWN_MAX_PER_POSITION: int = 3
+    SHALLOW_VOLATILITY_AVG_DOWN_MAX_PER_POSITION: int = 2
     SHALLOW_VOLATILITY_AVG_DOWN_COOLDOWN_SEC: int = 90
+    SHALLOW_VOLATILITY_AVG_DOWN_POST_ADD_TAKE_PROFIT_PCT: float = 0.30
     SCALP_LOSS_FALLBACK_ENABLED: bool = True        # 운영 override: 손절 직전 ADM/fallback 추가매수 실전 적용
     SCALP_LOSS_FALLBACK_OBSERVE_ONLY: bool = False  # 운영 override: 후보 기록에 그치지 않고 scale-in safety 후 실행
     SCALP_LOSS_FALLBACK_ALLOWED_REASONS: tuple = (
@@ -808,7 +824,7 @@ class TradingConfig:
     OPENAI_SCANNER_REPORT_TIMEOUT_MS: int = 15000  # source-only morning scanner report timeout
     OPENAI_OVERNIGHT_TIMEOUT_MS: int = 12000  # source-only overnight_v1 batch 판단 timeout
     OPENAI_RESPONSES_MAX_OUTPUT_TOKENS: int = 512  # OpenAI live JSON 응답 토큰 상한
-    OPENAI_REASONING_EFFORT: str = "auto"  # hot path 추론 effort
+    OPENAI_REASONING_EFFORT: str = "minimal"  # hot path 추론 effort
     OPENAI_RESPONSES_WS_LATE_DISCARD_ENABLED: bool = True  # deadline 초과 응답 discard
     OPENAI_ENTRY_TIMEOUT_REJECT_ENABLED: bool = True  # buy-side hot path timeout/parse failure 시 reject fallback
     OPENAI_SCALPING_COMPACT_INPUT_ENABLED: bool = True  # OpenAI live route hot path 입력 compact JSON 사용
@@ -1926,12 +1942,18 @@ def _build_trading_rules() -> TradingConfig:
     env_shallow_volatility_avg_down_pnl_max = _env_float("KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_PNL_MAX")
     env_shallow_volatility_avg_down_min_hold_sec = _env_int("KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_HOLD_SEC")
     env_shallow_volatility_avg_down_max_hold_sec = _env_int("KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MAX_HOLD_SEC")
+    env_shallow_volatility_avg_down_observation_max_hold_sec = _env_int(
+        "KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_OBSERVATION_MAX_HOLD_SEC"
+    )
     env_shallow_volatility_avg_down_min_buy_pressure = _env_float("KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE")
     env_shallow_volatility_avg_down_min_tick_accel = _env_float("KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_TICK_ACCEL")
     env_shallow_volatility_avg_down_min_micro_vwap_bp = _env_float("KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_MICRO_VWAP_BP")
     env_shallow_volatility_avg_down_max_quote_age_ms = _env_float("KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MAX_QUOTE_AGE_MS")
     env_shallow_volatility_avg_down_max_per_position = _env_int("KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MAX_PER_POSITION")
     env_shallow_volatility_avg_down_cooldown_sec = _env_int("KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_COOLDOWN_SEC")
+    env_shallow_volatility_avg_down_post_add_tp = _env_float(
+        "KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_POST_ADD_TAKE_PROFIT_PCT"
+    )
     env_bad_entry_observe_enabled = _env_bool("KORSTOCKSCAN_SCALP_BAD_ENTRY_BLOCK_OBSERVE_ENABLED")
     env_bad_entry_refined_enabled = _env_bool("KORSTOCKSCAN_SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED")
     env_bad_entry_refined_min_hold = _env_int("KORSTOCKSCAN_SCALP_BAD_ENTRY_REFINED_MIN_HOLD_SEC")
@@ -2016,6 +2038,20 @@ def _build_trading_rules() -> TradingConfig:
     env_late_loss_avg_down_min_hold = _env_int("KORSTOCKSCAN_SCALP_LATE_LOSS_AVG_DOWN_MIN_HOLD_SEC")
     env_late_loss_avg_down_min_ai = _env_int("KORSTOCKSCAN_SCALP_LATE_LOSS_AVG_DOWN_MIN_AI_SCORE")
     env_late_loss_avg_down_max_per_position = _env_int("KORSTOCKSCAN_SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION")
+    env_deep_recovery_avg_down_enabled = _env_bool("KORSTOCKSCAN_DEEP_RECOVERY_AVG_DOWN_ENABLED")
+    env_deep_recovery_avg_down_pnl_min = _env_float("KORSTOCKSCAN_DEEP_RECOVERY_AVG_DOWN_PNL_MIN")
+    env_deep_recovery_avg_down_pnl_max = _env_float("KORSTOCKSCAN_DEEP_RECOVERY_AVG_DOWN_PNL_MAX")
+    env_deep_recovery_avg_down_min_hold = _env_int("KORSTOCKSCAN_DEEP_RECOVERY_AVG_DOWN_MIN_HOLD_SEC")
+    env_deep_recovery_avg_down_max_hold = _env_int("KORSTOCKSCAN_DEEP_RECOVERY_AVG_DOWN_MAX_HOLD_SEC")
+    env_deep_recovery_avg_down_min_ai = _env_int("KORSTOCKSCAN_DEEP_RECOVERY_AVG_DOWN_MIN_AI_SCORE")
+    env_deep_recovery_avg_down_max_ai = _env_int("KORSTOCKSCAN_DEEP_RECOVERY_AVG_DOWN_MAX_AI_SCORE")
+    env_deep_recovery_avg_down_min_buy_pressure = _env_float("KORSTOCKSCAN_DEEP_RECOVERY_AVG_DOWN_MIN_BUY_PRESSURE")
+    env_deep_recovery_avg_down_min_tick_accel = _env_float("KORSTOCKSCAN_DEEP_RECOVERY_AVG_DOWN_MIN_TICK_ACCEL")
+    env_deep_recovery_avg_down_min_micro_vwap = _env_float("KORSTOCKSCAN_DEEP_RECOVERY_AVG_DOWN_MIN_MICRO_VWAP_BP")
+    env_deep_recovery_avg_down_max_quote_age = _env_float("KORSTOCKSCAN_DEEP_RECOVERY_AVG_DOWN_MAX_QUOTE_AGE_MS")
+    env_deep_recovery_avg_down_max_per_position = _env_int("KORSTOCKSCAN_DEEP_RECOVERY_AVG_DOWN_MAX_PER_POSITION")
+    env_deep_recovery_avg_down_post_add_tp = _env_float("KORSTOCKSCAN_DEEP_RECOVERY_AVG_DOWN_POST_ADD_TAKE_PROFIT_PCT")
+    env_deep_recovery_avg_down_emergency = _env_float("KORSTOCKSCAN_DEEP_RECOVERY_AVG_DOWN_EMERGENCY_PCT")
     env_stop_line_avg_down_defer_enabled = _env_bool("KORSTOCKSCAN_SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_ENABLED")
     env_stop_line_avg_down_defer_max_sec = _env_int("KORSTOCKSCAN_SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_MAX_SEC")
     env_stop_line_avg_down_extra_dip_pct = _env_float("KORSTOCKSCAN_SCALP_STOP_LINE_TOUCH_AVG_DOWN_EXTRA_DIP_PCT")
@@ -2745,6 +2781,9 @@ def _build_trading_rules() -> TradingConfig:
             SHALLOW_VOLATILITY_AVG_DOWN_MAX_HOLD_SEC=env_shallow_volatility_avg_down_max_hold_sec
             if env_shallow_volatility_avg_down_max_hold_sec is not None
             else config.SHALLOW_VOLATILITY_AVG_DOWN_MAX_HOLD_SEC,
+            SHALLOW_VOLATILITY_AVG_DOWN_OBSERVATION_MAX_HOLD_SEC=env_shallow_volatility_avg_down_observation_max_hold_sec
+            if env_shallow_volatility_avg_down_observation_max_hold_sec is not None
+            else config.SHALLOW_VOLATILITY_AVG_DOWN_OBSERVATION_MAX_HOLD_SEC,
             SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE=env_shallow_volatility_avg_down_min_buy_pressure
             if env_shallow_volatility_avg_down_min_buy_pressure is not None
             else config.SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE,
@@ -2763,6 +2802,9 @@ def _build_trading_rules() -> TradingConfig:
             SHALLOW_VOLATILITY_AVG_DOWN_COOLDOWN_SEC=env_shallow_volatility_avg_down_cooldown_sec
             if env_shallow_volatility_avg_down_cooldown_sec is not None
             else config.SHALLOW_VOLATILITY_AVG_DOWN_COOLDOWN_SEC,
+            SHALLOW_VOLATILITY_AVG_DOWN_POST_ADD_TAKE_PROFIT_PCT=env_shallow_volatility_avg_down_post_add_tp
+            if env_shallow_volatility_avg_down_post_add_tp is not None
+            else config.SHALLOW_VOLATILITY_AVG_DOWN_POST_ADD_TAKE_PROFIT_PCT,
             SCALP_BAD_ENTRY_BLOCK_OBSERVE_ENABLED=env_bad_entry_observe_enabled
             if env_bad_entry_observe_enabled is not None
             else config.SCALP_BAD_ENTRY_BLOCK_OBSERVE_ENABLED,
@@ -2943,6 +2985,48 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=env_late_loss_avg_down_max_per_position
             if env_late_loss_avg_down_max_per_position is not None
             else config.SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION,
+            DEEP_RECOVERY_AVG_DOWN_ENABLED=env_deep_recovery_avg_down_enabled
+            if env_deep_recovery_avg_down_enabled is not None
+            else config.DEEP_RECOVERY_AVG_DOWN_ENABLED,
+            DEEP_RECOVERY_AVG_DOWN_PNL_MIN=env_deep_recovery_avg_down_pnl_min
+            if env_deep_recovery_avg_down_pnl_min is not None
+            else config.DEEP_RECOVERY_AVG_DOWN_PNL_MIN,
+            DEEP_RECOVERY_AVG_DOWN_PNL_MAX=env_deep_recovery_avg_down_pnl_max
+            if env_deep_recovery_avg_down_pnl_max is not None
+            else config.DEEP_RECOVERY_AVG_DOWN_PNL_MAX,
+            DEEP_RECOVERY_AVG_DOWN_MIN_HOLD_SEC=env_deep_recovery_avg_down_min_hold
+            if env_deep_recovery_avg_down_min_hold is not None
+            else config.DEEP_RECOVERY_AVG_DOWN_MIN_HOLD_SEC,
+            DEEP_RECOVERY_AVG_DOWN_MAX_HOLD_SEC=env_deep_recovery_avg_down_max_hold
+            if env_deep_recovery_avg_down_max_hold is not None
+            else config.DEEP_RECOVERY_AVG_DOWN_MAX_HOLD_SEC,
+            DEEP_RECOVERY_AVG_DOWN_MIN_AI_SCORE=env_deep_recovery_avg_down_min_ai
+            if env_deep_recovery_avg_down_min_ai is not None
+            else config.DEEP_RECOVERY_AVG_DOWN_MIN_AI_SCORE,
+            DEEP_RECOVERY_AVG_DOWN_MAX_AI_SCORE=env_deep_recovery_avg_down_max_ai
+            if env_deep_recovery_avg_down_max_ai is not None
+            else config.DEEP_RECOVERY_AVG_DOWN_MAX_AI_SCORE,
+            DEEP_RECOVERY_AVG_DOWN_MIN_BUY_PRESSURE=env_deep_recovery_avg_down_min_buy_pressure
+            if env_deep_recovery_avg_down_min_buy_pressure is not None
+            else config.DEEP_RECOVERY_AVG_DOWN_MIN_BUY_PRESSURE,
+            DEEP_RECOVERY_AVG_DOWN_MIN_TICK_ACCEL=env_deep_recovery_avg_down_min_tick_accel
+            if env_deep_recovery_avg_down_min_tick_accel is not None
+            else config.DEEP_RECOVERY_AVG_DOWN_MIN_TICK_ACCEL,
+            DEEP_RECOVERY_AVG_DOWN_MIN_MICRO_VWAP_BP=env_deep_recovery_avg_down_min_micro_vwap
+            if env_deep_recovery_avg_down_min_micro_vwap is not None
+            else config.DEEP_RECOVERY_AVG_DOWN_MIN_MICRO_VWAP_BP,
+            DEEP_RECOVERY_AVG_DOWN_MAX_QUOTE_AGE_MS=env_deep_recovery_avg_down_max_quote_age
+            if env_deep_recovery_avg_down_max_quote_age is not None
+            else config.DEEP_RECOVERY_AVG_DOWN_MAX_QUOTE_AGE_MS,
+            DEEP_RECOVERY_AVG_DOWN_MAX_PER_POSITION=env_deep_recovery_avg_down_max_per_position
+            if env_deep_recovery_avg_down_max_per_position is not None
+            else config.DEEP_RECOVERY_AVG_DOWN_MAX_PER_POSITION,
+            DEEP_RECOVERY_AVG_DOWN_POST_ADD_TAKE_PROFIT_PCT=env_deep_recovery_avg_down_post_add_tp
+            if env_deep_recovery_avg_down_post_add_tp is not None
+            else config.DEEP_RECOVERY_AVG_DOWN_POST_ADD_TAKE_PROFIT_PCT,
+            DEEP_RECOVERY_AVG_DOWN_EMERGENCY_PCT=env_deep_recovery_avg_down_emergency
+            if env_deep_recovery_avg_down_emergency is not None
+            else config.DEEP_RECOVERY_AVG_DOWN_EMERGENCY_PCT,
             SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_ENABLED=env_stop_line_avg_down_defer_enabled
             if env_stop_line_avg_down_defer_enabled is not None
             else config.SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_ENABLED,

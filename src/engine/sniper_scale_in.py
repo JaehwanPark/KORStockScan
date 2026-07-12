@@ -9,6 +9,7 @@ from src.utils import kiwoom_utils
 _DEFAULT_SCALE_IN_RATIO = 0.50
 _DEFAULT_SWING_PYRAMID_RATIO = 0.30
 _STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON = "stop_line_touch_mandatory_avg_down"
+_DEEP_RECOVERY_AVG_DOWN_REASON = "deep_recovery_avg_down"
 _SHALLOW_VOLATILITY_AVG_DOWN_REASON = "shallow_volatility_avg_down"
 _SCALPING_AVG_DOWN_SPECIAL_REASONS = {
     "reversal_add_ok",
@@ -16,6 +17,7 @@ _SCALPING_AVG_DOWN_SPECIAL_REASONS = {
     "aggressive_reversal_add_ok",
     _SHALLOW_VOLATILITY_AVG_DOWN_REASON,
     _STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON,
+    _DEEP_RECOVERY_AVG_DOWN_REASON,
 }
 _SCALE_IN_RULES = {
     ("SCALPING", "AVG_DOWN", "reversal_add_ok"): {
@@ -43,6 +45,12 @@ _SCALE_IN_RULES = {
         "floor_default": True,
     },
     ("SCALPING", "AVG_DOWN", _STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON): {
+        "ratio_rule": "REVERSAL_ADD_SIZE_RATIO",
+        "default_ratio": 0.33,
+        "floor_rule": "REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED",
+        "floor_default": True,
+    },
+    ("SCALPING", "AVG_DOWN", _DEEP_RECOVERY_AVG_DOWN_REASON): {
         "ratio_rule": "REVERSAL_ADD_SIZE_RATIO",
         "default_ratio": 0.33,
         "floor_rule": "REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED",
@@ -1335,6 +1343,9 @@ def _build_shallow_volatility_avg_down_probe(stock, profit_rate, held_sec):
     pnl_max = float(getattr(TRADING_RULES, 'SHALLOW_VOLATILITY_AVG_DOWN_PNL_MAX', -0.30))
     min_hold = int(getattr(TRADING_RULES, 'SHALLOW_VOLATILITY_AVG_DOWN_MIN_HOLD_SEC', 15))
     max_hold = int(getattr(TRADING_RULES, 'SHALLOW_VOLATILITY_AVG_DOWN_MAX_HOLD_SEC', 240))
+    observation_max_hold = int(
+        getattr(TRADING_RULES, 'SHALLOW_VOLATILITY_AVG_DOWN_OBSERVATION_MAX_HOLD_SEC', max_hold)
+    )
     min_buy_pressure = float(getattr(TRADING_RULES, 'SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE', 85.0))
     min_tick_accel = float(getattr(TRADING_RULES, 'SHALLOW_VOLATILITY_AVG_DOWN_MIN_TICK_ACCEL', 1.05))
     min_micro_vwap_bp = float(getattr(TRADING_RULES, 'SHALLOW_VOLATILITY_AVG_DOWN_MIN_MICRO_VWAP_BP', 0.0))
@@ -1346,6 +1357,9 @@ def _build_shallow_volatility_avg_down_probe(stock, profit_rate, held_sec):
     cooldown_sec = max(
         0,
         int(getattr(TRADING_RULES, 'SHALLOW_VOLATILITY_AVG_DOWN_COOLDOWN_SEC', 90) or 0),
+    )
+    post_add_take_profit_pct = float(
+        getattr(TRADING_RULES, 'SHALLOW_VOLATILITY_AVG_DOWN_POST_ADD_TAKE_PROFIT_PCT', 0.30)
     )
     stop_line_pct = float(getattr(TRADING_RULES, 'SCALP_STOP', -1.5))
 
@@ -1372,7 +1386,10 @@ def _build_shallow_volatility_avg_down_probe(stock, profit_rate, held_sec):
         "held_sec": int(held_sec),
         "min_hold_sec": min_hold,
         "max_hold_sec": max_hold,
+        "observation_max_hold_sec": observation_max_hold,
         "hold_ok": min_hold <= held_sec <= max_hold,
+        "observation_extension_hold_ok": max_hold < held_sec <= observation_max_hold,
+        "post_add_take_profit_pct": round(post_add_take_profit_pct, 4),
         "buy_pressure_10t": round(float(buy_pressure), 4),
         "min_buy_pressure": round(min_buy_pressure, 4),
         "buy_pressure_ok": buy_pressure >= min_buy_pressure,
@@ -1681,6 +1698,7 @@ def resolve_scale_in_order_price(stock, ws_data, action, *, strategy=None, curr_
             "reversal_add_ok",
             "aggressive_reversal_add_ok",
             _SHALLOW_VOLATILITY_AVG_DOWN_REASON,
+            _DEEP_RECOVERY_AVG_DOWN_REASON,
         }
         if (micro_supported_avg_down or late_loss_retry) and feature_quality["reversal_feature_stale"]:
             result["reason"] = "micro_context_stale:" + feature_quality["reversal_feature_stale_reason"]

@@ -1895,13 +1895,13 @@ def test_observation_source_quality_audit_blocks_reversal_add_pressure_without_t
 
 def _first_touch_fields(**overrides):
     fields = {
-        "threshold_family": "stop_line_touch_mandatory_avg_down",
-        "decision_source": "STOP_LINE_TOUCH_MANDATORY_AVG_DOWN",
-        "decision_authority": "real_scalping_stop_line_touch_intercept",
+        "threshold_family": "deep_recovery_avg_down",
+        "decision_source": "DEEP_RECOVERY_AVG_DOWN",
+        "decision_authority": "real_scalping_deep_recovery_intercept",
         "metric_role": "bounded_tunable",
         "window_policy": "same_day_intraday_runtime",
-        "sample_floor": "not_applicable_operator_override",
-        "primary_decision_metric": "stop_line_touch",
+        "sample_floor": "postclose_rolling_real_deep_recovery_required",
+        "primary_decision_metric": "post_add_mfe_30m_pct",
         "source_quality_gate": "real_holding_stop_line_touch_and_scale_in_guards_present",
         "runtime_effect": True,
         "allowed_runtime_apply": True,
@@ -1916,7 +1916,7 @@ def _first_touch_fields(**overrides):
         "gate_allowed": True,
         "gate_reason": "ok",
         "add_type": "AVG_DOWN",
-        "add_reason": "stop_line_touch_mandatory_avg_down",
+        "add_reason": "deep_recovery_avg_down",
         "actual_order_submitted": False,
         "broker_order_forbidden": False,
         "first_touch_avgdown_decision_allowed": True,

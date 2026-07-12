@@ -693,6 +693,11 @@ def test_direct_scale_in_calibration_loaders_block_source_quality_preflight(tmp_
     )
     monkeypatch.setattr(
         mod,
+        "SCALPING_AVG_DOWN_RECOVERY_CALIBRATION_DIR",
+        tmp_path / "scalping_avg_down_recovery_calibration",
+    )
+    monkeypatch.setattr(
+        mod,
         "load_source_quality_preflight",
         lambda source_date: {
             "status": "fail",
@@ -713,8 +718,13 @@ def test_direct_scale_in_calibration_loaders_block_source_quality_preflight(tmp_
         mod.SCALPING_PYRAMID_QUALITY_CALIBRATION_DIR
         / "scalping_pyramid_quality_calibration_2026-07-03.json"
     )
+    avg_down_path = (
+        mod.SCALPING_AVG_DOWN_RECOVERY_CALIBRATION_DIR
+        / "scalping_avg_down_recovery_calibration_2026-07-03.json"
+    )
     rising_path.parent.mkdir(parents=True)
     pyramid_path.parent.mkdir(parents=True)
+    avg_down_path.parent.mkdir(parents=True)
     rising_path.write_text(
         json.dumps(
             {
@@ -753,16 +763,86 @@ def test_direct_scale_in_calibration_loaders_block_source_quality_preflight(tmp_
         ),
         encoding="utf-8",
     )
+    avg_down_path.write_text(
+        json.dumps(
+            {
+                "calibration_candidates": [
+                    {
+                        "family": "scalping_avg_down_recovery_quality_gate",
+                        "stage": "scale_in",
+                        "calibration_state": "adjust_up",
+                        "allowed_runtime_apply": True,
+                        "sample_floor_passed": True,
+                        "source_quality_gate": "pass",
+                        "target_env_keys": ["SHALLOW_VOLATILITY_AVG_DOWN_MAX_PER_POSITION"],
+                        "recommended_values": {"shallow_max_per_position": 2},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
 
     rising_candidates, rising_status = mod._load_rising_missed_first_touch_calibration_candidates("2026-07-03")
     pyramid_candidates, pyramid_status = mod._load_scalping_pyramid_quality_calibration_candidates("2026-07-03")
+    avg_down_candidates, avg_down_status = mod._load_scalping_avg_down_recovery_calibration_candidates("2026-07-03")
 
     assert rising_status["source_quality_blocked"] is True
     assert pyramid_status["source_quality_blocked"] is True
+    assert avg_down_status["source_quality_blocked"] is True
     assert rising_candidates[0]["allowed_runtime_apply"] is False
     assert pyramid_candidates[0]["allowed_runtime_apply"] is False
+    assert avg_down_candidates[0]["allowed_runtime_apply"] is False
     assert rising_candidates[0]["source_quality_gate"] == "source_quality_blocked"
     assert pyramid_candidates[0]["source_quality_gate"] == "source_quality_blocked"
+    assert avg_down_candidates[0]["source_quality_gate"] == "source_quality_blocked"
+
+
+def test_scalping_avg_down_recovery_quality_gate_emits_runtime_env_overrides():
+    candidate = {
+        "family": "scalping_avg_down_recovery_quality_gate",
+        "calibration_state": "adjust_up",
+        "current_values": {
+            "shallow_max_per_position": 2,
+            "deep_enabled": True,
+            "deep_pnl_min": -4.0,
+        },
+        "recommended_values": {
+            "shallow_max_per_position": 2,
+            "deep_enabled": True,
+            "deep_pnl_min": -4.0,
+        },
+        "target_env_keys": [
+            "SHALLOW_VOLATILITY_AVG_DOWN_MAX_PER_POSITION",
+            "DEEP_RECOVERY_AVG_DOWN_ENABLED",
+            "DEEP_RECOVERY_AVG_DOWN_PNL_MIN",
+        ],
+    }
+
+    overrides = mod._env_overrides_for_candidate(candidate)
+
+    assert overrides["KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MAX_PER_POSITION"] == "2"
+    assert overrides["KORSTOCKSCAN_DEEP_RECOVERY_AVG_DOWN_ENABLED"] == "true"
+    assert overrides["KORSTOCKSCAN_DEEP_RECOVERY_AVG_DOWN_PNL_MIN"] == "-4"
+
+
+def test_scalping_avg_down_recovery_carry_forward_filters_to_avg_down_env():
+    env = mod._previous_runtime_env_overrides_for_family(
+        {
+            "env_overrides": {
+                "KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MAX_PER_POSITION": "2",
+                "KORSTOCKSCAN_DEEP_RECOVERY_AVG_DOWN_PNL_MIN": "-4",
+                "KORSTOCKSCAN_ENTRY_CANCEL_WAIT_STANDARD_SEC": "25",
+                "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_PROFIT_PCT": "1.1",
+            }
+        },
+        "scalping_avg_down_recovery_quality_gate",
+    )
+
+    assert env == {
+        "KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MAX_PER_POSITION": "2",
+        "KORSTOCKSCAN_DEEP_RECOVERY_AVG_DOWN_PNL_MIN": "-4",
+    }
 
 
 def test_ai_score_optimization_loader_blocks_source_quality_preflight(tmp_path, monkeypatch):

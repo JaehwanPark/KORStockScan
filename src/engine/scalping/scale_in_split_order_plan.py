@@ -198,7 +198,7 @@ def _context_bucket(fields: dict[str, Any]) -> str:
         or stage
         or ""
     ).strip()
-    if add_reason == "stop_line_touch_mandatory_avg_down":
+    if add_reason in {"stop_line_touch_mandatory_avg_down", "deep_recovery_avg_down"}:
         reason_bucket = "stop_line_touch"
     elif add_reason == "late_loss_avg_down_retry":
         reason_bucket = "late_loss_retry"

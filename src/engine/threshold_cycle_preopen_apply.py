@@ -61,6 +61,9 @@ RISING_MISSED_FIRST_TOUCH_CALIBRATION_DIR = (
 SCALPING_PYRAMID_QUALITY_CALIBRATION_DIR = (
     DATA_DIR / "report" / "scalping_pyramid_quality_calibration"
 )
+SCALPING_AVG_DOWN_RECOVERY_CALIBRATION_DIR = (
+    DATA_DIR / "report" / "scalping_avg_down_recovery_calibration"
+)
 AI_SCORE_OPTIMIZATION_BACKTEST_DIR = DATA_DIR / "report" / "ai_score_optimization_backtest"
 RUNTIME_GAP_PROVENANCE_DIR = DATA_DIR / "threshold_cycle" / "runtime_gap_provenance"
 ENTRY_CANCEL_WAIT_TUNING_DIR = DATA_DIR / "report" / "entry_cancel_wait_tuning"
@@ -168,6 +171,32 @@ TARGET_ENV_VALUE_KEYS = {
     "SCALPING_PYRAMID_STRONG_CONTINUATION_ENABLED": "strong_continuation_enabled",
     "SCALPING_PYRAMID_STRONG_CONTINUATION_MIN_PROFIT_PCT": "strong_continuation_min_profit_pct",
     "SCALPING_PYRAMID_STRONG_CONTINUATION_MAX_DRAWDOWN_PCT": "strong_continuation_max_drawdown_pct",
+    "SHALLOW_VOLATILITY_AVG_DOWN_ENABLED": "shallow_enabled",
+    "SHALLOW_VOLATILITY_AVG_DOWN_PNL_MIN": "shallow_pnl_min",
+    "SHALLOW_VOLATILITY_AVG_DOWN_PNL_MAX": "shallow_pnl_max",
+    "SHALLOW_VOLATILITY_AVG_DOWN_MIN_HOLD_SEC": "shallow_min_hold_sec",
+    "SHALLOW_VOLATILITY_AVG_DOWN_MAX_HOLD_SEC": "shallow_max_hold_sec",
+    "SHALLOW_VOLATILITY_AVG_DOWN_OBSERVATION_MAX_HOLD_SEC": "shallow_observation_max_hold_sec",
+    "SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE": "shallow_min_buy_pressure",
+    "SHALLOW_VOLATILITY_AVG_DOWN_MIN_TICK_ACCEL": "shallow_min_tick_accel",
+    "SHALLOW_VOLATILITY_AVG_DOWN_MIN_MICRO_VWAP_BP": "shallow_min_micro_vwap_bp",
+    "SHALLOW_VOLATILITY_AVG_DOWN_MAX_QUOTE_AGE_MS": "shallow_max_quote_age_ms",
+    "SHALLOW_VOLATILITY_AVG_DOWN_MAX_PER_POSITION": "shallow_max_per_position",
+    "SHALLOW_VOLATILITY_AVG_DOWN_POST_ADD_TAKE_PROFIT_PCT": "shallow_post_add_take_profit_pct",
+    "DEEP_RECOVERY_AVG_DOWN_ENABLED": "deep_enabled",
+    "DEEP_RECOVERY_AVG_DOWN_PNL_MIN": "deep_pnl_min",
+    "DEEP_RECOVERY_AVG_DOWN_PNL_MAX": "deep_pnl_max",
+    "DEEP_RECOVERY_AVG_DOWN_MIN_HOLD_SEC": "deep_min_hold_sec",
+    "DEEP_RECOVERY_AVG_DOWN_MAX_HOLD_SEC": "deep_max_hold_sec",
+    "DEEP_RECOVERY_AVG_DOWN_MIN_AI_SCORE": "deep_min_ai_score",
+    "DEEP_RECOVERY_AVG_DOWN_MAX_AI_SCORE": "deep_max_ai_score",
+    "DEEP_RECOVERY_AVG_DOWN_MIN_BUY_PRESSURE": "deep_min_buy_pressure",
+    "DEEP_RECOVERY_AVG_DOWN_MIN_TICK_ACCEL": "deep_min_tick_accel",
+    "DEEP_RECOVERY_AVG_DOWN_MIN_MICRO_VWAP_BP": "deep_min_micro_vwap_bp",
+    "DEEP_RECOVERY_AVG_DOWN_MAX_QUOTE_AGE_MS": "deep_max_quote_age_ms",
+    "DEEP_RECOVERY_AVG_DOWN_MAX_PER_POSITION": "deep_max_per_position",
+    "DEEP_RECOVERY_AVG_DOWN_POST_ADD_TAKE_PROFIT_PCT": "deep_post_add_take_profit_pct",
+    "DEEP_RECOVERY_AVG_DOWN_EMERGENCY_PCT": "deep_emergency_pct",
     "SCALPING_ENABLE_PYRAMID": "scalping_enable_pyramid",
     "REVERSAL_ADD_MIN_AI_SCORE": "reversal_add_min_ai_score",
     "REVERSAL_ADD_MIN_BUY_PRESSURE": "reversal_add_min_buy_pressure",
@@ -863,6 +892,12 @@ def _scalping_pyramid_quality_calibration_path(source_date: str) -> Path:
     )
 
 
+def _scalping_avg_down_recovery_calibration_path(source_date: str) -> Path:
+    return SCALPING_AVG_DOWN_RECOVERY_CALIBRATION_DIR / (
+        f"scalping_avg_down_recovery_calibration_{source_date}.json"
+    )
+
+
 def _source_quality_preflight_status(source_date: str | None) -> dict[str, Any]:
     if not source_date:
         return {"blocked": True, "reason": "missing_source_date", "preflight": {}}
@@ -928,6 +963,37 @@ def _load_scalping_pyramid_quality_calibration_candidates(
         "allowed_runtime_apply": selected_candidate.get("allowed_runtime_apply"),
         "calibration_state": selected_candidate.get("calibration_state"),
         "sample_count": selected_candidate.get("sample_count"),
+        "source_quality_preflight": preflight_status,
+        "source_quality_blocked": bool(preflight_status.get("blocked")),
+    }
+
+
+def _load_scalping_avg_down_recovery_calibration_candidates(
+    source_date: str | None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if not source_date:
+        return [], {"status": "missing_source_date", "path": None}
+    path = _scalping_avg_down_recovery_calibration_path(source_date)
+    if not path.exists():
+        return [], {"status": "missing_report", "path": str(path)}
+    payload = _load_json(path)
+    candidates = payload.get("calibration_candidates")
+    if not isinstance(candidates, list):
+        candidate = payload.get("calibration_candidate")
+        candidates = [candidate] if isinstance(candidate, dict) else []
+    normalized = [item for item in candidates if isinstance(item, dict)]
+    normalized, preflight_status = _block_candidates_by_source_quality_preflight(
+        normalized,
+        source_date,
+        source_report_type="scalping_avg_down_recovery_calibration",
+    )
+    return normalized, {
+        "status": "loaded",
+        "path": str(path),
+        "candidate_count": len(normalized),
+        "allowed_runtime_apply_candidate_count": sum(
+            1 for item in normalized if bool(item.get("allowed_runtime_apply"))
+        ),
         "source_quality_preflight": preflight_status,
         "source_quality_blocked": bool(preflight_status.get("blocked")),
     }
@@ -1141,6 +1207,8 @@ _FAMILY_ENV_KEY_PREFIXES: dict[str, str] = {
     "score65_74_recovery_probe": "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_",
     "rising_missed_first_touch_avgdown_decision_gate": "KORSTOCKSCAN_SCALP_FIRST_TOUCH_AVGDOWN_",
     "scalping_pyramid_quality_gate": "KORSTOCKSCAN_SCALPING_PYRAMID_",
+    "shallow_volatility_avg_down_quality_gate": "KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_",
+    "deep_recovery_avg_down_quality_gate": "KORSTOCKSCAN_DEEP_RECOVERY_AVG_DOWN_",
     SCORE65_74_STRONG_MICRO_OVERRIDE_FAMILY: "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_",
     PRE_SUBMIT_LIQUIDITY_RELIEF_FAMILY: "KORSTOCKSCAN_PRE_SUBMIT_LIQUIDITY_RELIEF_",
     ENTRY_OPPORTUNITY_RECHECK_FAMILY: "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_",
@@ -1194,6 +1262,19 @@ def _previous_runtime_env_overrides_for_family(
             if str(k).startswith("KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_")
             or str(k) in exact_keys
         }
+    if family == "scalping_avg_down_recovery_quality_gate":
+        prefixes = (
+            "KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_",
+            "KORSTOCKSCAN_DEEP_RECOVERY_AVG_DOWN_",
+        )
+        return _normalize_runtime_env_overrides_for_family(
+            family,
+            {
+                str(k): str(v)
+                for k, v in env_overrides.items()
+                if any(str(k).startswith(prefix) for prefix in prefixes)
+            },
+        )
     prefix = _FAMILY_ENV_KEY_PREFIXES.get(family)
     if prefix:
         return _normalize_runtime_env_overrides_for_family(
@@ -1298,6 +1379,7 @@ def _env_overrides_for_candidate(candidate: dict[str, Any]) -> dict[str, str]:
         "lifecycle_bucket_discovery_sim_auto_approval",
         "scalp_sim_auto_approval",
         "swing_sim_auto_approval",
+        "scalping_avg_down_recovery_quality_gate",
     }
     overrides: dict[str, str] = {}
     for target_key in candidate.get("target_env_keys") or []:
@@ -3703,6 +3785,14 @@ def build_preopen_apply_manifest(
                 *calibration_candidates,
                 *scalping_pyramid_quality_candidates,
             ]
+        scalping_avg_down_recovery_candidates, scalping_avg_down_recovery_calibration = (
+            _load_scalping_avg_down_recovery_calibration_candidates(report_source_date)
+        )
+        if scalping_avg_down_recovery_candidates:
+            calibration_candidates = [
+                *calibration_candidates,
+                *scalping_avg_down_recovery_candidates,
+            ]
         ai_score_optimization_candidates, ai_score_optimization_backtest = (
             _load_ai_score_optimization_backtest_candidates(report_source_date)
         )
@@ -3970,6 +4060,7 @@ def build_preopen_apply_manifest(
             "latency_classifier_recommendation": latency_recommendation,
             "rising_missed_first_touch_calibration": rising_missed_first_touch_calibration,
             "scalping_pyramid_quality_calibration": scalping_pyramid_quality_calibration,
+            "scalping_avg_down_recovery_calibration": scalping_avg_down_recovery_calibration,
             "ai_score_optimization_backtest": ai_score_optimization_backtest,
             "auto_apply_selected": selected,
             "auto_apply_decisions": decisions,
