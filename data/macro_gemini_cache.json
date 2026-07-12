@@ -1,77 +1,85 @@
 {
-  "bundle_as_of": "2026-07-08T22:20:15Z",
+  "bundle_as_of": "2026-07-12T22:20:15Z",
   "sp500": {
     "name": "S&P500",
-    "value": 7503.85,
-    "prev_value": 7537.43,
-    "change": -33.58,
-    "change_pct": -0.45,
-    "as_of": "2026-07-08T13:11:00Z",
-    "source": "Charles Schwab"
+    "value": 7575.39,
+    "prev_value": 7543.64,
+    "change": 31.75,
+    "change_pct": 0.42,
+    "as_of": "2026-07-10T20:00:00Z",
+    "source": "Xinhua"
   },
   "nasdaq": {
     "name": "NASDAQ",
-    "value": 25818.69,
-    "prev_value": 26121.16,
-    "change": -302.47,
-    "change_pct": -1.16,
-    "as_of": "2026-07-08T13:11:00Z",
-    "source": "Charles Schwab"
+    "value": 26281.61,
+    "prev_value": 26206.89,
+    "change": 74.72,
+    "change_pct": 0.29,
+    "as_of": "2026-07-10T20:00:00Z",
+    "source": "Xinhua"
   },
   "vix": {
     "name": "VIX",
-    "value": 17.46,
-    "prev_value": 16.13,
-    "change": 1.33,
-    "change_pct": 8.25,
-    "as_of": "2026-07-08T13:11:00Z",
-    "source": "Charles Schwab"
+    "value": 15.03,
+    "prev_value": 15.84,
+    "change": -0.81,
+    "change_pct": -5.11,
+    "as_of": "2026-07-10T20:00:00Z",
+    "source": "Cboe"
   },
   "us10y": {
     "name": "US10Y",
-    "value": 4.56,
-    "prev_value": 4.53,
-    "change": 0.03,
-    "change_pct": null,
-    "as_of": "2026-07-08T13:11:00Z",
-    "source": "Charles Schwab"
+    "value": 4.558,
+    "prev_value": 4.577,
+    "change": -0.019,
+    "change_pct": -0.41,
+    "as_of": "2026-07-10T20:00:00Z",
+    "source": "Exante"
   },
   "brent": {
     "name": "BRENT",
-    "value": 79.25,
-    "prev_value": 74.16,
-    "change": 5.09,
-    "change_pct": 6.86,
-    "as_of": "2026-07-08T22:20:15Z",
+    "value": 76.01,
+    "prev_value": 76.3,
+    "change": -0.29,
+    "change_pct": -0.38,
+    "as_of": "2026-07-10T20:00:00Z",
     "source": "Trading Economics"
   },
   "headlines": [
     {
-      "title": "Markets drop, oil surges as President Trump declares Iran ceasefire 'over'",
-      "source": "Charles Schwab",
-      "published_at": "2026-07-08T13:11:00Z",
-      "url": "https://www.schwab.com/"
+      "title": "Companies 'no longer in the wait and see mode' as experts predict manufacturing exodus from Canada",
+      "source": "CTV News",
+      "published_at": "2026-07-12T09:00:00Z",
+      "url": "https://www.ctvnews.ca"
     },
     {
-      "title": "US Stocks Close Mixed Amid US-Iran Tensions",
-      "source": "Trading Economics",
-      "published_at": "2026-07-08T22:20:15Z",
-      "url": "https://tradingeconomics.com/united-states/stock-market"
+      "title": "U.S. launches fresh strikes on Iran as Tehran says it has closed Strait of Hormuz",
+      "source": "KNKX",
+      "published_at": "2026-07-12T14:21:00Z",
+      "url": "https://www.knkx.org"
     },
     {
-      "title": "Crude Oil Prices Sharply Higher on Supply Disruptions in Strait of Hormuz",
-      "source": "Barchart",
-      "published_at": "2026-07-07T19:21:00Z",
-      "url": "https://www.barchart.com/"
+      "title": "Fed report cites 'stepped-up' inflation due to tariffs, Iran war, AI buildout",
+      "source": "Maaal / Reuters",
+      "published_at": "2026-07-11T00:00:00Z",
+      "url": "https://maaal.com"
     },
     {
-      "title": "Trade war and tariffs: Anatomy of winners and losers",
-      "source": "Bloomberg",
-      "published_at": "2025-05-09T00:00:00Z",
-      "url": "https://www.bloomberg.com/professional/insights/trade-war-and-tariffs-anatomy-of-winners-and-losers/"
+      "title": "Americans warned over coming price hikes",
+      "source": "Newsweek",
+      "published_at": "2026-07-09T00:00:00Z",
+      "url": "https://www.newsweek.com"
+    },
+    {
+      "title": "Shipping prices surge as companies try to get ahead of new Trump tariffs",
+      "source": "CTV News",
+      "published_at": "2026-07-07T13:33:00Z",
+      "url": "https://www.ctvnews.ca"
     }
   ],
   "notes": [
-    "Market data captured corresponds to intraday and latest available readings around the bundle request time."
+    "Market data reflects the close of Friday, July 10, 2026.",
+    "US markets continue to show resilience driven by AI-related semiconductor gains despite geopolitical tensions.",
+    "Oil prices pulled back slightly following earlier escalations in the US-Iran conflict."
   ]
 }
