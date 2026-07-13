@@ -47,6 +47,7 @@ STALE_WEAK_RECHECK_DELTA_PCT = 3.0
 LATENCY_DANGER_SPREAD_RATIO_CAP = 0.0100
 LATENCY_DANGER_WS_AGE_MS_CAP = 450.0
 STALE_WEAK_REASON = "stale_quote_with_weak_ai_or_strength"
+STALE_AI_PROVENANCE_REASON = "stale_quote_with_missing_ai_provenance"
 LATENCY_DANGER_REASON = "latency_state_danger"
 FRESH_REFRESH_REASONS = {
     "input_snapshot_fresh",
@@ -301,6 +302,12 @@ def _stale_weak_components(fields: dict[str, Any]) -> dict[str, bool]:
         "recent_weak_ai_micro_block": _boolish(
             fields.get("rising_missed_scout_quality_guard_recent_weak_ai_micro_block")
         ),
+        "ai_provenance_missing": _boolish(
+            fields.get("rising_missed_scout_quality_guard_ai_provenance_missing")
+        ),
+        "ai_score_defaulted_without_action": _boolish(
+            fields.get("rising_missed_scout_quality_guard_ai_score_defaulted_without_action")
+        ),
     }
 
 
@@ -331,6 +338,8 @@ def _stale_weak_ai_source_bucket(fields: dict[str, Any], components: dict[str, b
         return "ai_drop"
     if components.get("ai_unusable"):
         return "ai_unusable"
+    if components.get("ai_provenance_missing"):
+        return "ai_provenance_missing"
     if action in {"", "-"} and ai_score is not None and ai_score <= 50.0 and action_source in {
         "",
         "-",
@@ -866,7 +875,7 @@ def build_report(
         )
         stage = str(row.get("stage") or "")
         if in_window and row.get("pipeline") == ENTRY_PIPELINE and _is_rising_missed_event_lineage(row, fields):
-            if _reason_matches(fields, STALE_WEAK_REASON):
+            if _reason_matches(fields, STALE_WEAK_REASON) or _reason_matches(fields, STALE_AI_PROVENANCE_REASON):
                 stale_weak_events.append({"row": row, "fields": fields})
             if _reason_matches(fields, LATENCY_DANGER_REASON):
                 latency_danger_events.append({"row": row, "fields": fields})

@@ -782,6 +782,10 @@ def _classify_stale_quote_block(fields: dict[str, Any]) -> tuple[str, list[str]]
         components.append("recent_weak_ai_micro")
     if _boolish(fields.get("rising_missed_scout_quality_guard_weak_evidence")):
         components.append("weak_evidence")
+    if _boolish(fields.get("rising_missed_scout_quality_guard_ai_provenance_missing")):
+        components.append("ai_provenance_missing")
+    if _boolish(fields.get("rising_missed_scout_quality_guard_ai_score_defaulted_without_action")):
+        components.append("ai_score_defaulted_without_action")
 
     micro_reason = str(fields.get("latency_spread_relief_micro_estimator_reason") or "").strip()
     if micro_reason:
@@ -795,6 +799,8 @@ def _classify_stale_quote_block(fields: dict[str, Any]) -> tuple[str, list[str]]
         return "ai_wait_after_refresh", components
     if any(item.startswith("true_ofi_true_ofi_below_floor") for item in components):
         return "true_ofi_below_floor", components
+    if "ai_provenance_missing" in components:
+        return "missing_ai_or_fresh_input", components
     if "weak_ai_score" in components:
         return "weak_ai_score", components
     if quote_stale and not any(item.startswith("ai_") or item.startswith("weak_") for item in components):
@@ -806,7 +812,10 @@ def _classify_submit_safety_block(row: dict[str, Any]) -> tuple[str, str, list[s
     fields = _fields(row)
     stage = str(row.get("stage") or "")
     reason = _field_reason(fields)
-    if stage == "rising_missed_scout_quality_guard_blocked" and reason == "stale_quote_with_weak_ai_or_strength":
+    if stage == "rising_missed_scout_quality_guard_blocked" and reason in {
+        "stale_quote_with_weak_ai_or_strength",
+        "stale_quote_with_missing_ai_provenance",
+    }:
         bucket, components = _classify_stale_quote_block(fields)
         return reason, bucket, components
     if stage == "latency_block":

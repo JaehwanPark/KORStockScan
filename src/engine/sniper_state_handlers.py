@@ -10181,6 +10181,9 @@ def _scanner_active_rising_recheck_reason(stock, *, now_ts: float | None = None)
     recheck_keys = (
         ("_scanner_rising_cooldown_recheck_after_epoch", "cooldown_recheck_pending"),
         ("_scanner_rising_cutoff_recheck_after_epoch", "next_buy_window_recheck_pending"),
+        ("_scanner_rising_freshness_envelope_recheck_until_epoch", "freshness_envelope_recheck_pending"),
+        ("_scanner_rising_reversal_up_volatile_recheck_until_epoch", "reversal_up_volatile_recheck_pending"),
+        ("_scanner_rising_reversal_up_watch_recheck_until_epoch", "reversal_up_watch_recheck_pending"),
         ("_scanner_rising_ws_gap_priority_recheck_after_epoch", "ws_gap_recovery_deferred_priority"),
         ("_scanner_rising_terminal_hardgate_recheck_after_epoch", "terminal_hardgate_recheck_pending"),
     )
@@ -10199,6 +10202,12 @@ def _scanner_active_full_eval_budget_source(stock, *, now_ts: float | None = Non
         return "not_applicable_cooldown"
     if reason == "next_buy_window_recheck_pending":
         return "not_applicable_cutoff"
+    if reason == "freshness_envelope_recheck_pending":
+        return "freshness_envelope_recheck"
+    if reason == "reversal_up_volatile_recheck_pending":
+        return "reversal_up_volatile_recheck"
+    if reason == "reversal_up_watch_recheck_pending":
+        return "reversal_up_watch_recheck"
     if reason == "ws_gap_recovery_deferred_priority":
         return "not_applicable_ws_gap"
     if reason == "terminal_hardgate_recheck_pending":
@@ -11052,6 +11061,8 @@ def _rising_missed_submit_safety_backoff_reason_group(reason: str | None) -> str
     reason_text = str(reason or "").strip().lower()
     if not reason_text:
         return ""
+    if "reversal_pre_submit" in reason_text or "pre_submit_reversal" in reason_text:
+        return "reversal_pre_submit"
     if "stale_quote_with_weak_ai_or_strength" in reason_text:
         return "stale_quote_with_weak_ai_or_strength"
     if (
@@ -11077,6 +11088,8 @@ def _rising_missed_submit_safety_backoff_base_sec(reason: str | None, count: int
         return max(0, _env_int("KORSTOCKSCAN_RISING_MISSED_SUBMIT_BACKOFF_STALE_WEAK_SEC", 90))
     if group == "tick_speed":
         return max(0, _env_int("KORSTOCKSCAN_RISING_MISSED_SUBMIT_BACKOFF_TICK_SPEED_SEC", 60))
+    if group == "reversal_pre_submit":
+        return max(0, _env_int("KORSTOCKSCAN_RISING_MISSED_SUBMIT_BACKOFF_REVERSAL_PRE_SUBMIT_SEC", 90))
     if group == "latency_state_danger":
         return max(0, _env_int("KORSTOCKSCAN_RISING_MISSED_SUBMIT_BACKOFF_LATENCY_DANGER_SEC", 60))
     if group == "weak_micro":
@@ -11322,6 +11335,56 @@ def _rising_missed_submit_safety_backoff_recovered(
             (fresh_quote and (ai_recovered or strength_recovered))
             or _rising_missed_submit_safety_backoff_positive_delta_recheck(stock, reason_group)
         )
+
+    if reason_group == "reversal_pre_submit":
+        recent_jump_pct = _rising_missed_submit_safety_backoff_raw_positive_delta_pct(stock)
+        jump_cooled = recent_jump_pct < _rising_missed_reversal_pre_submit_min_jump_pct()
+        micro_state = str(
+            _entry_submit_field(
+                ws_data,
+                stock,
+                key="orderbook_micro_state",
+                aliases=("micro_state", "weak_ai_micro_entry_block_micro_state"),
+                default="",
+            )
+            or ""
+        ).strip().lower()
+        qi = _safe_float(
+            _entry_submit_field(
+                ws_data,
+                stock,
+                key="orderbook_micro_qi",
+                aliases=("qi", "weak_ai_micro_entry_block_qi"),
+                default=None,
+            ),
+            None,
+        )
+        ofi_norm = _safe_float(
+            _entry_submit_field(
+                ws_data,
+                stock,
+                key="orderbook_micro_ofi_norm",
+                aliases=("ofi_norm", "true_ofi_ewma"),
+                default=None,
+            ),
+            None,
+        )
+        tick_acceleration_ratio, _raw_accel = _rising_missed_tick_numeric_field(
+            ws_data,
+            stock,
+            key="tick_acceleration_ratio",
+            aliases=("tick_accel", "late_entry_fresh_tick_acceleration_ratio"),
+        )
+        micro_recovered = bool(
+            micro_state in {"bullish", "strong_bullish"}
+            and (qi is None or qi > _rising_missed_reversal_pre_submit_qi_max())
+            and (ofi_norm is None or ofi_norm >= _rising_missed_reversal_pre_submit_ofi_norm_min())
+        )
+        tick_recovered = bool(
+            tick_acceleration_ratio is not None
+            and tick_acceleration_ratio >= _rising_missed_reversal_pre_submit_tick_accel_min()
+        )
+        return bool(jump_cooled or (fresh_quote and (micro_recovered or tick_recovered)))
 
     if reason_group == "source_quality_missing_or_unknown":
         has_curr = _safe_int(ws_data.get("curr") or stock.get("current_price"), 0) > 0
@@ -19606,6 +19669,705 @@ def _rising_missed_min_tick_acceleration_ratio() -> float:
     return 1.0
 
 
+def _rising_missed_reversal_pre_submit_guard_enabled() -> bool:
+    return _env_bool("KORSTOCKSCAN_RISING_MISSED_REVERSAL_PRE_SUBMIT_GUARD_ENABLED", True)
+
+
+def _rising_missed_reversal_pre_submit_min_jump_pct() -> float:
+    return max(
+        0.0,
+        _env_float("KORSTOCKSCAN_RISING_MISSED_REVERSAL_PRE_SUBMIT_MIN_JUMP_PCT", 3.0),
+    )
+
+
+def _rising_missed_reversal_pre_submit_min_risk_score() -> int:
+    return max(
+        1,
+        _env_int("KORSTOCKSCAN_RISING_MISSED_REVERSAL_PRE_SUBMIT_MIN_RISK_SCORE", 3),
+    )
+
+
+def _rising_missed_reversal_pre_submit_tick_accel_min() -> float:
+    return _env_float("KORSTOCKSCAN_RISING_MISSED_REVERSAL_PRE_SUBMIT_TICK_ACCEL_MIN", 1.0)
+
+
+def _rising_missed_reversal_pre_submit_qi_max() -> float:
+    return _env_float("KORSTOCKSCAN_RISING_MISSED_REVERSAL_PRE_SUBMIT_QI_MAX", 0.25)
+
+
+def _rising_missed_reversal_pre_submit_ofi_norm_min() -> float:
+    return _env_float("KORSTOCKSCAN_RISING_MISSED_REVERSAL_PRE_SUBMIT_OFI_NORM_MIN", 0.0)
+
+
+def _rising_missed_reversal_pre_submit_low_buy_pressure_max() -> float:
+    return _env_float("KORSTOCKSCAN_RISING_MISSED_REVERSAL_PRE_SUBMIT_LOW_BUY_PRESSURE_MAX", 45.0)
+
+
+def _rising_missed_reversal_pre_submit_high_buy_pressure_min() -> float:
+    return _env_float("KORSTOCKSCAN_RISING_MISSED_REVERSAL_PRE_SUBMIT_HIGH_BUY_PRESSURE_MIN", 70.0)
+
+
+def _rising_missed_reversal_prefixed_fields(fields: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in (fields or {}).items()
+        if str(key).startswith("rising_missed_reversal_pre_submit_")
+    }
+
+
+def _rising_missed_reversal_up_volatile_recheck_enabled() -> bool:
+    return _env_bool("KORSTOCKSCAN_RISING_MISSED_REVERSAL_UP_VOLATILE_RECHECK_ENABLED", True)
+
+
+def _rising_missed_reversal_up_volatile_recheck_ttl_sec() -> float:
+    return max(
+        1.0,
+        _env_float("KORSTOCKSCAN_RISING_MISSED_REVERSAL_UP_VOLATILE_RECHECK_TTL_SEC", 20.0),
+    )
+
+
+def _rising_missed_reversal_up_watch_recheck_enabled() -> bool:
+    return _env_bool("KORSTOCKSCAN_RISING_MISSED_REVERSAL_UP_WATCH_RECHECK_ENABLED", True)
+
+
+def _rising_missed_reversal_up_watch_recheck_ttl_sec() -> float:
+    return max(
+        1.0,
+        _env_float("KORSTOCKSCAN_RISING_MISSED_REVERSAL_UP_WATCH_RECHECK_TTL_SEC", 30.0),
+    )
+
+
+def _rising_missed_freshness_envelope_recheck_ttl_sec() -> float:
+    return max(
+        1.0,
+        _env_float("KORSTOCKSCAN_RISING_MISSED_FRESHNESS_ENVELOPE_RECHECK_TTL_SEC", 12.0),
+    )
+
+
+def _apply_rising_missed_freshness_envelope_recheck(
+    stock: dict | None,
+    code: str | None,
+    quality_guard: dict | None,
+    *,
+    now_ts: float | None = None,
+) -> dict[str, Any]:
+    stock = stock if isinstance(stock, dict) else {}
+    quality_guard = quality_guard if isinstance(quality_guard, dict) else {}
+    stale_gap = bool(quality_guard.get("rising_missed_scout_quality_guard_stale_ai_provenance_gap_blocked"))
+    if not stale_gap:
+        return {
+            "rising_missed_freshness_envelope_recheck_enqueued": False,
+            "rising_missed_freshness_envelope_recheck_reason": "not_missing_ai_freshness_gap",
+        }
+    now_value = time.time() if now_ts is None else float(now_ts)
+    ttl_sec = _rising_missed_freshness_envelope_recheck_ttl_sec()
+    until_epoch = now_value + ttl_sec
+    existing_until = _safe_float(stock.get("_scanner_rising_freshness_envelope_recheck_until_epoch"), 0.0)
+    recheck_until = max(existing_until, until_epoch)
+    set_fields = {
+        "_scanner_rising_freshness_envelope_recheck_until_epoch": recheck_until,
+        "_scanner_rising_entry_relief_reason": "freshness_envelope_recheck_pending",
+        "_scanner_rising_recheck_reason": "freshness_envelope_recheck_pending",
+        "_scanner_full_eval_budget_source": "freshness_envelope_recheck",
+        "rising_missed_freshness_envelope_recheck_armed": True,
+        "rising_missed_freshness_envelope_recheck_armed_at": now_value,
+        "rising_missed_freshness_envelope_recheck_code": code or "-",
+        "rising_missed_freshness_envelope_recheck_until_epoch": f"{recheck_until:.3f}",
+    }
+    _mutate_stock_state(stock, set_fields=set_fields)
+    return {
+        "rising_missed_freshness_envelope_recheck_enqueued": True,
+        "rising_missed_freshness_envelope_recheck_reason": "freshness_envelope_recheck_pending",
+        "rising_missed_freshness_envelope_recheck_ttl_sec": f"{ttl_sec:.3f}",
+        "rising_missed_freshness_envelope_recheck_until_epoch": f"{recheck_until:.3f}",
+        "rising_missed_freshness_envelope_recheck_source_block_reason": (
+            quality_guard.get("block_reason") or quality_guard.get("reason") or "-"
+        ),
+        "decision_authority": "source_quality_freshness_envelope_recheck_no_submit_authority",
+        "metric_role": "source_quality_gate",
+        "window_policy": "same_day_intraday_runtime_state",
+        "sample_floor": "not_applicable_source_quality_recheck",
+        "primary_decision_metric": "freshness_envelope_recheck_after_stale_missing_ai_provenance",
+        "source_quality_gate": "fresh_ws_or_rest_enriched_envelope_required",
+        "threshold_family": "rising_missed_freshness_envelope_recheck",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
+    }
+
+
+def _rising_missed_freshness_envelope_recheck_prefixed_fields(fields: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in (fields or {}).items()
+        if str(key).startswith("rising_missed_freshness_envelope_recheck_")
+    }
+
+
+def _rising_missed_reversal_up_volatile_prefixed_fields(fields: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in (fields or {}).items()
+        if str(key).startswith("rising_missed_reversal_up_volatile_")
+    }
+
+
+def _rising_missed_reversal_up_watch_prefixed_fields(fields: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in (fields or {}).items()
+        if str(key).startswith("rising_missed_reversal_up_watch_")
+    }
+
+
+def _rising_missed_reversal_up_volatile_text_blob(*sources: dict | None) -> str:
+    text_parts: list[str] = []
+    interesting_keys = (
+        "source_signature",
+        "scanner_source_signature",
+        "scanner_promotion_reason",
+        "components",
+        "component",
+        "latency_spread_block_bucket",
+        "latency_relief_block_reason",
+        "latency_spread_relief_block_reason",
+        "block_reason",
+        "reason",
+        "weak_ai_micro_entry_block_reason",
+        "weak_ai_micro_entry_block_block_reason",
+        "weak_ai_micro_entry_block_micro_state",
+        "orderbook_micro_state",
+        "micro_state",
+        "source_quality_state",
+        "source_quality_block_reason",
+        "rising_missed_scout_quality_guard_ai_action",
+        "rising_missed_scout_quality_guard_strength_reason",
+        "rising_missed_scout_quality_guard_strength_state",
+        "rising_missed_quality_guard_recheck_policy",
+        "rising_missed_entry_ai_retry_reason",
+        "rising_missed_entry_ai_retry_action",
+        "pre_submit_rest_orderbook_refresh_reason",
+        "rising_missed_submit_safety_backoff_reason",
+    )
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for key in interesting_keys:
+            value = source.get(key)
+            if value in (None, "", "-"):
+                continue
+            text_parts.append(str(value))
+    return " ".join(text_parts).upper()
+
+
+def _evaluate_rising_missed_reversal_up_watch_recheck(
+    *,
+    stock: dict | None,
+    runtime: dict | None,
+    quality_guard: dict | None,
+    source_stage: str,
+    now_ts: float | None = None,
+    backoff_fields: dict | None = None,
+) -> dict[str, Any]:
+    stock = stock if isinstance(stock, dict) else {}
+    runtime = runtime if isinstance(runtime, dict) else {}
+    quality_guard = quality_guard if isinstance(quality_guard, dict) else {}
+    backoff_fields = backoff_fields if isinstance(backoff_fields, dict) else {}
+    source_quality_fields = stock.get("last_watching_ai_source_quality_fields")
+    source_quality_fields = source_quality_fields if isinstance(source_quality_fields, dict) else {}
+
+    enabled = _rising_missed_reversal_up_watch_recheck_enabled()
+    text_blob = _rising_missed_reversal_up_volatile_text_blob(
+        stock,
+        runtime,
+        source_quality_fields,
+        quality_guard,
+        backoff_fields,
+    )
+    source_signature = str(
+        stock.get("source_signature")
+        or runtime.get("source_signature")
+        or source_quality_fields.get("source_signature")
+        or quality_guard.get("source_signature")
+        or "-"
+    ).strip()
+    low_rebound_source = bool(
+        "LOW_REBOUND_RISING_MISSED" in text_blob
+        or _safe_float(stock.get("low_rebound_pct") or stock.get("LowReboundPct"), 0.0) > 0.0
+    )
+    price_rank_stack = bool("PRICE_JUMP_START" in text_blob and "REALTIME_RANK_START" in text_blob)
+    rising_source = bool(low_rebound_source or price_rank_stack)
+    stale_weak_blocked = bool(
+        quality_guard.get("rising_missed_scout_quality_guard_stale_weak_blocked")
+        or str(quality_guard.get("block_reason") or "").strip() == "stale_quote_with_weak_ai_or_strength"
+    )
+    adverse_micro_blocked = bool(quality_guard.get("rising_missed_scout_quality_guard_adverse_micro_blocked"))
+    ai_action = str(quality_guard.get("rising_missed_scout_quality_guard_ai_action") or "").strip().upper()
+    reject_or_delay = bool(
+        ai_action in {"DROP", "NOT_EVALUATED", "UNAVAILABLE", "FAIL_CLOSED"}
+        or "REJECT" in text_blob
+        or "DELAY" in text_blob
+    )
+    weak_ai_or_wait = bool(
+        (
+            quality_guard.get("rising_missed_scout_quality_guard_weak_ai")
+            and not reject_or_delay
+        )
+        or ai_action == "WAIT"
+        or "AI_WAIT" in text_blob
+        or "WEAK_AI_SCORE" in text_blob
+    )
+    weak_strength = bool(quality_guard.get("rising_missed_scout_quality_guard_weak_strength"))
+    recent_weak = bool(quality_guard.get("rising_missed_scout_quality_guard_recent_weak_ai_micro_block"))
+    rest_orderbook_fresh = bool("REST_ORDERBOOK_FRESH" in text_blob or "KA10004_REST_ORDERBOOK" in text_blob)
+    ai_recheck_success = bool("AI_RECHECK_SUCCESS" in text_blob or "ENTRY_AI_RETRY_SUCCESS" in text_blob)
+    watch = bool(
+        enabled
+        and rising_source
+        and stale_weak_blocked
+        and not adverse_micro_blocked
+        and not reject_or_delay
+        and (weak_ai_or_wait or weak_strength or recent_weak)
+    )
+    ttl_sec = _rising_missed_reversal_up_watch_recheck_ttl_sec()
+    now_value = time.time() if now_ts is None else float(now_ts)
+    recheck_until = now_value + ttl_sec if watch else 0.0
+    components = []
+    if low_rebound_source:
+        components.append("low_rebound_rising_missed")
+    if price_rank_stack:
+        components.append("price_jump_realtime_rank")
+    if weak_ai_or_wait:
+        components.append("ai_wait_or_weak_score")
+    if reject_or_delay:
+        components.append("reject_or_delay_excluded")
+    if weak_strength:
+        components.append("weak_strength")
+    if recent_weak:
+        components.append("recent_weak_ai_micro")
+    if rest_orderbook_fresh:
+        components.append("rest_orderbook_fresh")
+    if ai_recheck_success:
+        components.append("ai_recheck_success")
+
+    if not enabled:
+        reason = "reversal_up_watch_recheck_disabled"
+    elif not rising_source:
+        reason = "reversal_up_watch_source_missing"
+    elif adverse_micro_blocked:
+        reason = "adverse_micro_guard_kept"
+    elif reject_or_delay:
+        reason = "reversal_up_reject_or_delay_excluded"
+    elif not stale_weak_blocked:
+        reason = "not_stale_weak_quality_block"
+    elif not (weak_ai_or_wait or weak_strength or recent_weak):
+        reason = "weak_evidence_missing"
+    else:
+        reason = "reversal_up_watch_recheck_pending"
+
+    return {
+        "rising_missed_reversal_up_watch_enabled": bool(enabled),
+        "rising_missed_reversal_up_watch": bool(watch),
+        "rising_missed_reversal_up_watch_recheck_enqueued": bool(watch),
+        "rising_missed_reversal_up_watch_recheck_reason": reason,
+        "rising_missed_reversal_up_watch_source_stage": source_stage or "-",
+        "rising_missed_reversal_up_watch_source_signature": source_signature or "-",
+        "rising_missed_reversal_up_watch_components": ",".join(components) if components else "-",
+        "rising_missed_reversal_up_watch_low_rebound_source": bool(low_rebound_source),
+        "rising_missed_reversal_up_watch_price_rank_stack": bool(price_rank_stack),
+        "rising_missed_reversal_up_watch_stale_weak_blocked": bool(stale_weak_blocked),
+        "rising_missed_reversal_up_watch_adverse_micro_blocked": bool(adverse_micro_blocked),
+        "rising_missed_reversal_up_watch_reject_or_delay_excluded": bool(reject_or_delay),
+        "rising_missed_reversal_up_watch_ai_wait_or_weak_score": bool(weak_ai_or_wait),
+        "rising_missed_reversal_up_watch_weak_strength": bool(weak_strength),
+        "rising_missed_reversal_up_watch_recent_weak_ai_micro": bool(recent_weak),
+        "rising_missed_reversal_up_watch_rest_orderbook_fresh": bool(rest_orderbook_fresh),
+        "rising_missed_reversal_up_watch_ai_recheck_success": bool(ai_recheck_success),
+        "rising_missed_reversal_up_watch_recheck_ttl_sec": f"{ttl_sec:.3f}",
+        "rising_missed_reversal_up_watch_recheck_until_epoch": (
+            f"{recheck_until:.3f}" if watch else "not_applicable_recheck_until_epoch"
+        ),
+        "metric_role": "funnel_count",
+        "decision_authority": "source_only_reversal_up_watch_recheck_no_submit_authority",
+        "window_policy": "same_day_intraday_runtime_state",
+        "sample_floor": "not_applicable_source_only_recheck",
+        "primary_decision_metric": "rising_source_plus_stale_weak_quality_block",
+        "source_quality_gate": "source_signature_and_quality_guard_context_present",
+        "threshold_family": "rising_missed_reversal_up_watch_recheck",
+        "gate_action": "scanner_recheck_tag_only" if watch else "observe_only",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
+    }
+
+
+def _apply_rising_missed_reversal_up_watch_recheck(
+    stock: dict | None,
+    code: str | None,
+    fields: dict[str, Any],
+    *,
+    now_ts: float | None = None,
+) -> dict[str, Any]:
+    stock = stock if isinstance(stock, dict) else {}
+    fields = fields if isinstance(fields, dict) else {}
+    if not fields.get("rising_missed_reversal_up_watch_recheck_enqueued"):
+        return fields
+    now_value = time.time() if now_ts is None else float(now_ts)
+    ttl_sec = _safe_float(fields.get("rising_missed_reversal_up_watch_recheck_ttl_sec"), 30.0)
+    until_epoch = _safe_float(fields.get("rising_missed_reversal_up_watch_recheck_until_epoch"), 0.0)
+    if until_epoch <= now_value:
+        until_epoch = now_value + max(1.0, ttl_sec)
+    existing_until = _safe_float(stock.get("_scanner_rising_reversal_up_watch_recheck_until_epoch"), 0.0)
+    recheck_until = max(existing_until, until_epoch)
+    set_fields = {
+        "_scanner_rising_reversal_up_watch_recheck_until_epoch": recheck_until,
+        "_scanner_rising_entry_relief_reason": "reversal_up_watch_recheck_pending",
+        "_scanner_full_eval_budget_source": "reversal_up_watch_recheck",
+        "rising_missed_reversal_up_watch_recheck_armed": True,
+        "rising_missed_reversal_up_watch_recheck_armed_at": now_value,
+        "rising_missed_reversal_up_watch_recheck_code": code or "-",
+        "rising_missed_reversal_up_watch_recheck_until_epoch": f"{recheck_until:.3f}",
+    }
+    set_fields.update(_rising_missed_reversal_up_watch_prefixed_fields(fields))
+    _mutate_stock_state(stock, set_fields=set_fields)
+    fields["rising_missed_reversal_up_watch_recheck_until_epoch"] = f"{recheck_until:.3f}"
+    return fields
+
+
+def _evaluate_rising_missed_reversal_up_volatile_recheck(
+    *,
+    stock: dict | None,
+    runtime: dict | None,
+    source_stage: str,
+    latency_gate: dict | None = None,
+    orderbook_fields: dict | None = None,
+    microstructure_fields: dict | None = None,
+    block_fields: dict | None = None,
+    now_ts: float | None = None,
+    rising_missed_entry_lineage: bool | None = None,
+) -> dict[str, Any]:
+    stock = stock if isinstance(stock, dict) else {}
+    runtime = runtime if isinstance(runtime, dict) else {}
+    latency_gate = latency_gate if isinstance(latency_gate, dict) else {}
+    orderbook_fields = orderbook_fields if isinstance(orderbook_fields, dict) else {}
+    microstructure_fields = microstructure_fields if isinstance(microstructure_fields, dict) else {}
+    block_fields = block_fields if isinstance(block_fields, dict) else {}
+    source_quality_fields = stock.get("last_watching_ai_source_quality_fields")
+    source_quality_fields = source_quality_fields if isinstance(source_quality_fields, dict) else {}
+    enabled = _rising_missed_reversal_up_volatile_recheck_enabled()
+    is_rising_missed = (
+        bool(rising_missed_entry_lineage)
+        if rising_missed_entry_lineage is not None
+        else _has_rising_missed_entry_lineage(stock, runtime) or _has_rising_missed_watch_source_marker(stock)
+    )
+    text_blob = _rising_missed_reversal_up_volatile_text_blob(
+        stock,
+        runtime,
+        source_quality_fields,
+        latency_gate,
+        orderbook_fields,
+        microstructure_fields,
+        block_fields,
+    )
+    source_signature = str(
+        stock.get("source_signature")
+        or runtime.get("source_signature")
+        or source_quality_fields.get("source_signature")
+        or "-"
+    ).strip()
+    rank_value_stack = "REALTIME_RANK_START" in text_blob and "VALUE_TOP" in text_blob
+    high_or_bid_imbalance = "NEW_HIGH_CONFIRMATION" in text_blob or "BID_IMBALANCE_SURGE" in text_blob
+    spread_caution = "SPREAD_ABOVE_CAUTION" in text_blob or "SPREAD_ABOVE_CAUTION_BELOW_GUARD_CAP" in text_blob
+    true_ofi_below_floor = "TRUE_OFI_BELOW_FLOOR" in text_blob
+    micro_state = str(
+        _entry_submit_field(
+            block_fields,
+            latency_gate,
+            orderbook_fields,
+            microstructure_fields,
+            source_quality_fields,
+            stock,
+            key="weak_ai_micro_entry_block_micro_state",
+            aliases=("orderbook_micro_state", "micro_state", "quote_fresh_composite_micro_state"),
+            default="",
+        )
+        or ""
+    ).strip().lower()
+    micro_neutral = bool(
+        micro_state == "neutral"
+        or "WEAK_AI_MICRO_NEUTRAL" in text_blob
+        or " MICRO_NEUTRAL" in text_blob
+        or "NEUTRAL" in text_blob and "MICRO" in text_blob
+    )
+    volatile_evidence = bool(spread_caution or true_ofi_below_floor or micro_neutral)
+    watch = bool(enabled and is_rising_missed and rank_value_stack and high_or_bid_imbalance and volatile_evidence)
+    ttl_sec = _rising_missed_reversal_up_volatile_recheck_ttl_sec()
+    now_value = time.time() if now_ts is None else float(now_ts)
+    recheck_until = now_value + ttl_sec if watch else 0.0
+    components = []
+    if spread_caution:
+        components.append("spread_above_caution")
+    if true_ofi_below_floor:
+        components.append("true_ofi_below_floor")
+    if micro_neutral:
+        components.append("micro_neutral")
+    if not enabled:
+        reason = "reversal_up_volatile_recheck_disabled"
+    elif not is_rising_missed:
+        reason = "not_rising_missed_lineage"
+    elif not rank_value_stack:
+        reason = "rank_value_stack_missing"
+    elif not high_or_bid_imbalance:
+        reason = "high_confirmation_or_bid_imbalance_missing"
+    elif not volatile_evidence:
+        reason = "volatile_evidence_missing"
+    else:
+        reason = "reversal_up_volatile_recheck_pending"
+    return {
+        "rising_missed_reversal_up_volatile_watch_enabled": bool(enabled),
+        "rising_missed_reversal_up_volatile_watch": bool(watch),
+        "rising_missed_reversal_up_volatile_recheck_enqueued": bool(watch),
+        "rising_missed_reversal_up_volatile_recheck_reason": reason,
+        "rising_missed_reversal_up_volatile_source_stage": source_stage or "-",
+        "rising_missed_reversal_up_volatile_source_signature": source_signature or "-",
+        "rising_missed_reversal_up_volatile_components": ",".join(components) if components else "-",
+        "rising_missed_reversal_up_volatile_entry_lineage": bool(is_rising_missed),
+        "rising_missed_reversal_up_volatile_rank_value_stack": bool(rank_value_stack),
+        "rising_missed_reversal_up_volatile_high_confirmation_or_bid_imbalance": bool(high_or_bid_imbalance),
+        "rising_missed_reversal_up_volatile_spread_caution": bool(spread_caution),
+        "rising_missed_reversal_up_volatile_true_ofi_below_floor": bool(true_ofi_below_floor),
+        "rising_missed_reversal_up_volatile_micro_neutral": bool(micro_neutral),
+        "rising_missed_reversal_up_volatile_micro_state": micro_state or "-",
+        "rising_missed_reversal_up_volatile_recheck_ttl_sec": f"{ttl_sec:.3f}",
+        "rising_missed_reversal_up_volatile_recheck_until_epoch": (
+            f"{recheck_until:.3f}" if watch else "not_applicable_recheck_until_epoch"
+        ),
+        "metric_role": "funnel_count",
+        "decision_authority": "source_only_reversal_up_volatile_recheck_no_submit_authority",
+        "window_policy": "same_day_intraday_runtime_state",
+        "sample_floor": "not_applicable_source_only_recheck",
+        "primary_decision_metric": "rank_value_high_confirmation_plus_spread_ofi_or_micro_neutral",
+        "source_quality_gate": "source_signature_and_blocker_context_present",
+        "threshold_family": "rising_missed_reversal_up_volatile_recheck",
+        "gate_action": "scanner_recheck_tag_only" if watch else "observe_only",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
+    }
+
+
+def _apply_rising_missed_reversal_up_volatile_recheck(
+    stock: dict | None,
+    code: str | None,
+    fields: dict[str, Any],
+    *,
+    now_ts: float | None = None,
+) -> dict[str, Any]:
+    stock = stock if isinstance(stock, dict) else {}
+    fields = fields if isinstance(fields, dict) else {}
+    if not fields.get("rising_missed_reversal_up_volatile_recheck_enqueued"):
+        return fields
+    now_value = time.time() if now_ts is None else float(now_ts)
+    ttl_sec = _safe_float(fields.get("rising_missed_reversal_up_volatile_recheck_ttl_sec"), 20.0)
+    until_epoch = _safe_float(fields.get("rising_missed_reversal_up_volatile_recheck_until_epoch"), 0.0)
+    if until_epoch <= now_value:
+        until_epoch = now_value + max(1.0, ttl_sec)
+    existing_until = _safe_float(stock.get("_scanner_rising_reversal_up_volatile_recheck_until_epoch"), 0.0)
+    recheck_until = max(existing_until, until_epoch)
+    set_fields = {
+        "_scanner_rising_reversal_up_volatile_recheck_until_epoch": recheck_until,
+        "_scanner_rising_entry_relief_reason": "reversal_up_volatile_recheck_pending",
+        "_scanner_full_eval_budget_source": "reversal_up_volatile_recheck",
+        "rising_missed_reversal_up_volatile_recheck_armed": True,
+        "rising_missed_reversal_up_volatile_recheck_armed_at": now_value,
+        "rising_missed_reversal_up_volatile_recheck_code": code or "-",
+        "rising_missed_reversal_up_volatile_recheck_until_epoch": f"{recheck_until:.3f}",
+    }
+    set_fields.update(_rising_missed_reversal_up_volatile_prefixed_fields(fields))
+    _mutate_stock_state(stock, set_fields=set_fields)
+    fields["rising_missed_reversal_up_volatile_recheck_until_epoch"] = f"{recheck_until:.3f}"
+    return fields
+
+
+def _evaluate_rising_missed_reversal_pre_submit_guard(
+    *,
+    stock: dict | None,
+    runtime: dict | None,
+    latency_gate: dict | None = None,
+    ws_data: dict | None = None,
+    orderbook_fields: dict | None = None,
+    microstructure_fields: dict | None = None,
+    rising_missed_entry_lineage: bool | None = None,
+) -> dict[str, Any]:
+    stock = stock if isinstance(stock, dict) else {}
+    runtime = runtime if isinstance(runtime, dict) else {}
+    latency_gate = latency_gate if isinstance(latency_gate, dict) else {}
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    orderbook_fields = orderbook_fields if isinstance(orderbook_fields, dict) else {}
+    microstructure_fields = microstructure_fields if isinstance(microstructure_fields, dict) else {}
+    source_quality_fields = stock.get("last_watching_ai_source_quality_fields")
+    source_quality_fields = source_quality_fields if isinstance(source_quality_fields, dict) else {}
+    market_data_fields = market_data_enrichment_log_fields(ws_data)
+
+    enabled = _rising_missed_reversal_pre_submit_guard_enabled()
+    is_rising_missed = (
+        bool(rising_missed_entry_lineage)
+        if rising_missed_entry_lineage is not None
+        else _has_rising_missed_entry_lineage(stock, runtime)
+    )
+    min_jump_pct = _rising_missed_reversal_pre_submit_min_jump_pct()
+    min_risk_score = _rising_missed_reversal_pre_submit_min_risk_score()
+    tick_accel_min = _rising_missed_reversal_pre_submit_tick_accel_min()
+    qi_max = _rising_missed_reversal_pre_submit_qi_max()
+    ofi_norm_min = _rising_missed_reversal_pre_submit_ofi_norm_min()
+    low_buy_pressure_max = _rising_missed_reversal_pre_submit_low_buy_pressure_max()
+    high_buy_pressure_min = _rising_missed_reversal_pre_submit_high_buy_pressure_min()
+
+    sources = (
+        latency_gate,
+        microstructure_fields,
+        orderbook_fields,
+        source_quality_fields,
+        runtime,
+        ws_data,
+        stock,
+    )
+    recent_jump_pct = _rising_missed_submit_safety_backoff_raw_positive_delta_pct(stock)
+    tick_acceleration_ratio, raw_accel_ratio = _rising_missed_tick_numeric_field(
+        *sources,
+        key="tick_acceleration_ratio",
+        aliases=("tick_accel", "late_entry_fresh_tick_acceleration_ratio"),
+    )
+    micro_state = str(
+        _entry_submit_field(
+            *sources,
+            key="orderbook_micro_state",
+            aliases=("micro_state", "weak_ai_micro_entry_block_micro_state"),
+            default="",
+        )
+        or ""
+    ).strip().lower()
+    qi, qi_available, _qi_source = _first_numeric_field_with_source(
+        *sources,
+        key="orderbook_micro_qi",
+        aliases=("qi", "weak_ai_micro_entry_block_qi"),
+    )
+    ofi_norm, ofi_available, _ofi_source = _first_numeric_field_with_source(
+        *sources,
+        key="orderbook_micro_ofi_norm",
+        aliases=("ofi_norm", "true_ofi_ewma", "micro_estimator_true_ofi_ewma"),
+    )
+    buy_pressure, buy_pressure_available, _buy_pressure_source = _first_numeric_field_with_source(
+        *sources,
+        key="buy_pressure_10t",
+        aliases=("buy_pressure", "last_buy_pressure_10t", "late_entry_fresh_buy_pressure_10t"),
+    )
+
+    micro_state_available = bool(micro_state and micro_state not in {"-", "unknown", "missing", "not_evaluated"})
+    core_available = bool(
+        tick_acceleration_ratio is not None
+        or micro_state_available
+        or qi_available
+        or ofi_available
+        or buy_pressure_available
+    )
+    jump_scope = recent_jump_pct >= min_jump_pct
+    reasons: list[str] = []
+    if tick_acceleration_ratio is not None and tick_acceleration_ratio < tick_accel_min:
+        reasons.append("tick_acceleration_ratio_lt_1")
+    if micro_state_available and micro_state not in {"bullish", "strong_bullish"}:
+        reasons.append("micro_state_not_bullish")
+    if qi_available and qi <= qi_max:
+        reasons.append("qi_at_or_below_0_25")
+    if ofi_available and ofi_norm < ofi_norm_min:
+        reasons.append("ofi_norm_below_0")
+    if buy_pressure_available and buy_pressure < low_buy_pressure_max:
+        reasons.append("buy_pressure_below_45")
+    if buy_pressure_available and buy_pressure >= high_buy_pressure_min and (
+        (qi_available and qi <= qi_max) or (ofi_available and ofi_norm < ofi_norm_min)
+    ):
+        reasons.append("buy_pressure_high_with_weak_micro")
+    risk_score = len(reasons)
+    verification_missing = bool(jump_scope and not core_available)
+    blocked = bool(enabled and is_rising_missed and jump_scope and core_available and risk_score >= min_risk_score)
+    if not enabled:
+        risk_tag = "disabled"
+        reason = "reversal_pre_submit_guard_disabled"
+    elif not is_rising_missed:
+        risk_tag = "not_rising_missed"
+        reason = "not_rising_missed_lineage"
+    elif not jump_scope:
+        risk_tag = "none"
+        reason = "recent_jump_below_min"
+    elif verification_missing:
+        risk_tag = "verification_missing"
+        reason = "reversal_pre_submit_core_fields_missing"
+    elif blocked:
+        risk_tag = "hold_candidate"
+        reason = "reversal_pre_submit_risk"
+    elif risk_score > 0:
+        risk_tag = "watch"
+        reason = "reversal_pre_submit_risk_below_block_score"
+    else:
+        risk_tag = "none"
+        reason = "reversal_pre_submit_guard_pass"
+
+    return {
+        **_rising_missed_submit_safety_filter_fields(blocked=blocked),
+        **market_data_fields,
+        "blocked": blocked,
+        "reason": reason,
+        "block_reason": reason if blocked else "",
+        "rising_missed_reversal_pre_submit_guard_enabled": bool(enabled),
+        "rising_missed_reversal_pre_submit_entry_lineage": bool(is_rising_missed),
+        "rising_missed_reversal_pre_submit_recent_jump_pct": f"{recent_jump_pct:.4f}",
+        "rising_missed_reversal_pre_submit_min_jump_pct": f"{min_jump_pct:.4f}",
+        "rising_missed_reversal_pre_submit_jump_scope": bool(jump_scope),
+        "rising_missed_reversal_pre_submit_core_available": bool(core_available),
+        "rising_missed_reversal_pre_submit_verification_missing": bool(verification_missing),
+        "rising_missed_reversal_pre_submit_risk_tag": risk_tag,
+        "rising_missed_reversal_pre_submit_risk_score": int(risk_score),
+        "rising_missed_reversal_pre_submit_min_risk_score": int(min_risk_score),
+        "rising_missed_reversal_pre_submit_risk_reasons": ",".join(reasons) if reasons else "-",
+        "rising_missed_reversal_pre_submit_tick_acceleration_ratio": (
+            f"{tick_acceleration_ratio:.3f}" if tick_acceleration_ratio is not None else "-"
+        ),
+        "rising_missed_reversal_pre_submit_tick_acceleration_ratio_raw": (
+            raw_accel_ratio if raw_accel_ratio not in (None, "") else "-"
+        ),
+        "rising_missed_reversal_pre_submit_tick_accel_min": f"{tick_accel_min:.3f}",
+        "rising_missed_reversal_pre_submit_micro_state": micro_state or "-",
+        "rising_missed_reversal_pre_submit_qi": f"{qi:.6f}" if qi_available else "-",
+        "rising_missed_reversal_pre_submit_qi_max": f"{qi_max:.6f}",
+        "rising_missed_reversal_pre_submit_ofi_norm": f"{ofi_norm:.6f}" if ofi_available else "-",
+        "rising_missed_reversal_pre_submit_ofi_norm_min": f"{ofi_norm_min:.6f}",
+        "rising_missed_reversal_pre_submit_buy_pressure_10t": (
+            f"{buy_pressure:.3f}" if buy_pressure_available else "-"
+        ),
+        "rising_missed_reversal_pre_submit_low_buy_pressure_max": f"{low_buy_pressure_max:.3f}",
+        "rising_missed_reversal_pre_submit_high_buy_pressure_min": f"{high_buy_pressure_min:.3f}",
+        "metric_role": "safety_veto" if blocked else "diagnostic",
+        "decision_authority": "real_scalping_rising_missed_reversal_pre_submit_guard",
+        "window_policy": "same_day_intraday_runtime_state",
+        "sample_floor": "not_applicable_runtime_guard",
+        "primary_decision_metric": "recent_jump_pct_plus_tick_micro_reversal_risk_score",
+        "source_quality_gate": "tag_only_when_tick_micro_core_missing",
+        "threshold_family": "rising_missed_reversal_pre_submit_guard",
+        "gate_action": "pre_submit_block" if blocked else "observe_only",
+        "runtime_effect": bool(blocked),
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": bool(blocked),
+        "forbidden_uses": TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
+    }
+
+
 def _rising_missed_tick_numeric_field(*sources: dict | None, key: str, aliases=None):
     raw = _entry_submit_field(*sources, key=key, aliases=aliases or (), default=None)
     value = _safe_float(raw, None)
@@ -19714,10 +20476,20 @@ def _quote_stale_for_rising_missed_scout_quality_guard(
     stock: dict | None,
     ws_data: dict | None,
     runtime: dict | None,
+    decision_log_fields: dict | None = None,
 ) -> tuple[bool, dict[str, Any]]:
     stock = stock if isinstance(stock, dict) else {}
     ws_data = ws_data if isinstance(ws_data, dict) else {}
     runtime = runtime if isinstance(runtime, dict) else {}
+    decision_log_fields = decision_log_fields if isinstance(decision_log_fields, dict) else {}
+    market_data_source = dict(ws_data)
+    market_data_source.update(
+        {
+            key: value
+            for key, value in decision_log_fields.items()
+            if str(key).startswith("market_data_")
+        }
+    )
     max_age_ms = _rising_missed_scout_quality_guard_max_quote_age_ms()
     explicit_stale = any(
         _boolish_true(source.get(key))
@@ -19760,11 +20532,11 @@ def _quote_stale_for_rising_missed_scout_quality_guard(
         if quote_age_sec is not None:
             quote_age_ms = quote_age_sec * 1000.0
     age_stale = quote_age_ms is not None and quote_age_ms > max_age_ms
-    market_data_fields = market_data_enrichment_log_fields(ws_data)
-    market_data_state = str(ws_data.get("market_data_freshness_state") or "").strip().lower()
-    market_data_orderbook_state = str(ws_data.get("market_data_orderbook_state") or "").strip().lower()
+    market_data_fields = market_data_enrichment_log_fields(market_data_source)
+    market_data_state = str(market_data_source.get("market_data_freshness_state") or "").strip().lower()
+    market_data_orderbook_state = str(market_data_source.get("market_data_orderbook_state") or "").strip().lower()
     market_data_effective_quote_age_ms = _safe_float(
-        ws_data.get("market_data_effective_quote_age_ms"),
+        market_data_source.get("market_data_effective_quote_age_ms"),
         None,
     )
     if (
@@ -19897,26 +20669,37 @@ def _weak_ai_for_rising_missed_scout_quality_guard(
     stock = stock if isinstance(stock, dict) else {}
     runtime = runtime if isinstance(runtime, dict) else {}
     max_score = _rising_missed_scout_quality_guard_weak_ai_max_score()
-    ai_score = _safe_float(
-        _entry_submit_field(
-            runtime,
-            stock,
-            key="current_ai_score",
-            aliases=("last_watching_ai_score", "ai_score", "rt_ai_score"),
-            default=None,
-        ),
-        None,
+
+    def _first_present_value(*sources: dict | None, key: str, aliases: tuple[str, ...] = ()) -> tuple[Any, bool, str]:
+        missing_tokens = {"", "-", "none", "null", "nan", "nat"}
+        for source in sources:
+            if not isinstance(source, dict):
+                continue
+            for candidate_key in (key, *aliases):
+                if candidate_key not in source:
+                    continue
+                value = source.get(candidate_key)
+                if value is None:
+                    continue
+                if isinstance(value, str) and value.strip().lower() in missing_tokens:
+                    continue
+                return value, True, candidate_key
+        return None, False, ""
+
+    raw_ai_score, ai_score_provenance_present, ai_score_source_key = _first_present_value(
+        runtime,
+        stock,
+        key="current_ai_score",
+        aliases=("last_watching_ai_score", "ai_score", "rt_ai_score"),
     )
-    ai_action = str(
-        _entry_submit_field(
-            runtime,
-            stock,
-            key="ai_action",
-            aliases=("last_watching_ai_action", "entry_ai_action", "current_ai_action"),
-            default="",
-        )
-        or ""
-    ).strip().upper()
+    ai_score = _safe_float(raw_ai_score, None)
+    raw_ai_action, ai_action_provenance_present, ai_action_source_key = _first_present_value(
+        runtime,
+        stock,
+        key="ai_action",
+        aliases=("last_watching_ai_action", "entry_ai_action", "current_ai_action"),
+    )
+    ai_action = str(raw_ai_action or "").strip().upper()
     unusable = any(
         _boolish_true(stock.get(key))
         for key in (
@@ -19925,14 +20708,45 @@ def _weak_ai_for_rising_missed_scout_quality_guard(
             "ai_score_unusable",
         )
     )
-    weak_score = ai_score is not None and ai_score <= max_score
-    weak_action = ai_action in {"DROP", "WAIT", "NOT_EVALUATED", "UNAVAILABLE", "FAIL_CLOSED"}
-    return bool(unusable or weak_score or weak_action), {
-        "rising_missed_scout_quality_guard_weak_ai": bool(unusable or weak_score or weak_action),
+
+    score_defaulted_without_action = bool(
+        ai_score_provenance_present
+        and not ai_action_provenance_present
+        and ai_score is not None
+        and abs(ai_score - 50.0) < 0.0001
+    )
+    ai_provenance_missing = bool(
+        (not ai_score_provenance_present and not ai_action_provenance_present)
+        or score_defaulted_without_action
+    )
+    weak_score = bool(ai_score is not None and ai_score <= max_score and not ai_provenance_missing)
+    weak_action = bool(
+        ai_action_provenance_present
+        and ai_action in {"DROP", "WAIT", "NOT_EVALUATED", "UNAVAILABLE", "FAIL_CLOSED"}
+    )
+    weak_source = "none"
+    if unusable:
+        weak_source = "ai_unusable"
+    elif weak_action:
+        weak_source = "weak_ai_action"
+    elif weak_score:
+        weak_source = "weak_ai_score"
+    elif ai_provenance_missing:
+        weak_source = "ai_provenance_missing"
+    weak_ai = bool(unusable or weak_score or weak_action)
+    return weak_ai, {
+        "rising_missed_scout_quality_guard_weak_ai": weak_ai,
         "rising_missed_scout_quality_guard_ai_score": f"{ai_score:.1f}" if ai_score is not None else "-",
         "rising_missed_scout_quality_guard_weak_ai_max_score": f"{max_score:.1f}",
         "rising_missed_scout_quality_guard_ai_action": ai_action or "-",
         "rising_missed_scout_quality_guard_ai_unusable": bool(unusable),
+        "rising_missed_scout_quality_guard_ai_provenance_missing": ai_provenance_missing,
+        "rising_missed_scout_quality_guard_ai_score_provenance_present": bool(ai_score_provenance_present),
+        "rising_missed_scout_quality_guard_ai_action_provenance_present": bool(ai_action_provenance_present),
+        "rising_missed_scout_quality_guard_ai_score_defaulted_without_action": score_defaulted_without_action,
+        "rising_missed_scout_quality_guard_ai_score_source_key": ai_score_source_key or "-",
+        "rising_missed_scout_quality_guard_ai_action_source_key": ai_action_source_key or "-",
+        "rising_missed_scout_quality_guard_weak_ai_source": weak_source,
     }
 
 
@@ -20137,7 +20951,12 @@ def _evaluate_rising_missed_scout_quality_guard(
     stock = stock if isinstance(stock, dict) else {}
     runtime = runtime if isinstance(runtime, dict) else {}
     enabled = _rising_missed_scout_quality_guard_enabled()
-    quote_stale, quote_fields = _quote_stale_for_rising_missed_scout_quality_guard(stock, ws_data, runtime)
+    quote_stale, quote_fields = _quote_stale_for_rising_missed_scout_quality_guard(
+        stock,
+        ws_data,
+        runtime,
+        decision_log_fields,
+    )
     weak_ai, ai_fields = _weak_ai_for_rising_missed_scout_quality_guard(stock, runtime)
     weak_strength, strength_fields = _weak_strength_for_rising_missed_scout_quality_guard(
         stock,
@@ -20156,11 +20975,15 @@ def _evaluate_rising_missed_scout_quality_guard(
     )
     recent_weak = bool(recent_weak_fields["rising_missed_scout_quality_guard_recent_weak_ai_micro_block"])
     weak_evidence = bool(weak_ai or weak_strength or recent_weak)
+    ai_provenance_gap = bool(ai_fields.get("rising_missed_scout_quality_guard_ai_provenance_missing"))
     stale_weak_blocked = bool(enabled and quote_stale and weak_evidence)
+    stale_ai_provenance_gap_blocked = bool(enabled and quote_stale and ai_provenance_gap and not weak_evidence)
     adverse_micro_blocked = bool(enabled and adverse_micro)
-    blocked = bool(stale_weak_blocked or adverse_micro_blocked)
+    blocked = bool(stale_weak_blocked or stale_ai_provenance_gap_blocked or adverse_micro_blocked)
     if stale_weak_blocked:
         block_reason = "stale_quote_with_weak_ai_or_strength"
+    elif stale_ai_provenance_gap_blocked:
+        block_reason = "stale_quote_with_missing_ai_provenance"
     elif adverse_micro_blocked:
         block_reason = "stale_adverse_micro_submit_safety" if quote_stale else "fresh_adverse_micro_submit_safety"
     else:
@@ -20177,6 +21000,7 @@ def _evaluate_rising_missed_scout_quality_guard(
         "rising_missed_scout_quality_guard_blocked": blocked,
         "rising_missed_scout_quality_guard_weak_evidence": weak_evidence,
         "rising_missed_scout_quality_guard_stale_weak_blocked": stale_weak_blocked,
+        "rising_missed_scout_quality_guard_stale_ai_provenance_gap_blocked": stale_ai_provenance_gap_blocked,
         "rising_missed_scout_quality_guard_adverse_micro_blocked": adverse_micro_blocked,
         "block_reason": block_reason,
         "reason": block_reason,
@@ -20185,7 +21009,7 @@ def _evaluate_rising_missed_scout_quality_guard(
         "decision_authority": "operator_runtime_override_rising_missed_scout_quality_guard",
         "window_policy": "same_day_intraday_runtime_state",
         "sample_floor": "not_applicable_runtime_guard",
-        "primary_decision_metric": "stale_quote_with_weak_ai_or_strength_or_adverse_micro",
+        "primary_decision_metric": "stale_quote_with_weak_ai_or_strength_or_missing_ai_provenance_or_adverse_micro",
         "source_quality_gate": "rising_missed_scout_quality_context_present",
         "threshold_family": "rising_missed_scout_quality_guard",
         "runtime_effect": blocked,
@@ -32174,6 +32998,39 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             if str(latency_gate.get("latency_state") or "").strip().upper() == "DANGER"
             else {}
         )
+        reversal_up_volatile_recheck_fields = _apply_rising_missed_reversal_up_volatile_recheck(
+            stock,
+            code,
+            _evaluate_rising_missed_reversal_up_volatile_recheck(
+                stock=stock,
+                runtime=runtime,
+                source_stage="latency_block",
+                latency_gate=latency_gate,
+                orderbook_fields=entry_orderbook_micro_fields,
+                microstructure_fields=_merge_entry_pipeline_field_groups(
+                    market_data_pre_submit_fields,
+                    latency_submit_backoff_fields,
+                ),
+                block_fields=latency_gate,
+                now_ts=now_ts,
+                rising_missed_entry_lineage=bool(
+                    forced_rising_missed_one_share
+                    or _has_rising_missed_entry_lineage(stock, runtime)
+                    or _has_rising_missed_watch_source_marker(stock)
+                ),
+            ),
+            now_ts=now_ts,
+        )
+        if reversal_up_volatile_recheck_fields.get(
+            "rising_missed_reversal_up_volatile_recheck_enqueued"
+        ):
+            _log_entry_pipeline(
+                stock,
+                code,
+                "rising_missed_reversal_up_volatile_recheck_enqueued",
+                source_block_stage="latency_block",
+                **reversal_up_volatile_recheck_fields,
+            )
         log_info(
             f"[LATENCY_ENTRY_BLOCK] {stock.get('name')}({code}) decision={latency_gate.get('decision')} "
             f"latency={latency_gate.get('latency_state')} reason={latency_gate.get('reason')} "
@@ -32275,6 +33132,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             latency_relief_block_reason=latency_gate.get('latency_relief_block_reason'),
             **_latency_spread_relief_micro_estimator_log_fields(latency_gate),
             **_latency_false_negative_remeasure_log_fields(latency_gate),
+            **_rising_missed_reversal_up_volatile_prefixed_fields(reversal_up_volatile_recheck_fields),
             pre_submit_quote_refresh_enabled=bool(latency_gate.get('pre_submit_quote_refresh_enabled')),
             pre_submit_quote_refresh_applied=bool(latency_gate.get('pre_submit_quote_refresh_applied')),
             pre_submit_quote_refresh_reason=latency_gate.get('pre_submit_quote_refresh_reason'),
@@ -32613,6 +33471,39 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             source_stage="real_weak_ai_micro_entry_block",
             runtime=runtime,
         )
+        reversal_up_volatile_recheck_fields = _apply_rising_missed_reversal_up_volatile_recheck(
+            stock,
+            code,
+            _evaluate_rising_missed_reversal_up_volatile_recheck(
+                stock=stock,
+                runtime=runtime,
+                source_stage="real_weak_ai_micro_entry_block",
+                latency_gate=latency_gate,
+                orderbook_fields=entry_orderbook_micro_fields,
+                microstructure_fields=microstructure_submit_log_fields,
+                block_fields=_merge_entry_pipeline_field_groups(
+                    weak_ai_micro_entry_block,
+                    weak_ai_micro_backoff_fields,
+                ),
+                now_ts=now_ts,
+                rising_missed_entry_lineage=bool(
+                    forced_rising_missed_one_share
+                    or _has_rising_missed_entry_lineage(stock, runtime)
+                    or _has_rising_missed_watch_source_marker(stock)
+                ),
+            ),
+            now_ts=now_ts,
+        )
+        if reversal_up_volatile_recheck_fields.get(
+            "rising_missed_reversal_up_volatile_recheck_enqueued"
+        ):
+            _log_entry_pipeline(
+                stock,
+                code,
+                "rising_missed_reversal_up_volatile_recheck_enqueued",
+                source_block_stage="real_weak_ai_micro_entry_block",
+                **reversal_up_volatile_recheck_fields,
+            )
         log_info(
             f"[REAL_WEAK_AI_MICRO_ENTRY_BLOCK] {stock.get('name')}({code}) "
             f"ai={weak_ai_micro_entry_block.get('weak_ai_micro_entry_block_ai_score')} "
@@ -32649,6 +33540,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 microstructure_submit_log_fields,
                 weak_ai_micro_entry_block,
                 weak_ai_micro_backoff_fields,
+                _rising_missed_reversal_up_volatile_prefixed_fields(reversal_up_volatile_recheck_fields),
             ),
         )
         _emit_scalp_entry_adm_snapshot(
@@ -32820,6 +33712,80 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             actual_order_submitted=False,
             broker_order_forbidden=True,
             extra_fields=rising_missed_tick_speed_guard,
+        )
+        return False
+    rising_missed_reversal_pre_submit_guard = _evaluate_rising_missed_reversal_pre_submit_guard(
+        stock=stock,
+        runtime=runtime,
+        latency_gate=latency_gate,
+        ws_data=ws_data,
+        orderbook_fields=entry_orderbook_micro_fields,
+        microstructure_fields=microstructure_submit_log_fields,
+        rising_missed_entry_lineage=bool(
+            forced_rising_missed_one_share or _has_rising_missed_entry_lineage(stock, runtime)
+        ),
+    )
+    _mutate_stock_state(
+        stock,
+        set_fields=_rising_missed_reversal_prefixed_fields(rising_missed_reversal_pre_submit_guard),
+    )
+    if rising_missed_reversal_pre_submit_guard.get("blocked"):
+        reversal_pre_submit_backoff_fields = _record_rising_missed_submit_safety_backoff(
+            stock,
+            code,
+            rising_missed_reversal_pre_submit_guard.get("block_reason")
+            or rising_missed_reversal_pre_submit_guard.get("reason"),
+            now_ts=now_ts,
+            source_stage="rising_missed_reversal_pre_submit_block",
+            runtime=runtime,
+        )
+        log_info(
+            f"[RISING_MISSED_REVERSAL_PRE_SUBMIT_BLOCK] {stock.get('name')}({code}) "
+            f"jump={rising_missed_reversal_pre_submit_guard.get('rising_missed_reversal_pre_submit_recent_jump_pct')} "
+            f"score={rising_missed_reversal_pre_submit_guard.get('rising_missed_reversal_pre_submit_risk_score')} "
+            f"tag={rising_missed_reversal_pre_submit_guard.get('rising_missed_reversal_pre_submit_risk_tag')} "
+            f"reasons={rising_missed_reversal_pre_submit_guard.get('rising_missed_reversal_pre_submit_risk_reasons')}"
+        )
+        _mutate_stock_state(
+            stock,
+            pop_fields=[
+                "rising_missed_normal_buy_bridge_allowed",
+                "rising_missed_one_share_entry_forced",
+                "rising_missed_one_share_scout",
+                "rising_missed_scout_upgrade_pending",
+                "rising_missed_scout_upgrade_order_pending",
+                "forced_entry_qty",
+                "forced_entry_reason",
+                "target_buy_price",
+            ],
+        )
+        clear_signal_reference(stock)
+        _log_entry_pipeline(
+            stock,
+            code,
+            "rising_missed_reversal_pre_submit_block",
+            forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON if forced_rising_missed_one_share else "-",
+            forced_entry_qty=forced_rising_missed_scout_qty,
+            **_merge_entry_pipeline_field_groups(
+                latency_price_snapshot,
+                entry_orderbook_micro_fields,
+                microstructure_submit_log_fields,
+                rising_missed_reversal_pre_submit_guard,
+                reversal_pre_submit_backoff_fields,
+            ),
+        )
+        _emit_scalp_entry_adm_snapshot(
+            stock,
+            code,
+            "rising_missed_reversal_pre_submit_block",
+            ai_score=latency_signal_score,
+            chosen_action="WAIT_REQUOTE",
+            latency_gate=latency_gate,
+            price_snapshot=latency_price_snapshot,
+            orderbook_fields=entry_orderbook_micro_fields,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            extra_fields=rising_missed_reversal_pre_submit_guard,
         )
         return False
     if forced_rising_missed_one_share:
@@ -35625,13 +36591,55 @@ def _maybe_submit_rising_missed_one_share_entry(
             runtime=runtime,
             rising_missed_entry_lineage=True,
         )
+        freshness_envelope_recheck_fields = _apply_rising_missed_freshness_envelope_recheck(
+            stock,
+            code,
+            quality_guard,
+            now_ts=_safe_float(runtime.get("now_ts"), time.time()),
+        )
+        if freshness_envelope_recheck_fields.get("rising_missed_freshness_envelope_recheck_enqueued"):
+            _log_entry_pipeline(
+                stock,
+                code,
+                "rising_missed_freshness_envelope_recheck_enqueued",
+                source_block_stage="rising_missed_scout_quality_guard_blocked",
+                **freshness_envelope_recheck_fields,
+            )
+        reversal_up_watch_recheck_fields = _apply_rising_missed_reversal_up_watch_recheck(
+            stock,
+            code,
+            _evaluate_rising_missed_reversal_up_watch_recheck(
+                stock=stock,
+                runtime=runtime,
+                quality_guard=quality_guard,
+                backoff_fields=scout_quality_backoff_fields,
+                source_stage="rising_missed_scout_quality_guard_blocked",
+                now_ts=_safe_float(runtime.get("now_ts"), time.time()),
+            ),
+            now_ts=_safe_float(runtime.get("now_ts"), time.time()),
+        )
+        if reversal_up_watch_recheck_fields.get("rising_missed_reversal_up_watch_recheck_enqueued"):
+            _log_entry_pipeline(
+                stock,
+                code,
+                "rising_missed_reversal_up_watch_recheck_enqueued",
+                source_block_stage="rising_missed_scout_quality_guard_blocked",
+                **reversal_up_watch_recheck_fields,
+            )
         _log_entry_pipeline(
             stock,
             code,
             "rising_missed_scout_quality_guard_blocked",
             forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON,
             forced_entry_qty=int(decision.forced_qty or 1),
-            **_merge_entry_pipeline_field_groups(quality_guard, scout_quality_backoff_fields),
+            **_merge_entry_pipeline_field_groups(
+                quality_guard,
+                scout_quality_backoff_fields,
+                _rising_missed_freshness_envelope_recheck_prefixed_fields(
+                    freshness_envelope_recheck_fields
+                ),
+                _rising_missed_reversal_up_watch_prefixed_fields(reversal_up_watch_recheck_fields),
+            ),
         )
         return True
 

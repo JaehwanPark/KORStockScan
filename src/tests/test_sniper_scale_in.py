@@ -3344,6 +3344,91 @@ def test_rising_missed_scout_quality_guard_fresh_ws_envelope_clears_stale_weak_e
     assert decision["block_reason"] == "quality_guard_pass"
 
 
+def test_rising_missed_scout_quality_guard_uses_decision_log_envelope_for_stale_quote(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_SCOUT_QUALITY_GUARD_ENABLED", raising=False)
+    stock = {
+        "last_watching_ai_score": 45,
+        "last_watching_ai_action": "WAIT",
+    }
+    ws_data = {
+        "curr": 10000,
+        "quote_stale": True,
+        "quote_age_ms": 11168.0,
+    }
+    decision_log_fields = {
+        "market_data_enrichment_applied": True,
+        "market_data_enrichment_consumer_result": "applied",
+        "market_data_freshness_state": "fresh_ws",
+        "market_data_orderbook_state": "fresh_ws",
+        "market_data_effective_quote_age_ms": 186.53,
+        "market_data_effective_price_source": "ws",
+    }
+
+    decision = state_handlers._evaluate_rising_missed_scout_quality_guard(
+        stock,
+        "024060",
+        ws_data,
+        {"now_ts": 1000.0},
+        decision_log_fields,
+    )
+
+    assert decision["rising_missed_scout_quality_guard_blocked"] is False
+    assert decision["rising_missed_scout_quality_guard_quote_stale"] is False
+    assert decision["rising_missed_scout_quality_guard_quote_age_ms"] == "186.5"
+    assert decision["market_data_freshness_state"] == "fresh_ws"
+    assert decision["market_data_enrichment_consumer_result"] == "applied"
+    assert decision["block_reason"] == "quality_guard_pass"
+
+
+def test_rising_missed_scout_quality_guard_splits_missing_ai_provenance_from_weak_score(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_SCOUT_QUALITY_GUARD_ENABLED", raising=False)
+
+    decision = state_handlers._evaluate_rising_missed_scout_quality_guard(
+        {},
+        "123457",
+        {
+            "curr": 10000,
+            "quote_age_ms": 8000.0,
+            "quote_stale": True,
+        },
+        {"now_ts": 1000.0, "current_ai_score": 50.0},
+        {},
+    )
+
+    assert decision["rising_missed_scout_quality_guard_blocked"] is True
+    assert decision["block_reason"] == "stale_quote_with_missing_ai_provenance"
+    assert decision["rising_missed_scout_quality_guard_weak_ai"] is False
+    assert decision["rising_missed_scout_quality_guard_weak_evidence"] is False
+    assert decision["rising_missed_scout_quality_guard_ai_provenance_missing"] is True
+    assert decision["rising_missed_scout_quality_guard_ai_score_defaulted_without_action"] is True
+    assert decision["rising_missed_scout_quality_guard_stale_ai_provenance_gap_blocked"] is True
+    assert decision["rising_missed_filter_layer"] == "submit_safety"
+    assert decision["actual_order_submitted"] is False
+    assert decision["broker_order_forbidden"] is True
+
+
+def test_rising_missed_scout_quality_guard_preserves_explicit_wait_as_weak_ai(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_SCOUT_QUALITY_GUARD_ENABLED", raising=False)
+
+    decision = state_handlers._evaluate_rising_missed_scout_quality_guard(
+        {"last_watching_ai_score": 50.0, "last_watching_ai_action": "WAIT"},
+        "123457",
+        {
+            "curr": 10000,
+            "quote_age_ms": 8000.0,
+            "quote_stale": True,
+        },
+        {"now_ts": 1000.0, "current_ai_score": 50.0},
+        {},
+    )
+
+    assert decision["rising_missed_scout_quality_guard_blocked"] is True
+    assert decision["block_reason"] == "stale_quote_with_weak_ai_or_strength"
+    assert decision["rising_missed_scout_quality_guard_weak_ai"] is True
+    assert decision["rising_missed_scout_quality_guard_ai_action"] == "WAIT"
+    assert decision["rising_missed_scout_quality_guard_ai_provenance_missing"] is False
+
+
 def test_rising_missed_scout_quality_guard_blocks_stale_recent_weak_ai_micro(monkeypatch):
     state_handlers.COOLDOWNS = {}
     state_handlers.ALERTED_STOCKS = set()
@@ -3652,7 +3737,27 @@ def test_rising_missed_scout_quality_guard_no_rest_estimator_after_block(monkeyp
         "removed_market_data_envelope_first"
     )
     assert entry_logs[-1][1]["rising_missed_quality_guard_recheck_attempted"] is False
-    assert entry_logs[-1][1]["block_reason"] == "stale_quote_with_weak_ai_or_strength"
+    assert entry_logs[-1][1]["block_reason"] == "stale_quote_with_missing_ai_provenance"
+    assert entry_logs[-1][1]["rising_missed_scout_quality_guard_weak_ai"] is False
+    assert entry_logs[-1][1]["rising_missed_scout_quality_guard_ai_provenance_missing"] is True
+    assert entry_logs[-1][1]["runtime_effect"] is True
+    assert entry_logs[-1][1]["decision_authority"] == "operator_runtime_override_rising_missed_scout_quality_guard"
+    assert entry_logs[-2][0] == "rising_missed_freshness_envelope_recheck_enqueued"
+    assert entry_logs[-2][1]["rising_missed_freshness_envelope_recheck_enqueued"] is True
+    assert entry_logs[-2][1]["runtime_effect"] is False
+    assert entry_logs[-2][1]["decision_authority"] == "source_quality_freshness_envelope_recheck_no_submit_authority"
+    assert stock["rising_missed_freshness_envelope_recheck_armed"] is True
+    assert stock["_scanner_rising_entry_relief_reason"] == "freshness_envelope_recheck_pending"
+    assert stock["_scanner_rising_recheck_reason"] == "freshness_envelope_recheck_pending"
+    assert stock["_scanner_full_eval_budget_source"] == "freshness_envelope_recheck"
+    assert state_handlers._scanner_active_rising_recheck_reason(
+        stock,
+        now_ts=now_ts + 1.0,
+    ) == "freshness_envelope_recheck_pending"
+    assert state_handlers._scanner_active_full_eval_budget_source(
+        stock,
+        now_ts=now_ts + 1.0,
+    ) == "freshness_envelope_recheck"
     hydrated = state_handlers._RISING_MISSED_MICRO_ESTIMATOR_STORE.snapshot("123458", now_ts=now_ts)
     assert hydrated["tier"] == "cold"
     assert hydrated["sample_count"] == 0
@@ -5038,6 +5143,308 @@ def test_rising_missed_tick_speed_guard_does_not_block_non_rising_missed(monkeyp
     assert decision["broker_order_forbidden"] is False
     assert decision["rising_missed_filter_layer"] == "submit_safety"
     assert decision["rising_missed_filter_action"] == "observe_only"
+
+
+def test_rising_missed_reversal_pre_submit_guard_blocks_jump_with_weak_tick_micro(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_REVERSAL_PRE_SUBMIT_GUARD_ENABLED", raising=False)
+
+    decision = state_handlers._evaluate_rising_missed_reversal_pre_submit_guard(
+        stock=_weak_rising_missed_reentry_stock(price_delta_since_first_seen_pct=4.25),
+        runtime={},
+        latency_gate={},
+        ws_data={},
+        orderbook_fields={
+            "orderbook_micro_state": "neutral",
+            "orderbook_micro_qi": 0.12,
+            "orderbook_micro_ofi_norm": -0.08,
+            "buy_pressure_10t": 78.0,
+        },
+        microstructure_fields={"tick_acceleration_ratio": 0.72},
+    )
+
+    assert decision["blocked"] is True
+    assert decision["block_reason"] == "reversal_pre_submit_risk"
+    assert decision["rising_missed_reversal_pre_submit_risk_tag"] == "hold_candidate"
+    assert decision["rising_missed_reversal_pre_submit_risk_score"] >= 3
+    assert "tick_acceleration_ratio_lt_1" in decision["rising_missed_reversal_pre_submit_risk_reasons"]
+    assert "buy_pressure_high_with_weak_micro" in decision["rising_missed_reversal_pre_submit_risk_reasons"]
+    assert decision["rising_missed_filter_layer"] == "submit_safety"
+    assert decision["rising_missed_filter_action"] == "pre_submit_block"
+    assert decision["broker_order_forbidden"] is True
+
+
+def test_rising_missed_reversal_pre_submit_guard_tags_missing_core_without_block(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_REVERSAL_PRE_SUBMIT_GUARD_ENABLED", raising=False)
+
+    decision = state_handlers._evaluate_rising_missed_reversal_pre_submit_guard(
+        stock=_weak_rising_missed_reentry_stock(price_delta_since_first_seen_pct=4.25),
+        runtime={},
+        latency_gate={},
+        ws_data={},
+        orderbook_fields={},
+        microstructure_fields={},
+    )
+
+    assert decision["blocked"] is False
+    assert decision["reason"] == "reversal_pre_submit_core_fields_missing"
+    assert decision["rising_missed_reversal_pre_submit_risk_tag"] == "verification_missing"
+    assert decision["rising_missed_reversal_pre_submit_verification_missing"] is True
+    assert decision["broker_order_forbidden"] is False
+    assert decision["rising_missed_filter_action"] == "observe_only"
+
+
+def test_rising_missed_reversal_pre_submit_guard_does_not_block_buy_pressure_alone(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_REVERSAL_PRE_SUBMIT_GUARD_ENABLED", raising=False)
+
+    decision = state_handlers._evaluate_rising_missed_reversal_pre_submit_guard(
+        stock=_weak_rising_missed_reentry_stock(price_delta_since_first_seen_pct=4.25),
+        runtime={},
+        latency_gate={},
+        ws_data={},
+        orderbook_fields={
+            "orderbook_micro_state": "bullish",
+            "orderbook_micro_qi": 0.44,
+            "orderbook_micro_ofi_norm": 0.06,
+            "buy_pressure_10t": 42.0,
+        },
+        microstructure_fields={"tick_acceleration_ratio": 1.22},
+    )
+
+    assert decision["blocked"] is False
+    assert decision["rising_missed_reversal_pre_submit_risk_tag"] == "watch"
+    assert decision["rising_missed_reversal_pre_submit_risk_score"] == 1
+    assert decision["rising_missed_reversal_pre_submit_risk_reasons"] == "buy_pressure_below_45"
+    assert decision["broker_order_forbidden"] is False
+
+
+def test_rising_missed_reversal_pre_submit_guard_ignores_low_jump_scope(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_REVERSAL_PRE_SUBMIT_GUARD_ENABLED", raising=False)
+
+    decision = state_handlers._evaluate_rising_missed_reversal_pre_submit_guard(
+        stock=_weak_rising_missed_reentry_stock(price_delta_since_first_seen_pct=1.25),
+        runtime={},
+        latency_gate={},
+        ws_data={},
+        orderbook_fields={
+            "orderbook_micro_state": "neutral",
+            "orderbook_micro_qi": 0.12,
+            "orderbook_micro_ofi_norm": -0.08,
+            "buy_pressure_10t": 78.0,
+        },
+        microstructure_fields={"tick_acceleration_ratio": 0.72},
+    )
+
+    assert decision["blocked"] is False
+    assert decision["reason"] == "recent_jump_below_min"
+    assert decision["rising_missed_reversal_pre_submit_risk_tag"] == "none"
+    assert decision["rising_missed_reversal_pre_submit_jump_scope"] is False
+
+
+def test_rising_missed_reversal_up_watch_recheck_enqueues_stale_weak_quality_block(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_REVERSAL_UP_WATCH_RECHECK_ENABLED", raising=False)
+    stock = _weak_rising_missed_reentry_stock(
+        source_signature="PRICE_JUMP_START,REALTIME_RANK_START,VOLUME_SURGE_POSITIVE",
+    )
+    quality_guard = {
+        "block_reason": "stale_quote_with_weak_ai_or_strength",
+        "rising_missed_scout_quality_guard_stale_weak_blocked": True,
+        "rising_missed_scout_quality_guard_adverse_micro_blocked": False,
+        "rising_missed_scout_quality_guard_weak_ai": True,
+        "rising_missed_scout_quality_guard_ai_action": "WAIT",
+    }
+
+    decision = state_handlers._evaluate_rising_missed_reversal_up_watch_recheck(
+        stock=stock,
+        runtime={},
+        quality_guard=quality_guard,
+        backoff_fields={},
+        source_stage="rising_missed_scout_quality_guard_blocked",
+        now_ts=1000.0,
+    )
+    applied = state_handlers._apply_rising_missed_reversal_up_watch_recheck(
+        stock,
+        "123456",
+        decision,
+        now_ts=1000.0,
+    )
+
+    assert applied["rising_missed_reversal_up_watch"] is True
+    assert applied["rising_missed_reversal_up_watch_recheck_enqueued"] is True
+    assert applied["rising_missed_reversal_up_watch_recheck_reason"] == "reversal_up_watch_recheck_pending"
+    assert applied["decision_authority"] == "source_only_reversal_up_watch_recheck_no_submit_authority"
+    assert applied["runtime_effect"] is False
+    assert applied["actual_order_submitted"] is False
+    assert applied["broker_order_forbidden"] is True
+    assert stock["_scanner_rising_entry_relief_reason"] == "reversal_up_watch_recheck_pending"
+    assert stock["_scanner_full_eval_budget_source"] == "reversal_up_watch_recheck"
+    assert state_handlers._scanner_active_rising_recheck_reason(
+        stock,
+        now_ts=1001.0,
+    ) == "reversal_up_watch_recheck_pending"
+
+
+def test_rising_missed_reversal_up_watch_recheck_keeps_adverse_micro_guard(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_REVERSAL_UP_WATCH_RECHECK_ENABLED", raising=False)
+
+    decision = state_handlers._evaluate_rising_missed_reversal_up_watch_recheck(
+        stock=_weak_rising_missed_reentry_stock(
+            source_signature="LOW_REBOUND_RISING_MISSED,PRICE_JUMP_START,REALTIME_RANK_START",
+        ),
+        runtime={},
+        quality_guard={
+            "block_reason": "fresh_adverse_micro_submit_safety",
+            "rising_missed_scout_quality_guard_stale_weak_blocked": False,
+            "rising_missed_scout_quality_guard_adverse_micro_blocked": True,
+            "rising_missed_scout_quality_guard_weak_ai": True,
+            "rising_missed_scout_quality_guard_ai_action": "WAIT",
+        },
+        backoff_fields={},
+        source_stage="rising_missed_scout_quality_guard_blocked",
+        now_ts=1000.0,
+    )
+
+    assert decision["rising_missed_reversal_up_watch"] is False
+    assert decision["rising_missed_reversal_up_watch_recheck_enqueued"] is False
+    assert decision["rising_missed_reversal_up_watch_recheck_reason"] == "adverse_micro_guard_kept"
+    assert decision["runtime_effect"] is False
+    assert decision["actual_order_submitted"] is False
+
+
+def test_rising_missed_reversal_up_watch_recheck_excludes_reject_or_delay(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_REVERSAL_UP_WATCH_RECHECK_ENABLED", raising=False)
+
+    decision = state_handlers._evaluate_rising_missed_reversal_up_watch_recheck(
+        stock=_weak_rising_missed_reentry_stock(
+            source_signature="LOW_REBOUND_RISING_MISSED,PRICE_JUMP_START,REALTIME_RANK_START",
+        ),
+        runtime={},
+        quality_guard={
+            "block_reason": "stale_quote_with_weak_ai_or_strength",
+            "rising_missed_scout_quality_guard_stale_weak_blocked": True,
+            "rising_missed_scout_quality_guard_adverse_micro_blocked": False,
+            "rising_missed_scout_quality_guard_weak_ai": True,
+            "rising_missed_scout_quality_guard_ai_action": "DROP",
+        },
+        backoff_fields={},
+        source_stage="rising_missed_scout_quality_guard_blocked",
+        now_ts=1000.0,
+    )
+
+    assert decision["rising_missed_reversal_up_watch"] is False
+    assert decision["rising_missed_reversal_up_watch_recheck_enqueued"] is False
+    assert decision["rising_missed_reversal_up_watch_recheck_reason"] == "reversal_up_reject_or_delay_excluded"
+    assert decision["rising_missed_reversal_up_watch_reject_or_delay_excluded"] is True
+    assert decision["runtime_effect"] is False
+    assert decision["actual_order_submitted"] is False
+
+
+def test_rising_missed_reversal_up_volatile_recheck_enqueues_source_only(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_REVERSAL_UP_VOLATILE_RECHECK_ENABLED", raising=False)
+
+    decision = state_handlers._evaluate_rising_missed_reversal_up_volatile_recheck(
+        stock=_weak_rising_missed_reentry_stock(
+            source_signature="BID_IMBALANCE_SURGE,NEW_HIGH_CONFIRMATION,REALTIME_RANK_START,VALUE_TOP",
+        ),
+        runtime={},
+        source_stage="latency_block",
+        latency_gate={
+            "latency_spread_block_bucket": "latency_spread_above_caution_below_guard_cap",
+        },
+        orderbook_fields={"orderbook_micro_state": "bullish"},
+        microstructure_fields={},
+        block_fields={},
+        now_ts=1000.0,
+    )
+
+    assert decision["rising_missed_reversal_up_volatile_watch"] is True
+    assert decision["rising_missed_reversal_up_volatile_recheck_enqueued"] is True
+    assert decision["rising_missed_reversal_up_volatile_recheck_reason"] == "reversal_up_volatile_recheck_pending"
+    assert decision["rising_missed_reversal_up_volatile_components"] == "spread_above_caution"
+    assert decision["decision_authority"] == "source_only_reversal_up_volatile_recheck_no_submit_authority"
+    assert decision["runtime_effect"] is False
+    assert decision["actual_order_submitted"] is False
+    assert decision["broker_order_forbidden"] is True
+
+
+def test_rising_missed_reversal_up_volatile_recheck_ignores_missing_rank_value(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_REVERSAL_UP_VOLATILE_RECHECK_ENABLED", raising=False)
+
+    decision = state_handlers._evaluate_rising_missed_reversal_up_volatile_recheck(
+        stock=_weak_rising_missed_reentry_stock(
+            source_signature="BID_IMBALANCE_SURGE,NEW_HIGH_CONFIRMATION,PRICE_JUMP_START",
+        ),
+        runtime={},
+        source_stage="real_weak_ai_micro_entry_block",
+        latency_gate={},
+        orderbook_fields={"orderbook_micro_state": "neutral"},
+        microstructure_fields={},
+        block_fields={"weak_ai_micro_entry_block_micro_state": "neutral"},
+        now_ts=1000.0,
+    )
+
+    assert decision["rising_missed_reversal_up_volatile_watch"] is False
+    assert decision["rising_missed_reversal_up_volatile_recheck_enqueued"] is False
+    assert decision["rising_missed_reversal_up_volatile_recheck_reason"] == "rank_value_stack_missing"
+    assert decision["runtime_effect"] is False
+    assert decision["actual_order_submitted"] is False
+
+
+def test_apply_rising_missed_reversal_up_volatile_recheck_sets_scanner_recheck_state(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_REVERSAL_UP_VOLATILE_RECHECK_ENABLED", raising=False)
+    stock = _weak_rising_missed_reentry_stock(
+        source_signature="BID_IMBALANCE_SURGE,NEW_HIGH_CONFIRMATION,REALTIME_RANK_START,VALUE_TOP",
+    )
+    fields = state_handlers._evaluate_rising_missed_reversal_up_volatile_recheck(
+        stock=stock,
+        runtime={},
+        source_stage="real_weak_ai_micro_entry_block",
+        latency_gate={},
+        orderbook_fields={},
+        microstructure_fields={},
+        block_fields={"weak_ai_micro_entry_block_micro_state": "neutral"},
+        now_ts=1000.0,
+    )
+
+    applied = state_handlers._apply_rising_missed_reversal_up_volatile_recheck(
+        stock,
+        "123456",
+        fields,
+        now_ts=1000.0,
+    )
+
+    assert applied["rising_missed_reversal_up_volatile_recheck_enqueued"] is True
+    assert stock["rising_missed_reversal_up_volatile_recheck_armed"] is True
+    assert stock["_scanner_rising_entry_relief_reason"] == "reversal_up_volatile_recheck_pending"
+    assert stock["_scanner_full_eval_budget_source"] == "reversal_up_volatile_recheck"
+    assert stock["_scanner_rising_reversal_up_volatile_recheck_until_epoch"] > 1000.0
+    assert state_handlers._scanner_active_rising_recheck_reason(
+        stock,
+        now_ts=1001.0,
+    ) == "reversal_up_volatile_recheck_pending"
+    assert state_handlers._scanner_active_full_eval_budget_source(
+        stock,
+        now_ts=1001.0,
+    ) == "reversal_up_volatile_recheck"
+
+
+def test_rising_missed_reversal_pre_submit_backoff_recovers_on_fresh_micro(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_REVERSAL_PRE_SUBMIT_GUARD_ENABLED", raising=False)
+    now_ts = time.time()
+
+    recovered = state_handlers._rising_missed_submit_safety_backoff_recovered(
+        _weak_rising_missed_reentry_stock(price_delta_since_first_seen_pct=4.25),
+        {
+            "last_ws_update_ts": now_ts,
+            "orderbook_micro_state": "bullish",
+            "orderbook_micro_qi": 0.42,
+            "orderbook_micro_ofi_norm": 0.03,
+            "tick_acceleration_ratio": 1.18,
+        },
+        "reversal_pre_submit",
+        now_ts=now_ts,
+    )
+
+    assert recovered is True
 
 
 def test_rising_missed_weak_micro_reentry_blocks_prior_profitable_same_symbol(monkeypatch, tmp_path):

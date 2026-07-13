@@ -782,6 +782,36 @@ def test_submit_safety_breakdown_and_backoff_opportunity_audit_are_source_only(t
             emitted_at="2026-07-10T09:01:00",
         ),
         _event(
+            706,
+            "000706",
+            "stale-ai-missing",
+            "rising_missed_scout_quality_guard_blocked",
+            {
+                "forced_entry_reason": "rising_missed_one_share_entry",
+                "block_reason": "stale_quote_with_missing_ai_provenance",
+                "current_price": "1500",
+                "price_delta_since_first_seen_pct": "1.50",
+                "rising_missed_scout_quality_guard_quote_age_ms": "6000",
+                "rising_missed_scout_quality_guard_max_quote_age_ms": "3000",
+                "rising_missed_scout_quality_guard_quote_stale": True,
+                "rising_missed_scout_quality_guard_weak_evidence": False,
+                "rising_missed_scout_quality_guard_weak_ai": False,
+                "rising_missed_scout_quality_guard_ai_action": "-",
+                "rising_missed_scout_quality_guard_ai_score": "50.0",
+                "rising_missed_scout_quality_guard_ai_provenance_missing": True,
+                "rising_missed_scout_quality_guard_ai_score_defaulted_without_action": True,
+            },
+            emitted_at="2026-07-10T09:01:30",
+        ),
+        _event(
+            706,
+            "000706",
+            "stale-ai-missing",
+            "scalping_scanner_candidate_observed",
+            {"current_price": "1530", "price_delta_since_first_seen_pct": "2.10"},
+            emitted_at="2026-07-10T09:01:45",
+        ),
+        _event(
             702,
             "000702",
             "true-ofi-block",
@@ -870,18 +900,27 @@ def test_submit_safety_breakdown_and_backoff_opportunity_audit_are_source_only(t
 
     report = mod.build_report("2026-07-10", pipeline_path=pipeline_path, generated_at="fixed")
 
-    assert report["summary"]["submit_safety_block_count"] == 2
+    assert report["summary"]["submit_safety_block_count"] == 3
     assert report["summary"]["potential_backoff_opportunity_loss_count"] == 1
     bucket_counts = {
         item["blocker_bucket"]: item["count"] for item in report["summary"]["submit_safety_bucket_counts"]
     }
-    assert bucket_counts == {"ai_wait_after_refresh": 1, "latency_true_ofi_below_floor": 1}
+    assert bucket_counts == {
+        "ai_wait_after_refresh": 1,
+        "latency_true_ofi_below_floor": 1,
+        "missing_ai_or_fresh_input": 1,
+    }
     stale_row = report["submit_safety_blocker_rows"][0]
     assert stale_row["reason"] == "stale_quote_with_weak_ai_or_strength"
     assert stale_row["quote_age_sec"] == 4.5
     assert stale_row["mfe_after_block_pct"] == 3.0
     assert stale_row["runtime_effect"] is False
-    latency_row = report["submit_safety_blocker_rows"][1]
+    missing_ai_row = report["submit_safety_blocker_rows"][1]
+    assert missing_ai_row["reason"] == "stale_quote_with_missing_ai_provenance"
+    assert missing_ai_row["blocker_bucket"] == "missing_ai_or_fresh_input"
+    assert "ai_provenance_missing" in missing_ai_row["components"]
+    assert "weak_ai_score" not in missing_ai_row["components"]
+    latency_row = report["submit_safety_blocker_rows"][2]
     assert latency_row["true_ofi_reason"] == "true_ofi_below_floor"
     assert latency_row["spread_bps"] == 70.0
     backoff_rows = {item["stock_code"]: item for item in report["backoff_opportunity_audit_rows"]}
