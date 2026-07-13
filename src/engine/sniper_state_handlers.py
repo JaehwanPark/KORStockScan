@@ -22844,6 +22844,109 @@ def _hard_stop_quote_revalidation_block(
     return True
 
 
+def _truthy_log_value(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _trailing_shallow_loss_confirm_defer_decision(
+    stock: dict | None,
+    *,
+    strategy: str | None,
+    sell_reason_type: str | None,
+    exit_rule: str | None,
+    profit_rate: float,
+    peak_profit: float,
+    drawdown: float,
+    current_ai_score: float,
+    held_sec: int,
+    feature_fields: dict | None = None,
+    now_ts: float | None = None,
+) -> dict:
+    if str(strategy or "").upper() != "SCALPING":
+        return {"defer": False, "reason": "not_scalping"}
+    if str(sell_reason_type or "").upper() != "LOSS":
+        return {"defer": False, "reason": "not_loss_exit"}
+    if str(exit_rule or "").strip() != "scalp_trailing_take_profit":
+        return {"defer": False, "reason": "not_trailing_exit"}
+    if not isinstance(stock, dict) or _is_scalp_simulated_position(stock, strategy) or _has_sim_probe_provenance(stock):
+        return {"defer": False, "reason": "not_real_position"}
+    if bool(stock.get("trailing_shallow_loss_confirm_deferred")):
+        return {"defer": False, "reason": "already_deferred_once"}
+
+    min_peak = 0.60
+    min_profit = -0.30
+    max_profit = 0.05
+    min_ai = 75.0
+    min_held_sec = 30
+    max_drawdown = 1.20
+    min_buy_pressure = 50.0
+    min_tick_accel = 1.0
+    min_micro_vwap_bp = -40.0
+    max_recheck_sec = 15
+
+    profit = _safe_float(profit_rate, 0.0)
+    peak = _safe_float(peak_profit, 0.0)
+    ai_score = _safe_float(current_ai_score, 0.0)
+    drawdown_value = _safe_float(drawdown, max(0.0, peak - profit))
+    if not (min_profit <= profit <= max_profit):
+        return {"defer": False, "reason": "profit_not_shallow_loss", "profit_rate": profit}
+    if peak < min_peak:
+        return {"defer": False, "reason": "peak_below_min", "peak_profit": peak, "min_peak": min_peak}
+    if ai_score < min_ai:
+        return {"defer": False, "reason": "ai_below_min", "current_ai_score": ai_score, "min_ai": min_ai}
+    if int(held_sec or 0) < min_held_sec:
+        return {"defer": False, "reason": "hold_below_min", "held_sec": int(held_sec or 0), "min_held_sec": min_held_sec}
+    if drawdown_value >= max_drawdown:
+        return {"defer": False, "reason": "drawdown_too_deep", "drawdown": drawdown_value, "max_drawdown": max_drawdown}
+
+    fields = feature_fields if isinstance(feature_fields, dict) else {}
+    quote_stale = _truthy_log_value(fields.get("quote_stale"))
+    tick_context_stale = _truthy_log_value(fields.get("tick_context_stale"))
+    micro_vwap_available = _truthy_log_value(fields.get("micro_vwap_available"))
+    large_sell_print_detected = _truthy_log_value(fields.get("large_sell_print_detected"))
+    buy_pressure = _safe_float(fields.get("buy_pressure_10t"), 0.0)
+    tick_accel = _safe_float(fields.get("tick_acceleration_ratio"), 0.0)
+    curr_vs_micro_vwap_bp = _safe_float(fields.get("curr_vs_micro_vwap_bp"), -999.0)
+    if quote_stale or tick_context_stale:
+        return {"defer": False, "reason": "source_stale"}
+    if large_sell_print_detected:
+        return {"defer": False, "reason": "large_sell_print_detected"}
+    if not micro_vwap_available:
+        return {"defer": False, "reason": "micro_vwap_missing"}
+    support_checks = {
+        "buy_pressure_ok": buy_pressure >= min_buy_pressure,
+        "tick_accel_ok": tick_accel >= min_tick_accel,
+        "micro_vwap_ok": curr_vs_micro_vwap_bp >= min_micro_vwap_bp,
+    }
+    if not all(support_checks.values()):
+        return {
+            "defer": False,
+            "reason": "micro_support_insufficient",
+            **support_checks,
+            "buy_pressure_10t": buy_pressure,
+            "tick_acceleration_ratio": tick_accel,
+            "curr_vs_micro_vwap_bp": curr_vs_micro_vwap_bp,
+        }
+
+    now = float(now_ts if now_ts is not None else time.time())
+    return {
+        "defer": True,
+        "reason": "shallow_loss_trailing_micro_confirm",
+        "defer_sec": max_recheck_sec,
+        "defer_until": now + max_recheck_sec,
+        "profit_rate": profit,
+        "peak_profit": peak,
+        "drawdown": drawdown_value,
+        "current_ai_score": ai_score,
+        "buy_pressure_10t": buy_pressure,
+        "tick_acceleration_ratio": tick_accel,
+        "curr_vs_micro_vwap_bp": curr_vs_micro_vwap_bp,
+        **support_checks,
+    }
+
+
 def _normalize_pre_ai_strength_ws_timestamp(snapshot: dict | None) -> tuple[dict, str]:
     normalized = dict(snapshot or {}) if isinstance(snapshot, dict) else {}
     if not normalized:
@@ -40804,6 +40907,79 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         profit_rate=f"{profit_rate:+.2f}",
                     )
 
+            if strategy == "SCALPING" and sell_reason_type == "LOSS" and not fallback_candidate:
+                trailing_confirm_defer = _trailing_shallow_loss_confirm_defer_decision(
+                    stock,
+                    strategy=strategy,
+                    sell_reason_type=sell_reason_type,
+                    exit_rule=exit_rule,
+                    profit_rate=profit_rate,
+                    peak_profit=peak_profit,
+                    drawdown=_safe_float(locals().get("drawdown"), max(0.0, peak_profit - profit_rate)),
+                    current_ai_score=current_ai_score,
+                    held_sec=held_sec,
+                    feature_fields=fallback_log_fields,
+                    now_ts=now_ts,
+                )
+                if trailing_confirm_defer.get("defer"):
+                    _mutate_stock_state(
+                        stock,
+                        set_fields={
+                            "trailing_shallow_loss_confirm_deferred": True,
+                            "trailing_shallow_loss_confirm_started_at": now_ts,
+                            "trailing_shallow_loss_confirm_until": trailing_confirm_defer.get("defer_until"),
+                            "trailing_shallow_loss_confirm_reason": trailing_confirm_defer.get("reason"),
+                        },
+                    )
+                    _log_holding_pipeline(
+                        stock,
+                        code,
+                        "trailing_shallow_loss_confirm_deferred",
+                        threshold_family="scalp_trailing_take_profit",
+                        runtime_family_candidate="trailing_shallow_loss_micro_confirm",
+                        decision_authority="real_scalping_trailing_pre_sell_confirm_guard",
+                        runtime_effect=True,
+                        allowed_runtime_apply=False,
+                        source_quality_gate="fresh_quote_tick_micro_context_required",
+                        forbidden_uses=TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
+                        actual_order_submitted=False,
+                        broker_order_forbidden=True,
+                        exit_rule=exit_rule or "-",
+                        sell_reason_type=sell_reason_type or "-",
+                        fallback_reason=fallback_reason_for_event,
+                        defer_sec=trailing_confirm_defer.get("defer_sec"),
+                        defer_until=f"{_safe_float(trailing_confirm_defer.get('defer_until'), 0.0):.3f}",
+                        profit_rate=f"{profit_rate:+.2f}",
+                        peak_profit=f"{peak_profit:+.2f}",
+                        drawdown=f"{_safe_float(trailing_confirm_defer.get('drawdown'), 0.0):.2f}",
+                        current_ai_score=f"{current_ai_score:.0f}",
+                        buy_pressure_10t=f"{_safe_float(trailing_confirm_defer.get('buy_pressure_10t'), 0.0):.1f}",
+                        tick_acceleration_ratio=f"{_safe_float(trailing_confirm_defer.get('tick_acceleration_ratio'), 0.0):.3f}",
+                        curr_vs_micro_vwap_bp=f"{_safe_float(trailing_confirm_defer.get('curr_vs_micro_vwap_bp'), 0.0):.2f}",
+                    )
+                    _emit_stat_action_decision_snapshot(
+                        stock=stock,
+                        code=code,
+                        strategy=strategy,
+                        ws_data=ws_data,
+                        chosen_action="hold_wait",
+                        eligible_actions=["hold_wait"],
+                        rejected_actions=[f"exit_now:{trailing_confirm_defer.get('reason')}"],
+                        profit_rate=profit_rate,
+                        peak_profit=peak_profit,
+                        current_ai_score=current_ai_score,
+                        held_sec=held_sec,
+                        curr_price=curr_p,
+                        buy_price=buy_p,
+                        exit_rule=exit_rule or "-",
+                        sell_reason_type=sell_reason_type or "-",
+                        scale_in_gate=fallback_gate,
+                        scale_in_action=fallback_action,
+                        reason="trailing_shallow_loss_confirm_deferred",
+                        force=True,
+                    )
+                    return
+
         rejected_actions = []
         if fallback_gate and not fallback_candidate:
             rejected_actions.append(f"avg_down_wait:{fallback_gate.get('reason') or fallback_reason or 'not_candidate'}")
@@ -41290,7 +41466,11 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
         rest_snapshot = {}
         rest_check_state = "not_attempted"
         rest_check_elapsed_ms = 0.0
-        if sell_safety_exit:
+        trailing_pre_submit_recheck = (
+            strategy == "SCALPING"
+            and str(exit_rule or stock.get("last_exit_rule") or "").strip() == "scalp_trailing_take_profit"
+        )
+        if sell_safety_exit or trailing_pre_submit_recheck:
             rest_snapshot, rest_check_state, rest_check_elapsed_ms = _fetch_rest_orderbook_snapshot_bounded(
                 code,
                 QuoteConsistencyConfig.from_env().emergency_rest_timeout_ms,
@@ -41309,8 +41489,36 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 "quote_consistency_rest_check_state": rest_check_state,
                 "quote_consistency_rest_check_elapsed_ms": round(float(rest_check_elapsed_ms), 3),
                 "quote_consistency_safety_exit": bool(sell_safety_exit),
+                "trailing_pre_submit_recheck": bool(trailing_pre_submit_recheck),
             }
         )
+        if trailing_pre_submit_recheck and (
+            str(sell_quote_fields.get("quote_consistency_reason") or "").strip().lower()
+            in {"quote_stale", "stale_quote"}
+            or _truthy_log_value(sell_quote_fields.get("quote_consistency_entry_blocked"))
+        ):
+            _log_holding_pipeline(
+                stock,
+                code,
+                "trailing_sell_quote_revalidation_blocked",
+                **{
+                    **sell_quote_fields,
+                    "exit_rule": exit_rule or stock.get("last_exit_rule") or "-",
+                    "sell_reason_type": sell_reason_type or "-",
+                    "exit_decision_source": stock.get("last_exit_decision_source") or "MANUAL",
+                    "profit_rate": f"{profit_rate:+.2f}",
+                    "peak_profit": f"{peak_profit:+.2f}",
+                    "current_ai_score": f"{current_ai_score:.0f}",
+                    "held_sec": held_sec,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "runtime_effect": True,
+                    "decision_authority": "real_scalping_trailing_pre_submit_quote_guard",
+                    "source_quality_gate": "fresh_sell_quote_required_for_trailing_submit",
+                    "forbidden_uses": TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
+                },
+            )
+            return
         if sell_mark_price > 0:
             curr_p = int(sell_mark_price)
             profit_rate = calculate_net_profit_rate(buy_p, curr_p)

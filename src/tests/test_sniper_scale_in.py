@@ -11662,6 +11662,15 @@ def test_scalp_trailing_uses_peak_start_after_profit_falls_below_safe_profit(mon
         "send_smart_sell_order",
         lambda **kwargs: sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "S1"},
     )
+    monkeypatch.setattr(
+        state_handlers,
+        "_fetch_rest_orderbook_snapshot_bounded",
+        lambda code, timeout_ms: (
+            {"best_bid": 10090, "best_ask": 10100, "rest_mid_price": 10095, "age_ms": 0},
+            "ok",
+            0.0,
+        ),
+    )
 
     stock = {
         "id": 1,
@@ -21694,6 +21703,15 @@ def test_legacy_preset_tp_position_flows_to_scalp_trailing(monkeypatch):
         "send_smart_sell_order",
         lambda **kwargs: sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "S1"},
     )
+    monkeypatch.setattr(
+        state_handlers,
+        "_fetch_rest_orderbook_snapshot_bounded",
+        lambda code, timeout_ms: (
+            {"best_bid": 10210, "best_ask": 10230, "rest_mid_price": 10220, "age_ms": 0},
+            "ok",
+            0.0,
+        ),
+    )
 
     stock = {
         "id": 13,
@@ -26819,6 +26837,163 @@ def test_scalp_mfe_protect_negative_fill_uses_loss_sign_and_cooldown(monkeypatch
         "scalp_mfe_protect_exit",
         -0.03,
     ) == 1800
+
+
+def test_trailing_shallow_loss_confirm_defer_accepts_strong_micro_context():
+    stock = {"strategy": "SCALPING"}
+    decision = state_handlers._trailing_shallow_loss_confirm_defer_decision(
+        stock,
+        strategy="SCALPING",
+        sell_reason_type="LOSS",
+        exit_rule="scalp_trailing_take_profit",
+        profit_rate=-0.06,
+        peak_profit=0.77,
+        drawdown=0.83,
+        current_ai_score=75,
+        held_sec=1314,
+        feature_fields={
+            "quote_stale": "False",
+            "tick_context_stale": "False",
+            "micro_vwap_available": "True",
+            "large_sell_print_detected": "False",
+            "buy_pressure_10t": "50.0",
+            "tick_acceleration_ratio": "1.0",
+            "curr_vs_micro_vwap_bp": "-37.19",
+        },
+        now_ts=1_000.0,
+    )
+
+    assert decision["defer"] is True
+    assert decision["reason"] == "shallow_loss_trailing_micro_confirm"
+    assert decision["defer_until"] == pytest.approx(1_015.0)
+
+    stock["trailing_shallow_loss_confirm_deferred"] = True
+    repeated = state_handlers._trailing_shallow_loss_confirm_defer_decision(
+        stock,
+        strategy="SCALPING",
+        sell_reason_type="LOSS",
+        exit_rule="scalp_trailing_take_profit",
+        profit_rate=-0.06,
+        peak_profit=0.77,
+        drawdown=0.83,
+        current_ai_score=75,
+        held_sec=1314,
+        feature_fields={
+            "quote_stale": "False",
+            "tick_context_stale": "False",
+            "micro_vwap_available": "True",
+            "large_sell_print_detected": "False",
+            "buy_pressure_10t": "50.0",
+            "tick_acceleration_ratio": "1.0",
+            "curr_vs_micro_vwap_bp": "-37.19",
+        },
+        now_ts=1_000.0,
+    )
+    assert repeated == {"defer": False, "reason": "already_deferred_once"}
+
+
+def test_handle_holding_state_blocks_trailing_sell_when_pre_submit_quote_stale(monkeypatch):
+    original_rules = state_handlers.TRADING_RULES
+    try:
+        state_handlers.TRADING_RULES = replace(
+            CONFIG,
+            SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+            SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED=False,
+            SCALP_BAD_ENTRY_REFINED_OBSERVE_ENABLED=False,
+            SCALP_MFE_PROTECT_EXIT_ENABLED=False,
+            SCALP_TRAILING_START_PCT=0.50,
+            SCALP_SAFE_PROFIT=1.00,
+        )
+        state_handlers.COOLDOWNS = {}
+        state_handlers.ALERTED_STOCKS = set()
+        state_handlers.HIGHEST_PRICES = {"123456": 10_080}
+        state_handlers.LAST_AI_CALL_TIMES = {}
+        state_handlers.LAST_LOG_TIMES = {}
+        state_handlers.DB = _DummyDB()
+        state_handlers.KIWOOM_TOKEN = "token"
+
+        sell_calls = []
+        pipeline_events = []
+
+        def fake_quote_fields(ws_data, *, rest_snapshot=None, side="mark", safety_exit=False, now_ts=None):
+            if rest_snapshot:
+                return (
+                    {
+                        "quote_consistency_state": "single_source",
+                        "quote_consistency_reason": "rest_only_fresh",
+                        "quote_consistency_entry_blocked": False,
+                        "price_source": "rest_mid",
+                    },
+                    10_000,
+                    10_010,
+                    9_990,
+                )
+            return (
+                {
+                    "quote_consistency_state": "stale",
+                    "quote_consistency_reason": "quote_stale",
+                    "quote_consistency_entry_blocked": True,
+                    "price_source": "stale_cached",
+                },
+                0,
+                0,
+                0,
+            )
+
+        monkeypatch.setattr(state_handlers, "_build_quote_consistency_fields", fake_quote_fields)
+        monkeypatch.setattr(
+            state_handlers,
+            "_fetch_rest_orderbook_snapshot_bounded",
+            lambda code, timeout_ms: ({}, "unavailable", 0.0),
+        )
+        monkeypatch.setattr(
+            state_handlers,
+            "can_consider_scale_in",
+            lambda *args, **kwargs: {"allowed": False, "reason": "test_no_add"},
+        )
+        monkeypatch.setattr(
+            state_handlers.kiwoom_orders,
+            "send_smart_sell_order",
+            lambda **kwargs: sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "S1"},
+        )
+        monkeypatch.setattr(
+            state_handlers,
+            "_log_holding_pipeline",
+            lambda stock, code, stage, **fields: pipeline_events.append((stage, fields)),
+        )
+
+        stock = {
+            "id": 1,
+            "code": "123456",
+            "name": "TEST",
+            "status": "HOLDING",
+            "strategy": "SCALPING",
+            "buy_price": 10_000,
+            "buy_qty": 3,
+            "rt_ai_prob": 0.75,
+            "buy_time": 1_000.0,
+            "trailing_shallow_loss_confirm_deferred": True,
+        }
+
+        state_handlers.handle_holding_state(
+            stock=stock,
+            code="123456",
+            ws_data={"curr": 10_000},
+            admin_id=1,
+            market_regime="BULL",
+            now_ts=1_240.0,
+            now_dt=datetime(2026, 7, 13, 13, 4, 30),
+            radar=None,
+            ai_engine=None,
+        )
+    finally:
+        state_handlers.TRADING_RULES = original_rules
+
+    assert sell_calls == []
+    blocked = [fields for stage, fields in pipeline_events if stage == "trailing_sell_quote_revalidation_blocked"]
+    assert blocked, pipeline_events
+    assert blocked[0]["quote_consistency_reason"] == "quote_stale"
+    assert blocked[0]["actual_order_submitted"] is False
 
 
 def test_scalp_profit_stagnation_time_exit_skips_simulated_position(monkeypatch):
