@@ -15,23 +15,23 @@
 
 ## 근거
 
-- as_of: `2026-07-13T15:00:02`
+- as_of: `2026-07-13T15:20:02`
 - baseline_date: `2026-07-10`
 - ai_confirmed unique: `25`
-- budget_pass unique: `47`
+- budget_pass unique: `50`
 - latency_pass unique: `2`
 - submitted unique: `3`
 - holding_started unique: `3`
-- budget/ai unique: `188.0%` (baseline `50.8`)
-- submitted/ai unique: `12.0%` (baseline `9.0`)
+- budget/ai unique: `200.0%` (baseline `51.2`)
+- submitted/ai unique: `12.0%` (baseline `10.6`)
 - critical submit thresholds: `submitted/ai < 20.0%` or `submitted/budget <= 10.0%` (floors: ai>=20, budget>=3)
-- top blockers: `blocked_strength_momentum:below_window_buy_value=248, latency_block:latency_state_danger=39, blocked_liquidity:-=35, blocked_ai_score:ai_score_50_buy_hold_override=24, first_ai_wait:-=20`
+- top blockers: `blocked_strength_momentum:below_window_buy_value=248, latency_block:latency_state_danger=50, blocked_liquidity:-=35, blocked_ai_score:ai_score_50_buy_hold_override=24, first_ai_wait:-=20`
 - swing blockers: `-`
 - upstream blockers: `blocked_ai_score:ai_score_50_buy_hold_override=24, first_ai_wait:-=20, blocked_ai_score:score_0.0=7, blocked_ai_score:score_58.0=6, blocked_ai_score:score_62.0=6`
 - AI terminal reasons: `ai_terminal:entry_policy_no_buy_score_prior=41, ai_terminal:first_ai_wait_big_bite_not_confirmed=20`
-- latency blockers: `latency_block:latency_state_danger=39`
-- price guards: `pre_submit_entry_ai_authority_guard_block:entry_ai_score_unavailable=4, entry_ai_price_canary_fallback:low_confidence=1, entry_ai_price_canary_fallback:above_best_ask=1`
-- quote refresh: `attempted=20, applied=15, latency_recovered=1, submitted_after_refresh=0`
+- latency blockers: `latency_block:latency_state_danger=50`
+- price guards: `pre_submit_entry_ai_authority_guard_block:entry_ai_score_unavailable=4, entry_ai_price_canary_fallback:low_confidence=1, entry_ai_price_canary_fallback:above_best_ask=1, entry_ai_price_canary_fallback:skip_low_confidence=1`
+- quote refresh: `attempted=22, applied=15, latency_recovered=1, submitted_after_refresh=0`
 - quote refresh downstream: `{'price_guard_or_revalidation': 1}`
 
 ## 금지된 자동변경
@@ -50,6 +50,6 @@
 
 ## Window Summary
 
-- `5m`: ai=0, budget=1, latency=0, submitted=0, top=`latency_block:latency_state_danger=1`, swing=`-`, upstream=`-`, ai_terminal=`-`
-- `10m`: ai=0, budget=3, latency=0, submitted=0, top=`latency_block:latency_state_danger=4`, swing=`-`, upstream=`-`, ai_terminal=`-`
-- `30m`: ai=0, budget=14, latency=0, submitted=0, top=`latency_block:latency_state_danger=17`, swing=`-`, upstream=`-`, ai_terminal=`-`
+- `5m`: ai=0, budget=2, latency=0, submitted=0, top=`latency_block:latency_state_danger=4`, swing=`-`, upstream=`-`, ai_terminal=`-`
+- `10m`: ai=0, budget=4, latency=0, submitted=0, top=`latency_block:latency_state_danger=8`, swing=`-`, upstream=`-`, ai_terminal=`-`
+- `30m`: ai=0, budget=8, latency=0, submitted=0, top=`latency_block:latency_state_danger=15, entry_ai_price_canary_fallback:skip_low_confidence=1`, swing=`-`, upstream=`-`, ai_terminal=`-`
