@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import os
+import re
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Iterator
 from datetime import date, datetime, timedelta, timezone
@@ -15,6 +17,7 @@ from src.engine.ai.postclose_review_config import resolve_postclose_ai_review_co
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 KST = timezone(timedelta(hours=9))
 CLEAN_BASELINE_DATE = "2026-06-04"
+CLEAN_BASELINE_TS_KST = "2026-06-04T14:29:09+09:00"
 REPORT_TYPE = "one_share_threshold_opportunity"
 AI_REVIEW_SCHEMA_NAME = "one_share_threshold_opportunity_ai_review_v1"
 AI_REVIEWER_NAME = "one_share_threshold_opportunity_ai_review"
@@ -96,7 +99,8 @@ def _boolish(value: Any) -> bool:
 def _iter_jsonl(path: Path) -> Iterator[dict[str, Any]]:
     if not path.exists():
         return
-    with path.open("r", encoding="utf-8") as handle:
+    opener = gzip.open if path.suffix == ".gz" else Path.open
+    with opener(path, "rt", encoding="utf-8") as handle:
         for line in handle:
             if not line.strip():
                 continue
@@ -109,32 +113,31 @@ def _iter_jsonl(path: Path) -> Iterator[dict[str, Any]]:
 
 
 def _date_from_path(path: Path) -> str:
-    for part in path.stem.split("_"):
-        if len(part) == 10 and part.count("-") == 2:
-            return part
-    return ""
+    match = re.search(r"(\d{4}-\d{2}-\d{2})", path.name)
+    return match.group(1) if match else ""
 
 
 def _date_in_range(value: str, *, since_date: str, until_date: str) -> bool:
     return bool(value and since_date <= value <= until_date)
 
 
-def _pipeline_paths(*, since_date: str, until_date: str) -> list[Path]:
-    base = PROJECT_ROOT / "data" / "pipeline_events"
+def _jsonl_paths(base: Path, prefix: str, *, since_date: str, until_date: str) -> list[Path]:
+    candidates = list(base.glob(f"{prefix}_*.jsonl")) + list(base.glob(f"{prefix}_*.jsonl.gz"))
     return sorted(
         path
-        for path in base.glob("pipeline_events_*.jsonl")
+        for path in candidates
         if _date_in_range(_date_from_path(path), since_date=since_date, until_date=until_date)
     )
+
+
+def _pipeline_paths(*, since_date: str, until_date: str) -> list[Path]:
+    base = PROJECT_ROOT / "data" / "pipeline_events"
+    return _jsonl_paths(base, "pipeline_events", since_date=since_date, until_date=until_date)
 
 
 def _post_sell_paths(*, since_date: str, until_date: str) -> list[Path]:
     base = PROJECT_ROOT / "data" / "post_sell"
-    return sorted(
-        path
-        for path in base.glob("post_sell_candidates_*.jsonl")
-        if _date_in_range(_date_from_path(path), since_date=since_date, until_date=until_date)
-    )
+    return _jsonl_paths(base, "post_sell_candidates", since_date=since_date, until_date=until_date)
 
 
 def _default_output_paths(target_date: str) -> tuple[Path, Path]:
@@ -152,6 +155,19 @@ def _is_forced_one_share(row: dict[str, Any]) -> bool:
         or fields.get("forced_entry_reason") == FORCED_REASON
         or _boolish(fields.get("rising_missed_one_share_entry_forced"))
     )
+
+
+def _clean_baseline_allowed(row: dict[str, Any], *, clean_baseline_ts_kst: str) -> bool:
+    emitted_at = str(row.get("emitted_at") or "")
+    if not emitted_at:
+        return True
+    row_date = emitted_at[:10]
+    baseline_date = clean_baseline_ts_kst[:10]
+    if row_date < baseline_date:
+        return False
+    if row_date > baseline_date:
+        return True
+    return emitted_at >= clean_baseline_ts_kst
 
 
 def _event_record_id(row: dict[str, Any]) -> str:
@@ -194,24 +210,71 @@ def _classify_threshold(row: dict[str, Any]) -> set[str]:
     return groups
 
 
-def _build_forced_index(paths: Iterable[Path]) -> tuple[dict[str, dict[str, Any]], dict[str, Counter[str]], list[str]]:
+def _build_forced_index(
+    paths: Iterable[Path],
+    *,
+    clean_baseline_ts_kst: str = CLEAN_BASELINE_TS_KST,
+) -> tuple[dict[str, dict[str, Any]], dict[str, Counter[str]], list[str]]:
     forced: dict[str, dict[str, Any]] = {}
     threshold_counts: dict[str, Counter[str]] = defaultdict(Counter)
-    source_paths: list[str] = []
-    for path in paths:
-        source_paths.append(str(path))
+    path_list = list(paths)
+    source_paths: list[str] = [str(path) for path in path_list]
+    for path in path_list:
         for row in _iter_jsonl(path):
-            record_id = _event_record_id(row)
-            if not record_id:
+            if not _clean_baseline_allowed(row, clean_baseline_ts_kst=clean_baseline_ts_kst):
                 continue
-            if _is_forced_one_share(row):
-                item = forced.setdefault(record_id, _record_feature(row))
-                item["forced_event_count"] = int(item.get("forced_event_count") or 0) + 1
-                if row.get("stage") == "rising_missed_one_share_entry":
-                    item.update(_record_feature(row))
+            record_id = _event_record_id(row)
+            if not record_id or not _is_forced_one_share(row):
+                continue
+            item = forced.setdefault(record_id, _record_feature(row))
+            item["forced_event_count"] = int(item.get("forced_event_count") or 0) + 1
+            if row.get("stage") == "rising_missed_one_share_entry":
+                item.update(_record_feature(row))
+    if not forced:
+        return forced, threshold_counts, source_paths
+    forced_ids = set(forced)
+    for path in path_list:
+        for row in _iter_jsonl(path):
+            if not _clean_baseline_allowed(row, clean_baseline_ts_kst=clean_baseline_ts_kst):
+                continue
+            record_id = _event_record_id(row)
+            if record_id not in forced_ids:
+                continue
             for group in _classify_threshold(row):
                 threshold_counts[record_id][group] += 1
     return forced, threshold_counts, source_paths
+
+
+def _source_coverage_manifest(
+    *,
+    pipeline_paths: list[Path],
+    post_sell_paths: list[Path],
+    since_date: str,
+    until_date: str,
+) -> dict[str, Any]:
+    pipeline_dates = sorted({_date_from_path(path) for path in pipeline_paths if _date_from_path(path)})
+    post_sell_dates = sorted({_date_from_path(path) for path in post_sell_paths if _date_from_path(path)})
+    observed_dates = sorted(set(pipeline_dates) | set(post_sell_dates))
+    missing_pipeline_dates = [value for value in observed_dates if value not in set(pipeline_dates)]
+    missing_post_sell_dates = [value for value in observed_dates if value not in set(post_sell_dates)]
+    gap_count = len(missing_pipeline_dates) + len(missing_post_sell_dates)
+    return {
+        "status": "pass" if gap_count == 0 else "source_coverage_gap",
+        "since_date": since_date,
+        "until_date": until_date,
+        "clean_baseline_ts_kst": CLEAN_BASELINE_TS_KST,
+        "observed_dates": observed_dates,
+        "pipeline_event_dates": pipeline_dates,
+        "post_sell_dates": post_sell_dates,
+        "missing_pipeline_event_dates": missing_pipeline_dates,
+        "missing_post_sell_dates": missing_post_sell_dates,
+        "gap_count": gap_count,
+        "pipeline_path_count": len(pipeline_paths),
+        "pipeline_gzip_path_count": sum(1 for path in pipeline_paths if path.suffix == ".gz"),
+        "post_sell_path_count": len(post_sell_paths),
+        "post_sell_gzip_path_count": sum(1 for path in post_sell_paths if path.suffix == ".gz"),
+        "fail_closed_on_gap": True,
+    }
 
 
 def _load_post_sell(paths: Iterable[Path]) -> tuple[dict[str, dict[str, Any]], list[str]]:
@@ -530,13 +593,23 @@ def build_report(
     generated_at = generated_at or datetime.now(KST).isoformat(timespec="seconds")
     pipeline_paths = pipeline_paths or _pipeline_paths(since_date=since_date, until_date=target_date)
     post_sell_paths = post_sell_paths or _post_sell_paths(since_date=since_date, until_date=target_date)
+    coverage_manifest = _source_coverage_manifest(
+        pipeline_paths=pipeline_paths,
+        post_sell_paths=post_sell_paths,
+        since_date=since_date,
+        until_date=target_date,
+    )
     forced, threshold_counts, pipeline_sources = _build_forced_index(pipeline_paths)
     post_sell_by_record, post_sell_sources = _load_post_sell(post_sell_paths)
     rows = _joined_rows(forced, threshold_counts, post_sell_by_record)
     joined = [row for row in rows if row.get("post_sell_joined")]
     opportunities = _threshold_opportunities(rows)
     source_paths = {"pipeline_events": pipeline_sources, "post_sell_candidates": post_sell_sources}
-    orders = _build_code_orders(opportunities, source_paths)
+    orders = (
+        _build_code_orders(opportunities, source_paths)
+        if coverage_manifest.get("status") == "pass"
+        else []
+    )
     threshold_group_counts = Counter(group for row in rows for group in row.get("threshold_groups") or [])
     report = {
         "schema_version": 1,
@@ -546,7 +619,9 @@ def build_report(
         "window": {
             "since_date": since_date,
             "until_date": target_date,
+            "clean_baseline_ts_kst": CLEAN_BASELINE_TS_KST,
             "window_policy": "all_available_since_clean_baseline_or_configured_start",
+            "baseline_row_filter": "pipeline rows before clean_baseline_ts_kst are excluded",
         },
         "runtime_effect": False,
         "allowed_runtime_apply": False,
@@ -564,6 +639,7 @@ def build_report(
             "forbidden_uses": FORBIDDEN_USES,
         },
         "source_paths": source_paths,
+        "source_coverage_manifest": coverage_manifest,
         "summary": {
             "forced_record_count": len(rows),
             "post_sell_joined_count": len(joined),
@@ -572,6 +648,8 @@ def build_report(
             "threshold_group_counts": [{"threshold_group": key, "count": value} for key, value in threshold_group_counts.most_common()],
             "threshold_opportunity_count": len(opportunities),
             "code_improvement_order_count": len(orders),
+            "source_coverage_status": coverage_manifest.get("status"),
+            "source_coverage_gap_count": coverage_manifest.get("gap_count"),
         },
         "profit_summary": _profit_summary(joined),
         "threshold_opportunities": opportunities,
@@ -596,6 +674,8 @@ def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path)
         "- allowed_runtime_apply: false",
         "- forbidden_uses: " + ", ".join(FORBIDDEN_USES),
         f"- ai_review_status: {(summary.get('ai_review_status') or '-')}",
+        f"- source_coverage_status: {summary.get('source_coverage_status')}",
+        f"- source_coverage_gap_count: {summary.get('source_coverage_gap_count')}",
         "",
         "## Summary",
         "",

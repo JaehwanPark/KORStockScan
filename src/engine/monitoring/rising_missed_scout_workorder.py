@@ -41,6 +41,21 @@ def _safe_float(value: Any) -> float | None:
         return None
 
 
+def _safe_int(value: Any) -> int | None:
+    number = _safe_float(value)
+    if number is None:
+        return None
+    return int(number)
+
+
+def _first_present(mapping: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = mapping.get(key)
+        if value not in (None, "", "-"):
+            return value
+    return None
+
+
 def _boolish(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -138,6 +153,24 @@ def _is_forced_scout(row: dict[str, Any]) -> bool:
 
 def _event_features(row: dict[str, Any]) -> dict[str, Any]:
     fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
+    entry_price = _safe_float(
+        _first_present(
+            fields,
+            "rising_missed_one_share_entry_price",
+            "current_price",
+            "current_price_observed",
+        )
+    )
+    forced_qty = _safe_int(
+        _first_present(
+            fields,
+            "forced_entry_qty",
+            "rising_missed_one_share_entry_forced_qty",
+        )
+    )
+    forced_notional = _safe_float(fields.get("rising_missed_scout_forced_notional_krw"))
+    if forced_notional is None and entry_price is not None and forced_qty is not None:
+        forced_notional = entry_price * forced_qty
     return {
         "stock_code": row.get("stock_code"),
         "stock_name": row.get("stock_name"),
@@ -153,9 +186,14 @@ def _event_features(row: dict[str, Any]) -> dict[str, Any]:
         ),
         "rising_missed_selection_rank_reason": fields.get("rising_missed_selection_rank_reason"),
         "price_delta_since_first_seen_pct": _safe_float(fields.get("price_delta_since_first_seen_pct")),
-        "entry_price": fields.get("rising_missed_one_share_entry_price")
-        or fields.get("current_price")
-        or fields.get("current_price_observed"),
+        "entry_price": entry_price,
+        "forced_entry_qty": forced_qty,
+        "forced_entry_notional_krw": forced_notional,
+        "forced_entry_budget_cap_krw": _safe_float(fields.get("rising_missed_scout_budget_cap_krw")),
+        "forced_entry_budget_qty": _safe_int(fields.get("rising_missed_scout_budget_qty")),
+        "forced_entry_sizing_mode": fields.get("rising_missed_scout_sizing_mode"),
+        "forced_entry_min_one_share_applied": _boolish(fields.get("rising_missed_scout_min_one_share_applied")),
+        "forced_entry_min_one_share_over_cap": _boolish(fields.get("rising_missed_scout_min_one_share_over_cap")),
     }
 
 
@@ -179,6 +217,54 @@ def _index_forced_scouts(rows: Iterable[dict[str, Any]]) -> dict[str, dict[str, 
     return forced
 
 
+def _outcome_quantity_summary(
+    *,
+    entry: dict[str, Any],
+    sell: dict[str, Any],
+    profit_rate: float | None,
+) -> dict[str, Any]:
+    forced_qty = _safe_int(entry.get("forced_entry_qty"))
+    forced_notional = _safe_float(entry.get("forced_entry_notional_krw"))
+    post_sell_buy_qty = _safe_int(sell.get("buy_qty"))
+    post_sell_buy_price = _safe_float(sell.get("buy_price"))
+    post_sell_sell_price = _safe_float(sell.get("sell_price"))
+    post_sell_buy_notional = (
+        post_sell_buy_qty * post_sell_buy_price
+        if post_sell_buy_qty is not None and post_sell_buy_price is not None
+        else None
+    )
+    initial_gross_pnl = (
+        round(forced_notional * profit_rate / 100.0, 3)
+        if forced_notional is not None and profit_rate is not None
+        else None
+    )
+    total_gross_pnl = (
+        round(post_sell_buy_notional * profit_rate / 100.0, 3)
+        if post_sell_buy_notional is not None and profit_rate is not None
+        else None
+    )
+    scale_in_qty_delta = (
+        max(0, post_sell_buy_qty - forced_qty)
+        if post_sell_buy_qty is not None and forced_qty is not None
+        else None
+    )
+    return {
+        "forced_initial_entry_qty": forced_qty,
+        "forced_initial_entry_price": _safe_float(entry.get("entry_price")),
+        "forced_initial_notional_krw": forced_notional,
+        "post_sell_buy_qty": post_sell_buy_qty,
+        "post_sell_buy_price": post_sell_buy_price,
+        "post_sell_sell_price": post_sell_sell_price,
+        "post_sell_buy_notional_krw": post_sell_buy_notional,
+        "scale_in_qty_delta_after_initial_entry": scale_in_qty_delta,
+        "initial_entry_estimated_gross_pnl_krw": initial_gross_pnl,
+        "total_position_estimated_gross_pnl_krw": total_gross_pnl,
+        "initial_entry_fee_tax_krw": None,
+        "initial_entry_estimated_net_pnl_krw": None,
+        "net_pnl_unavailable_reason": "fee_tax_fields_missing",
+    }
+
+
 def _joined_scout_outcomes(
     *,
     forced: dict[str, dict[str, Any]],
@@ -193,6 +279,11 @@ def _joined_scout_outcomes(
         profit_rate = _safe_float(sell.get("profit_rate"))
         entry = forced[record_id].get("first_forced_event") or {}
         counts = stage_counts.get(record_id, Counter())
+        quantity_summary = _outcome_quantity_summary(
+            entry=entry,
+            sell=sell,
+            profit_rate=profit_rate,
+        )
         outcomes.append(
             {
                 "record_id": record_id,
@@ -212,6 +303,38 @@ def _joined_scout_outcomes(
                 "rising_missed_selection_score_delta": entry.get("rising_missed_selection_score_delta"),
                 "rising_missed_selection_rank_reason": entry.get("rising_missed_selection_rank_reason"),
                 "price_delta_since_first_seen_pct": entry.get("price_delta_since_first_seen_pct"),
+                "forced_initial_entry": {
+                    "qty": quantity_summary.get("forced_initial_entry_qty"),
+                    "price": quantity_summary.get("forced_initial_entry_price"),
+                    "notional_krw": quantity_summary.get("forced_initial_notional_krw"),
+                    "budget_cap_krw": entry.get("forced_entry_budget_cap_krw"),
+                    "budget_qty": entry.get("forced_entry_budget_qty"),
+                    "sizing_mode": entry.get("forced_entry_sizing_mode"),
+                    "min_one_share_applied": entry.get("forced_entry_min_one_share_applied"),
+                    "min_one_share_over_cap": entry.get("forced_entry_min_one_share_over_cap"),
+                },
+                "post_sell_position": {
+                    "buy_qty": quantity_summary.get("post_sell_buy_qty"),
+                    "buy_price": quantity_summary.get("post_sell_buy_price"),
+                    "sell_price": quantity_summary.get("post_sell_sell_price"),
+                    "buy_notional_krw": quantity_summary.get("post_sell_buy_notional_krw"),
+                    "scale_in_qty_delta_after_initial_entry": quantity_summary.get(
+                        "scale_in_qty_delta_after_initial_entry"
+                    ),
+                },
+                "cashflow_estimate": {
+                    "initial_entry_estimated_gross_pnl_krw": quantity_summary.get(
+                        "initial_entry_estimated_gross_pnl_krw"
+                    ),
+                    "total_position_estimated_gross_pnl_krw": quantity_summary.get(
+                        "total_position_estimated_gross_pnl_krw"
+                    ),
+                    "initial_entry_fee_tax_krw": quantity_summary.get("initial_entry_fee_tax_krw"),
+                    "initial_entry_estimated_net_pnl_krw": quantity_summary.get(
+                        "initial_entry_estimated_net_pnl_krw"
+                    ),
+                    "net_pnl_unavailable_reason": quantity_summary.get("net_pnl_unavailable_reason"),
+                },
                 "forced_event_count": forced[record_id].get("forced_event_count", 0),
                 "latency_pass_count": counts.get("latency_pass", 0),
                 "order_bundle_submitted_count": counts.get("order_bundle_submitted", 0),
@@ -282,12 +405,55 @@ def _current_missed_summary(diagnostic: dict[str, Any]) -> dict[str, Any]:
 
 def _profit_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     values = [row["profit_rate"] for row in rows if row.get("profit_rate") is not None]
+    weighted_terms: list[tuple[float, float]] = []
+    initial_gross_pnls: list[float] = []
+    total_gross_pnls: list[float] = []
+    scale_in_delta_rows = 0
+    for row in rows:
+        profit_rate = row.get("profit_rate")
+        forced_initial = row.get("forced_initial_entry") if isinstance(row.get("forced_initial_entry"), dict) else {}
+        notional = _safe_float(forced_initial.get("notional_krw"))
+        if profit_rate is not None and notional is not None and notional > 0:
+            weighted_terms.append((float(profit_rate), notional))
+        cashflow = row.get("cashflow_estimate") if isinstance(row.get("cashflow_estimate"), dict) else {}
+        initial_gross = _safe_float(cashflow.get("initial_entry_estimated_gross_pnl_krw"))
+        total_gross = _safe_float(cashflow.get("total_position_estimated_gross_pnl_krw"))
+        if initial_gross is not None:
+            initial_gross_pnls.append(initial_gross)
+        if total_gross is not None:
+            total_gross_pnls.append(total_gross)
+        post_sell_position = row.get("post_sell_position") if isinstance(row.get("post_sell_position"), dict) else {}
+        scale_in_delta = _safe_int(post_sell_position.get("scale_in_qty_delta_after_initial_entry"))
+        if scale_in_delta is not None and scale_in_delta > 0:
+            scale_in_delta_rows += 1
+    notional_sum = sum(notional for _profit, notional in weighted_terms)
+    notional_ev = (
+        round(sum(profit * notional for profit, notional in weighted_terms) / notional_sum, 6)
+        if notional_sum > 0
+        else None
+    )
+    equal_weight_ev = round(sum(values) / len(values), 6) if values else None
     return {
         "sample": len(rows),
         "valid_profit_sample": len(values),
         "avg_profit_rate": round(sum(values) / len(values), 4) if values else None,
+        "equal_weight_avg_profit_pct": equal_weight_ev,
+        "notional_weighted_ev_pct": notional_ev,
         "min_profit_rate": min(values) if values else None,
         "max_profit_rate": max(values) if values else None,
+        "simple_sum_profit_pct": round(sum(values), 6) if values else None,
+        "diagnostic_win_rate": round(
+            sum(1 for value in values if value > 0) / len(values),
+            6,
+        ) if values else None,
+        "initial_entry_estimated_gross_pnl_krw": round(sum(initial_gross_pnls), 3)
+        if initial_gross_pnls
+        else None,
+        "total_position_estimated_gross_pnl_krw": round(sum(total_gross_pnls), 3)
+        if total_gross_pnls
+        else None,
+        "net_pnl_unavailable_reason": "fee_tax_fields_missing" if values else None,
+        "scale_in_delta_after_initial_entry_row_count": scale_in_delta_rows,
     }
 
 
@@ -408,6 +574,7 @@ def _take_profit_capture_summary(winners: list[dict[str, Any]]) -> dict[str, Any
         "evaluated_capture_count": len(capture_rows),
         "avg_peak_profit": _avg([row["peak_profit"] for row in capture_rows]),
         "avg_profit_rate": _avg([row["profit_rate"] for row in capture_rows]),
+        "equal_weight_avg_profit_pct": _avg([row["profit_rate"] for row in capture_rows]),
         "avg_giveback_pct": _avg(givebacks),
         "max_giveback_pct": max(givebacks) if givebacks else None,
         "avg_peak_capture_ratio_pct": _avg(captures),
@@ -1039,6 +1206,7 @@ def build_report(
     outcomes = _joined_scout_outcomes(forced=forced, stage_counts=stage_counts, post_sell_rows=post_sell_rows)
     winners = [row for row in outcomes if (row.get("profit_rate") is not None and row["profit_rate"] > 0)]
     losers = [row for row in outcomes if (row.get("profit_rate") is not None and row["profit_rate"] <= 0)]
+    forced_initial_entry_ev_summary = _profit_summary(outcomes)
     entry_quality_split = _entry_quality_split_summary(winners, losers)
     take_profit_capture = _take_profit_capture_summary(winners)
     current_missed = _current_missed_summary(diagnostic)
@@ -1101,9 +1269,18 @@ def build_report(
                 "decision_authority": "source_only_take_profit_expansion_review",
                 "window_policy": "same_day_profitable_forced_scout_post_sell_mfe_join",
                 "sample_floor": "1_profitable_forced_scout_with_profit_and_peak_profit",
-                "primary_decision_metric": "avg_giveback_pct",
+                "primary_decision_metric": "equal_weight_avg_profit_pct",
                 "source_quality_gate": "record_id_joined_forced_scout_post_sell_profit_and_peak_profit",
                 "forbidden_uses": take_profit_capture.get("forbidden_uses"),
+            },
+            "forced_initial_entry_ev_summary": {
+                "metric_role": "sim_probe_ev",
+                "decision_authority": "source_only_forced_initial_entry_ev_measurement",
+                "window_policy": "same_day_forced_scout_post_sell_join",
+                "sample_floor": "1_forced_scout_with_valid_post_sell_profit",
+                "primary_decision_metric": "notional_weighted_ev_pct",
+                "source_quality_gate": "record_id_joined_forced_scout_event_to_post_sell_outcome_with_initial_qty_notional",
+                "forbidden_uses": FORBIDDEN_USES,
             }
         },
         "source_paths": source_paths,
@@ -1125,6 +1302,24 @@ def build_report(
             "take_profit_avg_giveback_pct": take_profit_capture.get("avg_giveback_pct"),
             "forced_scout_selection_prior_winner_counts": _selection_recommendation_counts(winners),
             "forced_scout_selection_prior_loser_counts": _selection_recommendation_counts(losers),
+            "forced_initial_entry_equal_weight_avg_profit_pct": forced_initial_entry_ev_summary.get(
+                "equal_weight_avg_profit_pct"
+            ),
+            "forced_initial_entry_notional_weighted_ev_pct": forced_initial_entry_ev_summary.get(
+                "notional_weighted_ev_pct"
+            ),
+            "forced_initial_entry_estimated_gross_pnl_krw": forced_initial_entry_ev_summary.get(
+                "initial_entry_estimated_gross_pnl_krw"
+            ),
+            "total_position_estimated_gross_pnl_krw": forced_initial_entry_ev_summary.get(
+                "total_position_estimated_gross_pnl_krw"
+            ),
+            "scale_in_delta_after_initial_entry_row_count": forced_initial_entry_ev_summary.get(
+                "scale_in_delta_after_initial_entry_row_count"
+            ),
+            "net_pnl_unavailable_reason": forced_initial_entry_ev_summary.get(
+                "net_pnl_unavailable_reason"
+            ),
             "current_missed_count": current_missed.get("count"),
             "current_missed_class_counts": current_missed.get("class_counts"),
             "current_missed_selection_prior_recommendation_counts": current_missed.get(
@@ -1150,6 +1345,7 @@ def build_report(
         },
         "profitable_forced_scout_examples": winners[:20],
         "loss_or_flat_forced_scout_examples": losers[:20],
+        "forced_initial_entry_ev_summary": forced_initial_entry_ev_summary,
         "current_missed_summary": current_missed,
         "intraday_feedback_summary": intraday_feedback_summary,
         "classifier_prior_summary": classifier_prior_summary,
@@ -1182,6 +1378,12 @@ def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path)
         f"- loss_or_flat_forced_scout_count: {summary.get('loss_or_flat_forced_scout_count')}",
         f"- winner_avg_profit_rate: {(summary.get('winner_profit') or {}).get('avg_profit_rate')}",
         f"- loser_avg_profit_rate: {(summary.get('loser_profit') or {}).get('avg_profit_rate')}",
+        f"- forced_initial_entry_equal_weight_avg_profit_pct: {summary.get('forced_initial_entry_equal_weight_avg_profit_pct')}",
+        f"- forced_initial_entry_notional_weighted_ev_pct: {summary.get('forced_initial_entry_notional_weighted_ev_pct')}",
+        f"- forced_initial_entry_estimated_gross_pnl_krw: {summary.get('forced_initial_entry_estimated_gross_pnl_krw')}",
+        f"- total_position_estimated_gross_pnl_krw: {summary.get('total_position_estimated_gross_pnl_krw')}",
+        f"- scale_in_delta_after_initial_entry_row_count: {summary.get('scale_in_delta_after_initial_entry_row_count')}",
+        f"- net_pnl_unavailable_reason: {summary.get('net_pnl_unavailable_reason')}",
         f"- shared_source_signature_count: {summary.get('shared_source_signature_count')}",
         f"- take_profit_runner_review_candidate_count: {summary.get('take_profit_runner_review_candidate_count')}",
         f"- take_profit_avg_giveback_pct: {summary.get('take_profit_avg_giveback_pct')}",

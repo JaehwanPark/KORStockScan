@@ -41,6 +41,8 @@ def test_build_report_joins_forced_scout_post_sell_and_creates_workorders(tmp_pa
                 "source_signature": "OPEN_TOP,PRICE_JUMP_START,VALUE_TOP",
                 "price_delta_since_first_seen_pct": "2.5",
                 "rising_missed_one_share_entry_price": "10000",
+                "forced_entry_qty": "2",
+                "rising_missed_scout_forced_notional_krw": "20000",
                 "rising_missed_selection_prior_key": "prior_positive",
                 "rising_missed_selection_recommendation": "positive_prior",
                 "rising_missed_selection_confidence": "high",
@@ -93,6 +95,8 @@ def test_build_report_joins_forced_scout_post_sell_and_creates_workorders(tmp_pa
                 "scanner_promotion_reason": "price_jump_start_acceleration",
                 "source_signature": "OPEN_TOP,PRICE_JUMP_START,VALUE_TOP",
                 "price_delta_since_first_seen_pct": "4.0",
+                "current_price": "10000",
+                "forced_entry_qty": "1",
                 "rising_missed_selection_prior_key": "prior_loss",
                 "rising_missed_selection_recommendation": "loss_filter",
                 "rising_missed_selection_confidence": "medium",
@@ -113,6 +117,9 @@ def test_build_report_joins_forced_scout_post_sell_and_creates_workorders(tmp_pa
                         "stock_code": "000001",
                         "stock_name": "winner",
                         "sell_time": "09:10:00",
+                        "buy_price": 10000,
+                        "buy_qty": 3,
+                        "sell_price": 10120,
                         "profit_rate": 1.2,
                         "peak_profit": 1.5,
                         "held_sec": 600,
@@ -125,6 +132,9 @@ def test_build_report_joins_forced_scout_post_sell_and_creates_workorders(tmp_pa
                         "stock_code": "000002",
                         "stock_name": "loser",
                         "sell_time": "09:05:00",
+                        "buy_price": 10000,
+                        "buy_qty": 1,
+                        "sell_price": 9920,
                         "profit_rate": -0.8,
                         "peak_profit": 0.0,
                         "held_sec": 120,
@@ -173,6 +183,20 @@ def test_build_report_joins_forced_scout_post_sell_and_creates_workorders(tmp_pa
     assert report["summary"]["forced_scout_record_count"] == 2
     assert report["summary"]["profitable_forced_scout_count"] == 1
     assert report["summary"]["loss_or_flat_forced_scout_count"] == 1
+    assert report["summary"]["forced_initial_entry_equal_weight_avg_profit_pct"] == 0.2
+    assert report["summary"]["forced_initial_entry_notional_weighted_ev_pct"] == 0.533333
+    assert report["summary"]["forced_initial_entry_estimated_gross_pnl_krw"] == 160.0
+    assert report["summary"]["total_position_estimated_gross_pnl_krw"] == 280.0
+    assert report["summary"]["scale_in_delta_after_initial_entry_row_count"] == 1
+    assert report["summary"]["net_pnl_unavailable_reason"] == "fee_tax_fields_missing"
+    assert report["profitable_forced_scout_examples"][0]["forced_initial_entry"]["qty"] == 2
+    assert report["profitable_forced_scout_examples"][0]["post_sell_position"]["scale_in_qty_delta_after_initial_entry"] == 1
+    assert (
+        report["profitable_forced_scout_examples"][0]["cashflow_estimate"][
+            "initial_entry_estimated_net_pnl_krw"
+        ]
+        is None
+    )
     assert report["summary"]["forced_scout_selection_prior_winner_counts"] == [
         {"recommendation": "positive_prior", "count": 1}
     ]
@@ -208,6 +232,10 @@ def test_build_report_joins_forced_scout_post_sell_and_creates_workorders(tmp_pa
     assert (
         report["metric_contracts"]["scale_in_bottleneck_summary"]["decision_authority"]
         == "source_only_scale_in_bottleneck_analysis"
+    )
+    assert (
+        report["metric_contracts"]["forced_initial_entry_ev_summary"]["primary_decision_metric"]
+        == "notional_weighted_ev_pct"
     )
     assert (
         "scale_in_guard_bypass"

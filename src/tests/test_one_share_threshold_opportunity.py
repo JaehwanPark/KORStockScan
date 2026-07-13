@@ -1,3 +1,4 @@
+import gzip
 import json
 
 from src.engine.monitoring import one_share_threshold_opportunity as mod
@@ -269,3 +270,93 @@ def test_write_outputs(tmp_path):
     markdown = output_md.read_text(encoding="utf-8")
     assert "One Share Threshold Opportunity" in markdown
     assert "runtime_effect: false" in markdown
+
+
+def test_build_report_reads_gzip_pipeline_and_filters_clean_baseline(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-06-04.jsonl.gz"
+    post_sell_path = tmp_path / "post_sell_candidates_2026-06-04.jsonl"
+    with gzip.open(pipeline_path, "wt", encoding="utf-8") as handle:
+        for row in [
+            _event(
+                "old",
+                "rising_missed_one_share_entry",
+                {"forced_entry_reason": "rising_missed_one_share_entry"},
+                emitted_at="2026-06-04T14:20:00+09:00",
+            ),
+            _event(
+                "new",
+                "blocked_ai_score",
+                {"reason": "blocked_ai_score_below_buy_score_threshold"},
+                emitted_at="2026-06-04T14:30:00+09:00",
+            ),
+            _event(
+                "new",
+                "rising_missed_one_share_entry",
+                {"forced_entry_reason": "rising_missed_one_share_entry"},
+                emitted_at="2026-06-04T14:31:00+09:00",
+            ),
+        ]:
+            handle.write(json.dumps(row) + "\n")
+    post_sell_path.write_text(
+        "\n".join(
+            [
+                json.dumps({"recommendation_id": "old", "profit_rate": 9.9}),
+                json.dumps({"recommendation_id": "new", "profit_rate": 0.3}),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod.build_report(
+        "2026-06-04",
+        since_date="2026-06-04",
+        pipeline_paths=[pipeline_path],
+        post_sell_paths=[post_sell_path],
+        generated_at="fixed",
+        ai_provider="none",
+    )
+
+    assert report["summary"]["forced_record_count"] == 1
+    assert report["joined_examples"][0]["record_id"] == "new"
+    assert report["source_coverage_manifest"]["pipeline_gzip_path_count"] == 1
+    assert report["window"]["clean_baseline_ts_kst"] == "2026-06-04T14:29:09+09:00"
+
+
+def test_source_coverage_gap_fails_closed_for_code_orders(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-01.jsonl"
+    post_sell_path = tmp_path / "post_sell_candidates_2026-07-02.jsonl"
+    pipeline_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    _event(
+                        1,
+                        "blocked_ai_score",
+                        {"reason": "blocked_ai_score_below_buy_score_threshold"},
+                    )
+                ),
+                json.dumps(
+                    _event(
+                        1,
+                        "rising_missed_one_share_entry",
+                        {"forced_entry_reason": "rising_missed_one_share_entry"},
+                    )
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    post_sell_path.write_text(json.dumps({"recommendation_id": 1, "profit_rate": 1.0}) + "\n", encoding="utf-8")
+
+    report = mod.build_report(
+        "2026-07-02",
+        since_date="2026-07-01",
+        pipeline_paths=[pipeline_path],
+        post_sell_paths=[post_sell_path],
+        generated_at="fixed",
+        ai_provider="none",
+    )
+
+    assert report["summary"]["source_coverage_status"] == "source_coverage_gap"
+    assert report["summary"]["code_improvement_order_count"] == 0
+    assert report["code_improvement_orders"] == []
