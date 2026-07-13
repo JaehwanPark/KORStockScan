@@ -344,3 +344,25 @@ This file is cumulative. Do not append every 10-minute loop result here. Loop-le
 
 - `runtime_effect=false` for order/provider/threshold authority.
 - This changed scanner watch-budget retention and field emission only. It did not change thresholds, provider route, bot state, order submission, stale/latency/broker/account/order/quantity/cooldown guards, or hard/protect/emergency safety.
+
+## 13. 2026-07-13 Signed-Tape Retention Queue-Lag Continuity Guard
+
+### Decision
+
+- Bounded signed-tape watch retention must not be broken by the queue-lag eviction path during the same cooldown recheck window.
+- Retention remains valid only when the current fast-precheck reason is signed-tape related. Candidate-gate, submit-safety, stale WS, missing price, and market-data conflict states keep their higher-priority ownership.
+
+### Change
+
+- `_scanner_watch_eviction_decision_from_queue_lag` now skips queue-lag eviction for the bounded `bounded_repeat_cooldown_recheck_pending` signed-tape retention reason and resets stale queue-lag confirmation state.
+- The guard requires the current fast-precheck reason to be `signed_tape_sell_dominated` or `signed_tape_sell_dominated_backoff_active`, so retained state cannot leak into candidate-gate or submit-safety blockers.
+
+### Validation
+
+- `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_kiwoom_sniper_market_regime_runtime.py -k "signed_tape_retention or queue_lag_retention or queue_lag_eviction"` passed with `9 passed`.
+- `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_sniper_scale_in.py -k "signed_tape_preserve or sell_dominated_signed_tape_reallocates_budget or submit_safety_backoff_stale_weak_reallocates"` passed with `5 passed`.
+- `PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500` passed.
+
+### Operating Boundary
+
+- This is scanner watch-budget continuity only. It does not change thresholds, provider route, bot state, order submission, stale/latency/broker/account/order/quantity/cooldown guards, or hard/protect/emergency safety.

@@ -2221,6 +2221,37 @@ def _scanner_watch_eviction_decision_from_queue_lag(target, *, now_ts, queue_lag
             "fast_precheck_reason": fast_precheck_reason or "not_available",
         }
 
+    fast_precheck_fields = dict((target or {}).get("_scanner_fast_precheck_fields") or {})
+    retention_fast_precheck_reason = str(
+        fast_precheck_fields.get("fast_precheck_reason") or fast_precheck_reason or ""
+    )
+    retention_reason = str(
+        fast_precheck_fields.get("rising_missed_signed_tape_watch_retention_reason") or ""
+    )
+    if (
+        _scanner_boolish_true(
+            fast_precheck_fields.get("rising_missed_signed_tape_watch_retention_recommended")
+        )
+        and retention_fast_precheck_reason
+        in {"signed_tape_sell_dominated", "signed_tape_sell_dominated_backoff_active"}
+        and retention_reason == "bounded_repeat_cooldown_recheck_pending"
+    ):
+        _scanner_watch_reset_queue_lag_eviction_state(target)
+        target["_scanner_queue_lag_retained_at"] = float(now_ts)
+        target["_scanner_queue_lag_retained_reason"] = retention_reason
+        return {
+            "should_evict": False,
+            "eviction_attempt_count": 0,
+            "eviction_reason": "scanner_queue_lag_signed_tape_retention_pending",
+            "queue_lag_sec": round(queue_lag_sec, 3),
+            "queue_lag_min_sec": round(min_sec, 3),
+            "fresh_input_confirmed": False,
+            "fast_precheck_result": fast_precheck_result or "not_available",
+            "fast_precheck_reason": fast_precheck_reason or "not_available",
+            "fast_precheck_fields": fast_precheck_fields,
+            "signed_tape_watch_retention_reason": retention_reason,
+        }
+
     last_observed = _safe_float(target.get("_scanner_watch_queue_lag_last_observed_epoch"), 0.0)
     if last_observed > 0 and float(now_ts) - last_observed < 5.0:
         return {

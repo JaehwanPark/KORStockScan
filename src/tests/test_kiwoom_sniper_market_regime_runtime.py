@@ -4704,6 +4704,102 @@ def test_scanner_fast_precheck_retention_requires_bounded_signed_tape_reason(mon
     assert "_scanner_fast_precheck_budget_retained_reason" not in target
 
 
+def test_scanner_queue_lag_retention_skips_eviction_for_bounded_signed_tape_reason(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_QUEUE_LAG_EVICTION_MIN_SEC", "30")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_QUEUE_LAG_EVICTION_MIN_COUNT", "2")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_QUEUE_LAG_EVICTION_IMMEDIATE_SEC", "60")
+    target = _scanner_watch_stock(
+        code="005930",
+        _scanner_watch_queue_lag_count=2,
+        _scanner_watch_queue_lag_first_observed_epoch=1035.0,
+        _scanner_watch_queue_lag_last_observed_epoch=1045.0,
+        _scanner_fast_precheck_result="budget_reallocated",
+        _scanner_fast_precheck_reason="signed_tape_sell_dominated",
+        _scanner_fast_precheck_fields={
+            "fast_precheck_result": "budget_reallocated",
+            "fast_precheck_reason": "signed_tape_sell_dominated",
+            "rising_missed_signed_tape_watch_retention_recommended": True,
+            "rising_missed_signed_tape_watch_retention_reason": (
+                "bounded_repeat_cooldown_recheck_pending"
+            ),
+        },
+    )
+
+    decision = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_queue_lag(
+        target,
+        now_ts=1065.0,
+        queue_lag_fields={"queue_lag_sec": 65.0},
+    )
+
+    assert decision["should_evict"] is False
+    assert decision["eviction_reason"] == "scanner_queue_lag_signed_tape_retention_pending"
+    assert decision["signed_tape_watch_retention_reason"] == (
+        "bounded_repeat_cooldown_recheck_pending"
+    )
+    assert target["_scanner_queue_lag_retained_reason"] == (
+        "bounded_repeat_cooldown_recheck_pending"
+    )
+    assert "_scanner_watch_queue_lag_count" not in target
+    assert "_scanner_watch_queue_lag_first_observed_epoch" not in target
+    assert "_scanner_watch_queue_lag_last_observed_epoch" not in target
+
+
+def test_scanner_queue_lag_retention_requires_bounded_signed_tape_reason(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_QUEUE_LAG_EVICTION_MIN_SEC", "30")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_QUEUE_LAG_EVICTION_MIN_COUNT", "2")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_QUEUE_LAG_EVICTION_IMMEDIATE_SEC", "60")
+    target = _scanner_watch_stock(
+        code="005930",
+        _scanner_fast_precheck_result="budget_reallocated",
+        _scanner_fast_precheck_reason="signed_tape_sell_dominated",
+        _scanner_fast_precheck_fields={
+            "fast_precheck_result": "budget_reallocated",
+            "fast_precheck_reason": "signed_tape_sell_dominated",
+            "rising_missed_signed_tape_watch_retention_recommended": True,
+            "rising_missed_signed_tape_watch_retention_reason": "unexpected_retention_reason",
+        },
+    )
+
+    decision = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_queue_lag(
+        target,
+        now_ts=1065.0,
+        queue_lag_fields={"queue_lag_sec": 65.0},
+    )
+
+    assert decision["should_evict"] is True
+    assert decision["eviction_reason"] == "scanner_queue_lag_budget_reallocated"
+    assert "_scanner_queue_lag_retained_reason" not in target
+
+
+def test_scanner_queue_lag_retention_requires_current_signed_tape_reason(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_QUEUE_LAG_EVICTION_MIN_SEC", "30")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_QUEUE_LAG_EVICTION_MIN_COUNT", "2")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_QUEUE_LAG_EVICTION_IMMEDIATE_SEC", "60")
+    target = _scanner_watch_stock(
+        code="005930",
+        _scanner_fast_precheck_result="budget_reallocated",
+        _scanner_fast_precheck_reason="candidate_gate_backoff_active",
+        _scanner_fast_precheck_fields={
+            "fast_precheck_result": "budget_reallocated",
+            "fast_precheck_reason": "candidate_gate_backoff_active",
+            "rising_missed_signed_tape_watch_retention_recommended": True,
+            "rising_missed_signed_tape_watch_retention_reason": (
+                "bounded_repeat_cooldown_recheck_pending"
+            ),
+        },
+    )
+
+    decision = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_queue_lag(
+        target,
+        now_ts=1065.0,
+        queue_lag_fields={"queue_lag_sec": 65.0},
+    )
+
+    assert decision["should_evict"] is True
+    assert decision["eviction_reason"] == "scanner_queue_lag_budget_reallocated"
+    assert "_scanner_queue_lag_retained_reason" not in target
+
+
 def test_scanner_queue_lag_eviction_immediate_for_extreme_lag(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_QUEUE_LAG_EVICTION_MIN_SEC", "30")
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_QUEUE_LAG_EVICTION_MIN_COUNT", "3")
