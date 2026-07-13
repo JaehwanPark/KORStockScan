@@ -3101,6 +3101,76 @@ def test_latency_true_ofi_direct_canary_keeps_wide_spread_blocked(monkeypatch):
     assert result["latency_true_ofi_direct_canary_reason"] == "spread_bps_above_direct_canary_cap"
 
 
+def test_latency_true_ofi_direct_canary_reports_stale_true_ofi_source_before_value(monkeypatch):
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=True,
+            SCALP_LATENCY_SPREAD_RELIEF_TAGS=("OTHER",),
+            SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED=False,
+            SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_GUARD_CANARY_ENABLED=False,
+            SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=False,
+        ),
+    )
+    now_ts = time.time()
+    monkeypatch.setattr(
+        entry_latency_module,
+        "MICRO_ESTIMATOR_STORE",
+        SimpleNamespace(
+            snapshot=lambda code, *, now_ts: {
+                "source_state": "fresh_ws_order_flow_delta",
+                "confidence": 0.91,
+                "true_ofi_ewma": 0.21,
+                "true_ofi_sample_count": 120,
+                "last_ws_ts": now_ts - 1.5,
+            }
+        ),
+    )
+
+    result = evaluate_live_buy_entry(
+        stock={
+            "name": "TEST",
+            "position_tag": "SCANNER",
+            "rising_missed_entry_lineage": True,
+            "source_signature": "LOW_REBOUND_RISING_MISSED,PRICE_JUMP_START",
+            "price_delta_since_first_seen_pct": "7.63",
+        },
+        code="123456_true_ofi_direct_canary_stale_source",
+        ws_data={
+            "curr": 3_680,
+            "last_ws_update_ts": now_ts,
+            "tick_aggressor_pressure_usable": True,
+            "tick_aggressor_trusted_count": 10,
+            "buy_pressure_10t": 83.0,
+            "buy_exec_volume": 830,
+            "sell_exec_volume": 170,
+            "net_buy_exec_volume": 660,
+            "orderbook": {
+                "asks": [{"price": 3_700, "volume": 100}],
+                "bids": [{"price": 3_680, "volume": 100}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=2,
+        signal_price=3_680,
+        signal_strength=0.70,
+    )
+
+    assert result["decision"] == "REJECT_DANGER"
+    assert result["latency_true_ofi_direct_canary_applied"] is False
+    assert result["latency_true_ofi_direct_canary_derived_reason"] == "not_true_ofi_below_floor"
+    assert result["latency_true_ofi_direct_canary_reason"] == "ws_age_above_direct_canary_cap"
+    assert result["latency_true_ofi_direct_canary_ws_age_ms"] > result[
+        "latency_true_ofi_direct_canary_max_ws_age_ms"
+    ]
+
+
 def test_latency_false_negative_remeasure_preserves_explicit_ai_wait(monkeypatch):
     monkeypatch.setattr(
         entry_latency_module,

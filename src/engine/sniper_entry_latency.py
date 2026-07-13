@@ -1650,9 +1650,6 @@ def _latency_true_ofi_direct_canary_fields(
     if not normalized_reasons or not normalized_reasons.issubset(spread_reasons):
         fields["latency_true_ofi_direct_canary_reason"] = "non_spread_latency_danger"
         return fields
-    if not derived_true_ofi_below_floor:
-        fields["latency_true_ofi_direct_canary_reason"] = "not_true_ofi_below_floor"
-        return fields
     if source_state in {"", "not_evaluated", "missing_code", "snapshot_unavailable"}:
         fields["latency_true_ofi_direct_canary_reason"] = "true_ofi_source_unavailable"
         return fields
@@ -1664,6 +1661,9 @@ def _latency_true_ofi_direct_canary_fields(
         return fields
     if float(spread_bps or 0.0) > max_spread_bps:
         fields["latency_true_ofi_direct_canary_reason"] = "spread_bps_above_direct_canary_cap"
+        return fields
+    if not derived_true_ofi_below_floor:
+        fields["latency_true_ofi_direct_canary_reason"] = "not_true_ofi_below_floor"
         return fields
     if not (min_true_ofi <= true_ofi <= max_true_ofi):
         fields["latency_true_ofi_direct_canary_reason"] = "true_ofi_outside_near_zero_band"
