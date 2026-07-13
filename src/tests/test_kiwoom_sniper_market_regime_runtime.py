@@ -26,7 +26,15 @@ class _RuntimeRecordDB:
     def get_session(self):
         return _RuntimeRecordSession()
 
-    def find_reusable_watching_record(self, session, *, rec_date, stock_code, strategy=None):
+    def find_reusable_watching_record(
+        self,
+        session,
+        *,
+        rec_date,
+        stock_code,
+        strategy=None,
+        position_tag=None,
+    ):
         return SimpleNamespace(id=self.record_id)
 
 

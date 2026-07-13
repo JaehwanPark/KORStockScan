@@ -142,6 +142,80 @@ def test_promote_candidates_limits_new_codes_to_remaining_active_slots(monkeypat
     assert len(db.records) == 2
 
 
+def test_promote_candidates_skips_code_with_active_manual_scalp_base(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "2")
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(scalping_scanner, "_scanner_candidate_pre_filter_reason", lambda target: "")
+    monkeypatch.setattr(scalping_scanner, "_should_promote_candidate", lambda *args, **kwargs: True)
+    monkeypatch.setattr(scalping_scanner, "_scanner_real_source_guard_decision", lambda *args, **kwargs: {"blocked": False})
+    db = _DB()
+    db.records.append(
+        SimpleNamespace(
+            stock_code="000001",
+            status="WATCHING",
+            strategy="SCALPING",
+            position_tag="SCALP_BASE",
+            buy_time=None,
+            buy_qty=0,
+        )
+    )
+    event_bus = _EventBus()
+
+    codes, recent = scalping_scanner.promote_candidates(
+        db,
+        event_bus,
+        [{"Code": "000001", "Name": "MANUAL", "Price": 10000, "Source": "PRICE_JUMP_START"}],
+        {},
+        max_new_codes=12,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=1000.0,
+    )
+
+    assert codes == []
+    assert recent == {}
+    assert len(db.records) == 1
+    assert _event_payloads(event_bus, "COMMAND_WS_REG") == []
+    assert _event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET") == []
+
+
+def test_promote_candidates_skips_code_with_legacy_manual_scalp_base(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "2")
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(scalping_scanner, "_scanner_candidate_pre_filter_reason", lambda target: "")
+    monkeypatch.setattr(scalping_scanner, "_should_promote_candidate", lambda *args, **kwargs: True)
+    monkeypatch.setattr(scalping_scanner, "_scanner_real_source_guard_decision", lambda *args, **kwargs: {"blocked": False})
+    db = _DB()
+    db.records.append(
+        SimpleNamespace(
+            stock_code="000001",
+            status="WATCHING",
+            strategy="SCALPING",
+            position_tag=None,
+            buy_time=None,
+            buy_qty=None,
+        )
+    )
+    event_bus = _EventBus()
+
+    codes, recent = scalping_scanner.promote_candidates(
+        db,
+        event_bus,
+        [{"Code": "000001", "Name": "MANUAL", "Price": 10000, "Source": "PRICE_JUMP_START"}],
+        {},
+        max_new_codes=12,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=1000.0,
+    )
+
+    assert codes == []
+    assert recent == {}
+    assert len(db.records) == 1
+    assert _event_payloads(event_bus, "COMMAND_WS_REG") == []
+    assert _event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET") == []
+
+
 def test_promote_candidates_reserves_two_slots_for_low_rebound(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "3")
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_LOW_REBOUND_RESERVE_SLOTS", "2")

@@ -54,13 +54,23 @@ class _DummyDB(DBManager):
     def get_session(self):
         return _DummySession(self.records)
 
-    def find_reusable_watching_record(self, session, *, rec_date, stock_code, strategy=None):
+    def find_reusable_watching_record(
+        self,
+        session,
+        *,
+        rec_date,
+        stock_code,
+        strategy=None,
+        position_tag=None,
+    ):
         for record in reversed(session.records):
             if getattr(record, "rec_date", None) != rec_date:
                 continue
             if getattr(record, "stock_code", None) != stock_code:
                 continue
             if strategy is not None and getattr(record, "strategy", None) != strategy:
+                continue
+            if position_tag is not None and getattr(record, "position_tag", None) != position_tag:
                 continue
             if str(getattr(record, "status", "") or "") not in {"WATCHING", "EXPIRED"}:
                 continue
@@ -197,7 +207,7 @@ def test_save_recommendation_does_not_reuse_completed_trade_row():
         trade_type="SCALP",
         strategy="SCALPING",
         status="COMPLETED",
-        position_tag="SCANNER",
+        position_tag="SCALP_BASE",
         buy_price=57000,
         buy_qty=10,
     )
@@ -283,15 +293,57 @@ def test_register_manual_stock_reuses_only_empty_watching_row():
         trade_type="SCALP",
         strategy="SCALPING",
         status="WATCHING",
-        position_tag="SCANNER",
+        position_tag="SCALP_BASE",
         buy_price=0,
         buy_qty=0,
+        entry_armed_at_epoch=12345.0,
     )
     db.records.extend([completed, watching])
 
-    assert db.register_manual_stock("005930", "삼성전자") is True
+    assert db.register_manual_stock("005930", "삼성전자", prob=0.8) is True
 
     assert len(db.records) == 2
     assert db.records[0].status == "COMPLETED"
     assert db.records[1].status == "WATCHING"
     assert db.records[1].stock_name == "삼성전자"
+    assert db.records[1].strategy == "SCALPING"
+    assert db.records[1].trade_type == "SCALP"
+    assert db.records[1].position_tag == "SCALP_BASE"
+    assert db.records[1].buy_price == 0
+    assert db.records[1].buy_qty == 0
+    assert db.records[1].entry_armed_at_epoch is None
+    assert db.records[1].prob == 0.8
+
+
+def test_register_manual_stock_does_not_reuse_scanner_row():
+    today = date.today()
+    db = _DummyDB()
+    scanner = RecommendationHistory(
+        id=1,
+        rec_date=today,
+        stock_code="005930",
+        stock_name="삼성전자",
+        trade_type="SCALP",
+        strategy="SCALPING",
+        status="WATCHING",
+        position_tag="SCANNER",
+        buy_price=60000,
+        buy_qty=0,
+        entry_armed_at_epoch=12345.0,
+    )
+    db.records.append(scanner)
+
+    assert db.register_manual_stock("005930", "삼성전자", prob=0.8) is True
+
+    assert len(db.records) == 2
+    assert db.records[0].position_tag == "SCANNER"
+    assert db.records[0].status == "EXPIRED"
+    assert db.records[0].buy_price == 60000
+    assert db.records[0].entry_armed_at_epoch == 12345.0
+    assert db.records[1].status == "WATCHING"
+    assert db.records[1].strategy == "SCALPING"
+    assert db.records[1].trade_type == "SCALP"
+    assert db.records[1].position_tag == "SCALP_BASE"
+    assert db.records[1].buy_price == 0
+    assert db.records[1].buy_qty == 0
+    assert db.records[1].prob == 0.8

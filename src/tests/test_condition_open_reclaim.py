@@ -81,13 +81,23 @@ class _DummyDB:
     def get_latest_marcap(self, _code):
         return 123456789
 
-    def find_reusable_watching_record(self, session, *, rec_date, stock_code, strategy=None):
+    def find_reusable_watching_record(
+        self,
+        session,
+        *,
+        rec_date,
+        stock_code,
+        strategy=None,
+        position_tag=None,
+    ):
         for record in reversed(session.records):
             if getattr(record, "rec_date", None) != rec_date:
                 continue
             if getattr(record, "stock_code", None) != stock_code:
                 continue
             if strategy is not None and getattr(record, "strategy", None) != strategy:
+                continue
+            if position_tag is not None and getattr(record, "position_tag", None) != position_tag:
                 continue
             if str(getattr(record, "status", "") or "") not in {"WATCHING", "EXPIRED"}:
                 continue

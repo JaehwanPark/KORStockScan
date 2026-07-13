@@ -768,9 +768,7 @@ def process_manual_add_step(message):
 
     try:
         from src.utils import kiwoom_utils
-        from src.database.models import RecommendationHistory
         from src.utils.constants import TRADING_RULES
-        from datetime import datetime
 
         # 💡 [교정 1] CONF 파라미터 삭제 (독립 호출)
         token = kiwoom_utils.get_kiwoom_token()
@@ -781,32 +779,10 @@ def process_manual_add_step(message):
             stock_name = code
             print(f"⚠️ API 종목명 조회 실패, 코드로 대체: {e}")
 
-        # 💡 [교정 2] ORM 호환을 위해 날짜를 date() 객체로 변환
-        today = datetime.now().date()
         high_prob = getattr(TRADING_RULES, 'SNIPER_AGGRESSIVE_PROB', 0.8)
         
-        with db_manager.get_session() as session:
-            # 💡 [교정 3] 구버전 date, code -> 최신 rec_date, stock_code 매핑
-            record = session.query(RecommendationHistory).filter_by(rec_date=today, stock_code=code).first()
-            
-            if record:
-                # 이미 오늘 등록된 이력이 있다면 상태를 강제로 감시(WATCHING)로 멱등성 업데이트
-                record.status = 'WATCHING'
-                record.trade_type = 'SCALP' # 확실한 수동 타입 지정
-                record.strategy = 'SCALPING'
-                record.prob = high_prob
-            else:
-                # 없다면 신규 생성 (최신 컬럼명 적용)
-                new_record = RecommendationHistory(
-                    rec_date=today,          # 💡 교정
-                    stock_code=code,         # 💡 교정
-                    stock_name=stock_name,   # 💡 교정
-                    prob=high_prob,
-                    status='WATCHING',
-                    trade_type='SCALP',     # 💡 type -> trade_type
-                    strategy='SCALPING'
-                )
-                session.add(new_record)
+        if not db_manager.register_manual_stock(code, stock_name, prob=high_prob):
+            raise RuntimeError("manual stock DB registration failed")
         
         # 💡 [교정 4] 텔레그램 마크다운 링크 에러 유발 코드 제거
         # (기존의 `[이름](코드)`를 안전한 `*이름 (코드)*` 형태로 변경)

@@ -23,6 +23,7 @@ from src.engine.signal_radar import SniperRadar
 from src.engine.sniper_time import SCALPING_BUY_WINDOWS, describe_scalping_buy_windows, is_scalping_buy_time_allowed
 from src.utils.constants import TRADING_RULES
 from src.utils.pipeline_event_logger import emit_pipeline_event
+from sqlalchemy import func, or_
 
 SCANNER_RISING_START_SOURCE_FAMILY = "scalping_scanner_rising_start_source_v1"
 LOW_REBOUND_RISING_MISSED_SOURCE = "LOW_REBOUND_RISING_MISSED"
@@ -441,6 +442,45 @@ def _active_scanner_watching_count(db):
     except Exception as exc:
         log_error(f"⚠️ [SCALPING 스캐너] active WATCHING 수량 확인 실패: {exc}")
         return 0
+
+
+def _has_active_non_scanner_scalping_watching_code(db, code):
+    norm_code = str(code or "").strip()[:6]
+    if not norm_code:
+        return False
+    try:
+        with db.get_session() as session:
+            if hasattr(session, "query"):
+                return (
+                    session.query(RecommendationHistory)
+                    .filter(
+                        RecommendationHistory.rec_date == datetime.now().date(),
+                        RecommendationHistory.stock_code == norm_code,
+                        RecommendationHistory.status == "WATCHING",
+                        RecommendationHistory.strategy == "SCALPING",
+                        or_(
+                            RecommendationHistory.position_tag.is_(None),
+                            RecommendationHistory.position_tag != "SCANNER",
+                        ),
+                        RecommendationHistory.buy_time.is_(None),
+                        func.coalesce(RecommendationHistory.buy_qty, 0) == 0,
+                    )
+                    .count()
+                    > 0
+                )
+            records = getattr(session, "records", [])
+            return any(
+                getattr(record, "status", None) == "WATCHING"
+                and getattr(record, "strategy", None) == "SCALPING"
+                and getattr(record, "position_tag", None) != "SCANNER"
+                and str(getattr(record, "stock_code", "") or "").strip()[:6] == norm_code
+                and getattr(record, "buy_time", None) is None
+                and int(getattr(record, "buy_qty", 0) or 0) == 0
+                for record in records
+            )
+    except Exception as exc:
+        log_error(f"⚠️ [SCALPING 스캐너] active non-SCANNER 코드 확인 실패 ({norm_code}): {exc}")
+        return False
 
 
 def _source_priority(source):
@@ -2213,6 +2253,8 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
 
     for target in ranked_targets:
         code = target["Code"]
+        if _has_active_non_scanner_scalping_watching_code(db, code):
+            continue
         is_low_rebound_target = _is_low_rebound_target(target)
         is_low_rebound_reserved_priority_target = _is_low_rebound_reserved_priority_target(target)
         uses_low_rebound_reserved_slot = (
@@ -2290,6 +2332,7 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
                     rec_date=today_date,
                     stock_code=code,
                     strategy='SCALPING',
+                    position_tag='SCANNER',
                 )
 
                 if record:

@@ -1640,6 +1640,7 @@ def _resolve_scanner_runtime_record_id(payload, code, strategy):
                 rec_date=datetime.now().date(),
                 stock_code=code,
                 strategy=strategy,
+                position_tag="SCANNER",
             )
             return getattr(record, "id", None) if record is not None else None
     except Exception as exc:

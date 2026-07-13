@@ -229,8 +229,22 @@ class DBManager:
         except Exception as e:
             print(f"⚠️ 성과 테이블 ANALYZE 실패: {e}")
 
-    def find_reusable_watching_record(self, session, *, rec_date, stock_code, strategy=None):
+    def find_reusable_watching_record(
+        self,
+        session,
+        *,
+        rec_date,
+        stock_code,
+        strategy=None,
+        position_tag=None,
+    ):
         """체결/청산 이력이 없는 WATCHING/EXPIRED row만 재사용 대상으로 찾습니다."""
+        normalized_strategy = normalize_strategy(strategy) if strategy is not None else None
+        normalized_position_tag = (
+            normalize_position_tag(normalized_strategy, position_tag)
+            if position_tag is not None
+            else None
+        )
         query = session.query(RecommendationHistory).filter(
             RecommendationHistory.rec_date == rec_date,
             RecommendationHistory.stock_code == stock_code,
@@ -238,8 +252,10 @@ class DBManager:
             RecommendationHistory.buy_time.is_(None),
             func.coalesce(RecommendationHistory.buy_qty, 0) == 0,
         )
-        if strategy is not None:
-            query = query.filter(RecommendationHistory.strategy == strategy)
+        if normalized_strategy is not None:
+            query = query.filter(RecommendationHistory.strategy == normalized_strategy)
+        if normalized_position_tag is not None:
+            query = query.filter(RecommendationHistory.position_tag == normalized_position_tag)
         return query.order_by(RecommendationHistory.id.desc()).first()
     
     @contextmanager
@@ -353,6 +369,7 @@ class DBManager:
                 rec_date=date,
                 stock_code=code,
                 strategy=strategy,
+                position_tag=position,
             )
             
             if record: # Update
@@ -381,7 +398,7 @@ class DBManager:
                 )
                 session.add(new_record)
     
-    def register_manual_stock(self, code: str, name: str) -> bool:
+    def register_manual_stock(self, code: str, name: str, prob: float | None = None) -> bool:
         """수동 감시 종목을 DB에 등록합니다."""
         today_date = datetime.now().date()
         target_code = str(code).zfill(6)
@@ -395,6 +412,7 @@ class DBManager:
                     rec_date=today_date,
                     stock_code=target_code,
                     strategy=strategy,
+                    position_tag=position_tag,
                 )
 
                 if record:
@@ -402,20 +420,53 @@ class DBManager:
                     record.status = 'WATCHING'
                     record.trade_type = 'SCALP' 
                     record.strategy = strategy # 💡 수동 등록 시 확실하게 단타 전략으로 덮어씌움
-                    record.position_tag = normalize_position_tag(strategy, record.position_tag)
+                    record.position_tag = position_tag
+                    record.buy_price = 0
+                    record.buy_qty = 0
+                    if hasattr(record, "entry_armed_at_epoch"):
+                        record.entry_armed_at_epoch = None
+                    if prob is not None:
+                        record.prob = prob
                 else:
                     new_record = RecommendationHistory(
                         rec_date=today_date,     
                         stock_code=target_code,  
                         stock_name=name,         
                         buy_price=0,
+                        buy_qty=0,
                         trade_type='SCALP', # 태그는 단타로
                         strategy=strategy,       # 💡 실제 매매 로직은 확실한 SCALPING으로!
                         status='WATCHING',
                         position_tag=position_tag,
                     )
+                    if prob is not None:
+                        new_record.prob = prob
                     session.add(new_record)
-                
+                if hasattr(session, "records"):
+                    scanner_records = [
+                        candidate
+                        for candidate in session.records
+                        if getattr(candidate, "rec_date", None) == today_date
+                        and getattr(candidate, "stock_code", None) == target_code
+                        and getattr(candidate, "strategy", None) == strategy
+                        and getattr(candidate, "position_tag", None) == "SCANNER"
+                        and str(getattr(candidate, "status", "") or "") in {"WATCHING", "EXPIRED"}
+                        and getattr(candidate, "buy_time", None) is None
+                        and int(getattr(candidate, "buy_qty", 0) or 0) == 0
+                    ]
+                else:
+                    scanner_records = session.query(RecommendationHistory).filter(
+                        RecommendationHistory.rec_date == today_date,
+                        RecommendationHistory.stock_code == target_code,
+                        RecommendationHistory.strategy == strategy,
+                        RecommendationHistory.position_tag == "SCANNER",
+                        RecommendationHistory.status.in_(("WATCHING", "EXPIRED")),
+                        RecommendationHistory.buy_time.is_(None),
+                        func.coalesce(RecommendationHistory.buy_qty, 0) == 0,
+                    ).all()
+                for scanner_record in scanner_records:
+                    scanner_record.status = "EXPIRED"
+
             return True
 
         except Exception as e:
