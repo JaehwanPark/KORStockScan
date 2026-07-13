@@ -4108,6 +4108,15 @@ def _scanner_market_data_enrichment_hot_delta_pct():
     return max(0.0, min(value, 20.0))
 
 
+def _scanner_market_data_enrichment_rest_timeout_ms():
+    raw = os.getenv("KORSTOCKSCAN_SCANNER_MARKET_DATA_ENRICHMENT_REST_TIMEOUT_MS")
+    try:
+        value = int(float(str(raw).strip())) if str(raw or "").strip() else 400
+    except (TypeError, ValueError):
+        value = 400
+    return max(50, min(value, 1500))
+
+
 def _scanner_ws_quote_age_ms(ws_data, now_ts):
     ws_data = ws_data if isinstance(ws_data, dict) else {}
     for key in ("quote_age_ms", "ws_age_ms", "pre_submit_effective_quote_age_ms"):
@@ -4138,9 +4147,11 @@ def _scanner_market_data_enrichment_candidate(stock, ws_data, now_ts):
         return False
     if not _is_scanner_watching_target(stock):
         return False
-    if not _scanner_is_rising_entry_relief_candidate(stock):
-        return False
     ws_data = ws_data if isinstance(ws_data, dict) else {}
+    hot_delta = _scanner_positive_delta_value(stock) >= _scanner_market_data_enrichment_hot_delta_pct()
+    rising_source_marker = sniper_state_handlers._has_rising_missed_watch_source_marker(stock)
+    if not (_scanner_is_rising_entry_relief_candidate(stock) or rising_source_marker or hot_delta):
+        return False
     curr = _safe_int(ws_data.get("curr"), 0)
     quote_age_ms = _scanner_ws_quote_age_ms(ws_data, now_ts)
     stale_or_missing = (
@@ -4153,7 +4164,6 @@ def _scanner_market_data_enrichment_candidate(stock, ws_data, now_ts):
             for key in ("quote_stale", "stale_quote", "context_stale")
         )
     )
-    hot_delta = _scanner_positive_delta_value(stock) >= _scanner_market_data_enrichment_hot_delta_pct()
     return bool(stale_or_missing or hot_delta)
 
 
@@ -4189,24 +4199,38 @@ def _fetch_scanner_market_data_enrichment_packet(code, now_ts):
         return {}, [], {"market_data_enrichment_fetch_reason": "kiwoom_token_missing"}
     rest_orderbook = {}
     rest_signed_ticks = []
-    fields = {"market_data_enrichment_fetch_reason": "fetch_attempted"}
-    try:
-        rest_orderbook = kiwoom_utils.get_stock_orderbook_ka10004(KIWOOM_TOKEN, code) or {}
-    except Exception as exc:
-        fields["market_data_enrichment_orderbook_error"] = str(exc)[:160]
-        log_error(f"[SCANNER_MARKET_DATA_ENRICHMENT] ka10004 failed ({code}): {exc}")
-    try:
-        rest_signed_ticks = kiwoom_utils.get_recent_signed_trades_ka10084(
-            KIWOOM_TOKEN,
-            code,
-            limit=10,
-        ) or []
-    except Exception as exc:
-        fields["market_data_enrichment_signed_tape_error"] = str(exc)[:160]
-        log_error(f"[SCANNER_MARKET_DATA_ENRICHMENT] ka10084 failed ({code}): {exc}")
+    timeout_ms = _scanner_market_data_enrichment_rest_timeout_ms()
+    fields = {
+        "market_data_enrichment_fetch_reason": "fetch_attempted",
+        "market_data_enrichment_rest_timeout_ms": timeout_ms,
+    }
+    rest_orderbook, orderbook_state, orderbook_elapsed_ms = (
+        sniper_state_handlers._fetch_rest_orderbook_snapshot_bounded(code, timeout_ms)
+    )
+    fields["market_data_enrichment_orderbook_fetch_state"] = orderbook_state
+    fields["market_data_enrichment_orderbook_fetch_elapsed_ms"] = round(
+        orderbook_elapsed_ms,
+        3,
+    )
+    if rest_orderbook:
+        rest_signed_ticks, signed_tape_state, signed_tape_elapsed_ms = (
+            sniper_state_handlers._fetch_rising_missed_signed_tape_bounded(code, timeout_ms)
+        )
+    else:
+        signed_tape_state = "skipped_orderbook_unavailable"
+        signed_tape_elapsed_ms = 0.0
+    fields["market_data_enrichment_signed_tape_fetch_state"] = signed_tape_state
+    fields["market_data_enrichment_signed_tape_fetch_elapsed_ms"] = round(
+        signed_tape_elapsed_ms,
+        3,
+    )
     if rest_orderbook or rest_signed_ticks:
         _scanner_market_data_enrichment_store(code, now_ts, rest_orderbook, rest_signed_ticks)
         fields["market_data_enrichment_fetch_reason"] = "rest_packet_fetched"
+    elif orderbook_state == "timeout":
+        fields["market_data_enrichment_fetch_reason"] = "rest_packet_timeout"
+    else:
+        fields["market_data_enrichment_fetch_reason"] = "rest_packet_unavailable"
     return rest_orderbook, rest_signed_ticks, fields
 
 
@@ -6158,6 +6182,7 @@ def run_sniper(is_test_mode=False):
                             or "scanner_fast_precheck",
                         },
                         now_ts=now_value,
+                        prefer_freshest_source=True,
                     )
                     packet_fields.update(envelope_fields)
                     packet_fields["market_data_enrichment_packet_source"] = "scanner_cache"
@@ -6202,6 +6227,7 @@ def run_sniper(is_test_mode=False):
                         or "scanner_fast_precheck",
                     },
                     now_ts=now_value,
+                    prefer_freshest_source=True,
                 )
                 packet_fields.update(envelope_fields)
                 packet_fields.update(fetch_fields)

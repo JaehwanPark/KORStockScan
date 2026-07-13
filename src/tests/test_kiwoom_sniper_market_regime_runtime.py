@@ -79,6 +79,110 @@ def _reset_scanner_hot_override_cache():
         )
 
 
+def test_scanner_market_data_enrichment_candidate_accepts_rising_source_marker(monkeypatch):
+    monkeypatch.setattr(kiwoom_sniper_v2, "_scanner_market_data_enrichment_enabled", lambda: True)
+    monkeypatch.setattr(kiwoom_sniper_v2, "_is_scanner_watching_target", lambda stock: True)
+    monkeypatch.setattr(kiwoom_sniper_v2, "_scanner_is_rising_entry_relief_candidate", lambda stock: False)
+    monkeypatch.setattr(kiwoom_sniper_v2, "_scanner_positive_delta_value", lambda stock: 0.5)
+    monkeypatch.setattr(kiwoom_sniper_v2, "_scanner_market_data_enrichment_hot_delta_pct", lambda: 2.0)
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.sniper_state_handlers,
+        "_has_rising_missed_watch_source_marker",
+        lambda stock: True,
+    )
+
+    assert kiwoom_sniper_v2._scanner_market_data_enrichment_candidate(
+        {},
+        {"curr": 10000, "quote_age_ms": 5000.0, "quote_stale": True},
+        1000.0,
+    ) is True
+
+
+def test_scanner_market_data_enrichment_candidate_accepts_hot_delta_with_fresh_ws(monkeypatch):
+    monkeypatch.setattr(kiwoom_sniper_v2, "_scanner_market_data_enrichment_enabled", lambda: True)
+    monkeypatch.setattr(kiwoom_sniper_v2, "_is_scanner_watching_target", lambda stock: True)
+    monkeypatch.setattr(kiwoom_sniper_v2, "_scanner_is_rising_entry_relief_candidate", lambda stock: False)
+    monkeypatch.setattr(kiwoom_sniper_v2, "_scanner_positive_delta_value", lambda stock: 3.0)
+    monkeypatch.setattr(kiwoom_sniper_v2, "_scanner_market_data_enrichment_hot_delta_pct", lambda: 2.0)
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.sniper_state_handlers,
+        "_has_rising_missed_watch_source_marker",
+        lambda stock: False,
+    )
+
+    assert kiwoom_sniper_v2._scanner_market_data_enrichment_candidate(
+        {},
+        {"curr": 10000, "quote_age_ms": 100.0, "quote_stale": False},
+        1000.0,
+    ) is True
+
+
+def test_scanner_market_data_enrichment_packet_uses_bounded_rest_calls(monkeypatch):
+    calls = []
+    monkeypatch.setattr(kiwoom_sniper_v2, "KIWOOM_TOKEN", "TOKEN")
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_scanner_market_data_enrichment_rest_timeout_ms",
+        lambda: 250,
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.sniper_state_handlers,
+        "_fetch_rest_orderbook_snapshot_bounded",
+        lambda code, timeout_ms: calls.append(("orderbook", code, timeout_ms))
+        or ({"best_bid": 9990, "best_ask": 10000}, "ok", 12.5),
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.sniper_state_handlers,
+        "_fetch_rising_missed_signed_tape_bounded",
+        lambda code, timeout_ms: calls.append(("signed_tape", code, timeout_ms))
+        or ([{"aggressor_side": "SELL", "signed_trade_volume": "-10"}], "ok", 15.0),
+    )
+    with kiwoom_sniper_v2._SCANNER_MARKET_DATA_ENRICHMENT_LOCK:
+        kiwoom_sniper_v2._SCANNER_MARKET_DATA_ENRICHMENT_CACHE.clear()
+
+    orderbook, signed_ticks, fields = (
+        kiwoom_sniper_v2._fetch_scanner_market_data_enrichment_packet("123456", 1000.0)
+    )
+
+    assert [call[0] for call in calls] == ["orderbook", "signed_tape"]
+    assert all(call[2] == 250 for call in calls)
+    assert orderbook["best_ask"] == 10000
+    assert signed_ticks[0]["aggressor_side"] == "SELL"
+    assert fields["market_data_enrichment_fetch_reason"] == "rest_packet_fetched"
+    assert fields["market_data_enrichment_orderbook_fetch_state"] == "ok"
+    assert fields["market_data_enrichment_signed_tape_fetch_state"] == "ok"
+
+
+def test_scanner_market_data_enrichment_packet_skips_tape_after_orderbook_timeout(monkeypatch):
+    monkeypatch.setattr(kiwoom_sniper_v2, "KIWOOM_TOKEN", "TOKEN")
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_scanner_market_data_enrichment_rest_timeout_ms",
+        lambda: 250,
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.sniper_state_handlers,
+        "_fetch_rest_orderbook_snapshot_bounded",
+        lambda code, timeout_ms: ({}, "timeout", 250.0),
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.sniper_state_handlers,
+        "_fetch_rising_missed_signed_tape_bounded",
+        lambda code, timeout_ms: pytest.fail("signed tape must not run without an orderbook"),
+    )
+
+    orderbook, signed_ticks, fields = (
+        kiwoom_sniper_v2._fetch_scanner_market_data_enrichment_packet("123456", 1000.0)
+    )
+
+    assert orderbook == {}
+    assert signed_ticks == []
+    assert fields["market_data_enrichment_fetch_reason"] == "rest_packet_timeout"
+    assert fields["market_data_enrichment_signed_tape_fetch_state"] == (
+        "skipped_orderbook_unavailable"
+    )
+
+
 def _disable_scanner_operator_runtime_overrides(monkeypatch, tmp_path):
     _reset_scanner_hot_override_cache()
     monkeypatch.setattr(

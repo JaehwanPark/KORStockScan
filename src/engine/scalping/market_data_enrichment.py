@@ -293,6 +293,7 @@ def build_market_data_enrichment(
     signed_tape_window: int = 5,
     signed_tape_min_samples: int = 3,
     signed_tape_sell_max_buy_ratio: float = 45.0,
+    prefer_freshest_source: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     now_value = time.time() if now_ts is None else float(now_ts)
     base = dict(ws_data or {})
@@ -319,6 +320,14 @@ def build_market_data_enrichment(
         sources.append("ka10004")
     if rest_signed_ticks:
         sources.append("ka10084")
+    rest_is_fresher = bool(
+        ws_fresh
+        and rest_fresh
+        and ws_age is not None
+        and rest_age is not None
+        and rest_age < ws_age
+    )
+    use_rest_quote = bool(rest_fresh and (not ws_fresh or (prefer_freshest_source and rest_is_fresher)))
     if conflicted:
         freshness_state = CONFLICTED
         orderbook_state = CONFLICTED
@@ -326,12 +335,7 @@ def build_market_data_enrichment(
             value is not None for value in (ws_age, rest_age)
         ) else None
         effective_source = "ws_rest_conflicted"
-    elif ws_fresh:
-        freshness_state = FRESH_WS
-        orderbook_state = FRESH_WS
-        effective_age = ws_age
-        effective_source = "ws"
-    elif rest_fresh:
+    elif use_rest_quote:
         freshness_state = REST_ENRICHED
         orderbook_state = REST_ENRICHED
         effective_age = rest_age
@@ -356,6 +360,11 @@ def build_market_data_enrichment(
                 "last_ws_update_ts": now_value - float(rest_age) / 1000.0,
             }
         )
+    elif ws_fresh:
+        freshness_state = FRESH_WS
+        orderbook_state = FRESH_WS
+        effective_age = ws_age
+        effective_source = "ws"
     elif ws_usable or rest_usable:
         freshness_state = STALE
         orderbook_state = STALE
@@ -388,6 +397,11 @@ def build_market_data_enrichment(
         ),
         "market_data_effective_price_source": effective_source,
         "market_data_ws_rest_gap_bps": round(float(gap), 3) if gap is not None else "-",
+        "market_data_ws_quote_age_ms": round(float(ws_age), 3) if ws_age is not None else "-",
+        "market_data_rest_quote_age_ms": round(float(rest_age), 3) if rest_age is not None else "-",
+        "market_data_source_selection_policy": (
+            "freshest_age" if prefer_freshest_source else "ws_primary_then_rest"
+        ),
         "market_data_orderbook_state": orderbook_state,
         "market_data_tick_context_state": tick_state,
         "market_data_candidate_source": metadata.get("source_signature") or metadata.get("source") or "-",

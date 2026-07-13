@@ -20574,6 +20574,149 @@ def _scanner_market_data_enrichment_consumer_ttl_sec() -> float:
     )
 
 
+def _rising_missed_quality_guard_pre_envelope_enabled() -> bool:
+    return _env_bool("KORSTOCKSCAN_RISING_MISSED_QUALITY_GUARD_PRE_ENVELOPE_ENABLED", True)
+
+
+def _rising_missed_quality_guard_pre_envelope_min_interval_sec() -> float:
+    return max(
+        0.2,
+        min(
+            _env_float("KORSTOCKSCAN_RISING_MISSED_QUALITY_GUARD_PRE_ENVELOPE_MIN_INTERVAL_SEC", 2.0),
+            30.0,
+        ),
+    )
+
+
+_RISING_MISSED_QUALITY_GUARD_PRE_ENVELOPE_RATE_LOCK = threading.Lock()
+_RISING_MISSED_QUALITY_GUARD_PRE_ENVELOPE_RATE_EPOCHS: list[float] = []
+
+
+def _rising_missed_quality_guard_pre_envelope_rest_timeout_ms() -> int:
+    return max(
+        50,
+        min(
+            _env_int("KORSTOCKSCAN_RISING_MISSED_QUALITY_GUARD_PRE_ENVELOPE_REST_TIMEOUT_MS", 400),
+            1500,
+        ),
+    )
+
+
+def _rising_missed_quality_guard_pre_envelope_rate_window_sec() -> float:
+    return max(
+        1.0,
+        min(
+            _env_float("KORSTOCKSCAN_RISING_MISSED_QUALITY_GUARD_PRE_ENVELOPE_RATE_WINDOW_SEC", 30.0),
+            120.0,
+        ),
+    )
+
+
+def _rising_missed_quality_guard_pre_envelope_max_packets_per_window() -> int:
+    return max(
+        1,
+        min(
+            _env_int(
+                "KORSTOCKSCAN_RISING_MISSED_QUALITY_GUARD_PRE_ENVELOPE_MAX_PACKETS_PER_WINDOW",
+                12,
+            ),
+            40,
+        ),
+    )
+
+
+def _reserve_rising_missed_quality_guard_pre_envelope_packet(now_ts: float) -> tuple[bool, str]:
+    window_sec = _rising_missed_quality_guard_pre_envelope_rate_window_sec()
+    max_packets = _rising_missed_quality_guard_pre_envelope_max_packets_per_window()
+    window_start = float(now_ts) - window_sec
+    with _RISING_MISSED_QUALITY_GUARD_PRE_ENVELOPE_RATE_LOCK:
+        active_epochs = [
+            epoch
+            for epoch in _RISING_MISSED_QUALITY_GUARD_PRE_ENVELOPE_RATE_EPOCHS
+            if epoch >= window_start
+        ]
+        _RISING_MISSED_QUALITY_GUARD_PRE_ENVELOPE_RATE_EPOCHS[:] = active_epochs
+        if len(active_epochs) >= max_packets:
+            return False, "final_envelope_reserve_exhausted"
+        _RISING_MISSED_QUALITY_GUARD_PRE_ENVELOPE_RATE_EPOCHS.append(float(now_ts))
+    return True, "final_envelope_reserve_allowed"
+
+
+def _rising_missed_market_data_envelope_is_fresh(source: dict | None) -> bool:
+    source = source if isinstance(source, dict) else {}
+    state = str(source.get("market_data_freshness_state") or "").strip().lower()
+    orderbook_state = str(source.get("market_data_orderbook_state") or "").strip().lower()
+    effective_age_ms = _safe_float(source.get("market_data_effective_quote_age_ms"), None)
+    return bool(
+        state in {"fresh_ws", "rest_enriched"}
+        and orderbook_state == state
+        and effective_age_ms is not None
+        and effective_age_ms <= _rising_missed_scout_quality_guard_max_quote_age_ms()
+    )
+
+
+def _normalize_rising_missed_quality_guard_ws_envelope(
+    ws_data: dict | None,
+    *,
+    now_ts: float,
+) -> tuple[dict, dict[str, Any]]:
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    if _rising_missed_market_data_envelope_is_fresh(ws_data):
+        return dict(ws_data), market_data_enrichment_log_fields(ws_data)
+    return build_market_data_enrichment(ws_data=ws_data, now_ts=now_ts)
+
+
+def _fetch_rising_missed_signed_tape_bounded(
+    code: str,
+    timeout_ms: int,
+) -> tuple[list[dict[str, Any]], str, float]:
+    if not KIWOOM_TOKEN:
+        return [], "token_missing", 0.0
+    timeout_sec = max(0.05, float(timeout_ms or 400) / 1000.0)
+    results: queue.Queue = queue.Queue(maxsize=1)
+
+    def _worker() -> None:
+        started = time.time()
+        try:
+            rows = kiwoom_utils.get_recent_signed_trades_ka10084(
+                KIWOOM_TOKEN,
+                code,
+                limit=10,
+            ) or []
+            results.put((rows, "ok", started), block=False)
+        except Exception as exc:
+            results.put(([], f"error:{str(exc)[:80]}", started), block=False)
+
+    thread = threading.Thread(target=_worker, name=f"signed-tape-rest-{code}", daemon=True)
+    thread.start()
+    try:
+        rows, state, started = results.get(timeout=timeout_sec)
+        elapsed_ms = max(0.0, (time.time() - float(started)) * 1000.0)
+        return list(rows or []), str(state), elapsed_ms
+    except queue.Empty:
+        return [], "timeout", timeout_sec * 1000.0
+
+
+def _market_data_signed_tape_fields(*sources: dict | None) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        fields.update(
+            {
+                key: value
+                for key, value in source.items()
+                if str(key).startswith("market_data_signed_tape_")
+                or key
+                in {
+                    "market_data_rest_signed_tape_pressure_usable",
+                    "market_data_tick_context_state",
+                }
+            }
+        )
+    return fields
+
+
 def _merge_scanner_market_data_enrichment_into_ws_data(
     stock: dict | None,
     ws_data: dict | None,
@@ -20587,31 +20730,102 @@ def _merge_scanner_market_data_enrichment_into_ws_data(
     cached_fields = stock.get("_scanner_market_data_enrichment_fields")
     cached_ws = cached_ws if isinstance(cached_ws, dict) else {}
     cached_fields = cached_fields if isinstance(cached_fields, dict) else {}
-    if not cached_ws and not cached_fields:
-        return merged
-
     now_ts = _safe_float(runtime.get("now_ts"), time.time())
     stored_at = _safe_float(stock.get("_scanner_market_data_enrichment_stored_at"), None)
     ttl_sec = _scanner_market_data_enrichment_consumer_ttl_sec()
     age_sec = None if stored_at is None else max(0.0, now_ts - stored_at)
-    state = str(
+    cached_state = str(
         cached_fields.get("market_data_freshness_state")
         or cached_ws.get("market_data_freshness_state")
         or ""
-    ).strip()
-    active = bool(
-        state in {"fresh_ws", "rest_enriched", "conflicted"}
+    ).strip().lower()
+    cached_active = bool(
+        cached_state in {"fresh_ws", "rest_enriched", "conflicted"}
         and age_sec is not None
         and age_sec <= ttl_sec
     )
+    live_ws, live_fields = _normalize_rising_missed_quality_guard_ws_envelope(
+        merged,
+        now_ts=now_ts,
+    )
+    if _rising_missed_market_data_envelope_is_fresh(live_ws):
+        live_ws.update(live_fields)
+        if cached_active and cached_state == "conflicted":
+            conflict_fields = {
+                key: value
+                for source in (cached_ws, cached_fields)
+                for key, value in source.items()
+                if key
+                in {
+                    "market_data_enrichment_applied",
+                    "market_data_enrichment_sources",
+                    "market_data_freshness_state",
+                    "market_data_effective_quote_age_ms",
+                    "market_data_effective_price_source",
+                    "market_data_ws_rest_gap_bps",
+                    "market_data_ws_quote_age_ms",
+                    "market_data_rest_quote_age_ms",
+                    "market_data_source_selection_policy",
+                    "market_data_orderbook_state",
+                }
+            }
+            live_ws.update(conflict_fields)
+            if age_sec is not None:
+                for key in (
+                    "market_data_effective_quote_age_ms",
+                    "market_data_ws_quote_age_ms",
+                    "market_data_rest_quote_age_ms",
+                ):
+                    parsed_age_ms = _safe_float(live_ws.get(key), None)
+                    if parsed_age_ms is not None:
+                        live_ws[key] = round(
+                            max(0.0, parsed_age_ms + age_sec * 1000.0),
+                            3,
+                        )
+            live_ws.update(
+                {
+                    "market_data_enrichment_consumer": "rising_missed_submit_safety",
+                    "market_data_enrichment_consumer_ttl_sec": f"{ttl_sec:.3f}",
+                    "market_data_enrichment_consumer_age_sec": f"{age_sec:.3f}",
+                    "market_data_enrichment_consumer_result": "applied",
+                    "market_data_enrichment_consumer_skip_reason": (
+                        "active_cached_conflict_preserved"
+                    ),
+                }
+            )
+            return live_ws
+        signed_tape_fields = (
+            _market_data_signed_tape_fields(cached_ws, cached_fields)
+            if cached_active
+            else {}
+        )
+        if signed_tape_fields:
+            live_ws.update(signed_tape_fields)
+            live_ws["market_data_enrichment_sources"] = "ws,ka10084"
+        live_ws.update(
+            {
+                "market_data_enrichment_consumer": "rising_missed_submit_safety",
+                "market_data_enrichment_consumer_ttl_sec": f"{ttl_sec:.3f}",
+                "market_data_enrichment_consumer_age_sec": "0.000",
+                "market_data_enrichment_consumer_result": "skipped",
+                "market_data_enrichment_consumer_skip_reason": "fresh_live_ws_preferred",
+                "market_data_enrichment_consumer_signed_tape_result": (
+                    "applied" if signed_tape_fields else "skipped"
+                ),
+            }
+        )
+        return live_ws
+    if not cached_ws and not cached_fields:
+        return live_ws
+
     consumer_fields = {
         "market_data_enrichment_consumer": "rising_missed_submit_safety",
         "market_data_enrichment_consumer_ttl_sec": f"{ttl_sec:.3f}",
         "market_data_enrichment_consumer_age_sec": f"{age_sec:.3f}" if age_sec is not None else "-",
-        "market_data_enrichment_consumer_result": "applied" if active else "skipped",
+        "market_data_enrichment_consumer_result": "applied" if cached_active else "skipped",
         "market_data_enrichment_consumer_skip_reason": (
             "not_applicable"
-            if active
+            if cached_active
             else (
                 "missing_stored_at"
                 if age_sec is None
@@ -20621,7 +20835,7 @@ def _merge_scanner_market_data_enrichment_into_ws_data(
             )
         ),
     }
-    if not active:
+    if not cached_active:
         merged.update(consumer_fields)
         return merged
 
@@ -20634,6 +20848,199 @@ def _merge_scanner_market_data_enrichment_into_ws_data(
             merged[key] = round(max(0.0, parsed + age_increment_ms), 3)
     merged.update(consumer_fields)
     return merged
+
+
+def _rising_missed_quality_guard_pre_envelope(
+    stock: dict | None,
+    code: str | None,
+    ws_data: dict | None,
+    runtime: dict | None,
+    *,
+    scanner_envelope_ws_data: dict | None = None,
+) -> tuple[dict, dict[str, Any]]:
+    stock = stock if isinstance(stock, dict) else {}
+    runtime = runtime if isinstance(runtime, dict) else {}
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    scanner_envelope_ws_data = (
+        scanner_envelope_ws_data if isinstance(scanner_envelope_ws_data, dict) else {}
+    )
+    fields: dict[str, Any] = {
+        "rising_missed_quality_guard_pre_envelope_enabled": _rising_missed_quality_guard_pre_envelope_enabled(),
+        "rising_missed_quality_guard_pre_envelope_attempted": False,
+        "rising_missed_quality_guard_pre_envelope_evaluated": True,
+        "rising_missed_quality_guard_pre_envelope_rest_attempted": False,
+        "rising_missed_quality_guard_pre_envelope_result": "not_needed",
+        "rising_missed_quality_guard_pre_envelope_source": "ka10004_ka10084_freshness_only",
+        "rising_missed_quality_guard_pre_envelope_decision_authority": (
+            "source_quality_freshness_envelope_no_buy_support"
+        ),
+        "rising_missed_quality_guard_pre_envelope_metric_role": "source_quality_gate",
+        "rising_missed_quality_guard_pre_envelope_window_policy": "same_day_intraday_runtime_state",
+        "rising_missed_quality_guard_pre_envelope_sample_floor": (
+            "not_applicable_source_quality_envelope"
+        ),
+        "rising_missed_quality_guard_pre_envelope_primary_decision_metric": (
+            "minimum_effective_quote_age_ms_across_ws_and_rest"
+        ),
+        "rising_missed_quality_guard_pre_envelope_source_quality_gate": (
+            "freshness_envelope_before_rising_missed_quality_guard"
+        ),
+        "rising_missed_quality_guard_pre_envelope_runtime_effect": False,
+        "rising_missed_quality_guard_pre_envelope_allowed_runtime_apply": False,
+        "rising_missed_quality_guard_pre_envelope_actual_order_submitted": False,
+        "rising_missed_quality_guard_pre_envelope_broker_order_forbidden": True,
+        "rising_missed_quality_guard_pre_envelope_forbidden_uses": TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
+    }
+    if not fields["rising_missed_quality_guard_pre_envelope_enabled"]:
+        fields["rising_missed_quality_guard_pre_envelope_result"] = "disabled"
+        return dict(ws_data), fields
+    now_ts = _safe_float(runtime.get("now_ts"), time.time())
+    normalized_ws, normalized_fields = _normalize_rising_missed_quality_guard_ws_envelope(
+        ws_data,
+        now_ts=now_ts,
+    )
+    fields.update(normalized_fields)
+    fields["rising_missed_quality_guard_pre_envelope_input_state"] = str(
+        (ws_data or {}).get("market_data_freshness_state") or "unlabeled"
+    )
+    fields["rising_missed_quality_guard_pre_envelope_normalized_state"] = str(
+        normalized_fields.get("market_data_freshness_state") or "missing"
+    )
+    fallback_envelope = normalized_ws
+    fallback_source = "current_ws_envelope"
+    scanner_state = str(
+        scanner_envelope_ws_data.get("market_data_freshness_state") or ""
+    ).strip().lower()
+    scanner_signed_tape_state = str(
+        scanner_envelope_ws_data.get("market_data_signed_tape_state") or ""
+    ).strip().lower()
+    if scanner_state == "conflicted" or scanner_signed_tape_state == "sell_dominated" or (
+        _rising_missed_market_data_envelope_is_fresh(scanner_envelope_ws_data)
+        and not _rising_missed_market_data_envelope_is_fresh(normalized_ws)
+    ):
+        fallback_envelope = dict(scanner_envelope_ws_data)
+        fallback_source = "scanner_envelope"
+    fields["rising_missed_quality_guard_pre_envelope_existing_fallback_source"] = fallback_source
+
+    def _use_existing_envelope(result: str) -> tuple[dict, dict[str, Any]]:
+        for key in [key for key in fields if str(key).startswith("market_data_")]:
+            fields.pop(key, None)
+        fields.update(market_data_enrichment_log_fields(fallback_envelope))
+        fields["rising_missed_quality_guard_pre_envelope_result"] = result
+        fields["rising_missed_quality_guard_pre_envelope_final_state"] = str(
+            fallback_envelope.get("market_data_freshness_state") or "missing"
+        )
+        result_envelope = dict(fallback_envelope)
+        result_envelope.update(market_data_enrichment_log_fields(fields))
+        return result_envelope, fields
+
+    if not KIWOOM_TOKEN:
+        return _use_existing_envelope("kiwoom_token_missing")
+    min_interval = _rising_missed_quality_guard_pre_envelope_min_interval_sec()
+    last_fetch_at = _safe_float(stock.get("_rising_missed_quality_guard_pre_envelope_last_fetch_at"), 0.0)
+    if last_fetch_at > 0 and now_ts - last_fetch_at < min_interval:
+        fields["rising_missed_quality_guard_pre_envelope_min_interval_sec"] = f"{min_interval:.3f}"
+        fields["rising_missed_quality_guard_pre_envelope_last_fetch_age_sec"] = f"{max(0.0, now_ts - last_fetch_at):.3f}"
+        return _use_existing_envelope("interval_suppressed")
+    reserve_allowed, reserve_reason = _reserve_rising_missed_quality_guard_pre_envelope_packet(now_ts)
+    fields["rising_missed_quality_guard_pre_envelope_rest_budget_reason"] = reserve_reason
+    fields["rising_missed_quality_guard_pre_envelope_rest_rate_window_sec"] = (
+        f"{_rising_missed_quality_guard_pre_envelope_rate_window_sec():.3f}"
+    )
+    fields["rising_missed_quality_guard_pre_envelope_rest_max_packets_per_window"] = (
+        _rising_missed_quality_guard_pre_envelope_max_packets_per_window()
+    )
+    if not reserve_allowed:
+        return _use_existing_envelope("rest_budget_deferred")
+    stock["_rising_missed_quality_guard_pre_envelope_last_fetch_at"] = now_ts
+    fields["rising_missed_quality_guard_pre_envelope_attempted"] = True
+    fields["rising_missed_quality_guard_pre_envelope_rest_attempted"] = True
+    rest_orderbook: dict[str, Any] = {}
+    rest_signed_ticks: list[dict[str, Any]] = []
+    timeout_ms = _rising_missed_quality_guard_pre_envelope_rest_timeout_ms()
+    rest_orderbook, orderbook_state, orderbook_elapsed_ms = _fetch_rest_orderbook_snapshot_bounded(
+        str(code or ""),
+        timeout_ms,
+    )
+    fields["rising_missed_quality_guard_pre_envelope_rest_timeout_ms"] = timeout_ms
+    fields["rising_missed_quality_guard_pre_envelope_orderbook_fetch_state"] = orderbook_state
+    fields["rising_missed_quality_guard_pre_envelope_orderbook_fetch_elapsed_ms"] = (
+        f"{orderbook_elapsed_ms:.3f}"
+    )
+    if rest_orderbook:
+        rest_signed_ticks, signed_tape_state, signed_tape_elapsed_ms = (
+            _fetch_rising_missed_signed_tape_bounded(str(code or ""), timeout_ms)
+        )
+    else:
+        signed_tape_state = "skipped_orderbook_unavailable"
+        signed_tape_elapsed_ms = 0.0
+    fields["rising_missed_quality_guard_pre_envelope_signed_tape_fetch_state"] = signed_tape_state
+    fields["rising_missed_quality_guard_pre_envelope_signed_tape_fetch_elapsed_ms"] = (
+        f"{signed_tape_elapsed_ms:.3f}"
+    )
+    enriched_ws, envelope_fields = build_market_data_enrichment(
+        ws_data=ws_data,
+        rest_orderbook=rest_orderbook,
+        rest_signed_ticks=rest_signed_ticks,
+        candidate_metadata={
+            "source_signature": stock.get("source_signature")
+            or stock.get("scanner_promotion_reason")
+            or "rising_missed_quality_guard_pre_envelope",
+        },
+        now_ts=now_ts,
+        prefer_freshest_source=True,
+    )
+    signed_tape_fallback_preserved = False
+    if signed_tape_state != "ok" and scanner_signed_tape_state == "sell_dominated":
+        cached_signed_tape_fields = _market_data_signed_tape_fields(scanner_envelope_ws_data)
+        if cached_signed_tape_fields:
+            enriched_ws.update(cached_signed_tape_fields)
+            envelope_fields.update(cached_signed_tape_fields)
+            sources = str(envelope_fields.get("market_data_enrichment_sources") or "").strip()
+            source_tokens = [token for token in sources.split(",") if token and token != "-"]
+            if "ka10084" not in source_tokens:
+                source_tokens.append("ka10084")
+            envelope_fields["market_data_enrichment_sources"] = ",".join(source_tokens)
+            enriched_ws["market_data_enrichment_sources"] = envelope_fields[
+                "market_data_enrichment_sources"
+            ]
+            signed_tape_fallback_preserved = True
+    fields["rising_missed_quality_guard_pre_envelope_signed_tape_fallback_result"] = (
+        "cached_negative_veto_preserved"
+        if signed_tape_fallback_preserved
+        else "not_applied"
+    )
+    final_state = str(envelope_fields.get("market_data_freshness_state") or "").lower()
+    final_source = str(envelope_fields.get("market_data_effective_price_source") or "").lower()
+    if final_state == "conflicted":
+        result = "simultaneous_ws_rest_conflicted"
+    elif rest_orderbook and final_source == "ka10004_rest_orderbook":
+        result = "simultaneous_rest_selected_fresher"
+    elif rest_orderbook and final_source == "ws":
+        result = "simultaneous_ws_selected_fresher"
+    elif orderbook_state == "timeout":
+        result = "rest_timeout_existing_envelope_used"
+        enriched_ws = dict(fallback_envelope)
+        envelope_fields = market_data_enrichment_log_fields(enriched_ws)
+    else:
+        result = "rest_failed_existing_envelope_used"
+        enriched_ws = dict(fallback_envelope)
+        envelope_fields = market_data_enrichment_log_fields(enriched_ws)
+    for key in [key for key in fields if str(key).startswith("market_data_")]:
+        fields.pop(key, None)
+    fields.update(envelope_fields)
+    fields["rising_missed_quality_guard_pre_envelope_result"] = result
+    fields["rising_missed_quality_guard_pre_envelope_final_state"] = str(
+        enriched_ws.get("market_data_freshness_state") or "missing"
+    )
+    enriched_ws.update(market_data_enrichment_log_fields(fields))
+    if rest_orderbook and not signed_tape_fallback_preserved:
+        stock["_scanner_market_data_enrichment_fields"] = dict(
+            market_data_enrichment_log_fields(fields)
+        )
+        stock["_scanner_market_data_enrichment_ws_data"] = dict(enriched_ws or {})
+        stock["_scanner_market_data_enrichment_stored_at"] = now_ts
+    return enriched_ws, fields
 
 
 def _rising_missed_scout_recent_weak_ai_micro_block_fields(
@@ -36426,6 +36833,7 @@ def _maybe_submit_rising_missed_one_share_entry(
     feature_enabled = _rising_missed_one_share_entry_enabled()
     if not feature_enabled:
         return False
+    current_ws_data = dict(ws_data or {})
     ws_data = _merge_scanner_market_data_enrichment_into_ws_data(stock, ws_data, runtime)
     decision = evaluate_rising_missed_one_share_entry(
         stock,
@@ -36567,6 +36975,16 @@ def _maybe_submit_rising_missed_one_share_entry(
     )
     if ws_estimator_fields.get("rising_missed_micro_estimator_ws_update_reason") != "not_needed":
         decision_log_fields.update(ws_estimator_fields)
+
+    ws_data, pre_quality_envelope_fields = _rising_missed_quality_guard_pre_envelope(
+        stock,
+        code,
+        current_ws_data,
+        runtime,
+        scanner_envelope_ws_data=ws_data,
+    )
+    if pre_quality_envelope_fields.get("rising_missed_quality_guard_pre_envelope_evaluated"):
+        decision_log_fields.update(pre_quality_envelope_fields)
 
     quality_guard = _evaluate_rising_missed_scout_quality_guard(
         stock,

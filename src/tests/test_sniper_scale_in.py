@@ -2851,12 +2851,12 @@ def test_signed_tape_preserve_not_consumed_by_candidate_gate_backoff(monkeypatch
     )
 
     assert after_backoff["fast_precheck_result"] == "eligible_for_heavy_entry_eval"
-    assert after_backoff["fast_precheck_reason"] == "fast_precheck_pass"
-    assert after_backoff["rising_missed_signed_tape_strong_preserve_applied"] is False
+    assert after_backoff["fast_precheck_reason"] == "signed_tape_sell_dominated_strong_rising_preserve_once"
+    assert after_backoff["rising_missed_signed_tape_strong_preserve_applied"] is True
     assert after_backoff["rising_missed_signed_tape_strong_preserve_reason"] == (
-        "not_rising_entry_relief_eligible"
+        "delta_or_multisource_strong_rising_preserved_for_one_heavy_eval"
     )
-    assert stock.get("rising_missed_signed_tape_strong_preserve_used") is None
+    assert stock.get("rising_missed_signed_tape_strong_preserve_used") is True
 
 
 def test_rising_missed_candidate_gate_backoff_recovery_allows_heavy_eval():
@@ -3776,6 +3776,18 @@ def test_rising_missed_submit_safety_consumes_cached_scanner_envelope(monkeypatc
     monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", "true")
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_MARKET_DATA_ENRICHMENT_CONSUMER_TTL_SEC", "5")
     monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
+    state_handlers._RISING_MISSED_QUALITY_GUARD_PRE_ENVELOPE_RATE_EPOCHS.clear()
+    monkeypatch.setattr(
+        state_handlers,
+        "_fetch_rest_orderbook_snapshot_bounded",
+        lambda code, timeout_ms: ({}, "timeout", float(timeout_ms)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_fetch_rising_missed_signed_tape_bounded",
+        lambda code, timeout_ms: ([], "timeout", float(timeout_ms)),
+    )
     monkeypatch.setattr(
         state_handlers,
         "evaluate_rising_missed_same_day_reentry_guard",
@@ -3882,6 +3894,437 @@ def test_rising_missed_submit_safety_ignores_expired_cached_scanner_envelope(mon
     assert merged["quote_age_ms"] == 9000.0
     assert merged["market_data_enrichment_consumer_result"] == "skipped"
     assert merged["market_data_enrichment_consumer_skip_reason"] == "expired"
+
+
+def test_rising_missed_quality_guard_pre_envelope_refreshes_expired_scanner_packet(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_MARKET_DATA_ENRICHMENT_CONSUMER_TTL_SEC", "5")
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
+    state_handlers._RISING_MISSED_QUALITY_GUARD_PRE_ENVELOPE_RATE_EPOCHS.clear()
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_stock_orderbook_ka10004",
+        lambda token, code: {
+            "source": "ka10004_rest_orderbook",
+            "curr": 10020,
+            "best_bid": 10010,
+            "best_ask": 10020,
+            "best_bid_qty": 900,
+            "best_ask_qty": 100,
+            "bid_tot": 9000,
+            "ask_tot": 1000,
+            "rest_received_ts": 1000.0,
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_recent_signed_trades_ka10084",
+        lambda token, code, limit=10: [
+            {"aggressor_side": "BUY", "signed_trade_volume": "+100"},
+            {"aggressor_side": "SELL", "signed_trade_volume": "-10"},
+            {"aggressor_side": "BUY", "signed_trade_volume": "+80"},
+        ],
+    )
+    stock = {
+        "name": "PRE_ENVELOPE_RISING",
+        "source_signature": "LOW_REBOUND_RISING_MISSED,PRICE_JUMP_START",
+        "last_watching_ai_score": 50.0,
+        "last_watching_ai_action": "WAIT",
+        "_scanner_market_data_enrichment_stored_at": 990.0,
+        "_scanner_market_data_enrichment_fields": {
+            "market_data_freshness_state": "rest_enriched",
+            "market_data_orderbook_state": "rest_enriched",
+            "market_data_effective_quote_age_ms": 200.0,
+        },
+    }
+    expired_ws = state_handlers._merge_scanner_market_data_enrichment_into_ws_data(
+        stock,
+        {"curr": 10000, "quote_age_ms": 9000.0, "quote_stale": True},
+        {"now_ts": 1000.0},
+    )
+
+    refreshed_ws, pre_fields = state_handlers._rising_missed_quality_guard_pre_envelope(
+        stock,
+        "123461",
+        expired_ws,
+        {"now_ts": 1000.0},
+    )
+    decision = state_handlers._evaluate_rising_missed_scout_quality_guard(
+        stock,
+        "123461",
+        refreshed_ws,
+        {"now_ts": 1000.0},
+        pre_fields,
+    )
+
+    assert expired_ws["market_data_enrichment_consumer_result"] == "skipped"
+    assert pre_fields["rising_missed_quality_guard_pre_envelope_attempted"] is True
+    assert pre_fields["rising_missed_quality_guard_pre_envelope_result"] == (
+        "simultaneous_rest_selected_fresher"
+    )
+    assert "broker_order_forbidden" not in pre_fields
+    assert "actual_order_submitted" not in pre_fields
+    assert "runtime_effect" not in pre_fields
+    assert pre_fields["market_data_freshness_state"] == "rest_enriched"
+    assert pre_fields["market_data_rest_signed_tape_pressure_usable"] is False
+    assert refreshed_ws["market_data_freshness_state"] == "rest_enriched"
+    assert refreshed_ws["quote_stale"] is False
+    assert decision["rising_missed_scout_quality_guard_blocked"] is False
+    assert decision["rising_missed_scout_quality_guard_quote_stale"] is False
+    assert decision["block_reason"] == "quality_guard_pass"
+
+
+def test_rising_missed_quality_guard_pre_envelope_compares_fresh_ws_with_rest(monkeypatch):
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
+    state_handlers._RISING_MISSED_QUALITY_GUARD_PRE_ENVELOPE_RATE_EPOCHS.clear()
+    rest_calls = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_fetch_rest_orderbook_snapshot_bounded",
+        lambda code, timeout_ms: rest_calls.append(("orderbook", code, timeout_ms))
+        or (
+            {
+                "source": "ka10004_rest_orderbook",
+                "rest_mid_price": 10020,
+                "best_bid": 10010,
+                "best_ask": 10020,
+                "rest_received_ts": 999.8,
+            },
+            "ok",
+            1.0,
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_fetch_rising_missed_signed_tape_bounded",
+        lambda code, timeout_ms: rest_calls.append(("signed_tape", code, timeout_ms))
+        or ([], "ok", 0.0),
+    )
+
+    refreshed_ws, fields = state_handlers._rising_missed_quality_guard_pre_envelope(
+        {},
+        "123462",
+        {
+            "curr": 10000,
+            "best_bid": 9990,
+            "best_ask": 10000,
+            "quote_age_ms": 100.0,
+            "quote_stale": False,
+        },
+        {"now_ts": 1000.0},
+    )
+
+    assert [call[0] for call in rest_calls] == ["orderbook", "signed_tape"]
+    assert fields["rising_missed_quality_guard_pre_envelope_evaluated"] is True
+    assert fields["rising_missed_quality_guard_pre_envelope_attempted"] is True
+    assert fields["rising_missed_quality_guard_pre_envelope_result"] == (
+        "simultaneous_ws_selected_fresher"
+    )
+    assert fields["market_data_source_selection_policy"] == "freshest_age"
+    assert refreshed_ws["market_data_freshness_state"] == "fresh_ws"
+    assert refreshed_ws["market_data_effective_quote_age_ms"] == 100.0
+
+
+def test_rising_missed_quality_guard_pre_envelope_preserves_cached_sell_veto_on_tape_timeout(
+    monkeypatch,
+):
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
+    state_handlers._RISING_MISSED_QUALITY_GUARD_PRE_ENVELOPE_RATE_EPOCHS.clear()
+    monkeypatch.setattr(
+        state_handlers,
+        "_fetch_rest_orderbook_snapshot_bounded",
+        lambda code, timeout_ms: (
+            {
+                "source": "ka10004_rest_orderbook",
+                "rest_mid_price": 10020,
+                "best_bid": 10010,
+                "best_ask": 10020,
+                "rest_received_ts": 1000.0,
+            },
+            "ok",
+            1.0,
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_fetch_rising_missed_signed_tape_bounded",
+        lambda code, timeout_ms: ([], "timeout", float(timeout_ms)),
+    )
+    stock = {"_scanner_market_data_enrichment_stored_at": 999.0}
+    scanner_envelope = {
+        "curr": 10000,
+        "best_bid": 9990,
+        "best_ask": 10000,
+        "quote_age_ms": 100.0,
+        "quote_stale": False,
+        "market_data_freshness_state": "fresh_ws",
+        "market_data_orderbook_state": "fresh_ws",
+        "market_data_effective_quote_age_ms": 100.0,
+        "market_data_signed_tape_state": "sell_dominated",
+        "market_data_signed_tape_sample_count": 5,
+        "market_data_signed_tape_sell_count": 4,
+        "market_data_signed_tape_buy_count": 1,
+        "market_data_rest_signed_tape_pressure_usable": False,
+        "market_data_tick_context_state": "rest_signed_tape",
+    }
+
+    refreshed_ws, fields = state_handlers._rising_missed_quality_guard_pre_envelope(
+        stock,
+        "123467",
+        {
+            "curr": 10000,
+            "best_bid": 9990,
+            "best_ask": 10000,
+            "quote_age_ms": 500.0,
+            "quote_stale": False,
+        },
+        {"now_ts": 1000.0},
+        scanner_envelope_ws_data=scanner_envelope,
+    )
+    quality_decision = state_handlers._evaluate_rising_missed_scout_quality_guard(
+        stock,
+        "123467",
+        refreshed_ws,
+        {"now_ts": 1000.0, "current_ai_score": 72.0, "ai_action": "BUY"},
+        {**fields, "buy_pressure_10t": 10.0},
+    )
+
+    assert fields["rising_missed_quality_guard_pre_envelope_result"] == (
+        "simultaneous_rest_selected_fresher"
+    )
+    assert fields["rising_missed_quality_guard_pre_envelope_signed_tape_fetch_state"] == "timeout"
+    assert fields["rising_missed_quality_guard_pre_envelope_signed_tape_fallback_result"] == (
+        "cached_negative_veto_preserved"
+    )
+    assert fields["market_data_signed_tape_state"] == "sell_dominated"
+    assert fields["market_data_signed_tape_sample_count"] == 5
+    assert refreshed_ws["market_data_freshness_state"] == "rest_enriched"
+    assert refreshed_ws["market_data_signed_tape_state"] == "sell_dominated"
+    assert quality_decision["rising_missed_scout_quality_guard_signed_tape_sell_dominated"] is True
+    assert quality_decision["rising_missed_scout_quality_guard_blocked"] is True
+    assert quality_decision["block_reason"] == "fresh_adverse_micro_submit_safety"
+    assert stock["_scanner_market_data_enrichment_stored_at"] == 999.0
+
+
+def test_rising_missed_submit_safety_prefers_fresh_live_ws_over_older_scanner_cache(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_MARKET_DATA_ENRICHMENT_CONSUMER_TTL_SEC", "5")
+    stock = {
+        "_scanner_market_data_enrichment_stored_at": 997.0,
+        "_scanner_market_data_enrichment_fields": {
+            "market_data_freshness_state": "rest_enriched",
+            "market_data_orderbook_state": "rest_enriched",
+            "market_data_effective_quote_age_ms": 500.0,
+            "market_data_signed_tape_state": "sell_dominated",
+            "market_data_signed_tape_sample_count": 5,
+            "market_data_rest_signed_tape_pressure_usable": False,
+        },
+        "_scanner_market_data_enrichment_ws_data": {
+            "curr": 9900,
+            "best_bid": 9890,
+            "best_ask": 9900,
+            "quote_age_ms": 500.0,
+            "quote_stale": False,
+            "market_data_freshness_state": "rest_enriched",
+            "market_data_orderbook_state": "rest_enriched",
+            "market_data_effective_quote_age_ms": 500.0,
+        },
+    }
+
+    merged = state_handlers._merge_scanner_market_data_enrichment_into_ws_data(
+        stock,
+        {
+            "curr": 10000,
+            "best_bid": 9990,
+            "best_ask": 10000,
+            "quote_age_ms": 100.0,
+            "quote_stale": False,
+        },
+        {"now_ts": 1000.0},
+    )
+
+    assert merged["curr"] == 10000
+    assert merged["best_bid"] == 9990
+    assert merged["quote_age_ms"] == 100.0
+    assert merged["market_data_freshness_state"] == "fresh_ws"
+    assert merged["market_data_signed_tape_state"] == "sell_dominated"
+    assert merged["market_data_rest_signed_tape_pressure_usable"] is False
+    assert merged["market_data_enrichment_sources"] == "ws,ka10084"
+    assert merged["market_data_enrichment_consumer_result"] == "skipped"
+    assert merged["market_data_enrichment_consumer_skip_reason"] == "fresh_live_ws_preferred"
+    assert merged["market_data_enrichment_consumer_signed_tape_result"] == "applied"
+
+
+def test_rising_missed_submit_safety_preserves_cached_conflict_until_rest_recheck(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_MARKET_DATA_ENRICHMENT_CONSUMER_TTL_SEC", "5")
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
+    stock = {
+        "last_watching_ai_score": 50.0,
+        "last_watching_ai_action": "WAIT",
+        "_rising_missed_quality_guard_pre_envelope_last_fetch_at": 999.5,
+        "_scanner_market_data_enrichment_stored_at": 999.0,
+        "_scanner_market_data_enrichment_fields": {
+            "market_data_enrichment_applied": True,
+            "market_data_enrichment_sources": "ws,ka10004",
+            "market_data_freshness_state": "conflicted",
+            "market_data_orderbook_state": "conflicted",
+            "market_data_effective_price_source": "ws_rest_conflicted",
+            "market_data_effective_quote_age_ms": 100.0,
+            "market_data_ws_quote_age_ms": 100.0,
+            "market_data_rest_quote_age_ms": 50.0,
+            "market_data_ws_rest_gap_bps": 250.0,
+            "market_data_source_selection_policy": "freshest_age",
+        },
+        "_scanner_market_data_enrichment_ws_data": {
+            "curr": 9900,
+            "best_bid": 9890,
+            "best_ask": 9900,
+            "market_data_freshness_state": "conflicted",
+            "market_data_orderbook_state": "conflicted",
+            "market_data_effective_price_source": "ws_rest_conflicted",
+            "market_data_effective_quote_age_ms": 100.0,
+            "market_data_ws_rest_gap_bps": 250.0,
+        },
+    }
+    current_ws = {
+        "curr": 10000,
+        "best_bid": 9990,
+        "best_ask": 10000,
+        "quote_age_ms": 100.0,
+        "quote_stale": False,
+    }
+
+    merged = state_handlers._merge_scanner_market_data_enrichment_into_ws_data(
+        stock,
+        current_ws,
+        {"now_ts": 1000.0},
+    )
+    checked_ws, fields = state_handlers._rising_missed_quality_guard_pre_envelope(
+        stock,
+        "123466",
+        current_ws,
+        {"now_ts": 1000.0},
+        scanner_envelope_ws_data=merged,
+    )
+    decision = state_handlers._evaluate_rising_missed_scout_quality_guard(
+        stock,
+        "123466",
+        checked_ws,
+        {"now_ts": 1000.0},
+        fields,
+    )
+
+    assert merged["curr"] == 10000
+    assert merged["market_data_freshness_state"] == "conflicted"
+    assert merged["market_data_effective_quote_age_ms"] == 1100.0
+    assert merged["market_data_ws_quote_age_ms"] == 1100.0
+    assert merged["market_data_rest_quote_age_ms"] == 1050.0
+    assert merged["market_data_enrichment_consumer_result"] == "applied"
+    assert merged["market_data_enrichment_consumer_skip_reason"] == (
+        "active_cached_conflict_preserved"
+    )
+    assert fields["rising_missed_quality_guard_pre_envelope_attempted"] is False
+    assert fields["rising_missed_quality_guard_pre_envelope_result"] == "interval_suppressed"
+    assert fields["market_data_freshness_state"] == "conflicted"
+    assert checked_ws["market_data_freshness_state"] == "conflicted"
+    assert decision["rising_missed_scout_quality_guard_blocked"] is True
+    assert decision["rising_missed_scout_quality_guard_quote_stale"] is True
+
+
+def test_rising_missed_quality_guard_pre_envelope_defers_when_rest_reserve_exhausted(monkeypatch):
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_QUALITY_GUARD_PRE_ENVELOPE_MAX_PACKETS_PER_WINDOW",
+        "1",
+    )
+    state_handlers._RISING_MISSED_QUALITY_GUARD_PRE_ENVELOPE_RATE_EPOCHS.clear()
+    monkeypatch.setattr(
+        state_handlers,
+        "_fetch_rest_orderbook_snapshot_bounded",
+        lambda code, timeout_ms: (
+            {
+                "source": "ka10004_rest_orderbook",
+                "rest_mid_price": 10000,
+                "best_bid": 9990,
+                "best_ask": 10000,
+                "rest_received_ts": 1000.0,
+            },
+            "ok",
+            1.0,
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_fetch_rising_missed_signed_tape_bounded",
+        lambda code, timeout_ms: ([], "ok", 1.0),
+    )
+    stale_ws = {"curr": 10000, "quote_age_ms": 9000.0, "quote_stale": True}
+
+    _first_ws, first_fields = state_handlers._rising_missed_quality_guard_pre_envelope(
+        {},
+        "123463",
+        stale_ws,
+        {"now_ts": 1000.0},
+    )
+    second_ws, second_fields = state_handlers._rising_missed_quality_guard_pre_envelope(
+        {},
+        "123464",
+        stale_ws,
+        {"now_ts": 1001.0},
+    )
+
+    assert first_fields["rising_missed_quality_guard_pre_envelope_result"] == (
+        "simultaneous_rest_selected_fresher"
+    )
+    assert second_fields["rising_missed_quality_guard_pre_envelope_attempted"] is False
+    assert second_fields["rising_missed_quality_guard_pre_envelope_result"] == "rest_budget_deferred"
+    assert second_fields["rising_missed_quality_guard_pre_envelope_rest_budget_reason"] == (
+        "final_envelope_reserve_exhausted"
+    )
+    assert second_ws["market_data_freshness_state"] == "missing"
+
+
+def test_rising_missed_quality_guard_pre_envelope_timeout_keeps_stale_block(monkeypatch):
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
+    state_handlers._RISING_MISSED_QUALITY_GUARD_PRE_ENVELOPE_RATE_EPOCHS.clear()
+    monkeypatch.setattr(
+        state_handlers,
+        "_fetch_rest_orderbook_snapshot_bounded",
+        lambda code, timeout_ms: ({}, "timeout", float(timeout_ms)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_fetch_rising_missed_signed_tape_bounded",
+        lambda code, timeout_ms: ([], "timeout", float(timeout_ms)),
+    )
+    stock = {
+        "last_watching_ai_score": 50.0,
+        "last_watching_ai_action": "WAIT",
+        "_scanner_market_data_enrichment_stored_at": 990.0,
+    }
+
+    refreshed_ws, fields = state_handlers._rising_missed_quality_guard_pre_envelope(
+        stock,
+        "123465",
+        {"curr": 10000, "quote_age_ms": 9000.0, "quote_stale": True},
+        {"now_ts": 1000.0},
+    )
+    decision = state_handlers._evaluate_rising_missed_scout_quality_guard(
+        stock,
+        "123465",
+        refreshed_ws,
+        {"now_ts": 1000.0},
+        fields,
+    )
+
+    assert fields["rising_missed_quality_guard_pre_envelope_result"] == (
+        "rest_timeout_existing_envelope_used"
+    )
+    assert fields["rising_missed_quality_guard_pre_envelope_orderbook_fetch_state"] == "timeout"
+    assert fields["rising_missed_quality_guard_pre_envelope_signed_tape_fetch_state"] == (
+        "skipped_orderbook_unavailable"
+    )
+    assert decision["rising_missed_scout_quality_guard_blocked"] is True
+    assert decision["rising_missed_scout_quality_guard_quote_stale"] is True
+    assert stock["_scanner_market_data_enrichment_stored_at"] == 990.0
 
 
 def test_rising_missed_submit_safety_cached_envelope_ages_before_guard(monkeypatch):
