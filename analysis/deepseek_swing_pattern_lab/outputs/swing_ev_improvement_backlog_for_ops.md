@@ -2,7 +2,7 @@
 
 ## 개요
 
-- total_findings: `3`
+- total_findings: `5`
 - runtime_change: `False`
 - purpose: report-only / proposal-only improvement backlog
 
@@ -37,3 +37,23 @@
 - mapped_family: `-`
 - confidence: `low_sample`
 - expected_ev_effect: Insufficient evidence; defer until more trades complete.
+
+### 4. OFI/QI stale/missing quality review
+
+- finding_id: `swing_pattern_lab_deepseek_ofi_qi_stale_missing`
+- lifecycle_stage: `ofi_qi`
+- route: `defer_evidence`
+- priority: `LOW`
+- mapped_family: `swing_entry_ofi_qi_execution_quality`
+- confidence: `solo`
+- expected_ev_effect: If stale ratio > 0.3, consider instrumentation/observer enhancement.
+
+### 5. OFI/QI exit smoothing action distribution
+
+- finding_id: `swing_pattern_lab_deepseek_ofi_qi_smoothing_review`
+- lifecycle_stage: `ofi_qi`
+- route: `attach_existing_family`
+- priority: `MEDIUM`
+- mapped_family: `swing_exit_ofi_qi_smoothing`
+- confidence: `solo`
+- expected_ev_effect: Monitor DEBOUNCE_EXIT/CONFIRM_EXIT rate for holding flow quality.

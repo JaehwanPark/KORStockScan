@@ -1,6 +1,6 @@
 # Scalp Sim Overnight 2026-07-13
 
-- generated_at: `2026-07-13T15:10:05`
+- generated_at: `2026-07-13T20:20:45`
 - artifact_role: `postclose_source_packet_for_scalp_sim_overnight_ai_carry`
 - runtime_effect: `false`
 - decision_authority: `sim_observation_only`
@@ -19,9 +19,14 @@
 
 ## Stage Counts
 
+- `scalp_sim_overnight_decision`: `1`
+- `scalp_sim_overnight_sell_today`: `1`
+- `scalp_sim_sell_order_assumed_filled`: `1`
 
 ## Rows
 
 | time | stage | stock | action | confidence | profit/live | sell_profit | held_sec |
 | --- | --- | --- | --- | ---: | ---: | ---: | ---: |
-| - | `-` | ARMED(123456) | `-` | - | - | -0.23 | - |
+| 2026-07-13T15:10:05.004235 | `scalp_sim_overnight_decision` | ARMED(123456) | `SELL_TODAY` | 97 | -0.23 | - | 5039 |
+| 2026-07-13T15:10:05.004610 | `scalp_sim_overnight_sell_today` | ARMED(123456) | `SELL_TODAY` | 97 | -0.23 | -0.23 | 5039 |
+| 2026-07-13T15:10:05.004780 | `scalp_sim_sell_order_assumed_filled` | ARMED(123456) | `-` | - | - | -0.23 | - |

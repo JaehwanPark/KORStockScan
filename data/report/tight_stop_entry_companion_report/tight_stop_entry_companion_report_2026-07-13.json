@@ -16540,7 +16540,7 @@
     "bot_restart",
     "real_execution_quality_approval"
   ],
-  "generated_at": "2026-07-13T16:26:43",
+  "generated_at": "2026-07-13T20:20:34",
   "metric_contract": {
     "candidate_filters": {
       "exclude_unknown_context": true,
