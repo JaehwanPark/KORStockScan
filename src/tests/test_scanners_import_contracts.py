@@ -1,6 +1,7 @@
 import importlib
 import sys
 from datetime import time
+from pathlib import Path
 
 
 def test_final_ensemble_scanner_import_does_not_start_telegram_manager():
@@ -10,6 +11,29 @@ def test_final_ensemble_scanner_import_does_not_start_telegram_manager():
     importlib.import_module("src.scanners.final_ensemble_scanner")
 
     assert "src.notify.telegram_manager" not in sys.modules
+
+
+def test_final_ensemble_scanner_has_no_start_of_day_ai_report_path():
+    source = Path("src/scanners/final_ensemble_scanner.py").read_text()
+
+    forbidden_fragments = [
+        "START_OF_DAY_REPORT",
+        "오늘의 AI 리포트",
+        "AI 수석 브리핑",
+        "analyze_scanner_results",
+        "MacroBriefingBuilder",
+        "GPTSniperEngine",
+    ]
+
+    for fragment in forbidden_fragments:
+        assert fragment not in source
+
+
+def test_telegram_manager_has_no_start_of_day_ai_report_handler():
+    source = Path("src/notify/telegram_manager.py").read_text()
+
+    assert "START_OF_DAY_REPORT" not in source
+    assert "오늘의 AI 리포트" not in source
 
 
 def test_crisis_monitor_import_keeps_runtime_dependencies_lazy():

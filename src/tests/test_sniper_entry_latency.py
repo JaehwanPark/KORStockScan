@@ -2645,10 +2645,80 @@ def test_latency_true_ofi_direct_canary_allows_high_opportunity_without_report_m
     assert result["latency_canary_reason"] == "latency_true_ofi_direct_canary_applied"
     assert result["latency_true_ofi_direct_canary_applied"] is True
     assert result["latency_true_ofi_direct_canary_reason"] == "direct_canary_true_ofi_false_negative_allow"
+    assert result["latency_true_ofi_direct_canary_max_spread_bps"] == 90.0
     assert result["latency_true_ofi_direct_canary_relief_runtime_enabled"] is True
     assert result["latency_true_ofi_direct_canary_tape_support_ok"] is True
     assert result["latency_false_negative_remeasure_enqueued"] is False
     assert result["latency_false_negative_remeasure_reason"] == "report_ready_for_recheck_missing"
+
+
+def test_latency_true_ofi_direct_canary_allows_near_cap_spread(monkeypatch):
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=True,
+            SCALP_LATENCY_SPREAD_RELIEF_TAGS=("OTHER",),
+            SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED=False,
+            SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_GUARD_CANARY_ENABLED=False,
+            SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=False,
+        ),
+    )
+    monkeypatch.delenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MAX_SPREAD_BPS", raising=False)
+    now_ts = time.time()
+    monkeypatch.setattr(
+        entry_latency_module,
+        "MICRO_ESTIMATOR_STORE",
+        SimpleNamespace(
+            snapshot=lambda code, *, now_ts: {
+                "source_state": "fresh_ws_order_flow_delta",
+                "confidence": 0.91,
+                "true_ofi_ewma": -0.02,
+                "true_ofi_sample_count": 120,
+                "last_ws_ts": now_ts - 0.08,
+            }
+        ),
+    )
+
+    result = evaluate_live_buy_entry(
+        stock={
+            "name": "TEST",
+            "position_tag": "SCANNER",
+            "rising_missed_entry_lineage": True,
+            "source_signature": "LOW_REBOUND_RISING_MISSED,PRICE_JUMP_START",
+            "price_delta_since_first_seen_pct": "6.16",
+        },
+        code="123456_true_ofi_direct_canary_near_cap",
+        ws_data={
+            "curr": 10_000,
+            "last_ws_update_ts": now_ts,
+            "tick_aggressor_pressure_usable": True,
+            "tick_aggressor_trusted_count": 10,
+            "buy_pressure_10t": 68.0,
+            "buy_exec_volume": 680,
+            "sell_exec_volume": 320,
+            "net_buy_exec_volume": 360,
+            "orderbook": {
+                "asks": [{"price": 10_088, "volume": 100}],
+                "bids": [{"price": 10_000, "volume": 100}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=2,
+        signal_price=10_000,
+        signal_strength=0.70,
+    )
+
+    assert result["decision"] == "ALLOW_NORMAL"
+    assert result["allowed"] is True
+    assert result["latency_true_ofi_direct_canary_applied"] is True
+    assert result["latency_true_ofi_direct_canary_spread_bps"] == 88.0
+    assert result["latency_true_ofi_direct_canary_max_spread_bps"] == 90.0
 
 
 def test_latency_true_ofi_direct_canary_blocks_sell_dominated_tape(monkeypatch):

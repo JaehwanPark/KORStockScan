@@ -1551,7 +1551,7 @@ def _latency_true_ofi_direct_canary_fields(
     )
     max_spread_bps = max(
         1.0,
-        _to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MAX_SPREAD_BPS"), 85.0),
+        _to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MAX_SPREAD_BPS"), 90.0),
     )
     min_true_ofi = _to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MIN_TRUE_OFI"), -0.09)
     max_true_ofi = _to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MAX_TRUE_OFI"), 0.12)

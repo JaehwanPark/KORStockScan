@@ -1680,6 +1680,56 @@ def test_scalp_entry_snapshot_marks_final_submit_safety_block(monkeypatch):
     assert fields["weak_ai_micro_entry_block_buy_pressure_10t"] == "-"
 
 
+def test_scalp_entry_snapshot_marks_runtime_submit_when_ai_wait(monkeypatch):
+    logs = []
+
+    def fake_emit(event_type, stock_name, code, stage, *, record_id=None, fields=None):
+        logs.append((event_type, stock_name, code, stage, record_id, fields or {}))
+
+    monkeypatch.setattr(handlers, "emit_pipeline_event", fake_emit)
+
+    stock = {
+        "id": "R-PEPT",
+        "name": "펩트론",
+        "strategy": "SCALPING",
+        "last_watching_ai_action": "WAIT",
+        "last_watching_ai_score": 0.0,
+    }
+    handlers._emit_scalp_entry_adm_snapshot(
+        stock,
+        "087010",
+        "order_bundle_submitted",
+        ai_decision={"action": "WAIT", "score": 0.0, "reason": "no_directional_buy_authority"},
+        ai_score=0.0,
+        chosen_action="BUY_DEFENSIVE",
+        latency_gate={
+            "allowed": True,
+            "decision": "ALLOW_NORMAL",
+            "reason": "caution_normal_entry_allowed",
+            "latency_state": "CAUTION",
+            "ai_entry_price_canary_action": "USE_DEFENSIVE",
+            "entry_price_guard": "defensive_price_selected",
+        },
+        actual_order_submitted=True,
+        broker_order_forbidden=False,
+        extra_fields={"reason": "order_submitted"},
+    )
+
+    assert logs
+    fields = logs[0][5]
+    assert fields["entry_action_final_decision"] == "SUBMITTED"
+    assert fields["entry_action_submit_authority"] == "runtime_submit_policy"
+    assert fields["entry_action_submit_authority_reason"] == "caution_normal_entry_allowed"
+    assert fields["entry_action_ai_directional_authority"] == "observed_context_only"
+    assert fields["entry_action_ai_directional_allowed"] is False
+    assert fields["entry_action_ai_directional_mismatch"] is True
+    assert fields["entry_action_price_ai_authority"] == "entry_price_ai_price_selection"
+    assert fields["entry_action_price_ai_action"] == "USE_DEFENSIVE"
+    assert fields["entry_action_final_reason_detail"] == (
+        "submitted_by_runtime_policy_despite_directional_ai_not_buy"
+    )
+
+
 def test_ai_ops_log_fields_mark_numeric_inconsistency_as_no_runtime_authority():
     fields = handlers._build_ai_ops_log_fields(
         {

@@ -10342,6 +10342,7 @@ _RISING_MISSED_MICRO_ESTIMATOR_STORE = _SCALPING_MICRO_ESTIMATOR_STORE
 SCANNER_WS_STALE_BACKOFF_SOURCE = "ws_stale_feedback"
 _SCANNER_WS_STALE_BACKOFFS: dict[str, dict[str, Any]] = {}
 _RISING_MISSED_SIGNED_TAPE_SCANNER_BACKOFFS: dict[str, dict[str, Any]] = {}
+_RISING_MISSED_SIGNED_TAPE_PRESERVED_KEYS: set[str] = set()
 
 
 def _rising_missed_submit_safety_backoff_key(stock: dict | None, code: str | None) -> str:
@@ -10373,6 +10374,115 @@ def _rising_missed_signed_tape_backoff_sec() -> int:
             180,
         ),
     )
+
+
+def _rising_missed_signed_tape_strong_preserve_enabled() -> bool:
+    return _env_bool("KORSTOCKSCAN_RISING_MISSED_SIGNED_TAPE_STRONG_PRESERVE_ENABLED", True)
+
+
+def _rising_missed_signed_tape_strong_preserve_min_delta_pct() -> float:
+    return max(
+        0.0,
+        min(
+            _env_float("KORSTOCKSCAN_RISING_MISSED_SIGNED_TAPE_STRONG_PRESERVE_MIN_DELTA_PCT", 2.0),
+            20.0,
+        ),
+    )
+
+
+def _rising_missed_signed_tape_strong_preserve_min_source_count() -> int:
+    return max(
+        1,
+        min(
+            _env_int("KORSTOCKSCAN_RISING_MISSED_SIGNED_TAPE_STRONG_PRESERVE_MIN_SOURCE_COUNT", 2),
+            8,
+        ),
+    )
+
+
+def _rising_missed_signed_tape_strong_preserve_fields(
+    stock: dict | None,
+    code: str | None,
+    ws_data: dict | None,
+    *,
+    now_ts: float,
+) -> dict[str, Any]:
+    stock = stock if isinstance(stock, dict) else {}
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    enabled = _rising_missed_signed_tape_strong_preserve_enabled()
+    min_delta = _rising_missed_signed_tape_strong_preserve_min_delta_pct()
+    min_source_count = _rising_missed_signed_tape_strong_preserve_min_source_count()
+    source_signature = str(stock.get("source_signature") or "").upper()
+    source_tokens = {token for token in re.split(r"[^A-Z0-9_]+", source_signature) if token}
+    strong_sources = {
+        "BID_IMBALANCE_SURGE",
+        "NEW_HIGH_CONFIRMATION",
+        "PRICE_JUMP_START",
+        "REALTIME_RANK_START",
+        "VALUE_TOP",
+        "VOLUME_SURGE_POSITIVE",
+    }
+    matched_sources = sorted(strong_sources & source_tokens)
+    source_count = len(matched_sources)
+    positive_delta = _scanner_positive_delta_pct(stock)
+    state = str(ws_data.get("market_data_signed_tape_state") or "").strip().lower()
+    key = _scanner_ws_stale_backoff_key(stock, code)
+    already_preserved = bool(
+        key in _RISING_MISSED_SIGNED_TAPE_PRESERVED_KEYS
+        or stock.get("rising_missed_signed_tape_strong_preserve_used")
+    )
+    base = {
+        "rising_missed_signed_tape_strong_preserve_enabled": bool(enabled),
+        "rising_missed_signed_tape_strong_preserve_applied": False,
+        "rising_missed_signed_tape_strong_preserve_reason": "not_evaluated",
+        "rising_missed_signed_tape_strong_preserve_min_delta_pct": round(min_delta, 4),
+        "rising_missed_signed_tape_strong_preserve_min_source_count": int(min_source_count),
+        "rising_missed_signed_tape_strong_preserve_positive_delta_pct": round(positive_delta, 4),
+        "rising_missed_signed_tape_strong_preserve_source_count": int(source_count),
+        "rising_missed_signed_tape_strong_preserve_source_tokens": ",".join(matched_sources) or "-",
+        "rising_missed_signed_tape_strong_preserve_already_used": bool(already_preserved),
+        "rising_missed_signed_tape_strong_preserve_source": "market_data_signed_tape_feedback",
+        "rising_missed_signed_tape_strong_preserve_decision_authority": (
+            "scanner_watch_budget_one_eval_preserve_only"
+        ),
+        "rising_missed_signed_tape_strong_preserve_runtime_effect": False,
+        "rising_missed_signed_tape_strong_preserve_forbidden_uses": (
+            "standalone_buy,submit_safety_bypass,stale_submit_bypass,broker_guard_bypass,"
+            "threshold_mutation,provider_route_change,quantity_or_cap_change"
+        ),
+    }
+    if not enabled:
+        base["rising_missed_signed_tape_strong_preserve_reason"] = "disabled"
+        return base
+    if state != "sell_dominated":
+        base["rising_missed_signed_tape_strong_preserve_reason"] = "not_sell_dominated"
+        return base
+    if already_preserved:
+        base["rising_missed_signed_tape_strong_preserve_reason"] = "already_preserved_once"
+        return base
+    if not _scanner_rising_entry_relief_eligible(stock):
+        base["rising_missed_signed_tape_strong_preserve_reason"] = "not_rising_entry_relief_eligible"
+        return base
+    strong_by_delta = positive_delta >= min_delta
+    strong_by_sources = source_count >= min_source_count
+    if not (strong_by_delta or strong_by_sources):
+        base["rising_missed_signed_tape_strong_preserve_reason"] = "weak_rising_signal"
+        return base
+
+    _RISING_MISSED_SIGNED_TAPE_PRESERVED_KEYS.add(key)
+    stock["rising_missed_signed_tape_strong_preserve_used"] = True
+    stock["rising_missed_signed_tape_strong_preserve_epoch"] = f"{float(now_ts):.3f}"
+    base.update(
+        {
+            "rising_missed_signed_tape_strong_preserve_applied": True,
+            "rising_missed_signed_tape_strong_preserve_reason": (
+                "delta_or_multisource_strong_rising_preserved_for_one_heavy_eval"
+            ),
+            "rising_missed_signed_tape_strong_preserve_runtime_effect": True,
+            "rising_missed_signed_tape_strong_preserve_epoch": f"{float(now_ts):.3f}",
+        }
+    )
+    return base
 
 
 def _clear_rising_missed_signed_tape_scanner_backoff(stock: dict | None, code: str | None) -> None:
@@ -11686,6 +11796,7 @@ def _scanner_fast_precheck_fields(
         ws_data,
         now_ts=float(now_ts),
     )
+    signed_tape_strong_preserve_fields = {}
     scanner_ws_stale_backoff_recheck_applied = _scanner_ws_stale_backoff_strong_promotion_recheck(
         stock,
         code,
@@ -11720,13 +11831,23 @@ def _scanner_fast_precheck_fields(
         market_data_signed_tape_state == "sell_dominated"
         and _scanner_rising_entry_relief_eligible(stock)
     ):
-        signed_tape_scanner_backoff_fields = _record_rising_missed_signed_tape_scanner_backoff(
+        signed_tape_strong_preserve_fields = _rising_missed_signed_tape_strong_preserve_fields(
             stock,
             code,
+            ws_data,
             now_ts=float(now_ts),
         )
-        result = "budget_reallocated"
-        reason = "signed_tape_sell_dominated"
+        if signed_tape_strong_preserve_fields.get("rising_missed_signed_tape_strong_preserve_applied"):
+            result = "eligible_for_heavy_entry_eval"
+            reason = "signed_tape_sell_dominated_strong_rising_preserve_once"
+        else:
+            signed_tape_scanner_backoff_fields = _record_rising_missed_signed_tape_scanner_backoff(
+                stock,
+                code,
+                now_ts=float(now_ts),
+            )
+            result = "budget_reallocated"
+            reason = "signed_tape_sell_dominated"
     elif rising_missed_fast_reject.get("scanner_rising_missed_fast_reject_candidate"):
         result = "budget_reallocated"
         reason = "rising_missed_not_rising_without_recovery_signal"
@@ -11885,6 +12006,7 @@ def _scanner_fast_precheck_fields(
         **candidate_gate_backoff_fields,
         **submit_safety_backoff_fields,
         **signed_tape_scanner_backoff_fields,
+        **signed_tape_strong_preserve_fields,
         **_scanner_rising_relief_observation_fields(stock),
     }
 
@@ -12246,6 +12368,44 @@ def _emit_scalp_entry_adm_snapshot(
         latency_reason = latency_gate.get("reason") or latency_gate.get("block_reason")
     if latency_reason not in (None, "", "-"):
         fields.setdefault("entry_action_latency_reason", latency_reason)
+    directional_ai_action = str(fields.get("ai_action") or observed_ai_action or "not_evaluated").upper()
+    directional_ai_score = _safe_float(fields.get("ai_score"), 0.0)
+    directional_ai_allows = entry_buy_decision_allowed(directional_ai_action, directional_ai_score)
+    price_ai_action = str(
+        fields.get("ai_entry_price_canary_action")
+        or fields.get("entry_price_canary_action")
+        or fields.get("entry_price_ai_action")
+        or ""
+    ).strip().upper()
+    price_guard = str(fields.get("entry_price_guard") or "").strip().lower()
+    price_ai_authority = (
+        "entry_price_ai_price_selection"
+        if price_ai_action or price_guard
+        else "not_evaluated"
+    )
+    submit_authority = "directional_ai_buy_confirmed" if directional_ai_allows else "runtime_submit_policy"
+    if _truthy_field(fields.get("actual_order_submitted")):
+        fields.setdefault("entry_action_submit_authority", submit_authority)
+        fields.setdefault(
+            "entry_action_submit_authority_reason",
+            str(
+                fields.get("forced_entry_reason")
+                or fields.get("entry_action_latency_reason")
+                or fields.get("reason")
+                or "order_submitted"
+            ),
+        )
+        fields.setdefault(
+            "entry_action_ai_directional_authority",
+            "directional_ai_buy_confirmed" if directional_ai_allows else "observed_context_only",
+        )
+        fields.setdefault("entry_action_ai_directional_allowed", directional_ai_allows)
+        fields.setdefault("entry_action_ai_directional_action", directional_ai_action or "not_evaluated")
+        fields.setdefault("entry_action_ai_directional_score", f"{directional_ai_score:.1f}")
+        fields.setdefault("entry_action_ai_directional_mismatch", not directional_ai_allows)
+        fields.setdefault("entry_action_price_ai_authority", price_ai_authority)
+        if price_ai_action:
+            fields.setdefault("entry_action_price_ai_action", price_ai_action)
     explicit_extra_block = bool(
         isinstance(extra_fields, dict)
         and (
@@ -12274,6 +12434,10 @@ def _emit_scalp_entry_adm_snapshot(
         fields["entry_action_final_decision"] = "SUBMITTED"
         fields["entry_action_final_blocked"] = False
         fields["entry_action_final_reason"] = "order_submitted"
+        if not directional_ai_allows:
+            fields["entry_action_final_reason_detail"] = (
+                "submitted_by_runtime_policy_despite_directional_ai_not_buy"
+            )
     else:
         fields["entry_action_final_decision"] = "OBSERVE_ONLY"
         fields["entry_action_final_blocked"] = False
@@ -12474,6 +12638,32 @@ def _scale_in_blocker_reason_from_context(action, gate, rejected_actions, fallba
     return str(fallback_reason or "-")
 
 
+def _scale_in_blocker_detail_from_context(action, blocker_reason):
+    if not isinstance(action, dict):
+        return str(blocker_reason or "-")
+    details = [str(blocker_reason or "-")]
+    for key in ("shallow_volatility_blocked_reason", "aggressive_blocked_reason"):
+        value = str(action.get(key) or "").strip()
+        if value and value not in details:
+            details.append(value)
+    return "|".join(details)
+
+
+def _reversal_add_probe_for_log(action_or_probe):
+    if not isinstance(action_or_probe, dict):
+        return action_or_probe if isinstance(action_or_probe, dict) else None
+    probe = dict(action_or_probe.get("probe") or {})
+    shallow_probe = action_or_probe.get("shallow_volatility_probe")
+    if isinstance(shallow_probe, dict):
+        for key, value in shallow_probe.items():
+            probe.setdefault(f"shallow_{key}", value)
+    for key in ("shallow_volatility_blocked_reason", "aggressive_blocked_reason", "blocked_standard_reason"):
+        value = action_or_probe.get(key)
+        if value not in (None, ""):
+            probe[key] = value
+    return probe
+
+
 def _ai_score_source_for_snapshot(stock):
     if not isinstance(stock, dict):
         return "-"
@@ -12562,6 +12752,7 @@ def _emit_stat_action_decision_snapshot(
     gate = scale_in_gate if isinstance(scale_in_gate, dict) else {}
     action = scale_in_action if isinstance(scale_in_action, dict) else {}
     blocker_reason = _scale_in_blocker_reason_from_context(action, gate, rejected_actions, reason)
+    blocker_detail = _scale_in_blocker_detail_from_context(action, blocker_reason)
     scale_in_arm = _scale_in_arm_from_context(
         profit_rate=profit_rate,
         action=action,
@@ -12607,6 +12798,7 @@ def _emit_stat_action_decision_snapshot(
         "scale_in_arm": scale_in_arm,
         "scale_in_blocker_namespace": blocker_namespace,
         "scale_in_blocker_reason": blocker_reason,
+        "scale_in_blocker_detail": blocker_detail,
         "ai_score_source": _ai_score_source_for_snapshot(stock),
         "source_quality_gate": "stat_action_snapshot_source_only",
         "reason": str(reason or "-"),
@@ -12621,6 +12813,13 @@ def _emit_stat_action_decision_snapshot(
     }
     if distance_to_buy_bps is not None:
         fields["distance_to_buy_bps"] = f"{distance_to_buy_bps:.2f}"
+    for key in ("shallow_volatility_blocked_reason", "aggressive_blocked_reason", "blocked_standard_reason"):
+        if action.get(key) not in (None, ""):
+            fields[key] = action.get(key)
+    shallow_probe = action.get("shallow_volatility_probe")
+    if isinstance(shallow_probe, dict):
+        for key, value in shallow_probe.items():
+            fields.setdefault(f"shallow_{key}", value)
     for key in (
         "runtime_family",
         "runtime_family_candidate",
@@ -12835,6 +13034,12 @@ def _append_reversal_add_probe_fields(fields: dict, probe: dict | None) -> dict:
     ):
         if key in probe:
             merged[key] = bool(probe.get(key))
+    for key, value in probe.items():
+        if str(key).startswith("shallow_") and key not in merged:
+            merged[key] = value
+    for key in ("shallow_volatility_blocked_reason", "aggressive_blocked_reason", "blocked_standard_reason"):
+        if key in probe:
+            merged[key] = probe.get(key)
     for key in (
         "profit_rate",
         "pnl_min",
@@ -20166,6 +20371,37 @@ def _retry_entry_ai_submit_authority_before_block(
             ) or {}
         except Exception:
             feature_probe = {}
+        retry_log_fields = _merge_entry_pipeline_field_groups(
+            _build_ai_overlap_log_fields(
+                stock=stock,
+                ai_score=score,
+                momentum_tag=(stock or {}).get("entry_momentum_tag"),
+                threshold_profile=(stock or {}).get("entry_threshold_profile"),
+                overbought_blocked=False,
+                blocked_stage="-",
+                overlap_snapshot=overlap_snapshot,
+            ),
+            _build_ai_ops_log_fields(
+                ai_decision,
+                ai_score_raw=score,
+                ai_score_after_bonus=score,
+                entry_score_threshold=get_entry_buy_score_threshold(),
+                big_bite_bonus_applied=False,
+                ai_cooldown_blocked=False,
+            ),
+        )
+        retry_log_fields = _without_entry_pipeline_fields(
+            retry_log_fields,
+            "action",
+            "vip_target",
+            "ai_call_trigger_reason",
+            "buy_pressure",
+            "tick_accel",
+            "micro_vwap_bp",
+            "large_sell_print_detected",
+            "latency_state",
+        )
+        retry_log_fields.setdefault("large_sell_print_detected", bool(feature_probe.get("large_sell_print", False)))
         _log_entry_pipeline(
             stock,
             code,
@@ -20176,27 +20412,8 @@ def _retry_entry_ai_submit_authority_before_block(
             buy_pressure=f"{float(feature_probe.get('buy_pressure', 0.0) or 0.0):.2f}",
             tick_accel=f"{float(feature_probe.get('tick_accel', 0.0) or 0.0):.3f}",
             micro_vwap_bp=f"{float(feature_probe.get('micro_vwap_bp', 0.0) or 0.0):.2f}",
-            large_sell_print_detected=bool(feature_probe.get("large_sell_print", False)),
             latency_state=str((retry_ws_data or {}).get("latency_state", "") or "-").upper(),
-            **_merge_entry_pipeline_field_groups(
-                _build_ai_overlap_log_fields(
-                    stock=stock,
-                    ai_score=score,
-                    momentum_tag=(stock or {}).get("entry_momentum_tag"),
-                    threshold_profile=(stock or {}).get("entry_threshold_profile"),
-                    overbought_blocked=False,
-                    blocked_stage="-",
-                    overlap_snapshot=overlap_snapshot,
-                ),
-                _build_ai_ops_log_fields(
-                    ai_decision,
-                    ai_score_raw=score,
-                    ai_score_after_bonus=score,
-                    entry_score_threshold=get_entry_buy_score_threshold(),
-                    big_bite_bonus_applied=False,
-                    ai_cooldown_blocked=False,
-                ),
-            ),
+            **retry_log_fields,
         )
         _emit_scalp_entry_adm_snapshot(
             stock,
@@ -40220,7 +40437,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     "profit_rate": f"{profit_rate:+.2f}",
                     "peak_profit": f"{peak_profit:+.2f}",
                 },
-                (fallback_probe_detail or {}).get("probe"),
+                _reversal_add_probe_for_log(fallback_probe_detail or {}),
             )
             _log_holding_pipeline(stock, code, "loss_fallback_probe", **fallback_log_fields)
             if fallback_candidate:
@@ -41267,7 +41484,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                                 "broker_guard_bypass|cap_release"
                             ),
                         },
-                        scale_in_action.get("probe"),
+                        _reversal_add_probe_for_log(scale_in_action),
                     ),
                 )
             return
@@ -41365,7 +41582,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                                         "broker_guard_bypass|cap_release"
                                     ),
                                 },
-                                _ra_probe.get("probe"),
+                                _reversal_add_probe_for_log(_ra_probe),
                             ),
                         )
                         _emit_stat_action_decision_snapshot(
@@ -41458,7 +41675,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                                     "broker_guard_bypass|cap_release"
                                 ),
                             },
-                            reversal_probe.get("probe"),
+                            _reversal_add_probe_for_log(reversal_probe),
                         ),
                     )
                     rejected_action = f"avg_down_wait:{gate.get('reason') or '-'}"

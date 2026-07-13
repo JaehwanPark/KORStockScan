@@ -2,18 +2,18 @@
 [KORStockScan Final Ensemble Scanner (Batch Engine)]
 
 이 모듈은 시스템의 최종 결정을 내리는 '장 마감(또는 장 전) 통합 스캐너' 및 '장중 지능형 재스캔' 엔진입니다.
-시장 전체의 데이터를 분석하여 승률이 가장 높은 타겟을 찾아내고, 알림/감시 계층으로 데이터를 전달합니다.
+시장 전체의 데이터를 분석하여 승률이 가장 높은 타겟을 찾아내고, DB 감시 계층으로 데이터를 전달합니다.
 
 💡 핵심 기능 명세 (Feature Spec):
 -run_integrated_scanner() - 장 마감/장전 배치 작업:
    1. 코스피 시총/거래량 상위 150~200개 종목을 대상으로 AI 콰트로 앙상블(XGB/LGBM) 예측 수행.
    2. 지수 상대강도(RS), 단기 정배열, 수급(스마트 머니) 필터를 거쳐 'MAIN' 추천 종목만 DB 감시 대상으로 적재한다.
       'RUNNER'는 기본적으로 감시 대상에서 제외하며, 필요한 경우 report-only 목록으로만 분리한다.
-   3. OpenAI 등 LLM 경로에 장전 브리핑 데이터(Context)를 제공.
+   3. 스캐너 필터링 결과를 DB와 관리자 디버그 알림으로 남긴다.
 
 💡 아키텍처 설계 사상 (Decoupling & Event-Driven):
 - 이 파일은 오직 '계산(Compute)과 필터링(Filtering)'에만 집중합니다.
-- 알림 전송: 텔레그램 서버와 직접 통신하지 않으며, 결과물은 EventBus를 통해 알림 계층으로 던집니다. (TELEGRAM_BROADCAST)
+- 알림 전송: 텔레그램 서버와 직접 통신하지 않으며, 관리자 디버그 알림만 EventBus로 발행합니다.
 - AI 추론: 무거운 ML 예측 연산은 `ml_predictor.py` 모듈로 철저하게 위임(Delegate)하여 책임을 분리했습니다.
 """
 import sys
@@ -30,27 +30,20 @@ import os
 import json
 import warnings
 import pandas as pd
-import numpy as np
 from datetime import datetime, timedelta
-import FinanceDataReader as fdr
 
 # 💡 Level 1 & 2 공통 모듈
 from src.utils import kiwoom_utils
 from src.utils.constants import TRADING_RULES, DATA_DIR, CONFIG_PATH, DEV_PATH
 from src.database.db_manager import DBManager
-from src.database.models import RecommendationHistory
 from src.core.event_bus import EventBus
 from src.model.common_v2 import calculate_all_features
 
 # 💡 [교정] 커스텀 로거 적용
 from src.utils.logger import log_error
-from src.engine.macro_briefing_complete import MacroBriefingBuilder
 
 # 💡 [수정] 순수 AI 추론 도구
 import src.engine.swing.ml_predictor as ml_predictor
-
-# 💡 [신규] AI 브리핑 엔진 준비
-from src.engine.ai_engine_openai import GPTSniperEngine
 
 warnings.filterwarnings('ignore')
 
@@ -128,76 +121,7 @@ def split_realtime_recommendations(all_results, *, prob_main_pick, prob_runner_p
     )[:runner_limit]
     return main_picks, runner_ups
 
-# --- [1. 성과 복기 엔진] ---
-def get_performance_report(db):
-    """전일 추천 종목의 성과를 계산하여 반환합니다. (DB 스키마 변경 완벽 대응)"""
-    last_date = db.get_latest_history_date()
-    if not last_date: return "📊 신규 가동을 시작합니다.\n"
-
-    try:
-        history = db.get_history_by_date(last_date)
-        if history is None or history.empty:
-            return f"📊 <b>[전일 성적표 ({last_date})]</b>\n기록 없음\n" + "-" * 20 + "\n"
-    except Exception as e:
-        return f"📊 성과 데이터 로드 실패: {e}\n"
-
-    report_msg = f"📊 <b>[전일 성적표 ({last_date})]</b>\n"
-
-    # 💡 [핵심 교정 1] DB 스키마 버전에 따라 유연하게 컬럼명 매핑
-    # 'trade_type'이나 'strategy'가 있으면 그것을 쓰고, 없으면 기존 'type' 사용
-    type_col = 'trade_type' if 'trade_type' in history.columns else 'type'
-    if 'strategy' in history.columns and type_col not in history.columns:
-        type_col = 'strategy'
-        
-    code_col = 'stock_code' if 'stock_code' in history.columns else 'code'
-    price_col = 'buy_price' if 'buy_price' in history.columns else 'price'
-
-    for r_type in ['MAIN', 'RUNNER']:
-        # 해당 컬럼 자체가 없으면 스킵하여 에러 방어
-        if type_col not in history.columns:
-            continue
-            
-        subset = history[history[type_col] == r_type]
-        if subset.empty: continue
-
-        profits = []
-        for row in subset.to_dict('records'):
-            try:
-                # 💡 [핵심 교정 2] 종목코드 6자리 규격화 및 가격 유효성 검사
-                target_code = str(row.get(code_col, '')).replace('.0', '').strip().zfill(6)
-                target_price = float(row.get(price_col, 0)) if pd.notna(row.get(price_col)) else 0
-                
-                # 매수가가 0이면 수익률 계산이 불가능하므로 스킵
-                if target_price <= 0: continue
-
-                try:
-                    df = fdr.DataReader(target_code, start=last_date)
-                    close_price = df.iloc[-1]['Close']
-                except:
-                    # FDR 수집 실패 시 DB 데이터로 폴백 (대소문자 완벽 대응)
-                    db_last = db.get_stock_data(target_code, limit=1)
-                    if db_last is not None and not db_last.empty:
-                        close_price = db_last.iloc[0]['close_price'] if 'close_price' in db_last.columns else db_last.iloc[0]['Close']
-                    else:
-                        close_price = target_price # 최후의 수단: 본전 처리
-
-                p = (close_price / target_price - 1) * 100
-                profits.append(p)
-                
-            except Exception as e:
-                print(f"⚠️ [{target_code}] 성과 계산 중 오류: {e}")
-                continue
-
-        if profits:
-            win_rate = (len([p for p in profits if p > 0]) / len(profits)) * 100
-            avg_p = sum(profits) / len(profits)
-            label = "✅ 강력추천" if r_type == 'MAIN' else "🥈 아차상"
-            report_msg += f"{label}: 승률 {win_rate:.0f}% / 수익 {avg_p:+.2f}%\n"
-
-    return report_msg + "-" * 20 + "\n"
-
-
-# --- [2. 메인 스캐너 엔진 (장 마감(또는 장 전) 배치 작업)] ---
+# --- [1. 메인 스캐너 엔진 (장 마감(또는 장 전) 배치 작업)] ---
 def run_integrated_scanner():
     marker_date = datetime.now().strftime('%Y-%m-%d')
     scanner_failed = False
@@ -359,7 +283,6 @@ def run_integrated_scanner():
         csv_path = os.path.join(DATA_DIR, 'daily_recommendations_v2.csv')
         csv_count = 0
         csv_skipped_count = 0
-        csv_picks = []  # 텔레그램 아침 브리핑에 합류시킬 임시 리스트
         
         if os.path.exists(csv_path):
             try:
@@ -376,7 +299,6 @@ def run_integrated_scanner():
                     csv_prob = classified['prob']
                     pick_type = classified['pick_type']
                     position_tag = classified['position_tag']
-                    star_icon = classified['star_icon']
                     if pick_type == 'RUNNER':
                         csv_skipped_count += 1
                         continue
@@ -393,17 +315,6 @@ def run_integrated_scanner():
                         strategy='KOSPI_ML'     
                     )
                     
-                    # 2. 리포트 결합용 데이터 보관
-                    csv_picks.append({
-                        'Code': csv_code,
-                        'Name': f"{star_icon}{csv_name}",
-                        'Price': csv_price,
-                        'Prob': csv_prob,
-                        'Position': position_tag,
-                        'MetaScore': classified['meta_score'],
-                        'HybridMean': classified['hybrid_mean'],
-                        'SelectionMode': classified['selection_mode'],
-                    })
                     csv_count += 1
                 print(f"✅ V2 CSV에서 {csv_count}개 종목 우선 적재 완료 (skip={csv_skipped_count})")
             except Exception as e:
@@ -412,9 +323,9 @@ def run_integrated_scanner():
             print(f"ℹ️ V2 CSV 파일이 존재하지 않아 실시간 스캐닝 결과만 처리합니다.")
 
         # ==========================================
-        # 5. 결과 기록 및 텔레그램 전송 (Event-Driven)
+        # 5. 결과 기록 및 관리자 디버그 알림 (Event-Driven)
         # ==========================================
-        print("📊 [3/4] 리포트 생성 및 전송 중...")
+        print("📊 [3/4] 결과 기록 및 관리자 디버그 알림 중...")
         
         # 💡 [핵심] 텔레그램 발송 메시지에 CSV 적재 건수(csv_count)를 한 줄 추가!
         debug_msg = (
@@ -443,58 +354,11 @@ def run_integrated_scanner():
         for r in main_picks:
             db.save_recommendation(today, r['Code'], r['Name'], r['Price'], 'MAIN', r['Position'], prob=r['Prob'])
 
-        # 💡 [핵심] 아침 브리핑(START_OF_DAY_REPORT)을 위해 CSV 종목을 실시간 MAIN 종목 맨 앞에 병합
-        main_picks = csv_picks + main_picks
-
-        # --- OpenAI 수석 트레이더 장전 브리핑 ---
-        ai_briefing = "⚠️ OPENAI_API_KEY 미설정"
-
-        api_keys = [v for k, v in CONF.items() if k.startswith("OPENAI_API_KEY")]
-    
-        # 매크로 데이터 수집 - 별도 macro bundle은 실시간 시장 데이터에 grounded되지 않음
-        builder = MacroBriefingBuilder.from_system_config()
-        try:
-            snap, macro_text = builder.build_macro_context(include_debug=True)
-        except Exception as e:
-            macro_text = f"- 매크로 생성 예외: {e}"
-
-        if 'snap' in locals():
-            print("missing_sources =", snap.missing_sources)
-            print("notes =", snap.notes)
-
-        if not api_keys:
-            log_error("❌ OpenAI 키 미설정으로 AI 브리핑을 건너뜁니다.")
-            event_bus.publish('TELEGRAM_BROADCAST', {'message': "🚨 [시스템 에러] OPENAI_API_KEY 미설정으로 AI 브리핑을 건너뜁니다."})
-        else:
-            try:
-                ai_engine = GPTSniperEngine(api_keys=api_keys, announce_startup=False)
-                ai_briefing = ai_engine.analyze_scanner_results(len(target_list), len(all_results), debug_msg, macro_text)
-            except Exception as e:
-                ai_briefing = f"⚠️ AI 브리핑 생성 실패: {e}"
-
-        perf_report = get_performance_report(db)
-
-        # 💡 [핵심 교정 3] 텔레그램 매니저의 '0개 스킵' 로직을 우회하는 방어막 추가
-        if len(main_picks) == 0 and len(runner_ups) == 0:
-            # 종목이 0개일 때는 START_OF_DAY_REPORT 양식을 쓰지 않고, 통짜 텍스트로 강제 전송합니다.
-            fallback_msg = (
-                f"{perf_report}\n"
-                f"{ai_briefing}\n\n"
-                f"🛡️ <b>[시스템 알림]</b>\n"
-                f"오늘은 AI 필터링을 통과한 생존 종목이 0개입니다.\n무리한 진입을 피하고 현금을 보호합니다."
+        if csv_count or main_picks or runner_ups:
+            print(
+                "ℹ️ 장전 브리핑 발송은 비활성화됨: "
+                f"csv={csv_count}, main={len(main_picks)}, runner={len(runner_ups)}"
             )
-            event_bus.publish("TELEGRAM_BROADCAST", {"message": fallback_msg, "parse_mode": "HTML"})
-        else:
-            # 📢 정상적으로 생존 종목이 있을 때 (기존 로직)
-            payload = {
-                "type": "START_OF_DAY_REPORT",
-                "date": today,
-                "performance_report": perf_report,
-                "ai_briefing": ai_briefing,
-                "main_picks": main_picks,
-                "runner_ups": runner_ups
-            }
-            event_bus.publish("TELEGRAM_BROADCAST", payload)
 
     except Exception as e:
         scanner_failed = True

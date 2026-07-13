@@ -201,24 +201,7 @@ def handle_telegram_event(event_data):
         else:
             _broadcast_alert(msg, audience, parse_mode)
             
-    # 2. 💡 [신규] 장전 리포트 형태 (final_ensemble_scanner.py 에서 보냄)
-    elif event_data.get('type') == 'START_OF_DAY_REPORT':
-        perf = event_data.get('performance_report', '')
-        ai_brief = event_data.get('ai_briefing', '')
-        main_picks = event_data.get('main_picks', [])
-        
-        # 메시지를 예쁘게 조립합니다.
-        msg = f"🏆 <b>[오늘의 AI 리포트]</b>\n\n{perf}"
-        if main_picks:
-            msg += "🔥 <b>[오늘의 강력 추천]</b>\n"
-            for p in main_picks:
-                # msg += f"• {p['Name']} ({p['Code']}) - AI확신: {p['Prob']*100:.1f}%\n"
-                msg += f"• {p['Name']} ({p['Code']}) \n"
-        
-        msg += f"\n🤖 <b>[AI 수석 브리핑]</b>\n{ai_brief}"
-        _broadcast_alert(msg, audience='VIP_ALL', parse_mode='HTML')
-        
-    # 3. 💡 [핵심 추가] 코스닥 장중 스캐너 리포트 수신 처리
+    # 2. 💡 [핵심 추가] 코스닥 장중 스캐너 리포트 수신 처리
     elif event_data.get('type') == 'KOSDAQ_REPORT':
         picks = event_data.get('picks', [])
         if not picks: return

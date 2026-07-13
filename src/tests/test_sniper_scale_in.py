@@ -63,6 +63,7 @@ def _clear_scalp_loss_reentry_state(request, monkeypatch, tmp_path):
     )
     state_handlers._RISING_MISSED_SUBMIT_SAFETY_BACKOFFS.clear()
     state_handlers._RISING_MISSED_SIGNED_TAPE_SCANNER_BACKOFFS.clear()
+    state_handlers._RISING_MISSED_SIGNED_TAPE_PRESERVED_KEYS.clear()
     state_handlers._RISING_MISSED_MICRO_ESTIMATOR_STORE.clear()
     state_handlers._SCALPING_MICRO_ESTIMATOR_STORE.clear()
     yield
@@ -73,6 +74,7 @@ def _clear_scalp_loss_reentry_state(request, monkeypatch, tmp_path):
     )
     state_handlers._RISING_MISSED_SUBMIT_SAFETY_BACKOFFS.clear()
     state_handlers._RISING_MISSED_SIGNED_TAPE_SCANNER_BACKOFFS.clear()
+    state_handlers._RISING_MISSED_SIGNED_TAPE_PRESERVED_KEYS.clear()
     state_handlers._RISING_MISSED_MICRO_ESTIMATOR_STORE.clear()
     state_handlers._SCALPING_MICRO_ESTIMATOR_STORE.clear()
 
@@ -2269,6 +2271,80 @@ def test_scanner_fast_precheck_does_not_reallocate_general_not_rising_class(monk
     assert fields["rising_missed_filter_action"] == "observe_only"
 
 
+def test_scanner_fast_precheck_preserves_strong_signed_tape_sell_once(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_FULL_EVAL_MIN_DELTA_PCT", "1.0")
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_SIGNED_TAPE_STRONG_PRESERVE_ENABLED", "true")
+    stock = {
+        "id": 15,
+        "name": "SIGNED_TAPE_STRONG",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "status": "WATCHING",
+        "rising_missed_buy": True,
+        "scanner_promotion_reason": "price_jump_start_acceleration",
+        "source_signature": "NEW_HIGH_CONFIRMATION,OPEN_TOP,PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        "first_seen_price": 10000,
+        "current_price": 10650,
+        "price_delta_since_first_seen_pct": 6.5,
+    }
+
+    first = state_handlers._scanner_fast_precheck_fields(
+        stock,
+        code="123456",
+        ws_data={"curr": 10650, "market_data_signed_tape_state": "sell_dominated"},
+        now_ts=1000.0,
+    )
+    second = state_handlers._scanner_fast_precheck_fields(
+        stock,
+        code="123456",
+        ws_data={"curr": 10650, "market_data_signed_tape_state": "sell_dominated"},
+        now_ts=1001.0,
+    )
+
+    assert first["fast_precheck_result"] == "eligible_for_heavy_entry_eval"
+    assert first["fast_precheck_reason"] == "signed_tape_sell_dominated_strong_rising_preserve_once"
+    assert first["rising_missed_filter_action"] == "observe_only"
+    assert first["rising_missed_signed_tape_strong_preserve_applied"] is True
+    assert first["rising_missed_signed_tape_strong_preserve_runtime_effect"] is True
+    assert first["rising_missed_signed_tape_strong_preserve_forbidden_uses"].find("submit_safety_bypass") >= 0
+    assert second["fast_precheck_result"] == "budget_reallocated"
+    assert second["fast_precheck_reason"] == "signed_tape_sell_dominated"
+    assert second["rising_missed_filter_action"] == "budget_reallocated"
+    assert second["rising_missed_signed_tape_strong_preserve_reason"] == "already_preserved_once"
+
+
+def test_scanner_fast_precheck_signed_tape_preserve_requires_exact_source_tokens(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_FULL_EVAL_MIN_DELTA_PCT", "1.0")
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_SIGNED_TAPE_STRONG_PRESERVE_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_SIGNED_TAPE_STRONG_PRESERVE_MIN_DELTA_PCT", "10.0")
+    stock = {
+        "id": 16,
+        "name": "SIGNED_TAPE_WEAK_TOKEN",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "status": "WATCHING",
+        "rising_missed_buy": True,
+        "scanner_promotion_reason": "price_jump_start_acceleration",
+        "source_signature": "NOT_PRICE_JUMP_START,OPEN_TOP,NO_VALUE_TOP",
+        "first_seen_price": 10000,
+        "current_price": 10650,
+        "price_delta_since_first_seen_pct": 6.5,
+    }
+
+    fields = state_handlers._scanner_fast_precheck_fields(
+        stock,
+        code="123457",
+        ws_data={"curr": 10650, "market_data_signed_tape_state": "sell_dominated"},
+        now_ts=1000.0,
+    )
+
+    assert fields["fast_precheck_result"] == "budget_reallocated"
+    assert fields["fast_precheck_reason"] == "signed_tape_sell_dominated"
+    assert fields["rising_missed_signed_tape_strong_preserve_applied"] is False
+    assert fields["rising_missed_signed_tape_strong_preserve_reason"] == "weak_rising_signal"
+    assert fields["rising_missed_signed_tape_strong_preserve_source_count"] == 0
+
+
 def test_scanner_fast_precheck_keeps_missing_quote_as_source_quality_blocked(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_FULL_EVAL_MIN_DELTA_PCT", "1.0")
     stock = {
@@ -2373,6 +2449,7 @@ def test_scanner_fast_precheck_market_data_conflict_blocks_heavy_eval(monkeypatc
 
 def test_scanner_fast_precheck_sell_dominated_signed_tape_reallocates_budget(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_FULL_EVAL_MIN_DELTA_PCT", "1.0")
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_SIGNED_TAPE_STRONG_PRESERVE_ENABLED", "false")
     stock = {
         "id": 17,
         "name": "SELL_TAPE_SCANNER",
@@ -2687,6 +2764,49 @@ def test_rising_missed_candidate_gate_backoff_upper_limit_reallocates_scanner_bu
     assert fields["rising_missed_budget_reallocation_source"] == "candidate_gate_feedback"
     assert fields["rising_missed_candidate_gate_backoff_reason"] == "upper_limit_proximity_entry_block"
     assert "rising_missed_submit_safety_backoff_reason" not in fields
+
+
+def test_signed_tape_preserve_not_consumed_by_candidate_gate_backoff(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_CANDIDATE_BACKOFF_UPPER_LIMIT_SEC", raising=False)
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_SIGNED_TAPE_STRONG_PRESERVE_ENABLED", "true")
+    state_handlers._RISING_MISSED_CANDIDATE_GATE_BACKOFFS.clear()
+    stock = _rising_missed_backoff_stock(fluctuation=28.0)
+    stock.update(
+        {
+            "source_signature": "NEW_HIGH_CONFIRMATION,PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+            "first_seen_price": 10000,
+            "current_price": 10650,
+            "price_delta_since_first_seen_pct": 6.5,
+        }
+    )
+
+    state_handlers._record_rising_missed_candidate_gate_backoff(
+        stock,
+        "477850",
+        "upper_limit_proximity_entry_block",
+        now_ts=1000.0,
+        source_stage="rising_missed_one_share_entry_blocked",
+    )
+    blocked = state_handlers._scanner_fast_precheck_fields(
+        stock,
+        code="477850",
+        ws_data={"curr": 10650, "fluctuation": 28.0, "market_data_signed_tape_state": "sell_dominated"},
+        now_ts=1001.0,
+    )
+    assert blocked["fast_precheck_reason"] == "candidate_gate_backoff_active"
+    assert "rising_missed_signed_tape_strong_preserve_applied" not in blocked
+    assert stock.get("rising_missed_signed_tape_strong_preserve_used") is None
+
+    after_backoff = state_handlers._scanner_fast_precheck_fields(
+        stock,
+        code="477850",
+        ws_data={"curr": 10650, "market_data_signed_tape_state": "sell_dominated"},
+        now_ts=1121.0,
+    )
+
+    assert after_backoff["fast_precheck_result"] == "eligible_for_heavy_entry_eval"
+    assert after_backoff["fast_precheck_reason"] == "signed_tape_sell_dominated_strong_rising_preserve_once"
+    assert after_backoff["rising_missed_signed_tape_strong_preserve_applied"] is True
 
 
 def test_rising_missed_candidate_gate_backoff_recovery_allows_heavy_eval():
@@ -7944,6 +8064,101 @@ def test_stat_action_decision_snapshot_logs_observe_only_with_rate_limit(monkeyp
     )
     assert emitted_again is False
     assert len(logs) == 1
+
+
+def test_stat_action_decision_snapshot_keeps_shallow_blocker_detail(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    logs = []
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        STAT_ACTION_DECISION_SNAPSHOT_ENABLED=True,
+        STAT_ACTION_DECISION_SNAPSHOT_MIN_INTERVAL_SEC=0,
+    )
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 2_000.0)
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 2,
+        "name": "TEST",
+        "buy_qty": 3,
+        "last_reversal_features": _trusted_reversal_features(
+            buy_pressure_10t=60,
+            tick_acceleration_ratio=1.02,
+            large_sell_print_detected=False,
+            curr_vs_micro_vwap_bp=1.0,
+        ),
+    }
+    action = {
+        "add_type": "AVG_DOWN",
+        "reason": "pnl_out_of_range(-0.05)",
+        "shallow_volatility_blocked_reason": "shallow_volatility_pnl_out_of_range(-0.05)",
+        "shallow_volatility_probe": {
+            "pnl_ok": False,
+            "pnl_min": -1.2,
+            "pnl_max": -0.3,
+            "buy_pressure_ok": False,
+            "buy_pressure_10t": 60.0,
+        },
+    }
+
+    emitted = state_handlers._emit_stat_action_decision_snapshot(
+        stock=stock,
+        code="087010",
+        strategy="SCALPING",
+        ws_data={},
+        chosen_action="hold_wait",
+        eligible_actions=["hold_wait"],
+        rejected_actions=["avg_down_wait:pnl_out_of_range(-0.05)"],
+        profit_rate=-0.05,
+        peak_profit=0.25,
+        current_ai_score=64,
+        held_sec=75,
+        curr_price=111900,
+        buy_price=111700,
+        scale_in_gate={"allowed": True, "reason": "ok"},
+        scale_in_action=action,
+        reason="scale_in_probe_blocked",
+        force=True,
+    )
+
+    assert emitted is True
+    fields = logs[0][1]
+    assert fields["scale_in_blocker_reason"] == "pnl_out_of_range(-0.05)"
+    assert fields["shallow_volatility_blocked_reason"] == "shallow_volatility_pnl_out_of_range(-0.05)"
+    assert fields["scale_in_blocker_detail"] == (
+        "pnl_out_of_range(-0.05)|shallow_volatility_pnl_out_of_range(-0.05)"
+    )
+    assert fields["shallow_pnl_ok"] is False
+    assert fields["shallow_buy_pressure_10t"] == 60.0
+
+
+def test_reversal_add_probe_for_log_preserves_shallow_blocker_fields():
+    probe = state_handlers._reversal_add_probe_for_log(
+        {
+            "probe": {"pnl_ok": False, "profit_rate": -0.05},
+            "shallow_volatility_blocked_reason": "shallow_volatility_pnl_out_of_range(-0.05)",
+            "shallow_volatility_probe": {
+                "pnl_ok": False,
+                "pnl_min": -1.2,
+                "pnl_max": -0.3,
+                "buy_pressure_ok": False,
+                "buy_pressure_10t": 60.0,
+            },
+        }
+    )
+    fields = state_handlers._append_reversal_add_probe_fields({}, probe)
+
+    assert fields["pnl_ok"] is False
+    assert fields["profit_rate"] == -0.05
+    assert fields["shallow_volatility_blocked_reason"] == "shallow_volatility_pnl_out_of_range(-0.05)"
+    assert fields["shallow_pnl_ok"] is False
+    assert fields["shallow_pnl_min"] == -1.2
+    assert fields["shallow_buy_pressure_10t"] == 60.0
 
 
 def test_stat_action_decision_snapshot_separates_pyramid_namespace(monkeypatch):
