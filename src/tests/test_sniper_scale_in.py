@@ -3314,6 +3314,36 @@ def test_rising_missed_scout_quality_guard_rest_envelope_clears_stale_weak_evide
     assert decision["block_reason"] == "quality_guard_pass"
 
 
+def test_rising_missed_scout_quality_guard_fresh_ws_envelope_clears_stale_weak_evidence(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_SCOUT_QUALITY_GUARD_ENABLED", raising=False)
+    stock = {
+        "last_watching_ai_score": 45,
+        "last_watching_ai_action": "WAIT",
+    }
+    ws_data = {
+        "curr": 10000,
+        "quote_age_ms": 15000.0,
+        "market_data_enrichment_applied": True,
+        "market_data_freshness_state": "fresh_ws",
+        "market_data_orderbook_state": "fresh_ws",
+        "market_data_effective_quote_age_ms": 400.0,
+        "market_data_effective_price_source": "ws",
+    }
+
+    decision = state_handlers._evaluate_rising_missed_scout_quality_guard(
+        stock,
+        "123456",
+        ws_data,
+        {"now_ts": 1000.0},
+        {},
+    )
+
+    assert decision["rising_missed_scout_quality_guard_blocked"] is False
+    assert decision["rising_missed_scout_quality_guard_quote_stale"] is False
+    assert decision["market_data_freshness_state"] == "fresh_ws"
+    assert decision["block_reason"] == "quality_guard_pass"
+
+
 def test_rising_missed_scout_quality_guard_blocks_stale_recent_weak_ai_micro(monkeypatch):
     state_handlers.COOLDOWNS = {}
     state_handlers.ALERTED_STOCKS = set()

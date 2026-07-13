@@ -62,6 +62,28 @@ def test_market_data_enrichment_promotes_stale_ws_to_rest_enriched_quote():
     assert enriched["quote_refresh_source"] == "ka10004_rest_orderbook"
 
 
+def test_market_data_enrichment_promotes_stale_ws_to_rest_when_gap_is_large():
+    ws_data = {
+        "curr": 9000,
+        "best_ask": 9010,
+        "best_bid": 8990,
+        "last_ws_update_ts": 990.0,
+        "quote_stale": True,
+    }
+
+    enriched, fields = build_market_data_enrichment(
+        ws_data=ws_data,
+        rest_orderbook=_rest_orderbook(10000),
+        now_ts=1000.0,
+        max_ws_rest_gap_bps=100.0,
+    )
+
+    assert fields["market_data_freshness_state"] == REST_ENRICHED
+    assert fields["market_data_orderbook_state"] == REST_ENRICHED
+    assert fields["market_data_ws_rest_gap_bps"] > 100.0
+    assert enriched["curr"] == 10000
+
+
 def test_market_data_enrichment_uses_ka10004_mid_price_when_current_price_missing():
     ws_data = {
         "curr": 9900,

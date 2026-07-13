@@ -19768,8 +19768,8 @@ def _quote_stale_for_rising_missed_scout_quality_guard(
         None,
     )
     if (
-        market_data_state == "rest_enriched"
-        and market_data_orderbook_state == "rest_enriched"
+        market_data_state in {"fresh_ws", "rest_enriched"}
+        and market_data_orderbook_state == market_data_state
         and market_data_effective_quote_age_ms is not None
         and market_data_effective_quote_age_ms <= max_age_ms
     ):

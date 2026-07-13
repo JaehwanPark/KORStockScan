@@ -311,7 +311,7 @@ def build_market_data_enrichment(
     ws_fresh = bool(ws_usable and not ws_explicit_stale and ws_age is not None and ws_age <= max_ws_age_ms)
     rest_fresh = bool(rest_usable and rest_age is not None and rest_age <= max_rest_age_ms)
     gap = _gap_bps(ws_levels, rest_levels)
-    conflicted = bool(ws_usable and rest_usable and gap is not None and gap > max_ws_rest_gap_bps)
+    conflicted = bool(ws_fresh and rest_fresh and gap is not None and gap > max_ws_rest_gap_bps)
     sources = []
     if ws_usable:
         sources.append("ws")
