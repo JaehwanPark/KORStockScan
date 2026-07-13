@@ -99,17 +99,29 @@ def _boolish(value: Any) -> bool:
 def _iter_jsonl(path: Path) -> Iterator[dict[str, Any]]:
     if not path.exists():
         return
+    for line in _iter_jsonl_lines(path):
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            yield payload
+
+
+def _iter_jsonl_lines(path: Path) -> Iterator[str]:
+    if not path.exists():
+        return
     opener = gzip.open if path.suffix == ".gz" else Path.open
     with opener(path, "rt", encoding="utf-8") as handle:
         for line in handle:
-            if not line.strip():
-                continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(payload, dict):
-                yield payload
+            yield line
+
+
+def _record_id_from_json_line(line: str) -> str:
+    match = re.search(r'"record_id"\s*:\s*"?([^",}\s]+)', line)
+    return match.group(1) if match else ""
 
 
 def _date_from_path(path: Path) -> str:
@@ -220,7 +232,15 @@ def _build_forced_index(
     path_list = list(paths)
     source_paths: list[str] = [str(path) for path in path_list]
     for path in path_list:
-        for row in _iter_jsonl(path):
+        for line in _iter_jsonl_lines(path):
+            if FORCED_REASON not in line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(row, dict):
+                continue
             if not _clean_baseline_allowed(row, clean_baseline_ts_kst=clean_baseline_ts_kst):
                 continue
             record_id = _event_record_id(row)
@@ -234,11 +254,17 @@ def _build_forced_index(
         return forced, threshold_counts, source_paths
     forced_ids = set(forced)
     for path in path_list:
-        for row in _iter_jsonl(path):
-            if not _clean_baseline_allowed(row, clean_baseline_ts_kst=clean_baseline_ts_kst):
-                continue
-            record_id = _event_record_id(row)
+        for line in _iter_jsonl_lines(path):
+            record_id = _record_id_from_json_line(line)
             if record_id not in forced_ids:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(row, dict):
+                continue
+            if not _clean_baseline_allowed(row, clean_baseline_ts_kst=clean_baseline_ts_kst):
                 continue
             for group in _classify_threshold(row):
                 threshold_counts[record_id][group] += 1
