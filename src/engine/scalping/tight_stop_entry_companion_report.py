@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -32,6 +33,7 @@ ENTRY_STAGES = {
     "order_leg_sent",
     "buy_order_submitted",
     "entry_order_submitted",
+    "scalp_sim_buy_order_virtual_pending",
     "scalp_sim_buy_order_assumed_filled",
 }
 FORBIDDEN_USES = [
@@ -48,6 +50,36 @@ FORBIDDEN_USES = [
 TIGHT_STOP_PCT = float(getattr(TRADING_RULES, "SCALP_PRESET_HARD_STOP_PCT", -0.70) or -0.70)
 MFE_TARGET_PCT = 0.30
 SAMPLE_FLOOR = 20
+CANDIDATE_DIMENSIONS = [
+    ("score_band", "buy_pressure_bucket"),
+    ("score_band", "tick_accel_bucket"),
+    ("score_band", "micro_vwap_bucket"),
+    ("buy_pressure_bucket", "tick_accel_bucket"),
+    ("tick_accel_bucket", "micro_vwap_bucket"),
+]
+PROFILE_CONTEXT_FIELDS = {
+    "ai_score",
+    "current_ai_score",
+    "score_source_value",
+    "scalp_sim_candidate_window_original_score",
+    "original_score",
+    "buy_pressure_10t",
+    "buy_pressure",
+    "order_flow_pressure_score",
+    "entry_order_flow_score",
+    "order_flow_pressure",
+    "tick_acceleration_ratio",
+    "tick_accel",
+    "curr_vs_micro_vwap_bp",
+    "micro_vwap_bp",
+    "quote_age_ms",
+    "quote_age_at_submit_ms",
+    "pre_submit_effective_quote_age_ms",
+    "quote_consistency_age_ms",
+    "scalp_sim_candidate_window_original_reason",
+    "original_reason",
+    "ai_reason",
+}
 
 
 def report_paths(target_date: str) -> tuple[Path, Path]:
@@ -77,6 +109,23 @@ def _first_present(event: dict[str, Any], *keys: str) -> Any:
         value = event.get(key)
         if _is_present(value):
             return value
+    return None
+
+
+def _reason_number(event: dict[str, Any], *labels: str) -> float | None:
+    reason = str(
+        event.get("scalp_sim_candidate_window_original_reason")
+        or event.get("original_reason")
+        or event.get("ai_reason")
+        or ""
+    )
+    if not reason:
+        return None
+    for label in labels:
+        pattern = rf"{re.escape(label)}\s*(?:=|\()?\s*([-+]?\d+(?:\.\d+)?)"
+        match = re.search(pattern, reason, flags=re.IGNORECASE)
+        if match:
+            return _safe_float(match.group(1), None)
     return None
 
 
@@ -145,6 +194,36 @@ def _row_key(source_date: str, event: dict[str, Any]) -> str:
     if stock_code:
         return f"{source_date}:stock:{stock_code}"
     return ""
+
+
+def _context_aliases(source_date: str, event: dict[str, Any]) -> list[str]:
+    aliases: list[str] = []
+    sim_id = str(event.get("sim_record_id") or "").strip()
+    if sim_id:
+        aliases.append(f"{source_date}:sim:{sim_id}")
+    parent_id = str(event.get("sim_parent_record_id") or event.get("parent_record_id") or "").strip()
+    if parent_id:
+        aliases.append(f"{source_date}:real:{parent_id}")
+    record_id = str(event.get("record_id") or event.get("recommendation_id") or event.get("runtime_record_id") or "").strip()
+    if record_id:
+        aliases.append(f"{source_date}:real:{record_id}")
+    if not aliases:
+        stock_code = str(event.get("stock_code") or "").strip()
+        if stock_code:
+            aliases.append(f"{source_date}:stock:{stock_code}")
+    return list(dict.fromkeys(aliases))
+
+
+def _profile_context(event: dict[str, Any]) -> dict[str, Any]:
+    return {key: event.get(key) for key in PROFILE_CONTEXT_FIELDS if _is_present(event.get(key))}
+
+
+def _merge_profile_context(event: dict[str, Any], source_date: str, contexts: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    for alias in _context_aliases(source_date, event):
+        merged.update(contexts.get(alias) or {})
+    merged.update(event)
+    return merged
 
 
 def _is_entry_event(event: dict[str, Any]) -> bool:
@@ -232,11 +311,42 @@ def _tick_accel_bucket(value: float | None) -> str:
 
 
 def _entry_profile(event: dict[str, Any], source_date: str, key: str, event_time: datetime) -> dict[str, Any]:
-    score = _safe_float(_first_present(event, "ai_score", "current_ai_score", "score_source_value"), None)
-    buy_pressure = _safe_float(_first_present(event, "buy_pressure_10t", "buy_pressure"), None)
+    score = _safe_float(
+        _first_present(
+            event,
+            "ai_score",
+            "current_ai_score",
+            "score_source_value",
+            "scalp_sim_candidate_window_original_score",
+            "original_score",
+        ),
+        None,
+    )
+    buy_pressure = _safe_float(
+        _first_present(
+            event,
+            "buy_pressure_10t",
+            "buy_pressure",
+            "order_flow_pressure_score",
+            "entry_order_flow_score",
+            "order_flow_pressure",
+        ),
+        None,
+    )
+    if buy_pressure is None:
+        buy_pressure = _reason_number(event, "order_flow_pressure_score", "buy_pressure_10t", "buy_pressure")
     tick_accel = _safe_float(_first_present(event, "tick_acceleration_ratio", "tick_accel"), None)
     micro_vwap = _safe_float(_first_present(event, "curr_vs_micro_vwap_bp", "micro_vwap_bp"), None)
-    quote_age = _safe_float(event.get("quote_age_ms"), None)
+    quote_age = _safe_float(
+        _first_present(
+            event,
+            "quote_age_ms",
+            "quote_age_at_submit_ms",
+            "pre_submit_effective_quote_age_ms",
+            "quote_consistency_age_ms",
+        ),
+        None,
+    )
     actual_order_submitted = _boolish(event.get("actual_order_submitted"))
     stage = str(event.get("stage") or "")
     row_authority = (
@@ -244,6 +354,8 @@ def _entry_profile(event: dict[str, Any], source_date: str, key: str, event_time
         if actual_order_submitted
         else "sim_assumed_fill_path_observation"
         if stage == "scalp_sim_buy_order_assumed_filled"
+        or str(event.get("sim_record_id") or "").strip()
+        or stage.startswith("scalp_sim_")
         else "source_only_entry_path_observation"
     )
     return {
@@ -341,24 +453,27 @@ def _summaries(rows: list[dict[str, Any]], bucket_key: str) -> list[dict[str, An
     return sorted(result, key=lambda item: (item["sample_count"], item["mfe_before_tight_stop_rate"]), reverse=True)
 
 
+def _is_unknown_bucket(value: Any) -> bool:
+    return "unknown" in str(value or "").lower()
+
+
 def _top_companion_candidates(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    dimensions = [
-        ("score_band", "buy_pressure_bucket"),
-        ("score_band", "tick_accel_bucket"),
-        ("score_band", "micro_vwap_bucket"),
-        ("buy_pressure_bucket", "tick_accel_bucket"),
-        ("tick_accel_bucket", "micro_vwap_bucket"),
-    ]
     candidates: list[dict[str, Any]] = []
-    for left, right in dimensions:
+    for left, right in CANDIDATE_DIMENSIONS:
         grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for row in rows:
-            grouped[f"{left}={row.get(left)}|{right}={row.get(right)}"].append(row)
+            left_bucket = row.get(left)
+            right_bucket = row.get(right)
+            if _is_unknown_bucket(left_bucket) or _is_unknown_bucket(right_bucket):
+                continue
+            grouped[f"{left}={left_bucket}|{right}={right_bucket}"].append(row)
         for key, bucket_rows in grouped.items():
             summary = _bucket_summary(bucket_rows)
             if summary["sample_count"] < SAMPLE_FLOOR:
                 continue
             edge = summary["mfe_before_tight_stop_rate"] - summary["tight_stop_first_rate"]
+            if edge <= 0:
+                continue
             candidates.append(
                 {
                     "companion_key": key,
@@ -379,6 +494,31 @@ def _top_companion_candidates(rows: list[dict[str, Any]]) -> list[dict[str, Any]
         ),
         reverse=True,
     )[:10]
+
+
+def _real_submitted_path_validation(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    real_rows = [row for row in rows if row.get("row_authority") == "real_submitted_path_observation"]
+    companion_candidates = _top_companion_candidates(real_rows)
+    if not real_rows:
+        decision = "hold_no_real_submitted_sample"
+    elif len(real_rows) < SAMPLE_FLOOR:
+        decision = "hold_real_submitted_sample_below_floor"
+    elif companion_candidates:
+        decision = "source_only_real_submitted_positive_pattern_found"
+    else:
+        decision = "hold_no_positive_real_submitted_pattern"
+    return {
+        "decision": decision,
+        "sample_floor": SAMPLE_FLOOR,
+        "sample_floor_passed": len(real_rows) >= SAMPLE_FLOOR,
+        "overall": _bucket_summary(real_rows),
+        "row_authority": "real_submitted_path_observation",
+        "companion_candidate_count": len(companion_candidates),
+        "companion_candidates": companion_candidates,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "decision_authority": "source_only_tight_stop_entry_companion_observation",
+    }
 
 
 def _source_date_preflight_entry(source_date: str, preflight: dict[str, Any]) -> dict[str, Any]:
@@ -414,6 +554,7 @@ def _filter_source_quality_dates(source_dates: list[str]) -> tuple[list[str], li
 def _build_rows(source_dates: list[str], missing: list[dict[str, str]]) -> list[dict[str, Any]]:
     entries: dict[str, dict[str, Any]] = {}
     series: dict[str, list[tuple[datetime, float]]] = defaultdict(list)
+    contexts: dict[str, dict[str, Any]] = defaultdict(dict)
     for source_date, event in _iter_events(source_dates, missing):
         event_time = _parse_time(event.get("emitted_at"))
         if event_time is None:
@@ -425,7 +566,11 @@ def _build_rows(source_dates: list[str], missing: list[dict[str, str]]) -> list[
         if pnl is not None:
             series[key].append((event_time, pnl))
         if _is_entry_event(event) and key not in entries:
-            entries[key] = _entry_profile(event, source_date, key, event_time)
+            entries[key] = _entry_profile(_merge_profile_context(event, source_date, contexts), source_date, key, event_time)
+        context = _profile_context(event)
+        if context:
+            for alias in _context_aliases(source_date, event):
+                contexts[alias].update(context)
     rows: list[dict[str, Any]] = []
     for key, entry in entries.items():
         path = sorted(series.get(key, []), key=lambda item: item[0])
@@ -475,12 +620,18 @@ def build_report(target_date: str, *, start_date: str | None = None, end_date: s
         else "pass"
     )
     companion_candidates = _top_companion_candidates(rows)
+    real_submitted_path_validation = _real_submitted_path_validation(rows)
     summary = {
         "entry_path_sample_count": candidate_count,
         "tight_stop_pct": TIGHT_STOP_PCT,
         "mfe_target_pct": MFE_TARGET_PCT,
         "sample_floor": SAMPLE_FLOOR,
         "sample_floor_passed": candidate_count >= SAMPLE_FLOOR,
+        "companion_candidate_policy": {
+            "exclude_unknown_context": True,
+            "require_positive_survival_edge": True,
+            "primary_decision_metric": "mfe_before_tight_stop_rate_minus_tight_stop_first_rate",
+        },
         "overall": _bucket_summary(rows),
         "top_companion_candidate_count": len(companion_candidates),
         "score_band": _summaries(rows, "score_band"),
@@ -516,13 +667,19 @@ def build_report(target_date: str, *, start_date: str | None = None, end_date: s
             "metric_role": "diagnostic_win_rate",
             "decision_authority": "source_only_tight_stop_entry_companion_observation",
             "window_policy": f"{start}_to_{end}",
-            "sample_floor": {"entry_path_rows": SAMPLE_FLOOR},
+            "sample_floor": {"entry_path_rows": SAMPLE_FLOOR, "real_submitted_path_rows": SAMPLE_FLOOR},
             "primary_decision_metric": "mfe_before_tight_stop_rate_minus_tight_stop_first_rate",
+            "candidate_filters": {
+                "exclude_unknown_context": True,
+                "require_positive_survival_edge": True,
+                "real_submitted_path_validated_separately": True,
+            },
             "source_quality_gate": "pipeline_events_present_clean_baseline_and_postclose_source_quality_preflight",
             "forbidden_uses": FORBIDDEN_USES,
         },
         "summary": summary,
         "companion_candidates": companion_candidates,
+        "real_submitted_path_validation": real_submitted_path_validation,
         "entry_path_rows": rows[:500],
         "runtime_effect": False,
         "actual_order_submitted": False,
@@ -549,11 +706,18 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- mfe_before_tight_stop_rate: `{overall.get('mfe_before_tight_stop_rate')}`",
         f"- tight_stop_first_rate: `{overall.get('tight_stop_first_rate')}`",
         f"- top_companion_candidate_count: `{summary.get('top_companion_candidate_count')}`",
+        f"- companion_candidate_policy: `{summary.get('companion_candidate_policy')}`",
         "",
         "## Top Companion Candidates",
         "",
         "```json",
         json.dumps(report.get("companion_candidates") or [], ensure_ascii=False, indent=2, default=str),
+        "```",
+        "",
+        "## Real Submitted Path Validation",
+        "",
+        "```json",
+        json.dumps(report.get("real_submitted_path_validation") or {}, ensure_ascii=False, indent=2, default=str),
         "```",
     ]
     return "\n".join(lines) + "\n"
