@@ -13,23 +13,23 @@
 
 ## 근거
 
-- as_of: `2026-07-13T09:15:03`
-- exit_signal unique: `0`
+- as_of: `2026-07-13T10:10:01`
+- exit_signal unique: `2`
 - sell_order_sent unique: `0`
 - sell_completed unique: `0`
 - real exit/sell_sent/sell_completed: `0` / `0` / `0`
-- non-real exit/sell_sent/sell_completed: `0` / `0` / `0`
+- non-real exit/sell_sent/sell_completed: `2` / `0` / `0`
 - sell_sent/exit_signal: `0.0%`
 - real sell_sent/exit_signal: `0.0%`
 - non-real sell_sent/exit_signal: `0.0%`
 - flow defer events: `0`
-- AI holding cache MISS: `0.0%`
-- score50 origins: `{}`
+- AI holding cache MISS: `100.0%`
+- score50 origins: `{'legacy_or_unclassified_score50': 7}`
 - score50 preflight/source-quality blocked: `0`
 - score50 raw-non50 neutralized: `0`
 - soft_stop rebound above sell 10m: `0.0%`
 - trailing missed-upside: `0.0%`
-- top reasons: `-`
+- top reasons: `AI보유감시:cache_miss=3, 청산신호:scalp_preset_hard_stop_pct=2`
 
 ## 금지된 자동변경
 
