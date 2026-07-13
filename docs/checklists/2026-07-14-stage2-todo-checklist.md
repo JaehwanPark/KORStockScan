@@ -83,6 +83,24 @@
   - 금지: code-improvement workorder를 자동 repo 수정으로 취급하지 않는다. 사용자가 Codex 구현을 지시한 경우에만 실행한다.
   - 다음 액션: `implement_now`, `terminal_non_implement_longstanding`, `repeat_unresolved_structural_blocker`, `keep_visible_by_design`, `already_implemented`, `defer_design`, `reject` 중 하나로 닫는다.
 
+- [ ] `[NonImplementLongstandingRejudge0714] non-implement 장기 항목 재판정 및 처리방안 재확인` (`Due: 2026-07-14`, `Slot: POSTCLOSE`, `TimeWindow: 21:25~21:35`, `Track: ScalpingLogic`)
+  - Source: [code_improvement_workorder_2026-07-13.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-07-13.json), [code_improvement_workorder_2026-07-13.md](/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-07-13.md)
+  - 판정 기준: `selected_terminal_non_implement_longstanding_order_ids`, `selected_longstanding_non_implement_disposition_counts`, `non_selected_longstanding_non_implement_disposition_counts`, `repeat_unresolved_escalation_count`, `needs_followup_workorder_count`를 산출물 기준으로 확인한다. `keep_visible_by_design`, `review_required`, `implemented_with_provenance`, `action_required`를 분리하고 action_required가 있으면 별도 구현 워크오더로 승격할지 판단한다.
+  - 금지: `keep_visible_by_design` 또는 source-only visibility rollup을 `implement_now`로 임의 승격하지 않는다. runtime/order/provider/bot/threshold/cap 변경 근거로 사용하지 않는다.
+  - 다음 액션: `no_action_required_keep_visible`, `review_required_defer_evidence`, `implemented_with_provenance`, `new_followup_workorder_required`, `repeat_unresolved_escalation_required` 중 하나로 닫는다.
+
+- [ ] `[ExitOutcomeUnknownEvidenceReview0714] exit_outcome=outcome_unknown deferred evidence 처리방안 확인` (`Due: 2026-07-14`, `Slot: POSTCLOSE`, `TimeWindow: 21:35~21:45`, `Track: ScalpingLogic`)
+  - Source: [code_improvement_workorder_2026-07-13.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-07-13.json), [lifecycle_decision_matrix_2026-07-13.json](/home/ubuntu/KORStockScan/data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_2026-07-13.json), [lifecycle_bucket_discovery_2026-07-13.json](/home/ubuntu/KORStockScan/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_2026-07-13.json)
+  - 판정 기준: `order_lifecycle_exit_bucket_exit_outcome_outcome_unknown_40c2ecc3`가 계속 `defer_evidence`인지 확인하고, 파일 후보(`files_likely_touched`)와 실행 가능한 acceptance test가 생겼는지 확인한다. 둘 중 하나라도 없으면 evidence 대기로 닫고, 둘 다 있으면 별도 instrumentation workorder 후보로 분리한다.
+  - 금지: exit outcome unknown만으로 exit threshold, TP/trailing, sell automation, provider, bot restart를 변경하지 않는다.
+  - 다음 액션: `defer_evidence_no_code_action`, `candidate_ready_needs_workorder`, `covered_by_new_provenance`, `reject_not_applicable` 중 하나로 닫는다.
+
+- [ ] `[PerformanceParityHarnessScope0714] deferred performance review 항목 parity harness 범위 검토` (`Due: 2026-07-14`, `Slot: POSTCLOSE`, `TimeWindow: 21:45~21:55`, `Track: RuntimeStability`)
+  - Source: [code_improvement_workorder_2026-07-13.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-07-13.json), [codebase_performance_workorder_2026-07-13.json](/home/ubuntu/KORStockScan/data/report/codebase_performance_workorder/codebase_performance_workorder_2026-07-13.json)
+  - 판정 기준: `order_perf_kiwoom_orders_http_session_review`, `order_perf_config_cache_scope_review`, `order_perf_sentinel_event_cache_incremental_review`의 broker request lifecycle, runtime config reload semantics, incremental cache semantics를 분리해 parity harness 선행 필요 여부를 확인한다. 범위가 닫히지 않으면 deferred performance backlog로 유지한다.
+  - 금지: parity harness 없이 broker request/session, runtime config cache, sentinel incremental cache 구현을 시작하지 않는다. provider/order/bot/threshold 변경과 묶지 않는다.
+  - 다음 액션: `defer_until_parity_harness`, `parity_harness_workorder_required`, `reject_out_of_scope`, `covered_by_existing_test` 중 하나로 닫는다.
+
 - [ ] `[LifecycleQuietGapReview0714] lifecycle quiet gap rollup 자동 표면화 및 처리 확인` (`Due: 2026-07-14`, `Slot: POSTCLOSE`, `TimeWindow: 21:25~21:40`, `Track: ScalpingLogic`)
   - Source: [runtime_apply_gap_audit_2026-07-13.json](/home/ubuntu/KORStockScan/data/report/runtime_apply_gap_audit/runtime_apply_gap_audit_2026-07-13.json), [runtime_apply_gap_audit_2026-07-13.md](/home/ubuntu/KORStockScan/data/report/runtime_apply_gap_audit/runtime_apply_gap_audit_2026-07-13.md)
   - 판정 기준: quiet gap summary의 quiet_gap_count=`268`, rollup_required_count=`268`, sim_live_connected_quiet_gap_count=`0`, observation_source_quality_warning_count=`0`, quiet_gap_type_counts=`{'ai_review_parsed_low_coverage': 1, 'positive_source_only_keep_collecting': 267}`를 확인하고 parent conflict/exclusion, positive source-only, source-quality warning, AI coverage 누락을 닫는다.
