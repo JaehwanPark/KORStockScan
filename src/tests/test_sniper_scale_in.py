@@ -3388,6 +3388,150 @@ def test_rising_missed_scout_quality_guard_blocks_stale_recent_weak_ai_micro(mon
     assert entry_logs[-1][1]["broker_order_forbidden"] is True
 
 
+def test_rising_missed_scout_quality_guard_blocks_fresh_adverse_micro(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_SCOUT_QUALITY_GUARD_ENABLED", raising=False)
+
+    decision = state_handlers._evaluate_rising_missed_scout_quality_guard(
+        {
+            "last_watching_ai_score": 72,
+            "last_watching_ai_action": "BUY",
+        },
+        "319660",
+        {
+            "curr": 195400,
+            "quote_age_ms": 134.907,
+            "quote_stale": False,
+            "buy_pressure_10t": 0.0,
+            "curr_vs_micro_vwap_bp": -87.96,
+            "true_ofi_ewma": -0.1369,
+            "true_ofi_sample_count": 29,
+            "market_data_signed_tape_state": "sell_dominated",
+            "market_data_signed_tape_sample_count": 5,
+        },
+        {"now_ts": 1000.0, "current_ai_score": 72.0},
+        {},
+    )
+
+    assert decision["rising_missed_scout_quality_guard_blocked"] is True
+    assert decision["rising_missed_scout_quality_guard_quote_stale"] is False
+    assert decision["rising_missed_scout_quality_guard_weak_buy_pressure"] is True
+    assert decision["rising_missed_scout_quality_guard_true_ofi_below_floor"] is True
+    assert decision["rising_missed_scout_quality_guard_signed_tape_sell_dominated"] is True
+    assert decision["rising_missed_scout_quality_guard_micro_vwap_below_floor"] is True
+    assert decision["rising_missed_scout_quality_guard_adverse_micro_blocked"] is True
+    assert decision["block_reason"] == "fresh_adverse_micro_submit_safety"
+    assert decision["rising_missed_filter_layer"] == "submit_safety"
+    assert decision["rising_missed_filter_action"] == "pre_submit_block"
+    assert decision["actual_order_submitted"] is False
+    assert decision["broker_order_forbidden"] is True
+
+
+def test_rising_missed_scout_quality_guard_does_not_block_buy_pressure_alone(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_SCOUT_QUALITY_GUARD_ENABLED", raising=False)
+
+    decision = state_handlers._evaluate_rising_missed_scout_quality_guard(
+        {
+            "last_watching_ai_score": 72,
+            "last_watching_ai_action": "BUY",
+        },
+        "319660",
+        {
+            "curr": 195400,
+            "quote_age_ms": 134.907,
+            "quote_stale": False,
+            "buy_pressure_10t": 0.0,
+            "curr_vs_micro_vwap_bp": 12.0,
+            "true_ofi_ewma": 0.25,
+            "true_ofi_sample_count": 29,
+            "market_data_signed_tape_state": "buy_dominated",
+            "market_data_signed_tape_sample_count": 5,
+        },
+        {"now_ts": 1000.0, "current_ai_score": 72.0},
+        {},
+    )
+
+    assert decision["rising_missed_scout_quality_guard_blocked"] is False
+    assert decision["rising_missed_scout_quality_guard_quote_stale"] is False
+    assert decision["rising_missed_scout_quality_guard_weak_buy_pressure"] is True
+    assert decision["rising_missed_scout_quality_guard_adverse_micro"] is False
+    assert decision["rising_missed_scout_quality_guard_adverse_micro_signal_count"] == 0
+    assert decision["block_reason"] == "quality_guard_pass"
+    assert decision["rising_missed_filter_action"] == "observe_only"
+
+
+def test_rising_missed_one_share_entry_blocks_fresh_adverse_micro_before_submit(monkeypatch):
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.TRADING_RULES = CONFIG
+    state_handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK.clear()
+
+    submit_calls = []
+    entry_logs = []
+    now_ts = 1_783_471_000.0
+
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", "true")
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_SCOUT_QUALITY_GUARD_ENABLED", raising=False)
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_rising_missed_same_day_reentry_guard",
+        lambda *args, **kwargs: {"allowed": True},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_submit_watching_triggered_entry",
+        lambda *args, **kwargs: submit_calls.append(True) or True,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: entry_logs.append((stage, fields)),
+    )
+
+    submitted = state_handlers._maybe_submit_rising_missed_one_share_entry(
+        {
+            "id": 319660,
+            "name": "PSK",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "scanner_promotion_id": "scan-fresh-adverse",
+            "price_delta_since_first_seen_pct": 3.2,
+            "last_watching_ai_score": 72.0,
+            "last_watching_ai_action": "BUY",
+        },
+        "319660",
+        {
+            "curr": 195400,
+            "v_pw": 100.0,
+            "quote_age_ms": 134.907,
+            "quote_stale": False,
+            "buy_pressure_10t": 0.0,
+            "curr_vs_micro_vwap_bp": -87.96,
+            "true_ofi_ewma": -0.1369,
+            "true_ofi_sample_count": 29,
+            "market_data_signed_tape_state": "sell_dominated",
+            "market_data_signed_tape_sample_count": 5,
+        },
+        admin_id=1,
+        runtime={"now_ts": now_ts, "current_ai_score": 72.0, "ai_engine": None, "scout_upgrade_entry": False},
+        strategy="SCALPING",
+        pos_tag="SCANNER",
+        curr_price=195400,
+    )
+
+    assert submitted is True
+    assert submit_calls == []
+    assert entry_logs[-1][0] == "rising_missed_scout_quality_guard_blocked"
+    assert entry_logs[-1][1]["block_reason"] == "fresh_adverse_micro_submit_safety"
+    assert entry_logs[-1][1]["rising_missed_scout_quality_guard_quote_stale"] is False
+    assert entry_logs[-1][1]["rising_missed_scout_quality_guard_adverse_micro_blocked"] is True
+    assert entry_logs[-1][1]["rising_missed_one_share_entry_forced_qty"] == 2
+    assert entry_logs[-1][1]["rising_missed_filter_layer"] == "submit_safety"
+    assert entry_logs[-1][1]["rising_missed_filter_action"] == "pre_submit_block"
+    assert entry_logs[-1][1]["actual_order_submitted"] is False
+    assert entry_logs[-1][1]["broker_order_forbidden"] is True
+
+
 def test_rising_missed_scout_quality_guard_no_rest_estimator_after_block(monkeypatch):
     state_handlers.COOLDOWNS = {}
     state_handlers.ALERTED_STOCKS = set()

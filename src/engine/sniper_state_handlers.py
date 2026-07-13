@@ -19383,6 +19383,28 @@ def _rising_missed_scout_quality_guard_weak_ai_max_score() -> float:
     )
 
 
+def _rising_missed_scout_quality_guard_min_buy_pressure_10t() -> float:
+    return max(
+        0.0,
+        _env_float("KORSTOCKSCAN_RISING_MISSED_SCOUT_QUALITY_GUARD_MIN_BUY_PRESSURE_10T", 30.0),
+    )
+
+
+def _rising_missed_scout_quality_guard_true_ofi_floor() -> float:
+    return _env_float("KORSTOCKSCAN_RISING_MISSED_SCOUT_QUALITY_GUARD_TRUE_OFI_FLOOR", -0.10)
+
+
+def _rising_missed_scout_quality_guard_signed_tape_min_samples() -> int:
+    return max(
+        1,
+        _env_int("KORSTOCKSCAN_RISING_MISSED_SCOUT_QUALITY_GUARD_SIGNED_TAPE_MIN_SAMPLES", 3),
+    )
+
+
+def _rising_missed_scout_quality_guard_micro_vwap_floor_bp() -> float:
+    return _env_float("KORSTOCKSCAN_RISING_MISSED_SCOUT_QUALITY_GUARD_MICRO_VWAP_FLOOR_BP", 0.0)
+
+
 def _rising_missed_scout_quality_guard_rest_estimator_enabled() -> bool:
     legacy_default = _env_bool("KORSTOCKSCAN_RISING_MISSED_REST_QUOTE_ESTIMATOR_ENABLED", True)
     return _env_bool("KORSTOCKSCAN_MICRO_ESTIMATOR_ENABLED", legacy_default)
@@ -19981,6 +20003,130 @@ def _weak_strength_for_rising_missed_scout_quality_guard(
     }
 
 
+def _adverse_micro_for_rising_missed_scout_quality_guard(
+    stock: dict | None,
+    ws_data: dict | None,
+    runtime: dict | None,
+    decision_log_fields: dict | None,
+) -> tuple[bool, dict[str, Any]]:
+    stock = stock if isinstance(stock, dict) else {}
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    runtime = runtime if isinstance(runtime, dict) else {}
+    decision_log_fields = decision_log_fields if isinstance(decision_log_fields, dict) else {}
+    source_quality_fields = stock.get("last_watching_ai_source_quality_fields")
+    source_quality_fields = source_quality_fields if isinstance(source_quality_fields, dict) else {}
+    sources = (decision_log_fields, ws_data, runtime, source_quality_fields)
+
+    min_buy_pressure = _rising_missed_scout_quality_guard_min_buy_pressure_10t()
+    true_ofi_floor = _rising_missed_scout_quality_guard_true_ofi_floor()
+    signed_tape_min_samples = _rising_missed_scout_quality_guard_signed_tape_min_samples()
+    micro_vwap_floor_bp = _rising_missed_scout_quality_guard_micro_vwap_floor_bp()
+
+    buy_pressure, has_buy_pressure, _buy_pressure_source = _first_numeric_field_with_source(
+        *sources,
+        key="buy_pressure_10t",
+        aliases=(
+            "buy_pressure",
+            "last_buy_pressure_10t",
+            "latency_true_ofi_direct_canary_tape_buy_pressure",
+            "late_entry_fresh_buy_pressure_10t",
+        ),
+    )
+    weak_buy_pressure = bool(has_buy_pressure and buy_pressure <= min_buy_pressure)
+
+    true_ofi, has_true_ofi, _true_ofi_source = _first_numeric_field_with_source(
+        *sources,
+        key="true_ofi_ewma",
+        aliases=(
+            "latency_true_ofi_direct_canary_true_ofi_ewma",
+            "latency_spread_relief_micro_estimator_true_ofi_ewma",
+            "micro_estimator_true_ofi_ewma",
+        ),
+    )
+    true_ofi_sample_count, has_true_ofi_samples, _true_ofi_sample_source = _first_numeric_field_with_source(
+        *sources,
+        key="true_ofi_sample_count",
+        aliases=(
+            "latency_true_ofi_direct_canary_true_ofi_sample_count",
+            "latency_spread_relief_micro_estimator_true_ofi_sample_count",
+            "micro_estimator_true_ofi_sample_count",
+        ),
+    )
+    true_ofi_below_floor = bool(has_true_ofi and true_ofi < true_ofi_floor)
+
+    signed_tape_state = str(
+        _entry_submit_field(
+            *sources,
+            key="market_data_signed_tape_state",
+            aliases=("signed_tape_state", "latency_true_ofi_direct_canary_signed_tape_state"),
+            default="",
+        )
+        or ""
+    ).strip().lower()
+    signed_tape_sample_count, has_signed_tape_samples, _signed_tape_sample_source = (
+        _first_numeric_field_with_source(
+            *sources,
+            key="market_data_signed_tape_sample_count",
+            aliases=("signed_tape_sample_count", "latency_true_ofi_direct_canary_signed_tape_sample_count"),
+        )
+    )
+    signed_tape_sell_dominated_flag = any(
+        _truthy_field(source.get(key))
+        for source in sources
+        for key in (
+            "market_data_signed_tape_sell_dominated",
+            "signed_tape_sell_dominated",
+            "latency_true_ofi_direct_canary_signed_tape_sell_dominated",
+        )
+    )
+    signed_tape_sell_dominated = bool(
+        (signed_tape_state == "sell_dominated" or signed_tape_sell_dominated_flag)
+        and has_signed_tape_samples
+        and int(signed_tape_sample_count) >= signed_tape_min_samples
+    )
+
+    micro_vwap_bp, has_micro_vwap, _micro_vwap_source = _first_numeric_field_with_source(
+        *sources,
+        key="curr_vs_micro_vwap_bp",
+        aliases=("micro_vwap_bp", "late_entry_fresh_micro_vwap_bp"),
+    )
+    micro_vwap_below_floor = bool(has_micro_vwap and micro_vwap_bp < micro_vwap_floor_bp)
+
+    adverse_signal_count = int(true_ofi_below_floor) + int(signed_tape_sell_dominated) + int(
+        micro_vwap_below_floor
+    )
+    adverse_micro = bool(weak_buy_pressure and adverse_signal_count >= 1)
+    return adverse_micro, {
+        "rising_missed_scout_quality_guard_adverse_micro": adverse_micro,
+        "rising_missed_scout_quality_guard_weak_buy_pressure": weak_buy_pressure,
+        "rising_missed_scout_quality_guard_buy_pressure_available": bool(has_buy_pressure),
+        "rising_missed_scout_quality_guard_buy_pressure_10t": (
+            f"{buy_pressure:.3f}" if has_buy_pressure else "-"
+        ),
+        "rising_missed_scout_quality_guard_min_buy_pressure_10t": f"{min_buy_pressure:.3f}",
+        "rising_missed_scout_quality_guard_true_ofi_available": bool(has_true_ofi),
+        "rising_missed_scout_quality_guard_true_ofi_ewma": f"{true_ofi:.4f}" if has_true_ofi else "-",
+        "rising_missed_scout_quality_guard_true_ofi_floor": f"{true_ofi_floor:.4f}",
+        "rising_missed_scout_quality_guard_true_ofi_below_floor": true_ofi_below_floor,
+        "rising_missed_scout_quality_guard_true_ofi_sample_count": (
+            int(true_ofi_sample_count) if has_true_ofi_samples else 0
+        ),
+        "rising_missed_scout_quality_guard_signed_tape_state": signed_tape_state or "-",
+        "rising_missed_scout_quality_guard_signed_tape_sample_count": (
+            int(signed_tape_sample_count) if has_signed_tape_samples else 0
+        ),
+        "rising_missed_scout_quality_guard_signed_tape_min_samples": signed_tape_min_samples,
+        "rising_missed_scout_quality_guard_signed_tape_sell_dominated": signed_tape_sell_dominated,
+        "rising_missed_scout_quality_guard_micro_vwap_available": bool(has_micro_vwap),
+        "rising_missed_scout_quality_guard_curr_vs_micro_vwap_bp": (
+            f"{micro_vwap_bp:.3f}" if has_micro_vwap else "-"
+        ),
+        "rising_missed_scout_quality_guard_micro_vwap_floor_bp": f"{micro_vwap_floor_bp:.3f}",
+        "rising_missed_scout_quality_guard_micro_vwap_below_floor": micro_vwap_below_floor,
+        "rising_missed_scout_quality_guard_adverse_micro_signal_count": adverse_signal_count,
+    }
+
+
 def _evaluate_rising_missed_scout_quality_guard(
     stock: dict | None,
     code: str,
@@ -20002,10 +20148,23 @@ def _evaluate_rising_missed_scout_quality_guard(
         stock,
         now_ts=_safe_float(runtime.get("now_ts"), None),
     )
+    adverse_micro, adverse_micro_fields = _adverse_micro_for_rising_missed_scout_quality_guard(
+        stock,
+        ws_data,
+        runtime,
+        decision_log_fields,
+    )
     recent_weak = bool(recent_weak_fields["rising_missed_scout_quality_guard_recent_weak_ai_micro_block"])
     weak_evidence = bool(weak_ai or weak_strength or recent_weak)
-    blocked = bool(enabled and quote_stale and weak_evidence)
-    block_reason = "stale_quote_with_weak_ai_or_strength" if blocked else "quality_guard_pass"
+    stale_weak_blocked = bool(enabled and quote_stale and weak_evidence)
+    adverse_micro_blocked = bool(enabled and adverse_micro)
+    blocked = bool(stale_weak_blocked or adverse_micro_blocked)
+    if stale_weak_blocked:
+        block_reason = "stale_quote_with_weak_ai_or_strength"
+    elif adverse_micro_blocked:
+        block_reason = "stale_adverse_micro_submit_safety" if quote_stale else "fresh_adverse_micro_submit_safety"
+    else:
+        block_reason = "quality_guard_pass"
     return {
         **(decision_log_fields or {}),
         **_rising_missed_submit_safety_filter_fields(blocked=blocked),
@@ -20013,9 +20172,12 @@ def _evaluate_rising_missed_scout_quality_guard(
         **ai_fields,
         **strength_fields,
         **recent_weak_fields,
+        **adverse_micro_fields,
         "rising_missed_scout_quality_guard_enabled": bool(enabled),
         "rising_missed_scout_quality_guard_blocked": blocked,
         "rising_missed_scout_quality_guard_weak_evidence": weak_evidence,
+        "rising_missed_scout_quality_guard_stale_weak_blocked": stale_weak_blocked,
+        "rising_missed_scout_quality_guard_adverse_micro_blocked": adverse_micro_blocked,
         "block_reason": block_reason,
         "reason": block_reason,
         "stock_code": code,
@@ -20023,7 +20185,7 @@ def _evaluate_rising_missed_scout_quality_guard(
         "decision_authority": "operator_runtime_override_rising_missed_scout_quality_guard",
         "window_policy": "same_day_intraday_runtime_state",
         "sample_floor": "not_applicable_runtime_guard",
-        "primary_decision_metric": "stale_quote_with_weak_ai_or_strength",
+        "primary_decision_metric": "stale_quote_with_weak_ai_or_strength_or_adverse_micro",
         "source_quality_gate": "rising_missed_scout_quality_context_present",
         "threshold_family": "rising_missed_scout_quality_guard",
         "runtime_effect": blocked,
