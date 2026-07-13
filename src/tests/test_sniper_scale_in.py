@@ -2310,7 +2310,22 @@ def test_scanner_fast_precheck_preserves_strong_signed_tape_sell_once(monkeypatc
     assert second["fast_precheck_result"] == "budget_reallocated"
     assert second["fast_precheck_reason"] == "signed_tape_sell_dominated"
     assert second["rising_missed_filter_action"] == "budget_reallocated"
-    assert second["rising_missed_signed_tape_strong_preserve_reason"] == "already_preserved_once"
+    assert second["rising_missed_signed_tape_strong_preserve_reason"] == "repeat_cooldown_active"
+    assert second["rising_missed_signed_tape_watch_retention_recommended"] is True
+    assert second["rising_missed_signed_tape_watch_retention_reason"] == (
+        "bounded_repeat_cooldown_recheck_pending"
+    )
+
+    third = state_handlers._scanner_fast_precheck_fields(
+        stock,
+        code="123456",
+        ws_data={"curr": 10650, "market_data_signed_tape_state": "sell_dominated"},
+        now_ts=1061.0,
+    )
+
+    assert third["fast_precheck_result"] == "eligible_for_heavy_entry_eval"
+    assert third["fast_precheck_reason"] == "signed_tape_sell_dominated_strong_rising_preserve_once"
+    assert third["rising_missed_signed_tape_strong_preserve_count"] == 2
 
 
 def test_scanner_fast_precheck_signed_tape_preserve_requires_exact_source_tokens(monkeypatch):
@@ -2553,6 +2568,34 @@ def test_rising_missed_submit_safety_backoff_stale_weak_reallocates_scanner_budg
     assert fields["rising_missed_budget_reallocation_source"] == "submit_safety_feedback"
     assert fields["actual_order_submitted"] is False
     assert fields["broker_order_forbidden"] is True
+
+
+def test_signed_tape_preserve_not_consumed_by_submit_safety_backoff(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_SIGNED_TAPE_STRONG_PRESERVE_ENABLED", "true")
+    stock = _rising_missed_backoff_stock(
+        source_signature="NEW_HIGH_CONFIRMATION,PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        first_seen_price=10000,
+        current_price=10650,
+        price_delta_since_first_seen_pct=6.5,
+    )
+
+    state_handlers._record_rising_missed_submit_safety_backoff(
+        stock,
+        "477850",
+        "latency_state_danger",
+        now_ts=1000.0,
+        source_stage="submit_safety_block",
+    )
+    blocked = state_handlers._scanner_fast_precheck_fields(
+        stock,
+        code="477850",
+        ws_data={"curr": 10650, "market_data_signed_tape_state": "sell_dominated"},
+        now_ts=1001.0,
+    )
+
+    assert blocked["fast_precheck_reason"] == "submit_safety_backoff_active"
+    assert "rising_missed_signed_tape_strong_preserve_applied" not in blocked
+    assert stock.get("rising_missed_signed_tape_strong_preserve_used") is None
 
 
 def test_rising_missed_submit_safety_backoff_stale_weak_high_delta_rechecks_heavy_eval(monkeypatch):
@@ -2808,8 +2851,12 @@ def test_signed_tape_preserve_not_consumed_by_candidate_gate_backoff(monkeypatch
     )
 
     assert after_backoff["fast_precheck_result"] == "eligible_for_heavy_entry_eval"
-    assert after_backoff["fast_precheck_reason"] == "signed_tape_sell_dominated_strong_rising_preserve_once"
-    assert after_backoff["rising_missed_signed_tape_strong_preserve_applied"] is True
+    assert after_backoff["fast_precheck_reason"] == "fast_precheck_pass"
+    assert after_backoff["rising_missed_signed_tape_strong_preserve_applied"] is False
+    assert after_backoff["rising_missed_signed_tape_strong_preserve_reason"] == (
+        "not_rising_entry_relief_eligible"
+    )
+    assert stock.get("rising_missed_signed_tape_strong_preserve_used") is None
 
 
 def test_rising_missed_candidate_gate_backoff_recovery_allows_heavy_eval():

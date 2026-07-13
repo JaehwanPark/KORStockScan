@@ -4639,6 +4639,71 @@ def test_scanner_queue_lag_eviction_reallocates_after_repeated_lag(monkeypatch):
     assert event_fields["queue_lag_anchor_field"] == "entry_armed_at_epoch"
 
 
+def test_scanner_fast_precheck_signed_tape_retention_skips_budget_eviction():
+    target = _scanner_watch_stock(
+        code="005930",
+        _scanner_fast_precheck_fields={
+            "fast_precheck_result": "budget_reallocated",
+            "fast_precheck_reason": "signed_tape_sell_dominated",
+            "rising_missed_signed_tape_watch_retention_recommended": True,
+            "rising_missed_signed_tape_watch_retention_reason": (
+                "bounded_repeat_cooldown_recheck_pending"
+            ),
+        },
+    )
+    targets = [target]
+    emitted = []
+
+    expired = kiwoom_sniper_v2._maybe_expire_scanner_watch_for_fast_precheck_budget(
+        target,
+        "005930",
+        targets,
+        now_ts=1035.0,
+        emit_event_fn=lambda *args, **kwargs: emitted.append((args, kwargs)),
+    )
+
+    assert expired is False
+    assert targets == [target]
+    assert emitted == []
+    assert target["_scanner_fast_precheck_budget_retained_reason"] == (
+        "bounded_repeat_cooldown_recheck_pending"
+    )
+
+
+def test_scanner_fast_precheck_retention_requires_bounded_signed_tape_reason(monkeypatch):
+    target = _scanner_watch_stock(
+        code="005930",
+        _scanner_fast_precheck_fields={
+            "fast_precheck_result": "budget_reallocated",
+            "fast_precheck_reason": "signed_tape_sell_dominated",
+            "rising_missed_signed_tape_watch_retention_recommended": True,
+            "rising_missed_signed_tape_watch_retention_reason": "unexpected_retention_reason",
+        },
+    )
+    targets = [target]
+    emitted = []
+    expire_calls = []
+
+    def fake_expire(target_arg, code_arg, targets_arg, *, decision, emit_event_fn=None):
+        expire_calls.append((target_arg, code_arg, targets_arg, decision, emit_event_fn))
+        return True
+
+    monkeypatch.setattr(kiwoom_sniper_v2, "_expire_scanner_watch_target", fake_expire)
+
+    expired = kiwoom_sniper_v2._maybe_expire_scanner_watch_for_fast_precheck_budget(
+        target,
+        "005930",
+        targets,
+        now_ts=1035.0,
+        emit_event_fn=lambda *args, **kwargs: emitted.append((args, kwargs)),
+    )
+
+    assert expired is True
+    assert len(expire_calls) == 1
+    assert emitted == []
+    assert "_scanner_fast_precheck_budget_retained_reason" not in target
+
+
 def test_scanner_queue_lag_eviction_immediate_for_extreme_lag(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_QUEUE_LAG_EVICTION_MIN_SEC", "30")
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_QUEUE_LAG_EVICTION_MIN_COUNT", "3")

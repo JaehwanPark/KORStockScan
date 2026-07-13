@@ -2712,6 +2712,16 @@ def _maybe_expire_scanner_watch_for_fast_precheck_budget(
     emit_event_fn=None,
 ):
     fast_precheck_fields = dict((target or {}).get("_scanner_fast_precheck_fields") or {})
+    retention_reason = str(
+        fast_precheck_fields.get("rising_missed_signed_tape_watch_retention_reason") or ""
+    )
+    if (
+        fast_precheck_fields.get("rising_missed_signed_tape_watch_retention_recommended") is True
+        and retention_reason == "bounded_repeat_cooldown_recheck_pending"
+    ):
+        target["_scanner_fast_precheck_budget_retained_at"] = float(now_ts)
+        target["_scanner_fast_precheck_budget_retained_reason"] = retention_reason
+        return False
     decision = {
         "should_evict": True,
         "eviction_reason": "rising_missed_not_rising_budget_reallocated",

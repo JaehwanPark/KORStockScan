@@ -10400,6 +10400,26 @@ def _rising_missed_signed_tape_strong_preserve_min_source_count() -> int:
     )
 
 
+def _rising_missed_signed_tape_strong_preserve_max_count() -> int:
+    return max(
+        1,
+        min(
+            _env_int("KORSTOCKSCAN_RISING_MISSED_SIGNED_TAPE_STRONG_PRESERVE_MAX_COUNT", 3),
+            10,
+        ),
+    )
+
+
+def _rising_missed_signed_tape_strong_preserve_repeat_cooldown_sec() -> float:
+    return max(
+        5.0,
+        min(
+            _env_float("KORSTOCKSCAN_RISING_MISSED_SIGNED_TAPE_STRONG_PRESERVE_REPEAT_COOLDOWN_SEC", 60.0),
+            600.0,
+        ),
+    )
+
+
 def _rising_missed_signed_tape_strong_preserve_fields(
     stock: dict | None,
     code: str | None,
@@ -10412,6 +10432,8 @@ def _rising_missed_signed_tape_strong_preserve_fields(
     enabled = _rising_missed_signed_tape_strong_preserve_enabled()
     min_delta = _rising_missed_signed_tape_strong_preserve_min_delta_pct()
     min_source_count = _rising_missed_signed_tape_strong_preserve_min_source_count()
+    max_count = _rising_missed_signed_tape_strong_preserve_max_count()
+    repeat_cooldown_sec = _rising_missed_signed_tape_strong_preserve_repeat_cooldown_sec()
     source_signature = str(stock.get("source_signature") or "").upper()
     source_tokens = {token for token in re.split(r"[^A-Z0-9_]+", source_signature) if token}
     strong_sources = {
@@ -10427,9 +10449,19 @@ def _rising_missed_signed_tape_strong_preserve_fields(
     positive_delta = _scanner_positive_delta_pct(stock)
     state = str(ws_data.get("market_data_signed_tape_state") or "").strip().lower()
     key = _scanner_ws_stale_backoff_key(stock, code)
-    already_preserved = bool(
+    preserve_count = _safe_int(stock.get("rising_missed_signed_tape_strong_preserve_count"), 0)
+    if preserve_count <= 0 and (
         key in _RISING_MISSED_SIGNED_TAPE_PRESERVED_KEYS
         or stock.get("rising_missed_signed_tape_strong_preserve_used")
+    ):
+        preserve_count = 1
+    last_preserve_epoch = _safe_float(stock.get("rising_missed_signed_tape_strong_preserve_last_epoch"), 0.0)
+    if last_preserve_epoch <= 0.0:
+        last_preserve_epoch = _safe_float(stock.get("rising_missed_signed_tape_strong_preserve_epoch"), 0.0)
+    cooldown_remaining_sec = (
+        max(0.0, repeat_cooldown_sec - (float(now_ts) - last_preserve_epoch))
+        if last_preserve_epoch > 0.0
+        else 0.0
     )
     base = {
         "rising_missed_signed_tape_strong_preserve_enabled": bool(enabled),
@@ -10437,13 +10469,22 @@ def _rising_missed_signed_tape_strong_preserve_fields(
         "rising_missed_signed_tape_strong_preserve_reason": "not_evaluated",
         "rising_missed_signed_tape_strong_preserve_min_delta_pct": round(min_delta, 4),
         "rising_missed_signed_tape_strong_preserve_min_source_count": int(min_source_count),
+        "rising_missed_signed_tape_strong_preserve_max_count": int(max_count),
+        "rising_missed_signed_tape_strong_preserve_repeat_cooldown_sec": round(repeat_cooldown_sec, 3),
         "rising_missed_signed_tape_strong_preserve_positive_delta_pct": round(positive_delta, 4),
         "rising_missed_signed_tape_strong_preserve_source_count": int(source_count),
         "rising_missed_signed_tape_strong_preserve_source_tokens": ",".join(matched_sources) or "-",
-        "rising_missed_signed_tape_strong_preserve_already_used": bool(already_preserved),
+        "rising_missed_signed_tape_strong_preserve_count": int(preserve_count),
+        "rising_missed_signed_tape_strong_preserve_cooldown_remaining_sec": round(
+            cooldown_remaining_sec,
+            3,
+        ),
+        "rising_missed_signed_tape_strong_preserve_already_used": bool(preserve_count > 0),
+        "rising_missed_signed_tape_watch_retention_recommended": False,
+        "rising_missed_signed_tape_watch_retention_reason": "not_applicable",
         "rising_missed_signed_tape_strong_preserve_source": "market_data_signed_tape_feedback",
         "rising_missed_signed_tape_strong_preserve_decision_authority": (
-            "scanner_watch_budget_one_eval_preserve_only"
+            "scanner_watch_budget_bounded_eval_preserve_only"
         ),
         "rising_missed_signed_tape_strong_preserve_runtime_effect": False,
         "rising_missed_signed_tape_strong_preserve_forbidden_uses": (
@@ -10457,9 +10498,6 @@ def _rising_missed_signed_tape_strong_preserve_fields(
     if state != "sell_dominated":
         base["rising_missed_signed_tape_strong_preserve_reason"] = "not_sell_dominated"
         return base
-    if already_preserved:
-        base["rising_missed_signed_tape_strong_preserve_reason"] = "already_preserved_once"
-        return base
     if not _scanner_rising_entry_relief_eligible(stock):
         base["rising_missed_signed_tape_strong_preserve_reason"] = "not_rising_entry_relief_eligible"
         return base
@@ -10468,10 +10506,22 @@ def _rising_missed_signed_tape_strong_preserve_fields(
     if not (strong_by_delta or strong_by_sources):
         base["rising_missed_signed_tape_strong_preserve_reason"] = "weak_rising_signal"
         return base
+    if preserve_count >= max_count:
+        base["rising_missed_signed_tape_strong_preserve_reason"] = "max_preserve_count_reached"
+        return base
+    if cooldown_remaining_sec > 0.0:
+        base["rising_missed_signed_tape_strong_preserve_reason"] = "repeat_cooldown_active"
+        base["rising_missed_signed_tape_watch_retention_recommended"] = True
+        base["rising_missed_signed_tape_watch_retention_reason"] = (
+            "bounded_repeat_cooldown_recheck_pending"
+        )
+        return base
 
     _RISING_MISSED_SIGNED_TAPE_PRESERVED_KEYS.add(key)
     stock["rising_missed_signed_tape_strong_preserve_used"] = True
     stock["rising_missed_signed_tape_strong_preserve_epoch"] = f"{float(now_ts):.3f}"
+    stock["rising_missed_signed_tape_strong_preserve_last_epoch"] = f"{float(now_ts):.3f}"
+    stock["rising_missed_signed_tape_strong_preserve_count"] = preserve_count + 1
     base.update(
         {
             "rising_missed_signed_tape_strong_preserve_applied": True,
@@ -10480,6 +10530,7 @@ def _rising_missed_signed_tape_strong_preserve_fields(
             ),
             "rising_missed_signed_tape_strong_preserve_runtime_effect": True,
             "rising_missed_signed_tape_strong_preserve_epoch": f"{float(now_ts):.3f}",
+            "rising_missed_signed_tape_strong_preserve_count": preserve_count + 1,
         }
     )
     return base
@@ -11858,7 +11909,6 @@ def _scanner_fast_precheck_fields(
         ws_data,
         now_ts=float(now_ts),
     )
-    signed_tape_strong_preserve_fields = {}
     scanner_ws_stale_backoff_recheck_applied = _scanner_ws_stale_backoff_strong_promotion_recheck(
         stock,
         code,
@@ -11871,6 +11921,20 @@ def _scanner_fast_precheck_fields(
         ws_data,
         now_ts=float(now_ts),
     )
+    signed_tape_strong_preserve_fields = {}
+    if (
+        curr > 0
+        and not scanner_ws_stale_backoff_fields
+        and not candidate_gate_backoff_fields
+        and not submit_safety_backoff_fields
+        and not market_data_conflicted
+    ):
+        signed_tape_strong_preserve_fields = _rising_missed_signed_tape_strong_preserve_fields(
+            stock,
+            code,
+            ws_data,
+            now_ts=float(now_ts),
+        )
     if scanner_ws_stale_backoff_fields:
         result = "budget_reallocated"
         reason = "scanner_ws_stale_backoff_active"
@@ -11883,6 +11947,11 @@ def _scanner_fast_precheck_fields(
     elif submit_safety_backoff_fields:
         result = "budget_reallocated"
         reason = "submit_safety_backoff_active"
+    elif signed_tape_strong_preserve_fields.get("rising_missed_signed_tape_strong_preserve_applied"):
+        _clear_rising_missed_signed_tape_scanner_backoff(stock, code)
+        signed_tape_scanner_backoff_fields = {}
+        result = "eligible_for_heavy_entry_eval"
+        reason = "signed_tape_sell_dominated_strong_rising_preserve_once"
     elif signed_tape_scanner_backoff_fields:
         result = "budget_reallocated"
         reason = "signed_tape_sell_dominated_backoff_active"
@@ -11893,23 +11962,13 @@ def _scanner_fast_precheck_fields(
         market_data_signed_tape_state == "sell_dominated"
         and _scanner_rising_entry_relief_eligible(stock)
     ):
-        signed_tape_strong_preserve_fields = _rising_missed_signed_tape_strong_preserve_fields(
+        signed_tape_scanner_backoff_fields = _record_rising_missed_signed_tape_scanner_backoff(
             stock,
             code,
-            ws_data,
             now_ts=float(now_ts),
         )
-        if signed_tape_strong_preserve_fields.get("rising_missed_signed_tape_strong_preserve_applied"):
-            result = "eligible_for_heavy_entry_eval"
-            reason = "signed_tape_sell_dominated_strong_rising_preserve_once"
-        else:
-            signed_tape_scanner_backoff_fields = _record_rising_missed_signed_tape_scanner_backoff(
-                stock,
-                code,
-                now_ts=float(now_ts),
-            )
-            result = "budget_reallocated"
-            reason = "signed_tape_sell_dominated"
+        result = "budget_reallocated"
+        reason = "signed_tape_sell_dominated"
     elif rising_missed_fast_reject.get("scanner_rising_missed_fast_reject_candidate"):
         result = "budget_reallocated"
         reason = "rising_missed_not_rising_without_recovery_signal"

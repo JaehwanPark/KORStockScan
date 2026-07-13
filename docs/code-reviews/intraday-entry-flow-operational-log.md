@@ -315,3 +315,32 @@ This file is cumulative. Do not append every 10-minute loop result here. Loop-le
 - `runtime_effect=false`
 - `allowed_runtime_apply=false`
 - This changed report/source-quality separation only. It did not change thresholds, provider route, bot state, order submission, stale/latency/broker/account/order/quantity/cooldown guards, or hard/protect/emergency safety.
+
+## 12. 2026-07-13 Signed-Tape Preserve Bounded Recheck Guard
+
+### Decision
+
+- Candidate-gate, submit-safety, scanner WS stale, missing price, and market-data conflict states must not consume or expose `rising_missed_signed_tape_strong_preserve` fields.
+- A strong rising-missed candidate blocked only by signed-tape sell dominance can retain scanner watch budget for a bounded cooldown recheck instead of being immediately evicted.
+- Signed-tape preserve remains a bounded scanner watch-budget observation and must not become submit, threshold, provider, cap, broker, or stale-guard authority.
+
+### Change
+
+- `_scanner_fast_precheck_fields` skips signed-tape strong-preserve evaluation while higher-priority fast-precheck blockers are active, preserving source-quality and submit-safety boundaries.
+- `rising_missed_signed_tape_strong_preserve` is bounded by count and repeat cooldown. During cooldown it emits watch-retention recommendation fields, not order authority.
+- `_maybe_expire_scanner_watch_for_fast_precheck_budget` retains only targets carrying the bounded signed-tape watch-retention recommendation.
+
+### Validation
+
+- `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_sniper_scale_in.py -k "signed_tape_preserve or sell_dominated_signed_tape_reallocates_budget or submit_safety_backoff_stale_weak_reallocates"` passed with `5 passed`.
+- `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_kiwoom_sniper_market_regime_runtime.py -k "signed_tape_retention or queue_lag_eviction or retention_requires_bounded"` passed with `7 passed`.
+- `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_state_handler_fast_signatures.py -k "scanner_fast_precheck"` passed with `11 passed`.
+- `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_sniper_entry_latency.py -k "latency_false_negative_remeasure or true_ofi_direct_canary"` passed with `9 passed`.
+- `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_market_data_enrichment.py` passed with `7 passed`.
+- `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_kiwoom_market_data_contract.py` passed with `10 passed`.
+- `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/sniper_state_handlers.py src/engine/kiwoom_sniper_v2.py src/tests/test_sniper_scale_in.py src/tests/test_kiwoom_sniper_market_regime_runtime.py` passed.
+
+### Operating Boundary
+
+- `runtime_effect=false` for order/provider/threshold authority.
+- This changed scanner watch-budget retention and field emission only. It did not change thresholds, provider route, bot state, order submission, stale/latency/broker/account/order/quantity/cooldown guards, or hard/protect/emergency safety.
