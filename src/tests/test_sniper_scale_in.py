@@ -2411,6 +2411,9 @@ def test_scanner_fast_precheck_rest_enriched_quote_keeps_heavy_eval_candidate(mo
     assert fields["fast_precheck_reason"] == "rising_rest_quote_recovery_without_realtime_strength"
     assert fields["market_data_freshness_state"] == "rest_enriched"
     assert fields["fast_precheck_rest_quote_relief_applied"] is True
+    assert fields["fast_precheck_rest_supplement_status"] == "applied_rising_rest_quote_relief"
+    assert fields["fast_precheck_rest_supplement_block_reason"] == "applied_rising_rest_quote_relief"
+    assert fields["fast_precheck_stale_ws_relief_block_reason"] == "quote_not_stale"
 
 
 def test_scanner_fast_precheck_market_data_conflict_blocks_heavy_eval(monkeypatch):

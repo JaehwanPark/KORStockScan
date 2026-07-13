@@ -2741,6 +2741,39 @@ def test_without_entry_pipeline_fields_drops_explicit_authority_keys():
     assert fields == {"threshold_family": "weak_context_late_entry_guard_runtime"}
 
 
+def test_ai_confirmed_log_fields_do_not_duplicate_large_sell_kwarg():
+    captured = {}
+
+    def fake_log(*, large_sell_print_detected, **fields):
+        captured.update(fields)
+        captured["large_sell_print_detected"] = large_sell_print_detected
+
+    pre_ai_fields = _without_entry_pipeline_fields(
+        {
+            "pre_ai_gate_context_keys": "strength_momentum",
+            "large_sell_print_detected": False,
+        },
+        "large_sell_print_detected",
+    )
+    ai_confirm_fields = _without_entry_pipeline_fields(
+        _merge_entry_pipeline_field_groups(
+            {"ai_score": "72.0"},
+            {"large_sell_print_detected": False},
+        ),
+        "large_sell_print_detected",
+    )
+
+    fake_log(
+        large_sell_print_detected=True,
+        **pre_ai_fields,
+        **ai_confirm_fields,
+    )
+
+    assert captured["large_sell_print_detected"] is True
+    assert captured["pre_ai_gate_context_keys"] == "strength_momentum"
+    assert captured["ai_score"] == "72.0"
+
+
 def test_pre_submit_guard_log_fields_do_not_duplicate_authority_kwargs():
     captured = {}
 
@@ -3735,8 +3768,52 @@ def test_scanner_fast_precheck_marks_stale_snapshot_not_queued(monkeypatch):
     assert fields["heavy_queue_enter_epoch"] == "not_queued"
     assert fields["ws_received_types"] == "-"
     assert fields["ws_last_0b_age_ms"] == "not_available_realtime_type_age_ms"
+    assert fields["fast_precheck_positive_delta_pct"] == 0.0
+    assert fields["fast_precheck_rest_supplement_status"] == "rest_supplement_not_present"
+    assert fields["fast_precheck_rest_supplement_block_reason"] == "rest_supplement_not_present"
+    assert fields["fast_precheck_stale_ws_relief_block_reason"] == "rising_stale_ws_relief_disabled"
     assert stock["_scanner_fast_precheck_result"] == "stability_pending"
     assert "_scanner_heavy_queue_enter_epoch" not in stock
+
+
+def test_scanner_fast_precheck_reports_low_delta_stale_ws_relief_block(monkeypatch):
+    emitted = []
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_FULL_EVAL_MIN_DELTA_PCT", "0.1")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_STALE_WS_FULL_EVAL_RELIEF_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_STALE_WS_FULL_EVAL_MIN_DELTA_PCT", "1.0")
+    monkeypatch.setattr(handlers.time, "time", lambda: 1012.0)
+    monkeypatch.setattr(
+        handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+    stock = {
+        "id": 820,
+        "name": "STALE_LOW_DELTA",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "entry_armed_at_epoch": 1000.0,
+        "price_delta_since_first_seen_pct": "0.20",
+    }
+
+    assert handlers.emit_scanner_fast_precheck(
+        stock,
+        "000820",
+        now_ts=1012.0,
+        ws_data={"curr": 1200, "last_ws_update_ts": 1000.0},
+        throttle_sec=0,
+    )
+
+    fields = emitted[-1]["fields"]
+    assert fields["fast_precheck_result"] == "stability_pending"
+    assert fields["fast_precheck_reason"] == "stale_ws_snapshot"
+    assert fields["fast_precheck_positive_delta_pct"] == 0.2
+    assert fields["fast_precheck_stale_ws_relief_applied"] is False
+    assert fields["fast_precheck_stale_ws_relief_block_reason"] == "positive_delta_below_stale_ws_relief_min"
+    assert fields["fast_precheck_rest_supplement_status"] == "rest_supplement_not_present"
 
 
 def test_scanner_fast_precheck_holds_rest_quote_only_recovery_until_realtime_strength(monkeypatch):
@@ -3766,6 +3843,7 @@ def test_scanner_fast_precheck_holds_rest_quote_only_recovery_until_realtime_str
         now_ts=1012.0,
         ws_data={
             "curr": 1200,
+            "last_ws_update_ts": 1000.0,
             "ws_snapshot_recovery_source": "ka10001_rest_quote_fallback",
             "ws_snapshot_recovery_epoch": 1012.0,
         },
@@ -3775,6 +3853,9 @@ def test_scanner_fast_precheck_holds_rest_quote_only_recovery_until_realtime_str
     fields = emitted[-1]["fields"]
     assert fields["fast_precheck_result"] == "stability_pending"
     assert fields["fast_precheck_reason"] == "rest_quote_without_realtime_strength"
+    assert fields["fast_precheck_rest_supplement_status"] == "rest_quote_fallback_detected"
+    assert fields["fast_precheck_rest_supplement_block_reason"] == "rising_rest_quote_relief_disabled"
+    assert fields["fast_precheck_stale_ws_relief_block_reason"] == "rest_supplement_present"
     assert fields["heavy_queue_enter_epoch"] == "not_queued"
     assert stock["_scanner_fast_precheck_result"] == "stability_pending"
     assert "_scanner_heavy_queue_enter_epoch" not in stock
@@ -3944,6 +4025,9 @@ def test_scanner_fast_precheck_allows_high_delta_rest_quote_recovery(monkeypatch
     assert fields["fast_precheck_result"] == "eligible_for_heavy_entry_eval"
     assert fields["fast_precheck_reason"] == "rising_rest_quote_recovery_without_realtime_strength"
     assert fields["fast_precheck_rest_quote_relief_applied"] is True
+    assert fields["fast_precheck_rest_supplement_status"] == "applied_rising_rest_quote_relief"
+    assert fields["fast_precheck_rest_supplement_block_reason"] == "applied_rising_rest_quote_relief"
+    assert fields["fast_precheck_stale_ws_relief_block_reason"] == "quote_not_stale"
     assert fields["fast_precheck_realtime_relief_scope"] == "rising_entry_relief_only"
     assert fields["heavy_queue_enter_epoch"] == "1012.000"
     assert stock["_scanner_fast_precheck_result"] == "eligible_for_heavy_entry_eval"
@@ -3990,6 +4074,8 @@ def test_scanner_fast_precheck_blocks_rest_quote_below_promotion_anchor(monkeypa
     assert fields["fast_precheck_rest_quote_anchor_price"] == 45400
     assert fields["fast_precheck_rest_quote_anchor_gap_pct"] > 1.0
     assert fields["fast_precheck_rest_quote_consistency_status"] == "conflicts_with_scanner_promotion"
+    assert fields["fast_precheck_rest_supplement_status"] == "rest_quote_fallback_detected"
+    assert fields["fast_precheck_rest_supplement_block_reason"] == "rest_quote_conflicts_with_scanner_promotion"
     assert fields["heavy_queue_enter_epoch"] == "not_queued"
     assert stock["_scanner_fast_precheck_result"] == "stability_pending"
     assert "_scanner_heavy_queue_enter_epoch" not in stock
@@ -4033,6 +4119,9 @@ def test_scanner_fast_precheck_allows_configured_high_delta_stale_ws_relief(monk
     assert fields["fast_precheck_result"] == "eligible_for_heavy_entry_eval"
     assert fields["fast_precheck_reason"] == "rising_stale_ws_snapshot_full_eval_relief"
     assert fields["fast_precheck_stale_ws_relief_applied"] is True
+    assert fields["fast_precheck_positive_delta_pct"] == 3.4
+    assert fields["fast_precheck_stale_ws_relief_block_reason"] == "applied_rising_stale_ws_relief"
+    assert fields["fast_precheck_rest_supplement_status"] == "rest_supplement_not_present"
     assert fields["fast_precheck_realtime_relief_scope"] == "rising_entry_relief_only"
     assert fields["heavy_queue_enter_epoch"] == "1012.000"
     assert stock["_scanner_fast_precheck_result"] == "eligible_for_heavy_entry_eval"

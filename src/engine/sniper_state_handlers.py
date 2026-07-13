@@ -11711,19 +11711,25 @@ def _scanner_fast_precheck_fields(
             )
         )
     )
+    rising_entry_relief_eligible = _scanner_rising_entry_relief_eligible(stock)
+    scanner_positive_delta_pct = _scanner_positive_delta_pct(stock)
+    rest_quote_relief_enabled = _scanner_rising_rest_quote_full_eval_relief_enabled()
+    rest_quote_relief_min_delta_pct = _scanner_rising_rest_quote_full_eval_min_delta_pct()
+    stale_ws_relief_enabled = _scanner_rising_stale_ws_full_eval_relief_enabled()
+    stale_ws_relief_min_delta_pct = _scanner_rising_stale_ws_full_eval_min_delta_pct()
     rising_subscription_recheck_curr_relief = (
         quote_age_sec is not None
         and quote_age_sec > max_age_sec
         and bool(ws_data.get("scanner_subscription_recheck_entry_relief"))
         and subscription_recheck_fresh_sec > 0
         and subscription_recheck_age_sec <= subscription_recheck_fresh_sec
-        and _scanner_rising_entry_relief_eligible(stock)
+        and rising_entry_relief_eligible
     )
     rising_realtime_relief = (
         quote_age_sec is not None
         and quote_age_sec > max_age_sec
         and fresh_realtime_evidence
-        and _scanner_rising_entry_relief_eligible(stock)
+        and rising_entry_relief_eligible
     )
     rising_subscription_recheck_relief = (
         rising_subscription_recheck_curr_relief
@@ -11759,9 +11765,9 @@ def _scanner_fast_precheck_fields(
         (rest_quote_only_recovery or market_data_rest_enriched_recovery)
         and not rest_quote_promotion_conflict
         and not market_data_conflicted
-        and _scanner_rising_rest_quote_full_eval_relief_enabled()
-        and _scanner_rising_entry_relief_eligible(stock)
-        and _scanner_positive_delta_pct(stock) >= _scanner_rising_rest_quote_full_eval_min_delta_pct()
+        and rest_quote_relief_enabled
+        and rising_entry_relief_eligible
+        and scanner_positive_delta_pct >= rest_quote_relief_min_delta_pct
     )
     rising_stale_ws_relief = (
         quote_age_sec is not None
@@ -11770,10 +11776,66 @@ def _scanner_fast_precheck_fields(
         and not rising_subscription_recheck_relief
         and not rest_quote_only_recovery
         and not market_data_rest_enriched_recovery
-        and _scanner_rising_stale_ws_full_eval_relief_enabled()
-        and _scanner_rising_entry_relief_eligible(stock)
-        and _scanner_positive_delta_pct(stock) >= _scanner_rising_stale_ws_full_eval_min_delta_pct()
+        and stale_ws_relief_enabled
+        and rising_entry_relief_eligible
+        and scanner_positive_delta_pct >= stale_ws_relief_min_delta_pct
     )
+    rest_supplement_present = bool(rest_quote_only_recovery or market_data_rest_enriched_recovery)
+    stale_snapshot = quote_age_sec is not None and quote_age_sec > max_age_sec
+    if rising_rest_quote_relief:
+        rest_supplement_status = "applied_rising_rest_quote_relief"
+    elif rest_quote_only_recovery:
+        rest_supplement_status = "rest_quote_fallback_detected"
+    elif market_data_rest_enriched_recovery:
+        rest_supplement_status = "market_data_rest_enriched_detected"
+    elif str(ws_data.get("ws_snapshot_recovery_source") or "").strip() == "ka10001_rest_quote_fallback":
+        rest_supplement_status = "rest_quote_fallback_superseded_by_realtime_evidence"
+    elif market_data_freshness_state == "rest_enriched" or market_data_orderbook_state == "rest_enriched":
+        rest_supplement_status = "partial_or_superseded_market_data_rest_enrichment"
+    else:
+        rest_supplement_status = "rest_supplement_not_present"
+    if rising_rest_quote_relief:
+        rest_supplement_block_reason = "applied_rising_rest_quote_relief"
+    elif rest_quote_promotion_conflict:
+        rest_supplement_block_reason = "rest_quote_conflicts_with_scanner_promotion"
+    elif market_data_conflicted:
+        rest_supplement_block_reason = "market_data_ws_rest_conflicted"
+    elif not rest_supplement_present:
+        rest_supplement_block_reason = (
+            "rest_supplement_superseded_by_realtime_evidence"
+            if (
+                fresh_realtime_evidence
+                or subscription_recheck_fresh_realtime_evidence
+                or rest_supplement_status != "rest_supplement_not_present"
+            )
+            else "rest_supplement_not_present"
+        )
+    elif not rest_quote_relief_enabled:
+        rest_supplement_block_reason = "rising_rest_quote_relief_disabled"
+    elif not rising_entry_relief_eligible:
+        rest_supplement_block_reason = "not_rising_entry_relief_eligible"
+    elif scanner_positive_delta_pct < rest_quote_relief_min_delta_pct:
+        rest_supplement_block_reason = "positive_delta_below_rest_quote_relief_min"
+    else:
+        rest_supplement_block_reason = "rest_quote_without_realtime_strength"
+    if rising_stale_ws_relief:
+        stale_ws_relief_block_reason = "applied_rising_stale_ws_relief"
+    elif not stale_snapshot:
+        stale_ws_relief_block_reason = "quote_not_stale"
+    elif rising_realtime_relief:
+        stale_ws_relief_block_reason = "realtime_relief_applied"
+    elif rising_subscription_recheck_relief:
+        stale_ws_relief_block_reason = "subscription_recheck_relief_applied"
+    elif rest_supplement_present:
+        stale_ws_relief_block_reason = "rest_supplement_present"
+    elif not stale_ws_relief_enabled:
+        stale_ws_relief_block_reason = "rising_stale_ws_relief_disabled"
+    elif not rising_entry_relief_eligible:
+        stale_ws_relief_block_reason = "not_rising_entry_relief_eligible"
+    elif scanner_positive_delta_pct < stale_ws_relief_min_delta_pct:
+        stale_ws_relief_block_reason = "positive_delta_below_stale_ws_relief_min"
+    else:
+        stale_ws_relief_block_reason = "not_applicable_stale_ws_relief"
     rising_missed_fast_reject = _scanner_rising_missed_not_rising_fast_reject_fields(
         stock,
         ws_data,
@@ -11916,10 +11978,13 @@ def _scanner_fast_precheck_fields(
         ),
         "fast_precheck_rest_quote_relief_applied": bool(rising_rest_quote_relief),
         "fast_precheck_rest_quote_relief_min_delta_pct": (
-            round(_scanner_rising_rest_quote_full_eval_min_delta_pct(), 4)
+            round(rest_quote_relief_min_delta_pct, 4)
             if rising_rest_quote_relief
             else "not_applicable_rest_quote_relief_min_delta_pct"
         ),
+        "fast_precheck_positive_delta_pct": round(scanner_positive_delta_pct, 4),
+        "fast_precheck_rest_supplement_status": rest_supplement_status,
+        "fast_precheck_rest_supplement_block_reason": rest_supplement_block_reason,
         "fast_precheck_rest_quote_anchor_price": (
             int(rest_quote_anchor_price)
             if rest_quote_only_recovery and rest_quote_anchor_price > 0
@@ -11946,10 +12011,11 @@ def _scanner_fast_precheck_fields(
         ),
         "fast_precheck_stale_ws_relief_applied": bool(rising_stale_ws_relief),
         "fast_precheck_stale_ws_relief_min_delta_pct": (
-            round(_scanner_rising_stale_ws_full_eval_min_delta_pct(), 4)
+            round(stale_ws_relief_min_delta_pct, 4)
             if rising_stale_ws_relief
             else "not_applicable_stale_ws_relief_min_delta_pct"
         ),
+        "fast_precheck_stale_ws_relief_block_reason": stale_ws_relief_block_reason,
         "fast_precheck_ws_stale_backoff_recheck_applied": bool(
             scanner_ws_stale_backoff_recheck_applied
         ),
@@ -29238,23 +29304,8 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 ) + 1
                                 state_fields["early_accel_recheck_last_at"] = now_ts
                             _mutate_stock_state(stock, set_fields=state_fields)
-                            _log_entry_pipeline(
-                                stock,
-                                code,
-                                "ai_confirmed",
-                                action=action,
-                                vip_target=is_vip_target,
-                                **{
-                                    "ai_call_trigger_reason": ai_call_trigger_reason or "-",
-                                    **_entry_runtime_retry_exclusion_fields(ai_call_trigger_reason),
-                                },
-                                buy_pressure=f"{float(feature_probe.get('buy_pressure', 0.0) or 0.0):.2f}",
-                                tick_accel=f"{float(feature_probe.get('tick_accel', 0.0) or 0.0):.3f}",
-                                micro_vwap_bp=f"{float(feature_probe.get('micro_vwap_bp', 0.0) or 0.0):.2f}",
-                                large_sell_print_detected=bool(feature_probe.get("large_sell_print", False)),
-                                latency_state=latency_state,
-                                **_scalp_pre_ai_gate_context_log_fields(stock.get("scalp_pre_ai_gate_context")),
-                                **_merge_entry_pipeline_field_groups(
+                            ai_confirm_log_fields = _without_entry_pipeline_fields(
+                                _merge_entry_pipeline_field_groups(
                                     _build_ai_overlap_log_fields(
                                         stock=stock,
                                         ai_score=ai_score,
@@ -29273,6 +29324,29 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                         ai_cooldown_blocked=False,
                                     ),
                                 ),
+                                "large_sell_print_detected",
+                            )
+                            pre_ai_gate_log_fields = _without_entry_pipeline_fields(
+                                _scalp_pre_ai_gate_context_log_fields(stock.get("scalp_pre_ai_gate_context")),
+                                "large_sell_print_detected",
+                            )
+                            _log_entry_pipeline(
+                                stock,
+                                code,
+                                "ai_confirmed",
+                                action=action,
+                                vip_target=is_vip_target,
+                                **{
+                                    "ai_call_trigger_reason": ai_call_trigger_reason or "-",
+                                    **_entry_runtime_retry_exclusion_fields(ai_call_trigger_reason),
+                                },
+                                buy_pressure=f"{float(feature_probe.get('buy_pressure', 0.0) or 0.0):.2f}",
+                                tick_accel=f"{float(feature_probe.get('tick_accel', 0.0) or 0.0):.3f}",
+                                micro_vwap_bp=f"{float(feature_probe.get('micro_vwap_bp', 0.0) or 0.0):.2f}",
+                                large_sell_print_detected=bool(feature_probe.get("large_sell_print", False)),
+                                latency_state=latency_state,
+                                **pre_ai_gate_log_fields,
+                                **ai_confirm_log_fields,
                             )
                             _emit_scalp_entry_adm_snapshot(
                                 stock,
