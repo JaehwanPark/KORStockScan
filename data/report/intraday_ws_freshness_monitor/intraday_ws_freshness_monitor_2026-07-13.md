@@ -8,9 +8,9 @@
 
 ## Evidence
 
-- pipeline_event_count: `49680`
-- pipeline_counts: `{'scout_related': 33993, 'ws_age_observed': 6399, 'submit_related': 48, 'trade_tick_quiet': 438, 'fresh_0d_stale_0b': 342, 'both_ws_stale': 199}`
-- pipeline_rates: `{'trade_tick_quiet_rate_pct': 0.8816, 'subscription_stale_rate_pct': 0.0, 'both_ws_stale_rate_pct': 0.4006, 'provider_none_rate_pct': 0.0}`
+- pipeline_event_count: `57211`
+- pipeline_counts: `{'scout_related': 39961, 'ws_age_observed': 7194, 'submit_related': 80, 'trade_tick_quiet': 482, 'fresh_0d_stale_0b': 370, 'both_ws_stale': 329}`
+- pipeline_rates: `{'trade_tick_quiet_rate_pct': 0.8425, 'subscription_stale_rate_pct': 0.0, 'both_ws_stale_rate_pct': 0.5751, 'provider_none_rate_pct': 0.0}`
 - snapshot_summary: `{'row_count': 0, 'freshness_state_counts': {}, 'repair_reason_counts': {}, 'subscription_stale_like_count': 0, 'subscription_stale_like_rate_pct': 0.0, 'trade_tick_quiet_count': 0, 'trade_tick_quiet_rate_pct': 0.0, 'repair_recommended_count': 0, 'registered_item_quota_units': 0, 'registered_route_counts': {}, 'registered_market_suffix_counts': {}, 'multi_route_registered_count': 0, 'multi_route_registered_rate_pct': 0.0, 'route_repair_policy': 'remove_then_reg_required_for_route_transition', 'top_trade_tick_quiet_symbols': [], 'top_repair_symbols': [], 'top_multi_route_symbols': []}`
 - source_missing: `[]`
 

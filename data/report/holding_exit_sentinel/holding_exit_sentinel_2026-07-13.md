@@ -13,23 +13,23 @@
 
 ## 근거
 
-- as_of: `2026-07-13T12:15:03`
-- exit_signal unique: `7`
-- sell_order_sent unique: `1`
-- sell_completed unique: `1`
+- as_of: `2026-07-13T13:10:02`
+- exit_signal unique: `11`
+- sell_order_sent unique: `3`
+- sell_completed unique: `3`
 - real exit/sell_sent/sell_completed: `0` / `0` / `0`
-- non-real exit/sell_sent/sell_completed: `7` / `1` / `1`
-- sell_sent/exit_signal: `14.3%`
+- non-real exit/sell_sent/sell_completed: `11` / `3` / `3`
+- sell_sent/exit_signal: `27.3%`
 - real sell_sent/exit_signal: `0.0%`
-- non-real sell_sent/exit_signal: `14.3%`
+- non-real sell_sent/exit_signal: `27.3%`
 - flow defer events: `0`
 - AI holding cache MISS: `100.0%`
-- score50 origins: `{'legacy_or_unclassified_score50': 606, 'post_call_source_quality_neutralized': 47}`
+- score50 origins: `{'legacy_or_unclassified_score50': 697, 'post_call_source_quality_neutralized': 59}`
 - score50 preflight/source-quality blocked: `0`
-- score50 raw-non50 neutralized: `47`
+- score50 raw-non50 neutralized: `59`
 - soft_stop rebound above sell 10m: `95.2%`
 - trailing missed-upside: `29.5%`
-- top reasons: `AI보유감시:cache_miss=194, soft_stop_grace=45, 청산신호:scalp_soft_stop_pct=4, 청산신호:scalp_preset_hard_stop_pct=2, 청산신호:scalp_low_profit_stagnation_hard_exit=1`
+- top reasons: `AI보유감시:cache_miss=215, soft_stop_grace=49, 청산신호:scalp_soft_stop_pct=6, sell_order_sent=3, sell_completed=3`
 
 ## 금지된 자동변경
 
