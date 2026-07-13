@@ -9,8 +9,8 @@
 - panic_confirmation_policy: `portfolio stop-loss clusters are evidence; PANIC_DETECTED requires market or microstructure confirmation`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-07-13T14:14:03`
-- latest_event_at: `2026-07-13T14:14:03`
+- as_of: `2026-07-13T15:04:04`
+- latest_event_at: `2026-07-13T15:03:52`
 - reasons: `live market panic breadth risk_off advisory; market breadth risk-off watch without panic confirmation`
 
 ## 패닉 지표
@@ -47,28 +47,28 @@
 
 ## Microstructure Detector
 
-- evaluated_symbol_count: `1398`
+- evaluated_symbol_count: `1641`
 - risk_off_advisory_count: `0`
 - allow_new_long_false_count: `0`
 - panic_signal_count: `0`
 - recovery_candidate_count: `0`
 - recovery_confirmed_count: `0`
-- missing_orderbook_count: `1002`
-- degraded_orderbook_count: `1002`
-- max_panic_score: `0.4078`
-- max_recovery_score: `0.6793`
-- micro_cusum_triggered_symbol_count: `1`
+- missing_orderbook_count: `1181`
+- degraded_orderbook_count: `1181`
+- max_panic_score: `0.3015`
+- max_recovery_score: `0.6425`
+- micro_cusum_triggered_symbol_count: `2`
 - micro_consensus_pass_symbol_count: `0`
 - micro_cusum_decision_authority: `source_quality_only`
 
 ## Microstructure Market Context
 
 - market_risk_state: `RISK_OFF`
-- market_panic_breadth_as_of: `2026-07-13T14:14:01`
+- market_panic_breadth_as_of: `2026-07-13T15:04:01`
 - market_panic_breadth_source_quality_status: `ok`
 - market_panic_breadth_risk_off_advisory: `true`
 - market_panic_breadth_single_market_risk_off_advisory: `false`
-- evaluated_symbol_count: `1398`
+- evaluated_symbol_count: `1641`
 - risk_off_advisory_ratio_pct: `0`
 - confirmed_micro_risk_off_advisory: `false`
 - confirmed_risk_off_advisory: `true`
