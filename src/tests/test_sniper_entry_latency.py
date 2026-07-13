@@ -2721,6 +2721,70 @@ def test_latency_true_ofi_direct_canary_allows_near_cap_spread(monkeypatch):
     assert result["latency_true_ofi_direct_canary_max_spread_bps"] == 90.0
 
 
+def test_latency_true_ofi_direct_canary_treats_missing_tape_as_neutral(monkeypatch):
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=True,
+            SCALP_LATENCY_SPREAD_RELIEF_TAGS=("OTHER",),
+            SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED=False,
+            SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_GUARD_CANARY_ENABLED=False,
+            SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=False,
+        ),
+    )
+    now_ts = time.time()
+    monkeypatch.setattr(
+        entry_latency_module,
+        "MICRO_ESTIMATOR_STORE",
+        SimpleNamespace(
+            snapshot=lambda code, *, now_ts: {
+                "source_state": "fresh_ws_order_flow_delta",
+                "confidence": 0.91,
+                "true_ofi_ewma": 0.018,
+                "true_ofi_sample_count": 120,
+                "last_ws_ts": now_ts - 0.06,
+            }
+        ),
+    )
+
+    result = evaluate_live_buy_entry(
+        stock={
+            "name": "TEST",
+            "position_tag": "SCANNER",
+            "rising_missed_entry_lineage": True,
+            "source_signature": "LOW_REBOUND_RISING_MISSED,PRICE_JUMP_START",
+            "price_delta_since_first_seen_pct": "5.42",
+        },
+        code="123456_true_ofi_direct_canary_missing_tape",
+        ws_data={
+            "curr": 10_020,
+            "last_ws_update_ts": now_ts,
+            "orderbook_micro_state": "neutral",
+            "orderbook": {
+                "asks": [{"price": 10_080, "volume": 100}],
+                "bids": [{"price": 10_020, "volume": 100}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=2,
+        signal_price=10_000,
+        signal_strength=0.70,
+    )
+
+    assert result["decision"] == "ALLOW_NORMAL"
+    assert result["allowed"] is True
+    assert result["latency_true_ofi_direct_canary_applied"] is True
+    assert result["latency_true_ofi_direct_canary_reason"] == "direct_canary_true_ofi_false_negative_allow"
+    assert result["latency_true_ofi_direct_canary_tape_support_ok"] is True
+    assert result["latency_true_ofi_direct_canary_tape_block_reason"] == "tape_support_ok_missing_pressure"
+
+
 def test_latency_true_ofi_direct_canary_blocks_sell_dominated_tape(monkeypatch):
     monkeypatch.setattr(
         entry_latency_module,

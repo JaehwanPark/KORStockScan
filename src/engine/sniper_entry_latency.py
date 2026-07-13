@@ -1326,7 +1326,8 @@ def _latency_direct_canary_tape_pressure_fields(
         fields["latency_true_ofi_direct_canary_tape_block_reason"] = "signed_tape_sell_dominated"
         return fields
     if not pressure_usable or trusted_count < min_trusted_ticks:
-        fields["latency_true_ofi_direct_canary_tape_block_reason"] = "tape_pressure_unavailable"
+        fields["latency_true_ofi_direct_canary_tape_support_ok"] = True
+        fields["latency_true_ofi_direct_canary_tape_block_reason"] = "tape_support_ok_missing_pressure"
         return fields
     if (buy_exec_volume > 0 or sell_exec_volume > 0) and net_buy_exec_volume <= 0:
         fields["latency_true_ofi_direct_canary_tape_block_reason"] = "sell_dominated_tape"
