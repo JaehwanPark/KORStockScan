@@ -1139,6 +1139,101 @@ def test_observation_source_quality_audit_reviews_rising_missed_submit_backoff_r
     )
 
 
+def test_observation_source_quality_audit_reviews_20260713_unknown_provenance_gaps(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    common_entry_context = {
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "entry_order_flow_status": "unknown",
+        "entry_context_quality": "partial",
+        "entry_context_missing_features": "order_flow_pressure",
+    }
+    _write_events(
+        tmp_path,
+        "2026-07-13",
+        [
+            _event(
+                "rising_missed_scout_quality_guard_blocked",
+                {
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "decision_authority": "operator_runtime_override_rising_missed_scout_quality_guard",
+                    "runtime_effect": True,
+                    "source_quality_gate": "rising_missed_scout_quality_context_present",
+                    "rising_missed_submit_safety_backoff_reason": "source_quality_missing_or_unknown",
+                },
+                record_id=1,
+            ),
+            _event(
+                "rising_missed_tick_speed_entry_block",
+                {
+                    **common_entry_context,
+                    "decision_authority": "real_scalping_rising_missed_tick_speed_guard",
+                    "runtime_effect": True,
+                    "source_quality_gate": "rising_missed_tick_context_present",
+                },
+                record_id=2,
+            ),
+            _event(
+                "scalp_entry_action_decision_snapshot",
+                {
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "decision_authority": "entry_advisory_prompt_context_only",
+                    "runtime_effect": False,
+                    "source_quality_gate": "entry pipeline event + post-sell sim evaluation join when available",
+                    "entry_action_final_block_reason": "source_quality_unknown",
+                    "entry_action_final_reason": "source_quality_unknown",
+                },
+                record_id=4,
+            ),
+            _event(
+                "stat_action_decision_snapshot",
+                {
+                    "decision_authority": "sim_observation_only",
+                    "source_quality_gate": "stat_action_snapshot_source_only",
+                    "tick_context_quality": "-",
+                    "tick_latest_age_ms": "-",
+                    "quote_age_source": "missing",
+                    "quote_age_ms": "-",
+                    "shallow_tick_context_stale": "unknown",
+                    "shallow_quote_stale": "unknown",
+                },
+                record_id=3,
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-07-13")
+
+    assert report["summary"]["unknown_token_stage_count"] == 0
+    reviewed = {
+        item["stage"]: {field["field"]: field for field in item["fields"]}
+        for item in report["reviewed_unknown_token_findings"]
+    }
+    assert reviewed["rising_missed_scout_quality_guard_blocked"][
+        "rising_missed_submit_safety_backoff_reason"
+    ]["reviewed_reason"] == "reviewed_rising_missed_submit_safety_backoff_source_quality_provenance"
+    assert reviewed["rising_missed_tick_speed_entry_block"]["entry_order_flow_status"][
+        "reviewed_reason"
+    ] == "reviewed_entry_order_flow_not_available"
+    assert reviewed["scalp_entry_action_decision_snapshot"]["entry_action_final_block_reason"][
+        "reviewed_reason"
+    ] == "reviewed_entry_block_source_quality_unknown_provenance"
+    assert reviewed["scalp_entry_action_decision_snapshot"]["entry_action_final_reason"][
+        "reviewed_reason"
+    ] == "reviewed_entry_block_source_quality_unknown_provenance"
+    assert reviewed["stat_action_decision_snapshot"]["shallow_tick_context_stale"][
+        "reviewed_reason"
+    ] == "reviewed_shallow_stale_flag_not_available"
+    assert reviewed["stat_action_decision_snapshot"]["shallow_quote_stale"][
+        "reviewed_reason"
+    ] == "reviewed_shallow_stale_flag_not_available"
+
+
 def test_observation_source_quality_audit_reviews_unknown_fill_quality_without_requested_qty(
     monkeypatch,
     tmp_path,

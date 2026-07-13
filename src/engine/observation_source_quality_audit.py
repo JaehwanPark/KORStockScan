@@ -1983,7 +1983,11 @@ def _reviewed_unknown_reason_for_stage_field(
         )
 
     def _is_reviewed_entry_block_source_quality_unknown() -> bool:
-        if stage == "scalp_entry_action_decision_snapshot" and str(key or "") != "block_reason":
+        if stage == "scalp_entry_action_decision_snapshot" and str(key or "") not in {
+            "block_reason",
+            "entry_action_final_block_reason",
+            "entry_action_final_reason",
+        }:
             return False
         if stage == "real_weak_ai_micro_entry_block" and str(key or "") not in {"reason", "block_reason"}:
             return False
@@ -2025,6 +2029,49 @@ def _reviewed_unknown_reason_for_stage_field(
             "cooldown_reuse",
         } or _field_text("ai_call_skipped_reason") not in {"", "-", "none"}
 
+    def _is_reviewed_entry_order_flow_not_available() -> bool:
+        if str(key or "") != "entry_order_flow_status":
+            return False
+        if stage not in {
+            "ai_confirmed",
+            "ai_confirmed_terminal_no_budget",
+            "ai_holding_review",
+            "blocked_ai_score",
+            "order_bundle_submitted",
+            "pre_submit_entry_ai_authority_guard_block",
+            "rising_missed_tick_speed_entry_block",
+            "scalp_entry_action_decision_snapshot",
+        }:
+            return False
+        if str(value or "").strip().lower() != "unknown":
+            return False
+        context_quality = _field_text("entry_context_quality").lower()
+        missing_features = _field_text("entry_context_missing_features").lower()
+        return context_quality in {"partial", "stale", "insufficient"} and any(
+            token in missing_features
+            for token in {
+                "order_flow_pressure",
+                "quote_freshness",
+                "micro_vwap",
+                "minute_candle",
+            }
+        )
+
+    def _is_reviewed_shallow_stale_not_available() -> bool:
+        if stage not in {"loss_fallback_probe", "stat_action_decision_snapshot"}:
+            return False
+        if str(key or "") not in {"shallow_tick_context_stale", "shallow_quote_stale"}:
+            return False
+        if str(value or "").strip().lower() != "unknown":
+            return False
+        if str(key or "") == "shallow_tick_context_stale":
+            return _field_text("tick_latest_age_ms") in {"", "-"} or _field_text(
+                "tick_context_quality"
+            ) in {"", "-", "missing", "not_available"}
+        return _field_text("quote_age_ms") in {"", "-"} or _field_text(
+            "quote_age_source"
+        ) in {"", "-", "missing", "not_available_quote_age"}
+
     def _is_reviewed_first_touch_quote_stale_not_available() -> bool:
         if stage != "stop_line_touch_first_touch_avgdown_decision_blocked":
             return False
@@ -2048,6 +2095,7 @@ def _reviewed_unknown_reason_for_stage_field(
             "scalping_scanner_fast_precheck",
             "real_weak_ai_micro_entry_block",
             "pre_submit_micro_unavailable_block",
+            "rising_missed_scout_quality_guard_blocked",
         }:
             return False
         return str(value or "").strip().lower() == "source_quality_missing_or_unknown"
@@ -2086,6 +2134,10 @@ def _reviewed_unknown_reason_for_stage_field(
         return "reviewed_score_prior_neutral_unknown_not_decision_input"
     if _is_reviewed_holding_score_preflight_not_available():
         return "reviewed_holding_score_preflight_not_available"
+    if _is_reviewed_entry_order_flow_not_available():
+        return "reviewed_entry_order_flow_not_available"
+    if _is_reviewed_shallow_stale_not_available():
+        return "reviewed_shallow_stale_flag_not_available"
     if _is_reviewed_first_touch_quote_stale_not_available():
         return "reviewed_first_touch_quote_stale_not_available"
     if _is_reviewed_rising_missed_submit_safety_backoff_source_quality():
