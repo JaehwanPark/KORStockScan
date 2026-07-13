@@ -1,21 +1,21 @@
 # 2026-07-13 08:00 이후 감시대상 BUY 전 흐름
 
-- generated_at: 2026-07-13T09:00:28
+- generated_at: 2026-07-13T09:10:30
 - source_events: /home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-13.jsonl
 - source_diagnostic: /home/ubuntu/KORStockScan/data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-07-13.json
 - event_window_since: 08:00
 - event_window_until: None
-- symbol_count: 134
+- symbol_count: 146
 - rising_symbol_count_by_max_delta: 16
 - rising_missed_buy_count_in_latest_diagnostic: 9
 - rising_missed_symbol_count_in_report: 9
 - rising_missed_residual_excluding_forced_scout_symbol_count: 0
-- rising_missed_forced_scout_event_count: 2460
-- rising_missed_forced_scout_symbol_count: 81
+- rising_missed_forced_scout_event_count: 2466
+- rising_missed_forced_scout_symbol_count: 84
 - rising_missed_forced_scout_residual_symbol_count: 8
 - real_submit_symbol_count_in_latest_diagnostic: 0
 - buy_signal_or_pre_submit_pass_seen_symbols: 0
-- stale_eval_symbol_count: 131
+- stale_eval_symbol_count: 139
 - rising_stale_eval_symbol_count: 14
 - rising_fresh_only_symbol_count: 2
 - stale_refresh_recovered_symbol_count: 0
@@ -26,9 +26,9 @@
 
 ## forced scout observation
 
-- event_count: 2460
-- symbol_count: 81
-- symbols: 000500, 003160, 003670, 005290, 005300, 005380, 005440, 005490, 005500, 005810, 005930, 006400, 006650, 007390, 007660, 008930, 009150, 010140, 010950, 012330, 015760, 017960, 031980, 033100, 037710, 039440, 042660, 042700, 045100, 046890, 047050, 047920, 058470, 061090, 062040, 065350, 066570, 067080, 073240, 074600, 078350, 078600, 079550, 084370, 086520, 087010, 089890, 089970, 095500, 095610, 101730, 102710, 103590, 114810, 131290, 161890, 168360, 180640, 183300, 194700, 195870, 196170, 199800, 200670, 222800, 241710, 247540, 257720, 272210, 281820, 299030, 319660, 348370, 378340, 388210, 399720, 402340, 445090, 448900, 468530, 476830
+- event_count: 2466
+- symbol_count: 84
+- symbols: 000500, 003160, 003670, 005290, 005300, 005380, 005440, 005490, 005500, 005810, 005930, 006400, 006650, 007390, 007660, 008930, 009150, 010140, 010950, 012330, 014820, 015760, 017960, 031980, 033100, 036930, 037710, 039440, 042660, 042700, 045100, 046890, 047050, 047920, 058470, 061090, 062040, 065350, 066570, 067080, 073240, 074600, 078350, 078600, 079550, 084370, 086520, 087010, 089890, 089970, 095500, 095610, 101730, 102710, 103590, 114810, 131290, 144960, 161890, 168360, 180640, 183300, 194700, 195870, 196170, 199800, 200670, 222800, 241710, 247540, 257720, 272210, 281820, 299030, 319660, 348370, 378340, 388210, 399720, 402340, 445090, 448900, 468530, 476830
 - rising_missed_residual_symbols: 005500, 045100, 067080, 089970, 101730, 195870, 196170, 399720
 - rising_missed_residual_excluding_forced_scout_symbols: -
 - decision_authority: source_quality_only
@@ -36,34 +36,35 @@
 
 ## blocker rollup
 
-- 63: `scalping_scanner_watching_runtime_skip` / `ws_snapshot_missing_or_zero`
-- 62: `scalping_scanner_runtime_target_attach` / `new_watching_target_attached`
+- 72: `scalping_scanner_watching_runtime_skip` / `ws_snapshot_missing_or_zero`
+- 64: `scalping_scanner_runtime_target_attach` / `new_watching_target_attached`
 - 4: `scalping_scanner_watching_runtime_skip` / `scanner_fast_precheck_stability_pending`
 - 1: `scalping_scanner_watching_runtime_skip` / `entry_cooldown_active`
 - 1: `scalping_scanner_runtime_target_attach` / `operator_manual_control_excluded_symbol`
 - 1: `scalping_scanner_watching_runtime_skip` / `scanner_full_eval_loop_budget_deferred`
 - 1: `scalping_scanner_watching_runtime_skip` / `scanner_fast_precheck_budget_reallocated`
+- 1: `scalping_scanner_runtime_target_attach` / `scalping_dynamic_watch_cap_capacity`
 - 1: `scalping_scanner_runtime_target_attach` / `-`
 
 ## blocker taxonomy
 
-- 306: `strategy_reject`
-- 165: `watch_budget_reallocated`
-- 144: `source_freshness_recovering`
-- 81: `source_freshness_evictable`
-- 52: `runtime_backpressure`
+- 318: `strategy_reject`
+- 164: `watch_budget_reallocated`
+- 162: `source_freshness_recovering`
+- 84: `source_freshness_evictable`
+- 51: `runtime_backpressure`
 - 9: `intended_guard`
 
 ## suppressed non-major blocker counts
 
-- 149: `strategy_reject` / `scalping_scanner_runtime_target_attach` / `new_watching_target_attached`
-- 144: `source_freshness_recovering` / `scalping_scanner_watching_runtime_skip` / `ws_snapshot_missing_or_zero`
+- 162: `source_freshness_recovering` / `scalping_scanner_watching_runtime_skip` / `ws_snapshot_missing_or_zero`
+- 161: `strategy_reject` / `scalping_scanner_runtime_target_attach` / `new_watching_target_attached`
 - 88: `strategy_reject` / `scalping_scanner_watching_runtime_skip` / `scanner_fast_precheck_budget_reallocated`
-- 81: `source_freshness_evictable` / `scalping_scanner_watching_runtime_skip` / `ws_snapshot_missing_or_zero`
-- 81: `watch_budget_reallocated` / `scalping_scanner_watch_eviction` / `rising_missed_not_rising_budget_reallocated`
+- 84: `source_freshness_evictable` / `scalping_scanner_watching_runtime_skip` / `ws_snapshot_missing_or_zero`
+- 80: `watch_budget_reallocated` / `scalping_scanner_watch_eviction` / `rising_missed_not_rising_budget_reallocated`
 - 68: `watch_budget_reallocated` / `scalping_scanner_watch_eviction` / `scanner_queue_lag_budget_reallocated`
-- 63: `strategy_reject` / `scalping_scanner_watching_runtime_skip` / `scanner_fast_precheck_stability_pending`
-- 52: `runtime_backpressure` / `scalping_scanner_watching_runtime_skip` / `scanner_full_eval_loop_budget_deferred`
+- 62: `strategy_reject` / `scalping_scanner_watching_runtime_skip` / `scanner_fast_precheck_stability_pending`
+- 51: `runtime_backpressure` / `scalping_scanner_watching_runtime_skip` / `scanner_full_eval_loop_budget_deferred`
 - 14: `watch_budget_reallocated` / `scalping_scanner_watch_eviction` / `stale_recovery_failed`
 - 8: `intended_guard` / `scalping_scanner_runtime_target_attach` / `operator_manual_control_excluded_symbol`
 - 3: `strategy_reject` / `scalping_scanner_runtime_target_attach` / `existing_watching_refreshed`
@@ -91,13 +92,13 @@
 
 ## stale-eval rollup
 
-- 79: `scalping_scanner_watching_runtime_skip`
-- 52: `scalping_scanner_fast_precheck`
+- 88: `scalping_scanner_watching_runtime_skip`
+- 51: `scalping_scanner_fast_precheck`
 
 ## stale-eval category rollup
 
-- 79: `ws_snapshot_missing_or_zero`
-- 52: `diagnostic_quote_age_stale`
+- 88: `ws_snapshot_missing_or_zero`
+- 51: `diagnostic_quote_age_stale`
 
 ## rising missed submit-safety decomposition
 
@@ -154,12 +155,12 @@
 |삼진제약(005500)|08:20:58|08:39:34|rising|2.12%|2.12%|`scalping_scanner_watching_runtime_skip`/ws_snapshot_missing_or_zero|non_actionable_guard_or_backpressure|7|0|ws_snapshot_missing_or_zero|13734.0|-||0|08:20:58 scalping_scanner_candidate_promoted(+0.00%) -> 08:20:58 scalping_scanner_runtime_target_attach(+0.00%) -> 08:21:07 scalping_scanner_watching_runtime_skip:ws_snapshot_missing_or_zero(+0.00%) -> 08:21:30 scalping_scanner_promotion_latency_trace(+0.00%) -> ... -> 08:39:34 scalping_scanner_fast_precheck(+2.12%) -> 08:39:34 scalping_scanner_runtime_queue_lag(+2.12%) -> 08:39:34 scalping_scanner_watch_eviction:scanner_queue_lag_budget_reallocated(+2.12%)|
 |한솔아이원스(114810)|08:12:20|08:27:16|rising|1.35%|1.35%|`scalping_scanner_watching_runtime_skip`/ws_snapshot_missing_or_zero|non_actionable_guard_or_backpressure|9|0|ws_snapshot_missing_or_zero|5575.0|-||0|08:12:20 scalping_scanner_candidate_promoted(+0.00%) -> 08:12:20 scalping_scanner_runtime_target_attach(+0.00%) -> 08:12:26 scalping_scanner_watching_runtime_skip:ws_snapshot_missing_or_zero(+0.00%) -> 08:13:54 scalping_scanner_watch_eviction:stale_recovery_failed(+0.00%) -> ... -> 08:27:16 scalping_scanner_fast_precheck(+1.35%) -> 08:27:16 scalping_scanner_runtime_queue_lag(+1.35%) -> 08:27:16 scalping_scanner_watch_eviction:scanner_queue_lag_budget_reallocated(+1.35%)|
 |알테오젠(196170)|08:05:25|08:24:40|rising|1.23%|1.23%|`scalping_scanner_watching_runtime_skip`/ws_snapshot_missing_or_zero|non_actionable_guard_or_backpressure|9|0|ws_snapshot_missing_or_zero|14526.0|-||0|08:05:25 scalping_scanner_candidate_promoted(+0.00%) -> 08:05:25 scalping_scanner_runtime_target_attach -> 08:05:25 scalping_scanner_watching_runtime_skip:ws_snapshot_missing_or_zero(+0.00%) -> 08:05:49 scalping_scanner_promotion_latency_trace(+0.00%) -> ... -> 08:24:39 scalping_scanner_watch_eviction:rising_missed_not_rising_budget_reallocated(+1.23%) -> 08:24:40 scalping_scanner_watching_runtime_skip:ws_snapshot_missing_or_zero_recovered(+1.23%) -> 08:24:40 scalping_scanner_watching_runtime_skip:scanner_fast_precheck_budget_reallocated(+1.23%)|
-|LS ELECTRIC(010120)|08:00:03|09:00:27|rising|0.71%|0.71%|`scalping_scanner_runtime_target_attach`/operator_manual_control_excluded_symbol|non_actionable_guard_or_backpressure|0|0|-||-||0|08:00:03 scalping_scanner_runtime_target_attach -> 08:17:31 scalping_scanner_candidate_promoted(+0.00%) -> 08:17:31 scalping_scanner_runtime_target_attach(+0.00%) -> 08:36:31 scalping_scanner_candidate_promoted(+0.71%) -> 08:36:31 scalping_scanner_runtime_target_attach(+0.71%)|
+|LS ELECTRIC(010120)|08:00:03|09:06:19|rising|0.71%|0.71%|`scalping_scanner_runtime_target_attach`/operator_manual_control_excluded_symbol|non_actionable_guard_or_backpressure|0|0|-||-||0|08:00:03 scalping_scanner_runtime_target_attach -> 08:17:31 scalping_scanner_candidate_promoted(+0.00%) -> 08:17:31 scalping_scanner_runtime_target_attach(+0.00%) -> 08:36:31 scalping_scanner_candidate_promoted(+0.71%) -> 08:36:31 scalping_scanner_runtime_target_attach(+0.71%)|
 |한국카본(017960)|08:22:42|08:29:07|rising|0.58%|0.58%|`scalping_scanner_runtime_target_attach`/new_watching_target_attached|non_actionable_guard_or_backpressure|4|0|diagnostic_quote_age_stale|5040.0|-||0|08:22:42 scalping_scanner_candidate_promoted(+0.00%) -> 08:22:42 scalping_scanner_runtime_target_attach(+0.00%) -> 08:22:46 scalping_scanner_promotion_latency_trace(+0.00%) -> 08:22:46 scalping_scanner_fast_precheck(+0.00%) -> ... -> 08:29:07 scalping_scanner_fast_precheck(+0.58%) -> 08:29:07 scalping_scanner_runtime_queue_lag(+0.58%) -> 08:29:07 scalping_scanner_watch_eviction:scanner_queue_lag_budget_reallocated(+0.58%)|
 |미래나노텍(095500)|08:07:10|08:09:35|rising|0.51%|0.51%|`scalping_scanner_runtime_target_attach`/new_watching_target_attached|non_actionable_guard_or_backpressure|5|0|diagnostic_quote_age_stale|14250.0|-||0|08:07:10 scalping_scanner_candidate_promoted(+0.00%) -> 08:07:10 scalping_scanner_runtime_target_attach(+0.00%) -> 08:07:26 scalping_scanner_promotion_latency_trace(+0.00%) -> 08:07:26 scalping_scanner_fast_precheck(+0.00%) -> ... -> 08:09:34 scalping_scanner_fast_precheck(+0.51%) -> 08:09:34 scalping_scanner_watch_eviction:rising_missed_not_rising_budget_reallocated(+0.51%) -> 08:09:35 scalping_scanner_watching_runtime_skip:scanner_fast_precheck_budget_reallocated(+0.51%)|
 |한국콜마(161890)|08:12:20|08:54:14|rising|0.45%|0.45%|`scalping_scanner_watching_runtime_skip`/scanner_fast_precheck_stability_pending|non_actionable_guard_or_backpressure|21|0|diagnostic_quote_age_stale|14822.0|-||0|08:12:20 scalping_scanner_candidate_promoted(+0.00%) -> 08:12:20 scalping_scanner_runtime_target_attach(+0.00%) -> 08:12:26 scalping_scanner_watching_runtime_skip:ws_snapshot_missing_or_zero(+0.00%) -> 08:12:40 scalping_scanner_promotion_latency_trace(+0.00%) -> ... -> 08:54:09 scalping_scanner_runtime_queue_lag(+0.45%) -> 08:54:14 scalping_scanner_promotion_latency_trace(+0.45%) -> 08:54:14 scalping_scanner_fast_precheck(+0.45%)|
 |피에스케이(319660)|08:08:52|08:54:14|rising|0.35%|0.35%|`scalping_scanner_watching_runtime_skip`/scanner_fast_precheck_stability_pending|non_actionable_guard_or_backpressure|22|0|diagnostic_quote_age_stale|11505.0|-||0|08:08:52 scalping_scanner_candidate_promoted(+0.00%) -> 08:08:52 scalping_scanner_runtime_target_attach(+0.00%) -> 08:09:08 scalping_scanner_watching_runtime_skip:ws_snapshot_missing_or_zero(+0.00%) -> 08:09:16 scalping_scanner_promotion_latency_trace(+0.00%) -> ... -> 08:54:09 scalping_scanner_fast_precheck(+0.35%) -> 08:54:14 scalping_scanner_promotion_latency_trace(+0.35%) -> 08:54:14 scalping_scanner_fast_precheck(+0.35%)|
-|알지노믹스(476830)|08:14:04|08:21:30|rising|0.15%|0.15%|`scalping_scanner_watching_runtime_skip`/ws_snapshot_missing_or_zero|non_actionable_guard_or_backpressure|4|0|ws_snapshot_missing_or_zero|6720.0|-||0|08:14:04 scalping_scanner_candidate_promoted(+0.00%) -> 08:14:04 scalping_scanner_runtime_target_attach(+0.00%) -> 08:14:05 scalping_scanner_watching_runtime_skip:ws_snapshot_missing_or_zero(+0.00%) -> 08:14:56 scalping_scanner_promotion_latency_trace(+0.00%) -> ... -> 08:21:30 scalping_scanner_runtime_queue_lag(+0.15%) -> 08:21:30 scalping_scanner_watch_eviction:rising_missed_not_rising_budget_reallocated(+0.15%) -> 08:21:30 scalping_scanner_watching_runtime_skip:scanner_fast_precheck_budget_reallocated(+0.15%)|
+|알지노믹스(476830)|08:14:04|09:08:08|rising|0.15%|0.00%|`scalping_scanner_watching_runtime_skip`/ws_snapshot_missing_or_zero|non_actionable_guard_or_backpressure|6|0|ws_snapshot_missing_or_zero|6720.0|-||0|08:14:04 scalping_scanner_candidate_promoted(+0.00%) -> 08:14:04 scalping_scanner_runtime_target_attach(+0.00%) -> 08:14:05 scalping_scanner_watching_runtime_skip:ws_snapshot_missing_or_zero(+0.00%) -> 08:14:56 scalping_scanner_promotion_latency_trace(+0.00%) -> ... -> 09:06:27 scalping_scanner_runtime_queue_lag(+0.00%) -> 09:08:08 scalping_scanner_promotion_latency_trace(+0.00%) -> 09:08:08 scalping_scanner_heavy_eval_lag(+0.00%)|
 |일진전기(103590)|08:05:25|08:40:31|flat_or_falling|0.00%|0.00%|`scalping_scanner_watching_runtime_skip`/ws_snapshot_missing_or_zero|non_actionable_guard_or_backpressure|7|0|diagnostic_quote_age_stale|4010.0|-||0|08:05:25 scalping_scanner_candidate_promoted(+0.00%) -> 08:05:25 scalping_scanner_runtime_target_attach(+0.00%) -> 08:05:25 scalping_scanner_watching_runtime_skip:ws_snapshot_missing_or_zero(+0.00%) -> 08:05:46 scalping_scanner_promotion_latency_trace(+0.00%) -> ... -> 08:40:31 scalping_scanner_runtime_queue_lag(+0.00%) -> 08:40:31 scalping_scanner_watch_eviction:rising_missed_not_rising_budget_reallocated(+0.00%) -> 08:40:31 scalping_scanner_watching_runtime_skip:scanner_fast_precheck_budget_reallocated(+0.00%)|
 |제룡전기(033100)|08:05:25|08:35:08|flat_or_falling|0.00%|0.00%|`scalping_scanner_watching_runtime_skip`/ws_snapshot_missing_or_zero|non_actionable_guard_or_backpressure|7|0|diagnostic_quote_age_stale|14316.0|-||0|08:05:25 scalping_scanner_candidate_promoted(+0.00%) -> 08:05:25 scalping_scanner_runtime_target_attach(+0.00%) -> 08:05:25 scalping_scanner_watching_runtime_skip:ws_snapshot_missing_or_zero(+0.00%) -> 08:05:46 scalping_scanner_promotion_latency_trace(+0.00%) -> ... -> 08:35:08 scalping_scanner_fast_precheck(+0.00%) -> 08:35:08 scalping_scanner_runtime_queue_lag(+0.00%) -> 08:35:08 scalping_scanner_watch_eviction:scanner_queue_lag_budget_reallocated(+0.00%)|
 |피에스케이홀딩스(031980)|08:05:25|08:07:03|flat_or_falling|0.00%|0.00%|`scalping_scanner_watching_runtime_skip`/ws_snapshot_missing_or_zero|non_actionable_guard_or_backpressure|4|0|ws_snapshot_missing_or_zero|3722.0|-||0|08:05:25 scalping_scanner_candidate_promoted(+0.00%) -> 08:05:25 scalping_scanner_runtime_target_attach(+0.00%) -> 08:05:25 scalping_scanner_watching_runtime_skip:ws_snapshot_missing_or_zero(+0.00%) -> 08:05:46 scalping_scanner_promotion_latency_trace(+0.00%) -> ... -> 08:07:03 scalping_scanner_fast_precheck(+0.00%) -> 08:07:03 scalping_scanner_runtime_queue_lag(+0.00%) -> 08:07:03 scalping_scanner_watch_eviction:scanner_queue_lag_budget_reallocated(+0.00%)|
@@ -172,9 +173,9 @@
 |서울반도체(046890)|08:05:25|08:38:04|flat_or_falling|0.00%|0.00%|`scalping_scanner_watching_runtime_skip`/ws_snapshot_missing_or_zero|non_actionable_guard_or_backpressure|12|0|diagnostic_quote_age_stale|14542.0|-||0|08:05:25 scalping_scanner_candidate_promoted(+0.00%) -> 08:05:25 scalping_scanner_runtime_target_attach(+0.00%) -> 08:05:25 scalping_scanner_watching_runtime_skip:ws_snapshot_missing_or_zero(+0.00%) -> 08:05:49 scalping_scanner_promotion_latency_trace(+0.00%) -> ... -> 08:38:04 scalping_scanner_fast_precheck(+0.00%) -> 08:38:04 scalping_scanner_runtime_queue_lag(+0.00%) -> 08:38:04 scalping_scanner_watch_eviction:scanner_queue_lag_budget_reallocated(+0.00%)|
 |코세스(089890)|08:07:10|08:39:58|flat_or_falling|0.00%|0.00%|`scalping_scanner_runtime_target_attach`/new_watching_target_attached|non_actionable_guard_or_backpressure|3|0|diagnostic_quote_age_stale|8128.0|-||0|08:07:10 scalping_scanner_candidate_promoted(+0.00%) -> 08:07:10 scalping_scanner_runtime_target_attach(+0.00%) -> 08:07:13 scalping_scanner_promotion_latency_trace(+0.00%) -> 08:07:13 scalping_scanner_fast_precheck(+0.00%) -> ... -> 08:08:03 scalping_scanner_watching_runtime_skip:scanner_fast_precheck_budget_reallocated(+0.00%) -> 08:39:58 scalping_scanner_candidate_observed -> 08:39:58 scalping_scanner_real_source_guard_block|
 |삼성SDI(006400)|08:07:10|08:08:03|flat_or_falling|0.00%|0.00%|`scalping_scanner_runtime_target_attach`/new_watching_target_attached|non_actionable_guard_or_backpressure|3|0|diagnostic_quote_age_stale|7973.0|-||0|08:07:10 scalping_scanner_candidate_promoted(+0.00%) -> 08:07:10 scalping_scanner_runtime_target_attach(+0.00%) -> 08:07:13 scalping_scanner_promotion_latency_trace(+0.00%) -> 08:07:13 scalping_scanner_fast_precheck(+0.00%) -> ... -> 08:08:03 scalping_scanner_runtime_queue_lag(+0.00%) -> 08:08:03 scalping_scanner_watch_eviction:rising_missed_not_rising_budget_reallocated(+0.00%) -> 08:08:03 scalping_scanner_watching_runtime_skip:scanner_fast_precheck_budget_reallocated(+0.00%)|
-|테스(095610)|08:07:10|08:39:22|flat_or_falling|0.00%|0.00%|`scalping_scanner_runtime_target_attach`/new_watching_target_attached|non_actionable_guard_or_backpressure|6|0|diagnostic_quote_age_stale|11512.0|-||0|08:07:10 scalping_scanner_candidate_promoted(+0.00%) -> 08:07:10 scalping_scanner_runtime_target_attach(+0.00%) -> 08:07:13 scalping_scanner_promotion_latency_trace(+0.00%) -> 08:07:13 scalping_scanner_fast_precheck(+0.00%) -> ... -> 08:39:22 scalping_scanner_fast_precheck(+0.00%) -> 08:39:22 scalping_scanner_runtime_queue_lag(+0.00%) -> 08:39:22 scalping_scanner_watch_eviction:scanner_queue_lag_budget_reallocated(+0.00%)|
+|테스(095610)|08:07:10|09:06:43|flat_or_falling|0.00%|0.00%|`scalping_scanner_runtime_target_attach`/new_watching_target_attached|non_actionable_guard_or_backpressure|8|0|diagnostic_quote_age_stale|11512.0|-||0|08:07:10 scalping_scanner_candidate_promoted(+0.00%) -> 08:07:10 scalping_scanner_runtime_target_attach(+0.00%) -> 08:07:13 scalping_scanner_promotion_latency_trace(+0.00%) -> 08:07:13 scalping_scanner_fast_precheck(+0.00%) -> ... -> 09:06:27 scalping_scanner_runtime_queue_lag(+0.00%) -> 09:06:43 scalping_scanner_promotion_latency_trace(+0.00%) -> 09:06:43 scalping_scanner_heavy_eval_lag(+0.00%)|
 |티에스이(131290)|08:07:10|08:38:38|flat_or_falling|0.00%|0.00%|`scalping_scanner_runtime_target_attach`/new_watching_target_attached|non_actionable_guard_or_backpressure|5|0|diagnostic_quote_age_stale|16365.0|-||0|08:07:10 scalping_scanner_candidate_promoted(+0.00%) -> 08:07:10 scalping_scanner_runtime_target_attach(+0.00%) -> 08:07:13 scalping_scanner_promotion_latency_trace(+0.00%) -> 08:07:13 scalping_scanner_fast_precheck(+0.00%) -> ... -> 08:38:38 scalping_scanner_runtime_queue_lag(+0.00%) -> 08:38:38 scalping_scanner_watch_eviction:rising_missed_not_rising_budget_reallocated(+0.00%) -> 08:38:38 scalping_scanner_watching_runtime_skip:scanner_fast_precheck_budget_reallocated(+0.00%)|
-|LG전자(066570)|08:07:10|08:08:03|flat_or_falling|0.00%|0.00%|`scalping_scanner_runtime_target_attach`/new_watching_target_attached|non_actionable_guard_or_backpressure|3|0|diagnostic_quote_age_stale|7864.0|-||0|08:07:10 scalping_scanner_candidate_promoted(+0.00%) -> 08:07:10 scalping_scanner_runtime_target_attach(+0.00%) -> 08:07:13 scalping_scanner_promotion_latency_trace(+0.00%) -> 08:07:13 scalping_scanner_fast_precheck(+0.00%) -> ... -> 08:08:03 scalping_scanner_runtime_queue_lag(+0.00%) -> 08:08:03 scalping_scanner_watch_eviction:rising_missed_not_rising_budget_reallocated(+0.00%) -> 08:08:03 scalping_scanner_watching_runtime_skip:scanner_fast_precheck_budget_reallocated(+0.00%)|
+|LG전자(066570)|08:07:10|09:06:27|flat_or_falling|0.00%|0.00%|`scalping_scanner_runtime_target_attach`/new_watching_target_attached|non_actionable_guard_or_backpressure|5|0|diagnostic_quote_age_stale|7864.0|-||0|08:07:10 scalping_scanner_candidate_promoted(+0.00%) -> 08:07:10 scalping_scanner_runtime_target_attach(+0.00%) -> 08:07:13 scalping_scanner_promotion_latency_trace(+0.00%) -> 08:07:13 scalping_scanner_fast_precheck(+0.00%) -> ... -> 09:06:27 scalping_scanner_runtime_queue_lag(+0.00%) -> 09:06:27 scalping_scanner_promotion_latency_trace(+0.00%) -> 09:06:27 scalping_scanner_heavy_eval_lag(+0.00%)|
 |하나기술(299030)|08:07:10|08:47:29|flat_or_falling|0.00%|-1.71%|`scalping_scanner_runtime_target_attach`/new_watching_target_attached|non_actionable_guard_or_backpressure|4|0|diagnostic_quote_age_stale|14727.0|-||0|08:07:10 scalping_scanner_candidate_promoted(+0.00%) -> 08:07:10 scalping_scanner_runtime_target_attach(+0.00%) -> 08:07:26 scalping_scanner_promotion_latency_trace(+0.00%) -> 08:07:26 scalping_scanner_fast_precheck(+0.00%) -> ... -> 08:47:29 scalping_scanner_fast_precheck(-1.71%) -> 08:47:29 scalping_scanner_promotion_latency_trace(-1.71%) -> 08:47:29 scalping_scanner_heavy_eval_lag(-1.71%)|
 |펩트론(087010)|08:07:10|08:39:27|flat_or_falling|0.00%|0.00%|`scalping_scanner_runtime_target_attach`/new_watching_target_attached|non_actionable_guard_or_backpressure|1|0|diagnostic_quote_age_stale|3576.0|-||0|08:07:10 scalping_scanner_candidate_promoted(+0.00%) -> 08:07:10 scalping_scanner_runtime_target_attach(+0.00%) -> 08:07:13 scalping_scanner_promotion_latency_trace(+0.00%) -> 08:07:13 scalping_scanner_fast_precheck(+0.00%) -> ... -> 08:39:27 scalping_scanner_fast_precheck(+0.00%) -> 08:39:27 scalping_scanner_runtime_queue_lag(+0.00%) -> 08:39:27 scalping_scanner_watch_eviction:scanner_queue_lag_budget_reallocated(+0.00%)|
 |엔켐(348370)|08:07:10|08:33:32|flat_or_falling|0.00%|0.00%|`scalping_scanner_runtime_target_attach`/new_watching_target_attached|non_actionable_guard_or_backpressure|4|0|diagnostic_quote_age_stale|14331.0|-||0|08:07:10 scalping_scanner_candidate_promoted(+0.00%) -> 08:07:10 scalping_scanner_runtime_target_attach(+0.00%) -> 08:07:26 scalping_scanner_promotion_latency_trace(+0.00%) -> 08:07:26 scalping_scanner_fast_precheck(+0.00%) -> ... -> 08:33:32 scalping_scanner_runtime_queue_lag(+0.00%) -> 08:33:32 scalping_scanner_watch_eviction:rising_missed_not_rising_budget_reallocated(+0.00%) -> 08:33:32 scalping_scanner_watching_runtime_skip:scanner_fast_precheck_budget_reallocated(+0.00%)|
@@ -219,7 +220,7 @@
 |포스코인터내셔널(047050)|08:15:47|08:17:58|flat_or_falling|0.00%|0.00%|`scalping_scanner_watching_runtime_skip`/ws_snapshot_missing_or_zero|non_actionable_guard_or_backpressure|5|0|ws_snapshot_missing_or_zero|8069.0|-||0|08:15:47 scalping_scanner_candidate_promoted(+0.00%) -> 08:15:47 scalping_scanner_runtime_target_attach(+0.00%) -> 08:15:52 scalping_scanner_watching_runtime_skip:ws_snapshot_missing_or_zero(+0.00%) -> 08:16:26 scalping_scanner_promotion_latency_trace(+0.00%) -> ... -> 08:17:58 scalping_scanner_fast_precheck(+0.00%) -> 08:17:58 scalping_scanner_runtime_queue_lag(+0.00%) -> 08:17:58 scalping_scanner_watch_eviction:scanner_queue_lag_budget_reallocated(+0.00%)|
 |노바렉스(194700)|08:17:31|08:29:17|flat_or_falling|0.00%|-3.88%|`scalping_scanner_watching_runtime_skip`/ws_snapshot_missing_or_zero|non_actionable_guard_or_backpressure|7|0|diagnostic_quote_age_stale|6838.0|-||0|08:17:31 scalping_scanner_candidate_promoted(+0.00%) -> 08:17:31 scalping_scanner_runtime_target_attach(+0.00%) -> 08:17:41 scalping_scanner_watching_runtime_skip:ws_snapshot_missing_or_zero(+0.00%) -> 08:17:51 scalping_scanner_promotion_latency_trace(+0.00%) -> ... -> 08:29:17 scalping_scanner_fast_precheck(-3.88%) -> 08:29:17 scalping_scanner_runtime_queue_lag(-3.88%) -> 08:29:17 scalping_scanner_watch_eviction:scanner_queue_lag_budget_reallocated(-3.88%)|
 |POSCO홀딩스(005490)|08:17:31|08:24:55|flat_or_falling|0.00%|0.00%|`scalping_scanner_runtime_target_attach`/new_watching_target_attached|non_actionable_guard_or_backpressure|4|0|diagnostic_quote_age_stale|3720.0|-||0|08:17:31 scalping_scanner_candidate_promoted(+0.00%) -> 08:17:31 scalping_scanner_runtime_target_attach(+0.00%) -> 08:17:41 scalping_scanner_watching_runtime_skip:ws_snapshot_missing_or_zero(+0.00%) -> 08:17:51 scalping_scanner_promotion_latency_trace(+0.00%) -> ... -> 08:24:55 scalping_scanner_fast_precheck(+0.00%) -> 08:24:55 scalping_scanner_runtime_queue_lag(+0.00%) -> 08:24:55 scalping_scanner_watch_eviction:scanner_queue_lag_budget_reallocated(+0.00%)|
-|금호타이어(073240)|08:19:15|08:21:30|flat_or_falling|0.00%|-0.76%|`scalping_scanner_runtime_target_attach`/new_watching_target_attached|non_actionable_guard_or_backpressure|5|0|diagnostic_quote_age_stale|9152.0|-||0|08:19:15 scalping_scanner_candidate_promoted(+0.00%) -> 08:19:15 scalping_scanner_runtime_target_attach(+0.00%) -> 08:19:19 scalping_scanner_watching_runtime_skip:ws_snapshot_missing_or_zero(+0.00%) -> 08:19:23 scalping_scanner_promotion_latency_trace(+0.00%) -> ... -> 08:21:30 scalping_scanner_fast_precheck(-0.76%) -> 08:21:30 scalping_scanner_runtime_queue_lag(-0.76%) -> 08:21:30 scalping_scanner_watch_eviction:rising_missed_not_rising_budget_reallocated(-0.76%)|
+|금호타이어(073240)|08:19:15|09:06:27|flat_or_falling|0.00%|0.00%|`scalping_scanner_watching_runtime_skip`/ws_snapshot_missing_or_zero|non_actionable_guard_or_backpressure|7|0|ws_snapshot_missing_or_zero|9152.0|-||0|08:19:15 scalping_scanner_candidate_promoted(+0.00%) -> 08:19:15 scalping_scanner_runtime_target_attach(+0.00%) -> 08:19:19 scalping_scanner_watching_runtime_skip:ws_snapshot_missing_or_zero(+0.00%) -> 08:19:23 scalping_scanner_promotion_latency_trace(+0.00%) -> ... -> 09:06:27 scalping_scanner_promotion_latency_trace(+0.00%) -> 09:06:27 scalping_scanner_fast_precheck(+0.00%) -> 09:06:27 scalping_scanner_runtime_queue_lag(+0.00%)|
 |가온전선(000500)|08:19:15|08:25:07|flat_or_falling|0.00%|0.00%|`scalping_scanner_runtime_target_attach`/new_watching_target_attached|non_actionable_guard_or_backpressure|2|0|ws_snapshot_missing_or_zero|8376.0|-||0|08:19:15 scalping_scanner_candidate_promoted(+0.00%) -> 08:19:15 scalping_scanner_runtime_target_attach(+0.00%) -> 08:19:19 scalping_scanner_watching_runtime_skip:ws_snapshot_missing_or_zero(+0.00%) -> 08:19:20 scalping_scanner_promotion_latency_trace(+0.00%) -> ... -> 08:25:07 scalping_scanner_fast_precheck(+0.00%) -> 08:25:07 scalping_scanner_runtime_queue_lag(+0.00%) -> 08:25:07 scalping_scanner_watch_eviction:scanner_queue_lag_budget_reallocated(+0.00%)|
 |리노공업(058470)|08:19:15|08:30:14|flat_or_falling|0.00%|0.00%|`scalping_scanner_watching_runtime_skip`/ws_snapshot_missing_or_zero|non_actionable_guard_or_backpressure|3|0|ws_snapshot_missing_or_zero|3887.0|-||0|08:19:15 scalping_scanner_candidate_promoted(+0.00%) -> 08:19:15 scalping_scanner_runtime_target_attach(+0.00%) -> 08:19:19 scalping_scanner_watching_runtime_skip:ws_snapshot_missing_or_zero(+0.00%) -> 08:19:52 scalping_scanner_promotion_latency_trace(+0.00%) -> ... -> 08:30:14 scalping_scanner_fast_precheck(+0.00%) -> 08:30:14 scalping_scanner_runtime_queue_lag(+0.00%) -> 08:30:14 scalping_scanner_watch_eviction:scanner_queue_lag_budget_reallocated(+0.00%)|
 |현대모비스(012330)|08:19:15|08:20:06|flat_or_falling|0.00%|0.00%|`scalping_scanner_runtime_target_attach`/new_watching_target_attached|non_actionable_guard_or_backpressure|3|0|diagnostic_quote_age_stale|7602.0|-||0|08:19:15 scalping_scanner_candidate_promoted(+0.00%) -> 08:19:15 scalping_scanner_runtime_target_attach(+0.00%) -> 08:19:19 scalping_scanner_watching_runtime_skip:ws_snapshot_missing_or_zero(+0.00%) -> 08:19:20 scalping_scanner_promotion_latency_trace(+0.00%) -> ... -> 08:20:06 scalping_scanner_fast_precheck(+0.00%) -> 08:20:06 scalping_scanner_watch_eviction:rising_missed_not_rising_budget_reallocated(+0.00%) -> 08:20:06 scalping_scanner_watching_runtime_skip:scanner_fast_precheck_budget_reallocated(+0.00%)|
