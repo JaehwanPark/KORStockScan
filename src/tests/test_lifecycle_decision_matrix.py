@@ -1940,6 +1940,38 @@ def test_lifecycle_flow_bridge_key_can_complete_cross_namespace_flow():
     assert attribution["flows"][0]["stage_completion_state"] == "complete"
 
 
+def test_scalp_sim_panic_exit_rows_preserve_entry_adm_candidate_id(tmp_path, monkeypatch):
+    pipeline_dir = tmp_path / "pipeline_events"
+    pipeline_dir.mkdir()
+    event = {
+        "stage": "scalp_sim_partial_sell_order_assumed_filled",
+        "stock_code": "200710",
+        "emitted_at": "2026-07-14T10:06:16+09:00",
+        "fields": {
+            "simulation_book": "scalp_ai_buy_all",
+            "sim_record_id": "SCALPSIM-200710-1783991127433-ddada1",
+            "entry_adm_candidate_id": "ADM-200710-17966-1783990546690-eb6804",
+            "panic_lifecycle_action_id": "SCALPSIM-200710-1783991127433-ddada1|REDUCE_PARTIAL",
+            "exit_rule": "scalp_sim_panic_lifecycle_partial_exit",
+            "realized_profit_rate": "-1.21",
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        },
+    }
+    (pipeline_dir / "pipeline_events_2026-07-14.jsonl").write_text(
+        json.dumps(event) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", pipeline_dir)
+
+    rows, source = mod._load_scalp_sim_panic_rows("2026-07-14")
+
+    assert source["rows"] == 1
+    assert rows[0]["stage"] == "exit"
+    assert rows[0]["runtime_features"]["entry_adm_candidate_id"] == "ADM-200710-17966-1783990546690-eb6804"
+    assert mod._row_flow_identity(rows[0]) == ("entry_adm_source:200710:17966", "entry_adm_bridge_key")
+
+
 def test_lifecycle_matrix_ingests_scalp_sim_scale_in_rows(tmp_path, monkeypatch):
     matrix_dir = tmp_path / "matrix"
     entry_dir = tmp_path / "entry_adm"
