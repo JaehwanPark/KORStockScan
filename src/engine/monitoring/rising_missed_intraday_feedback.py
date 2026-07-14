@@ -111,14 +111,23 @@ def _event_name(row: dict[str, Any]) -> str:
     return str(row.get("stock_name") or fields.get("stock_name") or _event_code(row) or "").strip()
 
 
-def _event_price(row: dict[str, Any]) -> float | None:
+def _scanner_current_price_usable(row: dict[str, Any], fields: dict[str, Any]) -> bool:
+    stage = str(row.get("stage") or "")
+    if not stage.startswith("scalping_scanner_"):
+        return True
+    ws_trade_age_ms = _safe_float(fields.get("ws_last_0b_age_ms"))
+    return bool(ws_trade_age_ms is not None and ws_trade_age_ms <= 3000.0)
+
+
+def _event_price_with_source(row: dict[str, Any]) -> tuple[float | None, str]:
     fields = _fields(row)
     for key in (
-        "current_price_observed",
-        "current_price",
-        "latest_price",
+        "pre_submit_ws_snapshot_refresh_latest_price",
         "mark_price_at_submit",
         "canonical_mark_price",
+        "latest_price",
+        "current_price",
+        "current_price_observed",
         "rising_missed_one_share_entry_price",
         "submitted_order_price",
         "rising_missed_tp1_effective_price",
@@ -126,8 +135,31 @@ def _event_price(row: dict[str, Any]) -> float | None:
     ):
         price = _safe_float(fields.get(key))
         if price is not None and price > 0:
-            return price
-    return None
+            return price, key
+    return None, "missing"
+
+
+def _event_price(row: dict[str, Any]) -> float | None:
+    return _event_price_with_source(row)[0]
+
+
+def _tp1_observation_price(row: dict[str, Any]) -> tuple[float | None, str]:
+    fields = _fields(row)
+    is_tp1_evaluation = bool(
+        fields.get("rising_missed_tp1_evaluation_id")
+        or fields.get("rising_missed_tp1_candidate_reason")
+        or str(row.get("stage") or "") == "rising_missed_tp1_counterfactual_submit_safety"
+    )
+    if is_tp1_evaluation:
+        effective_price = _safe_float(fields.get("rising_missed_tp1_effective_price"))
+        if effective_price is not None and effective_price > 0:
+            return effective_price, "rising_missed_tp1_effective_price"
+    price, source = _event_price_with_source(row)
+    if source in {"current_price", "current_price_observed"} and not _scanner_current_price_usable(
+        row, fields
+    ):
+        return None, "scanner_current_price_time_basis_unknown"
+    return price, source
 
 
 def _event_delta_pct(row: dict[str, Any]) -> float | None:
@@ -1333,7 +1365,7 @@ def _build_tp1_first_hit_labels(pipeline_path: Path) -> tuple[dict[str, Any], li
             continue
         seen_keys.add(dedupe_key)
         candidate_ts = _tp1_label_timestamp(candidate_ts_text)
-        entry_price = _event_price(candidate)
+        entry_price, entry_price_source = _tp1_observation_price(candidate)
         label = "input_unavailable"
         first_hit_ts = None
         first_hit_move_pct = None
@@ -1356,7 +1388,7 @@ def _build_tp1_first_hit_labels(pipeline_path: Path) -> tuple[dict[str, Any], li
                     actual_fee_krw = later_fee
                 if later_tax is not None:
                     actual_tax_krw = later_tax
-                price = _event_price(subsequent)
+                price, _price_source = _tp1_observation_price(subsequent)
                 if price is None or price <= 0:
                     continue
                 observed_event_count += 1
@@ -1409,6 +1441,7 @@ def _build_tp1_first_hit_labels(pipeline_path: Path) -> tuple[dict[str, Any], li
                 "candidate_lane": fields.get("rising_missed_tp1_candidate_lane"),
                 "evaluation_id": evaluation_id or None,
                 "entry_price": entry_price,
+                "entry_price_source": entry_price_source,
                 "gross_first_hit_label": label,
                 "first_hit_ts": first_hit_ts,
                 "first_hit_move_pct": round(first_hit_move_pct, 4) if first_hit_move_pct is not None else None,
@@ -1517,6 +1550,125 @@ def _build_tp1_counterfactual_submit_safety(
     }, rows
 
 
+def _build_tp1_counterfactual_first_hit_labels(
+    pipeline_path: Path,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    events = list(iter_jsonl(pipeline_path))
+    observation_watermark = max(
+        (timestamp for row in events if (timestamp := _tp1_label_timestamp(_event_ts(row))) is not None),
+        default=None,
+    )
+    labels: list[dict[str, Any]] = []
+    seen_keys: set[tuple[str, ...]] = set()
+    for index, candidate in enumerate(events):
+        if str(candidate.get("stage") or "") != "rising_missed_tp1_counterfactual_submit_safety":
+            continue
+        fields = _fields(candidate)
+        code = _event_code(candidate)
+        candidate_ts_text = _event_ts(candidate)
+        evaluation_id = str(fields.get("rising_missed_tp1_evaluation_id") or "").strip()
+        record_id = str(candidate.get("record_id") or "").strip()
+        dedupe_key = (
+            ("evaluation_id", evaluation_id)
+            if evaluation_id
+            else ("legacy_event", record_id, code, candidate_ts_text)
+        )
+        if not code or dedupe_key in seen_keys:
+            continue
+        seen_keys.add(dedupe_key)
+
+        candidate_ts = _tp1_label_timestamp(candidate_ts_text)
+        entry_price, entry_price_source = _tp1_observation_price(candidate)
+        label = "input_unavailable"
+        first_hit_ts = None
+        first_hit_move_pct = None
+        max_move_pct = None
+        min_move_pct = None
+        observed_event_count = 0
+        if candidate_ts is not None and entry_price is not None and entry_price > 0:
+            label = "pending_horizon"
+            horizon_end = candidate_ts + timedelta(seconds=TP1_LABEL_HORIZON_SEC)
+            for subsequent in events[index:]:
+                if _event_code(subsequent) != code:
+                    continue
+                event_ts = _tp1_label_timestamp(_event_ts(subsequent))
+                if event_ts is None or event_ts < candidate_ts or event_ts > horizon_end:
+                    continue
+                price, _price_source = _tp1_observation_price(subsequent)
+                if price is None or price <= 0:
+                    continue
+                observed_event_count += 1
+                move_pct = ((price - entry_price) / entry_price) * 100.0
+                max_move_pct = move_pct if max_move_pct is None else max(max_move_pct, move_pct)
+                min_move_pct = move_pct if min_move_pct is None else min(min_move_pct, move_pct)
+                if first_hit_ts is None:
+                    if move_pct >= TP1_GROSS_TARGET_PCT:
+                        label = "gross_target_first"
+                        first_hit_ts = _event_ts(subsequent)
+                        first_hit_move_pct = move_pct
+                    elif move_pct <= TP1_ADVERSE_STOP_PCT:
+                        label = "adverse_stop_first"
+                        first_hit_ts = _event_ts(subsequent)
+                        first_hit_move_pct = move_pct
+            if (
+                label == "pending_horizon"
+                and observation_watermark is not None
+                and observation_watermark >= horizon_end
+            ):
+                label = "no_hit_within_20m"
+
+        labels.append(
+            {
+                "record_id": record_id,
+                "stock_code": code,
+                "stock_name": _event_name(candidate),
+                "candidate_ts": candidate_ts_text,
+                "evaluation_id": evaluation_id or None,
+                "selector_reason": fields.get("selector_reason"),
+                "selector_deferred": _boolish(fields.get("selector_deferred")),
+                "counterfactual_action": fields.get(
+                    "rising_missed_tp1_counterfactual_submit_safety_action"
+                ),
+                "entry_price": entry_price,
+                "entry_price_source": entry_price_source,
+                "gross_first_hit_label": label,
+                "first_hit_ts": first_hit_ts,
+                "first_hit_move_pct": (
+                    round(first_hit_move_pct, 4) if first_hit_move_pct is not None else None
+                ),
+                "max_move_pct_within_20m": (
+                    round(max_move_pct, 4) if max_move_pct is not None else None
+                ),
+                "min_move_pct_within_20m": (
+                    round(min_move_pct, 4) if min_move_pct is not None else None
+                ),
+                "observed_price_event_count": observed_event_count,
+                "gross_target_pct": TP1_GROSS_TARGET_PCT,
+                "adverse_stop_pct": TP1_ADVERSE_STOP_PCT,
+                "horizon_sec": TP1_LABEL_HORIZON_SEC,
+                "decision_authority": "source_only_tp1_counterfactual_outcome_label",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "forbidden_uses": FORBIDDEN_USES,
+            }
+        )
+    counts = Counter(str(item.get("gross_first_hit_label") or "unknown") for item in labels)
+    return {
+        "rising_missed_tp1_counterfactual_labeled_count": len(labels),
+        "rising_missed_tp1_counterfactual_gross_label_counts": [
+            {"gross_first_hit_label": key, "count": value} for key, value in counts.most_common()
+        ],
+        "rising_missed_tp1_counterfactual_gross_target_first_count": counts.get(
+            "gross_target_first", 0
+        ),
+        "rising_missed_tp1_counterfactual_adverse_stop_first_count": counts.get(
+            "adverse_stop_first", 0
+        ),
+    }, labels
+
+
 def build_report(
     target_date: str,
     *,
@@ -1592,6 +1744,9 @@ def build_report(
     tp1_label_summary, tp1_label_rows = _build_tp1_first_hit_labels(pipeline_path)
     tp1_counterfactual_summary, tp1_counterfactual_rows = (
         _build_tp1_counterfactual_submit_safety(pipeline_path)
+    )
+    tp1_counterfactual_label_summary, tp1_counterfactual_label_rows = (
+        _build_tp1_counterfactual_first_hit_labels(pipeline_path)
     )
     if first_touch_source_quality_counts["first_touch_ai_provenance_missing_count"]:
         source_quality_status = "first_touch_ai_provenance_missing"
@@ -1754,6 +1909,17 @@ def build_report(
                 "source_quality_gate": "tp1_freshness_envelope_and_selector_provenance",
                 "forbidden_uses": FORBIDDEN_USES,
             },
+            "rising_missed_tp1_counterfactual_outcome_label": {
+                "metric_role": "source_only_tp1_counterfactual_outcome_label",
+                "decision_authority": "source_only_tp1_counterfactual_outcome_label",
+                "window_policy": "selector_block_plus_20m_same_symbol_fresh_price_observations",
+                "sample_floor": "1_tp1_selector_block_with_effective_price",
+                "primary_decision_metric": "rising_missed_tp1_counterfactual_gross_label_counts",
+                "source_quality_gate": (
+                    "freshness_envelope_effective_price_then_fresh_submit_mark_or_signed_ws_0b"
+                ),
+                "forbidden_uses": FORBIDDEN_USES,
+            },
         },
         "source_paths": {"pipeline_events": str(resolved_pipeline_path)},
         "source_quality": {
@@ -1807,6 +1973,7 @@ def build_report(
             **latency_canary_summary,
             **tp1_label_summary,
             **tp1_counterfactual_summary,
+            **tp1_counterfactual_label_summary,
             "code_improvement_order_count": len(code_improvement_orders),
         },
         "records": rows[:100],
@@ -1818,6 +1985,7 @@ def build_report(
         "latency_false_negative_canary_candidate_rows": latency_canary_rows[:200],
         "rising_missed_tp1_first_hit_label_rows": tp1_label_rows[:200],
         "rising_missed_tp1_counterfactual_submit_safety_rows": tp1_counterfactual_rows[:200],
+        "rising_missed_tp1_counterfactual_first_hit_label_rows": tp1_counterfactual_label_rows[:200],
         "code_improvement_orders": code_improvement_orders,
     }
 
@@ -1893,6 +2061,8 @@ def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path)
         f"{summary.get('rising_missed_tp1_counterfactual_selector_reason_counts')}",
         f"- rising_missed_tp1_counterfactual_risk_counts: "
         f"{summary.get('rising_missed_tp1_counterfactual_risk_counts')}",
+        f"- rising_missed_tp1_counterfactual_gross_label_counts: "
+        f"{summary.get('rising_missed_tp1_counterfactual_gross_label_counts')}",
         f"- code_improvement_order_count: {summary.get('code_improvement_order_count')}",
         "",
     ]

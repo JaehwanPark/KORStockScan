@@ -176,6 +176,7 @@ def test_tp1_first_hit_label_uses_effective_price_and_later_cost_only_event(tmp_
                 "rising_missed_tp1_candidate_allowed": True,
                 "rising_missed_tp1_candidate_reason": "rising_missed_tp1_candidate_pass",
                 "rising_missed_tp1_effective_price": 10000,
+                "current_price_observed": 9000,
                 "quantity": 1,
             },
             emitted_at="2026-07-14T09:00:00+09:00",
@@ -207,9 +208,92 @@ def test_tp1_first_hit_label_uses_effective_price_and_later_cost_only_event(tmp_
 
     label = report["rising_missed_tp1_first_hit_label_rows"][0]
     assert label["entry_price"] == 10000.0
+    assert label["entry_price_source"] == "rising_missed_tp1_effective_price"
     assert label["gross_first_hit_label"] == "gross_target_first"
     assert label["actual_cost_pct"] == 0.2
     assert label["net_label"] == "net_target_confirmed"
+
+
+def test_tp1_labels_prefer_effective_candidate_and_fresh_submit_mark_over_stale_scanner_price(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-14.jsonl"
+    rows = [
+        _event(
+            706,
+            "000706",
+            "pass",
+            "rising_missed_one_share_entry",
+            {
+                "rising_missed_tp1_selector_active": True,
+                "rising_missed_tp1_candidate_allowed": True,
+                "rising_missed_tp1_candidate_reason": "rising_missed_tp1_candidate_pass",
+                "rising_missed_tp1_evaluation_id": "pass-eval",
+                "rising_missed_tp1_effective_price": 10000,
+                "current_price_observed": 9000,
+            },
+            emitted_at="2026-07-14T09:00:00+09:00",
+        ),
+        _event(
+            706,
+            "000706",
+            "pass",
+            "real_weak_ai_micro_entry_block",
+            {"current_price_observed": 9000, "mark_price_at_submit": 10140},
+            emitted_at="2026-07-14T09:01:00+09:00",
+        ),
+        _event(
+            806,
+            "000806",
+            "counterfactual",
+            "rising_missed_tp1_counterfactual_submit_safety",
+            {
+                "selector_reason": "rising_missed_tp1_lane_not_eligible",
+                "selector_deferred": False,
+                "rising_missed_tp1_candidate_allowed": False,
+                "rising_missed_tp1_evaluation_id": "counterfactual-eval",
+                "rising_missed_tp1_effective_price": 20000,
+                "current_price_observed": 18000,
+                "rising_missed_tp1_counterfactual_submit_safety_action": "RECHECK_REQUIRED",
+                "rising_missed_tp1_counterfactual_submit_safety_risks": "momentum_support_weak",
+            },
+            emitted_at="2026-07-14T09:02:00+09:00",
+        ),
+        _event(
+            806,
+            "000806",
+            "counterfactual",
+            "scalping_scanner_promotion_latency_trace",
+            {"current_price_observed": 20300, "ws_last_0d_age_ms": 100},
+            emitted_at="2026-07-14T09:03:00+09:00",
+        ),
+        _event(
+            806,
+            "000806",
+            "counterfactual",
+            "scalping_scanner_watching_runtime_skip",
+            {"current_price_observed": 20280, "ws_last_0b_age_ms": 100},
+            emitted_at="2026-07-14T09:04:00+09:00",
+        ),
+    ]
+    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+
+    report = mod.build_report("2026-07-14", pipeline_path=pipeline_path, generated_at="fixed")
+
+    pass_label = report["rising_missed_tp1_first_hit_label_rows"][0]
+    assert pass_label["entry_price"] == 10000.0
+    assert pass_label["entry_price_source"] == "rising_missed_tp1_effective_price"
+    assert pass_label["gross_first_hit_label"] == "gross_target_first"
+    counterfactual_label = report[
+        "rising_missed_tp1_counterfactual_first_hit_label_rows"
+    ][0]
+    assert counterfactual_label["entry_price"] == 20000.0
+    assert counterfactual_label["entry_price_source"] == "rising_missed_tp1_effective_price"
+    assert counterfactual_label["gross_first_hit_label"] == "gross_target_first"
+    assert counterfactual_label["first_hit_ts"] == "2026-07-14T09:04:00+09:00"
+    assert report["summary"]["rising_missed_tp1_counterfactual_gross_target_first_count"] == 1
+    assert counterfactual_label["actual_order_submitted"] is False
+    assert counterfactual_label["broker_order_forbidden"] is True
 
 
 def test_tp1_counterfactual_submit_safety_is_aggregated_without_label_duplication(tmp_path):
