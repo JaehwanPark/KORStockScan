@@ -39992,24 +39992,31 @@ def _manual_control_exclusion_blocked(stock, code, *, pipeline: str, stage: str,
         and (
             bool((stock or {}).get("manual_control_auto_open_loss_blocked"))
             or bool((stock or {}).get("manual_control_auto_scale_in_qty_blocked"))
+            or bool((stock or {}).get("manual_control_auto_hard_stop_blocked"))
         )
     ):
+        hard_stop_blocked = bool((stock or {}).get("manual_control_auto_hard_stop_blocked"))
+        scale_in_blocked = bool((stock or {}).get("manual_control_auto_scale_in_qty_blocked"))
         decision = ManualControlExclusionDecision(
             True,
             str((stock or {}).get("code") or code or ""),
             str(
                 (stock or {}).get("manual_control_exclusion_reason")
                 or (
-                    "operator_manual_control_scale_in_qty_guard_auto_excluded"
-                    if bool((stock or {}).get("manual_control_auto_scale_in_qty_blocked"))
+                    "operator_manual_control_hard_stop_auto_excluded"
+                    if hard_stop_blocked
+                    else "operator_manual_control_scale_in_qty_guard_auto_excluded"
+                    if scale_in_blocked
                     else "operator_manual_control_open_loss_auto_excluded"
                 )
             ),
             str(
                 (stock or {}).get("manual_control_exclusion_source")
                 or (
-                    "in_memory_scale_in_qty_guard_auto_exclusion"
-                    if bool((stock or {}).get("manual_control_auto_scale_in_qty_blocked"))
+                    "in_memory_hard_stop_auto_exclusion"
+                    if hard_stop_blocked
+                    else "in_memory_scale_in_qty_guard_auto_exclusion"
+                    if scale_in_blocked
                     else "in_memory_open_loss_auto_exclusion"
                 )
             ),
@@ -40046,6 +40053,9 @@ def _manual_control_exclusion_blocked(stock, code, *, pipeline: str, stage: str,
             "manual_control_auto_scale_in_qty_blocked": bool(
                 (stock or {}).get("manual_control_auto_scale_in_qty_blocked")
             ),
+            "manual_control_auto_hard_stop_blocked": bool(
+                (stock or {}).get("manual_control_auto_hard_stop_blocked")
+            ),
             **({last_key: now_value} if should_log else {}),
         },
     )
@@ -40054,6 +40064,120 @@ def _manual_control_exclusion_blocked(stock, code, *, pipeline: str, stage: str,
             f"[MANUAL_CONTROL_EXCLUSION] bot control skipped "
             f"{(stock or {}).get('name') or code}({decision.code}) "
             f"pipeline={pipeline} stage={stage} source={decision.source}"
+        )
+    return True
+
+
+def _handoff_hard_stop_to_manual_control_if_enabled(
+    stock,
+    code,
+    *,
+    strategy: str,
+    sell_reason_type: str,
+    exit_rule: str,
+    profit_rate: float,
+    peak_profit: float,
+    curr_price: int,
+    buy_price: float,
+    now_ts: float,
+    source_stage: str,
+    emergency: bool = False,
+) -> bool:
+    if not _env_or_rule_bool("HARD_STOP_MANUAL_HANDOFF_ENABLED", False):
+        return False
+    if emergency or _is_scalp_simulated_position(stock, strategy):
+        return False
+    if normalize_strategy(strategy) != "SCALPING" or str(sell_reason_type or "").upper() != "LOSS":
+        return False
+    exit_key = str(exit_rule or "").strip()
+    if exit_key not in {"scalp_hard_stop_pct", "scalp_preset_hard_stop_pct"}:
+        return False
+
+    retry_sec = max(1, _env_or_rule_int("HARD_STOP_MANUAL_HANDOFF_RETRY_SEC", 5))
+    last_attempt_ts = _safe_float(
+        (stock or {}).get("manual_control_hard_stop_handoff_last_attempt_ts"),
+        0.0,
+    )
+    if (
+        bool((stock or {}).get("manual_control_hard_stop_handoff_pending"))
+        and float(now_ts) - last_attempt_ts < retry_sec
+    ):
+        return True
+
+    comment = (
+        f"auto_hard_stop_handoff source={source_stage} exit={exit_key} "
+        f"profit={float(profit_rate):+.2f}% peak={float(peak_profit):+.2f}%"
+    )
+    decision = add_manual_control_exclusion_code(code, comment=comment)
+    registered = bool(decision.excluded)
+    stage = (
+        "hard_stop_manual_control_handoff"
+        if registered
+        else "hard_stop_manual_control_handoff_deferred"
+    )
+    fields = {
+        **decision.as_log_fields(),
+        "manual_control_auto_exclusion_triggered": registered,
+        "manual_control_auto_exclusion_policy": "hard_stop_manual_handoff_v1",
+        "manual_control_auto_exclusion_source_stage": source_stage,
+        "hard_stop_manual_handoff_enabled": True,
+        "hard_stop_manual_handoff_registered": registered,
+        "hard_stop_manual_handoff_retry_sec": retry_sec,
+        "target_status": (stock or {}).get("status") or "not_applicable_target_status",
+        "target_strategy": normalize_strategy(strategy),
+        "runtime_record_id": (stock or {}).get("id") or "not_applicable_runtime_record_id",
+        "sell_reason_type": sell_reason_type or "-",
+        "exit_rule": exit_key,
+        "profit_rate": f"{float(profit_rate):+.2f}",
+        "peak_profit": f"{float(peak_profit):+.2f}",
+        "curr_price": int(curr_price or 0),
+        "buy_price": float(buy_price or 0.0),
+        "observed_epoch": f"{float(now_ts):.3f}",
+        "metric_role": "operator_runtime_guard",
+        "decision_authority": "operator_hard_stop_manual_control_handoff",
+        "window_policy": "same_loop_hard_stop_pre_submit_intercept",
+        "sample_floor": "not_applicable_operator_override",
+        "primary_decision_metric": "hard_stop_exit_intercepted_before_broker_submit",
+        "source_quality_gate": (
+            "manual_control_exclusion_active"
+            if registered
+            else "manual_control_exclusion_persist_retry_pending"
+        ),
+        "runtime_effect": True,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": (
+            "protect_stop_bypass,emergency_stop_bypass,daily_limit_up_exit_bypass,"
+            "non_hard_stop_exit_bypass,simulated_position_exit_change,"
+            "score_threshold_change,provider_route_change,quantity_or_cap_change"
+        ),
+    }
+    _log_holding_pipeline(stock or {}, code, stage, **fields)
+    set_fields = {
+        "manual_control_hard_stop_handoff_pending": not registered,
+        "manual_control_hard_stop_handoff_last_attempt_ts": float(now_ts),
+        "manual_control_auto_exclusion_source_stage": source_stage,
+    }
+    if registered:
+        set_fields.update(
+            {
+                "manual_control_exclusion_blocked": True,
+                "manual_control_exclusion_reason": decision.reason,
+                "manual_control_exclusion_source": decision.source,
+                "manual_control_auto_hard_stop_blocked": True,
+                "last_manual_control_exclusion_holding_log_ts": float(now_ts),
+            }
+        )
+    _mutate_stock_state(stock, set_fields=set_fields)
+    if registered:
+        log_info(
+            f"[HARD_STOP_MANUAL_HANDOFF] {(stock or {}).get('name') or code}"
+            f"({decision.code or code}) hard stop sell blocked; manual control registered"
+        )
+    else:
+        log_error(
+            f"[HARD_STOP_MANUAL_HANDOFF] {(stock or {}).get('name') or code}({code}) "
+            f"registration deferred ({decision.reason}); hard stop sell remains blocked"
         )
     return True
 
@@ -41079,6 +41203,21 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     curr_price=curr_p,
                     buy_price=buy_p,
                     quote_fields=holding_ws_fields,
+                ):
+                    return
+                if _handoff_hard_stop_to_manual_control_if_enabled(
+                    stock,
+                    code,
+                    strategy=strategy,
+                    sell_reason_type="LOSS",
+                    exit_rule="scalp_preset_hard_stop_pct",
+                    profit_rate=profit_rate,
+                    peak_profit=peak_profit,
+                    curr_price=curr_p,
+                    buy_price=buy_p,
+                    now_ts=now_ts,
+                    source_stage="preset_hard_stop_after_quote_confirmation",
+                    emergency=emergency_break,
                 ):
                     return
                 log_info(
@@ -43329,6 +43468,21 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             ):
                 return
             hard_stop_revalidation_already_passed = True
+
+        if _handoff_hard_stop_to_manual_control_if_enabled(
+            stock,
+            code,
+            strategy=strategy,
+            sell_reason_type=sell_reason_type,
+            exit_rule=exit_rule,
+            profit_rate=profit_rate,
+            peak_profit=peak_profit,
+            curr_price=curr_p,
+            buy_price=buy_p,
+            now_ts=now_ts,
+            source_stage="standard_hard_stop_after_quote_revalidation",
+        ):
+            return
 
         stop_touch_avg_down_result = _attempt_stop_line_touch_mandatory_avg_down(
             stock=stock,

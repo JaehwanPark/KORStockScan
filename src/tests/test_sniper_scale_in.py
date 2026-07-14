@@ -20572,6 +20572,78 @@ def test_hard_stop_avg_down_attempt_runs_after_quote_revalidation(monkeypatch):
     assert sell_calls == []
 
 
+def test_hard_stop_manual_handoff_runs_before_avg_down_and_broker_sell(
+    monkeypatch,
+    tmp_path,
+):
+    from src.engine.risk import manual_control_exclusion
+
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=True,
+        SCALP_HARD_STOP=-2.5,
+    )
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 100}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+
+    path = tmp_path / "manual_control_excluded_codes.txt"
+    monkeypatch.setenv("KORSTOCKSCAN_HARD_STOP_MANUAL_HANDOFF_ENABLED", "true")
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+    monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
+    monkeypatch.setattr(state_handlers, "_evaluate_holding_flow_override", lambda **kwargs: True)
+    monkeypatch.setattr(
+        state_handlers,
+        "_hard_stop_quote_revalidation_block",
+        lambda *args, **kwargs: False,
+    )
+
+    def fail_avg_down(**kwargs):
+        raise AssertionError("manual handoff must run before hard-stop avg-down")
+
+    def fail_sell(*args, **kwargs):
+        raise AssertionError("manual handoff must block hard-stop broker sell")
+
+    monkeypatch.setattr(
+        state_handlers,
+        "_attempt_stop_line_touch_mandatory_avg_down",
+        fail_avg_down,
+    )
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "send_smart_sell_order", fail_sell)
+
+    stock = {
+        "id": 13,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 100,
+        "buy_qty": 10,
+        "rt_ai_prob": 0.50,
+    }
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 97.0, "orderbook": {"bids": [{"price": 97, "volume": 1000}]}},
+        admin_id=1,
+        market_regime="BULL",
+        now_ts=1_000.0,
+        now_dt=datetime(2026, 7, 14, 13, 0, 0),
+        radar=None,
+        ai_engine=None,
+    )
+
+    assert stock["status"] == "HOLDING"
+    assert stock["manual_control_auto_hard_stop_blocked"] is True
+    assert manual_control_exclusion.evaluate_manual_control_exclusion("123456").excluded is True
+    assert "123456" in path.read_text(encoding="utf-8")
+
+
 def test_rest_quote_only_mfe_protect_requires_confirmation(monkeypatch):
     logs = []
     monkeypatch.setattr(state_handlers, "_log_holding_pipeline", lambda stock, code, stage, **fields: logs.append((stage, fields)))

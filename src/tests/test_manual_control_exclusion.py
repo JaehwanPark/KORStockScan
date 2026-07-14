@@ -277,3 +277,142 @@ def test_open_loss_holding_auto_exclusion_ignores_non_open_window(monkeypatch, t
 
     assert called["reconcile"] is True
     assert manual_control_exclusion.evaluate_manual_control_exclusion("005930").excluded is False
+
+
+def test_hard_stop_manual_handoff_registers_and_blocks_real_sell(monkeypatch, tmp_path):
+    emitted = []
+    path = tmp_path / "manual_control_excluded_codes.txt"
+    stock = {
+        "id": 5,
+        "code": "005930",
+        "name": "SAMSUNG",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 10000,
+    }
+    monkeypatch.setenv("KORSTOCKSCAN_HARD_STOP_MANUAL_HANDOFF_ENABLED", "true")
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+    monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
+    monkeypatch.setattr(
+        sniper_state_handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+
+    blocked = sniper_state_handlers._handoff_hard_stop_to_manual_control_if_enabled(
+        stock,
+        "005930",
+        strategy="SCALPING",
+        sell_reason_type="LOSS",
+        exit_rule="scalp_hard_stop_pct",
+        profit_rate=-2.6,
+        peak_profit=0.2,
+        curr_price=9750,
+        buy_price=10000,
+        now_ts=1000.0,
+        source_stage="standard_hard_stop_after_quote_revalidation",
+    )
+
+    assert blocked is True
+    assert manual_control_exclusion.evaluate_manual_control_exclusion("005930").excluded is True
+    assert path.read_text(encoding="utf-8").count("005930") == 1
+    assert stock["status"] == "HOLDING"
+    assert stock["manual_control_auto_hard_stop_blocked"] is True
+    assert stock["manual_control_hard_stop_handoff_pending"] is False
+    assert emitted[-1]["stage"] == "hard_stop_manual_control_handoff"
+    assert emitted[-1]["fields"]["actual_order_submitted"] is False
+    assert emitted[-1]["fields"]["broker_order_forbidden"] is True
+    assert emitted[-1]["fields"]["source_quality_gate"] == "manual_control_exclusion_active"
+
+
+def test_hard_stop_manual_handoff_preserves_emergency_and_simulated_exit(monkeypatch, tmp_path):
+    path = tmp_path / "manual_control_excluded_codes.txt"
+    monkeypatch.setenv("KORSTOCKSCAN_HARD_STOP_MANUAL_HANDOFF_ENABLED", "true")
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+
+    common = {
+        "strategy": "SCALPING",
+        "sell_reason_type": "LOSS",
+        "exit_rule": "scalp_preset_hard_stop_pct",
+        "profit_rate": -3.0,
+        "peak_profit": 0.0,
+        "curr_price": 9700,
+        "buy_price": 10000,
+        "now_ts": 1000.0,
+        "source_stage": "preset_hard_stop_after_quote_confirmation",
+    }
+    assert (
+        sniper_state_handlers._handoff_hard_stop_to_manual_control_if_enabled(
+            {"status": "HOLDING", "strategy": "SCALPING"},
+            "005930",
+            emergency=True,
+            **common,
+        )
+        is False
+    )
+    assert (
+        sniper_state_handlers._handoff_hard_stop_to_manual_control_if_enabled(
+            {
+                "status": "HOLDING",
+                "strategy": "SCALPING",
+                "scalp_live_simulator": True,
+            },
+            "000660",
+            **common,
+        )
+        is False
+    )
+    assert not path.exists()
+
+
+def test_hard_stop_manual_handoff_blocks_and_retries_when_registration_fails(monkeypatch):
+    emitted = []
+    stock = {
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "name": "SAMSUNG",
+    }
+    monkeypatch.setenv("KORSTOCKSCAN_HARD_STOP_MANUAL_HANDOFF_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_HARD_STOP_MANUAL_HANDOFF_RETRY_SEC", "5")
+    monkeypatch.setattr(
+        sniper_state_handlers,
+        "add_manual_control_exclusion_code",
+        lambda code, comment="": manual_control_exclusion.ManualControlExclusionDecision(
+            False,
+            "005930",
+            "manual_control_exclusion_append_failed:OSError",
+            "/read-only/manual.txt",
+        ),
+    )
+    monkeypatch.setattr(
+        sniper_state_handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+
+    kwargs = {
+        "strategy": "SCALPING",
+        "sell_reason_type": "LOSS",
+        "exit_rule": "scalp_hard_stop_pct",
+        "profit_rate": -2.6,
+        "peak_profit": 0.0,
+        "curr_price": 9750,
+        "buy_price": 10000,
+        "source_stage": "standard_hard_stop_after_quote_revalidation",
+    }
+    assert sniper_state_handlers._handoff_hard_stop_to_manual_control_if_enabled(
+        stock, "005930", now_ts=1000.0, **kwargs
+    ) is True
+    assert stock["manual_control_hard_stop_handoff_pending"] is True
+    assert stock.get("manual_control_auto_hard_stop_blocked") is None
+    assert emitted[-1]["stage"] == "hard_stop_manual_control_handoff_deferred"
+    assert emitted[-1]["fields"]["broker_order_forbidden"] is True
+
+    assert sniper_state_handlers._handoff_hard_stop_to_manual_control_if_enabled(
+        stock, "005930", now_ts=1002.0, **kwargs
+    ) is True
+    assert len(emitted) == 1
