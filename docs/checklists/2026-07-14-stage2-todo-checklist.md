@@ -44,17 +44,19 @@
 
 ## 장중 체크리스트 (09:05~15:20)
 
-- [ ] `[RuntimeEnvIntradayObserve0714] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-07-14`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
-  - Source: [threshold_cycle_ev_2026-07-13.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-07-13.json)
+- [x] `[RuntimeEnvIntradayObserve0714] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-07-14`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
+  - Source: [threshold_cycle_ev_2026-07-13.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-07-13.json), [pipeline_events_2026-07-14.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-14.jsonl)
   - 판정 기준: selected_families=soft_stop_whipsaw_confirmation, entry_split_order_plan, scale_in_split_order_plan, score65_74_recovery_probe, scalping_scanner_real_source_guard_runtime, score65_74_recovery_probe_strong_micro_override_runtime, entry_price_gap_profile_runtime, profit_stagnation_exit_runtime, latency_spread_relief_real_operator_override, quote_consistency_normalization, scalp_sim_candidate_window_expansion, scalp_sim_ai_budget_manager, ai_watching_score_smoothing_report_only, weak_pullback_entry_block_runtime, early_accel_recheck_runtime, real_pyramid_scale_in_quality_guard_runtime, sell_side_open_time_block_runtime, pre_submit_liquidity_relief_runtime, entry_opportunity_recheck_runtime, weak_context_late_entry_guard_runtime, rising_missed_normal_buy_bridge, persistent_operator_overrides_2026_06_26가 runtime event provenance에 찍히는지 확인한다.
   - 금지: 장중 관찰 결과로 runtime threshold mutation을 수행하지 않는다.
-  - 다음 액션: provenance present/missing, rollback guard breach 여부를 분리 기록한다.
+  - 실행 결과 (`2026-07-14 15:27 KST`): pipeline event `68,686`건 기준 selected/runtime family provenance는 `entry_split_order_plan=17`, `score65_74_recovery_probe=7`, `quote_consistency_normalization=130`, `scalp_sim_candidate_window_expansion=632`, `real_pyramid_scale_in_quality_guard_runtime=83`, `sell_side_open_time_block_runtime=2`, `rising_missed_normal_buy_bridge=24`, `scalp_sim_auto_approval=632`, `entry_cancel_wait_runtime=5`로 관측됐다. 나머지 selected family는 장중 자연 표본이 없거나 stage/event provenance에 family literal이 직접 찍히지 않은 상태다. 실제 rollback guard breach 계열(`rollback_guard_breach`, `rollback_triggered`)은 `0`건이며, 관찰 결과만으로 threshold/env/provider/bot/cap 변경은 수행하지 않았다.
+  - 다음 액션: `provenance_partial_present_no_rollback_breach`. 자연 표본이 없는 selected family는 장후 post-apply attribution에서 적용 여부와 미관측 상태를 분리 확인한다.
 
-- [ ] `[SimProbeIntradayCoverage0714] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-07-14`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
-  - Source: [threshold_cycle_ev_2026-07-13.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-07-13.json)
+- [x] `[SimProbeIntradayCoverage0714] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-07-14`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
+  - Source: [threshold_cycle_ev_2026-07-13.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-07-13.json), [pipeline_events_2026-07-14.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-14.jsonl), [observation_source_quality_audit_2026-07-14.json](/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-07-14.json)
   - 판정 기준: sim/probe 표본이 real execution과 분리되고 `actual_order_submitted=false` provenance가 유지되는지 확인한다.
   - 금지: sim/probe EV를 broker execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.
-  - 다음 액션: source-quality split, active state 복원, open/closed count를 같이 기록한다.
+  - 실행 결과 (`2026-07-14 15:27 KST`): sim/probe/counterfactual 키워드 이벤트는 `28,191`건이지만, 이 중에는 `rising_missed_one_share_entry`와 실제 broker submit 경로가 섞여 있어 권한별로 재분리했다. sim-only/counterfactual 권한 표본 `1,499`건 중 `actual_order_submitted=false`는 `1,489`건, `broker_order_forbidden=true`는 `1,475`건이며, 누수 의심 `actual_order_submitted=true` `10`건과 `broker_order_forbidden=false` `24`건은 `order_bundle_submitted`, `holding_started`, `entry_advisory_prompt_context_only` 등 실제 주문/보유 또는 advisory 경로가 keyword filter에 섞인 것으로 분리했다. 순수 sim stage의 주요 표본은 `scalp_sim_panic_scale_in_blocked=458`, `scalp_sim_panic_action_deduped=244`, `scalp_sim_ai_holding_live_call=168`, `rising_missed_tp1_counterfactual_submit_safety=139`, `score65_74_recovery_probe_blocked=7`이다.
+  - 다음 액션: `sim_probe_authority_split_verified`. sim/probe EV는 계속 source-only/observation evidence로만 사용하고, 실제 주문 경로와 섞인 키워드 결과는 authority 기준으로 재분리해 장후 report에 반영한다.
 
 - [x] `[RisingMissedTP1PostRestartMonitor0714] Rising Missed TP1/Freshness Envelope 재기동 후 가동현황 및 반전 가드 점검` (`Due: 2026-07-14`, `Slot: INTRADAY`, `TimeWindow: 09:53~11:15`, `Track: ScalpingLogic`)
   - Source: [pipeline_events_2026-07-14.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-14.jsonl), [rising_missed_intraday_feedback_2026-07-14.json](/home/ubuntu/KORStockScan/data/report/rising_missed_intraday_feedback/rising_missed_intraday_feedback_2026-07-14.json), [rising_missed_intraday_feedback_2026-07-14.md](/home/ubuntu/KORStockScan/data/report/rising_missed_intraday_feedback/rising_missed_intraday_feedback_2026-07-14.md)
@@ -99,13 +101,23 @@
   - 미적용 runtime 추가 점검: 추가 미적용 env는 `0`이다. `persistent_operator_overrides_2026_06_26`은 개별 env mapping이 없는 manifest rollup 이름이지만 operator+PREOPEN effective env 전수 대조로 실제 PID 반영을 확인했다. `lifecycle_bucket_discovery_sim_auto_approval`의 live-auto apply OFF는 sim-only 계약에 따른 의도된 상태이며 미적용 결함이 아니다. 최종 PID의 정상 entry/scale split 자연 주문 표본은 아직 없으므로 env/hook 반영과 자연 실행 관측을 구분한다.
   - rollback: `KORSTOCKSCAN_ENTRY_SPLIT_MARKET_FIRST_LEG_ENABLED=false`, `KORSTOCKSCAN_ENTRY_SPLIT_OPERATOR_FALLBACK_ENABLED=false`, `KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED=false`. 날짜 제한 키는 2026-07-15부터 자동 비활성화된다.
 
-- [ ] `[IntradaySourceQualityGateCheck0714] 장중 raw source-quality 결손/unknown 조기 경보 및 튜닝 입력 차단 준비 확인` (`Due: 2026-07-14`, `Slot: INTRADAY`, `TimeWindow: 14:20~14:35`, `Track: RuntimeStability`)
+- [x] `[IntradaySourceQualityGateCheck0714] 장중 raw source-quality 결손/unknown 조기 경보 및 튜닝 입력 차단 준비 확인` (`Due: 2026-07-14`, `Slot: INTRADAY`, `TimeWindow: 14:20~14:35`, `Track: RuntimeStability`)
   - Source: [pipeline_events_2026-07-14.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-14.jsonl), [threshold_events_2026-07-14.jsonl](/home/ubuntu/KORStockScan/data/threshold_cycle/threshold_events_2026-07-14.jsonl), [observation_source_quality_audit_2026-07-14.json](/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-07-14.json), [observation_source_quality_audit.py](/home/ubuntu/KORStockScan/src/engine/observation_source_quality_audit.py)
   - 판정 기준: 장중 `PYTHONPATH=. .venv/bin/python -m src.engine.observation_source_quality_audit --target-date 2026-07-14 --write` 재감사를 실행하거나 최신 산출물을 확인해 `hard_blocking_contract_gap_count`, `hard_blocking_excluded_row_count`, `tuning_input_allowed`, `raw_row_exclusion_applied`, `unknown_token_stage_count`, `review_warning_count`를 기록한다.
   - 금지: hard contract gap 또는 unknown-token warning을 답변에만 남기지 않는다. 결손 row/window는 튜닝 입력 제외 또는 workorder handoff 대상으로 고정하고, broker/order/provider/cap/bot/threshold 변경 근거로 사용하지 않는다.
-  - 다음 액션: `source_quality_clean_intraday`, `defective_rows_excluded`, `hard_block_requires_producer_fix`, `unknown_warning_workorder_required`, `audit_missing_or_stale` 중 하나로 닫는다. hard gap/unknown warning이 있으면 장후 `PostcloseSourceQualityGateReview`와 `CodeImprovementWorkorderReview`에서 누락 없이 재확인한다.
+  - 실행 결과 (`2026-07-14 15:28 KST`): `observation_source_quality_audit --target-date 2026-07-14 --write`를 재실행해 JSON/MD 산출물을 생성했다. audit status=`pass`, `tuning_input_allowed=true`, event_count=`68,630`, stage_count=`106`, `hard_blocking_contract_gap_count=0`, `hard_blocking_excluded_row_count=0`, `unknown_token_stage_count=0`, `review_warning_count=0`, `warning_stage_count=0`이다. `raw_row_exclusion_applied=true`이며 exclusion manifest는 `data/source_quality/raw_row_exclusion/2026-07-14_20260714T152745427972+0900/manifest.json`이다.
+  - 다음 액션: `defective_rows_excluded`. hard gap/unknown warning은 없으므로 tuning input은 장중 기준 허용하되, postclose 산출물 생성 후 `PostcloseSourceQualityGateReview0714`에서 동일 gate를 재확인한다.
 
 ## 장후 체크리스트 (20:05~21:55)
+
+- [ ] `[RisingMissedNxtSessionObservation0714] NXT window TP1/WS route/micro/order resolution 관측 분리` (`Due: 2026-07-14`, `Slot: POSTCLOSE`, `TimeWindow: 16:00~20:00`, `Track: ScalpingLogic`)
+  - Source: [kiwoom_websocket.py](/home/ubuntu/KORStockScan/src/engine/kiwoom_websocket.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [rising_missed_intraday_feedback.py](/home/ubuntu/KORStockScan/src/engine/monitoring/rising_missed_intraday_feedback.py), [pipeline_events_2026-07-14.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-14.jsonl)
+  - 구현 범위: 실제 WS item 기준 type별 `_AL/_NX` route, NXT session bucket, 절대 0B/0D receive age, `fresh_active/fresh_trade_quiet/stale_or_conflicted`, Freshness Envelope effective quote source, NXT eligibility, 요청/유효 주문유형과 market-to-best remap을 observation-only provenance로 기록한다. 기존 TP1 selector, freshness/micro authority, submit-safety, sizing/cap/provider/TP/exit/hard safety는 변경하지 않는다.
+  - 판정 기준: review gate와 targeted test/parser 통과 후 graceful restart하고 새 PID에서 0B/0D route가 실제 수신 item과 일치하는지 확인한다. NXT 자연 표본은 KRX와 분리해 TP1 pass/block/defer, input ready, `fresh_trade_quiet`, REST quote 선택, 주문유형 remap과 fillability를 관찰한다.
+  - 금지: `fresh_trade_quiet`를 positive OFI로 변환하거나 이 단일 장중 표본으로 threshold 완화, broker/order guard 우회, provider/cap 변경, full-live 승인 근거로 사용하지 않는다.
+  - 적용 결과 (`2026-07-14 15:51 KST`): WS canonical snapshot에 type별 실제 item/suffix/route를 보존하고 TP1 resolver가 NXT session bucket, absolute 0B/0D age, NXT eligibility, `fresh_active/fresh_trade_quiet/stale_or_conflicted`, effective quote source를 observation-only로 기록하도록 구현했다. TP1 pass context는 60초 이내 submit/broker event에만 전달하며 requested/effective order type과 NXT market-to-best remap을 기록한다. intraday feedback JSON/MD에는 NXT session/micro/route/REST quote/order remap 집계를 추가했다. 첫 재기동 후 persisted WS snapshot allowlist가 route를 제거하는 결함을 발견해 producer를 보완했고, review/fix/re-review 후 targeted pytest `1,109 passed`, compile, parser, `git diff --check`를 통과했다. 최종 PID `184522`의 runtime env handoff는 status=`pass`, selected family missing/mismatch=`0/0`이며 계좌 동기화, WS login, 0B/0D 수신이 정상이다. persisted snapshot에서 `010120/105560`의 실제 item=`*_AL`, suffix=`_AL`, 0B/0D route=`krx_nxt_integrated`를 확인했다. selector/threshold/sizing/cap/provider/TP/exit/hard safety 권한은 변경하지 않았다.
+  - NXT open 관측 (`2026-07-14 16:00~16:10 KST`): PID `184522`(시작 `15:50:50`) 기준 unique evaluation/symbol=`9/5`, TP1 pass/block/defer=`4/4/1`, input ready=`8/9`, micro state fresh-active/trade-quiet=`8/1`, effective quote WS/REST=`9/0`, `ka10004/ka10084` fetch ok=`9/9`, REST budget defer/conflict=`0/0`이다. 0B/0D route는 모두 `krx_nxt_integrated`, effective venue는 모두 `NXT`였다. 유일 micro defer `319660/피에스케이`는 0B age=`4039ms`, 0D age=`0ms`의 `fresh_trade_quiet`에서 `tp1_micro_ws_unavailable`로 fail-closed하고 recheck를 예약했다. selector block은 lane-none `3`, support 부족 `1`이며 `399720/가온칩스`, `095610/테스`는 각각 36초, 29초 후 자연 pass로 재평가됐다. pass 4건의 terminal은 latency DANGER=`3`, tick-speed=`1`, broker/order/multi-leg/reprice=`0`이다. 16:10 시점 submit blocker 사후 MFE/MAE는 두산에너빌리티=`0/0%`, 가온칩스=`0/0%`, HD현대중공업=`+0.0536/+0.0536%`, 테스=`0/-2.5287%`로 명백한 missed winner는 없었다. shallow avg-down은 KB금융 `-1.43~-1.59%`로 configured shallow PnL 범위를 벗어나 미실행이 적정했다. reversal pre-submit/normal watch/direct submit=`0`, volatile recheck enqueue=`1`이고 broker forbidden이 유지됐다. NXT에서 wide spread와 trade-quiet가 관찰됐지만 20분 first-hit label과 실제 fill/multi-leg 표본이 없으므로 KRX 공통 threshold를 변경하지 않고, 후속 근거가 쌓일 경우에만 NXT 전용 runtime family로 분기한다.
+  - 다음 액션: `nxt_hold_20m_label_and_order_sample`. 16:21 이후 성숙한 20분 first-hit label과 20:00까지의 자연 broker/order remap/multi-leg/fillability 표본을 NXT cohort로만 재판정한다. NXT 고유 차이가 반복되면 기존 KRX family를 변경하지 않고 독립 env/rollback guard를 갖는 NXT runtime family candidate로 넘긴다.
 
 - [ ] `[PostcloseSourceQualityGateReview0714] 장후 source-quality gate 결과 및 튜닝 입력 허용/제외 확인` (`Due: 2026-07-14`, `Slot: POSTCLOSE`, `TimeWindow: 16:25~16:35`, `Track: RuntimeStability`)
   - Source: [observation_source_quality_audit_2026-07-14.json](/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-07-14.json), [threshold_cycle_ev_2026-07-14.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-07-14.json), [code_improvement_workorder_2026-07-14.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-07-14.json), [threshold_cycle_postclose_verification_2026-07-14.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_2026-07-14.json)
@@ -171,3 +183,18 @@
 ```bash
 PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar
 ```
+
+<!-- AUTO_SERVER_COMPARISON_START -->
+### 본서버 vs songstockscan 자동 비교 (`2026-07-14 15:45:51`)
+
+- 기준: `profit-derived metrics are excluded by default because fallback-normalized values such as NULL -> 0 can distort comparison`
+- 상세 리포트: `data/report/server_comparison/server_comparison_2026-07-14.md`
+- `Trade Review`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Performance Tuning`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Post Sell Feedback`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Entry Pipeline Flow`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+<!-- AUTO_SERVER_COMPARISON_END -->
