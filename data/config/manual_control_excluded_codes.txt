@@ -1,3 +1,2 @@
 038500 # Sampyo Cement manual control
-005930 # Samsung Electronics manual control
 010120 # auto_scale_in_qty_guard_block source=stop_line_touch_mandatory_avg_down exit=scalp_soft_stop_pct profit=-4.47% peak=-0.23%
