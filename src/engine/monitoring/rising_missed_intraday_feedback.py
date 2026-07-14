@@ -30,6 +30,11 @@ LATENCY_CANARY_TRUE_OFI_MIN_SAMPLE_COUNT = 100
 LATENCY_CANARY_FRESH_WS_MAX_AGE_MS = 150.0
 LATENCY_CANARY_TRUE_OFI_NEAR_ZERO_FLOOR = -0.10
 LATENCY_CANARY_SPREAD_ONLY_MAX_SPREAD_BPS = 90.0
+TP1_GROSS_TARGET_PCT = 1.30
+TP1_ADVERSE_STOP_PCT = -0.70
+TP1_COST_RESERVE_PCT = 0.30
+TP1_NET_TARGET_PCT = 1.00
+TP1_LABEL_HORIZON_SEC = 20 * 60
 FORBIDDEN_USES = [
     "runtime_threshold_mutation",
     "intraday_runtime_apply",
@@ -116,6 +121,7 @@ def _event_price(row: dict[str, Any]) -> float | None:
         "canonical_mark_price",
         "rising_missed_one_share_entry_price",
         "submitted_order_price",
+        "rising_missed_tp1_effective_price",
         "first_seen_price",
     ):
         price = _safe_float(fields.get(key))
@@ -1272,6 +1278,172 @@ def _build_latency_false_negative_canary_candidates(
     return summary, rows
 
 
+def _tp1_label_timestamp(value: Any) -> datetime | None:
+    parsed = _parse_ts(value)
+    if parsed is None:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=KST)
+
+
+def _tp1_actual_costs(fields: dict[str, Any]) -> tuple[float | None, float | None]:
+    fee = _safe_float(
+        fields.get("actual_fee_krw")
+        if fields.get("actual_fee_krw") not in (None, "", "-")
+        else fields.get("fee_krw")
+    )
+    tax = _safe_float(
+        fields.get("actual_tax_krw")
+        if fields.get("actual_tax_krw") not in (None, "", "-")
+        else fields.get("tax_krw")
+    )
+    return fee, tax
+
+
+def _build_tp1_first_hit_labels(pipeline_path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    events = list(iter_jsonl(pipeline_path))
+    observation_watermark = max(
+        (timestamp for row in events if (timestamp := _tp1_label_timestamp(_event_ts(row))) is not None),
+        default=None,
+    )
+    candidates: list[tuple[int, dict[str, Any]]] = []
+    for index, row in enumerate(events):
+        fields = _fields(row)
+        if not _boolish(fields.get("rising_missed_tp1_selector_active")):
+            continue
+        if not _boolish(fields.get("rising_missed_tp1_candidate_allowed")):
+            continue
+        if str(fields.get("rising_missed_tp1_candidate_reason") or "") != "rising_missed_tp1_candidate_pass":
+            continue
+        candidates.append((index, row))
+
+    labels: list[dict[str, Any]] = []
+    seen_keys: set[tuple[str, ...]] = set()
+    for index, candidate in candidates:
+        fields = _fields(candidate)
+        code = _event_code(candidate)
+        record_id = str(candidate.get("record_id") or "").strip()
+        candidate_ts_text = _event_ts(candidate)
+        evaluation_id = str(fields.get("rising_missed_tp1_evaluation_id") or "").strip()
+        dedupe_key = (
+            ("evaluation_id", evaluation_id)
+            if evaluation_id
+            else ("legacy_event", record_id, code, candidate_ts_text)
+        )
+        if not code or dedupe_key in seen_keys:
+            continue
+        seen_keys.add(dedupe_key)
+        candidate_ts = _tp1_label_timestamp(candidate_ts_text)
+        entry_price = _event_price(candidate)
+        label = "input_unavailable"
+        first_hit_ts = None
+        first_hit_move_pct = None
+        max_move_pct = None
+        min_move_pct = None
+        observed_event_count = 0
+        latest_ts = candidate_ts
+        actual_fee_krw, actual_tax_krw = _tp1_actual_costs(fields)
+        if candidate_ts is not None and entry_price is not None and entry_price > 0:
+            label = "pending_horizon"
+            horizon_end = candidate_ts + timedelta(seconds=TP1_LABEL_HORIZON_SEC)
+            for subsequent in events[index:]:
+                if _event_code(subsequent) != code:
+                    continue
+                event_ts = _tp1_label_timestamp(_event_ts(subsequent))
+                if event_ts is None or event_ts < candidate_ts or event_ts > horizon_end:
+                    continue
+                later_fee, later_tax = _tp1_actual_costs(_fields(subsequent))
+                if later_fee is not None:
+                    actual_fee_krw = later_fee
+                if later_tax is not None:
+                    actual_tax_krw = later_tax
+                price = _event_price(subsequent)
+                if price is None or price <= 0:
+                    continue
+                observed_event_count += 1
+                latest_ts = max(latest_ts or event_ts, event_ts)
+                move_pct = ((price - entry_price) / entry_price) * 100.0
+                max_move_pct = move_pct if max_move_pct is None else max(max_move_pct, move_pct)
+                min_move_pct = move_pct if min_move_pct is None else min(min_move_pct, move_pct)
+                if first_hit_ts is None:
+                    if move_pct >= TP1_GROSS_TARGET_PCT:
+                        label = "gross_target_first"
+                        first_hit_ts = _event_ts(subsequent)
+                        first_hit_move_pct = move_pct
+                    elif move_pct <= TP1_ADVERSE_STOP_PCT:
+                        label = "adverse_stop_first"
+                        first_hit_ts = _event_ts(subsequent)
+                        first_hit_move_pct = move_pct
+            if (
+                label == "pending_horizon"
+                and observation_watermark is not None
+                and observation_watermark >= horizon_end
+            ):
+                label = "no_hit_within_20m"
+
+        actual_costs_available = actual_fee_krw is not None and actual_tax_krw is not None
+        actual_cost_pct = None
+        net_label = "unavailable_fee_tax_missing"
+        if actual_costs_available and entry_price is not None and entry_price > 0:
+            quantity = max(1, _safe_int(fields.get("forced_entry_qty") or fields.get("quantity") or 1))
+            notional = entry_price * quantity
+            actual_cost_pct = ((actual_fee_krw + actual_tax_krw) / notional) * 100.0
+            if label == "gross_target_first" and first_hit_move_pct is not None:
+                net_label = (
+                    "net_target_confirmed"
+                    if first_hit_move_pct - actual_cost_pct >= TP1_NET_TARGET_PCT
+                    else "net_target_not_met"
+                )
+            elif label == "pending_horizon":
+                net_label = "pending_horizon"
+            elif label == "input_unavailable":
+                net_label = "input_unavailable"
+            else:
+                net_label = "net_target_not_met"
+        labels.append(
+            {
+                "record_id": record_id,
+                "stock_code": code,
+                "stock_name": _event_name(candidate),
+                "candidate_ts": candidate_ts_text,
+                "candidate_stage": candidate.get("stage"),
+                "candidate_lane": fields.get("rising_missed_tp1_candidate_lane"),
+                "evaluation_id": evaluation_id or None,
+                "entry_price": entry_price,
+                "gross_first_hit_label": label,
+                "first_hit_ts": first_hit_ts,
+                "first_hit_move_pct": round(first_hit_move_pct, 4) if first_hit_move_pct is not None else None,
+                "max_move_pct_within_20m": round(max_move_pct, 4) if max_move_pct is not None else None,
+                "min_move_pct_within_20m": round(min_move_pct, 4) if min_move_pct is not None else None,
+                "observed_price_event_count": observed_event_count,
+                "gross_target_pct": TP1_GROSS_TARGET_PCT,
+                "adverse_stop_pct": TP1_ADVERSE_STOP_PCT,
+                "horizon_sec": TP1_LABEL_HORIZON_SEC,
+                "cost_reserve_pct": TP1_COST_RESERVE_PCT,
+                "net_target_pct": TP1_NET_TARGET_PCT,
+                "actual_fee_krw": actual_fee_krw,
+                "actual_tax_krw": actual_tax_krw,
+                "actual_cost_pct": round(actual_cost_pct, 6) if actual_cost_pct is not None else None,
+                "net_label": net_label,
+                "decision_authority": "source_only_tp1_outcome_label",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "forbidden_uses": FORBIDDEN_USES,
+            }
+        )
+    counts = Counter(str(item.get("gross_first_hit_label") or "unknown") for item in labels)
+    net_counts = Counter(str(item.get("net_label") or "unknown") for item in labels)
+    return {
+        "rising_missed_tp1_labeled_candidate_count": len(labels),
+        "rising_missed_tp1_gross_label_counts": [
+            {"gross_first_hit_label": key, "count": value} for key, value in counts.most_common()
+        ],
+        "rising_missed_tp1_net_label_counts": [
+            {"net_label": key, "count": value} for key, value in net_counts.most_common()
+        ],
+        "rising_missed_tp1_net_confirmed_count": net_counts.get("net_target_confirmed", 0),
+    }, labels
+
+
 def build_report(
     target_date: str,
     *,
@@ -1344,6 +1516,7 @@ def build_report(
     latency_canary_summary, latency_canary_rows = _build_latency_false_negative_canary_candidates(
         latency_false_negative_rows
     )
+    tp1_label_summary, tp1_label_rows = _build_tp1_first_hit_labels(pipeline_path)
     if first_touch_source_quality_counts["first_touch_ai_provenance_missing_count"]:
         source_quality_status = "first_touch_ai_provenance_missing"
     if first_touch_source_quality_counts["first_touch_ai_provenance_unusable_count"]:
@@ -1547,6 +1720,7 @@ def build_report(
             **submit_backoff_summary,
             **latency_false_negative_summary,
             **latency_canary_summary,
+            **tp1_label_summary,
             "code_improvement_order_count": len(code_improvement_orders),
         },
         "records": rows[:100],
@@ -1556,6 +1730,7 @@ def build_report(
         "backoff_opportunity_audit_rows": backoff_audit_rows[:200],
         "latency_false_negative_review_rows": latency_false_negative_rows[:200],
         "latency_false_negative_canary_candidate_rows": latency_canary_rows[:200],
+        "rising_missed_tp1_first_hit_label_rows": tp1_label_rows[:200],
         "code_improvement_orders": code_improvement_orders,
     }
 

@@ -23,6 +23,195 @@ def _event(
     }
 
 
+def test_tp1_first_hit_label_prefers_gross_target_and_requires_actual_costs_for_net(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-14.jsonl"
+    rows = [
+        _event(
+            701,
+            "000701",
+            "tp1",
+            "rising_missed_one_share_entry",
+            {
+                "rising_missed_tp1_selector_active": True,
+                "rising_missed_tp1_candidate_allowed": True,
+                "rising_missed_tp1_candidate_reason": "rising_missed_tp1_candidate_pass",
+                "rising_missed_tp1_candidate_lane": "low_rebound",
+                "current_price_observed": 10000,
+            },
+            emitted_at="2026-07-14T09:00:00+09:00",
+        ),
+        _event(
+            701,
+            "000701",
+            "tp1",
+            "holding_observation",
+            {"current_price_observed": 10140},
+            emitted_at="2026-07-14T09:05:00+09:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+    ]
+    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+
+    report = mod.build_report("2026-07-14", pipeline_path=pipeline_path, generated_at="fixed")
+
+    label = report["rising_missed_tp1_first_hit_label_rows"][0]
+    assert label["gross_first_hit_label"] == "gross_target_first"
+    assert label["first_hit_move_pct"] == 1.4
+    assert label["net_label"] == "unavailable_fee_tax_missing"
+    assert report["summary"]["rising_missed_tp1_net_confirmed_count"] == 0
+
+
+def test_tp1_first_hit_label_marks_adverse_first_and_can_confirm_net_with_costs(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-14.jsonl"
+    rows = [
+        _event(
+            702,
+            "000702",
+            "adverse",
+            "rising_missed_tp1_candidate_blocked",
+            {
+                "rising_missed_tp1_selector_active": True,
+                "rising_missed_tp1_candidate_allowed": True,
+                "rising_missed_tp1_candidate_reason": "rising_missed_tp1_candidate_pass",
+                "current_price_observed": 10000,
+            },
+            emitted_at="2026-07-14T09:00:00+09:00",
+        ),
+        _event(
+            702,
+            "000702",
+            "adverse",
+            "holding_observation",
+            {"current_price_observed": 9920},
+            emitted_at="2026-07-14T09:02:00+09:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+        _event(
+            703,
+            "000703",
+            "net",
+            "rising_missed_one_share_entry",
+            {
+                "rising_missed_tp1_selector_active": True,
+                "rising_missed_tp1_candidate_allowed": True,
+                "rising_missed_tp1_candidate_reason": "rising_missed_tp1_candidate_pass",
+                "current_price_observed": 10000,
+                "actual_fee_krw": 10,
+                "actual_tax_krw": 10,
+            },
+            emitted_at="2026-07-14T09:10:00+09:00",
+        ),
+        _event(
+            703,
+            "000703",
+            "net",
+            "holding_observation",
+            {"current_price_observed": 10130},
+            emitted_at="2026-07-14T09:15:00+09:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+    ]
+    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+
+    report = mod.build_report("2026-07-14", pipeline_path=pipeline_path, generated_at="fixed")
+    labels = {row["stock_code"]: row for row in report["rising_missed_tp1_first_hit_label_rows"]}
+
+    assert labels["000702"]["gross_first_hit_label"] == "adverse_stop_first"
+    assert labels["000702"]["net_label"] == "unavailable_fee_tax_missing"
+    assert labels["000703"]["gross_first_hit_label"] == "gross_target_first"
+    assert labels["000703"]["actual_cost_pct"] == 0.2
+    assert labels["000703"]["net_label"] == "net_target_confirmed"
+
+
+def test_tp1_first_hit_label_accepts_explicit_zero_costs_without_closing_pending_horizon(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-14.jsonl"
+    rows = [
+        _event(
+            704,
+            "000704",
+            "pending",
+            "rising_missed_one_share_entry",
+            {
+                "rising_missed_tp1_selector_active": True,
+                "rising_missed_tp1_candidate_allowed": True,
+                "rising_missed_tp1_candidate_reason": "rising_missed_tp1_candidate_pass",
+                "current_price_observed": 10000,
+                "actual_fee_krw": 0,
+                "actual_tax_krw": 0,
+            },
+            emitted_at="2026-07-14T09:00:00+09:00",
+        ),
+        _event(
+            704,
+            "000704",
+            "pending",
+            "holding_observation",
+            {"current_price_observed": 10020},
+            emitted_at="2026-07-14T09:05:00+09:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+    ]
+    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+
+    report = mod.build_report("2026-07-14", pipeline_path=pipeline_path, generated_at="fixed")
+
+    label = report["rising_missed_tp1_first_hit_label_rows"][0]
+    assert label["gross_first_hit_label"] == "pending_horizon"
+    assert label["actual_cost_pct"] == 0.0
+    assert label["net_label"] == "pending_horizon"
+
+
+def test_tp1_first_hit_label_uses_effective_price_and_later_cost_only_event(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-14.jsonl"
+    rows = [
+        _event(
+            705,
+            "000705",
+            "bridge",
+            "rising_missed_normal_buy_bridge_unlocked",
+            {
+                "rising_missed_tp1_selector_active": True,
+                "rising_missed_tp1_candidate_allowed": True,
+                "rising_missed_tp1_candidate_reason": "rising_missed_tp1_candidate_pass",
+                "rising_missed_tp1_effective_price": 10000,
+                "quantity": 1,
+            },
+            emitted_at="2026-07-14T09:00:00+09:00",
+        ),
+        _event(
+            705,
+            "000705",
+            "bridge",
+            "holding_observation",
+            {
+                "current_price_observed": 10130,
+                "rising_missed_tp1_effective_price": 10000,
+            },
+            emitted_at="2026-07-14T09:05:00+09:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+        _event(
+            705,
+            "000705",
+            "bridge",
+            "execution_cost_observation",
+            {"actual_fee_krw": 10, "actual_tax_krw": 10},
+            emitted_at="2026-07-14T09:08:00+09:00",
+        ),
+    ]
+    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+
+    report = mod.build_report("2026-07-14", pipeline_path=pipeline_path, generated_at="fixed")
+
+    label = report["rising_missed_tp1_first_hit_label_rows"][0]
+    assert label["entry_price"] == 10000.0
+    assert label["gross_first_hit_label"] == "gross_target_first"
+    assert label["actual_cost_pct"] == 0.2
+    assert label["net_label"] == "net_target_confirmed"
+
+
 def test_build_report_flags_rising_missed_avg_down_ge2_initial_quality_fail(tmp_path):
     pipeline_path = tmp_path / "pipeline_events_2026-07-02.jsonl"
     rows = [
