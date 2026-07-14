@@ -38,6 +38,7 @@ from src.engine.scalping.rising_missed_one_share_entry import (
     collapse_to_one_share_order,
     evaluate_rising_missed_normal_buy_bridge,
     evaluate_rising_missed_one_share_entry,
+    evaluate_rising_missed_tp1_candidate,
 )
 
 
@@ -1127,6 +1128,171 @@ def test_rising_missed_normal_buy_bridge_blocks_wait_action_and_safety_reasons()
     assert price_cap.reason == BLOCK_PRICE_ABOVE_CAP
     assert price_cap.log_fields["rising_missed_filter_layer"] == "candidate_gate"
     assert price_cap.log_fields["rising_missed_filter_action"] == "candidate_block"
+
+
+def test_rising_missed_tp1_selector_passes_low_rebound_with_trusted_micro():
+    decision = evaluate_rising_missed_tp1_candidate(
+        {
+            "source_signature": "LOW_REBOUND_RISING_MISSED,PRICE_JUMP_START,BID_IMBALANCE_SURGE",
+            "low_rebound_pct": 1.2,
+            "last_watching_ai_action": "WAIT",
+        },
+        {
+            "rising_missed_tp1_input_ready": True,
+            "rising_missed_tp1_effective_quote_age_ms": 500.0,
+            "rising_missed_tp1_spread_ratio": 0.001,
+            "rising_missed_tp1_micro_confidence": 0.4,
+            "rising_missed_tp1_true_ofi_ewma": 0.1,
+            "rising_missed_tp1_pressure_ewma": 51.0,
+            "rising_missed_tp1_depth_imbalance_ewma": 0.02,
+            "rising_missed_tp1_top_depth_ratio": 1.1,
+            "rising_missed_tp1_tick_acceleration": 1.1,
+            "rising_missed_tp1_tick_acceleration_fresh": True,
+            "rising_missed_tp1_micro_vwap_gap_bps": -1.0,
+            "market_data_signed_tape_state": "mixed",
+        },
+        selector_enabled=True,
+        active_date="2026-07-14",
+        current_date="2026-07-14",
+        current_ai_action="WAIT",
+    )
+
+    assert decision.allowed is True
+    assert decision.lane == "low_rebound"
+    assert decision.log_fields["rising_missed_tp1_actual_fee_tax_required_for_net_label"] is True
+
+
+def test_rising_missed_tp1_selector_defers_missing_micro_and_blocks_wait_without_bid_surge():
+    stock = {
+        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        "price_delta_since_first_seen_pct": 1.5,
+    }
+    deferred = evaluate_rising_missed_tp1_candidate(
+        stock,
+        {
+            "rising_missed_tp1_input_ready": False,
+            "rising_missed_tp1_input_reason": "tp1_micro_ws_unavailable",
+            "rising_missed_tp1_actual_watch_delta_pct": 1.5,
+        },
+        selector_enabled=True,
+        active_date="2026-07-14",
+        current_date="2026-07-14",
+        current_ai_action="BUY",
+    )
+    wait_block = evaluate_rising_missed_tp1_candidate(
+        stock,
+        {
+            "rising_missed_tp1_input_ready": True,
+            "rising_missed_tp1_actual_watch_delta_pct": 1.5,
+            "rising_missed_tp1_effective_quote_age_ms": 500.0,
+            "rising_missed_tp1_spread_ratio": 0.001,
+            "rising_missed_tp1_micro_confidence": 0.4,
+            "rising_missed_tp1_true_ofi_ewma": 0.1,
+            "rising_missed_tp1_pressure_ewma": 51.0,
+            "rising_missed_tp1_depth_imbalance_ewma": 0.02,
+            "rising_missed_tp1_top_depth_ratio": 1.1,
+            "rising_missed_tp1_tick_acceleration": 1.1,
+            "rising_missed_tp1_tick_acceleration_fresh": True,
+            "market_data_signed_tape_state": "mixed",
+        },
+        selector_enabled=True,
+        active_date="2026-07-14",
+        current_date="2026-07-14",
+        current_ai_action="WAIT",
+    )
+
+    assert deferred.allowed is False
+    assert deferred.deferred is True
+    assert deferred.reason == "tp1_micro_ws_unavailable"
+    assert wait_block.allowed is False
+    assert wait_block.deferred is False
+    assert wait_block.reason == "rising_missed_tp1_wait_requires_bid_imbalance_surge"
+
+
+def test_rising_missed_tp1_selector_requires_exact_source_markers():
+    decision = evaluate_rising_missed_tp1_candidate(
+        {
+            "source_signature": (
+                "NO_LOW_REBOUND_RISING_MISSED,NO_BID_IMBALANCE_SURGE,PRICE_JUMP_START"
+            ),
+            "low_rebound_pct": 1.5,
+        },
+        {
+            "rising_missed_tp1_input_ready": True,
+            "rising_missed_tp1_actual_watch_delta_pct": 0.5,
+        },
+        selector_enabled=True,
+        active_date="2026-07-14",
+        current_date="2026-07-14",
+        current_ai_action="WAIT",
+    )
+
+    assert decision.allowed is False
+    assert decision.lane == "none"
+    assert decision.reason == "rising_missed_tp1_lane_not_eligible"
+
+
+def test_rising_missed_tp1_selector_does_not_count_promotion_reason_as_source_family():
+    decision = evaluate_rising_missed_tp1_candidate(
+        {
+            "source_signature": "LOW_REBOUND_RISING_MISSED,PRICE_JUMP_START",
+            "scanner_promotion_reason": "BID_IMBALANCE_SURGE",
+            "low_rebound_pct": 1.5,
+        },
+        {
+            "rising_missed_tp1_input_ready": True,
+            "rising_missed_tp1_actual_watch_delta_pct": 0.5,
+        },
+        selector_enabled=True,
+        active_date="2026-07-14",
+        current_date="2026-07-14",
+        current_ai_action="BUY",
+    )
+
+    assert decision.log_fields["rising_missed_tp1_source_family_count"] == 2
+    assert decision.allowed is False
+    assert decision.reason == "rising_missed_tp1_lane_not_eligible"
+
+
+def test_rising_missed_tp1_acceleration_lane_uses_actual_watch_delta_not_preserved_delta():
+    stock = {
+        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        "price_delta_since_first_seen_pct": 2.0,
+    }
+    common_input = {
+        "rising_missed_tp1_input_ready": True,
+        "rising_missed_tp1_effective_quote_age_ms": 100.0,
+        "rising_missed_tp1_spread_ratio": 0.001,
+        "rising_missed_tp1_micro_confidence": 0.4,
+        "rising_missed_tp1_true_ofi_ewma": 0.1,
+        "rising_missed_tp1_pressure_ewma": 51.0,
+        "rising_missed_tp1_depth_imbalance_ewma": 0.02,
+        "rising_missed_tp1_top_depth_ratio": 1.1,
+        "rising_missed_tp1_tick_acceleration": 1.1,
+        "rising_missed_tp1_tick_acceleration_fresh": True,
+        "market_data_signed_tape_state": "mixed",
+    }
+    stale_preserved = evaluate_rising_missed_tp1_candidate(
+        stock,
+        {**common_input, "rising_missed_tp1_actual_watch_delta_pct": 0.5},
+        selector_enabled=True,
+        active_date="2026-07-14",
+        current_date="2026-07-14",
+        current_ai_action="BUY",
+    )
+    actual_follow_through = evaluate_rising_missed_tp1_candidate(
+        stock,
+        {**common_input, "rising_missed_tp1_actual_watch_delta_pct": 2.0},
+        selector_enabled=True,
+        active_date="2026-07-14",
+        current_date="2026-07-14",
+        current_ai_action="BUY",
+    )
+
+    assert stale_preserved.allowed is False
+    assert stale_preserved.reason == "rising_missed_tp1_lane_not_eligible"
+    assert actual_follow_through.allowed is True
+    assert actual_follow_through.lane == "acceleration"
 
 
 def test_rising_missed_one_share_entry_uses_budget_cap_with_min_one_share():
@@ -2529,11 +2695,18 @@ def _rising_missed_backoff_stock(**overrides):
         "status": "WATCHING",
         "rising_missed_buy": True,
         "rising_missed_class": "rising_missed_raw",
+        "scanner_promotion_id": "test-backoff-promotion",
+        "scanner_promotion_emitted_epoch": 900.0,
         "scanner_promotion_reason": "price_jump_start_acceleration",
         "source_signature": "OPEN_TOP,PRICE_JUMP_START,REALTIME_RANK_START,VOLUME_SURGE_POSITIVE",
+        "entry_armed_at_epoch": 900.0,
+        "buy_price": 10000,
         "first_seen_price": 10000,
         "current_price": 10120,
         "price_delta_since_first_seen_pct": 1.2,
+        "comparable_flu_delta_since_first_seen": 1.2,
+        "cntr_str_available": True,
+        "cntr_str": 110.0,
     }
     stock.update(overrides)
     return stock
@@ -4418,7 +4591,11 @@ def test_rising_missed_micro_estimator_updates_from_fresh_ws_without_rest(monkey
             "curr": 10000,
             "v_pw": 100.0,
             "quote_age_ms": 100.0,
+            "last_ws_update_ts": now_ts - 0.1,
+            "last_realtime_type_ts": {"0D": now_ts - 0.1},
             "quote_stale": False,
+            "best_bid": 9990,
+            "best_ask": 10000,
             "best_bid_qty": 800,
             "best_ask_qty": 200,
             "bid_tot": 8000,
@@ -4442,6 +4619,449 @@ def test_rising_missed_micro_estimator_updates_from_fresh_ws_without_rest(monkey
     assert snapshot["true_ofi_sample_count"] == 0
     assert snapshot["confidence"] >= 0.25
     assert snapshot["ofi_ewma"] >= 0.10
+
+
+def test_rising_missed_micro_estimator_rejects_rest_selected_quote_provenance(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_MICRO_ESTIMATOR_ENABLED", "true")
+    now_ts = 1_783_471_000.0
+
+    fields = state_handlers._maybe_update_rising_missed_micro_estimator_from_fresh_ws(
+        {},
+        "123468",
+        {
+            "curr": 10020,
+            "best_bid": 10010,
+            "best_ask": 10020,
+            "best_bid_qty": 900,
+            "best_ask_qty": 100,
+            "last_ws_update_ts": now_ts,
+            "market_data_effective_price_source": "ka10004_rest_orderbook",
+            "quote_refresh_source": "ka10004_rest_orderbook",
+        },
+        {"now_ts": now_ts},
+        consumer_stage="test_rest_selected_provenance",
+    )
+
+    snapshot = state_handlers._RISING_MISSED_MICRO_ESTIMATOR_STORE.snapshot(
+        "123468", now_ts=now_ts
+    )
+    assert fields["rising_missed_micro_estimator_ws_update_applied"] is False
+    assert fields["rising_missed_micro_estimator_ws_update_reason"] == "non_ws_quote_provenance"
+    assert snapshot["tier"] == "cold"
+    assert snapshot["sample_count"] == 0
+
+
+def test_rising_missed_decision_input_resolver_shares_rest_envelope(monkeypatch):
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
+    state_handlers._RISING_MISSED_QUALITY_GUARD_PRE_ENVELOPE_RATE_EPOCHS.clear()
+    calls = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_fetch_rest_orderbook_snapshot_bounded",
+        lambda code, timeout_ms: calls.append(("orderbook", code))
+        or (
+            {
+                "source": "ka10004_rest_orderbook",
+                "rest_mid_price": 10020,
+                "best_bid": 10010,
+                "best_ask": 10020,
+                "best_bid_qty": 900,
+                "best_ask_qty": 100,
+                "rest_received_ts": 999.9,
+            },
+            "ok",
+            1.0,
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_fetch_rising_missed_signed_tape_bounded",
+        lambda code, timeout_ms: calls.append(("signed_tape", code)) or ([], "ok", 1.0),
+    )
+    stock = {}
+    raw_ws = {
+        "curr": 10000,
+        "best_bid": 9990,
+        "best_ask": 10000,
+        "best_bid_qty": 800,
+        "best_ask_qty": 200,
+        "v_pw": 120.0,
+        "last_ws_update_ts": 999.5,
+        "last_realtime_type_ts": {"0B": 999.8, "0D": 999.7},
+        "last_trade_tick": {
+            "ts": 999.8,
+            "values": {"15": "+100"},
+            "aggressor_source": "kiwoom_0b_signed_trade_volume",
+            "strength": 120.0,
+        },
+    }
+
+    first_ws, first_fields = state_handlers.resolve_rising_missed_decision_input(
+        stock, "123469", raw_ws, {"now_ts": 1000.0}
+    )
+    first_snapshot = state_handlers._RISING_MISSED_MICRO_ESTIMATOR_STORE.snapshot(
+        "123469", now_ts=1000.0
+    )
+    second_ws, second_fields = state_handlers.resolve_rising_missed_decision_input(
+        stock, "123469", raw_ws, {"now_ts": 1000.1}
+    )
+    second_snapshot = state_handlers._RISING_MISSED_MICRO_ESTIMATOR_STORE.snapshot(
+        "123469", now_ts=1000.1
+    )
+
+    assert calls == [("orderbook", "123469"), ("signed_tape", "123469")]
+    assert first_fields["rising_missed_tp1_resolver_envelope_cache_hit"] is False
+    assert second_fields["rising_missed_tp1_resolver_envelope_cache_hit"] is True
+    assert first_ws["market_data_effective_price_source"] == "ka10004_rest_orderbook"
+    assert second_ws["market_data_effective_price_source"] == "ka10004_rest_orderbook"
+    assert second_fields["rising_missed_tp1_micro_source_state"].startswith("fresh_ws")
+    assert second_fields["rising_missed_micro_estimator_ws_update_reason"] == (
+        "trusted_ws_snapshot_reused"
+    )
+    assert second_snapshot["sample_count"] == first_snapshot["sample_count"]
+    assert second_snapshot["true_ofi_sample_count"] == first_snapshot["true_ofi_sample_count"]
+
+
+def test_rising_missed_decision_input_normalizes_ws_spread_and_fresh_features(monkeypatch):
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
+    state_handlers._RISING_MISSED_QUALITY_GUARD_PRE_ENVELOPE_RATE_EPOCHS.clear()
+    monkeypatch.setattr(
+        state_handlers,
+        "_fetch_rest_orderbook_snapshot_bounded",
+        lambda code, timeout_ms: (
+            {
+                "source": "ka10004_rest_orderbook",
+                "curr": 10000,
+                "best_bid": 9990,
+                "best_ask": 10010,
+                "best_bid_qty": 800,
+                "best_ask_qty": 200,
+                "rest_received_ts": 999.0,
+            },
+            "ok",
+            1.0,
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_fetch_rising_missed_signed_tape_bounded",
+        lambda code, timeout_ms: ([], "ok", 1.0),
+    )
+    stock = {
+        "buy_price": 9900,
+        "last_watching_ai_feature_probe_at": 1000.0,
+        "last_watching_ai_feature_probe": {
+            "tick_acceleration_ratio": 1.2,
+            "tick_context_stale": False,
+            "curr_vs_micro_vwap_bp": 3.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh",
+        },
+    }
+    raw_ws = {
+        "curr": 10000,
+        "last_ws_update_ts": 1000.0,
+        "last_realtime_type_ts": {"0B": 1000.0, "0D": 1000.0},
+        "last_trade_tick": {
+            "ts": 1000.0,
+            "values": {"15": "+100"},
+            "aggressor_source": "kiwoom_0b_signed_trade_volume",
+            "strength": 120.0,
+        },
+        "orderbook": {
+            "asks": [{"price": 10010, "qty": 200}],
+            "bids": [{"price": 9990, "qty": 800}],
+        },
+    }
+
+    resolved, fields = state_handlers.resolve_rising_missed_decision_input(
+        stock, "123471", raw_ws, {"now_ts": 1000.1}
+    )
+
+    assert resolved["market_data_effective_price_source"] == "ws"
+    assert resolved["best_ask"] == 10010
+    assert resolved["best_bid"] == 9990
+    assert fields["rising_missed_tp1_spread_ratio"] == 0.002
+    assert fields["rising_missed_tp1_effective_price"] == 10000.0
+    assert fields["rising_missed_tp1_actual_watch_delta_anchor_source"] == "buy_price"
+    assert fields["rising_missed_tp1_actual_watch_delta_pct"] == 1.010101
+    assert fields["rising_missed_tp1_tick_acceleration_fresh"] is True
+    assert fields["rising_missed_tp1_tick_acceleration_source"] == (
+        "last_watching_ai_feature_probe"
+    )
+    assert fields["rising_missed_tp1_micro_vwap_fresh"] is True
+    assert fields["rising_missed_tp1_micro_vwap_source"] == (
+        "last_watching_ai_feature_probe"
+    )
+
+
+def test_rising_missed_decision_input_resolver_defers_without_budget_cache(monkeypatch):
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
+    monkeypatch.setattr(
+        state_handlers,
+        "_reserve_rising_missed_quality_guard_pre_envelope_packet",
+        lambda now_ts: (False, "final_envelope_reserve_exhausted"),
+    )
+
+    _resolved_ws, fields = state_handlers.resolve_rising_missed_decision_input(
+        {},
+        "123470",
+        {
+            "curr": 10000,
+            "best_bid": 9990,
+            "best_ask": 10000,
+            "best_bid_qty": 800,
+            "best_ask_qty": 200,
+            "last_ws_update_ts": 1000.0,
+        },
+        {"now_ts": 1000.0},
+    )
+
+    assert fields["rising_missed_tp1_input_ready"] is False
+    assert fields["rising_missed_tp1_input_reason"] == "tp1_rest_budget_cache_unavailable"
+    assert fields["rising_missed_tp1_resolver_envelope_result"] == "rest_budget_deferred"
+
+
+def test_rising_missed_decision_input_consumes_scanner_cache_when_rest_budget_exhausted(
+    monkeypatch,
+):
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
+    monkeypatch.setattr(
+        state_handlers,
+        "_reserve_rising_missed_quality_guard_pre_envelope_packet",
+        lambda now_ts: (False, "final_envelope_reserve_exhausted"),
+    )
+    stock = {
+        "_scanner_market_data_enrichment_stored_at": 998.0,
+        "_scanner_market_data_enrichment_ws_data": {
+            "curr": 10000,
+            "best_bid": 9990,
+            "best_ask": 10010,
+            "market_data_freshness_state": "rest_enriched",
+            "market_data_orderbook_state": "rest_enriched",
+            "market_data_effective_quote_age_ms": 100.0,
+            "market_data_rest_quote_age_ms": 100.0,
+            "market_data_effective_price_source": "ka10004_rest_orderbook",
+            "market_data_effective_age_basis": "absolute_timestamp:rest_received_ts",
+            "market_data_source_selection_policy": "freshest_age",
+        },
+        "_scanner_market_data_enrichment_fields": {
+            "market_data_freshness_state": "rest_enriched",
+            "market_data_orderbook_state": "rest_enriched",
+        },
+    }
+
+    resolved, fields = state_handlers.resolve_rising_missed_decision_input(
+        stock,
+        "123469",
+        {
+            "curr": 10100,
+            "best_bid": 10090,
+            "best_ask": 10110,
+            "last_ws_update_ts": 1000.0,
+        },
+        {"now_ts": 1000.0},
+    )
+
+    assert resolved["curr"] == 10000
+    assert resolved["market_data_effective_price_source"] == "ka10004_rest_orderbook"
+    assert fields["market_data_effective_quote_age_ms"] == 2100.0
+    assert fields["rising_missed_tp1_resolver_budget_cache_fallback"] == (
+        "scanner_market_data_enrichment_cache"
+    )
+    assert fields["rising_missed_tp1_input_reason"] == "tp1_micro_ws_unavailable"
+
+
+def test_rising_missed_tp1_selector_block_prevents_submit(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE", "2026-07-14")
+    monkeypatch.setattr(
+        state_handlers, "_rising_missed_tp1_selector_current_date", lambda runtime: "2026-07-14"
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_rising_missed_same_day_reentry_guard",
+        lambda *args, **kwargs: {"allowed": True},
+    )
+    decision_input = {
+        "rising_missed_tp1_input_ready": True,
+        "rising_missed_tp1_effective_quote_age_ms": 100.0,
+        "rising_missed_tp1_spread_ratio": 0.001,
+        "rising_missed_tp1_micro_confidence": 0.1,
+        "rising_missed_tp1_true_ofi_ewma": 0.1,
+        "rising_missed_tp1_pressure_ewma": 51.0,
+        "rising_missed_tp1_depth_imbalance_ewma": 0.02,
+        "rising_missed_tp1_top_depth_ratio": 1.1,
+        "rising_missed_tp1_tick_acceleration": 1.1,
+        "rising_missed_tp1_tick_acceleration_fresh": True,
+        "market_data_signed_tape_state": "mixed",
+    }
+    monkeypatch.setattr(
+        state_handlers,
+        "resolve_rising_missed_decision_input",
+        lambda *args, **kwargs: ({"curr": 10000}, decision_input),
+    )
+    submit_calls = []
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_submit_watching_triggered_entry",
+        lambda *args, **kwargs: submit_calls.append(args) or True,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    handled = state_handlers._maybe_submit_rising_missed_one_share_entry(
+        {
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "source_signature": "LOW_REBOUND_RISING_MISSED,PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+            "low_rebound_pct": 1.2,
+            "price_delta_since_first_seen_pct": 1.2,
+            "last_watching_ai_action": "BUY",
+        },
+        "123471",
+        {"curr": 10000},
+        1,
+        {"now_ts": 1000.0, "current_ai_score": 72.0},
+        strategy="SCALPING",
+        pos_tag="SCANNER",
+        curr_price=10000,
+    )
+
+    assert handled is True
+    assert submit_calls == []
+    assert logs[-1][0] == "rising_missed_tp1_candidate_blocked"
+
+
+def test_rising_missed_normal_bridge_uses_common_tp1_resolver(monkeypatch):
+    monkeypatch.setattr(state_handlers, "_rising_missed_normal_buy_bridge_enabled", lambda: True)
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE", "2026-07-14")
+    monkeypatch.setattr(
+        state_handlers, "_rising_missed_tp1_selector_current_date", lambda runtime: "2026-07-14"
+    )
+    resolver_calls = []
+    decision_input = {
+        "rising_missed_tp1_input_ready": True,
+        "rising_missed_tp1_effective_quote_age_ms": 100.0,
+        "rising_missed_tp1_spread_ratio": 0.001,
+        "rising_missed_tp1_micro_confidence": 0.4,
+        "rising_missed_tp1_true_ofi_ewma": 0.1,
+        "rising_missed_tp1_pressure_ewma": 51.0,
+        "rising_missed_tp1_depth_imbalance_ewma": 0.02,
+        "rising_missed_tp1_top_depth_ratio": 1.1,
+        "rising_missed_tp1_tick_acceleration": 1.1,
+        "rising_missed_tp1_tick_acceleration_fresh": True,
+        "market_data_signed_tape_state": "mixed",
+    }
+    monkeypatch.setattr(
+        state_handlers,
+        "resolve_rising_missed_decision_input",
+        lambda *args, **kwargs: resolver_calls.append(args) or ({"curr": 10000}, decision_input),
+    )
+
+    result = state_handlers._evaluate_rising_missed_normal_buy_bridge(
+        {
+            "source_signature": "LOW_REBOUND_RISING_MISSED,PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+            "low_rebound_pct": 1.2,
+            "price_delta_since_first_seen_pct": 1.2,
+            "last_watching_ai_action": "BUY",
+        },
+        "123473",
+        {"curr": 10000},
+        {"now_ts": 1000.0},
+        strategy="SCALPING",
+        pos_tag="SCANNER",
+        curr_price=10000,
+        ai_decision={"action": "BUY"},
+        current_ai_score=60.0,
+        entry_score_threshold=70.0,
+        entry_score_role_gate={"entry_score_usable_for_entry_submit": True},
+    )
+
+    assert len(resolver_calls) == 1
+    assert result["rising_missed_normal_buy_bridge_allowed"] is True
+    assert result["rising_missed_tp1_candidate_reason"] == "rising_missed_tp1_candidate_pass"
+
+
+def test_rising_missed_tp1_pass_still_obeys_existing_submit_safety_veto(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE", "2026-07-14")
+    monkeypatch.setattr(
+        state_handlers, "_rising_missed_tp1_selector_current_date", lambda runtime: "2026-07-14"
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_rising_missed_same_day_reentry_guard",
+        lambda *args, **kwargs: {"allowed": True},
+    )
+    decision_input = {
+        "rising_missed_tp1_input_ready": True,
+        "rising_missed_tp1_effective_quote_age_ms": 100.0,
+        "rising_missed_tp1_spread_ratio": 0.001,
+        "rising_missed_tp1_micro_confidence": 0.4,
+        "rising_missed_tp1_true_ofi_ewma": 0.1,
+        "rising_missed_tp1_pressure_ewma": 51.0,
+        "rising_missed_tp1_depth_imbalance_ewma": 0.02,
+        "rising_missed_tp1_top_depth_ratio": 1.1,
+        "rising_missed_tp1_tick_acceleration": 1.1,
+        "rising_missed_tp1_tick_acceleration_fresh": True,
+        "market_data_signed_tape_state": "mixed",
+    }
+    monkeypatch.setattr(
+        state_handlers,
+        "resolve_rising_missed_decision_input",
+        lambda *args, **kwargs: ({"curr": 10000}, decision_input),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_evaluate_rising_missed_scout_quality_guard",
+        lambda *args, **kwargs: {
+            "rising_missed_scout_quality_guard_blocked": True,
+            "block_reason": "stale_quote_submit_safety",
+        },
+    )
+    submit_calls = []
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_submit_watching_triggered_entry",
+        lambda *args, **kwargs: submit_calls.append(args) or True,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    handled = state_handlers._maybe_submit_rising_missed_one_share_entry(
+        {
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "source_signature": "LOW_REBOUND_RISING_MISSED,PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+            "low_rebound_pct": 1.2,
+            "price_delta_since_first_seen_pct": 1.2,
+            "last_watching_ai_action": "BUY",
+        },
+        "123472",
+        {"curr": 10000},
+        1,
+        {"now_ts": 1000.0, "current_ai_score": 72.0},
+        strategy="SCALPING",
+        pos_tag="SCANNER",
+        curr_price=10000,
+    )
+
+    assert handled is True
+    assert submit_calls == []
+    assert any(stage == "rising_missed_scout_quality_guard_blocked" for stage, _ in logs)
 
 
 def test_micro_estimator_state_defaults_rest_probe_ws_and_eviction():
@@ -5592,15 +6212,15 @@ def test_rising_missed_reversal_pre_submit_guard_blocks_jump_with_weak_tick_micr
     monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_REVERSAL_PRE_SUBMIT_GUARD_ENABLED", raising=False)
 
     decision = state_handlers._evaluate_rising_missed_reversal_pre_submit_guard(
-        stock=_weak_rising_missed_reentry_stock(price_delta_since_first_seen_pct=4.25),
+        stock=_weak_rising_missed_reentry_stock(first_seen_price=10000),
         runtime={},
         latency_gate={},
-        ws_data={},
+        ws_data={"curr": 10425},
         orderbook_fields={
             "orderbook_micro_state": "neutral",
             "orderbook_micro_qi": 0.12,
             "orderbook_micro_ofi_norm": -0.08,
-            "buy_pressure_10t": 78.0,
+            "buy_pressure_10t": 42.0,
         },
         microstructure_fields={"tick_acceleration_ratio": 0.72},
     )
@@ -5610,7 +6230,9 @@ def test_rising_missed_reversal_pre_submit_guard_blocks_jump_with_weak_tick_micr
     assert decision["rising_missed_reversal_pre_submit_risk_tag"] == "hold_candidate"
     assert decision["rising_missed_reversal_pre_submit_risk_score"] >= 3
     assert "tick_acceleration_ratio_lt_1" in decision["rising_missed_reversal_pre_submit_risk_reasons"]
-    assert "buy_pressure_high_with_weak_micro" in decision["rising_missed_reversal_pre_submit_risk_reasons"]
+    assert decision["rising_missed_reversal_pre_submit_risk_components"] == (
+        "tick_momentum_weak,orderbook_micro_weak,signed_trade_pressure_weak"
+    )
     assert decision["rising_missed_filter_layer"] == "submit_safety"
     assert decision["rising_missed_filter_action"] == "pre_submit_block"
     assert decision["broker_order_forbidden"] is True
@@ -5620,10 +6242,10 @@ def test_rising_missed_reversal_pre_submit_guard_tags_missing_core_without_block
     monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_REVERSAL_PRE_SUBMIT_GUARD_ENABLED", raising=False)
 
     decision = state_handlers._evaluate_rising_missed_reversal_pre_submit_guard(
-        stock=_weak_rising_missed_reentry_stock(price_delta_since_first_seen_pct=4.25),
+        stock=_weak_rising_missed_reentry_stock(first_seen_price=10000),
         runtime={},
         latency_gate={},
-        ws_data={},
+        ws_data={"curr": 10425},
         orderbook_fields={},
         microstructure_fields={},
     )
@@ -5640,10 +6262,10 @@ def test_rising_missed_reversal_pre_submit_guard_does_not_block_buy_pressure_alo
     monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_REVERSAL_PRE_SUBMIT_GUARD_ENABLED", raising=False)
 
     decision = state_handlers._evaluate_rising_missed_reversal_pre_submit_guard(
-        stock=_weak_rising_missed_reentry_stock(price_delta_since_first_seen_pct=4.25),
+        stock=_weak_rising_missed_reentry_stock(first_seen_price=10000),
         runtime={},
         latency_gate={},
-        ws_data={},
+        ws_data={"curr": 10425},
         orderbook_fields={
             "orderbook_micro_state": "bullish",
             "orderbook_micro_qi": 0.44,
@@ -5664,10 +6286,10 @@ def test_rising_missed_reversal_pre_submit_guard_ignores_low_jump_scope(monkeypa
     monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_REVERSAL_PRE_SUBMIT_GUARD_ENABLED", raising=False)
 
     decision = state_handlers._evaluate_rising_missed_reversal_pre_submit_guard(
-        stock=_weak_rising_missed_reentry_stock(price_delta_since_first_seen_pct=1.25),
+        stock=_weak_rising_missed_reentry_stock(first_seen_price=10000),
         runtime={},
         latency_gate={},
-        ws_data={},
+        ws_data={"curr": 10125},
         orderbook_fields={
             "orderbook_micro_state": "neutral",
             "orderbook_micro_qi": 0.12,
@@ -5681,6 +6303,82 @@ def test_rising_missed_reversal_pre_submit_guard_ignores_low_jump_scope(monkeypa
     assert decision["reason"] == "recent_jump_below_min"
     assert decision["rising_missed_reversal_pre_submit_risk_tag"] == "none"
     assert decision["rising_missed_reversal_pre_submit_jump_scope"] is False
+
+
+def test_rising_missed_reversal_pre_submit_guard_uses_current_delta_not_stale_backoff(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_REVERSAL_PRE_SUBMIT_GUARD_ENABLED", raising=False)
+
+    decision = state_handlers._evaluate_rising_missed_reversal_pre_submit_guard(
+        stock=_weak_rising_missed_reentry_stock(
+            first_seen_price=10000,
+            price_delta_since_first_seen_pct=5.0,
+            low_rebound_pct=6.0,
+            rising_missed_submit_safety_backoff_positive_delta_pct=7.0,
+        ),
+        runtime={},
+        latency_gate={},
+        ws_data={"curr": 10100},
+        orderbook_fields={
+            "orderbook_micro_state": "neutral",
+            "orderbook_micro_qi": 0.12,
+            "orderbook_micro_ofi_norm": -0.08,
+            "buy_pressure_10t": 40.0,
+        },
+        microstructure_fields={"tick_acceleration_ratio": 0.72},
+    )
+
+    assert decision["blocked"] is False
+    assert decision["reason"] == "recent_jump_below_min"
+    assert decision["rising_missed_reversal_pre_submit_recent_jump_pct"] == "1.0000"
+    assert decision["rising_missed_reversal_pre_submit_jump_delta_source"] == (
+        "current_quote_vs_first_seen_price"
+    )
+
+
+def test_rising_missed_reversal_pre_submit_guard_logs_buy_price_anchor(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_REVERSAL_PRE_SUBMIT_GUARD_ENABLED", raising=False)
+
+    decision = state_handlers._evaluate_rising_missed_reversal_pre_submit_guard(
+        stock=_weak_rising_missed_reentry_stock(first_seen_price=None, buy_price=10000),
+        runtime={},
+        latency_gate={},
+        ws_data={"curr": 10400},
+        orderbook_fields={},
+        microstructure_fields={},
+    )
+
+    assert decision["rising_missed_reversal_pre_submit_current_delta_available"] is True
+    assert decision["rising_missed_reversal_pre_submit_recent_jump_pct"] == "4.0000"
+    assert decision["rising_missed_reversal_pre_submit_jump_delta_source"] == (
+        "current_quote_vs_buy_price"
+    )
+
+
+def test_rising_missed_reversal_pre_submit_guard_does_not_double_count_micro_divergence(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_REVERSAL_PRE_SUBMIT_GUARD_ENABLED", raising=False)
+
+    decision = state_handlers._evaluate_rising_missed_reversal_pre_submit_guard(
+        stock=_weak_rising_missed_reentry_stock(first_seen_price=10000),
+        runtime={},
+        latency_gate={},
+        ws_data={"curr": 10400},
+        orderbook_fields={
+            "orderbook_micro_state": "neutral",
+            "orderbook_micro_qi": 0.12,
+            "orderbook_micro_ofi_norm": -0.08,
+            "buy_pressure_10t": 78.0,
+        },
+        microstructure_fields={"tick_acceleration_ratio": 0.72},
+    )
+
+    assert decision["blocked"] is False
+    assert decision["rising_missed_reversal_pre_submit_risk_score"] == 2
+    assert "buy_pressure_high_with_weak_micro" in decision[
+        "rising_missed_reversal_pre_submit_risk_reasons"
+    ]
+    assert decision["rising_missed_reversal_pre_submit_risk_components"] == (
+        "tick_momentum_weak,orderbook_micro_weak"
+    )
 
 
 def test_rising_missed_reversal_up_watch_recheck_enqueues_stale_weak_quality_block(monkeypatch):
@@ -5724,6 +6422,18 @@ def test_rising_missed_reversal_up_watch_recheck_enqueues_stale_weak_quality_blo
         stock,
         now_ts=1001.0,
     ) == "reversal_up_watch_recheck_pending"
+
+    duplicate = state_handlers._apply_rising_missed_reversal_up_watch_recheck(
+        stock,
+        "123456",
+        decision,
+        now_ts=1001.0,
+    )
+    assert duplicate["rising_missed_reversal_up_watch_recheck_enqueued"] is False
+    assert duplicate["rising_missed_reversal_up_watch_recheck_deduplicated"] is True
+    assert duplicate["rising_missed_reversal_up_watch_recheck_reason"] == (
+        "reversal_up_watch_recheck_already_pending"
+    )
 
 
 def test_rising_missed_reversal_up_watch_recheck_keeps_adverse_micro_guard(monkeypatch):
@@ -5868,6 +6578,28 @@ def test_apply_rising_missed_reversal_up_volatile_recheck_sets_scanner_recheck_s
         stock,
         now_ts=1001.0,
     ) == "reversal_up_volatile_recheck"
+
+    duplicate_fields = state_handlers._evaluate_rising_missed_reversal_up_volatile_recheck(
+        stock=stock,
+        runtime={},
+        source_stage="latency_block",
+        latency_gate={"latency_spread_block_bucket": "spread_above_caution"},
+        orderbook_fields={"orderbook_micro_state": "neutral"},
+        microstructure_fields={},
+        block_fields={},
+        now_ts=1001.0,
+    )
+    duplicate = state_handlers._apply_rising_missed_reversal_up_volatile_recheck(
+        stock,
+        "123456",
+        duplicate_fields,
+        now_ts=1001.0,
+    )
+    assert duplicate["rising_missed_reversal_up_volatile_recheck_enqueued"] is False
+    assert duplicate["rising_missed_reversal_up_volatile_recheck_deduplicated"] is True
+    assert duplicate["rising_missed_reversal_up_volatile_recheck_reason"] == (
+        "reversal_up_volatile_recheck_already_pending"
+    )
 
 
 def test_rising_missed_reversal_pre_submit_backoff_recovers_on_fresh_micro(monkeypatch):
@@ -14928,6 +15660,7 @@ def test_rising_missed_normal_buy_bridge_controls_first_ai_score_prior_path(
     else:
         assert "rising_missed_normal_buy_bridge_unlocked" not in by_stage
         assert "first_ai_wait" in by_stage
+        assert "rising_missed_normal_buy_bridge_reason" in by_stage["first_ai_wait"]
 
 
 def test_ai_wait_rebound_recheck_bypasses_entry_cooldown_for_fresh_scanner_rebound(monkeypatch):

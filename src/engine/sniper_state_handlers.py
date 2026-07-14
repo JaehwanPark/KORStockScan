@@ -85,6 +85,7 @@ from src.engine.scalping.rising_missed_one_share_entry import (
     collapse_to_one_share_order,
     evaluate_rising_missed_normal_buy_bridge,
     evaluate_rising_missed_one_share_entry,
+    evaluate_rising_missed_tp1_candidate,
     is_forced_rising_missed_one_share_entry,
 )
 from src.engine.scalping.rising_missed_selection_prior import rising_missed_selection_prior_fields
@@ -20022,6 +20023,18 @@ def _apply_rising_missed_reversal_up_watch_recheck(
     if until_epoch <= now_value:
         until_epoch = now_value + max(1.0, ttl_sec)
     existing_until = _safe_float(stock.get("_scanner_rising_reversal_up_watch_recheck_until_epoch"), 0.0)
+    if existing_until > now_value:
+        fields.update(
+            {
+                "rising_missed_reversal_up_watch_recheck_enqueued": False,
+                "rising_missed_reversal_up_watch_recheck_reason": (
+                    "reversal_up_watch_recheck_already_pending"
+                ),
+                "rising_missed_reversal_up_watch_recheck_deduplicated": True,
+                "rising_missed_reversal_up_watch_recheck_until_epoch": f"{existing_until:.3f}",
+            }
+        )
+        return fields
     recheck_until = max(existing_until, until_epoch)
     set_fields = {
         "_scanner_rising_reversal_up_watch_recheck_until_epoch": recheck_until,
@@ -20035,6 +20048,7 @@ def _apply_rising_missed_reversal_up_watch_recheck(
     set_fields.update(_rising_missed_reversal_up_watch_prefixed_fields(fields))
     _mutate_stock_state(stock, set_fields=set_fields)
     fields["rising_missed_reversal_up_watch_recheck_until_epoch"] = f"{recheck_until:.3f}"
+    fields["rising_missed_reversal_up_watch_recheck_deduplicated"] = False
     return fields
 
 
@@ -20179,6 +20193,18 @@ def _apply_rising_missed_reversal_up_volatile_recheck(
     if until_epoch <= now_value:
         until_epoch = now_value + max(1.0, ttl_sec)
     existing_until = _safe_float(stock.get("_scanner_rising_reversal_up_volatile_recheck_until_epoch"), 0.0)
+    if existing_until > now_value:
+        fields.update(
+            {
+                "rising_missed_reversal_up_volatile_recheck_enqueued": False,
+                "rising_missed_reversal_up_volatile_recheck_reason": (
+                    "reversal_up_volatile_recheck_already_pending"
+                ),
+                "rising_missed_reversal_up_volatile_recheck_deduplicated": True,
+                "rising_missed_reversal_up_volatile_recheck_until_epoch": f"{existing_until:.3f}",
+            }
+        )
+        return fields
     recheck_until = max(existing_until, until_epoch)
     set_fields = {
         "_scanner_rising_reversal_up_volatile_recheck_until_epoch": recheck_until,
@@ -20192,6 +20218,7 @@ def _apply_rising_missed_reversal_up_volatile_recheck(
     set_fields.update(_rising_missed_reversal_up_volatile_prefixed_fields(fields))
     _mutate_stock_state(stock, set_fields=set_fields)
     fields["rising_missed_reversal_up_volatile_recheck_until_epoch"] = f"{recheck_until:.3f}"
+    fields["rising_missed_reversal_up_volatile_recheck_deduplicated"] = False
     return fields
 
 
@@ -20238,7 +20265,32 @@ def _evaluate_rising_missed_reversal_pre_submit_guard(
         ws_data,
         stock,
     )
-    recent_jump_pct = _rising_missed_submit_safety_backoff_raw_positive_delta_pct(stock)
+    current_price = _safe_float(
+        _entry_submit_field(
+            ws_data,
+            runtime,
+            stock,
+            key="curr",
+            aliases=("current_price", "canonical_mark_price", "current_price_observed"),
+            default=0.0,
+        ),
+        0.0,
+    )
+    jump_anchor_source = next(
+        (
+            key
+            for key in ("first_seen_price", "watch_buy_price", "buy_price")
+            if _safe_float(stock.get(key), 0.0) > 0
+        ),
+        "missing",
+    )
+    jump_anchor_price = _safe_float(stock.get(jump_anchor_source), 0.0)
+    current_jump_available = bool(current_price > 0 and jump_anchor_price > 0)
+    recent_jump_pct = (
+        ((current_price - jump_anchor_price) / jump_anchor_price) * 100.0
+        if current_jump_available
+        else 0.0
+    )
     tick_acceleration_ratio, raw_accel_ratio = _rising_missed_tick_numeric_field(
         *sources,
         key="tick_acceleration_ratio",
@@ -20279,22 +20331,39 @@ def _evaluate_rising_missed_reversal_pre_submit_guard(
     )
     jump_scope = recent_jump_pct >= min_jump_pct
     reasons: list[str] = []
-    if tick_acceleration_ratio is not None and tick_acceleration_ratio < tick_accel_min:
+    risk_components: list[str] = []
+    tick_weak = bool(
+        tick_acceleration_ratio is not None and tick_acceleration_ratio < tick_accel_min
+    )
+    if tick_weak:
         reasons.append("tick_acceleration_ratio_lt_1")
-    if micro_state_available and micro_state not in {"bullish", "strong_bullish"}:
+        risk_components.append("tick_momentum_weak")
+    micro_state_weak = bool(
+        micro_state_available and micro_state not in {"bullish", "strong_bullish"}
+    )
+    qi_weak = bool(qi_available and qi <= qi_max)
+    ofi_weak = bool(ofi_available and ofi_norm < ofi_norm_min)
+    if micro_state_weak:
         reasons.append("micro_state_not_bullish")
-    if qi_available and qi <= qi_max:
+    if qi_weak:
         reasons.append("qi_at_or_below_0_25")
-    if ofi_available and ofi_norm < ofi_norm_min:
+    if ofi_weak:
         reasons.append("ofi_norm_below_0")
-    if buy_pressure_available and buy_pressure < low_buy_pressure_max:
+    if micro_state_weak or qi_weak or ofi_weak:
+        risk_components.append("orderbook_micro_weak")
+    pressure_weak = bool(buy_pressure_available and buy_pressure < low_buy_pressure_max)
+    if pressure_weak:
         reasons.append("buy_pressure_below_45")
+        risk_components.append("signed_trade_pressure_weak")
     if buy_pressure_available and buy_pressure >= high_buy_pressure_min and (
-        (qi_available and qi <= qi_max) or (ofi_available and ofi_norm < ofi_norm_min)
+        qi_weak or ofi_weak
     ):
         reasons.append("buy_pressure_high_with_weak_micro")
-    risk_score = len(reasons)
-    verification_missing = bool(jump_scope and not core_available)
+    risk_score = len(set(risk_components))
+    verification_missing = bool(
+        is_rising_missed
+        and (not current_jump_available or (jump_scope and not core_available))
+    )
     blocked = bool(enabled and is_rising_missed and jump_scope and core_available and risk_score >= min_risk_score)
     if not enabled:
         risk_tag = "disabled"
@@ -20302,6 +20371,9 @@ def _evaluate_rising_missed_reversal_pre_submit_guard(
     elif not is_rising_missed:
         risk_tag = "not_rising_missed"
         reason = "not_rising_missed_lineage"
+    elif not current_jump_available:
+        risk_tag = "verification_missing"
+        reason = "reversal_pre_submit_current_delta_missing"
     elif not jump_scope:
         risk_tag = "none"
         reason = "recent_jump_below_min"
@@ -20327,6 +20399,12 @@ def _evaluate_rising_missed_reversal_pre_submit_guard(
         "rising_missed_reversal_pre_submit_guard_enabled": bool(enabled),
         "rising_missed_reversal_pre_submit_entry_lineage": bool(is_rising_missed),
         "rising_missed_reversal_pre_submit_recent_jump_pct": f"{recent_jump_pct:.4f}",
+        "rising_missed_reversal_pre_submit_current_price": current_price or "-",
+        "rising_missed_reversal_pre_submit_jump_anchor_price": jump_anchor_price or "-",
+        "rising_missed_reversal_pre_submit_jump_delta_source": (
+            f"current_quote_vs_{jump_anchor_source}" if current_jump_available else "missing"
+        ),
+        "rising_missed_reversal_pre_submit_current_delta_available": current_jump_available,
         "rising_missed_reversal_pre_submit_min_jump_pct": f"{min_jump_pct:.4f}",
         "rising_missed_reversal_pre_submit_jump_scope": bool(jump_scope),
         "rising_missed_reversal_pre_submit_core_available": bool(core_available),
@@ -20335,6 +20413,9 @@ def _evaluate_rising_missed_reversal_pre_submit_guard(
         "rising_missed_reversal_pre_submit_risk_score": int(risk_score),
         "rising_missed_reversal_pre_submit_min_risk_score": int(min_risk_score),
         "rising_missed_reversal_pre_submit_risk_reasons": ",".join(reasons) if reasons else "-",
+        "rising_missed_reversal_pre_submit_risk_components": (
+            ",".join(dict.fromkeys(risk_components)) if risk_components else "-"
+        ),
         "rising_missed_reversal_pre_submit_tick_acceleration_ratio": (
             f"{tick_acceleration_ratio:.3f}" if tick_acceleration_ratio is not None else "-"
         ),
@@ -29878,6 +29959,7 @@ def _arm_ai_wait_rebound_recheck_anchor(
             "ai_wait_cooldown_anchor_reason": str((ai_decision or {}).get("reason") or "")[:240],
             "ai_wait_cooldown_anchor_source_stage": source_stage or "-",
             "last_watching_ai_feature_probe": feature_probe,
+            "last_watching_ai_feature_probe_at": now_ts,
         },
     )
     fields.update(
@@ -31758,10 +31840,13 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 stock,
                                 code,
                                 "first_ai_wait",
-                                **_build_observation_contract_fields("funnel_count"),
                                 ai_score=f"{current_ai_score:.1f}",
                                 big_bite_confirmed=big_bite_confirmed,
                                 vip_target=is_vip_target,
+                                **_merge_entry_pipeline_field_groups(
+                                    _build_observation_contract_fields("funnel_count"),
+                                    rising_missed_normal_buy_bridge_fields,
+                                ),
                             )
                             rebound_anchor = _arm_ai_wait_rebound_recheck_anchor(
                                 stock=stock,
@@ -36349,6 +36434,20 @@ def _rising_missed_normal_buy_bridge_enabled() -> bool:
     return bool(getattr(TRADING_RULES, "RISING_MISSED_NORMAL_BUY_BRIDGE_ENABLED", False))
 
 
+def _rising_missed_tp1_selector_enabled() -> bool:
+    return _env_bool("KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED", False)
+
+
+def _rising_missed_tp1_selector_active_date() -> str:
+    return str(os.getenv("KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE", "")).strip()
+
+
+def _rising_missed_tp1_selector_current_date(runtime: dict | None) -> str:
+    runtime = runtime if isinstance(runtime, dict) else {}
+    now_ts = _safe_float(runtime.get("now_ts"), time.time())
+    return datetime.fromtimestamp(float(now_ts), tz=_KST).strftime("%Y-%m-%d")
+
+
 def _caution_weak_liquidity_entry_block_enabled() -> bool:
     if "KORSTOCKSCAN_CAUTION_WEAK_LIQUIDITY_ENTRY_BLOCK_ENABLED" in os.environ:
         return _env_bool("KORSTOCKSCAN_CAUTION_WEAK_LIQUIDITY_ENTRY_BLOCK_ENABLED", True)
@@ -36522,7 +36621,50 @@ def _evaluate_rising_missed_normal_buy_bridge(
         upper_limit_exclude_enabled=_rising_missed_upper_limit_exclude_enabled(),
         upper_limit_exclude_pct=_rising_missed_upper_limit_exclude_pct(),
     )
+    tp1_decision = None
+    tp1_recheck_fields: dict[str, Any] = {}
+    selector_active = bool(
+        _rising_missed_tp1_selector_enabled()
+        and _rising_missed_tp1_selector_active_date()
+        == _rising_missed_tp1_selector_current_date(runtime)
+    )
+    if decision.allowed and selector_active:
+        _resolved_ws, decision_input = resolve_rising_missed_decision_input(
+            stock,
+            code,
+            ws_data,
+            runtime,
+        )
+        tp1_decision = evaluate_rising_missed_tp1_candidate(
+            stock,
+            decision_input,
+            selector_enabled=True,
+            active_date=_rising_missed_tp1_selector_active_date(),
+            current_date=_rising_missed_tp1_selector_current_date(runtime),
+            current_ai_action=current_ai_action,
+        )
+        if tp1_decision.deferred:
+            tp1_recheck_fields = _apply_rising_missed_freshness_envelope_recheck(
+                stock,
+                code,
+                {
+                    "rising_missed_scout_quality_guard_stale_ai_provenance_gap_blocked": True,
+                    "block_reason": tp1_decision.reason,
+                },
+                now_ts=_safe_float(runtime.get("now_ts"), time.time()),
+            )
     bridge_fields.update(decision.log_fields or {})
+    if tp1_decision is not None:
+        bridge_fields.update(tp1_decision.log_fields or {})
+        bridge_fields.update(
+            _rising_missed_freshness_envelope_recheck_prefixed_fields(tp1_recheck_fields)
+        )
+        if not tp1_decision.allowed:
+            decision = type(decision)(
+                allowed=False,
+                reason=tp1_decision.reason,
+                log_fields=decision.log_fields,
+            )
     bridge_fields.update(
         {
             "rising_missed_normal_buy_bridge_allowed": bool(decision.allowed),
@@ -36628,6 +36770,64 @@ def _rising_missed_depth_estimator_from_rest_snapshot(refreshed_ws: dict | None)
     return estimate_orderbook_pressure(refreshed_ws)
 
 
+def _rising_missed_trusted_ws_provenance(
+    ws_data: dict | None,
+    *,
+    now_ts: float,
+) -> dict[str, Any]:
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    type_ts = ws_data.get("last_realtime_type_ts")
+    type_ts = type_ts if isinstance(type_ts, dict) else {}
+    last_tick = ws_data.get("last_trade_tick")
+    last_tick = last_tick if isinstance(last_tick, dict) else {}
+    last_tick_values = last_tick.get("values")
+    last_tick_values = last_tick_values if isinstance(last_tick_values, dict) else {}
+
+    def _age_sec(value: Any) -> float | None:
+        timestamp = _safe_float(value, 0.0)
+        if timestamp <= 0:
+            return None
+        if timestamp > 10_000_000_000:
+            timestamp /= 1000.0
+        return max(0.0, float(now_ts) - timestamp)
+
+    age_0d = _age_sec(type_ts.get("0D"))
+    if age_0d is None:
+        age_0d = _age_sec(ws_data.get("micro_estimator_ws_observation_ts"))
+    age_0b = _age_sec(type_ts.get("0B"))
+    if age_0b is None:
+        age_0b = _age_sec(last_tick.get("ts") or last_tick.get("received_at_ms"))
+    raw_15 = str(
+        last_tick_values.get("15")
+        or last_tick.get("aggressor_aux_raw_15")
+        or last_tick.get("signed_trade_volume")
+        or ""
+    ).strip()
+    signed_fid_15 = bool(raw_15.startswith(("+", "-")) and _safe_float(raw_15, 0.0) != 0.0)
+    aggressor_source = str(last_tick.get("aggressor_source") or "").strip()
+    strength = _safe_float(last_tick.get("strength") or ws_data.get("v_pw"), 0.0)
+    depth_fresh = bool(age_0d is not None and age_0d <= 3.0)
+    trade_fresh = bool(age_0b is not None and age_0b <= 3.0)
+    tick_flow_trusted = bool(
+        trade_fresh
+        and signed_fid_15
+        and aggressor_source == "kiwoom_0b_signed_trade_volume"
+    )
+    return {
+        "rising_missed_tp1_ws_0d_age_sec": round(age_0d, 6) if age_0d is not None else "-",
+        "rising_missed_tp1_ws_0d_depth_fresh": depth_fresh,
+        "rising_missed_tp1_ws_0b_age_sec": round(age_0b, 6) if age_0b is not None else "-",
+        "rising_missed_tp1_ws_0b_trade_fresh": trade_fresh,
+        "rising_missed_tp1_ws_0b_signed_fid15_present": signed_fid_15,
+        "rising_missed_tp1_ws_0b_aggressor_source": aggressor_source or "-",
+        "rising_missed_tp1_ws_0b_strength": strength,
+        "rising_missed_tp1_ws_0b_tick_flow_trusted": tick_flow_trusted,
+        "rising_missed_tp1_ws_micro_provenance_ready": bool(
+            depth_fresh and tick_flow_trusted and strength > 0.0
+        ),
+    }
+
+
 def _maybe_update_rising_missed_micro_estimator_from_fresh_ws(
     stock: dict | None,
     code: str,
@@ -36651,23 +36851,36 @@ def _maybe_update_rising_missed_micro_estimator_from_fresh_ws(
         fields["rising_missed_micro_estimator_ws_update_reason"] = "missing_ws_or_code"
         return fields
     fields["rising_missed_micro_estimator_ws_update_attempted"] = True
-    quote_stale, quote_fields = _quote_stale_for_rising_missed_scout_quality_guard(stock, ws_data, runtime)
-    if quote_stale:
-        fields.update(quote_fields)
-        fields["rising_missed_micro_estimator_ws_update_reason"] = "ws_quote_stale"
+    declared_source = str(ws_data.get("market_data_effective_price_source") or "").strip().lower()
+    refresh_source = str(ws_data.get("quote_refresh_source") or "").strip().lower()
+    if (declared_source and declared_source != "ws") or refresh_source.startswith("ka10004"):
+        fields["rising_missed_micro_estimator_ws_update_reason"] = "non_ws_quote_provenance"
+        return fields
+    normalized_ws, normalized_fields = build_market_data_enrichment(
+        ws_data=ws_data,
+        now_ts=now_ts,
+    )
+    fields.update(normalized_fields)
+    ws_provenance = _rising_missed_trusted_ws_provenance(ws_data, now_ts=now_ts)
+    fields.update(ws_provenance)
+    effective_source = str(normalized_fields.get("market_data_effective_price_source") or "").lower()
+    freshness_state = str(normalized_fields.get("market_data_freshness_state") or "").lower()
+    age_basis = str(normalized_fields.get("market_data_ws_age_basis") or "missing")
+    trusted_ws = bool(
+        effective_source == "ws"
+        and freshness_state == "fresh_ws"
+        and bool(ws_provenance.get("rising_missed_tp1_ws_0d_depth_fresh"))
+        and not age_basis.startswith("reported_age_no_time_basis")
+        and age_basis != "missing"
+    )
+    if not trusted_ws:
+        fields["rising_missed_micro_estimator_ws_update_reason"] = "untrusted_ws_provenance"
         return fields
 
-    depth = _rising_missed_depth_estimator_from_rest_snapshot(ws_data)
-    stock_dict = stock if isinstance(stock, dict) else {}
-    probe = stock_dict.get("last_watching_ai_feature_probe")
-    source_quality = stock_dict.get("last_watching_ai_source_quality_fields")
-    probe = probe if isinstance(probe, dict) else {}
-    source_quality = source_quality if isinstance(source_quality, dict) else {}
-    probe_at = _safe_float(stock_dict.get("last_watching_ai_feature_probe_at"), 0.0)
+    depth = _rising_missed_depth_estimator_from_rest_snapshot(normalized_ws)
     has_depth = bool(depth.get("total_depth", 0.0) > 0)
-    has_probe = bool(probe or source_quality)
-    if not has_depth and not has_probe:
-        fields["rising_missed_micro_estimator_ws_update_reason"] = "no_orderbook_depth_or_probe"
+    if not has_depth:
+        fields["rising_missed_micro_estimator_ws_update_reason"] = "no_trusted_ws_orderbook_depth"
         return fields
 
     pre_snapshot = _RISING_MISSED_MICRO_ESTIMATOR_STORE.snapshot(code, now_ts=now_ts)
@@ -36675,34 +36888,58 @@ def _maybe_update_rising_missed_micro_estimator_from_fresh_ws(
         str(pre_snapshot.get("tier") or "cold") == "cold"
         or _safe_int(pre_snapshot.get("sample_count"), 0) <= 0
     )
+    type_ts = ws_data.get("last_realtime_type_ts")
+    type_ts = type_ts if isinstance(type_ts, dict) else {}
+    observation_ts = _safe_float(
+        type_ts.get("0D") or ws_data.get("micro_estimator_ws_observation_ts"),
+        0.0,
+    )
+    prior_consumed_ts = _safe_float(
+        (stock or {}).get("_rising_missed_tp1_last_micro_ws_observation_ts"),
+        0.0,
+    )
+    store_last_ws_ts = _safe_float(pre_snapshot.get("last_ws_ts"), 0.0)
     _RISING_MISSED_MICRO_ESTIMATOR_STORE.mark_candidate(
         code,
         tier="hot",
         now_ts=now_ts,
         reason=consumer_stage,
     )
-    if has_depth:
-        _RISING_MISSED_MICRO_ESTIMATOR_STORE.update_from_ws_quote(
-            code,
-            ws_data,
-            now_ts=now_ts,
-            tier="hot",
+    if (
+        observation_ts > 0
+        and _safe_int(pre_snapshot.get("sample_count"), 0) > 0
+        and max(prior_consumed_ts, store_last_ws_ts) >= observation_ts
+    ):
+        snapshot = _RISING_MISSED_MICRO_ESTIMATOR_STORE.snapshot(code, now_ts=now_ts)
+        fields.update(
+            {
+                "rising_missed_micro_estimator_ws_update_reason": "trusted_ws_snapshot_reused",
+                "rising_missed_micro_estimator_ws_observation_ts": observation_ts,
+                "rising_missed_micro_estimator_lazy_hydration": lazy_hydration,
+                **feature_only_fields_from_snapshot(
+                    snapshot,
+                    prefix="rising_missed_micro_estimator",
+                    consumer_stage=consumer_stage,
+                ),
+            }
         )
-    if has_probe:
-        _RISING_MISSED_MICRO_ESTIMATOR_STORE.update_from_feature_probe(
-            code,
-            probe,
-            source_quality,
-            now_ts=now_ts,
-            observed_ts=probe_at if probe_at > 0 else None,
-            max_age_sec=_rising_missed_rest_estimator_probe_max_age_sec(),
-            tier="hot",
-        )
+        return fields
+    _RISING_MISSED_MICRO_ESTIMATOR_STORE.update_from_ws_quote(
+        code,
+        normalized_ws,
+        now_ts=now_ts,
+        tier="hot",
+    )
+    if observation_ts > 0 and isinstance(stock, dict):
+        stock["_rising_missed_tp1_last_micro_ws_observation_ts"] = observation_ts
     snapshot = _RISING_MISSED_MICRO_ESTIMATOR_STORE.snapshot(code, now_ts=now_ts)
     fields.update(
         {
             "rising_missed_micro_estimator_ws_update_applied": True,
-            "rising_missed_micro_estimator_ws_update_reason": "fresh_ws_or_probe_updated",
+            "rising_missed_micro_estimator_ws_update_reason": "trusted_fresh_ws_updated",
+            "rising_missed_micro_estimator_ws_observation_ts": (
+                observation_ts if observation_ts > 0 else "-"
+            ),
             "rising_missed_micro_estimator_lazy_hydration": lazy_hydration,
             **feature_only_fields_from_snapshot(
                 snapshot,
@@ -36712,6 +36949,346 @@ def _maybe_update_rising_missed_micro_estimator_from_fresh_ws(
         }
     )
     return fields
+
+
+def resolve_rising_missed_decision_input(
+    stock: dict | None,
+    code: str,
+    ws_data: dict | None,
+    runtime: dict | None,
+) -> tuple[dict, dict[str, Any]]:
+    """Resolve one freshness envelope and trusted WS micro input for scout/bridge."""
+    stock = stock if isinstance(stock, dict) else {}
+    runtime = runtime if isinstance(runtime, dict) else {}
+    raw_ws = dict(ws_data or {})
+    now_ts = _safe_float(runtime.get("now_ts"), time.time())
+    cache_ttl_sec = 5.0
+    cached = stock.get("_rising_missed_tp1_decision_envelope_cache")
+    cached = cached if isinstance(cached, dict) else {}
+    cache_age_sec = max(0.0, now_ts - _safe_float(cached.get("stored_at"), 0.0))
+    cache_hit = bool(
+        str(cached.get("code") or "") == str(code or "")
+        and cached.get("stored_at")
+        and cache_age_sec <= cache_ttl_sec
+        and isinstance(cached.get("enriched_ws"), dict)
+    )
+    if cache_hit:
+        enriched_ws = dict(cached.get("enriched_ws") or {})
+        envelope_fields = dict(cached.get("envelope_fields") or {})
+        evaluation_id = str(cached.get("evaluation_id") or "")
+        age_increment_ms = cache_age_sec * 1000.0
+        for key in (
+            "market_data_effective_quote_age_ms",
+            "market_data_ws_quote_age_ms",
+            "market_data_rest_quote_age_ms",
+        ):
+            value = _safe_float(enriched_ws.get(key), None)
+            if value is not None:
+                enriched_ws[key] = round(value + age_increment_ms, 3)
+                envelope_fields[key] = enriched_ws[key]
+        envelope_fields["rising_missed_tp1_resolver_envelope_cache_hit"] = True
+        envelope_fields["rising_missed_tp1_resolver_envelope_cache_age_sec"] = f"{cache_age_sec:.3f}"
+    else:
+        evaluation_id = uuid4().hex
+        scanner_envelope = _merge_scanner_market_data_enrichment_into_ws_data(stock, raw_ws, runtime)
+        enriched_ws, envelope_fields = _rising_missed_quality_guard_pre_envelope(
+            stock,
+            code,
+            raw_ws,
+            runtime,
+            scanner_envelope_ws_data=scanner_envelope,
+        )
+        scanner_cache_stored_at = _safe_float(
+            stock.get("_scanner_market_data_enrichment_stored_at"),
+            0.0,
+        )
+        scanner_cache_age = max(0.0, now_ts - scanner_cache_stored_at)
+        scanner_cache_usable = bool(
+            scanner_cache_stored_at > 0
+            and scanner_cache_age <= cache_ttl_sec
+            and isinstance(stock.get("_scanner_market_data_enrichment_ws_data"), dict)
+        )
+        if (
+            envelope_fields.get("rising_missed_quality_guard_pre_envelope_result")
+            == "rest_budget_deferred"
+            and scanner_cache_usable
+        ):
+            enriched_ws = dict(stock.get("_scanner_market_data_enrichment_ws_data") or {})
+            enriched_ws.update(stock.get("_scanner_market_data_enrichment_fields") or {})
+            age_increment_ms = scanner_cache_age * 1000.0
+            for key in (
+                "quote_age_ms",
+                "ws_age_ms",
+                "market_data_effective_quote_age_ms",
+                "market_data_ws_quote_age_ms",
+                "market_data_rest_quote_age_ms",
+            ):
+                value = _safe_float(enriched_ws.get(key), None)
+                if value is not None:
+                    enriched_ws[key] = round(value + age_increment_ms, 3)
+            envelope_fields.update(market_data_enrichment_log_fields(enriched_ws))
+            envelope_fields[
+                "rising_missed_tp1_resolver_budget_cache_fallback"
+            ] = "scanner_market_data_enrichment_cache"
+        stock["_rising_missed_tp1_decision_envelope_cache"] = {
+            "code": str(code or ""),
+            "evaluation_id": evaluation_id,
+            "stored_at": now_ts,
+            "enriched_ws": dict(enriched_ws),
+            "envelope_fields": dict(envelope_fields),
+        }
+        envelope_fields["rising_missed_tp1_resolver_envelope_cache_hit"] = False
+        envelope_fields["rising_missed_tp1_resolver_envelope_cache_age_sec"] = "0.000"
+
+    micro_update_fields = _maybe_update_rising_missed_micro_estimator_from_fresh_ws(
+        stock,
+        code,
+        raw_ws,
+        runtime,
+        consumer_stage="rising_missed_tp1_decision_input",
+    )
+    micro_snapshot = _RISING_MISSED_MICRO_ESTIMATOR_STORE.snapshot(code, now_ts=now_ts)
+    ws_provenance = _rising_missed_trusted_ws_provenance(raw_ws, now_ts=now_ts)
+    effective_age_ms = _safe_float(enriched_ws.get("market_data_effective_quote_age_ms"), None)
+    effective_source = str(enriched_ws.get("market_data_effective_price_source") or "none")
+    effective_age_basis = str(enriched_ws.get("market_data_effective_age_basis") or "missing")
+    freshness_state = str(enriched_ws.get("market_data_freshness_state") or "missing").lower()
+    envelope_result = str(
+        envelope_fields.get("rising_missed_quality_guard_pre_envelope_result") or "unknown"
+    )
+    scanner_cache_age = max(
+        0.0,
+        now_ts - _safe_float(stock.get("_scanner_market_data_enrichment_stored_at"), 0.0),
+    )
+    scanner_cache_usable = bool(
+        stock.get("_scanner_market_data_enrichment_stored_at")
+        and scanner_cache_age <= cache_ttl_sec
+        and isinstance(stock.get("_scanner_market_data_enrichment_ws_data"), dict)
+    )
+    time_basis_known = bool(
+        effective_age_basis != "missing"
+        and not effective_age_basis.startswith("reported_age_no_time_basis")
+    )
+    envelope_ready = bool(
+        freshness_state in {"fresh_ws", "rest_enriched"}
+        and effective_age_ms is not None
+        and effective_age_ms <= 3000.0
+        and time_basis_known
+        and effective_source != "ws_rest_conflicted"
+    )
+    if envelope_result == "rest_budget_deferred" and not (cache_hit or scanner_cache_usable):
+        envelope_ready = False
+
+    micro_source_state = str(micro_snapshot.get("source_state") or "unusable")
+    micro_age_sec = _safe_float(micro_snapshot.get("age_sec"), 999999.0)
+    true_ofi_samples = _safe_int(micro_snapshot.get("true_ofi_sample_count"), 0)
+    trusted_micro_ready = bool(
+        micro_source_state.startswith("fresh_ws")
+        and micro_age_sec <= 3.0
+        and true_ofi_samples >= 3
+        and ws_provenance.get("rising_missed_tp1_ws_micro_provenance_ready")
+    )
+    best_ask = _safe_float(
+        enriched_ws.get("best_ask")
+        or enriched_ws.get("ask_price")
+        or enriched_ws.get("market_data_effective_best_ask"),
+        0.0,
+    )
+    best_bid = _safe_float(
+        enriched_ws.get("best_bid")
+        or enriched_ws.get("bid_price")
+        or enriched_ws.get("market_data_effective_best_bid"),
+        0.0,
+    )
+    effective_current_price = _safe_float(
+        enriched_ws.get("curr") or enriched_ws.get("current_price"), 0.0
+    )
+    first_seen_price_source = next(
+        (
+            key
+            for key in ("first_seen_price", "watch_buy_price", "buy_price")
+            if _safe_float(stock.get(key), 0.0) > 0
+        ),
+        "missing",
+    )
+    first_seen_price = _safe_float(stock.get(first_seen_price_source), 0.0)
+    actual_watch_delta_pct = (
+        ((effective_current_price - first_seen_price) / first_seen_price) * 100.0
+        if effective_current_price > 0 and first_seen_price > 0
+        else None
+    )
+    mid = (best_ask + best_bid) / 2.0 if best_ask > 0 and best_bid > 0 else 0.0
+    spread_ratio = max(0.0, (best_ask - best_bid) / mid) if mid > 0 else 1.0
+    feature_probe = stock.get("last_watching_ai_feature_probe")
+    feature_probe = feature_probe if isinstance(feature_probe, dict) else {}
+    reversal_features = stock.get("last_reversal_features")
+    reversal_features = reversal_features if isinstance(reversal_features, dict) else {}
+    source_quality_features = stock.get("last_watching_ai_source_quality_fields")
+    source_quality_features = (
+        source_quality_features if isinstance(source_quality_features, dict) else {}
+    )
+
+    def _feature_observed_at(source: dict, fallback: Any = 0.0) -> float:
+        raw_value = (
+            source.get("feature_extracted_at")
+            or source.get("observed_at")
+            or source.get("captured_at")
+            or fallback
+        )
+        value = _safe_float(raw_value, 0.0)
+        if value > 10_000_000_000:
+            value /= 1000.0
+        return value
+
+    realtime_type_ts = raw_ws.get("last_realtime_type_ts")
+    realtime_type_ts = realtime_type_ts if isinstance(realtime_type_ts, dict) else {}
+    raw_ws_observed_at = max(
+        _feature_observed_at(raw_ws),
+        _feature_observed_at({"observed_at": realtime_type_ts.get("0B")}),
+        _feature_observed_at({"observed_at": realtime_type_ts.get("0D")}),
+        _feature_observed_at(
+            {
+                "observed_at": raw_ws.get("last_ws_update_ts")
+                or raw_ws.get("received_at")
+                or raw_ws.get("received_ts")
+            }
+        ),
+    )
+    feature_probe_at = _safe_float(stock.get("last_watching_ai_feature_probe_at"), 0.0)
+    feature_sources = (
+        ("raw_ws", raw_ws, raw_ws_observed_at),
+        (
+            "last_reversal_features",
+            reversal_features,
+            _feature_observed_at(reversal_features),
+        ),
+        ("last_watching_ai_feature_probe", feature_probe, feature_probe_at),
+        (
+            "last_watching_ai_source_quality_fields",
+            source_quality_features,
+            _feature_observed_at(source_quality_features, feature_probe_at),
+        ),
+    )
+
+    def _fresh_feature(keys: tuple[str, ...]) -> tuple[Any, str, float | None, dict]:
+        selected: tuple[Any, str, float | None, dict] | None = None
+        for source_name, source, observed_at in feature_sources:
+            if not source:
+                continue
+            value = next(
+                (source.get(key) for key in keys if source.get(key) not in (None, "", "-")),
+                None,
+            )
+            if value is None:
+                continue
+            age_sec = max(0.0, now_ts - observed_at) if observed_at > 0 else None
+            candidate = (value, source_name, age_sec, source)
+            if selected is None or (
+                age_sec is not None and (selected[2] is None or age_sec < selected[2])
+            ):
+                selected = candidate
+        return selected or (None, "missing", None, {})
+
+    tick_acceleration_raw, tick_acceleration_source, tick_feature_age_sec, tick_feature_source = (
+        _fresh_feature(
+            (
+                "tick_acceleration_ratio",
+                "tick_accel",
+                "tick_acceleration",
+                "late_entry_fresh_tick_acceleration_ratio",
+            )
+        )
+    )
+    tick_acceleration = _safe_float(tick_acceleration_raw, 0.0)
+    tick_acceleration_fresh = bool(
+        ws_provenance.get("rising_missed_tp1_ws_0b_tick_flow_trusted")
+        and tick_feature_age_sec is not None
+        and tick_feature_age_sec <= 3.0
+        and not _boolish_true(tick_feature_source.get("tick_context_stale"))
+    )
+    micro_vwap_raw, micro_vwap_source, micro_vwap_age_sec, micro_vwap_feature_source = (
+        _fresh_feature(("curr_vs_micro_vwap_bp", "micro_vwap_bp"))
+    )
+    micro_vwap_gap_bps = _safe_float(micro_vwap_raw, -999999.0)
+    micro_vwap_available = _boolish_true(micro_vwap_feature_source.get("micro_vwap_available"))
+    minute_candle_fresh = _boolish_true(
+        micro_vwap_feature_source.get("minute_candle_window_fresh")
+        or micro_vwap_feature_source.get("minute_candle_context_fresh")
+    )
+    minute_quality = str(
+        micro_vwap_feature_source.get("minute_candle_context_quality") or ""
+    ).lower()
+    minute_quality_usable = not any(
+        token in minute_quality for token in ("missing", "stale", "unavailable")
+    )
+    micro_vwap_fresh = bool(
+        micro_vwap_available
+        and minute_candle_fresh
+        and minute_quality_usable
+        and micro_vwap_age_sec is not None
+        and micro_vwap_age_sec <= 3.0
+    )
+    if envelope_result == "rest_budget_deferred" and not (cache_hit or scanner_cache_usable):
+        input_reason = "tp1_rest_budget_cache_unavailable"
+    elif not envelope_ready:
+        input_reason = "tp1_freshness_envelope_unavailable"
+    elif not trusted_micro_ready:
+        input_reason = "tp1_micro_ws_unavailable"
+    else:
+        input_reason = "ready"
+    fields: dict[str, Any] = {
+        **micro_update_fields,
+        **market_data_enrichment_log_fields(enriched_ws),
+        **envelope_fields,
+        **ws_provenance,
+        "rising_missed_tp1_input_ready": bool(envelope_ready and trusted_micro_ready),
+        "rising_missed_tp1_input_reason": input_reason,
+        "rising_missed_tp1_effective_quote_age_ms": (
+            effective_age_ms if effective_age_ms is not None else "-"
+        ),
+        "rising_missed_tp1_effective_price": (
+            effective_current_price if effective_current_price > 0 else "-"
+        ),
+        "rising_missed_tp1_effective_age_basis_known": time_basis_known,
+        "rising_missed_tp1_spread_ratio": round(spread_ratio, 6),
+        "rising_missed_tp1_actual_watch_delta_pct": (
+            round(actual_watch_delta_pct, 6) if actual_watch_delta_pct is not None else "-"
+        ),
+        "rising_missed_tp1_actual_watch_delta_anchor_price": (
+            first_seen_price if first_seen_price > 0 else "-"
+        ),
+        "rising_missed_tp1_actual_watch_delta_anchor_source": (
+            first_seen_price_source
+        ),
+        "rising_missed_tp1_micro_source_state": micro_source_state,
+        "rising_missed_tp1_micro_age_sec": round(micro_age_sec, 6),
+        "rising_missed_tp1_micro_confidence": micro_snapshot.get("confidence", 0.0),
+        "rising_missed_tp1_true_ofi_ewma": micro_snapshot.get("true_ofi_ewma", 0.0),
+        "rising_missed_tp1_true_ofi_sample_count": true_ofi_samples,
+        "rising_missed_tp1_pressure_ewma": micro_snapshot.get("pressure_ewma", 0.0),
+        "rising_missed_tp1_depth_imbalance_ewma": micro_snapshot.get(
+            "depth_imbalance_ewma", 0.0
+        ),
+        "rising_missed_tp1_top_depth_ratio": micro_snapshot.get("top_depth_ratio", 0.0),
+        "rising_missed_tp1_tick_acceleration": tick_acceleration,
+        "rising_missed_tp1_tick_acceleration_fresh": tick_acceleration_fresh,
+        "rising_missed_tp1_tick_acceleration_source": tick_acceleration_source,
+        "rising_missed_tp1_tick_acceleration_age_sec": (
+            round(tick_feature_age_sec, 6) if tick_feature_age_sec is not None else "-"
+        ),
+        "rising_missed_tp1_micro_vwap_gap_bps": micro_vwap_gap_bps,
+        "rising_missed_tp1_micro_vwap_fresh": micro_vwap_fresh,
+        "rising_missed_tp1_micro_vwap_source": micro_vwap_source,
+        "rising_missed_tp1_micro_vwap_age_sec": (
+            round(micro_vwap_age_sec, 6) if micro_vwap_age_sec is not None else "-"
+        ),
+        "rising_missed_tp1_resolver_envelope_result": envelope_result,
+        "rising_missed_tp1_evaluation_id": evaluation_id,
+        "rising_missed_tp1_resolver_scanner_cache_usable": scanner_cache_usable,
+        "rising_missed_tp1_resolver_cache_ttl_sec": cache_ttl_sec,
+    }
+    enriched_ws.update(fields)
+    return enriched_ws, fields
 
 
 def _is_forced_rising_missed_initial_scout_entry(
@@ -36966,25 +37543,71 @@ def _maybe_submit_rising_missed_one_share_entry(
     if not decision.allowed:
         return False
 
-    ws_estimator_fields = _maybe_update_rising_missed_micro_estimator_from_fresh_ws(
-        stock,
-        code,
-        ws_data,
-        runtime,
-        consumer_stage="rising_missed_candidate_gate_passed",
-    )
-    if ws_estimator_fields.get("rising_missed_micro_estimator_ws_update_reason") != "not_needed":
-        decision_log_fields.update(ws_estimator_fields)
-
-    ws_data, pre_quality_envelope_fields = _rising_missed_quality_guard_pre_envelope(
+    ws_data, decision_input_fields = resolve_rising_missed_decision_input(
         stock,
         code,
         current_ws_data,
         runtime,
-        scanner_envelope_ws_data=ws_data,
     )
-    if pre_quality_envelope_fields.get("rising_missed_quality_guard_pre_envelope_evaluated"):
-        decision_log_fields.update(pre_quality_envelope_fields)
+    decision_log_fields.update(decision_input_fields)
+    tp1_decision = evaluate_rising_missed_tp1_candidate(
+        stock,
+        decision_input_fields,
+        selector_enabled=_rising_missed_tp1_selector_enabled(),
+        active_date=_rising_missed_tp1_selector_active_date(),
+        current_date=_rising_missed_tp1_selector_current_date(runtime),
+        current_ai_action=(
+            stock.get("rising_missed_entry_ai_action")
+            or stock.get("entry_ai_action")
+            or stock.get("last_watching_ai_action")
+            or "WAIT"
+        ),
+    )
+    decision_log_fields.update(tp1_decision.log_fields or {})
+    if not tp1_decision.allowed:
+        freshness_recheck_fields: dict[str, Any] = {}
+        candidate_backoff_fields: dict[str, Any] = {}
+        if tp1_decision.deferred:
+            freshness_recheck_fields = _apply_rising_missed_freshness_envelope_recheck(
+                stock,
+                code,
+                {
+                    "rising_missed_scout_quality_guard_stale_ai_provenance_gap_blocked": True,
+                    "block_reason": tp1_decision.reason,
+                },
+                now_ts=_safe_float(runtime.get("now_ts"), time.time()),
+            )
+        else:
+            candidate_backoff_fields = _record_rising_missed_candidate_gate_backoff(
+                stock,
+                code,
+                tp1_decision.reason,
+                now_ts=_safe_float(runtime.get("now_ts"), time.time()),
+                source_stage="rising_missed_tp1_candidate_blocked",
+            )
+        _log_entry_pipeline(
+            stock,
+            code,
+            (
+                "rising_missed_tp1_candidate_deferred"
+                if tp1_decision.deferred
+                else "rising_missed_tp1_candidate_blocked"
+            ),
+            block_reason=tp1_decision.reason,
+            forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            runtime_effect=True,
+            allowed_runtime_apply=True,
+            **_merge_entry_pipeline_field_groups(
+                decision_log_fields,
+                candidate_backoff_fields,
+                _rising_missed_freshness_envelope_recheck_prefixed_fields(
+                    freshness_recheck_fields
+                ),
+            ),
+        )
+        return True
 
     quality_guard = _evaluate_rising_missed_scout_quality_guard(
         stock,

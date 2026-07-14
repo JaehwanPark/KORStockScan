@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -38,6 +39,18 @@ RISING_MISSED_ONE_SHARE_ELIGIBLE_CLASSES = {
     RISING_MISSED_CLASS_RAW,
     RISING_MISSED_CLASS_ACTIONABLE_MAJOR,
 }
+TP1_SELECTOR_PASS = "rising_missed_tp1_candidate_pass"
+TP1_SELECTOR_BYPASS = "rising_missed_tp1_selector_inactive"
+TP1_SELECTOR_DEFER_INPUT = "rising_missed_tp1_decision_input_defer"
+TP1_SELECTOR_BLOCK_LANE = "rising_missed_tp1_lane_not_eligible"
+TP1_SELECTOR_BLOCK_AI = "rising_missed_tp1_ai_state_blocked"
+TP1_SELECTOR_BLOCK_WAIT = "rising_missed_tp1_wait_requires_bid_imbalance_surge"
+TP1_SELECTOR_BLOCK_MICRO = "rising_missed_tp1_micro_conditions_failed"
+TP1_SELECTOR_GROSS_TARGET_PCT = 1.30
+TP1_SELECTOR_ADVERSE_STOP_PCT = -0.70
+TP1_SELECTOR_COST_RESERVE_PCT = 0.30
+TP1_SELECTOR_NET_TARGET_PCT = 1.00
+TP1_SELECTOR_HORIZON_SEC = 20 * 60
 
 
 @dataclass(frozen=True)
@@ -64,6 +77,15 @@ class RisingMissedClassification:
     reason: str
 
 
+@dataclass(frozen=True)
+class RisingMissedTP1CandidateDecision:
+    allowed: bool
+    deferred: bool
+    reason: str
+    lane: str = "none"
+    log_fields: dict[str, Any] | None = None
+
+
 def _safe_float(value: Any, default: float = 0.0) -> float:
     try:
         return float(value)
@@ -87,6 +109,229 @@ def _field_present(value: Any) -> bool:
         return value
     text = str(value or "").strip().lower()
     return bool(text) and text not in {"0", "false", "no", "n", "off", "none", "null", "-"}
+
+
+def _signature_tokens(
+    stock: dict[str, Any],
+    *,
+    include_promotion_reason: bool = True,
+) -> set[str]:
+    tokens: set[str] = set()
+    keys = [
+        "source_signature",
+        "scanner_source_signature",
+        "scanner_sources",
+    ]
+    if include_promotion_reason:
+        keys.extend(("scanner_promotion_reason", "promotion_reason"))
+    for key in keys:
+        raw = str(stock.get(key) or "").upper()
+        tokens.update(token for token in re.split(r"[^A-Z0-9_]+", raw) if token)
+    return tokens
+
+
+def _source_family_count(stock: dict[str, Any]) -> int:
+    explicit = _safe_int(
+        stock.get("source_family_count")
+        or stock.get("scanner_source_family_count")
+        or stock.get("source_count"),
+        0,
+    )
+    if explicit > 0:
+        return explicit
+    return len(_signature_tokens(stock, include_promotion_reason=False))
+
+
+def _has_signature(stock: dict[str, Any], marker: str) -> bool:
+    return marker.upper() in _signature_tokens(stock)
+
+
+def evaluate_rising_missed_tp1_candidate(
+    stock: dict[str, Any] | None,
+    decision_input: dict[str, Any] | None,
+    *,
+    selector_enabled: bool,
+    active_date: str,
+    current_date: str,
+    current_ai_action: Any = None,
+) -> RisingMissedTP1CandidateDecision:
+    """Return candidate eligibility only; broker submit safety remains downstream."""
+    stock = stock if isinstance(stock, dict) else {}
+    decision_input = decision_input if isinstance(decision_input, dict) else {}
+    active = bool(selector_enabled and active_date and active_date == current_date)
+    source_count = _source_family_count(stock)
+    low_rebound_pct = _safe_float(stock.get("low_rebound_pct") or stock.get("LowReboundPct"), 0.0)
+    watch_delta_raw = decision_input.get("rising_missed_tp1_actual_watch_delta_pct")
+    watch_delta_available = watch_delta_raw not in (None, "", "-")
+    watch_delta_pct = _safe_float(watch_delta_raw, 0.0)
+    low_rebound_lane = bool(
+        (
+            _has_signature(stock, "LOW_REBOUND_RISING_MISSED")
+            or _has_signature(stock, "LOW_REBOUND")
+        )
+        and low_rebound_pct >= 1.0
+        and source_count >= 3
+    )
+    acceleration_lane = bool(
+        watch_delta_available and 1.0 <= watch_delta_pct <= 3.0 and source_count >= 2
+    )
+    lane = "low_rebound" if low_rebound_lane else "acceleration" if acceleration_lane else "none"
+    ai_action = str(
+        current_ai_action
+        if current_ai_action not in (None, "")
+        else _entry_ai_action_for_rising_missed(stock)[0]
+    ).strip().upper()
+    bid_imbalance_surge = _has_signature(stock, "BID_IMBALANCE_SURGE")
+    base_fields = {
+        "rising_missed_tp1_selector_enabled": bool(selector_enabled),
+        "rising_missed_tp1_selector_active": active,
+        "rising_missed_tp1_selector_active_date": active_date or "-",
+        "rising_missed_tp1_selector_current_date": current_date or "-",
+        "rising_missed_tp1_candidate_lane": lane,
+        "rising_missed_tp1_source_family_count": source_count,
+        "rising_missed_tp1_low_rebound_pct": f"{low_rebound_pct:.4f}",
+        "rising_missed_tp1_watch_delta_pct": (
+            f"{watch_delta_pct:.4f}" if watch_delta_available else "-"
+        ),
+        "rising_missed_tp1_ai_action": ai_action or "-",
+        "rising_missed_tp1_bid_imbalance_surge": bid_imbalance_surge,
+        "rising_missed_tp1_gross_target_pct": TP1_SELECTOR_GROSS_TARGET_PCT,
+        "rising_missed_tp1_adverse_stop_pct": TP1_SELECTOR_ADVERSE_STOP_PCT,
+        "rising_missed_tp1_cost_reserve_pct": TP1_SELECTOR_COST_RESERVE_PCT,
+        "rising_missed_tp1_net_target_pct": TP1_SELECTOR_NET_TARGET_PCT,
+        "rising_missed_tp1_horizon_sec": TP1_SELECTOR_HORIZON_SEC,
+        "rising_missed_tp1_actual_fee_tax_required_for_net_label": True,
+        "metric_role": "bounded_tunable_candidate_gate",
+        "decision_authority": "operator_runtime_override_rising_missed_tp1_candidate_selector",
+        "window_policy": "same_day_intraday_candidate_then_postclose_20m_label",
+        "sample_floor": "source_family_and_true_ofi_runtime_floors",
+        "primary_decision_metric": "gross_1_30_before_adverse_0_70_within_20m",
+        "source_quality_gate": "freshness_envelope_and_trusted_ws_micro_required",
+        "forbidden_uses": (
+            "broker_guard_bypass,submit_safety_bypass,quantity_or_cap_change,provider_route_change,"
+            "tp_or_exit_change,hard_or_protect_or_emergency_guard_relaxation,profit_guarantee"
+        ),
+    }
+
+    def _decision_fields(*, allowed: bool, deferred: bool, reason: str) -> dict[str, Any]:
+        return {
+            **base_fields,
+            **decision_input,
+            "rising_missed_tp1_candidate_allowed": allowed,
+            "rising_missed_tp1_candidate_deferred": deferred,
+            "rising_missed_tp1_candidate_reason": reason,
+        }
+
+    if not active:
+        return RisingMissedTP1CandidateDecision(
+            allowed=True,
+            deferred=False,
+            reason=TP1_SELECTOR_BYPASS,
+            lane=lane,
+            log_fields=_decision_fields(
+                allowed=True,
+                deferred=False,
+                reason=TP1_SELECTOR_BYPASS,
+            ),
+        )
+    if not bool(decision_input.get("rising_missed_tp1_input_ready")):
+        return RisingMissedTP1CandidateDecision(
+            allowed=False,
+            deferred=True,
+            reason=str(decision_input.get("rising_missed_tp1_input_reason") or TP1_SELECTOR_DEFER_INPUT),
+            lane=lane,
+            log_fields=_decision_fields(
+                allowed=False,
+                deferred=True,
+                reason=str(
+                    decision_input.get("rising_missed_tp1_input_reason")
+                    or TP1_SELECTOR_DEFER_INPUT
+                ),
+            ),
+        )
+    if lane == "none":
+        return RisingMissedTP1CandidateDecision(
+            allowed=False,
+            deferred=False,
+            reason=TP1_SELECTOR_BLOCK_LANE,
+            lane=lane,
+            log_fields=_decision_fields(
+                allowed=False,
+                deferred=False,
+                reason=TP1_SELECTOR_BLOCK_LANE,
+            ),
+        )
+    if ai_action in {"DROP", "NOT_EVALUATED", "FAIL_CLOSED", "UNAVAILABLE"}:
+        return RisingMissedTP1CandidateDecision(
+            allowed=False,
+            deferred=False,
+            reason=TP1_SELECTOR_BLOCK_AI,
+            lane=lane,
+            log_fields=_decision_fields(
+                allowed=False,
+                deferred=False,
+                reason=TP1_SELECTOR_BLOCK_AI,
+            ),
+        )
+    if ai_action in {"", "-", "WAIT", "MISSING", "NONE", "NULL"} and not bid_imbalance_surge:
+        return RisingMissedTP1CandidateDecision(
+            allowed=False,
+            deferred=False,
+            reason=TP1_SELECTOR_BLOCK_WAIT,
+            lane=lane,
+            log_fields=_decision_fields(
+                allowed=False,
+                deferred=False,
+                reason=TP1_SELECTOR_BLOCK_WAIT,
+            ),
+        )
+    micro_conditions = bool(
+        _safe_float(decision_input.get("rising_missed_tp1_effective_quote_age_ms"), 999999.0) <= 3000.0
+        and _safe_float(decision_input.get("rising_missed_tp1_spread_ratio"), 1.0) <= 0.002
+        and _safe_float(decision_input.get("rising_missed_tp1_micro_confidence"), 0.0) >= 0.25
+        and _safe_float(decision_input.get("rising_missed_tp1_true_ofi_ewma"), 0.0) > 0.0
+        and _safe_float(decision_input.get("rising_missed_tp1_pressure_ewma"), 0.0) >= 49.0
+        and _safe_float(decision_input.get("rising_missed_tp1_depth_imbalance_ewma"), -1.0) >= -0.05
+        and _safe_float(decision_input.get("rising_missed_tp1_top_depth_ratio"), 0.0) >= 0.95
+        and str(decision_input.get("market_data_signed_tape_state") or "").lower() != "sell_dominated"
+        and (
+            (
+                bool(decision_input.get("rising_missed_tp1_tick_acceleration_fresh"))
+                and _safe_float(decision_input.get("rising_missed_tp1_tick_acceleration"), 0.0)
+                >= 1.0
+            )
+            or (
+                bool(decision_input.get("rising_missed_tp1_micro_vwap_fresh"))
+                and _safe_float(
+                    decision_input.get("rising_missed_tp1_micro_vwap_gap_bps"), -999999.0
+                )
+                >= 0.0
+            )
+        )
+    )
+    if not micro_conditions:
+        return RisingMissedTP1CandidateDecision(
+            allowed=False,
+            deferred=False,
+            reason=TP1_SELECTOR_BLOCK_MICRO,
+            lane=lane,
+            log_fields=_decision_fields(
+                allowed=False,
+                deferred=False,
+                reason=TP1_SELECTOR_BLOCK_MICRO,
+            ),
+        )
+    return RisingMissedTP1CandidateDecision(
+        allowed=True,
+        deferred=False,
+        reason=TP1_SELECTOR_PASS,
+        lane=lane,
+        log_fields=_decision_fields(
+            allowed=True,
+            deferred=False,
+            reason=TP1_SELECTOR_PASS,
+        ),
+    )
 
 
 def _prior_log_fields(stock: dict[str, Any]) -> dict[str, Any]:

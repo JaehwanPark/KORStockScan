@@ -40,6 +40,27 @@ def test_market_data_enrichment_uses_fresh_ws_without_rest():
     assert enriched["curr"] == 10000
 
 
+def test_market_data_enrichment_normalizes_nested_ws_best_levels():
+    enriched, fields = build_market_data_enrichment(
+        ws_data={
+            "curr": 10000,
+            "last_ws_update_ts": 1000.0,
+            "orderbook": {
+                "asks": [{"price": 10010, "qty": 120}],
+                "bids": [{"price": 9990, "qty": 140}],
+            },
+        },
+        now_ts=1000.1,
+    )
+
+    assert fields["market_data_freshness_state"] == FRESH_WS
+    assert fields["market_data_effective_quote_level_basis"] == "normalized_ws_orderbook"
+    assert fields["market_data_effective_best_ask"] == 10010
+    assert fields["market_data_effective_best_bid"] == 9990
+    assert enriched["best_ask"] == 10010
+    assert enriched["best_bid"] == 9990
+
+
 def test_market_data_enrichment_promotes_stale_ws_to_rest_enriched_quote():
     ws_data = {
         "curr": 9900,
@@ -176,6 +197,46 @@ def test_market_data_enrichment_freshest_policy_keeps_younger_ws_quote():
     assert enriched["curr"] == 10000
 
 
+def test_market_data_enrichment_absolute_ws_timestamp_overrides_constant_reported_age():
+    ws_data = {
+        "curr": 10000,
+        "best_ask": 10010,
+        "best_bid": 9990,
+        "quote_age_ms": 10.0,
+        "last_ws_update_ts": 995.0,
+    }
+    rest_snapshot = _rest_orderbook(10020)
+    rest_snapshot["rest_received_ts"] = 999.9
+
+    enriched, fields = build_market_data_enrichment(
+        ws_data=ws_data,
+        rest_orderbook=rest_snapshot,
+        now_ts=1000.0,
+        prefer_freshest_source=True,
+    )
+
+    assert fields["market_data_effective_price_source"] == "ka10004_rest_orderbook"
+    assert fields["market_data_ws_quote_age_ms"] == 5000.0
+    assert fields["market_data_ws_age_basis"] == "absolute_timestamp:last_ws_update_ts"
+    assert fields["market_data_rest_age_basis"] == "absolute_timestamp:rest_received_ts"
+    assert enriched["curr"] == 10020
+
+
+def test_market_data_enrichment_reported_ws_age_without_time_basis_is_labeled_unknown():
+    _enriched, fields = build_market_data_enrichment(
+        ws_data={
+            "curr": 10000,
+            "best_ask": 10010,
+            "best_bid": 9990,
+            "quote_age_ms": 10.0,
+        },
+        now_ts=1000.0,
+    )
+
+    assert fields["market_data_freshness_state"] == FRESH_WS
+    assert fields["market_data_ws_age_basis"] == "reported_age_no_time_basis:quote_age_ms"
+
+
 def test_market_data_enrichment_rejects_ka10004_without_receive_timestamp_as_fresh():
     ws_data = {
         "curr": 9900,
@@ -195,6 +256,21 @@ def test_market_data_enrichment_rejects_ka10004_without_receive_timestamp_as_fre
 
     assert fields["market_data_freshness_state"] == "stale"
     assert fields["market_data_orderbook_state"] == "stale"
+
+
+def test_market_data_enrichment_rejects_ka10004_age_zero_without_receive_timestamp():
+    rest_snapshot = _rest_orderbook(10000)
+    rest_snapshot.pop("rest_received_ts")
+    rest_snapshot["age_ms"] = 0
+
+    _enriched, fields = build_market_data_enrichment(
+        ws_data={"curr": 9900, "best_ask": 9910, "best_bid": 9890, "last_ws_update_ts": 990.0},
+        rest_orderbook=rest_snapshot,
+        now_ts=1000.0,
+    )
+
+    assert fields["market_data_rest_quote_age_ms"] == "-"
+    assert fields["market_data_rest_age_basis"] == "missing_receive_timestamp"
 
 
 def test_market_data_signed_tape_sell_dominated_is_negative_veto_provenance_only():

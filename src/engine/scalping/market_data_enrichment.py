@@ -78,33 +78,71 @@ def _age_ms_from_keys(source: dict[str, Any], now_ts: float, keys: tuple[str, ..
     return None
 
 
-def _ws_age_ms(ws_data: dict[str, Any], now_ts: float) -> float | None:
-    age = _age_ms_from_keys(
+def _age_details(
+    source: dict[str, Any],
+    now_ts: float,
+    *,
+    absolute_keys: tuple[str, ...],
+    reported_age_keys: tuple[str, ...],
+    snapshot_time_keys: tuple[str, ...] = (),
+) -> tuple[float | None, str]:
+    for key in absolute_keys:
+        if key not in source:
+            continue
+        age = _epoch_ms_to_age_ms(source.get(key), now_ts)
+        if age is not None:
+            return age, f"absolute_timestamp:{key}"
+    for key in reported_age_keys:
+        if key not in source:
+            continue
+        reported_age = _safe_float(source.get(key), None)
+        if reported_age is None or reported_age < 0:
+            continue
+        for snapshot_key in snapshot_time_keys:
+            if snapshot_key not in source:
+                continue
+            elapsed = _epoch_ms_to_age_ms(source.get(snapshot_key), now_ts)
+            if elapsed is not None:
+                return float(reported_age) + elapsed, f"reported_age_plus_elapsed:{key}:{snapshot_key}"
+        return float(reported_age), f"reported_age_no_time_basis:{key}"
+    return None, "missing"
+
+
+def _ws_age_details(ws_data: dict[str, Any], now_ts: float) -> tuple[float | None, str]:
+    return _age_details(
         ws_data,
         now_ts,
-        (
-            "quote_age_ms",
-            "ws_age_ms",
-            "pre_submit_effective_quote_age_ms",
-            "pre_ai_ws_snapshot_refresh_age_ms",
+        absolute_keys=(
             "last_ws_update_ts",
             "received_at",
             "received_ts",
             "timestamp",
             "ts",
         ),
+        reported_age_keys=(
+            "quote_age_ms",
+            "ws_age_ms",
+            "pre_submit_effective_quote_age_ms",
+            "pre_ai_ws_snapshot_refresh_age_ms",
+        ),
+        snapshot_time_keys=(
+            "quote_age_observed_at",
+            "snapshot_observed_at",
+            "snapshot_created_at",
+            "market_data_enrichment_stored_at",
+        ),
     )
-    return age
 
 
-def _rest_age_ms(rest_orderbook: dict[str, Any], now_ts: float) -> float | None:
+def _ws_age_ms(ws_data: dict[str, Any], now_ts: float) -> float | None:
+    return _ws_age_details(ws_data, now_ts)[0]
+
+
+def _rest_age_details(rest_orderbook: dict[str, Any], now_ts: float) -> tuple[float | None, str]:
     if not isinstance(rest_orderbook, dict) or not rest_orderbook:
-        return None
+        return None, "missing"
     is_ka10004_snapshot = str(rest_orderbook.get("source") or "").strip() == "ka10004_rest_orderbook"
-    age_keys = (
-        "pre_submit_rest_orderbook_refresh_age_ms",
-        "rest_received_age_ms",
-        "received_age_ms",
+    absolute_keys = (
         "rest_received_ts_ms",
         "received_at_ms",
         "rest_received_ts",
@@ -113,18 +151,29 @@ def _rest_age_ms(rest_orderbook: dict[str, Any], now_ts: float) -> float | None:
         "timestamp",
         "ts",
     )
+    reported_age_keys = (
+        "pre_submit_rest_orderbook_refresh_age_ms",
+        "rest_received_age_ms",
+        "received_age_ms",
+    )
     if not is_ka10004_snapshot:
-        age_keys = ("age_ms", *age_keys)
-    age = _age_ms_from_keys(
+        reported_age_keys = ("age_ms", *reported_age_keys)
+    age, basis = _age_details(
         rest_orderbook,
         now_ts,
-        age_keys,
+        absolute_keys=absolute_keys,
+        reported_age_keys=reported_age_keys,
+        snapshot_time_keys=("snapshot_observed_at", "snapshot_created_at"),
     )
     if age is not None:
-        return age
+        return age, basis
     if is_ka10004_snapshot:
-        return None
-    return None
+        return None, "missing_receive_timestamp"
+    return None, "missing"
+
+
+def _rest_age_ms(rest_orderbook: dict[str, Any], now_ts: float) -> float | None:
+    return _rest_age_details(rest_orderbook, now_ts)[0]
 
 
 def _orderbook_side(orderbook: Any, side: str) -> dict[str, Any]:
@@ -151,11 +200,19 @@ def _quote_levels(source: dict[str, Any]) -> dict[str, int]:
         0,
     )
     best_ask_qty = _safe_int(
-        source.get("best_ask_qty") or source.get("ask_qty") or ask_row.get("qty"),
+        source.get("best_ask_qty")
+        or source.get("ask_qty")
+        or ask_row.get("qty")
+        or ask_row.get("volume")
+        or ask_row.get("quantity"),
         0,
     )
     best_bid_qty = _safe_int(
-        source.get("best_bid_qty") or source.get("bid_qty") or bid_row.get("qty"),
+        source.get("best_bid_qty")
+        or source.get("bid_qty")
+        or bid_row.get("qty")
+        or bid_row.get("volume")
+        or bid_row.get("quantity"),
         0,
     )
     curr = _safe_int(
@@ -301,10 +358,18 @@ def build_market_data_enrichment(
     metadata = candidate_metadata if isinstance(candidate_metadata, dict) else {}
     ws_levels = _quote_levels(base)
     rest_levels = _quote_levels(rest_orderbook)
+    ws_levels_explicit = bool(
+        _safe_int(base.get("curr") or base.get("current_price"), 0) > 0
+        and _safe_int(base.get("best_ask") or base.get("ask_price"), 0) > 0
+        and _safe_int(base.get("best_bid") or base.get("bid_price"), 0) > 0
+    )
+    for key, value in ws_levels.items():
+        if value > 0 and _safe_int(base.get(key), 0) <= 0:
+            base[key] = value
     ws_usable = _quote_usable(ws_levels)
     rest_usable = _quote_usable(rest_levels)
-    ws_age = _ws_age_ms(base, now_value)
-    rest_age = _rest_age_ms(rest_orderbook, now_value)
+    ws_age, ws_age_basis = _ws_age_details(base, now_value)
+    rest_age, rest_age_basis = _rest_age_details(rest_orderbook, now_value)
     ws_explicit_stale = any(
         _boolish(base.get(key))
         for key in ("quote_stale", "stale_quote", "context_stale", "diagnostic_quote_age_stale")
@@ -357,7 +422,6 @@ def build_market_data_enrichment(
                     base.get("ws_snapshot_recovery_source") or "ka10004_rest_orderbook_enrichment"
                 ),
                 "quote_age_ms": float(rest_age),
-                "last_ws_update_ts": now_value - float(rest_age) / 1000.0,
             }
         )
     elif ws_fresh:
@@ -375,6 +439,18 @@ def build_market_data_enrichment(
         orderbook_state = MISSING
         effective_age = None
         effective_source = "none"
+
+    if effective_source == "ka10004_rest_orderbook":
+        effective_levels = rest_levels
+        effective_level_basis = "ka10004_rest_orderbook"
+    elif effective_source == "ws":
+        effective_levels = ws_levels
+        effective_level_basis = (
+            "explicit_ws_levels" if ws_levels_explicit else "normalized_ws_orderbook"
+        )
+    else:
+        effective_levels = {"best_ask": 0, "best_bid": 0}
+        effective_level_basis = effective_source or "none"
 
     signed_fields = _signed_tape_fields(
         rest_signed_ticks,
@@ -396,9 +472,17 @@ def build_market_data_enrichment(
             round(float(effective_age), 3) if effective_age is not None else "-"
         ),
         "market_data_effective_price_source": effective_source,
+        "market_data_effective_best_ask": effective_levels.get("best_ask", 0) or "-",
+        "market_data_effective_best_bid": effective_levels.get("best_bid", 0) or "-",
+        "market_data_effective_quote_level_basis": effective_level_basis,
+        "market_data_effective_age_basis": (
+            rest_age_basis if effective_source == "ka10004_rest_orderbook" else ws_age_basis
+        ),
         "market_data_ws_rest_gap_bps": round(float(gap), 3) if gap is not None else "-",
         "market_data_ws_quote_age_ms": round(float(ws_age), 3) if ws_age is not None else "-",
+        "market_data_ws_age_basis": ws_age_basis,
         "market_data_rest_quote_age_ms": round(float(rest_age), 3) if rest_age is not None else "-",
+        "market_data_rest_age_basis": rest_age_basis,
         "market_data_source_selection_policy": (
             "freshest_age" if prefer_freshest_source else "ws_primary_then_rest"
         ),
