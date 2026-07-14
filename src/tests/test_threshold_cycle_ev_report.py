@@ -5,6 +5,43 @@ import pytest
 from src.engine import threshold_cycle_ev_report as mod
 
 
+def test_scale_in_split_order_summary_preserves_runtime_three_leg_count(
+    tmp_path, monkeypatch
+):
+    target_date = "2026-07-07"
+    report_dir = tmp_path / "scale_in_split_order_plan"
+    report_dir.mkdir(parents=True)
+    (report_dir / f"scale_in_split_order_plan_{target_date}.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "scale_in_split_order_plan_v1",
+                "source_quality": {"status": "pass", "tuning_input_allowed": True},
+                "input_summary": {
+                    "runtime_three_leg_candidate_count": 1,
+                    "diagnostic_three_leg_candidate_count": 0,
+                },
+                "candidate_grid": [],
+                "recommended_policy": {
+                    "runtime_apply_allowed": True,
+                    "policy_file": "/tmp/scale-in-policy.json",
+                    "policy_version": "scale_in_split_order_plan:test-three-leg",
+                    "candidates": [
+                        {"policy_mode": "bounded_three_leg_tick_band", "leg_count": 3}
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "SCALE_IN_SPLIT_ORDER_PLAN_DIR", report_dir)
+
+    summary, _path, warnings = mod._scale_in_split_order_plan_summary(target_date)
+
+    assert warnings == []
+    assert summary["runtime_three_leg_candidate_count"] == 1
+    assert summary["recommended_policy_candidate_count"] == 1
+
+
 def test_runtime_apply_bridge_summary_preserves_post_apply_provenance():
     manifest = {
         "runtime_apply_bridge": {

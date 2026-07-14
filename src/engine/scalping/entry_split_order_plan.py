@@ -37,6 +37,12 @@ BASELINE_SPLIT_VARIANT_ID = "equal_50_50_offset_0pct_0_3pct"
 PCT_BAND_3LEG_VARIANT_ID = "equal_3leg_offset_0pct_0_3pct_0_8pct"
 RUNTIME_FALLBACK_POLICY_MODE = "runtime_default_passive_center_40_60_0_3pct"
 RUNTIME_FALLBACK_VARIANT_ID = "runtime_default_passive_center_40_60_offset_0pct_0_3pct"
+RUNTIME_FALLBACK_THREE_LEG_POLICY_MODE = (
+    "runtime_default_market_first_50_residual_25_25_3leg"
+)
+RUNTIME_FALLBACK_THREE_LEG_VARIANT_ID = (
+    "runtime_default_50_25_25_offset_0pct_0_3pct_0_8pct"
+)
 PASSIVE_CENTER_MAX_FIRST_WEIGHT = 0.40
 PASSIVE_BIAS_WAIT_WARNING_FIRST_WEIGHT = 0.20
 ALLOWED_PRICE_CANDIDATES = {
@@ -977,6 +983,20 @@ def _tick_size(price: int) -> int:
 
 
 def _runtime_default_bucket_policy(bucket: str) -> dict[str, Any]:
+    if bucket == "passive_wide_or_weak":
+        return {
+            "context_bucket": bucket,
+            "leg_count": 3,
+            "price_offsets_ticks": [0, 1, 2],
+            "price_offsets_pct": [0.0, 0.3, 0.8],
+            "qty_weight_min": 0.5,
+            "qty_weight_max": 0.5,
+            "policy_mode": RUNTIME_FALLBACK_THREE_LEG_POLICY_MODE,
+            "split_variant_id": RUNTIME_FALLBACK_THREE_LEG_VARIANT_ID,
+            "policy_generation_reason": (
+                "runtime fallback for passive bucket gap; 50pct market-first plus two resolver residual legs"
+            ),
+        }
     return {
         "context_bucket": bucket,
         "leg_count": 2,
@@ -1164,8 +1184,9 @@ def apply_entry_split_order_policy(
             "entry_split_order_qty_weight_min": bucket_policy.get("qty_weight_min"),
         }
     )
+    requested_legs = max(1, _safe_int(bucket_policy.get("leg_count"), 1))
     max_legs = _max_legs_for_qty(total_qty)
-    desired_legs = min(_safe_int(bucket_policy.get("leg_count"), 1), max_legs, total_qty)
+    desired_legs = min(requested_legs, max_legs, total_qty)
     if desired_legs <= 1:
         fields["entry_split_order_skip_reason"] = "single_leg_policy"
         fields["entry_split_order_bucket"] = bucket
@@ -1201,11 +1222,16 @@ def apply_entry_split_order_policy(
             policy_first_weight,
             context_fields,
         )
-    runtime_weight_adjusted = abs(float(first_weight) - float(policy_first_weight)) > 0.000001
+    runtime_weight_adjusted = (
+        abs(float(first_weight) - float(policy_first_weight)) > 0.000001
+    )
     split_variant_id = policy_split_variant_id
+    leg_count_clipped = desired_legs != requested_legs
+    if leg_count_clipped:
+        split_variant_id = f"{split_variant_id}__qty_clipped_legs{desired_legs}"
     if runtime_weight_adjusted:
         split_variant_id = (
-            f"{policy_split_variant_id}__runtime_first_weight_{int(round(first_weight * 100)):02d}"
+            f"{split_variant_id}__runtime_first_weight_{int(round(first_weight * 100)):02d}"
         )
     quantities = _split_qty(total_qty, desired_legs, first_weight)
     applied_offsets = offsets[:desired_legs]
@@ -1275,6 +1301,9 @@ def apply_entry_split_order_policy(
             "entry_split_order_policy_mode": policy_mode,
             "entry_split_order_variant_id": split_variant_id,
             "entry_split_order_policy_variant_id": policy_split_variant_id,
+            "entry_split_order_policy_requested_leg_count": requested_legs,
+            "entry_split_order_max_leg_count_for_qty": max_legs,
+            "entry_split_order_leg_count_clipped": leg_count_clipped,
             "entry_split_order_runtime_default_policy_applied": fallback_policy_applied,
             "entry_split_order_operator_fallback_authorized": bool(
                 policy.get("entry_split_order_operator_fallback_authorized")

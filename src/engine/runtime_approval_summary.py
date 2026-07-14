@@ -2185,6 +2185,11 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
             "scale_in_split_order_plan_market_qty_split_only_count": scale_in_split_order_plan_summary.get(
                 "market_qty_split_only_count"
             ),
+            "scale_in_split_order_plan_runtime_three_leg_candidate_count": (
+                scale_in_split_order_plan_summary.get(
+                    "runtime_three_leg_candidate_count"
+                )
+            ),
             "buy_funnel_sentinel_primary": (
                 (ev_report.get("buy_funnel_sentinel") or {}).get("primary")
                 if isinstance(ev_report.get("buy_funnel_sentinel"), dict)

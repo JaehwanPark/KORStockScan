@@ -622,6 +622,92 @@ def test_allocator_uses_runtime_default_for_missing_bucket_policy(monkeypatch, t
     assert [item["price"] for item in orders] == [1000, 997]
 
 
+def test_allocator_uses_three_leg_runtime_default_for_missing_passive_bucket(
+    monkeypatch, tmp_path
+):
+    _patch_dirs(monkeypatch, tmp_path)
+    target_date = datetime.now(timezone(timedelta(hours=9))).date().isoformat()
+    policy_file = split_plan.policy_path(target_date)
+    policy_file.parent.mkdir(parents=True, exist_ok=True)
+    policy_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "entry_split_order_policy_v1",
+                "policy_version": "test-policy",
+                "source_date": target_date,
+                "buckets": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE", str(policy_file))
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_MARKET_FIRST_LEG_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_MARKET_FIRST_LEG_ACTIVE_DATE", target_date)
+
+    orders, fields = split_plan.apply_entry_split_order_policy(
+        [{"tag": "normal", "qty": 10, "price": 1000, "order_type_code": "00", "tif": "DAY"}],
+        latency_gate={
+            "spread_bps": 45,
+            "buy_pressure_10t": 40,
+            "latency_state": "SAFE",
+            "order_price": 1000,
+        },
+    )
+
+    assert fields["entry_split_order_policy_applied"] is True
+    assert fields["entry_split_order_runtime_default_policy_applied"] is True
+    assert fields["entry_split_order_policy_requested_leg_count"] == 3
+    assert fields["entry_split_order_leg_count"] == 3
+    assert fields["entry_split_order_leg_count_clipped"] is False
+    assert [item["qty"] for item in orders] == [5, 2, 3]
+    assert [item["price"] for item in orders] == [1000, 997, 992]
+    assert [item["order_type_code"] for item in orders] == ["3", "00", "00"]
+    assert [item["entry_split_order_execution_mode"] for item in orders] == [
+        "market_first",
+        "resolver_limit",
+        "resolver_limit",
+    ]
+    assert sum(item["qty"] for item in orders) == 10
+
+
+def test_allocator_records_qty_clipping_for_three_leg_entry_policy(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    target_date = datetime.now(timezone(timedelta(hours=9))).date().isoformat()
+    policy_file = split_plan.policy_path(target_date)
+    policy_file.parent.mkdir(parents=True, exist_ok=True)
+    policy_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "entry_split_order_policy_v1",
+                "policy_version": "test-policy",
+                "source_date": target_date,
+                "buckets": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE", str(policy_file))
+
+    orders, fields = split_plan.apply_entry_split_order_policy(
+        [{"tag": "normal", "qty": 4, "price": 1000, "order_type_code": "00", "tif": "DAY"}],
+        latency_gate={
+            "spread_bps": 45,
+            "buy_pressure_10t": 40,
+            "latency_state": "SAFE",
+            "order_price": 1000,
+        },
+    )
+
+    assert len(orders) == 2
+    assert fields["entry_split_order_policy_requested_leg_count"] == 3
+    assert fields["entry_split_order_max_leg_count_for_qty"] == 2
+    assert fields["entry_split_order_leg_count_clipped"] is True
+    assert fields["entry_split_order_variant_id"].endswith("__qty_clipped_legs2__runtime_first_weight_40")
+    assert sum(item["qty"] for item in orders) == 4
+
+
 def test_allocator_biases_ai_wait_high_spread_to_passive_leg(monkeypatch, tmp_path):
     _patch_dirs(monkeypatch, tmp_path)
     target_date = datetime.now(timezone(timedelta(hours=9))).date().isoformat()
@@ -770,13 +856,16 @@ def test_allocator_market_first_uses_policy_weight_and_keeps_residual_at_resolve
     assert fields["entry_split_order_qty_weight_min"] == 0.5
     assert fields["entry_split_order_passive_bias_reason"] == ""
     assert fields["entry_split_order_runtime_weight_adjustment_applied"] is False
-    assert [item["qty"] for item in orders] == [16, 16]
+    assert [item["qty"] for item in orders] == [16, 8, 8]
     assert orders[0]["order_type_code"] == "3"
     assert orders[0]["entry_split_order_execution_mode"] == "market_first"
     assert orders[0]["entry_split_order_market_reference_price"] == 12240
     assert orders[1]["order_type_code"] == "00"
     assert orders[1]["entry_split_order_execution_mode"] == "resolver_limit"
     assert orders[1]["price"] < orders[0]["price"]
+    assert orders[2]["order_type_code"] == "00"
+    assert orders[2]["entry_split_order_execution_mode"] == "resolver_limit"
+    assert orders[2]["price"] < orders[1]["price"]
 
 
 def test_allocator_date_bounded_policy_becomes_inactive(monkeypatch, tmp_path):

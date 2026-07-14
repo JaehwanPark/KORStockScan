@@ -156,6 +156,54 @@ def test_allocator_skips_qty_one_pyramid_and_splits_market_avg_down(monkeypatch,
     assert {order["price"] for order in best_limit_orders} == {0}
 
 
+def test_allocator_applies_explicit_three_leg_avg_down_policy(monkeypatch, tmp_path):
+    target_date = "2026-07-07"
+    _patch_dirs(monkeypatch, tmp_path)
+    policy_file = split_plan.policy_path(target_date)
+    policy_file.parent.mkdir(parents=True, exist_ok=True)
+    policy_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "scale_in_split_order_policy_v1",
+                "policy_version": "scale_in_split_order_plan:test-three-leg",
+                "generated_at": datetime.now(timezone(timedelta(hours=9))).isoformat(),
+                "runtime_apply_allowed": True,
+                "buckets": {
+                    "scalping:late_loss_retry:normal": {
+                        "context_bucket": "scalping:late_loss_retry:normal",
+                        "leg_count": 3,
+                        "price_offsets_ticks": [0, 1, 2],
+                        "price_offsets_pct": [0.0, 0.3, 0.8],
+                        "qty_weights": [0.5, 0.25, 0.25],
+                        "qty_weight_min": 0.5,
+                        "qty_weight_max": 0.25,
+                        "policy_mode": "bounded_three_leg_tick_band",
+                        "split_variant_id": "scale_in_bounded_50_25_25_offset_0pct_0_3pct_0_8pct",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_FILE", str(policy_file))
+
+    orders, fields = split_plan.apply_scale_in_split_order_policy(
+        {"qty": 8, "price": 10000, "order_type_code": "00", "add_type": "AVG_DOWN"},
+        stock={"strategy": "SCALPING"},
+        action={"add_type": "AVG_DOWN", "reason": "late_loss_avg_down_retry"},
+        price_resolution={"order_price": 10000, "best_bid": 10000},
+    )
+
+    assert fields["scale_in_split_order_policy_applied"] is True
+    assert fields["scale_in_split_order_policy_requested_leg_count"] == 3
+    assert fields["scale_in_split_order_leg_count"] == 3
+    assert fields["scale_in_split_order_leg_count_clipped"] is False
+    assert [item["qty"] for item in orders] == [4, 2, 2]
+    assert [item["price"] for item in orders] == [10000, 9970, 9920]
+    assert sum(item["qty"] for item in orders) == 8
+
+
 def test_allocator_runtime_default_uses_one_pct_when_policy_bucket_missing(monkeypatch, tmp_path):
     target_date = "2026-07-07"
     _patch_dirs(monkeypatch, tmp_path)
@@ -390,6 +438,72 @@ def test_report_selects_0_2tick_60_40_when_two_tick_touch_high(monkeypatch, tmp_
     assert diagnostic["price_offsets_ticks"] == [0, 1, 2]
     assert diagnostic["price_offsets_pct"] == [0.0, 0.3, 0.8]
     assert diagnostic["runtime_apply_allowed"] is False
+
+
+def test_report_promotes_three_leg_candidate_after_runtime_sample_floor(
+    monkeypatch, tmp_path
+):
+    target_date = "2026-07-07"
+    data_dir = _patch_dirs(monkeypatch, tmp_path)
+    _write_source_quality_pass(data_dir, target_date)
+    events = []
+    for idx in range(split_plan.THREE_LEG_RUNTIME_SAMPLE_FLOOR):
+        code = f"{idx:06d}"
+        minute = idx % 60
+        events.extend(
+            [
+                {
+                    "stage": "late_loss_avg_down_retry_submitted",
+                    "emitted_at": f"2026-07-07T09:{minute:02d}:00+09:00",
+                    "stock_code": code,
+                    "record_id": idx + 1,
+                    "strategy": "SCALPING",
+                    "add_type": "AVG_DOWN",
+                    "reason": "late_loss_avg_down_retry",
+                    "actual_order_submitted": True,
+                    "request_price": 10000,
+                    "order_type": "00",
+                },
+                {
+                    "stage": "stat_action_decision_snapshot",
+                    "emitted_at": f"2026-07-07T09:{minute:02d}:20+09:00",
+                    "stock_code": code,
+                    "curr_price": 9980,
+                },
+            ]
+        )
+    _write_pipeline_events(data_dir, target_date, events)
+
+    report = split_plan.build_report(target_date)
+
+    assert report["input_summary"]["runtime_three_leg_candidate_count"] == 1
+    assert report["input_summary"]["diagnostic_three_leg_candidate_count"] == 0
+    assert len(report["recommended_policy"]["candidates"]) == 1
+    candidate = report["recommended_policy"]["candidates"][0]
+    assert candidate["leg_count"] == 3
+    assert candidate["policy_mode"] == split_plan.POLICY_MODE_BOUNDED_THREE_LEG
+    assert candidate["runtime_apply_allowed"] is True
+    assert (
+        report["policy_artifact"]["buckets"]["scalping:late_loss_retry:normal"]["leg_count"]
+        == 3
+    )
+
+
+def test_three_leg_candidate_stays_diagnostic_when_missed_upside_is_high():
+    candidate = split_plan._three_leg_candidate(
+        "scalping:late_loss_retry:normal",
+        {
+            "post_submit_observed_sample": split_plan.THREE_LEG_RUNTIME_SAMPLE_FLOOR,
+            "touch_1tick_rate": 0.8,
+            "touch_2tick_rate": 0.5,
+            "missed_upside_proxy_rate": 0.4,
+        },
+    )
+
+    assert candidate is not None
+    assert candidate["runtime_apply_allowed"] is False
+    assert candidate["diagnostic_only"] is True
+    assert candidate["policy_mode"] == split_plan.POLICY_MODE_DIAGNOSTIC_THREE_LEG
 
 
 def test_report_keeps_market_avg_down_qty_split_only(monkeypatch, tmp_path):

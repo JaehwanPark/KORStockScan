@@ -1882,6 +1882,9 @@ def _scale_in_split_order_plan_summary(target_date: str) -> tuple[dict[str, Any]
             "base_price_reconstruction_gap_count": _safe_int(input_summary.get("base_price_reconstruction_gap_count"), 0),
             "market_qty_split_only_count": market_qty_split_only_count,
             "diagnostic_three_leg_candidate_count": _safe_int(input_summary.get("diagnostic_three_leg_candidate_count"), 0),
+            "runtime_three_leg_candidate_count": _safe_int(
+                input_summary.get("runtime_three_leg_candidate_count"), 0
+            ),
             "avg_down_observation_count": _safe_int(input_summary.get("avg_down_observation_count"), 0),
             "policy_file": recommended.get("policy_file"),
             "policy_version": recommended.get("policy_version"),

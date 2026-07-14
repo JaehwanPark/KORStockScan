@@ -27,16 +27,20 @@ POLICY_MODE_BOUNDED_EQUAL_BASELINE = "bounded_equal_scale_in_split_baseline"
 POLICY_MODE_COUNTERFACTUAL_TICK_BAND = "counterfactual_tick_band_selector"
 POLICY_MODE_MARKET_QTY_SPLIT_ONLY = "market_qty_split_only"
 POLICY_MODE_DIAGNOSTIC_THREE_LEG = "diagnostic_three_leg_tick_band"
+POLICY_MODE_BOUNDED_THREE_LEG = "bounded_three_leg_tick_band"
 BASELINE_SPLIT_VARIANT_ID = "scale_in_equal_50_50_offset_0pct_0_3pct"
 COUNTERFACTUAL_70_30_VARIANT_ID = "scale_in_counterfactual_70_30_offset_0pct_0_3pct"
 COUNTERFACTUAL_50_50_VARIANT_ID = "scale_in_counterfactual_50_50_offset_0pct_0_3pct"
 COUNTERFACTUAL_60_40_VARIANT_ID = "scale_in_counterfactual_60_40_offset_0pct_0_8pct"
 MARKET_QTY_SPLIT_VARIANT_ID = "scale_in_market_qty_split_50_50"
 DIAGNOSTIC_THREE_LEG_VARIANT_ID = "scale_in_diagnostic_50_25_25_offset_0pct_0_3pct_0_8pct"
+BOUNDED_THREE_LEG_VARIANT_ID = "scale_in_bounded_50_25_25_offset_0pct_0_3pct_0_8pct"
 RUNTIME_FALLBACK_POLICY_MODE = "runtime_default_scale_in_equal_50_50_0_3pct"
 RUNTIME_FALLBACK_VARIANT_ID = "runtime_default_scale_in_equal_50_50_offset_0pct_0_3pct"
 COUNTERFACTUAL_WINDOW_SEC = 180
 ANCHOR_RECONSTRUCT_WINDOW_SEC = 5
+THREE_LEG_RUNTIME_SAMPLE_FLOOR = 20
+MAX_SCALE_IN_SPLIT_LEGS = 3
 
 
 def report_paths(target_date: str) -> tuple[Path, Path]:
@@ -643,12 +647,16 @@ def _selected_policy_from_counterfactual(summary: dict[str, Any]) -> dict[str, A
     }
 
 
-def _diagnostic_three_leg_candidate(bucket: str, summary: dict[str, Any]) -> dict[str, Any] | None:
+def _three_leg_candidate(bucket: str, summary: dict[str, Any]) -> dict[str, Any] | None:
     observed_sample = _safe_int(summary.get("post_submit_observed_sample"), 0)
     touch1 = _safe_float(summary.get("touch_1tick_rate"), 0.0) or 0.0
     touch2 = _safe_float(summary.get("touch_2tick_rate"), 0.0) or 0.0
+    missed = _safe_float(summary.get("missed_upside_proxy_rate"), 0.0) or 0.0
     if observed_sample <= 0 or touch1 < 0.70 or touch2 < 0.40:
         return None
+    runtime_apply_allowed = (
+        observed_sample >= THREE_LEG_RUNTIME_SAMPLE_FLOOR and missed < 0.40
+    )
     return {
         **{key: value for key, value in summary.items() if key != "anchor_samples"},
         "context_bucket": bucket,
@@ -658,11 +666,23 @@ def _diagnostic_three_leg_candidate(bucket: str, summary: dict[str, Any]) -> dic
         "qty_weights": [0.5, 0.25, 0.25],
         "qty_weight_min": 0.5,
         "qty_weight_max": 0.25,
-        "policy_mode": POLICY_MODE_DIAGNOSTIC_THREE_LEG,
-        "split_variant_id": DIAGNOSTIC_THREE_LEG_VARIANT_ID,
-        "selection_reason": "diagnostic_only_touch_1tick_and_2tick_high",
-        "runtime_apply_allowed": False,
-        "diagnostic_only": True,
+        "policy_mode": (
+            POLICY_MODE_BOUNDED_THREE_LEG
+            if runtime_apply_allowed
+            else POLICY_MODE_DIAGNOSTIC_THREE_LEG
+        ),
+        "split_variant_id": (
+            BOUNDED_THREE_LEG_VARIANT_ID
+            if runtime_apply_allowed
+            else DIAGNOSTIC_THREE_LEG_VARIANT_ID
+        ),
+        "selection_reason": (
+            "bounded_three_leg_sample_and_touch_floors_passed"
+            if runtime_apply_allowed
+            else "diagnostic_only_sample_floor_or_missed_upside_guard"
+        ),
+        "runtime_apply_allowed": runtime_apply_allowed,
+        "diagnostic_only": not runtime_apply_allowed,
     }
 
 
@@ -786,21 +806,22 @@ def build_report(target_date: str) -> dict[str, Any]:
     for bucket, rows in sorted(by_bucket.items()):
         candidate = _candidate_for_bucket(bucket, rows, events)
         candidate_grid.append(candidate)
-        diagnostic = _diagnostic_three_leg_candidate(
+        three_leg_candidate = _three_leg_candidate(
             bucket,
             {key: value for key, value in candidate.items() if key != "anchor_samples"},
         )
-        if diagnostic:
-            diagnostic_candidates.append(diagnostic)
-            candidate_grid.append(diagnostic)
+        if three_leg_candidate:
+            candidate_grid.append(three_leg_candidate)
+            if _safe_bool(three_leg_candidate.get("diagnostic_only")):
+                diagnostic_candidates.append(three_leg_candidate)
     if not candidate_grid:
         candidate_grid = [_candidate_for_bucket("default", [], events)]
-    candidates = [
-        item
-        for item in candidate_grid
-        if source_quality.get("tuning_input_allowed") is not False
-        and _safe_bool(item.get("runtime_apply_allowed"))
-    ]
+    runtime_candidates_by_bucket: dict[str, dict[str, Any]] = {}
+    if source_quality.get("tuning_input_allowed") is not False:
+        for item in candidate_grid:
+            if _safe_bool(item.get("runtime_apply_allowed")):
+                runtime_candidates_by_bucket[str(item.get("context_bucket") or "default")] = item
+    candidates = list(runtime_candidates_by_bucket.values())
     policy = _build_policy(target_date, candidates)
     policy_file = policy_path(target_date)
     counterfactual_selected_count = sum(
@@ -840,6 +861,9 @@ def build_report(target_date: str) -> dict[str, Any]:
             "base_price_reconstruction_gap_count": base_price_reconstruction_gap_count,
             "market_qty_split_only_count": market_qty_split_only_count,
             "diagnostic_three_leg_candidate_count": len(diagnostic_candidates),
+            "runtime_three_leg_candidate_count": sum(
+                1 for item in candidates if _safe_int(item.get("leg_count"), 0) == 3
+            ),
             "counterfactual_window_sec": COUNTERFACTUAL_WINDOW_SEC,
             "anchor_reconstruct_window_sec": ANCHOR_RECONSTRUCT_WINDOW_SEC,
         }
@@ -853,7 +877,12 @@ def build_report(target_date: str) -> dict[str, Any]:
             "metric_role": "execution_shape_seed",
             "decision_authority": "next_preopen_bounded_scale_in_split_policy",
             "window_policy": "operator_requested_seed_with_daily_diagnostic",
-            "sample_floor": {"real": 0, "sim": 0},
+            "sample_floor": {
+                "real": 0,
+                "sim": 0,
+                "three_leg_runtime": THREE_LEG_RUNTIME_SAMPLE_FLOOR,
+            },
+            "three_leg_runtime_missed_upside_proxy_max_exclusive": 0.40,
             "primary_decision_metric": "post_submit_tick_band_counterfactual_selector",
             "source_quality_gate": "observation_source_quality_audit_tuning_input_allowed",
             "forbidden_uses": [
@@ -1091,7 +1120,8 @@ def apply_scale_in_split_order_policy(
     if not isinstance(bucket_policy, dict):
         bucket_policy = _runtime_default_bucket_policy(bucket)
         fallback_policy_applied = True
-    desired_legs = min(max(1, _safe_int(bucket_policy.get("leg_count"), 2)), 2, qty)
+    requested_legs = max(1, _safe_int(bucket_policy.get("leg_count"), 2))
+    desired_legs = min(requested_legs, MAX_SCALE_IN_SPLIT_LEGS, qty)
     if desired_legs <= 1:
         fields["scale_in_split_order_skip_reason"] = "single_leg_policy"
         fields["scale_in_split_order_bucket"] = bucket
@@ -1122,6 +1152,11 @@ def apply_scale_in_split_order_policy(
         else _split_qty(qty, desired_legs, first_weight)
     )
     tick = _tick_size(base_price) if base_price > 0 else 1
+    policy_variant_id = str(bucket_policy.get("split_variant_id") or "").strip()
+    leg_count_clipped = desired_legs != requested_legs
+    execution_variant_id = policy_variant_id
+    if leg_count_clipped:
+        execution_variant_id = f"{execution_variant_id}__qty_clipped_legs{desired_legs}"
     split_orders = []
     for idx, leg_qty in enumerate(quantities):
         price = (
@@ -1139,7 +1174,11 @@ def apply_scale_in_split_order_policy(
                 "scale_in_split_order_leg_index": idx + 1,
                 "scale_in_split_order_policy_version": policy.get("policy_version"),
                 "scale_in_split_order_policy_mode": bucket_policy.get("policy_mode"),
-                "scale_in_split_order_variant_id": bucket_policy.get("split_variant_id"),
+                "scale_in_split_order_variant_id": execution_variant_id,
+                "scale_in_split_order_policy_variant_id": policy_variant_id,
+                "scale_in_split_order_policy_requested_leg_count": requested_legs,
+                "scale_in_split_order_max_leg_count": MAX_SCALE_IN_SPLIT_LEGS,
+                "scale_in_split_order_leg_count_clipped": leg_count_clipped,
                 "scale_in_split_order_bucket": bucket,
                 "scale_in_split_order_runtime_default_policy_applied": fallback_policy_applied,
                 "scale_in_split_order_market_order_applied": market_order,
@@ -1169,7 +1208,11 @@ def apply_scale_in_split_order_policy(
             "scale_in_split_order_bucket": bucket,
             "scale_in_split_order_policy_version": policy.get("policy_version"),
             "scale_in_split_order_policy_mode": bucket_policy.get("policy_mode"),
-            "scale_in_split_order_variant_id": bucket_policy.get("split_variant_id"),
+            "scale_in_split_order_variant_id": execution_variant_id,
+            "scale_in_split_order_policy_variant_id": policy_variant_id,
+            "scale_in_split_order_policy_requested_leg_count": requested_legs,
+            "scale_in_split_order_max_leg_count": MAX_SCALE_IN_SPLIT_LEGS,
+            "scale_in_split_order_leg_count_clipped": leg_count_clipped,
             "scale_in_split_order_runtime_default_policy_applied": fallback_policy_applied,
             "scale_in_split_order_policy_file": policy_file
             or os.environ.get("KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_FILE"),

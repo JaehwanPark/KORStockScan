@@ -2131,6 +2131,7 @@ def test_scale_in_split_order_plan_counterfactual_candidates_are_apply_ready(tmp
                     "price_observation_join_gap_count": 0,
                     "base_price_reconstruction_gap_count": 0,
                     "market_qty_split_only_count": 0,
+                    "runtime_three_leg_candidate_count": 1,
                 },
                 "candidate_grid": [
                     {
@@ -2167,6 +2168,7 @@ def test_scale_in_split_order_plan_counterfactual_candidates_are_apply_ready(tmp
     assert candidate["recommended_values"]["enabled"] is True
     assert candidate["recommended_values"]["policy_version"] == "scale_in_split_order_plan:test-counterfactual"
     assert candidate["source_metrics"]["counterfactual_selected_count"] == 2
+    assert candidate["source_metrics"]["runtime_three_leg_candidate_count"] == 1
     assert "counterfactual" in candidate["calibration_reason"]
 
 
