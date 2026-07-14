@@ -1,6 +1,6 @@
 # 2026-07-14 Scalping Pyramid Intraday Feedback
 
-- generated_at: 2026-07-14T16:15:01+09:00
+- generated_at: 2026-07-14T16:25:01+09:00
 - decision_authority: source_only_pyramid_intraday_feedback_no_runtime_mutation
 - runtime_effect: false
 - allowed_runtime_apply: false
@@ -14,7 +14,7 @@
 - pyramid_correctly_blocked_count: 0
 - pyramid_overheat_or_reversal_risk_count: 0
 - pyramid_open_unresolved_count: 0
-- one_share_event_count: 200
+- one_share_event_count: 203
 - one_share_closed_count: 2
 - one_share_pyramid_opportunity_count: 1
 - one_share_pyramid_missed_upside_count: 0
@@ -154,7 +154,6 @@
 - record_id=18334 code=001530 name=DI동일 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=18411 code=260660 name=알리코제약 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=18344 code=290690 name=소룩스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
-- record_id=18392 code=007390 name=네이처셀 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=18026 code=003680 name=한성기업 label=pyramid_correctly_blocked opportunity_seen=True opportunity_profit=3.13 max_profit=3.13 opportunity_cost=0.0 final=0.7
 - record_id=18077 code=144960 name=뉴파워프라즈마 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=18436 code=005950 name=이수화학 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
@@ -229,3 +228,7 @@
 - record_id=18519 code=089860 name=롯데렌탈 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=18528 code=124500 name=아이티센글로벌 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=17957 code=058470 name=리노공업 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=18536 code=003540 name=대신증권 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=18535 code=007810 name=코리아써키트 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=18392 code=007390 name=네이처셀 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=18540 code=459510 name=나우로보틱스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
