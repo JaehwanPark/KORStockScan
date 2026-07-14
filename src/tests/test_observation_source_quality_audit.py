@@ -1139,6 +1139,56 @@ def test_observation_source_quality_audit_reviews_rising_missed_submit_backoff_r
     )
 
 
+def test_observation_source_quality_audit_accepts_rising_missed_tp1_source_gap_relief(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-07-14",
+        [
+            _event(
+                "rising_missed_tp1_source_gap_relief_applied",
+                {
+                    "metric_role": "bounded_tunable",
+                    "decision_authority": (
+                        "operator_runtime_override_rising_missed_tp1_source_gap_relief"
+                    ),
+                    "window_policy": "same_day_intraday_runtime_state",
+                    "sample_floor": (
+                        "fresh_tp1_support_reversal_with_three_supports_and_momentum"
+                    ),
+                    "primary_decision_metric": "post_relief_submit_and_tp1_first_hit_outcome",
+                    "source_quality_gate": (
+                        "fresh_tp1_contract_replaces_missing_legacy_weak_ai_micro_context"
+                    ),
+                    "runtime_effect": True,
+                    "allowed_runtime_apply": True,
+                    "forbidden_uses": "standalone_buy,submit_safety_bypass,broker_guard_bypass",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": False,
+                    "threshold_family": "rising_missed_tp1_source_gap_relief",
+                    "rising_missed_tp1_source_gap_relief_applied": True,
+                    "rising_missed_tp1_source_gap_relief_support_count": 3,
+                    "rising_missed_tp1_source_gap_relief_min_support_count": 3,
+                    "rising_missed_tp1_source_gap_relief_support_momentum": True,
+                    "rising_missed_tp1_source_gap_relief_trusted_ws_micro": True,
+                    "rising_missed_tp1_source_gap_relief_evaluation_id": "eval-1",
+                },
+                record_id=1,
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-07-14")
+
+    contract = report["stage_contracts"]["rising_missed_tp1_source_gap_relief_applied"]
+    assert contract["status"] == "pass"
+    assert contract["missing_violations"] == {}
+    assert report["summary"]["hard_blocking_contract_gap_count"] == 0
+
+
 def test_observation_source_quality_audit_reviews_20260713_unknown_provenance_gaps(
     monkeypatch,
     tmp_path,

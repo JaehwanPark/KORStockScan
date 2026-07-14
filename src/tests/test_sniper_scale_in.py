@@ -1298,10 +1298,62 @@ def test_rising_missed_tp1_acceleration_lane_uses_actual_watch_delta_not_preserv
         current_ai_action="BUY",
     )
 
-    assert stale_preserved.allowed is False
-    assert stale_preserved.reason == "rising_missed_tp1_lane_not_eligible"
+    assert stale_preserved.allowed is True
+    assert stale_preserved.reason == "rising_missed_tp1_candidate_pass"
+    assert stale_preserved.lane == "support_reversal"
+    assert stale_preserved.log_fields["rising_missed_tp1_support_reversal_lane"] is True
     assert actual_follow_through.allowed is True
     assert actual_follow_through.lane == "acceleration"
+    assert actual_follow_through.log_fields["rising_missed_tp1_support_reversal_lane"] is False
+
+
+def test_rising_missed_tp1_support_reversal_lane_requires_two_independent_supports():
+    stock = {
+        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+    }
+    common_input = {
+        "rising_missed_tp1_input_ready": True,
+        "rising_missed_tp1_actual_watch_delta_pct": 0.3,
+        "rising_missed_tp1_effective_quote_age_ms": 100.0,
+        "rising_missed_tp1_spread_ratio": 0.004,
+        "rising_missed_tp1_micro_confidence": 0.85,
+        "rising_missed_tp1_true_ofi_ewma": 0.1,
+        "rising_missed_tp1_pressure_ewma": 60.0,
+        "rising_missed_tp1_tick_acceleration_fresh": False,
+        "rising_missed_tp1_micro_vwap_fresh": False,
+        "market_data_signed_tape_state": "mixed",
+    }
+    two_supports = evaluate_rising_missed_tp1_candidate(
+        stock,
+        {
+            **common_input,
+            "rising_missed_tp1_depth_imbalance_ewma": 0.1,
+            "rising_missed_tp1_top_depth_ratio": 1.2,
+        },
+        selector_enabled=True,
+        active_date="2026-07-14",
+        current_date="2026-07-14",
+        current_ai_action="WAIT",
+    )
+    one_support = evaluate_rising_missed_tp1_candidate(
+        stock,
+        {
+            **common_input,
+            "rising_missed_tp1_depth_imbalance_ewma": -0.2,
+            "rising_missed_tp1_top_depth_ratio": 0.7,
+        },
+        selector_enabled=True,
+        active_date="2026-07-14",
+        current_date="2026-07-14",
+        current_ai_action="WAIT",
+    )
+
+    assert two_supports.allowed is True
+    assert two_supports.lane == "support_reversal"
+    assert two_supports.log_fields["rising_missed_tp1_positive_support_count"] == 2
+    assert one_support.allowed is False
+    assert one_support.lane == "none"
+    assert one_support.reason == "rising_missed_tp1_lane_not_eligible"
 
 
 def test_rising_missed_tp1_probability_gate_passes_wide_spread_chase_for_submit_recheck():
@@ -1957,6 +2009,124 @@ def test_real_weak_ai_micro_entry_block_blocks_missing_micro_source_quality():
     assert "orderbook_micro_state" in decision["weak_ai_micro_entry_block_missing_fields"]
     assert "orderbook_micro_ofi_norm" in decision["weak_ai_micro_entry_block_missing_fields"]
     assert "orderbook_micro_qi" in decision["weak_ai_micro_entry_block_missing_fields"]
+
+
+def test_real_weak_ai_micro_entry_block_relaxes_legacy_gap_for_fresh_tp1_support_momentum(
+    monkeypatch,
+):
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE", "2026-07-14")
+    now_ts = datetime(2026, 7, 14, 13, 40, tzinfo=state_handlers._KST).timestamp()
+    stock = {
+        "last_watching_ai_action": "WAIT",
+        "last_watching_ai_score": 0.0,
+        "rising_missed_tp1_submit_context_at": now_ts - 2.0,
+        "rising_missed_tp1_submit_context_evaluation_id": "eval-1",
+        "rising_missed_tp1_submit_context_candidate_allowed": True,
+        "rising_missed_tp1_submit_context_selector_active": True,
+        "rising_missed_tp1_submit_context_policy": "probability_support_v3",
+        "rising_missed_tp1_submit_context_lane": "support_reversal",
+        "rising_missed_tp1_submit_context_input_ready": True,
+        "rising_missed_tp1_submit_context_micro_source_state": "fresh_ws_order_flow_delta",
+        "rising_missed_tp1_submit_context_support_count": 3,
+        "rising_missed_tp1_submit_context_support_momentum": True,
+    }
+
+    decision = state_handlers._evaluate_real_weak_ai_micro_entry_block(
+        strategy="SCALPING",
+        stock=stock,
+        latency_gate={"allowed": True, "decision": "ALLOW_NORMAL"},
+        latency_signal_score=0.0,
+        orderbook_fields={},
+        microstructure_fields={},
+        now_ts=now_ts,
+    )
+
+    assert decision["blocked"] is False
+    assert decision["reason"] == "tp1_support_momentum_source_gap_relief"
+    assert decision["rising_missed_tp1_source_gap_relief_applied"] is True
+    assert decision["weak_ai_micro_entry_block_source_quality_state"] == "missing"
+    assert decision["broker_order_forbidden"] is False
+    assert decision["allowed_runtime_apply"] is True
+    assert decision["threshold_family"] == "rising_missed_tp1_source_gap_relief"
+    assert decision["window_policy"] == "same_day_intraday_runtime_state"
+    assert decision["primary_decision_metric"] == "post_relief_submit_and_tp1_first_hit_outcome"
+
+
+def test_real_weak_ai_micro_entry_block_keeps_gap_block_without_fresh_tp1_momentum(
+    monkeypatch,
+):
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE", "2026-07-14")
+    now_ts = datetime(2026, 7, 14, 13, 40, tzinfo=state_handlers._KST).timestamp()
+    stock = {
+        "last_watching_ai_action": "WAIT",
+        "last_watching_ai_score": 0.0,
+        "rising_missed_tp1_submit_context_at": now_ts - 2.0,
+        "rising_missed_tp1_submit_context_candidate_allowed": True,
+        "rising_missed_tp1_submit_context_selector_active": True,
+        "rising_missed_tp1_submit_context_policy": "probability_support_v3",
+        "rising_missed_tp1_submit_context_lane": "support_reversal",
+        "rising_missed_tp1_submit_context_input_ready": True,
+        "rising_missed_tp1_submit_context_micro_source_state": "fresh_ws_order_flow_delta",
+        "rising_missed_tp1_submit_context_support_count": 3,
+        "rising_missed_tp1_submit_context_support_momentum": False,
+    }
+
+    decision = state_handlers._evaluate_real_weak_ai_micro_entry_block(
+        strategy="SCALPING",
+        stock=stock,
+        latency_gate={"allowed": True, "decision": "ALLOW_NORMAL"},
+        latency_signal_score=0.0,
+        orderbook_fields={},
+        microstructure_fields={},
+        now_ts=now_ts,
+    )
+
+    assert decision["blocked"] is True
+    assert decision["block_reason"] == "source_quality_unknown"
+    assert decision["rising_missed_tp1_source_gap_relief_applied"] is False
+    assert "momentum" in decision["rising_missed_tp1_source_gap_relief_reason"]
+
+
+def test_real_weak_ai_micro_entry_block_does_not_relax_measured_weak_context(
+    monkeypatch,
+):
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE", "2026-07-14")
+    now_ts = datetime(2026, 7, 14, 13, 40, tzinfo=state_handlers._KST).timestamp()
+    stock = {
+        "last_watching_ai_action": "WAIT",
+        "last_watching_ai_score": 0.0,
+        "rising_missed_tp1_submit_context_at": now_ts - 2.0,
+        "rising_missed_tp1_submit_context_candidate_allowed": True,
+        "rising_missed_tp1_submit_context_selector_active": True,
+        "rising_missed_tp1_submit_context_policy": "probability_support_v3",
+        "rising_missed_tp1_submit_context_lane": "support_reversal",
+        "rising_missed_tp1_submit_context_input_ready": True,
+        "rising_missed_tp1_submit_context_micro_source_state": "fresh_ws_order_flow_delta",
+        "rising_missed_tp1_submit_context_support_count": 3,
+        "rising_missed_tp1_submit_context_support_momentum": True,
+    }
+
+    decision = state_handlers._evaluate_real_weak_ai_micro_entry_block(
+        strategy="SCALPING",
+        stock=stock,
+        latency_gate={"allowed": True, "decision": "ALLOW_NORMAL"},
+        latency_signal_score=0.0,
+        orderbook_fields={"orderbook_micro_state": "neutral"},
+        microstructure_fields={
+            "buy_pressure_10t": "12.0",
+            "tick_aggressor_pressure_usable": True,
+            "tick_aggressor_trusted_count": 3,
+        },
+        now_ts=now_ts,
+    )
+
+    assert decision["blocked"] is True
+    assert decision["rising_missed_tp1_source_gap_relief_eligible"] is True
+    assert decision["rising_missed_tp1_source_gap_relief_applied"] is False
+    assert decision["rising_missed_tp1_source_gap_relief_measured_weak_context"] is True
 
 
 def test_real_weak_ai_micro_entry_block_splits_missing_buy_pressure_when_orderbook_strong():

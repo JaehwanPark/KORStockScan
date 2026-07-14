@@ -242,6 +242,12 @@ def evaluate_rising_missed_tp1_candidate(
     positive_supports = sorted(
         name for name, supported in support_families.items() if supported
     )
+    support_reversal_lane = bool(
+        lane == "none"
+        and len(positive_supports) >= TP1_SELECTOR_MIN_POSITIVE_SUPPORT_FAMILIES
+    )
+    if support_reversal_lane:
+        lane = "support_reversal"
     hard_negative_reasons = []
     if ai_action in {"DROP", "NOT_EVALUATED", "FAIL_CLOSED", "UNAVAILABLE"}:
         hard_negative_reasons.append("ai_explicit_veto")
@@ -286,7 +292,8 @@ def evaluate_rising_missed_tp1_candidate(
         ),
         "rising_missed_tp1_ai_action": ai_action or "-",
         "rising_missed_tp1_bid_imbalance_surge": bid_imbalance_surge,
-        "rising_missed_tp1_selector_policy": "probability_support_v2",
+        "rising_missed_tp1_selector_policy": "probability_support_v3",
+        "rising_missed_tp1_support_reversal_lane": support_reversal_lane,
         "rising_missed_tp1_positive_support_count": len(positive_supports),
         "rising_missed_tp1_positive_support_min": TP1_SELECTOR_MIN_POSITIVE_SUPPORT_FAMILIES,
         "rising_missed_tp1_positive_support_families": ",".join(positive_supports) or "-",
@@ -328,7 +335,7 @@ def evaluate_rising_missed_tp1_candidate(
         "metric_role": "bounded_tunable_candidate_gate",
         "decision_authority": "operator_runtime_override_rising_missed_tp1_candidate_selector",
         "window_policy": "same_day_intraday_candidate_then_postclose_20m_label",
-        "sample_floor": "lane_identity_plus_two_independent_positive_support_families",
+        "sample_floor": "identity_lane_or_two_independent_positive_support_families",
         "primary_decision_metric": "gross_1_30_before_adverse_0_70_within_20m",
         "source_quality_gate": "freshness_envelope_and_trusted_ws_micro_required",
         "forbidden_uses": (

@@ -1206,6 +1206,20 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "entry_ai_submit_authority_result_source",
         ),
     ),
+    "rising_missed_tp1_source_gap_relief_applied": StageContract(
+        required_fields=(
+            *REAL_EXECUTION_DIAGNOSTIC_FIELDS,
+            "allowed_runtime_apply",
+            "threshold_family",
+            "rising_missed_tp1_source_gap_relief_applied",
+            "rising_missed_tp1_source_gap_relief_support_count",
+            "rising_missed_tp1_source_gap_relief_min_support_count",
+            "rising_missed_tp1_source_gap_relief_support_momentum",
+            "rising_missed_tp1_source_gap_relief_trusted_ws_micro",
+            "rising_missed_tp1_source_gap_relief_evaluation_id",
+        ),
+        decision_authority="operator_runtime_override_rising_missed_tp1_source_gap_relief",
+    ),
     "pre_submit_overbought_pullback_guard_block": StageContract(
         required_fields=(*PRE_SUBMIT_GUARD_FIELDS, "risk_state"),
     ),

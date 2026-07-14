@@ -19295,6 +19295,7 @@ def _evaluate_real_weak_ai_micro_entry_block(
     latency_signal_score,
     orderbook_fields,
     microstructure_fields=None,
+    now_ts=None,
 ) -> dict:
     if str(strategy or "").upper() not in {"SCALPING", "SCALP"}:
         return {"blocked": False, "reason": "non_scalping"}
@@ -19457,8 +19458,50 @@ def _evaluate_real_weak_ai_micro_entry_block(
         "weak_ai_micro_entry_block_missing_buy_pressure_strong_qi_min": f"{strong_missing_buy_pressure_qi_min:.4f}",
         "forbidden_uses": "score_threshold_mutation,provider_route_change,quantity_cap_release,broker_guard_bypass,tuning_auto_apply_authority",
     }
+    tp1_source_gap_relief = _evaluate_rising_missed_tp1_source_gap_relief(
+        stock,
+        now_ts=_safe_float(now_ts, time.time()),
+    )
+    fields.update(tp1_source_gap_relief)
+    measured_weak_context = bool(weak_buy_pressure and weak_micro)
+    tp1_source_gap_relief_applied = bool(
+        fields["blocked"]
+        and missing_fields
+        and not measured_weak_context
+        and tp1_source_gap_relief.get("rising_missed_tp1_source_gap_relief_eligible")
+    )
+    fields["rising_missed_tp1_source_gap_relief_applied"] = tp1_source_gap_relief_applied
+    fields["rising_missed_tp1_source_gap_relief_measured_weak_context"] = measured_weak_context
+    if tp1_source_gap_relief_applied:
+        fields.update(
+            {
+                "blocked": False,
+                "reason": "tp1_support_momentum_source_gap_relief",
+                "block_reason": "tp1_support_momentum_source_gap_relief",
+                "decision_authority": (
+                    "operator_runtime_override_rising_missed_tp1_source_gap_relief"
+                ),
+                "metric_role": "bounded_tunable",
+                "window_policy": "same_day_intraday_runtime_state",
+                "sample_floor": "fresh_tp1_support_reversal_with_three_supports_and_momentum",
+                "primary_decision_metric": "post_relief_submit_and_tp1_first_hit_outcome",
+                "source_quality_gate": (
+                    "fresh_tp1_contract_replaces_missing_legacy_weak_ai_micro_context"
+                ),
+                "threshold_family": "rising_missed_tp1_source_gap_relief",
+                "allowed_runtime_apply": True,
+                "broker_order_forbidden": False,
+                "forbidden_uses": (
+                    "standalone_buy,submit_safety_bypass,broker_guard_bypass,"
+                    "quantity_or_cap_change,provider_route_change,tp_or_exit_change,"
+                    "hard_or_protect_or_emergency_guard_relaxation,tuning_auto_apply_authority"
+                ),
+            }
+        )
     if not fields["blocked"]:
-        if source_missing_but_orderbook_strong:
+        if tp1_source_gap_relief_applied:
+            pass
+        elif source_missing_but_orderbook_strong:
             fields["reason"] = "source_missing_but_orderbook_strong_observe"
             fields["block_reason"] = "source_missing_but_orderbook_strong_observe"
             fields["decision_authority"] = "real_buy_submit_observe_only_source_gap_split"
@@ -31901,6 +31944,12 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                             if rising_missed_normal_buy_bridge_fields.get(
                                 "rising_missed_normal_buy_bridge_allowed"
                             ):
+                                tp1_submit_context_fields = (
+                                    _rising_missed_tp1_submit_context_fields(
+                                        rising_missed_normal_buy_bridge_fields,
+                                        now_ts=now_ts,
+                                    )
+                                )
                                 _mutate_stock_state(
                                     stock,
                                     set_fields={
@@ -31911,6 +31960,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                             )
                                         ),
                                         "rising_missed_normal_buy_bridge_at": now_ts,
+                                        **tp1_submit_context_fields,
                                     },
                                 )
                                 _log_entry_pipeline(
@@ -34042,7 +34092,24 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         latency_signal_score=latency_signal_score,
         orderbook_fields=entry_orderbook_micro_fields,
         microstructure_fields=microstructure_submit_log_fields,
+        now_ts=now_ts,
     )
+    if weak_ai_micro_entry_block.get("rising_missed_tp1_source_gap_relief_applied"):
+        log_info(
+            f"[RISING_MISSED_TP1_SOURCE_GAP_RELIEF] {stock.get('name')}({code}) "
+            f"support={weak_ai_micro_entry_block.get('rising_missed_tp1_source_gap_relief_support_count')} "
+            f"evaluation_id={weak_ai_micro_entry_block.get('rising_missed_tp1_source_gap_relief_evaluation_id')}"
+        )
+        _log_entry_pipeline(
+            stock,
+            code,
+            "rising_missed_tp1_source_gap_relief_applied",
+            forced_entry_reason=(
+                RISING_MISSED_FORCED_ENTRY_REASON if forced_rising_missed_one_share else "-"
+            ),
+            forced_entry_qty=forced_rising_missed_scout_qty,
+            **weak_ai_micro_entry_block,
+        )
     if weak_ai_micro_entry_block.get("blocked"):
         weak_ai_micro_backoff_fields = _record_rising_missed_submit_safety_backoff(
             stock,
@@ -36586,6 +36653,133 @@ def _rising_missed_tp1_selector_current_date(runtime: dict | None) -> str:
     return datetime.fromtimestamp(float(now_ts), tz=_KST).strftime("%Y-%m-%d")
 
 
+def _rising_missed_tp1_source_gap_relief_enabled() -> bool:
+    return _env_bool("KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ENABLED", False)
+
+
+def _rising_missed_tp1_source_gap_relief_context_ttl_sec() -> float:
+    return max(
+        1.0,
+        _env_float("KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_TTL_SEC", 10.0),
+    )
+
+
+def _rising_missed_tp1_source_gap_relief_min_support_count() -> int:
+    return max(
+        3,
+        _env_int("KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_MIN_SUPPORT_COUNT", 3),
+    )
+
+
+def _rising_missed_tp1_submit_context_fields(tp1_decision, *, now_ts: float) -> dict[str, Any]:
+    if isinstance(tp1_decision, dict):
+        log_fields = tp1_decision
+        allowed = _truthy_field(log_fields.get("rising_missed_tp1_candidate_allowed"))
+    else:
+        log_fields = getattr(tp1_decision, "log_fields", None)
+        log_fields = log_fields if isinstance(log_fields, dict) else {}
+        allowed = bool(getattr(tp1_decision, "allowed", False))
+    if not allowed:
+        return {}
+    return {
+        "rising_missed_tp1_submit_context_at": float(now_ts),
+        "rising_missed_tp1_submit_context_evaluation_id": (
+            log_fields.get("rising_missed_tp1_evaluation_id") or "-"
+        ),
+        "rising_missed_tp1_submit_context_candidate_allowed": True,
+        "rising_missed_tp1_submit_context_selector_active": _truthy_field(
+            log_fields.get("rising_missed_tp1_selector_active")
+        ),
+        "rising_missed_tp1_submit_context_policy": (
+            log_fields.get("rising_missed_tp1_selector_policy") or "-"
+        ),
+        "rising_missed_tp1_submit_context_lane": (
+            log_fields.get("rising_missed_tp1_candidate_lane") or "-"
+        ),
+        "rising_missed_tp1_submit_context_input_ready": _truthy_field(
+            log_fields.get("rising_missed_tp1_input_ready")
+        ),
+        "rising_missed_tp1_submit_context_micro_source_state": (
+            log_fields.get("rising_missed_tp1_micro_source_state") or "-"
+        ),
+        "rising_missed_tp1_submit_context_support_count": _safe_int(
+            log_fields.get("rising_missed_tp1_positive_support_count"),
+            0,
+        ),
+        "rising_missed_tp1_submit_context_support_momentum": _truthy_field(
+            log_fields.get("rising_missed_tp1_support_momentum")
+        ),
+    }
+
+
+def _evaluate_rising_missed_tp1_source_gap_relief(
+    stock: dict | None,
+    *,
+    now_ts: float,
+) -> dict[str, Any]:
+    stock = stock if isinstance(stock, dict) else {}
+    enabled = _rising_missed_tp1_source_gap_relief_enabled()
+    ttl_sec = _rising_missed_tp1_source_gap_relief_context_ttl_sec()
+    context_at = _safe_float(stock.get("rising_missed_tp1_submit_context_at"), 0.0)
+    context_age_sec = float(now_ts) - context_at if context_at > 0 else None
+    active_date = _rising_missed_tp1_selector_active_date()
+    current_date = datetime.fromtimestamp(float(now_ts), tz=_KST).strftime("%Y-%m-%d")
+    support_count = _safe_int(stock.get("rising_missed_tp1_submit_context_support_count"), 0)
+    min_support_count = _rising_missed_tp1_source_gap_relief_min_support_count()
+    micro_source_state = str(
+        stock.get("rising_missed_tp1_submit_context_micro_source_state") or ""
+    ).strip().lower()
+    checks = {
+        "active_date": bool(active_date and active_date == current_date),
+        "context_fresh": bool(
+            context_age_sec is not None and 0.0 <= context_age_sec <= ttl_sec
+        ),
+        "candidate_allowed": bool(
+            stock.get("rising_missed_tp1_submit_context_candidate_allowed")
+        ),
+        "selector_active": bool(stock.get("rising_missed_tp1_submit_context_selector_active")),
+        "policy_v3": (
+            str(stock.get("rising_missed_tp1_submit_context_policy") or "")
+            == "probability_support_v3"
+        ),
+        "support_reversal": (
+            str(stock.get("rising_missed_tp1_submit_context_lane") or "")
+            == "support_reversal"
+        ),
+        "input_ready": bool(stock.get("rising_missed_tp1_submit_context_input_ready")),
+        "trusted_ws_micro": micro_source_state.startswith("fresh_ws"),
+        "support_count": support_count >= min_support_count,
+        "momentum": bool(stock.get("rising_missed_tp1_submit_context_support_momentum")),
+    }
+    eligible = bool(enabled and all(checks.values()))
+    failed_checks = [name for name, passed in checks.items() if not passed]
+    return {
+        "rising_missed_tp1_source_gap_relief_enabled": enabled,
+        "rising_missed_tp1_source_gap_relief_eligible": eligible,
+        "rising_missed_tp1_source_gap_relief_applied": False,
+        "rising_missed_tp1_source_gap_relief_reason": (
+            "fresh_tp1_support_momentum_contract"
+            if eligible
+            else "disabled"
+            if not enabled
+            else "ineligible:" + ",".join(failed_checks)
+        ),
+        "rising_missed_tp1_source_gap_relief_context_age_sec": (
+            round(context_age_sec, 6) if context_age_sec is not None else "-"
+        ),
+        "rising_missed_tp1_source_gap_relief_context_ttl_sec": ttl_sec,
+        "rising_missed_tp1_source_gap_relief_support_count": support_count,
+        "rising_missed_tp1_source_gap_relief_min_support_count": min_support_count,
+        "rising_missed_tp1_source_gap_relief_support_momentum": checks["momentum"],
+        "rising_missed_tp1_source_gap_relief_trusted_ws_micro": checks["trusted_ws_micro"],
+        "rising_missed_tp1_source_gap_relief_active_date": active_date or "-",
+        "rising_missed_tp1_source_gap_relief_current_date": current_date,
+        "rising_missed_tp1_source_gap_relief_evaluation_id": (
+            stock.get("rising_missed_tp1_submit_context_evaluation_id") or "-"
+        ),
+    }
+
+
 def _caution_weak_liquidity_entry_block_enabled() -> bool:
     if "KORSTOCKSCAN_CAUTION_WEAK_LIQUIDITY_ENTRY_BLOCK_ENABLED" in os.environ:
         return _env_bool("KORSTOCKSCAN_CAUTION_WEAK_LIQUIDITY_ENTRY_BLOCK_ENABLED", True)
@@ -38001,6 +38195,10 @@ def _maybe_submit_rising_missed_one_share_entry(
         return True
 
     forced_entry_qty = int(decision.forced_qty or 1)
+    tp1_submit_context_fields = _rising_missed_tp1_submit_context_fields(
+        tp1_decision,
+        now_ts=_safe_float(runtime.get("now_ts"), time.time()),
+    )
     _mutate_stock_state(
         stock,
         set_fields={
@@ -38012,6 +38210,7 @@ def _maybe_submit_rising_missed_one_share_entry(
             "forced_entry_reason": RISING_MISSED_FORCED_ENTRY_REASON,
             "target_buy_price": curr_price,
             "msg_audience": _resolve_telegram_audience_for_stock(stock, strategy),
+            **tp1_submit_context_fields,
         },
     )
     runtime.update(
