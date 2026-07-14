@@ -70,6 +70,111 @@ def test_is_valid_stock_allows_low_price_common_stock():
     assert kiwoom_utils.is_valid_stock("000020", "LOW_REAL", current_price=3900) is True
 
 
+def test_scanner_resets_code_reuse_anchor_before_cooldown_and_remember():
+    recent = {
+        "001820": {
+            "identity_name": "1Q K반도체TOP2+",
+            "first_seen_at": 100.0,
+            "first_price": 10662,
+            "last_price": 10662,
+            "last_promoted_at": 990.0,
+            "first_flu_rate": 0.54,
+            "last_source_signature": ["VOLUME_SURGE_POSITIVE"],
+        }
+    }
+    target = {
+        "Code": "001820",
+        "Name": "삼화콘덴서",
+        "Price": 89400,
+        "Source": "PRICE_JUMP_START",
+        "SourceSet": {"PRICE_JUMP_START"},
+        "PriceJumpFluRate": 4.2,
+    }
+
+    reset = scalping_scanner._scanner_anchor_reset_context(target, recent["001820"])
+
+    assert reset["reset"] is True
+    assert reset["reason"] == "scanner_identity_name_changed"
+    assert scalping_scanner._should_promote_candidate(target, recent, 1000.0, 1500) is True
+
+    scalping_scanner._remember_pick(recent, target, 1000.0)
+
+    assert recent["001820"]["identity_name"] == "삼화콘덴서"
+    assert recent["001820"]["first_seen_at"] == 1000.0
+    assert recent["001820"]["first_price"] == 89400
+    assert recent["001820"]["last_price"] == 89400
+
+
+def test_scanner_resets_legacy_anchor_on_price_discontinuity_without_identity():
+    reset = scalping_scanner._scanner_anchor_reset_context(
+        {"Code": "001820", "Name": "삼화콘덴서", "Price": 89400},
+        {"first_price": 44700, "last_price": 44700},
+    )
+
+    assert reset["reset"] is True
+    assert reset["reason"] == "scanner_identity_price_discontinuity"
+    assert reset["price_ratio"] == 2.0
+
+
+def test_scanner_rejects_source_name_mismatch_without_polluting_recent_state(monkeypatch):
+    emitted = []
+    db = _DB()
+    db.get_latest_stock_name = lambda code: "삼화콘덴서"
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        scalping_scanner,
+        "_scanner_real_source_guard_decision",
+        lambda *args, **kwargs: {
+            "blocked": False,
+            "reason": "new_volume_surge_positive_source",
+            "source_signature": "VOLUME_SURGE_POSITIVE",
+        },
+    )
+    monkeypatch.setattr(
+        scalping_scanner,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+    event_bus = _EventBus()
+
+    codes, recent = scalping_scanner.promote_candidates(
+        db,
+        event_bus,
+        [
+            {
+                "Code": "001820",
+                "Name": "1Q K반도체TOP2+",
+                "Price": 10662,
+                "Source": "VOLUME_SURGE_POSITIVE",
+                "SourceSet": {"VOLUME_SURGE_POSITIVE"},
+                "VolumeSurgeFluRate": 0.54,
+                "VolumeSurgeRate": 32.39,
+            }
+        ],
+        {},
+        max_new_codes=12,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=1000.0,
+    )
+
+    assert codes == []
+    assert recent == {}
+    assert db.records == []
+    assert event_bus.events == []
+    fields = [
+        row["fields"]
+        for row in emitted
+        if row["stage"] == "scalping_scanner_real_source_guard_block"
+    ][-1]
+    assert fields["scanner_real_source_guard_skip_reason"] == "scanner_identity_name_mismatch"
+    assert fields["scanner_source_identity_guard_applied"] is True
+    assert fields["scanner_source_identity_payload_name"] == "1Q K반도체TOP2+"
+    assert fields["scanner_source_identity_authoritative_name"] == "삼화콘덴서"
+
+
 def test_promote_candidates_skips_when_active_scanner_cap_reached(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "1")
     db = _DB()

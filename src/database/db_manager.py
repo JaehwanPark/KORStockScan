@@ -285,6 +285,24 @@ class DBManager:
             df = df.sort_values('quote_date').reset_index(drop=True)
         return df
 
+    def get_latest_stock_name(self, code: str) -> str:
+        """Return the latest authoritative code/name mapping for runtime identity guards."""
+        norm_code = str(code or "").strip()[:6]
+        if not norm_code:
+            return ""
+        query = text(
+            """
+            SELECT stock_name
+            FROM daily_stock_quotes
+            WHERE stock_code = :code
+              AND COALESCE(stock_name, '') <> ''
+            ORDER BY quote_date DESC
+            LIMIT 1
+            """
+        )
+        with self.engine.connect() as conn:
+            return str(conn.execute(query, {"code": norm_code}).scalar() or "").strip()
+
     def get_latest_is_nxt(self, code: str) -> bool:
         """최신 거래일 기준 NXT 대상 여부(_AL suffix 적용 대상) 조회"""
         norm_code = str(code).replace('_AL', '').zfill(6)

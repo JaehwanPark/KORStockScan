@@ -1629,10 +1629,90 @@ def _filter_picks_within_cooldown(recent_picks, now_ts, reentry_cooldown_sec):
     }
 
 
+def _scanner_identity_name(value):
+    text = str(value or "").strip().upper()
+    if text in {"", "-", "UNKNOWN", "NONE"}:
+        return ""
+    return "".join(char for char in text if char.isalnum())
+
+
+def _scanner_anchor_reset_context(target, previous):
+    previous = previous if isinstance(previous, dict) else {}
+    current_name = _scanner_identity_name((target or {}).get("Name"))
+    previous_name = _scanner_identity_name(previous.get("identity_name"))
+    current_price = _safe_positive_int((target or {}).get("Price"))
+    previous_price = _safe_positive_int(
+        previous.get("last_price") or previous.get("first_price")
+    )
+    price_ratio = (
+        current_price / previous_price
+        if current_price > 0 and previous_price > 0
+        else 0.0
+    )
+    name_changed = bool(current_name and previous_name and current_name != previous_name)
+    price_discontinuous = bool(price_ratio >= 2.0 or (price_ratio > 0.0 and price_ratio <= 0.5))
+    reason = (
+        "scanner_identity_name_changed"
+        if name_changed
+        else "scanner_identity_price_discontinuity"
+        if price_discontinuous
+        else "not_applicable"
+    )
+    return {
+        "reset": bool(name_changed or price_discontinuous),
+        "reason": reason,
+        "previous_name": previous_name or "-",
+        "current_name": current_name or "-",
+        "previous_price": previous_price or "-",
+        "current_price": current_price or "-",
+        "price_ratio": round(price_ratio, 6) if price_ratio > 0 else "-",
+    }
+
+
+def _scanner_candidate_identity_decision(db, target):
+    code = str((target or {}).get("Code") or "").strip()[:6]
+    payload_name = str((target or {}).get("Name") or "").strip()
+    fields = {
+        "scanner_source_identity_guard_applied": False,
+        "scanner_source_identity_guard_reason": "authoritative_name_unavailable",
+        "scanner_source_identity_payload_name": payload_name or "-",
+        "scanner_source_identity_authoritative_name": "-",
+    }
+    getter = getattr(db, "get_latest_stock_name", None)
+    if not callable(getter) or not code:
+        return {"blocked": False, "reason": "authoritative_name_unavailable", **fields}
+    try:
+        authoritative_name = str(getter(code) or "").strip()
+    except Exception as exc:
+        log_error(f"[SCANNER_SOURCE_IDENTITY_GUARD] latest name lookup failed ({code}): {exc}")
+        return {"blocked": False, "reason": "authoritative_name_lookup_failed", **fields}
+    fields.update(
+        {
+            "scanner_source_identity_guard_applied": bool(authoritative_name),
+            "scanner_source_identity_guard_reason": "scanner_identity_ok",
+            "scanner_source_identity_authoritative_name": authoritative_name or "-",
+        }
+    )
+    payload_name_norm = _scanner_identity_name(payload_name)
+    authoritative_name_norm = _scanner_identity_name(authoritative_name)
+    if (
+        payload_name
+        and not payload_name.isascii()
+        and payload_name_norm
+        and authoritative_name_norm
+        and payload_name_norm != authoritative_name_norm
+    ):
+        fields["scanner_source_identity_guard_reason"] = "scanner_identity_name_mismatch"
+        return {"blocked": True, "reason": "scanner_identity_name_mismatch", **fields}
+    return {"blocked": False, "reason": "scanner_identity_ok", **fields}
+
+
 def _should_promote_candidate(target, recent_picks, now_ts, reentry_cooldown_sec):
     code = target.get("Code")
     previous = (recent_picks or {}).get(code)
     if not previous:
+        return True
+    if _scanner_anchor_reset_context(target, previous)["reset"]:
         return True
     if str(previous.get("scanner_probe_state") or "") == "first_seen_probe":
         return True
@@ -1659,7 +1739,9 @@ def _scanner_real_source_guard_decision(target, recent_picks, now_ts):
 
     source_signature = _source_signature(target)
     source_set = set(source_signature)
-    previous = (recent_picks or {}).get(target.get("Code")) or {}
+    raw_previous = (recent_picks or {}).get(target.get("Code")) or {}
+    anchor_reset = _scanner_anchor_reset_context(target, raw_previous)
+    previous = {} if anchor_reset["reset"] else raw_previous
     candidate_role = _scanner_candidate_role(target)
     acceleration_reason = _acceleration_reason(target, previous)
     priority_profile = _scanner_priority_profile(target, previous)
@@ -1723,6 +1805,13 @@ def _scanner_real_source_guard_decision(target, recent_picks, now_ts):
         "flu_delta_since_first_seen": f"{flu_delta:.2f}",
         "comparable_flu_delta_since_first_seen": f"{comparable_flu_delta:.2f}",
         "last_promoted_at": str(previous.get("last_promoted_at") or "-"),
+        "scanner_anchor_reset_applied": bool(anchor_reset["reset"]),
+        "scanner_anchor_reset_reason": anchor_reset["reason"],
+        "scanner_anchor_previous_name": anchor_reset["previous_name"],
+        "scanner_anchor_current_name": anchor_reset["current_name"],
+        "scanner_anchor_previous_price": anchor_reset["previous_price"],
+        "scanner_anchor_current_price": anchor_reset["current_price"],
+        "scanner_anchor_price_ratio": anchor_reset["price_ratio"],
         **priority_profile,
     }
     first_seen_at = float(previous.get("first_seen_at", 0.0) or 0.0)
@@ -1912,7 +2001,12 @@ def _scanner_real_source_guard_decision(target, recent_picks, now_ts):
 
 
 def _remember_pick(recent_picks, target, now_ts):
-    previous = recent_picks.get(target["Code"]) or {}
+    raw_previous = recent_picks.get(target["Code"]) or {}
+    previous = (
+        {}
+        if _scanner_anchor_reset_context(target, raw_previous)["reset"]
+        else raw_previous
+    )
     current_flu, current_flu_metric, current_flu_source = _scanner_flu_metric(target)
     recent_picks[target["Code"]] = {
         "last_promoted_at": now_ts,
@@ -1927,6 +2021,7 @@ def _remember_pick(recent_picks, target, now_ts):
         "last_flu_rate_metric": current_flu_metric,
         "last_flu_rate_source": current_flu_source,
         "last_price": _safe_positive_int(target.get("Price")),
+        "identity_name": str(target.get("Name") or "").strip(),
         "last_volume_surge_matched": bool(target.get("VolumeSurgeMatched")),
         "last_volume_surge_rank": _safe_positive_int(target.get("VolumeSurgeRank")),
         "last_volume_surge_rank_pct": _safe_float(target.get("VolumeSurgeRankPct")),
@@ -1937,7 +2032,12 @@ def _remember_pick(recent_picks, target, now_ts):
 
 
 def _remember_guard_block(recent_picks, target, now_ts, reason):
-    previous = recent_picks.get(target["Code"]) or {}
+    raw_previous = recent_picks.get(target["Code"]) or {}
+    previous = (
+        {}
+        if _scanner_anchor_reset_context(target, raw_previous)["reset"]
+        else raw_previous
+    )
     current_flu, current_flu_metric, current_flu_source = _scanner_flu_metric(target)
     reset_probe_anchor = reason == "late_confirmation_flu_metric_changed"
     first_seen_at = now_ts if reset_probe_anchor else previous.get("first_seen_at", now_ts)
@@ -1968,6 +2068,7 @@ def _remember_guard_block(recent_picks, target, now_ts, reason):
         "last_flu_rate_metric": current_flu_metric,
         "last_flu_rate_source": current_flu_source,
         "last_price": _safe_positive_int(target.get("Price")),
+        "identity_name": str(target.get("Name") or "").strip(),
         "last_volume_surge_matched": bool(target.get("VolumeSurgeMatched")),
         "last_volume_surge_rank": _safe_positive_int(target.get("VolumeSurgeRank")),
         "last_volume_surge_rank_pct": _safe_float(target.get("VolumeSurgeRankPct")),
@@ -2117,6 +2218,18 @@ def _scanner_event_fields(target, source_guard=None):
         ),
         "negative_display_rebound": bool(target.get("NegativeDisplayRebound")) if is_low_rebound_source else "",
         "low_rebound_base_source_signature": target.get("LowReboundBaseSourceSignature") or "",
+        "scanner_source_identity_guard_applied": source_guard.get(
+            "scanner_source_identity_guard_applied", "not_evaluated"
+        ),
+        "scanner_source_identity_guard_reason": source_guard.get(
+            "scanner_source_identity_guard_reason", "not_evaluated"
+        ),
+        "scanner_source_identity_payload_name": source_guard.get(
+            "scanner_source_identity_payload_name", "not_evaluated"
+        ),
+        "scanner_source_identity_authoritative_name": source_guard.get(
+            "scanner_source_identity_authoritative_name", "not_evaluated"
+        ),
         **_scanner_zero_context_fields(target, source_guard, current_flu, source_guard_context),
     }
 
@@ -2312,6 +2425,28 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
             _log_scanner_candidate_event("scalping_scanner_candidate_observed", target, source_guard)
             _log_scanner_real_source_guard_block(target, source_guard, now_ts)
             _remember_guard_block(recent_picks, target, now_ts, "invalid_stock_filter")
+            continue
+
+        identity_decision = _scanner_candidate_identity_decision(db, target)
+        if identity_decision.get("blocked"):
+            source_guard = {
+                **source_guard,
+                **identity_decision,
+                "candidate_role": _scanner_candidate_role(target),
+                "source_signature": ",".join(_source_signature(target)),
+            }
+            _log_scanner_candidate_event(
+                "scalping_scanner_candidate_observed",
+                target,
+                {**source_guard, "blocked": True},
+            )
+            _log_scanner_real_source_guard_block(target, source_guard, now_ts)
+            log_error(
+                "[SCANNER_SOURCE_IDENTITY_GUARD] candidate rejected "
+                f"code={code} payload_name={identity_decision.get('scanner_source_identity_payload_name')} "
+                "authoritative_name="
+                f"{identity_decision.get('scanner_source_identity_authoritative_name')}"
+            )
             continue
 
         score = _freshness_score(target)

@@ -20222,6 +20222,48 @@ def _apply_rising_missed_reversal_up_volatile_recheck(
     return fields
 
 
+def _rising_missed_price_anchor(
+    stock: dict | None,
+    *,
+    reference_price: float,
+) -> tuple[float, str, dict[str, Any]]:
+    stock = stock if isinstance(stock, dict) else {}
+    rejected: list[str] = []
+    selected_price = 0.0
+    selected_source = "missing"
+    for key in ("first_seen_price", "watch_buy_price", "buy_price"):
+        value = _safe_float(stock.get(key), 0.0)
+        if value <= 0:
+            continue
+        ratio = value / reference_price if reference_price > 0 else 1.0
+        if reference_price > 0 and not 0.5 <= ratio <= 2.0:
+            rejected.append(f"{key}:{value:.4f}:{ratio:.6f}")
+            continue
+        selected_price = value
+        selected_source = key
+        break
+    state = (
+        "recovered_fallback"
+        if selected_price > 0 and rejected
+        else "valid"
+        if selected_price > 0
+        else "unavailable"
+    )
+    if state == "recovered_fallback":
+        stock["first_seen_price"] = selected_price
+    return selected_price, selected_source, {
+        "rising_missed_price_anchor_state": state,
+        "rising_missed_price_anchor_source": selected_source,
+        "rising_missed_price_anchor_price": selected_price if selected_price > 0 else "-",
+        "rising_missed_price_anchor_reference_price": (
+            reference_price if reference_price > 0 else "-"
+        ),
+        "rising_missed_price_anchor_rejected_count": len(rejected),
+        "rising_missed_price_anchor_rejected": ",".join(rejected) if rejected else "-",
+        "rising_missed_price_anchor_policy": "symbol_local_reference_ratio_0_5_to_2_0",
+    }
+
+
 def _evaluate_rising_missed_reversal_pre_submit_guard(
     *,
     stock: dict | None,
@@ -20276,15 +20318,10 @@ def _evaluate_rising_missed_reversal_pre_submit_guard(
         ),
         0.0,
     )
-    jump_anchor_source = next(
-        (
-            key
-            for key in ("first_seen_price", "watch_buy_price", "buy_price")
-            if _safe_float(stock.get(key), 0.0) > 0
-        ),
-        "missing",
+    jump_anchor_price, jump_anchor_source, jump_anchor_fields = _rising_missed_price_anchor(
+        stock,
+        reference_price=current_price,
     )
-    jump_anchor_price = _safe_float(stock.get(jump_anchor_source), 0.0)
     current_jump_available = bool(current_price > 0 and jump_anchor_price > 0)
     recent_jump_pct = (
         ((current_price - jump_anchor_price) / jump_anchor_price) * 100.0
@@ -20393,6 +20430,7 @@ def _evaluate_rising_missed_reversal_pre_submit_guard(
     return {
         **_rising_missed_submit_safety_filter_fields(blocked=blocked),
         **market_data_fields,
+        **jump_anchor_fields,
         "blocked": blocked,
         "reason": reason,
         "block_reason": reason if blocked else "",
@@ -36828,6 +36866,122 @@ def _rising_missed_trusted_ws_provenance(
     }
 
 
+def _rising_missed_trusted_ws_momentum(
+    ws_data: dict | None,
+    *,
+    current_price: float,
+    now_ts: float,
+) -> dict[str, Any]:
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    raw_ticks = ws_data.get("recent_trade_ticks")
+    try:
+        ticks = list(raw_ticks or [])
+    except TypeError:
+        ticks = []
+    trusted: list[dict[str, float]] = []
+    for tick in ticks:
+        if not isinstance(tick, dict):
+            continue
+        if str(tick.get("aggressor_source") or "") != "kiwoom_0b_signed_trade_volume":
+            continue
+        raw_signed_volume = str(
+            tick.get("aggressor_aux_raw_15")
+            or tick.get("signed_trade_volume")
+            or ""
+        ).strip()
+        if (
+            not raw_signed_volume.startswith(("+", "-"))
+            or _safe_float(raw_signed_volume, 0.0) == 0.0
+        ):
+            continue
+        observed_ts = _safe_float(tick.get("received_at_ms"), 0.0)
+        if observed_ts > 10_000_000_000:
+            observed_ts /= 1000.0
+        if observed_ts <= 0:
+            observed_ts = _safe_float(tick.get("ts"), 0.0)
+        price = _safe_float(tick.get("price"), 0.0)
+        volume = abs(_safe_float(raw_signed_volume, 0.0))
+        if observed_ts <= 0 or price <= 0:
+            continue
+        trusted.append({"ts": observed_ts, "price": price, "volume": volume})
+    trusted.sort(key=lambda item: item["ts"], reverse=True)
+    recent_ticks = [
+        item
+        for item in trusted
+        if 0.0 <= now_ts - item["ts"] <= 60.0
+    ]
+    latest_age_sec = (
+        now_ts - recent_ticks[0]["ts"]
+        if recent_ticks
+        else None
+    )
+    tick_window_span_sec = (
+        max(0.0, recent_ticks[0]["ts"] - recent_ticks[-1]["ts"])
+        if len(recent_ticks) >= 2
+        else None
+    )
+    tick_acceleration = None
+    tick_acceleration_fresh = False
+    if len(recent_ticks) >= 10 and latest_age_sec is not None and latest_age_sec <= 3.0:
+        recent_span = recent_ticks[0]["ts"] - recent_ticks[4]["ts"]
+        previous_span = recent_ticks[5]["ts"] - recent_ticks[9]["ts"]
+        if previous_span > 0 and recent_span >= 0:
+            effective_recent_span = recent_span if recent_span > 0 else 1.0
+            tick_acceleration = previous_span / effective_recent_span
+            tick_acceleration_fresh = True
+    vwap_ticks = recent_ticks[:10]
+    weighted_volume = sum(item["volume"] for item in vwap_ticks if item["volume"] > 0)
+    micro_vwap = (
+        sum(item["price"] * item["volume"] for item in vwap_ticks if item["volume"] > 0)
+        / weighted_volume
+        if weighted_volume > 0 and len(vwap_ticks) >= 3
+        else 0.0
+    )
+    micro_vwap_gap_bps = (
+        ((current_price - micro_vwap) / micro_vwap) * 10000.0
+        if current_price > 0 and micro_vwap > 0
+        else None
+    )
+    micro_vwap_fresh = bool(
+        micro_vwap_gap_bps is not None
+        and latest_age_sec is not None
+        and latest_age_sec <= 3.0
+    )
+    return {
+        "rising_missed_tp1_ws_momentum_sample_count": len(recent_ticks),
+        "rising_missed_tp1_ws_momentum_latest_age_sec": (
+            round(latest_age_sec, 6) if latest_age_sec is not None else "-"
+        ),
+        "rising_missed_tp1_ws_momentum_window_span_sec": (
+            round(tick_window_span_sec, 6) if tick_window_span_sec is not None else "-"
+        ),
+        "rising_missed_tp1_ws_tick_acceleration": (
+            round(tick_acceleration, 6) if tick_acceleration is not None else "-"
+        ),
+        "rising_missed_tp1_ws_tick_acceleration_fresh": tick_acceleration_fresh,
+        "rising_missed_tp1_ws_tick_acceleration_source": (
+            "trusted_ws_signed_0b_10tick_received_ts"
+            if tick_acceleration_fresh
+            else "trusted_ws_signed_0b_insufficient_10tick_window"
+        ),
+        "rising_missed_tp1_ws_micro_vwap": round(micro_vwap, 6) if micro_vwap > 0 else "-",
+        "rising_missed_tp1_ws_micro_vwap_gap_bps": (
+            round(micro_vwap_gap_bps, 6) if micro_vwap_gap_bps is not None else "-"
+        ),
+        "rising_missed_tp1_ws_micro_vwap_fresh": micro_vwap_fresh,
+        "rising_missed_tp1_ws_micro_vwap_source": (
+            "trusted_ws_signed_0b_recent_tick_vwap"
+            if micro_vwap_fresh
+            else "trusted_ws_signed_0b_vwap_unavailable"
+        ),
+        "rising_missed_tp1_ws_momentum_decision_authority": "trusted_ws_micro_feature_only",
+        "rising_missed_tp1_ws_momentum_forbidden_uses": (
+            "standalone_buy,submit_safety_bypass,broker_guard_bypass,threshold_mutation,"
+            "provider_route_change,quantity_or_cap_change"
+        ),
+    }
+
+
 def _maybe_update_rising_missed_micro_estimator_from_fresh_ws(
     stock: dict | None,
     code: str,
@@ -37103,20 +37257,19 @@ def resolve_rising_missed_decision_input(
     effective_current_price = _safe_float(
         enriched_ws.get("curr") or enriched_ws.get("current_price"), 0.0
     )
-    first_seen_price_source = next(
-        (
-            key
-            for key in ("first_seen_price", "watch_buy_price", "buy_price")
-            if _safe_float(stock.get(key), 0.0) > 0
-        ),
-        "missing",
+    first_seen_price, first_seen_price_source, price_anchor_fields = _rising_missed_price_anchor(
+        stock,
+        reference_price=effective_current_price,
     )
-    first_seen_price = _safe_float(stock.get(first_seen_price_source), 0.0)
     actual_watch_delta_pct = (
         ((effective_current_price - first_seen_price) / first_seen_price) * 100.0
         if effective_current_price > 0 and first_seen_price > 0
         else None
     )
+    if actual_watch_delta_pct is not None and price_anchor_fields.get(
+        "rising_missed_price_anchor_state"
+    ) == "recovered_fallback":
+        stock["price_delta_since_first_seen_pct"] = f"{actual_watch_delta_pct:.2f}"
     mid = (best_ask + best_bid) / 2.0 if best_ask > 0 and best_bid > 0 else 0.0
     spread_ratio = max(0.0, (best_ask - best_bid) / mid) if mid > 0 else 1.0
     feature_probe = stock.get("last_watching_ai_feature_probe")
@@ -37228,6 +37381,47 @@ def resolve_rising_missed_decision_input(
         and micro_vwap_age_sec is not None
         and micro_vwap_age_sec <= 3.0
     )
+    ws_momentum_fields = _rising_missed_trusted_ws_momentum(
+        raw_ws,
+        current_price=effective_current_price,
+        now_ts=now_ts,
+    )
+    if (
+        not tick_acceleration_fresh
+        and ws_provenance.get("rising_missed_tp1_ws_0b_tick_flow_trusted")
+        and ws_momentum_fields.get("rising_missed_tp1_ws_tick_acceleration_fresh")
+    ):
+        tick_acceleration = _safe_float(
+            ws_momentum_fields.get("rising_missed_tp1_ws_tick_acceleration"),
+            0.0,
+        )
+        tick_acceleration_fresh = True
+        tick_acceleration_source = str(
+            ws_momentum_fields.get("rising_missed_tp1_ws_tick_acceleration_source")
+            or "trusted_ws_signed_0b_10tick_received_ts"
+        )
+        tick_feature_age_sec = _safe_float(
+            ws_momentum_fields.get("rising_missed_tp1_ws_momentum_latest_age_sec"),
+            None,
+        )
+    if (
+        not micro_vwap_fresh
+        and ws_provenance.get("rising_missed_tp1_ws_0b_tick_flow_trusted")
+        and ws_momentum_fields.get("rising_missed_tp1_ws_micro_vwap_fresh")
+    ):
+        micro_vwap_gap_bps = _safe_float(
+            ws_momentum_fields.get("rising_missed_tp1_ws_micro_vwap_gap_bps"),
+            -999999.0,
+        )
+        micro_vwap_fresh = True
+        micro_vwap_source = str(
+            ws_momentum_fields.get("rising_missed_tp1_ws_micro_vwap_source")
+            or "trusted_ws_signed_0b_recent_tick_vwap"
+        )
+        micro_vwap_age_sec = _safe_float(
+            ws_momentum_fields.get("rising_missed_tp1_ws_momentum_latest_age_sec"),
+            None,
+        )
     if envelope_result == "rest_budget_deferred" and not (cache_hit or scanner_cache_usable):
         input_reason = "tp1_rest_budget_cache_unavailable"
     elif not envelope_ready:
@@ -37241,6 +37435,8 @@ def resolve_rising_missed_decision_input(
         **market_data_enrichment_log_fields(enriched_ws),
         **envelope_fields,
         **ws_provenance,
+        **price_anchor_fields,
+        **ws_momentum_fields,
         "rising_missed_tp1_input_ready": bool(envelope_ready and trusted_micro_ready),
         "rising_missed_tp1_input_reason": input_reason,
         "rising_missed_tp1_effective_quote_age_ms": (

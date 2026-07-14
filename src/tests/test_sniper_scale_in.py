@@ -4796,6 +4796,120 @@ def test_rising_missed_decision_input_normalizes_ws_spread_and_fresh_features(mo
     )
 
 
+def test_rising_missed_decision_input_recovers_anchor_and_derives_ws_momentum(monkeypatch):
+    now_ts = 1_783_471_000.1
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
+    state_handlers._RISING_MISSED_QUALITY_GUARD_PRE_ENVELOPE_RATE_EPOCHS.clear()
+    monkeypatch.setattr(
+        state_handlers,
+        "_fetch_rest_orderbook_snapshot_bounded",
+        lambda code, timeout_ms: (
+            {
+                "source": "ka10004_rest_orderbook",
+                "curr": 89400,
+                "best_bid": 89390,
+                "best_ask": 89410,
+                "best_bid_qty": 800,
+                "best_ask_qty": 200,
+                "rest_received_ts": now_ts - 1.1,
+            },
+            "ok",
+            1.0,
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_fetch_rising_missed_signed_tape_bounded",
+        lambda code, timeout_ms: ([], "ok", 1.0),
+    )
+    tick_times = [
+        now_ts - offset
+        for offset in (0.1, 0.2, 0.3, 0.4, 0.5, 1.1, 1.6, 2.1, 2.6, 3.1)
+    ]
+    recent_trade_ticks = [
+        {
+            "received_at_ms": int(observed_at * 1000),
+            "price": 89300,
+            "signed_trade_volume": "+10",
+            "aggressor_aux_raw_15": "+10",
+            "aggressor_source": "kiwoom_0b_signed_trade_volume",
+        }
+        for observed_at in tick_times
+    ]
+    stock = {"first_seen_price": 10662, "buy_price": 89400}
+    raw_ws = {
+        "curr": 89400,
+        "last_ws_update_ts": now_ts - 0.1,
+        "last_realtime_type_ts": {"0B": now_ts - 0.1, "0D": now_ts - 0.1},
+        "last_trade_tick": {
+            "ts": now_ts - 0.1,
+            "values": {"15": "+10"},
+            "aggressor_source": "kiwoom_0b_signed_trade_volume",
+            "strength": 120.0,
+        },
+        "recent_trade_ticks": recent_trade_ticks,
+        "orderbook": {
+            "asks": [{"price": 89410, "qty": 200}],
+            "bids": [{"price": 89390, "qty": 800}],
+        },
+    }
+
+    _resolved, fields = state_handlers.resolve_rising_missed_decision_input(
+        stock, "001820", raw_ws, {"now_ts": now_ts}
+    )
+
+    assert fields["rising_missed_price_anchor_state"] == "recovered_fallback"
+    assert fields["rising_missed_price_anchor_source"] == "buy_price"
+    assert fields["rising_missed_price_anchor_rejected_count"] == 1
+    assert fields["rising_missed_tp1_actual_watch_delta_pct"] == 0.0
+    assert stock["first_seen_price"] == 89400
+    assert stock["price_delta_since_first_seen_pct"] == "0.00"
+    assert fields["rising_missed_tp1_tick_acceleration"] == pytest.approx(5.0, abs=0.00001)
+    assert fields["rising_missed_tp1_tick_acceleration_fresh"] is True
+    assert fields["rising_missed_tp1_tick_acceleration_source"] == (
+        "trusted_ws_signed_0b_10tick_received_ts"
+    )
+    assert fields["rising_missed_tp1_micro_vwap_gap_bps"] > 0.0
+    assert fields["rising_missed_tp1_micro_vwap_fresh"] is True
+    assert fields["rising_missed_tp1_micro_vwap_source"] == (
+        "trusted_ws_signed_0b_recent_tick_vwap"
+    )
+
+
+def test_rising_missed_ws_momentum_rejects_unsigned_or_rest_ticks():
+    now_ts = 1_783_471_000.0
+    fields = state_handlers._rising_missed_trusted_ws_momentum(
+        {
+            "recent_trade_ticks": [
+                {
+                    "received_at_ms": int(now_ts * 1000),
+                    "price": 10000,
+                    "signed_trade_volume": "10",
+                    "aggressor_source": "kiwoom_0b_signed_trade_volume",
+                },
+                {
+                    "received_at_ms": int(now_ts * 1000),
+                    "price": 10000,
+                    "signed_trade_volume": "+10",
+                    "aggressor_source": "kiwoom_rest_ka10084_signed_trade_qty",
+                },
+                {
+                    "received_at_ms": int((now_ts + 100.0) * 1000),
+                    "price": 10000,
+                    "signed_trade_volume": "+10",
+                    "aggressor_source": "kiwoom_0b_signed_trade_volume",
+                },
+            ]
+        },
+        current_price=10000,
+        now_ts=now_ts,
+    )
+
+    assert fields["rising_missed_tp1_ws_momentum_sample_count"] == 0
+    assert fields["rising_missed_tp1_ws_tick_acceleration_fresh"] is False
+    assert fields["rising_missed_tp1_ws_micro_vwap_fresh"] is False
+
+
 def test_rising_missed_decision_input_resolver_defers_without_budget_cache(monkeypatch):
     monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
     monkeypatch.setattr(
@@ -6352,6 +6466,28 @@ def test_rising_missed_reversal_pre_submit_guard_logs_buy_price_anchor(monkeypat
     assert decision["rising_missed_reversal_pre_submit_jump_delta_source"] == (
         "current_quote_vs_buy_price"
     )
+
+
+def test_rising_missed_reversal_guard_recovers_contaminated_first_seen_anchor(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_RISING_MISSED_REVERSAL_PRE_SUBMIT_GUARD_ENABLED", raising=False)
+    stock = _weak_rising_missed_reentry_stock(first_seen_price=10662, buy_price=89400)
+
+    decision = state_handlers._evaluate_rising_missed_reversal_pre_submit_guard(
+        stock=stock,
+        runtime={},
+        latency_gate={},
+        ws_data={"curr": 89400},
+        orderbook_fields={},
+        microstructure_fields={},
+    )
+
+    assert decision["rising_missed_price_anchor_state"] == "recovered_fallback"
+    assert decision["rising_missed_price_anchor_source"] == "buy_price"
+    assert decision["rising_missed_reversal_pre_submit_recent_jump_pct"] == "0.0000"
+    assert decision["rising_missed_reversal_pre_submit_jump_delta_source"] == (
+        "current_quote_vs_buy_price"
+    )
+    assert stock["first_seen_price"] == 89400
 
 
 def test_rising_missed_reversal_pre_submit_guard_does_not_double_count_micro_divergence(monkeypatch):
