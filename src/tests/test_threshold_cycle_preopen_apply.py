@@ -6943,6 +6943,142 @@ def test_verify_runtime_env_handoff_missing_key(tmp_path, monkeypatch):
     assert result["missing_family_count"] == 1
 
 
+def test_verify_runtime_env_handoff_rejects_stale_operator_split_policy(tmp_path, monkeypatch):
+    runtime_dir = tmp_path / "runtime_env"
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    policy_file = tmp_path / "entry_split_order_policy_2026-07-07.json"
+    policy_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "entry_split_order_policy_v1",
+                "policy_version": "entry-split-stale",
+                "source_date": "2026-07-07",
+                "buckets": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (runtime_dir / "threshold_runtime_env_2026-07-14.json").write_text(
+        json.dumps({"target_date": "2026-07-14", "selected_families": [], "env_overrides": {}}),
+        encoding="utf-8",
+    )
+    (runtime_dir / "operator_runtime_overrides.env").write_text(
+        "\n".join(
+            [
+                "export KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED=true",
+                f"export KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE={policy_file}",
+                "export KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_VERSION=entry-split-stale",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = mod.verify_runtime_env_handoff("2026-07-14")
+
+    assert result["status"] == "fail"
+    assert result["runtime_policy_fail_count"] == 1
+    assert result["runtime_policy_audits"][0]["reason"] == "stale_policy"
+    assert result["findings"][0]["severity"] == "runtime_policy_unusable"
+
+
+def test_split_runtime_policy_audit_accepts_current_entry_and_scale_in_policies(tmp_path):
+    entry_policy = tmp_path / "entry.json"
+    entry_policy.write_text(
+        json.dumps(
+            {
+                "schema_version": "entry_split_order_policy_v1",
+                "policy_version": "entry-current",
+                "source_date": "2026-07-13",
+                "runtime_apply_allowed": False,
+                "buckets": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    scale_policy = tmp_path / "scale.json"
+    scale_policy.write_text(
+        json.dumps(
+            {
+                "schema_version": "scale_in_split_order_policy_v1",
+                "policy_version": "scale-current",
+                "generated_at": "2026-07-13T20:28:03+09:00",
+                "runtime_apply_allowed": True,
+                "buckets": {"default": {}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    env = {
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED": "true",
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE": "2026-07-14",
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE": str(entry_policy),
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_VERSION": "entry-current",
+        "KORSTOCKSCAN_ENTRY_SPLIT_OPERATOR_FALLBACK_ENABLED": "true",
+        "KORSTOCKSCAN_ENTRY_SPLIT_OPERATOR_FALLBACK_ACTIVE_DATE": "2026-07-14",
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED": "true",
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_FILE": str(scale_policy),
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_VERSION": "scale-current",
+    }
+
+    audits = mod._split_runtime_policy_audits("2026-07-14", env)
+
+    assert [audit["status"] for audit in audits] == ["pass", "pass"]
+    assert [audit["reason"] for audit in audits] == ["policy_usable", "policy_usable"]
+    assert audits[0]["operator_fallback_authorized"] is True
+
+
+def test_verify_runtime_env_handoff_rejects_selected_disabled_split_policy(tmp_path, monkeypatch):
+    runtime_dir = tmp_path / "runtime_env"
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    (runtime_dir / "threshold_runtime_env_2026-07-14.json").write_text(
+        json.dumps(
+            {
+                "target_date": "2026-07-14",
+                "selected_families": ["scale_in_split_order_plan"],
+                "env_overrides": {
+                    "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED": "false",
+                    "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_FILE": "unused.json",
+                    "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_VERSION": "disabled",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = mod.verify_runtime_env_handoff("2026-07-14")
+
+    assert result["status"] == "fail"
+    assert result["findings"][0]["severity"] == "runtime_policy_unusable"
+    assert result["findings"][0]["policy_reason"] == "selected_policy_disabled"
+
+
+def test_verify_runtime_env_handoff_rejects_market_first_inactive_date(tmp_path, monkeypatch):
+    runtime_dir = tmp_path / "runtime_env"
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    (runtime_dir / "threshold_runtime_env_2026-07-14.json").write_text(
+        json.dumps({"target_date": "2026-07-14", "selected_families": [], "env_overrides": {}}),
+        encoding="utf-8",
+    )
+    (runtime_dir / "operator_runtime_overrides.env").write_text(
+        "\n".join(
+            [
+                "export KORSTOCKSCAN_ENTRY_SPLIT_MARKET_FIRST_LEG_ENABLED=true",
+                "export KORSTOCKSCAN_ENTRY_SPLIT_MARKET_FIRST_LEG_ACTIVE_DATE=2026-07-13",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = mod.verify_runtime_env_handoff("2026-07-14")
+
+    assert result["status"] == "fail"
+    finding = next(item for item in result["findings"] if item["policy_reason"] == "market_first_inactive_date")
+    assert finding["active_date"] == "2026-07-13"
+
+
 def test_verify_runtime_env_handoff_requires_scalp_sim_policy_source_date(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     apply_dir = tmp_path / "apply_plans"

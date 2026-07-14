@@ -7,7 +7,7 @@ import hashlib
 import json
 import os
 import shlex
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -3251,6 +3251,16 @@ SELECTED_FAMILY_REQUIRED_ENV_KEYS: dict[str, list[str]] = {
     "soft_stop_whipsaw_confirmation": [
         "KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED",
     ],
+    "entry_split_order_plan": [
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED",
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE",
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_VERSION",
+    ],
+    "scale_in_split_order_plan": [
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED",
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_FILE",
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_VERSION",
+    ],
     "score65_74_recovery_probe": [
         "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED",
     ],
@@ -3259,6 +3269,51 @@ SELECTED_FAMILY_REQUIRED_ENV_KEYS: dict[str, list[str]] = {
     ],
     "scalp_sim_ai_budget_manager": [
         "KORSTOCKSCAN_SCALP_SIM_AI_BUDGET_ENABLED",
+    ],
+    "scalping_scanner_real_source_guard_runtime": [
+        "KORSTOCKSCAN_SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED",
+    ],
+    "score65_74_recovery_probe_strong_micro_override_runtime": [
+        "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_OVERRIDE_ENABLED",
+    ],
+    "entry_price_gap_profile_runtime": [
+        "KORSTOCKSCAN_SCALPING_ENTRY_PRICE_DEFENSE_MODE",
+    ],
+    "profit_stagnation_exit_runtime": [
+        "KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_EXIT_ENABLED",
+    ],
+    "latency_spread_relief_real_operator_override": [
+        "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED",
+    ],
+    "quote_consistency_normalization": [
+        "KORSTOCKSCAN_QUOTE_CONSISTENCY_RUNTIME_ENABLED",
+    ],
+    "ai_watching_score_smoothing_report_only": [
+        "KORSTOCKSCAN_AI_WATCHING_SCORE_SMOOTHING_MODE",
+    ],
+    "weak_pullback_entry_block_runtime": [
+        "KORSTOCKSCAN_SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_ENABLED",
+    ],
+    "early_accel_recheck_runtime": [
+        "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_RUNTIME_ENABLED",
+    ],
+    "real_pyramid_scale_in_quality_guard_runtime": [
+        "KORSTOCKSCAN_REAL_PYRAMID_MICRO_CONTEXT_GUARD_ENABLED",
+    ],
+    "sell_side_open_time_block_runtime": [
+        "KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_ENABLED",
+    ],
+    "pre_submit_liquidity_relief_runtime": [
+        "KORSTOCKSCAN_PRE_SUBMIT_LIQUIDITY_RELIEF_ENABLED",
+    ],
+    "entry_opportunity_recheck_runtime": [
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED",
+    ],
+    "weak_context_late_entry_guard_runtime": [
+        "KORSTOCKSCAN_WEAK_CONTEXT_LATE_ENTRY_GUARD_ENABLED",
+    ],
+    "rising_missed_normal_buy_bridge": [
+        "KORSTOCKSCAN_RISING_MISSED_NORMAL_BUY_BRIDGE_ENABLED",
     ],
     "lifecycle_decision_matrix_runtime": [
         "KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_ENABLED",
@@ -3286,6 +3341,143 @@ SELECTED_FAMILY_REQUIRED_ENV_KEYS: dict[str, list[str]] = {
         "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_EXECUTION_ARMS",
     ],
 }
+
+
+def _runtime_env_enabled(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _split_runtime_policy_audits(
+    target_date: str,
+    effective_env: dict[str, str],
+) -> list[dict[str, Any]]:
+    specs = (
+        {
+            "family": "entry_split_order_plan",
+            "prefix": "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_",
+            "schema": "entry_split_order_policy_v1",
+            "freshness_field": "source_date",
+            "max_age_days": 5,
+            "require_runtime_apply_allowed": True,
+            "allow_missing_runtime_apply_allowed": True,
+            "active_date_key": "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE",
+            "operator_fallback_enabled_key": "KORSTOCKSCAN_ENTRY_SPLIT_OPERATOR_FALLBACK_ENABLED",
+            "operator_fallback_active_date_key": "KORSTOCKSCAN_ENTRY_SPLIT_OPERATOR_FALLBACK_ACTIVE_DATE",
+        },
+        {
+            "family": "scale_in_split_order_plan",
+            "prefix": "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_",
+            "schema": "scale_in_split_order_policy_v1",
+            "freshness_field": "generated_at",
+            "max_age_days": 3,
+            "require_runtime_apply_allowed": True,
+            "allow_missing_runtime_apply_allowed": False,
+        },
+    )
+    try:
+        target_day = date.fromisoformat(target_date)
+    except ValueError:
+        target_day = datetime.now(timezone(timedelta(hours=9))).date()
+    audits: list[dict[str, Any]] = []
+    for spec in specs:
+        prefix = str(spec["prefix"])
+        enabled_key = f"{prefix}ENABLED"
+        file_key = f"{prefix}FILE"
+        version_key = f"{prefix}VERSION"
+        enabled = _runtime_env_enabled(effective_env.get(enabled_key))
+        audit: dict[str, Any] = {
+            "family": spec["family"],
+            "enabled": enabled,
+            "enabled_key": enabled_key,
+            "file_key": file_key,
+            "version_key": version_key,
+            "policy_file": effective_env.get(file_key),
+            "expected_policy_version": effective_env.get(version_key),
+            "status": "disabled",
+            "reason": "policy_disabled",
+            "required_env_keys": [enabled_key, file_key, version_key],
+        }
+        if not enabled:
+            audits.append(audit)
+            continue
+        active_date_key = str(spec.get("active_date_key") or "")
+        if active_date_key and str(effective_env.get(active_date_key) or "").strip():
+            audit["active_date_key"] = active_date_key
+            audit["active_date"] = effective_env.get(active_date_key)
+            audit["required_env_keys"].append(active_date_key)
+            if str(effective_env.get(active_date_key) or "").strip() != target_date:
+                audit.update(status="fail", reason="policy_inactive_date")
+                audits.append(audit)
+                continue
+        policy_path = Path(str(effective_env.get(file_key) or ""))
+        if not policy_path.exists():
+            audit.update(status="fail", reason="policy_file_missing")
+            audits.append(audit)
+            continue
+        policy = _load_json(policy_path)
+        audit["policy_schema_version"] = policy.get("schema_version")
+        audit["policy_version"] = policy.get("policy_version")
+        if policy.get("schema_version") != spec["schema"]:
+            audit.update(status="fail", reason="policy_schema_mismatch")
+            audits.append(audit)
+            continue
+        if effective_env.get(version_key) and policy.get("policy_version") != effective_env.get(version_key):
+            audit.update(status="fail", reason="policy_version_mismatch")
+            audits.append(audit)
+            continue
+        runtime_apply_value_present = "runtime_apply_allowed" in policy
+        runtime_apply_denied = not _runtime_env_enabled(policy.get("runtime_apply_allowed"))
+        runtime_apply_denial_requires_fallback = bool(
+            spec["require_runtime_apply_allowed"]
+            and runtime_apply_denied
+            and (runtime_apply_value_present or not spec.get("allow_missing_runtime_apply_allowed"))
+        )
+        if runtime_apply_denial_requires_fallback:
+            fallback_enabled_key = str(spec.get("operator_fallback_enabled_key") or "")
+            fallback_active_date_key = str(spec.get("operator_fallback_active_date_key") or "")
+            fallback_enabled = bool(
+                fallback_enabled_key and _runtime_env_enabled(effective_env.get(fallback_enabled_key))
+            )
+            fallback_active_date = str(effective_env.get(fallback_active_date_key) or "").strip()
+            audit.update(
+                operator_fallback_enabled=fallback_enabled,
+                operator_fallback_active_date=fallback_active_date or None,
+            )
+            if fallback_enabled_key:
+                audit["required_env_keys"].extend([fallback_enabled_key, fallback_active_date_key])
+            if not fallback_enabled or fallback_active_date != target_date:
+                audit.update(status="fail", reason="runtime_apply_not_allowed")
+                audits.append(audit)
+                continue
+            audit["operator_fallback_authorized"] = True
+        freshness_value = str(policy.get(str(spec["freshness_field"])) or "").strip()
+        audit["freshness_value"] = freshness_value or None
+        try:
+            if spec["freshness_field"] == "source_date":
+                source_day = date.fromisoformat(freshness_value)
+                stale = target_day - source_day > timedelta(days=int(spec["max_age_days"]))
+            else:
+                generated_at = datetime.fromisoformat(freshness_value.replace("Z", "+00:00"))
+                if generated_at.tzinfo is None:
+                    generated_at = generated_at.replace(tzinfo=timezone(timedelta(hours=9)))
+                target_end = datetime.combine(
+                    target_day,
+                    datetime.max.time(),
+                    tzinfo=timezone(timedelta(hours=9)),
+                )
+                stale = target_end - generated_at.astimezone(target_end.tzinfo) > timedelta(
+                    days=int(spec["max_age_days"])
+                )
+        except (TypeError, ValueError):
+            audit.update(status="fail", reason="policy_freshness_basis_invalid")
+            audits.append(audit)
+            continue
+        if stale:
+            audit.update(status="fail", reason="stale_policy")
+        else:
+            audit.update(status="pass", reason="policy_usable")
+        audits.append(audit)
+    return audits
 
 
 def _read_pid_environ(pid: int) -> dict[str, str]:
@@ -3353,6 +3545,49 @@ def verify_runtime_env_handoff(
     effective_env_overrides = dict(env_overrides)
     effective_env_overrides.update(operator_overrides)
     findings: list[dict[str, Any]] = []
+    runtime_policy_audits = _split_runtime_policy_audits(target_date, effective_env_overrides)
+    for audit in runtime_policy_audits:
+        selected_policy_disabled = bool(
+            audit.get("status") == "disabled"
+            and audit.get("family") in selected_families
+        )
+        if audit.get("status") != "fail" and not selected_policy_disabled:
+            continue
+        policy_reason = "selected_policy_disabled" if selected_policy_disabled else audit.get("reason")
+        findings.append(
+            {
+                "family": audit.get("family"),
+                "missing_env_keys": [],
+                "severity": "runtime_policy_unusable",
+                "detail": f"{audit.get('family')} runtime policy unusable: {policy_reason}",
+                "policy_file": audit.get("policy_file"),
+                "policy_reason": policy_reason,
+            }
+        )
+    market_first_enabled_key = "KORSTOCKSCAN_ENTRY_SPLIT_MARKET_FIRST_LEG_ENABLED"
+    market_first_active_date_key = "KORSTOCKSCAN_ENTRY_SPLIT_MARKET_FIRST_LEG_ACTIVE_DATE"
+    if _runtime_env_enabled(effective_env_overrides.get(market_first_enabled_key)):
+        market_first_active_date = str(
+            effective_env_overrides.get(market_first_active_date_key) or ""
+        ).strip()
+        if market_first_active_date != target_date:
+            findings.append(
+                {
+                    "family": "entry_split_order_plan",
+                    "missing_env_keys": (
+                        [market_first_active_date_key] if not market_first_active_date else []
+                    ),
+                    "severity": "runtime_policy_unusable",
+                    "detail": "entry market-first leg enabled outside its active date",
+                    "policy_reason": "market_first_inactive_date",
+                    "active_date": market_first_active_date or None,
+                }
+            )
+    unverified_selected_families = sorted(
+        family
+        for family in selected_families
+        if family not in SELECTED_FAMILY_REQUIRED_ENV_KEYS
+    )
     missing_families: list[str] = []
     for family in selected_families:
         required_keys = SELECTED_FAMILY_REQUIRED_ENV_KEYS.get(family, [])
@@ -3374,8 +3609,27 @@ def verify_runtime_env_handoff(
     pid_missing: list[dict[str, Any]] = []
     if pid is not None:
         pid_env = _read_pid_environ(pid)
-        for family in selected_families:
-            required_keys = SELECTED_FAMILY_REQUIRED_ENV_KEYS.get(family, [])
+        pid_required_keys: dict[str, list[str]] = {
+            family: list(SELECTED_FAMILY_REQUIRED_ENV_KEYS.get(family, []))
+            for family in selected_families
+        }
+        for audit in runtime_policy_audits:
+            if not audit.get("enabled"):
+                continue
+            family = str(audit.get("family") or "")
+            keys = pid_required_keys.setdefault(family, [])
+            for key in audit.get("required_env_keys") or []:
+                if key not in keys:
+                    keys.append(key)
+        if _runtime_env_enabled(effective_env_overrides.get(market_first_enabled_key)):
+            keys = pid_required_keys.setdefault("entry_split_order_plan", [])
+            for key in (
+                market_first_enabled_key,
+                market_first_active_date_key,
+            ):
+                if key not in keys:
+                    keys.append(key)
+        for family, required_keys in pid_required_keys.items():
             for key in required_keys:
                 manifest_value = effective_env_overrides.get(key)
                 pid_value = pid_env.get(key)
@@ -3422,6 +3676,12 @@ def verify_runtime_env_handoff(
             str(operator_override_path) if operator_override_path.exists() else None
         ),
         "operator_runtime_override_keys": sorted(operator_overrides),
+        "runtime_policy_audits": runtime_policy_audits,
+        "runtime_policy_fail_count": sum(
+            audit.get("status") == "fail" for audit in runtime_policy_audits
+        ),
+        "unverified_selected_families": unverified_selected_families,
+        "unverified_selected_family_count": len(unverified_selected_families),
     }
     if not passed:
         result["status"] = "fail"
