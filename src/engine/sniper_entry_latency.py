@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from src.engine.scalping.micro_estimator_state import DEFAULT_STORE as MICRO_ESTIMATOR_STORE
+from src.engine.scalping.market_data_enrichment import rest_signed_tape_tick_freshness
 from src.trading.config.entry_config import EntryConfig
 from src.trading.entry.entry_policy import EntryPolicy
 from src.trading.entry.entry_types import EntryDecision
@@ -1232,8 +1233,33 @@ def _latency_signed_tape_fields(
             _to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_SIGNED_TAPE_MAX_BUY_RATIO"), 45.0),
         ),
     )
+    max_rest_age_ms = max(
+        0.0,
+        _to_float(
+            os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_SIGNED_TAPE_MAX_REST_AGE_MS"),
+            3000.0,
+        ),
+    )
     rows: list[tuple[str, float]] = []
+    rest_fresh_count = 0
+    rest_stale_or_unknown_count = 0
+    now_ts = time.time()
     for tick in _iter_signed_tape_ticks(ws, item):
+        is_rest_tick = bool(
+            str(tick.get("rest_signed_tape_source") or "").strip().lower() == "ka10084"
+            or str(tick.get("aggressor_source") or "").strip()
+            == "kiwoom_rest_ka10084_signed_trade_qty"
+        )
+        if is_rest_tick:
+            fresh, _age_ms, _age_basis = rest_signed_tape_tick_freshness(
+                tick,
+                now_ts=now_ts,
+                max_age_ms=max_rest_age_ms,
+            )
+            if not fresh:
+                rest_stale_or_unknown_count += 1
+                continue
+            rest_fresh_count += 1
         side, volume = _signed_trade_side_and_volume_from_tick(tick)
         if side in {"BUY", "SELL"} and volume > 0:
             rows.append((side, volume))
@@ -1261,6 +1287,11 @@ def _latency_signed_tape_fields(
         "latency_true_ofi_direct_canary_signed_tape_window": window,
         "latency_true_ofi_direct_canary_signed_tape_min_samples": min_samples,
         "latency_true_ofi_direct_canary_signed_tape_max_buy_ratio": round(max_buy_ratio, 3),
+        "latency_true_ofi_direct_canary_signed_tape_max_rest_age_ms": round(max_rest_age_ms, 3),
+        "latency_true_ofi_direct_canary_signed_tape_rest_fresh_count": rest_fresh_count,
+        "latency_true_ofi_direct_canary_signed_tape_rest_stale_or_unknown_count": (
+            rest_stale_or_unknown_count
+        ),
         "latency_true_ofi_direct_canary_signed_tape_sample_count": sample_count,
         "latency_true_ofi_direct_canary_signed_tape_buy_count": buy_count,
         "latency_true_ofi_direct_canary_signed_tape_sell_count": sell_count,

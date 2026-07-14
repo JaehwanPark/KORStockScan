@@ -2985,9 +2985,27 @@ def test_latency_true_ofi_direct_canary_blocks_rest_signed_sell_tape(monkeypatch
             "sell_exec_volume": 8_000,
             "net_buy_exec_volume": 7_000,
             "rest_signed_trade_ticks": [
-                {"signed_trade_volume": "-200", "volume": 200, "rest_signed_tape_source": "ka10084"},
-                {"signed_trade_volume": "-150", "volume": 150, "rest_signed_tape_source": "ka10084"},
-                {"signed_trade_volume": "+50", "volume": 50, "rest_signed_tape_source": "ka10084"},
+                {
+                    "signed_trade_volume": "-200",
+                    "volume": 200,
+                    "rest_signed_tape_source": "ka10084",
+                    "rest_signed_tape_received_at": now_ts,
+                    "source_timestamp": now_ts,
+                },
+                {
+                    "signed_trade_volume": "-150",
+                    "volume": 150,
+                    "rest_signed_tape_source": "ka10084",
+                    "rest_signed_tape_received_at": now_ts,
+                    "source_timestamp": now_ts - 0.1,
+                },
+                {
+                    "signed_trade_volume": "+50",
+                    "volume": 50,
+                    "rest_signed_tape_source": "ka10084",
+                    "rest_signed_tape_received_at": now_ts,
+                    "source_timestamp": now_ts - 0.2,
+                },
             ],
             "orderbook_micro_state": "neutral",
             "orderbook": {
@@ -3010,6 +3028,7 @@ def test_latency_true_ofi_direct_canary_blocks_rest_signed_sell_tape(monkeypatch
 
 
 def test_rest_signed_tape_counts_unsigned_buy_rows_with_rest_side():
+    now_ts = time.time()
     fields = entry_latency_module._latency_signed_tape_fields(
         {},
         {
@@ -3018,16 +3037,22 @@ def test_rest_signed_tape_counts_unsigned_buy_rows_with_rest_side():
                     "signed_trade_volume": "120",
                     "aggressor_side": "BUY",
                     "aggressor_source": "kiwoom_rest_ka10084_signed_trade_qty",
+                    "rest_signed_tape_received_at": now_ts,
+                    "source_timestamp": now_ts,
                 },
                 {
                     "signed_trade_volume": "-80",
                     "aggressor_side": "SELL",
                     "aggressor_source": "kiwoom_rest_ka10084_signed_trade_qty",
+                    "rest_signed_tape_received_at": now_ts,
+                    "source_timestamp": now_ts - 0.1,
                 },
                 {
                     "signed_trade_volume": "-20",
                     "aggressor_side": "SELL",
                     "aggressor_source": "kiwoom_rest_ka10084_signed_trade_qty",
+                    "rest_signed_tape_received_at": now_ts,
+                    "source_timestamp": now_ts - 0.2,
                 },
             ]
         },
@@ -3037,6 +3062,39 @@ def test_rest_signed_tape_counts_unsigned_buy_rows_with_rest_side():
     assert fields["latency_true_ofi_direct_canary_signed_tape_buy_count"] == 1
     assert fields["latency_true_ofi_direct_canary_signed_tape_buy_volume"] == 120
     assert fields["latency_true_ofi_direct_canary_signed_tape_sell_dominated"] is False
+
+
+def test_rest_signed_tape_stale_sell_rows_cannot_block_latency_canary():
+    now_ts = time.time()
+    fields = entry_latency_module._latency_signed_tape_fields(
+        {},
+        {
+            "rest_signed_trade_ticks": [
+                {
+                    "signed_trade_volume": "-200",
+                    "rest_signed_tape_source": "ka10084",
+                    "rest_signed_tape_received_at": now_ts - 10.0,
+                    "source_timestamp": now_ts - 10.0,
+                },
+                {
+                    "signed_trade_volume": "-150",
+                    "rest_signed_tape_source": "ka10084",
+                    "rest_signed_tape_received_at": now_ts - 10.0,
+                    "source_timestamp": now_ts - 9.9,
+                },
+                {
+                    "signed_trade_volume": "-100",
+                    "rest_signed_tape_source": "ka10084",
+                    "rest_signed_tape_received_at": now_ts - 10.0,
+                    "source_timestamp": now_ts - 9.8,
+                },
+            ]
+        },
+    )
+
+    assert fields["latency_true_ofi_direct_canary_signed_tape_sample_count"] == 0
+    assert fields["latency_true_ofi_direct_canary_signed_tape_sell_dominated"] is False
+    assert fields["latency_true_ofi_direct_canary_signed_tape_rest_stale_or_unknown_count"] == 3
 
 
 def test_latency_true_ofi_direct_canary_keeps_wide_spread_blocked(monkeypatch):

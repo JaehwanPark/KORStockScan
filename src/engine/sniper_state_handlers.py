@@ -178,6 +178,7 @@ from src.engine.scalping.entry_reprice_after_submit import (
 from src.engine.scalping.market_data_enrichment import (
     build_market_data_enrichment,
     market_data_enrichment_log_fields,
+    refresh_rest_signed_tape_fields,
 )
 from src.engine.scalping.entry_opportunity_recheck import (
     EntryOpportunityRecheckState,
@@ -37193,6 +37194,14 @@ def resolve_rising_missed_decision_input(
         }
         envelope_fields["rising_missed_tp1_resolver_envelope_cache_hit"] = False
         envelope_fields["rising_missed_tp1_resolver_envelope_cache_age_sec"] = "0.000"
+
+    if enriched_ws.get("rest_signed_trade_ticks"):
+        refreshed_signed_tape_fields = refresh_rest_signed_tape_fields(
+            enriched_ws,
+            now_ts=now_ts,
+        )
+        enriched_ws.update(refreshed_signed_tape_fields)
+        envelope_fields.update(refreshed_signed_tape_fields)
 
     micro_update_fields = _maybe_update_rising_missed_micro_estimator_from_fresh_ws(
         stock,

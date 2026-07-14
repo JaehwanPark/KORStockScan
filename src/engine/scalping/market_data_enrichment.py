@@ -8,6 +8,7 @@ pressure or bypass hard submit safety.
 from __future__ import annotations
 
 import time
+from datetime import datetime
 from typing import Any
 
 
@@ -22,6 +23,7 @@ SIGNED_TAPE_BUY_DOMINATED = "buy_dominated"
 SIGNED_TAPE_MIXED = "mixed"
 SIGNED_TAPE_INSUFFICIENT = "insufficient"
 SIGNED_TAPE_MISSING = "missing"
+SIGNED_TAPE_STALE = "stale"
 
 MARKET_DATA_FORBIDDEN_USES = (
     "buy_support,pressure_math,threshold_mutation,provider_route_change,"
@@ -266,9 +268,73 @@ def _signed_tick_side_and_qty(tick: dict[str, Any]) -> tuple[str, int]:
     return side, qty
 
 
+def _rest_signed_tape_source_age_ms(
+    tick: dict[str, Any],
+    now_ts: float,
+) -> tuple[float | None, str]:
+    for key in ("source_timestamp", "trade_timestamp", "execution_timestamp"):
+        age = _epoch_ms_to_age_ms(tick.get(key), now_ts)
+        if age is not None:
+            return age, f"absolute_timestamp:{key}"
+
+    raw_time = str(tick.get("time") or tick.get("tm") or "").strip()
+    digits = "".join(character for character in raw_time if character.isdigit())
+    try:
+        if len(digits) >= 14:
+            observed = datetime.strptime(digits[:14], "%Y%m%d%H%M%S")
+        elif len(digits) >= 6:
+            current = datetime.fromtimestamp(float(now_ts))
+            observed = current.replace(
+                hour=int(digits[-6:-4]),
+                minute=int(digits[-4:-2]),
+                second=int(digits[-2:]),
+                microsecond=0,
+            )
+        else:
+            return None, "missing_source_timestamp"
+    except (TypeError, ValueError, OverflowError):
+        return None, "invalid_source_timestamp"
+
+    delta_ms = (float(now_ts) - observed.timestamp()) * 1000.0
+    if delta_ms < -1000.0:
+        return None, "future_source_timestamp"
+    return max(0.0, delta_ms), "source_time:ka10084_tm"
+
+
+def rest_signed_tape_tick_freshness(
+    tick: dict[str, Any],
+    *,
+    now_ts: float,
+    max_age_ms: float = 3000.0,
+) -> tuple[bool, float | None, str]:
+    """Require both REST receipt and provider trade time for signed-tape authority."""
+    receive_age, receive_basis = _age_details(
+        tick,
+        now_ts,
+        absolute_keys=(
+            "rest_signed_tape_received_at",
+            "rest_received_ts",
+            "received_at",
+            "received_ts",
+        ),
+        reported_age_keys=(),
+    )
+    source_age, source_basis = _rest_signed_tape_source_age_ms(tick, now_ts)
+    if receive_age is None or source_age is None:
+        return False, None, f"{receive_basis}|{source_basis}"
+    effective_age = max(float(receive_age), float(source_age))
+    return (
+        effective_age <= max(0.0, float(max_age_ms)),
+        effective_age,
+        f"{receive_basis}|{source_basis}",
+    )
+
+
 def _signed_tape_fields(
     ticks: Any,
     *,
+    now_ts: float,
+    signed_tape_max_age_ms: float,
     signed_tape_window: int,
     signed_tape_min_samples: int,
     signed_tape_sell_max_buy_ratio: float,
@@ -282,12 +348,28 @@ def _signed_tape_fields(
             "market_data_signed_tape_buy_volume": 0,
             "market_data_signed_tape_sell_volume": 0,
             "market_data_signed_tape_buy_ratio_pct": "-",
+            "market_data_signed_tape_age_ms": "-",
+            "market_data_signed_tape_age_basis": "missing",
+            "market_data_signed_tape_fresh_sample_count": 0,
+            "market_data_signed_tape_stale_or_unknown_count": 0,
             "market_data_rest_signed_tape_pressure_usable": False,
         }
     buy_count = sell_count = buy_volume = sell_volume = 0
     sample = 0
-    for tick in ticks[: max(1, int(signed_tape_window))]:
+    stale_or_unknown_count = 0
+    observed_ages: list[tuple[float, str]] = []
+    for tick in ticks:
         if not isinstance(tick, dict):
+            continue
+        fresh, age_ms, age_basis = rest_signed_tape_tick_freshness(
+            tick,
+            now_ts=now_ts,
+            max_age_ms=signed_tape_max_age_ms,
+        )
+        if age_ms is not None:
+            observed_ages.append((float(age_ms), age_basis))
+        if not fresh:
+            stale_or_unknown_count += 1
             continue
         side, qty = _signed_tick_side_and_qty(tick)
         if side == "BUY":
@@ -298,9 +380,13 @@ def _signed_tape_fields(
             sell_count += 1
             sell_volume += qty
             sample += 1
+        if sample >= max(1, int(signed_tape_window)):
+            break
     total_volume = buy_volume + sell_volume
     buy_ratio = (float(buy_volume) / float(total_volume) * 100.0) if total_volume > 0 else None
-    if sample < max(1, int(signed_tape_min_samples)):
+    if sample == 0 and stale_or_unknown_count > 0:
+        state = SIGNED_TAPE_STALE
+    elif sample < max(1, int(signed_tape_min_samples)):
         state = SIGNED_TAPE_INSUFFICIENT
     elif (
         sell_count > buy_count
@@ -318,6 +404,7 @@ def _signed_tape_fields(
         state = SIGNED_TAPE_BUY_DOMINATED
     else:
         state = SIGNED_TAPE_MIXED
+    newest_age = min(observed_ages, default=(None, "missing"), key=lambda item: item[0])
     return {
         "market_data_signed_tape_state": state,
         "market_data_signed_tape_sample_count": int(sample),
@@ -328,8 +415,41 @@ def _signed_tape_fields(
         "market_data_signed_tape_buy_ratio_pct": (
             round(buy_ratio, 3) if buy_ratio is not None else "-"
         ),
+        "market_data_signed_tape_age_ms": (
+            round(float(newest_age[0]), 3) if newest_age[0] is not None else "-"
+        ),
+        "market_data_signed_tape_age_basis": newest_age[1],
+        "market_data_signed_tape_fresh_sample_count": int(sample),
+        "market_data_signed_tape_stale_or_unknown_count": int(stale_or_unknown_count),
         "market_data_rest_signed_tape_pressure_usable": False,
     }
+
+
+def refresh_rest_signed_tape_fields(
+    source: dict[str, Any] | None,
+    *,
+    now_ts: float,
+    signed_tape_max_age_ms: float = 3000.0,
+    signed_tape_window: int = 5,
+    signed_tape_min_samples: int = 3,
+    signed_tape_sell_max_buy_ratio: float = 45.0,
+) -> dict[str, Any]:
+    source = source if isinstance(source, dict) else {}
+    fields = _signed_tape_fields(
+        source.get("rest_signed_trade_ticks"),
+        now_ts=now_ts,
+        signed_tape_max_age_ms=signed_tape_max_age_ms,
+        signed_tape_window=signed_tape_window,
+        signed_tape_min_samples=signed_tape_min_samples,
+        signed_tape_sell_max_buy_ratio=signed_tape_sell_max_buy_ratio,
+    )
+    fields["market_data_tick_context_state"] = (
+        "rest_signed_tape"
+        if fields["market_data_signed_tape_state"]
+        not in {SIGNED_TAPE_MISSING, SIGNED_TAPE_INSUFFICIENT, SIGNED_TAPE_STALE}
+        else "missing"
+    )
+    return fields
 
 
 def market_data_enrichment_log_fields(source: dict[str, Any] | None) -> dict[str, Any]:
@@ -350,6 +470,7 @@ def build_market_data_enrichment(
     signed_tape_window: int = 5,
     signed_tape_min_samples: int = 3,
     signed_tape_sell_max_buy_ratio: float = 45.0,
+    signed_tape_max_age_ms: float = 3000.0,
     prefer_freshest_source: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     now_value = time.time() if now_ts is None else float(now_ts)
@@ -454,6 +575,8 @@ def build_market_data_enrichment(
 
     signed_fields = _signed_tape_fields(
         rest_signed_ticks,
+        now_ts=now_value,
+        signed_tape_max_age_ms=signed_tape_max_age_ms,
         signed_tape_window=signed_tape_window,
         signed_tape_min_samples=signed_tape_min_samples,
         signed_tape_sell_max_buy_ratio=signed_tape_sell_max_buy_ratio,
@@ -461,7 +584,7 @@ def build_market_data_enrichment(
     tick_state = (
         "rest_signed_tape"
         if signed_fields["market_data_signed_tape_state"]
-        not in {SIGNED_TAPE_MISSING, SIGNED_TAPE_INSUFFICIENT}
+        not in {SIGNED_TAPE_MISSING, SIGNED_TAPE_INSUFFICIENT, SIGNED_TAPE_STALE}
         else "missing"
     )
     fields: dict[str, Any] = {

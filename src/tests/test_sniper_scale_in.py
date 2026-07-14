@@ -4722,6 +4722,69 @@ def test_rising_missed_decision_input_resolver_shares_rest_envelope(monkeypatch)
     assert second_snapshot["true_ofi_sample_count"] == first_snapshot["true_ofi_sample_count"]
 
 
+def test_rising_missed_decision_input_cache_expires_rest_signed_tape(monkeypatch):
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
+    state_handlers._RISING_MISSED_QUALITY_GUARD_PRE_ENVELOPE_RATE_EPOCHS.clear()
+    calls = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_fetch_rest_orderbook_snapshot_bounded",
+        lambda code, timeout_ms: calls.append(("orderbook", code))
+        or (
+            {
+                "source": "ka10004_rest_orderbook",
+                "rest_mid_price": 10020,
+                "best_bid": 10010,
+                "best_ask": 10020,
+                "best_bid_qty": 900,
+                "best_ask_qty": 100,
+                "rest_received_ts": 1000.0,
+            },
+            "ok",
+            1.0,
+        ),
+    )
+    signed_ticks = [
+        {
+            "signed_trade_volume": "-100",
+            "aggressor_side": "SELL",
+            "aggressor_source": "kiwoom_rest_ka10084_signed_trade_qty",
+            "rest_signed_tape_received_at": 1000.0,
+            "source_timestamp": 1000.0 - offset,
+        }
+        for offset in (0.0, 0.1, 0.2)
+    ]
+    monkeypatch.setattr(
+        state_handlers,
+        "_fetch_rising_missed_signed_tape_bounded",
+        lambda code, timeout_ms: calls.append(("signed_tape", code))
+        or (signed_ticks, "ok", 1.0),
+    )
+    stock = {}
+    raw_ws = {
+        "curr": 10000,
+        "best_bid": 9990,
+        "best_ask": 10000,
+        "best_bid_qty": 800,
+        "best_ask_qty": 200,
+        "last_ws_update_ts": 999.5,
+    }
+
+    _first_ws, first_fields = state_handlers.resolve_rising_missed_decision_input(
+        stock, "123469_tape", raw_ws, {"now_ts": 1000.0}
+    )
+    _second_ws, second_fields = state_handlers.resolve_rising_missed_decision_input(
+        stock, "123469_tape", raw_ws, {"now_ts": 1004.0}
+    )
+
+    assert calls == [("orderbook", "123469_tape"), ("signed_tape", "123469_tape")]
+    assert first_fields["market_data_signed_tape_state"] == "sell_dominated"
+    assert second_fields["rising_missed_tp1_resolver_envelope_cache_hit"] is True
+    assert second_fields["market_data_signed_tape_state"] == "stale"
+    assert second_fields["market_data_signed_tape_sample_count"] == 0
+    assert second_fields["market_data_tick_context_state"] == "missing"
+
+
 def test_rising_missed_decision_input_normalizes_ws_spread_and_fresh_features(monkeypatch):
     monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
     state_handlers._RISING_MISSED_QUALITY_GUARD_PRE_ENVELOPE_RATE_EPOCHS.clear()

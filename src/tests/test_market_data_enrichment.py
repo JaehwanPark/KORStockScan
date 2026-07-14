@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from src.engine.scalping.market_data_enrichment import (
     CONFLICTED,
     FRESH_WS,
@@ -275,10 +277,30 @@ def test_market_data_enrichment_rejects_ka10004_age_zero_without_receive_timesta
 
 def test_market_data_signed_tape_sell_dominated_is_negative_veto_provenance_only():
     ticks = [
-        {"aggressor_side": "SELL", "signed_trade_volume": "-100"},
-        {"aggressor_side": "SELL", "signed_trade_volume": "-90"},
-        {"aggressor_side": "SELL", "signed_trade_volume": "-80"},
-        {"aggressor_side": "BUY", "signed_trade_volume": "+20"},
+        {
+            "aggressor_side": "SELL",
+            "signed_trade_volume": "-100",
+            "rest_signed_tape_received_at": 1000.0,
+            "source_timestamp": 1000.0,
+        },
+        {
+            "aggressor_side": "SELL",
+            "signed_trade_volume": "-90",
+            "rest_signed_tape_received_at": 1000.0,
+            "source_timestamp": 999.9,
+        },
+        {
+            "aggressor_side": "SELL",
+            "signed_trade_volume": "-80",
+            "rest_signed_tape_received_at": 1000.0,
+            "source_timestamp": 999.8,
+        },
+        {
+            "aggressor_side": "BUY",
+            "signed_trade_volume": "+20",
+            "rest_signed_tape_received_at": 1000.0,
+            "source_timestamp": 999.7,
+        },
     ]
 
     enriched, fields = build_market_data_enrichment(
@@ -288,16 +310,37 @@ def test_market_data_signed_tape_sell_dominated_is_negative_veto_provenance_only
     )
 
     assert fields["market_data_signed_tape_state"] == SIGNED_TAPE_SELL_DOMINATED
+    assert fields["market_data_signed_tape_fresh_sample_count"] == 4
     assert fields["market_data_rest_signed_tape_pressure_usable"] is False
     assert "buy_pressure_10t" not in enriched
 
 
 def test_market_data_signed_tape_buy_dominated_does_not_create_buy_pressure():
     ticks = [
-        {"aggressor_side": "BUY", "signed_trade_volume": "+100"},
-        {"aggressor_side": "BUY", "signed_trade_volume": "+90"},
-        {"aggressor_side": "BUY", "signed_trade_volume": "+80"},
-        {"aggressor_side": "SELL", "signed_trade_volume": "-20"},
+        {
+            "aggressor_side": "BUY",
+            "signed_trade_volume": "+100",
+            "rest_signed_tape_received_at": 1000.0,
+            "source_timestamp": 1000.0,
+        },
+        {
+            "aggressor_side": "BUY",
+            "signed_trade_volume": "+90",
+            "rest_signed_tape_received_at": 1000.0,
+            "source_timestamp": 999.9,
+        },
+        {
+            "aggressor_side": "BUY",
+            "signed_trade_volume": "+80",
+            "rest_signed_tape_received_at": 1000.0,
+            "source_timestamp": 999.8,
+        },
+        {
+            "aggressor_side": "SELL",
+            "signed_trade_volume": "-20",
+            "rest_signed_tape_received_at": 1000.0,
+            "source_timestamp": 999.7,
+        },
     ]
 
     enriched, fields = build_market_data_enrichment(
@@ -309,3 +352,63 @@ def test_market_data_signed_tape_buy_dominated_does_not_create_buy_pressure():
     assert fields["market_data_signed_tape_state"] == SIGNED_TAPE_BUY_DOMINATED
     assert fields["market_data_rest_signed_tape_pressure_usable"] is False
     assert "buy_pressure_10t" not in enriched
+
+
+def test_market_data_signed_tape_stale_rows_cannot_create_negative_veto():
+    ticks = [
+        {
+            "aggressor_side": "SELL",
+            "signed_trade_volume": "-100",
+            "rest_signed_tape_received_at": 999.0,
+            "source_timestamp": 990.0,
+        },
+        {
+            "aggressor_side": "SELL",
+            "signed_trade_volume": "-90",
+            "rest_signed_tape_received_at": 999.0,
+            "source_timestamp": 990.1,
+        },
+        {
+            "aggressor_side": "SELL",
+            "signed_trade_volume": "-80",
+            "rest_signed_tape_received_at": 999.0,
+            "source_timestamp": 990.2,
+        },
+    ]
+
+    _enriched, fields = build_market_data_enrichment(
+        ws_data={},
+        rest_signed_ticks=ticks,
+        now_ts=1000.0,
+    )
+
+    assert fields["market_data_signed_tape_state"] == "stale"
+    assert fields["market_data_signed_tape_sample_count"] == 0
+    assert fields["market_data_signed_tape_stale_or_unknown_count"] == 3
+    assert fields["market_data_tick_context_state"] == "missing"
+    assert fields["market_data_rest_signed_tape_pressure_usable"] is False
+
+
+def test_market_data_signed_tape_accepts_fresh_official_ka10084_time_shape():
+    now_ts = datetime(2026, 7, 14, 10, 30, 2).timestamp()
+    ticks = [
+        {
+            "time": value,
+            "aggressor_side": "SELL",
+            "signed_trade_volume": "-100",
+            "rest_signed_tape_received_at": now_ts,
+        }
+        for value in ("103002", "103001", "103000")
+    ]
+
+    _enriched, fields = build_market_data_enrichment(
+        ws_data={},
+        rest_signed_ticks=ticks,
+        now_ts=now_ts,
+    )
+
+    assert fields["market_data_signed_tape_state"] == SIGNED_TAPE_SELL_DOMINATED
+    assert fields["market_data_signed_tape_sample_count"] == 3
+    assert fields["market_data_signed_tape_age_basis"].endswith(
+        "source_time:ka10084_tm"
+    )
