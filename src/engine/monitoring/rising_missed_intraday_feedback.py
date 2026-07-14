@@ -143,6 +143,14 @@ def _event_price(row: dict[str, Any]) -> float | None:
     return _event_price_with_source(row)[0]
 
 
+def _decision_stage_current_price_unusable(row: dict[str, Any], source: str) -> bool:
+    return bool(
+        source in {"current_price", "current_price_observed"}
+        and str(row.get("stage") or "")
+        in {"budget_pass", "orderbook_stability_observed"}
+    )
+
+
 def _tp1_observation_price(row: dict[str, Any]) -> tuple[float | None, str]:
     fields = _fields(row)
     is_tp1_evaluation = bool(
@@ -155,6 +163,8 @@ def _tp1_observation_price(row: dict[str, Any]) -> tuple[float | None, str]:
         if effective_price is not None and effective_price > 0:
             return effective_price, "rising_missed_tp1_effective_price"
     price, source = _event_price_with_source(row)
+    if _decision_stage_current_price_unusable(row, source):
+        return None, "decision_stage_current_price_without_fresh_mark"
     if source in {"current_price", "current_price_observed"} and not _scanner_current_price_usable(
         row, fields
     ):
@@ -984,7 +994,7 @@ def _build_submit_safety_and_backoff_audit(pipeline_path: Path) -> tuple[dict[st
         parsed_ts = _parse_ts(ts)
         if parsed_ts is not None and (latest_seen_ts is None or parsed_ts > latest_seen_ts):
             latest_seen_ts = parsed_ts
-        price = _event_price(row)
+        price = _tp1_observation_price(row)[0]
         delta = _event_delta_pct(row)
 
         for block in open_submit_blocks_by_code.get(code, []):

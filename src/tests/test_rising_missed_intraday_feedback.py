@@ -296,6 +296,89 @@ def test_tp1_labels_prefer_effective_candidate_and_fresh_submit_mark_over_stale_
     assert counterfactual_label["broker_order_forbidden"] is True
 
 
+def test_tp1_label_ignores_unfresh_decision_stage_current_price_before_submit_mark(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-14.jsonl"
+    rows = [
+        _event(
+            707,
+            "000707",
+            "stale-decision-price",
+            "rising_missed_one_share_entry",
+            {
+                "rising_missed_tp1_selector_active": True,
+                "rising_missed_tp1_candidate_allowed": True,
+                "rising_missed_tp1_candidate_reason": "rising_missed_tp1_candidate_pass",
+                "rising_missed_tp1_evaluation_id": "stale-decision-price-eval",
+                "rising_missed_tp1_effective_price": 10000,
+                "current_price_observed": 11000,
+            },
+            emitted_at="2026-07-14T09:00:00+09:00",
+        ),
+        _event(
+            707,
+            "000707",
+            "stale-decision-price",
+            "budget_pass",
+            {"current_price_observed": 11000},
+            emitted_at="2026-07-14T09:00:01+09:00",
+        ),
+        _event(
+            707,
+            "000707",
+            "stale-decision-price",
+            "orderbook_stability_observed",
+            {"current_price_observed": 11000},
+            emitted_at="2026-07-14T09:00:02+09:00",
+        ),
+        _event(
+            707,
+            "000707",
+            "stale-decision-price",
+            "latency_block",
+            {
+                "current_price_observed": 11000,
+                "pre_submit_ws_snapshot_refresh_latest_price": 10050,
+                "rising_missed_submit_safety_backoff_lineage": True,
+                "reason": "latency_state_danger",
+            },
+            emitted_at="2026-07-14T09:00:03+09:00",
+        ),
+        _event(
+            707,
+            "000707",
+            "stale-decision-price",
+            "budget_pass",
+            {"current_price_observed": 11000},
+            emitted_at="2026-07-14T09:00:04+09:00",
+        ),
+        _event(
+            707,
+            "000707",
+            "stale-decision-price",
+            "holding_observation",
+            {"current_price_observed": 10040},
+            emitted_at="2026-07-14T09:00:05+09:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+    ]
+    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+
+    report = mod.build_report("2026-07-14", pipeline_path=pipeline_path, generated_at="fixed")
+
+    label = report["rising_missed_tp1_first_hit_label_rows"][0]
+    assert label["entry_price"] == 10000.0
+    assert label["gross_first_hit_label"] == "pending_horizon"
+    assert label["max_move_pct_within_20m"] == 0.5
+    assert label["observed_price_event_count"] == 3
+    blocker = report["submit_safety_blocker_rows"][0]
+    assert blocker["block_price"] == 10050.0
+    assert blocker["mfe_after_block_pct"] == -0.0995
+    assert blocker["mae_after_block_pct"] == -0.0995
+    assert blocker["post_block_price_event_count"] == 1
+
+
 def test_tp1_counterfactual_submit_safety_is_aggregated_without_label_duplication(tmp_path):
     pipeline_path = tmp_path / "pipeline_events_2026-07-14.jsonl"
     rows = [
@@ -1113,7 +1196,11 @@ def test_submit_safety_breakdown_and_backoff_opportunity_audit_are_source_only(t
             "000701",
             "stale-ai-wait",
             "scalping_scanner_candidate_observed",
-            {"current_price": "1030", "price_delta_since_first_seen_pct": "2.00"},
+            {
+                "current_price": "1030",
+                "price_delta_since_first_seen_pct": "2.00",
+                "ws_last_0b_age_ms": "100",
+            },
             emitted_at="2026-07-10T09:01:00",
         ),
         _event(
@@ -1143,7 +1230,11 @@ def test_submit_safety_breakdown_and_backoff_opportunity_audit_are_source_only(t
             "000706",
             "stale-ai-missing",
             "scalping_scanner_candidate_observed",
-            {"current_price": "1530", "price_delta_since_first_seen_pct": "2.10"},
+            {
+                "current_price": "1530",
+                "price_delta_since_first_seen_pct": "2.10",
+                "ws_last_0b_age_ms": "100",
+            },
             emitted_at="2026-07-10T09:01:45",
         ),
         _event(
@@ -1295,7 +1386,7 @@ def test_latency_false_negative_review_selects_only_high_mfe_low_mae_latency_blo
             "000801",
             "true-ofi-candidate",
             "scalping_scanner_candidate_observed",
-            {"current_price": "990"},
+            {"current_price": "990", "ws_last_0b_age_ms": "100"},
             emitted_at="2026-07-10T09:10:20",
         ),
         _event(
@@ -1303,7 +1394,7 @@ def test_latency_false_negative_review_selects_only_high_mfe_low_mae_latency_blo
             "000801",
             "true-ofi-candidate",
             "scalping_scanner_candidate_observed",
-            {"current_price": "1045"},
+            {"current_price": "1045", "ws_last_0b_age_ms": "100"},
             emitted_at="2026-07-10T09:10:40",
         ),
         _event(
@@ -1326,7 +1417,7 @@ def test_latency_false_negative_review_selects_only_high_mfe_low_mae_latency_blo
             "000802",
             "spread-candidate",
             "scalping_scanner_candidate_observed",
-            {"current_price": "1980"},
+            {"current_price": "1980", "ws_last_0b_age_ms": "100"},
             emitted_at="2026-07-10T09:11:20",
         ),
         _event(
@@ -1334,7 +1425,7 @@ def test_latency_false_negative_review_selects_only_high_mfe_low_mae_latency_blo
             "000802",
             "spread-candidate",
             "scalping_scanner_candidate_observed",
-            {"current_price": "2070"},
+            {"current_price": "2070", "ws_last_0b_age_ms": "100"},
             emitted_at="2026-07-10T09:11:40",
         ),
         _event(
@@ -1356,7 +1447,7 @@ def test_latency_false_negative_review_selects_only_high_mfe_low_mae_latency_blo
             "000803",
             "wide-mae",
             "scalping_scanner_candidate_observed",
-            {"current_price": "2910"},
+            {"current_price": "2910", "ws_last_0b_age_ms": "100"},
             emitted_at="2026-07-10T09:12:20",
         ),
         _event(
@@ -1364,7 +1455,7 @@ def test_latency_false_negative_review_selects_only_high_mfe_low_mae_latency_blo
             "000803",
             "wide-mae",
             "scalping_scanner_candidate_observed",
-            {"current_price": "3120"},
+            {"current_price": "3120", "ws_last_0b_age_ms": "100"},
             emitted_at="2026-07-10T09:12:40",
         ),
         _event(
@@ -1386,7 +1477,7 @@ def test_latency_false_negative_review_selects_only_high_mfe_low_mae_latency_blo
             "000804",
             "stale-not-latency",
             "scalping_scanner_candidate_observed",
-            {"current_price": "1100"},
+            {"current_price": "1100", "ws_last_0b_age_ms": "100"},
             emitted_at="2026-07-10T09:13:20",
         ),
         _event(
@@ -1409,7 +1500,7 @@ def test_latency_false_negative_review_selects_only_high_mfe_low_mae_latency_blo
             "000805",
             "wide-spread-observe",
             "scalping_scanner_candidate_observed",
-            {"current_price": "4000"},
+            {"current_price": "4000", "ws_last_0b_age_ms": "100"},
             emitted_at="2026-07-10T09:14:10",
         ),
         _event(
@@ -1417,7 +1508,7 @@ def test_latency_false_negative_review_selects_only_high_mfe_low_mae_latency_blo
             "000805",
             "wide-spread-observe",
             "scalping_scanner_candidate_observed",
-            {"current_price": "4160"},
+            {"current_price": "4160", "ws_last_0b_age_ms": "100"},
             emitted_at="2026-07-10T09:14:20",
         ),
     ]
