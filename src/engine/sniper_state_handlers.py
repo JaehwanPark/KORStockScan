@@ -10053,6 +10053,7 @@ def _log_entry_pipeline(stock, code, stage, **fields):
     record_id = stock.get("id") if isinstance(stock, dict) else None
     merged_fields = {
         **_scanner_promotion_correlation_fields(stock),
+        **_rising_missed_tp1_observation_context_log_fields(stock),
         **fields,
     }
     _remember_scanner_terminal_block(stock, stage, merged_fields)
@@ -35600,6 +35601,32 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         qty = request['qty']
         broker_price = request['price']
         price = int(request.get('guard_price', broker_price) or broker_price or 0)
+        submit_dmst_stex_tp_source = _entry_order_submit_dmst_stex_tp_source(request)
+        requested_dmst_stex_tp = (
+            _entry_order_submit_dmst_stex_tp(request)
+            if submit_dmst_stex_tp_source == "request"
+            else None
+        )
+        order_resolution = kiwoom_orders.describe_buy_order_resolution(
+            request['order_type_code'],
+            price=broker_price,
+            tif=request['tif'],
+            dmst_stex_tp=requested_dmst_stex_tp,
+        )
+        submit_dmst_stex_tp = str(order_resolution["effective_dmst_stex_tp"])
+        order_resolution_fields = {
+            "requested_order_type": order_resolution["requested_order_type"],
+            "requested_order_price": order_resolution["requested_order_price"],
+            "effective_order_type": order_resolution["effective_order_type"],
+            "effective_order_price": order_resolution["effective_order_price"],
+            "effective_dmst_stex_tp": submit_dmst_stex_tp,
+            "dmst_stex_tp_source": submit_dmst_stex_tp_source,
+            "order_type_remapped": order_resolution["order_type_remapped"],
+            "order_type_remap_reason": order_resolution["order_type_remap_reason"],
+            "entry_order_resolution_metric_role": "source_quality_gate",
+            "entry_order_resolution_decision_authority": "order_resolution_provenance_only",
+            "entry_order_resolution_forbidden_uses": TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
+        }
         if qty <= 0:
             _log_entry_pipeline(
                 stock,
@@ -35796,6 +35823,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             ),
             actual_order_submitted=False,
             broker_order_forbidden=broker_order_forbidden_for_request,
+            **order_resolution_fields,
         )
         if swing_order_dry_run:
             ord_no = _simulated_order_no("SIMBUY", code)
@@ -35836,17 +35864,20 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 ),
             )
             continue
-        submit_dmst_stex_tp_source = _entry_order_submit_dmst_stex_tp_source(request)
-        submit_dmst_stex_tp = kiwoom_orders.resolve_order_dmst_stex_tp(
-            _entry_order_submit_dmst_stex_tp(request) if submit_dmst_stex_tp_source == "request" else None
-        )
         res = kiwoom_orders.send_buy_order(
             code, qty, broker_price, request['order_type_code'], token=KIWOOM_TOKEN,
             order_type_desc="매수" if strategy == 'SCALPING' else "최유리지정가", tif=request['tif'],
             dmst_stex_tp=submit_dmst_stex_tp,
         )
         if not isinstance(res, dict):
-            _log_entry_pipeline(stock, code, "order_leg_no_response", tag=request['tag'], **real_pre_submit_guard_fields)
+            _log_entry_pipeline(
+                stock,
+                code,
+                "order_leg_no_response",
+                tag=request['tag'],
+                **order_resolution_fields,
+                **real_pre_submit_guard_fields,
+            )
             continue
         rt_cd = str(res.get('return_code', res.get('rt_cd', '')))
         if rt_cd != '0':
@@ -35854,6 +35885,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             _log_entry_pipeline(
                 stock, code, "order_leg_fail", tag=request['tag'], return_code=rt_cd,
                 message=res.get('return_msg') or res.get('err_msg'),
+                **order_resolution_fields,
                 **real_pre_submit_guard_fields,
             )
             continue
@@ -35886,6 +35918,10 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             'order_type': request['order_type_code'], 'status': 'OPEN', 'filled_qty': 0, 'sent_at': order_sent_ts,
             'dmst_stex_tp': submit_dmst_stex_tp,
             'dmst_stex_tp_source': submit_dmst_stex_tp_source,
+            'requested_order_type': order_resolution['requested_order_type'],
+            'effective_order_type': order_resolution['effective_order_type'],
+            'order_type_remapped': order_resolution['order_type_remapped'],
+            'order_type_remap_reason': order_resolution['order_type_remap_reason'],
             'entry_order_lifecycle': submit_revalidation_fields.get('entry_order_lifecycle', 'standard'),
             'entry_passive_probe_applied': bool(submit_revalidation_fields.get('entry_passive_probe_applied')),
             'best_bid_at_submit': price_snapshot.get('best_bid_at_submit'),
@@ -35933,6 +35969,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             broker_order_no=ord_no,
             order_no=ord_no,
             order_response_ord_no=ord_no,
+            **order_resolution_fields,
             **split_leg_meta_fields,
             **_merge_entry_pipeline_field_groups(
                 real_pre_submit_guard_fields,
@@ -36669,6 +36706,111 @@ def _rising_missed_tp1_selector_current_date(runtime: dict | None) -> str:
     return datetime.fromtimestamp(float(now_ts), tz=_KST).strftime("%Y-%m-%d")
 
 
+def _rising_missed_nxt_session_bucket(now_ts: float) -> str:
+    now_t = datetime.fromtimestamp(float(now_ts), tz=_KST).time()
+    if datetime_time(hour=9) <= now_t < TIME_15_30:
+        return "krx_regular"
+    if datetime_time(hour=16) <= now_t < datetime_time(hour=16, minute=10):
+        return "nxt_open_observe"
+    if datetime_time(hour=16, minute=10) <= now_t < TIME_SCALPING_NEW_BUY_CUTOFF:
+        return "nxt_entry_window"
+    if TIME_SCALPING_NEW_BUY_CUTOFF <= now_t < TIME_20_00:
+        return "nxt_close_only"
+    return "outside_krx_nxt_window"
+
+
+def _rising_missed_nxt_observation_fields(
+    stock: dict | None,
+    code: str,
+    raw_ws: dict | None,
+    enriched_ws: dict | None,
+    *,
+    now_ts: float,
+) -> dict[str, Any]:
+    stock = stock if isinstance(stock, dict) else {}
+    raw_ws = raw_ws if isinstance(raw_ws, dict) else {}
+    enriched_ws = enriched_ws if isinstance(enriched_ws, dict) else {}
+    session_bucket = _rising_missed_nxt_session_bucket(now_ts)
+    nxt_window = session_bucket.startswith("nxt_")
+    if nxt_window:
+        nxt_eligible, nxt_flag_source = _holding_sell_nxt_enabled_status(stock, code)
+    else:
+        nxt_eligible, nxt_flag_source = None, "not_applicable_outside_nxt_window"
+    type_ts = raw_ws.get("last_realtime_type_ts")
+    type_ts = type_ts if isinstance(type_ts, dict) else {}
+    type_routes = raw_ws.get("last_realtime_type_market_route")
+    type_routes = type_routes if isinstance(type_routes, dict) else {}
+
+    def _type_age_ms(realtime_type: str) -> float | None:
+        observed_at = _safe_float(type_ts.get(realtime_type), 0.0)
+        if observed_at <= 0:
+            return None
+        return max(0.0, (float(now_ts) - observed_at) * 1000.0)
+
+    ws_0b_age_ms = _type_age_ms("0B")
+    ws_0d_age_ms = _type_age_ms("0D")
+    ws_0b_fresh = bool(ws_0b_age_ms is not None and ws_0b_age_ms <= 3000.0)
+    ws_0d_fresh = bool(ws_0d_age_ms is not None and ws_0d_age_ms <= 3000.0)
+    ws_0b_route = str(type_routes.get("0B") or "unknown")
+    ws_0d_route = str(type_routes.get("0D") or "unknown")
+    route_known = ws_0d_route in {"krx_nxt_integrated", "nxt_only"}
+    effective_source = str(
+        enriched_ws.get("market_data_effective_price_source") or "none"
+    ).strip()
+    conflicted = effective_source == "ws_rest_conflicted"
+    if not nxt_window:
+        micro_state = "not_nxt_window"
+    elif conflicted or not ws_0d_fresh or not route_known:
+        micro_state = "stale_or_conflicted"
+    elif ws_0b_fresh:
+        micro_state = "fresh_active"
+    else:
+        micro_state = "fresh_trade_quiet"
+    effective_venue = (
+        "NXT"
+        if nxt_window and nxt_eligible is True
+        else "NXT_ELIGIBILITY_UNKNOWN"
+        if nxt_window and nxt_eligible is None
+        else "KRX_ONLY_UNAVAILABLE"
+        if nxt_window
+        else "KRX"
+        if session_bucket == "krx_regular"
+        else "OFF_SESSION"
+    )
+    return {
+        "rising_missed_market_session_bucket": session_bucket,
+        "rising_missed_market_session_state": raw_ws.get("market_session_state") or "-",
+        "rising_missed_market_session_remaining": (
+            raw_ws.get("market_session_remaining") or "-"
+        ),
+        "rising_missed_effective_venue": effective_venue,
+        "rising_missed_nxt_eligible": nxt_eligible if nxt_eligible is not None else "unknown",
+        "rising_missed_nxt_flag_source": nxt_flag_source,
+        "rising_missed_ws_last_route": raw_ws.get("last_ws_market_route") or "unknown",
+        "rising_missed_ws_0b_route": ws_0b_route,
+        "rising_missed_ws_0d_route": ws_0d_route,
+        "rising_missed_ws_0b_age_ms": (
+            round(ws_0b_age_ms, 3) if ws_0b_age_ms is not None else "-"
+        ),
+        "rising_missed_ws_0d_age_ms": (
+            round(ws_0d_age_ms, 3) if ws_0d_age_ms is not None else "-"
+        ),
+        "rising_missed_nxt_micro_state": micro_state,
+        "rising_missed_nxt_micro_state_role": "ws_transport_activity_not_positive_evidence",
+        "rising_missed_nxt_positive_micro_authority": "trusted_signed_ws_0b_existing_tp1_contract",
+        "rising_missed_nxt_observation_only": True,
+        "rising_missed_nxt_metric_role": "source_quality_gate",
+        "rising_missed_nxt_decision_authority": "observe_only_no_runtime_mutation",
+        "rising_missed_nxt_window_policy": "same_day_krx_nxt_session_bucket",
+        "rising_missed_nxt_sample_floor": "1_rising_missed_tp1_evaluation",
+        "rising_missed_nxt_primary_decision_metric": "nxt_session_micro_and_fillability_distribution",
+        "rising_missed_nxt_source_quality_gate": (
+            "absolute_type_receive_ts_and_actual_ws_item_route"
+        ),
+        "rising_missed_nxt_forbidden_uses": TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
+    }
+
+
 def _rising_missed_tp1_source_gap_relief_enabled() -> bool:
     return _env_bool("KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ENABLED", False)
 
@@ -36697,7 +36839,7 @@ def _rising_missed_tp1_submit_context_fields(tp1_decision, *, now_ts: float) -> 
         allowed = bool(getattr(tp1_decision, "allowed", False))
     if not allowed:
         return {}
-    return {
+    fields = {
         "rising_missed_tp1_submit_context_at": float(now_ts),
         "rising_missed_tp1_submit_context_evaluation_id": (
             log_fields.get("rising_missed_tp1_evaluation_id") or "-"
@@ -36726,6 +36868,68 @@ def _rising_missed_tp1_submit_context_fields(tp1_decision, *, now_ts: float) -> 
             log_fields.get("rising_missed_tp1_support_momentum")
         ),
     }
+    for source_key in (
+        "rising_missed_market_session_bucket",
+        "rising_missed_market_session_state",
+        "rising_missed_market_session_remaining",
+        "rising_missed_effective_venue",
+        "rising_missed_nxt_eligible",
+        "rising_missed_nxt_flag_source",
+        "rising_missed_ws_last_route",
+        "rising_missed_ws_0b_route",
+        "rising_missed_ws_0d_route",
+        "rising_missed_ws_0b_age_ms",
+        "rising_missed_ws_0d_age_ms",
+        "rising_missed_nxt_micro_state",
+        "rising_missed_nxt_micro_state_role",
+        "rising_missed_nxt_positive_micro_authority",
+        "market_data_effective_price_source",
+    ):
+        fields[f"rising_missed_tp1_submit_context_{source_key}"] = log_fields.get(
+            source_key, "-"
+        )
+    return fields
+
+
+def _rising_missed_tp1_observation_context_log_fields(stock: dict | None) -> dict[str, Any]:
+    stock = stock if isinstance(stock, dict) else {}
+    evaluation_id = stock.get("rising_missed_tp1_submit_context_evaluation_id")
+    if not evaluation_id or evaluation_id == "-":
+        return {}
+    context_at = _safe_float(stock.get("rising_missed_tp1_submit_context_at"), 0.0)
+    context_age_sec = max(0.0, time.time() - context_at) if context_at > 0 else None
+    if context_age_sec is None or context_age_sec > 60.0:
+        return {}
+    fields = {
+        "rising_missed_tp1_evaluation_id": evaluation_id,
+        "rising_missed_tp1_submit_context_age_sec": (
+            round(context_age_sec, 6) if context_age_sec is not None else "-"
+        ),
+        "rising_missed_tp1_submit_context_fresh": bool(
+            context_age_sec is not None and context_age_sec <= 60.0
+        ),
+    }
+    for source_key in (
+        "rising_missed_market_session_bucket",
+        "rising_missed_market_session_state",
+        "rising_missed_market_session_remaining",
+        "rising_missed_effective_venue",
+        "rising_missed_nxt_eligible",
+        "rising_missed_nxt_flag_source",
+        "rising_missed_ws_last_route",
+        "rising_missed_ws_0b_route",
+        "rising_missed_ws_0d_route",
+        "rising_missed_ws_0b_age_ms",
+        "rising_missed_ws_0d_age_ms",
+        "rising_missed_nxt_micro_state",
+        "rising_missed_nxt_micro_state_role",
+        "rising_missed_nxt_positive_micro_authority",
+        "market_data_effective_price_source",
+    ):
+        fields[source_key] = stock.get(
+            f"rising_missed_tp1_submit_context_{source_key}", "-"
+        )
+    return fields
 
 
 def _evaluate_rising_missed_tp1_source_gap_relief(
@@ -37756,6 +37960,13 @@ def resolve_rising_missed_decision_input(
         input_reason = "tp1_micro_ws_unavailable"
     else:
         input_reason = "ready"
+    nxt_observation_fields = _rising_missed_nxt_observation_fields(
+        stock,
+        code,
+        raw_ws,
+        enriched_ws,
+        now_ts=now_ts,
+    )
     fields: dict[str, Any] = {
         **micro_update_fields,
         **market_data_enrichment_log_fields(enriched_ws),
@@ -37808,6 +38019,7 @@ def resolve_rising_missed_decision_input(
         "rising_missed_tp1_evaluation_id": evaluation_id,
         "rising_missed_tp1_resolver_scanner_cache_usable": scanner_cache_usable,
         "rising_missed_tp1_resolver_cache_ttl_sec": cache_ttl_sec,
+        **nxt_observation_fields,
     }
     enriched_ws.update(fields)
     return enriched_ws, fields

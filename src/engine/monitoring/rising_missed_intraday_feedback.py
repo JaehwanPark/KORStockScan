@@ -1679,6 +1679,140 @@ def _build_tp1_counterfactual_first_hit_labels(
     }, labels
 
 
+def _build_nxt_session_observation(
+    pipeline_path: Path,
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    evaluation_rows: list[dict[str, Any]] = []
+    order_rows: list[dict[str, Any]] = []
+    seen_evaluations: set[tuple[str, ...]] = set()
+    session_counts: Counter[str] = Counter()
+    micro_state_counts: Counter[str] = Counter()
+    route_counts: Counter[str] = Counter()
+    effective_venue_counts: Counter[str] = Counter()
+    unique_symbols: set[str] = set()
+    for row in iter_jsonl(pipeline_path):
+        fields = _fields(row)
+        evaluation_id = str(fields.get("rising_missed_tp1_evaluation_id") or "").strip()
+        session_bucket = str(
+            fields.get("rising_missed_market_session_bucket") or "missing"
+        ).strip()
+        if evaluation_id and session_bucket.startswith("nxt_"):
+            key = ("evaluation_id", evaluation_id)
+            if key not in seen_evaluations:
+                seen_evaluations.add(key)
+                code = _event_code(row)
+                if code:
+                    unique_symbols.add(code)
+                micro_state = str(
+                    fields.get("rising_missed_nxt_micro_state") or "missing"
+                ).strip()
+                route_0b = str(fields.get("rising_missed_ws_0b_route") or "unknown").strip()
+                route_0d = str(fields.get("rising_missed_ws_0d_route") or "unknown").strip()
+                effective_venue = str(
+                    fields.get("rising_missed_effective_venue") or "unknown"
+                ).strip()
+                session_counts[session_bucket] += 1
+                micro_state_counts[micro_state] += 1
+                route_counts[f"0B:{route_0b}"] += 1
+                route_counts[f"0D:{route_0d}"] += 1
+                effective_venue_counts[effective_venue] += 1
+                evaluation_rows.append(
+                    {
+                        "ts": _event_ts(row),
+                        "stock_code": code,
+                        "stock_name": _event_name(row),
+                        "record_id": row.get("record_id"),
+                        "evaluation_id": evaluation_id,
+                        "stage": row.get("stage"),
+                        "market_session_bucket": session_bucket,
+                        "market_session_state": fields.get(
+                            "rising_missed_market_session_state"
+                        ),
+                        "effective_venue": effective_venue,
+                        "nxt_eligible": fields.get("rising_missed_nxt_eligible"),
+                        "nxt_flag_source": fields.get("rising_missed_nxt_flag_source"),
+                        "ws_0b_route": route_0b,
+                        "ws_0d_route": route_0d,
+                        "ws_0b_age_ms": _safe_float(
+                            fields.get("rising_missed_ws_0b_age_ms")
+                        ),
+                        "ws_0d_age_ms": _safe_float(
+                            fields.get("rising_missed_ws_0d_age_ms")
+                        ),
+                        "nxt_micro_state": micro_state,
+                        "input_ready": _boolish(fields.get("rising_missed_tp1_input_ready")),
+                        "effective_price_source": fields.get(
+                            "market_data_effective_price_source"
+                        ),
+                        "candidate_allowed": _optional_boolish(
+                            fields.get("rising_missed_tp1_candidate_allowed")
+                        ),
+                        "candidate_reason": fields.get("rising_missed_tp1_candidate_reason"),
+                        "decision_authority": "observe_only_no_runtime_mutation",
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                        "forbidden_uses": FORBIDDEN_USES,
+                    }
+                )
+        if (
+            str(row.get("stage") or "") == "order_leg_request"
+            and evaluation_id
+            and session_bucket.startswith("nxt_")
+        ):
+            order_rows.append(
+                {
+                    "ts": _event_ts(row),
+                    "stock_code": _event_code(row),
+                    "stock_name": _event_name(row),
+                    "record_id": row.get("record_id"),
+                    "evaluation_id": evaluation_id,
+                    "market_session_bucket": session_bucket,
+                    "effective_venue": fields.get("rising_missed_effective_venue"),
+                    "requested_order_type": fields.get("requested_order_type"),
+                    "effective_order_type": fields.get("effective_order_type"),
+                    "effective_dmst_stex_tp": fields.get("effective_dmst_stex_tp"),
+                    "order_type_remapped": _boolish(fields.get("order_type_remapped")),
+                    "order_type_remap_reason": fields.get("order_type_remap_reason"),
+                    "decision_authority": "execution_quality_observation_only",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "forbidden_uses": FORBIDDEN_USES,
+                }
+            )
+    return {
+        "rising_missed_nxt_evaluation_count": len(evaluation_rows),
+        "rising_missed_nxt_unique_symbol_count": len(unique_symbols),
+        "rising_missed_nxt_session_bucket_counts": [
+            {"market_session_bucket": key, "count": value}
+            for key, value in session_counts.most_common()
+        ],
+        "rising_missed_nxt_micro_state_counts": [
+            {"nxt_micro_state": key, "count": value}
+            for key, value in micro_state_counts.most_common()
+        ],
+        "rising_missed_nxt_ws_route_counts": [
+            {"ws_type_route": key, "count": value}
+            for key, value in route_counts.most_common()
+        ],
+        "rising_missed_nxt_effective_venue_counts": [
+            {"effective_venue": key, "count": value}
+            for key, value in effective_venue_counts.most_common()
+        ],
+        "rising_missed_nxt_input_ready_count": sum(
+            1 for item in evaluation_rows if item.get("input_ready")
+        ),
+        "rising_missed_nxt_rest_quote_selected_count": sum(
+            1
+            for item in evaluation_rows
+            if item.get("effective_price_source") == "ka10004_rest_orderbook"
+        ),
+        "rising_missed_nxt_order_request_count": len(order_rows),
+        "rising_missed_nxt_order_type_remap_count": sum(
+            1 for item in order_rows if item.get("order_type_remapped")
+        ),
+    }, evaluation_rows, order_rows
+
+
 def build_report(
     target_date: str,
     *,
@@ -1757,6 +1891,9 @@ def build_report(
     )
     tp1_counterfactual_label_summary, tp1_counterfactual_label_rows = (
         _build_tp1_counterfactual_first_hit_labels(pipeline_path)
+    )
+    nxt_session_summary, nxt_session_rows, nxt_order_rows = _build_nxt_session_observation(
+        pipeline_path
     )
     if first_touch_source_quality_counts["first_touch_ai_provenance_missing_count"]:
         source_quality_status = "first_touch_ai_provenance_missing"
@@ -1930,6 +2067,17 @@ def build_report(
                 ),
                 "forbidden_uses": FORBIDDEN_USES,
             },
+            "rising_missed_nxt_session_observation": {
+                "metric_role": "source_quality_gate",
+                "decision_authority": "observe_only_no_runtime_mutation",
+                "window_policy": "same_day_nxt_session_tp1_and_order_events",
+                "sample_floor": "1_nxt_session_rising_missed_tp1_evaluation",
+                "primary_decision_metric": "nxt_session_micro_and_fillability_distribution",
+                "source_quality_gate": (
+                    "absolute_0b_0d_receive_ts_actual_ws_item_route_and_effective_order_resolution"
+                ),
+                "forbidden_uses": FORBIDDEN_USES,
+            },
         },
         "source_paths": {"pipeline_events": str(resolved_pipeline_path)},
         "source_quality": {
@@ -1984,6 +2132,7 @@ def build_report(
             **tp1_label_summary,
             **tp1_counterfactual_summary,
             **tp1_counterfactual_label_summary,
+            **nxt_session_summary,
             "code_improvement_order_count": len(code_improvement_orders),
         },
         "records": rows[:100],
@@ -1996,6 +2145,8 @@ def build_report(
         "rising_missed_tp1_first_hit_label_rows": tp1_label_rows[:200],
         "rising_missed_tp1_counterfactual_submit_safety_rows": tp1_counterfactual_rows[:200],
         "rising_missed_tp1_counterfactual_first_hit_label_rows": tp1_counterfactual_label_rows[:200],
+        "rising_missed_nxt_session_observation_rows": nxt_session_rows[:200],
+        "rising_missed_nxt_order_resolution_rows": nxt_order_rows[:200],
         "code_improvement_orders": code_improvement_orders,
     }
 
@@ -2073,9 +2224,47 @@ def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path)
         f"{summary.get('rising_missed_tp1_counterfactual_risk_counts')}",
         f"- rising_missed_tp1_counterfactual_gross_label_counts: "
         f"{summary.get('rising_missed_tp1_counterfactual_gross_label_counts')}",
+        f"- rising_missed_nxt_evaluation_count: "
+        f"{summary.get('rising_missed_nxt_evaluation_count')}",
+        f"- rising_missed_nxt_unique_symbol_count: "
+        f"{summary.get('rising_missed_nxt_unique_symbol_count')}",
+        f"- rising_missed_nxt_session_bucket_counts: "
+        f"{summary.get('rising_missed_nxt_session_bucket_counts')}",
+        f"- rising_missed_nxt_micro_state_counts: "
+        f"{summary.get('rising_missed_nxt_micro_state_counts')}",
+        f"- rising_missed_nxt_input_ready_count: "
+        f"{summary.get('rising_missed_nxt_input_ready_count')}",
+        f"- rising_missed_nxt_rest_quote_selected_count: "
+        f"{summary.get('rising_missed_nxt_rest_quote_selected_count')}",
+        f"- rising_missed_nxt_order_request_count: "
+        f"{summary.get('rising_missed_nxt_order_request_count')}",
+        f"- rising_missed_nxt_order_type_remap_count: "
+        f"{summary.get('rising_missed_nxt_order_type_remap_count')}",
         f"- code_improvement_order_count: {summary.get('code_improvement_order_count')}",
         "",
     ]
+    if report.get("rising_missed_nxt_session_observation_rows"):
+        lines.extend(["## NXT Session Observation", ""])
+        for item in report.get("rising_missed_nxt_session_observation_rows") or []:
+            lines.append(
+                "- ts={ts} code={stock_code} name={stock_name} bucket={market_session_bucket} "
+                "venue={effective_venue} eligible={nxt_eligible} micro={nxt_micro_state} "
+                "0B_route={ws_0b_route} 0B_age_ms={ws_0b_age_ms} "
+                "0D_route={ws_0d_route} 0D_age_ms={ws_0d_age_ms} "
+                "input_ready={input_ready} quote_source={effective_price_source} "
+                "candidate_allowed={candidate_allowed} reason={candidate_reason}".format(**item)
+            )
+        lines.append("")
+    if report.get("rising_missed_nxt_order_resolution_rows"):
+        lines.extend(["## NXT Order Resolution", ""])
+        for item in report.get("rising_missed_nxt_order_resolution_rows") or []:
+            lines.append(
+                "- ts={ts} code={stock_code} name={stock_name} evaluation_id={evaluation_id} "
+                "requested_type={requested_order_type} effective_type={effective_order_type} "
+                "exchange={effective_dmst_stex_tp} remapped={order_type_remapped} "
+                "reason={order_type_remap_reason}".format(**item)
+            )
+        lines.append("")
     if report.get("rising_missed_submit_lineage_rows"):
         lines.extend(
             [

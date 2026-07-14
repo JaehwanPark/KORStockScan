@@ -5157,6 +5157,121 @@ def test_rising_missed_decision_input_normalizes_ws_spread_and_fresh_features(mo
     )
 
 
+def test_rising_missed_decision_input_observes_nxt_trade_quiet_without_changing_readiness(
+    monkeypatch,
+):
+    now_dt = datetime(2026, 7, 14, 16, 20, tzinfo=state_handlers._KST)
+    now_ts = now_dt.timestamp()
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
+    state_handlers._RISING_MISSED_QUALITY_GUARD_PRE_ENVELOPE_RATE_EPOCHS.clear()
+    monkeypatch.setattr(
+        state_handlers,
+        "_fetch_rest_orderbook_snapshot_bounded",
+        lambda code, timeout_ms: (
+            {
+                "source": "ka10004_rest_orderbook",
+                "curr": 10000,
+                "best_bid": 9990,
+                "best_ask": 10010,
+                "best_bid_qty": 800,
+                "best_ask_qty": 200,
+                "rest_received_ts": now_ts - 1.0,
+            },
+            "ok",
+            1.0,
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_fetch_rising_missed_signed_tape_bounded",
+        lambda code, timeout_ms: ([], "ok", 1.0),
+    )
+    stock = {"is_nxt": True, "buy_price": 10000}
+    raw_ws = {
+        "curr": 10000,
+        "last_ws_update_ts": now_ts - 0.2,
+        "last_realtime_type_ts": {"0B": now_ts - 8.0, "0D": now_ts - 0.2},
+        "last_ws_market_route": "krx_nxt_integrated",
+        "last_realtime_type_market_route": {
+            "0B": "krx_nxt_integrated",
+            "0D": "krx_nxt_integrated",
+        },
+        "market_session_state": "NXT_CONTINUOUS",
+        "orderbook": {
+            "asks": [{"price": 10010, "qty": 200}],
+            "bids": [{"price": 9990, "qty": 800}],
+        },
+    }
+
+    _resolved, fields = state_handlers.resolve_rising_missed_decision_input(
+        stock, "123472", raw_ws, {"now_ts": now_ts}
+    )
+
+    assert fields["rising_missed_market_session_bucket"] == "nxt_entry_window"
+    assert fields["rising_missed_effective_venue"] == "NXT"
+    assert fields["rising_missed_nxt_eligible"] is True
+    assert fields["rising_missed_ws_0b_route"] == "krx_nxt_integrated"
+    assert fields["rising_missed_ws_0d_route"] == "krx_nxt_integrated"
+    assert fields["rising_missed_ws_0b_age_ms"] == pytest.approx(8000.0)
+    assert fields["rising_missed_ws_0d_age_ms"] == pytest.approx(200.0)
+    assert fields["rising_missed_nxt_micro_state"] == "fresh_trade_quiet"
+    assert fields["rising_missed_tp1_input_ready"] is False
+    assert fields["rising_missed_tp1_input_reason"] == "tp1_micro_ws_unavailable"
+
+
+def test_describe_buy_order_resolution_reports_nxt_market_remap():
+    resolution = kiwoom_orders.describe_buy_order_resolution(
+        "3",
+        price=0,
+        tif="DAY",
+        dmst_stex_tp="NXT",
+        now=datetime(2026, 7, 14, 16, 20, tzinfo=kiwoom_orders.KST),
+    )
+
+    assert resolution == {
+        "requested_order_type": "3",
+        "requested_order_price": 0,
+        "effective_order_type": "6",
+        "effective_order_price": 0,
+        "effective_dmst_stex_tp": "NXT",
+        "order_type_remapped": True,
+        "order_type_remap_reason": "nxt_market_to_best_limit",
+    }
+
+
+def test_rising_missed_nxt_context_propagates_only_while_submit_context_is_fresh(
+    monkeypatch,
+):
+    decision_fields = {
+        "rising_missed_tp1_candidate_allowed": True,
+        "rising_missed_tp1_evaluation_id": "nxt-context-eval",
+        "rising_missed_market_session_bucket": "nxt_entry_window",
+        "rising_missed_effective_venue": "NXT",
+        "rising_missed_nxt_micro_state": "fresh_trade_quiet",
+        "rising_missed_nxt_micro_state_role": "ws_transport_activity_not_positive_evidence",
+        "rising_missed_nxt_positive_micro_authority": (
+            "trusted_signed_ws_0b_existing_tp1_contract"
+        ),
+    }
+    stock = state_handlers._rising_missed_tp1_submit_context_fields(
+        decision_fields,
+        now_ts=1000.0,
+    )
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 1010.0)
+
+    fresh = state_handlers._rising_missed_tp1_observation_context_log_fields(stock)
+
+    assert fresh["rising_missed_tp1_evaluation_id"] == "nxt-context-eval"
+    assert fresh["rising_missed_market_session_bucket"] == "nxt_entry_window"
+    assert fresh["rising_missed_nxt_micro_state"] == "fresh_trade_quiet"
+    assert fresh["rising_missed_nxt_micro_state_role"] == (
+        "ws_transport_activity_not_positive_evidence"
+    )
+
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 1061.0)
+    assert state_handlers._rising_missed_tp1_observation_context_log_fields(stock) == {}
+
+
 def test_rising_missed_decision_input_recovers_anchor_and_derives_ws_momentum(monkeypatch):
     now_ts = 1_783_471_000.1
     monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")

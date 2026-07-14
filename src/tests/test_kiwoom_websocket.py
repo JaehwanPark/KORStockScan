@@ -1679,6 +1679,13 @@ def test_real_payload_with_exchange_suffix_updates_canonical_snapshot():
     assert "039490_AL" not in manager.realtime_data
     assert manager.realtime_data["039490"]["curr"] == 10000
     assert manager.realtime_data["039490"]["received_types"] == {"0B"}
+    assert manager.realtime_data["039490"]["last_ws_item"] == "039490_AL"
+    assert manager.realtime_data["039490"]["last_ws_market_suffix"] == "_AL"
+    assert manager.realtime_data["039490"]["last_ws_market_route"] == "krx_nxt_integrated"
+    assert manager.realtime_data["039490"]["last_realtime_type_item"]["0B"] == "039490_AL"
+    assert manager.realtime_data["039490"]["last_realtime_type_market_route"]["0B"] == (
+        "krx_nxt_integrated"
+    )
 
 
 def test_subscription_freshness_snapshot_classifies_no_tick_stale_and_fresh(monkeypatch):

@@ -61,6 +61,70 @@ def test_tp1_first_hit_label_prefers_gross_target_and_requires_actual_costs_for_
     assert report["summary"]["rising_missed_tp1_net_confirmed_count"] == 0
 
 
+def test_nxt_session_observation_separates_micro_state_and_effective_order_type(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-14.jsonl"
+    common = {
+        "rising_missed_tp1_evaluation_id": "nxt-eval-1",
+        "rising_missed_market_session_bucket": "nxt_entry_window",
+        "rising_missed_market_session_state": "NXT_CONTINUOUS",
+        "rising_missed_effective_venue": "NXT",
+        "rising_missed_nxt_eligible": True,
+        "rising_missed_nxt_flag_source": "stock.is_nxt",
+        "rising_missed_ws_0b_route": "krx_nxt_integrated",
+        "rising_missed_ws_0d_route": "krx_nxt_integrated",
+        "rising_missed_ws_0b_age_ms": 8000.0,
+        "rising_missed_ws_0d_age_ms": 200.0,
+        "rising_missed_nxt_micro_state": "fresh_trade_quiet",
+        "rising_missed_tp1_input_ready": False,
+        "market_data_effective_price_source": "ka10004_rest_orderbook",
+    }
+    rows = [
+        _event(
+            801,
+            "000801",
+            "nxt",
+            "rising_missed_one_share_entry",
+            {
+                **common,
+                "rising_missed_tp1_selector_active": True,
+                "rising_missed_tp1_candidate_allowed": True,
+                "rising_missed_tp1_candidate_reason": "rising_missed_tp1_candidate_pass",
+            },
+            emitted_at="2026-07-14T16:20:00+09:00",
+        ),
+        _event(
+            801,
+            "000801",
+            "nxt",
+            "order_leg_request",
+            {
+                **common,
+                "requested_order_type": "3",
+                "effective_order_type": "6",
+                "effective_dmst_stex_tp": "NXT",
+                "order_type_remapped": True,
+                "order_type_remap_reason": "nxt_market_to_best_limit",
+            },
+            emitted_at="2026-07-14T16:20:01+09:00",
+        ),
+    ]
+    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+
+    report = mod.build_report("2026-07-14", pipeline_path=pipeline_path, generated_at="fixed")
+
+    assert report["summary"]["rising_missed_nxt_evaluation_count"] == 1
+    assert report["summary"]["rising_missed_nxt_input_ready_count"] == 0
+    assert report["summary"]["rising_missed_nxt_rest_quote_selected_count"] == 1
+    assert report["summary"]["rising_missed_nxt_order_request_count"] == 1
+    assert report["summary"]["rising_missed_nxt_order_type_remap_count"] == 1
+    assert report["summary"]["rising_missed_nxt_micro_state_counts"] == [
+        {"nxt_micro_state": "fresh_trade_quiet", "count": 1}
+    ]
+    assert report["rising_missed_nxt_order_resolution_rows"][0][
+        "order_type_remap_reason"
+    ] == "nxt_market_to_best_limit"
+
+
 def test_tp1_first_hit_label_marks_adverse_first_and_can_confirm_net_with_costs(tmp_path):
     pipeline_path = tmp_path / "pipeline_events_2026-07-14.jsonl"
     rows = [

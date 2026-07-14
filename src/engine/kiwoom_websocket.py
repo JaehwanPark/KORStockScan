@@ -1314,6 +1314,12 @@ class KiwoomWSManager:
                 'net_ask_depth': 0, 'ask_depth_ratio': 0.0,
                 'market_session_state': self.market_session_state,
                 'market_session_remaining': self.market_session_remaining,
+                'last_ws_item': '',
+                'last_ws_market_suffix': '',
+                'last_ws_market_route': 'unknown',
+                'last_realtime_type_item': {},
+                'last_realtime_type_market_suffix': {},
+                'last_realtime_type_market_route': {},
                 'received_types': set(),
                 'last_ws_update_ts': 0.0,
                 'last_realtime_type_ts': {},
@@ -2350,9 +2356,25 @@ class KiwoomWSManager:
                             target['received_types'].add(real_type)
                             now_update_ts = time.time()
                             target['last_ws_update_ts'] = now_update_ts
+                            market_suffix = self._ws_item_market_suffix(raw_item_code)
+                            market_route = self._ws_item_route(raw_item_code)
+                            target['last_ws_item'] = str(raw_item_code or '')
+                            target['last_ws_market_suffix'] = market_suffix
+                            target['last_ws_market_route'] = market_route
                             type_ts = target.setdefault('last_realtime_type_ts', {})
                             if isinstance(type_ts, dict):
                                 type_ts[real_type] = now_update_ts
+                            type_items = target.setdefault('last_realtime_type_item', {})
+                            if isinstance(type_items, dict):
+                                type_items[real_type] = str(raw_item_code or '')
+                            type_suffixes = target.setdefault(
+                                'last_realtime_type_market_suffix', {}
+                            )
+                            if isinstance(type_suffixes, dict):
+                                type_suffixes[real_type] = market_suffix
+                            type_routes = target.setdefault('last_realtime_type_market_route', {})
+                            if isinstance(type_routes, dict):
+                                type_routes[real_type] = market_route
                             target['time'] = datetime.now().strftime('%H:%M:%S')
 
                             if not target.get('_first_tick_logged') and self._is_ws_ready(target, require_trade=False):

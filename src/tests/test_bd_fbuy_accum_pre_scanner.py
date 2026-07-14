@@ -157,6 +157,17 @@ def test_write_ws_snapshot_preserves_realtime_type_and_trade_tick_provenance(mon
                 "last_ws_update_ts": 1000.0,
                 "received_types": {"0D", "0B"},
                 "last_realtime_type_ts": {"0B": 999.5, "0D": 998.0, "bad": "x"},
+                "last_ws_item": "011200_AL",
+                "last_ws_market_suffix": "_AL",
+                "last_ws_market_route": "krx_nxt_integrated",
+                "last_realtime_type_item": {"0B": "011200_AL", "0D": "011200_AL"},
+                "last_realtime_type_market_suffix": {"0B": "_AL", "0D": "_AL"},
+                "last_realtime_type_market_route": {
+                    "0B": "krx_nxt_integrated",
+                    "0D": "krx_nxt_integrated",
+                },
+                "market_session_state": "NXT_CONTINUOUS",
+                "market_session_remaining": "040000",
                 "last_trade_tick": {
                     "ts": 999.5,
                     "price": 10200,
@@ -175,6 +186,20 @@ def test_write_ws_snapshot_preserves_realtime_type_and_trade_tick_provenance(mon
     stock = payload["stocks"]["011200"]
     assert stock["received_types"] == ["0B", "0D"]
     assert stock["last_realtime_type_ts"] == {"0B": 999.5, "0D": 998.0}
+    assert stock["last_ws_item"] == "011200_AL"
+    assert stock["last_ws_market_suffix"] == "_AL"
+    assert stock["last_ws_market_route"] == "krx_nxt_integrated"
+    assert stock["last_realtime_type_item"] == {
+        "0B": "011200_AL",
+        "0D": "011200_AL",
+    }
+    assert stock["last_realtime_type_market_suffix"] == {"0B": "_AL", "0D": "_AL"}
+    assert stock["last_realtime_type_market_route"] == {
+        "0B": "krx_nxt_integrated",
+        "0D": "krx_nxt_integrated",
+    }
+    assert stock["market_session_state"] == "NXT_CONTINUOUS"
+    assert stock["market_session_remaining"] == "040000"
     assert stock["last_realtime_type_ages_ms"] == {"0B": 1500.0, "0D": 3000.0}
     assert stock["last_0b_ts"] == 999.5
     assert stock["last_0b_age_ms"] == 1500.0

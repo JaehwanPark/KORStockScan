@@ -663,7 +663,15 @@ def _nxt_market_order_remap_required(order_type, dmst_stex_tp=None, *, now=None)
     return str(dmst_stex_tp or "").strip().upper() == "NXT"
 
 
-def _resolve_buy_order_type(order_type, price=0, tif=None, dmst_stex_tp=None, *, now=None):
+def _resolve_buy_order_type(
+    order_type,
+    price=0,
+    tif=None,
+    dmst_stex_tp=None,
+    *,
+    now=None,
+    emit_log=True,
+):
     """
     Normalize legacy buy order request into Kiwoom order code + price.
 
@@ -681,21 +689,25 @@ def _resolve_buy_order_type(order_type, price=0, tif=None, dmst_stex_tp=None, *,
     requested_type = str(order_type or "6").upper()
     requested_price = int(price or 0)
     if _nxt_market_order_remap_required(requested_type, dmst_stex_tp, now=now):
-        log_info(
-            "[NXT_MARKET_BUY_REMAP] NXT plain market buy is unsupported; "
-            "using best-limit style buy order type 6"
-        )
+        if emit_log:
+            log_info(
+                "[NXT_MARKET_BUY_REMAP] NXT plain market buy is unsupported; "
+                "using best-limit style buy order type 6"
+            )
         return "6", 0
-    if requested_type in {"3", "MARKET"} and _pre0830_sor_market_order_remap_required(requested_type):
-        log_info(
-            "[PRE0830_BUY_MARKET_REMAP] SOR market buy is unavailable before 08:30; "
-            "using best-limit style buy order type 6"
-        )
+    if requested_type in {"3", "MARKET"} and _pre0830_sor_market_order_remap_required(
+        requested_type, now=now
+    ):
+        if emit_log:
+            log_info(
+                "[PRE0830_BUY_MARKET_REMAP] SOR market buy is unavailable before 08:30; "
+                "using best-limit style buy order type 6"
+            )
         return "6", 0
 
     if tif_value == "IOC":
         if requested_type in {"00", "LIMIT", "6", "BEST", "16"}:
-            if requested_price > 0:
+            if requested_price > 0 and emit_log:
                 log_info(
                     f"[ENTRY_TIF_MAP] IOC buy request promoted to best-IOC(16); "
                     f"requested_limit_price={requested_price} is advisory only"
@@ -711,6 +723,51 @@ def _resolve_buy_order_type(order_type, price=0, tif=None, dmst_stex_tp=None, *,
     if requested_type in {"16", "BEST_IOC"}:
         return "16", 0
     return str(order_type), requested_price
+
+
+def describe_buy_order_resolution(
+    order_type,
+    price=0,
+    tif=None,
+    dmst_stex_tp=None,
+    *,
+    now=None,
+    emit_log=False,
+):
+    """Return requested/effective order metadata without submitting an order."""
+    resolved_exchange = resolve_order_dmst_stex_tp(dmst_stex_tp, now=now)
+    effective_type, effective_price = _resolve_buy_order_type(
+        order_type,
+        price=price,
+        tif=tif,
+        dmst_stex_tp=resolved_exchange,
+        now=now,
+        emit_log=emit_log,
+    )
+    requested_type = str(order_type or "6").strip().upper()
+    requested_price = int(price or 0)
+    remapped = bool(
+        str(effective_type) != requested_type
+        or int(effective_price or 0) != requested_price
+    )
+    remap_reason = "none"
+    if _nxt_market_order_remap_required(requested_type, resolved_exchange, now=now):
+        remap_reason = "nxt_market_to_best_limit"
+    elif requested_type in {"3", "MARKET"} and _pre0830_sor_market_order_remap_required(
+        requested_type, now=now
+    ):
+        remap_reason = "pre0830_market_to_best_limit"
+    elif str(tif or "DAY").upper() == "IOC" and str(effective_type) == "16":
+        remap_reason = "ioc_to_best_ioc"
+    return {
+        "requested_order_type": requested_type,
+        "requested_order_price": requested_price,
+        "effective_order_type": str(effective_type),
+        "effective_order_price": int(effective_price or 0),
+        "effective_dmst_stex_tp": resolved_exchange,
+        "order_type_remapped": remapped,
+        "order_type_remap_reason": remap_reason,
+    }
 
 
 def _pre0830_sor_market_order_remap_required(order_type, now=None) -> bool:
@@ -1091,13 +1148,16 @@ def send_buy_order_market(
         'api-id': 'kt10000'
     }
 
-    resolved_dmst_stex_tp = resolve_order_dmst_stex_tp(dmst_stex_tp)
-    normalized_type, normalized_price = _resolve_buy_order_type(
+    order_resolution = describe_buy_order_resolution(
         order_type,
         price=price,
         tif=tif,
-        dmst_stex_tp=resolved_dmst_stex_tp,
+        dmst_stex_tp=dmst_stex_tp,
+        emit_log=True,
     )
+    resolved_dmst_stex_tp = order_resolution["effective_dmst_stex_tp"]
+    normalized_type = order_resolution["effective_order_type"]
+    normalized_price = order_resolution["effective_order_price"]
     ord_price_str = str(int(normalized_price)) if str(normalized_type) == "00" and normalized_price > 0 else ""
 
     payload = {

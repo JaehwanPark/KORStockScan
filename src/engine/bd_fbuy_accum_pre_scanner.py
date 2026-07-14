@@ -676,6 +676,19 @@ def _ws_snapshot_realtime_type_ts(value: Any) -> dict[str, float]:
     return result
 
 
+def _ws_snapshot_string_map(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, str] = {}
+    for key, raw_value in value.items():
+        if key is None or raw_value is None:
+            continue
+        text = str(raw_value).strip()
+        if text:
+            result[str(key)] = text
+    return result
+
+
 def _ws_snapshot_age_ms(ts: Any, now_ts: float) -> Any:
     ts_value = _safe_float(ts, 0.0)
     if ts_value <= 0 or not math.isfinite(ts_value):
@@ -732,6 +745,20 @@ def write_ws_snapshot(realtime_data: dict[str, Any], *, now_ts: float | None = N
             "best_ask": best_ask,
             "received_types": _ws_snapshot_received_types(row.get("received_types")),
             "last_realtime_type_ts": realtime_type_ts,
+            "last_ws_item": str(row.get("last_ws_item") or ""),
+            "last_ws_market_suffix": str(row.get("last_ws_market_suffix") or ""),
+            "last_ws_market_route": str(row.get("last_ws_market_route") or "unknown"),
+            "last_realtime_type_item": _ws_snapshot_string_map(
+                row.get("last_realtime_type_item")
+            ),
+            "last_realtime_type_market_suffix": _ws_snapshot_string_map(
+                row.get("last_realtime_type_market_suffix")
+            ),
+            "last_realtime_type_market_route": _ws_snapshot_string_map(
+                row.get("last_realtime_type_market_route")
+            ),
+            "market_session_state": str(row.get("market_session_state") or ""),
+            "market_session_remaining": str(row.get("market_session_remaining") or ""),
             "last_realtime_type_ages_ms": {
                 real_type: _ws_snapshot_age_ms(ts, now_ts) for real_type, ts in realtime_type_ts.items()
             },
