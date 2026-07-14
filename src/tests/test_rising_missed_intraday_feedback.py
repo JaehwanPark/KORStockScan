@@ -212,6 +212,68 @@ def test_tp1_first_hit_label_uses_effective_price_and_later_cost_only_event(tmp_
     assert label["net_label"] == "net_target_confirmed"
 
 
+def test_tp1_counterfactual_submit_safety_is_aggregated_without_label_duplication(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-14.jsonl"
+    rows = [
+        _event(
+            801,
+            "000801",
+            "recheck",
+            "rising_missed_tp1_counterfactual_submit_safety",
+            {
+                "selector_reason": "rising_missed_tp1_insufficient_positive_support",
+                "selector_deferred": False,
+                "rising_missed_tp1_candidate_allowed": False,
+                "rising_missed_tp1_counterfactual_submit_safety_action": "RECHECK_REQUIRED",
+                "rising_missed_tp1_counterfactual_submit_safety_risks": (
+                    "spread_above_candidate_caution,momentum_support_weak"
+                ),
+                "rising_missed_tp1_positive_support_count": 1,
+                "rising_missed_tp1_positive_support_families": "depth",
+            },
+        ),
+        _event(
+            802,
+            "000802",
+            "defer",
+            "rising_missed_tp1_counterfactual_submit_safety",
+            {
+                "selector_reason": "tp1_effective_quote_stale",
+                "selector_deferred": True,
+                "rising_missed_tp1_candidate_allowed": False,
+                "rising_missed_tp1_counterfactual_submit_safety_action": (
+                    "INPUT_DEFER_EXPECTED"
+                ),
+                "rising_missed_tp1_counterfactual_submit_safety_risks": "-",
+                "rising_missed_tp1_positive_support_count": 0,
+                "rising_missed_tp1_positive_support_families": "-",
+            },
+        ),
+    ]
+    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+
+    report = mod.build_report("2026-07-14", pipeline_path=pipeline_path, generated_at="fixed")
+    summary = report["summary"]
+
+    assert summary["rising_missed_tp1_counterfactual_submit_safety_count"] == 2
+    assert summary["rising_missed_tp1_counterfactual_unique_symbol_count"] == 2
+    assert summary["rising_missed_tp1_counterfactual_action_counts"] == [
+        {"action": "RECHECK_REQUIRED", "count": 1},
+        {"action": "INPUT_DEFER_EXPECTED", "count": 1},
+    ]
+    assert summary["rising_missed_tp1_counterfactual_risk_counts"] == [
+        {"risk": "spread_above_candidate_caution", "count": 1},
+        {"risk": "momentum_support_weak", "count": 1},
+    ]
+    assert report["rising_missed_tp1_first_hit_label_rows"] == []
+    assert all(
+        row["actual_order_submitted"] is False
+        and row["broker_order_forbidden"] is True
+        and row["runtime_effect"] is False
+        for row in report["rising_missed_tp1_counterfactual_submit_safety_rows"]
+    )
+
+
 def test_build_report_flags_rising_missed_avg_down_ge2_initial_quality_fail(tmp_path):
     pipeline_path = tmp_path / "pipeline_events_2026-07-02.jsonl"
     rows = [

@@ -1444,6 +1444,79 @@ def _build_tp1_first_hit_labels(pipeline_path: Path) -> tuple[dict[str, Any], li
     }, labels
 
 
+def _build_tp1_counterfactual_submit_safety(
+    pipeline_path: Path,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    action_counts: Counter[str] = Counter()
+    selector_reason_counts: Counter[str] = Counter()
+    risk_counts: Counter[str] = Counter()
+    unique_symbols: set[str] = set()
+    rows: list[dict[str, Any]] = []
+    for row in iter_jsonl(pipeline_path):
+        if str(row.get("stage") or "") != "rising_missed_tp1_counterfactual_submit_safety":
+            continue
+        fields = _fields(row)
+        action = str(
+            fields.get("rising_missed_tp1_counterfactual_submit_safety_action")
+            or "not_evaluated"
+        )
+        selector_reason = str(fields.get("selector_reason") or "not_evaluated")
+        risks = [
+            token.strip()
+            for token in str(
+                fields.get("rising_missed_tp1_counterfactual_submit_safety_risks") or ""
+            ).split(",")
+            if token.strip() and token.strip() != "-"
+        ]
+        code = _event_code(row)
+        if code:
+            unique_symbols.add(code)
+        action_counts[action] += 1
+        selector_reason_counts[selector_reason] += 1
+        risk_counts.update(risks)
+        rows.append(
+            {
+                "ts": _event_ts(row),
+                "stock_code": code,
+                "stock_name": _event_name(row),
+                "record_id": row.get("record_id"),
+                "evaluation_id": fields.get("rising_missed_tp1_evaluation_id"),
+                "source_stage": fields.get("source_stage"),
+                "selector_reason": selector_reason,
+                "selector_deferred": _boolish(fields.get("selector_deferred")),
+                "candidate_lane": fields.get("rising_missed_tp1_candidate_lane"),
+                "positive_support_count": _safe_int(
+                    fields.get("rising_missed_tp1_positive_support_count")
+                ),
+                "positive_support_families": fields.get(
+                    "rising_missed_tp1_positive_support_families"
+                ),
+                "counterfactual_action": action,
+                "counterfactual_risks": risks,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "decision_authority": "source_only_candidate_to_submit_safety_projection",
+                "forbidden_uses": FORBIDDEN_USES,
+            }
+        )
+    return {
+        "rising_missed_tp1_counterfactual_submit_safety_count": len(rows),
+        "rising_missed_tp1_counterfactual_unique_symbol_count": len(unique_symbols),
+        "rising_missed_tp1_counterfactual_action_counts": [
+            {"action": key, "count": value} for key, value in action_counts.most_common()
+        ],
+        "rising_missed_tp1_counterfactual_selector_reason_counts": [
+            {"selector_reason": key, "count": value}
+            for key, value in selector_reason_counts.most_common()
+        ],
+        "rising_missed_tp1_counterfactual_risk_counts": [
+            {"risk": key, "count": value} for key, value in risk_counts.most_common()
+        ],
+    }, rows
+
+
 def build_report(
     target_date: str,
     *,
@@ -1517,6 +1590,9 @@ def build_report(
         latency_false_negative_rows
     )
     tp1_label_summary, tp1_label_rows = _build_tp1_first_hit_labels(pipeline_path)
+    tp1_counterfactual_summary, tp1_counterfactual_rows = (
+        _build_tp1_counterfactual_submit_safety(pipeline_path)
+    )
     if first_touch_source_quality_counts["first_touch_ai_provenance_missing_count"]:
         source_quality_status = "first_touch_ai_provenance_missing"
     if first_touch_source_quality_counts["first_touch_ai_provenance_unusable_count"]:
@@ -1669,6 +1745,15 @@ def build_report(
                 ),
                 "forbidden_uses": FORBIDDEN_USES,
             },
+            "rising_missed_tp1_counterfactual_submit_safety": {
+                "metric_role": "source_only_candidate_to_submit_safety_projection",
+                "decision_authority": "source_only_candidate_to_submit_safety_projection",
+                "window_policy": "same_day_selector_block_evaluation_snapshots",
+                "sample_floor": "1_tp1_selector_block_or_defer",
+                "primary_decision_metric": "counterfactual_action_counts",
+                "source_quality_gate": "tp1_freshness_envelope_and_selector_provenance",
+                "forbidden_uses": FORBIDDEN_USES,
+            },
         },
         "source_paths": {"pipeline_events": str(resolved_pipeline_path)},
         "source_quality": {
@@ -1721,6 +1806,7 @@ def build_report(
             **latency_false_negative_summary,
             **latency_canary_summary,
             **tp1_label_summary,
+            **tp1_counterfactual_summary,
             "code_improvement_order_count": len(code_improvement_orders),
         },
         "records": rows[:100],
@@ -1731,6 +1817,7 @@ def build_report(
         "latency_false_negative_review_rows": latency_false_negative_rows[:200],
         "latency_false_negative_canary_candidate_rows": latency_canary_rows[:200],
         "rising_missed_tp1_first_hit_label_rows": tp1_label_rows[:200],
+        "rising_missed_tp1_counterfactual_submit_safety_rows": tp1_counterfactual_rows[:200],
         "code_improvement_orders": code_improvement_orders,
     }
 
@@ -1796,6 +1883,16 @@ def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path)
         f"{summary.get('latency_false_negative_canary_observe_wide_spread_count')}",
         f"- latency_false_negative_canary_hold_sample_count: "
         f"{summary.get('latency_false_negative_canary_hold_sample_count')}",
+        f"- rising_missed_tp1_counterfactual_submit_safety_count: "
+        f"{summary.get('rising_missed_tp1_counterfactual_submit_safety_count')}",
+        f"- rising_missed_tp1_counterfactual_unique_symbol_count: "
+        f"{summary.get('rising_missed_tp1_counterfactual_unique_symbol_count')}",
+        f"- rising_missed_tp1_counterfactual_action_counts: "
+        f"{summary.get('rising_missed_tp1_counterfactual_action_counts')}",
+        f"- rising_missed_tp1_counterfactual_selector_reason_counts: "
+        f"{summary.get('rising_missed_tp1_counterfactual_selector_reason_counts')}",
+        f"- rising_missed_tp1_counterfactual_risk_counts: "
+        f"{summary.get('rising_missed_tp1_counterfactual_risk_counts')}",
         f"- code_improvement_order_count: {summary.get('code_improvement_order_count')}",
         "",
     ]
