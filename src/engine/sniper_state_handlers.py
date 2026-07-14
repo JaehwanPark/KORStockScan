@@ -40093,6 +40093,7 @@ def _handoff_hard_stop_to_manual_control_if_enabled(
     if exit_key not in {"scalp_hard_stop_pct", "scalp_preset_hard_stop_pct"}:
         return False
 
+    retry_attempt = bool((stock or {}).get("manual_control_hard_stop_handoff_pending"))
     retry_sec = max(1, _env_or_rule_int("HARD_STOP_MANUAL_HANDOFF_RETRY_SEC", 5))
     last_attempt_ts = _safe_float(
         (stock or {}).get("manual_control_hard_stop_handoff_last_attempt_ts"),
@@ -40122,6 +40123,7 @@ def _handoff_hard_stop_to_manual_control_if_enabled(
         "manual_control_auto_exclusion_source_stage": source_stage,
         "hard_stop_manual_handoff_enabled": True,
         "hard_stop_manual_handoff_registered": registered,
+        "hard_stop_manual_handoff_retry_attempt": retry_attempt,
         "hard_stop_manual_handoff_retry_sec": retry_sec,
         "target_status": (stock or {}).get("status") or "not_applicable_target_status",
         "target_strategy": normalize_strategy(strategy),
@@ -40157,6 +40159,12 @@ def _handoff_hard_stop_to_manual_control_if_enabled(
         "manual_control_hard_stop_handoff_pending": not registered,
         "manual_control_hard_stop_handoff_last_attempt_ts": float(now_ts),
         "manual_control_auto_exclusion_source_stage": source_stage,
+        "manual_control_hard_stop_handoff_exit_rule": exit_key,
+        "manual_control_hard_stop_handoff_profit_rate": float(profit_rate),
+        "manual_control_hard_stop_handoff_peak_profit": float(peak_profit),
+        "manual_control_hard_stop_handoff_curr_price": int(curr_price or 0),
+        "manual_control_hard_stop_handoff_buy_price": float(buy_price or 0.0),
+        "manual_control_hard_stop_handoff_source_stage": source_stage,
     }
     if registered:
         set_fields.update(
@@ -40168,7 +40176,22 @@ def _handoff_hard_stop_to_manual_control_if_enabled(
                 "last_manual_control_exclusion_holding_log_ts": float(now_ts),
             }
         )
-    _mutate_stock_state(stock, set_fields=set_fields)
+    _mutate_stock_state(
+        stock,
+        set_fields=set_fields,
+        pop_fields=(
+            [
+                "manual_control_hard_stop_handoff_exit_rule",
+                "manual_control_hard_stop_handoff_profit_rate",
+                "manual_control_hard_stop_handoff_peak_profit",
+                "manual_control_hard_stop_handoff_curr_price",
+                "manual_control_hard_stop_handoff_buy_price",
+                "manual_control_hard_stop_handoff_source_stage",
+            ]
+            if registered
+            else []
+        ),
+    )
     if registered:
         log_info(
             f"[HARD_STOP_MANUAL_HANDOFF] {(stock or {}).get('name') or code}"
@@ -40180,6 +40203,57 @@ def _handoff_hard_stop_to_manual_control_if_enabled(
             f"registration deferred ({decision.reason}); hard stop sell remains blocked"
         )
     return True
+
+
+def _retry_pending_hard_stop_manual_handoff(stock, code, *, now_ts: float) -> bool:
+    if not bool((stock or {}).get("manual_control_hard_stop_handoff_pending")):
+        return False
+    if not _env_or_rule_bool("HARD_STOP_MANUAL_HANDOFF_ENABLED", False):
+        _mutate_stock_state(
+            stock,
+            pop_fields=[
+                "manual_control_hard_stop_handoff_pending",
+                "manual_control_hard_stop_handoff_last_attempt_ts",
+                "manual_control_hard_stop_handoff_exit_rule",
+                "manual_control_hard_stop_handoff_profit_rate",
+                "manual_control_hard_stop_handoff_peak_profit",
+                "manual_control_hard_stop_handoff_curr_price",
+                "manual_control_hard_stop_handoff_buy_price",
+                "manual_control_hard_stop_handoff_source_stage",
+            ],
+        )
+        return False
+    return _handoff_hard_stop_to_manual_control_if_enabled(
+        stock,
+        code,
+        strategy=normalize_strategy((stock or {}).get("strategy")),
+        sell_reason_type="LOSS",
+        exit_rule=str(
+            (stock or {}).get("manual_control_hard_stop_handoff_exit_rule")
+            or "scalp_hard_stop_pct"
+        ),
+        profit_rate=_safe_float(
+            (stock or {}).get("manual_control_hard_stop_handoff_profit_rate"),
+            0.0,
+        ),
+        peak_profit=_safe_float(
+            (stock or {}).get("manual_control_hard_stop_handoff_peak_profit"),
+            0.0,
+        ),
+        curr_price=_safe_int(
+            (stock or {}).get("manual_control_hard_stop_handoff_curr_price"),
+            0,
+        ),
+        buy_price=_safe_float(
+            (stock or {}).get("manual_control_hard_stop_handoff_buy_price"),
+            0.0,
+        ),
+        now_ts=now_ts,
+        source_stage=str(
+            (stock or {}).get("manual_control_hard_stop_handoff_source_stage")
+            or "pending_hard_stop_manual_handoff_retry"
+        ),
+    )
 
 
 def _manual_control_open_loss_session(now_dt: datetime | None) -> str:
@@ -40840,6 +40914,9 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
     if now_dt is None:
         now_dt = datetime.now()
     now_t = now_dt.time()
+
+    if _retry_pending_hard_stop_manual_handoff(stock, code, now_ts=now_ts):
+        return
 
     if _manual_control_exclusion_blocked(
         stock,

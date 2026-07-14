@@ -369,6 +369,7 @@ def test_hard_stop_manual_handoff_preserves_emergency_and_simulated_exit(monkeyp
 
 def test_hard_stop_manual_handoff_blocks_and_retries_when_registration_fails(monkeypatch):
     emitted = []
+    add_calls = []
     stock = {
         "status": "HOLDING",
         "strategy": "SCALPING",
@@ -376,16 +377,24 @@ def test_hard_stop_manual_handoff_blocks_and_retries_when_registration_fails(mon
     }
     monkeypatch.setenv("KORSTOCKSCAN_HARD_STOP_MANUAL_HANDOFF_ENABLED", "true")
     monkeypatch.setenv("KORSTOCKSCAN_HARD_STOP_MANUAL_HANDOFF_RETRY_SEC", "5")
-    monkeypatch.setattr(
-        sniper_state_handlers,
-        "add_manual_control_exclusion_code",
-        lambda code, comment="": manual_control_exclusion.ManualControlExclusionDecision(
-            False,
+
+    def fake_add(code, comment=""):
+        add_calls.append((code, comment))
+        if len(add_calls) == 1:
+            return manual_control_exclusion.ManualControlExclusionDecision(
+                False,
+                "005930",
+                "manual_control_exclusion_append_failed:OSError",
+                "/read-only/manual.txt",
+            )
+        return manual_control_exclusion.ManualControlExclusionDecision(
+            True,
             "005930",
-            "manual_control_exclusion_append_failed:OSError",
-            "/read-only/manual.txt",
-        ),
-    )
+            "operator_manual_control_excluded_symbol",
+            "/tmp/manual.txt",
+        )
+
+    monkeypatch.setattr(sniper_state_handlers, "add_manual_control_exclusion_code", fake_add)
     monkeypatch.setattr(
         sniper_state_handlers,
         "emit_pipeline_event",
@@ -412,7 +421,86 @@ def test_hard_stop_manual_handoff_blocks_and_retries_when_registration_fails(mon
     assert emitted[-1]["stage"] == "hard_stop_manual_control_handoff_deferred"
     assert emitted[-1]["fields"]["broker_order_forbidden"] is True
 
-    assert sniper_state_handlers._handoff_hard_stop_to_manual_control_if_enabled(
-        stock, "005930", now_ts=1002.0, **kwargs
+    assert sniper_state_handlers._retry_pending_hard_stop_manual_handoff(
+        stock, "005930", now_ts=1002.0
     ) is True
     assert len(emitted) == 1
+    assert len(add_calls) == 1
+
+    assert sniper_state_handlers._retry_pending_hard_stop_manual_handoff(
+        stock, "005930", now_ts=1006.0
+    ) is True
+    assert len(add_calls) == 2
+    assert stock["manual_control_hard_stop_handoff_pending"] is False
+    assert stock["manual_control_auto_hard_stop_blocked"] is True
+    assert "manual_control_hard_stop_handoff_exit_rule" not in stock
+    assert emitted[-1]["stage"] == "hard_stop_manual_control_handoff"
+    assert emitted[-1]["fields"]["hard_stop_manual_handoff_retry_attempt"] is True
+
+
+def test_pending_hard_stop_manual_handoff_runtime_off_clears_pending(monkeypatch):
+    stock = {
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "manual_control_hard_stop_handoff_pending": True,
+        "manual_control_hard_stop_handoff_last_attempt_ts": 1000.0,
+        "manual_control_hard_stop_handoff_exit_rule": "scalp_hard_stop_pct",
+    }
+    monkeypatch.setenv("KORSTOCKSCAN_HARD_STOP_MANUAL_HANDOFF_ENABLED", "false")
+
+    assert sniper_state_handlers._retry_pending_hard_stop_manual_handoff(
+        stock, "005930", now_ts=1006.0
+    ) is False
+    assert "manual_control_hard_stop_handoff_pending" not in stock
+    assert "manual_control_hard_stop_handoff_exit_rule" not in stock
+
+
+def test_holding_handler_retries_pending_hard_stop_handoff_before_quote_logic(
+    monkeypatch,
+    tmp_path,
+):
+    path = tmp_path / "manual_control_excluded_codes.txt"
+    stock = {
+        "id": 6,
+        "code": "005930",
+        "name": "SAMSUNG",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "manual_control_hard_stop_handoff_pending": True,
+        "manual_control_hard_stop_handoff_last_attempt_ts": 1000.0,
+        "manual_control_hard_stop_handoff_exit_rule": "scalp_hard_stop_pct",
+        "manual_control_hard_stop_handoff_profit_rate": -2.6,
+        "manual_control_hard_stop_handoff_peak_profit": 0.1,
+        "manual_control_hard_stop_handoff_curr_price": 9750,
+        "manual_control_hard_stop_handoff_buy_price": 10000,
+        "manual_control_hard_stop_handoff_source_stage": (
+            "standard_hard_stop_after_quote_revalidation"
+        ),
+    }
+    monkeypatch.setenv("KORSTOCKSCAN_HARD_STOP_MANUAL_HANDOFF_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_HARD_STOP_MANUAL_HANDOFF_RETRY_SEC", "5")
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+    monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
+
+    def fail_quote_logic(*args, **kwargs):
+        raise AssertionError("pending handoff retry must run before holding quote logic")
+
+    monkeypatch.setattr(
+        sniper_state_handlers,
+        "_holding_ws_freshness_recover_or_block",
+        fail_quote_logic,
+    )
+
+    sniper_state_handlers.handle_holding_state(
+        stock,
+        "005930",
+        {"curr": 10100},
+        admin_id="admin",
+        market_regime="BULL",
+        now_ts=1006.0,
+        now_dt=datetime(2026, 7, 14, 15, 0, 0),
+    )
+
+    assert stock["status"] == "HOLDING"
+    assert stock["manual_control_auto_hard_stop_blocked"] is True
+    assert manual_control_exclusion.evaluate_manual_control_exclusion("005930").excluded is True
