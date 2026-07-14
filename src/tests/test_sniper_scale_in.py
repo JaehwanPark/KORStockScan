@@ -1162,7 +1162,7 @@ def test_rising_missed_tp1_selector_passes_low_rebound_with_trusted_micro():
     assert decision.log_fields["rising_missed_tp1_actual_fee_tax_required_for_net_label"] is True
 
 
-def test_rising_missed_tp1_selector_defers_missing_micro_and_blocks_wait_without_bid_surge():
+def test_rising_missed_tp1_selector_defers_missing_micro_and_allows_wait_with_other_supports():
     stock = {
         "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
         "price_delta_since_first_seen_pct": 1.5,
@@ -1179,7 +1179,7 @@ def test_rising_missed_tp1_selector_defers_missing_micro_and_blocks_wait_without
         current_date="2026-07-14",
         current_ai_action="BUY",
     )
-    wait_block = evaluate_rising_missed_tp1_candidate(
+    wait_candidate = evaluate_rising_missed_tp1_candidate(
         stock,
         {
             "rising_missed_tp1_input_ready": True,
@@ -1204,9 +1204,16 @@ def test_rising_missed_tp1_selector_defers_missing_micro_and_blocks_wait_without
     assert deferred.allowed is False
     assert deferred.deferred is True
     assert deferred.reason == "tp1_micro_ws_unavailable"
-    assert wait_block.allowed is False
-    assert wait_block.deferred is False
-    assert wait_block.reason == "rising_missed_tp1_wait_requires_bid_imbalance_surge"
+    assert deferred.log_fields[
+        "rising_missed_tp1_counterfactual_submit_safety_action"
+    ] == "INPUT_DEFER_EXPECTED"
+    assert wait_candidate.allowed is True
+    assert wait_candidate.deferred is False
+    assert wait_candidate.reason == "rising_missed_tp1_candidate_pass"
+    assert wait_candidate.log_fields["rising_missed_tp1_positive_support_count"] == 3
+    assert "wait_without_bid_imbalance" in wait_candidate.log_fields[
+        "rising_missed_tp1_counterfactual_submit_safety_risks"
+    ]
 
 
 def test_rising_missed_tp1_selector_requires_exact_source_markers():
@@ -1220,6 +1227,7 @@ def test_rising_missed_tp1_selector_requires_exact_source_markers():
         {
             "rising_missed_tp1_input_ready": True,
             "rising_missed_tp1_actual_watch_delta_pct": 0.5,
+            "rising_missed_tp1_effective_quote_age_ms": 100.0,
         },
         selector_enabled=True,
         active_date="2026-07-14",
@@ -1242,6 +1250,7 @@ def test_rising_missed_tp1_selector_does_not_count_promotion_reason_as_source_fa
         {
             "rising_missed_tp1_input_ready": True,
             "rising_missed_tp1_actual_watch_delta_pct": 0.5,
+            "rising_missed_tp1_effective_quote_age_ms": 100.0,
         },
         selector_enabled=True,
         active_date="2026-07-14",
@@ -1293,6 +1302,86 @@ def test_rising_missed_tp1_acceleration_lane_uses_actual_watch_delta_not_preserv
     assert stale_preserved.reason == "rising_missed_tp1_lane_not_eligible"
     assert actual_follow_through.allowed is True
     assert actual_follow_through.lane == "acceleration"
+
+
+def test_rising_missed_tp1_probability_gate_passes_wide_spread_chase_for_submit_recheck():
+    decision = evaluate_rising_missed_tp1_candidate(
+        {
+            "source_signature": "BID_IMBALANCE_SURGE,PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        },
+        {
+            "rising_missed_tp1_input_ready": True,
+            "rising_missed_tp1_actual_watch_delta_pct": 5.0,
+            "rising_missed_tp1_effective_quote_age_ms": 100.0,
+            "rising_missed_tp1_spread_ratio": 0.0115,
+            "rising_missed_tp1_micro_confidence": 0.85,
+            "rising_missed_tp1_true_ofi_ewma": -0.04,
+            "rising_missed_tp1_pressure_ewma": 68.0,
+            "rising_missed_tp1_depth_imbalance_ewma": 0.36,
+            "rising_missed_tp1_top_depth_ratio": 2.7,
+            "rising_missed_tp1_tick_acceleration": 2.0,
+            "rising_missed_tp1_tick_acceleration_fresh": True,
+            "market_data_signed_tape_state": "stale",
+        },
+        selector_enabled=True,
+        active_date="2026-07-14",
+        current_date="2026-07-14",
+        current_ai_action="WAIT",
+    )
+
+    assert decision.allowed is True
+    assert decision.lane == "acceleration"
+    assert decision.log_fields["rising_missed_tp1_spread_penalty_applied"] is True
+    assert decision.log_fields["rising_missed_tp1_spread_hard_blocked"] is False
+    assert decision.log_fields["rising_missed_tp1_chase_recheck_required"] is True
+    assert decision.log_fields["rising_missed_tp1_positive_support_count"] == 4
+    assert decision.log_fields["rising_missed_tp1_downstream_submit_safety_required"] is True
+
+
+def test_rising_missed_tp1_probability_gate_blocks_insufficient_support_and_sell_tape():
+    stock = {
+        "source_signature": "LOW_REBOUND_RISING_MISSED,PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        "low_rebound_pct": 1.2,
+    }
+    decision_input = {
+        "rising_missed_tp1_input_ready": True,
+        "rising_missed_tp1_actual_watch_delta_pct": 0.0,
+        "rising_missed_tp1_effective_quote_age_ms": 100.0,
+        "rising_missed_tp1_spread_ratio": 0.001,
+        "rising_missed_tp1_micro_confidence": 0.1,
+        "rising_missed_tp1_true_ofi_ewma": -0.1,
+        "rising_missed_tp1_pressure_ewma": 40.0,
+        "rising_missed_tp1_depth_imbalance_ewma": -0.2,
+        "rising_missed_tp1_top_depth_ratio": 0.7,
+        "rising_missed_tp1_tick_acceleration_fresh": False,
+        "rising_missed_tp1_micro_vwap_fresh": False,
+        "market_data_signed_tape_state": "mixed",
+    }
+    insufficient = evaluate_rising_missed_tp1_candidate(
+        stock,
+        decision_input,
+        selector_enabled=True,
+        active_date="2026-07-14",
+        current_date="2026-07-14",
+        current_ai_action="WAIT",
+    )
+    sell_dominated = evaluate_rising_missed_tp1_candidate(
+        stock,
+        {**decision_input, "market_data_signed_tape_state": "sell_dominated"},
+        selector_enabled=True,
+        active_date="2026-07-14",
+        current_date="2026-07-14",
+        current_ai_action="WAIT",
+    )
+
+    assert insufficient.allowed is False
+    assert insufficient.reason == "rising_missed_tp1_insufficient_positive_support"
+    assert insufficient.log_fields["rising_missed_tp1_positive_support_count"] == 0
+    assert sell_dominated.allowed is False
+    assert sell_dominated.reason == "rising_missed_tp1_hard_negative_evidence"
+    assert sell_dominated.log_fields[
+        "rising_missed_tp1_counterfactual_submit_safety_action"
+    ] == "HARD_VETO_EXPECTED"
 
 
 def test_rising_missed_one_share_entry_uses_budget_cap_with_min_one_share():
@@ -5114,6 +5203,20 @@ def test_rising_missed_tp1_selector_block_prevents_submit(monkeypatch):
     assert handled is True
     assert submit_calls == []
     assert logs[-1][0] == "rising_missed_tp1_candidate_blocked"
+    counterfactual = next(
+        fields
+        for stage, fields in logs
+        if stage == "rising_missed_tp1_counterfactual_submit_safety"
+    )
+    assert counterfactual["selector_reason"] == (
+        "rising_missed_tp1_insufficient_positive_support"
+    )
+    assert counterfactual["runtime_effect"] is False
+    assert counterfactual["actual_order_submitted"] is False
+    assert counterfactual["broker_order_forbidden"] is True
+    assert counterfactual["decision_authority"] == (
+        "source_only_candidate_to_submit_safety_projection"
+    )
 
 
 def test_rising_missed_normal_bridge_uses_common_tp1_resolver(monkeypatch):

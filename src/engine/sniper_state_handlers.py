@@ -10344,6 +10344,46 @@ def _rising_missed_submit_safety_filter_fields(*, blocked: bool) -> dict[str, An
     )
 
 
+def _log_rising_missed_tp1_counterfactual_submit_safety(
+    stock: dict | None,
+    code: str | None,
+    tp1_decision,
+    *,
+    source_stage: str,
+) -> None:
+    if tp1_decision is None or bool(getattr(tp1_decision, "allowed", False)):
+        return
+    decision_fields = dict(getattr(tp1_decision, "log_fields", None) or {})
+    projection_fields = {
+        **decision_fields,
+        "source_stage": str(source_stage or "rising_missed_tp1_candidate_blocked"),
+        "selector_reason": str(
+            getattr(tp1_decision, "reason", "not_evaluated") or "not_evaluated"
+        ),
+        "selector_deferred": bool(getattr(tp1_decision, "deferred", False)),
+        "metric_role": "source_only",
+        "decision_authority": "source_only_candidate_to_submit_safety_projection",
+        "window_policy": "same_symbol_selector_evaluation_snapshot",
+        "sample_floor": "not_applicable_source_only_projection",
+        "primary_decision_metric": "post_selector_submit_safety_recheck_action",
+        "source_quality_gate": "tp1_freshness_envelope_and_selector_provenance",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": (
+            "standalone_buy,broker_submit,submit_safety_bypass,stale_submit_bypass,"
+            "broker_guard_bypass,threshold_mutation,provider_route_change,quantity_or_cap_change"
+        ),
+    }
+    _log_entry_pipeline(
+        stock if isinstance(stock, dict) else {},
+        str(code or ""),
+        "rising_missed_tp1_counterfactual_submit_safety",
+        **projection_fields,
+    )
+
+
 RISING_MISSED_SUBMIT_SAFETY_BACKOFF_SOURCE = "submit_safety_feedback"
 _RISING_MISSED_SUBMIT_SAFETY_BACKOFFS: dict[str, dict[str, Any]] = {}
 RISING_MISSED_CANDIDATE_GATE_BACKOFF_SOURCE = "candidate_gate_feedback"
@@ -36682,6 +36722,12 @@ def _evaluate_rising_missed_normal_buy_bridge(
             current_date=_rising_missed_tp1_selector_current_date(runtime),
             current_ai_action=current_ai_action,
         )
+        _log_rising_missed_tp1_counterfactual_submit_safety(
+            stock,
+            code,
+            tp1_decision,
+            source_stage="rising_missed_normal_buy_bridge_candidate_gate",
+        )
         if tp1_decision.deferred:
             tp1_recheck_fields = _apply_rising_missed_freshness_envelope_recheck(
                 stock,
@@ -37767,6 +37813,12 @@ def _maybe_submit_rising_missed_one_share_entry(
             or stock.get("last_watching_ai_action")
             or "WAIT"
         ),
+    )
+    _log_rising_missed_tp1_counterfactual_submit_safety(
+        stock,
+        code,
+        tp1_decision,
+        source_stage="rising_missed_one_share_candidate_gate",
     )
     decision_log_fields.update(tp1_decision.log_fields or {})
     if not tp1_decision.allowed:

@@ -44,13 +44,16 @@ TP1_SELECTOR_BYPASS = "rising_missed_tp1_selector_inactive"
 TP1_SELECTOR_DEFER_INPUT = "rising_missed_tp1_decision_input_defer"
 TP1_SELECTOR_BLOCK_LANE = "rising_missed_tp1_lane_not_eligible"
 TP1_SELECTOR_BLOCK_AI = "rising_missed_tp1_ai_state_blocked"
-TP1_SELECTOR_BLOCK_WAIT = "rising_missed_tp1_wait_requires_bid_imbalance_surge"
-TP1_SELECTOR_BLOCK_MICRO = "rising_missed_tp1_micro_conditions_failed"
+TP1_SELECTOR_BLOCK_HARD_NEGATIVE = "rising_missed_tp1_hard_negative_evidence"
+TP1_SELECTOR_BLOCK_SUPPORT = "rising_missed_tp1_insufficient_positive_support"
 TP1_SELECTOR_GROSS_TARGET_PCT = 1.30
 TP1_SELECTOR_ADVERSE_STOP_PCT = -0.70
 TP1_SELECTOR_COST_RESERVE_PCT = 0.30
 TP1_SELECTOR_NET_TARGET_PCT = 1.00
 TP1_SELECTOR_HORIZON_SEC = 20 * 60
+TP1_SELECTOR_MIN_POSITIVE_SUPPORT_FAMILIES = 2
+TP1_SELECTOR_SPREAD_CAUTION_RATIO = 0.002
+TP1_SELECTOR_CHASE_DELTA_PCT = 3.0
 
 
 @dataclass(frozen=True)
@@ -172,9 +175,7 @@ def evaluate_rising_missed_tp1_candidate(
         and low_rebound_pct >= 1.0
         and source_count >= 3
     )
-    acceleration_lane = bool(
-        watch_delta_available and 1.0 <= watch_delta_pct <= 3.0 and source_count >= 2
-    )
+    acceleration_lane = bool(watch_delta_available and watch_delta_pct >= 1.0 and source_count >= 2)
     lane = "low_rebound" if low_rebound_lane else "acceleration" if acceleration_lane else "none"
     ai_action = str(
         current_ai_action
@@ -182,6 +183,96 @@ def evaluate_rising_missed_tp1_candidate(
         else _entry_ai_action_for_rising_missed(stock)[0]
     ).strip().upper()
     bid_imbalance_surge = _has_signature(stock, "BID_IMBALANCE_SURGE")
+    input_ready = bool(decision_input.get("rising_missed_tp1_input_ready"))
+    effective_quote_age_ms = _safe_float(
+        decision_input.get("rising_missed_tp1_effective_quote_age_ms"),
+        999999.0,
+    )
+    spread_ratio = _safe_float(decision_input.get("rising_missed_tp1_spread_ratio"), 1.0)
+    micro_confidence = _safe_float(
+        decision_input.get("rising_missed_tp1_micro_confidence"),
+        0.0,
+    )
+    true_ofi_ewma = _safe_float(
+        decision_input.get("rising_missed_tp1_true_ofi_ewma"),
+        0.0,
+    )
+    pressure_ewma = _safe_float(
+        decision_input.get("rising_missed_tp1_pressure_ewma"),
+        0.0,
+    )
+    depth_imbalance_ewma = _safe_float(
+        decision_input.get("rising_missed_tp1_depth_imbalance_ewma"),
+        -1.0,
+    )
+    top_depth_ratio = _safe_float(
+        decision_input.get("rising_missed_tp1_top_depth_ratio"),
+        0.0,
+    )
+    signed_tape_state = str(
+        decision_input.get("market_data_signed_tape_state") or ""
+    ).strip().lower()
+    tick_acceleration_support = bool(
+        _field_present(decision_input.get("rising_missed_tp1_tick_acceleration_fresh"))
+        and _safe_float(
+            decision_input.get("rising_missed_tp1_tick_acceleration"),
+            0.0,
+        )
+        >= 1.0
+    )
+    micro_vwap_support = bool(
+        _field_present(decision_input.get("rising_missed_tp1_micro_vwap_fresh"))
+        and _safe_float(
+            decision_input.get("rising_missed_tp1_micro_vwap_gap_bps"),
+            -999999.0,
+        )
+        >= 0.0
+    )
+    micro_trusted = micro_confidence >= 0.25
+    support_families = {
+        "bid_imbalance": bid_imbalance_surge,
+        "order_flow": bool(micro_trusted and (true_ofi_ewma > 0.0 or pressure_ewma >= 49.0)),
+        "depth": bool(
+            micro_trusted
+            and depth_imbalance_ewma >= -0.05
+            and top_depth_ratio >= 0.95
+        ),
+        "momentum": bool(tick_acceleration_support or micro_vwap_support),
+    }
+    positive_supports = sorted(
+        name for name, supported in support_families.items() if supported
+    )
+    hard_negative_reasons = []
+    if ai_action in {"DROP", "NOT_EVALUATED", "FAIL_CLOSED", "UNAVAILABLE"}:
+        hard_negative_reasons.append("ai_explicit_veto")
+    if signed_tape_state == "sell_dominated":
+        hard_negative_reasons.append("fresh_sell_dominated_tape")
+    counterfactual_risks = []
+    if spread_ratio > TP1_SELECTOR_SPREAD_CAUTION_RATIO:
+        counterfactual_risks.append("spread_above_candidate_caution")
+    if not micro_trusted:
+        counterfactual_risks.append("micro_confidence_below_prior")
+    if true_ofi_ewma <= 0.0:
+        counterfactual_risks.append("true_ofi_nonpositive")
+    if pressure_ewma < 49.0:
+        counterfactual_risks.append("pressure_below_prior")
+    if depth_imbalance_ewma < -0.05 or top_depth_ratio < 0.95:
+        counterfactual_risks.append("depth_support_weak")
+    if not support_families["momentum"]:
+        counterfactual_risks.append("momentum_support_weak")
+    if ai_action in {"", "-", "WAIT", "MISSING", "NONE", "NULL"} and not bid_imbalance_surge:
+        counterfactual_risks.append("wait_without_bid_imbalance")
+    if watch_delta_available and watch_delta_pct > TP1_SELECTOR_CHASE_DELTA_PCT:
+        counterfactual_risks.append("acceleration_above_chase_prior")
+    counterfactual_action = (
+        "INPUT_DEFER_EXPECTED"
+        if not input_ready or effective_quote_age_ms > 3000.0
+        else "HARD_VETO_EXPECTED"
+        if hard_negative_reasons
+        else "RECHECK_REQUIRED"
+        if counterfactual_risks
+        else "NO_CURRENT_VETO_EVIDENCE"
+    )
     base_fields = {
         "rising_missed_tp1_selector_enabled": bool(selector_enabled),
         "rising_missed_tp1_selector_active": active,
@@ -195,6 +286,39 @@ def evaluate_rising_missed_tp1_candidate(
         ),
         "rising_missed_tp1_ai_action": ai_action or "-",
         "rising_missed_tp1_bid_imbalance_surge": bid_imbalance_surge,
+        "rising_missed_tp1_selector_policy": "probability_support_v2",
+        "rising_missed_tp1_positive_support_count": len(positive_supports),
+        "rising_missed_tp1_positive_support_min": TP1_SELECTOR_MIN_POSITIVE_SUPPORT_FAMILIES,
+        "rising_missed_tp1_positive_support_families": ",".join(positive_supports) or "-",
+        "rising_missed_tp1_support_bid_imbalance": support_families["bid_imbalance"],
+        "rising_missed_tp1_support_order_flow": support_families["order_flow"],
+        "rising_missed_tp1_support_depth": support_families["depth"],
+        "rising_missed_tp1_support_momentum": support_families["momentum"],
+        "rising_missed_tp1_spread_caution_ratio": TP1_SELECTOR_SPREAD_CAUTION_RATIO,
+        "rising_missed_tp1_spread_penalty_applied": bool(
+            spread_ratio > TP1_SELECTOR_SPREAD_CAUTION_RATIO
+        ),
+        "rising_missed_tp1_spread_hard_blocked": False,
+        "rising_missed_tp1_chase_prior_pct": TP1_SELECTOR_CHASE_DELTA_PCT,
+        "rising_missed_tp1_chase_recheck_required": bool(
+            watch_delta_available and watch_delta_pct > TP1_SELECTOR_CHASE_DELTA_PCT
+        ),
+        "rising_missed_tp1_hard_negative_reasons": (
+            ",".join(hard_negative_reasons) if hard_negative_reasons else "-"
+        ),
+        "rising_missed_tp1_downstream_submit_safety_required": True,
+        "rising_missed_tp1_counterfactual_submit_safety_action": counterfactual_action,
+        "rising_missed_tp1_counterfactual_submit_safety_risks": (
+            ",".join(counterfactual_risks) if counterfactual_risks else "-"
+        ),
+        "rising_missed_tp1_counterfactual_submit_safety_metric_role": "source_only",
+        "rising_missed_tp1_counterfactual_submit_safety_decision_authority": (
+            "source_only_candidate_to_submit_safety_projection"
+        ),
+        "rising_missed_tp1_counterfactual_submit_safety_runtime_effect": False,
+        "rising_missed_tp1_counterfactual_submit_safety_allowed_runtime_apply": False,
+        "rising_missed_tp1_counterfactual_submit_safety_actual_order_submitted": False,
+        "rising_missed_tp1_counterfactual_submit_safety_broker_order_forbidden": True,
         "rising_missed_tp1_gross_target_pct": TP1_SELECTOR_GROSS_TARGET_PCT,
         "rising_missed_tp1_adverse_stop_pct": TP1_SELECTOR_ADVERSE_STOP_PCT,
         "rising_missed_tp1_cost_reserve_pct": TP1_SELECTOR_COST_RESERVE_PCT,
@@ -204,7 +328,7 @@ def evaluate_rising_missed_tp1_candidate(
         "metric_role": "bounded_tunable_candidate_gate",
         "decision_authority": "operator_runtime_override_rising_missed_tp1_candidate_selector",
         "window_policy": "same_day_intraday_candidate_then_postclose_20m_label",
-        "sample_floor": "source_family_and_true_ofi_runtime_floors",
+        "sample_floor": "lane_identity_plus_two_independent_positive_support_families",
         "primary_decision_metric": "gross_1_30_before_adverse_0_70_within_20m",
         "source_quality_gate": "freshness_envelope_and_trusted_ws_micro_required",
         "forbidden_uses": (
@@ -234,7 +358,7 @@ def evaluate_rising_missed_tp1_candidate(
                 reason=TP1_SELECTOR_BYPASS,
             ),
         )
-    if not bool(decision_input.get("rising_missed_tp1_input_ready")):
+    if not input_ready:
         return RisingMissedTP1CandidateDecision(
             allowed=False,
             deferred=True,
@@ -247,6 +371,18 @@ def evaluate_rising_missed_tp1_candidate(
                     decision_input.get("rising_missed_tp1_input_reason")
                     or TP1_SELECTOR_DEFER_INPUT
                 ),
+            ),
+        )
+    if effective_quote_age_ms > 3000.0:
+        return RisingMissedTP1CandidateDecision(
+            allowed=False,
+            deferred=True,
+            reason="tp1_effective_quote_stale",
+            lane=lane,
+            log_fields=_decision_fields(
+                allowed=False,
+                deferred=True,
+                reason="tp1_effective_quote_stale",
             ),
         )
     if lane == "none":
@@ -273,52 +409,28 @@ def evaluate_rising_missed_tp1_candidate(
                 reason=TP1_SELECTOR_BLOCK_AI,
             ),
         )
-    if ai_action in {"", "-", "WAIT", "MISSING", "NONE", "NULL"} and not bid_imbalance_surge:
+    if hard_negative_reasons:
         return RisingMissedTP1CandidateDecision(
             allowed=False,
             deferred=False,
-            reason=TP1_SELECTOR_BLOCK_WAIT,
+            reason=TP1_SELECTOR_BLOCK_HARD_NEGATIVE,
             lane=lane,
             log_fields=_decision_fields(
                 allowed=False,
                 deferred=False,
-                reason=TP1_SELECTOR_BLOCK_WAIT,
+                reason=TP1_SELECTOR_BLOCK_HARD_NEGATIVE,
             ),
         )
-    micro_conditions = bool(
-        _safe_float(decision_input.get("rising_missed_tp1_effective_quote_age_ms"), 999999.0) <= 3000.0
-        and _safe_float(decision_input.get("rising_missed_tp1_spread_ratio"), 1.0) <= 0.002
-        and _safe_float(decision_input.get("rising_missed_tp1_micro_confidence"), 0.0) >= 0.25
-        and _safe_float(decision_input.get("rising_missed_tp1_true_ofi_ewma"), 0.0) > 0.0
-        and _safe_float(decision_input.get("rising_missed_tp1_pressure_ewma"), 0.0) >= 49.0
-        and _safe_float(decision_input.get("rising_missed_tp1_depth_imbalance_ewma"), -1.0) >= -0.05
-        and _safe_float(decision_input.get("rising_missed_tp1_top_depth_ratio"), 0.0) >= 0.95
-        and str(decision_input.get("market_data_signed_tape_state") or "").lower() != "sell_dominated"
-        and (
-            (
-                bool(decision_input.get("rising_missed_tp1_tick_acceleration_fresh"))
-                and _safe_float(decision_input.get("rising_missed_tp1_tick_acceleration"), 0.0)
-                >= 1.0
-            )
-            or (
-                bool(decision_input.get("rising_missed_tp1_micro_vwap_fresh"))
-                and _safe_float(
-                    decision_input.get("rising_missed_tp1_micro_vwap_gap_bps"), -999999.0
-                )
-                >= 0.0
-            )
-        )
-    )
-    if not micro_conditions:
+    if len(positive_supports) < TP1_SELECTOR_MIN_POSITIVE_SUPPORT_FAMILIES:
         return RisingMissedTP1CandidateDecision(
             allowed=False,
             deferred=False,
-            reason=TP1_SELECTOR_BLOCK_MICRO,
+            reason=TP1_SELECTOR_BLOCK_SUPPORT,
             lane=lane,
             log_fields=_decision_fields(
                 allowed=False,
                 deferred=False,
-                reason=TP1_SELECTOR_BLOCK_MICRO,
+                reason=TP1_SELECTOR_BLOCK_SUPPORT,
             ),
         )
     return RisingMissedTP1CandidateDecision(
