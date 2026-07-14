@@ -2448,6 +2448,14 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
                 f"{identity_decision.get('scanner_source_identity_authoritative_name')}"
             )
             continue
+        source_guard = {
+            **source_guard,
+            **{
+                key: value
+                for key, value in identity_decision.items()
+                if key.startswith("scanner_source_identity_")
+            },
+        }
 
         score = _freshness_score(target)
         source_sig = ",".join(_source_signature(target))

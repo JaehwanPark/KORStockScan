@@ -175,6 +175,66 @@ def test_scanner_rejects_source_name_mismatch_without_polluting_recent_state(mon
     assert fields["scanner_source_identity_authoritative_name"] == "삼화콘덴서"
 
 
+def test_scanner_records_source_identity_pass_on_promotion(monkeypatch):
+    emitted = []
+    db = _DB()
+    db.get_latest_stock_name = lambda code: "삼화콘덴서"
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        scalping_scanner,
+        "TRADING_RULES",
+        SimpleNamespace(SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED=True),
+    )
+    monkeypatch.setattr(
+        scalping_scanner,
+        "_scanner_real_source_guard_decision",
+        lambda *args, **kwargs: {
+            "blocked": False,
+            "reason": "new_volume_surge_positive_source",
+            "source_signature": "VOLUME_SURGE_POSITIVE",
+        },
+    )
+    monkeypatch.setattr(
+        scalping_scanner,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+
+    codes, _recent = scalping_scanner.promote_candidates(
+        db,
+        _EventBus(),
+        [
+            {
+                "Code": "001820",
+                "Name": "삼화콘덴서",
+                "Price": 89400,
+                "Source": "VOLUME_SURGE_POSITIVE",
+                "SourceSet": {"VOLUME_SURGE_POSITIVE"},
+                "VolumeSurgeFluRate": 0.85,
+                "VolumeSurgeRate": 14.72,
+            }
+        ],
+        {},
+        max_new_codes=12,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=1000.0,
+    )
+
+    assert codes == ["001820"]
+    fields = [
+        row["fields"]
+        for row in emitted
+        if row["stage"] == "scalping_scanner_candidate_promoted"
+    ][-1]
+    assert fields["scanner_source_identity_guard_applied"] is True
+    assert fields["scanner_source_identity_guard_reason"] == "scanner_identity_ok"
+    assert fields["scanner_source_identity_payload_name"] == "삼화콘덴서"
+    assert fields["scanner_source_identity_authoritative_name"] == "삼화콘덴서"
+
+
 def test_promote_candidates_skips_when_active_scanner_cap_reached(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "1")
     db = _DB()
