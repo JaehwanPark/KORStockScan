@@ -10399,6 +10399,11 @@ def _log_rising_missed_tp1_counterfactual_submit_safety(
         "rising_missed_tp1_counterfactual_submit_safety",
         **projection_fields,
     )
+    _register_rising_missed_nxt_post_block_sampler(
+        stock if isinstance(stock, dict) else {},
+        str(code or ""),
+        projection_fields,
+    )
 
 
 RISING_MISSED_SUBMIT_SAFETY_BACKOFF_SOURCE = "submit_safety_feedback"
@@ -10411,6 +10416,482 @@ SCANNER_WS_STALE_BACKOFF_SOURCE = "ws_stale_feedback"
 _SCANNER_WS_STALE_BACKOFFS: dict[str, dict[str, Any]] = {}
 _RISING_MISSED_SIGNED_TAPE_SCANNER_BACKOFFS: dict[str, dict[str, Any]] = {}
 _RISING_MISSED_SIGNED_TAPE_PRESERVED_KEYS: set[str] = set()
+_RISING_MISSED_NXT_POST_BLOCK_SAMPLERS: dict[str, dict[str, Any]] = {}
+_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_LOCK = threading.RLock()
+
+
+def _rising_missed_nxt_post_block_sampler_enabled(
+    *, now_ts: float | None = None
+) -> bool:
+    if not _env_bool(
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ENABLED", False
+    ):
+        return False
+    active_date = str(
+        os.getenv("KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ACTIVE_DATE", "")
+    ).strip()
+    if not active_date:
+        return False
+    observed_ts = time.time() if now_ts is None else float(now_ts)
+    current_date = datetime.fromtimestamp(observed_ts, tz=_KST).strftime("%Y-%m-%d")
+    return active_date == current_date
+
+
+def _rising_missed_nxt_post_block_sampler_horizon_sec() -> float:
+    return max(
+        60.0,
+        min(
+            20.0 * 60.0,
+            _env_float(
+                "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_HORIZON_SEC", 1200.0
+            ),
+        ),
+    )
+
+
+def _rising_missed_nxt_post_block_sampler_interval_sec() -> float:
+    return max(
+        5.0,
+        min(
+            60.0,
+            _env_float(
+                "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_INTERVAL_SEC", 15.0
+            ),
+        ),
+    )
+
+
+def _rising_missed_nxt_post_block_sampler_max_active() -> int:
+    return max(
+        1,
+        min(
+            50,
+            _env_int(
+                "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_MAX_ACTIVE", 24
+            ),
+        ),
+    )
+
+
+def _rising_missed_nxt_post_block_sampler_max_ws_age_ms() -> float:
+    return max(
+        100.0,
+        min(
+            3000.0,
+            _env_float(
+                "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_MAX_WS_AGE_MS",
+                3000.0,
+            ),
+        ),
+    )
+
+
+def _rising_missed_nxt_post_block_sampler_contract_fields() -> dict[str, Any]:
+    return {
+        "metric_role": "source_quality_gate",
+        "decision_authority": "source_only_nxt_post_block_price_observation",
+        "window_policy": "nxt_selector_block_or_defer_bounded_20m",
+        "sample_floor": "2_fresh_absolute_ws_0b_nxt_price_samples",
+        "primary_decision_metric": "gross_1.30_first_before_adverse_0.70",
+        "source_quality_gate": "fresh_absolute_0b_receive_ts_and_actual_nxt_item_route",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": (
+            "standalone_buy,broker_submit,submit_safety_bypass,threshold_mutation,"
+            "provider_route_change,quantity_or_cap_change,krx_runtime_tuning"
+        ),
+    }
+
+
+def _emit_rising_missed_nxt_post_block_sampler_event(
+    sampler: dict[str, Any],
+    stage: str,
+    **fields: Any,
+) -> None:
+    emit_pipeline_event(
+        "ENTRY_PIPELINE",
+        str(sampler.get("stock_name") or sampler.get("stock_code") or ""),
+        str(sampler.get("stock_code") or ""),
+        stage,
+        record_id=sampler.get("record_id"),
+        fields={
+            **_rising_missed_nxt_post_block_sampler_contract_fields(),
+            "rising_missed_tp1_evaluation_id": sampler.get("evaluation_id") or "-",
+            "rising_missed_market_session_bucket": sampler.get("market_session_bucket")
+            or "-",
+            "rising_missed_effective_venue": sampler.get("effective_venue") or "-",
+            "rising_missed_nxt_post_block_selector_reason": sampler.get(
+                "selector_reason"
+            )
+            or "-",
+            "rising_missed_nxt_post_block_selector_deferred": bool(
+                sampler.get("selector_deferred")
+            ),
+            **fields,
+        },
+    )
+
+
+def _register_rising_missed_nxt_post_block_sampler(
+    stock: dict | None,
+    code: str | None,
+    decision_fields: dict[str, Any] | None,
+    *,
+    now_ts: float | None = None,
+) -> bool:
+    fields = decision_fields if isinstance(decision_fields, dict) else {}
+    observed_ts = time.time() if now_ts is None else float(now_ts)
+    if not _rising_missed_nxt_post_block_sampler_enabled(now_ts=observed_ts):
+        return False
+    session_bucket = str(
+        fields.get("rising_missed_market_session_bucket") or ""
+    ).strip()
+    effective_venue = str(fields.get("rising_missed_effective_venue") or "").strip()
+    if not session_bucket.startswith("nxt_") or effective_venue != "NXT":
+        return False
+    evaluation_id = str(fields.get("rising_missed_tp1_evaluation_id") or "").strip()
+    normalized_code = str(code or (stock or {}).get("code") or "").strip()[:6]
+    entry_price = _safe_float(fields.get("rising_missed_tp1_effective_price"), 0.0)
+    if not evaluation_id or not normalized_code:
+        return False
+
+    horizon_sec = _rising_missed_nxt_post_block_sampler_horizon_sec()
+    sampler = {
+        "evaluation_id": evaluation_id,
+        "stock_code": normalized_code,
+        "stock_name": str((stock or {}).get("name") or normalized_code),
+        "record_id": (stock or {}).get("id") or (stock or {}).get("record_id"),
+        "market_session_bucket": session_bucket,
+        "effective_venue": effective_venue,
+        "selector_reason": fields.get("selector_reason")
+        or fields.get("rising_missed_tp1_candidate_reason")
+        or "not_evaluated",
+        "selector_deferred": bool(fields.get("selector_deferred")),
+        "entry_price": float(entry_price or 0.0),
+        "registered_at": observed_ts,
+        "expires_at": observed_ts + horizon_sec,
+        "last_sample_at": 0.0,
+        "sample_attempt_count": 0,
+        "fresh_sample_count": 0,
+        "source_gap_sample_count": 0,
+        "first_hit_label": None,
+        "first_hit_ts": None,
+        "first_hit_move_pct": None,
+        "max_move_pct": None,
+        "min_move_pct": None,
+    }
+    if sampler["entry_price"] <= 0:
+        _emit_rising_missed_nxt_post_block_sampler_event(
+            sampler,
+            "rising_missed_nxt_post_block_sampler_registration_skipped",
+            rising_missed_nxt_post_block_sampler_registration_state="skipped",
+            rising_missed_nxt_post_block_sampler_registration_reason="effective_entry_price_missing",
+            rising_missed_nxt_post_block_sampler_horizon_sec=horizon_sec,
+        )
+        return False
+
+    max_active_reached = False
+    active_count = 0
+    with _RISING_MISSED_NXT_POST_BLOCK_SAMPLER_LOCK:
+        if evaluation_id in _RISING_MISSED_NXT_POST_BLOCK_SAMPLERS:
+            return True
+        active_count = sum(
+            1
+            for item in _RISING_MISSED_NXT_POST_BLOCK_SAMPLERS.values()
+            if _safe_float(item.get("expires_at"), 0.0) > observed_ts
+        )
+        if active_count >= _rising_missed_nxt_post_block_sampler_max_active():
+            max_active_reached = True
+        else:
+            _RISING_MISSED_NXT_POST_BLOCK_SAMPLERS[evaluation_id] = sampler
+    if max_active_reached:
+        _emit_rising_missed_nxt_post_block_sampler_event(
+            sampler,
+            "rising_missed_nxt_post_block_sampler_registration_skipped",
+            rising_missed_nxt_post_block_sampler_registration_state="skipped",
+            rising_missed_nxt_post_block_sampler_registration_reason="max_active_reached",
+            rising_missed_nxt_post_block_sampler_active_count=active_count,
+            rising_missed_nxt_post_block_sampler_horizon_sec=horizon_sec,
+        )
+        return False
+
+    subscription_requested = False
+    subscription_error = "-"
+    if EVENT_BUS is not None:
+        try:
+            EVENT_BUS.publish(
+                "COMMAND_WS_REG",
+                {
+                    "codes": [normalized_code],
+                    "source": "rising_missed_nxt_post_block_sampler",
+                },
+            )
+            subscription_requested = True
+        except Exception as exc:
+            subscription_error = str(exc)
+    _emit_rising_missed_nxt_post_block_sampler_event(
+        sampler,
+        "rising_missed_nxt_post_block_sampler_registered",
+        rising_missed_nxt_post_block_sampler_registration_state="registered",
+        rising_missed_nxt_post_block_sampler_registration_reason="nxt_selector_block_or_defer",
+        rising_missed_nxt_post_block_sampler_entry_price=round(
+            sampler["entry_price"], 4
+        ),
+        rising_missed_nxt_post_block_sampler_horizon_sec=horizon_sec,
+        rising_missed_nxt_post_block_sampler_interval_sec=(
+            _rising_missed_nxt_post_block_sampler_interval_sec()
+        ),
+        rising_missed_nxt_post_block_sampler_ws_subscription_requested=subscription_requested,
+        rising_missed_nxt_post_block_sampler_ws_subscription_error=subscription_error,
+    )
+    return True
+
+
+def should_retain_rising_missed_nxt_post_block_subscription(
+    code: str | None,
+    *,
+    now_ts: float | None = None,
+) -> bool:
+    normalized_code = str(code or "").strip()[:6]
+    if not normalized_code:
+        return False
+    observed_ts = time.time() if now_ts is None else float(now_ts)
+    with _RISING_MISSED_NXT_POST_BLOCK_SAMPLER_LOCK:
+        return any(
+            str(item.get("stock_code") or "") == normalized_code
+            and _safe_float(item.get("expires_at"), 0.0) > observed_ts
+            for item in _RISING_MISSED_NXT_POST_BLOCK_SAMPLERS.values()
+        )
+
+
+def observe_rising_missed_nxt_post_block_samplers(
+    *,
+    now_ts: float | None = None,
+) -> dict[str, int]:
+    observed_ts = time.time() if now_ts is None else float(now_ts)
+    interval_sec = _rising_missed_nxt_post_block_sampler_interval_sec()
+    max_ws_age_ms = _rising_missed_nxt_post_block_sampler_max_ws_age_ms()
+    with _RISING_MISSED_NXT_POST_BLOCK_SAMPLER_LOCK:
+        due_items = [
+            dict(item)
+            for item in _RISING_MISSED_NXT_POST_BLOCK_SAMPLERS.values()
+            if observed_ts >= _safe_float(item.get("expires_at"), 0.0)
+            or observed_ts - _safe_float(item.get("last_sample_at"), 0.0)
+            >= interval_sec
+        ]
+
+    snapshot_cache: dict[str, dict[str, Any]] = {}
+    stats = {
+        "active": len(due_items),
+        "sampled": 0,
+        "fresh": 0,
+        "source_gap": 0,
+        "completed": 0,
+    }
+    for due in due_items:
+        evaluation_id = str(due.get("evaluation_id") or "")
+        code = str(due.get("stock_code") or "")
+        if code not in snapshot_cache:
+            snapshot: dict[str, Any] = {}
+            if WS_MANAGER is not None:
+                try:
+                    raw_snapshot = WS_MANAGER.get_latest_data(code)
+                    snapshot = raw_snapshot if isinstance(raw_snapshot, dict) else {}
+                except Exception:
+                    snapshot = {}
+            snapshot_cache[code] = snapshot
+        snapshot = snapshot_cache[code]
+        type_ts = snapshot.get("last_realtime_type_ts")
+        type_ts = type_ts if isinstance(type_ts, dict) else {}
+        type_items = snapshot.get("last_realtime_type_item")
+        type_items = type_items if isinstance(type_items, dict) else {}
+        type_suffixes = snapshot.get("last_realtime_type_market_suffix")
+        type_suffixes = type_suffixes if isinstance(type_suffixes, dict) else {}
+        type_routes = snapshot.get("last_realtime_type_market_route")
+        type_routes = type_routes if isinstance(type_routes, dict) else {}
+        received_at = _safe_float(type_ts.get("0B"), 0.0)
+        age_ms = (
+            max(0.0, (observed_ts - received_at) * 1000.0) if received_at > 0 else None
+        )
+        actual_item = str(type_items.get("0B") or "").strip()
+        actual_suffix = str(type_suffixes.get("0B") or "").strip()
+        actual_route = str(type_routes.get("0B") or "unknown").strip()
+        item_is_nxt = bool(
+            actual_suffix in {"_AL", "_NX"}
+            or actual_item.endswith("_AL")
+            or actual_item.endswith("_NX")
+        )
+        route_is_nxt = actual_route in {"krx_nxt_integrated", "nxt_only"}
+        price = _safe_int(snapshot.get("curr"), 0)
+        fresh = bool(
+            price > 0
+            and age_ms is not None
+            and age_ms <= max_ws_age_ms
+            and item_is_nxt
+            and route_is_nxt
+        )
+        if price <= 0:
+            source_reason = "price_missing"
+        elif age_ms is None:
+            source_reason = "absolute_0b_receive_ts_missing"
+        elif age_ms > max_ws_age_ms:
+            source_reason = "ws_0b_stale"
+        elif not item_is_nxt:
+            source_reason = "actual_nxt_item_missing"
+        elif not route_is_nxt:
+            source_reason = "actual_nxt_route_missing"
+        else:
+            source_reason = "fresh_absolute_ws_0b_nxt"
+
+        entry_price = _safe_float(due.get("entry_price"), 0.0)
+        move_pct = (
+            ((price - entry_price) / entry_price) * 100.0
+            if fresh and entry_price > 0
+            else None
+        )
+        with _RISING_MISSED_NXT_POST_BLOCK_SAMPLER_LOCK:
+            sampler = _RISING_MISSED_NXT_POST_BLOCK_SAMPLERS.get(evaluation_id)
+            if sampler is None:
+                continue
+            sampler["last_sample_at"] = observed_ts
+            sampler["sample_attempt_count"] = (
+                _safe_int(sampler.get("sample_attempt_count"), 0) + 1
+            )
+            if fresh and move_pct is not None:
+                sampler["fresh_sample_count"] = (
+                    _safe_int(sampler.get("fresh_sample_count"), 0) + 1
+                )
+                current_max = sampler.get("max_move_pct")
+                current_min = sampler.get("min_move_pct")
+                sampler["max_move_pct"] = (
+                    move_pct
+                    if current_max is None
+                    else max(float(current_max), move_pct)
+                )
+                sampler["min_move_pct"] = (
+                    move_pct
+                    if current_min is None
+                    else min(float(current_min), move_pct)
+                )
+                if sampler.get("first_hit_label") is None:
+                    if move_pct >= 1.30:
+                        sampler["first_hit_label"] = "gross_target_first"
+                    elif move_pct <= -0.70:
+                        sampler["first_hit_label"] = "adverse_stop_first"
+                    if sampler.get("first_hit_label") is not None:
+                        sampler["first_hit_ts"] = observed_ts
+                        sampler["first_hit_move_pct"] = move_pct
+            else:
+                sampler["source_gap_sample_count"] = (
+                    _safe_int(sampler.get("source_gap_sample_count"), 0) + 1
+                )
+            emitted_sampler = dict(sampler)
+
+        sample_fields = {
+            "rising_missed_nxt_post_block_price_observation_state": (
+                "fresh_ws_0b_nxt" if fresh else "source_gap"
+            ),
+            "rising_missed_nxt_post_block_price_source": (
+                "trusted_ws_0b_nxt" if fresh else "unavailable"
+            ),
+            "rising_missed_nxt_post_block_price_source_reason": source_reason,
+            "rising_missed_nxt_post_block_ws_0b_age_ms": (
+                round(age_ms, 3) if age_ms is not None else "-"
+            ),
+            "ws_last_0b_age_ms": round(age_ms, 3) if age_ms is not None else "-",
+            "rising_missed_nxt_post_block_ws_0b_item": actual_item or "-",
+            "rising_missed_nxt_post_block_ws_0b_suffix": actual_suffix or "-",
+            "rising_missed_nxt_post_block_ws_0b_route": actual_route,
+            "rising_missed_nxt_post_block_fresh_sample": fresh,
+            "rising_missed_nxt_post_block_sample_attempt_count": emitted_sampler[
+                "sample_attempt_count"
+            ],
+            "rising_missed_nxt_post_block_fresh_sample_count": emitted_sampler[
+                "fresh_sample_count"
+            ],
+            "rising_missed_nxt_post_block_source_gap_sample_count": emitted_sampler[
+                "source_gap_sample_count"
+            ],
+            "rising_missed_nxt_post_block_elapsed_sec": round(
+                max(
+                    0.0,
+                    observed_ts
+                    - _safe_float(emitted_sampler.get("registered_at"), observed_ts),
+                ),
+                3,
+            ),
+            "rising_missed_nxt_post_block_move_pct": (
+                round(move_pct, 6) if move_pct is not None else "-"
+            ),
+        }
+        if fresh:
+            sample_fields["current_price_observed"] = price
+        _emit_rising_missed_nxt_post_block_sampler_event(
+            emitted_sampler,
+            "rising_missed_nxt_post_block_price_sample",
+            **sample_fields,
+        )
+        stats["sampled"] += 1
+        stats["fresh" if fresh else "source_gap"] += 1
+
+        if observed_ts < _safe_float(emitted_sampler.get("expires_at"), 0.0):
+            continue
+        fresh_count = _safe_int(emitted_sampler.get("fresh_sample_count"), 0)
+        if fresh_count <= 0:
+            outcome_label = "source_gap_no_fresh_ws_price"
+        else:
+            outcome_label = str(
+                emitted_sampler.get("first_hit_label") or "no_hit_within_20m"
+            )
+        _emit_rising_missed_nxt_post_block_sampler_event(
+            emitted_sampler,
+            "rising_missed_nxt_post_block_price_sampler_completed",
+            rising_missed_nxt_post_block_sampler_completion_state="completed",
+            rising_missed_nxt_post_block_sampler_outcome_label=outcome_label,
+            rising_missed_nxt_post_block_sampler_source_quality_state=(
+                "pass" if fresh_count >= 2 else "insufficient_fresh_sample"
+            ),
+            rising_missed_nxt_post_block_sample_attempt_count=emitted_sampler[
+                "sample_attempt_count"
+            ],
+            rising_missed_nxt_post_block_fresh_sample_count=fresh_count,
+            rising_missed_nxt_post_block_source_gap_sample_count=emitted_sampler[
+                "source_gap_sample_count"
+            ],
+            rising_missed_nxt_post_block_first_hit_ts=emitted_sampler.get(
+                "first_hit_ts"
+            )
+            or "-",
+            rising_missed_nxt_post_block_first_hit_move_pct=(
+                round(_safe_float(emitted_sampler.get("first_hit_move_pct"), 0.0), 6)
+                if emitted_sampler.get("first_hit_move_pct") is not None
+                else "-"
+            ),
+            rising_missed_nxt_post_block_max_move_pct=(
+                round(_safe_float(emitted_sampler.get("max_move_pct"), 0.0), 6)
+                if emitted_sampler.get("max_move_pct") is not None
+                else "-"
+            ),
+            rising_missed_nxt_post_block_min_move_pct=(
+                round(_safe_float(emitted_sampler.get("min_move_pct"), 0.0), 6)
+                if emitted_sampler.get("min_move_pct") is not None
+                else "-"
+            ),
+            rising_missed_nxt_post_block_horizon_sec=round(
+                _safe_float(emitted_sampler.get("expires_at"), observed_ts)
+                - _safe_float(emitted_sampler.get("registered_at"), observed_ts),
+                3,
+            ),
+        )
+        with _RISING_MISSED_NXT_POST_BLOCK_SAMPLER_LOCK:
+            _RISING_MISSED_NXT_POST_BLOCK_SAMPLERS.pop(evaluation_id, None)
+        stats["completed"] += 1
+
+    with _RISING_MISSED_NXT_POST_BLOCK_SAMPLER_LOCK:
+        stats["active"] = len(_RISING_MISSED_NXT_POST_BLOCK_SAMPLERS)
+    return stats
 
 
 def _rising_missed_submit_safety_backoff_key(stock: dict | None, code: str | None) -> str:

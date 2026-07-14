@@ -874,6 +874,11 @@ def _prune_ws_subscriptions_for_inactive_targets(targets):
             continue
         if should_retain_ws_subscription(norm, now_ts=now_ts):
             continue
+        if sniper_state_handlers.should_retain_rising_missed_nxt_post_block_subscription(
+            norm,
+            now_ts=now_ts,
+        ):
+            continue
         stale_codes.append(norm)
 
     if stale_codes:
@@ -7084,6 +7089,7 @@ def run_sniper(is_test_mode=False):
             _flush_pending_scanner_ws_reg()
             _flush_deferred_scanner_pipeline_events()
             _flush_deferred_scanner_skip_events()
+            sniper_state_handlers.observe_rising_missed_nxt_post_block_samplers()
 
             targets[:] = [t for t in targets if t.get('status') not in ['COMPLETED', 'EXPIRED']]
             if now_ts - getattr(run_sniper, "last_ws_prune_time", 0) >= 5:

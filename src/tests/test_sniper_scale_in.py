@@ -65,6 +65,7 @@ def _clear_scalp_loss_reentry_state(request, monkeypatch, tmp_path):
     state_handlers._RISING_MISSED_SUBMIT_SAFETY_BACKOFFS.clear()
     state_handlers._RISING_MISSED_SIGNED_TAPE_SCANNER_BACKOFFS.clear()
     state_handlers._RISING_MISSED_SIGNED_TAPE_PRESERVED_KEYS.clear()
+    state_handlers._RISING_MISSED_NXT_POST_BLOCK_SAMPLERS.clear()
     state_handlers._RISING_MISSED_MICRO_ESTIMATOR_STORE.clear()
     state_handlers._SCALPING_MICRO_ESTIMATOR_STORE.clear()
     yield
@@ -76,6 +77,7 @@ def _clear_scalp_loss_reentry_state(request, monkeypatch, tmp_path):
     state_handlers._RISING_MISSED_SUBMIT_SAFETY_BACKOFFS.clear()
     state_handlers._RISING_MISSED_SIGNED_TAPE_SCANNER_BACKOFFS.clear()
     state_handlers._RISING_MISSED_SIGNED_TAPE_PRESERVED_KEYS.clear()
+    state_handlers._RISING_MISSED_NXT_POST_BLOCK_SAMPLERS.clear()
     state_handlers._RISING_MISSED_MICRO_ESTIMATOR_STORE.clear()
     state_handlers._SCALPING_MICRO_ESTIMATOR_STORE.clear()
 
@@ -5541,6 +5543,221 @@ def test_rising_missed_tp1_selector_block_prevents_submit(monkeypatch):
     assert counterfactual["decision_authority"] == (
         "source_only_candidate_to_submit_safety_projection"
     )
+
+
+def test_rising_missed_nxt_post_block_sampler_uses_only_fresh_actual_nxt_ws(
+    monkeypatch,
+):
+    start_ts = datetime(2026, 7, 14, 16, 30, tzinfo=state_handlers._KST).timestamp()
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ACTIVE_DATE",
+        "2026-07-14",
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_HORIZON_SEC", "1200"
+    )
+    events = []
+    published = []
+    snapshot = {
+        "curr": 10000,
+        "last_realtime_type_ts": {"0B": start_ts},
+        "last_realtime_type_item": {"0B": "123471_AL"},
+        "last_realtime_type_market_suffix": {"0B": "_AL"},
+        "last_realtime_type_market_route": {"0B": "krx_nxt_integrated"},
+    }
+    monkeypatch.setattr(
+        state_handlers,
+        "EVENT_BUS",
+        SimpleNamespace(
+            publish=lambda name, payload: published.append((name, payload))
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "WS_MANAGER",
+        SimpleNamespace(get_latest_data=lambda code: dict(snapshot)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, record_id=None, fields=None: events.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+    decision_fields = {
+        "rising_missed_tp1_evaluation_id": "nxt-block-1",
+        "rising_missed_market_session_bucket": "nxt_entry_window",
+        "rising_missed_effective_venue": "NXT",
+        "rising_missed_tp1_effective_price": 10000,
+        "selector_reason": "rising_missed_tp1_insufficient_positive_support",
+        "selector_deferred": False,
+    }
+
+    assert state_handlers._register_rising_missed_nxt_post_block_sampler(
+        {"id": 11, "name": "NXT TEST"},
+        "123471",
+        decision_fields,
+        now_ts=start_ts,
+    )
+    assert published == [
+        (
+            "COMMAND_WS_REG",
+            {"codes": ["123471"], "source": "rising_missed_nxt_post_block_sampler"},
+        )
+    ]
+    assert state_handlers.should_retain_rising_missed_nxt_post_block_subscription(
+        "123471", now_ts=start_ts + 10
+    )
+
+    first = state_handlers.observe_rising_missed_nxt_post_block_samplers(
+        now_ts=start_ts
+    )
+    assert first["fresh"] == 1
+    sample_event = next(
+        item
+        for item in events
+        if item["stage"] == "rising_missed_nxt_post_block_price_sample"
+    )
+    assert sample_event["fields"]["current_price_observed"] == 10000
+    assert sample_event["fields"]["rising_missed_nxt_post_block_price_source"] == (
+        "trusted_ws_0b_nxt"
+    )
+    assert "rising_missed_tp1_effective_price" not in sample_event["fields"]
+
+    snapshot["curr"] = 10020
+    snapshot["last_realtime_type_ts"] = {"0B": start_ts + 15}
+    snapshot["last_realtime_type_item"] = {"0B": "123471"}
+    snapshot["last_realtime_type_market_suffix"] = {"0B": ""}
+    snapshot["last_realtime_type_market_route"] = {"0B": "krx_only"}
+    source_gap = state_handlers.observe_rising_missed_nxt_post_block_samplers(
+        now_ts=start_ts + 15
+    )
+    assert source_gap["source_gap"] == 1
+    source_gap_event = [
+        item
+        for item in events
+        if item["stage"] == "rising_missed_nxt_post_block_price_sample"
+    ][-1]
+    assert (
+        source_gap_event["fields"]["rising_missed_nxt_post_block_price_source_reason"]
+        == "actual_nxt_item_missing"
+    )
+    assert "current_price_observed" not in source_gap_event["fields"]
+
+    snapshot["curr"] = 10140
+    snapshot["last_realtime_type_ts"] = {"0B": start_ts + 1200}
+    snapshot["last_realtime_type_item"] = {"0B": "123471_AL"}
+    snapshot["last_realtime_type_market_suffix"] = {"0B": "_AL"}
+    snapshot["last_realtime_type_market_route"] = {"0B": "krx_nxt_integrated"}
+    completed = state_handlers.observe_rising_missed_nxt_post_block_samplers(
+        now_ts=start_ts + 1200
+    )
+    assert completed["fresh"] == 1
+    assert completed["completed"] == 1
+    completion_event = next(
+        item
+        for item in events
+        if item["stage"] == "rising_missed_nxt_post_block_price_sampler_completed"
+    )
+    assert (
+        completion_event["fields"]["rising_missed_nxt_post_block_sampler_outcome_label"]
+        == "gross_target_first"
+    )
+    assert (
+        completion_event["fields"][
+            "rising_missed_nxt_post_block_sampler_source_quality_state"
+        ]
+        == "pass"
+    )
+    assert not state_handlers.should_retain_rising_missed_nxt_post_block_subscription(
+        "123471", now_ts=start_ts + 1200
+    )
+
+
+def test_rising_missed_nxt_post_block_sampler_rejects_krx_evaluation(monkeypatch):
+    start_ts = datetime(2026, 7, 14, 14, 0, tzinfo=state_handlers._KST).timestamp()
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ACTIVE_DATE",
+        "2026-07-14",
+    )
+
+    registered = state_handlers._register_rising_missed_nxt_post_block_sampler(
+        {"id": 12, "name": "KRX TEST"},
+        "123472",
+        {
+            "rising_missed_tp1_evaluation_id": "krx-block-1",
+            "rising_missed_market_session_bucket": "krx_regular",
+            "rising_missed_effective_venue": "KRX",
+            "rising_missed_tp1_effective_price": 10000,
+        },
+        now_ts=start_ts,
+    )
+
+    assert registered is False
+    assert state_handlers._RISING_MISSED_NXT_POST_BLOCK_SAMPLERS == {}
+
+
+def test_rising_missed_nxt_post_block_sampler_caps_active_evaluations(monkeypatch):
+    start_ts = datetime(2026, 7, 14, 16, 30, tzinfo=state_handlers._KST).timestamp()
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ACTIVE_DATE",
+        "2026-07-14",
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_MAX_ACTIVE", "1"
+    )
+    events = []
+    published = []
+    monkeypatch.setattr(
+        state_handlers,
+        "EVENT_BUS",
+        SimpleNamespace(
+            publish=lambda name, payload: published.append((name, payload))
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, record_id=None, fields=None: events.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+
+    def register(evaluation_id, code):
+        return state_handlers._register_rising_missed_nxt_post_block_sampler(
+            {"name": code},
+            code,
+            {
+                "rising_missed_tp1_evaluation_id": evaluation_id,
+                "rising_missed_market_session_bucket": "nxt_entry_window",
+                "rising_missed_effective_venue": "NXT",
+                "rising_missed_tp1_effective_price": 10000,
+            },
+            now_ts=start_ts,
+        )
+
+    assert register("nxt-cap-1", "123473") is True
+    assert register("nxt-cap-2", "123474") is False
+    assert len(published) == 1
+    skipped = next(
+        event
+        for event in events
+        if event["stage"] == "rising_missed_nxt_post_block_sampler_registration_skipped"
+    )
+    assert (
+        skipped["fields"]["rising_missed_nxt_post_block_sampler_registration_reason"]
+        == "max_active_reached"
+    )
+    assert skipped["fields"]["rising_missed_nxt_post_block_sampler_active_count"] == 1
 
 
 def test_rising_missed_normal_bridge_uses_common_tp1_resolver(monkeypatch):

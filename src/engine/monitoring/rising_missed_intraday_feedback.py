@@ -1681,17 +1681,27 @@ def _build_tp1_counterfactual_first_hit_labels(
 
 def _build_nxt_session_observation(
     pipeline_path: Path,
-) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[
+    dict[str, Any],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+]:
     evaluation_rows: list[dict[str, Any]] = []
     order_rows: list[dict[str, Any]] = []
+    sampler_rows: list[dict[str, Any]] = []
     seen_evaluations: set[tuple[str, ...]] = set()
     session_counts: Counter[str] = Counter()
     micro_state_counts: Counter[str] = Counter()
     route_counts: Counter[str] = Counter()
     effective_venue_counts: Counter[str] = Counter()
+    sampler_stage_counts: Counter[str] = Counter()
+    sampler_outcome_counts: Counter[str] = Counter()
+    sampler_evaluations: set[str] = set()
     unique_symbols: set[str] = set()
     for row in iter_jsonl(pipeline_path):
         fields = _fields(row)
+        stage = str(row.get("stage") or "")
         evaluation_id = str(fields.get("rising_missed_tp1_evaluation_id") or "").strip()
         session_bucket = str(
             fields.get("rising_missed_market_session_bucket") or "missing"
@@ -1706,8 +1716,12 @@ def _build_nxt_session_observation(
                 micro_state = str(
                     fields.get("rising_missed_nxt_micro_state") or "missing"
                 ).strip()
-                route_0b = str(fields.get("rising_missed_ws_0b_route") or "unknown").strip()
-                route_0d = str(fields.get("rising_missed_ws_0d_route") or "unknown").strip()
+                route_0b = str(
+                    fields.get("rising_missed_ws_0b_route") or "unknown"
+                ).strip()
+                route_0d = str(
+                    fields.get("rising_missed_ws_0d_route") or "unknown"
+                ).strip()
                 effective_venue = str(
                     fields.get("rising_missed_effective_venue") or "unknown"
                 ).strip()
@@ -1723,7 +1737,7 @@ def _build_nxt_session_observation(
                         "stock_name": _event_name(row),
                         "record_id": row.get("record_id"),
                         "evaluation_id": evaluation_id,
-                        "stage": row.get("stage"),
+                        "stage": stage,
                         "market_session_bucket": session_bucket,
                         "market_session_state": fields.get(
                             "rising_missed_market_session_state"
@@ -1740,14 +1754,18 @@ def _build_nxt_session_observation(
                             fields.get("rising_missed_ws_0d_age_ms")
                         ),
                         "nxt_micro_state": micro_state,
-                        "input_ready": _boolish(fields.get("rising_missed_tp1_input_ready")),
+                        "input_ready": _boolish(
+                            fields.get("rising_missed_tp1_input_ready")
+                        ),
                         "effective_price_source": fields.get(
                             "market_data_effective_price_source"
                         ),
                         "candidate_allowed": _optional_boolish(
                             fields.get("rising_missed_tp1_candidate_allowed")
                         ),
-                        "candidate_reason": fields.get("rising_missed_tp1_candidate_reason"),
+                        "candidate_reason": fields.get(
+                            "rising_missed_tp1_candidate_reason"
+                        ),
                         "decision_authority": "observe_only_no_runtime_mutation",
                         "runtime_effect": False,
                         "allowed_runtime_apply": False,
@@ -1755,7 +1773,7 @@ def _build_nxt_session_observation(
                     }
                 )
         if (
-            str(row.get("stage") or "") == "order_leg_request"
+            stage == "order_leg_request"
             and evaluation_id
             and session_bucket.startswith("nxt_")
         ):
@@ -1779,38 +1797,153 @@ def _build_nxt_session_observation(
                     "forbidden_uses": FORBIDDEN_USES,
                 }
             )
-    return {
-        "rising_missed_nxt_evaluation_count": len(evaluation_rows),
-        "rising_missed_nxt_unique_symbol_count": len(unique_symbols),
-        "rising_missed_nxt_session_bucket_counts": [
-            {"market_session_bucket": key, "count": value}
-            for key, value in session_counts.most_common()
-        ],
-        "rising_missed_nxt_micro_state_counts": [
-            {"nxt_micro_state": key, "count": value}
-            for key, value in micro_state_counts.most_common()
-        ],
-        "rising_missed_nxt_ws_route_counts": [
-            {"ws_type_route": key, "count": value}
-            for key, value in route_counts.most_common()
-        ],
-        "rising_missed_nxt_effective_venue_counts": [
-            {"effective_venue": key, "count": value}
-            for key, value in effective_venue_counts.most_common()
-        ],
-        "rising_missed_nxt_input_ready_count": sum(
-            1 for item in evaluation_rows if item.get("input_ready")
-        ),
-        "rising_missed_nxt_rest_quote_selected_count": sum(
-            1
-            for item in evaluation_rows
-            if item.get("effective_price_source") == "ka10004_rest_orderbook"
-        ),
-        "rising_missed_nxt_order_request_count": len(order_rows),
-        "rising_missed_nxt_order_type_remap_count": sum(
-            1 for item in order_rows if item.get("order_type_remapped")
-        ),
-    }, evaluation_rows, order_rows
+        if stage.startswith("rising_missed_nxt_post_block_"):
+            if evaluation_id:
+                sampler_evaluations.add(evaluation_id)
+            sampler_stage_counts[stage] += 1
+            outcome_label = str(
+                fields.get("rising_missed_nxt_post_block_sampler_outcome_label") or ""
+            ).strip()
+            if outcome_label:
+                sampler_outcome_counts[outcome_label] += 1
+            sampler_rows.append(
+                {
+                    "ts": _event_ts(row),
+                    "stock_code": _event_code(row),
+                    "stock_name": _event_name(row),
+                    "record_id": row.get("record_id"),
+                    "evaluation_id": evaluation_id,
+                    "stage": stage,
+                    "market_session_bucket": session_bucket,
+                    "effective_venue": fields.get("rising_missed_effective_venue"),
+                    "selector_reason": fields.get(
+                        "rising_missed_nxt_post_block_selector_reason"
+                    ),
+                    "selector_deferred": _boolish(
+                        fields.get("rising_missed_nxt_post_block_selector_deferred")
+                    ),
+                    "observation_state": fields.get(
+                        "rising_missed_nxt_post_block_price_observation_state"
+                    ),
+                    "price_source": fields.get(
+                        "rising_missed_nxt_post_block_price_source"
+                    ),
+                    "price_source_reason": fields.get(
+                        "rising_missed_nxt_post_block_price_source_reason"
+                    ),
+                    "current_price_observed": _safe_float(
+                        fields.get("current_price_observed")
+                    ),
+                    "ws_0b_age_ms": _safe_float(
+                        fields.get("rising_missed_nxt_post_block_ws_0b_age_ms")
+                    ),
+                    "ws_0b_item": fields.get("rising_missed_nxt_post_block_ws_0b_item"),
+                    "ws_0b_route": fields.get(
+                        "rising_missed_nxt_post_block_ws_0b_route"
+                    ),
+                    "fresh_sample": _boolish(
+                        fields.get("rising_missed_nxt_post_block_fresh_sample")
+                    ),
+                    "sample_attempt_count": _safe_int(
+                        fields.get("rising_missed_nxt_post_block_sample_attempt_count")
+                    ),
+                    "fresh_sample_count": _safe_int(
+                        fields.get("rising_missed_nxt_post_block_fresh_sample_count")
+                    ),
+                    "source_gap_sample_count": _safe_int(
+                        fields.get(
+                            "rising_missed_nxt_post_block_source_gap_sample_count"
+                        )
+                    ),
+                    "move_pct": _safe_float(
+                        fields.get("rising_missed_nxt_post_block_move_pct")
+                    ),
+                    "outcome_label": outcome_label or None,
+                    "source_quality_state": fields.get(
+                        "rising_missed_nxt_post_block_sampler_source_quality_state"
+                    ),
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "decision_authority": "source_only_nxt_post_block_price_observation",
+                    "forbidden_uses": FORBIDDEN_USES,
+                }
+            )
+    return (
+        {
+            "rising_missed_nxt_evaluation_count": len(evaluation_rows),
+            "rising_missed_nxt_unique_symbol_count": len(unique_symbols),
+            "rising_missed_nxt_session_bucket_counts": [
+                {"market_session_bucket": key, "count": value}
+                for key, value in session_counts.most_common()
+            ],
+            "rising_missed_nxt_micro_state_counts": [
+                {"nxt_micro_state": key, "count": value}
+                for key, value in micro_state_counts.most_common()
+            ],
+            "rising_missed_nxt_ws_route_counts": [
+                {"ws_type_route": key, "count": value}
+                for key, value in route_counts.most_common()
+            ],
+            "rising_missed_nxt_effective_venue_counts": [
+                {"effective_venue": key, "count": value}
+                for key, value in effective_venue_counts.most_common()
+            ],
+            "rising_missed_nxt_input_ready_count": sum(
+                1 for item in evaluation_rows if item.get("input_ready")
+            ),
+            "rising_missed_nxt_rest_quote_selected_count": sum(
+                1
+                for item in evaluation_rows
+                if item.get("effective_price_source") == "ka10004_rest_orderbook"
+            ),
+            "rising_missed_nxt_order_request_count": len(order_rows),
+            "rising_missed_nxt_order_type_remap_count": sum(
+                1 for item in order_rows if item.get("order_type_remapped")
+            ),
+            "rising_missed_nxt_post_block_sampler_evaluation_count": len(
+                sampler_evaluations
+            ),
+            "rising_missed_nxt_post_block_sampler_stage_counts": [
+                {"stage": key, "count": value}
+                for key, value in sampler_stage_counts.most_common()
+            ],
+            "rising_missed_nxt_post_block_sampler_registered_count": sampler_stage_counts.get(
+                "rising_missed_nxt_post_block_sampler_registered", 0
+            ),
+            "rising_missed_nxt_post_block_sampler_registration_skipped_count": (
+                sampler_stage_counts.get(
+                    "rising_missed_nxt_post_block_sampler_registration_skipped", 0
+                )
+            ),
+            "rising_missed_nxt_post_block_price_sample_count": sampler_stage_counts.get(
+                "rising_missed_nxt_post_block_price_sample", 0
+            ),
+            "rising_missed_nxt_post_block_fresh_price_sample_count": sum(
+                1
+                for item in sampler_rows
+                if item.get("stage") == "rising_missed_nxt_post_block_price_sample"
+                and item.get("fresh_sample")
+            ),
+            "rising_missed_nxt_post_block_source_gap_sample_count": sum(
+                1
+                for item in sampler_rows
+                if item.get("stage") == "rising_missed_nxt_post_block_price_sample"
+                and not item.get("fresh_sample")
+            ),
+            "rising_missed_nxt_post_block_sampler_completed_count": sampler_stage_counts.get(
+                "rising_missed_nxt_post_block_price_sampler_completed", 0
+            ),
+            "rising_missed_nxt_post_block_sampler_outcome_counts": [
+                {"outcome_label": key, "count": value}
+                for key, value in sampler_outcome_counts.most_common()
+            ],
+        },
+        evaluation_rows,
+        order_rows,
+        sampler_rows,
+    )
 
 
 def build_report(
@@ -1892,9 +2025,12 @@ def build_report(
     tp1_counterfactual_label_summary, tp1_counterfactual_label_rows = (
         _build_tp1_counterfactual_first_hit_labels(pipeline_path)
     )
-    nxt_session_summary, nxt_session_rows, nxt_order_rows = _build_nxt_session_observation(
-        pipeline_path
-    )
+    (
+        nxt_session_summary,
+        nxt_session_rows,
+        nxt_order_rows,
+        nxt_post_block_sampler_rows,
+    ) = _build_nxt_session_observation(pipeline_path)
     if first_touch_source_quality_counts["first_touch_ai_provenance_missing_count"]:
         source_quality_status = "first_touch_ai_provenance_missing"
     if first_touch_source_quality_counts["first_touch_ai_provenance_unusable_count"]:
@@ -2078,6 +2214,17 @@ def build_report(
                 ),
                 "forbidden_uses": FORBIDDEN_USES,
             },
+            "rising_missed_nxt_post_block_price_sampler": {
+                "metric_role": "source_quality_gate",
+                "decision_authority": "source_only_nxt_post_block_price_observation",
+                "window_policy": "nxt_selector_block_or_defer_bounded_20m",
+                "sample_floor": "2_fresh_absolute_ws_0b_nxt_price_samples",
+                "primary_decision_metric": "gross_1.30_first_before_adverse_0.70",
+                "source_quality_gate": (
+                    "fresh_absolute_0b_receive_ts_and_actual_nxt_item_route"
+                ),
+                "forbidden_uses": FORBIDDEN_USES,
+            },
         },
         "source_paths": {"pipeline_events": str(resolved_pipeline_path)},
         "source_quality": {
@@ -2147,6 +2294,7 @@ def build_report(
         "rising_missed_tp1_counterfactual_first_hit_label_rows": tp1_counterfactual_label_rows[:200],
         "rising_missed_nxt_session_observation_rows": nxt_session_rows[:200],
         "rising_missed_nxt_order_resolution_rows": nxt_order_rows[:200],
+        "rising_missed_nxt_post_block_price_sampler_rows": nxt_post_block_sampler_rows[-200:],
         "code_improvement_orders": code_improvement_orders,
     }
 
@@ -2240,6 +2388,18 @@ def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path)
         f"{summary.get('rising_missed_nxt_order_request_count')}",
         f"- rising_missed_nxt_order_type_remap_count: "
         f"{summary.get('rising_missed_nxt_order_type_remap_count')}",
+        f"- rising_missed_nxt_post_block_sampler_registered_count: "
+        f"{summary.get('rising_missed_nxt_post_block_sampler_registered_count')}",
+        f"- rising_missed_nxt_post_block_price_sample_count: "
+        f"{summary.get('rising_missed_nxt_post_block_price_sample_count')}",
+        f"- rising_missed_nxt_post_block_fresh_price_sample_count: "
+        f"{summary.get('rising_missed_nxt_post_block_fresh_price_sample_count')}",
+        f"- rising_missed_nxt_post_block_source_gap_sample_count: "
+        f"{summary.get('rising_missed_nxt_post_block_source_gap_sample_count')}",
+        f"- rising_missed_nxt_post_block_sampler_completed_count: "
+        f"{summary.get('rising_missed_nxt_post_block_sampler_completed_count')}",
+        f"- rising_missed_nxt_post_block_sampler_outcome_counts: "
+        f"{summary.get('rising_missed_nxt_post_block_sampler_outcome_counts')}",
         f"- code_improvement_order_count: {summary.get('code_improvement_order_count')}",
         "",
     ]
@@ -2263,6 +2423,19 @@ def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path)
                 "requested_type={requested_order_type} effective_type={effective_order_type} "
                 "exchange={effective_dmst_stex_tp} remapped={order_type_remapped} "
                 "reason={order_type_remap_reason}".format(**item)
+            )
+        lines.append("")
+    if report.get("rising_missed_nxt_post_block_price_sampler_rows"):
+        lines.extend(["## NXT Post-block Price Sampler", ""])
+        for item in report.get("rising_missed_nxt_post_block_price_sampler_rows") or []:
+            lines.append(
+                "- ts={ts} code={stock_code} name={stock_name} evaluation_id={evaluation_id} "
+                "stage={stage} state={observation_state} source={price_source} "
+                "reason={price_source_reason} price={current_price_observed} "
+                "0B_age_ms={ws_0b_age_ms} 0B_item={ws_0b_item} 0B_route={ws_0b_route} "
+                "move_pct={move_pct} outcome={outcome_label} quality={source_quality_state}".format(
+                    **item
+                )
             )
         lines.append("")
     if report.get("rising_missed_submit_lineage_rows"):

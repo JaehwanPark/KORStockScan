@@ -5757,3 +5757,31 @@ def test_truthy_flag_treats_false_strings_as_false():
     assert sniper_market_regime._truthy_flag("False") is False
     assert sniper_market_regime._truthy_flag("0") is False
     assert sniper_market_regime._truthy_flag("true") is True
+
+
+def test_ws_prune_retains_nxt_post_block_sampler_subscription(monkeypatch):
+    published = []
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "WS_MANAGER",
+        SimpleNamespace(subscribed_codes={"123456"}),
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "event_bus",
+        SimpleNamespace(publish=lambda name, payload: published.append((name, payload))),
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "should_retain_ws_subscription",
+        lambda *args, **kwargs: False,
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.sniper_state_handlers,
+        "should_retain_rising_missed_nxt_post_block_subscription",
+        lambda code, now_ts=None: code == "123456",
+    )
+
+    kiwoom_sniper_v2._prune_ws_subscriptions_for_inactive_targets([])
+
+    assert published == []

@@ -39,6 +39,22 @@ def test_market_halt_window_artifact_is_not_gitignored():
     assert result.returncode == 1
 
 
+def test_nxt_post_block_sampler_stages_have_source_quality_contracts():
+    stages = {
+        "rising_missed_nxt_post_block_sampler_registered",
+        "rising_missed_nxt_post_block_sampler_registration_skipped",
+        "rising_missed_nxt_post_block_price_sample",
+        "rising_missed_nxt_post_block_price_sampler_completed",
+    }
+
+    assert stages.issubset(audit.STAGE_CONTRACTS)
+    assert all(
+        audit.STAGE_CONTRACTS[stage].decision_authority
+        == "source_only_nxt_post_block_price_observation"
+        for stage in stages
+    )
+
+
 def test_market_halt_session_events_artifact_is_gitignored():
     path = Path("data/source_quality/market_halt_windows/session_events/2026-06-08.json")
     result = subprocess.run(

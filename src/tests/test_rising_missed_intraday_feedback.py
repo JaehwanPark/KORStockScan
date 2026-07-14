@@ -108,9 +108,13 @@ def test_nxt_session_observation_separates_micro_state_and_effective_order_type(
             emitted_at="2026-07-14T16:20:01+09:00",
         ),
     ]
-    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
 
-    report = mod.build_report("2026-07-14", pipeline_path=pipeline_path, generated_at="fixed")
+    report = mod.build_report(
+        "2026-07-14", pipeline_path=pipeline_path, generated_at="fixed"
+    )
 
     assert report["summary"]["rising_missed_nxt_evaluation_count"] == 1
     assert report["summary"]["rising_missed_nxt_input_ready_count"] == 0
@@ -123,6 +127,99 @@ def test_nxt_session_observation_separates_micro_state_and_effective_order_type(
     assert report["rising_missed_nxt_order_resolution_rows"][0][
         "order_type_remap_reason"
     ] == "nxt_market_to_best_limit"
+
+
+def test_nxt_post_block_sampler_recovers_counterfactual_first_hit_label(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-14.jsonl"
+    common = {
+        "rising_missed_tp1_evaluation_id": "nxt-block-1",
+        "rising_missed_market_session_bucket": "nxt_entry_window",
+        "rising_missed_effective_venue": "NXT",
+    }
+    rows = [
+        _event(
+            901,
+            "000901",
+            "nxt-block",
+            "rising_missed_tp1_counterfactual_submit_safety",
+            {
+                **common,
+                "rising_missed_tp1_effective_price": 10000,
+                "selector_reason": "rising_missed_tp1_insufficient_positive_support",
+                "selector_deferred": False,
+                "rising_missed_tp1_counterfactual_submit_safety_action": "RECHECK_REQUIRED",
+                "rising_missed_tp1_counterfactual_submit_safety_risks": "momentum_support_weak",
+            },
+            emitted_at="2026-07-14T16:20:00+09:00",
+        ),
+        _event(
+            901,
+            "000901",
+            "nxt-block",
+            "rising_missed_nxt_post_block_sampler_registered",
+            {
+                **common,
+                "rising_missed_nxt_post_block_sampler_registration_state": "registered",
+            },
+            emitted_at="2026-07-14T16:20:00.100000+09:00",
+        ),
+        _event(
+            901,
+            "000901",
+            "nxt-block",
+            "rising_missed_nxt_post_block_price_sample",
+            {
+                **common,
+                "current_price_observed": 10140,
+                "rising_missed_nxt_post_block_price_observation_state": "fresh_ws_0b_nxt",
+                "rising_missed_nxt_post_block_price_source": "trusted_ws_0b_nxt",
+                "rising_missed_nxt_post_block_price_source_reason": "fresh_absolute_ws_0b_nxt",
+                "rising_missed_nxt_post_block_ws_0b_age_ms": 100.0,
+                "rising_missed_nxt_post_block_ws_0b_item": "000901_AL",
+                "rising_missed_nxt_post_block_ws_0b_route": "krx_nxt_integrated",
+                "rising_missed_nxt_post_block_fresh_sample": True,
+                "rising_missed_nxt_post_block_sample_attempt_count": 2,
+                "rising_missed_nxt_post_block_fresh_sample_count": 2,
+                "rising_missed_nxt_post_block_source_gap_sample_count": 0,
+                "rising_missed_nxt_post_block_move_pct": 1.4,
+            },
+            emitted_at="2026-07-14T16:25:00+09:00",
+        ),
+        _event(
+            901,
+            "000901",
+            "nxt-block",
+            "rising_missed_nxt_post_block_price_sampler_completed",
+            {
+                **common,
+                "rising_missed_nxt_post_block_sampler_completion_state": "completed",
+                "rising_missed_nxt_post_block_sampler_outcome_label": "gross_target_first",
+                "rising_missed_nxt_post_block_sampler_source_quality_state": "pass",
+                "rising_missed_nxt_post_block_sample_attempt_count": 80,
+                "rising_missed_nxt_post_block_fresh_sample_count": 78,
+                "rising_missed_nxt_post_block_source_gap_sample_count": 2,
+            },
+            emitted_at="2026-07-14T16:40:00+09:00",
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-07-14", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+
+    label = report["rising_missed_tp1_counterfactual_first_hit_label_rows"][0]
+    assert label["gross_first_hit_label"] == "gross_target_first"
+    assert label["max_move_pct_within_20m"] == 1.4
+    summary = report["summary"]
+    assert summary["rising_missed_nxt_post_block_sampler_registered_count"] == 1
+    assert summary["rising_missed_nxt_post_block_fresh_price_sample_count"] == 1
+    assert summary["rising_missed_nxt_post_block_sampler_completed_count"] == 1
+    assert summary["rising_missed_nxt_post_block_sampler_outcome_counts"] == [
+        {"outcome_label": "gross_target_first", "count": 1}
+    ]
 
 
 def test_tp1_first_hit_label_marks_adverse_first_and_can_confirm_net_with_costs(tmp_path):
