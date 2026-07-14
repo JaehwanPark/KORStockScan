@@ -1601,8 +1601,68 @@ def _build_tp1_counterfactual_first_hit_labels(
             for subsequent in events[index:]:
                 if _event_code(subsequent) != code:
                     continue
+                subsequent_fields = _fields(subsequent)
+                subsequent_stage = str(subsequent.get("stage") or "")
+                subsequent_evaluation_id = str(
+                    subsequent_fields.get("rising_missed_tp1_evaluation_id") or ""
+                ).strip()
+                is_sampler_event = subsequent_stage.startswith(
+                    "rising_missed_nxt_post_block_"
+                )
+                if (
+                    is_sampler_event
+                    and evaluation_id
+                    and subsequent_evaluation_id != evaluation_id
+                ):
+                    continue
                 event_ts = _tp1_label_timestamp(_event_ts(subsequent))
-                if event_ts is None or event_ts < candidate_ts or event_ts > horizon_end:
+                if event_ts is None or event_ts < candidate_ts:
+                    continue
+                if (
+                    subsequent_stage
+                    == "rising_missed_nxt_post_block_price_sampler_completed"
+                    and subsequent_evaluation_id == evaluation_id
+                ):
+                    completion_max = _safe_float(
+                        subsequent_fields.get(
+                            "rising_missed_nxt_post_block_max_move_pct"
+                        )
+                    )
+                    completion_min = _safe_float(
+                        subsequent_fields.get(
+                            "rising_missed_nxt_post_block_min_move_pct"
+                        )
+                    )
+                    if completion_max is not None:
+                        max_move_pct = completion_max
+                    if completion_min is not None:
+                        min_move_pct = completion_min
+                    completion_label = str(
+                        subsequent_fields.get(
+                            "rising_missed_nxt_post_block_sampler_outcome_label"
+                        )
+                        or ""
+                    )
+                    if completion_label in {
+                        "gross_target_first",
+                        "adverse_stop_first",
+                        "no_hit_within_20m",
+                    }:
+                        label = completion_label
+                    completion_first_hit = _safe_float(
+                        subsequent_fields.get(
+                            "rising_missed_nxt_post_block_first_hit_move_pct"
+                        )
+                    )
+                    if completion_first_hit is not None:
+                        first_hit_move_pct = completion_first_hit
+                        completion_first_hit_ts = subsequent_fields.get(
+                            "rising_missed_nxt_post_block_first_hit_ts"
+                        )
+                        if completion_first_hit_ts not in (None, "", "-"):
+                            first_hit_ts = completion_first_hit_ts
+                    continue
+                if event_ts > horizon_end:
                     continue
                 price, _price_source = _tp1_observation_price(subsequent)
                 if price is None or price <= 0:
@@ -1857,6 +1917,15 @@ def _build_nxt_session_observation(
                     ),
                     "move_pct": _safe_float(
                         fields.get("rising_missed_nxt_post_block_move_pct")
+                    ),
+                    "first_hit_move_pct": _safe_float(
+                        fields.get("rising_missed_nxt_post_block_first_hit_move_pct")
+                    ),
+                    "mfe_after_block_pct": _safe_float(
+                        fields.get("rising_missed_nxt_post_block_max_move_pct")
+                    ),
+                    "mae_after_block_pct": _safe_float(
+                        fields.get("rising_missed_nxt_post_block_min_move_pct")
                     ),
                     "outcome_label": outcome_label or None,
                     "source_quality_state": fields.get(
@@ -2433,9 +2502,10 @@ def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path)
                 "stage={stage} state={observation_state} source={price_source} "
                 "reason={price_source_reason} price={current_price_observed} "
                 "0B_age_ms={ws_0b_age_ms} 0B_item={ws_0b_item} 0B_route={ws_0b_route} "
-                "move_pct={move_pct} outcome={outcome_label} quality={source_quality_state}".format(
-                    **item
-                )
+                "move_pct={move_pct} first_hit_move_pct={first_hit_move_pct} "
+                "mfe_after_block_pct={mfe_after_block_pct} "
+                "mae_after_block_pct={mae_after_block_pct} outcome={outcome_label} "
+                "quality={source_quality_state}".format(**item)
             )
         lines.append("")
     if report.get("rising_missed_submit_lineage_rows"):

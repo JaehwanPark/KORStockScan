@@ -78,6 +78,7 @@ restart.flag
 data/threshold_cycle/runtime_env/
 data/runtime/kiwoom_token_cache.json
 data/runtime/kiwoom_token_cache.lock
+data/runtime/rising_missed_nxt_post_block_sampler_state.lock
 
 # ==========================================
 # 💻 OS 및 IDE 설정

@@ -617,6 +617,9 @@ _SCALP_SIM_STATE_LAST_SEEN_MTIME_NS: int | None = None
 SWING_INTRADAY_PROBE_BOOK = "swing_intraday_live_equiv_probe"
 SWING_INTRADAY_PROBE_STATE_PATH = DATA_DIR / "runtime" / "swing_intraday_probe_state.json"
 _SWING_PROBE_STATE_LAST_SEEN_MTIME_NS: int | None = None
+RISING_MISSED_NXT_POST_BLOCK_SAMPLER_STATE_PATH = (
+    DATA_DIR / "runtime" / "rising_missed_nxt_post_block_sampler_state.json"
+)
 _SCALP_SIM_CANDIDATE_WINDOW_DAILY_CREATED: dict[str, int] = {}
 _SCALP_SIM_CANDIDATE_WINDOW_DAILY_BUCKET_CREATED: dict[tuple[str, str], int] = {}
 _SCALP_SIM_CANDIDATE_WINDOW_DAILY_SOURCE_CREATED: dict[tuple[str, str], int] = {}
@@ -10416,8 +10419,12 @@ SCANNER_WS_STALE_BACKOFF_SOURCE = "ws_stale_feedback"
 _SCANNER_WS_STALE_BACKOFFS: dict[str, dict[str, Any]] = {}
 _RISING_MISSED_SIGNED_TAPE_SCANNER_BACKOFFS: dict[str, dict[str, Any]] = {}
 _RISING_MISSED_SIGNED_TAPE_PRESERVED_KEYS: set[str] = set()
+_RISING_MISSED_TP1_SUBMIT_CONTEXT_CACHE: dict[str, dict[str, Any]] = {}
+_RISING_MISSED_TP1_SUBMIT_CONTEXT_CACHE_LOCK = threading.RLock()
+_RISING_MISSED_TP1_OBSERVATION_CONTEXT_MAX_AGE_SEC = 20.0 * 60.0
 _RISING_MISSED_NXT_POST_BLOCK_SAMPLERS: dict[str, dict[str, Any]] = {}
 _RISING_MISSED_NXT_POST_BLOCK_SAMPLER_LOCK = threading.RLock()
+_RISING_MISSED_NXT_POST_BLOCK_SAMPLERS_RESTORED = False
 
 
 def _rising_missed_nxt_post_block_sampler_enabled(
@@ -10505,6 +10512,141 @@ def _rising_missed_nxt_post_block_sampler_contract_fields() -> dict[str, Any]:
     }
 
 
+def _persist_rising_missed_nxt_post_block_samplers() -> None:
+    path = RISING_MISSED_NXT_POST_BLOCK_SAMPLER_STATE_PATH
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = path.with_suffix(".lock")
+        tmp_path = path.with_suffix(".tmp")
+        with _RISING_MISSED_NXT_POST_BLOCK_SAMPLER_LOCK:
+            active_samplers = [
+                dict(item)
+                for item in _RISING_MISSED_NXT_POST_BLOCK_SAMPLERS.values()
+            ]
+            payload = {
+                "schema_version": 1,
+                "owner": "rising_missed_nxt_post_block_source_only_sampler",
+                "active_date": str(
+                    os.getenv(
+                        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ACTIVE_DATE",
+                        "",
+                    )
+                ).strip(),
+                "updated_at": datetime.now(tz=_KST).isoformat(timespec="seconds"),
+                "active_samplers": active_samplers,
+            }
+            with lock_path.open("a+", encoding="utf-8") as lock_handle:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+                try:
+                    tmp_path.write_text(
+                        json.dumps(payload, ensure_ascii=True, indent=2),
+                        encoding="utf-8",
+                    )
+                    tmp_path.replace(path)
+                finally:
+                    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+    except Exception as exc:
+        log_error(f"[RISING_MISSED_NXT_POST_BLOCK] state persist failed: {exc}")
+
+
+def _restore_rising_missed_nxt_post_block_samplers(
+    *, now_ts: float | None = None
+) -> int:
+    global _RISING_MISSED_NXT_POST_BLOCK_SAMPLERS_RESTORED
+    observed_ts = time.time() if now_ts is None else float(now_ts)
+    with _RISING_MISSED_NXT_POST_BLOCK_SAMPLER_LOCK:
+        if _RISING_MISSED_NXT_POST_BLOCK_SAMPLERS_RESTORED:
+            return 0
+        _RISING_MISSED_NXT_POST_BLOCK_SAMPLERS_RESTORED = True
+    if not _rising_missed_nxt_post_block_sampler_enabled(now_ts=observed_ts):
+        return 0
+    path = RISING_MISSED_NXT_POST_BLOCK_SAMPLER_STATE_PATH
+    if not path.exists():
+        return 0
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        log_error(f"[RISING_MISSED_NXT_POST_BLOCK] state restore failed: {exc}")
+        return 0
+    active_date = str(
+        os.getenv("KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ACTIVE_DATE", "")
+    ).strip()
+    if str(payload.get("active_date") or "") != active_date:
+        return 0
+    raw_samplers = payload.get("active_samplers")
+    if not isinstance(raw_samplers, list):
+        return 0
+
+    restored: list[dict[str, Any]] = []
+    max_active = _rising_missed_nxt_post_block_sampler_max_active()
+    with _RISING_MISSED_NXT_POST_BLOCK_SAMPLER_LOCK:
+        for raw in raw_samplers:
+            if len(_RISING_MISSED_NXT_POST_BLOCK_SAMPLERS) >= max_active:
+                break
+            if not isinstance(raw, dict):
+                continue
+            evaluation_id = str(raw.get("evaluation_id") or "").strip()
+            stock_code = str(raw.get("stock_code") or "").strip()[:6]
+            if (
+                not evaluation_id
+                or not stock_code
+                or str(raw.get("effective_venue") or "") != "NXT"
+                or not str(raw.get("market_session_bucket") or "").startswith("nxt_")
+                or _safe_float(raw.get("entry_price"), 0.0) <= 0.0
+                or _safe_float(raw.get("expires_at"), 0.0) <= observed_ts
+            ):
+                continue
+            sampler = dict(raw)
+            sampler["evaluation_id"] = evaluation_id
+            sampler["stock_code"] = stock_code
+            for optional_float_key in (
+                "first_hit_move_pct",
+                "max_move_pct",
+                "min_move_pct",
+            ):
+                if sampler.get(optional_float_key) is None:
+                    continue
+                normalized_value = _safe_float(
+                    sampler.get(optional_float_key), float("nan")
+                )
+                sampler[optional_float_key] = (
+                    normalized_value if math.isfinite(normalized_value) else None
+                )
+            if evaluation_id in _RISING_MISSED_NXT_POST_BLOCK_SAMPLERS:
+                continue
+            _RISING_MISSED_NXT_POST_BLOCK_SAMPLERS[evaluation_id] = sampler
+            restored.append(sampler)
+    for sampler in restored:
+        subscription_requested = False
+        subscription_error = "-"
+        if EVENT_BUS is not None:
+            try:
+                EVENT_BUS.publish(
+                    "COMMAND_WS_REG",
+                    {
+                        "codes": [sampler["stock_code"]],
+                        "source": "rising_missed_nxt_post_block_sampler_restore",
+                    },
+                )
+                subscription_requested = True
+            except Exception as exc:
+                subscription_error = str(exc)
+        _emit_rising_missed_nxt_post_block_sampler_event(
+            sampler,
+            "rising_missed_nxt_post_block_sampler_restored",
+            rising_missed_nxt_post_block_sampler_restore_state="restored",
+            rising_missed_nxt_post_block_sampler_restore_reason="process_restart_recovery",
+            rising_missed_nxt_post_block_sampler_restore_expired=False,
+            rising_missed_nxt_post_block_sampler_ws_subscription_requested=(
+                subscription_requested
+            ),
+            rising_missed_nxt_post_block_sampler_ws_subscription_error=(
+                subscription_error
+            ),
+        )
+    return len(restored)
+
+
 def _emit_rising_missed_nxt_post_block_sampler_event(
     sampler: dict[str, Any],
     stage: str,
@@ -10545,6 +10687,7 @@ def _register_rising_missed_nxt_post_block_sampler(
     observed_ts = time.time() if now_ts is None else float(now_ts)
     if not _rising_missed_nxt_post_block_sampler_enabled(now_ts=observed_ts):
         return False
+    _restore_rising_missed_nxt_post_block_samplers(now_ts=observed_ts)
     session_bucket = str(
         fields.get("rising_missed_market_session_bucket") or ""
     ).strip()
@@ -10617,6 +10760,8 @@ def _register_rising_missed_nxt_post_block_sampler(
         )
         return False
 
+    _persist_rising_missed_nxt_post_block_samplers()
+
     subscription_requested = False
     subscription_error = "-"
     if EVENT_BUS is not None:
@@ -10658,6 +10803,7 @@ def should_retain_rising_missed_nxt_post_block_subscription(
     if not normalized_code:
         return False
     observed_ts = time.time() if now_ts is None else float(now_ts)
+    _restore_rising_missed_nxt_post_block_samplers(now_ts=observed_ts)
     with _RISING_MISSED_NXT_POST_BLOCK_SAMPLER_LOCK:
         return any(
             str(item.get("stock_code") or "") == normalized_code
@@ -10671,6 +10817,7 @@ def observe_rising_missed_nxt_post_block_samplers(
     now_ts: float | None = None,
 ) -> dict[str, int]:
     observed_ts = time.time() if now_ts is None else float(now_ts)
+    _restore_rising_missed_nxt_post_block_samplers(now_ts=observed_ts)
     interval_sec = _rising_missed_nxt_post_block_sampler_interval_sec()
     max_ws_age_ms = _rising_missed_nxt_post_block_sampler_max_ws_age_ms()
     with _RISING_MISSED_NXT_POST_BLOCK_SAMPLER_LOCK:
@@ -10725,12 +10872,17 @@ def observe_rising_missed_nxt_post_block_samplers(
         )
         route_is_nxt = actual_route in {"krx_nxt_integrated", "nxt_only"}
         price = _safe_int(snapshot.get("curr"), 0)
+        sample_within_horizon = bool(
+            received_at > 0
+            and received_at <= _safe_float(due.get("expires_at"), 0.0)
+        )
         fresh = bool(
             price > 0
             and age_ms is not None
             and age_ms <= max_ws_age_ms
             and item_is_nxt
             and route_is_nxt
+            and sample_within_horizon
         )
         if price <= 0:
             source_reason = "price_missing"
@@ -10742,6 +10894,8 @@ def observe_rising_missed_nxt_post_block_samplers(
             source_reason = "actual_nxt_item_missing"
         elif not route_is_nxt:
             source_reason = "actual_nxt_route_missing"
+        elif not sample_within_horizon:
+            source_reason = "ws_0b_tick_after_sampler_horizon"
         else:
             source_reason = "fresh_absolute_ws_0b_nxt"
 
@@ -10891,6 +11045,8 @@ def observe_rising_missed_nxt_post_block_samplers(
 
     with _RISING_MISSED_NXT_POST_BLOCK_SAMPLER_LOCK:
         stats["active"] = len(_RISING_MISSED_NXT_POST_BLOCK_SAMPLERS)
+    if due_items:
+        _persist_rising_missed_nxt_post_block_samplers()
     return stats
 
 
@@ -32446,6 +32602,8 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                     _rising_missed_tp1_submit_context_fields(
                                         rising_missed_normal_buy_bridge_fields,
                                         now_ts=now_ts,
+                                        stock=stock,
+                                        code=code,
                                     )
                                 )
                                 _mutate_stock_state(
@@ -37310,7 +37468,43 @@ def _rising_missed_tp1_source_gap_relief_min_support_count() -> int:
     )
 
 
-def _rising_missed_tp1_submit_context_fields(tp1_decision, *, now_ts: float) -> dict[str, Any]:
+def _rising_missed_tp1_submit_context_cache_key(
+    stock: dict | None, code: str | None = None
+) -> str:
+    stock = stock if isinstance(stock, dict) else {}
+    normalized_code = str(
+        code or stock.get("code") or stock.get("stock_code") or ""
+    ).strip()[:6]
+    promotion_id = str(stock.get("scanner_promotion_id") or "").strip()
+    return f"{normalized_code}:{promotion_id}" if normalized_code and promotion_id else ""
+
+
+def _remember_rising_missed_tp1_submit_context(
+    stock: dict | None, fields: dict[str, Any], *, code: str | None = None
+) -> None:
+    cache_key = _rising_missed_tp1_submit_context_cache_key(stock, code)
+    if not cache_key or not fields:
+        return
+    now_ts = _safe_float(fields.get("rising_missed_tp1_submit_context_at"), time.time())
+    with _RISING_MISSED_TP1_SUBMIT_CONTEXT_CACHE_LOCK:
+        stale_keys = [
+            key
+            for key, item in _RISING_MISSED_TP1_SUBMIT_CONTEXT_CACHE.items()
+            if now_ts - _safe_float(item.get("rising_missed_tp1_submit_context_at"), 0.0)
+            > _RISING_MISSED_TP1_OBSERVATION_CONTEXT_MAX_AGE_SEC
+        ]
+        for key in stale_keys:
+            _RISING_MISSED_TP1_SUBMIT_CONTEXT_CACHE.pop(key, None)
+        _RISING_MISSED_TP1_SUBMIT_CONTEXT_CACHE[cache_key] = dict(fields)
+
+
+def _rising_missed_tp1_submit_context_fields(
+    tp1_decision,
+    *,
+    now_ts: float,
+    stock: dict | None = None,
+    code: str | None = None,
+) -> dict[str, Any]:
     if isinstance(tp1_decision, dict):
         log_fields = tp1_decision
         allowed = _truthy_field(log_fields.get("rising_missed_tp1_candidate_allowed"))
@@ -37369,17 +37563,28 @@ def _rising_missed_tp1_submit_context_fields(tp1_decision, *, now_ts: float) -> 
         fields[f"rising_missed_tp1_submit_context_{source_key}"] = log_fields.get(
             source_key, "-"
         )
+    _remember_rising_missed_tp1_submit_context(stock, fields, code=code)
     return fields
 
 
 def _rising_missed_tp1_observation_context_log_fields(stock: dict | None) -> dict[str, Any]:
     stock = stock if isinstance(stock, dict) else {}
-    evaluation_id = stock.get("rising_missed_tp1_submit_context_evaluation_id")
+    context = stock
+    evaluation_id = context.get("rising_missed_tp1_submit_context_evaluation_id")
+    if not evaluation_id or evaluation_id == "-":
+        cache_key = _rising_missed_tp1_submit_context_cache_key(stock)
+        with _RISING_MISSED_TP1_SUBMIT_CONTEXT_CACHE_LOCK:
+            cached = _RISING_MISSED_TP1_SUBMIT_CONTEXT_CACHE.get(cache_key)
+            context = dict(cached) if isinstance(cached, dict) else stock
+        evaluation_id = context.get("rising_missed_tp1_submit_context_evaluation_id")
     if not evaluation_id or evaluation_id == "-":
         return {}
-    context_at = _safe_float(stock.get("rising_missed_tp1_submit_context_at"), 0.0)
+    context_at = _safe_float(context.get("rising_missed_tp1_submit_context_at"), 0.0)
     context_age_sec = max(0.0, time.time() - context_at) if context_at > 0 else None
-    if context_age_sec is None or context_age_sec > 60.0:
+    if (
+        context_age_sec is None
+        or context_age_sec > _RISING_MISSED_TP1_OBSERVATION_CONTEXT_MAX_AGE_SEC
+    ):
         return {}
     fields = {
         "rising_missed_tp1_evaluation_id": evaluation_id,
@@ -37407,7 +37612,7 @@ def _rising_missed_tp1_observation_context_log_fields(stock: dict | None) -> dic
         "rising_missed_nxt_positive_micro_authority",
         "market_data_effective_price_source",
     ):
-        fields[source_key] = stock.get(
+        fields[source_key] = context.get(
             f"rising_missed_tp1_submit_context_{source_key}", "-"
         )
     return fields
@@ -38909,6 +39114,8 @@ def _maybe_submit_rising_missed_one_share_entry(
     tp1_submit_context_fields = _rising_missed_tp1_submit_context_fields(
         tp1_decision,
         now_ts=_safe_float(runtime.get("now_ts"), time.time()),
+        stock=stock,
+        code=code,
     )
     _mutate_stock_state(
         stock,

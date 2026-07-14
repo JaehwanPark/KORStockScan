@@ -198,6 +198,9 @@ def test_nxt_post_block_sampler_recovers_counterfactual_first_hit_label(tmp_path
                 "rising_missed_nxt_post_block_sample_attempt_count": 80,
                 "rising_missed_nxt_post_block_fresh_sample_count": 78,
                 "rising_missed_nxt_post_block_source_gap_sample_count": 2,
+                "rising_missed_nxt_post_block_first_hit_move_pct": 1.4,
+                "rising_missed_nxt_post_block_max_move_pct": 1.8,
+                "rising_missed_nxt_post_block_min_move_pct": -0.2,
             },
             emitted_at="2026-07-14T16:40:00+09:00",
         ),
@@ -212,7 +215,8 @@ def test_nxt_post_block_sampler_recovers_counterfactual_first_hit_label(tmp_path
 
     label = report["rising_missed_tp1_counterfactual_first_hit_label_rows"][0]
     assert label["gross_first_hit_label"] == "gross_target_first"
-    assert label["max_move_pct_within_20m"] == 1.4
+    assert label["max_move_pct_within_20m"] == 1.8
+    assert label["min_move_pct_within_20m"] == -0.2
     summary = report["summary"]
     assert summary["rising_missed_nxt_post_block_sampler_registered_count"] == 1
     assert summary["rising_missed_nxt_post_block_fresh_price_sample_count"] == 1
@@ -220,6 +224,10 @@ def test_nxt_post_block_sampler_recovers_counterfactual_first_hit_label(tmp_path
     assert summary["rising_missed_nxt_post_block_sampler_outcome_counts"] == [
         {"outcome_label": "gross_target_first", "count": 1}
     ]
+    completion = report["rising_missed_nxt_post_block_price_sampler_rows"][-1]
+    assert completion["first_hit_move_pct"] == 1.4
+    assert completion["mfe_after_block_pct"] == 1.8
+    assert completion["mae_after_block_pct"] == -0.2
 
 
 def test_tp1_first_hit_label_marks_adverse_first_and_can_confirm_net_with_costs(tmp_path):
