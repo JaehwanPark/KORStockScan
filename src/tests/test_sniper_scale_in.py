@@ -2053,6 +2053,45 @@ def test_real_weak_ai_micro_entry_block_relaxes_legacy_gap_for_fresh_tp1_support
     assert decision["primary_decision_metric"] == "post_relief_submit_and_tp1_first_hit_outcome"
 
 
+def test_real_weak_ai_micro_entry_block_relaxes_acceleration_lane_with_same_tp1_contract(
+    monkeypatch,
+):
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE", "2026-07-14")
+    now_ts = datetime(2026, 7, 14, 14, 13, tzinfo=state_handlers._KST).timestamp()
+    stock = {
+        "last_watching_ai_action": "WAIT",
+        "last_watching_ai_score": 0.0,
+        "rising_missed_tp1_submit_context_at": now_ts,
+        "rising_missed_tp1_submit_context_evaluation_id": "eval-acceleration",
+        "rising_missed_tp1_submit_context_candidate_allowed": True,
+        "rising_missed_tp1_submit_context_selector_active": True,
+        "rising_missed_tp1_submit_context_policy": "probability_support_v3",
+        "rising_missed_tp1_submit_context_lane": "acceleration",
+        "rising_missed_tp1_submit_context_input_ready": True,
+        "rising_missed_tp1_submit_context_micro_source_state": "fresh_ws_order_flow_delta",
+        "rising_missed_tp1_submit_context_support_count": 4,
+        "rising_missed_tp1_submit_context_support_momentum": True,
+    }
+
+    decision = state_handlers._evaluate_real_weak_ai_micro_entry_block(
+        strategy="SCALPING",
+        stock=stock,
+        latency_gate={"allowed": True, "decision": "ALLOW_NORMAL"},
+        latency_signal_score=0.0,
+        orderbook_fields={},
+        microstructure_fields={},
+        now_ts=now_ts,
+    )
+
+    assert decision["blocked"] is False
+    assert decision["rising_missed_tp1_source_gap_relief_applied"] is True
+    assert decision["rising_missed_tp1_source_gap_relief_candidate_lane"] == "acceleration"
+    assert decision["sample_floor"] == (
+        "fresh_tp1_eligible_lane_with_three_supports_and_momentum"
+    )
+
+
 def test_real_weak_ai_micro_entry_block_keeps_gap_block_without_fresh_tp1_momentum(
     monkeypatch,
 ):

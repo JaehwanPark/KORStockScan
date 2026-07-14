@@ -2721,6 +2721,234 @@ def test_latency_true_ofi_direct_canary_allows_near_cap_spread(monkeypatch):
     assert result["latency_true_ofi_direct_canary_max_spread_bps"] == 90.0
 
 
+def test_latency_true_ofi_direct_canary_allows_bounded_extended_spread_tier(monkeypatch):
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=True,
+            SCALP_LATENCY_SPREAD_RELIEF_TAGS=("OTHER",),
+            SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED=False,
+            SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_GUARD_CANARY_ENABLED=False,
+            SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=False,
+        ),
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ACTIVE_DATE",
+        datetime.now(entry_latency_module._KST).strftime("%Y-%m-%d"),
+    )
+    now_ts = time.time()
+    monkeypatch.setattr(
+        entry_latency_module,
+        "MICRO_ESTIMATOR_STORE",
+        SimpleNamespace(
+            snapshot=lambda code, *, now_ts: {
+                "source_state": "fresh_ws_order_flow_delta",
+                "confidence": 0.91,
+                "true_ofi_ewma": 0.0412,
+                "true_ofi_sample_count": 222,
+                "last_ws_ts": now_ts - 0.10,
+            }
+        ),
+    )
+
+    result = evaluate_live_buy_entry(
+        stock={
+            "name": "TEST",
+            "position_tag": "SCANNER",
+            "rising_missed_entry_lineage": True,
+            "source_signature": "NEW_HIGH_CONFIRMATION,VOLUME_SURGE_POSITIVE",
+            "price_delta_since_first_seen_pct": "3.79",
+            "rising_missed_tp1_submit_context_support_count": 3,
+        },
+        code="123456_true_ofi_direct_canary_extended",
+        ws_data={
+            "curr": 10_000,
+            "last_ws_update_ts": now_ts,
+            "recent_trade_ticks": [
+                {
+                    "signed_trade_volume": signed_volume,
+                    "aggressor_source": "kiwoom_0b_signed_trade_volume",
+                }
+                for signed_volume in ("+100", "+80", "+60", "-30", "-20")
+            ],
+            "orderbook": {
+                "asks": [{"price": 10_118, "volume": 100}],
+                "bids": [{"price": 10_000, "volume": 100}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=2,
+        signal_price=10_000,
+        signal_strength=0.0,
+    )
+
+    assert result["decision"] == "ALLOW_NORMAL"
+    assert result["allowed"] is True
+    assert result["latency_true_ofi_direct_canary_applied"] is True
+    assert result["latency_true_ofi_direct_canary_extended_tier_applied"] is True
+    assert result["latency_true_ofi_direct_canary_reason"] == (
+        "direct_canary_extended_spread_true_ofi_allow"
+    )
+    assert result["latency_true_ofi_direct_canary_spread_bps"] == 118.0
+
+
+def test_latency_true_ofi_direct_canary_extended_tier_keeps_weak_support_blocked(
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ACTIVE_DATE",
+        datetime.now(entry_latency_module._KST).strftime("%Y-%m-%d"),
+    )
+    fields = entry_latency_module._latency_true_ofi_direct_canary_fields(
+        stock={
+            "rising_missed_entry_lineage": True,
+            "price_delta_since_first_seen_pct": "3.79",
+            "rising_missed_tp1_submit_context_support_count": 2,
+        },
+        ws_data={
+            "recent_trade_ticks": [
+                {"signed_trade_volume": "+100"},
+                {"signed_trade_volume": "+80"},
+                {"signed_trade_volume": "+60"},
+                {"signed_trade_volume": "-30"},
+                {"signed_trade_volume": "-20"},
+            ]
+        },
+        strategy_id="SCALPING",
+        policy_decision=entry_latency_module.EntryDecision.REJECT_DANGER,
+        effective_decision=entry_latency_module.EntryDecision.REJECT_DANGER,
+        latency_status=SimpleNamespace(quote_stale=False),
+        danger_reasons=["spread_too_wide"],
+        spread_bps=118.0,
+        signal_score=0.0,
+        micro_estimator_reason="true_ofi_below_floor",
+        estimator_context={
+            "latency_false_negative_remeasure_true_ofi_ewma": 0.0412,
+            "latency_false_negative_remeasure_true_ofi_sample_count": 222,
+            "latency_false_negative_remeasure_ws_age_ms": 100.0,
+            "latency_false_negative_remeasure_source_state": "fresh_ws_order_flow_delta",
+        },
+        danger_relief_forbidden=False,
+    )
+
+    assert fields["latency_true_ofi_direct_canary_applied"] is False
+    assert fields["latency_true_ofi_direct_canary_extended_tier_applied"] is False
+    assert fields["latency_true_ofi_direct_canary_reason"] == (
+        "extended_spread_support_count_below_floor"
+    )
+
+
+def test_latency_true_ofi_direct_canary_extended_tier_rejects_rest_positive_tape(
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ACTIVE_DATE",
+        datetime.now(entry_latency_module._KST).strftime("%Y-%m-%d"),
+    )
+    now_ts = time.time()
+    rest_ticks = [
+        {
+            "signed_trade_volume": signed_volume,
+            "rest_signed_tape_source": "ka10084",
+            "rest_signed_tape_received_at": now_ts,
+            "source_timestamp": now_ts,
+        }
+        for signed_volume in ("+100", "+80", "+60")
+    ]
+    fields = entry_latency_module._latency_true_ofi_direct_canary_fields(
+        stock={
+            "rising_missed_entry_lineage": True,
+            "price_delta_since_first_seen_pct": "3.79",
+            "rising_missed_tp1_submit_context_support_count": 3,
+        },
+        ws_data={"rest_signed_trade_ticks": rest_ticks},
+        strategy_id="SCALPING",
+        policy_decision=entry_latency_module.EntryDecision.REJECT_DANGER,
+        effective_decision=entry_latency_module.EntryDecision.REJECT_DANGER,
+        latency_status=SimpleNamespace(quote_stale=False),
+        danger_reasons=["spread_too_wide"],
+        spread_bps=118.0,
+        signal_score=0.0,
+        micro_estimator_reason="true_ofi_below_floor",
+        estimator_context={
+            "latency_false_negative_remeasure_true_ofi_ewma": 0.0412,
+            "latency_false_negative_remeasure_true_ofi_sample_count": 222,
+            "latency_false_negative_remeasure_ws_age_ms": 100.0,
+            "latency_false_negative_remeasure_source_state": "fresh_ws_order_flow_delta",
+        },
+        danger_relief_forbidden=False,
+    )
+
+    assert fields["latency_true_ofi_direct_canary_applied"] is False
+    assert fields["latency_true_ofi_direct_canary_extended_signed_tape_ws_only"] is False
+    assert fields["latency_true_ofi_direct_canary_reason"] == (
+        "extended_spread_trusted_ws_signed_tape_required"
+    )
+
+
+def test_latency_true_ofi_direct_canary_extended_tier_rejects_unknown_tape_source(
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ACTIVE_DATE",
+        datetime.now(entry_latency_module._KST).strftime("%Y-%m-%d"),
+    )
+    fields = entry_latency_module._latency_true_ofi_direct_canary_fields(
+        stock={
+            "rising_missed_entry_lineage": True,
+            "price_delta_since_first_seen_pct": "3.79",
+            "rising_missed_tp1_submit_context_support_count": 3,
+        },
+        ws_data={
+            "recent_trade_ticks": [
+                {"signed_trade_volume": "+100"},
+                {"signed_trade_volume": "+80"},
+                {"signed_trade_volume": "+60"},
+            ]
+        },
+        strategy_id="SCALPING",
+        policy_decision=entry_latency_module.EntryDecision.REJECT_DANGER,
+        effective_decision=entry_latency_module.EntryDecision.REJECT_DANGER,
+        latency_status=SimpleNamespace(quote_stale=False),
+        danger_reasons=["spread_too_wide"],
+        spread_bps=118.0,
+        signal_score=0.0,
+        micro_estimator_reason="true_ofi_below_floor",
+        estimator_context={
+            "latency_false_negative_remeasure_true_ofi_ewma": 0.0412,
+            "latency_false_negative_remeasure_true_ofi_sample_count": 222,
+            "latency_false_negative_remeasure_ws_age_ms": 100.0,
+            "latency_false_negative_remeasure_source_state": "fresh_ws_order_flow_delta",
+        },
+        danger_relief_forbidden=False,
+    )
+
+    assert fields["latency_true_ofi_direct_canary_applied"] is False
+    assert fields["latency_true_ofi_direct_canary_extended_signed_tape_ws_only"] is False
+    assert fields["latency_true_ofi_direct_canary_signed_tape_unknown_source_count"] == 3
+    assert fields["latency_true_ofi_direct_canary_reason"] == (
+        "extended_spread_trusted_ws_signed_tape_required"
+    )
+
+
 def test_latency_true_ofi_direct_canary_treats_missing_tape_as_neutral(monkeypatch):
     monkeypatch.setattr(
         entry_latency_module,

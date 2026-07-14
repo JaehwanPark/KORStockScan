@@ -9837,6 +9837,17 @@ _LATENCY_FALSE_NEGATIVE_REMEASURE_LOG_KEYS = (
     "latency_true_ofi_direct_canary_min_samples",
     "latency_true_ofi_direct_canary_max_ws_age_ms",
     "latency_true_ofi_direct_canary_max_spread_bps",
+    "latency_true_ofi_direct_canary_extended_spread_enabled",
+    "latency_true_ofi_direct_canary_extended_spread_active",
+    "latency_true_ofi_direct_canary_extended_spread_active_date",
+    "latency_true_ofi_direct_canary_extended_max_spread_bps",
+    "latency_true_ofi_direct_canary_extended_min_support_count",
+    "latency_true_ofi_direct_canary_extended_min_delta_pct",
+    "latency_true_ofi_direct_canary_extended_min_true_ofi",
+    "latency_true_ofi_direct_canary_extended_min_signed_tape_buy_ratio",
+    "latency_true_ofi_direct_canary_extended_support_count",
+    "latency_true_ofi_direct_canary_extended_signed_tape_ws_only",
+    "latency_true_ofi_direct_canary_extended_tier_applied",
     "latency_true_ofi_direct_canary_min_true_ofi",
     "latency_true_ofi_direct_canary_max_true_ofi",
     "latency_true_ofi_direct_canary_min_signal_score",
@@ -9867,6 +9878,11 @@ _LATENCY_FALSE_NEGATIVE_REMEASURE_LOG_KEYS = (
     "latency_true_ofi_direct_canary_signed_tape_window",
     "latency_true_ofi_direct_canary_signed_tape_min_samples",
     "latency_true_ofi_direct_canary_signed_tape_max_buy_ratio",
+    "latency_true_ofi_direct_canary_signed_tape_max_rest_age_ms",
+    "latency_true_ofi_direct_canary_signed_tape_rest_fresh_count",
+    "latency_true_ofi_direct_canary_signed_tape_rest_stale_or_unknown_count",
+    "latency_true_ofi_direct_canary_signed_tape_trusted_ws_count",
+    "latency_true_ofi_direct_canary_signed_tape_unknown_source_count",
     "latency_true_ofi_direct_canary_signed_tape_sample_count",
     "latency_true_ofi_direct_canary_signed_tape_buy_count",
     "latency_true_ofi_direct_canary_signed_tape_sell_count",
@@ -19483,7 +19499,7 @@ def _evaluate_real_weak_ai_micro_entry_block(
                 ),
                 "metric_role": "bounded_tunable",
                 "window_policy": "same_day_intraday_runtime_state",
-                "sample_floor": "fresh_tp1_support_reversal_with_three_supports_and_momentum",
+                "sample_floor": "fresh_tp1_eligible_lane_with_three_supports_and_momentum",
                 "primary_decision_metric": "post_relief_submit_and_tp1_first_hit_outcome",
                 "source_quality_gate": (
                     "fresh_tp1_contract_replaces_missing_legacy_weak_ai_micro_context"
@@ -36726,6 +36742,9 @@ def _evaluate_rising_missed_tp1_source_gap_relief(
     current_date = datetime.fromtimestamp(float(now_ts), tz=_KST).strftime("%Y-%m-%d")
     support_count = _safe_int(stock.get("rising_missed_tp1_submit_context_support_count"), 0)
     min_support_count = _rising_missed_tp1_source_gap_relief_min_support_count()
+    candidate_lane = str(
+        stock.get("rising_missed_tp1_submit_context_lane") or ""
+    ).strip()
     micro_source_state = str(
         stock.get("rising_missed_tp1_submit_context_micro_source_state") or ""
     ).strip().lower()
@@ -36742,10 +36761,8 @@ def _evaluate_rising_missed_tp1_source_gap_relief(
             str(stock.get("rising_missed_tp1_submit_context_policy") or "")
             == "probability_support_v3"
         ),
-        "support_reversal": (
-            str(stock.get("rising_missed_tp1_submit_context_lane") or "")
-            == "support_reversal"
-        ),
+        "eligible_lane": candidate_lane
+        in {"support_reversal", "acceleration", "low_rebound"},
         "input_ready": bool(stock.get("rising_missed_tp1_submit_context_input_ready")),
         "trusted_ws_micro": micro_source_state.startswith("fresh_ws"),
         "support_count": support_count >= min_support_count,
@@ -36770,6 +36787,7 @@ def _evaluate_rising_missed_tp1_source_gap_relief(
         "rising_missed_tp1_source_gap_relief_context_ttl_sec": ttl_sec,
         "rising_missed_tp1_source_gap_relief_support_count": support_count,
         "rising_missed_tp1_source_gap_relief_min_support_count": min_support_count,
+        "rising_missed_tp1_source_gap_relief_candidate_lane": candidate_lane or "-",
         "rising_missed_tp1_source_gap_relief_support_momentum": checks["momentum"],
         "rising_missed_tp1_source_gap_relief_trusted_ws_micro": checks["trusted_ws_micro"],
         "rising_missed_tp1_source_gap_relief_active_date": active_date or "-",

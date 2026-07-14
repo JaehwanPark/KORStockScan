@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import threading
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 
 from src.engine.scalping.micro_estimator_state import DEFAULT_STORE as MICRO_ESTIMATOR_STORE
@@ -66,6 +66,7 @@ _LATENCY_TRUE_OFI_DIRECT_CANARY_FORBIDDEN_USES = (
     "stale_submit_bypass,broker_guard_bypass,threshold_mutation,provider_route_change,"
     "quantity_or_cap_change,position_cap_release,wide_spread_bypass,explicit_ai_veto_bypass"
 )
+_KST = timezone(timedelta(hours=9))
 
 
 def _safe_price_int(value: Any) -> int:
@@ -1243,6 +1244,8 @@ def _latency_signed_tape_fields(
     rows: list[tuple[str, float]] = []
     rest_fresh_count = 0
     rest_stale_or_unknown_count = 0
+    trusted_ws_count = 0
+    unknown_source_count = 0
     now_ts = time.time()
     for tick in _iter_signed_tape_ticks(ws, item):
         is_rest_tick = bool(
@@ -1263,6 +1266,11 @@ def _latency_signed_tape_fields(
         side, volume = _signed_trade_side_and_volume_from_tick(tick)
         if side in {"BUY", "SELL"} and volume > 0:
             rows.append((side, volume))
+            aggressor_source = str(tick.get("aggressor_source") or "").strip()
+            if aggressor_source == "kiwoom_0b_signed_trade_volume":
+                trusted_ws_count += 1
+            elif not is_rest_tick:
+                unknown_source_count += 1
         if len(rows) >= window:
             break
 
@@ -1291,6 +1299,10 @@ def _latency_signed_tape_fields(
         "latency_true_ofi_direct_canary_signed_tape_rest_fresh_count": rest_fresh_count,
         "latency_true_ofi_direct_canary_signed_tape_rest_stale_or_unknown_count": (
             rest_stale_or_unknown_count
+        ),
+        "latency_true_ofi_direct_canary_signed_tape_trusted_ws_count": trusted_ws_count,
+        "latency_true_ofi_direct_canary_signed_tape_unknown_source_count": (
+            unknown_source_count
         ),
         "latency_true_ofi_direct_canary_signed_tape_sample_count": sample_count,
         "latency_true_ofi_direct_canary_signed_tape_buy_count": buy_count,
@@ -1585,6 +1597,59 @@ def _latency_true_ofi_direct_canary_fields(
         1.0,
         _to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MAX_SPREAD_BPS"), 90.0),
     )
+    extended_enabled = _truthy(
+        os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ENABLED", "false")
+    )
+    extended_active_date = str(
+        os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ACTIVE_DATE")
+        or os.getenv("KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE")
+        or ""
+    ).strip()
+    current_date = datetime.now(_KST).strftime("%Y-%m-%d")
+    extended_active = bool(
+        extended_enabled and extended_active_date and extended_active_date == current_date
+    )
+    extended_max_spread_bps = max(
+        max_spread_bps,
+        _to_float(
+            os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_MAX_SPREAD_BPS"),
+            120.0,
+        ),
+    )
+    extended_min_support_count = max(
+        3,
+        int(
+            _to_float(
+                os.getenv(
+                    "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_MIN_SUPPORT_COUNT"
+                ),
+                3.0,
+            )
+        ),
+    )
+    extended_min_delta_pct = max(
+        0.0,
+        _to_float(
+            os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_MIN_DELTA_PCT"),
+            3.0,
+        ),
+    )
+    extended_min_true_ofi = _to_float(
+        os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_MIN_TRUE_OFI"),
+        0.0,
+    )
+    extended_min_signed_tape_buy_ratio = min(
+        100.0,
+        max(
+            50.0,
+            _to_float(
+                os.getenv(
+                    "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_MIN_SIGNED_TAPE_BUY_RATIO"
+                ),
+                60.0,
+            ),
+        ),
+    )
     min_true_ofi = _to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MIN_TRUE_OFI"), -0.09)
     max_true_ofi = _to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MAX_TRUE_OFI"), 0.12)
     min_signal_score = max(
@@ -1600,6 +1665,12 @@ def _latency_true_ofi_direct_canary_fields(
     ws_age_ms = _to_float(estimator_context.get("latency_false_negative_remeasure_ws_age_ms"), -1.0)
     source_state = str(estimator_context.get("latency_false_negative_remeasure_source_state") or "").strip().lower()
     delta_pct = _latency_opportunity_price_delta_pct(stock, ws_data)
+    support_count = int(
+        _to_float(
+            (stock or {}).get("rising_missed_tp1_submit_context_support_count"),
+            0.0,
+        )
+    )
     opportunity_supported = (
         float(signal_score or 0.0) >= min_signal_score
         or delta_pct >= min_delta_pct
@@ -1631,6 +1702,29 @@ def _latency_true_ofi_direct_canary_fields(
         "latency_true_ofi_direct_canary_min_samples": min_samples,
         "latency_true_ofi_direct_canary_max_ws_age_ms": round(max_ws_age_ms, 3),
         "latency_true_ofi_direct_canary_max_spread_bps": round(max_spread_bps, 3),
+        "latency_true_ofi_direct_canary_extended_spread_enabled": extended_enabled,
+        "latency_true_ofi_direct_canary_extended_spread_active": extended_active,
+        "latency_true_ofi_direct_canary_extended_spread_active_date": (
+            extended_active_date or "-"
+        ),
+        "latency_true_ofi_direct_canary_extended_max_spread_bps": round(
+            extended_max_spread_bps, 3
+        ),
+        "latency_true_ofi_direct_canary_extended_min_support_count": (
+            extended_min_support_count
+        ),
+        "latency_true_ofi_direct_canary_extended_min_delta_pct": round(
+            extended_min_delta_pct, 3
+        ),
+        "latency_true_ofi_direct_canary_extended_min_true_ofi": round(
+            extended_min_true_ofi, 4
+        ),
+        "latency_true_ofi_direct_canary_extended_min_signed_tape_buy_ratio": round(
+            extended_min_signed_tape_buy_ratio, 3
+        ),
+        "latency_true_ofi_direct_canary_extended_support_count": support_count,
+        "latency_true_ofi_direct_canary_extended_signed_tape_ws_only": False,
+        "latency_true_ofi_direct_canary_extended_tier_applied": False,
         "latency_true_ofi_direct_canary_min_true_ofi": round(min_true_ofi, 4),
         "latency_true_ofi_direct_canary_max_true_ofi": round(max_true_ofi, 4),
         "latency_true_ofi_direct_canary_min_signal_score": round(min_signal_score, 3),
@@ -1690,9 +1784,104 @@ def _latency_true_ofi_direct_canary_fields(
     if not (0.0 <= ws_age_ms <= max_ws_age_ms):
         fields["latency_true_ofi_direct_canary_reason"] = "ws_age_above_direct_canary_cap"
         return fields
-    if float(spread_bps or 0.0) > max_spread_bps:
-        fields["latency_true_ofi_direct_canary_reason"] = "spread_bps_above_direct_canary_cap"
-        return fields
+    spread_bps_value = float(spread_bps or 0.0)
+    if spread_bps_value > max_spread_bps:
+        if not extended_active:
+            fields["latency_true_ofi_direct_canary_reason"] = (
+                "spread_bps_above_direct_canary_cap"
+            )
+            return fields
+        if spread_bps_value > extended_max_spread_bps:
+            fields["latency_true_ofi_direct_canary_reason"] = (
+                "spread_bps_above_extended_direct_canary_cap"
+            )
+            return fields
+        if support_count < extended_min_support_count:
+            fields["latency_true_ofi_direct_canary_reason"] = (
+                "extended_spread_support_count_below_floor"
+            )
+            return fields
+        if delta_pct < extended_min_delta_pct:
+            fields["latency_true_ofi_direct_canary_reason"] = (
+                "extended_spread_delta_below_floor"
+            )
+            return fields
+        if true_ofi < extended_min_true_ofi:
+            fields["latency_true_ofi_direct_canary_reason"] = (
+                "extended_spread_true_ofi_below_floor"
+            )
+            return fields
+        signed_tape_buy_ratio = _to_float(
+            fields.get("latency_true_ofi_direct_canary_signed_tape_buy_ratio"),
+            -1.0,
+        )
+        signed_tape_sample_count = int(
+            _to_float(
+                fields.get("latency_true_ofi_direct_canary_signed_tape_sample_count"),
+                0.0,
+            )
+        )
+        signed_tape_min_samples = int(
+            _to_float(
+                fields.get("latency_true_ofi_direct_canary_signed_tape_min_samples"),
+                3.0,
+            )
+        )
+        signed_tape_rest_fresh_count = int(
+            _to_float(
+                fields.get("latency_true_ofi_direct_canary_signed_tape_rest_fresh_count"),
+                0.0,
+            )
+        )
+        signed_tape_trusted_ws_count = int(
+            _to_float(
+                fields.get(
+                    "latency_true_ofi_direct_canary_signed_tape_trusted_ws_count"
+                ),
+                0.0,
+            )
+        )
+        signed_tape_unknown_source_count = int(
+            _to_float(
+                fields.get(
+                    "latency_true_ofi_direct_canary_signed_tape_unknown_source_count"
+                ),
+                0.0,
+            )
+        )
+        signed_tape_net_buy_volume = int(
+            _to_float(
+                fields.get("latency_true_ofi_direct_canary_signed_tape_net_buy_volume"),
+                0.0,
+            )
+        )
+        signed_tape_latest_side = str(
+            fields.get("latency_true_ofi_direct_canary_signed_tape_latest_side") or ""
+        ).upper()
+        signed_tape_ws_only = bool(
+            signed_tape_sample_count >= signed_tape_min_samples
+            and signed_tape_trusted_ws_count >= signed_tape_min_samples
+            and signed_tape_rest_fresh_count == 0
+            and signed_tape_unknown_source_count == 0
+        )
+        fields["latency_true_ofi_direct_canary_extended_signed_tape_ws_only"] = (
+            signed_tape_ws_only
+        )
+        if not signed_tape_ws_only:
+            fields["latency_true_ofi_direct_canary_reason"] = (
+                "extended_spread_trusted_ws_signed_tape_required"
+            )
+            return fields
+        if (
+            signed_tape_buy_ratio < extended_min_signed_tape_buy_ratio
+            or signed_tape_net_buy_volume <= 0
+            or signed_tape_latest_side != "BUY"
+        ):
+            fields["latency_true_ofi_direct_canary_reason"] = (
+                "extended_spread_signed_tape_below_floor"
+            )
+            return fields
+        fields["latency_true_ofi_direct_canary_extended_tier_applied"] = True
     if not derived_true_ofi_below_floor:
         fields["latency_true_ofi_direct_canary_reason"] = "not_true_ofi_below_floor"
         return fields
@@ -1714,7 +1903,11 @@ def _latency_true_ofi_direct_canary_fields(
     fields.update(
         {
             "latency_true_ofi_direct_canary_applied": True,
-            "latency_true_ofi_direct_canary_reason": "direct_canary_true_ofi_false_negative_allow",
+            "latency_true_ofi_direct_canary_reason": (
+                "direct_canary_extended_spread_true_ofi_allow"
+                if fields["latency_true_ofi_direct_canary_extended_tier_applied"]
+                else "direct_canary_true_ofi_false_negative_allow"
+            ),
             "latency_true_ofi_direct_canary_runtime_effect": True,
             "latency_true_ofi_direct_canary_allowed_runtime_apply": True,
         }
