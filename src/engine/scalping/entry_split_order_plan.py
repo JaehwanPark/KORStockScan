@@ -894,10 +894,19 @@ def _render_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _load_policy_from_env(policy_file: str | None = None) -> tuple[dict[str, Any], str]:
+def _load_policy_from_env(
+    policy_file: str | None = None,
+    *,
+    now: datetime | None = None,
+) -> tuple[dict[str, Any], str]:
     enabled = str(os.environ.get("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED", "")).strip().lower()
     if enabled not in {"1", "true", "yes", "on"}:
         return {}, "policy_disabled"
+    active_date = str(os.environ.get("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE") or "").strip()
+    if active_date:
+        now_date = (now or datetime.now(timezone(timedelta(hours=9)))).date().isoformat()
+        if active_date != now_date:
+            return {}, "policy_inactive_date"
     path_text = str(policy_file or os.environ.get("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE") or "").strip()
     if not path_text:
         return {}, "policy_file_missing"
@@ -909,6 +918,13 @@ def _load_policy_from_env(policy_file: str | None = None) -> tuple[dict[str, Any
         return {}, "invalid_policy_schema"
     if not isinstance(payload.get("buckets"), dict):
         return {}, "invalid_policy_buckets"
+    if "runtime_apply_allowed" in payload and not _safe_bool(payload.get("runtime_apply_allowed")):
+        if not _entry_split_operator_fallback_active(now=now):
+            return {}, "policy_runtime_apply_not_allowed"
+        payload = {
+            **payload,
+            "entry_split_order_operator_fallback_authorized": True,
+        }
     return payload, "loaded"
 
 
@@ -1057,6 +1073,40 @@ def _entry_split_passive_bias_first_weight(
     return policy_first_weight, ""
 
 
+def _market_first_leg_active(*, now: datetime | None = None) -> bool:
+    if not _safe_bool(os.environ.get("KORSTOCKSCAN_ENTRY_SPLIT_MARKET_FIRST_LEG_ENABLED")):
+        return False
+    active_date = str(os.environ.get("KORSTOCKSCAN_ENTRY_SPLIT_MARKET_FIRST_LEG_ACTIVE_DATE") or "").strip()
+    if not active_date:
+        return False
+    now_date = (now or datetime.now(timezone(timedelta(hours=9)))).date().isoformat()
+    return active_date == now_date
+
+
+def _entry_split_operator_fallback_active(*, now: datetime | None = None) -> bool:
+    if not _safe_bool(os.environ.get("KORSTOCKSCAN_ENTRY_SPLIT_OPERATOR_FALLBACK_ENABLED")):
+        return False
+    active_date = str(os.environ.get("KORSTOCKSCAN_ENTRY_SPLIT_OPERATOR_FALLBACK_ACTIVE_DATE") or "").strip()
+    if not active_date:
+        return False
+    now_date = (now or datetime.now(timezone(timedelta(hours=9)))).date().isoformat()
+    return active_date == now_date
+
+
+def _market_first_leg_reference_price(fields: dict[str, Any], base_price: int) -> int:
+    for key in (
+        "best_ask_at_submit",
+        "executable_buy_price",
+        "best_ask",
+        "latest_price",
+        "canonical_mark_price",
+    ):
+        value = _safe_int(fields.get(key), 0)
+        if value > 0:
+            return value
+    return max(0, int(base_price or 0))
+
+
 def apply_entry_split_order_policy(
     planned_orders: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None,
     *,
@@ -1088,7 +1138,7 @@ def apply_entry_split_order_policy(
     ):
         fields["entry_split_order_skip_reason"] = "danger_latency_without_approved_relief"
         return orders, fields
-    policy, load_status = _load_policy_from_env(policy_file)
+    policy, load_status = _load_policy_from_env(policy_file, now=now)
     if not policy:
         fields["entry_split_order_skip_reason"] = load_status
         return orders, fields
@@ -1142,7 +1192,15 @@ def apply_entry_split_order_policy(
     while len(offsets) < desired_legs:
         offsets.append(offsets[-1] + 1 if offsets else 0)
     policy_first_weight = (_safe_float(bucket_policy.get("qty_weight_min"), 0.5) or 0.5)
-    first_weight, passive_bias_reason = _entry_split_passive_bias_first_weight(policy_first_weight, context_fields)
+    market_first_leg_active = _market_first_leg_active(now=now)
+    if market_first_leg_active:
+        first_weight = policy_first_weight
+        passive_bias_reason = ""
+    else:
+        first_weight, passive_bias_reason = _entry_split_passive_bias_first_weight(
+            policy_first_weight,
+            context_fields,
+        )
     runtime_weight_adjusted = abs(float(first_weight) - float(policy_first_weight)) > 0.000001
     split_variant_id = policy_split_variant_id
     if runtime_weight_adjusted:
@@ -1158,6 +1216,7 @@ def apply_entry_split_order_policy(
     ][:desired_legs] if isinstance(raw_pct_offsets, list) else []
     while pct_offsets and len(pct_offsets) < desired_legs:
         pct_offsets.append(pct_offsets[-1])
+    market_first_reference_price = _market_first_leg_reference_price(context_fields, base_price)
     split_orders: list[dict[str, Any]] = []
     for idx, qty in enumerate(quantities):
         price = (
@@ -1171,6 +1230,14 @@ def apply_entry_split_order_policy(
                 "tag": "entry_split_primary" if idx == 0 else f"entry_split_passive_{idx}",
                 "qty": qty,
                 "price": price,
+                "order_type_code": "3" if market_first_leg_active and idx == 0 else base_order.get("order_type_code", "00"),
+                "entry_split_order_execution_mode": (
+                    "market_first" if market_first_leg_active and idx == 0 else "resolver_limit"
+                ),
+                "entry_split_order_market_first_leg_applied": bool(market_first_leg_active and idx == 0),
+                "entry_split_order_market_reference_price": (
+                    market_first_reference_price if market_first_leg_active and idx == 0 else 0
+                ),
                 "entry_split_order_leg_index": idx + 1,
                 "entry_split_order_policy_version": policy.get("policy_version"),
                 "entry_split_order_policy_mode": policy_mode,
@@ -1178,6 +1245,9 @@ def apply_entry_split_order_policy(
                 "entry_split_order_policy_variant_id": policy_split_variant_id,
                 "entry_split_order_bucket": bucket,
                 "entry_split_order_runtime_default_policy_applied": fallback_policy_applied,
+                "entry_split_order_operator_fallback_authorized": bool(
+                    policy.get("entry_split_order_operator_fallback_authorized")
+                ),
                 "entry_split_order_price_offsets_ticks": ",".join(str(item) for item in applied_offsets),
                 "entry_split_order_price_offsets_pct": ",".join(str(item) for item in pct_offsets) if pct_offsets else "",
                 "entry_split_order_price_offset_ticks": applied_offsets[idx],
@@ -1206,6 +1276,18 @@ def apply_entry_split_order_policy(
             "entry_split_order_variant_id": split_variant_id,
             "entry_split_order_policy_variant_id": policy_split_variant_id,
             "entry_split_order_runtime_default_policy_applied": fallback_policy_applied,
+            "entry_split_order_operator_fallback_authorized": bool(
+                policy.get("entry_split_order_operator_fallback_authorized")
+            ),
+            "entry_split_order_market_first_leg_enabled": market_first_leg_active,
+            "entry_split_order_market_first_leg_applied": market_first_leg_active,
+            "entry_split_order_market_first_leg_active_date": str(
+                os.environ.get("KORSTOCKSCAN_ENTRY_SPLIT_MARKET_FIRST_LEG_ACTIVE_DATE") or ""
+            ),
+            "entry_split_order_market_first_leg_qty": quantities[0] if market_first_leg_active else 0,
+            "entry_split_order_market_reference_price": (
+                market_first_reference_price if market_first_leg_active else 0
+            ),
             "entry_split_order_policy_file": policy_file
             or os.environ.get("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE"),
             "entry_split_order_leg_count": len(split_orders),

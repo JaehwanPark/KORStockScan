@@ -19779,6 +19779,111 @@ def test_split_entry_cancel_only_expired_leg_keeps_later_legs(monkeypatch):
     assert requested[0]["split_bundle_final_cancel"] is False
 
 
+def test_resolve_live_entry_order_request_uses_market_only_for_authorized_first_leg():
+    market = state_handlers._resolve_live_entry_order_request(
+        "SCALPING",
+        "normal",
+        {
+            "tag": "entry_split_primary",
+            "qty": 13,
+            "price": 12160,
+            "entry_split_order_leg_index": 1,
+            "entry_split_order_execution_mode": "market_first",
+            "entry_split_order_market_first_leg_applied": True,
+            "entry_split_order_market_reference_price": 12240,
+        },
+        "00",
+        12160,
+    )
+    residual = state_handlers._resolve_live_entry_order_request(
+        "SCALPING",
+        "normal",
+        {
+            "tag": "entry_split_passive_1",
+            "qty": 19,
+            "price": 12120,
+            "entry_split_order_leg_index": 2,
+            "entry_split_order_execution_mode": "resolver_limit",
+            "entry_split_order_market_first_leg_applied": False,
+        },
+        "00",
+        12160,
+    )
+
+    assert market == {
+        "qty": 13,
+        "price": 0,
+        "guard_price": 12240,
+        "order_type_code": "3",
+        "tif": "DAY",
+        "tag": "entry_split_primary",
+    }
+    assert residual["price"] == 12120
+    assert residual["guard_price"] == 12120
+    assert residual["order_type_code"] == "00"
+
+
+def test_entry_split_leg_provenance_overrides_bundle_without_duplicate_keys():
+    bundle = {
+        "entry_split_order_market_first_leg_applied": True,
+        "entry_split_order_market_reference_price": 12240,
+        "entry_split_order_operator_fallback_authorized": True,
+    }
+    residual_leg = state_handlers._split_order_meta_fields(
+        {
+            "entry_split_order_execution_mode": "resolver_limit",
+            "entry_split_order_market_first_leg_applied": False,
+            "entry_split_order_market_reference_price": 0,
+            "entry_split_order_operator_fallback_authorized": True,
+        }
+    )
+
+    merged = state_handlers._merge_entry_pipeline_field_groups(bundle, residual_leg)
+
+    assert merged["entry_split_order_execution_mode"] == "resolver_limit"
+    assert merged["entry_split_order_market_first_leg_applied"] is False
+    assert merged["entry_split_order_market_reference_price"] == 0
+    assert merged["entry_split_order_operator_fallback_authorized"] is True
+
+
+def test_market_first_cancel_analytics_uses_guard_price_not_zero(monkeypatch):
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_cancel_order",
+        lambda **kwargs: {"return_code": "0", "ord_no": "C1", "return_msg": "ok"},
+    )
+    stock = {
+        "id": 1,
+        "name": "MARKET_FIRST",
+        "strategy": "SCALPING",
+        "pending_entry_orders": [
+            {
+                "tag": "entry_split_primary",
+                "qty": 16,
+                "filled_qty": 0,
+                "price": 0,
+                "entry_order_guard_price": 12240,
+                "entry_order_analytics_price": 12240,
+                "ord_no": "M1",
+                "order_type": "3",
+                "status": "OPEN",
+                "sent_at": time.time() - 10,
+            }
+        ],
+    }
+
+    assert state_handlers._cancel_pending_entry_orders(stock, "006340", force=True) == "cancelled"
+    requested = next(fields for stage, fields in logs if stage == "entry_order_cancel_requested")
+    assert requested["submitted_price"] == 12240
+    assert requested["submitted_broker_price"] == 0
+
+
 def test_split_entry_residual_cancel_after_partial_fill_has_no_cooldown(monkeypatch):
     cancel_calls = []
     monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda *args, **kwargs: None)

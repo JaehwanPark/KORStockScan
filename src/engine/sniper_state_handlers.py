@@ -23148,6 +23148,16 @@ def _split_order_meta_fields(order: dict | None) -> dict:
         "split_leg_role": src.get("split_leg_role"),
         "split_price_offset_pct": src.get("split_price_offset_pct"),
         "split_price_offset_ticks": src.get("split_price_offset_ticks"),
+        "entry_split_order_execution_mode": src.get("entry_split_order_execution_mode"),
+        "entry_split_order_market_first_leg_applied": bool(
+            src.get("entry_split_order_market_first_leg_applied")
+        ),
+        "entry_split_order_market_reference_price": src.get(
+            "entry_split_order_market_reference_price"
+        ),
+        "entry_split_order_operator_fallback_authorized": bool(
+            src.get("entry_split_order_operator_fallback_authorized")
+        ),
     }
 
 
@@ -35405,6 +35415,24 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 "entry_split_order_runtime_default_policy_applied": entry_split_fields.get(
                     "entry_split_order_runtime_default_policy_applied"
                 ),
+                "entry_split_order_operator_fallback_authorized": entry_split_fields.get(
+                    "entry_split_order_operator_fallback_authorized"
+                ),
+                "entry_split_order_market_first_leg_enabled": entry_split_fields.get(
+                    "entry_split_order_market_first_leg_enabled"
+                ),
+                "entry_split_order_market_first_leg_applied": entry_split_fields.get(
+                    "entry_split_order_market_first_leg_applied"
+                ),
+                "entry_split_order_market_first_leg_active_date": entry_split_fields.get(
+                    "entry_split_order_market_first_leg_active_date"
+                ),
+                "entry_split_order_market_first_leg_qty": entry_split_fields.get(
+                    "entry_split_order_market_first_leg_qty"
+                ),
+                "entry_split_order_market_reference_price": entry_split_fields.get(
+                    "entry_split_order_market_reference_price"
+                ),
             }
         )
         _log_entry_pipeline(
@@ -35455,17 +35483,40 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         "entry_split_order_runtime_default_policy_applied": submit_revalidation_fields.get(
             "entry_split_order_runtime_default_policy_applied"
         ),
+        "entry_split_order_operator_fallback_authorized": submit_revalidation_fields.get(
+            "entry_split_order_operator_fallback_authorized"
+        ),
+        "entry_split_order_market_first_leg_enabled": submit_revalidation_fields.get(
+            "entry_split_order_market_first_leg_enabled"
+        ),
+        "entry_split_order_market_first_leg_applied": submit_revalidation_fields.get(
+            "entry_split_order_market_first_leg_applied"
+        ),
+        "entry_split_order_market_first_leg_active_date": submit_revalidation_fields.get(
+            "entry_split_order_market_first_leg_active_date"
+        ),
+        "entry_split_order_market_first_leg_qty": submit_revalidation_fields.get(
+            "entry_split_order_market_first_leg_qty"
+        ),
+        "entry_split_order_market_reference_price": submit_revalidation_fields.get(
+            "entry_split_order_market_reference_price"
+        ),
     }
     swing_order_dry_run = _is_swing_live_order_dry_run(strategy)
     broker_order_forbidden_for_request = bool(swing_order_dry_run)
     for planned_order in planned_orders:
         split_leg_meta_fields = _split_order_meta_fields(planned_order)
+        leg_submit_revalidation_fields = _merge_entry_pipeline_field_groups(
+            submit_revalidation_fields,
+            split_leg_meta_fields,
+        )
         request = _resolve_live_entry_order_request(
             strategy=strategy, entry_mode=entry_mode, planned_order=planned_order,
             default_order_type_code=order_type_code, default_price=final_price,
         )
         qty = request['qty']
-        price = request['price']
+        broker_price = request['price']
+        price = int(request.get('guard_price', broker_price) or broker_price or 0)
         if qty <= 0:
             _log_entry_pipeline(
                 stock,
@@ -35475,6 +35526,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 planned_order_qty=planned_order.get("qty", "not_applicable_planned_order_qty"),
                 planned_order_price=planned_order.get("price", "not_applicable_planned_order_price"),
                 resolved_order_price=price,
+                broker_order_price=broker_price,
                 **_quantity_zero_context_fields(
                     domain="submit_order_leg",
                     blocker="skip_order_leg_zero_qty",
@@ -35636,7 +35688,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             )
             continue
         _log_entry_pipeline(
-            stock, code, "order_leg_request", tag=request['tag'], qty=qty, price=price,
+            stock, code, "order_leg_request", tag=request['tag'], qty=qty, price=broker_price,
+            guard_price=price,
             order_type=request['order_type_code'], tif=request['tif'],
             entry_price_guard=latency_gate.get('entry_price_guard'),
             **pre_submit_price_guard_fields,
@@ -35647,11 +35700,10 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             conditional_1tick_real_override_applied=bool(latency_gate.get('conditional_1tick_real_override_applied')),
             conditional_1tick_real_override_reason=latency_gate.get('conditional_1tick_real_override_reason'),
             conditional_1tick_real_override_context=latency_gate.get('conditional_1tick_real_override_context'),
-            **split_leg_meta_fields,
             **_without_entry_pipeline_fields(
                 _merge_entry_pipeline_field_groups(
                     real_pre_submit_guard_fields,
-                    submit_revalidation_fields,
+                    leg_submit_revalidation_fields,
                     price_snapshot,
                     swing_entry_micro_fields,
                     _panic_gap_weight_log_fields(latency_gate),
@@ -35675,8 +35727,10 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 'price_below_bid_bps': price_snapshot.get('price_below_bid_bps'),
                 'price_decision_context_age_ms': submit_revalidation_fields.get('price_decision_context_age_ms'),
                 'quote_age_at_submit_ms': submit_revalidation_fields.get('quote_age_at_submit_ms'),
-                **split_leg_meta_fields,
-                **entry_split_order_submit_fields,
+                **_merge_entry_pipeline_field_groups(
+                    entry_split_order_submit_fields,
+                    split_leg_meta_fields,
+                ),
             })
             log_info(
                 f"[SWING_LIVE_ORDER_DRY_RUN] {stock.get('name')}({code}) "
@@ -35693,7 +35747,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 would_submit_stage="order_leg_sent",
                 **_swing_sim_priority_event_fields(stock),
                 **_merge_entry_pipeline_field_groups(
-                    submit_revalidation_fields,
+                    leg_submit_revalidation_fields,
                     price_snapshot,
                     swing_entry_micro_fields,
                 ),
@@ -35704,7 +35758,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             _entry_order_submit_dmst_stex_tp(request) if submit_dmst_stex_tp_source == "request" else None
         )
         res = kiwoom_orders.send_buy_order(
-            code, qty, price, request['order_type_code'], token=KIWOOM_TOKEN,
+            code, qty, broker_price, request['order_type_code'], token=KIWOOM_TOKEN,
             order_type_desc="매수" if strategy == 'SCALPING' else "최유리지정가", tif=request['tif'],
             dmst_stex_tp=submit_dmst_stex_tp,
         )
@@ -35743,7 +35797,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             submit_trusted_count = entry_orderbook_micro_fields.get("tick_aggressor_trusted_count")
         order_sent_ts = time.time()
         successful_orders.append({
-            'tag': request['tag'], 'qty': qty, 'price': price, 'ord_no': ord_no, 'tif': request['tif'],
+            'tag': request['tag'], 'qty': qty, 'price': broker_price, 'ord_no': ord_no, 'tif': request['tif'],
+            'entry_order_guard_price': price,
+            'entry_order_analytics_price': price,
             'order_type': request['order_type_code'], 'status': 'OPEN', 'filled_qty': 0, 'sent_at': order_sent_ts,
             'dmst_stex_tp': submit_dmst_stex_tp,
             'dmst_stex_tp_source': submit_dmst_stex_tp_source,
@@ -35772,15 +35828,18 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             'mark_price_at_submit': int(latency_gate.get('latest_price', 0) or curr_price or 0),
             'submitted_mark_price': int(latency_gate.get('signal_price', 0) or curr_price or 0),
             'latest_price_at_submit': int(latency_gate.get('latest_price', 0) or curr_price or 0),
-            **split_leg_meta_fields,
-            **entry_split_order_submit_fields,
+            **_merge_entry_pipeline_field_groups(
+                entry_split_order_submit_fields,
+                split_leg_meta_fields,
+            ),
         })
         _stage_buy_order_submission(
             stock=stock, code=code, curr_price=curr_price, requested_qty=requested_qty, msg=msg, entry_orders=successful_orders,
         )
         log_info(
             f"[LATENCY_ENTRY_ORDER_SENT] {stock.get('name')}({code}) "
-            f"tag={request['tag']} qty={qty} price={price} type={request['order_type_code']} tif={request['tif']} ord_no={ord_no}"
+            f"tag={request['tag']} qty={qty} price={broker_price} guard_price={price} "
+            f"type={request['order_type_code']} tif={request['tif']} ord_no={ord_no}"
         )
         _log_entry_pipeline(
             stock,
@@ -38235,7 +38294,12 @@ def _cancel_pending_entry_orders(stock, code, *, force=False, expired_only=False
                 "qty": _coerce_int_value(order.get('qty')),
                 "filled_qty": _coerce_int_value(order.get('filled_qty')),
                 "remaining_qty": max(0, _coerce_int_value(order.get('qty')) - _coerce_int_value(order.get('filled_qty'))),
-                "submitted_price": _coerce_int_value(order.get('price')),
+                "submitted_price": _coerce_int_value(
+                    order.get('entry_order_analytics_price')
+                    or order.get('entry_order_guard_price')
+                    or order.get('price')
+                ),
+                "submitted_broker_price": _coerce_int_value(order.get('price')),
                 "order_age_sec": f"{order_age_sec:.1f}",
                 "entry_order_lifecycle": str(order.get('entry_order_lifecycle') or "standard"),
                 "entry_passive_probe_applied": bool(order.get('entry_passive_probe_applied')),
@@ -38381,7 +38445,11 @@ def _cancel_pending_entry_orders(stock, code, *, force=False, expired_only=False
                         order_no=ord_no,
                         submitted_at=sent_at or time.time(),
                         cancelled_at=time.time(),
-                        submitted_price=_coerce_int_value(order.get("price")),
+                        submitted_price=_coerce_int_value(
+                            order.get("entry_order_analytics_price")
+                            or order.get("entry_order_guard_price")
+                            or order.get("price")
+                        ),
                         qty=max(0, _coerce_int_value(order.get("qty")) - _coerce_int_value(order.get("filled_qty"))),
                         profile=wait_profile,
                         actual_timeout_sec=_resolve_buy_order_timeout_sec(stock, stock.get("strategy")),
@@ -39411,10 +39479,32 @@ def _resolve_live_entry_order_request(strategy, entry_mode, planned_order, defau
     qty = int(planned_order.get('qty', 0) or 0)
     price = int(planned_order.get('price', default_price) or default_price or 0)
 
+    if (
+        strategy == 'SCALPING'
+        and bool(planned_order.get('entry_split_order_market_first_leg_applied'))
+        and str(planned_order.get('entry_split_order_execution_mode') or '') == 'market_first'
+        and int(planned_order.get('entry_split_order_leg_index', 0) or 0) == 1
+    ):
+        guard_price = int(
+            planned_order.get('entry_split_order_market_reference_price')
+            or price
+            or default_price
+            or 0
+        )
+        return {
+            'qty': qty,
+            'price': 0,
+            'guard_price': guard_price,
+            'order_type_code': '3',
+            'tif': 'DAY',
+            'tag': tag,
+        }
+
     if tif == 'IOC':
         return {
             'qty': qty,
             'price': 0,
+            'guard_price': price,
             'order_type_code': '16',
             'tif': tif,
             'tag': tag,
@@ -39424,6 +39514,7 @@ def _resolve_live_entry_order_request(strategy, entry_mode, planned_order, defau
         return {
             'qty': qty,
             'price': price,
+            'guard_price': price,
             'order_type_code': '00',
             'tif': tif,
             'tag': tag,
@@ -39432,6 +39523,7 @@ def _resolve_live_entry_order_request(strategy, entry_mode, planned_order, defau
     return {
         'qty': qty,
         'price': int(default_price or 0),
+        'guard_price': int(default_price or 0),
         'order_type_code': default_order_type_code,
         'tif': tif,
         'tag': tag,

@@ -212,6 +212,7 @@ ENTRY_SPLIT_POST_SELL_KEYS = (
     "entry_split_order_qty_weight_min",
     "entry_split_order_qty_weight_max",
     "entry_split_order_runtime_default_policy_applied",
+    "entry_split_order_operator_fallback_authorized",
 )
 
 

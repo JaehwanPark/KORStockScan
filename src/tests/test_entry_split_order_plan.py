@@ -291,6 +291,8 @@ def test_build_report_creates_bounded_equal_baseline_without_real_outcome(monkey
 
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED", "true")
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE", str(split_plan.policy_path(target_date)))
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_OPERATOR_FALLBACK_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_OPERATOR_FALLBACK_ACTIVE_DATE", target_date)
     orders, fields = split_plan.apply_entry_split_order_policy(
         [{"tag": "normal", "qty": 2, "price": 1000}],
         latency_gate={
@@ -724,6 +726,123 @@ def test_allocator_passive_centers_buy_action_without_wait_warning(monkeypatch, 
     assert fields["entry_split_order_qty_weight_max"] == 0.4
     assert fields["entry_split_order_runtime_weight_adjustment_applied"] is True
     assert [item["qty"] for item in orders] == [2, 3]
+
+
+def test_allocator_market_first_uses_policy_weight_and_keeps_residual_at_resolver(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    target_date = "2026-07-14"
+    policy_file = split_plan.policy_path(target_date)
+    policy_file.parent.mkdir(parents=True, exist_ok=True)
+    policy_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "entry_split_order_policy_v1",
+                "policy_version": "test-market-first",
+                "source_date": "2026-07-13",
+                "buckets": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE", target_date)
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE", str(policy_file))
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_MARKET_FIRST_LEG_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_MARKET_FIRST_LEG_ACTIVE_DATE", target_date)
+
+    orders, fields = split_plan.apply_entry_split_order_policy(
+        [{"tag": "normal", "qty": 32, "price": 12160, "order_type_code": "00", "tif": "DAY"}],
+        latency_gate={
+            "spread_bps": 41.017,
+            "buy_pressure_10t": 50,
+            "latency_state": "CAUTION",
+            "quote_stale_at_submit": False,
+            "entry_ai_submit_authority_action": "WAIT",
+            "best_ask_at_submit": 12240,
+            "order_price": 12160,
+        },
+        now=datetime(2026, 7, 14, 12, 0, tzinfo=timezone(timedelta(hours=9))),
+    )
+
+    assert fields["entry_split_order_policy_applied"] is True
+    assert fields["entry_split_order_market_first_leg_applied"] is True
+    assert fields["entry_split_order_market_first_leg_qty"] == 16
+    assert fields["entry_split_order_qty_weight_min"] == 0.5
+    assert fields["entry_split_order_passive_bias_reason"] == ""
+    assert fields["entry_split_order_runtime_weight_adjustment_applied"] is False
+    assert [item["qty"] for item in orders] == [16, 16]
+    assert orders[0]["order_type_code"] == "3"
+    assert orders[0]["entry_split_order_execution_mode"] == "market_first"
+    assert orders[0]["entry_split_order_market_reference_price"] == 12240
+    assert orders[1]["order_type_code"] == "00"
+    assert orders[1]["entry_split_order_execution_mode"] == "resolver_limit"
+    assert orders[1]["price"] < orders[0]["price"]
+
+
+def test_allocator_date_bounded_policy_becomes_inactive(monkeypatch, tmp_path):
+    policy_file = tmp_path / "entry-policy.json"
+    policy_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "entry_split_order_policy_v1",
+                "policy_version": "date-bounded",
+                "source_date": "2026-07-13",
+                "buckets": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE", "2026-07-14")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE", str(policy_file))
+
+    orders, fields = split_plan.apply_entry_split_order_policy(
+        [{"tag": "normal", "qty": 4, "price": 1000}],
+        latency_gate={"spread_bps": 5, "latency_state": "SAFE"},
+        now=datetime(2026, 7, 15, 9, 0, tzinfo=timezone(timedelta(hours=9))),
+    )
+
+    assert fields["entry_split_order_policy_applied"] is False
+    assert fields["entry_split_order_skip_reason"] == "policy_inactive_date"
+    assert orders[0]["qty"] == 4
+
+
+def test_allocator_requires_date_bounded_operator_fallback_for_denied_policy(monkeypatch, tmp_path):
+    policy_file = tmp_path / "entry-policy-denied.json"
+    policy_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "entry_split_order_policy_v1",
+                "policy_version": "denied-policy",
+                "source_date": "2026-07-13",
+                "runtime_apply_allowed": False,
+                "buckets": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE", str(policy_file))
+    now = datetime(2026, 7, 14, 12, 0, tzinfo=timezone(timedelta(hours=9)))
+
+    _, blocked_fields = split_plan.apply_entry_split_order_policy(
+        [{"tag": "normal", "qty": 4, "price": 1000}],
+        latency_gate={"spread_bps": 5, "latency_state": "SAFE"},
+        now=now,
+    )
+    assert blocked_fields["entry_split_order_skip_reason"] == "policy_runtime_apply_not_allowed"
+
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_OPERATOR_FALLBACK_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_OPERATOR_FALLBACK_ACTIVE_DATE", "2026-07-14")
+    orders, fields = split_plan.apply_entry_split_order_policy(
+        [{"tag": "normal", "qty": 4, "price": 1000}],
+        latency_gate={"spread_bps": 5, "latency_state": "SAFE"},
+        now=now,
+    )
+
+    assert fields["entry_split_order_policy_applied"] is True
+    assert fields["entry_split_order_operator_fallback_authorized"] is True
+    assert all(item["entry_split_order_operator_fallback_authorized"] is True for item in orders)
 
 
 def test_allocator_allows_split_when_source_quote_stale_recovered_before_submit(monkeypatch, tmp_path):
