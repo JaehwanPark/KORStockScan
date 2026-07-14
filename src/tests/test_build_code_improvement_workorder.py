@@ -4663,6 +4663,15 @@ def test_build_code_improvement_workorder_adds_entry_adm_gap_order(tmp_path, mon
                     "prompt_applied_count": 0,
                     "missing_actions": ["WAIT_REQUOTE"],
                     "artifact": str(adm_path),
+                    "outcome_join_diagnostic": {
+                        "status": "no_candidate_key_overlap",
+                        "zero_join_reason": "entry_adm_candidate_keys_do_not_overlap_post_sell_evaluation_keys",
+                        "candidate_post_sell_key_overlap_count": 0,
+                        "post_sell_evaluation_rows": 1,
+                        "post_sell_evaluation_join_keys": 1,
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                    },
                 },
             },
             ensure_ascii=False,
@@ -4686,6 +4695,11 @@ def test_build_code_improvement_workorder_adds_entry_adm_gap_order(tmp_path, mon
     assert order["decision"] == "implement_now"
     assert order["runtime_effect"] is False
     assert "joined_sample=2" in order["evidence"]
+    assert "outcome_join_status=no_candidate_key_overlap" in order["evidence"]
+    assert (
+        "zero_join_reason=entry_adm_candidate_keys_do_not_overlap_post_sell_evaluation_keys"
+        in order["evidence"]
+    )
     assert report["source"]["scalp_entry_action_decision_matrix"] == str(adm_path)
 
 

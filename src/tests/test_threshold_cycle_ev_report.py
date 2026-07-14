@@ -147,6 +147,12 @@ def test_scalp_entry_adm_summary_preserves_unknown_bucket_summary(tmp_path, monk
                         "affected_rows": 4,
                         "source_quality_gate": "source_quality_blocker",
                     },
+                    "outcome_join_diagnostic": {
+                        "status": "no_candidate_key_overlap",
+                        "zero_join_reason": "entry_adm_candidate_keys_do_not_overlap_post_sell_evaluation_keys",
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                    },
                 },
                 "warnings": ["unknown_bucket_source_quality_gap"],
                 "action_summary": [],
@@ -164,6 +170,8 @@ def test_scalp_entry_adm_summary_preserves_unknown_bucket_summary(tmp_path, monk
 
     assert path == str(adm_path)
     assert summary["unknown_bucket_summary"]["affected_rows"] == 4
+    assert summary["outcome_join_diagnostic"]["status"] == "no_candidate_key_overlap"
+    assert summary["outcome_join_diagnostic"]["runtime_effect"] is False
     assert "scalp_entry_adm:unknown_bucket_source_quality_gap" in warnings
 
 

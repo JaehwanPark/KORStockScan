@@ -797,6 +797,11 @@ def _scalp_entry_adm_summary(target_date: str) -> tuple[dict[str, Any], str | No
         if isinstance(summary.get("unknown_bucket_summary"), dict)
         else {}
     )
+    outcome_join_diagnostic = (
+        summary.get("outcome_join_diagnostic")
+        if isinstance(summary.get("outcome_join_diagnostic"), dict)
+        else {}
+    )
     warnings = [f"scalp_entry_adm:{item}" for item in (payload.get("warnings") or []) if str(item)]
     return (
         {
@@ -830,6 +835,7 @@ def _scalp_entry_adm_summary(target_date: str) -> tuple[dict[str, Any], str | No
             if isinstance(summary.get("action_normalization_counts"), dict)
             else {},
             "unknown_bucket_summary": unknown_bucket_summary,
+            "outcome_join_diagnostic": outcome_join_diagnostic,
             "top_actions": [
                 {
                     "action": item.get("action"),
@@ -2685,6 +2691,7 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         f"- forced_action_counts: `{scalp_entry_adm.get('forced_action_counts') or {}}`",
         f"- missing_actions: `{scalp_entry_adm.get('missing_actions') or []}`",
         f"- zero_sample_actions: `{scalp_entry_adm.get('zero_sample_actions') or []}`",
+        f"- outcome_join_diagnostic: `{scalp_entry_adm.get('outcome_join_diagnostic') or {}}`",
         f"- top_actions: `{scalp_entry_adm.get('top_actions') or []}`",
         "",
         "## Lifecycle Decision Matrix",

@@ -3025,6 +3025,22 @@ def _entry_adm_followup_orders(ev_report: dict[str, Any]) -> list[dict[str, Any]
         f"sample_floor={floor}",
         f"prompt_applied_count={prompt_applied_count}",
     ]
+    outcome_join_diagnostic = (
+        adm.get("outcome_join_diagnostic")
+        if isinstance(adm.get("outcome_join_diagnostic"), dict)
+        else {}
+    )
+    if outcome_join_diagnostic:
+        evidence.extend(
+            [
+                f"outcome_join_status={outcome_join_diagnostic.get('status')}",
+                f"zero_join_reason={outcome_join_diagnostic.get('zero_join_reason')}",
+                "candidate_post_sell_key_overlap_count="
+                f"{outcome_join_diagnostic.get('candidate_post_sell_key_overlap_count')}",
+                f"post_sell_evaluation_rows={outcome_join_diagnostic.get('post_sell_evaluation_rows')}",
+                f"post_sell_evaluation_join_keys={outcome_join_diagnostic.get('post_sell_evaluation_join_keys')}",
+            ]
+        )
     if missing_actions:
         evidence.append("missing_actions=" + ",".join(str(value) for value in missing_actions))
     source_path = sources.get("scalp_entry_action_decision_matrix") or adm.get("artifact")

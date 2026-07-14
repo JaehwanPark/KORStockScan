@@ -1035,6 +1035,69 @@ def _bucket_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(summaries, key=lambda item: (-_safe_int(item.get("sample_count")), item.get("bucket_token") or ""))[:50]
 
 
+def _outcome_join_diagnostic(
+    *,
+    rows: list[dict[str, Any]],
+    aggregate_rows: list[dict[str, Any]],
+    evaluations: dict[str, dict[str, Any]],
+    eval_summary: dict[str, Any],
+) -> dict[str, Any]:
+    candidate_keys_by_field: dict[str, set[str]] = {
+        "candidate_id": set(),
+        "entry_adm_candidate_id": set(),
+        "sim_record_id": set(),
+        "record_id": set(),
+    }
+    for row in rows:
+        for field, keys in candidate_keys_by_field.items():
+            value = str(row.get(field) or "").strip()
+            if value:
+                keys.add(value)
+    candidate_keys = set().union(*candidate_keys_by_field.values())
+    evaluation_keys = {str(key or "").strip() for key in evaluations.keys() if str(key or "").strip()}
+    overlap_keys = candidate_keys & evaluation_keys
+    aggregate_joined_sample = sum(1 for row in aggregate_rows if row.get("outcome_joined"))
+    joined_sample_all_rows = sum(1 for row in rows if row.get("outcome_joined"))
+    post_sell_rows = _safe_int(eval_summary.get("rows"), 0)
+    join_keys = _safe_int(eval_summary.get("join_keys"), len(evaluation_keys))
+    if aggregate_joined_sample > 0:
+        status = "joined"
+        reason = "post_sell_outcome_join_available"
+    elif not rows:
+        status = "no_entry_adm_candidates"
+        reason = "no_relevant_entry_adm_events"
+    elif post_sell_rows <= 0 or join_keys <= 0:
+        status = "post_sell_evaluation_missing_or_empty"
+        reason = "no_post_sell_evaluation_rows_for_target_date"
+    elif not candidate_keys:
+        status = "candidate_join_keys_missing"
+        reason = "entry_adm_rows_have_no_candidate_or_sim_record_join_key"
+    elif not overlap_keys:
+        status = "no_candidate_key_overlap"
+        reason = "entry_adm_candidate_keys_do_not_overlap_post_sell_evaluation_keys"
+    else:
+        status = "overlap_present_but_unjoined"
+        reason = "candidate_keys_overlap_but_rows_did_not_mark_outcome_joined"
+    return {
+        "status": status,
+        "zero_join_reason": reason if aggregate_joined_sample <= 0 else "",
+        "candidate_key_count": len(candidate_keys),
+        "candidate_key_field_counts": {
+            field: len(values) for field, values in candidate_keys_by_field.items()
+        },
+        "post_sell_evaluation_rows": post_sell_rows,
+        "post_sell_evaluation_join_keys": join_keys,
+        "candidate_post_sell_key_overlap_count": len(overlap_keys),
+        "joined_sample": aggregate_joined_sample,
+        "joined_sample_all_rows": joined_sample_all_rows,
+        "sample_floor": SAMPLE_FLOOR,
+        "sample_floor_met": aggregate_joined_sample >= SAMPLE_FLOOR,
+        "decision_authority": "source_quality_gap_discovery",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+
+
 def _is_numeric_consistency_excluded_row(row: dict[str, Any]) -> bool:
     if bool(row.get("ai_reason_numeric_inconsistency")):
         return True
@@ -1408,6 +1471,12 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
     numeric_consistency_rows = [row for row in rows if _is_numeric_consistency_excluded_row(row)]
     aggregate_rows = [row for row in rows if not _is_numeric_consistency_excluded_row(row)]
     aggregate_joined_sample = sum(1 for row in aggregate_rows if row.get("outcome_joined"))
+    outcome_join_diagnostic = _outcome_join_diagnostic(
+        rows=rows,
+        aggregate_rows=aggregate_rows,
+        evaluations=evaluations,
+        eval_summary=eval_summary,
+    )
     warnings = []
     if aggregate_joined_sample < SAMPLE_FLOOR:
         warnings.append("joined_sample_below_sample_floor")
@@ -1486,6 +1555,7 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
             "adm_bucket_lookup_followup_required": bool(adm_lookup_closure.get("followup_required")),
             "prior_missing_top_tokens": [[token, count] for token, count in prior_missing_top_tokens],
             "prior_missing_top_stages": [[stage, count] for stage, count in prior_missing_top_stages],
+            "outcome_join_diagnostic": outcome_join_diagnostic,
             "unknown_bucket_summary": unknown_summary,
             "status": status,
             "warnings": warnings,

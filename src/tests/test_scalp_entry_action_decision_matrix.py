@@ -237,6 +237,9 @@ def test_scalp_entry_adm_report_aggregates_actions_and_joins_outcomes(tmp_path, 
         "submitted_or_latency_pass_non_buy_action_normalized": 1
     }
     assert report["summary"]["joined_sample"] == 2
+    assert report["summary"]["outcome_join_diagnostic"]["status"] == "joined"
+    assert report["summary"]["outcome_join_diagnostic"]["candidate_post_sell_key_overlap_count"] >= 2
+    assert report["summary"]["outcome_join_diagnostic"]["runtime_effect"] is False
     buy_now = next(item for item in report["action_summary"] if item["action"] == "BUY_NOW")
     defensive = next(item for item in report["action_summary"] if item["action"] == "BUY_DEFENSIVE")
     assert buy_now["equal_weight_avg_profit_pct"] == 1.25
@@ -306,10 +309,63 @@ def test_scalp_entry_adm_report_excludes_numeric_inconsistency_rows_from_aggrega
     assert report["summary"]["joined_sample_all_rows"] == 0
     assert report["summary"]["aggregate_joined_sample"] == 0
     assert report["summary"]["numeric_consistency_excluded_count"] == 1
+    assert report["summary"]["outcome_join_diagnostic"]["status"] == "post_sell_evaluation_missing_or_empty"
+    assert (
+        report["summary"]["outcome_join_diagnostic"]["zero_join_reason"]
+        == "no_post_sell_evaluation_rows_for_target_date"
+    )
     assert "ai_numeric_consistency_rows_excluded_from_aggregates" in report["warnings"]
     assert "joined_sample_below_sample_floor" in report["warnings"]
     no_buy = next(item for item in report["action_summary"] if item["action"] == "NO_BUY_AI")
     assert no_buy["sample_count"] == 1
+
+
+def test_scalp_entry_adm_report_explains_zero_join_when_keys_do_not_overlap(tmp_path, monkeypatch):
+    pipeline_dir = tmp_path / "pipeline_events"
+    threshold_dir = tmp_path / "threshold_cycle"
+    post_sell_dir = tmp_path / "post_sell"
+    report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
+    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", threshold_dir)
+    monkeypatch.setattr(mod, "THRESHOLD_SNAPSHOT_DIR", threshold_dir / "snapshots")
+    monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
+    monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
+
+    _write_jsonl(
+        pipeline_dir / "pipeline_events_2026-05-18.jsonl",
+        [
+            {
+                "stage": "scalp_entry_action_decision_snapshot",
+                "stock_code": "111111",
+                "record_id": "R1",
+                "emitted_at": "2026-05-18T09:10:00",
+                "emitted_date": "2026-05-18",
+                "fields": {
+                    "candidate_id": "ADM-NOT-IN-EVAL",
+                    "chosen_action": "NO_BUY_AI",
+                    "entry_adm_prompt_applied": True,
+                },
+            }
+        ],
+    )
+    _write_jsonl(
+        post_sell_dir / "sim_post_sell_evaluations_2026-05-18.jsonl",
+        [{"candidate_id": "OTHER-ADM", "profit_rate": 1.25, "outcome": "MISSED_UPSIDE"}],
+    )
+
+    report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
+
+    diagnostic = report["summary"]["outcome_join_diagnostic"]
+    assert report["summary"]["joined_sample"] == 0
+    assert diagnostic["status"] == "no_candidate_key_overlap"
+    assert diagnostic["zero_join_reason"] == (
+        "entry_adm_candidate_keys_do_not_overlap_post_sell_evaluation_keys"
+    )
+    assert diagnostic["candidate_key_count"] == 2
+    assert diagnostic["post_sell_evaluation_rows"] == 1
+    assert diagnostic["post_sell_evaluation_join_keys"] == 1
+    assert diagnostic["candidate_post_sell_key_overlap_count"] == 0
+    assert diagnostic["allowed_runtime_apply"] is False
 
 
 def test_scalp_entry_adm_loads_gzip_sim_evaluations(tmp_path, monkeypatch):
