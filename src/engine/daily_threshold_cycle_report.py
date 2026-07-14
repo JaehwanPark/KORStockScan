@@ -3287,10 +3287,24 @@ def _build_eligible_but_not_chosen_report(events: list[dict], target_date: str |
         chosen = str(fields.get("chosen_action") or "-").strip()
         eligible = _parse_action_list(fields.get("eligible_actions"))
         rejected_reasons = _parse_rejected_action_reasons(fields.get("rejected_actions"))
+        snapshot_profit_rate_available = _safe_float(fields.get("profit_rate"), None) is not None
         candidates = [action for action in eligible if action != chosen]
         for action in rejected_reasons:
             if action != chosen and action not in candidates:
                 candidates.append(action)
+        normalized_chosen = _normalize_counterfactual_proxy_action(chosen)
+        normalized_candidates = {
+            _normalize_counterfactual_proxy_action(action)
+            for action in candidates
+            if str(action or "").strip()
+        }
+        if (
+            snapshot_profit_rate_available
+            and normalized_chosen != "exit_only"
+            and "exit_only" not in normalized_candidates
+        ):
+            candidates.append("exit_only")
+            rejected_reasons["exit_only"] = "implicit_exit_at_snapshot_profit_proxy"
         if not candidates:
             continue
         record_id = event.get("record_id")

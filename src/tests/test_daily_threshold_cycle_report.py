@@ -2649,6 +2649,66 @@ def test_statistical_action_weight_reports_eligible_but_not_chosen(tmp_path, mon
     assert proxy_summary["missing_actions"] == ["avg_down_wait"]
 
 
+def test_holding_exit_matrix_uses_implicit_exit_snapshot_proxy_when_exit_not_listed():
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-04-30",
+        pipeline_loader=lambda target_date: [
+            {
+                "stage": "stat_action_decision_snapshot",
+                "record_id": 2001,
+                "stock_code": "000200",
+                "fields": {
+                    "chosen_action": "hold_wait",
+                    "eligible_actions": "avg_down_wait|pyramid_wait",
+                    "profit_rate": "0.8",
+                    "peak_profit": "1.1",
+                    "drawdown_from_peak": "0.3",
+                    "current_ai_score": "67",
+                },
+            }
+        ],
+        completed_rows_loader=lambda start_date, end_date: [],
+    )
+
+    eligible = report["threshold_snapshot"]["statistical_action_weight"]["recommended"]["eligible_but_not_chosen"]
+    exit_row = next(row for row in eligible["action_summary"] if row["candidate_action"] == "exit_only")
+    assert exit_row["sample"] == 1
+    assert exit_row["top_not_chosen_reasons"] == {"implicit_exit_at_snapshot_profit_proxy": 1}
+
+    matrix = report_mod.build_holding_exit_decision_matrix(report)
+    proxy_summary = matrix["counterfactual_proxy_summary"]
+    assert proxy_summary["per_action_samples"]["exit_only"] == 1
+    assert "exit_only" in proxy_summary["actions_present"]
+
+
+def test_holding_exit_matrix_does_not_create_implicit_exit_proxy_without_profit_rate():
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-04-30",
+        pipeline_loader=lambda target_date: [
+            {
+                "stage": "stat_action_decision_snapshot",
+                "record_id": 2002,
+                "stock_code": "000201",
+                "fields": {
+                    "chosen_action": "hold_wait",
+                    "eligible_actions": "avg_down_wait|pyramid_wait",
+                    "peak_profit": "1.1",
+                    "drawdown_from_peak": "0.3",
+                    "current_ai_score": "67",
+                },
+            }
+        ],
+        completed_rows_loader=lambda start_date, end_date: [],
+    )
+
+    eligible = report["threshold_snapshot"]["statistical_action_weight"]["recommended"]["eligible_but_not_chosen"]
+    assert all(row["candidate_action"] != "exit_only" for row in eligible["action_summary"])
+
+    matrix = report_mod.build_holding_exit_decision_matrix(report)
+    proxy_summary = matrix["counterfactual_proxy_summary"]
+    assert proxy_summary["per_action_samples"]["exit_only"] == 0
+
+
 def test_ofi_ai_smoothing_families_generate_manifest_only_candidates():
     pipeline_rows = []
     for record_id in range(1, 7):
