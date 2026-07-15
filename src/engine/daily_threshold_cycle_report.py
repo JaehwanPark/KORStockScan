@@ -5706,7 +5706,11 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
         [_safe_int(item.get("sim_sample_count"), 0) or 0 for item in candidate_grid if isinstance(item, dict)] or [0]
     )
     real_outcome_sample = max(
-        [_safe_int(item.get("real_outcome_joined_sample"), 0) or 0 for item in candidate_grid if isinstance(item, dict)]
+        [
+            _safe_int(item.get("real_outcome_joined_sample"), 0) or 0
+            for item in candidate_grid
+            if isinstance(item, dict)
+        ]
         or [0]
     )
     policy_file = str(recommended_policy.get("policy_file") or "")
@@ -5718,8 +5722,12 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
         "policy_file": "",
         "policy_version": "",
     }
+    runtime_apply_allowed = recommended_policy.get("runtime_apply_allowed") is True
     recommended = {
-        "enabled": bool(candidates) and bool(policy_file) and not source_quality_blocked,
+        "enabled": bool(candidates)
+        and bool(policy_file)
+        and not source_quality_blocked
+        and runtime_apply_allowed,
         "policy_file": policy_file,
         "policy_version": policy_version,
     }
@@ -5728,7 +5736,9 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
         "stage": "submit",
         "sample": {
             "report_loaded": report_loaded,
-            "report_path": str(report_path) if report_path and report_path.exists() else None,
+            "report_path": (
+                str(report_path) if report_path and report_path.exists() else None
+            ),
             "candidate_grid_count": len(candidate_grid),
             "recommended_policy_candidate_count": len(candidates),
             "bounded_equal_split_baseline_candidate_count": bounded_equal_baseline_count,
@@ -5738,22 +5748,39 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
             "sim_sample_count": sim_sample,
             "real_outcome_joined_sample": real_outcome_sample,
             "primary_sample_book": best_candidate.get("primary_sample_book")
-            or ("real" if real_outcome_sample > 0 else "real_outcome_pending" if real_sample >= 20 else "none"),
+            or (
+                "real"
+                if real_outcome_sample > 0
+                else "real_outcome_pending" if real_sample >= 20 else "none"
+            ),
             "source_quality_blocked": bool(source_quality_blocked),
             "source_quality_status": source_quality.get("status"),
-            "excluded_source_quality_event_count": input_summary.get("excluded_source_quality_event_count"),
+            "excluded_source_quality_event_count": input_summary.get(
+                "excluded_source_quality_event_count"
+            ),
             "policy_file": policy_file or None,
             "policy_version": policy_version or None,
+            "runtime_apply_allowed": runtime_apply_allowed,
             "best_context_bucket": best_candidate.get("context_bucket"),
-            "best_source_quality_adjusted_ev_pct": best_candidate.get("source_quality_adjusted_ev_pct"),
-            "best_notional_weighted_ev_pct": best_candidate.get("notional_weighted_ev_pct"),
-            "best_downside_p10_profit_rate": best_candidate.get("downside_p10_profit_rate"),
+            "best_source_quality_adjusted_ev_pct": best_candidate.get(
+                "source_quality_adjusted_ev_pct"
+            ),
+            "best_notional_weighted_ev_pct": best_candidate.get(
+                "notional_weighted_ev_pct"
+            ),
+            "best_downside_p10_profit_rate": best_candidate.get(
+                "downside_p10_profit_rate"
+            ),
         },
         "current": current,
         "recommended": recommended,
         "candidate_grid": candidate_grid,
         "apply_ready": bool(recommended["enabled"]),
-        "apply_mode": "calibrated_apply_candidate" if recommended["enabled"] else "report_only_calibration",
+        "apply_mode": (
+            "calibrated_apply_candidate"
+            if recommended["enabled"]
+            else "report_only_calibration"
+        ),
         "notes": [
             "entry_split_order_plan only decomposes planned_orders and never increases requested_qty.",
             "runtime apply is next PREOPEN env/policy-file only; intraday mutation is forbidden.",
@@ -5766,28 +5793,61 @@ def _build_scale_in_split_order_plan_family(*, target_date: str | None = None) -
     report_path = _scale_in_split_order_plan_path(target_date)
     payload = _read_json_dict(report_path) if report_path is not None else {}
     recommended_policy = (
-        payload.get("recommended_policy") if isinstance(payload.get("recommended_policy"), dict) else {}
+        payload.get("recommended_policy")
+        if isinstance(payload.get("recommended_policy"), dict)
+        else {}
     )
-    candidate_grid = payload.get("candidate_grid") if isinstance(payload.get("candidate_grid"), list) else []
-    source_quality = payload.get("source_quality") if isinstance(payload.get("source_quality"), dict) else {}
-    input_summary = payload.get("input_summary") if isinstance(payload.get("input_summary"), dict) else {}
-    candidates = recommended_policy.get("candidates") if isinstance(recommended_policy.get("candidates"), list) else []
+    candidate_grid = (
+        payload.get("candidate_grid")
+        if isinstance(payload.get("candidate_grid"), list)
+        else []
+    )
+    source_quality = (
+        payload.get("source_quality")
+        if isinstance(payload.get("source_quality"), dict)
+        else {}
+    )
+    input_summary = (
+        payload.get("input_summary")
+        if isinstance(payload.get("input_summary"), dict)
+        else {}
+    )
+    candidates = (
+        recommended_policy.get("candidates")
+        if isinstance(recommended_policy.get("candidates"), list)
+        else []
+    )
     baseline_count = sum(
         1
         for item in candidates
-        if isinstance(item, dict) and item.get("policy_mode") == "bounded_equal_scale_in_split_baseline"
+        if isinstance(item, dict)
+        and item.get("policy_mode") == "bounded_equal_scale_in_split_baseline"
     )
     real_sample = max(
-        [_safe_int(item.get("real_sample_count"), 0) or 0 for item in candidate_grid if isinstance(item, dict)] or [0]
+        [
+            _safe_int(item.get("real_sample_count"), 0) or 0
+            for item in candidate_grid
+            if isinstance(item, dict)
+        ]
+        or [0]
     )
     sim_sample = max(
-        [_safe_int(item.get("sim_sample_count"), 0) or 0 for item in candidate_grid if isinstance(item, dict)] or [0]
+        [
+            _safe_int(item.get("sim_sample_count"), 0) or 0
+            for item in candidate_grid
+            if isinstance(item, dict)
+        ]
+        or [0]
     )
     policy_file = str(recommended_policy.get("policy_file") or "")
     policy_version = str(recommended_policy.get("policy_version") or "")
     source_quality_blocked = source_quality.get("tuning_input_allowed") is False
+    runtime_apply_allowed = recommended_policy.get("runtime_apply_allowed") is True
     recommended = {
-        "enabled": bool(candidates) and bool(policy_file) and not source_quality_blocked,
+        "enabled": bool(candidates)
+        and bool(policy_file)
+        and not source_quality_blocked
+        and runtime_apply_allowed,
         "policy_file": policy_file,
         "policy_version": policy_version,
     }
@@ -5796,29 +5856,55 @@ def _build_scale_in_split_order_plan_family(*, target_date: str | None = None) -
         "stage": "scale_in",
         "sample": {
             "report_loaded": bool(payload),
-            "report_path": str(report_path) if report_path and report_path.exists() else None,
+            "report_path": (
+                str(report_path) if report_path and report_path.exists() else None
+            ),
             "candidate_grid_count": len(candidate_grid),
             "recommended_policy_candidate_count": len(candidates),
             "bounded_equal_split_baseline_candidate_count": baseline_count,
-            "counterfactual_selected_count": _safe_int(input_summary.get("counterfactual_selected_count"), 0) or 0,
-            "baseline_fallback_count": _safe_int(input_summary.get("baseline_fallback_count"), baseline_count) or 0,
-            "price_observation_join_gap_count": _safe_int(input_summary.get("price_observation_join_gap_count"), 0) or 0,
-            "base_price_reconstruction_gap_count": _safe_int(input_summary.get("base_price_reconstruction_gap_count"), 0) or 0,
-            "market_qty_split_only_count": _safe_int(input_summary.get("market_qty_split_only_count"), 0) or 0,
-            "diagnostic_three_leg_candidate_count": _safe_int(input_summary.get("diagnostic_three_leg_candidate_count"), 0) or 0,
+            "counterfactual_selected_count": _safe_int(
+                input_summary.get("counterfactual_selected_count"), 0
+            )
+            or 0,
+            "baseline_fallback_count": _safe_int(
+                input_summary.get("baseline_fallback_count"), baseline_count
+            )
+            or 0,
+            "price_observation_join_gap_count": _safe_int(
+                input_summary.get("price_observation_join_gap_count"), 0
+            )
+            or 0,
+            "base_price_reconstruction_gap_count": _safe_int(
+                input_summary.get("base_price_reconstruction_gap_count"), 0
+            )
+            or 0,
+            "market_qty_split_only_count": _safe_int(
+                input_summary.get("market_qty_split_only_count"), 0
+            )
+            or 0,
+            "diagnostic_three_leg_candidate_count": _safe_int(
+                input_summary.get("diagnostic_three_leg_candidate_count"), 0
+            )
+            or 0,
             "runtime_three_leg_candidate_count": _safe_int(
                 input_summary.get("runtime_three_leg_candidate_count"), 0
             )
             or 0,
-            "avg_down_observation_count": _safe_int(input_summary.get("avg_down_observation_count"), 0) or 0,
+            "avg_down_observation_count": _safe_int(
+                input_summary.get("avg_down_observation_count"), 0
+            )
+            or 0,
             "real_sample_count": real_sample,
             "sim_sample_count": sim_sample,
             "primary_sample_book": "post_submit_tick_band_counterfactual",
             "source_quality_blocked": bool(source_quality_blocked),
             "source_quality_status": source_quality.get("status"),
-            "excluded_source_quality_event_count": input_summary.get("excluded_source_quality_event_count"),
+            "excluded_source_quality_event_count": input_summary.get(
+                "excluded_source_quality_event_count"
+            ),
             "policy_file": policy_file or None,
             "policy_version": policy_version or None,
+            "runtime_apply_allowed": runtime_apply_allowed,
         },
         "current": {
             "enabled": False,
@@ -5828,7 +5914,11 @@ def _build_scale_in_split_order_plan_family(*, target_date: str | None = None) -
         "recommended": recommended,
         "candidate_grid": candidate_grid,
         "apply_ready": bool(recommended["enabled"]),
-        "apply_mode": "calibrated_apply_candidate" if recommended["enabled"] else "report_only_calibration",
+        "apply_mode": (
+            "calibrated_apply_candidate"
+            if recommended["enabled"]
+            else "report_only_calibration"
+        ),
         "notes": [
             "scale_in_split_order_plan only decomposes AVG_DOWN scale-in orders and never increases requested_qty.",
             "PYRAMID is excluded from v1 because it is not avg-down averaging.",
@@ -7697,8 +7787,12 @@ def _calibration_state_for_family(
     if output_family == "entry_split_order_plan":
         real_count = _safe_int(source_metrics.get("real_sample_count"), 0) or 0
         sim_count = _safe_int(source_metrics.get("sim_sample_count"), 0) or 0
-        real_outcome_count = _safe_int(source_metrics.get("real_outcome_joined_sample"), 0) or 0
-        policy_count = _safe_int(source_metrics.get("recommended_policy_candidate_count"), 0) or 0
+        real_outcome_count = (
+            _safe_int(source_metrics.get("real_outcome_joined_sample"), 0) or 0
+        )
+        policy_count = (
+            _safe_int(source_metrics.get("recommended_policy_candidate_count"), 0) or 0
+        )
         if not source_metrics.get("report_loaded"):
             return (
                 "hold_sample",
@@ -7709,15 +7803,37 @@ def _calibration_state_for_family(
                 "source_quality_blocked",
                 "entry_split_order_plan source-quality hard block present; exclude row/window and regenerate before policy use.",
             )
+        if source_metrics.get("runtime_apply_allowed") is not True:
+            return (
+                "hold",
+                "entry_split_order_plan recommended policy is not runtime-apply allowed; keep it out of PREOPEN env handoff.",
+            )
         if real_count < 20:
             return (
                 "hold_sample",
                 f"entry split real submit sample floor 미달(real={real_count}/20); planned_orders split policy 유지 보류",
             )
-        baseline_policy_count = _safe_int(source_metrics.get("bounded_equal_split_baseline_candidate_count"), 0) or 0
-        tick_band_policy_count = _safe_int(source_metrics.get("post_submit_tick_band_seed_candidate_count"), 0) or 0
-        real_primary_policy_count = _safe_int(source_metrics.get("real_primary_ev_policy_candidate_count"), 0) or 0
-        if policy_count > 0 and (baseline_policy_count > 0 or tick_band_policy_count > 0) and real_primary_policy_count <= 0:
+        baseline_policy_count = (
+            _safe_int(
+                source_metrics.get("bounded_equal_split_baseline_candidate_count"), 0
+            )
+            or 0
+        )
+        tick_band_policy_count = (
+            _safe_int(
+                source_metrics.get("post_submit_tick_band_seed_candidate_count"), 0
+            )
+            or 0
+        )
+        real_primary_policy_count = (
+            _safe_int(source_metrics.get("real_primary_ev_policy_candidate_count"), 0)
+            or 0
+        )
+        if (
+            policy_count > 0
+            and (baseline_policy_count > 0 or tick_band_policy_count > 0)
+            and real_primary_policy_count <= 0
+        ):
             return (
                 "adjust_up",
                 "entry split real submit sample floor와 execution-shape guard가 통과해 qty-preserving split seed policy를 다음 PREOPEN env 후보로 연다.",
@@ -7742,10 +7858,21 @@ def _calibration_state_for_family(
             "entry split policy passed report guards; next PREOPEN env points to policy file and runtime only decomposes requested_qty-preserving planned_orders.",
         )
     if output_family == "scale_in_split_order_plan":
-        policy_count = _safe_int(source_metrics.get("recommended_policy_candidate_count"), 0) or 0
-        baseline_policy_count = _safe_int(source_metrics.get("bounded_equal_split_baseline_candidate_count"), 0) or 0
-        counterfactual_policy_count = _safe_int(source_metrics.get("counterfactual_selected_count"), 0) or 0
-        market_policy_count = _safe_int(source_metrics.get("market_qty_split_only_count"), 0) or 0
+        policy_count = (
+            _safe_int(source_metrics.get("recommended_policy_candidate_count"), 0) or 0
+        )
+        baseline_policy_count = (
+            _safe_int(
+                source_metrics.get("bounded_equal_split_baseline_candidate_count"), 0
+            )
+            or 0
+        )
+        counterfactual_policy_count = (
+            _safe_int(source_metrics.get("counterfactual_selected_count"), 0) or 0
+        )
+        market_policy_count = (
+            _safe_int(source_metrics.get("market_qty_split_only_count"), 0) or 0
+        )
         if not source_metrics.get("report_loaded"):
             return (
                 "hold_sample",
@@ -7756,7 +7883,16 @@ def _calibration_state_for_family(
                 "source_quality_blocked",
                 "scale_in_split_order_plan source-quality hard block present; exclude row/window and regenerate before policy use.",
             )
-        if policy_count > 0 and (baseline_policy_count > 0 or counterfactual_policy_count > 0 or market_policy_count > 0):
+        if source_metrics.get("runtime_apply_allowed") is not True:
+            return (
+                "hold",
+                "scale_in_split_order_plan recommended policy is not runtime-apply allowed; keep it out of PREOPEN env handoff.",
+            )
+        if policy_count > 0 and (
+            baseline_policy_count > 0
+            or counterfactual_policy_count > 0
+            or market_policy_count > 0
+        ):
             return (
                 "adjust_up",
                 "AVG_DOWN scale-in split policy is qty-preserving, guard-bounded, and has baseline/counterfactual/market candidates; next PREOPEN env may point to its policy file.",
@@ -8066,7 +8202,10 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
                 **source_metrics,
                 "report_loaded": bool(family_sample.get("report_loaded")),
                 "report_path": family_sample.get("report_path"),
-                "candidate_grid_count": _safe_int(family_sample.get("candidate_grid_count"), 0) or 0,
+                "candidate_grid_count": _safe_int(
+                    family_sample.get("candidate_grid_count"), 0
+                )
+                or 0,
                 "recommended_policy_candidate_count": _safe_int(
                     family_sample.get("recommended_policy_candidate_count"), 0
                 )
@@ -8083,11 +8222,20 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
                     family_sample.get("real_primary_ev_policy_candidate_count"), 0
                 )
                 or 0,
-                "real_sample_count": _safe_int(family_sample.get("real_sample_count"), 0) or 0,
-                "sim_sample_count": _safe_int(family_sample.get("sim_sample_count"), 0) or 0,
-                "real_outcome_joined_sample": _safe_int(family_sample.get("real_outcome_joined_sample"), 0) or 0,
+                "real_sample_count": _safe_int(
+                    family_sample.get("real_sample_count"), 0
+                )
+                or 0,
+                "sim_sample_count": _safe_int(family_sample.get("sim_sample_count"), 0)
+                or 0,
+                "real_outcome_joined_sample": _safe_int(
+                    family_sample.get("real_outcome_joined_sample"), 0
+                )
+                or 0,
                 "primary_sample_book": family_sample.get("primary_sample_book"),
-                "source_quality_blocked": bool(family_sample.get("source_quality_blocked")),
+                "source_quality_blocked": bool(
+                    family_sample.get("source_quality_blocked")
+                ),
                 "source_quality_status": family_sample.get("source_quality_status"),
                 "excluded_source_quality_event_count": _safe_int(
                     family_sample.get("excluded_source_quality_event_count"), 0
@@ -8095,20 +8243,33 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
                 or 0,
                 "policy_file": family_sample.get("policy_file"),
                 "policy_version": family_sample.get("policy_version"),
+                "runtime_apply_allowed": family_sample.get("runtime_apply_allowed")
+                is True,
                 "best_context_bucket": family_sample.get("best_context_bucket"),
-                "source_quality_adjusted_ev_pct": family_sample.get("best_source_quality_adjusted_ev_pct"),
-                "notional_weighted_ev_pct": family_sample.get("best_notional_weighted_ev_pct"),
-                "downside_p10_profit_rate": family_sample.get("best_downside_p10_profit_rate"),
+                "source_quality_adjusted_ev_pct": family_sample.get(
+                    "best_source_quality_adjusted_ev_pct"
+                ),
+                "notional_weighted_ev_pct": family_sample.get(
+                    "best_notional_weighted_ev_pct"
+                ),
+                "downside_p10_profit_rate": family_sample.get(
+                    "best_downside_p10_profit_rate"
+                ),
                 "runtime_authority": "next_preopen_bounded_entry_split_policy",
                 "requested_qty_authority": "position_sizing_dynamic_formula",
             }
         if output_family == "scale_in_split_order_plan":
-            family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
+            family_sample = (
+                family.get("sample") if isinstance(family.get("sample"), dict) else {}
+            )
             source_metrics = {
                 **source_metrics,
                 "report_loaded": bool(family_sample.get("report_loaded")),
                 "report_path": family_sample.get("report_path"),
-                "candidate_grid_count": _safe_int(family_sample.get("candidate_grid_count"), 0) or 0,
+                "candidate_grid_count": _safe_int(
+                    family_sample.get("candidate_grid_count"), 0
+                )
+                or 0,
                 "recommended_policy_candidate_count": _safe_int(
                     family_sample.get("recommended_policy_candidate_count"), 0
                 )
@@ -8117,8 +8278,14 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
                     family_sample.get("bounded_equal_split_baseline_candidate_count"), 0
                 )
                 or 0,
-                "counterfactual_selected_count": _safe_int(family_sample.get("counterfactual_selected_count"), 0) or 0,
-                "baseline_fallback_count": _safe_int(family_sample.get("baseline_fallback_count"), 0) or 0,
+                "counterfactual_selected_count": _safe_int(
+                    family_sample.get("counterfactual_selected_count"), 0
+                )
+                or 0,
+                "baseline_fallback_count": _safe_int(
+                    family_sample.get("baseline_fallback_count"), 0
+                )
+                or 0,
                 "price_observation_join_gap_count": _safe_int(
                     family_sample.get("price_observation_join_gap_count"), 0
                 )
@@ -8127,7 +8294,10 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
                     family_sample.get("base_price_reconstruction_gap_count"), 0
                 )
                 or 0,
-                "market_qty_split_only_count": _safe_int(family_sample.get("market_qty_split_only_count"), 0) or 0,
+                "market_qty_split_only_count": _safe_int(
+                    family_sample.get("market_qty_split_only_count"), 0
+                )
+                or 0,
                 "diagnostic_three_leg_candidate_count": _safe_int(
                     family_sample.get("diagnostic_three_leg_candidate_count"), 0
                 )
@@ -8136,11 +8306,20 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
                     family_sample.get("runtime_three_leg_candidate_count"), 0
                 )
                 or 0,
-                "avg_down_observation_count": _safe_int(family_sample.get("avg_down_observation_count"), 0) or 0,
-                "real_sample_count": _safe_int(family_sample.get("real_sample_count"), 0) or 0,
-                "sim_sample_count": _safe_int(family_sample.get("sim_sample_count"), 0) or 0,
+                "avg_down_observation_count": _safe_int(
+                    family_sample.get("avg_down_observation_count"), 0
+                )
+                or 0,
+                "real_sample_count": _safe_int(
+                    family_sample.get("real_sample_count"), 0
+                )
+                or 0,
+                "sim_sample_count": _safe_int(family_sample.get("sim_sample_count"), 0)
+                or 0,
                 "primary_sample_book": family_sample.get("primary_sample_book"),
-                "source_quality_blocked": bool(family_sample.get("source_quality_blocked")),
+                "source_quality_blocked": bool(
+                    family_sample.get("source_quality_blocked")
+                ),
                 "source_quality_status": family_sample.get("source_quality_status"),
                 "excluded_source_quality_event_count": _safe_int(
                     family_sample.get("excluded_source_quality_event_count"), 0
@@ -8148,10 +8327,14 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
                 or 0,
                 "policy_file": family_sample.get("policy_file"),
                 "policy_version": family_sample.get("policy_version"),
+                "runtime_apply_allowed": family_sample.get("runtime_apply_allowed")
+                is True,
                 "runtime_authority": "next_preopen_bounded_scale_in_split_policy",
                 "requested_qty_authority": "describe_dynamic_scale_in_qty",
             }
-        source_sample_count = _source_sample_count_for_family(output_family, source_metrics)
+        source_sample_count = _source_sample_count_for_family(
+            output_family, source_metrics
+        )
         if output_family == "dynamic_entry_price_resolver":
             family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
             source_sample_count = max(

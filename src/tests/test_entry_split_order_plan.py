@@ -1043,18 +1043,19 @@ def test_daily_report_candidate_and_preopen_env_handoff(monkeypatch, tmp_path):
                 "source_quality": {"status": "warning", "tuning_input_allowed": True},
                 "input_summary": {"excluded_source_quality_event_count": 2},
                 "candidate_grid": [
-                        {
-                            "context_bucket": "urgent_tight_spread",
-                            "real_sample_count": 20,
-                            "real_outcome_joined_sample": 20,
-                            "sim_sample_count": 10,
-                            "primary_sample_book": "real",
-                            "source_quality_adjusted_ev_pct": 1.1,
-                            "notional_weighted_ev_pct": 1.1,
+                    {
+                        "context_bucket": "urgent_tight_spread",
+                        "real_sample_count": 20,
+                        "real_outcome_joined_sample": 20,
+                        "sim_sample_count": 10,
+                        "primary_sample_book": "real",
+                        "source_quality_adjusted_ev_pct": 1.1,
+                        "notional_weighted_ev_pct": 1.1,
                         "downside_p10_profit_rate": 0.2,
                     }
                 ],
                 "recommended_policy": {
+                    "runtime_apply_allowed": True,
                     "policy_file": str(policy_file),
                     "policy_version": "entry_split_order_plan:test",
                     "candidates": [
@@ -1071,7 +1072,9 @@ def test_daily_report_candidate_and_preopen_env_handoff(monkeypatch, tmp_path):
 
     family = daily_report._build_entry_split_order_plan_family(target_date=target_date)
     candidates = daily_report._build_calibration_candidates([family], {})
-    candidate = next(item for item in candidates if item["family"] == "entry_split_order_plan")
+    candidate = next(
+        item for item in candidates if item["family"] == "entry_split_order_plan"
+    )
 
     assert candidate["calibration_state"] == "adjust_up"
     assert candidate["recommended_values"]["enabled"] is True
@@ -1079,13 +1082,21 @@ def test_daily_report_candidate_and_preopen_env_handoff(monkeypatch, tmp_path):
     overrides = preopen_apply._env_overrides_for_candidate(candidate)
     assert overrides["KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED"] == "true"
     assert overrides["KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE"] == str(policy_file)
-    assert overrides["KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_VERSION"] == "entry_split_order_plan:test"
+    assert (
+        overrides["KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_VERSION"]
+        == "entry_split_order_plan:test"
+    )
 
 
 def test_daily_report_handoff_accepts_bounded_equal_baseline(monkeypatch, tmp_path):
     target_date = "2026-07-07"
     report_dir = tmp_path / "report" / "entry_split_order_plan"
-    policy_file = tmp_path / "threshold_cycle" / "entry_split_order_policy" / f"entry_split_order_policy_{target_date}.json"
+    policy_file = (
+        tmp_path
+        / "threshold_cycle"
+        / "entry_split_order_policy"
+        / f"entry_split_order_policy_{target_date}.json"
+    )
     report_dir.mkdir(parents=True, exist_ok=True)
     policy_file.parent.mkdir(parents=True, exist_ok=True)
     policy_file.write_text("{}", encoding="utf-8")
@@ -1108,6 +1119,7 @@ def test_daily_report_handoff_accepts_bounded_equal_baseline(monkeypatch, tmp_pa
                     }
                 ],
                 "recommended_policy": {
+                    "runtime_apply_allowed": True,
                     "policy_file": str(policy_file),
                     "policy_version": "entry_split_order_plan:baseline",
                     "candidates": [
@@ -1125,10 +1137,71 @@ def test_daily_report_handoff_accepts_bounded_equal_baseline(monkeypatch, tmp_pa
 
     family = daily_report._build_entry_split_order_plan_family(target_date=target_date)
     candidates = daily_report._build_calibration_candidates([family], {})
-    candidate = next(item for item in candidates if item["family"] == "entry_split_order_plan")
+    candidate = next(
+        item for item in candidates if item["family"] == "entry_split_order_plan"
+    )
 
     assert candidate["calibration_state"] == "adjust_up"
-    assert candidate["source_metrics"]["bounded_equal_split_baseline_candidate_count"] == 1
+    assert (
+        candidate["source_metrics"]["bounded_equal_split_baseline_candidate_count"] == 1
+    )
     overrides = preopen_apply._env_overrides_for_candidate(candidate)
     assert overrides["KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED"] == "true"
     assert overrides["KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE"] == str(policy_file)
+
+
+def test_daily_report_handoff_blocks_runtime_disallowed_policy(monkeypatch, tmp_path):
+    target_date = "2026-07-07"
+    report_dir = tmp_path / "report" / "entry_split_order_plan"
+    policy_file = (
+        tmp_path
+        / "threshold_cycle"
+        / "entry_split_order_policy"
+        / f"entry_split_order_policy_{target_date}.json"
+    )
+    report_dir.mkdir(parents=True, exist_ok=True)
+    policy_file.parent.mkdir(parents=True, exist_ok=True)
+    policy_file.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(daily_report, "ENTRY_SPLIT_ORDER_PLAN_DIR", report_dir)
+    (report_dir / f"entry_split_order_plan_{target_date}.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "entry_split_order_plan_v1",
+                "source_quality": {"status": "pass", "tuning_input_allowed": True},
+                "candidate_grid": [
+                    {
+                        "context_bucket": "balanced_normal",
+                        "real_sample_count": 20,
+                        "real_outcome_joined_sample": 20,
+                        "sim_sample_count": 0,
+                        "primary_sample_book": "real_submit_execution_shape",
+                        "policy_mode": "bounded_equal_split_baseline",
+                    }
+                ],
+                "recommended_policy": {
+                    "runtime_apply_allowed": False,
+                    "policy_file": str(policy_file),
+                    "policy_version": "entry_split_order_plan:runtime-blocked",
+                    "candidates": [
+                        {
+                            "context_bucket": "balanced_normal",
+                            "policy_mode": "bounded_equal_split_baseline",
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    family = daily_report._build_entry_split_order_plan_family(target_date=target_date)
+    candidate = next(
+        item
+        for item in daily_report._build_calibration_candidates([family], {})
+        if item["family"] == "entry_split_order_plan"
+    )
+
+    assert family["recommended"]["enabled"] is False
+    assert family["sample"]["runtime_apply_allowed"] is False
+    assert candidate["recommended_value"] is False
+    assert candidate["calibration_state"] == "hold"

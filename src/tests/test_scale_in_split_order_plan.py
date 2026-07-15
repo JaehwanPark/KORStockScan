@@ -265,6 +265,7 @@ def test_report_and_preopen_env_handoff(monkeypatch, tmp_path):
                     }
                 ],
                 "recommended_policy": {
+                    "runtime_apply_allowed": True,
                     "policy_file": str(policy_file),
                     "policy_version": "scale_in_split_order_plan:test",
                     "candidates": [
@@ -279,16 +280,83 @@ def test_report_and_preopen_env_handoff(monkeypatch, tmp_path):
         encoding="utf-8",
     )
 
-    family = daily_report._build_scale_in_split_order_plan_family(target_date=target_date)
+    family = daily_report._build_scale_in_split_order_plan_family(
+        target_date=target_date
+    )
     candidates = daily_report._build_calibration_candidates([family], {})
-    candidate = next(item for item in candidates if item["family"] == "scale_in_split_order_plan")
+    candidate = next(
+        item for item in candidates if item["family"] == "scale_in_split_order_plan"
+    )
 
     assert candidate["calibration_state"] == "adjust_up"
     assert candidate["recommended_values"]["enabled"] is True
     overrides = preopen_apply._env_overrides_for_candidate(candidate)
     assert overrides["KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED"] == "true"
-    assert overrides["KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_FILE"] == str(policy_file)
-    assert overrides["KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_VERSION"] == "scale_in_split_order_plan:test"
+    assert overrides["KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_FILE"] == str(
+        policy_file
+    )
+    assert (
+        overrides["KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_VERSION"]
+        == "scale_in_split_order_plan:test"
+    )
+
+
+def test_daily_report_handoff_blocks_runtime_disallowed_policy(monkeypatch, tmp_path):
+    target_date = "2026-07-07"
+    report_dir = tmp_path / "report" / "scale_in_split_order_plan"
+    policy_file = (
+        tmp_path
+        / "threshold_cycle"
+        / "scale_in_split_order_policy"
+        / f"scale_in_split_order_policy_{target_date}.json"
+    )
+    report_dir.mkdir(parents=True, exist_ok=True)
+    policy_file.parent.mkdir(parents=True, exist_ok=True)
+    policy_file.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(daily_report, "SCALE_IN_SPLIT_ORDER_PLAN_DIR", report_dir)
+    (report_dir / f"scale_in_split_order_plan_{target_date}.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "scale_in_split_order_plan_v1",
+                "source_quality": {"status": "pass", "tuning_input_allowed": True},
+                "input_summary": {"avg_down_observation_count": 3},
+                "candidate_grid": [
+                    {
+                        "context_bucket": "scalping:late_loss_retry:normal",
+                        "real_sample_count": 1,
+                        "sim_sample_count": 2,
+                        "policy_mode": "bounded_equal_scale_in_split_baseline",
+                    }
+                ],
+                "recommended_policy": {
+                    "runtime_apply_allowed": False,
+                    "policy_file": str(policy_file),
+                    "policy_version": "scale_in_split_order_plan:runtime-blocked",
+                    "candidates": [
+                        {
+                            "context_bucket": "scalping:late_loss_retry:normal",
+                            "policy_mode": "bounded_equal_scale_in_split_baseline",
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    family = daily_report._build_scale_in_split_order_plan_family(
+        target_date=target_date
+    )
+    candidate = next(
+        item
+        for item in daily_report._build_calibration_candidates([family], {})
+        if item["family"] == "scale_in_split_order_plan"
+    )
+
+    assert family["recommended"]["enabled"] is False
+    assert family["sample"]["runtime_apply_allowed"] is False
+    assert candidate["recommended_value"] is False
+    assert candidate["calibration_state"] == "hold"
 
 
 def test_report_selects_low_pct_touch_70_30_counterfactual(monkeypatch, tmp_path):

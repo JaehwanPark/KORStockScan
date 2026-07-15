@@ -45,6 +45,71 @@ wait_for_threshold_runtime_env() {
     return 0
 }
 
+korstockscan_env_true() {
+    case "${1,,}" in
+        1|true|yes|on)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+disable_expired_dated_runtime_overrides() {
+    local target_date="$1"
+    local spec enabled_key active_date_key dependency_enabled_key enabled_value active_date dependency_value
+    local dated_override_specs=(
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED:KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE:"
+        "KORSTOCKSCAN_ENTRY_SPLIT_OPERATOR_FALLBACK_ENABLED:KORSTOCKSCAN_ENTRY_SPLIT_OPERATOR_FALLBACK_ACTIVE_DATE:"
+        "KORSTOCKSCAN_ENTRY_SPLIT_MARKET_FIRST_LEG_ENABLED:KORSTOCKSCAN_ENTRY_SPLIT_MARKET_FIRST_LEG_ACTIVE_DATE:"
+        "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED:KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE:"
+        "KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ENABLED:KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE:KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED"
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ENABLED:KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ACTIVE_DATE:"
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ENABLED:KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ACTIVE_DATE:KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ENABLED"
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ENABLED:KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ACTIVE_DATE:KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ENABLED"
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_ENABLED:KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_ACTIVE_DATE:KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ENABLED"
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ENABLED:KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ACTIVE_DATE:"
+        "KORSTOCKSCAN_NXT_RISING_MISSED_TP1_PARTIAL_RUNNER_ENABLED:KORSTOCKSCAN_NXT_RISING_MISSED_TP1_PARTIAL_RUNNER_ACTIVE_DATE:"
+        "KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_ENABLED:KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_ACTIVE_DATE:"
+        "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_ENABLED:KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_ACTIVE_DATE:"
+        "KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_ENABLED:KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_ACTIVE_DATE:"
+    )
+
+    for spec in "${dated_override_specs[@]}"; do
+        IFS=: read -r enabled_key active_date_key dependency_enabled_key <<< "$spec"
+        enabled_value="${!enabled_key:-}"
+        if ! korstockscan_env_true "$enabled_value"; then
+            continue
+        fi
+        active_date="${!active_date_key:-}"
+        if [ -z "$active_date" ] || [ "$active_date" != "$target_date" ]; then
+            printf -v "$enabled_key" '%s' "false"
+            export "$enabled_key"
+            echo "⏳ dated operator runtime override 만료 처리: ${enabled_key} active_date=${active_date:-missing} target_date=${target_date}"
+            continue
+        fi
+        if [ -n "$dependency_enabled_key" ]; then
+            dependency_value="${!dependency_enabled_key:-}"
+            if ! korstockscan_env_true "$dependency_value"; then
+                printf -v "$enabled_key" '%s' "false"
+                export "$enabled_key"
+                echo "⏳ dated operator runtime override dependency 비활성 처리: ${enabled_key} dependency=${dependency_enabled_key}"
+            fi
+        fi
+    done
+}
+
+reset_runtime_policy_env_before_handoff() {
+    unset KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED
+    unset KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE
+    unset KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_VERSION
+    unset KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE
+    unset KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED
+    unset KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_FILE
+    unset KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_VERSION
+}
+
 # 무한 루프 시작
 while true; do
     echo "🚀 KORStockScan 스나이퍼 엔진을 시작합니다..."
@@ -116,6 +181,7 @@ while true; do
 
     THRESHOLD_RUNTIME_ENV="../data/threshold_cycle/runtime_env/threshold_runtime_env_$(TZ=Asia/Seoul date +%F).env"
     wait_for_threshold_runtime_env "$THRESHOLD_RUNTIME_ENV" || exit 1
+    reset_runtime_policy_env_before_handoff
     if [ -f "$THRESHOLD_RUNTIME_ENV" ]; then
         echo "📌 threshold runtime env 적용: $THRESHOLD_RUNTIME_ENV"
         set -a
@@ -130,6 +196,7 @@ while true; do
         # shellcheck source=/dev/null
         . "$OPERATOR_RUNTIME_OVERRIDES"
         set +a
+        disable_expired_dated_runtime_overrides "$(TZ=Asia/Seoul date +%F)"
     fi
 
     # 봇 실행 (경로나 파일명은 환경에 맞게 수정)

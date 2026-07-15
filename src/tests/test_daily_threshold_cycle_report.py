@@ -2142,6 +2142,7 @@ def test_scale_in_split_order_plan_counterfactual_candidates_are_apply_ready(tmp
                     }
                 ],
                 "recommended_policy": {
+                    "runtime_apply_allowed": True,
                     "policy_file": str(policy_file),
                     "policy_version": "scale_in_split_order_plan:test-counterfactual",
                     "candidates": [
