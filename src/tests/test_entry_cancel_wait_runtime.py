@@ -23,10 +23,20 @@ def test_counterfactual_completes_without_order_authority():
         actual_timeout_sec=60,
         selected_timeout_sec=60,
     )
-    observation, events = observe_counterfactual(observation, now_ts=91.0, current_price=990)
-    assert any(item["stage"] == "entry_cancel_wait_counterfactual_threshold" for item in events)
-    observation, events = observe_counterfactual(observation, now_ts=152.0, current_price=1010)
-    completed = [item for item in events if item["stage"] == "entry_cancel_wait_counterfactual_completed"]
+    observation, events = observe_counterfactual(
+        observation, now_ts=91.0, current_price=990
+    )
+    assert any(
+        item["stage"] == "entry_cancel_wait_counterfactual_threshold" for item in events
+    )
+    observation, events = observe_counterfactual(
+        observation, now_ts=152.0, current_price=1010
+    )
+    completed = [
+        item
+        for item in events
+        if item["stage"] == "entry_cancel_wait_counterfactual_completed"
+    ]
     assert completed
     assert completed[0]["counterfactual_ev_pct"] == 1.0
     assert COUNTERFACTUAL_AUTHORITY == "entry_cancel_wait_counterfactual_only"

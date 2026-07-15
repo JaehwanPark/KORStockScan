@@ -11,13 +11,20 @@ PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, "..", ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.append(PROJECT_ROOT)
 
-from src.engine.daily_report_service import format_daily_report_summary, load_or_build_daily_report
+from src.engine.daily_report_service import (
+    format_daily_report_summary,
+    load_or_build_daily_report,
+)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Show the structured daily report summary.")
+    parser = argparse.ArgumentParser(
+        description="Show the structured daily report summary."
+    )
     parser.add_argument("--date", help="기준일 (YYYY-MM-DD)")
-    parser.add_argument("--refresh", action="store_true", help="저장된 JSON 대신 즉시 재생성")
+    parser.add_argument(
+        "--refresh", action="store_true", help="저장된 JSON 대신 즉시 재생성"
+    )
     args = parser.parse_args()
 
     report = load_or_build_daily_report(args.date, refresh=args.refresh)

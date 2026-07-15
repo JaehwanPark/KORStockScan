@@ -22,7 +22,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Show HOLDING/매매 복기 집계.")
     parser.add_argument("--date", help="기준일 (YYYY-MM-DD)")
     parser.add_argument("--code", help="종목코드 6자리")
-    parser.add_argument("--since", help="이 시각 이후 로그만 집계 (HH:MM 또는 HH:MM:SS)")
+    parser.add_argument(
+        "--since", help="이 시각 이후 로그만 집계 (HH:MM 또는 HH:MM:SS)"
+    )
     parser.add_argument("--top", type=int, default=10, help="표시할 거래 수")
     args = parser.parse_args()
 

@@ -22,7 +22,9 @@ from src.engine.sniper_strength_shadow_feedback import (
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Evaluate dynamic VPW shadow candidates.")
+    parser = argparse.ArgumentParser(
+        description="Evaluate dynamic VPW shadow candidates."
+    )
     parser.add_argument("--date", default=None, help="Target date in YYYY-MM-DD format")
     args = parser.parse_args()
 
