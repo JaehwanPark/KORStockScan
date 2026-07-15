@@ -2,7 +2,7 @@
 
 ## Summary
 - status: `warning`
-- warning_count: `15`
+- warning_count: `13`
 - source_quality: status=`pass` allowed=`True`
 - samples real/sim: `35` / `37`
 - live_auto_ready_count: `0`
@@ -31,8 +31,8 @@
 - recovered/lost labels: `0` / `0`
 - stale/broker override excluded: `0` / `0`
 - full/partial fill: `0` / `0`
-- entry_split_order_plan: status=`source_quality_blocked` candidates=`0` policy=`entry_split_order_plan:2026-07-15:97d170e155`
-- scale_in_split_order_plan: status=`source_quality_blocked` candidates=`0` policy=`scale_in_split_order_plan:2026-07-15:12f3fbdc5057`
+- entry_split_order_plan: status=`pass` candidates=`1` policy=`entry_split_order_plan:2026-07-15:f857c34bde`
+- scale_in_split_order_plan: status=`pass` candidates=`1` policy=`scale_in_split_order_plan:2026-07-15:22b5f5555dc1`
 
 ## Holding Exit
 - holding_reviews: `0`
@@ -218,17 +218,17 @@
 - `market_regime_continuous_thresholds`: `hold_sample` sample=`9/10`
 - `pre_submit_price_guard`: `hold` sample=`0/1`
 - `dynamic_entry_price_resolver`: `hold_sample` sample=`61/20`
-- `entry_split_order_plan`: `source_quality_blocked` sample=`1812/20`
-- `scale_in_split_order_plan`: `source_quality_blocked` sample=`12/0`
+- `entry_split_order_plan`: `hold` sample=`1812/20`
+- `scale_in_split_order_plan`: `adjust_up` sample=`12/0`
 - `entry_price_execution_quality`: `hold` sample=`47/5`
 - `score65_74_recovery_probe`: `adjust_up` sample=`49/20`
 - `strength_momentum_soft_gate_p1`: `hold` sample=`1025/20`
 - `overbought_pullback_guard_p1`: `hold_sample` sample=`15/20`
 - `liquidity_pre_submit_guard_p1`: `hold` sample=`156/20`
 - `bad_entry_refined_canary`: `adjust_up` sample=`17619/10`
-- `holding_exit_decision_matrix_advisory`: `hold_no_edge` sample=`0/1`
-- `lifecycle_decision_matrix_runtime`: `adjust_up` sample=`1082/20`
-- `scale_in_price_guard`: `hold` sample=`105/20`
+- `holding_exit_decision_matrix_advisory`: `hold_no_edge` sample=`13/1`
+- `lifecycle_decision_matrix_runtime`: `adjust_up` sample=`1081/20`
+- `scale_in_price_guard`: `hold` sample=`112/20`
 - `position_sizing_dynamic_formula`: `hold_sample` sample=`103/30`
 
 ## Warnings
@@ -236,8 +236,6 @@
 - `performance_tuning_missing`
 - `scalp_entry_adm:joined_sample_below_sample_floor`
 - `scalp_entry_adm:unknown_bucket_source_quality_gap`
-- `entry_split_order_plan_source_quality_blocked`
-- `scale_in_split_order_plan_source_quality_blocked`
 - `lifecycle_bucket_discovery:source_contract_drift_warning`
 - `lifecycle_bucket_discovery:source_contract_drift_warning`
 - `swing_strategy_discovery:pending_future_quotes`

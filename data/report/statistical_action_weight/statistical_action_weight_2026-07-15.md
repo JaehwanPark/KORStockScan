@@ -24,15 +24,15 @@
 | field | known |
 | --- | ---: |
 | price_known | 35 |
-| volume_known | 33 |
+| volume_known | 34 |
 | time_known | 35 |
 
 ## Policy Counts
 
 | policy | count |
 | --- | ---: |
-| candidate_weight_source | 4 |
-| defensive_only_high_loss_rate | 5 |
+| candidate_weight_source | 5 |
+| defensive_only_high_loss_rate | 4 |
 | insufficient_sample | 4 |
 
 ## Price Bucket
@@ -48,9 +48,9 @@
 
 | bucket | best_action | score | edge | sample | avg_profit | loss_rate | policy |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| volume_2m_10m | exit_only | -1.7598 | - | 6 | -1.3983 | 0.8333 | defensive_only_high_loss_rate |
-| volume_500k_2m | exit_only | -0.8164 | - | 10 | -0.02 | 0.2 | candidate_weight_source |
-| volume_gte_10m | exit_only | -1.7304 | - | 7 | -0.8329 | 0.7143 | defensive_only_high_loss_rate |
+| volume_2m_10m | exit_only | -1.7293 | - | 10 | -1.572 | 0.8 | defensive_only_high_loss_rate |
+| volume_500k_2m | exit_only | -0.549 | - | 9 | 0.3233 | 0.2222 | candidate_weight_source |
+| volume_gte_10m | exit_only | -1.2887 | - | 7 | -0.04 | 0.5714 | candidate_weight_source |
 | volume_lt_500k | insufficient_sample | - | - | - | - | - | insufficient_sample |
 | volume_unknown | insufficient_sample | - | - | - | - | - | insufficient_sample |
 

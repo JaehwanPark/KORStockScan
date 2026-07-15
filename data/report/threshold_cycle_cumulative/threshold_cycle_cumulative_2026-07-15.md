@@ -67,7 +67,7 @@
 | cumulative | pre_submit_price_guard | entry | 101 | False | report_only_reference |
 | cumulative | dynamic_entry_price_resolver | entry | 18905 | True | report_only_reference |
 | cumulative | entry_split_order_plan | submit | 1812 | False | report_only_reference |
-| cumulative | scale_in_split_order_plan | scale_in | 12 | False | report_only_reference |
+| cumulative | scale_in_split_order_plan | scale_in | 12 | True | report_only_reference |
 | cumulative | entry_price_execution_quality | entry | 3790 | False | report_only_reference |
 | cumulative | strength_momentum_soft_gate_p1 | entry | 181234 | False | report_only_reference |
 | cumulative | overbought_pullback_guard_p1 | entry | 47722 | False | report_only_reference |
@@ -84,13 +84,13 @@
 | cumulative | scale_in_price_guard | holding_exit | 2774 | True | report_only_reference |
 | cumulative | position_sizing_dynamic_formula | position_sizing | 548 | False | report_only_reference |
 | cumulative | statistical_action_weight | decision_support | 548 | False | report_only_reference |
-| cumulative | lifecycle_decision_matrix_runtime | lifecycle | 1082 | True | report_only_reference |
+| cumulative | lifecycle_decision_matrix_runtime | lifecycle | 1081 | True | report_only_reference |
 | rolling_5d | entry_mechanical_momentum | entry | 577 | False | report_only_reference |
 | rolling_5d | score65_74_recovery_probe | entry | 0 | False | report_only_reference |
 | rolling_5d | pre_submit_price_guard | entry | 0 | False | report_only_reference |
 | rolling_5d | dynamic_entry_price_resolver | entry | 190 | True | report_only_reference |
 | rolling_5d | entry_split_order_plan | submit | 1812 | False | report_only_reference |
-| rolling_5d | scale_in_split_order_plan | scale_in | 12 | False | report_only_reference |
+| rolling_5d | scale_in_split_order_plan | scale_in | 12 | True | report_only_reference |
 | rolling_5d | entry_price_execution_quality | entry | 79 | False | report_only_reference |
 | rolling_5d | strength_momentum_soft_gate_p1 | entry | 1025 | False | report_only_reference |
 | rolling_5d | overbought_pullback_guard_p1 | entry | 16 | False | report_only_reference |
@@ -107,13 +107,13 @@
 | rolling_5d | scale_in_price_guard | holding_exit | 15 | False | report_only_reference |
 | rolling_5d | position_sizing_dynamic_formula | position_sizing | 17 | False | report_only_reference |
 | rolling_5d | statistical_action_weight | decision_support | 17 | False | report_only_reference |
-| rolling_5d | lifecycle_decision_matrix_runtime | lifecycle | 1082 | True | report_only_reference |
+| rolling_5d | lifecycle_decision_matrix_runtime | lifecycle | 1081 | True | report_only_reference |
 | rolling_10d | entry_mechanical_momentum | entry | 2849 | True | report_only_reference |
 | rolling_10d | score65_74_recovery_probe | entry | 0 | False | report_only_reference |
 | rolling_10d | pre_submit_price_guard | entry | 12 | False | report_only_reference |
 | rolling_10d | dynamic_entry_price_resolver | entry | 1079 | True | report_only_reference |
 | rolling_10d | entry_split_order_plan | submit | 1812 | False | report_only_reference |
-| rolling_10d | scale_in_split_order_plan | scale_in | 12 | False | report_only_reference |
+| rolling_10d | scale_in_split_order_plan | scale_in | 12 | True | report_only_reference |
 | rolling_10d | entry_price_execution_quality | entry | 516 | False | report_only_reference |
 | rolling_10d | strength_momentum_soft_gate_p1 | entry | 4275 | False | report_only_reference |
 | rolling_10d | overbought_pullback_guard_p1 | entry | 342 | False | report_only_reference |
@@ -130,13 +130,13 @@
 | rolling_10d | scale_in_price_guard | holding_exit | 87 | True | report_only_reference |
 | rolling_10d | position_sizing_dynamic_formula | position_sizing | 103 | False | report_only_reference |
 | rolling_10d | statistical_action_weight | decision_support | 103 | False | report_only_reference |
-| rolling_10d | lifecycle_decision_matrix_runtime | lifecycle | 1082 | True | report_only_reference |
+| rolling_10d | lifecycle_decision_matrix_runtime | lifecycle | 1081 | True | report_only_reference |
 | rolling_20d | entry_mechanical_momentum | entry | 5960 | True | report_only_reference |
 | rolling_20d | score65_74_recovery_probe | entry | 0 | False | report_only_reference |
 | rolling_20d | pre_submit_price_guard | entry | 12 | False | report_only_reference |
 | rolling_20d | dynamic_entry_price_resolver | entry | 2624 | True | report_only_reference |
 | rolling_20d | entry_split_order_plan | submit | 1812 | False | report_only_reference |
-| rolling_20d | scale_in_split_order_plan | scale_in | 12 | False | report_only_reference |
+| rolling_20d | scale_in_split_order_plan | scale_in | 12 | True | report_only_reference |
 | rolling_20d | entry_price_execution_quality | entry | 1536 | False | report_only_reference |
 | rolling_20d | strength_momentum_soft_gate_p1 | entry | 11996 | False | report_only_reference |
 | rolling_20d | overbought_pullback_guard_p1 | entry | 1846 | False | report_only_reference |
@@ -153,7 +153,7 @@
 | rolling_20d | scale_in_price_guard | holding_exit | 835 | True | report_only_reference |
 | rolling_20d | position_sizing_dynamic_formula | position_sizing | 244 | False | report_only_reference |
 | rolling_20d | statistical_action_weight | decision_support | 244 | False | report_only_reference |
-| rolling_20d | lifecycle_decision_matrix_runtime | lifecycle | 1082 | True | report_only_reference |
+| rolling_20d | lifecycle_decision_matrix_runtime | lifecycle | 1081 | True | report_only_reference |
 
 ## 사용 금지선
 

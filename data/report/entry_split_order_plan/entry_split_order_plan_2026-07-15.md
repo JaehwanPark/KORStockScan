@@ -3,7 +3,7 @@
 ## Summary
 - schema_version: `entry_split_order_plan_v1`
 - runtime_effect: `False`
-- recommended_policy_candidates: `0`
+- recommended_policy_candidates: `1`
 - runtime_apply_allowed: `False`
 - policy_file: `/home/ubuntu/KORStockScan/data/threshold_cycle/entry_split_order_policy/entry_split_order_policy_2026-07-15.json`
 
