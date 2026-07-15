@@ -7079,6 +7079,85 @@ def test_verify_runtime_env_handoff_rejects_market_first_inactive_date(tmp_path,
     assert finding["active_date"] == "2026-07-13"
 
 
+def test_dated_runtime_override_audits_require_current_date_and_dependency():
+    target_date = "2026-07-15"
+    env = {
+        "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED": "false",
+        "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE": target_date,
+        "KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ENABLED": "true",
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ENABLED": "true",
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ACTIVE_DATE": "",
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ENABLED": "true",
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ACTIVE_DATE": "2026-07-14",
+    }
+
+    audits = mod._dated_runtime_override_audits(target_date, env)
+    by_family = {audit["family"]: audit for audit in audits}
+
+    assert by_family["rising_missed_tp1_selector"]["status"] == "disabled"
+    assert by_family["rising_missed_tp1_source_gap_relief"]["reason"] == "dependency_disabled"
+    assert (
+        by_family["latency_true_ofi_direct_canary_extended_spread"]["reason"]
+        == "active_date_missing"
+    )
+    assert by_family["rising_missed_nxt_post_block_sampler"]["reason"] == (
+        "runtime_inactive_date"
+    )
+
+
+def test_verify_runtime_env_handoff_rejects_stale_dated_operator_runtime(
+    tmp_path, monkeypatch
+):
+    runtime_dir = tmp_path / "runtime_env"
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    (runtime_dir / "threshold_runtime_env_2026-07-15.json").write_text(
+        json.dumps({"target_date": "2026-07-15", "selected_families": [], "env_overrides": {}}),
+        encoding="utf-8",
+    )
+    (runtime_dir / "operator_runtime_overrides.env").write_text(
+        "\n".join(
+            [
+                "export KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ENABLED=true",
+                "export KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ACTIVE_DATE=2026-07-14",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = mod.verify_runtime_env_handoff("2026-07-15")
+
+    assert result["status"] == "fail"
+    assert result["dated_runtime_override_fail_count"] == 1
+    finding = next(
+        item
+        for item in result["findings"]
+        if item["family"] == "rising_missed_nxt_post_block_sampler"
+    )
+    assert finding["policy_reason"] == "runtime_inactive_date"
+    assert finding["active_date"] == "2026-07-14"
+
+
+def test_dated_runtime_override_audits_accept_current_runtime_bundle():
+    target_date = "2026-07-15"
+    env = {
+        "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED": "true",
+        "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE": target_date,
+        "KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ENABLED": "true",
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ENABLED": "true",
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ACTIVE_DATE": target_date,
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ENABLED": "true",
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ACTIVE_DATE": target_date,
+        "KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_ENABLED": "true",
+        "KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_ACTIVE_DATE": target_date,
+    }
+
+    audits = mod._dated_runtime_override_audits(target_date, env)
+
+    assert all(audit["status"] == "pass" for audit in audits)
+    assert all(audit["reason"] == "active_date_matches_target" for audit in audits)
+
+
 def test_verify_runtime_env_handoff_requires_scalp_sim_policy_source_date(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     apply_dir = tmp_path / "apply_plans"
@@ -7244,6 +7323,52 @@ def test_verify_runtime_env_handoff_pid_uses_operator_runtime_overrides(tmp_path
         "KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_ENABLED",
         "KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_FILE",
         "KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_VERSION",
+    ]
+
+
+def test_verify_runtime_env_handoff_pid_rejects_stale_dated_override(
+    tmp_path, monkeypatch
+):
+    runtime_dir = tmp_path / "runtime_env"
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    (runtime_dir / "threshold_runtime_env_2026-07-15.json").write_text(
+        json.dumps({"target_date": "2026-07-15", "selected_families": [], "env_overrides": {}}),
+        encoding="utf-8",
+    )
+    (runtime_dir / "operator_runtime_overrides.env").write_text(
+        "\n".join(
+            [
+                "export KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ENABLED=true",
+                "export KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ACTIVE_DATE=2026-07-15",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        mod,
+        "_read_pid_environ",
+        lambda pid: {
+            "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ENABLED": "true",
+            "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ACTIVE_DATE": "2026-07-14",
+        },
+    )
+
+    result = mod.verify_runtime_env_handoff("2026-07-15", pid=12345)
+
+    assert result["passed"] is True
+    assert result["pid_passed"] is False
+    assert result["status"] == "fail"
+    assert result["fail_reason"] == "runtime_env_pid_missing"
+    assert result["pid_mismatches"] == [
+        {
+            "family": "rising_missed_nxt_post_block_sampler",
+            "env_key": "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ACTIVE_DATE",
+            "manifest_value": "2026-07-15",
+            "pid_value": "2026-07-14",
+            "expected_value_source": "operator_runtime_overrides",
+        }
     ]
 
 

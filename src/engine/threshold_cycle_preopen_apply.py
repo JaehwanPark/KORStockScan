@@ -3347,6 +3347,83 @@ def _runtime_env_enabled(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+DATED_RUNTIME_OVERRIDE_SPECS: tuple[dict[str, str], ...] = (
+    {
+        "family": "rising_missed_tp1_selector",
+        "enabled_key": "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED",
+        "active_date_key": "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE",
+    },
+    {
+        "family": "rising_missed_tp1_source_gap_relief",
+        "enabled_key": "KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ENABLED",
+        "active_date_key": "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE",
+        "dependency_enabled_key": "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED",
+    },
+    {
+        "family": "latency_true_ofi_direct_canary_extended_spread",
+        "enabled_key": "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ENABLED",
+        "active_date_key": (
+            "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ACTIVE_DATE"
+        ),
+    },
+    {
+        "family": "rising_missed_nxt_post_block_sampler",
+        "enabled_key": "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ENABLED",
+        "active_date_key": "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ACTIVE_DATE",
+    },
+    {
+        "family": "shallow_avg_down_source_gap_recheck",
+        "enabled_key": "KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_ENABLED",
+        "active_date_key": "KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_ACTIVE_DATE",
+    },
+)
+
+
+def _dated_runtime_override_audits(
+    target_date: str,
+    effective_env: dict[str, str],
+) -> list[dict[str, Any]]:
+    audits: list[dict[str, Any]] = []
+    for spec in DATED_RUNTIME_OVERRIDE_SPECS:
+        enabled_key = spec["enabled_key"]
+        active_date_key = spec["active_date_key"]
+        dependency_enabled_key = spec.get("dependency_enabled_key", "")
+        enabled = _runtime_env_enabled(effective_env.get(enabled_key))
+        active_date = str(effective_env.get(active_date_key) or "").strip()
+        required_env_keys = [enabled_key, active_date_key]
+        if dependency_enabled_key:
+            required_env_keys.append(dependency_enabled_key)
+        audit: dict[str, Any] = {
+            "family": spec["family"],
+            "enabled": enabled,
+            "enabled_key": enabled_key,
+            "active_date_key": active_date_key,
+            "active_date": active_date or None,
+            "required_env_keys": required_env_keys,
+            "status": "disabled",
+            "reason": "runtime_disabled",
+        }
+        if not enabled:
+            audits.append(audit)
+            continue
+        if dependency_enabled_key and not _runtime_env_enabled(
+            effective_env.get(dependency_enabled_key)
+        ):
+            audit.update(
+                status="fail",
+                reason="dependency_disabled",
+                dependency_enabled_key=dependency_enabled_key,
+            )
+        elif not active_date:
+            audit.update(status="fail", reason="active_date_missing")
+        elif active_date != target_date:
+            audit.update(status="fail", reason="runtime_inactive_date")
+        else:
+            audit.update(status="pass", reason="active_date_matches_target")
+        audits.append(audit)
+    return audits
+
+
 def _split_runtime_policy_audits(
     target_date: str,
     effective_env: dict[str, str],
@@ -3564,6 +3641,30 @@ def verify_runtime_env_handoff(
                 "policy_reason": policy_reason,
             }
         )
+    dated_runtime_override_audits = _dated_runtime_override_audits(
+        target_date,
+        effective_env_overrides,
+    )
+    for audit in dated_runtime_override_audits:
+        if audit.get("status") != "fail":
+            continue
+        findings.append(
+            {
+                "family": audit.get("family"),
+                "missing_env_keys": (
+                    [audit.get("active_date_key")]
+                    if audit.get("reason") == "active_date_missing"
+                    else []
+                ),
+                "severity": "runtime_policy_unusable",
+                "detail": (
+                    f"{audit.get('family')} dated runtime override unusable: "
+                    f"{audit.get('reason')}"
+                ),
+                "policy_reason": audit.get("reason"),
+                "active_date": audit.get("active_date"),
+            }
+        )
     market_first_enabled_key = "KORSTOCKSCAN_ENTRY_SPLIT_MARKET_FIRST_LEG_ENABLED"
     market_first_active_date_key = "KORSTOCKSCAN_ENTRY_SPLIT_MARKET_FIRST_LEG_ACTIVE_DATE"
     if _runtime_env_enabled(effective_env_overrides.get(market_first_enabled_key)):
@@ -3614,6 +3715,14 @@ def verify_runtime_env_handoff(
             for family in selected_families
         }
         for audit in runtime_policy_audits:
+            if not audit.get("enabled"):
+                continue
+            family = str(audit.get("family") or "")
+            keys = pid_required_keys.setdefault(family, [])
+            for key in audit.get("required_env_keys") or []:
+                if key not in keys:
+                    keys.append(key)
+        for audit in dated_runtime_override_audits:
             if not audit.get("enabled"):
                 continue
             family = str(audit.get("family") or "")
@@ -3679,6 +3788,10 @@ def verify_runtime_env_handoff(
         "runtime_policy_audits": runtime_policy_audits,
         "runtime_policy_fail_count": sum(
             audit.get("status") == "fail" for audit in runtime_policy_audits
+        ),
+        "dated_runtime_override_audits": dated_runtime_override_audits,
+        "dated_runtime_override_fail_count": sum(
+            audit.get("status") == "fail" for audit in dated_runtime_override_audits
         ),
         "unverified_selected_families": unverified_selected_families,
         "unverified_selected_family_count": len(unverified_selected_families),
