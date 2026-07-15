@@ -23,7 +23,9 @@ def _event(
     }
 
 
-def test_tp1_first_hit_label_prefers_gross_target_and_requires_actual_costs_for_net(tmp_path):
+def test_tp1_first_hit_label_prefers_gross_target_and_requires_actual_costs_for_net(
+    tmp_path,
+):
     pipeline_path = tmp_path / "pipeline_events_2026-07-14.jsonl"
     rows = [
         _event(
@@ -50,9 +52,13 @@ def test_tp1_first_hit_label_prefers_gross_target_and_requires_actual_costs_for_
             pipeline="HOLDING_PIPELINE",
         ),
     ]
-    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
 
-    report = mod.build_report("2026-07-14", pipeline_path=pipeline_path, generated_at="fixed")
+    report = mod.build_report(
+        "2026-07-14", pipeline_path=pipeline_path, generated_at="fixed"
+    )
 
     label = report["rising_missed_tp1_first_hit_label_rows"][0]
     assert label["gross_first_hit_label"] == "gross_target_first"
@@ -61,7 +67,9 @@ def test_tp1_first_hit_label_prefers_gross_target_and_requires_actual_costs_for_
     assert report["summary"]["rising_missed_tp1_net_confirmed_count"] == 0
 
 
-def test_nxt_session_observation_separates_micro_state_and_effective_order_type(tmp_path):
+def test_nxt_session_observation_separates_micro_state_and_effective_order_type(
+    tmp_path,
+):
     pipeline_path = tmp_path / "pipeline_events_2026-07-14.jsonl"
     common = {
         "rising_missed_tp1_evaluation_id": "nxt-eval-1",
@@ -124,9 +132,10 @@ def test_nxt_session_observation_separates_micro_state_and_effective_order_type(
     assert report["summary"]["rising_missed_nxt_micro_state_counts"] == [
         {"nxt_micro_state": "fresh_trade_quiet", "count": 1}
     ]
-    assert report["rising_missed_nxt_order_resolution_rows"][0][
-        "order_type_remap_reason"
-    ] == "nxt_market_to_best_limit"
+    assert (
+        report["rising_missed_nxt_order_resolution_rows"][0]["order_type_remap_reason"]
+        == "nxt_market_to_best_limit"
+    )
 
 
 def test_nxt_post_block_sampler_recovers_counterfactual_first_hit_label(tmp_path):
@@ -230,7 +239,9 @@ def test_nxt_post_block_sampler_recovers_counterfactual_first_hit_label(tmp_path
     assert completion["mae_after_block_pct"] == -0.2
 
 
-def test_tp1_first_hit_label_marks_adverse_first_and_can_confirm_net_with_costs(tmp_path):
+def test_tp1_first_hit_label_marks_adverse_first_and_can_confirm_net_with_costs(
+    tmp_path,
+):
     pipeline_path = tmp_path / "pipeline_events_2026-07-14.jsonl"
     rows = [
         _event(
@@ -280,10 +291,17 @@ def test_tp1_first_hit_label_marks_adverse_first_and_can_confirm_net_with_costs(
             pipeline="HOLDING_PIPELINE",
         ),
     ]
-    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
 
-    report = mod.build_report("2026-07-14", pipeline_path=pipeline_path, generated_at="fixed")
-    labels = {row["stock_code"]: row for row in report["rising_missed_tp1_first_hit_label_rows"]}
+    report = mod.build_report(
+        "2026-07-14", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+    labels = {
+        row["stock_code"]: row
+        for row in report["rising_missed_tp1_first_hit_label_rows"]
+    }
 
     assert labels["000702"]["gross_first_hit_label"] == "adverse_stop_first"
     assert labels["000702"]["net_label"] == "unavailable_fee_tax_missing"
@@ -322,9 +340,13 @@ def test_tp1_first_hit_label_accepts_explicit_zero_costs_without_closing_pending
             pipeline="HOLDING_PIPELINE",
         ),
     ]
-    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
 
-    report = mod.build_report("2026-07-14", pipeline_path=pipeline_path, generated_at="fixed")
+    report = mod.build_report(
+        "2026-07-14", pipeline_path=pipeline_path, generated_at="fixed"
+    )
 
     label = report["rising_missed_tp1_first_hit_label_rows"][0]
     assert label["gross_first_hit_label"] == "pending_horizon"
@@ -371,9 +393,13 @@ def test_tp1_first_hit_label_uses_effective_price_and_later_cost_only_event(tmp_
             emitted_at="2026-07-14T09:08:00+09:00",
         ),
     ]
-    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
 
-    report = mod.build_report("2026-07-14", pipeline_path=pipeline_path, generated_at="fixed")
+    report = mod.build_report(
+        "2026-07-14", pipeline_path=pipeline_path, generated_at="fixed"
+    )
 
     label = report["rising_missed_tp1_first_hit_label_rows"][0]
     assert label["entry_price"] == 10000.0
@@ -445,9 +471,13 @@ def test_tp1_labels_prefer_effective_candidate_and_fresh_submit_mark_over_stale_
             emitted_at="2026-07-14T09:04:00+09:00",
         ),
     ]
-    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
 
-    report = mod.build_report("2026-07-14", pipeline_path=pipeline_path, generated_at="fixed")
+    report = mod.build_report(
+        "2026-07-14", pipeline_path=pipeline_path, generated_at="fixed"
+    )
 
     pass_label = report["rising_missed_tp1_first_hit_label_rows"][0]
     assert pass_label["entry_price"] == 10000.0
@@ -457,10 +487,16 @@ def test_tp1_labels_prefer_effective_candidate_and_fresh_submit_mark_over_stale_
         "rising_missed_tp1_counterfactual_first_hit_label_rows"
     ][0]
     assert counterfactual_label["entry_price"] == 20000.0
-    assert counterfactual_label["entry_price_source"] == "rising_missed_tp1_effective_price"
+    assert (
+        counterfactual_label["entry_price_source"]
+        == "rising_missed_tp1_effective_price"
+    )
     assert counterfactual_label["gross_first_hit_label"] == "gross_target_first"
     assert counterfactual_label["first_hit_ts"] == "2026-07-14T09:04:00+09:00"
-    assert report["summary"]["rising_missed_tp1_counterfactual_gross_target_first_count"] == 1
+    assert (
+        report["summary"]["rising_missed_tp1_counterfactual_gross_target_first_count"]
+        == 1
+    )
     assert counterfactual_label["actual_order_submitted"] is False
     assert counterfactual_label["broker_order_forbidden"] is True
 
@@ -532,9 +568,13 @@ def test_tp1_label_ignores_unfresh_decision_stage_current_price_before_submit_ma
             pipeline="HOLDING_PIPELINE",
         ),
     ]
-    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
 
-    report = mod.build_report("2026-07-14", pipeline_path=pipeline_path, generated_at="fixed")
+    report = mod.build_report(
+        "2026-07-14", pipeline_path=pipeline_path, generated_at="fixed"
+    )
 
     label = report["rising_missed_tp1_first_hit_label_rows"][0]
     assert label["entry_price"] == 10000.0
@@ -548,7 +588,9 @@ def test_tp1_label_ignores_unfresh_decision_stage_current_price_before_submit_ma
     assert blocker["post_block_price_event_count"] == 1
 
 
-def test_tp1_counterfactual_submit_safety_is_aggregated_without_label_duplication(tmp_path):
+def test_tp1_counterfactual_submit_safety_is_aggregated_without_label_duplication(
+    tmp_path,
+):
     pipeline_path = tmp_path / "pipeline_events_2026-07-14.jsonl"
     rows = [
         _event(
@@ -591,9 +633,13 @@ def test_tp1_counterfactual_submit_safety_is_aggregated_without_label_duplicatio
             },
         ),
     ]
-    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
 
-    report = mod.build_report("2026-07-14", pipeline_path=pipeline_path, generated_at="fixed")
+    report = mod.build_report(
+        "2026-07-14", pipeline_path=pipeline_path, generated_at="fixed"
+    )
     summary = report["summary"]
 
     assert summary["rising_missed_tp1_counterfactual_submit_safety_count"] == 2
@@ -647,10 +693,15 @@ def test_submit_safety_source_quality_unknown_breakdown_is_structured(tmp_path):
         encoding="utf-8",
     )
 
-    report = mod.build_report("2026-07-15", pipeline_path=pipeline_path, generated_at="fixed")
+    report = mod.build_report(
+        "2026-07-15", pipeline_path=pipeline_path, generated_at="fixed"
+    )
 
     block = report["submit_safety_blocker_rows"][0]
-    assert block["source_quality_missing_fields"] == ["buy_pressure_10t", "tick_aggressor_pressure"]
+    assert block["source_quality_missing_fields"] == [
+        "buy_pressure_10t",
+        "tick_aggressor_pressure",
+    ]
     assert block["ai_action"] == "WAIT"
     assert block["ai_score"] == 0.0
     assert block["buy_pressure_usable"] is False
@@ -658,7 +709,9 @@ def test_submit_safety_source_quality_unknown_breakdown_is_structured(tmp_path):
     assert report["summary"]["submit_safety_source_quality_unknown_gate_counts"] == [
         {"source_quality_gate": "weak_ai_micro_context_contract", "count": 1}
     ]
-    assert report["summary"]["submit_safety_source_quality_unknown_missing_field_counts"] == [
+    assert report["summary"][
+        "submit_safety_source_quality_unknown_missing_field_counts"
+    ] == [
         {"missing_field": "buy_pressure_10t", "count": 1},
         {"missing_field": "tick_aggressor_pressure", "count": 1},
     ]
@@ -726,9 +779,13 @@ def test_build_report_flags_rising_missed_avg_down_ge2_initial_quality_fail(tmp_
             pipeline="HOLDING_PIPELINE",
         ),
     ]
-    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
 
-    report = mod.build_report("2026-07-02", pipeline_path=pipeline_path, generated_at="fixed")
+    report = mod.build_report(
+        "2026-07-02", pipeline_path=pipeline_path, generated_at="fixed"
+    )
 
     assert report["summary"]["forced_rising_missed_record_count"] == 2
     assert report["summary"]["rising_missed_avg_down_ge2_count"] == 1
@@ -820,7 +877,10 @@ def test_write_outputs_renders_json_and_markdown(tmp_path):
 
     mod.write_outputs(report, output_json=output_json, output_md=output_md)
 
-    assert json.loads(output_json.read_text(encoding="utf-8"))["target_date"] == "2026-07-02"
+    assert (
+        json.loads(output_json.read_text(encoding="utf-8"))["target_date"]
+        == "2026-07-02"
+    )
     markdown = output_md.read_text(encoding="utf-8")
     assert "rising_missed_avg_down_ge2_count: 1" in markdown
     assert "## First Touch Regression" in markdown
@@ -867,13 +927,20 @@ def test_profit_recovered_sell_order_is_rescue_warning_not_initial_fail(tmp_path
             pipeline="HOLDING_PIPELINE",
         ),
     ]
-    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
 
-    report = mod.build_report("2026-07-02", pipeline_path=pipeline_path, generated_at="fixed")
+    report = mod.build_report(
+        "2026-07-02", pipeline_path=pipeline_path, generated_at="fixed"
+    )
 
     assert report["summary"]["initial_quality_fail_count"] == 0
     assert report["summary"]["scale_in_rescue_warning_count"] == 1
-    assert report["records"][0]["feedback_label"] == "rising_missed_scale_in_rescue_warning"
+    assert (
+        report["records"][0]["feedback_label"]
+        == "rising_missed_scale_in_rescue_warning"
+    )
 
 
 def test_build_report_adds_continuously_updated_first_touch_regression_rows(tmp_path):
@@ -920,7 +987,12 @@ def test_build_report_adds_continuously_updated_first_touch_regression_rows(tmp_
             "000401",
             "winner",
             "stop_line_touch_mandatory_avg_down_submitted",
-            {"profit_rate": "-3.42", "peak_profit": "-0.23", "current_ai_score": "65", "gate_reason": "ok"},
+            {
+                "profit_rate": "-3.42",
+                "peak_profit": "-0.23",
+                "current_ai_score": "65",
+                "gate_reason": "ok",
+            },
             emitted_at="2026-07-03T08:06:01",
             pipeline="HOLDING_PIPELINE",
         ),
@@ -971,7 +1043,12 @@ def test_build_report_adds_continuously_updated_first_touch_regression_rows(tmp_
             "000402",
             "loser",
             "stop_line_touch_mandatory_avg_down_submitted",
-            {"profit_rate": "-3.33", "peak_profit": "-0.23", "current_ai_score": "67", "gate_reason": "ok"},
+            {
+                "profit_rate": "-3.33",
+                "peak_profit": "-0.23",
+                "current_ai_score": "67",
+                "gate_reason": "ok",
+            },
             emitted_at="2026-07-03T08:17:01",
             pipeline="HOLDING_PIPELINE",
         ),
@@ -980,7 +1057,12 @@ def test_build_report_adds_continuously_updated_first_touch_regression_rows(tmp_
             "000402",
             "loser",
             "stop_line_touch_mandatory_avg_down_submitted",
-            {"profit_rate": "-3.05", "peak_profit": "-0.23", "current_ai_score": "67", "gate_reason": "ok"},
+            {
+                "profit_rate": "-3.05",
+                "peak_profit": "-0.23",
+                "current_ai_score": "67",
+                "gate_reason": "ok",
+            },
             emitted_at="2026-07-03T08:31:00",
             pipeline="HOLDING_PIPELINE",
         ),
@@ -1033,9 +1115,13 @@ def test_build_report_adds_continuously_updated_first_touch_regression_rows(tmp_
             pipeline="HOLDING_PIPELINE",
         ),
     ]
-    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
 
-    report = mod.build_report("2026-07-03", pipeline_path=pipeline_path, generated_at="fixed")
+    report = mod.build_report(
+        "2026-07-03", pipeline_path=pipeline_path, generated_at="fixed"
+    )
 
     assert report["summary"]["first_touch_regression_record_count"] == 3
     assert report["summary"]["first_touch_entry_submitted_count"] == 0
@@ -1044,33 +1130,62 @@ def test_build_report_adds_continuously_updated_first_touch_regression_rows(tmp_
     assert report["summary"]["first_touch_closed_count"] == 2
     assert report["summary"]["first_touch_profitable_count"] == 1
     assert report["summary"]["first_touch_loss_or_flat_count"] == 1
-    rows_by_record = {row["record_id"]: row for row in report["first_touch_regression_rows"]}
-    assert rows_by_record["401"]["first_touch_regression_label"] == "first_touch_recovered_profit"
+    rows_by_record = {
+        row["record_id"]: row for row in report["first_touch_regression_rows"]
+    }
+    assert (
+        rows_by_record["401"]["first_touch_regression_label"]
+        == "first_touch_recovered_profit"
+    )
     assert rows_by_record["401"]["entry_order_submitted"] is False
     assert rows_by_record["401"]["entry_order_submitted_count"] == 0
-    assert rows_by_record["401"]["blocker_counts_before_first_touch"] == {"blocked_strength_momentum": 1}
-    assert rows_by_record["401"]["first_touch_shadow_cap1_decision"] == "cap1_first_avg_down_allowed"
-    assert rows_by_record["402"]["first_touch_regression_label"] == "first_touch_loss_or_flat"
+    assert rows_by_record["401"]["blocker_counts_before_first_touch"] == {
+        "blocked_strength_momentum": 1
+    }
+    assert (
+        rows_by_record["401"]["first_touch_shadow_cap1_decision"]
+        == "cap1_first_avg_down_allowed"
+    )
+    assert (
+        rows_by_record["402"]["first_touch_regression_label"]
+        == "first_touch_loss_or_flat"
+    )
     assert rows_by_record["402"]["avg_down_submitted_event_count"] == 2
-    assert rows_by_record["402"]["first_touch_shadow_cap1_decision"] == "cap1_extra_avg_down_would_block"
-    assert "cap1_extra_avg_down_would_block" in rows_by_record["402"]["first_touch_shadow_risk_signals"]
-    assert rows_by_record["403"]["first_touch_regression_label"] == "first_touch_open_unresolved"
+    assert (
+        rows_by_record["402"]["first_touch_shadow_cap1_decision"]
+        == "cap1_extra_avg_down_would_block"
+    )
+    assert (
+        "cap1_extra_avg_down_would_block"
+        in rows_by_record["402"]["first_touch_shadow_risk_signals"]
+    )
+    assert (
+        rows_by_record["403"]["first_touch_regression_label"]
+        == "first_touch_open_unresolved"
+    )
     assert rows_by_record["403"]["first_touch_avgdown_decision_blocked"] is True
     assert rows_by_record["403"]["first_touch_avgdown_decision_allowed"] is False
     assert rows_by_record["403"]["actual_order_submitted"] is False
     assert rows_by_record["403"]["broker_order_forbidden"] is True
-    assert rows_by_record["403"]["first_touch_avgdown_decision_reason"] == "repeated_blockers_without_recovery"
+    assert (
+        rows_by_record["403"]["first_touch_avgdown_decision_reason"]
+        == "repeated_blockers_without_recovery"
+    )
     assert rows_by_record["403"]["first_touch_avgdown_decision_authority"] == (
         "real_scalping_first_touch_avgdown_decision_gate"
     )
     assert (
-        report["metric_contracts"]["rising_missed_first_touch_regression"]["decision_authority"]
+        report["metric_contracts"]["rising_missed_first_touch_regression"][
+            "decision_authority"
+        ]
         == "source_only_first_touch_regression_table"
     )
     assert report["source_quality"]["status"] == "pass"
 
 
-def test_build_report_captures_real_entry_submit_separately_from_first_touch_avgdown_submit(tmp_path):
+def test_build_report_captures_real_entry_submit_separately_from_first_touch_avgdown_submit(
+    tmp_path,
+):
     pipeline_path = tmp_path / "pipeline_events_2026-07-08.jsonl"
     rows = [
         _event(
@@ -1128,9 +1243,13 @@ def test_build_report_captures_real_entry_submit_separately_from_first_touch_avg
             pipeline="HOLDING_PIPELINE",
         ),
     ]
-    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
 
-    report = mod.build_report("2026-07-08", pipeline_path=pipeline_path, generated_at="fixed")
+    report = mod.build_report(
+        "2026-07-08", pipeline_path=pipeline_path, generated_at="fixed"
+    )
 
     assert report["summary"]["first_touch_entry_submitted_count"] == 1
     row = report["first_touch_regression_rows"][0]
@@ -1149,7 +1268,9 @@ def test_build_report_captures_real_entry_submit_separately_from_first_touch_avg
     assert submit_row["submit_lineage_join_method"] == "record_id"
 
 
-def test_build_report_joins_forced_plan_to_submit_by_code_time_when_lineage_fields_missing(tmp_path):
+def test_build_report_joins_forced_plan_to_submit_by_code_time_when_lineage_fields_missing(
+    tmp_path,
+):
     pipeline_path = tmp_path / "pipeline_events_2026-07-10.jsonl"
     rows = [
         _event(
@@ -1200,9 +1321,13 @@ def test_build_report_joins_forced_plan_to_submit_by_code_time_when_lineage_fiel
             emitted_at="2026-07-10T10:00:08",
         ),
     ]
-    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
 
-    report = mod.build_report("2026-07-10", pipeline_path=pipeline_path, generated_at="fixed")
+    report = mod.build_report(
+        "2026-07-10", pipeline_path=pipeline_path, generated_at="fixed"
+    )
 
     assert report["summary"]["rising_missed_submit_lineage_record_count"] == 1
     assert report["summary"]["rising_missed_order_plan_forced_count"] == 1
@@ -1218,7 +1343,9 @@ def test_build_report_joins_forced_plan_to_submit_by_code_time_when_lineage_fiel
     assert row["decision_authority"] == "source_only_rising_missed_submit_lineage"
 
 
-def test_first_touch_regression_blocks_source_quality_when_ai_provenance_missing(tmp_path):
+def test_first_touch_regression_blocks_source_quality_when_ai_provenance_missing(
+    tmp_path,
+):
     pipeline_path = tmp_path / "pipeline_events_2026-07-03.jsonl"
     rows = [
         _event(
@@ -1234,20 +1361,31 @@ def test_first_touch_regression_blocks_source_quality_when_ai_provenance_missing
             "000501",
             "missing-ai-provenance",
             "stop_line_touch_mandatory_avg_down_candidate",
-            {"profit_rate": "-3.42", "peak_profit": "-0.23", "current_ai_score": "65", "gate_reason": "ok"},
+            {
+                "profit_rate": "-3.42",
+                "peak_profit": "-0.23",
+                "current_ai_score": "65",
+                "gate_reason": "ok",
+            },
             emitted_at="2026-07-03T08:06:00",
             pipeline="HOLDING_PIPELINE",
         ),
     ]
-    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
 
-    report = mod.build_report("2026-07-03", pipeline_path=pipeline_path, generated_at="fixed")
+    report = mod.build_report(
+        "2026-07-03", pipeline_path=pipeline_path, generated_at="fixed"
+    )
 
     assert report["source_quality"]["status"] == "first_touch_ai_provenance_missing"
     assert report["summary"]["first_touch_ai_provenance_missing_count"] == 1
 
 
-def test_first_touch_regression_accepts_runtime_usable_holding_ai_not_called_score(tmp_path):
+def test_first_touch_regression_accepts_runtime_usable_holding_ai_not_called_score(
+    tmp_path,
+):
     pipeline_path = tmp_path / "pipeline_events_2026-07-03.jsonl"
     rows = [
         _event(
@@ -1276,15 +1414,21 @@ def test_first_touch_regression_accepts_runtime_usable_holding_ai_not_called_sco
             pipeline="HOLDING_PIPELINE",
         ),
     ]
-    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
 
-    report = mod.build_report("2026-07-03", pipeline_path=pipeline_path, generated_at="fixed")
+    report = mod.build_report(
+        "2026-07-03", pipeline_path=pipeline_path, generated_at="fixed"
+    )
 
     assert report["source_quality"]["status"] == "pass"
     assert report["summary"]["first_touch_ai_provenance_unusable_count"] == 0
 
 
-def test_first_touch_regression_blocks_source_quality_when_micro_provenance_unusable(tmp_path):
+def test_first_touch_regression_blocks_source_quality_when_micro_provenance_unusable(
+    tmp_path,
+):
     pipeline_path = tmp_path / "pipeline_events_2026-07-03.jsonl"
     rows = [
         _event(
@@ -1320,15 +1464,21 @@ def test_first_touch_regression_blocks_source_quality_when_micro_provenance_unus
             pipeline="HOLDING_PIPELINE",
         ),
     ]
-    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
 
-    report = mod.build_report("2026-07-03", pipeline_path=pipeline_path, generated_at="fixed")
+    report = mod.build_report(
+        "2026-07-03", pipeline_path=pipeline_path, generated_at="fixed"
+    )
 
     assert report["source_quality"]["status"] == "first_touch_micro_provenance_unusable"
     assert report["summary"]["first_touch_micro_provenance_unusable_count"] == 1
 
 
-def test_first_touch_regression_blocks_source_quality_when_pressure_provenance_missing(tmp_path):
+def test_first_touch_regression_blocks_source_quality_when_pressure_provenance_missing(
+    tmp_path,
+):
     pipeline_path = tmp_path / "pipeline_events_2026-07-03.jsonl"
     rows = [
         _event(
@@ -1364,15 +1514,23 @@ def test_first_touch_regression_blocks_source_quality_when_pressure_provenance_m
             pipeline="HOLDING_PIPELINE",
         ),
     ]
-    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
 
-    report = mod.build_report("2026-07-03", pipeline_path=pipeline_path, generated_at="fixed")
+    report = mod.build_report(
+        "2026-07-03", pipeline_path=pipeline_path, generated_at="fixed"
+    )
 
-    assert report["source_quality"]["status"] == "first_touch_pressure_provenance_missing"
+    assert (
+        report["source_quality"]["status"] == "first_touch_pressure_provenance_missing"
+    )
     assert report["summary"]["first_touch_pressure_provenance_missing_count"] == 1
 
 
-def test_first_touch_regression_blocks_source_quality_when_micro_vwap_provenance_missing(tmp_path):
+def test_first_touch_regression_blocks_source_quality_when_micro_vwap_provenance_missing(
+    tmp_path,
+):
     pipeline_path = tmp_path / "pipeline_events_2026-07-03.jsonl"
     rows = [
         _event(
@@ -1407,15 +1565,21 @@ def test_first_touch_regression_blocks_source_quality_when_micro_vwap_provenance
             pipeline="HOLDING_PIPELINE",
         ),
     ]
-    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
 
-    report = mod.build_report("2026-07-03", pipeline_path=pipeline_path, generated_at="fixed")
+    report = mod.build_report(
+        "2026-07-03", pipeline_path=pipeline_path, generated_at="fixed"
+    )
 
     assert report["source_quality"]["status"] == "first_touch_micro_provenance_missing"
     assert report["summary"]["first_touch_micro_provenance_missing_count"] == 1
 
 
-def test_submit_safety_breakdown_and_backoff_opportunity_audit_are_source_only(tmp_path):
+def test_submit_safety_breakdown_and_backoff_opportunity_audit_are_source_only(
+    tmp_path,
+):
     pipeline_path = tmp_path / "pipeline_events_2026-07-10.jsonl"
     rows = [
         _event(
@@ -1573,14 +1737,19 @@ def test_submit_safety_breakdown_and_backoff_opportunity_audit_are_source_only(t
             emitted_at="2026-07-10T09:09:00",
         ),
     ]
-    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
 
-    report = mod.build_report("2026-07-10", pipeline_path=pipeline_path, generated_at="fixed")
+    report = mod.build_report(
+        "2026-07-10", pipeline_path=pipeline_path, generated_at="fixed"
+    )
 
     assert report["summary"]["submit_safety_block_count"] == 3
     assert report["summary"]["potential_backoff_opportunity_loss_count"] == 1
     bucket_counts = {
-        item["blocker_bucket"]: item["count"] for item in report["summary"]["submit_safety_bucket_counts"]
+        item["blocker_bucket"]: item["count"]
+        for item in report["summary"]["submit_safety_bucket_counts"]
     }
     assert bucket_counts == {
         "ai_wait_after_refresh": 1,
@@ -1600,18 +1769,24 @@ def test_submit_safety_breakdown_and_backoff_opportunity_audit_are_source_only(t
     latency_row = report["submit_safety_blocker_rows"][2]
     assert latency_row["true_ofi_reason"] == "true_ofi_below_floor"
     assert latency_row["spread_bps"] == 70.0
-    backoff_rows = {item["stock_code"]: item for item in report["backoff_opportunity_audit_rows"]}
+    backoff_rows = {
+        item["stock_code"]: item for item in report["backoff_opportunity_audit_rows"]
+    }
     assert backoff_rows["000704"]["recovered_eval_after_last_backoff"] is True
     assert backoff_rows["000705"]["potential_backoff_opportunity_loss"] is True
     assert backoff_rows["000705"]["backoff_observation_state"] == "mature_unrecovered"
     assert report["summary"]["backoff_active_positive_delta_symbol_count"] == 0
     assert (
-        report["metric_contracts"]["rising_missed_submit_safety_blocker_breakdown"]["decision_authority"]
+        report["metric_contracts"]["rising_missed_submit_safety_blocker_breakdown"][
+            "decision_authority"
+        ]
         == "source_only_submit_safety_blocker_attribution"
     )
 
 
-def test_latency_false_negative_review_selects_only_high_mfe_low_mae_latency_blocks(tmp_path):
+def test_latency_false_negative_review_selects_only_high_mfe_low_mae_latency_blocks(
+    tmp_path,
+):
     pipeline_path = tmp_path / "pipeline_events_2026-07-10.jsonl"
     rows = [
         _event(
@@ -1763,40 +1938,65 @@ def test_latency_false_negative_review_selects_only_high_mfe_low_mae_latency_blo
             emitted_at="2026-07-10T09:14:20",
         ),
     ]
-    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
 
-    report = mod.build_report("2026-07-10", pipeline_path=pipeline_path, generated_at="fixed")
+    report = mod.build_report(
+        "2026-07-10", pipeline_path=pipeline_path, generated_at="fixed"
+    )
 
     assert report["summary"]["latency_false_negative_review_count"] == 3
     assert report["summary"]["latency_false_negative_true_ofi_count"] == 1
     assert report["summary"]["latency_false_negative_spread_only_count"] == 2
-    rows_by_code = {item["stock_code"]: item for item in report["latency_false_negative_review_rows"]}
+    rows_by_code = {
+        item["stock_code"]: item
+        for item in report["latency_false_negative_review_rows"]
+    }
     assert set(rows_by_code) == {"000801", "000802", "000805"}
-    assert rows_by_code["000801"]["review_bucket"] == "true_ofi_false_negative_candidate"
+    assert (
+        rows_by_code["000801"]["review_bucket"] == "true_ofi_false_negative_candidate"
+    )
     assert rows_by_code["000801"]["mfe_after_block_pct"] == 4.5
     assert rows_by_code["000801"]["mae_after_block_pct"] == -1.0
-    assert rows_by_code["000802"]["review_bucket"] == "spread_caution_false_negative_candidate"
+    assert (
+        rows_by_code["000802"]["review_bucket"]
+        == "spread_caution_false_negative_candidate"
+    )
     assert rows_by_code["000802"]["mfe_after_block_pct"] == 3.5
     assert rows_by_code["000802"]["mae_after_block_pct"] == -1.0
     assert rows_by_code["000801"]["runtime_effect"] is False
     assert rows_by_code["000801"]["allowed_runtime_apply"] is False
     assert (
-        report["metric_contracts"]["rising_missed_latency_false_negative_review"]["decision_authority"]
+        report["metric_contracts"]["rising_missed_latency_false_negative_review"][
+            "decision_authority"
+        ]
         == "source_only_latency_false_negative_review"
     )
     canary_rows_by_code = {
-        item["stock_code"]: item for item in report["latency_false_negative_canary_candidate_rows"]
+        item["stock_code"]: item
+        for item in report["latency_false_negative_canary_candidate_rows"]
     }
-    assert canary_rows_by_code["000801"]["canary_cohort"] == "true_ofi_near_zero_false_negative"
+    assert (
+        canary_rows_by_code["000801"]["canary_cohort"]
+        == "true_ofi_near_zero_false_negative"
+    )
     assert canary_rows_by_code["000801"]["canary_grade"] == "ready_for_recheck"
     assert canary_rows_by_code["000801"]["canary_primary_review_score_pct"] == 3.5
-    assert canary_rows_by_code["000802"]["canary_cohort"] == "spread_only_false_negative"
+    assert (
+        canary_rows_by_code["000802"]["canary_cohort"] == "spread_only_false_negative"
+    )
     assert canary_rows_by_code["000802"]["canary_grade"] == "ready_for_recheck"
     assert canary_rows_by_code["000805"]["canary_grade"] == "observe_wide_spread"
     assert report["summary"]["latency_false_negative_canary_candidate_count"] == 3
     assert report["summary"]["latency_false_negative_canary_ready_count"] == 2
-    assert report["summary"]["latency_false_negative_canary_observe_wide_spread_count"] == 1
     assert (
-        report["metric_contracts"]["rising_missed_latency_false_negative_canary_candidate"]["decision_authority"]
+        report["summary"]["latency_false_negative_canary_observe_wide_spread_count"]
+        == 1
+    )
+    assert (
+        report["metric_contracts"][
+            "rising_missed_latency_false_negative_canary_candidate"
+        ]["decision_authority"]
         == "source_only_latency_false_negative_canary_candidate"
     )

@@ -9,7 +9,6 @@ from typing import Any
 
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 PIPELINE_EVENTS_DIR = PROJECT_ROOT / "data" / "pipeline_events"
 REPORT_DIR = PROJECT_ROOT / "data" / "report" / "rising_missed_intraday_feedback"
@@ -103,12 +102,16 @@ def _parse_ts(value: Any) -> datetime | None:
 
 def _event_code(row: dict[str, Any]) -> str:
     fields = _fields(row)
-    return str(row.get("stock_code") or fields.get("stock_code") or row.get("code") or "").strip()
+    return str(
+        row.get("stock_code") or fields.get("stock_code") or row.get("code") or ""
+    ).strip()
 
 
 def _event_name(row: dict[str, Any]) -> str:
     fields = _fields(row)
-    return str(row.get("stock_name") or fields.get("stock_name") or _event_code(row) or "").strip()
+    return str(
+        row.get("stock_name") or fields.get("stock_name") or _event_code(row) or ""
+    ).strip()
 
 
 def _scanner_current_price_usable(row: dict[str, Any], fields: dict[str, Any]) -> bool:
@@ -156,7 +159,8 @@ def _tp1_observation_price(row: dict[str, Any]) -> tuple[float | None, str]:
     is_tp1_evaluation = bool(
         fields.get("rising_missed_tp1_evaluation_id")
         or fields.get("rising_missed_tp1_candidate_reason")
-        or str(row.get("stage") or "") == "rising_missed_tp1_counterfactual_submit_safety"
+        or str(row.get("stage") or "")
+        == "rising_missed_tp1_counterfactual_submit_safety"
     )
     if is_tp1_evaluation:
         effective_price = _safe_float(fields.get("rising_missed_tp1_effective_price"))
@@ -165,9 +169,10 @@ def _tp1_observation_price(row: dict[str, Any]) -> tuple[float | None, str]:
     price, source = _event_price_with_source(row)
     if _decision_stage_current_price_unusable(row, source):
         return None, "decision_stage_current_price_without_fresh_mark"
-    if source in {"current_price", "current_price_observed"} and not _scanner_current_price_usable(
-        row, fields
-    ):
+    if source in {
+        "current_price",
+        "current_price_observed",
+    } and not _scanner_current_price_usable(row, fields):
         return None, "scanner_current_price_time_basis_unknown"
     return price, source
 
@@ -229,9 +234,17 @@ def _quality_label(item: dict[str, Any]) -> str:
         return "rising_missed_initial_quality_fail"
     if latest_profit is not None and latest_profit < 0:
         return "rising_missed_initial_quality_fail_open"
-    if min_profit is not None and min_profit <= -2.0 and (max_profit is None or max_profit < 0.5):
+    if (
+        min_profit is not None
+        and min_profit <= -2.0
+        and (max_profit is None or max_profit < 0.5)
+    ):
         return "rising_missed_initial_quality_fail_open"
-    if max_profit is not None and max_profit >= 1.0 and (latest_profit is not None and latest_profit >= 0):
+    if (
+        max_profit is not None
+        and max_profit >= 1.0
+        and (latest_profit is not None and latest_profit >= 0)
+    ):
         return "rising_missed_scale_in_rescue_warning"
     return "rising_missed_initial_quality_review"
 
@@ -252,12 +265,18 @@ def _update_holding_record(item: dict[str, Any], row: dict[str, Any]) -> None:
         or fields.get("scale_in_blocker_reason")
         or fields.get("gate_reason")
     )
-    item["exit_rule_candidate"] = fields.get("exit_rule_candidate") or fields.get("exit_rule")
+    item["exit_rule_candidate"] = fields.get("exit_rule_candidate") or fields.get(
+        "exit_rule"
+    )
     item["sell_reason_type"] = fields.get("sell_reason_type")
-    item["max_avg_down_count"] = max(_safe_int(item.get("max_avg_down_count")), avg_down_count)
+    item["max_avg_down_count"] = max(
+        _safe_int(item.get("max_avg_down_count")), avg_down_count
+    )
     if avg_down_count >= AVG_DOWN_FAIL_FLOOR:
         item["avg_down_ge2_seen"] = True
-        item["first_avg_down_ge2_ts"] = item.get("first_avg_down_ge2_ts") or row.get("emitted_at")
+        item["first_avg_down_ge2_ts"] = item.get("first_avg_down_ge2_ts") or row.get(
+            "emitted_at"
+        )
     if profit_rate is not None:
         item["min_profit_seen"] = (
             profit_rate
@@ -330,39 +349,69 @@ def _touch_feature(row: dict[str, Any]) -> dict[str, Any]:
         "first_touch_stage": row.get("stage"),
         "first_touch_profit_rate": _safe_float(fields.get("profit_rate")),
         "first_touch_peak_profit": _safe_float(fields.get("peak_profit")),
-        "first_touch_ai_score": _safe_float(fields.get("current_ai_score") or fields.get("ai_score")),
+        "first_touch_ai_score": _safe_float(
+            fields.get("current_ai_score") or fields.get("ai_score")
+        ),
         "first_touch_gate_reason": _touch_reason(fields),
-        "first_touch_avgdown_decision_allowed": fields.get("first_touch_avgdown_decision_allowed"),
-        "first_touch_avgdown_decision_reason": fields.get("first_touch_avgdown_decision_reason"),
-        "first_touch_avgdown_support_signals": fields.get("first_touch_avgdown_support_signals"),
-        "first_touch_avgdown_risk_signals": fields.get("first_touch_avgdown_risk_signals"),
+        "first_touch_avgdown_decision_allowed": fields.get(
+            "first_touch_avgdown_decision_allowed"
+        ),
+        "first_touch_avgdown_decision_reason": fields.get(
+            "first_touch_avgdown_decision_reason"
+        ),
+        "first_touch_avgdown_support_signals": fields.get(
+            "first_touch_avgdown_support_signals"
+        ),
+        "first_touch_avgdown_risk_signals": fields.get(
+            "first_touch_avgdown_risk_signals"
+        ),
         "first_touch_avgdown_repeated_blocker_count": _safe_int(
             fields.get("first_touch_avgdown_repeated_blocker_count")
         ),
-        "first_touch_avgdown_decision_authority": fields.get("first_touch_avgdown_decision_authority"),
+        "first_touch_avgdown_decision_authority": fields.get(
+            "first_touch_avgdown_decision_authority"
+        ),
         "first_touch_avgdown_ai_score_usable": _optional_boolish(
             fields.get("first_touch_avgdown_ai_score_usable")
         ),
-        "first_touch_avgdown_ai_score_source": fields.get("first_touch_avgdown_ai_score_source"),
-        "first_touch_avgdown_ai_score_data_quality": fields.get("first_touch_avgdown_ai_score_data_quality"),
+        "first_touch_avgdown_ai_score_source": fields.get(
+            "first_touch_avgdown_ai_score_source"
+        ),
+        "first_touch_avgdown_ai_score_data_quality": fields.get(
+            "first_touch_avgdown_ai_score_data_quality"
+        ),
         "first_touch_avgdown_ai_score_excluded_reason": fields.get(
             "first_touch_avgdown_ai_score_excluded_reason"
         ),
-        "first_touch_reversal_feature_source_quality": fields.get("first_touch_reversal_feature_source_quality"),
-        "first_touch_reversal_feature_stale": _optional_boolish(fields.get("first_touch_reversal_feature_stale")),
-        "first_touch_reversal_feature_stale_reason": fields.get("first_touch_reversal_feature_stale_reason"),
-        "first_touch_tick_context_quality": fields.get("first_touch_tick_context_quality"),
+        "first_touch_reversal_feature_source_quality": fields.get(
+            "first_touch_reversal_feature_source_quality"
+        ),
+        "first_touch_reversal_feature_stale": _optional_boolish(
+            fields.get("first_touch_reversal_feature_stale")
+        ),
+        "first_touch_reversal_feature_stale_reason": fields.get(
+            "first_touch_reversal_feature_stale_reason"
+        ),
+        "first_touch_tick_context_quality": fields.get(
+            "first_touch_tick_context_quality"
+        ),
         "first_touch_tick_latest_age_ms": fields.get("first_touch_tick_latest_age_ms"),
         "first_touch_quote_stale": fields.get("first_touch_quote_stale"),
         "first_touch_quote_age_ms": fields.get("first_touch_quote_age_ms"),
         "buy_pressure_10t": _safe_float(fields.get("buy_pressure_10t")),
-        "tick_aggressor_trusted_count": _safe_float(fields.get("tick_aggressor_trusted_count")),
-        "tick_aggressor_pressure_usable": _optional_boolish(fields.get("tick_aggressor_pressure_usable")),
+        "tick_aggressor_trusted_count": _safe_float(
+            fields.get("tick_aggressor_trusted_count")
+        ),
+        "tick_aggressor_pressure_usable": _optional_boolish(
+            fields.get("tick_aggressor_pressure_usable")
+        ),
         "tick_acceleration_ratio": _safe_float(fields.get("tick_acceleration_ratio")),
         "curr_vs_micro_vwap_bp": _safe_float(fields.get("curr_vs_micro_vwap_bp")),
         "micro_vwap_available": _optional_boolish(fields.get("micro_vwap_available")),
         "minute_candle_context_quality": fields.get("minute_candle_context_quality"),
-        "minute_candle_window_fresh": _optional_boolish(fields.get("minute_candle_window_fresh")),
+        "minute_candle_window_fresh": _optional_boolish(
+            fields.get("minute_candle_window_fresh")
+        ),
         "minute_candle_latest_age_ms": fields.get("minute_candle_latest_age_ms"),
     }
 
@@ -388,11 +437,17 @@ def _update_first_touch_regression(
         item["first_touch_avgdown_decision_blocked"] = True
     if "stop_line_touch_mandatory_avg_down_submitted" in stage:
         item["first_touch_avg_down_submitted"] = True
-        item["first_touch_submitted_ts"] = item.get("first_touch_submitted_ts") or row.get("emitted_at")
-        item["avg_down_submitted_event_count"] = _safe_int(item.get("avg_down_submitted_event_count")) + 1
+        item["first_touch_submitted_ts"] = item.get(
+            "first_touch_submitted_ts"
+        ) or row.get("emitted_at")
+        item["avg_down_submitted_event_count"] = (
+            _safe_int(item.get("avg_down_submitted_event_count")) + 1
+        )
     if "stop_line_touch_mandatory_avg_down_not_eligible" in stage:
         item["first_touch_not_eligible_seen"] = True
-        item["first_touch_not_eligible_reason"] = item.get("first_touch_not_eligible_reason") or _touch_reason(fields)
+        item["first_touch_not_eligible_reason"] = item.get(
+            "first_touch_not_eligible_reason"
+        ) or _touch_reason(fields)
     if stage.startswith("blocked_") and not item.get("first_touch_seen"):
         blocker_counts[stage] += 1
         reason = _touch_reason(fields)
@@ -406,7 +461,9 @@ def _update_first_touch_regression(
             item["final_ts"] = row.get("emitted_at")
     avg_down_count = _safe_int(fields.get("avg_down_count"))
     if avg_down_count:
-        item["max_avg_down_count"] = max(_safe_int(item.get("max_avg_down_count")), avg_down_count)
+        item["max_avg_down_count"] = max(
+            _safe_int(item.get("max_avg_down_count")), avg_down_count
+        )
 
 
 def _build_first_touch_regression_rows(
@@ -425,23 +482,35 @@ def _build_first_touch_regression_rows(
         }
         for record_id, entry in forced.items()
     }
-    blocker_counts: dict[str, Counter[str]] = {record_id: Counter() for record_id in candidates}
-    blocker_reason_counts: dict[str, Counter[str]] = {record_id: Counter() for record_id in candidates}
+    blocker_counts: dict[str, Counter[str]] = {
+        record_id: Counter() for record_id in candidates
+    }
+    blocker_reason_counts: dict[str, Counter[str]] = {
+        record_id: Counter() for record_id in candidates
+    }
     for row in iter_jsonl(pipeline_path):
         record_id = str(row.get("record_id") or "").strip()
         if record_id not in candidates:
             continue
         fields = _fields(row)
         stage = str(row.get("stage") or "")
-        if stage == "order_bundle_submitted" and _boolish(fields.get("actual_order_submitted")):
+        if stage == "order_bundle_submitted" and _boolish(
+            fields.get("actual_order_submitted")
+        ):
             candidates[record_id]["entry_order_submitted"] = True
             candidates[record_id]["entry_order_submitted_count"] = (
                 _safe_int(candidates[record_id].get("entry_order_submitted_count")) + 1
             )
-            candidates[record_id]["entry_order_last_submitted_ts"] = row.get("emitted_at")
-        if stage == "holding_started" and _boolish(fields.get("actual_order_submitted")):
+            candidates[record_id]["entry_order_last_submitted_ts"] = row.get(
+                "emitted_at"
+            )
+        if stage == "holding_started" and _boolish(
+            fields.get("actual_order_submitted")
+        ):
             candidates[record_id]["entry_fill_seen"] = True
-            candidates[record_id]["entry_fill_seen_count"] = _safe_int(candidates[record_id].get("entry_fill_seen_count")) + 1
+            candidates[record_id]["entry_fill_seen_count"] = (
+                _safe_int(candidates[record_id].get("entry_fill_seen_count")) + 1
+            )
             candidates[record_id]["entry_fill_last_seen_ts"] = row.get("emitted_at")
         _update_first_touch_regression(
             candidates[record_id],
@@ -457,7 +526,9 @@ def _build_first_touch_regression_rows(
         item.update(_first_touch_shadow_decision(item))
         item["decision_authority"] = "source_only_first_touch_regression_table"
         item["entry_order_submitted"] = bool(item.get("entry_order_submitted"))
-        item["entry_order_submitted_count"] = _safe_int(item.get("entry_order_submitted_count"))
+        item["entry_order_submitted_count"] = _safe_int(
+            item.get("entry_order_submitted_count")
+        )
         item["entry_fill_seen"] = bool(item.get("entry_fill_seen"))
         item["entry_fill_seen_count"] = _safe_int(item.get("entry_fill_seen_count"))
         item["actual_order_submitted"] = False
@@ -466,7 +537,12 @@ def _build_first_touch_regression_rows(
         item["allowed_runtime_apply"] = False
         item["forbidden_uses"] = FORBIDDEN_USES
         rows.append(item)
-    rows.sort(key=lambda item: (str(item.get("first_touch_ts") or ""), str(item.get("record_id") or "")))
+    rows.sort(
+        key=lambda item: (
+            str(item.get("first_touch_ts") or ""),
+            str(item.get("record_id") or ""),
+        )
+    )
     return rows
 
 
@@ -487,7 +563,9 @@ def _forced_submit_join_key(
         candidate_dt = _parse_ts(candidate.get("first_rising_ts"))
         if candidate_dt is None or candidate_dt > event_dt:
             continue
-        if event_dt - candidate_dt > timedelta(minutes=FORCED_SUBMIT_LINEAGE_JOIN_WINDOW_MINUTES):
+        if event_dt - candidate_dt > timedelta(
+            minutes=FORCED_SUBMIT_LINEAGE_JOIN_WINDOW_MINUTES
+        ):
             continue
         candidate_record_id = str(candidate.get("record_id") or "").strip()
         if not candidate_record_id:
@@ -566,36 +644,56 @@ def _build_forced_submit_lineage_rows(
         elif stage == "order_leg_request":
             item["order_leg_request_count"] += 1
             item["order_leg_request_last_ts"] = ts
-            price = fields.get("submitted_order_price") or fields.get("order_price") or fields.get("price")
+            price = (
+                fields.get("submitted_order_price")
+                or fields.get("order_price")
+                or fields.get("price")
+            )
             if price not in (None, ""):
                 item["submitted_price_list"].append(str(price))
         elif stage == "order_leg_sent":
             item["order_leg_sent_count"] += 1
             item["order_leg_sent_last_ts"] = ts
-            order_no = fields.get("order_no") or fields.get("ord_no") or fields.get("broker_order_no")
+            order_no = (
+                fields.get("order_no")
+                or fields.get("ord_no")
+                or fields.get("broker_order_no")
+            )
             if order_no not in (None, ""):
                 item["order_no_list"].append(str(order_no))
         elif stage == "buy_signal_telegram_enqueued":
             item["buy_signal_telegram_enqueued_count"] += 1
             item["buy_signal_telegram_enqueued_last_ts"] = ts
-        elif stage == "order_bundle_submitted" and _boolish(fields.get("actual_order_submitted")):
+        elif stage == "order_bundle_submitted" and _boolish(
+            fields.get("actual_order_submitted")
+        ):
             item["entry_order_submitted"] = True
             item["order_bundle_submitted_count"] += 1
             item["order_bundle_submitted_last_ts"] = ts
             item["entry_order_last_submitted_ts"] = ts
-            order_no = fields.get("order_no") or fields.get("ord_no") or fields.get("broker_order_no")
+            order_no = (
+                fields.get("order_no")
+                or fields.get("ord_no")
+                or fields.get("broker_order_no")
+            )
             if order_no not in (None, ""):
                 item["primary_order_no"] = str(order_no)
-            order_price = fields.get("order_price") or fields.get("submitted_order_price")
+            order_price = fields.get("order_price") or fields.get(
+                "submitted_order_price"
+            )
             if order_price not in (None, ""):
                 item["submitted_order_price"] = order_price
         elif stage == "entry_reprice_after_submit_evaluated":
             item["entry_reprice_after_submit_evaluated_count"] += 1
-            item["entry_reprice_after_submit_last_reason"] = fields.get("block_reason") or fields.get("reason")
+            item["entry_reprice_after_submit_last_reason"] = fields.get(
+                "block_reason"
+            ) or fields.get("reason")
             item["entry_reprice_after_submit_last_ts"] = ts
         elif stage == "entry_reprice_after_submit_blocked":
             item["entry_reprice_after_submit_blocked_count"] += 1
-            item["entry_reprice_after_submit_last_reason"] = fields.get("block_reason") or fields.get("reason")
+            item["entry_reprice_after_submit_last_reason"] = fields.get(
+                "block_reason"
+            ) or fields.get("reason")
             item["entry_reprice_after_submit_blocked_last_ts"] = ts
         elif stage == "entry_order_cancel_requested":
             item["entry_order_cancel_requested_count"] += 1
@@ -615,7 +713,9 @@ def _build_forced_submit_lineage_rows(
             continue
         item["entry_order_submitted"] = bool(item.get("entry_order_submitted"))
         item["order_no_list"] = ",".join(dict.fromkeys(item.get("order_no_list") or []))
-        item["submitted_price_list"] = ",".join(dict.fromkeys(item.get("submitted_price_list") or []))
+        item["submitted_price_list"] = ",".join(
+            dict.fromkeys(item.get("submitted_price_list") or [])
+        )
         item["actual_order_submitted"] = False
         item["broker_order_forbidden"] = True
         item["runtime_effect"] = False
@@ -625,7 +725,11 @@ def _build_forced_submit_lineage_rows(
         rows.append(item)
     rows.sort(
         key=lambda item: (
-            str(item.get("order_plan_first_ts") or item.get("order_bundle_submitted_last_ts") or ""),
+            str(
+                item.get("order_plan_first_ts")
+                or item.get("order_bundle_submitted_last_ts")
+                or ""
+            ),
             str(item.get("record_id") or ""),
         )
     )
@@ -633,7 +737,10 @@ def _build_forced_submit_lineage_rows(
 
 
 def _first_touch_ai_provenance_missing(item: dict[str, Any]) -> bool:
-    if item.get("first_touch_avgdown_ai_score") is None and item.get("first_touch_ai_score") is None:
+    if (
+        item.get("first_touch_avgdown_ai_score") is None
+        and item.get("first_touch_ai_score") is None
+    ):
         return False
     return (
         item.get("first_touch_avgdown_ai_score_usable") is None
@@ -644,7 +751,9 @@ def _first_touch_ai_provenance_missing(item: dict[str, Any]) -> bool:
 
 def _first_touch_ai_provenance_unusable(item: dict[str, Any]) -> bool:
     usable = item.get("first_touch_avgdown_ai_score_usable")
-    data_quality = str(item.get("first_touch_avgdown_ai_score_data_quality") or "").strip().lower()
+    data_quality = (
+        str(item.get("first_touch_avgdown_ai_score_data_quality") or "").strip().lower()
+    )
     source = str(item.get("first_touch_avgdown_ai_score_source") or "").strip().lower()
     if usable is False:
         return True
@@ -671,11 +780,17 @@ def _first_touch_micro_signals(item: dict[str, Any]) -> set[str]:
 
 
 def _first_touch_pressure_signal_used(item: dict[str, Any]) -> bool:
-    return bool(_first_touch_micro_signals(item) & {"buy_pressure_support", "tick_accel_support"})
+    return bool(
+        _first_touch_micro_signals(item)
+        & {"buy_pressure_support", "tick_accel_support"}
+    )
 
 
 def _first_touch_micro_vwap_signal_used(item: dict[str, Any]) -> bool:
-    return bool(_first_touch_micro_signals(item) & {"micro_vwap_non_negative", "micro_vwap_negative"})
+    return bool(
+        _first_touch_micro_signals(item)
+        & {"micro_vwap_non_negative", "micro_vwap_negative"}
+    )
 
 
 def _first_touch_pressure_provenance_missing(item: dict[str, Any]) -> bool:
@@ -708,7 +823,11 @@ def _first_touch_micro_provenance_missing(item: dict[str, Any]) -> bool:
     )
     if not micro_signal_used:
         return False
-    quality = str(item.get("first_touch_reversal_feature_source_quality") or "").strip().lower()
+    quality = (
+        str(item.get("first_touch_reversal_feature_source_quality") or "")
+        .strip()
+        .lower()
+    )
     if quality in {"", "-", "missing", "unknown"}:
         return True
     if _first_touch_micro_vwap_signal_used(item):
@@ -735,13 +854,26 @@ def _first_touch_micro_provenance_unusable(item: dict[str, Any]) -> bool:
     )
     if not micro_signal_used:
         return False
-    quality = str(item.get("first_touch_reversal_feature_source_quality") or "").strip().lower()
+    quality = (
+        str(item.get("first_touch_reversal_feature_source_quality") or "")
+        .strip()
+        .lower()
+    )
     stale = item.get("first_touch_reversal_feature_stale")
-    reason = str(item.get("first_touch_reversal_feature_stale_reason") or "").strip().lower()
-    if quality not in {"", "-", "usable"} or stale is True or bool(reason and reason != "-"):
+    reason = (
+        str(item.get("first_touch_reversal_feature_stale_reason") or "").strip().lower()
+    )
+    if (
+        quality not in {"", "-", "usable"}
+        or stale is True
+        or bool(reason and reason != "-")
+    ):
         return True
     if _first_touch_micro_vwap_signal_used(item):
-        return item.get("micro_vwap_available") is False or item.get("minute_candle_window_fresh") is False
+        return (
+            item.get("micro_vwap_available") is False
+            or item.get("minute_candle_window_fresh") is False
+        )
     return False
 
 
@@ -795,10 +927,13 @@ def _quote_age_ms(fields: dict[str, Any]) -> float | None:
 def _classify_stale_quote_block(fields: dict[str, Any]) -> tuple[str, list[str]]:
     components: list[str] = []
     quote_age = _quote_age_ms(fields)
-    max_quote_age = _safe_float(fields.get("rising_missed_scout_quality_guard_max_quote_age_ms")) or 3000.0
-    quote_stale = _boolish(fields.get("rising_missed_scout_quality_guard_quote_stale")) or (
-        quote_age is not None and quote_age > max_quote_age
+    max_quote_age = (
+        _safe_float(fields.get("rising_missed_scout_quality_guard_max_quote_age_ms"))
+        or 3000.0
     )
+    quote_stale = _boolish(
+        fields.get("rising_missed_scout_quality_guard_quote_stale")
+    ) or (quote_age is not None and quote_age > max_quote_age)
     if quote_stale:
         components.append("quote_age_stale")
 
@@ -813,12 +948,16 @@ def _classify_stale_quote_block(fields: dict[str, Any]) -> tuple[str, list[str]]
     if rest_success:
         components.append("ai_recheck_success")
 
-    ai_action = str(
-        fields.get("rising_missed_scout_quality_guard_ai_action")
-        or fields.get("rising_missed_rest_quote_ai_recheck_ai_action")
-        or fields.get("rising_missed_entry_ai_action")
-        or ""
-    ).strip().upper()
+    ai_action = (
+        str(
+            fields.get("rising_missed_scout_quality_guard_ai_action")
+            or fields.get("rising_missed_rest_quote_ai_recheck_ai_action")
+            or fields.get("rising_missed_entry_ai_action")
+            or ""
+        )
+        .strip()
+        .upper()
+    )
     if ai_action in {"WAIT", "DROP"}:
         components.append(f"ai_{ai_action.lower()}")
     elif _boolish(fields.get("rising_missed_scout_quality_guard_weak_ai")):
@@ -826,16 +965,24 @@ def _classify_stale_quote_block(fields: dict[str, Any]) -> tuple[str, list[str]]
 
     if _boolish(fields.get("rising_missed_scout_quality_guard_weak_strength")):
         components.append("weak_strength")
-    if _boolish(fields.get("rising_missed_scout_quality_guard_recent_weak_ai_micro_block")):
+    if _boolish(
+        fields.get("rising_missed_scout_quality_guard_recent_weak_ai_micro_block")
+    ):
         components.append("recent_weak_ai_micro")
     if _boolish(fields.get("rising_missed_scout_quality_guard_weak_evidence")):
         components.append("weak_evidence")
     if _boolish(fields.get("rising_missed_scout_quality_guard_ai_provenance_missing")):
         components.append("ai_provenance_missing")
-    if _boolish(fields.get("rising_missed_scout_quality_guard_ai_score_defaulted_without_action")):
+    if _boolish(
+        fields.get(
+            "rising_missed_scout_quality_guard_ai_score_defaulted_without_action"
+        )
+    ):
         components.append("ai_score_defaulted_without_action")
 
-    micro_reason = str(fields.get("latency_spread_relief_micro_estimator_reason") or "").strip()
+    micro_reason = str(
+        fields.get("latency_spread_relief_micro_estimator_reason") or ""
+    ).strip()
     if micro_reason:
         components.append(f"true_ofi_{micro_reason}")
 
@@ -851,7 +998,9 @@ def _classify_stale_quote_block(fields: dict[str, Any]) -> tuple[str, list[str]]
         return "missing_ai_or_fresh_input", components
     if "weak_ai_score" in components:
         return "weak_ai_score", components
-    if quote_stale and not any(item.startswith("ai_") or item.startswith("weak_") for item in components):
+    if quote_stale and not any(
+        item.startswith("ai_") or item.startswith("weak_") for item in components
+    ):
         return "quote_age_only", components
     return "stale_quote_with_weak_evidence", components
 
@@ -867,16 +1016,34 @@ def _classify_submit_safety_block(row: dict[str, Any]) -> tuple[str, str, list[s
         bucket, components = _classify_stale_quote_block(fields)
         return reason, bucket, components
     if stage == "latency_block":
-        micro_reason = str(fields.get("latency_spread_relief_micro_estimator_reason") or "").strip()
-        detail = str(fields.get("latency_danger_detail_reason") or fields.get("latency_danger_reasons") or "").strip()
+        micro_reason = str(
+            fields.get("latency_spread_relief_micro_estimator_reason") or ""
+        ).strip()
+        detail = str(
+            fields.get("latency_danger_detail_reason")
+            or fields.get("latency_danger_reasons")
+            or ""
+        ).strip()
         components = [item for item in (detail, micro_reason) if item]
         if micro_reason == "true_ofi_below_floor":
-            return reason or "latency_state_danger", "latency_true_ofi_below_floor", components
-        return reason or "latency_state_danger", f"latency_{micro_reason or detail or 'unspecified'}", components
+            return (
+                reason or "latency_state_danger",
+                "latency_true_ofi_below_floor",
+                components,
+            )
+        return (
+            reason or "latency_state_danger",
+            f"latency_{micro_reason or detail or 'unspecified'}",
+            components,
+        )
     if stage == "real_weak_ai_micro_entry_block":
         micro_state = str(fields.get("orderbook_micro_state") or "").strip()
         components = [item for item in (micro_state, reason) if item]
-        return reason or "weak_ai_micro", f"weak_ai_micro_{micro_state or 'unspecified'}", components
+        return (
+            reason or "weak_ai_micro",
+            f"weak_ai_micro_{micro_state or 'unspecified'}",
+            components,
+        )
     return reason or "unspecified", reason or stage or "unspecified", []
 
 
@@ -909,7 +1076,9 @@ def _tp1_counterfactual_decision_context(fields: dict[str, Any]) -> dict[str, An
         "bid_imbalance_surge": _optional_boolish(
             fields.get("rising_missed_tp1_bid_imbalance_surge")
         ),
-        "source_family_count": _safe_int(fields.get("rising_missed_tp1_source_family_count")),
+        "source_family_count": _safe_int(
+            fields.get("rising_missed_tp1_source_family_count")
+        ),
         "ws_micro_ready": _optional_boolish(
             fields.get("rising_missed_tp1_ws_micro_provenance_ready")
         ),
@@ -918,11 +1087,17 @@ def _tp1_counterfactual_decision_context(fields: dict[str, Any]) -> dict[str, An
         ),
         "micro_source_state": fields.get("rising_missed_tp1_micro_source_state"),
         "micro_age_sec": _safe_float(fields.get("rising_missed_tp1_micro_age_sec")),
-        "micro_confidence": _safe_float(fields.get("rising_missed_tp1_micro_confidence")),
+        "micro_confidence": _safe_float(
+            fields.get("rising_missed_tp1_micro_confidence")
+        ),
         "true_ofi_ewma": _safe_float(fields.get("rising_missed_tp1_true_ofi_ewma")),
-        "true_ofi_sample_count": _safe_int(fields.get("rising_missed_tp1_true_ofi_sample_count")),
+        "true_ofi_sample_count": _safe_int(
+            fields.get("rising_missed_tp1_true_ofi_sample_count")
+        ),
         "pressure_ewma": _safe_float(fields.get("rising_missed_tp1_pressure_ewma")),
-        "depth_imbalance_ewma": _safe_float(fields.get("rising_missed_tp1_depth_imbalance_ewma")),
+        "depth_imbalance_ewma": _safe_float(
+            fields.get("rising_missed_tp1_depth_imbalance_ewma")
+        ),
         "top_depth_ratio": _safe_float(fields.get("rising_missed_tp1_top_depth_ratio")),
         "tick_acceleration": _safe_float(
             fields.get("rising_missed_tp1_tick_acceleration")
@@ -930,7 +1105,9 @@ def _tp1_counterfactual_decision_context(fields: dict[str, Any]) -> dict[str, An
         "tick_acceleration_fresh": _optional_boolish(
             fields.get("rising_missed_tp1_tick_acceleration_fresh")
         ),
-        "micro_vwap_gap_bps": _safe_float(fields.get("rising_missed_tp1_micro_vwap_gap_bps")),
+        "micro_vwap_gap_bps": _safe_float(
+            fields.get("rising_missed_tp1_micro_vwap_gap_bps")
+        ),
         "micro_vwap_fresh": _optional_boolish(
             fields.get("rising_missed_tp1_micro_vwap_fresh")
         ),
@@ -957,8 +1134,12 @@ def _submit_safety_block_row(row: dict[str, Any]) -> dict[str, Any]:
         "mae_after_block_pct": None,
         "post_block_price_event_count": 0,
         "quote_age_ms": quote_age,
-        "quote_age_sec": round(quote_age / 1000.0, 3) if quote_age is not None else None,
-        "max_quote_age_ms": _safe_float(fields.get("rising_missed_scout_quality_guard_max_quote_age_ms")),
+        "quote_age_sec": (
+            round(quote_age / 1000.0, 3) if quote_age is not None else None
+        ),
+        "max_quote_age_ms": _safe_float(
+            fields.get("rising_missed_scout_quality_guard_max_quote_age_ms")
+        ),
         "ai_action": fields.get("rising_missed_scout_quality_guard_ai_action")
         or fields.get("rising_missed_rest_quote_ai_recheck_ai_action")
         or fields.get("rising_missed_entry_ai_action")
@@ -969,16 +1150,26 @@ def _submit_safety_block_row(row: dict[str, Any]) -> dict[str, Any]:
             or fields.get("ai_score")
             or fields.get("weak_ai_micro_entry_block_ai_score")
         ),
-        "rest_refresh_applied": _optional_boolish(fields.get("pre_submit_rest_orderbook_refresh_applied")),
+        "rest_refresh_applied": _optional_boolish(
+            fields.get("pre_submit_rest_orderbook_refresh_applied")
+        ),
         "rest_refresh_reason": fields.get("pre_submit_rest_orderbook_refresh_reason"),
-        "ws_age_ms": _safe_float(fields.get("ws_age_ms") or fields.get("quote_consistency_ws_age_ms")),
+        "ws_age_ms": _safe_float(
+            fields.get("ws_age_ms") or fields.get("quote_consistency_ws_age_ms")
+        ),
         "spread_bps": _safe_float(fields.get("latency_spread_block_spread_bps")),
         "spread_ratio": _safe_float(fields.get("spread_ratio")),
-        "true_ofi_ewma": _safe_float(fields.get("latency_spread_relief_micro_estimator_true_ofi_ewma")),
-        "true_ofi_sample_count": _safe_int(fields.get("latency_spread_relief_micro_estimator_true_ofi_sample_count")),
+        "true_ofi_ewma": _safe_float(
+            fields.get("latency_spread_relief_micro_estimator_true_ofi_ewma")
+        ),
+        "true_ofi_sample_count": _safe_int(
+            fields.get("latency_spread_relief_micro_estimator_true_ofi_sample_count")
+        ),
         "true_ofi_reason": fields.get("latency_spread_relief_micro_estimator_reason"),
         "source_quality_gate": fields.get("source_quality_gate"),
-        "source_quality_state": fields.get("weak_ai_micro_entry_block_source_quality_state"),
+        "source_quality_state": fields.get(
+            "weak_ai_micro_entry_block_source_quality_state"
+        ),
         "source_quality_missing_fields": _split_csv_values(
             fields.get("weak_ai_micro_entry_block_missing_fields")
         ),
@@ -1004,7 +1195,9 @@ def _update_block_mfe_mae(block: dict[str, Any], price: float | None) -> None:
     if base is None or base <= 0 or price is None or price <= 0:
         return
     move_pct = ((price - base) / base) * 100.0
-    block["post_block_price_event_count"] = _safe_int(block.get("post_block_price_event_count")) + 1
+    block["post_block_price_event_count"] = (
+        _safe_int(block.get("post_block_price_event_count")) + 1
+    )
     block["mfe_after_block_pct"] = (
         round(move_pct, 4)
         if block.get("mfe_after_block_pct") is None
@@ -1046,7 +1239,9 @@ def _is_backoff_event(row: dict[str, Any]) -> bool:
     return str(fields.get("fast_precheck_result") or "") == "budget_reallocated"
 
 
-def _build_submit_safety_and_backoff_audit(pipeline_path: Path) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+def _build_submit_safety_and_backoff_audit(
+    pipeline_path: Path,
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     submit_blocks: list[dict[str, Any]] = []
     open_submit_blocks_by_code: dict[str, list[dict[str, Any]]] = {}
     backoff_by_code: dict[str, dict[str, Any]] = {}
@@ -1067,7 +1262,9 @@ def _build_submit_safety_and_backoff_audit(pipeline_path: Path) -> tuple[dict[st
         stage = str(row.get("stage") or "")
         ts = _event_ts(row)
         parsed_ts = _parse_ts(ts)
-        if parsed_ts is not None and (latest_seen_ts is None or parsed_ts > latest_seen_ts):
+        if parsed_ts is not None and (
+            latest_seen_ts is None or parsed_ts > latest_seen_ts
+        ):
             latest_seen_ts = parsed_ts
         price = _tp1_observation_price(row)[0]
         delta = _event_delta_pct(row)
@@ -1083,7 +1280,11 @@ def _build_submit_safety_and_backoff_audit(pipeline_path: Path) -> tuple[dict[st
                     delta if current is None else max(float(current), delta)
                 )
                 backoff["max_delta_after_last_backoff_ts"] = ts
-            if stage == "scalping_scanner_fast_precheck" and fields.get("fast_precheck_result") == "eligible_for_heavy_entry_eval":
+            if (
+                stage == "scalping_scanner_fast_precheck"
+                and fields.get("fast_precheck_result")
+                == "eligible_for_heavy_entry_eval"
+            ):
                 backoff["fast_pass_after_last_backoff_count"] += 1
                 backoff["first_fast_pass_after_last_backoff_ts"] = (
                     backoff.get("first_fast_pass_after_last_backoff_ts") or ts
@@ -1118,14 +1319,20 @@ def _build_submit_safety_and_backoff_audit(pipeline_path: Path) -> tuple[dict[st
                     str(item)
                     for item in block.get("source_quality_missing_fields") or []
                 )
-            source = fields.get("scanner_budget_reallocation_source") or fields.get("rising_missed_budget_reallocation_source")
+            source = fields.get("scanner_budget_reallocation_source") or fields.get(
+                "rising_missed_budget_reallocation_source"
+            )
             if source:
                 source_counts[str(source)] += 1
 
         if _is_backoff_event(row):
-            source = fields.get("scanner_budget_reallocation_source") or fields.get("rising_missed_budget_reallocation_source")
-            reason = fields.get("fast_precheck_reason") or fields.get("scanner_ws_stale_backoff_reason") or fields.get(
-                "rising_missed_submit_safety_backoff_reason"
+            source = fields.get("scanner_budget_reallocation_source") or fields.get(
+                "rising_missed_budget_reallocation_source"
+            )
+            reason = (
+                fields.get("fast_precheck_reason")
+                or fields.get("scanner_ws_stale_backoff_reason")
+                or fields.get("rising_missed_submit_safety_backoff_reason")
             )
             source_counts[str(source or "unknown")] += 1
             backoff_by_code[code] = {
@@ -1153,7 +1360,8 @@ def _build_submit_safety_and_backoff_audit(pipeline_path: Path) -> tuple[dict[st
     audit_rows = sorted(
         backoff_by_code.values(),
         key=lambda item: (
-            -1.0 * (_safe_float(item.get("max_delta_after_last_backoff_pct")) or -999999.0),
+            -1.0
+            * (_safe_float(item.get("max_delta_after_last_backoff_pct")) or -999999.0),
             str(item.get("last_backoff_ts") or ""),
         ),
     )
@@ -1168,7 +1376,9 @@ def _build_submit_safety_and_backoff_audit(pipeline_path: Path) -> tuple[dict[st
         age_sec = None
         if latest_seen_ts is not None and last_backoff_ts is not None:
             age_sec = max(0.0, (latest_seen_ts - last_backoff_ts).total_seconds())
-        item["last_backoff_observation_age_sec"] = round(age_sec, 3) if age_sec is not None else None
+        item["last_backoff_observation_age_sec"] = (
+            round(age_sec, 3) if age_sec is not None else None
+        )
         item["backoff_observation_state"] = (
             "mature_unrecovered"
             if age_sec is not None and age_sec >= 180.0 and not recovered
@@ -1185,27 +1395,38 @@ def _build_submit_safety_and_backoff_audit(pipeline_path: Path) -> tuple[dict[st
 
     summary = {
         "submit_safety_block_count": len(submit_blocks),
-        "submit_safety_reason_counts": [{"reason": key, "count": value} for key, value in reason_counts.most_common()],
+        "submit_safety_reason_counts": [
+            {"reason": key, "count": value}
+            for key, value in reason_counts.most_common()
+        ],
         "submit_safety_bucket_counts": [
-            {"blocker_bucket": key, "count": value} for key, value in bucket_counts.most_common()
+            {"blocker_bucket": key, "count": value}
+            for key, value in bucket_counts.most_common()
         ],
         "submit_safety_component_counts": [
-            {"component": key, "count": value} for key, value in component_counts.most_common()
+            {"component": key, "count": value}
+            for key, value in component_counts.most_common()
         ],
         "submit_safety_source_quality_unknown_gate_counts": [
-            {"source_quality_gate": key, "count": value} for key, value in source_quality_gate_counts.most_common()
+            {"source_quality_gate": key, "count": value}
+            for key, value in source_quality_gate_counts.most_common()
         ],
         "submit_safety_source_quality_unknown_state_counts": [
-            {"source_quality_state": key, "count": value} for key, value in source_quality_state_counts.most_common()
+            {"source_quality_state": key, "count": value}
+            for key, value in source_quality_state_counts.most_common()
         ],
         "submit_safety_source_quality_unknown_missing_field_counts": [
-            {"missing_field": key, "count": value} for key, value in source_quality_missing_field_counts.most_common()
+            {"missing_field": key, "count": value}
+            for key, value in source_quality_missing_field_counts.most_common()
         ],
         "budget_reallocation_source_counts": [
-            {"source": key, "count": value} for key, value in source_counts.most_common()
+            {"source": key, "count": value}
+            for key, value in source_counts.most_common()
         ],
         "backoff_audit_symbol_count": len(audit_rows),
-        "backoff_recovered_eval_symbol_count": sum(1 for item in audit_rows if item["recovered_eval_after_last_backoff"]),
+        "backoff_recovered_eval_symbol_count": sum(
+            1 for item in audit_rows if item["recovered_eval_after_last_backoff"]
+        ),
         "backoff_active_positive_delta_symbol_count": sum(
             1
             for item in audit_rows
@@ -1226,11 +1447,17 @@ def _latency_false_negative_review_bucket(block: dict[str, Any]) -> str | None:
     blocker_bucket = str(block.get("blocker_bucket") or "")
     true_ofi_reason = str(block.get("true_ofi_reason") or "")
     components = str(block.get("components") or "")
-    if blocker_bucket in {"latency_true_ofi_below_floor", "latency_true_ofi_samples_below_floor"}:
+    if blocker_bucket in {
+        "latency_true_ofi_below_floor",
+        "latency_true_ofi_samples_below_floor",
+    }:
         return "true_ofi_false_negative_candidate"
     if true_ofi_reason in {"true_ofi_below_floor", "true_ofi_samples_below_floor"}:
         return "true_ofi_false_negative_candidate"
-    if blocker_bucket in {"latency_spread_above_caution", "latency_spread_above_caution_below_guard_cap"}:
+    if blocker_bucket in {
+        "latency_spread_above_caution",
+        "latency_spread_above_caution_below_guard_cap",
+    }:
         return "spread_caution_false_negative_candidate"
     if "spread_above_caution" in components:
         return "spread_caution_false_negative_candidate"
@@ -1249,13 +1476,19 @@ def _build_latency_false_negative_review(
         blocker_bucket = str(block.get("blocker_bucket") or "")
         if blocker_bucket not in LATENCY_FALSE_NEGATIVE_BUCKETS:
             components = str(block.get("components") or "")
-            if "spread_above_caution" not in components and "true_ofi_below_floor" not in components:
+            if (
+                "spread_above_caution" not in components
+                and "true_ofi_below_floor" not in components
+            ):
                 continue
         mfe = _safe_float(block.get("mfe_after_block_pct"))
         mae = _safe_float(block.get("mae_after_block_pct"))
         if mfe is None or mae is None:
             continue
-        if mfe < LATENCY_FALSE_NEGATIVE_MIN_MFE_PCT or mae < -LATENCY_FALSE_NEGATIVE_MAX_MAE_ABS_PCT:
+        if (
+            mfe < LATENCY_FALSE_NEGATIVE_MIN_MFE_PCT
+            or mae < -LATENCY_FALSE_NEGATIVE_MAX_MAE_ABS_PCT
+        ):
             continue
         bucket_counts[review_bucket] += 1
         rows.append(
@@ -1273,8 +1506,12 @@ def _build_latency_false_negative_review(
                 "block_price": block.get("block_price"),
                 "mfe_after_block_pct": mfe,
                 "mae_after_block_pct": mae,
-                "post_block_price_event_count": block.get("post_block_price_event_count"),
-                "price_delta_since_first_seen_pct": block.get("price_delta_since_first_seen_pct"),
+                "post_block_price_event_count": block.get(
+                    "post_block_price_event_count"
+                ),
+                "price_delta_since_first_seen_pct": block.get(
+                    "price_delta_since_first_seen_pct"
+                ),
                 "quote_age_sec": block.get("quote_age_sec"),
                 "ws_age_ms": block.get("ws_age_ms"),
                 "spread_bps": block.get("spread_bps"),
@@ -1301,12 +1538,15 @@ def _build_latency_false_negative_review(
     )
     summary = {
         "latency_false_negative_review_count": len(rows),
-        "latency_false_negative_true_ofi_count": bucket_counts.get("true_ofi_false_negative_candidate", 0),
+        "latency_false_negative_true_ofi_count": bucket_counts.get(
+            "true_ofi_false_negative_candidate", 0
+        ),
         "latency_false_negative_spread_only_count": bucket_counts.get(
             "spread_caution_false_negative_candidate", 0
         ),
         "latency_false_negative_review_bucket_counts": [
-            {"review_bucket": key, "count": value} for key, value in bucket_counts.most_common()
+            {"review_bucket": key, "count": value}
+            for key, value in bucket_counts.most_common()
         ],
         "latency_false_negative_min_mfe_pct": LATENCY_FALSE_NEGATIVE_MIN_MFE_PCT,
         "latency_false_negative_max_mae_abs_pct": LATENCY_FALSE_NEGATIVE_MAX_MAE_ABS_PCT,
@@ -1346,7 +1586,10 @@ def _latency_canary_grade(row: dict[str, Any], review_score: float) -> tuple[str
             return "hold_sample", "spread_bps_missing"
         if spread_bps > LATENCY_CANARY_SPREAD_ONLY_MAX_SPREAD_BPS:
             return "observe_wide_spread", "spread_bps_above_spread_only_canary_cap"
-        return "ready_for_recheck", "spread_only_false_negative_with_fresh_ws_and_bounded_spread"
+        return (
+            "ready_for_recheck",
+            "spread_only_false_negative_with_fresh_ws_and_bounded_spread",
+        )
     return "hold_sample", "unclassified_latency_false_negative"
 
 
@@ -1392,20 +1635,29 @@ def _build_latency_false_negative_canary_candidates(
     rows.sort(
         key=lambda row: (
             0 if row.get("canary_grade") == "ready_for_recheck" else 1,
-            -1.0 * (_safe_float(row.get("canary_primary_review_score_pct")) or -999999.0),
+            -1.0
+            * (_safe_float(row.get("canary_primary_review_score_pct")) or -999999.0),
             str(row.get("ts") or ""),
         )
     )
     summary = {
         "latency_false_negative_canary_candidate_count": len(rows),
-        "latency_false_negative_canary_ready_count": grade_counts.get("ready_for_recheck", 0),
-        "latency_false_negative_canary_observe_wide_spread_count": grade_counts.get("observe_wide_spread", 0),
-        "latency_false_negative_canary_hold_sample_count": grade_counts.get("hold_sample", 0),
+        "latency_false_negative_canary_ready_count": grade_counts.get(
+            "ready_for_recheck", 0
+        ),
+        "latency_false_negative_canary_observe_wide_spread_count": grade_counts.get(
+            "observe_wide_spread", 0
+        ),
+        "latency_false_negative_canary_hold_sample_count": grade_counts.get(
+            "hold_sample", 0
+        ),
         "latency_false_negative_canary_cohort_counts": [
-            {"canary_cohort": key, "count": value} for key, value in cohort_counts.most_common()
+            {"canary_cohort": key, "count": value}
+            for key, value in cohort_counts.most_common()
         ],
         "latency_false_negative_canary_grade_counts": [
-            {"canary_grade": key, "count": value} for key, value in grade_counts.most_common()
+            {"canary_grade": key, "count": value}
+            for key, value in grade_counts.most_common()
         ],
         "latency_false_negative_canary_min_review_score_pct": LATENCY_CANARY_MIN_REVIEW_SCORE_PCT,
         "latency_false_negative_canary_true_ofi_min_sample_count": LATENCY_CANARY_TRUE_OFI_MIN_SAMPLE_COUNT,
@@ -1436,10 +1688,16 @@ def _tp1_actual_costs(fields: dict[str, Any]) -> tuple[float | None, float | Non
     return fee, tax
 
 
-def _build_tp1_first_hit_labels(pipeline_path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def _build_tp1_first_hit_labels(
+    pipeline_path: Path,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     events = list(iter_jsonl(pipeline_path))
     observation_watermark = max(
-        (timestamp for row in events if (timestamp := _tp1_label_timestamp(_event_ts(row))) is not None),
+        (
+            timestamp
+            for row in events
+            if (timestamp := _tp1_label_timestamp(_event_ts(row))) is not None
+        ),
         default=None,
     )
     candidates: list[tuple[int, dict[str, Any]]] = []
@@ -1449,7 +1707,10 @@ def _build_tp1_first_hit_labels(pipeline_path: Path) -> tuple[dict[str, Any], li
             continue
         if not _boolish(fields.get("rising_missed_tp1_candidate_allowed")):
             continue
-        if str(fields.get("rising_missed_tp1_candidate_reason") or "") != "rising_missed_tp1_candidate_pass":
+        if (
+            str(fields.get("rising_missed_tp1_candidate_reason") or "")
+            != "rising_missed_tp1_candidate_pass"
+        ):
             continue
         candidates.append((index, row))
 
@@ -1486,7 +1747,11 @@ def _build_tp1_first_hit_labels(pipeline_path: Path) -> tuple[dict[str, Any], li
                 if _event_code(subsequent) != code:
                     continue
                 event_ts = _tp1_label_timestamp(_event_ts(subsequent))
-                if event_ts is None or event_ts < candidate_ts or event_ts > horizon_end:
+                if (
+                    event_ts is None
+                    or event_ts < candidate_ts
+                    or event_ts > horizon_end
+                ):
                     continue
                 later_fee, later_tax = _tp1_actual_costs(_fields(subsequent))
                 if later_fee is not None:
@@ -1499,8 +1764,12 @@ def _build_tp1_first_hit_labels(pipeline_path: Path) -> tuple[dict[str, Any], li
                 observed_event_count += 1
                 latest_ts = max(latest_ts or event_ts, event_ts)
                 move_pct = ((price - entry_price) / entry_price) * 100.0
-                max_move_pct = move_pct if max_move_pct is None else max(max_move_pct, move_pct)
-                min_move_pct = move_pct if min_move_pct is None else min(min_move_pct, move_pct)
+                max_move_pct = (
+                    move_pct if max_move_pct is None else max(max_move_pct, move_pct)
+                )
+                min_move_pct = (
+                    move_pct if min_move_pct is None else min(min_move_pct, move_pct)
+                )
                 if first_hit_ts is None:
                     if move_pct >= TP1_GROSS_TARGET_PCT:
                         label = "gross_target_first"
@@ -1517,11 +1786,18 @@ def _build_tp1_first_hit_labels(pipeline_path: Path) -> tuple[dict[str, Any], li
             ):
                 label = "no_hit_within_20m"
 
-        actual_costs_available = actual_fee_krw is not None and actual_tax_krw is not None
+        actual_costs_available = (
+            actual_fee_krw is not None and actual_tax_krw is not None
+        )
         actual_cost_pct = None
         net_label = "unavailable_fee_tax_missing"
         if actual_costs_available and entry_price is not None and entry_price > 0:
-            quantity = max(1, _safe_int(fields.get("forced_entry_qty") or fields.get("quantity") or 1))
+            quantity = max(
+                1,
+                _safe_int(
+                    fields.get("forced_entry_qty") or fields.get("quantity") or 1
+                ),
+            )
             notional = entry_price * quantity
             actual_cost_pct = ((actual_fee_krw + actual_tax_krw) / notional) * 100.0
             if label == "gross_target_first" and first_hit_move_pct is not None:
@@ -1549,9 +1825,17 @@ def _build_tp1_first_hit_labels(pipeline_path: Path) -> tuple[dict[str, Any], li
                 "entry_price_source": entry_price_source,
                 "gross_first_hit_label": label,
                 "first_hit_ts": first_hit_ts,
-                "first_hit_move_pct": round(first_hit_move_pct, 4) if first_hit_move_pct is not None else None,
-                "max_move_pct_within_20m": round(max_move_pct, 4) if max_move_pct is not None else None,
-                "min_move_pct_within_20m": round(min_move_pct, 4) if min_move_pct is not None else None,
+                "first_hit_move_pct": (
+                    round(first_hit_move_pct, 4)
+                    if first_hit_move_pct is not None
+                    else None
+                ),
+                "max_move_pct_within_20m": (
+                    round(max_move_pct, 4) if max_move_pct is not None else None
+                ),
+                "min_move_pct_within_20m": (
+                    round(min_move_pct, 4) if min_move_pct is not None else None
+                ),
                 "observed_price_event_count": observed_event_count,
                 "gross_target_pct": TP1_GROSS_TARGET_PCT,
                 "adverse_stop_pct": TP1_ADVERSE_STOP_PCT,
@@ -1560,7 +1844,9 @@ def _build_tp1_first_hit_labels(pipeline_path: Path) -> tuple[dict[str, Any], li
                 "net_target_pct": TP1_NET_TARGET_PCT,
                 "actual_fee_krw": actual_fee_krw,
                 "actual_tax_krw": actual_tax_krw,
-                "actual_cost_pct": round(actual_cost_pct, 6) if actual_cost_pct is not None else None,
+                "actual_cost_pct": (
+                    round(actual_cost_pct, 6) if actual_cost_pct is not None else None
+                ),
                 "net_label": net_label,
                 "decision_authority": "source_only_tp1_outcome_label",
                 "runtime_effect": False,
@@ -1568,17 +1854,23 @@ def _build_tp1_first_hit_labels(pipeline_path: Path) -> tuple[dict[str, Any], li
                 "forbidden_uses": FORBIDDEN_USES,
             }
         )
-    counts = Counter(str(item.get("gross_first_hit_label") or "unknown") for item in labels)
+    counts = Counter(
+        str(item.get("gross_first_hit_label") or "unknown") for item in labels
+    )
     net_counts = Counter(str(item.get("net_label") or "unknown") for item in labels)
     return {
         "rising_missed_tp1_labeled_candidate_count": len(labels),
         "rising_missed_tp1_gross_label_counts": [
-            {"gross_first_hit_label": key, "count": value} for key, value in counts.most_common()
+            {"gross_first_hit_label": key, "count": value}
+            for key, value in counts.most_common()
         ],
         "rising_missed_tp1_net_label_counts": [
-            {"net_label": key, "count": value} for key, value in net_counts.most_common()
+            {"net_label": key, "count": value}
+            for key, value in net_counts.most_common()
         ],
-        "rising_missed_tp1_net_confirmed_count": net_counts.get("net_target_confirmed", 0),
+        "rising_missed_tp1_net_confirmed_count": net_counts.get(
+            "net_target_confirmed", 0
+        ),
     }, labels
 
 
@@ -1591,7 +1883,10 @@ def _build_tp1_counterfactual_submit_safety(
     unique_symbols: set[str] = set()
     rows: list[dict[str, Any]] = []
     for row in iter_jsonl(pipeline_path):
-        if str(row.get("stage") or "") != "rising_missed_tp1_counterfactual_submit_safety":
+        if (
+            str(row.get("stage") or "")
+            != "rising_missed_tp1_counterfactual_submit_safety"
+        ):
             continue
         fields = _fields(row)
         action = str(
@@ -1644,7 +1939,8 @@ def _build_tp1_counterfactual_submit_safety(
         "rising_missed_tp1_counterfactual_submit_safety_count": len(rows),
         "rising_missed_tp1_counterfactual_unique_symbol_count": len(unique_symbols),
         "rising_missed_tp1_counterfactual_action_counts": [
-            {"action": key, "count": value} for key, value in action_counts.most_common()
+            {"action": key, "count": value}
+            for key, value in action_counts.most_common()
         ],
         "rising_missed_tp1_counterfactual_selector_reason_counts": [
             {"selector_reason": key, "count": value}
@@ -1661,13 +1957,20 @@ def _build_tp1_counterfactual_first_hit_labels(
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     events = list(iter_jsonl(pipeline_path))
     observation_watermark = max(
-        (timestamp for row in events if (timestamp := _tp1_label_timestamp(_event_ts(row))) is not None),
+        (
+            timestamp
+            for row in events
+            if (timestamp := _tp1_label_timestamp(_event_ts(row))) is not None
+        ),
         default=None,
     )
     labels: list[dict[str, Any]] = []
     seen_keys: set[tuple[str, ...]] = set()
     for index, candidate in enumerate(events):
-        if str(candidate.get("stage") or "") != "rising_missed_tp1_counterfactual_submit_safety":
+        if (
+            str(candidate.get("stage") or "")
+            != "rising_missed_tp1_counterfactual_submit_safety"
+        ):
             continue
         fields = _fields(candidate)
         code = _event_code(candidate)
@@ -1765,8 +2068,12 @@ def _build_tp1_counterfactual_first_hit_labels(
                     continue
                 observed_event_count += 1
                 move_pct = ((price - entry_price) / entry_price) * 100.0
-                max_move_pct = move_pct if max_move_pct is None else max(max_move_pct, move_pct)
-                min_move_pct = move_pct if min_move_pct is None else min(min_move_pct, move_pct)
+                max_move_pct = (
+                    move_pct if max_move_pct is None else max(max_move_pct, move_pct)
+                )
+                min_move_pct = (
+                    move_pct if min_move_pct is None else min(min_move_pct, move_pct)
+                )
                 if first_hit_ts is None:
                     if move_pct >= TP1_GROSS_TARGET_PCT:
                         label = "gross_target_first"
@@ -1795,14 +2102,18 @@ def _build_tp1_counterfactual_first_hit_labels(
                 "counterfactual_action": fields.get(
                     "rising_missed_tp1_counterfactual_submit_safety_action"
                 ),
-                "counterfactual_risks": _split_csv_values(fields.get("rising_missed_tp1_counterfactual_submit_safety_risks")),
+                "counterfactual_risks": _split_csv_values(
+                    fields.get("rising_missed_tp1_counterfactual_submit_safety_risks")
+                ),
                 **_tp1_counterfactual_decision_context(fields),
                 "entry_price": entry_price,
                 "entry_price_source": entry_price_source,
                 "gross_first_hit_label": label,
                 "first_hit_ts": first_hit_ts,
                 "first_hit_move_pct": (
-                    round(first_hit_move_pct, 4) if first_hit_move_pct is not None else None
+                    round(first_hit_move_pct, 4)
+                    if first_hit_move_pct is not None
+                    else None
                 ),
                 "max_move_pct_within_20m": (
                     round(max_move_pct, 4) if max_move_pct is not None else None
@@ -1822,11 +2133,14 @@ def _build_tp1_counterfactual_first_hit_labels(
                 "forbidden_uses": FORBIDDEN_USES,
             }
         )
-    counts = Counter(str(item.get("gross_first_hit_label") or "unknown") for item in labels)
+    counts = Counter(
+        str(item.get("gross_first_hit_label") or "unknown") for item in labels
+    )
     return {
         "rising_missed_tp1_counterfactual_labeled_count": len(labels),
         "rising_missed_tp1_counterfactual_gross_label_counts": [
-            {"gross_first_hit_label": key, "count": value} for key, value in counts.most_common()
+            {"gross_first_hit_label": key, "count": value}
+            for key, value in counts.most_common()
         ],
         "rising_missed_tp1_counterfactual_gross_target_first_count": counts.get(
             "gross_target_first", 0
@@ -2124,7 +2438,9 @@ def build_report(
     generated_at = generated_at or datetime.now(KST).isoformat(timespec="seconds")
     forced: dict[str, dict[str, Any]] = {}
     holding_by_record: dict[str, dict[str, Any]] = {}
-    source_quality_status = "pass" if resolved_pipeline_path.exists() else "missing_pipeline_events"
+    source_quality_status = (
+        "pass" if resolved_pipeline_path.exists() else "missing_pipeline_events"
+    )
 
     for row in iter_jsonl(pipeline_path):
         record_id = str(row.get("record_id") or "").strip()
@@ -2132,7 +2448,9 @@ def build_report(
             continue
         if _is_forced_rising_missed(row):
             item = forced.setdefault(record_id, _forced_entry_record(row))
-            item["rising_missed_stage_count"] = _safe_int(item.get("rising_missed_stage_count")) + 1
+            item["rising_missed_stage_count"] = (
+                _safe_int(item.get("rising_missed_stage_count")) + 1
+            )
             if row.get("stage") == "rising_missed_one_share_entry":
                 first_count = item.get("rising_missed_stage_count", 1)
                 item.update(_forced_entry_record(row))
@@ -2168,22 +2486,32 @@ def build_report(
         item["forbidden_uses"] = FORBIDDEN_USES
         rows.append(item)
 
-    rows.sort(key=lambda item: (str(item.get("first_avg_down_ge2_ts") or ""), str(item.get("record_id") or "")))
+    rows.sort(
+        key=lambda item: (
+            str(item.get("first_avg_down_ge2_ts") or ""),
+            str(item.get("record_id") or ""),
+        )
+    )
     first_touch_rows = _build_first_touch_regression_rows(forced, pipeline_path)
     submit_lineage_rows = _build_forced_submit_lineage_rows(forced, pipeline_path)
-    label_counts = Counter(str(item.get("feedback_label") or "unknown") for item in rows)
+    label_counts = Counter(
+        str(item.get("feedback_label") or "unknown") for item in rows
+    )
     first_touch_label_counts = Counter(
-        str(item.get("first_touch_regression_label") or "unknown") for item in first_touch_rows
+        str(item.get("first_touch_regression_label") or "unknown")
+        for item in first_touch_rows
     )
-    first_touch_source_quality_counts = _count_first_touch_source_quality(first_touch_rows)
-    submit_backoff_summary, submit_safety_rows, backoff_audit_rows = _build_submit_safety_and_backoff_audit(
-        pipeline_path
+    first_touch_source_quality_counts = _count_first_touch_source_quality(
+        first_touch_rows
     )
-    latency_false_negative_summary, latency_false_negative_rows = _build_latency_false_negative_review(
-        submit_safety_rows
+    submit_backoff_summary, submit_safety_rows, backoff_audit_rows = (
+        _build_submit_safety_and_backoff_audit(pipeline_path)
     )
-    latency_canary_summary, latency_canary_rows = _build_latency_false_negative_canary_candidates(
-        latency_false_negative_rows
+    latency_false_negative_summary, latency_false_negative_rows = (
+        _build_latency_false_negative_review(submit_safety_rows)
+    )
+    latency_canary_summary, latency_canary_rows = (
+        _build_latency_false_negative_canary_candidates(latency_false_negative_rows)
     )
     tp1_label_summary, tp1_label_rows = _build_tp1_first_hit_labels(pipeline_path)
     tp1_counterfactual_summary, tp1_counterfactual_rows = (
@@ -2202,9 +2530,13 @@ def build_report(
         source_quality_status = "first_touch_ai_provenance_missing"
     if first_touch_source_quality_counts["first_touch_ai_provenance_unusable_count"]:
         source_quality_status = "first_touch_ai_provenance_unusable"
-    if first_touch_source_quality_counts["first_touch_pressure_provenance_missing_count"]:
+    if first_touch_source_quality_counts[
+        "first_touch_pressure_provenance_missing_count"
+    ]:
         source_quality_status = "first_touch_pressure_provenance_missing"
-    if first_touch_source_quality_counts["first_touch_pressure_provenance_unusable_count"]:
+    if first_touch_source_quality_counts[
+        "first_touch_pressure_provenance_unusable_count"
+    ]:
         source_quality_status = "first_touch_pressure_provenance_unusable"
     if first_touch_source_quality_counts["first_touch_micro_provenance_missing_count"]:
         source_quality_status = "first_touch_micro_provenance_missing"
@@ -2213,7 +2545,11 @@ def build_report(
     initial_fail_count = sum(
         count
         for label, count in label_counts.items()
-        if label in {"rising_missed_initial_quality_fail", "rising_missed_initial_quality_fail_open"}
+        if label
+        in {
+            "rising_missed_initial_quality_fail",
+            "rising_missed_initial_quality_fail_open",
+        }
     )
     code_improvement_orders = []
     if rows:
@@ -2250,7 +2586,9 @@ def build_report(
                     f"rising_missed_avg_down_ge2_count={len(rows)}",
                     f"initial_quality_fail_count={initial_fail_count}",
                     "feedback_label_counts="
-                    + ",".join(f"{key}={value}" for key, value in label_counts.most_common()),
+                    + ",".join(
+                        f"{key}={value}" for key, value in label_counts.most_common()
+                    ),
                     f"source_quality_status={source_quality_status}",
                 ],
                 "source_paths": [str(resolved_pipeline_path)],
@@ -2405,40 +2743,62 @@ def build_report(
             "rising_missed_avg_down_ge2_count": len(rows),
             "rising_missed_submit_lineage_record_count": len(submit_lineage_rows),
             "rising_missed_order_plan_forced_count": sum(
-                _safe_int(item.get("order_plan_forced_count")) for item in submit_lineage_rows
+                _safe_int(item.get("order_plan_forced_count"))
+                for item in submit_lineage_rows
             ),
             "rising_missed_entry_submitted_count": sum(
                 1 for item in submit_lineage_rows if item.get("entry_order_submitted")
             ),
             "rising_missed_order_bundle_submitted_count": sum(
-                _safe_int(item.get("order_bundle_submitted_count")) for item in submit_lineage_rows
+                _safe_int(item.get("order_bundle_submitted_count"))
+                for item in submit_lineage_rows
             ),
             "rising_missed_order_leg_sent_count": sum(
-                _safe_int(item.get("order_leg_sent_count")) for item in submit_lineage_rows
+                _safe_int(item.get("order_leg_sent_count"))
+                for item in submit_lineage_rows
             ),
             "first_touch_regression_record_count": len(first_touch_rows),
-            "first_touch_entry_submitted_count": sum(1 for item in first_touch_rows if item.get("entry_order_submitted")),
+            "first_touch_entry_submitted_count": sum(
+                1 for item in first_touch_rows if item.get("entry_order_submitted")
+            ),
             "first_touch_avg_down_submitted_count": sum(
-                1 for item in first_touch_rows if item.get("first_touch_avg_down_submitted")
+                1
+                for item in first_touch_rows
+                if item.get("first_touch_avg_down_submitted")
             ),
             "first_touch_not_eligible_count": sum(
-                1 for item in first_touch_rows if item.get("first_touch_not_eligible_seen")
+                1
+                for item in first_touch_rows
+                if item.get("first_touch_not_eligible_seen")
             ),
             "first_touch_avgdown_decision_blocked_count": sum(
-                1 for item in first_touch_rows if item.get("first_touch_avgdown_decision_blocked")
+                1
+                for item in first_touch_rows
+                if item.get("first_touch_avgdown_decision_blocked")
             ),
-            "first_touch_closed_count": sum(1 for item in first_touch_rows if item.get("final_profit_rate") is not None),
-            "first_touch_profitable_count": first_touch_label_counts.get("first_touch_recovered_profit", 0),
-            "first_touch_loss_or_flat_count": first_touch_label_counts.get("first_touch_loss_or_flat", 0),
+            "first_touch_closed_count": sum(
+                1
+                for item in first_touch_rows
+                if item.get("final_profit_rate") is not None
+            ),
+            "first_touch_profitable_count": first_touch_label_counts.get(
+                "first_touch_recovered_profit", 0
+            ),
+            "first_touch_loss_or_flat_count": first_touch_label_counts.get(
+                "first_touch_loss_or_flat", 0
+            ),
             "first_touch_regression_label_counts": [
                 {"first_touch_regression_label": key, "count": value}
                 for key, value in first_touch_label_counts.most_common()
             ],
             **first_touch_source_quality_counts,
             "initial_quality_fail_count": initial_fail_count,
-            "scale_in_rescue_warning_count": label_counts.get("rising_missed_scale_in_rescue_warning", 0),
+            "scale_in_rescue_warning_count": label_counts.get(
+                "rising_missed_scale_in_rescue_warning", 0
+            ),
             "feedback_label_counts": [
-                {"feedback_label": key, "count": value} for key, value in label_counts.most_common()
+                {"feedback_label": key, "count": value}
+                for key, value in label_counts.most_common()
             ],
             **submit_backoff_summary,
             **latency_false_negative_summary,
@@ -2457,19 +2817,30 @@ def build_report(
         "latency_false_negative_review_rows": latency_false_negative_rows[:200],
         "latency_false_negative_canary_candidate_rows": latency_canary_rows[:200],
         "rising_missed_tp1_first_hit_label_rows": tp1_label_rows[:200],
-        "rising_missed_tp1_counterfactual_submit_safety_rows": tp1_counterfactual_rows[:200],
-        "rising_missed_tp1_counterfactual_first_hit_label_rows": tp1_counterfactual_label_rows[:200],
+        "rising_missed_tp1_counterfactual_submit_safety_rows": tp1_counterfactual_rows[
+            :200
+        ],
+        "rising_missed_tp1_counterfactual_first_hit_label_rows": tp1_counterfactual_label_rows[
+            :200
+        ],
         "rising_missed_nxt_session_observation_rows": nxt_session_rows[:200],
         "rising_missed_nxt_order_resolution_rows": nxt_order_rows[:200],
-        "rising_missed_nxt_post_block_price_sampler_rows": nxt_post_block_sampler_rows[-200:],
+        "rising_missed_nxt_post_block_price_sampler_rows": nxt_post_block_sampler_rows[
+            -200:
+        ],
         "code_improvement_orders": code_improvement_orders,
     }
 
 
-def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path) -> None:
+def write_outputs(
+    report: dict[str, Any], *, output_json: Path, output_md: Path
+) -> None:
     output_json.parent.mkdir(parents=True, exist_ok=True)
     output_md.parent.mkdir(parents=True, exist_ok=True)
-    output_json.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    output_json.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
     lines = [
         f"# {report.get('target_date')} Rising Missed Intraday Feedback",
@@ -2585,7 +2956,9 @@ def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path)
                 "0B_route={ws_0b_route} 0B_age_ms={ws_0b_age_ms} "
                 "0D_route={ws_0d_route} 0D_age_ms={ws_0d_age_ms} "
                 "input_ready={input_ready} quote_source={effective_price_source} "
-                "candidate_allowed={candidate_allowed} reason={candidate_reason}".format(**item)
+                "candidate_allowed={candidate_allowed} reason={candidate_reason}".format(
+                    **item
+                )
             )
         lines.append("")
     if report.get("rising_missed_nxt_order_resolution_rows"):
@@ -2632,7 +3005,9 @@ def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path)
                 "join={submit_lineage_join_method}".format(
                     **{
                         **item,
-                        "primary_order_no": item.get("primary_order_no") or item.get("order_no_list") or "-",
+                        "primary_order_no": item.get("primary_order_no")
+                        or item.get("order_no_list")
+                        or "-",
                         "planned_order_price": item.get("planned_order_price") or "-",
                         "submitted_order_price": item.get("submitted_order_price")
                         or item.get("submitted_price_list")
@@ -2708,7 +3083,9 @@ def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path)
             "decision_authority={decision_authority}".format(**item)
         )
     lines.extend(["", "## TP1 Counterfactual First-hit Labels", ""])
-    for item in report.get("rising_missed_tp1_counterfactual_first_hit_label_rows") or []:
+    for item in (
+        report.get("rising_missed_tp1_counterfactual_first_hit_label_rows") or []
+    ):
         lines.append(
             "- ts={candidate_ts} code={stock_code} name={stock_name} "
             "selector={selector_reason} action={counterfactual_action} risks={counterfactual_risks} "
@@ -2727,12 +3104,19 @@ def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path)
     )
     for item in report.get("first_touch_regression_rows") or []:
         blocker_counts = item.get("blocker_counts_before_first_touch") or {}
-        top_blockers = ",".join(f"{key}={value}" for key, value in list(blocker_counts.items())[:4])
+        top_blockers = ",".join(
+            f"{key}={value}" for key, value in list(blocker_counts.items())[:4]
+        )
         display_item = {
             **item,
             "final_profit_rate": item.get("final_profit_rate"),
-            "first_touch_shadow_cap1_decision": item.get("first_touch_shadow_cap1_decision", "-"),
-            "first_touch_avgdown_decision_reason": item.get("first_touch_avgdown_decision_reason") or "-",
+            "first_touch_shadow_cap1_decision": item.get(
+                "first_touch_shadow_cap1_decision", "-"
+            ),
+            "first_touch_avgdown_decision_reason": item.get(
+                "first_touch_avgdown_decision_reason"
+            )
+            or "-",
             "top_blockers": top_blockers,
         }
         lines.append(
@@ -2743,20 +3127,26 @@ def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path)
             "final_profit={final_profit_rate} entry_submit_count={entry_order_submitted_count} "
             "avgdown_submitted_count={avg_down_submitted_event_count} "
             "runtime_decision={first_touch_avgdown_decision_reason} shadow_cap1={first_touch_shadow_cap1_decision} "
-            "max_avg_down={max_avg_down_count} blockers={top_blockers}".format(**display_item)
+            "max_avg_down={max_avg_down_count} blockers={top_blockers}".format(
+                **display_item
+            )
         )
     lines.extend(["", "## Records", ""])
     for item in report.get("records") or []:
         lines.append(
             "- record_id={record_id} code={stock_code} name={stock_name} label={feedback_label} "
             "avg_down={max_avg_down_count} latest_profit={latest_profit_rate} min_profit={min_profit_seen} "
-            "max_profit={max_profit_seen} latest_gate={latest_gate_reason}".format(**item)
+            "max_profit={max_profit_seen} latest_gate={latest_gate_reason}".format(
+                **item
+            )
         )
     output_md.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build rising missed intraday feedback report.")
+    parser = argparse.ArgumentParser(
+        description="Build rising missed intraday feedback report."
+    )
     parser.add_argument("--target-date", default=datetime.now(KST).strftime("%Y-%m-%d"))
     parser.add_argument("--pipeline-path", type=Path)
     parser.add_argument("--output-json", type=Path)
@@ -2776,7 +3166,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.print_summary:
         print(
             json.dumps(
-                {"output_json": str(output_json), "output_md": str(output_md), **report["summary"]},
+                {
+                    "output_json": str(output_json),
+                    "output_md": str(output_md),
+                    **report["summary"],
+                },
                 ensure_ascii=False,
                 sort_keys=True,
             )
