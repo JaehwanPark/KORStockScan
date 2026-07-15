@@ -1671,6 +1671,32 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         ),
         decision_authority="scale_in_attribution_source_only",
     ),
+    "shallow_source_gap_recheck": StageContract(
+        required_fields=(
+            "threshold_family",
+            "recheck_state",
+            "metric_role",
+            "decision_authority",
+            "window_policy",
+            "sample_floor",
+            "primary_decision_metric",
+            "source_quality_gate",
+            "runtime_effect",
+            "allowed_runtime_apply",
+            "actual_order_submitted",
+            "broker_order_forbidden",
+            "forbidden_uses",
+            "recheck_enabled",
+            "recheck_active",
+            "recheck_active_date",
+            "recheck_current_date",
+            "recheck_observed_at",
+            "recheck_max_quote_age_ms",
+            "recheck_max_ws_micro_age_ms",
+            "recheck_min_trusted_ticks",
+        ),
+        decision_authority="bounded_shallow_avg_down_recheck_runtime",
+    ),
     "reversal_add_gate_blocked": StageContract(
         required_fields=(
             "state",
@@ -2575,6 +2601,51 @@ def _scanner_rank_change_sign_contract_violations(fields: dict[str, Any]) -> dic
     }
 
 
+def _shallow_source_gap_recheck_contract_violations(fields: dict[str, Any]) -> dict[str, bool]:
+    state = str(fields.get("recheck_state") or "").strip().lower()
+    valid_states = {"armed", "pending", "recovered", "ttl_expired", "recovered_without_add"}
+    violations = {
+        "shallow_recheck_state_contract": state not in valid_states,
+        "shallow_recheck_quote_contract": False,
+        "shallow_recheck_ws_micro_contract": False,
+        "shallow_recheck_authority_contract": False,
+    }
+    if state != "recovered":
+        return violations
+    quote_age_ms = _safe_float(fields.get("quote_age_ms"))
+    micro_age_ms = _safe_float(fields.get("trusted_ws_micro_latest_age_ms"))
+    trusted_count = _safe_float(fields.get("tick_aggressor_trusted_count"))
+    max_quote_age_ms = _safe_float(fields.get("recheck_max_quote_age_ms"))
+    max_micro_age_ms = _safe_float(fields.get("recheck_max_ws_micro_age_ms"))
+    min_trusted_ticks = _safe_float(fields.get("recheck_min_trusted_ticks"))
+    violations["shallow_recheck_quote_contract"] = not (
+        _contract_bool(fields.get("quote_fresh"), True)
+        and quote_age_ms is not None
+        and max_quote_age_ms is not None
+        and 0.0 <= quote_age_ms <= max_quote_age_ms
+        and str(fields.get("reversal_feature_consumption_age_basis") or "").strip()
+        == "feature_extracted_at_plus_snapshot_age"
+    )
+    violations["shallow_recheck_ws_micro_contract"] = not (
+        _contract_bool(fields.get("tick_aggressor_pressure_usable"), True)
+        and trusted_count is not None
+        and min_trusted_ticks is not None
+        and trusted_count >= min_trusted_ticks
+        and str(fields.get("tick_aggressor_source") or "").strip()
+        == "kiwoom_0b_signed_trade_volume"
+        and micro_age_ms is not None
+        and max_micro_age_ms is not None
+        and 0.0 <= micro_age_ms <= max_micro_age_ms
+    )
+    violations["shallow_recheck_authority_contract"] = not (
+        _contract_bool(fields.get("runtime_effect"), True)
+        and _contract_bool(fields.get("allowed_runtime_apply"), True)
+        and _contract_bool(fields.get("actual_order_submitted"), False)
+        and _contract_bool(fields.get("broker_order_forbidden"), False)
+    )
+    return violations
+
+
 def _pressure_provenance_unusable(fields: dict[str, Any]) -> bool:
     if not (_is_present(fields.get("buy_pressure_10t")) or _is_present(fields.get("buy_pressure"))):
         return False
@@ -2677,6 +2748,12 @@ def _row_contract_violations(stage: str, row: dict[str, Any], contract: StageCon
             for key, violated in _scanner_rank_change_sign_contract_violations(fields).items()
             if violated
         )
+    if stage == "shallow_source_gap_recheck":
+        invalid.extend(
+            key
+            for key, violated in _shallow_source_gap_recheck_contract_violations(fields).items()
+            if violated
+        )
     if _stage_requires_tick_pressure_provenance(stage) and _pressure_provenance_unusable(fields):
         invalid.append("tick_aggressor_pressure_usable_contract")
     if _stage_requires_minute_candle_provenance(stage) and _micro_vwap_provenance_unusable(fields):
@@ -2703,6 +2780,21 @@ def _row_contract_violations(stage: str, row: dict[str, Any], contract: StageCon
 
 
 def _conditional_required_fields(stage: str, fields: dict[str, Any]) -> tuple[str, ...]:
+    if stage == "shallow_source_gap_recheck":
+        if str(fields.get("recheck_state") or "").strip().lower() == "recovered":
+            return (
+                "quote_fresh",
+                "quote_age_ms",
+                "quote_age_source",
+                "reversal_feature_consumption_age_basis",
+                "reversal_feature_consumption_elapsed_ms",
+                "tick_aggressor_pressure_usable",
+                "tick_aggressor_trusted_count",
+                "tick_aggressor_source",
+                "trusted_ws_micro_latest_age_ms",
+                "buy_pressure_10t",
+            )
+        return ()
     if stage != "scalping_scanner_real_source_guard_block":
         return ()
     if fields.get("scanner_source_guard_first_seen_required") is True:
@@ -3066,6 +3158,20 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
                     for row in stage_rows
                     if _scanner_rank_change_sign_contract_violations(
                         _normalized_fields_for_contract(stage, row["fields"]),
+                    ).get(violation_key)
+                )
+        if stage == "shallow_source_gap_recheck":
+            for violation_key in (
+                "shallow_recheck_state_contract",
+                "shallow_recheck_quote_contract",
+                "shallow_recheck_ws_micro_contract",
+                "shallow_recheck_authority_contract",
+            ):
+                invalid_label_counts[violation_key] = sum(
+                    1
+                    for row in stage_rows
+                    if _shallow_source_gap_recheck_contract_violations(
+                        _normalized_fields_for_contract(stage, row["fields"])
                     ).get(violation_key)
                 )
         if _stage_requires_tick_pressure_provenance(stage):

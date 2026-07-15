@@ -2090,6 +2090,154 @@ def test_observation_source_quality_audit_accepts_reversal_add_blocked_pressure_
     assert report["summary"]["tuning_input_allowed"] is True
 
 
+def test_observation_source_quality_audit_accepts_shallow_source_gap_recheck_contract(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-07-15",
+        [
+            _event(
+                "shallow_source_gap_recheck",
+                {
+                    "threshold_family": "shallow_avg_down_source_gap_recheck",
+                    "recheck_state": "recovered",
+                    "metric_role": "bounded_tunable",
+                    "decision_authority": "bounded_shallow_avg_down_recheck_runtime",
+                    "window_policy": "same_position_10_to_20_second_recheck",
+                    "sample_floor": "one_source_gap_candidate_with_fresh_recovery",
+                    "primary_decision_metric": "rebound_with_trusted_ws_micro_before_ttl",
+                    "source_quality_gate": "fresh_quote_and_trusted_signed_ws_micro_required",
+                    "runtime_effect": True,
+                    "allowed_runtime_apply": True,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": False,
+                    "forbidden_uses": "rest_positive_micro|hard_safety_bypass",
+                    "recheck_enabled": True,
+                    "recheck_active": True,
+                    "recheck_active_date": "2026-07-15",
+                    "recheck_current_date": "2026-07-15",
+                    "recheck_observed_at": 1_784_077_200.0,
+                    "recheck_max_quote_age_ms": 1500.0,
+                    "recheck_max_ws_micro_age_ms": 3000.0,
+                    "recheck_min_trusted_ticks": 3,
+                    "quote_fresh": True,
+                    "quote_age_ms": 420.0,
+                    "quote_age_source": "absolute_timestamp:last_ws_update_ts",
+                    "reversal_feature_consumption_age_basis": (
+                        "feature_extracted_at_plus_snapshot_age"
+                    ),
+                    "reversal_feature_consumption_elapsed_ms": 200.0,
+                    "tick_aggressor_pressure_usable": True,
+                    "tick_aggressor_trusted_count": 5,
+                    "tick_aggressor_source": "kiwoom_0b_signed_trade_volume",
+                    "trusted_ws_micro_latest_age_ms": 180.0,
+                    "buy_pressure_10t": 72.0,
+                },
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-07-15")
+
+    assert report["stage_contracts"]["shallow_source_gap_recheck"]["status"] == "pass"
+    assert report["summary"]["tuning_input_allowed"] is True
+
+
+def test_observation_source_quality_audit_accepts_shallow_recheck_armed_without_micro(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-07-15",
+        [
+            _event(
+                "shallow_source_gap_recheck",
+                {
+                    "threshold_family": "shallow_avg_down_source_gap_recheck",
+                    "recheck_state": "armed",
+                    "metric_role": "bounded_tunable",
+                    "decision_authority": "bounded_shallow_avg_down_recheck_runtime",
+                    "window_policy": "same_position_10_to_20_second_recheck",
+                    "sample_floor": "one_source_gap_candidate_with_fresh_recovery",
+                    "primary_decision_metric": "rebound_with_trusted_ws_micro_before_ttl",
+                    "source_quality_gate": "fresh_quote_and_trusted_signed_ws_micro_required",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": True,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "forbidden_uses": "rest_positive_micro|hard_safety_bypass",
+                    "recheck_enabled": True,
+                    "recheck_active": True,
+                    "recheck_active_date": "2026-07-15",
+                    "recheck_current_date": "2026-07-15",
+                    "recheck_observed_at": 1_784_077_190.0,
+                    "recheck_max_quote_age_ms": 1500.0,
+                    "recheck_max_ws_micro_age_ms": 3000.0,
+                    "recheck_min_trusted_ticks": 3,
+                },
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-07-15")
+
+    assert report["stage_contracts"]["shallow_source_gap_recheck"]["status"] == "pass"
+    assert report["summary"]["tuning_input_allowed"] is True
+
+
+def test_observation_source_quality_audit_blocks_shallow_recheck_rest_positive_micro(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    fields = {
+        "threshold_family": "shallow_avg_down_source_gap_recheck",
+        "recheck_state": "recovered",
+        "metric_role": "bounded_tunable",
+        "decision_authority": "bounded_shallow_avg_down_recheck_runtime",
+        "window_policy": "same_position_10_to_20_second_recheck",
+        "sample_floor": "one_source_gap_candidate_with_fresh_recovery",
+        "primary_decision_metric": "rebound_with_trusted_ws_micro_before_ttl",
+        "source_quality_gate": "fresh_quote_and_trusted_signed_ws_micro_required",
+        "runtime_effect": True,
+        "allowed_runtime_apply": True,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": False,
+        "forbidden_uses": "rest_positive_micro|hard_safety_bypass",
+        "recheck_enabled": True,
+        "recheck_active": True,
+        "recheck_active_date": "2026-07-15",
+        "recheck_current_date": "2026-07-15",
+        "recheck_observed_at": 1_784_077_200.0,
+        "recheck_max_quote_age_ms": 1500.0,
+        "recheck_max_ws_micro_age_ms": 3000.0,
+        "recheck_min_trusted_ticks": 3,
+        "quote_fresh": True,
+        "quote_age_ms": 420.0,
+        "quote_age_source": "ka10004_rest_orderbook",
+        "reversal_feature_consumption_age_basis": "feature_extracted_at_plus_snapshot_age",
+        "reversal_feature_consumption_elapsed_ms": 200.0,
+        "tick_aggressor_pressure_usable": True,
+        "tick_aggressor_trusted_count": 5,
+        "tick_aggressor_source": "kiwoom_rest_ka10084_signed_trade_qty",
+        "trusted_ws_micro_latest_age_ms": 180.0,
+        "buy_pressure_10t": 72.0,
+    }
+    _write_events(tmp_path, "2026-07-15", [_event("shallow_source_gap_recheck", fields)])
+
+    report = audit.build_observation_source_quality_audit("2026-07-15")
+
+    stage = report["stage_contracts"]["shallow_source_gap_recheck"]
+    assert stage["status"] == "fail"
+    assert stage["invalid_label_counts"]["shallow_recheck_ws_micro_contract"] == 1
+    assert report["summary"]["tuning_input_allowed"] is False
+
+
 def test_observation_source_quality_audit_blocks_reversal_add_pressure_without_trusted_provenance(
     monkeypatch,
     tmp_path,

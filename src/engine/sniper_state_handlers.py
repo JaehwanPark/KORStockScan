@@ -204,6 +204,7 @@ _GREENFIELD_TELEGRAM_KEYS: set[str] = set()
 _STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON = "stop_line_touch_mandatory_avg_down"
 _DEEP_RECOVERY_AVG_DOWN_REASON = "deep_recovery_avg_down"
 _SHALLOW_VOLATILITY_AVG_DOWN_REASON = "shallow_volatility_avg_down"
+_SHALLOW_SOURCE_GAP_RECHECK_FAMILY = "shallow_avg_down_source_gap_recheck"
 _REAL_AVG_DOWN_REVERSAL_REASONS = {
     "reversal_add_ok",
     "aggressive_reversal_add_ok",
@@ -18412,6 +18413,26 @@ def _reversal_feature_payload(feat: dict | None, now_ts: float) -> dict:
     }
 
 
+def _reversal_features_with_consumption_age(feat: dict | None, now_ts: float) -> dict:
+    payload = dict(feat or {}) if isinstance(feat, dict) else {}
+    observed_at = _safe_float(payload.get("feature_extracted_at"), 0.0)
+    if observed_at > 10_000_000_000:
+        observed_at /= 1000.0
+    if observed_at <= 0:
+        payload["quote_stale"] = True
+        payload["tick_context_stale"] = True
+        payload["consumption_age_basis"] = "feature_extracted_at_missing"
+        return payload
+    elapsed_ms = max(0.0, now_ts - observed_at) * 1000.0
+    for key in ("quote_age_ms", "tick_latest_age_ms"):
+        base_age_ms = _safe_float(payload.get(key), None)
+        if base_age_ms is not None:
+            payload[key] = base_age_ms + elapsed_ms
+    payload["consumption_age_basis"] = "feature_extracted_at_plus_snapshot_age"
+    payload["consumption_elapsed_ms"] = elapsed_ms
+    return payload
+
+
 def _refresh_scale_in_reversal_features_if_needed(
     *,
     stock: dict,
@@ -18426,7 +18447,28 @@ def _refresh_scale_in_reversal_features_if_needed(
     base_ws = dict(ws_data or {})
     existing = stock.get("last_reversal_features") if isinstance(stock, dict) else {}
     existing = existing if isinstance(existing, dict) else {}
-    existing_quality = reversal_feature_source_quality(existing)
+    quality_input = existing
+    if stock.get("shallow_source_gap_recheck_armed"):
+        quality_input = _reversal_features_with_consumption_age(existing, now_ts)
+        max_quote_age_ms = max(
+            1.0,
+            _safe_float(
+                os.getenv("KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_MAX_QUOTE_AGE_MS"),
+                1500.0,
+            ),
+        )
+        max_micro_age_ms = max(
+            1.0,
+            _safe_float(
+                os.getenv("KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_MAX_WS_MICRO_AGE_MS"),
+                3000.0,
+            ),
+        )
+        if _safe_float(quality_input.get("quote_age_ms"), 999999.0) > max_quote_age_ms:
+            quality_input["quote_stale"] = True
+        if _safe_float(quality_input.get("tick_latest_age_ms"), 999999.0) > max_micro_age_ms:
+            quality_input["tick_context_stale"] = True
+    existing_quality = reversal_feature_source_quality(quality_input)
     fields = {
         "scale_in_feature_refresh_attempted": False,
         "scale_in_feature_refresh_applied": False,
@@ -18526,6 +18568,547 @@ def _refresh_scale_in_reversal_features_if_needed(
     fields["scale_in_feature_refresh_applied"] = True
     fields["scale_in_feature_refresh_reason"] = "feature_context_refreshed"
     return refreshed_ws, fields
+
+
+_SHALLOW_SOURCE_GAP_RECHECK_STATE_FIELDS = (
+    "shallow_source_gap_recheck_armed",
+    "shallow_source_gap_recheck_started_at",
+    "shallow_source_gap_recheck_until_epoch",
+    "shallow_source_gap_recheck_anchor_price",
+    "shallow_source_gap_recheck_low_price",
+    "shallow_source_gap_recheck_anchor_profit_rate",
+    "shallow_source_gap_recheck_source_reason",
+    "shallow_source_gap_recheck_last_observed_reason",
+)
+
+
+def _shallow_source_gap_recheck_config(now_ts: float) -> dict[str, Any]:
+    enabled = str(
+        os.getenv("KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_ENABLED", "false")
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    active_date = str(
+        os.getenv("KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_ACTIVE_DATE", "")
+    ).strip()
+    current_date = datetime.fromtimestamp(now_ts, tz=_KST).date().isoformat()
+    return {
+        "enabled": enabled,
+        "active_date": active_date,
+        "current_date": current_date,
+        "active": enabled and active_date == current_date,
+        "min_wait_sec": max(
+            0.0,
+            _safe_float(
+                os.getenv("KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_MIN_WAIT_SEC"),
+                10.0,
+            ),
+        ),
+        "ttl_sec": max(
+            1.0,
+            _safe_float(
+                os.getenv("KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_TTL_SEC"),
+                20.0,
+            ),
+        ),
+        "candidate_pnl_min": _safe_float(
+            os.getenv("KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_CANDIDATE_PNL_MIN"),
+            -1.50,
+        ),
+        "candidate_pnl_max": _safe_float(
+            os.getenv("KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_CANDIDATE_PNL_MAX"),
+            -0.30,
+        ),
+        "trigger_pnl_max": _safe_float(
+            os.getenv("KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_TRIGGER_PNL_MAX"),
+            -0.10,
+        ),
+        "min_hold_sec": max(
+            0,
+            _safe_int(
+                os.getenv("KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_MIN_HOLD_SEC"),
+                60,
+            ),
+        ),
+        "max_hold_sec": max(
+            1,
+            _safe_int(
+                os.getenv("KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_MAX_HOLD_SEC"),
+                300,
+            ),
+        ),
+        "min_rebound_pct": max(
+            0.0,
+            _safe_float(
+                os.getenv("KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_MIN_REBOUND_PCT"),
+                0.25,
+            ),
+        ),
+        "max_quote_age_ms": max(
+            1.0,
+            _safe_float(
+                os.getenv("KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_MAX_QUOTE_AGE_MS"),
+                1500.0,
+            ),
+        ),
+        "max_ws_micro_age_ms": max(
+            1.0,
+            _safe_float(
+                os.getenv("KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_MAX_WS_MICRO_AGE_MS"),
+                3000.0,
+            ),
+        ),
+        "min_trusted_ticks": max(
+            1,
+            _safe_int(
+                os.getenv("KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_MIN_TRUSTED_TICKS"),
+                3,
+            ),
+        ),
+        "min_buy_pressure": max(
+            0.0,
+            _safe_float(
+                os.getenv("KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_MIN_BUY_PRESSURE"),
+                60.0,
+            ),
+        ),
+        "min_tick_accel": max(
+            0.0,
+            _safe_float(
+                os.getenv("KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_MIN_TICK_ACCEL"),
+                1.0,
+            ),
+        ),
+        "min_micro_vwap_bp": _safe_float(
+            os.getenv("KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_MIN_MICRO_VWAP_BP"),
+            0.0,
+        ),
+        "max_attempts": max(
+            1,
+            _safe_int(
+                os.getenv("KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_MAX_ATTEMPTS"),
+                2,
+            ),
+        ),
+        "cooldown_sec": max(
+            0.0,
+            _safe_float(
+                os.getenv("KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_COOLDOWN_SEC"),
+                60.0,
+            ),
+        ),
+    }
+
+
+def _clear_shallow_source_gap_recheck(stock: dict, *, now_ts: float) -> None:
+    _mutate_stock_state(
+        stock,
+        set_fields={"shallow_source_gap_recheck_last_finished_at": now_ts},
+        pop_fields=_SHALLOW_SOURCE_GAP_RECHECK_STATE_FIELDS,
+    )
+
+
+def _log_shallow_source_gap_recheck(
+    stock: dict,
+    code: str,
+    *,
+    state: str,
+    now_ts: float,
+    config: dict,
+    **fields,
+) -> None:
+    provenance_fields = {
+        "quote_fresh": False,
+        "quote_age_ms": "-",
+        "quote_age_source": "not_evaluated",
+        "reversal_feature_consumption_age_basis": "not_evaluated",
+        "reversal_feature_consumption_elapsed_ms": "-",
+        "tick_aggressor_pressure_usable": False,
+        "tick_aggressor_trusted_count": 0,
+        "tick_aggressor_source": "not_evaluated",
+        "trusted_ws_micro_latest_age_ms": "-",
+        "buy_pressure_10t": "-",
+    }
+    provenance_fields.update(fields)
+    _log_holding_pipeline(
+        stock,
+        code,
+        "shallow_source_gap_recheck",
+        threshold_family=_SHALLOW_SOURCE_GAP_RECHECK_FAMILY,
+        recheck_state=state,
+        metric_role="bounded_tunable",
+        decision_authority="bounded_shallow_avg_down_recheck_runtime",
+        window_policy="same_position_10_to_20_second_recheck",
+        sample_floor="one_source_gap_candidate_with_fresh_recovery",
+        primary_decision_metric="rebound_with_trusted_ws_micro_before_ttl",
+        source_quality_gate="fresh_quote_and_trusted_signed_ws_micro_required",
+        runtime_effect=state == "recovered",
+        allowed_runtime_apply=bool(config.get("active")),
+        actual_order_submitted=False,
+        broker_order_forbidden=state != "recovered",
+        forbidden_uses=(
+            "stale_or_unknown_pressure_as_positive|rest_positive_micro|"
+            "hard_safety_bypass|broker_guard_bypass|account_order_quantity_cooldown_bypass|"
+            "cap_release|provider_route_change"
+        ),
+        recheck_enabled=bool(config.get("enabled")),
+        recheck_active=bool(config.get("active")),
+        recheck_active_date=config.get("active_date") or "-",
+        recheck_current_date=config.get("current_date") or "-",
+        recheck_observed_at=now_ts,
+        recheck_max_quote_age_ms=config.get("max_quote_age_ms"),
+        recheck_max_ws_micro_age_ms=config.get("max_ws_micro_age_ms"),
+        recheck_min_trusted_ticks=config.get("min_trusted_ticks"),
+        **provenance_fields,
+    )
+
+
+def _shallow_recheck_trusted_ws_micro(
+    ws_data: dict | None,
+    *,
+    current_price: float,
+    now_ts: float,
+    max_age_ms: float,
+) -> dict[str, Any]:
+    source = ws_data if isinstance(ws_data, dict) else {}
+    raw_ticks = source.get("recent_trade_ticks")
+    try:
+        ticks = list(raw_ticks or [])
+    except TypeError:
+        ticks = []
+    trusted: list[dict[str, float]] = []
+    for tick in ticks:
+        if not isinstance(tick, dict):
+            continue
+        if str(tick.get("aggressor_source") or "").strip() != "kiwoom_0b_signed_trade_volume":
+            continue
+        raw_signed_volume = str(
+            tick.get("aggressor_aux_raw_15")
+            or tick.get("signed_trade_volume")
+            or ""
+        ).strip()
+        signed_volume = _safe_float(raw_signed_volume, 0.0)
+        if not raw_signed_volume.startswith(("+", "-")) or signed_volume == 0.0:
+            continue
+        observed_at = _safe_float(tick.get("received_at_ms"), 0.0)
+        if observed_at > 10_000_000_000:
+            observed_at /= 1000.0
+        if observed_at <= 0:
+            observed_at = _safe_float(tick.get("ts"), 0.0)
+            if observed_at > 10_000_000_000:
+                observed_at /= 1000.0
+        price = _safe_float(tick.get("price"), 0.0)
+        age_ms = max(0.0, now_ts - observed_at) * 1000.0 if observed_at > 0 else None
+        if age_ms is None or age_ms > max_age_ms or price <= 0:
+            continue
+        trusted.append(
+            {
+                "ts": observed_at,
+                "price": price,
+                "signed_volume": signed_volume,
+                "age_ms": age_ms,
+            }
+        )
+    trusted.sort(key=lambda item: item["ts"], reverse=True)
+    recent = trusted[:10]
+    buy_volume = sum(item["signed_volume"] for item in recent if item["signed_volume"] > 0)
+    sell_volume = sum(abs(item["signed_volume"]) for item in recent if item["signed_volume"] < 0)
+    total_volume = buy_volume + sell_volume
+    buy_pressure = (buy_volume / total_volume) * 100.0 if total_volume > 0 else 0.0
+    weighted_volume = sum(abs(item["signed_volume"]) for item in recent)
+    micro_vwap = (
+        sum(item["price"] * abs(item["signed_volume"]) for item in recent) / weighted_volume
+        if len(recent) >= 3 and weighted_volume > 0
+        else 0.0
+    )
+    micro_vwap_gap_bps = (
+        ((current_price - micro_vwap) / micro_vwap) * 10000.0
+        if current_price > 0 and micro_vwap > 0
+        else None
+    )
+    tick_acceleration = 0.0
+    if len(recent) >= 10:
+        recent_span = recent[0]["ts"] - recent[4]["ts"]
+        previous_span = recent[5]["ts"] - recent[9]["ts"]
+        if previous_span > 0 and recent_span >= 0:
+            tick_acceleration = previous_span / max(recent_span, 0.001)
+    return {
+        "source": "kiwoom_0b_signed_trade_volume",
+        "trusted_tick_count": len(recent),
+        "pressure_usable": bool(recent and total_volume > 0),
+        "buy_pressure": buy_pressure,
+        "tick_acceleration": tick_acceleration,
+        "micro_vwap_available": micro_vwap > 0,
+        "micro_vwap_gap_bps": micro_vwap_gap_bps,
+        "latest_age_ms": round(recent[0]["age_ms"], 3) if recent else "-",
+    }
+
+
+def _maybe_arm_shallow_source_gap_recheck(
+    *,
+    stock: dict,
+    code: str,
+    reversal: dict | None,
+    profit_rate: float,
+    curr_price: int,
+    held_sec: float,
+    now_ts: float,
+) -> dict:
+    config = _shallow_source_gap_recheck_config(now_ts)
+    result = {"armed": False, "reason": "runtime_inactive", **config}
+    if not config["active"]:
+        return result
+    if stock.get("shallow_source_gap_recheck_armed"):
+        result["reason"] = "already_armed"
+        return result
+    attempts = max(0, _safe_int(stock.get("shallow_source_gap_recheck_attempt_count"), 0))
+    if attempts >= config["max_attempts"]:
+        result["reason"] = "attempt_limit_reached"
+        return result
+    last_finished = _safe_float(stock.get("shallow_source_gap_recheck_last_finished_at"), 0.0)
+    if last_finished > 0 and (now_ts - last_finished) < config["cooldown_sec"]:
+        result["reason"] = "cooldown_active"
+        return result
+    if curr_price <= 0:
+        result["reason"] = "invalid_current_price"
+        return result
+    if not (config["candidate_pnl_min"] <= profit_rate <= config["candidate_pnl_max"]):
+        result["reason"] = "candidate_pnl_out_of_range"
+        return result
+    if not (config["min_hold_sec"] <= held_sec <= config["max_hold_sec"]):
+        result["reason"] = "candidate_hold_out_of_range"
+        return result
+    reversal = reversal if isinstance(reversal, dict) else {}
+    shallow_probe = reversal.get("shallow_volatility_probe")
+    shallow_probe = shallow_probe if isinstance(shallow_probe, dict) else {}
+    if not shallow_probe.get("count_ok", True) or not shallow_probe.get("cooldown_ok", True):
+        result["reason"] = "shallow_position_quota_or_cooldown_blocked"
+        return result
+    if not shallow_probe.get("above_stop_line_ok", False):
+        result["reason"] = "at_or_below_stop_line"
+        return result
+    if bool(shallow_probe.get("large_sell_print_detected")):
+        result["reason"] = "large_sell_detected"
+        return result
+    source_gap_components = []
+    if not shallow_probe.get("has_reversal_features"):
+        source_gap_components.append("features_missing")
+    if bool(shallow_probe.get("reversal_feature_stale")):
+        source_gap_components.append("features_stale")
+    if not bool(shallow_probe.get("tick_aggressor_pressure_usable")):
+        source_gap_components.append("trusted_ws_pressure_unusable")
+    if not bool(shallow_probe.get("quote_age_ok")):
+        source_gap_components.append("quote_age_unusable")
+    if not source_gap_components:
+        result["reason"] = "measured_weak_evidence_not_source_gap"
+        return result
+
+    until_epoch = now_ts + config["ttl_sec"]
+    source_reason = ",".join(source_gap_components)
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "shallow_source_gap_recheck_armed": True,
+            "shallow_source_gap_recheck_started_at": now_ts,
+            "shallow_source_gap_recheck_until_epoch": until_epoch,
+            "shallow_source_gap_recheck_anchor_price": curr_price,
+            "shallow_source_gap_recheck_low_price": curr_price,
+            "shallow_source_gap_recheck_anchor_profit_rate": profit_rate,
+            "shallow_source_gap_recheck_source_reason": source_reason,
+            "shallow_source_gap_recheck_last_observed_reason": "armed",
+            "shallow_source_gap_recheck_attempt_count": attempts + 1,
+        },
+    )
+    _log_shallow_source_gap_recheck(
+        stock,
+        code,
+        state="armed",
+        now_ts=now_ts,
+        config=config,
+        recheck_started_at=now_ts,
+        recheck_until_epoch=until_epoch,
+        anchor_price=curr_price,
+        low_price=curr_price,
+        anchor_profit_rate=f"{profit_rate:+.2f}",
+        held_sec=_safe_int(held_sec, 0),
+        source_gap_components=source_reason,
+        attempt_count=attempts + 1,
+    )
+    return {"armed": True, "reason": "source_gap_recheck_armed", **config}
+
+
+def _evaluate_shallow_source_gap_recheck(
+    *,
+    stock: dict,
+    code: str,
+    profit_rate: float,
+    curr_price: int,
+    held_sec: float,
+    now_ts: float,
+    ws_data: dict | None = None,
+) -> dict | None:
+    if not stock.get("shallow_source_gap_recheck_armed"):
+        return None
+    config = _shallow_source_gap_recheck_config(now_ts)
+    if not config["active"]:
+        _clear_shallow_source_gap_recheck(stock, now_ts=now_ts)
+        return None
+
+    started_at = _safe_float(stock.get("shallow_source_gap_recheck_started_at"), 0.0)
+    until_epoch = _safe_float(stock.get("shallow_source_gap_recheck_until_epoch"), 0.0)
+    anchor_price = _safe_int(stock.get("shallow_source_gap_recheck_anchor_price"), 0)
+    low_price = _safe_int(stock.get("shallow_source_gap_recheck_low_price"), anchor_price)
+    if curr_price > 0 and (low_price <= 0 or curr_price < low_price):
+        low_price = curr_price
+        _mutate_stock_state(stock, set_fields={"shallow_source_gap_recheck_low_price": low_price})
+    elapsed_sec = max(0.0, now_ts - started_at) if started_at > 0 else 0.0
+    rebound_pct = ((curr_price / low_price) - 1.0) * 100.0 if curr_price > 0 and low_price > 0 else 0.0
+    raw_feat = stock.get("last_reversal_features")
+    raw_feat = raw_feat if isinstance(raw_feat, dict) else {}
+    feat = _reversal_features_with_consumption_age(raw_feat, now_ts)
+    quality = reversal_feature_source_quality(feat)
+    quote_age_ms = _safe_float(quality.get("quote_age_ms"), None)
+    quote_fresh = (
+        bool(feat)
+        and not _boolish_true(quality.get("quote_stale"))
+        and quote_age_ms is not None
+        and quote_age_ms <= config["max_quote_age_ms"]
+    )
+    ws_micro = _shallow_recheck_trusted_ws_micro(
+        ws_data,
+        current_price=curr_price,
+        now_ts=now_ts,
+        max_age_ms=config["max_ws_micro_age_ms"],
+    )
+    trusted_tick_count = max(0, _safe_int(ws_micro.get("trusted_tick_count"), 0))
+    pressure_usable = bool(ws_micro.get("pressure_usable"))
+    buy_pressure = _safe_float(ws_micro.get("buy_pressure"), 0.0)
+    tick_accel = _safe_float(ws_micro.get("tick_acceleration"), 0.0)
+    micro_vwap_available = bool(ws_micro.get("micro_vwap_available"))
+    micro_vwap_bp = _safe_float(ws_micro.get("micro_vwap_gap_bps"), -999999.0)
+    trusted_ws_micro = pressure_usable and trusted_tick_count >= config["min_trusted_ticks"]
+    momentum_recovered = (
+        tick_accel >= config["min_tick_accel"]
+        or (
+            micro_vwap_available
+            and micro_vwap_bp >= config["min_micro_vwap_bp"]
+        )
+    )
+    large_sell_absent = not _boolish_true(feat.get("large_sell_print_detected"))
+    pnl_still_eligible = (
+        config["candidate_pnl_min"] <= profit_rate <= config["trigger_pnl_max"]
+    )
+    recovered = all(
+        (
+            elapsed_sec >= config["min_wait_sec"],
+            now_ts <= until_epoch,
+            rebound_pct >= config["min_rebound_pct"],
+            quote_fresh,
+            trusted_ws_micro,
+            buy_pressure >= config["min_buy_pressure"],
+            momentum_recovered,
+            large_sell_absent,
+            pnl_still_eligible,
+            config["min_hold_sec"] <= held_sec <= config["max_hold_sec"],
+        )
+    )
+    observation = {
+        "recheck_started_at": started_at,
+        "recheck_until_epoch": until_epoch,
+        "recheck_elapsed_sec": round(elapsed_sec, 3),
+        "anchor_price": anchor_price,
+        "low_price": low_price,
+        "current_price": curr_price,
+        "rebound_pct": round(rebound_pct, 4),
+        "profit_rate": f"{profit_rate:+.2f}",
+        "held_sec": _safe_int(held_sec, 0),
+        "quote_fresh": quote_fresh,
+        "quote_age_ms": "-" if quote_age_ms is None else round(quote_age_ms, 3),
+        "quote_age_source": quality.get("quote_age_source", "missing"),
+        "reversal_feature_source_quality": quality.get("reversal_feature_source_quality"),
+        "reversal_feature_stale_reason": quality.get("reversal_feature_stale_reason"),
+        "reversal_feature_consumption_age_basis": feat.get("consumption_age_basis", "missing"),
+        "reversal_feature_consumption_elapsed_ms": round(
+            _safe_float(feat.get("consumption_elapsed_ms"), 0.0),
+            3,
+        ),
+        "tick_aggressor_pressure_usable": pressure_usable,
+        "tick_aggressor_trusted_count": trusted_tick_count,
+        "tick_aggressor_source": ws_micro.get("source", "missing"),
+        "trusted_ws_micro_latest_age_ms": ws_micro.get("latest_age_ms", "-"),
+        "buy_pressure_10t": round(buy_pressure, 3),
+        "tick_acceleration_ratio": round(tick_accel, 3),
+        "micro_vwap_available": micro_vwap_available,
+        "curr_vs_micro_vwap_bp": round(micro_vwap_bp, 3),
+        "large_sell_print_detected": not large_sell_absent,
+        "source_gap_components": stock.get("shallow_source_gap_recheck_source_reason") or "-",
+    }
+    if recovered:
+        _log_shallow_source_gap_recheck(
+            stock,
+            code,
+            state="recovered",
+            now_ts=now_ts,
+            config=config,
+            **observation,
+        )
+        _clear_shallow_source_gap_recheck(stock, now_ts=now_ts)
+        return {
+            "should_add": True,
+            "add_type": "AVG_DOWN",
+            "reason": _SHALLOW_VOLATILITY_AVG_DOWN_REASON,
+            "blocked_standard_reason": "shallow_source_gap_recheck_recovered",
+            "shallow_source_gap_recheck_applied": True,
+            "shallow_source_gap_recheck_runtime_family": _SHALLOW_SOURCE_GAP_RECHECK_FAMILY,
+            **observation,
+        }
+
+    if now_ts > until_epoch or profit_rate > config["trigger_pnl_max"]:
+        terminal_reason = "ttl_expired" if now_ts > until_epoch else "recovered_without_add"
+        _log_shallow_source_gap_recheck(
+            stock,
+            code,
+            state=terminal_reason,
+            now_ts=now_ts,
+            config=config,
+            **observation,
+        )
+        _clear_shallow_source_gap_recheck(stock, now_ts=now_ts)
+        return None
+
+    failed_checks = []
+    if elapsed_sec < config["min_wait_sec"]:
+        failed_checks.append("min_wait")
+    if rebound_pct < config["min_rebound_pct"]:
+        failed_checks.append("rebound")
+    if not quote_fresh:
+        failed_checks.append("fresh_quote")
+    if not trusted_ws_micro:
+        failed_checks.append("trusted_ws_micro")
+    if buy_pressure < config["min_buy_pressure"]:
+        failed_checks.append("buy_pressure")
+    if not momentum_recovered:
+        failed_checks.append("momentum")
+    if not large_sell_absent:
+        failed_checks.append("large_sell")
+    if not pnl_still_eligible:
+        failed_checks.append("pnl_window")
+    if not (config["min_hold_sec"] <= held_sec <= config["max_hold_sec"]):
+        failed_checks.append("hold_window")
+    observed_reason = ",".join(failed_checks) or "pending"
+    if observed_reason != stock.get("shallow_source_gap_recheck_last_observed_reason"):
+        _log_shallow_source_gap_recheck(
+            stock,
+            code,
+            state="pending",
+            now_ts=now_ts,
+            config=config,
+            failed_checks=observed_reason,
+            **observation,
+        )
+        _mutate_stock_state(
+            stock,
+            set_fields={"shallow_source_gap_recheck_last_observed_reason": observed_reason},
+        )
+    return None
 
 
 def _pre_submit_input_snapshot_has_usable_quote(ws_data: dict | None) -> bool:
@@ -47356,6 +47939,28 @@ def _evaluate_scale_in_signal(
                         current_ai_score,
                     )
 
+        shallow_recheck_action = _evaluate_shallow_source_gap_recheck(
+            stock=stock,
+            code=code,
+            profit_rate=profit_rate,
+            curr_price=_safe_int(curr_price, 0),
+            held_sec=held_sec,
+            now_ts=now_ts,
+            ws_data=ws_data,
+        )
+        if shallow_recheck_action and shallow_recheck_action.get("should_add"):
+            shallow_recheck_action.update(
+                {
+                    "profit_rate": profit_rate,
+                    "peak_profit": peak_profit,
+                    "current_ai_score": current_ai_score,
+                    "held_sec": held_sec,
+                    **scale_in_ai_retry_fields,
+                    **scale_in_micro_estimator_fields,
+                }
+            )
+            return shallow_recheck_action
+
         pyramid = evaluate_scalping_pyramid(
             stock,
             profit_rate,
@@ -47391,6 +47996,8 @@ def _evaluate_scale_in_signal(
             return pyramid
         reversal = evaluate_scalping_reversal_add(stock, profit_rate, current_ai_score, held_sec)
         if reversal.get("should_add"):
+            if stock.get("shallow_source_gap_recheck_armed"):
+                _clear_shallow_source_gap_recheck(stock, now_ts=now_ts)
             reversal.update(
                 {
                     "profit_rate": profit_rate,
@@ -47402,6 +48009,15 @@ def _evaluate_scale_in_signal(
                 }
             )
             return reversal
+        _maybe_arm_shallow_source_gap_recheck(
+            stock=stock,
+            code=code,
+            reversal=reversal,
+            profit_rate=profit_rate,
+            curr_price=_safe_int(curr_price, 0),
+            held_sec=held_sec,
+            now_ts=now_ts,
+        )
         adm_scale_in = resolve_holding_exit_matrix_scale_in_bias(
             strategy=raw_strategy,
             profit_rate=profit_rate,

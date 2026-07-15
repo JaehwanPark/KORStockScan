@@ -28898,6 +28898,319 @@ def test_shallow_volatility_avg_down_blocks_stale_quote():
         scale_in.TRADING_RULES = CONFIG
 
 
+def _enable_shallow_source_gap_recheck(monkeypatch):
+    values = {
+        "KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_ENABLED": "true",
+        "KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_ACTIVE_DATE": "2026-07-15",
+        "KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_MIN_WAIT_SEC": "10",
+        "KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_TTL_SEC": "20",
+        "KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_CANDIDATE_PNL_MIN": "-1.50",
+        "KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_CANDIDATE_PNL_MAX": "-0.30",
+        "KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_TRIGGER_PNL_MAX": "-0.10",
+        "KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_MIN_HOLD_SEC": "60",
+        "KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_MAX_HOLD_SEC": "300",
+        "KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_MIN_REBOUND_PCT": "0.25",
+        "KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_MAX_QUOTE_AGE_MS": "1500",
+        "KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_MAX_WS_MICRO_AGE_MS": "3000",
+        "KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_MIN_TRUSTED_TICKS": "3",
+        "KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_MIN_BUY_PRESSURE": "60",
+        "KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_MIN_TICK_ACCEL": "1.0",
+        "KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_MIN_MICRO_VWAP_BP": "0",
+        "KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_MAX_ATTEMPTS": "2",
+        "KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_COOLDOWN_SEC": "60",
+    }
+    for key, value in values.items():
+        monkeypatch.setenv(key, value)
+
+
+def _shallow_source_gap_blocked_reversal():
+    return {
+        "reason": "pnl_out_of_range(-1.43)",
+        "shallow_volatility_blocked_reason": "shallow_volatility_pnl_out_of_range(-1.43)",
+        "shallow_volatility_probe": {
+            "count_ok": True,
+            "cooldown_ok": True,
+            "above_stop_line_ok": True,
+            "large_sell_print_detected": False,
+            "has_reversal_features": True,
+            "reversal_feature_stale": True,
+            "tick_aggressor_pressure_usable": False,
+            "quote_age_ok": True,
+        },
+    }
+
+
+def _fresh_trusted_shallow_recheck_features(observed_at):
+    return {
+        "buy_pressure_10t": 72.0,
+        "tick_acceleration_ratio": 1.08,
+        "tick_accel_source": "trusted_ws_signed_0b",
+        "tick_context_quality": "live_tick",
+        "tick_context_stale": False,
+        "tick_latest_age_ms": 180,
+        "tick_aggressor_trusted_count": 5,
+        "tick_aggressor_pressure_usable": True,
+        "large_sell_print_detected": False,
+        "curr_vs_micro_vwap_bp": 2.5,
+        "micro_vwap_available": True,
+        "minute_candle_window_fresh": True,
+        "minute_candle_context_quality": "fresh_bar_window",
+        "minute_candle_latest_age_ms": 1200,
+        "quote_stale": False,
+        "quote_age_ms": 220,
+        "quote_age_source": "absolute_timestamp:last_ws_update_ts",
+        "feature_extracted_at": observed_at,
+    }
+
+
+def _trusted_shallow_recheck_ws(observed_at, *, source="kiwoom_0b_signed_trade_volume"):
+    ticks = []
+    for index, signed_volume in enumerate(("+120", "+100", "+90", "-40", "+80")):
+        ticks.append(
+            {
+                "received_at_ms": (observed_at - (index * 0.1)) * 1000.0,
+                "price": 139400 - (index * 20),
+                "aggressor_source": source,
+                "aggressor_aux_raw_15": signed_volume,
+            }
+        )
+    return {"recent_trade_ticks": ticks}
+
+
+def test_shallow_source_gap_recheck_waits_then_reenters_existing_avg_down_path(monkeypatch):
+    _enable_shallow_source_gap_recheck(monkeypatch)
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    now_ts = datetime.fromisoformat("2026-07-15T10:00:00+09:00").timestamp()
+    stock = {"name": "원익IPS"}
+
+    armed = state_handlers._maybe_arm_shallow_source_gap_recheck(
+        stock=stock,
+        code="240810",
+        reversal=_shallow_source_gap_blocked_reversal(),
+        profit_rate=-1.43,
+        curr_price=139000,
+        held_sec=235,
+        now_ts=now_ts,
+    )
+
+    assert armed["armed"] is True
+    stock["last_reversal_features"] = _fresh_trusted_shallow_recheck_features(now_ts + 8)
+    too_early = state_handlers._evaluate_shallow_source_gap_recheck(
+        stock=stock,
+        code="240810",
+        profit_rate=-1.10,
+        curr_price=139500,
+        held_sec=240,
+        now_ts=now_ts + 9,
+        ws_data=_trusted_shallow_recheck_ws(now_ts + 8.5),
+    )
+    stock["last_reversal_features"] = {
+        **_fresh_trusted_shallow_recheck_features(now_ts + 10),
+        "tick_aggressor_trusted_count": 0,
+        "tick_aggressor_pressure_usable": False,
+        "tick_accel_source": "rest_price_heuristic",
+    }
+    recovered = state_handlers._evaluate_shallow_source_gap_recheck(
+        stock=stock,
+        code="240810",
+        profit_rate=-0.95,
+        curr_price=139500,
+        held_sec=241,
+        now_ts=now_ts + 11,
+        ws_data=_trusted_shallow_recheck_ws(now_ts + 10.5),
+    )
+
+    assert too_early is None
+    assert recovered["should_add"] is True
+    assert recovered["add_type"] == "AVG_DOWN"
+    assert recovered["reason"] == "shallow_volatility_avg_down"
+    assert recovered["shallow_source_gap_recheck_applied"] is True
+    assert recovered["quote_fresh"] is True
+    assert recovered["reversal_feature_source_quality"] == "stale"
+    assert recovered["tick_aggressor_source"] == "kiwoom_0b_signed_trade_volume"
+    assert stock.get("shallow_source_gap_recheck_armed") is None
+    assert [fields["recheck_state"] for stage, fields in logs if stage == "shallow_source_gap_recheck"] == [
+        "armed",
+        "pending",
+        "recovered",
+    ]
+
+
+def test_shallow_source_gap_recheck_never_promotes_untrusted_pressure(monkeypatch):
+    _enable_shallow_source_gap_recheck(monkeypatch)
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    now_ts = datetime.fromisoformat("2026-07-15T10:00:00+09:00").timestamp()
+    stock = {"name": "원익IPS"}
+    state_handlers._maybe_arm_shallow_source_gap_recheck(
+        stock=stock,
+        code="240810",
+        reversal=_shallow_source_gap_blocked_reversal(),
+        profit_rate=-1.43,
+        curr_price=139000,
+        held_sec=235,
+        now_ts=now_ts,
+    )
+    stock["last_reversal_features"] = {
+        **_fresh_trusted_shallow_recheck_features(now_ts + 20),
+        "tick_aggressor_trusted_count": 0,
+        "tick_aggressor_pressure_usable": False,
+        "tick_accel_source": "rest_price_heuristic",
+    }
+
+    result = state_handlers._evaluate_shallow_source_gap_recheck(
+        stock=stock,
+        code="240810",
+        profit_rate=-0.90,
+        curr_price=139600,
+        held_sec=250,
+        now_ts=now_ts + 21,
+        ws_data=_trusted_shallow_recheck_ws(
+            now_ts + 20.5,
+            source="kiwoom_rest_ka10084_signed_trade_qty",
+        ),
+    )
+
+    assert result is None
+    assert stock.get("shallow_source_gap_recheck_armed") is None
+    states = [fields["recheck_state"] for stage, fields in logs if stage == "shallow_source_gap_recheck"]
+    assert states == ["armed", "ttl_expired"]
+    assert logs[-1][1]["tick_aggressor_pressure_usable"] is False
+    assert logs[-1][1]["tick_aggressor_trusted_count"] == 0
+
+
+def test_shallow_source_gap_recheck_rejects_static_quote_age_after_snapshot_ages(monkeypatch):
+    _enable_shallow_source_gap_recheck(monkeypatch)
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    now_ts = datetime.fromisoformat("2026-07-15T10:00:00+09:00").timestamp()
+    stock = {"name": "고정나이"}
+    state_handlers._maybe_arm_shallow_source_gap_recheck(
+        stock=stock,
+        code="000002",
+        reversal=_shallow_source_gap_blocked_reversal(),
+        profit_rate=-1.20,
+        curr_price=10000,
+        held_sec=120,
+        now_ts=now_ts,
+    )
+    stock["last_reversal_features"] = _fresh_trusted_shallow_recheck_features(now_ts)
+
+    result = state_handlers._evaluate_shallow_source_gap_recheck(
+        stock=stock,
+        code="000002",
+        profit_rate=-0.90,
+        curr_price=10050,
+        held_sec=131,
+        now_ts=now_ts + 11,
+        ws_data=_trusted_shallow_recheck_ws(now_ts + 10.5),
+    )
+
+    assert result is None
+    pending = [fields for stage, fields in logs if stage == "shallow_source_gap_recheck"][-1]
+    assert pending["recheck_state"] == "pending"
+    assert pending["quote_fresh"] is False
+    assert pending["quote_age_ms"] > 11000
+    assert "fresh_quote" in pending["failed_checks"]
+
+
+def test_shallow_source_gap_recheck_accepts_string_false_quote_and_sell_flags(monkeypatch):
+    _enable_shallow_source_gap_recheck(monkeypatch)
+    now_ts = datetime.fromisoformat("2026-07-15T10:00:00+09:00").timestamp()
+    stock = {"name": "문자열플래그"}
+    state_handlers._maybe_arm_shallow_source_gap_recheck(
+        stock=stock,
+        code="000003",
+        reversal=_shallow_source_gap_blocked_reversal(),
+        profit_rate=-1.20,
+        curr_price=139000,
+        held_sec=120,
+        now_ts=now_ts,
+    )
+    stock["last_reversal_features"] = {
+        **_fresh_trusted_shallow_recheck_features(now_ts + 10),
+        "quote_stale": "False",
+        "large_sell_print_detected": "False",
+    }
+
+    result = state_handlers._evaluate_shallow_source_gap_recheck(
+        stock=stock,
+        code="000003",
+        profit_rate=-0.90,
+        curr_price=139500,
+        held_sec=131,
+        now_ts=now_ts + 11,
+        ws_data=_trusted_shallow_recheck_ws(now_ts + 10.5),
+    )
+
+    assert result is not None
+    assert result["should_add"] is True
+    assert result["quote_fresh"] is True
+    assert result["large_sell_print_detected"] is False
+
+
+def test_shallow_source_gap_recheck_does_not_arm_measured_weak_micro(monkeypatch):
+    _enable_shallow_source_gap_recheck(monkeypatch)
+    now_ts = datetime.fromisoformat("2026-07-15T10:00:00+09:00").timestamp()
+    reversal = _shallow_source_gap_blocked_reversal()
+    reversal["shallow_volatility_probe"].update(
+        {
+            "reversal_feature_stale": False,
+            "tick_aggressor_pressure_usable": True,
+            "quote_age_ok": True,
+            "buy_pressure_10t": 55.0,
+        }
+    )
+    stock = {"name": "측정약세"}
+
+    result = state_handlers._maybe_arm_shallow_source_gap_recheck(
+        stock=stock,
+        code="000000",
+        reversal=reversal,
+        profit_rate=-1.00,
+        curr_price=10000,
+        held_sec=120,
+        now_ts=now_ts,
+    )
+
+    assert result["armed"] is False
+    assert result["reason"] == "measured_weak_evidence_not_source_gap"
+    assert stock.get("shallow_source_gap_recheck_armed") is None
+
+
+def test_shallow_source_gap_recheck_does_not_arm_before_minimum_hold(monkeypatch):
+    _enable_shallow_source_gap_recheck(monkeypatch)
+    now_ts = datetime.fromisoformat("2026-07-15T10:00:00+09:00").timestamp()
+    stock = {"name": "조기후보"}
+
+    result = state_handlers._maybe_arm_shallow_source_gap_recheck(
+        stock=stock,
+        code="000001",
+        reversal=_shallow_source_gap_blocked_reversal(),
+        profit_rate=-1.00,
+        curr_price=10000,
+        held_sec=30,
+        now_ts=now_ts,
+    )
+
+    assert result["armed"] is False
+    assert result["reason"] == "candidate_hold_out_of_range"
+    assert stock.get("shallow_source_gap_recheck_armed") is None
+
+
 # TC-6: 정상 조건 모두 충족 → 트리거
 def test_reversal_add_tc6_all_conditions_met():
     stock = _reversal_add_stock({

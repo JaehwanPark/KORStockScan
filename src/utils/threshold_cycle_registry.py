@@ -47,6 +47,7 @@ THRESHOLD_STAGE_FAMILY_MAP = {
     "reversal_add_candidate": "reversal_add",
     "reversal_add_blocked_reason": "reversal_add",
     "reversal_add_gate_blocked": "reversal_add",
+    "shallow_source_gap_recheck": "shallow_avg_down_source_gap_recheck",
     "soft_stop_micro_grace": "soft_stop_micro_grace",
     "soft_stop_expert_shadow": "soft_stop_expert_defense",
     "soft_stop_absorption_probe": "soft_stop_expert_defense",
