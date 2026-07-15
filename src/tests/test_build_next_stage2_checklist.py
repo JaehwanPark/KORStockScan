@@ -14,11 +14,18 @@ def _patch_dirs(monkeypatch, tmp_path):
     swing = tmp_path / "data" / "report" / "swing_runtime_approval"
     code = tmp_path / "data" / "report" / "code_improvement_workorder"
     runtime_gap = tmp_path / "data" / "report" / "runtime_apply_gap_audit"
-    tuning_performance = tmp_path / "data" / "report" / "tuning_performance_control_tower"
-    trigger_decision = tmp_path / "data" / "report" / "automation_chain_trigger_decision"
+    tuning_performance = (
+        tmp_path / "data" / "report" / "tuning_performance_control_tower"
+    )
+    trigger_decision = (
+        tmp_path / "data" / "report" / "automation_chain_trigger_decision"
+    )
     rising_missed = tmp_path / "data" / "report" / "rising_missed_scout_workorder"
     rising_missed_bridge = (
-        tmp_path / "data" / "report" / "rising_missed_normal_buy_bridge_candidate_discovery"
+        tmp_path
+        / "data"
+        / "report"
+        / "rising_missed_normal_buy_bridge_candidate_discovery"
     )
     for path in (
         docs,
@@ -56,7 +63,9 @@ def _write_json(path: Path, payload: dict):
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def test_build_next_stage2_checklist_generates_next_trading_day_and_tasks(monkeypatch, tmp_path):
+def test_build_next_stage2_checklist_generates_next_trading_day_and_tasks(
+    monkeypatch, tmp_path
+):
     docs, ev_dir, openai_dir, swing_dir, code_dir = _patch_dirs(monkeypatch, tmp_path)
     trigger_dir = mod.AUTOMATION_TRIGGER_DECISION_REPORT_DIR
     tuning_dir = mod.TUNING_PERFORMANCE_REPORT_DIR
@@ -73,17 +82,32 @@ def test_build_next_stage2_checklist_generates_next_trading_day_and_tasks(monkey
             "code_improvement_workorder": {"selected_order_count": 2},
         },
     )
-    _write_json(swing_dir / "swing_runtime_approval_2026-05-08.json", {"approval_requests": [{"id": "req"}]})
-    _write_json(code_dir / "code_improvement_workorder_2026-05-08.json", {"summary": {"selected_order_count": 2}})
-    _write_json(tuning_dir / "tuning_performance_control_tower_2026-05-08.json", {"summary": {}})
+    _write_json(
+        swing_dir / "swing_runtime_approval_2026-05-08.json",
+        {"approval_requests": [{"id": "req"}]},
+    )
+    _write_json(
+        code_dir / "code_improvement_workorder_2026-05-08.json",
+        {"summary": {"selected_order_count": 2}},
+    )
+    _write_json(
+        tuning_dir / "tuning_performance_control_tower_2026-05-08.json", {"summary": {}}
+    )
     (docs / "code-improvement-workorders").mkdir(parents=True, exist_ok=True)
-    (docs / "code-improvement-workorders" / "code_improvement_workorder_2026-05-08.md").write_text(
+    (
+        docs
+        / "code-improvement-workorders"
+        / "code_improvement_workorder_2026-05-08.md"
+    ).write_text(
         "# workorder",
         encoding="utf-8",
     )
     _write_json(
         trigger_dir / "automation_chain_trigger_decision_2026-05-08.json",
-        {"summary": {"total_steps": 1, "run_count": 1, "skip_count": 0}, "decisions": []},
+        {
+            "summary": {"total_steps": 1, "run_count": 1, "skip_count": 0},
+            "decisions": [],
+        },
     )
     _write_json(
         rising_missed_dir / "rising_missed_scout_workorder_2026-05-08.json",
@@ -100,7 +124,8 @@ def test_build_next_stage2_checklist_generates_next_trading_day_and_tasks(monkey
         },
     )
     _write_json(
-        rising_missed_bridge_dir / "rising_missed_normal_buy_bridge_candidate_discovery_2026-05-08.json",
+        rising_missed_bridge_dir
+        / "rising_missed_normal_buy_bridge_candidate_discovery_2026-05-08.json",
         {
             "summary": {
                 "status": "preopen_env_candidate",
@@ -123,7 +148,10 @@ def test_build_next_stage2_checklist_generates_next_trading_day_and_tasks(monkey
     assert "rising_missed_scout_workorder_2026-05-08.json" in text
     assert "rising_missed_normal_buy_bridge_candidate_discovery_2026-05-08.json" in text
     assert "bridge_candidate_count=`1`" in text
-    assert "source-only order는 별도 runtime family/env mapping과 guard 통과가 있을 때만 반영" in text
+    assert (
+        "source-only order는 별도 runtime family/env mapping과 guard 통과가 있을 때만 반영"
+        in text
+    )
     assert "runtime_env_reflected_and_verified" in text
     assert "stale submit bypass" in text
     assert "[SwingPreFinalAutoAndFinalApprovalPreopen0511]" in text
@@ -141,11 +169,21 @@ def test_build_next_stage2_checklist_generates_next_trading_day_and_tasks(monkey
     assert "codex_daily_workorder_*.md" in text
 
 
-def test_build_next_stage2_checklist_preserves_manual_content_and_replaces_auto_block(monkeypatch, tmp_path):
+def test_build_next_stage2_checklist_preserves_manual_content_and_replaces_auto_block(
+    monkeypatch, tmp_path
+):
     docs, ev_dir, openai_dir, swing_dir, code_dir = _patch_dirs(monkeypatch, tmp_path)
-    _write_json(ev_dir / "threshold_cycle_ev_2026-05-11.json", {"runtime_apply": {"runtime_change": False}})
-    _write_json(swing_dir / "swing_runtime_approval_2026-05-11.json", {"approval_requests": []})
-    _write_json(code_dir / "code_improvement_workorder_2026-05-11.json", {"summary": {"selected_order_count": 0}})
+    _write_json(
+        ev_dir / "threshold_cycle_ev_2026-05-11.json",
+        {"runtime_apply": {"runtime_change": False}},
+    )
+    _write_json(
+        swing_dir / "swing_runtime_approval_2026-05-11.json", {"approval_requests": []}
+    )
+    _write_json(
+        code_dir / "code_improvement_workorder_2026-05-11.json",
+        {"summary": {"selected_order_count": 0}},
+    )
     target = docs / "checklists" / "2026-05-12-stage2-todo-checklist.md"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
@@ -176,20 +214,36 @@ def test_build_next_stage2_checklist_preserves_manual_content_and_replaces_auto_
     assert text.count(mod.AUTO_END) == 1
 
 
-def test_build_next_stage2_checklist_excludes_codex_daily_workorder_snapshots(monkeypatch, tmp_path):
+def test_build_next_stage2_checklist_excludes_codex_daily_workorder_snapshots(
+    monkeypatch, tmp_path
+):
     docs, ev_dir, openai_dir, swing_dir, code_dir = _patch_dirs(monkeypatch, tmp_path)
     (docs / "code-improvement-workorders").mkdir(parents=True, exist_ok=True)
-    (docs / "code-improvement-workorders" / "codex_daily_workorder_2026-05-11_PREOPEN.md").write_text(
+    (
+        docs
+        / "code-improvement-workorders"
+        / "codex_daily_workorder_2026-05-11_PREOPEN.md"
+    ).write_text(
         "FakeCodexOnlyFamily",
         encoding="utf-8",
     )
-    _write_json(ev_dir / "threshold_cycle_ev_2026-05-11.json", {"runtime_apply": {"runtime_change": False}})
-    _write_json(swing_dir / "swing_runtime_approval_2026-05-11.json", {"approval_requests": []})
-    _write_json(code_dir / "code_improvement_workorder_2026-05-11.json", {"summary": {"selected_order_count": 0}})
+    _write_json(
+        ev_dir / "threshold_cycle_ev_2026-05-11.json",
+        {"runtime_apply": {"runtime_change": False}},
+    )
+    _write_json(
+        swing_dir / "swing_runtime_approval_2026-05-11.json", {"approval_requests": []}
+    )
+    _write_json(
+        code_dir / "code_improvement_workorder_2026-05-11.json",
+        {"summary": {"selected_order_count": 0}},
+    )
 
     mod.build_next_stage2_checklist("2026-05-11")
 
-    text = (docs / "checklists" / "2026-05-12-stage2-todo-checklist.md").read_text(encoding="utf-8")
+    text = (docs / "checklists" / "2026-05-12-stage2-todo-checklist.md").read_text(
+        encoding="utf-8"
+    )
     assert "FakeCodexOnlyFamily" not in text
     assert "RuntimeEnvIntradayObserve0512" not in text
 
@@ -197,12 +251,23 @@ def test_build_next_stage2_checklist_excludes_codex_daily_workorder_snapshots(mo
 def test_generated_checklist_is_parser_friendly(monkeypatch, tmp_path):
     docs, ev_dir, openai_dir, swing_dir, code_dir = _patch_dirs(monkeypatch, tmp_path)
     trigger_dir = mod.AUTOMATION_TRIGGER_DECISION_REPORT_DIR
-    _write_json(ev_dir / "threshold_cycle_ev_2026-05-11.json", {"runtime_apply": {"runtime_change": True}})
-    _write_json(swing_dir / "swing_runtime_approval_2026-05-11.json", {"approval_requests": []})
-    _write_json(code_dir / "code_improvement_workorder_2026-05-11.json", {"summary": {"selected_order_count": 1}})
+    _write_json(
+        ev_dir / "threshold_cycle_ev_2026-05-11.json",
+        {"runtime_apply": {"runtime_change": True}},
+    )
+    _write_json(
+        swing_dir / "swing_runtime_approval_2026-05-11.json", {"approval_requests": []}
+    )
+    _write_json(
+        code_dir / "code_improvement_workorder_2026-05-11.json",
+        {"summary": {"selected_order_count": 1}},
+    )
     _write_json(
         trigger_dir / "automation_chain_trigger_decision_2026-05-11.json",
-        {"summary": {"total_steps": 1, "run_count": 1, "skip_count": 0}, "decisions": []},
+        {
+            "summary": {"total_steps": 1, "run_count": 1, "skip_count": 0},
+            "decisions": [],
+        },
     )
 
     mod.build_next_stage2_checklist("2026-05-11")
@@ -220,7 +285,9 @@ def test_generated_checklist_is_parser_friendly(monkeypatch, tmp_path):
     assert all(task.due_date == "2026-05-12" for task in tasks)
 
 
-def test_build_next_stage2_checklist_refuses_to_write_when_core_postclose_artifacts_are_missing(monkeypatch, tmp_path):
+def test_build_next_stage2_checklist_refuses_to_write_when_core_postclose_artifacts_are_missing(
+    monkeypatch, tmp_path
+):
     docs, _, _, _, _ = _patch_dirs(monkeypatch, tmp_path)
     trigger_dir = mod.AUTOMATION_TRIGGER_DECISION_REPORT_DIR
     _write_json(
@@ -234,13 +301,20 @@ def test_build_next_stage2_checklist_refuses_to_write_when_core_postclose_artifa
     assert not (docs / "checklists" / "2026-06-04-stage2-todo-checklist.md").exists()
 
 
-def test_build_next_stage2_checklist_skips_optional_tasks_when_optional_artifacts_are_missing(monkeypatch, tmp_path):
+def test_build_next_stage2_checklist_skips_optional_tasks_when_optional_artifacts_are_missing(
+    monkeypatch, tmp_path
+):
     docs, ev_dir, _, _, _ = _patch_dirs(monkeypatch, tmp_path)
-    _write_json(ev_dir / "threshold_cycle_ev_2026-05-22.json", {"runtime_apply": {"runtime_change": False}})
+    _write_json(
+        ev_dir / "threshold_cycle_ev_2026-05-22.json",
+        {"runtime_apply": {"runtime_change": False}},
+    )
 
     summary = mod.build_next_stage2_checklist("2026-05-22")
 
-    text = (docs / "checklists" / "2026-05-26-stage2-todo-checklist.md").read_text(encoding="utf-8")
+    text = (docs / "checklists" / "2026-05-26-stage2-todo-checklist.md").read_text(
+        encoding="utf-8"
+    )
     assert summary["tasks"] == [
         "ThresholdEnvAutoApplyPreopen0526",
         "RisingMissedScoutRuntimePreopen0526",
@@ -255,12 +329,22 @@ def test_build_next_stage2_checklist_skips_optional_tasks_when_optional_artifact
     assert "tuning_performance_control_tower_2026-05-22.json" not in text
 
 
-def test_automation_trigger_decision_summary_is_surfaced_as_postclose_task(monkeypatch, tmp_path):
+def test_automation_trigger_decision_summary_is_surfaced_as_postclose_task(
+    monkeypatch, tmp_path
+):
     docs, ev_dir, openai_dir, swing_dir, code_dir = _patch_dirs(monkeypatch, tmp_path)
     trigger_dir = mod.AUTOMATION_TRIGGER_DECISION_REPORT_DIR
-    _write_json(ev_dir / "threshold_cycle_ev_2026-05-22.json", {"runtime_apply": {"runtime_change": False}})
-    _write_json(swing_dir / "swing_runtime_approval_2026-05-22.json", {"approval_requests": []})
-    _write_json(code_dir / "code_improvement_workorder_2026-05-22.json", {"summary": {"selected_order_count": 0}})
+    _write_json(
+        ev_dir / "threshold_cycle_ev_2026-05-22.json",
+        {"runtime_apply": {"runtime_change": False}},
+    )
+    _write_json(
+        swing_dir / "swing_runtime_approval_2026-05-22.json", {"approval_requests": []}
+    )
+    _write_json(
+        code_dir / "code_improvement_workorder_2026-05-22.json",
+        {"summary": {"selected_order_count": 0}},
+    )
     _write_json(
         trigger_dir / "automation_chain_trigger_decision_2026-05-22.json",
         {
@@ -296,7 +380,9 @@ def test_automation_trigger_decision_summary_is_surfaced_as_postclose_task(monke
 
     mod.build_next_stage2_checklist("2026-05-22")
 
-    text = (docs / "checklists" / "2026-05-26-stage2-todo-checklist.md").read_text(encoding="utf-8")
+    text = (docs / "checklists" / "2026-05-26-stage2-todo-checklist.md").read_text(
+        encoding="utf-8"
+    )
     assert "[AutomationTriggerDecisionSummary0526]" in text
     assert "automation_chain_trigger_decision_2026-05-22.json" in text
     assert "run_count=`1`" in text
@@ -312,9 +398,17 @@ def test_automation_trigger_decision_summary_is_surfaced_as_postclose_task(monke
 def test_runtime_apply_gap_pending_is_surfaced_in_preopen_task(monkeypatch, tmp_path):
     docs, ev_dir, openai_dir, swing_dir, code_dir = _patch_dirs(monkeypatch, tmp_path)
     runtime_gap_dir = mod.RUNTIME_APPLY_GAP_REPORT_DIR
-    _write_json(ev_dir / "threshold_cycle_ev_2026-05-22.json", {"runtime_apply": {"runtime_change": False}})
-    _write_json(swing_dir / "swing_runtime_approval_2026-05-22.json", {"approval_requests": []})
-    _write_json(code_dir / "code_improvement_workorder_2026-05-22.json", {"summary": {"selected_order_count": 0}})
+    _write_json(
+        ev_dir / "threshold_cycle_ev_2026-05-22.json",
+        {"runtime_apply": {"runtime_change": False}},
+    )
+    _write_json(
+        swing_dir / "swing_runtime_approval_2026-05-22.json", {"approval_requests": []}
+    )
+    _write_json(
+        code_dir / "code_improvement_workorder_2026-05-22.json",
+        {"summary": {"selected_order_count": 0}},
+    )
     _write_json(
         runtime_gap_dir / "runtime_apply_gap_audit_2026-05-22.json",
         {
@@ -334,19 +428,31 @@ def test_runtime_apply_gap_pending_is_surfaced_in_preopen_task(monkeypatch, tmp_
 
     mod.build_next_stage2_checklist("2026-05-22")
 
-    text = (docs / "checklists" / "2026-05-26-stage2-todo-checklist.md").read_text(encoding="utf-8")
+    text = (docs / "checklists" / "2026-05-26-stage2-todo-checklist.md").read_text(
+        encoding="utf-8"
+    )
     assert "runtime_apply_gap_audit_2026-05-22.json" in text
     assert "post_apply_attribution_pending" in text
     assert "entry_wait6579_score66_69_recovery_gate_v1:2026-05-22" in text
     assert "runtime_gap_pending_not_consumed" in text
 
 
-def test_runtime_apply_gap_codex_directives_are_surfaced_as_postclose_task(monkeypatch, tmp_path):
+def test_runtime_apply_gap_codex_directives_are_surfaced_as_postclose_task(
+    monkeypatch, tmp_path
+):
     docs, ev_dir, openai_dir, swing_dir, code_dir = _patch_dirs(monkeypatch, tmp_path)
     runtime_gap_dir = mod.RUNTIME_APPLY_GAP_REPORT_DIR
-    _write_json(ev_dir / "threshold_cycle_ev_2026-05-22.json", {"runtime_apply": {"runtime_change": False}})
-    _write_json(swing_dir / "swing_runtime_approval_2026-05-22.json", {"approval_requests": []})
-    _write_json(code_dir / "code_improvement_workorder_2026-05-22.json", {"summary": {"selected_order_count": 0}})
+    _write_json(
+        ev_dir / "threshold_cycle_ev_2026-05-22.json",
+        {"runtime_apply": {"runtime_change": False}},
+    )
+    _write_json(
+        swing_dir / "swing_runtime_approval_2026-05-22.json", {"approval_requests": []}
+    )
+    _write_json(
+        code_dir / "code_improvement_workorder_2026-05-22.json",
+        {"summary": {"selected_order_count": 0}},
+    )
     _write_json(
         runtime_gap_dir / "runtime_apply_gap_audit_2026-05-22.json",
         {
@@ -365,7 +471,9 @@ def test_runtime_apply_gap_codex_directives_are_surfaced_as_postclose_task(monke
 
     mod.build_next_stage2_checklist("2026-05-22")
 
-    text = (docs / "checklists" / "2026-05-26-stage2-todo-checklist.md").read_text(encoding="utf-8")
+    text = (docs / "checklists" / "2026-05-26-stage2-todo-checklist.md").read_text(
+        encoding="utf-8"
+    )
     assert "[RuntimeApplyGapDirectiveReview0526]" in text
     assert "runtime apply gap Codex 작업지시" in text
     assert "IMPLEMENT_RUNTIME_BRIDGE_FOR_ENTRY_BUCKET" in text
@@ -373,12 +481,22 @@ def test_runtime_apply_gap_codex_directives_are_surfaced_as_postclose_task(monke
     assert "approval artifact나 즉시 runtime env 수정" in text
 
 
-def test_source_dimension_gap_summary_is_surfaced_even_without_directives(monkeypatch, tmp_path):
+def test_source_dimension_gap_summary_is_surfaced_even_without_directives(
+    monkeypatch, tmp_path
+):
     docs, ev_dir, openai_dir, swing_dir, code_dir = _patch_dirs(monkeypatch, tmp_path)
     runtime_gap_dir = mod.RUNTIME_APPLY_GAP_REPORT_DIR
-    _write_json(ev_dir / "threshold_cycle_ev_2026-05-22.json", {"runtime_apply": {"runtime_change": False}})
-    _write_json(swing_dir / "swing_runtime_approval_2026-05-22.json", {"approval_requests": []})
-    _write_json(code_dir / "code_improvement_workorder_2026-05-22.json", {"summary": {"selected_order_count": 0}})
+    _write_json(
+        ev_dir / "threshold_cycle_ev_2026-05-22.json",
+        {"runtime_apply": {"runtime_change": False}},
+    )
+    _write_json(
+        swing_dir / "swing_runtime_approval_2026-05-22.json", {"approval_requests": []}
+    )
+    _write_json(
+        code_dir / "code_improvement_workorder_2026-05-22.json",
+        {"summary": {"selected_order_count": 0}},
+    )
     _write_json(
         runtime_gap_dir / "runtime_apply_gap_audit_2026-05-22.json",
         {
@@ -389,7 +507,9 @@ def test_source_dimension_gap_summary_is_surfaced_even_without_directives(monkey
             "source_dimension_gap_summary": {
                 "gap_count": 3,
                 "actionable_unknown_gap_count": 2,
-                "recommended_resolution_counts": {"resolve_unknown_source_dimensions": 2},
+                "recommended_resolution_counts": {
+                    "resolve_unknown_source_dimensions": 2
+                },
                 "missing_dimension_key_counts": {"liquidity_bucket": 2},
             },
         },
@@ -397,7 +517,9 @@ def test_source_dimension_gap_summary_is_surfaced_even_without_directives(monkey
 
     mod.build_next_stage2_checklist("2026-05-22")
 
-    text = (docs / "checklists" / "2026-05-26-stage2-todo-checklist.md").read_text(encoding="utf-8")
+    text = (docs / "checklists" / "2026-05-26-stage2-todo-checklist.md").read_text(
+        encoding="utf-8"
+    )
     assert "[LifecycleSourceDimensionGapReview0526]" in text
     assert "lifecycle source dimension gap 자동 표면화" in text
     assert "actionable_unknown_gap_count=`2`" in text
@@ -407,9 +529,17 @@ def test_source_dimension_gap_summary_is_surfaced_even_without_directives(monkey
 def test_quiet_gap_summary_is_surfaced_even_without_directives(monkeypatch, tmp_path):
     docs, ev_dir, openai_dir, swing_dir, code_dir = _patch_dirs(monkeypatch, tmp_path)
     runtime_gap_dir = mod.RUNTIME_APPLY_GAP_REPORT_DIR
-    _write_json(ev_dir / "threshold_cycle_ev_2026-05-22.json", {"runtime_apply": {"runtime_change": False}})
-    _write_json(swing_dir / "swing_runtime_approval_2026-05-22.json", {"approval_requests": []})
-    _write_json(code_dir / "code_improvement_workorder_2026-05-22.json", {"summary": {"selected_order_count": 0}})
+    _write_json(
+        ev_dir / "threshold_cycle_ev_2026-05-22.json",
+        {"runtime_apply": {"runtime_change": False}},
+    )
+    _write_json(
+        swing_dir / "swing_runtime_approval_2026-05-22.json", {"approval_requests": []}
+    )
+    _write_json(
+        code_dir / "code_improvement_workorder_2026-05-22.json",
+        {"summary": {"selected_order_count": 0}},
+    )
     _write_json(
         runtime_gap_dir / "runtime_apply_gap_audit_2026-05-22.json",
         {
@@ -422,25 +552,40 @@ def test_quiet_gap_summary_is_surfaced_even_without_directives(monkeypatch, tmp_
                 "rollup_required_count": 2,
                 "sim_live_connected_quiet_gap_count": 0,
                 "observation_source_quality_warning_count": 1,
-                "quiet_gap_type_counts": {"parent_conflict_child": 1, "positive_source_only_keep_collecting": 1},
+                "quiet_gap_type_counts": {
+                    "parent_conflict_child": 1,
+                    "positive_source_only_keep_collecting": 1,
+                },
             },
         },
     )
 
     mod.build_next_stage2_checklist("2026-05-22")
 
-    text = (docs / "checklists" / "2026-05-26-stage2-todo-checklist.md").read_text(encoding="utf-8")
+    text = (docs / "checklists" / "2026-05-26-stage2-todo-checklist.md").read_text(
+        encoding="utf-8"
+    )
     assert "[LifecycleQuietGapReview0526]" in text
     assert "lifecycle quiet gap rollup 자동 표면화" in text
     assert "quiet_gap_count=`2`" in text
     assert "`already_covered_by_parent_policy`" in text
 
 
-def test_build_next_stage2_checklist_preserves_unknown_tasks_inside_auto_block(monkeypatch, tmp_path):
+def test_build_next_stage2_checklist_preserves_unknown_tasks_inside_auto_block(
+    monkeypatch, tmp_path
+):
     docs, ev_dir, openai_dir, swing_dir, code_dir = _patch_dirs(monkeypatch, tmp_path)
-    _write_json(ev_dir / "threshold_cycle_ev_2026-05-22.json", {"runtime_apply": {"runtime_change": False}})
-    _write_json(swing_dir / "swing_runtime_approval_2026-05-22.json", {"approval_requests": []})
-    _write_json(code_dir / "code_improvement_workorder_2026-05-22.json", {"summary": {"selected_order_count": 0}})
+    _write_json(
+        ev_dir / "threshold_cycle_ev_2026-05-22.json",
+        {"runtime_apply": {"runtime_change": False}},
+    )
+    _write_json(
+        swing_dir / "swing_runtime_approval_2026-05-22.json", {"approval_requests": []}
+    )
+    _write_json(
+        code_dir / "code_improvement_workorder_2026-05-22.json",
+        {"summary": {"selected_order_count": 0}},
+    )
     target = docs / "checklists" / "2026-05-26-stage2-todo-checklist.md"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(

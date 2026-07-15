@@ -81,23 +81,44 @@ def test_signal_features_do_not_use_future_rows() -> None:
     full = prepare_feature_frame(raw)
     truncated = prepare_feature_frame(raw[raw["quote_date"].le(signal_date)])
 
-    full_row = full[(full["stock_code"].eq("000001")) & (full["quote_date"].eq(signal_date))].iloc[0]
-    truncated_row = truncated[(truncated["stock_code"].eq("000001")) & (truncated["quote_date"].eq(signal_date))].iloc[0]
+    full_row = full[
+        (full["stock_code"].eq("000001")) & (full["quote_date"].eq(signal_date))
+    ].iloc[0]
+    truncated_row = truncated[
+        (truncated["stock_code"].eq("000001"))
+        & (truncated["quote_date"].eq(signal_date))
+    ].iloc[0]
 
-    for column in ["drawdown_high60_pct", "dist_low60_pct", "volume_ratio20", "foreign_roll20_ratio"]:
-        assert round(float(full_row[column]), 8) == round(float(truncated_row[column]), 8)
+    for column in [
+        "drawdown_high60_pct",
+        "dist_low60_pct",
+        "volume_ratio20",
+        "foreign_roll20_ratio",
+    ]:
+        assert round(float(full_row[column]), 8) == round(
+            float(truncated_row[column]), 8
+        )
 
 
 def test_backtest_rank_score_does_not_use_future_rows() -> None:
     raw = _synthetic_quotes()
     signal_date = pd.Timestamp("2025-05-20")
     full = _apply_backtest_rank_score(prepare_feature_frame(raw))
-    truncated = _apply_backtest_rank_score(prepare_feature_frame(raw[raw["quote_date"].le(signal_date)]))
+    truncated = _apply_backtest_rank_score(
+        prepare_feature_frame(raw[raw["quote_date"].le(signal_date)])
+    )
 
-    full_row = full[(full["stock_code"].eq("000001")) & (full["quote_date"].eq(signal_date))].iloc[0]
-    truncated_row = truncated[(truncated["stock_code"].eq("000001")) & (truncated["quote_date"].eq(signal_date))].iloc[0]
+    full_row = full[
+        (full["stock_code"].eq("000001")) & (full["quote_date"].eq(signal_date))
+    ].iloc[0]
+    truncated_row = truncated[
+        (truncated["stock_code"].eq("000001"))
+        & (truncated["quote_date"].eq(signal_date))
+    ].iloc[0]
 
-    assert round(float(full_row["backtest_rank_score"]), 8) == round(float(truncated_row["backtest_rank_score"]), 8)
+    assert round(float(full_row["backtest_rank_score"]), 8) == round(
+        float(truncated_row["backtest_rank_score"]), 8
+    )
 
 
 def test_entry_policies_cover_filled_expired_and_pending_states() -> None:
@@ -118,7 +139,9 @@ def test_entry_policies_cover_filled_expired_and_pending_states() -> None:
     assert by_policy["open_guarded_retest_entry"]["label_status"] == "labeled"
     assert by_policy["close_zone_limit_entry"]["label_status"] == "labeled"
 
-    pending = label_signal(signal, future.iloc[0:0], config=ResearchConfig(), horizons=[1])
+    pending = label_signal(
+        signal, future.iloc[0:0], config=ResearchConfig(), horizons=[1]
+    )
     assert {row["label_status"] for row in pending} == {"pending_future_quotes"}
 
 
@@ -144,19 +167,29 @@ def test_open_guarded_entry_blocks_extreme_gap_up() -> None:
 
 
 def test_report_contract_and_research_only_forbidden_uses() -> None:
-    report = build_research_report_from_frame(_synthetic_quotes(), ResearchConfig(sample_floor=2))
+    report = build_research_report_from_frame(
+        _synthetic_quotes(), ResearchConfig(sample_floor=2)
+    )
 
     assert report["decision_authority"] == DECISION_AUTHORITY
     assert report["runtime_effect"] is False
     assert report["broker_order_forbidden"] is True
     assert report["allowed_runtime_apply"] is False
-    assert report["metric_contract"]["primary_decision_metric"] == "source_quality_adjusted_ev_pct"
+    assert (
+        report["metric_contract"]["primary_decision_metric"]
+        == "source_quality_adjusted_ev_pct"
+    )
     assert "broker_order_submit" in report["metric_contract"]["forbidden_uses"]
     assert report["summary"]["signal_rows"] > 0
     assert report["entry_policy_comparison"]
-    assert report["portfolio_backtest"]["config"]["entry_policy"] == "atr_pullback_entry"
+    assert (
+        report["portfolio_backtest"]["config"]["entry_policy"] == "atr_pullback_entry"
+    )
     assert report["portfolio_backtest"]["summary"]["trade_count"] > 0
-    assert report["summary"]["backtest_trade_count"] == report["portfolio_backtest"]["summary"]["trade_count"]
+    assert (
+        report["summary"]["backtest_trade_count"]
+        == report["portfolio_backtest"]["summary"]["trade_count"]
+    )
     assert report["portfolio_backtest_variants"]
     assert "market_regime_bucket" in report["feature_bucket_ev_tables"]
 
@@ -172,7 +205,9 @@ def test_bucket_aggregation_applies_sample_floor_to_adjusted_ev() -> None:
             "mae_pct": -2.0,
         }
     ]
-    aggregated = _aggregate_label_rows(rows, group_keys=["entry_policy", "horizon_days"], sample_floor=4)
+    aggregated = _aggregate_label_rows(
+        rows, group_keys=["entry_policy", "horizon_days"], sample_floor=4
+    )
 
     assert aggregated[0]["equal_weight_avg_profit_pct"] == 10.0
     assert aggregated[0]["source_quality_adjusted_ev_pct"] == 2.5
@@ -181,8 +216,12 @@ def test_bucket_aggregation_applies_sample_floor_to_adjusted_ev() -> None:
 def test_candidate_marking_finds_bottom_rebound_signals() -> None:
     features = prepare_feature_frame(_synthetic_quotes())
     marked = mark_bottom_rebound_candidates(features, ResearchConfig(sample_floor=2))
-    alpha_signals = marked[marked["stock_code"].eq("000001") & marked["is_bottom_rebound_signal"]]
-    beta_signals = marked[marked["stock_code"].eq("000002") & marked["is_bottom_rebound_signal"]]
+    alpha_signals = marked[
+        marked["stock_code"].eq("000001") & marked["is_bottom_rebound_signal"]
+    ]
+    beta_signals = marked[
+        marked["stock_code"].eq("000002") & marked["is_bottom_rebound_signal"]
+    ]
 
     assert not alpha_signals.empty
     assert beta_signals.empty
@@ -191,9 +230,21 @@ def test_candidate_marking_finds_bottom_rebound_signals() -> None:
 def test_example_dedupe_uses_trading_day_history_count() -> None:
     signals = pd.DataFrame(
         [
-            {"stock_code": "000001", "quote_date": pd.Timestamp("2025-01-01"), "history_count": 120},
-            {"stock_code": "000001", "quote_date": pd.Timestamp("2025-01-02"), "history_count": 125},
-            {"stock_code": "000001", "quote_date": pd.Timestamp("2025-01-03"), "history_count": 130},
+            {
+                "stock_code": "000001",
+                "quote_date": pd.Timestamp("2025-01-01"),
+                "history_count": 120,
+            },
+            {
+                "stock_code": "000001",
+                "quote_date": pd.Timestamp("2025-01-02"),
+                "history_count": 125,
+            },
+            {
+                "stock_code": "000001",
+                "quote_date": pd.Timestamp("2025-01-03"),
+                "history_count": 130,
+            },
         ]
     )
 
@@ -303,15 +354,22 @@ def test_kiwoom_enrichment_maps_latest_candidates(monkeypatch) -> None:
             "warnings": [],
         }
 
-    monkeypatch.setattr(swing_sector_theme_source, "build_sector_theme_map", fake_build_sector_theme_map)
-    candidates = [{"stock_code": "000001", "stock_name": "Alpha"}, {"stock_code": "000002", "stock_name": "Beta"}]
+    monkeypatch.setattr(
+        swing_sector_theme_source, "build_sector_theme_map", fake_build_sector_theme_map
+    )
+    candidates = [
+        {"stock_code": "000001", "stock_name": "Alpha"},
+        {"stock_code": "000002", "stock_name": "Beta"},
+    ]
     config = ResearchConfig(
         enable_kiwoom_enrichment=True,
         kiwoom_enrichment_max_codes=1,
         kiwoom_enrichment_write_cache=False,
     )
 
-    enrichment = _build_kiwoom_enrichment(candidates, target_date="2025-01-31", config=config)
+    enrichment = _build_kiwoom_enrichment(
+        candidates, target_date="2025-01-31", config=config
+    )
     enriched = _apply_kiwoom_enrichment_to_candidates(candidates, enrichment)
 
     assert calls == {

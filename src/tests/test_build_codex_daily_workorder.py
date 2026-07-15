@@ -122,9 +122,13 @@ def test_build_runbook_operational_checks_for_slot(monkeypatch):
         "src.engine.build_codex_daily_workorder._completed_runbook_slots",
         lambda due_date: set(),
     )
-    checks = build_runbook_operational_checks(target_date="2026-05-11", slots=["PREOPEN"])
+    checks = build_runbook_operational_checks(
+        target_date="2026-05-11", slots=["PREOPEN"]
+    )
 
-    assert [check.check_id for check in checks] == ["PreopenAutomationHealthCheck20260511"]
+    assert [check.check_id for check in checks] == [
+        "PreopenAutomationHealthCheck20260511"
+    ]
     assert checks[0].slot == "PREOPEN"
     assert "logs/ensemble_scanner.log" in checks[0].artifact_checks
     assert "data/daily_recommendations_v2.csv" in checks[0].artifact_checks
@@ -138,20 +142,35 @@ def test_build_runbook_operational_checks_for_slot(monkeypatch):
     assert [check.slot for check in all_checks] == ["PREOPEN", "INTRADAY", "POSTCLOSE"]
     postclose = next(check for check in all_checks if check.slot == "POSTCLOSE")
     assert "swing_lifecycle_audit_2026-05-11.md" in "\n".join(postclose.artifact_checks)
-    assert "swing_improvement_automation_2026-05-11.json" in "\n".join(postclose.artifact_checks)
-    assert "swing_runtime_approval_2026-05-11.json" in "\n".join(postclose.artifact_checks)
+    assert "swing_improvement_automation_2026-05-11.json" in "\n".join(
+        postclose.artifact_checks
+    )
+    assert "swing_runtime_approval_2026-05-11.json" in "\n".join(
+        postclose.artifact_checks
+    )
     assert postclose.time_window == "20:05~21:55"
-    assert "swing_model_retrain_2026-05-11.status.json" in "\n".join(postclose.artifact_checks)
+    assert "swing_model_retrain_2026-05-11.status.json" in "\n".join(
+        postclose.artifact_checks
+    )
     assert "swing_model_retrain_2026-05-11.json" in "\n".join(postclose.artifact_checks)
     assert "logs/tuning_monitoring_postclose_cron.log" in postclose.artifact_checks
-    assert "runtime_approval_summary_2026-05-11.md" in "\n".join(postclose.artifact_checks)
-    assert "observation_source_quality_audit_2026-05-11.md" in "\n".join(postclose.artifact_checks)
-    assert "threshold_cycle_postclose_verification_2026-05-11.json" in "\n".join(postclose.artifact_checks)
+    assert "runtime_approval_summary_2026-05-11.md" in "\n".join(
+        postclose.artifact_checks
+    )
+    assert "observation_source_quality_audit_2026-05-11.md" in "\n".join(
+        postclose.artifact_checks
+    )
+    assert "threshold_cycle_postclose_verification_2026-05-11.json" in "\n".join(
+        postclose.artifact_checks
+    )
     assert "tuning monitoring" in postclose.decision_rule
     assert "swing model retrain" in postclose.decision_rule
     assert "real/sim/combined" in postclose.decision_rule
     assert "Tuning Chain Control State" in postclose.decision_rule
-    assert "blocked_stage=input_health|chain_completion|decision_integrity" in postclose.decision_rule
+    assert (
+        "blocked_stage=input_health|chain_completion|decision_integrity"
+        in postclose.decision_rule
+    )
     assert "EV 손익은 control state의 primary 기준이 아니다" in postclose.decision_rule
     assert "스윙 dry-run 해제" in postclose.forbidden
     intraday = next(check for check in all_checks if check.slot == "INTRADAY")
@@ -164,7 +183,9 @@ def test_build_runbook_operational_checks_skips_completed_slot(monkeypatch):
         lambda due_date: {"PREOPEN"} if due_date == "2026-05-11" else set(),
     )
 
-    preopen = build_runbook_operational_checks(target_date="2026-05-11", slots=["PREOPEN"])
+    preopen = build_runbook_operational_checks(
+        target_date="2026-05-11", slots=["PREOPEN"]
+    )
     all_checks = build_runbook_operational_checks(target_date="2026-05-11", slots=None)
 
     assert preopen == []
@@ -176,7 +197,9 @@ def test_render_markdown_includes_runbook_operational_checks(monkeypatch):
         "src.engine.build_codex_daily_workorder._completed_runbook_slots",
         lambda due_date: set(),
     )
-    checks = build_runbook_operational_checks(target_date="2026-05-11", slots=["INTRADAY"])
+    checks = build_runbook_operational_checks(
+        target_date="2026-05-11", slots=["INTRADAY"]
+    )
     md = render_markdown(
         owner="JaehwanPark",
         project_number=1,
@@ -200,7 +223,9 @@ def test_render_markdown_includes_runbook_operational_checks(monkeypatch):
     assert "[Runbook 운영 확인]" in md
     assert "판정=pass|warning|fail|not_yet_due" in md
 
-    postclose_checks = build_runbook_operational_checks(target_date="2026-05-11", slots=["POSTCLOSE"])
+    postclose_checks = build_runbook_operational_checks(
+        target_date="2026-05-11", slots=["POSTCLOSE"]
+    )
     postclose_md = render_markdown(
         owner="JaehwanPark",
         project_number=1,
@@ -217,7 +242,9 @@ def test_render_markdown_includes_runbook_operational_checks(monkeypatch):
         runbook_checks=postclose_checks,
     )
     assert "Tuning Chain Control State=GREEN|YELLOW|RED|GRAY" in postclose_md
-    assert "blocked_stage=input_health|chain_completion|decision_integrity" in postclose_md
+    assert (
+        "blocked_stage=input_health|chain_completion|decision_integrity" in postclose_md
+    )
     assert "impact=..." in postclose_md
     assert "next_action=..." in postclose_md
 
@@ -384,7 +411,13 @@ def test_filter_stale_same_day_managed_tasks_uses_docs_as_source_of_truth(monkey
 
     monkeypatch.setattr(
         "src.engine.build_codex_daily_workorder.collect_backlog_tasks",
-        lambda: [DummyTask("[LatencyCanary0427-2] other_danger-only residual override 13:00 즉시 재점검", "2026-04-27", "Checklist0427")],
+        lambda: [
+            DummyTask(
+                "[LatencyCanary0427-2] other_danger-only residual override 13:00 즉시 재점검",
+                "2026-04-27",
+                "Checklist0427",
+            )
+        ],
     )
 
     filtered = _filter_stale_same_day_managed_tasks(
@@ -396,7 +429,13 @@ def test_filter_stale_same_day_managed_tasks_uses_docs_as_source_of_truth(monkey
 
 def test_local_backlog_project_tasks_include_intraday_before_project_sync(monkeypatch):
     class DummyTask:
-        def __init__(self, title: str, due_date: str, track: str, source: str = "docs/checklist.md"):
+        def __init__(
+            self,
+            title: str,
+            due_date: str,
+            track: str,
+            source: str = "docs/checklist.md",
+        ):
             self.title = title
             self.due_date = due_date
             self.track = track
@@ -453,8 +492,12 @@ def test_graphql_request_retries_retryable_http_error(monkeypatch):
             raise HTTPError(req.full_url, 504, "Gateway Timeout", hdrs=None, fp=None)
         return DummyResponse()
 
-    monkeypatch.setattr("src.engine.build_codex_daily_workorder.request.urlopen", fake_urlopen)
-    monkeypatch.setattr("src.engine.build_codex_daily_workorder.time.sleep", lambda delay: None)
+    monkeypatch.setattr(
+        "src.engine.build_codex_daily_workorder.request.urlopen", fake_urlopen
+    )
+    monkeypatch.setattr(
+        "src.engine.build_codex_daily_workorder.time.sleep", lambda delay: None
+    )
     monkeypatch.setenv("CODEX_WORKORDER_GRAPHQL_RETRY_DELAY_SEC", "0")
 
     data = _graphql_request("token", "query { viewer { login } }", {})
@@ -482,8 +525,12 @@ def test_graphql_request_retries_transport_error(monkeypatch):
             raise URLError("timed out")
         return DummyResponse()
 
-    monkeypatch.setattr("src.engine.build_codex_daily_workorder.request.urlopen", fake_urlopen)
-    monkeypatch.setattr("src.engine.build_codex_daily_workorder.time.sleep", lambda delay: None)
+    monkeypatch.setattr(
+        "src.engine.build_codex_daily_workorder.request.urlopen", fake_urlopen
+    )
+    monkeypatch.setattr(
+        "src.engine.build_codex_daily_workorder.time.sleep", lambda delay: None
+    )
     monkeypatch.setenv("CODEX_WORKORDER_GRAPHQL_RETRY_DELAY_SEC", "0")
 
     data = _graphql_request("token", "query { viewer { login } }", {})

@@ -72,7 +72,9 @@ def test_build_code_improvement_workorder_classifies_and_renders(tmp_path, monke
                 "title": "latency guard miss EV recovery",
                 "target_subsystem": "runtime_instrumentation",
                 "priority": 1,
-                "files_likely_touched": ["src/engine/sniper_performance_tuning_report.py"],
+                "files_likely_touched": [
+                    "src/engine/sniper_performance_tuning_report.py"
+                ],
                 "acceptance_tests": ["pytest instrumentation tests"],
                 "runtime_effect": False,
             },
@@ -111,7 +113,9 @@ def test_build_code_improvement_workorder_classifies_and_renders(tmp_path, monke
     )
     (ev_dir / "threshold_cycle_ev_2026-05-08.json").write_text("{}", encoding="utf-8")
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
@@ -121,14 +125,18 @@ def test_build_code_improvement_workorder_classifies_and_renders(tmp_path, monke
     decisions = {item["order_id"]: item["decision"] for item in report["orders"]}
     assert decisions["order_latency_guard_miss_ev_recovery"] == "implement_now"
     assert decisions["order_ai_threshold_miss_ev_recovery"] == "attach_existing_family"
-    assert decisions["order_liquidity_gate_miss_ev_recovery"] == "design_family_candidate"
+    assert (
+        decisions["order_liquidity_gate_miss_ev_recovery"] == "design_family_candidate"
+    )
     assert decisions["order_cache_signature_noise"] == "defer_evidence"
     assert decisions["order_partial_fallback_shadow"] == "reject"
     assert report["generation_id"].startswith("2026-05-08-")
     assert report["source_hash"]
     assert report["lineage"]["previous_exists"] is False
     assert (doc_dir / "code_improvement_workorder_2026-05-08.md").exists()
-    markdown = (doc_dir / "code_improvement_workorder_2026-05-08.md").read_text(encoding="utf-8")
+    markdown = (doc_dir / "code_improvement_workorder_2026-05-08.md").read_text(
+        encoding="utf-8"
+    )
     assert "Codex 실행 지시" in markdown
     assert "2-Pass 실행 기준" in markdown
     assert "Snapshot Lineage" in markdown
@@ -145,7 +153,12 @@ def test_build_code_improvement_workorder_limits_selected_orders(tmp_path, monke
         "solo_findings": [],
         "auto_family_candidates": [],
         "code_improvement_orders": [
-            {"order_id": f"order_{idx}", "title": f"order {idx}", "priority": idx, "runtime_effect": False}
+            {
+                "order_id": f"order_{idx}",
+                "title": f"order {idx}",
+                "priority": idx,
+                "runtime_effect": False,
+            }
             for idx in range(5)
         ],
     }
@@ -154,9 +167,13 @@ def test_build_code_improvement_workorder_limits_selected_orders(tmp_path, monke
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
-    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", tmp_path / "report")
+    monkeypatch.setattr(
+        mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", tmp_path / "report"
+    )
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", tmp_path / "docs")
 
     report = mod.build_code_improvement_workorder("2026-05-08", max_orders=2)
@@ -168,11 +185,15 @@ def test_build_code_improvement_workorder_limits_selected_orders(tmp_path, monke
     assert report["summary"]["selected_route_counts"] == {"defer_evidence": 2}
     assert report["summary"]["selected_implement_now_route_count"] == 0
     assert report["summary"]["selected_unimplemented_runtime_effect_false_count"] == 2
-    assert report["summary"]["selected_unimplemented_route_counts"] == {"defer_evidence": 2}
+    assert report["summary"]["selected_unimplemented_route_counts"] == {
+        "defer_evidence": 2
+    }
     assert report["deferred_or_rejected_count"] == 3
 
 
-def test_build_code_improvement_workorder_adds_intraday_entry_blocker_source_quality_orders(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_adds_intraday_entry_blocker_source_quality_orders(
+    tmp_path, monkeypatch
+):
     intraday_dir = tmp_path / "intraday_entry_blocker_diagnostics"
     report_dir = tmp_path / "report"
     doc_dir = tmp_path / "docs"
@@ -186,20 +207,20 @@ def test_build_code_improvement_workorder_adds_intraday_entry_blocker_source_qua
                     "stock_code": "000390",
                     "stock_name": "매드업",
                     "event_count": 5,
-                        "latest_reason": "scanner_identity_name_mismatch",
-                        "payload_name": "매드업",
-                        "db_name": "SP삼화",
-                        "mismatch_expired": "True",
-                        "implementation_status": "implemented_source_quality_contract_available",
-                        "implementation_provenance": {
-                            "implementation_type": "scanner_runtime_attach_identity_source_quality_provenance",
-                            "runtime_effect": False,
-                            "allowed_runtime_apply": False,
-                            "root_cause_closure_status_hint": "implementation_done",
-                        },
-                        "forbidden_uses": ["stale_submit_bypass", "broker_guard_bypass"],
-                    }
-                ],
+                    "latest_reason": "scanner_identity_name_mismatch",
+                    "payload_name": "매드업",
+                    "db_name": "SP삼화",
+                    "mismatch_expired": "True",
+                    "implementation_status": "implemented_source_quality_contract_available",
+                    "implementation_provenance": {
+                        "implementation_type": "scanner_runtime_attach_identity_source_quality_provenance",
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                        "root_cause_closure_status_hint": "implementation_done",
+                    },
+                    "forbidden_uses": ["stale_submit_bypass", "broker_guard_bypass"],
+                }
+            ],
             "rising_missed_freshness_recovery": [
                 {
                     "workorder_type": "bounded_rising_candidate_freshness_recheck",
@@ -207,19 +228,19 @@ def test_build_code_improvement_workorder_adds_intraday_entry_blocker_source_qua
                     "stock_name": "두산퓨얼셀",
                     "event_count": 15,
                     "diagnostic_quote_age_stale": 9,
-                        "pre_ai_stale_or_history_gap": 6,
-                        "latest_stage": "blocked_strength_momentum",
-                        "latest_reason": "below_strength_base",
-                        "implementation_status": "implemented_source_quality_contract_available",
-                        "implementation_provenance": {
-                            "implementation_type": "bounded_rising_freshness_recheck_source_provenance",
-                            "runtime_effect": False,
-                            "allowed_runtime_apply": False,
-                            "root_cause_closure_status_hint": "implementation_done",
-                        },
-                        "forbidden_uses": ["stale_submit_bypass", "broker_guard_bypass"],
-                    }
-                ],
+                    "pre_ai_stale_or_history_gap": 6,
+                    "latest_stage": "blocked_strength_momentum",
+                    "latest_reason": "below_strength_base",
+                    "implementation_status": "implemented_source_quality_contract_available",
+                    "implementation_provenance": {
+                        "implementation_type": "bounded_rising_freshness_recheck_source_provenance",
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                        "root_cause_closure_status_hint": "implementation_done",
+                    },
+                    "forbidden_uses": ["stale_submit_bypass", "broker_guard_bypass"],
+                }
+            ],
             "repeated_zero_strength_history": [
                 {
                     "workorder_type": "scanner_strength_momentum_history_missing",
@@ -243,8 +264,12 @@ def test_build_code_improvement_workorder_adds_intraday_entry_blocker_source_qua
         json.dumps(payload, ensure_ascii=False),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-automation")
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-automation"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "INTRADAY_ENTRY_BLOCKER_DIAGNOSTICS_DIR", intraday_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
@@ -253,7 +278,9 @@ def test_build_code_improvement_workorder_adds_intraday_entry_blocker_source_qua
     report = mod.build_code_improvement_workorder("2026-07-01", max_orders=10)
 
     intraday_orders = [
-        item for item in report["orders"] if item["source_report_type"] == "intraday_entry_blocker_diagnostics"
+        item
+        for item in report["orders"]
+        if item["source_report_type"] == "intraday_entry_blocker_diagnostics"
     ]
     assert report["summary"]["intraday_entry_blocker_source_order_count"] == 3
     assert len(intraday_orders) == 3
@@ -266,9 +293,14 @@ def test_build_code_improvement_workorder_adds_intraday_entry_blocker_source_qua
         "scanner_strength_history_missing",
     }
     strength_order = next(
-        item for item in intraday_orders if item["mapped_family"] == "scanner_strength_history_missing"
+        item
+        for item in intraday_orders
+        if item["mapped_family"] == "scanner_strength_history_missing"
     )
-    assert strength_order["implementation_status"] == "implemented_source_quality_contract_available"
+    assert (
+        strength_order["implementation_status"]
+        == "implemented_source_quality_contract_available"
+    )
     assert (
         strength_order["implementation_provenance"]["implementation_type"]
         == "scanner_strength_history_source_quality_provenance"
@@ -277,13 +309,17 @@ def test_build_code_improvement_workorder_adds_intraday_entry_blocker_source_qua
         item["implementation_status"] == "implemented_source_quality_contract_available"
         for item in intraday_orders
     )
-    assert all("stale_submit_bypass" in item["forbidden_uses"] for item in intraday_orders)
+    assert all(
+        "stale_submit_bypass" in item["forbidden_uses"] for item in intraday_orders
+    )
     assert report["source"]["intraday_entry_blocker_diagnostics"] == str(
         intraday_dir / "intraday_entry_blocker_diagnostics_2026-07-01.json"
     )
 
 
-def test_build_code_improvement_workorder_adds_rising_missed_scout_orders(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_adds_rising_missed_scout_orders(
+    tmp_path, monkeypatch
+):
     scout_dir = tmp_path / "rising_missed_scout_workorder"
     prior_dir = tmp_path / "rising_missed_classifier_prior"
     bridge_dir = tmp_path / "rising_missed_normal_buy_bridge_candidate_discovery"
@@ -315,7 +351,10 @@ def test_build_code_improvement_workorder_adds_rising_missed_scout_orders(tmp_pa
                     "root_cause_closure_status_hint": "implementation_done",
                 },
                 "evidence": ["winner_count=3", "forced scout remains source-only"],
-                "forbidden_uses": ["forced_one_share_success_counting", "stale_submit_bypass"],
+                "forbidden_uses": [
+                    "forced_one_share_success_counting",
+                    "stale_submit_bypass",
+                ],
             }
         ],
     }
@@ -385,29 +424,41 @@ def test_build_code_improvement_workorder_adds_rising_missed_scout_orders(tmp_pa
         ],
     }
     (
-        bridge_dir / "rising_missed_normal_buy_bridge_candidate_discovery_2026-07-01.json"
+        bridge_dir
+        / "rising_missed_normal_buy_bridge_candidate_discovery_2026-07-01.json"
     ).write_text(json.dumps(bridge_payload, ensure_ascii=False), encoding="utf-8")
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-automation")
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-automation"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "RISING_MISSED_SCOUT_WORKORDER_DIR", scout_dir)
     monkeypatch.setattr(mod, "RISING_MISSED_CLASSIFIER_PRIOR_DIR", prior_dir)
-    monkeypatch.setattr(mod, "RISING_MISSED_NORMAL_BUY_BRIDGE_CANDIDATE_DIR", bridge_dir)
+    monkeypatch.setattr(
+        mod, "RISING_MISSED_NORMAL_BUY_BRIDGE_CANDIDATE_DIR", bridge_dir
+    )
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
 
     report = mod.build_code_improvement_workorder("2026-07-01", max_orders=5)
 
     scout_orders = [
-        item for item in report["orders"] if item["source_report_type"] == "rising_missed_scout_workorder"
+        item
+        for item in report["orders"]
+        if item["source_report_type"] == "rising_missed_scout_workorder"
     ]
     prior_orders = [
-        item for item in report["orders"] if item["source_report_type"] == "rising_missed_classifier_prior"
+        item
+        for item in report["orders"]
+        if item["source_report_type"] == "rising_missed_classifier_prior"
     ]
     bridge_orders = [
         item
         for item in report["orders"]
-        if item["source_report_type"] == "rising_missed_normal_buy_bridge_candidate_discovery"
+        if item["source_report_type"]
+        == "rising_missed_normal_buy_bridge_candidate_discovery"
     ]
     assert report["summary"]["rising_missed_scout_source_order_count"] == 1
     assert report["summary"]["rising_missed_classifier_prior_source_order_count"] == 1
@@ -432,7 +483,10 @@ def test_build_code_improvement_workorder_adds_rising_missed_scout_orders(tmp_pa
     assert bridge_orders[0]["allowed_runtime_apply"] is False
     assert bridge_orders[0]["actual_order_submitted"] is False
     assert bridge_orders[0]["broker_order_forbidden"] is True
-    assert bridge_orders[0]["implementation_provenance"]["requires_preopen_env_selection"] is True
+    assert (
+        bridge_orders[0]["implementation_provenance"]["requires_preopen_env_selection"]
+        is True
+    )
     assert "buy_score_threshold_change" in bridge_orders[0]["forbidden_uses"]
     assert "forced_one_share_qty_or_tag_reuse" in bridge_orders[0]["forbidden_uses"]
     assert report["source"]["rising_missed_scout_workorder"] == str(
@@ -441,12 +495,17 @@ def test_build_code_improvement_workorder_adds_rising_missed_scout_orders(tmp_pa
     assert report["source"]["rising_missed_classifier_prior"] == str(
         prior_dir / "rising_missed_classifier_prior_2026-07-01.json"
     )
-    assert report["source"]["rising_missed_normal_buy_bridge_candidate_discovery"] == str(
-        bridge_dir / "rising_missed_normal_buy_bridge_candidate_discovery_2026-07-01.json"
+    assert report["source"][
+        "rising_missed_normal_buy_bridge_candidate_discovery"
+    ] == str(
+        bridge_dir
+        / "rising_missed_normal_buy_bridge_candidate_discovery_2026-07-01.json"
     )
 
 
-def test_build_code_improvement_workorder_adds_one_share_threshold_opportunity_orders(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_adds_one_share_threshold_opportunity_orders(
+    tmp_path, monkeypatch
+):
     source_dir = tmp_path / "one_share_threshold_opportunity"
     report_dir = tmp_path / "report"
     doc_dir = tmp_path / "docs"
@@ -481,8 +540,12 @@ def test_build_code_improvement_workorder_adds_one_share_threshold_opportunity_o
         json.dumps(payload, ensure_ascii=False),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-automation")
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-automation"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "ONE_SHARE_THRESHOLD_OPPORTUNITY_DIR", source_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
@@ -491,7 +554,9 @@ def test_build_code_improvement_workorder_adds_one_share_threshold_opportunity_o
     report = mod.build_code_improvement_workorder("2026-07-01", max_orders=5)
 
     orders = [
-        item for item in report["orders"] if item["source_report_type"] == "one_share_threshold_opportunity"
+        item
+        for item in report["orders"]
+        if item["source_report_type"] == "one_share_threshold_opportunity"
     ]
     assert report["summary"]["one_share_threshold_opportunity_source_order_count"] == 1
     assert len(orders) == 1
@@ -506,7 +571,9 @@ def test_build_code_improvement_workorder_adds_one_share_threshold_opportunity_o
     )
 
 
-def test_build_code_improvement_workorder_adds_entry_hurdle_backtest_orders(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_adds_entry_hurdle_backtest_orders(
+    tmp_path, monkeypatch
+):
     automation_dir = tmp_path / "automation"
     source_dir = tmp_path / "entry_hurdle_backtest"
     report_dir = tmp_path / "report"
@@ -564,7 +631,9 @@ def test_build_code_improvement_workorder_adds_entry_hurdle_backtest_orders(tmp_
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "ENTRY_HURDLE_BACKTEST_DIR", source_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
@@ -572,7 +641,11 @@ def test_build_code_improvement_workorder_adds_entry_hurdle_backtest_orders(tmp_
 
     report = mod.build_code_improvement_workorder("2026-07-01", max_orders=5)
 
-    orders = [item for item in report["orders"] if item["source_report_type"] == "entry_hurdle_backtest"]
+    orders = [
+        item
+        for item in report["orders"]
+        if item["source_report_type"] == "entry_hurdle_backtest"
+    ]
     pattern_orders = [
         item
         for item in report["orders"]
@@ -586,21 +659,37 @@ def test_build_code_improvement_workorder_adds_entry_hurdle_backtest_orders(tmp_
     assert pattern_orders[0]["decision"] == "attach_existing_family"
     assert pattern_orders[0]["route"] == "existing_family"
     assert pattern_orders[0]["mapped_family"] == "overbought_gate_miss_ev_recovery"
-    assert pattern_orders[0]["implementation_status"] == "implemented_source_quality_contract_available"
-    assert pattern_orders[0]["implementation_provenance"]["closed_by_source_report_type"] == "entry_hurdle_backtest"
+    assert (
+        pattern_orders[0]["implementation_status"]
+        == "implemented_source_quality_contract_available"
+    )
+    assert (
+        pattern_orders[0]["implementation_provenance"]["closed_by_source_report_type"]
+        == "entry_hurdle_backtest"
+    )
     assert orders[0]["runtime_effect"] is False
     assert orders[0]["allowed_runtime_apply"] is False
     assert orders[0]["actual_order_submitted"] is False
     assert orders[0]["broker_order_forbidden"] is True
-    assert orders[0]["implementation_status"] == "implemented_source_quality_contract_available"
-    assert orders[0]["implementation_provenance"]["requires_separate_runtime_apply_candidate"] is True
+    assert (
+        orders[0]["implementation_status"]
+        == "implemented_source_quality_contract_available"
+    )
+    assert (
+        orders[0]["implementation_provenance"][
+            "requires_separate_runtime_apply_candidate"
+        ]
+        is True
+    )
     assert "broker_guard_bypass" in orders[0]["forbidden_uses"]
     assert report["source"]["entry_hurdle_backtest"] == str(
         source_dir / "entry_hurdle_backtest_2026-07-01.json"
     )
 
 
-def test_build_code_improvement_workorder_adds_conversion_lane_orders(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_adds_conversion_lane_orders(
+    tmp_path, monkeypatch
+):
     automation_dir = tmp_path / "automation"
     conversion_dir = tmp_path / "conversion_lane"
     report_dir = tmp_path / "report"
@@ -629,7 +718,9 @@ def test_build_code_improvement_workorder_adds_conversion_lane_orders(tmp_path, 
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "CONVERSION_LANE_DIR", conversion_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
@@ -646,7 +737,9 @@ def test_build_code_improvement_workorder_adds_conversion_lane_orders(tmp_path, 
     assert report["summary"]["selected_implement_now_route_count"] == 1
 
 
-def test_conversion_lane_orders_are_required_handoff_beyond_max_orders(tmp_path, monkeypatch):
+def test_conversion_lane_orders_are_required_handoff_beyond_max_orders(
+    tmp_path, monkeypatch
+):
     automation_dir = tmp_path / "automation"
     conversion_dir = tmp_path / "conversion_lane"
     report_dir = tmp_path / "report"
@@ -683,7 +776,9 @@ def test_conversion_lane_orders_are_required_handoff_beyond_max_orders(tmp_path,
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "CONVERSION_LANE_DIR", conversion_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
@@ -693,11 +788,16 @@ def test_conversion_lane_orders_are_required_handoff_beyond_max_orders(tmp_path,
 
     selected_ids = {order["order_id"] for order in report["orders"]}
     assert "order_conversion_lane_key_lineage_hyp_1" in selected_ids
-    assert "order_conversion_lane_submit_drought_submit_drought_latency_pre_submit" in selected_ids
+    assert (
+        "order_conversion_lane_submit_drought_submit_drought_latency_pre_submit"
+        in selected_ids
+    )
     assert report["summary"]["selected_implement_now_route_count"] == 2
 
 
-def test_conversion_lane_axis_instrumentation_marks_order_as_existing_implementation(tmp_path, monkeypatch):
+def test_conversion_lane_axis_instrumentation_marks_order_as_existing_implementation(
+    tmp_path, monkeypatch
+):
     automation_dir = tmp_path / "automation"
     conversion_dir = tmp_path / "conversion_lane"
     report_dir = tmp_path / "report"
@@ -730,7 +830,9 @@ def test_conversion_lane_axis_instrumentation_marks_order_as_existing_implementa
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "CONVERSION_LANE_DIR", conversion_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
@@ -744,10 +846,14 @@ def test_conversion_lane_axis_instrumentation_marks_order_as_existing_implementa
         "conversion_lane_blocker_axis_report_provenance"
     )
     assert order["decision"] == "attach_existing_family"
-    assert report["summary"]["selected_implement_now_new_runtime_effect_false_count"] == 0
+    assert (
+        report["summary"]["selected_implement_now_new_runtime_effect_false_count"] == 0
+    )
 
 
-def test_build_code_improvement_workorder_escalates_repeated_unresolved_attach(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_escalates_repeated_unresolved_attach(
+    tmp_path, monkeypatch
+):
     automation_dir = tmp_path / "automation"
     report_dir = tmp_path / "report"
     doc_dir = tmp_path / "docs"
@@ -792,7 +898,9 @@ def test_build_code_improvement_workorder_escalates_repeated_unresolved_attach(t
             encoding="utf-8",
         )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
@@ -805,17 +913,28 @@ def test_build_code_improvement_workorder_escalates_repeated_unresolved_attach(t
     assert order["route"] == "repeat_unresolved_escalation"
     assert order["repeat_unresolved_escalation"]["repeat_count"] == 2
     assert report["summary"]["repeat_unresolved_escalation_count"] == 1
-    assert report["summary"]["repeat_unresolved_escalated_order_ids"] == ["order_repeated_source_quality_gap"]
-    assert report["summary"]["selected_implement_now_existing_implementation_count"] == 0
-    assert report["summary"]["selected_implement_now_existing_implementation_order_ids"] == []
-    assert report["summary"]["selected_implement_now_new_runtime_effect_false_count"] == 1
-    assert report["summary"]["selected_implement_now_new_runtime_effect_false_order_ids"] == [
+    assert report["summary"]["repeat_unresolved_escalated_order_ids"] == [
         "order_repeated_source_quality_gap"
     ]
+    assert (
+        report["summary"]["selected_implement_now_existing_implementation_count"] == 0
+    )
+    assert (
+        report["summary"]["selected_implement_now_existing_implementation_order_ids"]
+        == []
+    )
+    assert (
+        report["summary"]["selected_implement_now_new_runtime_effect_false_count"] == 1
+    )
+    assert report["summary"][
+        "selected_implement_now_new_runtime_effect_false_order_ids"
+    ] == ["order_repeated_source_quality_gap"]
     assert report["summary"]["selected_unimplemented_runtime_effect_false_count"] == 1
 
 
-def test_build_code_improvement_workorder_escalates_repeated_unresolved_signature(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_escalates_repeated_unresolved_signature(
+    tmp_path, monkeypatch
+):
     automation_dir = tmp_path / "automation"
     report_dir = tmp_path / "report"
     doc_dir = tmp_path / "docs"
@@ -853,11 +972,19 @@ def test_build_code_improvement_workorder_escalates_repeated_unresolved_signatur
             "decision": "attach_existing_family",
         }
         (report_dir / f"code_improvement_workorder_{previous_date}.json").write_text(
-            json.dumps({"date": previous_date, "orders": [previous_order], "non_selected_orders": []}),
+            json.dumps(
+                {
+                    "date": previous_date,
+                    "orders": [previous_order],
+                    "non_selected_orders": [],
+                }
+            ),
             encoding="utf-8",
         )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
@@ -870,12 +997,18 @@ def test_build_code_improvement_workorder_escalates_repeated_unresolved_signatur
     assert order["route"] == "repeat_unresolved_escalation"
     assert order["repeat_unresolved_escalation"]["repeat_key"].startswith("sig:")
     assert order["repeat_unresolved_escalation"]["repeat_count"] == 2
-    assert report["summary"]["selected_implement_now_existing_implementation_count"] == 0
-    assert report["summary"]["selected_implement_now_new_runtime_effect_false_count"] == 1
+    assert (
+        report["summary"]["selected_implement_now_existing_implementation_count"] == 0
+    )
+    assert (
+        report["summary"]["selected_implement_now_new_runtime_effect_false_count"] == 1
+    )
     assert report["summary"]["selected_unimplemented_runtime_effect_false_count"] == 1
 
 
-def test_build_code_improvement_workorder_does_not_escalate_history_implemented_waiting_sample(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_does_not_escalate_history_implemented_waiting_sample(
+    tmp_path, monkeypatch
+):
     automation_dir = tmp_path / "automation"
     report_dir = tmp_path / "report"
     doc_dir = tmp_path / "docs"
@@ -924,7 +1057,9 @@ def test_build_code_improvement_workorder_does_not_escalate_history_implemented_
             encoding="utf-8",
         )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
@@ -936,10 +1071,14 @@ def test_build_code_improvement_workorder_does_not_escalate_history_implemented_
     assert order["decision"] == "attach_existing_family"
     assert order["route"] == "existing_family"
     assert report["summary"]["repeat_unresolved_escalation_count"] == 0
-    assert report["summary"]["selected_implement_now_new_runtime_effect_false_count"] == 0
+    assert (
+        report["summary"]["selected_implement_now_new_runtime_effect_false_count"] == 0
+    )
 
 
-def test_build_code_improvement_workorder_does_not_escalate_existing_family_only_repeat(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_does_not_escalate_existing_family_only_repeat(
+    tmp_path, monkeypatch
+):
     automation_dir = tmp_path / "automation"
     report_dir = tmp_path / "report"
     doc_dir = tmp_path / "docs"
@@ -972,14 +1111,18 @@ def test_build_code_improvement_workorder_does_not_escalate_existing_family_only
             json.dumps(
                 {
                     "date": previous_date,
-                    "orders": [{**repeated_order, "decision": "attach_existing_family"}],
+                    "orders": [
+                        {**repeated_order, "decision": "attach_existing_family"}
+                    ],
                     "non_selected_orders": [],
                 }
             ),
             encoding="utf-8",
         )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
@@ -992,7 +1135,9 @@ def test_build_code_improvement_workorder_does_not_escalate_existing_family_only
     assert report["summary"]["repeat_unresolved_escalation_count"] == 0
 
 
-def test_build_code_improvement_workorder_keeps_rollup_non_implement_but_marks_longstanding(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_keeps_rollup_non_implement_but_marks_longstanding(
+    tmp_path, monkeypatch
+):
     automation_dir = tmp_path / "automation"
     report_dir = tmp_path / "report"
     doc_dir = tmp_path / "docs"
@@ -1025,11 +1170,19 @@ def test_build_code_improvement_workorder_keeps_rollup_non_implement_but_marks_l
     )
     for previous_date in ("2026-05-07", "2026-05-06"):
         (report_dir / f"code_improvement_workorder_{previous_date}.json").write_text(
-            json.dumps({"date": previous_date, "orders": [{**current_order, "decision": "attach_existing_family"}], "non_selected_orders": []}),
+            json.dumps(
+                {
+                    "date": previous_date,
+                    "orders": [{**current_order, "decision": "attach_existing_family"}],
+                    "non_selected_orders": [],
+                }
+            ),
             encoding="utf-8",
         )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
@@ -1039,12 +1192,15 @@ def test_build_code_improvement_workorder_keeps_rollup_non_implement_but_marks_l
     order = report["orders"][0]
     assert order["decision"] == "attach_existing_family"
     assert order["route"] == "positive_source_only_review"
-    assert order["longstanding_non_implement_review"]["review_disposition"] == "keep_visible_by_design"
+    assert (
+        order["longstanding_non_implement_review"]["review_disposition"]
+        == "keep_visible_by_design"
+    )
     assert report["summary"]["repeat_unresolved_structural_blocker_count"] == 0
     assert report["summary"]["selected_terminal_non_implement_longstanding_count"] == 1
-    assert report["summary"]["selected_terminal_non_implement_longstanding_order_ids"] == [
-        "order_lifecycle_quiet_gap_positive_source_only_rollup"
-    ]
+    assert report["summary"][
+        "selected_terminal_non_implement_longstanding_order_ids"
+    ] == ["order_lifecycle_quiet_gap_positive_source_only_rollup"]
 
 
 def test_build_code_improvement_workorder_escalates_repeated_implemented_submit_drought_as_structural_blocker(
@@ -1089,11 +1245,19 @@ def test_build_code_improvement_workorder_escalates_repeated_implemented_submit_
     )
     for previous_date in ("2026-05-07", "2026-05-06"):
         (report_dir / f"code_improvement_workorder_{previous_date}.json").write_text(
-            json.dumps({"date": previous_date, "orders": [{**current_order, "decision": "attach_existing_family"}], "non_selected_orders": []}),
+            json.dumps(
+                {
+                    "date": previous_date,
+                    "orders": [{**current_order, "decision": "attach_existing_family"}],
+                    "non_selected_orders": [],
+                }
+            ),
             encoding="utf-8",
         )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
@@ -1105,7 +1269,9 @@ def test_build_code_improvement_workorder_escalates_repeated_implemented_submit_
     assert order["route"] == "repeat_unresolved_structural_blocker"
     assert order["implementation_status"] == "repeat_unresolved_structural_blocker"
     assert order["structural_blocker_escalation"]["repeat_count"] == 3
-    assert order["structural_blocker_escalation"]["required_next_route"] == "implement_now"
+    assert (
+        order["structural_blocker_escalation"]["required_next_route"] == "implement_now"
+    )
     assert report["summary"]["repeat_unresolved_structural_blocker_count"] == 1
     assert report["summary"]["repeat_unresolved_structural_blocker_order_ids"] == [
         "order_entry_submit_drought_auto_resolution"
@@ -1157,11 +1323,19 @@ def test_build_code_improvement_workorder_does_not_reescalate_closed_submit_drou
     )
     for previous_date in ("2026-05-07", "2026-05-06"):
         (report_dir / f"code_improvement_workorder_{previous_date}.json").write_text(
-            json.dumps({"date": previous_date, "orders": [{**current_order, "decision": "attach_existing_family"}], "non_selected_orders": []}),
+            json.dumps(
+                {
+                    "date": previous_date,
+                    "orders": [{**current_order, "decision": "attach_existing_family"}],
+                    "non_selected_orders": [],
+                }
+            ),
             encoding="utf-8",
         )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
@@ -1197,7 +1371,9 @@ def test_build_code_improvement_workorder_does_not_escalate_repeated_explicit_no
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "implementation_status": "terminal_not_applicable_evidence",
-        "implementation_provenance": {"recommended_resolution": "mark_not_applicable_explicitly"},
+        "implementation_provenance": {
+            "recommended_resolution": "mark_not_applicable_explicitly"
+        },
     }
     (automation_dir / "scalping_pattern_lab_automation_2026-05-08.json").write_text(
         json.dumps(
@@ -1213,11 +1389,19 @@ def test_build_code_improvement_workorder_does_not_escalate_repeated_explicit_no
     )
     for previous_date in ("2026-05-07", "2026-05-06"):
         (report_dir / f"code_improvement_workorder_{previous_date}.json").write_text(
-            json.dumps({"date": previous_date, "orders": [{**current_order, "decision": "attach_existing_family"}], "non_selected_orders": []}),
+            json.dumps(
+                {
+                    "date": previous_date,
+                    "orders": [{**current_order, "decision": "attach_existing_family"}],
+                    "non_selected_orders": [],
+                }
+            ),
             encoding="utf-8",
         )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
@@ -1227,7 +1411,10 @@ def test_build_code_improvement_workorder_does_not_escalate_repeated_explicit_no
     order = report["orders"][0]
     assert order["decision"] == "attach_existing_family"
     assert order["structural_blocker_escalation"] is None
-    assert order["longstanding_non_implement_review"]["review_disposition"] == "keep_visible_by_design"
+    assert (
+        order["longstanding_non_implement_review"]["review_disposition"]
+        == "keep_visible_by_design"
+    )
     assert report["summary"]["repeat_unresolved_structural_blocker_count"] == 0
 
 
@@ -1298,7 +1485,9 @@ def test_build_code_improvement_workorder_does_not_double_escalate_summary_contr
             encoding="utf-8",
         )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
@@ -1306,14 +1495,35 @@ def test_build_code_improvement_workorder_does_not_double_escalate_summary_contr
     report = mod.build_code_improvement_workorder("2026-05-08", max_orders=2)
 
     by_id = {item["order_id"]: item for item in report["orders"]}
-    assert by_id["order_swing_ofi_qi_stale_or_missing_context"]["decision"] == "implement_now"
-    assert by_id["order_swing_ofi_qi_stale_or_missing_context"]["route"] == "repeat_unresolved_structural_blocker"
-    assert by_id["order_swing_holding_exit_contract_gap_review"]["decision"] == "attach_existing_family"
-    assert by_id["order_swing_holding_exit_contract_gap_review"]["structural_blocker_escalation"] is None
-    assert by_id["order_swing_holding_exit_contract_gap_review"]["longstanding_non_implement_review"]["review_disposition"] == "keep_visible_by_design"
+    assert (
+        by_id["order_swing_ofi_qi_stale_or_missing_context"]["decision"]
+        == "implement_now"
+    )
+    assert (
+        by_id["order_swing_ofi_qi_stale_or_missing_context"]["route"]
+        == "repeat_unresolved_structural_blocker"
+    )
+    assert (
+        by_id["order_swing_holding_exit_contract_gap_review"]["decision"]
+        == "attach_existing_family"
+    )
+    assert (
+        by_id["order_swing_holding_exit_contract_gap_review"][
+            "structural_blocker_escalation"
+        ]
+        is None
+    )
+    assert (
+        by_id["order_swing_holding_exit_contract_gap_review"][
+            "longstanding_non_implement_review"
+        ]["review_disposition"]
+        == "keep_visible_by_design"
+    )
 
 
-def test_build_code_improvement_workorder_does_not_escalate_current_implemented_hold_sample_repeat(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_does_not_escalate_current_implemented_hold_sample_repeat(
+    tmp_path, monkeypatch
+):
     automation_dir = tmp_path / "automation"
     report_dir = tmp_path / "report"
     doc_dir = tmp_path / "docs"
@@ -1352,14 +1562,18 @@ def test_build_code_improvement_workorder_does_not_escalate_current_implemented_
             json.dumps(
                 {
                     "date": previous_date,
-                    "orders": [{**repeated_order, "decision": "attach_existing_family"}],
+                    "orders": [
+                        {**repeated_order, "decision": "attach_existing_family"}
+                    ],
                     "non_selected_orders": [],
                 }
             ),
             encoding="utf-8",
         )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
@@ -1373,7 +1587,9 @@ def test_build_code_improvement_workorder_does_not_escalate_current_implemented_
     assert report["summary"]["repeat_unresolved_escalation_count"] == 0
 
 
-def test_build_code_improvement_workorder_does_not_escalate_pattern_lab_design_only_repeat(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_does_not_escalate_pattern_lab_design_only_repeat(
+    tmp_path, monkeypatch
+):
     automation_dir = tmp_path / "automation"
     report_dir = tmp_path / "report"
     doc_dir = tmp_path / "docs"
@@ -1408,14 +1624,18 @@ def test_build_code_improvement_workorder_does_not_escalate_pattern_lab_design_o
             json.dumps(
                 {
                     "date": previous_date,
-                    "orders": [{**repeated_order, "decision": "design_family_candidate"}],
+                    "orders": [
+                        {**repeated_order, "decision": "design_family_candidate"}
+                    ],
                     "non_selected_orders": [],
                 }
             ),
             encoding="utf-8",
         )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
@@ -1428,7 +1648,9 @@ def test_build_code_improvement_workorder_does_not_escalate_pattern_lab_design_o
     assert report["summary"]["repeat_unresolved_escalation_count"] == 0
 
 
-def test_build_code_improvement_workorder_does_not_close_swing_ai_contract_without_report_contract(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_does_not_close_swing_ai_contract_without_report_contract(
+    tmp_path, monkeypatch
+):
     swing_dir = tmp_path / "swing"
     report_dir = tmp_path / "report"
     doc_dir = tmp_path / "docs"
@@ -1463,13 +1685,17 @@ def test_build_code_improvement_workorder_does_not_close_swing_ai_contract_witho
             json.dumps(
                 {
                     "date": previous_date,
-                    "orders": [{**repeated_order, "decision": "design_family_candidate"}],
+                    "orders": [
+                        {**repeated_order, "decision": "design_family_candidate"}
+                    ],
                     "non_selected_orders": [],
                 }
             ),
             encoding="utf-8",
         )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-scalping")
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-scalping"
+    )
     monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", swing_dir)
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
@@ -1483,7 +1709,9 @@ def test_build_code_improvement_workorder_does_not_close_swing_ai_contract_witho
     assert report["summary"]["repeat_unresolved_escalation_count"] == 0
 
 
-def test_build_code_improvement_workorder_does_not_escalate_deferred_performance_repeat(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_does_not_escalate_deferred_performance_repeat(
+    tmp_path, monkeypatch
+):
     perf_dir = tmp_path / "perf"
     report_dir = tmp_path / "report"
     doc_dir = tmp_path / "docs"
@@ -1505,7 +1733,9 @@ def test_build_code_improvement_workorder_does_not_escalate_deferred_performance
         json.dumps(
             {
                 "summary": {"deferred_count": 1},
-                "deferred_candidates": [{**repeated_order, "item_id": repeated_order["order_id"]}],
+                "deferred_candidates": [
+                    {**repeated_order, "item_id": repeated_order["order_id"]}
+                ],
             }
         ),
         encoding="utf-8",
@@ -1521,8 +1751,12 @@ def test_build_code_improvement_workorder_does_not_escalate_deferred_performance
             ),
             encoding="utf-8",
         )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-scalping")
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-scalping"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", perf_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
@@ -1536,7 +1770,9 @@ def test_build_code_improvement_workorder_does_not_escalate_deferred_performance
     assert report["summary"]["repeat_unresolved_escalation_count"] == 0
 
 
-def test_build_code_improvement_workorder_does_not_escalate_solo_pattern_lab_existing_family_repeat(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_does_not_escalate_solo_pattern_lab_existing_family_repeat(
+    tmp_path, monkeypatch
+):
     automation_dir = tmp_path / "automation"
     report_dir = tmp_path / "report"
     doc_dir = tmp_path / "docs"
@@ -1579,7 +1815,9 @@ def test_build_code_improvement_workorder_does_not_escalate_solo_pattern_lab_exi
             encoding="utf-8",
         )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
@@ -1592,7 +1830,9 @@ def test_build_code_improvement_workorder_does_not_escalate_solo_pattern_lab_exi
     assert report["summary"]["repeat_unresolved_escalation_count"] == 0
 
 
-def test_build_code_improvement_workorder_does_not_signature_escalate_sparse_orders(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_does_not_signature_escalate_sparse_orders(
+    tmp_path, monkeypatch
+):
     automation_dir = tmp_path / "automation"
     report_dir = tmp_path / "report"
     doc_dir = tmp_path / "docs"
@@ -1627,11 +1867,19 @@ def test_build_code_improvement_workorder_does_not_signature_escalate_sparse_ord
             "implementation_status": "implemented_but_waiting_sample",
         }
         (report_dir / f"code_improvement_workorder_{previous_date}.json").write_text(
-            json.dumps({"date": previous_date, "orders": [previous_order], "non_selected_orders": []}),
+            json.dumps(
+                {
+                    "date": previous_date,
+                    "orders": [previous_order],
+                    "non_selected_orders": [],
+                }
+            ),
             encoding="utf-8",
         )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
@@ -1645,7 +1893,9 @@ def test_build_code_improvement_workorder_does_not_signature_escalate_sparse_ord
     assert report["summary"]["repeat_unresolved_escalation_count"] == 0
 
 
-def test_build_code_improvement_workorder_does_not_escalate_rejudged_not_applicable(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_does_not_escalate_rejudged_not_applicable(
+    tmp_path, monkeypatch
+):
     automation_dir = tmp_path / "automation"
     report_dir = tmp_path / "report"
     doc_dir = tmp_path / "docs"
@@ -1693,7 +1943,9 @@ def test_build_code_improvement_workorder_does_not_escalate_rejudged_not_applica
             encoding="utf-8",
         )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
@@ -1705,10 +1957,14 @@ def test_build_code_improvement_workorder_does_not_escalate_rejudged_not_applica
     assert order["decision"] == "attach_existing_family"
     assert order["route"] == "existing_family"
     assert report["summary"]["repeat_unresolved_escalation_count"] == 0
-    assert report["summary"]["selected_implement_now_new_runtime_effect_false_count"] == 0
+    assert (
+        report["summary"]["selected_implement_now_new_runtime_effect_false_count"] == 0
+    )
 
 
-def test_build_code_improvement_workorder_marks_terminal_non_implement_items(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_marks_terminal_non_implement_items(
+    tmp_path, monkeypatch
+):
     automation_dir = tmp_path / "automation"
     report_dir = tmp_path / "report"
     doc_dir = tmp_path / "docs"
@@ -1767,7 +2023,9 @@ def test_build_code_improvement_workorder_marks_terminal_non_implement_items(tmp
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
@@ -1775,11 +2033,23 @@ def test_build_code_improvement_workorder_marks_terminal_non_implement_items(tmp
     report = mod.build_code_improvement_workorder("2026-06-10", max_orders=10)
 
     by_id = {item["order_id"]: item for item in report["orders"]}
-    assert by_id["order_design_only"]["implementation_status"] == "terminal_design_family_candidate"
-    assert by_id["order_defer_only"]["implementation_status"] == "terminal_existing_family_evidence"
-    assert by_id["order_not_applicable_terminal"]["implementation_status"] == "terminal_not_applicable_evidence"
+    assert (
+        by_id["order_design_only"]["implementation_status"]
+        == "terminal_design_family_candidate"
+    )
+    assert (
+        by_id["order_defer_only"]["implementation_status"]
+        == "terminal_existing_family_evidence"
+    )
+    assert (
+        by_id["order_not_applicable_terminal"]["implementation_status"]
+        == "terminal_not_applicable_evidence"
+    )
     assert report["summary"]["selected_unimplemented_runtime_effect_false_count"] == 0
-    assert report["summary"]["selected_terminal_non_implement_runtime_effect_false_count"] == 3
+    assert (
+        report["summary"]["selected_terminal_non_implement_runtime_effect_false_count"]
+        == 3
+    )
 
 
 def test_build_code_improvement_workorder_does_not_escalate_terminal_non_implement_history(
@@ -1832,7 +2102,9 @@ def test_build_code_improvement_workorder_does_not_escalate_terminal_non_impleme
             encoding="utf-8",
         )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
@@ -1843,7 +2115,9 @@ def test_build_code_improvement_workorder_does_not_escalate_terminal_non_impleme
     assert order["decision"] == "design_family_candidate"
     assert order["implementation_status"] == "terminal_design_family_candidate"
     assert report["summary"]["repeat_unresolved_escalation_count"] == 0
-    assert report["summary"]["selected_implement_now_new_runtime_effect_false_count"] == 0
+    assert (
+        report["summary"]["selected_implement_now_new_runtime_effect_false_count"] == 0
+    )
 
 
 def test_build_code_improvement_workorder_marks_longstanding_actionable_existing_family_recheck(
@@ -1907,7 +2181,9 @@ def test_build_code_improvement_workorder_marks_longstanding_actionable_existing
     report = mod.build_code_improvement_workorder("2026-06-10", max_orders=10)
 
     order = next(
-        item for item in report["orders"] if item["order_id"] == "order_swing_existing_family_metric_review"
+        item
+        for item in report["orders"]
+        if item["order_id"] == "order_swing_existing_family_metric_review"
     )
     assert order["decision"] == "attach_existing_family"
     assert order["implementation_status"] == "terminal_existing_family_evidence"
@@ -1915,13 +2191,15 @@ def test_build_code_improvement_workorder_marks_longstanding_actionable_existing
         "actionable_existing_family_recheck"
     )
     assert order["longstanding_non_implement_action"]["action_required"] is True
-    assert report["summary"]["selected_longstanding_non_implement_disposition_counts"] == {
-        "actionable_existing_family_recheck": 1
-    }
-    assert report["summary"]["selected_longstanding_non_implement_action_required_order_ids"] == [
-        "order_swing_existing_family_metric_review"
-    ]
-    assert report["summary"]["selected_implement_now_new_runtime_effect_false_count"] == 0
+    assert report["summary"][
+        "selected_longstanding_non_implement_disposition_counts"
+    ] == {"actionable_existing_family_recheck": 1}
+    assert report["summary"][
+        "selected_longstanding_non_implement_action_required_order_ids"
+    ] == ["order_swing_existing_family_metric_review"]
+    assert (
+        report["summary"]["selected_implement_now_new_runtime_effect_false_count"] == 0
+    )
     markdown = mod.render_code_improvement_workorder_markdown(report)
     assert "selected_longstanding_non_implement_action_required_order_ids" in markdown
     assert "longstanding_non_implement_action" in markdown
@@ -1983,7 +2261,11 @@ def test_build_code_improvement_workorder_marks_lifecycle_logic_observation_as_a
 
     report = mod.build_code_improvement_workorder("2026-06-10", max_orders=10)
 
-    order = next(item for item in report["orders"] if item["order_id"] == "order_swing_scale_in_logic_review")
+    order = next(
+        item
+        for item in report["orders"]
+        if item["order_id"] == "order_swing_scale_in_logic_review"
+    )
     assert order["longstanding_non_implement_review"]["review_disposition"] == (
         "actionable_existing_family_recheck"
     )
@@ -2032,7 +2314,12 @@ def test_build_code_improvement_workorder_force_selects_longstanding_action_requ
         "allowed_runtime_apply": False,
     }
     (automation_dir / "scalping_pattern_lab_automation_2026-06-10.json").write_text(
-        json.dumps({"date": "2026-06-10", "code_improvement_orders": [selected_order, current_order]}),
+        json.dumps(
+            {
+                "date": "2026-06-10",
+                "code_improvement_orders": [selected_order, current_order],
+            }
+        ),
         encoding="utf-8",
     )
     for previous_date in ("2026-06-09", "2026-06-08"):
@@ -2049,7 +2336,7 @@ def test_build_code_improvement_workorder_force_selects_longstanding_action_requ
                             **current_order,
                             "decision": "defer_evidence",
                             "implementation_status": "terminal_deferred_evidence",
-                        }
+                        },
                     ],
                     "non_selected_orders": [],
                 }
@@ -2057,17 +2344,24 @@ def test_build_code_improvement_workorder_force_selects_longstanding_action_requ
             encoding="utf-8",
         )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
 
     report = mod.build_code_improvement_workorder("2026-06-10", max_orders=1)
 
-    assert report["summary"]["selected_longstanding_non_implement_action_required_order_ids"] == [
-        "order_non_selected_actionable_recheck"
-    ]
-    assert report["summary"]["non_selected_longstanding_non_implement_action_required_order_ids"] == []
+    assert report["summary"][
+        "selected_longstanding_non_implement_action_required_order_ids"
+    ] == ["order_non_selected_actionable_recheck"]
+    assert (
+        report["summary"][
+            "non_selected_longstanding_non_implement_action_required_order_ids"
+        ]
+        == []
+    )
     markdown = mod.render_code_improvement_workorder_markdown(report)
     assert "selected_longstanding_non_implement_action_required_order_ids" in markdown
     assert "order_non_selected_actionable_recheck" in markdown
@@ -2140,17 +2434,26 @@ def test_build_code_improvement_workorder_does_not_mark_currently_implemented_as
     report = mod.build_code_improvement_workorder("2026-06-10", max_orders=10)
 
     order = next(
-        item for item in report["orders"] if item["order_id"] == "order_swing_existing_family_metric_review"
+        item
+        for item in report["orders"]
+        if item["order_id"] == "order_swing_existing_family_metric_review"
     )
     assert order["implementation_status"] == "implemented"
     review = order.get("longstanding_non_implement_review")
     if review is not None:
         assert review["review_disposition"] == "implemented_with_provenance"
     assert order.get("longstanding_non_implement_action") is None
-    assert report["summary"]["selected_longstanding_non_implement_action_required_order_ids"] == []
+    assert (
+        report["summary"][
+            "selected_longstanding_non_implement_action_required_order_ids"
+        ]
+        == []
+    )
 
 
-def test_build_code_improvement_workorder_does_not_escalate_rejudged_lifecycle_holding_no_files(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_does_not_escalate_rejudged_lifecycle_holding_no_files(
+    tmp_path, monkeypatch
+):
     ldm_dir = tmp_path / "lifecycle_matrix"
     report_dir = tmp_path / "report"
     doc_dir = tmp_path / "docs"
@@ -2202,8 +2505,12 @@ def test_build_code_improvement_workorder_does_not_escalate_rejudged_lifecycle_h
             ),
             encoding="utf-8",
         )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-scalping")
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-scalping"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "LIFECYCLE_DECISION_MATRIX_DIR", ldm_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
@@ -2214,7 +2521,9 @@ def test_build_code_improvement_workorder_does_not_escalate_rejudged_lifecycle_h
     order = report["orders"][0]
     assert order["decision"] == "defer_evidence"
     assert report["summary"]["repeat_unresolved_escalation_count"] == 0
-    assert report["summary"]["selected_implement_now_new_runtime_effect_false_count"] == 0
+    assert (
+        report["summary"]["selected_implement_now_new_runtime_effect_false_count"] == 0
+    )
 
 
 def test_lifecycle_bucket_discovery_source_dimension_gap_groups_same_bucket():
@@ -2258,7 +2567,9 @@ def test_lifecycle_bucket_discovery_source_dimension_gap_groups_same_bucket():
     assert orders[0]["improvement_type"] == "source_dimension_gap_resolution"
 
 
-def test_build_code_improvement_workorder_preserves_lifecycle_discovery_handoff_orders(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_preserves_lifecycle_discovery_handoff_orders(
+    tmp_path, monkeypatch
+):
     automation_dir = tmp_path / "automation"
     discovery_dir = tmp_path / "discovery"
     report_dir = tmp_path / "report"
@@ -2294,25 +2605,56 @@ def test_build_code_improvement_workorder_preserves_lifecycle_discovery_handoff_
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
-    monkeypatch.setattr(mod, "SWING_STRATEGY_DISCOVERY_EV_DIR", tmp_path / "missing-swing-discovery")
-    monkeypatch.setattr(mod, "SWING_LIFECYCLE_DECISION_MATRIX_DIR", tmp_path / "missing-swing-ldm")
-    monkeypatch.setattr(mod, "SWING_LIFECYCLE_BUCKET_DISCOVERY_DIR", tmp_path / "missing-swing-bucket")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_STRATEGY_DISCOVERY_EV_DIR", tmp_path / "missing-swing-discovery"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_LIFECYCLE_DECISION_MATRIX_DIR", tmp_path / "missing-swing-ldm"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_LIFECYCLE_BUCKET_DISCOVERY_DIR", tmp_path / "missing-swing-bucket"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "LIFECYCLE_DECISION_MATRIX_DIR", tmp_path / "missing-ldm")
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
-    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-observation-audit")
-    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
-    monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness")
-    monkeypatch.setattr(mod, "PATTERN_LAB_AI_REVIEW_DIR", tmp_path / "missing-ai-review")
-    monkeypatch.setattr(mod, "_lifecycle_bucket_discovery_report_path", lambda target_date: discovery_dir / f"lifecycle_bucket_discovery_{target_date}.json")
+    monkeypatch.setattr(
+        mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity"
+    )
+    monkeypatch.setattr(
+        mod,
+        "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR",
+        tmp_path / "missing-observation-audit",
+    )
+    monkeypatch.setattr(
+        mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance"
+    )
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness"
+    )
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_AI_REVIEW_DIR", tmp_path / "missing-ai-review"
+    )
+    monkeypatch.setattr(
+        mod,
+        "_lifecycle_bucket_discovery_report_path",
+        lambda target_date: discovery_dir
+        / f"lifecycle_bucket_discovery_{target_date}.json",
+    )
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
 
     report = mod.build_code_improvement_workorder("2026-05-22", max_orders=1)
 
-    order = next(item for item in report["orders"] if item["source_report_type"] == "lifecycle_bucket_discovery")
+    order = next(
+        item
+        for item in report["orders"]
+        if item["source_report_type"] == "lifecycle_bucket_discovery"
+    )
     assert order["decision"] == "implement_now"
     assert order["runtime_effect"] is False
     assert order["source_bucket_id"] == bucket_id
@@ -2322,7 +2664,9 @@ def test_build_code_improvement_workorder_preserves_lifecycle_discovery_handoff_
 
 def test_lifecycle_bucket_discovery_greenfield_source_only_exclusion_is_not_active_workorder():
     report = {
-        "summary": {"greenfield_policy_emit_state": "not_emitted_no_complete_lifecycle_flow"},
+        "summary": {
+            "greenfield_policy_emit_state": "not_emitted_no_complete_lifecycle_flow"
+        },
         "surfaced_candidates": [
             {
                 "bucket_id": "lifecycle_flow:combo_lifecycle_flow:blocked",
@@ -2377,7 +2721,9 @@ def test_lifecycle_bucket_discovery_source_dimension_gap_creates_actionable_work
     orders = mod._lifecycle_bucket_discovery_followup_orders(report)
 
     assert len(orders) == 1
-    assert orders[0]["order_id"].startswith("order_lifecycle_source_dimension_gap_entry_combo_entry_spot_")
+    assert orders[0]["order_id"].startswith(
+        "order_lifecycle_source_dimension_gap_entry_combo_entry_spot_"
+    )
     assert orders[0]["improvement_type"] == "source_dimension_gap_resolution"
     assert orders[0]["priority"] == 1
     assert "source_dimension_gap=unknown_source_dimensions" in orders[0]["evidence"]
@@ -2441,7 +2787,9 @@ def test_lifecycle_bucket_discovery_join_gap_enrichment_creates_source_only_work
                 "candidate_count": 2,
                 "stage_counts": {"exit": 2},
                 "bucket_type_counts": {"exit_rule": 2},
-                "recommended_resolution_counts": {"join_labels_before_bucket_decision": 2},
+                "recommended_resolution_counts": {
+                    "join_labels_before_bucket_decision": 2
+                },
                 "missing_dimension_key_counts": {"exit": 2},
                 "recommended_next_action": "enrich_bucket_label_or_join_key_before_bucket_decision",
             },
@@ -2482,13 +2830,21 @@ def test_lifecycle_bucket_discovery_quiet_gap_rollup_orders_are_attach_existing_
                 "positive_source_only_keep_collecting": 1,
                 "ai_review_parsed_low_coverage": 1,
             },
-            "ai_review_coverage": {"status": "parsed", "shard_count": 5, "parsed_shard_count": 2},
+            "ai_review_coverage": {
+                "status": "parsed",
+                "shard_count": 5,
+                "parsed_shard_count": 2,
+            },
         },
         "surfaced_candidates": [],
     }
 
     orders = mod._lifecycle_bucket_discovery_followup_orders(report)
-    quiet_orders = [item for item in orders if item["source_report_type"] == "lifecycle_bucket_discovery_quiet_gap_rollup"]
+    quiet_orders = [
+        item
+        for item in orders
+        if item["source_report_type"] == "lifecycle_bucket_discovery_quiet_gap_rollup"
+    ]
 
     assert {item["order_id"] for item in quiet_orders} == {
         "order_lifecycle_quiet_gap_parent_conflict_rollup",
@@ -2503,13 +2859,21 @@ def test_lifecycle_bucket_discovery_quiet_gap_rollup_orders_are_attach_existing_
         closed_instrumentation_order_families={},
     )
     assert classified.decision == "attach_existing_family"
-    assert classified.route in {"parent_conflict_exclusion_review", "positive_source_only_review", "ai_review_coverage_review"}
+    assert classified.route in {
+        "parent_conflict_exclusion_review",
+        "positive_source_only_review",
+        "ai_review_coverage_review",
+    }
 
 
 def test_observation_source_quality_unknown_warning_creates_rollup_order():
     report = {
         "status": "warning",
-        "summary": {"event_count": 10, "warning_stage_count": 1, "high_volume_no_source_field_stage_count": 0},
+        "summary": {
+            "event_count": 10,
+            "warning_stage_count": 1,
+            "high_volume_no_source_field_stage_count": 0,
+        },
         "stage_contracts": {
             "unlisted_warning_stage": {
                 "status": "warning",
@@ -2566,13 +2930,16 @@ def test_observation_source_quality_unknown_token_findings_create_implement_orde
     order = next(
         item
         for item in orders
-        if item["order_id"] == "order_observation_source_quality_unknown_token_provenance_gap"
+        if item["order_id"]
+        == "order_observation_source_quality_unknown_token_provenance_gap"
     )
 
     assert order["improvement_type"] == "source_quality_unknown_token_provenance_gap"
     assert order["runtime_effect"] is False
     assert any("unknown:stage=latency_block" in item for item in order["evidence"])
-    assert any("top_unknown_fields=custom_context_state" in item for item in order["evidence"])
+    assert any(
+        "top_unknown_fields=custom_context_state" in item for item in order["evidence"]
+    )
     classified = mod._classify_order(
         order,
         finding_by_order_id={},
@@ -2632,13 +2999,16 @@ def test_observation_source_quality_arbitrary_unknown_token_routes_to_workorder(
     unknown_orders = [
         item
         for item in serialized
-        if item["order_id"] == "order_observation_source_quality_unknown_token_provenance_gap"
+        if item["order_id"]
+        == "order_observation_source_quality_unknown_token_provenance_gap"
     ]
 
     assert len(unknown_orders) == 1
     assert unknown_orders[0]["decision"] == "implement_now"
     assert codex_workorder_runner.is_safe_implement_now(unknown_orders[0])
-    assert any("custom_context_state:1:0.01" in item for item in unknown_orders[0]["evidence"])
+    assert any(
+        "custom_context_state:1:0.01" in item for item in unknown_orders[0]["evidence"]
+    )
 
 
 def test_observation_source_quality_raw_row_exclusion_routes_to_implement_now_workorder():
@@ -2697,7 +3067,8 @@ def test_observation_source_quality_raw_row_exclusion_routes_to_implement_now_wo
     raw_orders = [
         item
         for item in serialized
-        if item["order_id"] == "order_observation_source_quality_raw_row_exclusion_producer_gap"
+        if item["order_id"]
+        == "order_observation_source_quality_raw_row_exclusion_producer_gap"
     ]
 
     assert len(raw_orders) == 1
@@ -2706,10 +3077,14 @@ def test_observation_source_quality_raw_row_exclusion_routes_to_implement_now_wo
     assert raw_orders[0]["runtime_effect"] is False
     assert codex_workorder_runner.is_safe_implement_now(raw_orders[0])
     assert any("excluded_row_count=2" in item for item in raw_orders[0]["evidence"])
-    assert any("custom_runtime_context_stage" in item for item in raw_orders[0]["evidence"])
+    assert any(
+        "custom_runtime_context_stage" in item for item in raw_orders[0]["evidence"]
+    )
 
 
-def test_observation_source_quality_raw_row_exclusion_limit_up_context_is_review_only(tmp_path):
+def test_observation_source_quality_raw_row_exclusion_limit_up_context_is_review_only(
+    tmp_path,
+):
     manifest_path = tmp_path / "manifest.json"
     rows = []
     for idx in range(6):
@@ -2717,7 +3092,11 @@ def test_observation_source_quality_raw_row_exclusion_limit_up_context_is_review
             {
                 "line_no": idx + 1,
                 "payload": {
-                    "stage": "blocked_overbought" if idx % 2 == 0 else "blocked_strength_momentum",
+                    "stage": (
+                        "blocked_overbought"
+                        if idx % 2 == 0
+                        else "blocked_strength_momentum"
+                    ),
                     "stock_code": "003220",
                     "record_id": 9276,
                     "fields": {
@@ -2727,7 +3106,9 @@ def test_observation_source_quality_raw_row_exclusion_limit_up_context_is_review
                 },
             }
         )
-    manifest_path.write_text(json.dumps({"excluded_rows": rows}, ensure_ascii=False), encoding="utf-8")
+    manifest_path.write_text(
+        json.dumps({"excluded_rows": rows}, ensure_ascii=False), encoding="utf-8"
+    )
     report = {
         "status": "warning",
         "summary": {"event_count": 6, "tuning_input_allowed": True},
@@ -2759,17 +3140,30 @@ def test_observation_source_quality_raw_row_exclusion_limit_up_context_is_review
     raw_order = next(
         item
         for item in serialized
-        if item["order_id"] == "order_observation_source_quality_raw_row_exclusion_producer_gap"
+        if item["order_id"]
+        == "order_observation_source_quality_raw_row_exclusion_producer_gap"
     )
 
     assert raw_order["decision"] == "attach_existing_family"
     assert raw_order["route"] == "review_required_limit_up_locked_context"
-    assert raw_order["improvement_type"] == "source_quality_raw_row_exclusion_limit_up_locked_context"
-    assert raw_order["raw_row_exclusion_context_classification"] == "limit_up_locked_context"
-    assert raw_order["terminal_disposition"] == "no_code_required_pending_policy_classification"
+    assert (
+        raw_order["improvement_type"]
+        == "source_quality_raw_row_exclusion_limit_up_locked_context"
+    )
+    assert (
+        raw_order["raw_row_exclusion_context_classification"]
+        == "limit_up_locked_context"
+    )
+    assert (
+        raw_order["terminal_disposition"]
+        == "no_code_required_pending_policy_classification"
+    )
     assert raw_order["implementation_candidate"] is False
     assert not codex_workorder_runner.is_safe_implement_now(raw_order)
-    assert any("context_classification=limit_up_locked_context" in item for item in raw_order["evidence"])
+    assert any(
+        "context_classification=limit_up_locked_context" in item
+        for item in raw_order["evidence"]
+    )
 
 
 def test_observation_source_quality_raw_row_exclusion_market_halt_context_is_review_only(
@@ -2811,17 +3205,24 @@ def test_observation_source_quality_raw_row_exclusion_market_halt_context_is_rev
     raw_order = next(
         item
         for item in serialized
-        if item["order_id"] == "order_observation_source_quality_raw_row_exclusion_producer_gap"
+        if item["order_id"]
+        == "order_observation_source_quality_raw_row_exclusion_producer_gap"
     )
 
     assert raw_order["decision"] == "attach_existing_family"
     assert raw_order["route"] == "review_required_market_halt_context"
-    assert raw_order["improvement_type"] == "source_quality_raw_row_exclusion_market_halt_context"
+    assert (
+        raw_order["improvement_type"]
+        == "source_quality_raw_row_exclusion_market_halt_context"
+    )
     assert (
         raw_order["raw_row_exclusion_context_classification"]
         == "market_halt_or_circuit_window_overlap"
     )
-    assert raw_order["terminal_disposition"] == "no_code_required_pending_policy_classification"
+    assert (
+        raw_order["terminal_disposition"]
+        == "no_code_required_pending_policy_classification"
+    )
     assert raw_order["implementation_candidate"] is False
     assert not codex_workorder_runner.is_safe_implement_now(raw_order)
     assert any(
@@ -2844,7 +3245,8 @@ def test_observation_source_quality_raw_row_exclusion_routes_even_when_audit_sta
     orders = mod._observation_source_quality_followup_orders(report)
 
     assert any(
-        item["order_id"] == "order_observation_source_quality_raw_row_exclusion_producer_gap"
+        item["order_id"]
+        == "order_observation_source_quality_raw_row_exclusion_producer_gap"
         for item in orders
     )
 
@@ -2880,7 +3282,8 @@ def test_observation_source_quality_known_fixed_unknown_tokens_attach_existing_f
     order = next(
         item
         for item in mod._observation_source_quality_followup_orders(report)
-        if item["order_id"] == "order_observation_source_quality_unknown_token_provenance_gap"
+        if item["order_id"]
+        == "order_observation_source_quality_unknown_token_provenance_gap"
     )
     classified = mod._classify_order(
         order,
@@ -2941,8 +3344,14 @@ def test_lifecycle_source_contract_drift_followup_is_existing_source_only_proven
         closed_instrumentation_order_families={},
     )
 
-    assert order["implementation_status"] == "implemented_source_quality_contract_available"
-    assert order["implementation_provenance"]["decision_authority"] == "source_contract_drift_detection"
+    assert (
+        order["implementation_status"]
+        == "implemented_source_quality_contract_available"
+    )
+    assert (
+        order["implementation_provenance"]["decision_authority"]
+        == "source_contract_drift_detection"
+    )
     assert order["actual_order_submitted"] is False
     assert order["broker_order_forbidden"] is True
     assert classified.decision == "attach_existing_family"
@@ -2974,7 +3383,10 @@ def test_producer_gap_ai_review_followup_pass_is_existing_source_only_provenance
         closed_instrumentation_order_families={},
     )
 
-    assert order["implementation_status"] == "implemented_source_quality_contract_available"
+    assert (
+        order["implementation_status"]
+        == "implemented_source_quality_contract_available"
+    )
     assert order["implementation_provenance"]["runtime_effect"] is False
     assert order["implementation_provenance"]["broker_order_forbidden"] is True
     assert classified.decision == "attach_existing_family"
@@ -3013,7 +3425,8 @@ def test_observation_source_quality_unknown_token_workorder_evidence_is_not_trun
     order = next(
         item
         for item in mod._observation_source_quality_followup_orders(report)
-        if item["order_id"] == "order_observation_source_quality_unknown_token_provenance_gap"
+        if item["order_id"]
+        == "order_observation_source_quality_unknown_token_provenance_gap"
     )
 
     unknown_evidence = "\n".join(order["evidence"])
@@ -3061,7 +3474,9 @@ def test_swing_lifecycle_bucket_discovery_contract_and_ai_review_rollups_are_sou
             "sim_auto_reviewed_candidate_count": 20,
             "sim_auto_unreviewed_candidate_count": 1,
             "sim_auto_downgraded_by_review_count": 1,
-            "ai_review_followup_reasons": ["sim_policy_review_2:ai_review_response_missing"],
+            "ai_review_followup_reasons": [
+                "sim_policy_review_2:ai_review_response_missing"
+            ],
         },
         "surfaced_candidates": [
             {
@@ -3098,7 +3513,11 @@ def test_swing_lifecycle_bucket_discovery_provider_unavailable_ai_review_is_hold
     }
 
     orders = mod._swing_lifecycle_bucket_discovery_followup_orders(report)
-    order = next(item for item in orders if item["order_id"] == "order_swing_lifecycle_bucket_discovery_ai_review_rollup")
+    order = next(
+        item
+        for item in orders
+        if item["order_id"] == "order_swing_lifecycle_bucket_discovery_ai_review_rollup"
+    )
     classified = mod._classify_order(
         order,
         finding_by_order_id={},
@@ -3128,15 +3547,27 @@ def test_swing_lifecycle_bucket_discovery_ai_review_rollup_order_carries_impleme
     }
 
     orders = mod._swing_lifecycle_bucket_discovery_followup_orders(report)
-    order = next(item for item in orders if item["order_id"] == "order_swing_lifecycle_bucket_discovery_ai_review_rollup")
+    order = next(
+        item
+        for item in orders
+        if item["order_id"] == "order_swing_lifecycle_bucket_discovery_ai_review_rollup"
+    )
 
     assert order["implementation_status"] == "implemented"
-    assert order["implementation_provenance"]["implementation_type"] == "swing_bucket_ai_review_shard_rollup"
+    assert (
+        order["implementation_provenance"]["implementation_type"]
+        == "swing_bucket_ai_review_shard_rollup"
+    )
     assert order["implementation_provenance"]["sim_auto_reviewed_candidate_count"] == 14
-    assert order["implementation_provenance"]["root_cause_closure_status_hint"] == "root_cause_closed"
+    assert (
+        order["implementation_provenance"]["root_cause_closure_status_hint"]
+        == "root_cause_closed"
+    )
 
 
-def test_build_code_improvement_workorder_consumes_pattern_lab_currentness_audit(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_consumes_pattern_lab_currentness_audit(
+    tmp_path, monkeypatch
+):
     automation_dir = tmp_path / "automation"
     currentness_dir = tmp_path / "currentness"
     report_dir = tmp_path / "report"
@@ -3172,12 +3603,24 @@ def test_build_code_improvement_workorder_consumes_pattern_lab_currentness_audit
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
-    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-observation-audit")
-    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
+    monkeypatch.setattr(
+        mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity"
+    )
+    monkeypatch.setattr(
+        mod,
+        "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR",
+        tmp_path / "missing-observation-audit",
+    )
+    monkeypatch.setattr(
+        mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance"
+    )
     monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", currentness_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
@@ -3194,7 +3637,9 @@ def test_build_code_improvement_workorder_consumes_pattern_lab_currentness_audit
     )
 
 
-def test_build_code_improvement_workorder_preserves_observability_order_source(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_preserves_observability_order_source(
+    tmp_path, monkeypatch
+):
     automation_dir = tmp_path / "automation"
     currentness_dir = tmp_path / "currentness"
     report_dir = tmp_path / "report"
@@ -3227,12 +3672,24 @@ def test_build_code_improvement_workorder_preserves_observability_order_source(t
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
-    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-observation-audit")
-    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
+    monkeypatch.setattr(
+        mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity"
+    )
+    monkeypatch.setattr(
+        mod,
+        "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR",
+        tmp_path / "missing-observation-audit",
+    )
+    monkeypatch.setattr(
+        mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance"
+    )
     monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", currentness_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
@@ -3261,7 +3718,9 @@ def test_build_code_improvement_workorder_consumes_microstructure_reaction_conte
         json.dumps({"date": target_date, "code_improvement_orders": []}),
         encoding="utf-8",
     )
-    (microstructure_dir / f"microstructure_reaction_context_{target_date}.json").write_text(
+    (
+        microstructure_dir / f"microstructure_reaction_context_{target_date}.json"
+    ).write_text(
         json.dumps(
             {
                 "date": target_date,
@@ -3302,13 +3761,27 @@ def test_build_code_improvement_workorder_consumes_microstructure_reaction_conte
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
-    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-observation-audit")
-    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
-    monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness")
+    monkeypatch.setattr(
+        mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity"
+    )
+    monkeypatch.setattr(
+        mod,
+        "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR",
+        tmp_path / "missing-observation-audit",
+    )
+    monkeypatch.setattr(
+        mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance"
+    )
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness"
+    )
     monkeypatch.setattr(mod, "MICROSTRUCTURE_REACTION_CONTEXT_DIR", microstructure_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
@@ -3323,19 +3796,25 @@ def test_build_code_improvement_workorder_consumes_microstructure_reaction_conte
     assert timestamp_order["allowed_runtime_apply"] is False
     assert timestamp_order["actual_order_submitted"] is False
     assert timestamp_order["broker_order_forbidden"] is True
-    candidate_order = order_by_id["order_microstructure_signed_tape_runtime_candidate_review"]
+    candidate_order = order_by_id[
+        "order_microstructure_signed_tape_runtime_candidate_review"
+    ]
     assert candidate_order["decision"] == "design_family_candidate"
     assert candidate_order["allowed_runtime_apply"] is False
     assert report["summary"]["microstructure_reaction_context_source_order_count"] == 2
     assert report["source"]["microstructure_reaction_context"] == str(
         microstructure_dir / f"microstructure_reaction_context_{target_date}.json"
     )
-    markdown = (doc_dir / f"code_improvement_workorder_{target_date}.md").read_text(encoding="utf-8")
+    markdown = (doc_dir / f"code_improvement_workorder_{target_date}.md").read_text(
+        encoding="utf-8"
+    )
     assert "microstructure_reaction_context_source_order_count" in markdown
     assert "order_microstructure_ka10046_received_timestamp_gap" in markdown
 
 
-def test_build_code_improvement_workorder_consumes_pattern_lab_ai_review(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_consumes_pattern_lab_ai_review(
+    tmp_path, monkeypatch
+):
     automation_dir = tmp_path / "automation"
     ai_review_dir = tmp_path / "ai-review"
     report_dir = tmp_path / "report"
@@ -3371,13 +3850,27 @@ def test_build_code_improvement_workorder_consumes_pattern_lab_ai_review(tmp_pat
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
-    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-observation-audit")
-    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
-    monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness")
+    monkeypatch.setattr(
+        mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity"
+    )
+    monkeypatch.setattr(
+        mod,
+        "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR",
+        tmp_path / "missing-observation-audit",
+    )
+    monkeypatch.setattr(
+        mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance"
+    )
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness"
+    )
     monkeypatch.setattr(mod, "PATTERN_LAB_AI_REVIEW_DIR", ai_review_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
@@ -3466,7 +3959,9 @@ def test_pattern_lab_ai_review_automation_handoff_gap_is_evidence_not_duplicate_
     assert classified.mapped_family == "pattern_lab_feedback_handoff"
 
 
-def test_build_code_improvement_workorder_force_selects_producer_gap_orders(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_force_selects_producer_gap_orders(
+    tmp_path, monkeypatch
+):
     automation_dir = tmp_path / "automation"
     producer_gap_dir = tmp_path / "producer-gap"
     report_dir = tmp_path / "report"
@@ -3513,14 +4008,30 @@ def test_build_code_improvement_workorder_force_selects_producer_gap_orders(tmp_
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
-    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-observation-audit")
-    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
-    monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness")
-    monkeypatch.setattr(mod, "PATTERN_LAB_AI_REVIEW_DIR", tmp_path / "missing-ai-review")
+    monkeypatch.setattr(
+        mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity"
+    )
+    monkeypatch.setattr(
+        mod,
+        "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR",
+        tmp_path / "missing-observation-audit",
+    )
+    monkeypatch.setattr(
+        mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance"
+    )
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness"
+    )
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_AI_REVIEW_DIR", tmp_path / "missing-ai-review"
+    )
     monkeypatch.setattr(mod, "PRODUCER_GAP_DISCOVERY_DIR", producer_gap_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
@@ -3528,11 +4039,15 @@ def test_build_code_improvement_workorder_force_selects_producer_gap_orders(tmp_
     report = mod.build_code_improvement_workorder("2026-05-26", max_orders=1)
 
     decisions = {item["order_id"]: item["decision"] for item in report["orders"]}
-    assert decisions["order_producer_gap_discovery_time_window_policy_exception"] == "implement_now"
+    assert (
+        decisions["order_producer_gap_discovery_time_window_policy_exception"]
+        == "implement_now"
+    )
     order = next(
         item
         for item in report["orders"]
-        if item["order_id"] == "order_producer_gap_discovery_time_window_policy_exception"
+        if item["order_id"]
+        == "order_producer_gap_discovery_time_window_policy_exception"
     )
     assert order["actual_order_submitted"] is False
     assert order["broker_order_forbidden"] is True
@@ -3541,10 +4056,15 @@ def test_build_code_improvement_workorder_force_selects_producer_gap_orders(tmp_
     assert report["source"]["producer_gap_discovery"] == str(
         producer_gap_dir / "producer_gap_discovery_2026-05-26.json"
     )
-    assert "Runtime hook candidate:" not in mod.render_code_improvement_workorder_markdown(report)
+    assert (
+        "Runtime hook candidate:"
+        not in mod.render_code_improvement_workorder_markdown(report)
+    )
 
 
-def test_build_code_improvement_workorder_exposes_non_selected_source_orders(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_exposes_non_selected_source_orders(
+    tmp_path, monkeypatch
+):
     target_date = "2099-01-03"
     automation_dir = tmp_path / "automation"
     report_dir = tmp_path / "report"
@@ -3581,21 +4101,41 @@ def test_build_code_improvement_workorder_exposes_non_selected_source_orders(tmp
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
-    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-observation-audit")
-    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
-    monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness")
-    monkeypatch.setattr(mod, "PATTERN_LAB_AI_REVIEW_DIR", tmp_path / "missing-ai-review")
-    monkeypatch.setattr(mod, "PRODUCER_GAP_DISCOVERY_DIR", tmp_path / "missing-producer-gap")
+    monkeypatch.setattr(
+        mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity"
+    )
+    monkeypatch.setattr(
+        mod,
+        "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR",
+        tmp_path / "missing-observation-audit",
+    )
+    monkeypatch.setattr(
+        mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance"
+    )
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness"
+    )
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_AI_REVIEW_DIR", tmp_path / "missing-ai-review"
+    )
+    monkeypatch.setattr(
+        mod, "PRODUCER_GAP_DISCOVERY_DIR", tmp_path / "missing-producer-gap"
+    )
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
 
     report = mod.build_code_improvement_workorder(target_date, max_orders=1)
 
-    assert [item["order_id"] for item in report["orders"]] == ["order_runtime_instrumentation"]
+    assert [item["order_id"] for item in report["orders"]] == [
+        "order_runtime_instrumentation"
+    ]
     assert report["non_selected_orders"][0]["order_id"] == "order_deferred_solo"
     assert report["non_selected_orders"][0]["decision"] == "defer_evidence"
     assert report["summary"]["non_selected_order_count"] == 1
@@ -3606,7 +4146,9 @@ def test_build_code_improvement_workorder_exposes_non_selected_source_orders(tmp
     assert "order_deferred_solo" in markdown
 
 
-def test_build_code_improvement_workorder_strips_producer_gap_runtime_hook_candidate_contract(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_strips_producer_gap_runtime_hook_candidate_contract(
+    tmp_path, monkeypatch
+):
     automation_dir = tmp_path / "automation"
     producer_gap_dir = tmp_path / "producer-gap"
     report_dir = tmp_path / "report"
@@ -3655,27 +4197,49 @@ def test_build_code_improvement_workorder_strips_producer_gap_runtime_hook_candi
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
-    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-observation-audit")
-    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
-    monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness")
-    monkeypatch.setattr(mod, "PATTERN_LAB_AI_REVIEW_DIR", tmp_path / "missing-ai-review")
+    monkeypatch.setattr(
+        mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity"
+    )
+    monkeypatch.setattr(
+        mod,
+        "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR",
+        tmp_path / "missing-observation-audit",
+    )
+    monkeypatch.setattr(
+        mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance"
+    )
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness"
+    )
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_AI_REVIEW_DIR", tmp_path / "missing-ai-review"
+    )
     monkeypatch.setattr(mod, "PRODUCER_GAP_DISCOVERY_DIR", producer_gap_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
 
     report = mod.build_code_improvement_workorder("2026-05-26", max_orders=1)
 
-    order = next(item for item in report["orders"] if item["order_id"] == "order_producer_gap_discovery_runner")
+    order = next(
+        item
+        for item in report["orders"]
+        if item["order_id"] == "order_producer_gap_discovery_runner"
+    )
     assert order["runtime_hook_candidate_contract"] is None
     markdown = mod.render_code_improvement_workorder_markdown(report)
     assert "Runtime hook candidate:" not in markdown
 
 
-def test_build_code_improvement_workorder_consumes_stage_hook_workorders(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_consumes_stage_hook_workorders(
+    tmp_path, monkeypatch
+):
     automation_dir = tmp_path / "automation"
     stage_hook_dir = tmp_path / "stage-hook"
     scaffold_dir = tmp_path / "stage-hook-scaffold"
@@ -3741,7 +4305,9 @@ def test_build_code_improvement_workorder_consumes_stage_hook_workorders(tmp_pat
                         "allowed_runtime_apply": False,
                         "initial_runtime_state": "disabled",
                         "requires_separate_runtime_apply_candidate": True,
-                        "implementation_files": ["src/engine/automation/stage_hook_runtime_scaffold.py"],
+                        "implementation_files": [
+                            "src/engine/automation/stage_hook_runtime_scaffold.py"
+                        ],
                     }
                 ],
             }
@@ -3749,15 +4315,33 @@ def test_build_code_improvement_workorder_consumes_stage_hook_workorders(tmp_pat
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
-    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-observation-audit")
-    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
-    monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness")
-    monkeypatch.setattr(mod, "PATTERN_LAB_AI_REVIEW_DIR", tmp_path / "missing-ai-review")
-    monkeypatch.setattr(mod, "PRODUCER_GAP_DISCOVERY_DIR", tmp_path / "missing-producer-gap")
+    monkeypatch.setattr(
+        mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity"
+    )
+    monkeypatch.setattr(
+        mod,
+        "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR",
+        tmp_path / "missing-observation-audit",
+    )
+    monkeypatch.setattr(
+        mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance"
+    )
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness"
+    )
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_AI_REVIEW_DIR", tmp_path / "missing-ai-review"
+    )
+    monkeypatch.setattr(
+        mod, "PRODUCER_GAP_DISCOVERY_DIR", tmp_path / "missing-producer-gap"
+    )
     monkeypatch.setattr(mod, "STAGE_HOOK_WORKORDER_DISCOVERY_DIR", stage_hook_dir)
     monkeypatch.setattr(mod, "STAGE_HOOK_RUNTIME_SCAFFOLD_DIR", scaffold_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
@@ -3765,9 +4349,16 @@ def test_build_code_improvement_workorder_consumes_stage_hook_workorders(tmp_pat
 
     report = mod.build_code_improvement_workorder("2026-05-26", max_orders=1)
 
-    order = next(item for item in report["orders"] if item["order_id"] == "order_stage_hook_workorder_discovery_runner")
+    order = next(
+        item
+        for item in report["orders"]
+        if item["order_id"] == "order_stage_hook_workorder_discovery_runner"
+    )
     assert order["source_report_type"] == "stage_hook_workorder_discovery"
-    assert order["stage_hook_candidate_contract"]["hook_name"] == "holding_flow_runner_debounce_guard"
+    assert (
+        order["stage_hook_candidate_contract"]["hook_name"]
+        == "holding_flow_runner_debounce_guard"
+    )
     assert order["initial_runtime_state"] == "disabled"
     assert order["requires_separate_runtime_apply_candidate"] is True
     assert order["implementation_status"] == "implemented"
@@ -3808,8 +4399,12 @@ def test_build_code_improvement_workorder_auto_selects_buy_funnel_submit_drought
                             "submitted_to_budget_unique_pct": 16.67,
                         },
                         "blocker_top": [{"label": "latency_block", "count": 15}],
-                        "upstream_blocker_top": [{"label": "blocked_ai_score", "count": 8}],
-                        "latency_blocker_top": [{"label": "spread_too_wide", "count": 11}],
+                        "upstream_blocker_top": [
+                            {"label": "blocked_ai_score", "count": 8}
+                        ],
+                        "latency_blocker_top": [
+                            {"label": "spread_too_wide", "count": 11}
+                        ],
                     }
                 },
             },
@@ -3818,25 +4413,51 @@ def test_build_code_improvement_workorder_auto_selects_buy_funnel_submit_drought
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
-    monkeypatch.setattr(mod, "SWING_STRATEGY_DISCOVERY_EV_DIR", tmp_path / "missing-swing-discovery")
-    monkeypatch.setattr(mod, "SWING_LIFECYCLE_DECISION_MATRIX_DIR", tmp_path / "missing-swing-ldm")
-    monkeypatch.setattr(mod, "SWING_LIFECYCLE_BUCKET_DISCOVERY_DIR", tmp_path / "missing-swing-bucket")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_STRATEGY_DISCOVERY_EV_DIR", tmp_path / "missing-swing-discovery"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_LIFECYCLE_DECISION_MATRIX_DIR", tmp_path / "missing-swing-ldm"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_LIFECYCLE_BUCKET_DISCOVERY_DIR", tmp_path / "missing-swing-bucket"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "LIFECYCLE_DECISION_MATRIX_DIR", tmp_path / "missing-ldm")
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
-    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-observation-audit")
-    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
-    monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness")
-    monkeypatch.setattr(mod, "PATTERN_LAB_AI_REVIEW_DIR", tmp_path / "missing-ai-review")
+    monkeypatch.setattr(
+        mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity"
+    )
+    monkeypatch.setattr(
+        mod,
+        "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR",
+        tmp_path / "missing-observation-audit",
+    )
+    monkeypatch.setattr(
+        mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance"
+    )
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness"
+    )
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_AI_REVIEW_DIR", tmp_path / "missing-ai-review"
+    )
     monkeypatch.setattr(mod, "BUY_FUNNEL_SENTINEL_DIR", sentinel_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
 
     report = mod.build_code_improvement_workorder(target_date, max_orders=1)
 
-    order = next(item for item in report["orders"] if item["order_id"] == "order_entry_submit_drought_auto_resolution")
+    order = next(
+        item
+        for item in report["orders"]
+        if item["order_id"] == "order_entry_submit_drought_auto_resolution"
+    )
     assert order["decision"] == "implement_now"
     assert order["runtime_effect"] is False
     assert order["source_report_type"] == "buy_funnel_sentinel"
@@ -3950,25 +4571,51 @@ def test_build_code_improvement_workorder_marks_submit_drought_artifact_regenera
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
-    monkeypatch.setattr(mod, "SWING_STRATEGY_DISCOVERY_EV_DIR", tmp_path / "missing-swing-discovery")
-    monkeypatch.setattr(mod, "SWING_LIFECYCLE_DECISION_MATRIX_DIR", tmp_path / "missing-swing-ldm")
-    monkeypatch.setattr(mod, "SWING_LIFECYCLE_BUCKET_DISCOVERY_DIR", tmp_path / "missing-swing-bucket")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_STRATEGY_DISCOVERY_EV_DIR", tmp_path / "missing-swing-discovery"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_LIFECYCLE_DECISION_MATRIX_DIR", tmp_path / "missing-swing-ldm"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_LIFECYCLE_BUCKET_DISCOVERY_DIR", tmp_path / "missing-swing-bucket"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "LIFECYCLE_DECISION_MATRIX_DIR", ldm_dir)
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
-    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-observation-audit")
-    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
-    monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness")
-    monkeypatch.setattr(mod, "PATTERN_LAB_AI_REVIEW_DIR", tmp_path / "missing-ai-review")
+    monkeypatch.setattr(
+        mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity"
+    )
+    monkeypatch.setattr(
+        mod,
+        "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR",
+        tmp_path / "missing-observation-audit",
+    )
+    monkeypatch.setattr(
+        mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance"
+    )
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness"
+    )
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_AI_REVIEW_DIR", tmp_path / "missing-ai-review"
+    )
     monkeypatch.setattr(mod, "BUY_FUNNEL_SENTINEL_DIR", sentinel_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
 
     report = mod.build_code_improvement_workorder(target_date, max_orders=1)
 
-    order = next(item for item in report["orders"] if item["order_id"] == "order_entry_submit_drought_auto_resolution")
+    order = next(
+        item
+        for item in report["orders"]
+        if item["order_id"] == "order_entry_submit_drought_auto_resolution"
+    )
     assert order["root_cause_closure_status"] == "artifact_regeneration_required"
     assert order["implementation_provenance"]["artifact_regeneration_required"] is True
     assert report["summary"]["artifact_regeneration_required_count"] >= 1
@@ -4088,30 +4735,66 @@ def test_build_code_improvement_workorder_closes_submit_drought_when_root_cause_
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
-    monkeypatch.setattr(mod, "SWING_STRATEGY_DISCOVERY_EV_DIR", tmp_path / "missing-swing-discovery")
-    monkeypatch.setattr(mod, "SWING_LIFECYCLE_DECISION_MATRIX_DIR", tmp_path / "missing-swing-ldm")
-    monkeypatch.setattr(mod, "SWING_LIFECYCLE_BUCKET_DISCOVERY_DIR", tmp_path / "missing-swing-bucket")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_STRATEGY_DISCOVERY_EV_DIR", tmp_path / "missing-swing-discovery"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_LIFECYCLE_DECISION_MATRIX_DIR", tmp_path / "missing-swing-ldm"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_LIFECYCLE_BUCKET_DISCOVERY_DIR", tmp_path / "missing-swing-bucket"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "LIFECYCLE_DECISION_MATRIX_DIR", ldm_dir)
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
-    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-observation-audit")
-    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
-    monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness")
-    monkeypatch.setattr(mod, "PATTERN_LAB_AI_REVIEW_DIR", tmp_path / "missing-ai-review")
+    monkeypatch.setattr(
+        mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity"
+    )
+    monkeypatch.setattr(
+        mod,
+        "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR",
+        tmp_path / "missing-observation-audit",
+    )
+    monkeypatch.setattr(
+        mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance"
+    )
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness"
+    )
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_AI_REVIEW_DIR", tmp_path / "missing-ai-review"
+    )
     monkeypatch.setattr(mod, "BUY_FUNNEL_SENTINEL_DIR", sentinel_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
 
     report = mod.build_code_improvement_workorder(target_date, max_orders=1)
 
-    order = next(item for item in report["orders"] if item["order_id"] == "order_entry_submit_drought_auto_resolution")
+    order = next(
+        item
+        for item in report["orders"]
+        if item["order_id"] == "order_entry_submit_drought_auto_resolution"
+    )
     assert order["root_cause_closure_status"] == "root_cause_closed"
-    assert order["implementation_provenance"]["root_cause_counts"]["spread_microstructure_guard"] == 6
-    assert order["implementation_provenance"]["root_cause_closure_status_hint"] == "root_cause_closed"
     assert (
-        order["implementation_provenance"]["observation_breakdown"]["decision_authority"]
+        order["implementation_provenance"]["root_cause_counts"][
+            "spread_microstructure_guard"
+        ]
+        == 6
+    )
+    assert (
+        order["implementation_provenance"]["root_cause_closure_status_hint"]
+        == "root_cause_closed"
+    )
+    assert (
+        order["implementation_provenance"]["observation_breakdown"][
+            "decision_authority"
+        ]
         == "submit_drought_attribution_only"
     )
     assert order["implementation_provenance"]["observation_axis_status"] == {
@@ -4141,15 +4824,15 @@ def test_buy_funnel_submit_drought_workorder_uses_matches_when_primary_runtime_o
                     },
                     "blocker_top": [{"label": "blocked_ai_score", "count": 180}],
                     "upstream_blocker_top": [{"label": "score_wait", "count": 120}],
-                    "latency_blocker_top": [{"label": "stale_context_or_quote", "count": 64}],
+                    "latency_blocker_top": [
+                        {"label": "stale_context_or_quote", "count": 64}
+                    ],
                 }
             },
         }
     )
 
-    assert {
-        order["order_id"] for order in orders
-    } >= {
+    assert {order["order_id"] for order in orders} >= {
         "order_entry_submit_drought_auto_resolution",
         "order_entry_post_submit_contract_gap_review",
         "order_entry_broker_receipt_contract_gap_review",
@@ -4194,7 +4877,9 @@ def test_buy_funnel_submit_drought_creates_source_taxonomy_gap_workorder():
     )
 
     taxonomy_order = next(
-        item for item in orders if item["order_id"] == "order_entry_source_taxonomy_contract_gap_review"
+        item
+        for item in orders
+        if item["order_id"] == "order_entry_source_taxonomy_contract_gap_review"
     )
     assert taxonomy_order["runtime_effect"] is False
     assert taxonomy_order["allowed_runtime_apply"] is False
@@ -4300,14 +4985,22 @@ def test_buy_funnel_submit_drought_marks_post_submit_gap_when_submit_sample_exis
     taxonomy_order = by_id["order_entry_source_taxonomy_contract_gap_review"]
 
     assert order["implementation_status"] == "open_post_submit_provenance_join_gap"
-    assert order["implementation_provenance"]["implementation_type"] == "post_submit_provenance_join_gap"
+    assert (
+        order["implementation_provenance"]["implementation_type"]
+        == "post_submit_provenance_join_gap"
+    )
     assert order["implementation_provenance"]["submitted_unique"] == 17
     assert (
         order["implementation_provenance"]["sample_status"]
         == "submitted_sample_exists_broker_or_fill_join_missing"
     )
-    assert taxonomy_order["implementation_status"] == "open_source_taxonomy_provenance_gap"
-    assert taxonomy_order["implementation_provenance"]["implementation_type"] == "source_taxonomy_provenance_gap"
+    assert (
+        taxonomy_order["implementation_status"] == "open_source_taxonomy_provenance_gap"
+    )
+    assert (
+        taxonomy_order["implementation_provenance"]["implementation_type"]
+        == "source_taxonomy_provenance_gap"
+    )
     assert taxonomy_order["implementation_provenance"]["sample_status"] == (
         "submitted_sample_exists_source_taxonomy_missing"
     )
@@ -4450,10 +5143,16 @@ def test_buy_funnel_submit_drought_keeps_source_taxonomy_gap_open_when_leakage_r
 
     by_id = {item["order_id"]: item for item in orders}
     taxonomy_order = by_id["order_entry_source_taxonomy_contract_gap_review"]
-    assert taxonomy_order["implementation_status"] == "open_source_taxonomy_provenance_gap"
-    assert "taxonomy_leakage_labels=['blocked_swing_gap:-']" in taxonomy_order["evidence"]
+    assert (
+        taxonomy_order["implementation_status"] == "open_source_taxonomy_provenance_gap"
+    )
+    assert (
+        "taxonomy_leakage_labels=['blocked_swing_gap:-']" in taxonomy_order["evidence"]
+    )
     receipt_order = by_id["order_entry_broker_receipt_contract_gap_review"]
-    assert receipt_order["implementation_status"] == "implemented_submit_contract_verified"
+    assert (
+        receipt_order["implementation_status"] == "implemented_submit_contract_verified"
+    )
 
 
 def test_lifecycle_submit_attribution_marks_no_gap_resolution_when_broker_key_present():
@@ -4505,7 +5204,9 @@ def test_lifecycle_submit_attribution_marks_no_gap_resolution_when_broker_key_pr
     )
 
 
-def test_build_code_improvement_workorder_consumes_ldm_submit_bucket_workorders(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_consumes_ldm_submit_bucket_workorders(
+    tmp_path, monkeypatch
+):
     target_date = "2099-01-03"
     automation_dir = tmp_path / "automation"
     ldm_dir = tmp_path / "ldm"
@@ -4565,17 +5266,39 @@ def test_build_code_improvement_workorder_consumes_ldm_submit_bucket_workorders(
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(mod, "LIFECYCLE_DECISION_MATRIX_DIR", ldm_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
-    monkeypatch.setattr(mod, "SWING_STRATEGY_DISCOVERY_EV_DIR", tmp_path / "missing-swing-discovery")
-    monkeypatch.setattr(mod, "SWING_LIFECYCLE_DECISION_MATRIX_DIR", tmp_path / "missing-swing-ldm")
-    monkeypatch.setattr(mod, "SWING_LIFECYCLE_BUCKET_DISCOVERY_DIR", tmp_path / "missing-swing-bucket")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_STRATEGY_DISCOVERY_EV_DIR", tmp_path / "missing-swing-discovery"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_LIFECYCLE_DECISION_MATRIX_DIR", tmp_path / "missing-swing-ldm"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_LIFECYCLE_BUCKET_DISCOVERY_DIR", tmp_path / "missing-swing-bucket"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
-    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-observation-audit")
-    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
-    monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness")
-    monkeypatch.setattr(mod, "PATTERN_LAB_AI_REVIEW_DIR", tmp_path / "missing-ai-review")
+    monkeypatch.setattr(
+        mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity"
+    )
+    monkeypatch.setattr(
+        mod,
+        "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR",
+        tmp_path / "missing-observation-audit",
+    )
+    monkeypatch.setattr(
+        mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance"
+    )
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness"
+    )
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_AI_REVIEW_DIR", tmp_path / "missing-ai-review"
+    )
     monkeypatch.setattr(mod, "BUY_FUNNEL_SENTINEL_DIR", tmp_path / "missing-buy")
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
@@ -4588,7 +5311,10 @@ def test_build_code_improvement_workorder_consumes_ldm_submit_bucket_workorders(
         if item["order_id"] == "order_entry_broker_receipt_contract_gap_review"
     )
     assert order["decision"] == "implement_now"
-    assert order["source_report_type"] == "lifecycle_decision_matrix_submit_bucket_attribution"
+    assert (
+        order["source_report_type"]
+        == "lifecycle_decision_matrix_submit_bucket_attribution"
+    )
     assert order["runtime_effect"] is False
     assert order["allowed_runtime_apply"] is False
     expected_holding_order_id = mod._lifecycle_stage_bucket_order_id(
@@ -4603,7 +5329,10 @@ def test_build_code_improvement_workorder_consumes_ldm_submit_bucket_workorders(
         for item in report["orders"]
         if item["order_id"] == expected_holding_order_id
     )
-    assert holding_order["source_report_type"] == "lifecycle_decision_matrix_holding_bucket_attribution"
+    assert (
+        holding_order["source_report_type"]
+        == "lifecycle_decision_matrix_holding_bucket_attribution"
+    )
     assert holding_order["allowed_runtime_apply"] is False
     assert report["summary"]["lifecycle_submit_bucket_source_order_count"] == 1
     assert report["summary"]["lifecycle_holding_exit_bucket_source_order_count"] == 1
@@ -4622,7 +5351,13 @@ def test_lifecycle_child_bucket_not_applicable_evidence_is_existing_family():
             "allowed_runtime_apply": False,
             "implementation_status": "open",
             "implementation_provenance": {
-                "source_field_coverage": {"outcome": {"present_count": 9, "sample_count": 9, "coverage_rate": 1.0}},
+                "source_field_coverage": {
+                    "outcome": {
+                        "present_count": 9,
+                        "sample_count": 9,
+                        "coverage_rate": 1.0,
+                    }
+                },
                 "recommended_resolution": "mark_not_applicable_explicitly",
             },
         },
@@ -4637,7 +5372,9 @@ def test_lifecycle_child_bucket_not_applicable_evidence_is_existing_family():
     assert "not_applicable" in classified.reason
 
 
-def test_build_code_improvement_workorder_adds_entry_adm_gap_order(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_adds_entry_adm_gap_order(
+    tmp_path, monkeypatch
+):
     automation_dir = tmp_path / "automation"
     ev_dir = tmp_path / "ev"
     adm_dir = tmp_path / "adm"
@@ -4679,19 +5416,37 @@ def test_build_code_improvement_workorder_adds_entry_adm_gap_order(tmp_path, mon
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
-    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-observation-audit")
-    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
-    monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness")
+    monkeypatch.setattr(
+        mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity"
+    )
+    monkeypatch.setattr(
+        mod,
+        "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR",
+        tmp_path / "missing-observation-audit",
+    )
+    monkeypatch.setattr(
+        mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance"
+    )
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness"
+    )
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
 
     report = mod.build_code_improvement_workorder("2026-05-18", max_orders=5)
 
-    order = next(item for item in report["orders"] if item["order_id"] == "order_scalp_entry_adm_daily_tuning_coverage")
+    order = next(
+        item
+        for item in report["orders"]
+        if item["order_id"] == "order_scalp_entry_adm_daily_tuning_coverage"
+    )
     assert order["decision"] == "implement_now"
     assert order["runtime_effect"] is False
     assert "joined_sample=2" in order["evidence"]
@@ -4714,7 +5469,10 @@ def test_entry_adm_sample_wait_only_is_rejudged_non_implement():
             "threshold_family": "scalp_entry_action_decision_matrix_advisory",
             "runtime_effect": False,
             "allowed_runtime_apply": False,
-            "adm_issue_types": ["joined_sample_below_sample_floor", "prompt_context_not_loaded"],
+            "adm_issue_types": [
+                "joined_sample_below_sample_floor",
+                "prompt_context_not_loaded",
+            ],
             "files_likely_touched": [
                 "src/engine/scalp_entry_action_decision_matrix.py",
                 "src/engine/threshold_cycle_ev_report.py",
@@ -4733,7 +5491,9 @@ def test_entry_adm_sample_wait_only_is_rejudged_non_implement():
     assert "waiting on clean sample/runtime observation" in classified.reason
 
 
-def test_build_code_improvement_workorder_adds_pipeline_event_verbosity_order(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_adds_pipeline_event_verbosity_order(
+    tmp_path, monkeypatch
+):
     automation_dir = tmp_path / "automation"
     ev_dir = tmp_path / "ev"
     verbosity_dir = tmp_path / "verbosity"
@@ -4768,17 +5528,27 @@ def test_build_code_improvement_workorder_adds_pipeline_event_verbosity_order(tm
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
     monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", verbosity_dir)
-    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
+    monkeypatch.setattr(
+        mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance"
+    )
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
 
     report = mod.build_code_improvement_workorder("2026-05-14", max_orders=3)
 
-    order = next(item for item in report["orders"] if item["order_id"] == "order_pipeline_event_compaction_v2_shadow")
+    order = next(
+        item
+        for item in report["orders"]
+        if item["order_id"] == "order_pipeline_event_compaction_v2_shadow"
+    )
     assert order["decision"] == "implement_now"
     assert order["runtime_effect"] is False
     assert report["summary"]["pipeline_event_verbosity_source_order_count"] == 1
@@ -4787,7 +5557,9 @@ def test_build_code_improvement_workorder_adds_pipeline_event_verbosity_order(tm
     )
 
 
-def test_build_code_improvement_workorder_adds_observation_source_quality_orders(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_adds_observation_source_quality_orders(
+    tmp_path, monkeypatch
+):
     automation_dir = tmp_path / "automation"
     ev_dir = tmp_path / "ev"
     audit_dir = tmp_path / "observation-audit"
@@ -4836,31 +5608,53 @@ def test_build_code_improvement_workorder_adds_observation_source_quality_orders
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
+    monkeypatch.setattr(
+        mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity"
+    )
     monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", audit_dir)
-    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
+    monkeypatch.setattr(
+        mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance"
+    )
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
 
     report = mod.build_code_improvement_workorder("2026-05-15", max_orders=5)
 
     order_ids = {item["order_id"]: item for item in report["orders"]}
-    assert order_ids["order_ai_source_quality_not_evaluated_provenance"]["decision"] == "implement_now"
-    assert order_ids["order_high_volume_diagnostic_stage_contract_labels"]["runtime_effect"] is False
+    assert (
+        order_ids["order_ai_source_quality_not_evaluated_provenance"]["decision"]
+        == "implement_now"
+    )
+    assert (
+        order_ids["order_high_volume_diagnostic_stage_contract_labels"][
+            "runtime_effect"
+        ]
+        is False
+    )
     swing_order = order_ids["order_swing_source_quality_micro_context_provenance"]
     assert swing_order["runtime_effect"] is False
     assert swing_order["decision"] == "implement_now"
-    assert any("swing_warning_stages=swing_probe_state_persisted,scale_in_price_p2_observe" in item for item in swing_order["evidence"])
+    assert any(
+        "swing_warning_stages=swing_probe_state_persisted,scale_in_price_p2_observe"
+        in item
+        for item in swing_order["evidence"]
+    )
     assert report["summary"]["observation_source_quality_source_order_count"] == 3
     assert report["source"]["observation_source_quality_audit"] == str(
         audit_dir / "observation_source_quality_audit_2026-05-15.json"
     )
 
 
-def test_build_code_improvement_workorder_adds_source_quality_hard_block_order(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_adds_source_quality_hard_block_order(
+    tmp_path, monkeypatch
+):
     automation_dir = tmp_path / "automation"
     ev_dir = tmp_path / "ev"
     audit_dir = tmp_path / "observation-audit"
@@ -4908,28 +5702,44 @@ def test_build_code_improvement_workorder_adds_source_quality_hard_block_order(t
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
+    monkeypatch.setattr(
+        mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity"
+    )
     monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", audit_dir)
-    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
+    monkeypatch.setattr(
+        mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance"
+    )
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
 
     report = mod.build_code_improvement_workorder("2026-05-15", max_orders=5)
 
     order = next(
-        item for item in report["orders"] if item["order_id"] == "order_observation_source_quality_hard_block_contract_gap"
+        item
+        for item in report["orders"]
+        if item["order_id"]
+        == "order_observation_source_quality_hard_block_contract_gap"
     )
     assert order["decision"] == "implement_now"
     assert order["route"] == "source_quality_gap"
     assert order["improvement_type"] == "source_quality_hard_block_contract_gap"
     assert order["runtime_effect"] is False
-    assert any("first_timestamp=2026-05-15T09:00:00+09:00" in item for item in order["evidence"])
+    assert any(
+        "first_timestamp=2026-05-15T09:00:00+09:00" in item
+        for item in order["evidence"]
+    )
 
 
-def test_build_code_improvement_workorder_keeps_raw_row_exclusion_order_beyond_max_orders(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_keeps_raw_row_exclusion_order_beyond_max_orders(
+    tmp_path, monkeypatch
+):
     automation_dir = tmp_path / "automation"
     audit_dir = tmp_path / "observation-audit"
     report_dir = tmp_path / "report"
@@ -4956,22 +5766,33 @@ def test_build_code_improvement_workorder_keeps_raw_row_exclusion_order_beyond_m
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
+    monkeypatch.setattr(
+        mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity"
+    )
     monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", audit_dir)
-    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
+    monkeypatch.setattr(
+        mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance"
+    )
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
 
     report = mod.build_code_improvement_workorder("2026-05-15", max_orders=0)
 
     selected_ids = {order["order_id"] for order in report["orders"]}
-    assert "order_observation_source_quality_raw_row_exclusion_producer_gap" in selected_ids
-    assert report["summary"]["selected_implement_now_new_runtime_effect_false_order_ids"] == [
+    assert (
         "order_observation_source_quality_raw_row_exclusion_producer_gap"
-    ]
+        in selected_ids
+    )
+    assert report["summary"][
+        "selected_implement_now_new_runtime_effect_false_order_ids"
+    ] == ["order_observation_source_quality_raw_row_exclusion_producer_gap"]
 
 
 def test_build_code_improvement_workorder_treats_implemented_report_order_as_existing_family(
@@ -5013,7 +5834,9 @@ def test_build_code_improvement_workorder_treats_implemented_report_order_as_exi
                         "route": "implement_now",
                         "mapped_family": "swing_entry_ofi_qi_execution_quality",
                         "implementation_status": "implemented",
-                        "implementation_checks": [{"name": "contract", "status": "pass"}],
+                        "implementation_checks": [
+                            {"name": "contract", "status": "pass"}
+                        ],
                         "implementation_provenance": {
                             "owner": "swing_pattern_lab_automation",
                             "decision_authority": "source_quality_only",
@@ -5027,12 +5850,20 @@ def test_build_code_improvement_workorder_treats_implemented_report_order_as_exi
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
     monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", swing_lab_dir)
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
-    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-audit")
-    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
+    monkeypatch.setattr(
+        mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity"
+    )
+    monkeypatch.setattr(
+        mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-audit"
+    )
+    monkeypatch.setattr(
+        mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance"
+    )
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
 
@@ -5048,7 +5879,10 @@ def test_build_code_improvement_workorder_treats_implemented_report_order_as_exi
     assert order["implementation_candidate"] is False
     assert order["implementation_status"] == "implemented"
     assert order["implementation_checks"] == [{"name": "contract", "status": "pass"}]
-    assert order["implementation_provenance"]["decision_authority"] == "source_quality_only"
+    assert (
+        order["implementation_provenance"]["decision_authority"]
+        == "source_quality_only"
+    )
 
 
 def test_build_code_improvement_workorder_attaches_swing_improvement_implemented_ofi_qi_order(
@@ -5103,11 +5937,19 @@ def test_build_code_improvement_workorder_attaches_swing_improvement_implemented
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-pattern")
     monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", swing_dir)
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
-    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-audit")
-    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
+    monkeypatch.setattr(
+        mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity"
+    )
+    monkeypatch.setattr(
+        mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-audit"
+    )
+    monkeypatch.setattr(
+        mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance"
+    )
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
 
@@ -5122,7 +5964,10 @@ def test_build_code_improvement_workorder_attaches_swing_improvement_implemented
     assert order["route"] == "existing_family"
     assert order["implementation_candidate"] is False
     assert order["implementation_status"] == "implemented"
-    assert order["implementation_provenance"]["source_contract"] == "swing_orderbook_micro_context_v2"
+    assert (
+        order["implementation_provenance"]["source_contract"]
+        == "swing_orderbook_micro_context_v2"
+    )
     assert order["root_cause_closure_status"] == "root_cause_closed"
 
 
@@ -5182,11 +6027,19 @@ def test_build_code_improvement_workorder_attaches_swing_ai_structured_output_ev
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-pattern")
     monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", swing_dir)
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
-    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-audit")
-    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
+    monkeypatch.setattr(
+        mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity"
+    )
+    monkeypatch.setattr(
+        mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-audit"
+    )
+    monkeypatch.setattr(
+        mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance"
+    )
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
 
@@ -5201,15 +6054,26 @@ def test_build_code_improvement_workorder_attaches_swing_ai_structured_output_ev
     assert order["route"] == "existing_family"
     assert order["mapped_family"] == "swing_ai_contract_structured_output_eval"
     assert order["implementation_candidate"] is False
-    assert order["implementation_status"] == "implemented_source_quality_contract_waiting_sample"
+    assert (
+        order["implementation_status"]
+        == "implemented_source_quality_contract_waiting_sample"
+    )
     assert order["root_cause_closure_status"] == "implementation_done"
     assert order["runtime_effect"] is False
     assert order["allowed_runtime_apply"] is False
     assert order["actual_order_submitted"] is False
     assert order["broker_order_forbidden"] is True
-    assert order["implementation_provenance"]["decision_authority"] == "swing_ai_contract_eval_report_only"
-    assert order["implementation_provenance"]["source_contract"] == "swing_ai_structured_output_eval_v1"
-    assert order["implementation_provenance"]["sample_status"] == "waiting_replay_sample"
+    assert (
+        order["implementation_provenance"]["decision_authority"]
+        == "swing_ai_contract_eval_report_only"
+    )
+    assert (
+        order["implementation_provenance"]["source_contract"]
+        == "swing_ai_structured_output_eval_v1"
+    )
+    assert (
+        order["implementation_provenance"]["sample_status"] == "waiting_replay_sample"
+    )
 
 
 def test_build_code_improvement_workorder_attaches_lifecycle_ai_context_instrumentation(
@@ -5250,13 +6114,25 @@ def test_build_code_improvement_workorder_attaches_lifecycle_ai_context_instrume
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
-    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-audit")
-    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
-    monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness")
+    monkeypatch.setattr(
+        mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity"
+    )
+    monkeypatch.setattr(
+        mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-audit"
+    )
+    monkeypatch.setattr(
+        mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance"
+    )
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness"
+    )
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
 
@@ -5295,7 +6171,9 @@ def test_build_code_improvement_workorder_attaches_swing_discovery_source_qualit
                 },
                 "source_quality_summary": {
                     "implementation_status": "implemented",
-                    "implementation_checks": [{"name": "label_maturity_provenance", "status": "pass"}],
+                    "implementation_checks": [
+                        {"name": "label_maturity_provenance", "status": "pass"}
+                    ],
                     "implementation_provenance": {
                         "runtime_effect": False,
                         "decision_authority": "swing_sim_exploration_only",
@@ -5309,14 +6187,26 @@ def test_build_code_improvement_workorder_attaches_swing_discovery_source_qualit
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "SWING_STRATEGY_DISCOVERY_EV_DIR", swing_ev_dir)
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
-    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-audit")
-    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
-    monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness")
+    monkeypatch.setattr(
+        mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity"
+    )
+    monkeypatch.setattr(
+        mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-audit"
+    )
+    monkeypatch.setattr(
+        mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance"
+    )
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness"
+    )
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
 
@@ -5332,7 +6222,9 @@ def test_build_code_improvement_workorder_attaches_swing_discovery_source_qualit
     assert order["implementation_provenance"]["runtime_effect"] is False
 
 
-def test_build_code_improvement_workorder_adds_window_policy_audit_order(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_adds_window_policy_audit_order(
+    tmp_path, monkeypatch
+):
     automation_dir = tmp_path / "automation"
     ev_dir = tmp_path / "ev"
     calibration_dir = tmp_path / "calibration"
@@ -5340,7 +6232,9 @@ def test_build_code_improvement_workorder_adds_window_policy_audit_order(tmp_pat
     doc_dir = tmp_path / "docs"
     for directory in (automation_dir, ev_dir, calibration_dir):
         directory.mkdir()
-    calibration_path = calibration_dir / "threshold_cycle_calibration_2026-05-14_postclose.json"
+    calibration_path = (
+        calibration_dir / "threshold_cycle_calibration_2026-05-14_postclose.json"
+    )
     calibration_path.write_text(
         json.dumps(
             {
@@ -5372,11 +6266,19 @@ def test_build_code_improvement_workorder_adds_window_policy_audit_order(tmp_pat
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
-    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
+    monkeypatch.setattr(
+        mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity"
+    )
+    monkeypatch.setattr(
+        mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance"
+    )
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
 
@@ -5392,7 +6294,9 @@ def test_build_code_improvement_workorder_adds_window_policy_audit_order(tmp_pat
     assert "rolling_source_snapshot_mismatch" in "\n".join(order["evidence"])
 
 
-def test_build_code_improvement_workorder_adds_codebase_performance_orders(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_adds_codebase_performance_orders(
+    tmp_path, monkeypatch
+):
     automation_dir = tmp_path / "automation"
     ev_dir = tmp_path / "ev"
     perf_dir = tmp_path / "perf"
@@ -5422,7 +6326,9 @@ def test_build_code_improvement_workorder_adds_codebase_performance_orders(tmp_p
                         "data_quality_effect": False,
                         "tuning_axis_effect": False,
                         "files_likely_touched": ["src/engine/buy_funnel_sentinel.py"],
-                        "acceptance_tests": ["pytest src/tests/test_buy_funnel_sentinel.py"],
+                        "acceptance_tests": [
+                            "pytest src/tests/test_buy_funnel_sentinel.py"
+                        ],
                         "parity_contract": "classification parity",
                         "forbidden_uses": ["runtime_threshold_mutation"],
                     }
@@ -5467,8 +6373,12 @@ def test_build_code_improvement_workorder_adds_codebase_performance_orders(tmp_p
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
     monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", perf_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
@@ -5480,7 +6390,11 @@ def test_build_code_improvement_workorder_adds_codebase_performance_orders(tmp_p
     assert decisions["order_perf_buy_funnel_json_scan"] == "implement_now"
     assert decisions["order_perf_kiwoom_orders_http_session_review"] == "defer_evidence"
     assert decisions["order_perf_raw_event_suppression_out_of_scope"] == "reject"
-    accepted = next(item for item in report["orders"] if item["order_id"] == "order_perf_buy_funnel_json_scan")
+    accepted = next(
+        item
+        for item in report["orders"]
+        if item["order_id"] == "order_perf_buy_funnel_json_scan"
+    )
     assert accepted["runtime_effect"] is False
     assert accepted["strategy_effect"] is False
     assert accepted["data_quality_effect"] is False
@@ -5490,7 +6404,9 @@ def test_build_code_improvement_workorder_adds_codebase_performance_orders(tmp_p
     assert report["source"]["codebase_performance_workorder"] == str(perf_path)
 
 
-def test_build_code_improvement_workorder_attaches_implemented_codebase_performance_order(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_attaches_implemented_codebase_performance_order(
+    tmp_path, monkeypatch
+):
     perf_dir = tmp_path / "perf"
     report_dir = tmp_path / "report"
     doc_dir = tmp_path / "docs"
@@ -5514,9 +6430,15 @@ def test_build_code_improvement_workorder_attaches_implemented_codebase_performa
                         "priority": 1,
                         "runtime_effect": False,
                         "implementation_status": "implemented",
-                        "implementation_checks": [{"path": "src/engine/monitor_snapshot_runtime.py"}],
-                        "files_likely_touched": ["src/engine/monitor_snapshot_runtime.py"],
-                        "acceptance_tests": ["pytest src/tests/test_log_archive_service.py"],
+                        "implementation_checks": [
+                            {"path": "src/engine/monitor_snapshot_runtime.py"}
+                        ],
+                        "files_likely_touched": [
+                            "src/engine/monitor_snapshot_runtime.py"
+                        ],
+                        "acceptance_tests": [
+                            "pytest src/tests/test_log_archive_service.py"
+                        ],
                         "parity_contract": "last valid JSON line parity",
                     }
                 ],
@@ -5525,9 +6447,15 @@ def test_build_code_improvement_workorder_attaches_implemented_codebase_performa
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-automation")
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-automation"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
     monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", perf_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
@@ -5535,13 +6463,19 @@ def test_build_code_improvement_workorder_attaches_implemented_codebase_performa
 
     report = mod.build_code_improvement_workorder("2026-05-14", max_orders=10)
 
-    order = next(item for item in report["orders"] if item["order_id"] == "order_perf_monitor_snapshot_stream_tail")
+    order = next(
+        item
+        for item in report["orders"]
+        if item["order_id"] == "order_perf_monitor_snapshot_stream_tail"
+    )
     assert order["decision"] == "attach_existing_family"
     assert order["mapped_family"] == "ops_performance_report_only_implemented"
     assert order["implementation_status"] == "implemented"
 
 
-def test_build_code_improvement_workorder_adds_panic_lifecycle_orders(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_adds_panic_lifecycle_orders(
+    tmp_path, monkeypatch
+):
     automation_dir = tmp_path / "automation"
     ev_dir = tmp_path / "ev"
     calibration_dir = tmp_path / "calibration"
@@ -5571,7 +6505,9 @@ def test_build_code_improvement_workorder_adds_panic_lifecycle_orders(tmp_path, 
                             "microstructure_portfolio_local_risk_off_only": True,
                             "market_breadth_followup_candidate": True,
                             "source_quality_blockers": ["market_regime_not_risk_off"],
-                            "candidate_status": {"panic_stop_confirmation": "report_only_candidate"},
+                            "candidate_status": {
+                                "panic_stop_confirmation": "report_only_candidate"
+                            },
                         },
                         "panic_buying": {
                             "panic_buy_state": "PANIC_BUY",
@@ -5585,7 +6521,9 @@ def test_build_code_improvement_workorder_adds_panic_lifecycle_orders(tmp_path, 
                             "trailing_winner_count": 2,
                             "market_wide_panic_buy_confirmed": True,
                             "market_breadth_risk_on_advisory": True,
-                            "candidate_status": {"panic_buy_runner_tp_canary": "report_only_candidate"},
+                            "candidate_status": {
+                                "panic_buy_runner_tp_canary": "report_only_candidate"
+                            },
                         },
                     }
                 }
@@ -5599,8 +6537,12 @@ def test_build_code_improvement_workorder_adds_panic_lifecycle_orders(tmp_path, 
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
@@ -5608,29 +6550,61 @@ def test_build_code_improvement_workorder_adds_panic_lifecycle_orders(tmp_path, 
     report = mod.build_code_improvement_workorder("2026-05-13", max_orders=5)
 
     decisions = {item["order_id"]: item["decision"] for item in report["orders"]}
-    assert decisions["order_panic_sell_defense_lifecycle_transition_pack"] == "attach_existing_family"
-    assert decisions["order_panic_buy_runner_tp_canary_lifecycle_pack"] == "attach_existing_family"
+    assert (
+        decisions["order_panic_sell_defense_lifecycle_transition_pack"]
+        == "attach_existing_family"
+    )
+    assert (
+        decisions["order_panic_buy_runner_tp_canary_lifecycle_pack"]
+        == "attach_existing_family"
+    )
     assert report["summary"]["panic_lifecycle_source_order_count"] == 2
     assert report["source"]["threshold_cycle_calibration"] == str(calibration_path)
     panic_order = next(
-        item for item in report["orders"] if item["order_id"] == "order_panic_sell_defense_lifecycle_transition_pack"
+        item
+        for item in report["orders"]
+        if item["order_id"] == "order_panic_sell_defense_lifecycle_transition_pack"
     )
-    assert any("market_breadth_followup_candidate=True" in item for item in panic_order["evidence"])
-    assert any("source_quality_blockers=['market_regime_not_risk_off']" in item for item in panic_order["evidence"])
-    assert panic_order["implementation_status"] == "implemented_source_quality_contract_waiting_sample"
+    assert any(
+        "market_breadth_followup_candidate=True" in item
+        for item in panic_order["evidence"]
+    )
+    assert any(
+        "source_quality_blockers=['market_regime_not_risk_off']" in item
+        for item in panic_order["evidence"]
+    )
+    assert (
+        panic_order["implementation_status"]
+        == "implemented_source_quality_contract_waiting_sample"
+    )
     panic_buy_order = next(
-        item for item in report["orders"] if item["order_id"] == "order_panic_buy_runner_tp_canary_lifecycle_pack"
+        item
+        for item in report["orders"]
+        if item["order_id"] == "order_panic_buy_runner_tp_canary_lifecycle_pack"
     )
-    assert any("panic_buy_regime_mode=PANIC_BUY_CONTINUATION" in item for item in panic_buy_order["evidence"])
-    assert any("risk_regime_gate_state=confirmed_panic_buy" in item for item in panic_buy_order["evidence"])
-    assert any("market_wide_panic_buy_confirmed=True" in item for item in panic_buy_order["evidence"])
+    assert any(
+        "panic_buy_regime_mode=PANIC_BUY_CONTINUATION" in item
+        for item in panic_buy_order["evidence"]
+    )
+    assert any(
+        "risk_regime_gate_state=confirmed_panic_buy" in item
+        for item in panic_buy_order["evidence"]
+    )
+    assert any(
+        "market_wide_panic_buy_confirmed=True" in item
+        for item in panic_buy_order["evidence"]
+    )
     assert panic_buy_order["implementation_status"] == "implemented_but_waiting_sample"
-    markdown = (doc_dir / "code_improvement_workorder_2026-05-13.md").read_text(encoding="utf-8")
+    markdown = (doc_dir / "code_improvement_workorder_2026-05-13.md").read_text(
+        encoding="utf-8"
+    )
     assert "panic_buy_runner_tp_canary" in markdown
     assert "threshold_cycle_calibration" in markdown
 
 
-def test_build_code_improvement_workorder_routes_panic_buy_source_quality_only(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_routes_panic_buy_source_quality_only(
+    tmp_path, monkeypatch
+):
     automation_dir = tmp_path / "scalping_pattern_lab_automation"
     ev_dir = tmp_path / "threshold_cycle_ev"
     calibration_dir = tmp_path / "threshold_cycle_calibration"
@@ -5657,7 +6631,9 @@ def test_build_code_improvement_workorder_routes_panic_buy_source_quality_only(t
                             "market_breadth_risk_on_advisory": False,
                             "missing_orderbook_count": 15,
                             "missing_trade_aggressor_count": 13,
-                            "source_quality_blockers": ["panic_buy_orderbook_collector_coverage_gap"],
+                            "source_quality_blockers": [
+                                "panic_buy_orderbook_collector_coverage_gap"
+                            ],
                             "candidate_status": {},
                         }
                     }
@@ -5673,8 +6649,12 @@ def test_build_code_improvement_workorder_routes_panic_buy_source_quality_only(t
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
@@ -5682,17 +6662,31 @@ def test_build_code_improvement_workorder_routes_panic_buy_source_quality_only(t
     report = mod.build_code_improvement_workorder("2026-05-13", max_orders=5)
 
     order = next(
-        item for item in report["orders"] if item["order_id"] == "order_panic_buying_source_quality_market_breadth_micro_coverage"
+        item
+        for item in report["orders"]
+        if item["order_id"]
+        == "order_panic_buying_source_quality_market_breadth_micro_coverage"
     )
     assert order["route"] == "existing_family"
     assert order["runtime_effect"] is False
     assert order["threshold_family"] is None
-    assert order["implementation_status"] == "implemented_source_quality_contract_waiting_sample"
-    assert any("risk_regime_gate_state=source_quality_blocked" in item for item in order["evidence"])
-    assert any("source_quality_blockers=['panic_buy_orderbook_collector_coverage_gap']" in item for item in order["evidence"])
+    assert (
+        order["implementation_status"]
+        == "implemented_source_quality_contract_waiting_sample"
+    )
+    assert any(
+        "risk_regime_gate_state=source_quality_blocked" in item
+        for item in order["evidence"]
+    )
+    assert any(
+        "source_quality_blockers=['panic_buy_orderbook_collector_coverage_gap']" in item
+        for item in order["evidence"]
+    )
 
 
-def test_build_code_improvement_workorder_merges_swing_automation(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_merges_swing_automation(
+    tmp_path, monkeypatch
+):
     scalping_dir = tmp_path / "scalping"
     swing_dir = tmp_path / "swing"
     report_dir = tmp_path / "report"
@@ -5764,13 +6758,20 @@ def test_build_code_improvement_workorder_merges_swing_automation(tmp_path, monk
     assert report["summary"]["scalping_source_order_count"] == 1
     assert report["summary"]["swing_source_order_count"] == 1
     assert report["summary"]["swing_threshold_ai_status"] == "parsed"
-    assert decisions["order_swing_gatekeeper_reject_threshold_review"] == "attach_existing_family"
-    markdown = (doc_dir / "code_improvement_workorder_2026-05-08.md").read_text(encoding="utf-8")
+    assert (
+        decisions["order_swing_gatekeeper_reject_threshold_review"]
+        == "attach_existing_family"
+    )
+    markdown = (doc_dir / "code_improvement_workorder_2026-05-08.md").read_text(
+        encoding="utf-8"
+    )
     assert "swing_improvement_automation" in markdown
     assert "lifecycle_stage" in markdown
 
 
-def test_build_code_improvement_workorder_forces_swing_entry_bottleneck_selected(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_forces_swing_entry_bottleneck_selected(
+    tmp_path, monkeypatch
+):
     scalping_dir = tmp_path / "scalping"
     swing_dir = tmp_path / "swing"
     report_dir = tmp_path / "report"
@@ -5846,15 +6847,24 @@ def test_build_code_improvement_workorder_forces_swing_entry_bottleneck_selected
 
     selected_ids = {item["order_id"] for item in report["orders"]}
     assert "order_swing_entry_bottleneck_auto_resolution" in selected_ids
-    order = next(item for item in report["orders"] if item["order_id"] == "order_swing_entry_bottleneck_auto_resolution")
+    order = next(
+        item
+        for item in report["orders"]
+        if item["order_id"] == "order_swing_entry_bottleneck_auto_resolution"
+    )
     assert order["decision"] == "implement_now"
     assert order["runtime_effect"] is False
     assert order["allowed_runtime_apply"] is False
-    assert report["summary"]["swing_entry_bottleneck_primary"] == "SWING_ENTRY_DROUGHT_CRITICAL"
+    assert (
+        report["summary"]["swing_entry_bottleneck_primary"]
+        == "SWING_ENTRY_DROUGHT_CRITICAL"
+    )
     assert report["summary"]["swing_entry_bottleneck_selected"] is True
 
 
-def test_build_code_improvement_workorder_dedupes_duplicate_orders(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_dedupes_duplicate_orders(
+    tmp_path, monkeypatch
+):
     scalping_dir = tmp_path / "scalping"
     swing_dir = tmp_path / "swing"
     swing_lab_dir = tmp_path / "swing_lab"
@@ -5951,11 +6961,15 @@ def test_build_code_improvement_workorder_dedupes_duplicate_orders(tmp_path, mon
     assert len(dup_warnings) == 1
     assert "order_swing_only" in dup_warnings[0]
     assert "swing_pattern_lab_automation" in dup_warnings[0]
-    markdown = (doc_dir / "code_improvement_workorder_2026-05-08.md").read_text(encoding="utf-8")
+    markdown = (doc_dir / "code_improvement_workorder_2026-05-08.md").read_text(
+        encoding="utf-8"
+    )
     assert "Duplicate Order Collisions" in markdown
 
 
-def test_build_code_improvement_workorder_adds_threshold_ev_hold_no_edge_followup(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_adds_threshold_ev_hold_no_edge_followup(
+    tmp_path, monkeypatch
+):
     scalping_dir = tmp_path / "scalping"
     ev_dir = tmp_path / "ev"
     report_dir = tmp_path / "report"
@@ -5988,7 +7002,10 @@ def test_build_code_improvement_workorder_adds_threshold_ev_hold_no_edge_followu
                                 "counterfactual_gap_count": 42,
                                 "eligible_but_not_chosen_sample_snapshots": 0,
                                 "eligible_but_not_chosen_post_sell_joined_candidates": 0,
-                                "counterfactual_proxy_missing_actions": ["hold_defer", "avg_down_wait"],
+                                "counterfactual_proxy_missing_actions": [
+                                    "hold_defer",
+                                    "avg_down_wait",
+                                ],
                             },
                         }
                     ]
@@ -5998,8 +7015,12 @@ def test_build_code_improvement_workorder_adds_threshold_ev_hold_no_edge_followu
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", scalping_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
@@ -6012,12 +7033,16 @@ def test_build_code_improvement_workorder_adds_threshold_ev_hold_no_edge_followu
     assert order["decision"] == "implement_now"
     assert order["mapped_family"] == "holding_exit_decision_matrix_advisory"
     assert "counterfactual_gap_count=42" in order["evidence"]
-    markdown = (doc_dir / "code_improvement_workorder_2026-05-11.md").read_text(encoding="utf-8")
+    markdown = (doc_dir / "code_improvement_workorder_2026-05-11.md").read_text(
+        encoding="utf-8"
+    )
     assert "hold_no_edge" in markdown
     assert "counterfactual" in markdown
 
 
-def test_build_code_improvement_workorder_skips_adm_followup_when_instrumentation_gap_closed(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_skips_adm_followup_when_instrumentation_gap_closed(
+    tmp_path, monkeypatch
+):
     scalping_dir = tmp_path / "scalping"
     ev_dir = tmp_path / "ev"
     report_dir = tmp_path / "report"
@@ -6061,8 +7086,12 @@ def test_build_code_improvement_workorder_skips_adm_followup_when_instrumentatio
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", scalping_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
@@ -6070,7 +7099,10 @@ def test_build_code_improvement_workorder_skips_adm_followup_when_instrumentatio
     report = mod.build_code_improvement_workorder("2026-05-11", max_orders=5)
 
     assert report["summary"]["threshold_ev_source_order_count"] == 0
-    assert all(item["order_id"] != "order_holding_exit_decision_matrix_edge_counterfactual" for item in report["orders"])
+    assert all(
+        item["order_id"] != "order_holding_exit_decision_matrix_edge_counterfactual"
+        for item in report["orders"]
+    )
 
 
 def test_build_code_improvement_workorder_skips_adm_followup_when_matrix_contract_closed(
@@ -6111,7 +7143,10 @@ def test_build_code_improvement_workorder_skips_adm_followup_when_matrix_contrac
                                 "counterfactual_gap_count": 42,
                                 "eligible_but_not_chosen_sample_snapshots": 0,
                                 "eligible_but_not_chosen_post_sell_joined_candidates": 0,
-                                "counterfactual_proxy_missing_actions": ["hold_defer", "avg_down_wait"],
+                                "counterfactual_proxy_missing_actions": [
+                                    "hold_defer",
+                                    "avg_down_wait",
+                                ],
                             },
                         }
                     ]
@@ -6131,7 +7166,12 @@ def test_build_code_improvement_workorder_skips_adm_followup_when_matrix_contrac
                 },
                 "counterfactual_proxy_summary": {
                     "ready": True,
-                    "actions_present": ["hold_defer", "exit_only", "avg_down_wait", "pyramid_wait"],
+                    "actions_present": [
+                        "hold_defer",
+                        "exit_only",
+                        "avg_down_wait",
+                        "pyramid_wait",
+                    ],
                     "per_action_samples": {
                         "hold_defer": 10,
                         "exit_only": 8,
@@ -6150,8 +7190,12 @@ def test_build_code_improvement_workorder_skips_adm_followup_when_matrix_contrac
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", scalping_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
     monkeypatch.setattr(mod, "HOLDING_EXIT_DECISION_MATRIX_DIR", matrix_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
@@ -6160,7 +7204,10 @@ def test_build_code_improvement_workorder_skips_adm_followup_when_matrix_contrac
     report = mod.build_code_improvement_workorder("2026-05-11", max_orders=5)
 
     assert report["summary"]["threshold_ev_source_order_count"] == 0
-    assert all(item["order_id"] != "order_holding_exit_decision_matrix_edge_counterfactual" for item in report["orders"])
+    assert all(
+        item["order_id"] != "order_holding_exit_decision_matrix_edge_counterfactual"
+        for item in report["orders"]
+    )
 
 
 def test_build_code_improvement_workorder_moves_closed_latency_instrumentation_to_existing_family(
@@ -6225,8 +7272,12 @@ def test_build_code_improvement_workorder_moves_closed_latency_instrumentation_t
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
@@ -6239,7 +7290,9 @@ def test_build_code_improvement_workorder_moves_closed_latency_instrumentation_t
     assert order["mapped_family"] == "dynamic_entry_price_resolver"
 
 
-def test_build_code_improvement_workorder_does_not_route_dynamic_entry_normal_telemetry(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_does_not_route_dynamic_entry_normal_telemetry(
+    tmp_path, monkeypatch
+):
     ev_dir = tmp_path / "ev"
     report_dir = tmp_path / "report"
     doc_dir = tmp_path / "docs"
@@ -6284,8 +7337,12 @@ def test_build_code_improvement_workorder_does_not_route_dynamic_entry_normal_te
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-pattern")
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
@@ -6297,7 +7354,9 @@ def test_build_code_improvement_workorder_does_not_route_dynamic_entry_normal_te
     assert "order_dynamic_entry_price_sim_unpriced_stale_contract" not in orders
 
 
-def test_build_code_improvement_workorder_routes_dynamic_entry_report_contract_gaps(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_routes_dynamic_entry_report_contract_gaps(
+    tmp_path, monkeypatch
+):
     ev_dir = tmp_path / "ev"
     report_dir = tmp_path / "report"
     doc_dir = tmp_path / "docs"
@@ -6340,8 +7399,12 @@ def test_build_code_improvement_workorder_routes_dynamic_entry_report_contract_g
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-pattern")
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
@@ -6356,10 +7419,15 @@ def test_build_code_improvement_workorder_routes_dynamic_entry_report_contract_g
     unpriced_order = orders["order_dynamic_entry_price_sim_unpriced_stale_contract"]
     assert unpriced_order["lifecycle_stage"] == "submit"
     assert unpriced_order["allowed_runtime_apply"] is False
-    assert any("unpriced_or_stale_warning_count=4" in item for item in unpriced_order["evidence"])
+    assert any(
+        "unpriced_or_stale_warning_count=4" in item
+        for item in unpriced_order["evidence"]
+    )
 
 
-def test_build_code_improvement_workorder_reports_previous_generation_diff(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_reports_previous_generation_diff(
+    tmp_path, monkeypatch
+):
     automation_dir = tmp_path / "automation"
     report_dir = tmp_path / "report"
     doc_dir = tmp_path / "docs"
@@ -6406,8 +7474,12 @@ def test_build_code_improvement_workorder_reports_previous_generation_diff(tmp_p
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
@@ -6419,12 +7491,16 @@ def test_build_code_improvement_workorder_reports_previous_generation_diff(tmp_p
     assert report["lineage"]["new_order_ids"] == ["order_new"]
     assert report["lineage"]["removed_order_ids"] == ["order_old"]
     assert report["lineage"]["decision_changed_order_ids"] == ["order_keep"]
-    markdown = (doc_dir / "code_improvement_workorder_2026-05-08.md").read_text(encoding="utf-8")
+    markdown = (doc_dir / "code_improvement_workorder_2026-05-08.md").read_text(
+        encoding="utf-8"
+    )
     assert "order_new" in markdown
     assert "order_old" in markdown
 
 
-def test_build_code_improvement_workorder_consumes_lifecycle_entry_bucket_workorders(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_consumes_lifecycle_entry_bucket_workorders(
+    tmp_path, monkeypatch
+):
     automation_dir = tmp_path / "automation"
     ev_dir = tmp_path / "ev"
     ldm_dir = tmp_path / "ldm"
@@ -6501,7 +7577,7 @@ def test_build_code_improvement_workorder_consumes_lifecycle_entry_bucket_workor
                             "runtime_effect": False,
                         }
                     ],
-                }
+                },
             },
             ensure_ascii=False,
         ),
@@ -6512,14 +7588,26 @@ def test_build_code_improvement_workorder_consumes_lifecycle_entry_bucket_workor
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
+    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
     monkeypatch.setattr(mod, "LIFECYCLE_DECISION_MATRIX_DIR", ldm_dir)
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
-    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-audit")
-    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
-    monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness")
+    monkeypatch.setattr(
+        mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity"
+    )
+    monkeypatch.setattr(
+        mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-audit"
+    )
+    monkeypatch.setattr(
+        mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance"
+    )
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness"
+    )
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
 
@@ -6528,29 +7616,41 @@ def test_build_code_improvement_workorder_consumes_lifecycle_entry_bucket_workor
     order = next(
         item
         for item in report["orders"]
-        if item["order_id"] == "order_lifecycle_entry_bucket_liquidity_bucket_liquidity_unknown"
+        if item["order_id"]
+        == "order_lifecycle_entry_bucket_liquidity_bucket_liquidity_unknown"
     )
     assert order["decision"] == "implement_now"
     assert order["runtime_effect"] is False
-    assert order["source_report_type"] == "lifecycle_decision_matrix_entry_bucket_attribution"
+    assert (
+        order["source_report_type"]
+        == "lifecycle_decision_matrix_entry_bucket_attribution"
+    )
     assert "bucket_key=liquidity_unknown" in order["evidence"]
     scale_order = next(
         item
         for item in report["orders"]
-        if item["order_id"] == "order_lifecycle_scale_in_bucket_blocker_namespace_price_guard"
+        if item["order_id"]
+        == "order_lifecycle_scale_in_bucket_blocker_namespace_price_guard"
     )
     assert scale_order["decision"] == "implement_now"
     assert scale_order["runtime_effect"] is False
     assert scale_order["allowed_runtime_apply"] is False
-    assert scale_order["source_report_type"] == "lifecycle_decision_matrix_scale_in_bucket_attribution"
+    assert (
+        scale_order["source_report_type"]
+        == "lifecycle_decision_matrix_scale_in_bucket_attribution"
+    )
     assert "bucket_key=PRICE_GUARD" in scale_order["evidence"]
     overnight_order = next(
         item
         for item in report["orders"]
-        if item["order_id"] == "order_lifecycle_overnight_bucket_overnight_action_sell_today"
+        if item["order_id"]
+        == "order_lifecycle_overnight_bucket_overnight_action_sell_today"
     )
     assert overnight_order["decision"] == "attach_existing_family"
-    assert overnight_order["derived_review_category"] == "already_implemented_source_handoff"
+    assert (
+        overnight_order["derived_review_category"]
+        == "already_implemented_source_handoff"
+    )
     assert overnight_order["implementation_candidate"] is False
     assert overnight_order["runtime_effect"] is False
     assert overnight_order["allowed_runtime_apply"] is False
@@ -6560,7 +7660,10 @@ def test_build_code_improvement_workorder_consumes_lifecycle_entry_bucket_workor
         overnight_order["implementation_provenance"]["decision_authority"]
         == "adm_ldm_overnight_bucket_attribution_source_only"
     )
-    assert overnight_order["source_report_type"] == "lifecycle_decision_matrix_overnight_bucket_attribution"
+    assert (
+        overnight_order["source_report_type"]
+        == "lifecycle_decision_matrix_overnight_bucket_attribution"
+    )
     assert "bucket_key=SELL_TODAY" in overnight_order["evidence"]
     assert report["summary"]["already_implemented_source_handoff_count"] == 1
     assert report["summary"]["lifecycle_entry_bucket_source_order_count"] == 1
@@ -6644,7 +7747,11 @@ def test_contract_missing_threshold_creates_workorder():
     orders = mod._sim_fill_and_match_report_contract_orders(ev_report)
     gap_ids = [o["order_id"] for o in orders]
     assert "order_active_seed_or_ldm_match_missing_contract_gap" in gap_ids
-    gap = next(o for o in orders if o["order_id"] == "order_active_seed_or_ldm_match_missing_contract_gap")
+    gap = next(
+        o
+        for o in orders
+        if o["order_id"] == "order_active_seed_or_ldm_match_missing_contract_gap"
+    )
     assert "eligible_active_seed_matched_none_count=2" in gap["evidence"]
 
 

@@ -9,7 +9,10 @@ def _write_json(path: Path, payload: dict) -> None:
 
 def _seed_bucket_reports(root: Path, target_date: str = "2026-05-22") -> None:
     _write_json(
-        root / "report" / "lifecycle_decision_matrix" / f"lifecycle_decision_matrix_{target_date}.json",
+        root
+        / "report"
+        / "lifecycle_decision_matrix"
+        / f"lifecycle_decision_matrix_{target_date}.json",
         {
             "date": target_date,
             "entry_bucket_attribution": {"summary": {"bucket_count": 2}},
@@ -18,7 +21,10 @@ def _seed_bucket_reports(root: Path, target_date: str = "2026-05-22") -> None:
         },
     )
     _write_json(
-        root / "report" / "lifecycle_bucket_discovery" / f"lifecycle_bucket_discovery_{target_date}.json",
+        root
+        / "report"
+        / "lifecycle_bucket_discovery"
+        / f"lifecycle_bucket_discovery_{target_date}.json",
         {
             "date": target_date,
             "summary": {
@@ -60,7 +66,10 @@ def _seed_bucket_reports(root: Path, target_date: str = "2026-05-22") -> None:
         },
     )
     _write_json(
-        root / "report" / "runtime_apply_bridge" / f"runtime_apply_bridge_{target_date}.json",
+        root
+        / "report"
+        / "runtime_apply_bridge"
+        / f"runtime_apply_bridge_{target_date}.json",
         {
             "date": target_date,
             "status": "pass",
@@ -87,7 +96,10 @@ def _seed_bucket_reports(root: Path, target_date: str = "2026-05-22") -> None:
         },
     )
     _write_json(
-        root / "report" / "runtime_apply_gap_audit" / f"runtime_apply_gap_audit_{target_date}.json",
+        root
+        / "report"
+        / "runtime_apply_gap_audit"
+        / f"runtime_apply_gap_audit_{target_date}.json",
         {
             "date": target_date,
             "status": "warning",
@@ -99,7 +111,9 @@ def _seed_bucket_reports(root: Path, target_date: str = "2026-05-22") -> None:
                 "runtime_uptake_rate_pct": 0.0,
             },
             "aggressive_push_targets": [
-                {"candidate_id": "entry_wait6579_score66_69_recovery_gate_v1:2026-05-22"}
+                {
+                    "candidate_id": "entry_wait6579_score66_69_recovery_gate_v1:2026-05-22"
+                }
             ],
             "candidate_route_ledger": [
                 {
@@ -120,7 +134,9 @@ def _seed_bucket_reports(root: Path, target_date: str = "2026-05-22") -> None:
     )
 
 
-def test_bucket_tracking_api_returns_summary_timeline_buckets_and_missing(monkeypatch, tmp_path):
+def test_bucket_tracking_api_returns_summary_timeline_buckets_and_missing(
+    monkeypatch, tmp_path
+):
     import src.web.bucket_tracking_routes as routes
 
     monkeypatch.setattr(routes, "DATA_DIR", tmp_path)
@@ -147,11 +163,14 @@ def test_bucket_tracking_api_returns_summary_timeline_buckets_and_missing(monkey
     assert model["timeline"]
     assert model["buckets"]
     assert model["groups"]
-    assert {"date": "2026-05-21", "missing": [
-        "lifecycle_bucket_discovery",
-        "runtime_apply_bridge",
-        "lifecycle_decision_matrix",
-    ]} in model["missing_dates"]
+    assert {
+        "date": "2026-05-21",
+        "missing": [
+            "lifecycle_bucket_discovery",
+            "runtime_apply_bridge",
+            "lifecycle_decision_matrix",
+        ],
+    } in model["missing_dates"]
     assert any(
         row["row_type"] == "runtime_apply_gap" and row["state_group"] == "retry"
         for row in model["buckets"]
@@ -194,7 +213,9 @@ def test_bucket_tracking_routes_and_dashboard_replace_ipo(monkeypatch, tmp_path)
         api = client.get("/api/bucket-tracking?date=2026-05-22&days=1")
         assert api.status_code == 200
         data = api.get_json()
-        assert set(["summary", "timeline", "groups", "buckets", "missing_dates"]).issubset(data)
+        assert set(
+            ["summary", "timeline", "groups", "buckets", "missing_dates"]
+        ).issubset(data)
         assert data["summary"]["current_date"] == "2026-05-22"
         assert data["summary"]["runtime_apply_gap_status"] == "warning"
 
