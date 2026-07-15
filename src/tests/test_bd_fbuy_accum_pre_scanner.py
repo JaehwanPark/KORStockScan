@@ -52,7 +52,11 @@ def test_db_pass_conditions_include_inflow_streak_volume_and_liquidity():
 
 
 def test_thin_absolute_liquidity_is_rejected_even_when_ratios_pass():
-    df = pd.DataFrame(_rows_for_code("221980", "케이디켐", volume=1_500, close=10_000, foreign_net=300))
+    df = pd.DataFrame(
+        _rows_for_code(
+            "221980", "케이디켐", volume=1_500, close=10_000, foreign_net=300
+        )
+    )
     frame = mod._prepare_candidate_frame(df)
     passed = mod.filter_pass_candidates(frame)
 
@@ -60,7 +64,9 @@ def test_thin_absolute_liquidity_is_rejected_even_when_ratios_pass():
 
 
 def test_volume_spike_is_rejected_by_upper_band():
-    rows = _rows_for_code("215100", "로보로보", volume=120_000, close=10_000, foreign_net=18_000)
+    rows = _rows_for_code(
+        "215100", "로보로보", volume=120_000, close=10_000, foreign_net=18_000
+    )
     for row in rows[-1:]:
         row["volume"] = 240_000
     df = pd.DataFrame(rows)
@@ -97,7 +103,9 @@ def test_star_score_components_and_live_adjustments_are_clamped():
 def test_runtime_forbidden_contract_is_preserved(monkeypatch, tmp_path):
     df = pd.DataFrame(_rows_for_code("011200", "HMM"))
 
-    monkeypatch.setattr(mod, "_load_daily_quotes", lambda db_url, target: (df, "2026-05-21"))
+    monkeypatch.setattr(
+        mod, "_load_daily_quotes", lambda db_url, target: (df, "2026-05-21")
+    )
     monkeypatch.setattr(mod, "ARTIFACT_DIR", tmp_path)
 
     report = mod.build_report("2026-05-21", db_url=mod.POSTGRES_URL, write=True)
@@ -109,7 +117,11 @@ def test_runtime_forbidden_contract_is_preserved(monkeypatch, tmp_path):
 
 
 def test_rebound_expansion_candidates_capture_hanon_type():
-    df = pd.DataFrame(_rows_for_code("018880", "한온시스템", volume=120_000, close=10_000, foreign_net=20_000))
+    df = pd.DataFrame(
+        _rows_for_code(
+            "018880", "한온시스템", volume=120_000, close=10_000, foreign_net=20_000
+        )
+    )
     frame = mod._prepare_candidate_frame(df)
     frame.loc[:, "dist_low20_pct"] = 32.0
     frame.loc[:, "vol_med20_ratio"] = 1.65
@@ -146,7 +158,9 @@ def test_daily_db_fallback_replaces_missing_ws_when_live_enabled(monkeypatch):
     assert rows[0]["live_confirmed"] is True
 
 
-def test_write_ws_snapshot_preserves_realtime_type_and_trade_tick_provenance(monkeypatch, tmp_path):
+def test_write_ws_snapshot_preserves_realtime_type_and_trade_tick_provenance(
+    monkeypatch, tmp_path
+):
     snapshot_path = tmp_path / "latest.json"
     monkeypatch.setattr(mod, "WS_SNAPSHOT_PATH", snapshot_path)
 

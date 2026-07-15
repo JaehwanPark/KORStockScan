@@ -16,7 +16,10 @@ from src.engine.ai_engine_openai import (
     OpenAITransportResult,
     OpenAIWSRequestIdMismatchError,
 )
-from src.engine.ai_prompt_contracts import SCALPING_HOLDING_FLOW_SYSTEM_PROMPT, SCALPING_WATCHING_HOT_SYSTEM_PROMPT
+from src.engine.ai_prompt_contracts import (
+    SCALPING_HOLDING_FLOW_SYSTEM_PROMPT,
+    SCALPING_WATCHING_HOT_SYSTEM_PROMPT,
+)
 from src.engine.ai_response_contracts import build_openai_response_text_format
 from src.engine import bedrock_nova_provider
 
@@ -62,7 +65,9 @@ def _build_engine():
     engine.max_consecutive_failures = 5
     engine.last_call_time = 0.0
     engine.min_interval = 0.0
-    engine._annotate_analysis_result = GPTSniperEngine._annotate_analysis_result.__get__(engine, GPTSniperEngine)
+    engine._annotate_analysis_result = (
+        GPTSniperEngine._annotate_analysis_result.__get__(engine, GPTSniperEngine)
+    )
     return engine
 
 
@@ -103,7 +108,9 @@ def test_openai_runtime_clients_disable_sdk_retries(monkeypatch):
     monkeypatch.setattr(openai_module, "OpenAI", _FakeOpenAI)
 
     GPTSniperEngine(["main-key"], announce_startup=False)
-    worker = OpenAIResponsesWSWorker(worker_id=0, api_key="ws-key", metrics_callback=None)
+    worker = OpenAIResponsesWSWorker(
+        worker_id=0, api_key="ws-key", metrics_callback=None
+    )
     worker.close()
 
     assert created_clients
@@ -115,26 +122,121 @@ def test_openai_runtime_clients_disable_sdk_retries(monkeypatch):
 
 def _sample_ticks():
     return [
-        {"time": "09:00:10", "price": 10100, "volume": 220, "dir": "BUY", "strength": 135.0},
-        {"time": "09:00:09", "price": 10100, "volume": 180, "dir": "BUY", "strength": 133.0},
-        {"time": "09:00:08", "price": 10100, "volume": 160, "dir": "BUY", "strength": 131.0},
-        {"time": "09:00:07", "price": 10095, "volume": 100, "dir": "SELL", "strength": 125.0},
-        {"time": "09:00:06", "price": 10095, "volume": 90, "dir": "BUY", "strength": 122.0},
-        {"time": "09:00:05", "price": 10090, "volume": 95, "dir": "BUY", "strength": 120.0},
-        {"time": "09:00:00", "price": 10090, "volume": 80, "dir": "SELL", "strength": 119.0},
-        {"time": "08:59:56", "price": 10085, "volume": 70, "dir": "BUY", "strength": 118.0},
-        {"time": "08:59:52", "price": 10085, "volume": 60, "dir": "SELL", "strength": 117.0},
-        {"time": "08:59:48", "price": 10080, "volume": 55, "dir": "BUY", "strength": 116.0},
+        {
+            "time": "09:00:10",
+            "price": 10100,
+            "volume": 220,
+            "dir": "BUY",
+            "strength": 135.0,
+        },
+        {
+            "time": "09:00:09",
+            "price": 10100,
+            "volume": 180,
+            "dir": "BUY",
+            "strength": 133.0,
+        },
+        {
+            "time": "09:00:08",
+            "price": 10100,
+            "volume": 160,
+            "dir": "BUY",
+            "strength": 131.0,
+        },
+        {
+            "time": "09:00:07",
+            "price": 10095,
+            "volume": 100,
+            "dir": "SELL",
+            "strength": 125.0,
+        },
+        {
+            "time": "09:00:06",
+            "price": 10095,
+            "volume": 90,
+            "dir": "BUY",
+            "strength": 122.0,
+        },
+        {
+            "time": "09:00:05",
+            "price": 10090,
+            "volume": 95,
+            "dir": "BUY",
+            "strength": 120.0,
+        },
+        {
+            "time": "09:00:00",
+            "price": 10090,
+            "volume": 80,
+            "dir": "SELL",
+            "strength": 119.0,
+        },
+        {
+            "time": "08:59:56",
+            "price": 10085,
+            "volume": 70,
+            "dir": "BUY",
+            "strength": 118.0,
+        },
+        {
+            "time": "08:59:52",
+            "price": 10085,
+            "volume": 60,
+            "dir": "SELL",
+            "strength": 117.0,
+        },
+        {
+            "time": "08:59:48",
+            "price": 10080,
+            "volume": 55,
+            "dir": "BUY",
+            "strength": 116.0,
+        },
     ]
 
 
 def _sample_candles():
     return [
-        {"체결시간": "08:56:00", "시가": 10020, "현재가": 10040, "고가": 10060, "저가": 10010, "거래량": 800},
-        {"체결시간": "08:57:00", "시가": 10040, "현재가": 10060, "고가": 10080, "저가": 10030, "거래량": 900},
-        {"체결시간": "08:58:00", "시가": 10060, "현재가": 10080, "고가": 10090, "저가": 10040, "거래량": 1000},
-        {"체결시간": "08:59:00", "시가": 10080, "현재가": 10090, "고가": 10120, "저가": 10070, "거래량": 1200},
-        {"체결시간": "09:00:00", "시가": 10090, "현재가": 10100, "고가": 10130, "저가": 10080, "거래량": 1600},
+        {
+            "체결시간": "08:56:00",
+            "시가": 10020,
+            "현재가": 10040,
+            "고가": 10060,
+            "저가": 10010,
+            "거래량": 800,
+        },
+        {
+            "체결시간": "08:57:00",
+            "시가": 10040,
+            "현재가": 10060,
+            "고가": 10080,
+            "저가": 10030,
+            "거래량": 900,
+        },
+        {
+            "체결시간": "08:58:00",
+            "시가": 10060,
+            "현재가": 10080,
+            "고가": 10090,
+            "저가": 10040,
+            "거래량": 1000,
+        },
+        {
+            "체결시간": "08:59:00",
+            "시가": 10080,
+            "현재가": 10090,
+            "고가": 10120,
+            "저가": 10070,
+            "거래량": 1200,
+        },
+        {
+            "체결시간": "09:00:00",
+            "시가": 10090,
+            "현재가": 10100,
+            "고가": 10130,
+            "저가": 10080,
+            "거래량": 1600,
+        },
     ]
 
 
@@ -156,11 +258,19 @@ def _entry_price_compaction_sample(idx):
         "unused_snapshot": {f"extra_{n}": f"value-{idx}-{n}" for n in range(20)},
         "orderbook": {
             "asks": [
-                {"price": best_ask + level * 5, "volume": 1000 + idx + level, "unused": "ask-detail" * 4}
+                {
+                    "price": best_ask + level * 5,
+                    "volume": 1000 + idx + level,
+                    "unused": "ask-detail" * 4,
+                }
                 for level in range(10)
             ],
             "bids": [
-                {"price": best_bid - level * 5, "volume": 900 + idx + level, "unused": "bid-detail" * 4}
+                {
+                    "price": best_bid - level * 5,
+                    "volume": 900 + idx + level,
+                    "unused": "bid-detail" * 4,
+                }
                 for level in range(10)
             ],
         },
@@ -207,7 +317,9 @@ def _entry_price_compaction_sample(idx):
         "spread_ratio": round((best_ask - best_bid) / max(best_bid, 1), 6),
         "quote_stale": False,
         "signal_score": 65 + (idx % 30),
-        "irrelevant_price_context": {f"ctx_extra_{n}": "ctx-noise" * 5 for n in range(20)},
+        "irrelevant_price_context": {
+            f"ctx_extra_{n}": "ctx-noise" * 5 for n in range(20)
+        },
         "orderbook_micro": {
             "ready": True,
             "reason": "ok",
@@ -243,11 +355,19 @@ def _entry_price_fake_model_output(user_input):
 
     buy_ratio = float(current.get("buy_ratio") or 0.0)
     micro_state = str(micro.get("micro_state") or "insufficient")
-    quote_stale = bool(price_ctx.get("quote_stale") if "quote_stale" in price_ctx else latency_guard.get("quote_stale"))
-    latency_state = str(price_ctx.get("latency_state") or latency_guard.get("latency_state") or "")
+    quote_stale = bool(
+        price_ctx.get("quote_stale")
+        if "quote_stale" in price_ctx
+        else latency_guard.get("quote_stale")
+    )
+    latency_state = str(
+        price_ctx.get("latency_state") or latency_guard.get("latency_state") or ""
+    )
     defensive_price = int(float(price_ctx.get("defensive_order_price") or 0))
     reference_price = int(float(price_ctx.get("reference_target_price") or 0))
-    resolved_price = int(float(price_ctx.get("resolved_order_price") or defensive_price or 0))
+    resolved_price = int(
+        float(price_ctx.get("resolved_order_price") or defensive_price or 0)
+    )
     spread = int(float(price_ctx.get("spread") or 0))
     if spread <= 0:
         best_ask = int(float(price_ctx.get("best_ask") or 0))
@@ -331,9 +451,10 @@ def test_openai_call_applies_endpoint_response_schema_when_flag_enabled(monkeypa
     assert result["decision"] == "BUY"
     assert captured["text"]["format"]["type"] == "json_schema"
     assert captured["text"]["format"]["name"] == "condition_entry_v1"
-    assert captured["text"]["format"]["schema"] == build_openai_response_text_format("condition_entry_v1")[
-        "schema"
-    ]
+    assert (
+        captured["text"]["format"]["schema"]
+        == build_openai_response_text_format("condition_entry_v1")["schema"]
+    )
     assert OPENAI_PROMPT_CONTRACT_MARKER in captured["instructions"]
     assert "Control language: English" in captured["instructions"]
     assert "Domain glossary for interpretation" in captured["instructions"]
@@ -347,7 +468,9 @@ def test_gpt5_nano_always_uses_openai_after_micro_removal(monkeypatch):
     provider_called = {"value": False}
 
     def _fake_create(**kwargs):
-        return SimpleNamespace(output_text='{"action":"WAIT","score":61,"reason":"openai"}')
+        return SimpleNamespace(
+            output_text='{"action":"WAIT","score":61,"reason":"openai"}'
+        )
 
     class Provider:
         def converse(self, **kwargs):
@@ -386,7 +509,9 @@ def test_gpt54_nano_always_uses_openai_after_fast_model_update(monkeypatch):
     provider_called = {"value": False}
 
     def _fake_create(**kwargs):
-        return SimpleNamespace(output_text='{"action":"WAIT","score":61,"reason":"openai"}')
+        return SimpleNamespace(
+            output_text='{"action":"WAIT","score":61,"reason":"openai"}'
+        )
 
     class Provider:
         def converse(self, **kwargs):
@@ -446,9 +571,13 @@ def test_bedrock_primary_routes_gpt54_mini_independently(monkeypatch):
             )
 
     monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "primary")
-    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_PRIMARY_ENDPOINTS", "entry_price,holding_flow")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_BEDROCK_NOVA_LITE_PRIMARY_ENDPOINTS", "entry_price,holding_flow"
+    )
     monkeypatch.setattr(bedrock_nova_provider, "runtime_provider", lambda: Provider())
-    monkeypatch.setattr(bedrock_nova_provider, "write_provider_audit_row", lambda row: None)
+    monkeypatch.setattr(
+        bedrock_nova_provider, "write_provider_audit_row", lambda row: None
+    )
 
     result = GPTSniperEngine._call_openai_safe(
         engine,
@@ -500,9 +629,13 @@ def test_lite_primary_holding_flow_does_not_call_openai(monkeypatch):
 
     engine.client = SimpleNamespace(responses=Responses())
     monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "primary")
-    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_PRIMARY_ENDPOINTS", "entry_price,holding_flow")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_BEDROCK_NOVA_LITE_PRIMARY_ENDPOINTS", "entry_price,holding_flow"
+    )
     monkeypatch.setattr(bedrock_nova_provider, "runtime_provider", lambda: Provider())
-    monkeypatch.setattr(bedrock_nova_provider, "write_provider_audit_row", lambda row: None)
+    monkeypatch.setattr(
+        bedrock_nova_provider, "write_provider_audit_row", lambda row: None
+    )
 
     result = GPTSniperEngine._call_openai_safe(
         engine,
@@ -532,14 +665,21 @@ def test_entry_price_qwen_primary_does_not_call_openai(monkeypatch):
     class Responses:
         def create(self, **kwargs):
             openai_called["value"] = True
-            raise AssertionError("OpenAI must not be called for entry_price Qwen primary")
+            raise AssertionError(
+                "OpenAI must not be called for entry_price Qwen primary"
+            )
 
     class Provider:
         def converse(self, *, prompt, user_input, profile):
             captured["family"] = profile.family
             captured["model_id"] = profile.model_id
             return bedrock_nova_provider.BedrockNovaResult(
-                payload={"action": "USE_REFERENCE", "order_price": 10100, "confidence": 72, "reason": "qwen"},
+                payload={
+                    "action": "USE_REFERENCE",
+                    "order_price": 10100,
+                    "confidence": 72,
+                    "reason": "qwen",
+                },
                 raw_text='{"action":"USE_REFERENCE","order_price":10100,"confidence":72,"reason":"qwen"}',
                 parse_ok=True,
                 parse_error="",
@@ -560,7 +700,9 @@ def test_entry_price_qwen_primary_does_not_call_openai(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_ROUTE_MODE", "primary")
     monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_PRIMARY_FAMILY", "qwen3_32b")
     monkeypatch.setattr(bedrock_nova_provider, "runtime_provider", lambda: Provider())
-    monkeypatch.setattr(bedrock_nova_provider, "write_provider_audit_row", lambda row: None)
+    monkeypatch.setattr(
+        bedrock_nova_provider, "write_provider_audit_row", lambda row: None
+    )
 
     result = GPTSniperEngine._call_openai_safe(
         engine,
@@ -583,7 +725,9 @@ def test_entry_price_qwen_primary_does_not_call_openai(monkeypatch):
     assert openai_called["value"] is False
 
 
-def test_bedrock_lite_primary_endpoint_allowlist_keeps_other_tier2_on_openai(monkeypatch):
+def test_bedrock_lite_primary_endpoint_allowlist_keeps_other_tier2_on_openai(
+    monkeypatch,
+):
     engine = _build_engine()
     provider_called = {"value": False}
 
@@ -597,7 +741,9 @@ def test_bedrock_lite_primary_endpoint_allowlist_keeps_other_tier2_on_openai(mon
 
     engine.client = SimpleNamespace(responses=SimpleNamespace(create=_fake_create))
     monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "primary")
-    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_PRIMARY_ENDPOINTS", "entry_price,holding_flow")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_BEDROCK_NOVA_LITE_PRIMARY_ENDPOINTS", "entry_price,holding_flow"
+    )
     monkeypatch.setattr(bedrock_nova_provider, "runtime_provider", lambda: Provider())
     monkeypatch.setattr(
         openai_module,
@@ -669,10 +815,14 @@ def test_bedrock_primary_failure_falls_back_to_openai(monkeypatch):
 
     engine.client = SimpleNamespace(responses=SimpleNamespace(create=_fake_create))
     monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "primary")
-    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_PRIMARY_ENDPOINTS", "holding_flow")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_BEDROCK_NOVA_LITE_PRIMARY_ENDPOINTS", "holding_flow"
+    )
     monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_PRIMARY_FAILBACK_TO_OPENAI", "true")
     monkeypatch.setattr(bedrock_nova_provider, "runtime_provider", lambda: Provider())
-    monkeypatch.setattr(bedrock_nova_provider, "write_provider_audit_row", lambda row: None)
+    monkeypatch.setattr(
+        bedrock_nova_provider, "write_provider_audit_row", lambda row: None
+    )
     monkeypatch.setattr(
         openai_module,
         "TRADING_RULES",
@@ -704,7 +854,9 @@ def test_entry_price_qwen_parse_failure_falls_back_to_nova_lite_v2(monkeypatch):
     class Responses:
         def create(self, **kwargs):
             openai_called["value"] = True
-            raise AssertionError("OpenAI must not be called for entry_price Qwen failback")
+            raise AssertionError(
+                "OpenAI must not be called for entry_price Qwen failback"
+            )
 
     class Provider:
         def converse(self, *, prompt, user_input, profile):
@@ -728,7 +880,12 @@ def test_entry_price_qwen_parse_failure_falls_back_to_nova_lite_v2(monkeypatch):
                     attempted_key_count=2,
                 )
             return bedrock_nova_provider.BedrockNovaResult(
-                payload={"action": "USE_DEFENSIVE", "order_price": 9900, "confidence": 80, "reason": "nova"},
+                payload={
+                    "action": "USE_DEFENSIVE",
+                    "order_price": 9900,
+                    "confidence": 80,
+                    "reason": "nova",
+                },
                 raw_text='{"action":"USE_DEFENSIVE","order_price":9900,"confidence":80,"reason":"nova"}',
                 parse_ok=True,
                 parse_error="",
@@ -751,7 +908,9 @@ def test_entry_price_qwen_parse_failure_falls_back_to_nova_lite_v2(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_FAILBACK_FAMILY", "lite_v2")
     monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_FAILBACK_ENABLED", "true")
     monkeypatch.setattr(bedrock_nova_provider, "runtime_provider", lambda: Provider())
-    monkeypatch.setattr(bedrock_nova_provider, "write_provider_audit_row", audit_rows.append)
+    monkeypatch.setattr(
+        bedrock_nova_provider, "write_provider_audit_row", audit_rows.append
+    )
 
     result = GPTSniperEngine._call_openai_safe(
         engine,
@@ -772,9 +931,14 @@ def test_entry_price_qwen_parse_failure_falls_back_to_nova_lite_v2(monkeypatch):
     assert meta["bedrock_failback_family"] == "lite_v2"
     assert meta["bedrock_model_family"] == "lite_v2"
     assert openai_called["value"] is False
-    assert any(row["bedrock_primary_error_type"] == "BedrockNovaProviderError" for row in audit_rows)
     assert any(
-        row["decision_authority"] == "runtime_primary_with_bedrock_failback_defensive_close" for row in audit_rows
+        row["bedrock_primary_error_type"] == "BedrockNovaProviderError"
+        for row in audit_rows
+    )
+    assert any(
+        row["decision_authority"]
+        == "runtime_primary_with_bedrock_failback_defensive_close"
+        for row in audit_rows
     )
     assert any(row["bedrock_attempted_key_count"] == 2 for row in audit_rows)
 
@@ -787,7 +951,9 @@ def test_entry_price_qwen_and_nova_fail_does_not_fall_back_to_openai(monkeypatch
     class Responses:
         def create(self, **kwargs):
             openai_called["value"] = True
-            raise AssertionError("OpenAI must not be called when entry_price Bedrock chain fails")
+            raise AssertionError(
+                "OpenAI must not be called when entry_price Bedrock chain fails"
+            )
 
     class Provider:
         def converse(self, *, prompt, user_input, profile):
@@ -799,7 +965,9 @@ def test_entry_price_qwen_and_nova_fail_does_not_fall_back_to_openai(monkeypatch
     monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_PRIMARY_FAMILY", "qwen3_32b")
     monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_FAILBACK_FAMILY", "lite_v2")
     monkeypatch.setattr(bedrock_nova_provider, "runtime_provider", lambda: Provider())
-    monkeypatch.setattr(bedrock_nova_provider, "write_provider_audit_row", lambda row: None)
+    monkeypatch.setattr(
+        bedrock_nova_provider, "write_provider_audit_row", lambda row: None
+    )
 
     try:
         GPTSniperEngine._call_openai_safe(
@@ -814,13 +982,17 @@ def test_entry_price_qwen_and_nova_fail_does_not_fall_back_to_openai(monkeypatch
     except RuntimeError as exc:
         assert "lite_v2 unavailable" in str(exc)
     else:
-        raise AssertionError("entry_price Bedrock chain failure must raise to caller fallback")
+        raise AssertionError(
+            "entry_price Bedrock chain failure must raise to caller fallback"
+        )
 
     assert families == ["qwen3_32b", "lite_v2"]
     assert openai_called["value"] is False
 
 
-def test_entry_price_provider_init_failure_records_audit_and_does_not_call_openai(monkeypatch):
+def test_entry_price_provider_init_failure_records_audit_and_does_not_call_openai(
+    monkeypatch,
+):
     engine = _build_engine()
     audit_rows = []
     openai_called = {"value": False}
@@ -828,7 +1000,9 @@ def test_entry_price_provider_init_failure_records_audit_and_does_not_call_opena
     class Responses:
         def create(self, **kwargs):
             openai_called["value"] = True
-            raise AssertionError("OpenAI must not be called when entry_price Bedrock provider init fails")
+            raise AssertionError(
+                "OpenAI must not be called when entry_price Bedrock provider init fails"
+            )
 
     def _raise_runtime_provider():
         raise RuntimeError("missing bedrock api keys")
@@ -838,8 +1012,12 @@ def test_entry_price_provider_init_failure_records_audit_and_does_not_call_opena
     monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_PRIMARY_FAMILY", "qwen3_32b")
     monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_FAILBACK_FAMILY", "lite_v2")
     monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_FAILBACK_ENABLED", "true")
-    monkeypatch.setattr(bedrock_nova_provider, "runtime_provider", _raise_runtime_provider)
-    monkeypatch.setattr(bedrock_nova_provider, "write_provider_audit_row", audit_rows.append)
+    monkeypatch.setattr(
+        bedrock_nova_provider, "runtime_provider", _raise_runtime_provider
+    )
+    monkeypatch.setattr(
+        bedrock_nova_provider, "write_provider_audit_row", audit_rows.append
+    )
 
     try:
         GPTSniperEngine._call_openai_safe(
@@ -854,12 +1032,18 @@ def test_entry_price_provider_init_failure_records_audit_and_does_not_call_opena
     except RuntimeError as exc:
         assert "missing bedrock api keys" in str(exc)
     else:
-        raise AssertionError("entry_price provider init failure must raise to caller fallback")
+        raise AssertionError(
+            "entry_price provider init failure must raise to caller fallback"
+        )
 
     assert openai_called["value"] is False
     assert any(row["bedrock_primary_family"] == "qwen3_32b" for row in audit_rows)
     assert any(row["bedrock_failback_family"] == "lite_v2" for row in audit_rows)
-    assert all(row["decision_authority"] == "runtime_primary_with_bedrock_failback_defensive_close" for row in audit_rows)
+    assert all(
+        row["decision_authority"]
+        == "runtime_primary_with_bedrock_failback_defensive_close"
+        for row in audit_rows
+    )
 
 
 def test_entry_price_qwen_and_nova_fail_uses_defensive_engine_fallback(monkeypatch):
@@ -870,7 +1054,9 @@ def test_entry_price_qwen_and_nova_fail_uses_defensive_engine_fallback(monkeypat
     class Responses:
         def create(self, **kwargs):
             openai_called["value"] = True
-            raise AssertionError("OpenAI must not be called when entry_price Bedrock chain fails")
+            raise AssertionError(
+                "OpenAI must not be called when entry_price Bedrock chain fails"
+            )
 
     class Provider:
         def converse(self, *, prompt, user_input, profile):
@@ -881,7 +1067,9 @@ def test_entry_price_qwen_and_nova_fail_uses_defensive_engine_fallback(monkeypat
     monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_PRIMARY_FAMILY", "qwen3_32b")
     monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_FAILBACK_FAMILY", "lite_v2")
     monkeypatch.setattr(bedrock_nova_provider, "runtime_provider", lambda: Provider())
-    monkeypatch.setattr(bedrock_nova_provider, "write_provider_audit_row", lambda row: None)
+    monkeypatch.setattr(
+        bedrock_nova_provider, "write_provider_audit_row", lambda row: None
+    )
 
     result = GPTSniperEngine.evaluate_scalping_entry_price(
         engine,
@@ -930,7 +1118,13 @@ def test_openai_holding_flow_uses_flow_schema_and_normalizes_payload(monkeypatch
             {"close": 9900, "high": 10020, "low": 9890, "volume": 1000},
             {"close": 10000, "high": 10040, "low": 9950, "volume": 1200},
         ],
-        {"profit_rate": -0.3, "peak_profit": 0.4, "held_sec": 75, "current_ai_score": 31, "worsen_pct": 0.8},
+        {
+            "profit_rate": -0.3,
+            "peak_profit": 0.4,
+            "held_sec": 75,
+            "current_ai_score": 31,
+            "worsen_pct": 0.8,
+        },
         flow_history=[
             {
                 "time": "10:00:00",
@@ -961,7 +1155,10 @@ def test_openai_holding_flow_uses_flow_schema_and_normalizes_payload(monkeypatch
     assert captured["kwargs"]["metadata_extra"]["entry_adm_candidate_id"] == "ADM-1"
     assert "To reverse the previous flow-review action" in captured["prompt"]
     assert "If a system guard applies" in SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
-    assert "absorption, recovery, distribution, breakdown, or quiet" in captured["user_input"]
+    assert (
+        "absorption, recovery, distribution, breakdown, or quiet"
+        in captured["user_input"]
+    )
     assert "state=absorption" in captured["user_input"]
     assert not _has_hangul(captured["prompt"])
     assert "Do not cut by a single score cutoff" in captured["user_input"]
@@ -1050,20 +1247,47 @@ def test_entry_price_compact_input_reduces_payload_across_large_sample(monkeypat
         assert parsed["ws_data"]["bid_tot"] == ws_data["bid_tot"]
         assert len(parsed["ws_data"]["orderbook"]["asks"]) <= 10
         assert len(parsed["ws_data"]["orderbook"]["bids"]) <= 10
-        assert parsed["price_context"]["defensive_order_price"] == price_ctx["defensive_order_price"]
-        assert parsed["price_context"]["reference_target_price"] == price_ctx["reference_target_price"]
-        assert parsed["price_context"]["resolved_order_price"] == price_ctx["resolved_order_price"]
+        assert (
+            parsed["price_context"]["defensive_order_price"]
+            == price_ctx["defensive_order_price"]
+        )
+        assert (
+            parsed["price_context"]["reference_target_price"]
+            == price_ctx["reference_target_price"]
+        )
+        assert (
+            parsed["price_context"]["resolved_order_price"]
+            == price_ctx["resolved_order_price"]
+        )
         assert parsed["price_context"]["best_bid"] == price_ctx["best_bid"]
         assert parsed["price_context"]["best_ask"] == price_ctx["best_ask"]
         assert "spread" in parsed["price_context"]
         assert "latency_guard" in parsed["price_context"]
         assert "entry_price_guard" in parsed["price_context"]
-        assert parsed["price_context"]["orderbook_micro"]["micro_state"] == price_ctx["orderbook_micro"]["micro_state"]
-        assert parsed["price_context"]["orderbook_micro"]["ofi"] == price_ctx["orderbook_micro"]["ofi_norm"]
-        assert parsed["price_context"]["orderbook_micro"]["qi"] == price_ctx["orderbook_micro"]["qi"]
-        assert parsed["price_context"]["orderbook_micro"]["top_depth_ratio"] == price_ctx["orderbook_micro"]["top_depth_ratio"]
-        assert parsed["price_context"]["orderbook_micro"]["spread_bp"] == price_ctx["orderbook_micro"]["spread_bp"]
-        assert parsed["entry_context_features"]["context_role"] == "pre_submit_entry_quality_context"
+        assert (
+            parsed["price_context"]["orderbook_micro"]["micro_state"]
+            == price_ctx["orderbook_micro"]["micro_state"]
+        )
+        assert (
+            parsed["price_context"]["orderbook_micro"]["ofi"]
+            == price_ctx["orderbook_micro"]["ofi_norm"]
+        )
+        assert (
+            parsed["price_context"]["orderbook_micro"]["qi"]
+            == price_ctx["orderbook_micro"]["qi"]
+        )
+        assert (
+            parsed["price_context"]["orderbook_micro"]["top_depth_ratio"]
+            == price_ctx["orderbook_micro"]["top_depth_ratio"]
+        )
+        assert (
+            parsed["price_context"]["orderbook_micro"]["spread_bp"]
+            == price_ctx["orderbook_micro"]["spread_bp"]
+        )
+        assert (
+            parsed["entry_context_features"]["context_role"]
+            == "pre_submit_entry_quality_context"
+        )
         assert "entry_liquidity_score" in parsed["entry_context_features"]
         assert "fillability_score" in parsed["entry_context_features"]
         assert "order_flow_pressure_score" in parsed["entry_context_features"]
@@ -1120,7 +1344,10 @@ def test_entry_price_compact_input_reduces_payload_across_large_sample(monkeypat
     assert captured["kwargs"]["schema_name"] == "entry_price_v1"
     assert captured["kwargs"]["endpoint_name"] == "entry_price"
     assert captured["kwargs"]["model_override"] == engine.model_tier2_balanced
-    assert captured_payload["price_context"]["resolved_order_price"] == samples[0][3]["resolved_order_price"]
+    assert (
+        captured_payload["price_context"]["resolved_order_price"]
+        == samples[0][3]["resolved_order_price"]
+    )
 
 
 def test_entry_price_runtime_input_defaults_to_compact_and_can_be_disabled(monkeypatch):
@@ -1136,9 +1363,10 @@ def test_entry_price_runtime_input_defaults_to_compact_and_can_be_disabled(monke
         price_ctx=price_ctx,
     )
     assert "unused_snapshot" not in compact_runtime_payload
-    assert json.loads(compact_runtime_payload)["price_context"]["resolved_order_price"] == price_ctx[
-        "resolved_order_price"
-    ]
+    assert (
+        json.loads(compact_runtime_payload)["price_context"]["resolved_order_price"]
+        == price_ctx["resolved_order_price"]
+    )
 
     monkeypatch.setattr(
         openai_module,
@@ -1159,7 +1387,9 @@ def test_entry_price_runtime_input_defaults_to_compact_and_can_be_disabled(monke
     assert "unused_snapshot" in raw_runtime_payload
 
 
-def test_entry_price_compact_input_preserves_before_after_output_across_large_sample(monkeypatch):
+def test_entry_price_compact_input_preserves_before_after_output_across_large_sample(
+    monkeypatch,
+):
     engine = _build_engine()
     samples = [_entry_price_compaction_sample(idx) for idx in range(200)]
     action_counts = {}
@@ -1185,9 +1415,16 @@ def test_entry_price_compact_input_preserves_before_after_output_across_large_sa
         after_output = _entry_price_fake_model_output(compact_payload)
 
         assert after_output == before_output
-        action_counts[after_output["action"]] = action_counts.get(after_output["action"], 0) + 1
+        action_counts[after_output["action"]] = (
+            action_counts.get(after_output["action"], 0) + 1
+        )
 
-    assert set(action_counts) >= {"USE_DEFENSIVE", "USE_REFERENCE", "IMPROVE_LIMIT", "SKIP"}
+    assert set(action_counts) >= {
+        "USE_DEFENSIVE",
+        "USE_REFERENCE",
+        "IMPROVE_LIMIT",
+        "SKIP",
+    }
 
     captured_outputs = {}
 
@@ -1305,9 +1542,18 @@ def test_ai_hot_path_v2_inputs_are_structured_json_across_large_sample(monkeypat
         assert "recent_candles" not in entry_screen
 
         assert entry_price["input_schema"] == "entry_price_v2"
-        assert entry_price["price_context"]["resolved_order_price"] == price_ctx["resolved_order_price"]
-        assert entry_price["candidate_prices"]["defensive_order_price"] == price_ctx["defensive_order_price"]
-        assert entry_price["entry_context_features"]["context_role"] == "pre_submit_entry_quality_context"
+        assert (
+            entry_price["price_context"]["resolved_order_price"]
+            == price_ctx["resolved_order_price"]
+        )
+        assert (
+            entry_price["candidate_prices"]["defensive_order_price"]
+            == price_ctx["defensive_order_price"]
+        )
+        assert (
+            entry_price["entry_context_features"]["context_role"]
+            == "pre_submit_entry_quality_context"
+        )
         assert "entry_liquidity_score" in entry_price["entry_context_features"]
         assert "fillability_score" in entry_price["entry_context_features"]
         assert "order_flow_pressure_score" in entry_price["entry_context_features"]
@@ -1324,11 +1570,25 @@ def test_ai_hot_path_v2_inputs_are_structured_json_across_large_sample(monkeypat
 
         assert holding_flow["input_schema"] == "holding_flow_v2"
         assert holding_flow["position"]["current_price"] == ws_data["curr"]
-        assert holding_flow["entry_time_context"]["context_role"] == "entry_time_provenance_only"
+        assert (
+            holding_flow["entry_time_context"]["context_role"]
+            == "entry_time_provenance_only"
+        )
         assert holding_flow["entry_time_context"]["status"] == "not_available"
-        assert holding_flow["deterministic_guard_state"]["system_guards_remain_authoritative"] is True
-        assert holding_flow["runtime_advisory_context"]["holding_exit_matrix"] == "matrix_context"
-        assert holding_flow["runtime_advisory_context"]["lifecycle_ai"] == "lifecycle_context"
+        assert (
+            holding_flow["deterministic_guard_state"][
+                "system_guards_remain_authoritative"
+            ]
+            is True
+        )
+        assert (
+            holding_flow["runtime_advisory_context"]["holding_exit_matrix"]
+            == "matrix_context"
+        )
+        assert (
+            holding_flow["runtime_advisory_context"]["lifecycle_ai"]
+            == "lifecycle_context"
+        )
         assert len(holding_flow["recent_ticks_latest_first"]) <= 5
         assert len(holding_flow["recent_candles_latest_window"]) <= 5
 
@@ -1358,15 +1618,24 @@ def test_ai_hot_path_v2_inputs_are_structured_json_across_large_sample(monkeypat
 
     monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
     ws_data, ticks, candles, price_ctx = samples[0]
-    entry_result = engine.analyze_target("테스트0", ws_data, ticks, candles, prompt_profile="watching")
-    entry_price_result = engine.evaluate_scalping_entry_price("테스트0", "000000", ws_data, ticks, candles, price_ctx)
+    entry_result = engine.analyze_target(
+        "테스트0", ws_data, ticks, candles, prompt_profile="watching"
+    )
+    entry_price_result = engine.evaluate_scalping_entry_price(
+        "테스트0", "000000", ws_data, ticks, candles, price_ctx
+    )
     holding_result = engine.evaluate_scalping_holding_flow(
         "테스트0",
         "000000",
         ws_data,
         ticks,
         candles,
-        {"profit_rate": 0.2, "peak_profit": 0.5, "held_sec": 60, "current_ai_score": 70},
+        {
+            "profit_rate": 0.2,
+            "peak_profit": 0.5,
+            "held_sec": 60,
+            "current_ai_score": 70,
+        },
     )
 
     assert [item["kwargs"]["endpoint_name"] for item in captured] == [
@@ -1415,7 +1684,13 @@ def test_analyze_target_v2_input_fallback_uses_legacy_context_contract(monkeypat
     monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
     result = engine.analyze_target(
         "테스트",
-        {"curr": 10000, "orderbook": {"asks": [{"price": 10010, "volume": 100}], "bids": [{"price": 10000, "volume": 100}]}},
+        {
+            "curr": 10000,
+            "orderbook": {
+                "asks": [{"price": 10010, "volume": 100}],
+                "bids": [{"price": 10000, "volume": 100}],
+            },
+        },
         [{"price": 10000, "volume": 10, "side": "BUY"}],
         [{"close": 10000, "high": 10010, "low": 9990, "volume": 100}],
         prompt_profile="watching",
@@ -1431,7 +1706,9 @@ def test_analyze_target_v2_input_fallback_uses_legacy_context_contract(monkeypat
     assert result["ai_input_build_fallback"] == "legacy_text_payload"
 
 
-def test_analyze_target_swing_input_contract_stays_plain_text_when_v2_enabled(monkeypatch):
+def test_analyze_target_swing_input_contract_stays_plain_text_when_v2_enabled(
+    monkeypatch,
+):
     engine = _build_engine()
     monkeypatch.setattr(
         openai_module,
@@ -1479,7 +1756,9 @@ def test_hot_path_exception_results_keep_input_contract_metadata(monkeypatch):
 
     monkeypatch.setattr(engine, "_call_openai_safe", _raise_call)
 
-    entry_result = engine.analyze_target("테스트", ws_data, ticks, candles, prompt_profile="watching")
+    entry_result = engine.analyze_target(
+        "테스트", ws_data, ticks, candles, prompt_profile="watching"
+    )
     entry_price_result = engine.evaluate_scalping_entry_price(
         "테스트",
         "000000",
@@ -1494,7 +1773,12 @@ def test_hot_path_exception_results_keep_input_contract_metadata(monkeypatch):
         ws_data,
         ticks,
         candles,
-        {"profit_rate": 0.2, "peak_profit": 0.5, "held_sec": 60, "current_ai_score": 70},
+        {
+            "profit_rate": 0.2,
+            "peak_profit": 0.5,
+            "held_sec": 60,
+            "current_ai_score": 70,
+        },
     )
 
     assert entry_result["ai_parse_fail"] is True
@@ -1515,7 +1799,9 @@ def test_openai_deterministic_config_is_limited_to_json_path(monkeypatch):
     def _fake_create(**kwargs):
         calls.append(kwargs)
         if "text" in kwargs:
-            return SimpleNamespace(output_text='{"action":"BUY","score":91,"reason":"json"}')
+            return SimpleNamespace(
+                output_text='{"action":"BUY","score":91,"reason":"json"}'
+            )
         return SimpleNamespace(output_text="plain text report")
 
     engine.client = SimpleNamespace(responses=SimpleNamespace(create=_fake_create))
@@ -1656,7 +1942,9 @@ def test_openai_reasoning_effort_auto_uses_none_for_gpt54_family(monkeypatch):
 
         def _fake_create(**kwargs):
             calls.append(kwargs)
-            return SimpleNamespace(output_text='{"action":"WAIT","score":50,"reason":"ok"}')
+            return SimpleNamespace(
+                output_text='{"action":"WAIT","score":50,"reason":"ok"}'
+            )
 
         engine.client = SimpleNamespace(responses=SimpleNamespace(create=_fake_create))
         GPTSniperEngine._call_openai_safe(
@@ -1684,7 +1972,9 @@ def test_openai_scalping_market_data_uses_compact_json_payload(monkeypatch):
         ),
     )
 
-    payload = engine._format_market_data(_sample_ws_data(), _sample_ticks(), _sample_candles())
+    payload = engine._format_market_data(
+        _sample_ws_data(), _sample_ticks(), _sample_candles()
+    )
     parsed = json.loads(payload)
 
     assert payload.startswith("{")
@@ -1695,7 +1985,10 @@ def test_openai_scalping_market_data_uses_compact_json_payload(monkeypatch):
     assert "volume_analysis" not in payload
     assert "orderbook_imbalance" not in payload
     assert "drawdown_from_day_high" not in payload
-    assert parsed["current"]["distance_from_day_high_pct"] == parsed["features"]["distance_from_day_high_pct"]
+    assert (
+        parsed["current"]["distance_from_day_high_pct"]
+        == parsed["features"]["distance_from_day_high_pct"]
+    )
     assert "최근 10틱 상세 내역" not in payload
 
 
@@ -1716,14 +2009,22 @@ def test_openai_scalping_entry_hot_input_reduces_prompt_payload(monkeypatch):
         ),
     )
 
-    feature_packet = openai_module.extract_scalping_feature_packet(ws_data, ticks, candles)
-    compact_payload = engine._format_market_data(ws_data, ticks, candles, feature_packet=feature_packet)
+    feature_packet = openai_module.extract_scalping_feature_packet(
+        ws_data, ticks, candles
+    )
+    compact_payload = engine._format_market_data(
+        ws_data, ticks, candles, feature_packet=feature_packet
+    )
     hot_payload = engine._format_entry_screen_hot_data(
         ws_data,
         ticks,
         candles,
         feature_packet=feature_packet,
-        matrix_runtime={"status": "excluded", "cache_token": "matrix:excluded", "prompt_context": "x" * 200},
+        matrix_runtime={
+            "status": "excluded",
+            "cache_token": "matrix:excluded",
+            "prompt_context": "x" * 200,
+        },
         entry_adm_runtime={
             "status": "applied",
             "applied": True,
@@ -1735,7 +2036,12 @@ def test_openai_scalping_entry_hot_input_reduces_prompt_payload(monkeypatch):
                 "entry_adm_source_quality_adjusted_ev_pct": 0.12,
             },
         },
-        lifecycle_ai_runtime={"status": "ready", "applied": True, "cache_token": "lifecycle:ready", "prompt_context": "z" * 200},
+        lifecycle_ai_runtime={
+            "status": "ready",
+            "applied": True,
+            "cache_token": "lifecycle:ready",
+            "prompt_context": "z" * 200,
+        },
     )
     parsed = json.loads(hot_payload)
 
@@ -1744,7 +2050,9 @@ def test_openai_scalping_entry_hot_input_reduces_prompt_payload(monkeypatch):
     assert "recent_candles_latest_window" not in parsed
     assert "orderbook_top3" not in parsed
     assert "prompt_context" not in hot_payload
-    assert parsed["runtime_context"]["entry_adm"]["entry_adm_bucket_token"] == "bucket-a"
+    assert (
+        parsed["runtime_context"]["entry_adm"]["entry_adm_bucket_token"] == "bucket-a"
+    )
     assert parsed["features"]["entry_liquidity_status"] in {"good", "thin"}
     assert "fillability_score" in parsed["features"]
     assert "order_flow_pressure_score" in parsed["features"]
@@ -1825,7 +2133,9 @@ def test_openai_legacy_market_data_excludes_price_change_heuristic_ticks(monkeyp
         },
     ]
 
-    payload = engine._format_market_data(_sample_ws_data(), heuristic_ticks, _sample_candles())
+    payload = engine._format_market_data(
+        _sample_ws_data(), heuristic_ticks, _sample_candles()
+    )
 
     assert "매수 압도율(Buy Pressure): 50.0%" in payload
     assert "매수 0주 vs 매도 0주" in payload
@@ -1904,8 +2214,14 @@ def test_openai_request_metadata_normalizes_long_property_names():
     )
     metadata = request.build_provider_payload(use_schema_registry=False)["metadata"]
 
-    assert all(len(key) <= openai_module.OPENAI_METADATA_KEY_MAX_LENGTH for key in metadata)
-    normalized_long_keys = [key for key in metadata if key.startswith("early_accel_strong_bundle_recheck_price_delta_since_")]
+    assert all(
+        len(key) <= openai_module.OPENAI_METADATA_KEY_MAX_LENGTH for key in metadata
+    )
+    normalized_long_keys = [
+        key
+        for key in metadata
+        if key.startswith("early_accel_strong_bundle_recheck_price_delta_since_")
+    ]
     assert len(normalized_long_keys) == 1
     assert metadata[normalized_long_keys[0]] == "0.52"
 
@@ -1987,7 +2303,11 @@ def test_openai_responses_ws_pool_uses_round_robin_workers(monkeypatch):
 
         def submit(self, job):
             self.jobs.append(job.request.request_id)
-            return OpenAITransportResult(payload={"worker_id": self.worker_id}, transport_mode="responses_ws", ws_used=True)
+            return OpenAITransportResult(
+                payload={"worker_id": self.worker_id},
+                transport_mode="responses_ws",
+                ws_used=True,
+            )
 
         def close(self):
             return None
@@ -2020,7 +2340,9 @@ def test_openai_responses_ws_pool_uses_round_robin_workers(monkeypatch):
 
 def test_openai_call_falls_back_from_ws_to_http(monkeypatch):
     engine = _build_engine()
-    engine.client = SimpleNamespace(responses=SimpleNamespace(create=lambda **kwargs: None))
+    engine.client = SimpleNamespace(
+        responses=SimpleNamespace(create=lambda **kwargs: None)
+    )
     log_info_calls = []
     log_error_calls = []
 
@@ -2033,9 +2355,17 @@ def test_openai_call_falls_back_from_ws_to_http(monkeypatch):
             OPENAI_RESPONSES_WS_ENABLED=True,
         ),
     )
-    monkeypatch.setattr(engine, "_call_openai_responses_ws", lambda request: (_ for _ in ()).throw(TimeoutError("ws timeout")))
-    monkeypatch.setattr(openai_module, "log_info", lambda msg, **kwargs: log_info_calls.append(msg))
-    monkeypatch.setattr(openai_module, "log_error", lambda msg, **kwargs: log_error_calls.append(msg))
+    monkeypatch.setattr(
+        engine,
+        "_call_openai_responses_ws",
+        lambda request: (_ for _ in ()).throw(TimeoutError("ws timeout")),
+    )
+    monkeypatch.setattr(
+        openai_module, "log_info", lambda msg, **kwargs: log_info_calls.append(msg)
+    )
+    monkeypatch.setattr(
+        openai_module, "log_error", lambda msg, **kwargs: log_error_calls.append(msg)
+    )
     monkeypatch.setattr(
         engine,
         "_call_openai_responses_http",
@@ -2079,7 +2409,9 @@ def test_openai_http_timed_out_text_is_retryable(monkeypatch):
         calls.append(kwargs)
         if len(calls) == 1:
             raise Exception("Request timed out.")
-        return SimpleNamespace(output_text='{"action":"WAIT","score":61,"reason":"retry success"}')
+        return SimpleNamespace(
+            output_text='{"action":"WAIT","score":61,"reason":"retry success"}'
+        )
 
     engine.client = SimpleNamespace(responses=SimpleNamespace(create=_create))
     monkeypatch.setattr(openai_module.time, "sleep", lambda seconds: None)
@@ -2112,7 +2444,9 @@ def test_openai_http_retry_sleep_respects_remaining_timeout(monkeypatch):
         raise Exception("503 unavailable")
 
     engine.client = SimpleNamespace(responses=SimpleNamespace(create=_create))
-    monkeypatch.setattr(openai_module.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(
+        openai_module.time, "sleep", lambda seconds: sleeps.append(seconds)
+    )
     request = OpenAIResponseRequest(
         prompt="PROMPT",
         user_input="payload",
@@ -2151,8 +2485,12 @@ def test_openai_http_timeout_budget_exhaustion_does_not_rotate_key(monkeypatch):
 
     engine.client = SimpleNamespace(responses=SimpleNamespace(create=_create))
     engine._rotate_client = lambda: rotate_calls.append("rotated")
-    monkeypatch.setattr(openai_module, "log_info", lambda msg, **kwargs: log_info_calls.append(msg))
-    monkeypatch.setattr(openai_module, "log_error", lambda msg, **kwargs: log_error_calls.append(msg))
+    monkeypatch.setattr(
+        openai_module, "log_info", lambda msg, **kwargs: log_info_calls.append(msg)
+    )
+    monkeypatch.setattr(
+        openai_module, "log_error", lambda msg, **kwargs: log_error_calls.append(msg)
+    )
     request = OpenAIResponseRequest(
         prompt="PROMPT",
         user_input="payload",
@@ -2281,7 +2619,9 @@ def test_openai_ws_attempt_timeout_can_prefer_http_fallback_budget(monkeypatch):
 
 def test_openai_ws_http_fallback_keeps_executable_timeout_after_ws_elapsed(monkeypatch):
     engine = _build_engine()
-    engine.client = SimpleNamespace(responses=SimpleNamespace(create=lambda **kwargs: None))
+    engine.client = SimpleNamespace(
+        responses=SimpleNamespace(create=lambda **kwargs: None)
+    )
     captured_http = []
 
     monkeypatch.setattr(
@@ -2336,7 +2676,9 @@ def test_openai_ws_http_fallback_keeps_executable_timeout_after_ws_elapsed(monke
 
 def test_openai_ws_http_fallback_timeout_fails_closed_for_entry(monkeypatch):
     engine = _build_engine()
-    engine.client = SimpleNamespace(responses=SimpleNamespace(create=lambda **kwargs: None))
+    engine.client = SimpleNamespace(
+        responses=SimpleNamespace(create=lambda **kwargs: None)
+    )
     log_info_calls = []
     log_error_calls = []
 
@@ -2370,8 +2712,12 @@ def test_openai_ws_http_fallback_timeout_fails_closed_for_entry(monkeypatch):
             )
         ),
     )
-    monkeypatch.setattr(openai_module, "log_info", lambda msg, **kwargs: log_info_calls.append(msg))
-    monkeypatch.setattr(openai_module, "log_error", lambda msg, **kwargs: log_error_calls.append(msg))
+    monkeypatch.setattr(
+        openai_module, "log_info", lambda msg, **kwargs: log_info_calls.append(msg)
+    )
+    monkeypatch.setattr(
+        openai_module, "log_error", lambda msg, **kwargs: log_error_calls.append(msg)
+    )
 
     result = GPTSniperEngine._call_openai_safe(
         engine,
@@ -2401,7 +2747,9 @@ def test_openai_ws_http_fallback_timeout_fails_closed_for_entry(monkeypatch):
 
 def test_openai_ws_http_fallback_timeout_fails_closed_for_holding(monkeypatch):
     engine = _build_engine()
-    engine.client = SimpleNamespace(responses=SimpleNamespace(create=lambda **kwargs: None))
+    engine.client = SimpleNamespace(
+        responses=SimpleNamespace(create=lambda **kwargs: None)
+    )
 
     monkeypatch.setattr(
         openai_module,
@@ -2421,7 +2769,9 @@ def test_openai_ws_http_fallback_timeout_fails_closed_for_holding(monkeypatch):
     monkeypatch.setattr(
         engine,
         "_call_openai_responses_http",
-        lambda request: (_ for _ in ()).throw(RuntimeError("OpenAI Responses HTTP 응답/파싱 실패: Request timed out.")),
+        lambda request: (_ for _ in ()).throw(
+            RuntimeError("OpenAI Responses HTTP 응답/파싱 실패: Request timed out.")
+        ),
     )
 
     result = GPTSniperEngine._call_openai_safe(
@@ -2445,7 +2795,9 @@ def test_openai_ws_http_fallback_timeout_fails_closed_for_holding(monkeypatch):
 
 def test_openai_ws_connection_closed_ok_fallback_logs_info_not_error(monkeypatch):
     engine = _build_engine()
-    engine.client = SimpleNamespace(responses=SimpleNamespace(create=lambda **kwargs: None))
+    engine.client = SimpleNamespace(
+        responses=SimpleNamespace(create=lambda **kwargs: None)
+    )
     log_info_calls = []
     log_error_calls = []
 
@@ -2479,8 +2831,12 @@ def test_openai_ws_connection_closed_ok_fallback_logs_info_not_error(monkeypatch
             roundtrip_ms=15,
         ),
     )
-    monkeypatch.setattr(openai_module, "log_info", lambda msg, **kwargs: log_info_calls.append(msg))
-    monkeypatch.setattr(openai_module, "log_error", lambda msg, **kwargs: log_error_calls.append(msg))
+    monkeypatch.setattr(
+        openai_module, "log_info", lambda msg, **kwargs: log_info_calls.append(msg)
+    )
+    monkeypatch.setattr(
+        openai_module, "log_error", lambda msg, **kwargs: log_error_calls.append(msg)
+    )
 
     result = GPTSniperEngine._call_openai_safe(
         engine,
@@ -2503,7 +2859,9 @@ def test_openai_ws_connection_closed_ok_fallback_logs_info_not_error(monkeypatch
 
 def test_openai_ws_missing_close_frame_fallback_logs_info_not_error(monkeypatch):
     engine = _build_engine()
-    engine.client = SimpleNamespace(responses=SimpleNamespace(create=lambda **kwargs: None))
+    engine.client = SimpleNamespace(
+        responses=SimpleNamespace(create=lambda **kwargs: None)
+    )
     log_info_calls = []
     log_error_calls = []
 
@@ -2519,7 +2877,9 @@ def test_openai_ws_missing_close_frame_fallback_logs_info_not_error(monkeypatch)
     monkeypatch.setattr(
         engine,
         "_call_openai_responses_ws",
-        lambda request: (_ for _ in ()).throw(RuntimeError("no close frame received or sent")),
+        lambda request: (_ for _ in ()).throw(
+            RuntimeError("no close frame received or sent")
+        ),
     )
     monkeypatch.setattr(
         engine,
@@ -2532,8 +2892,12 @@ def test_openai_ws_missing_close_frame_fallback_logs_info_not_error(monkeypatch)
             roundtrip_ms=15,
         ),
     )
-    monkeypatch.setattr(openai_module, "log_info", lambda msg, **kwargs: log_info_calls.append(msg))
-    monkeypatch.setattr(openai_module, "log_error", lambda msg, **kwargs: log_error_calls.append(msg))
+    monkeypatch.setattr(
+        openai_module, "log_info", lambda msg, **kwargs: log_info_calls.append(msg)
+    )
+    monkeypatch.setattr(
+        openai_module, "log_error", lambda msg, **kwargs: log_error_calls.append(msg)
+    )
 
     result = GPTSniperEngine._call_openai_safe(
         engine,
@@ -2656,7 +3020,9 @@ def test_openai_invalid_prompt_retries_with_minimal_numeric_prompt(monkeypatch):
             raise Exception(
                 "Error code: 400 - {'error': {'code': 'invalid_prompt', 'message': 'Invalid prompt'}}"
             )
-        return SimpleNamespace(output_text='{"action":"WAIT","score":50,"reason":"numeric retry"}')
+        return SimpleNamespace(
+            output_text='{"action":"WAIT","score":50,"reason":"numeric retry"}'
+        )
 
     engine.client = SimpleNamespace(responses=SimpleNamespace(create=_create))
 
@@ -2693,13 +3059,19 @@ def test_openai_ws_request_id_mismatch_fails_closed_without_http_fallback(monkey
     monkeypatch.setattr(
         engine,
         "_call_openai_responses_ws",
-        lambda request: (_ for _ in ()).throw(OpenAIWSRequestIdMismatchError("request_id mismatch")),
+        lambda request: (_ for _ in ()).throw(
+            OpenAIWSRequestIdMismatchError("request_id mismatch")
+        ),
     )
 
     def _unexpected_http_fallback(request):
-        raise AssertionError("request_id mismatch must not be converted to HTTP fallback")
+        raise AssertionError(
+            "request_id mismatch must not be converted to HTTP fallback"
+        )
 
-    monkeypatch.setattr(engine, "_call_openai_responses_http", _unexpected_http_fallback)
+    monkeypatch.setattr(
+        engine, "_call_openai_responses_http", _unexpected_http_fallback
+    )
 
     result = engine.analyze_target(
         "테스트",

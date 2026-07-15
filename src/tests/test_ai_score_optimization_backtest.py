@@ -26,8 +26,12 @@ def _write_json(path, payload):
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
-def test_ai_score_optimization_keeps_score_only_entry_diagnostic_only(tmp_path, monkeypatch):
-    monkeypatch.setattr(mod, "ENTRY_AI_GATE_BACKTEST_DIR", tmp_path / "entry_ai_gate_backtest")
+def test_ai_score_optimization_keeps_score_only_entry_diagnostic_only(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        mod, "ENTRY_AI_GATE_BACKTEST_DIR", tmp_path / "entry_ai_gate_backtest"
+    )
     monkeypatch.setattr(
         mod,
         "RISING_MISSED_FIRST_TOUCH_CALIBRATION_DIR",
@@ -56,11 +60,16 @@ def test_ai_score_optimization_keeps_score_only_entry_diagnostic_only(tmp_path, 
         },
     )
 
-    report = mod.build_report("2026-07-03", start_date="2026-07-03", end_date="2026-07-03")
+    report = mod.build_report(
+        "2026-07-03", start_date="2026-07-03", end_date="2026-07-03"
+    )
 
     assert report["allowed_runtime_apply"] is False
     assert report["calibration_candidates"] == []
-    assert report["diagnostic_only_candidates"][0]["apply_block_reason"] == "diagnostic_score_only"
+    assert (
+        report["diagnostic_only_candidates"][0]["apply_block_reason"]
+        == "diagnostic_score_only"
+    )
     coverage = report["summary"]["backtest_coverage_status"]
     assert coverage["analyze_target_entry"]["status"] == "backtested"
     assert coverage["entry_price"]["status"] == "source_only_instrumentation_gap"
@@ -68,8 +77,12 @@ def test_ai_score_optimization_keeps_score_only_entry_diagnostic_only(tmp_path, 
     assert coverage["holding_flow"]["status"] == "source_only_instrumentation_gap"
 
 
-def test_ai_score_optimization_reads_entry_price_threshold_ev_source_only(tmp_path, monkeypatch):
-    monkeypatch.setattr(mod, "ENTRY_AI_GATE_BACKTEST_DIR", tmp_path / "entry_ai_gate_backtest")
+def test_ai_score_optimization_reads_entry_price_threshold_ev_source_only(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        mod, "ENTRY_AI_GATE_BACKTEST_DIR", tmp_path / "entry_ai_gate_backtest"
+    )
     monkeypatch.setattr(
         mod,
         "RISING_MISSED_FIRST_TOUCH_CALIBRATION_DIR",
@@ -115,7 +128,9 @@ def test_ai_score_optimization_reads_entry_price_threshold_ev_source_only(tmp_pa
         },
     )
 
-    report = mod.build_report("2026-07-03", start_date="2026-07-03", end_date="2026-07-03")
+    report = mod.build_report(
+        "2026-07-03", start_date="2026-07-03", end_date="2026-07-03"
+    )
 
     coverage = report["summary"]["backtest_coverage_status"]["entry_price"]
     assert coverage["status"] == "source_only_backtested"
@@ -127,11 +142,18 @@ def test_ai_score_optimization_reads_entry_price_threshold_ev_source_only(tmp_pa
     source_surface = report["surface_summaries"]["source_only_surfaces"][0]
     assert source_surface["surface"] == "entry_price"
     assert source_surface["status"] == "source_only_backtested"
-    assert "entry_price_env_apply_from_ai_score_optimization" in source_surface["forbidden_uses"]
+    assert (
+        "entry_price_env_apply_from_ai_score_optimization"
+        in source_surface["forbidden_uses"]
+    )
 
 
-def test_ai_score_optimization_reads_holding_exit_threshold_ev_source_only(tmp_path, monkeypatch):
-    monkeypatch.setattr(mod, "ENTRY_AI_GATE_BACKTEST_DIR", tmp_path / "entry_ai_gate_backtest")
+def test_ai_score_optimization_reads_holding_exit_threshold_ev_source_only(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        mod, "ENTRY_AI_GATE_BACKTEST_DIR", tmp_path / "entry_ai_gate_backtest"
+    )
     monkeypatch.setattr(
         mod,
         "RISING_MISSED_FIRST_TOUCH_CALIBRATION_DIR",
@@ -179,27 +201,44 @@ def test_ai_score_optimization_reads_holding_exit_threshold_ev_source_only(tmp_p
         },
     )
 
-    report = mod.build_report("2026-07-03", start_date="2026-07-03", end_date="2026-07-03")
+    report = mod.build_report(
+        "2026-07-03", start_date="2026-07-03", end_date="2026-07-03"
+    )
 
     coverage = report["summary"]["backtest_coverage_status"]
     assert coverage["holding_score_v2"]["status"] == "source_only_backtested"
-    assert coverage["holding_flow"]["producer"] == "threshold_cycle_ev.holding_exit_families"
+    assert (
+        coverage["holding_flow"]["producer"]
+        == "threshold_cycle_ev.holding_exit_families"
+    )
     assert coverage["holding_flow"]["allowed_runtime_apply"] is False
     assert coverage["holding_flow"]["auto_apply_family_scope"] == []
-    assert "soft_stop_whipsaw_confirmation" in coverage["holding_flow"]["threshold_ev_mapped_family_scope"]
+    assert (
+        "soft_stop_whipsaw_confirmation"
+        in coverage["holding_flow"]["threshold_ev_mapped_family_scope"]
+    )
     assert coverage["holding_flow"]["holding_flow_defer_exit_count"] == 3
-    assert "negative_exit_from_unusable_ai_score" in coverage["holding_score_v2"]["forbidden_uses"]
+    assert (
+        "negative_exit_from_unusable_ai_score"
+        in coverage["holding_score_v2"]["forbidden_uses"]
+    )
     holding_surface = next(
         item
         for item in report["surface_summaries"]["source_only_surfaces"]
         if item["surface"] == "holding_exit"
     )
     assert holding_surface["status"] == "source_only_backtested"
-    assert "holding_flow_ofi_smoothing" in holding_surface["threshold_ev_families_present"]
+    assert (
+        "holding_flow_ofi_smoothing" in holding_surface["threshold_ev_families_present"]
+    )
 
 
-def test_ai_score_optimization_reads_general_scale_in_threshold_ev_source_only(tmp_path, monkeypatch):
-    monkeypatch.setattr(mod, "ENTRY_AI_GATE_BACKTEST_DIR", tmp_path / "entry_ai_gate_backtest")
+def test_ai_score_optimization_reads_general_scale_in_threshold_ev_source_only(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        mod, "ENTRY_AI_GATE_BACKTEST_DIR", tmp_path / "entry_ai_gate_backtest"
+    )
     monkeypatch.setattr(
         mod,
         "RISING_MISSED_FIRST_TOUCH_CALIBRATION_DIR",
@@ -232,14 +271,20 @@ def test_ai_score_optimization_reads_general_scale_in_threshold_ev_source_only(t
         },
     )
 
-    report = mod.build_report("2026-07-03", start_date="2026-07-03", end_date="2026-07-03")
+    report = mod.build_report(
+        "2026-07-03", start_date="2026-07-03", end_date="2026-07-03"
+    )
 
-    coverage = report["summary"]["backtest_coverage_status"]["general_avg_down_reversal_add"]
+    coverage = report["summary"]["backtest_coverage_status"][
+        "general_avg_down_reversal_add"
+    ]
     assert coverage["status"] == "source_only_backtested"
     assert coverage["producer"] == "threshold_cycle_ev.scale_in_price_guard"
     assert coverage["allowed_runtime_apply"] is False
     assert coverage["avg_down_wait_count"] == 4
-    assert "avg_down_env_apply_without_dedicated_calibration" in coverage["forbidden_uses"]
+    assert (
+        "avg_down_env_apply_without_dedicated_calibration" in coverage["forbidden_uses"]
+    )
     scale_surface = next(
         item
         for item in report["surface_summaries"]["source_only_surfaces"]
@@ -248,8 +293,12 @@ def test_ai_score_optimization_reads_general_scale_in_threshold_ev_source_only(t
     assert scale_surface["status"] == "source_only_backtested"
 
 
-def test_ai_score_optimization_preserves_existing_scale_in_candidates(tmp_path, monkeypatch):
-    monkeypatch.setattr(mod, "ENTRY_AI_GATE_BACKTEST_DIR", tmp_path / "entry_ai_gate_backtest")
+def test_ai_score_optimization_preserves_existing_scale_in_candidates(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        mod, "ENTRY_AI_GATE_BACKTEST_DIR", tmp_path / "entry_ai_gate_backtest"
+    )
     monkeypatch.setattr(
         mod,
         "RISING_MISSED_FIRST_TOUCH_CALIBRATION_DIR",
@@ -303,7 +352,9 @@ def test_ai_score_optimization_preserves_existing_scale_in_candidates(tmp_path, 
         },
     )
 
-    report = mod.build_report("2026-07-03", start_date="2026-07-03", end_date="2026-07-03")
+    report = mod.build_report(
+        "2026-07-03", start_date="2026-07-03", end_date="2026-07-03"
+    )
 
     families = {item["family"] for item in report["calibration_candidates"]}
     assert families == {
@@ -317,7 +368,9 @@ def test_ai_score_optimization_preserves_existing_scale_in_candidates(tmp_path, 
 def test_ai_score_optimization_blocks_pyramid_candidate_when_nested_source_quality_blocked(
     tmp_path, monkeypatch
 ):
-    monkeypatch.setattr(mod, "ENTRY_AI_GATE_BACKTEST_DIR", tmp_path / "entry_ai_gate_backtest")
+    monkeypatch.setattr(
+        mod, "ENTRY_AI_GATE_BACKTEST_DIR", tmp_path / "entry_ai_gate_backtest"
+    )
     monkeypatch.setattr(
         mod,
         "RISING_MISSED_FIRST_TOUCH_CALIBRATION_DIR",
@@ -352,7 +405,9 @@ def test_ai_score_optimization_blocks_pyramid_candidate_when_nested_source_quali
         },
     )
 
-    report = mod.build_report("2026-07-03", start_date="2026-07-03", end_date="2026-07-03")
+    report = mod.build_report(
+        "2026-07-03", start_date="2026-07-03", end_date="2026-07-03"
+    )
     candidate = report["calibration_candidates"][0]
 
     assert report["allowed_runtime_apply"] is False
@@ -362,7 +417,9 @@ def test_ai_score_optimization_blocks_pyramid_candidate_when_nested_source_quali
 
 
 def test_ai_score_optimization_can_emit_entry_recheck_candidate(tmp_path, monkeypatch):
-    monkeypatch.setattr(mod, "ENTRY_AI_GATE_BACKTEST_DIR", tmp_path / "entry_ai_gate_backtest")
+    monkeypatch.setattr(
+        mod, "ENTRY_AI_GATE_BACKTEST_DIR", tmp_path / "entry_ai_gate_backtest"
+    )
     monkeypatch.setattr(
         mod,
         "RISING_MISSED_FIRST_TOUCH_CALIBRATION_DIR",
@@ -390,7 +447,9 @@ def test_ai_score_optimization_can_emit_entry_recheck_candidate(tmp_path, monkey
         },
     )
 
-    report = mod.build_report("2026-07-03", start_date="2026-07-03", end_date="2026-07-03")
+    report = mod.build_report(
+        "2026-07-03", start_date="2026-07-03", end_date="2026-07-03"
+    )
     candidate = report["calibration_candidates"][0]
 
     assert candidate["family"] == "entry_opportunity_recheck_runtime"
@@ -399,8 +458,12 @@ def test_ai_score_optimization_can_emit_entry_recheck_candidate(tmp_path, monkey
     assert "broad_buy_score_threshold_relaxation" in candidate["forbidden_uses"]
 
 
-def test_ai_score_optimization_blocks_entry_candidate_when_source_report_blocked(tmp_path, monkeypatch):
-    monkeypatch.setattr(mod, "ENTRY_AI_GATE_BACKTEST_DIR", tmp_path / "entry_ai_gate_backtest")
+def test_ai_score_optimization_blocks_entry_candidate_when_source_report_blocked(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        mod, "ENTRY_AI_GATE_BACKTEST_DIR", tmp_path / "entry_ai_gate_backtest"
+    )
     monkeypatch.setattr(
         mod,
         "RISING_MISSED_FIRST_TOUCH_CALIBRATION_DIR",
@@ -429,7 +492,9 @@ def test_ai_score_optimization_blocks_entry_candidate_when_source_report_blocked
         },
     )
 
-    report = mod.build_report("2026-07-03", start_date="2026-07-03", end_date="2026-07-03")
+    report = mod.build_report(
+        "2026-07-03", start_date="2026-07-03", end_date="2026-07-03"
+    )
     candidate = report["calibration_candidates"][0]
 
     assert report["allowed_runtime_apply"] is False
@@ -439,8 +504,12 @@ def test_ai_score_optimization_blocks_entry_candidate_when_source_report_blocked
     assert candidate["apply_block_reason"] == "source_quality_blocked"
 
 
-def test_ai_score_optimization_blocks_entry_candidate_when_primary_ev_non_positive(tmp_path, monkeypatch):
-    monkeypatch.setattr(mod, "ENTRY_AI_GATE_BACKTEST_DIR", tmp_path / "entry_ai_gate_backtest")
+def test_ai_score_optimization_blocks_entry_candidate_when_primary_ev_non_positive(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        mod, "ENTRY_AI_GATE_BACKTEST_DIR", tmp_path / "entry_ai_gate_backtest"
+    )
     monkeypatch.setattr(
         mod,
         "RISING_MISSED_FIRST_TOUCH_CALIBRATION_DIR",
@@ -468,7 +537,9 @@ def test_ai_score_optimization_blocks_entry_candidate_when_primary_ev_non_positi
         },
     )
 
-    report = mod.build_report("2026-07-03", start_date="2026-07-03", end_date="2026-07-03")
+    report = mod.build_report(
+        "2026-07-03", start_date="2026-07-03", end_date="2026-07-03"
+    )
     candidate = report["calibration_candidates"][0]
 
     assert report["allowed_runtime_apply"] is False
@@ -478,8 +549,12 @@ def test_ai_score_optimization_blocks_entry_candidate_when_primary_ev_non_positi
     assert candidate["apply_block_reason"] == "non_positive_primary_ev"
 
 
-def test_ai_score_optimization_source_quality_preflight_blocks_candidates(tmp_path, monkeypatch):
-    monkeypatch.setattr(mod, "ENTRY_AI_GATE_BACKTEST_DIR", tmp_path / "entry_ai_gate_backtest")
+def test_ai_score_optimization_source_quality_preflight_blocks_candidates(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        mod, "ENTRY_AI_GATE_BACKTEST_DIR", tmp_path / "entry_ai_gate_backtest"
+    )
     monkeypatch.setattr(
         mod,
         "RISING_MISSED_FIRST_TOUCH_CALIBRATION_DIR",
@@ -519,7 +594,9 @@ def test_ai_score_optimization_source_quality_preflight_blocks_candidates(tmp_pa
         },
     )
 
-    report = mod.build_report("2026-07-03", start_date="2026-07-03", end_date="2026-07-03")
+    report = mod.build_report(
+        "2026-07-03", start_date="2026-07-03", end_date="2026-07-03"
+    )
 
     assert report["status"] == "source_quality_blocked"
     assert report["allowed_runtime_apply"] is False

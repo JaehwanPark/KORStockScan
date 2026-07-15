@@ -19,7 +19,11 @@ def test_load_bedrock_api_keys_from_config_orders_suffixes(tmp_path, monkeypatch
     )
     monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
 
-    assert mod.load_bedrock_api_keys_from_config(config_path) == ["key-1", "key-2", "key-3"]
+    assert mod.load_bedrock_api_keys_from_config(config_path) == [
+        "key-1",
+        "key-2",
+        "key-3",
+    ]
 
 
 def test_provider_rotates_keys_on_retryable_error():
@@ -34,15 +38,21 @@ def test_provider_rotates_keys_on_retryable_error():
             if self.key_index == 0:
                 raise RuntimeError("429 throttling")
             return {
-                "output": {"message": {"content": [{"text": '{"action":"WAIT","score":61}'}]}},
+                "output": {
+                    "message": {"content": [{"text": '{"action":"WAIT","score":61}'}]}
+                },
                 "usage": {"inputTokens": 10, "outputTokens": 5},
             }
 
     provider = mod.BedrockNovaProvider(
         api_keys=["key-1", "key-2"],
-        client_factory=lambda key_index, api_key, region_name, timeout_ms: Client(key_index),
+        client_factory=lambda key_index, api_key, region_name, timeout_ms: Client(
+            key_index
+        ),
     )
-    result = provider.converse(prompt="p", user_input="u", profile=mod.lite_profile_from_env())
+    result = provider.converse(
+        prompt="p", user_input="u", profile=mod.lite_profile_from_env()
+    )
 
     assert [idx for idx, _ in calls] == [0, 1]
     assert result.payload["action"] == "WAIT"
@@ -58,8 +68,12 @@ def test_provider_result_records_parse_failure_without_raising():
                 "usage": {"inputTokens": 10, "outputTokens": 5},
             }
 
-    provider = mod.BedrockNovaProvider(api_keys=["key-1"], client_factory=lambda **kwargs: Client())
-    result = provider.converse(prompt="p", user_input="u", profile=mod.lite_profile_from_env())
+    provider = mod.BedrockNovaProvider(
+        api_keys=["key-1"], client_factory=lambda **kwargs: Client()
+    )
+    result = provider.converse(
+        prompt="p", user_input="u", profile=mod.lite_profile_from_env()
+    )
 
     assert result.parse_ok is False
     assert result.parse_error == "JSONDecodeError"
@@ -77,12 +91,20 @@ def test_provider_client_cache_is_separated_by_region(monkeypatch):
 
     monkeypatch.setitem(sys.modules, "boto3", FakeBoto3())
     monkeypatch.setitem(sys.modules, "botocore", SimpleNamespace())
-    monkeypatch.setitem(sys.modules, "botocore.config", SimpleNamespace(Config=lambda **kwargs: kwargs))
+    monkeypatch.setitem(
+        sys.modules, "botocore.config", SimpleNamespace(Config=lambda **kwargs: kwargs)
+    )
 
     provider = mod.BedrockNovaProvider(api_keys=["key-1"])
-    first = provider._client(key_index=0, key="key-1", region_name="us-west-2", timeout_ms=7000)
-    second = provider._client(key_index=0, key="key-1", region_name="ap-northeast-2", timeout_ms=7000)
-    first_again = provider._client(key_index=0, key="key-1", region_name="us-west-2", timeout_ms=7000)
+    first = provider._client(
+        key_index=0, key="key-1", region_name="us-west-2", timeout_ms=7000
+    )
+    second = provider._client(
+        key_index=0, key="key-1", region_name="ap-northeast-2", timeout_ms=7000
+    )
+    first_again = provider._client(
+        key_index=0, key="key-1", region_name="us-west-2", timeout_ms=7000
+    )
 
     assert first is first_again
     assert first is not second

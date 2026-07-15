@@ -21,7 +21,10 @@ from src.engine.ai_prompt_contracts import (
     SWING_SYSTEM_PROMPT,
 )
 from src.engine.ai_response_contracts import normalize_ai_reason_language
-from src.engine.ai_response_contracts import normalize_gatekeeper_action_key, display_gatekeeper_action_label
+from src.engine.ai_response_contracts import (
+    normalize_gatekeeper_action_key,
+    display_gatekeeper_action_label,
+)
 from src.engine.ai_engine_openai import GPTSniperEngine
 
 
@@ -148,9 +151,16 @@ def _build_provider_engine(engine_cls):
 def test_pullback_wait_prompt_requires_explicit_reentry_condition():
     assert "WAIT is not the default" in SWING_SYSTEM_PROMPT
     assert "If there is no explicit wait condition" in SWING_SYSTEM_PROMPT
-    assert "`[눌림 대기]` is not a safe default answer" in REALTIME_ANALYSIS_PROMPT_SCALP
-    assert "`[눌림 대기]` is not the default hold answer" in REALTIME_ANALYSIS_PROMPT_SWING
-    assert "If the wait condition cannot be derived from the input, choose `[전량 회피]`" in REALTIME_ANALYSIS_PROMPT_SWING
+    assert (
+        "`[눌림 대기]` is not a safe default answer" in REALTIME_ANALYSIS_PROMPT_SCALP
+    )
+    assert (
+        "`[눌림 대기]` is not the default hold answer" in REALTIME_ANALYSIS_PROMPT_SWING
+    )
+    assert (
+        "If the wait condition cannot be derived from the input, choose `[전량 회피]`"
+        in REALTIME_ANALYSIS_PROMPT_SWING
+    )
 
 
 def test_holding_flow_prompt_includes_consistency_rule_and_history_reason():
@@ -162,7 +172,12 @@ def test_holding_flow_prompt_includes_consistency_rule_and_history_reason():
         {"curr": 10000, "v_pw": 120, "buy_ratio": 55},
         [{"price": 10000, "volume": 10, "side": "BUY"}],
         [{"close": 10000, "high": 10020, "low": 9980, "volume": 1200}],
-        {"profit_rate": 0.2, "peak_profit": 0.5, "held_sec": 80, "current_ai_score": 50},
+        {
+            "profit_rate": 0.2,
+            "peak_profit": 0.5,
+            "held_sec": 80,
+            "current_ai_score": 50,
+        },
         flow_history=[
             {
                 "time": "10:01:02",
@@ -175,7 +190,10 @@ def test_holding_flow_prompt_includes_consistency_rule_and_history_reason():
         ],
     )
 
-    assert "To reverse the previous flow-review action" in SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
+    assert (
+        "To reverse the previous flow-review action"
+        in SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
+    )
     assert "If a system guard applies" in SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
     assert "state=absorption" in context
     assert "reason=매수 흡수 유지" in context
@@ -307,7 +325,10 @@ def test_holding_score_v2_payload_contains_position_pnl_and_source_quality(monke
     assert captured["kwargs"]["endpoint_name"] == "holding_score"
     assert "position-state score classifier" in captured["prompt"]
     assert "Do not reuse entry logic" in SCALPING_HOLDING_SCORE_SYSTEM_PROMPT
-    assert "Runtime role gates decide how the score may be consumed" in SCALPING_HOLDING_SCORE_SYSTEM_PROMPT
+    assert (
+        "Runtime role gates decide how the score may be consumed"
+        in SCALPING_HOLDING_SCORE_SYSTEM_PROMPT
+    )
     assert result["holding_score_input_schema"] == "holding_score_v2"
     assert result["holding_score_data_quality"] in {"fresh", "partial"}
     assert result["holding_score_effective_usable"] is True
@@ -341,9 +362,22 @@ def test_holding_score_timeout_returns_timeout_source_with_timing_meta(monkeypat
         "테스트",
         "005930",
         {"curr": 10050, "v_pw": 120, "orderbook": {"asks": [], "bids": []}},
-        [{"time": datetime.now().strftime("%H:%M:%S"), "price": 10050, "volume": 10, "side": "BUY"}],
+        [
+            {
+                "time": datetime.now().strftime("%H:%M:%S"),
+                "price": 10050,
+                "volume": 10,
+                "side": "BUY",
+            }
+        ],
         [{"현재가": 10050, "고가": 10080, "저가": 10000, "거래량": 1000}],
-        {"record_id": "REC-1", "buy_price": 10000, "profit_rate": 0.5, "held_sec": 75, "buy_qty": 1},
+        {
+            "record_id": "REC-1",
+            "buy_price": 10000,
+            "profit_rate": 0.5,
+            "held_sec": 75,
+            "buy_qty": 1,
+        },
     )
 
     assert result["holding_score_source"] == "timeout"
@@ -439,7 +473,9 @@ def test_holding_score_v2_payload_stays_compact_for_low_latency(monkeypatch):
     payload = json.loads(captured["user_input"])
     assert len(captured["user_input"]) <= 5000
     market_flow = payload["market_flow_features"]
-    assert set(market_flow).issuperset({"compact_features", "tick_summary", "candle_summary"})
+    assert set(market_flow).issuperset(
+        {"compact_features", "tick_summary", "candle_summary"}
+    )
     assert "feature_packet" not in market_flow
     assert "audit_fields" not in market_flow
     assert "recent_ticks_latest_first" not in market_flow
@@ -468,7 +504,15 @@ def test_holding_score_v2_non_dict_response_keeps_transport_meta(monkeypatch):
         "005930",
         {"curr": 10050, "v_pw": 140, "quote_age_ms": 100},
         [{"time": "09:30:00", "price": 10000, "volume": 10}],
-        [{"time": "09:30", "현재가": 10000, "고가": 10020, "저가": 9990, "거래량": 1000}],
+        [
+            {
+                "time": "09:30",
+                "현재가": 10000,
+                "고가": 10020,
+                "저가": 9990,
+                "거래량": 1000,
+            }
+        ],
         {
             "record_id": "REC-3",
             "buy_price": 10000,
@@ -520,7 +564,10 @@ def test_holding_score_v2_source_quality_keeps_micro_stale_as_partial():
     )
 
     assert quality["data_quality"] == "partial"
-    assert "microstructure_reaction_source_quality:stale_tick_or_quote" in quality["source_quality_reason"]
+    assert (
+        "microstructure_reaction_source_quality:stale_tick_or_quote"
+        in quality["source_quality_reason"]
+    )
 
 
 def test_holding_score_v2_source_quality_explicit_tick_stale_stays_stale():
@@ -589,7 +636,12 @@ def test_holding_score_v2_engine_disabled_is_neutral_unusable():
         {"curr": 10000},
         [],
         [],
-        {"record_id": "REC-2", "profit_rate": -0.5, "peak_profit": 0.0, "held_sec": 120},
+        {
+            "record_id": "REC-2",
+            "profit_rate": -0.5,
+            "peak_profit": 0.0,
+            "held_sec": 120,
+        },
     )
 
     assert result["action"] == "HOLD"
@@ -610,11 +662,17 @@ def test_gatekeeper_action_normalizer_accepts_korean_and_english_labels():
     assert normalize_gatekeeper_action_key("전량 회피") == "full_avoid"
     assert normalize_gatekeeper_action_key("full avoid") == "full_avoid"
     assert normalize_gatekeeper_action_key("즉시 매수") == "immediate_buy"
-    assert normalize_gatekeeper_action_key("NOT_EVALUATED_SCORE_VPW_PRIOR") == "not_evaluated_score_vpw_prior"
+    assert (
+        normalize_gatekeeper_action_key("NOT_EVALUATED_SCORE_VPW_PRIOR")
+        == "not_evaluated_score_vpw_prior"
+    )
     assert normalize_gatekeeper_action_key("None") == "unknown"
     assert normalize_gatekeeper_action_key("ambiguous_chase") == "unknown"
     assert display_gatekeeper_action_label("pullback_wait") == "눌림 대기"
-    assert display_gatekeeper_action_label("not_evaluated_score_vpw_prior") == "NOT_EVALUATED_SCORE_VPW_PRIOR"
+    assert (
+        display_gatekeeper_action_label("not_evaluated_score_vpw_prior")
+        == "NOT_EVALUATED_SCORE_VPW_PRIOR"
+    )
 
 
 PROVIDER_ENGINES = [
@@ -658,7 +716,9 @@ def test_analyze_target_uses_short_ttl_cache(monkeypatch):
     engine = _build_engine()
     call_count = {"value": 0}
 
-    monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "packet")
+    monkeypatch.setattr(
+        engine, "_format_market_data", lambda ws, ticks, candles: "packet"
+    )
 
     def _fake_call(*args, **kwargs):
         call_count["value"] += 1
@@ -670,8 +730,12 @@ def test_analyze_target_uses_short_ttl_cache(monkeypatch):
     recent_ticks = [{"time": "10:00:00", "price": 10000, "volume": 10, "dir": "BUY"}]
     recent_candles = [{"체결시간": "10:00:00", "현재가": 10000, "거래량": 100}]
 
-    first = engine.analyze_target("테스트", ws_data, recent_ticks, recent_candles, strategy="SCALPING")
-    second = engine.analyze_target("테스트", ws_data, recent_ticks, recent_candles, strategy="SCALPING")
+    first = engine.analyze_target(
+        "테스트", ws_data, recent_ticks, recent_candles, strategy="SCALPING"
+    )
+    second = engine.analyze_target(
+        "테스트", ws_data, recent_ticks, recent_candles, strategy="SCALPING"
+    )
 
     assert call_count["value"] == 1
     assert first["cache_hit"] is False
@@ -684,7 +748,9 @@ def test_holding_cache_provenance_reports_changed_bucket(monkeypatch):
     engine = _build_engine()
     call_count = {"value": 0}
 
-    monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "packet")
+    monkeypatch.setattr(
+        engine, "_format_market_data", lambda ws, ticks, candles: "packet"
+    )
 
     def _fake_call(*args, **kwargs):
         call_count["value"] += 1
@@ -697,10 +763,21 @@ def test_holding_cache_provenance_reports_changed_bucket(monkeypatch):
         "fluctuation": 1.0,
         "v_pw": 120,
         "buy_ratio": 55,
-        "orderbook": {"asks": [{"price": 10010, "volume": 100}], "bids": [{"price": 10000, "volume": 100}]},
+        "orderbook": {
+            "asks": [{"price": 10010, "volume": 100}],
+            "bids": [{"price": 10000, "volume": 100}],
+        },
     }
     recent_ticks = [{"time": "10:00:00", "price": 10000, "volume": 100, "dir": "BUY"}]
-    recent_candles = [{"체결시간": "10:00:00", "현재가": 10000, "고가": 10020, "저가": 9980, "거래량": 1000}]
+    recent_candles = [
+        {
+            "체결시간": "10:00:00",
+            "현재가": 10000,
+            "고가": 10020,
+            "저가": 9980,
+            "거래량": 1000,
+        }
+    ]
 
     first = engine.analyze_target(
         "테스트",
@@ -733,7 +810,9 @@ def test_analyze_target_cache_ignores_transient_market_timestamps(monkeypatch):
     engine = _build_engine()
     call_count = {"value": 0}
 
-    monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "packet")
+    monkeypatch.setattr(
+        engine, "_format_market_data", lambda ws, ticks, candles: "packet"
+    )
 
     def _fake_call(*args, **kwargs):
         call_count["value"] += 1
@@ -756,7 +835,9 @@ def test_analyze_target_cache_ignores_transient_market_timestamps(monkeypatch):
     candles_2 = [{"체결시간": "09:11:01", "현재가": 57100, "거래량": 100}]
 
     first = engine.analyze_target("심텍", ws_1, ticks_1, candles_1, strategy="SCALPING")
-    second = engine.analyze_target("심텍", ws_2, ticks_2, candles_2, strategy="SCALPING")
+    second = engine.analyze_target(
+        "심텍", ws_2, ticks_2, candles_2, strategy="SCALPING"
+    )
 
     assert call_count["value"] == 1
     assert first["cache_hit"] is False
@@ -780,7 +861,9 @@ def test_gatekeeper_cache_ignores_captured_at(monkeypatch):
             "error": "",
         }
 
-    monkeypatch.setattr(engine, "_generate_realtime_report_payload", _fake_report_payload)
+    monkeypatch.setattr(
+        engine, "_generate_realtime_report_payload", _fake_report_payload
+    )
 
     base_ctx = {
         "curr_price": 10100,
@@ -794,8 +877,12 @@ def test_gatekeeper_cache_ignores_captured_at(monkeypatch):
     later_ctx = dict(base_ctx)
     later_ctx["captured_at"] = "2026-04-03 10:00:08"
 
-    first = engine.evaluate_realtime_gatekeeper("테스트", "000001", base_ctx, analysis_mode="SWING")
-    second = engine.evaluate_realtime_gatekeeper("테스트", "000001", later_ctx, analysis_mode="SWING")
+    first = engine.evaluate_realtime_gatekeeper(
+        "테스트", "000001", base_ctx, analysis_mode="SWING"
+    )
+    second = engine.evaluate_realtime_gatekeeper(
+        "테스트", "000001", later_ctx, analysis_mode="SWING"
+    )
 
     assert call_count["value"] == 1
     assert first["cache_hit"] is False
@@ -820,7 +907,9 @@ def test_gatekeeper_cache_absorbs_small_context_noise(monkeypatch):
             "error": "",
         }
 
-    monkeypatch.setattr(engine, "_generate_realtime_report_payload", _fake_report_payload)
+    monkeypatch.setattr(
+        engine, "_generate_realtime_report_payload", _fake_report_payload
+    )
 
     ctx_a = {
         "curr_price": 72500,
@@ -864,8 +953,12 @@ def test_gatekeeper_cache_absorbs_small_context_noise(monkeypatch):
         "captured_at": "2026-04-03 10:00:11",
     }
 
-    first = engine.evaluate_realtime_gatekeeper("테스트", "000001", ctx_a, analysis_mode="SWING")
-    second = engine.evaluate_realtime_gatekeeper("테스트", "000001", ctx_b, analysis_mode="SWING")
+    first = engine.evaluate_realtime_gatekeeper(
+        "테스트", "000001", ctx_a, analysis_mode="SWING"
+    )
+    second = engine.evaluate_realtime_gatekeeper(
+        "테스트", "000001", ctx_b, analysis_mode="SWING"
+    )
 
     assert call_count["value"] == 1
     assert first["cache_hit"] is False
@@ -878,7 +971,9 @@ def test_holding_cache_profile_absorbs_micro_market_noise(monkeypatch):
     engine = _build_engine()
     call_count = {"value": 0}
 
-    monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "packet")
+    monkeypatch.setattr(
+        engine, "_format_market_data", lambda ws, ticks, candles: "packet"
+    )
 
     def _fake_call(*args, **kwargs):
         call_count["value"] += 1
@@ -920,14 +1015,50 @@ def test_holding_cache_profile_absorbs_micro_market_noise(monkeypatch):
         {"time": "10:45:12", "price": 12160, "volume": 16, "dir": "SELL"},
     ]
     candles_1 = [
-        {"체결시간": "10:43:00", "현재가": 12140, "고가": 12160, "저가": 12120, "거래량": 8200},
-        {"체결시간": "10:44:00", "현재가": 12150, "고가": 12170, "저가": 12130, "거래량": 9100},
-        {"체결시간": "10:45:00", "현재가": 12150, "고가": 12180, "저가": 12140, "거래량": 10300},
+        {
+            "체결시간": "10:43:00",
+            "현재가": 12140,
+            "고가": 12160,
+            "저가": 12120,
+            "거래량": 8200,
+        },
+        {
+            "체결시간": "10:44:00",
+            "현재가": 12150,
+            "고가": 12170,
+            "저가": 12130,
+            "거래량": 9100,
+        },
+        {
+            "체결시간": "10:45:00",
+            "현재가": 12150,
+            "고가": 12180,
+            "저가": 12140,
+            "거래량": 10300,
+        },
     ]
     candles_2 = [
-        {"체결시간": "10:43:30", "현재가": 12140, "고가": 12160, "저가": 12120, "거래량": 8700},
-        {"체결시간": "10:44:30", "현재가": 12160, "고가": 12170, "저가": 12140, "거래량": 9500},
-        {"체결시간": "10:45:30", "현재가": 12160, "고가": 12180, "저가": 12140, "거래량": 10800},
+        {
+            "체결시간": "10:43:30",
+            "현재가": 12140,
+            "고가": 12160,
+            "저가": 12120,
+            "거래량": 8700,
+        },
+        {
+            "체결시간": "10:44:30",
+            "현재가": 12160,
+            "고가": 12170,
+            "저가": 12140,
+            "거래량": 9500,
+        },
+        {
+            "체결시간": "10:45:30",
+            "현재가": 12160,
+            "고가": 12180,
+            "저가": 12140,
+            "거래량": 10800,
+        },
     ]
 
     first = engine.analyze_target(
@@ -959,7 +1090,11 @@ def test_scalping_prompt_75_canary_rewrites_buy_band():
 
 
 def test_scalping_entry_prompts_align_default_runtime_buy_band():
-    for prompt in (SCALPING_SYSTEM_PROMPT, SCALPING_WATCHING_HOT_SYSTEM_PROMPT, SCALPING_WATCHING_SYSTEM_PROMPT):
+    for prompt in (
+        SCALPING_SYSTEM_PROMPT,
+        SCALPING_WATCHING_HOT_SYSTEM_PROMPT,
+        SCALPING_WATCHING_SYSTEM_PROMPT,
+    ):
         assert "75-100 BUY" in prompt
         assert "50-74 WAIT" in prompt
         assert "0-49 DROP" in prompt
@@ -975,11 +1110,17 @@ def test_scalping_buy_recovery_prompt_mentions_recovery_band():
 def test_analyze_target_shadow_prompt_uses_shadow_prompt_type(monkeypatch):
     engine = _build_engine()
 
-    monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "packet")
+    monkeypatch.setattr(
+        engine, "_format_market_data", lambda ws, ticks, candles: "packet"
+    )
     monkeypatch.setattr(
         engine,
         "_call_openai_safe",
-        lambda *args, **kwargs: {"action": "BUY", "score": 77, "reason": "shadow-strong"},
+        lambda *args, **kwargs: {
+            "action": "BUY",
+            "score": 77,
+            "reason": "shadow-strong",
+        },
     )
 
     result = engine.analyze_target_shadow_prompt(
@@ -1003,7 +1144,9 @@ def test_analyze_target_shadow_prompt_skips_when_engine_disabled(monkeypatch):
     engine.ai_disabled = True
     called = {"value": False}
 
-    monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "packet")
+    monkeypatch.setattr(
+        engine, "_format_market_data", lambda ws, ticks, candles: "packet"
+    )
 
     def _fake_call(*args, **kwargs):
         called["value"] = True
@@ -1027,7 +1170,9 @@ def test_analyze_target_shadow_prompt_honors_prompt_override(monkeypatch):
     engine = _build_engine()
     used_prompt = {"value": None}
 
-    monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "packet")
+    monkeypatch.setattr(
+        engine, "_format_market_data", lambda ws, ticks, candles: "packet"
+    )
 
     def _fake_call(prompt, *args, **kwargs):
         used_prompt["value"] = prompt
@@ -1074,7 +1219,12 @@ def test_tier2_surfaces_do_not_advance_analyze_target_cooldown(monkeypatch):
                 "next_review_sec": 45,
             }
         if schema_name == "overnight_v1":
-            return {"action": "SELL_TODAY", "confidence": 60, "reason": "risk", "risk_note": "test"}
+            return {
+                "action": "SELL_TODAY",
+                "confidence": 60,
+                "reason": "risk",
+                "risk_note": "test",
+            }
         return {"action": "WAIT", "score": 50, "reason": "unexpected"}
 
     monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
@@ -1093,7 +1243,12 @@ def test_tier2_surfaces_do_not_advance_analyze_target_cooldown(monkeypatch):
         {"curr": 10000, "v_pw": 130, "buy_ratio": 60},
         [{"price": 10000, "volume": 10, "side": "BUY"}],
         [{"close": 10000, "high": 10020, "low": 9980, "volume": 1200}],
-        {"profit_rate": 0.2, "peak_profit": 0.5, "held_sec": 80, "current_ai_score": 50},
+        {
+            "profit_rate": 0.2,
+            "peak_profit": 0.5,
+            "held_sec": 80,
+            "current_ai_score": 50,
+        },
     )
     engine.evaluate_scalping_overnight_decision(
         "테스트",
@@ -1109,22 +1264,32 @@ def test_analyze_target_routes_scalping_and_swing_to_expected_tiers(monkeypatch)
     engine = _build_engine()
     used_models = []
 
-    monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "scalp-packet")
-    monkeypatch.setattr(engine, "_format_swing_market_data", lambda ws, candles, qty: "swing-packet")
+    monkeypatch.setattr(
+        engine, "_format_market_data", lambda ws, ticks, candles: "scalp-packet"
+    )
+    monkeypatch.setattr(
+        engine, "_format_swing_market_data", lambda ws, candles, qty: "swing-packet"
+    )
 
     def _fake_call(*args, **kwargs):
         used_models.append(kwargs.get("model_override"))
         return {"action": "BUY", "score": 80, "reason": "ok"}
 
     monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
-    monkeypatch.setattr(engine, "_apply_remote_entry_guard", lambda result, **kwargs: result)
+    monkeypatch.setattr(
+        engine, "_apply_remote_entry_guard", lambda result, **kwargs: result
+    )
 
     ws_data = {"curr": 10000, "fluctuation": 1.0, "orderbook": {"asks": [], "bids": []}}
     recent_ticks = [{"time": "10:00:00", "price": 10000, "volume": 10, "dir": "BUY"}]
     recent_candles = [{"체결시간": "10:00:00", "현재가": 10000, "거래량": 100}]
 
-    engine.analyze_target("스캘프", ws_data, recent_ticks, recent_candles, strategy="SCALPING")
-    engine.analyze_target("스윙", ws_data, recent_ticks, recent_candles, strategy="KOSDAQ_ML")
+    engine.analyze_target(
+        "스캘프", ws_data, recent_ticks, recent_candles, strategy="SCALPING"
+    )
+    engine.analyze_target(
+        "스윙", ws_data, recent_ticks, recent_candles, strategy="KOSDAQ_ML"
+    )
 
     assert used_models == ["tier1-model", "tier2-model"]
 
@@ -1134,7 +1299,9 @@ def test_analyze_target_routes_scalping_prompt_profiles(monkeypatch):
     used_prompts = []
     used_models = []
 
-    monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "scalp-packet")
+    monkeypatch.setattr(
+        engine, "_format_market_data", lambda ws, ticks, candles: "scalp-packet"
+    )
 
     def _fake_call(prompt, *args, **kwargs):
         used_prompts.append(prompt)
@@ -1200,7 +1367,9 @@ def test_analyze_target_routes_scalping_prompt_profiles(monkeypatch):
 
 def test_analyze_target_holding_exit_action_schema_compat(monkeypatch):
     engine = _build_engine()
-    monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "scalp-packet")
+    monkeypatch.setattr(
+        engine, "_format_market_data", lambda ws, ticks, candles: "scalp-packet"
+    )
     monkeypatch.setattr(
         engine,
         "_call_openai_safe",
@@ -1238,7 +1407,9 @@ def test_scalping_reason_language_contract_replaces_non_ascii_reason():
 
 
 def test_scalping_reason_language_contract_keeps_english_reason():
-    result = normalize_ai_reason_language("curr_vs_ma5_bp positive but liquidity weak", max_len=120)
+    result = normalize_ai_reason_language(
+        "curr_vs_ma5_bp positive but liquidity weak", max_len=120
+    )
 
     assert result["reason"] == "curr_vs_ma5_bp positive but liquidity weak"
     assert result["ai_reason_language_violation"] is False
@@ -1272,20 +1443,37 @@ def test_internal_json_classifier_prompts_use_english_instruction_text():
         assert not _has_hangul(prompt)
 
     assert "pre-submit scalping order-price classifier" in SCALPING_ENTRY_PRICE_PROMPT
-    assert "low-latency scalping position-state classifier" in SCALPING_HOLDING_SYSTEM_PROMPT
-    assert "scalping holding/overnight flow classifier" in SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
-    assert "absorption, recovery, distribution, breakdown, quiet" in SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
+    assert (
+        "low-latency scalping position-state classifier"
+        in SCALPING_HOLDING_SYSTEM_PROMPT
+    )
+    assert (
+        "scalping holding/overnight flow classifier"
+        in SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
+    )
+    assert (
+        "absorption, recovery, distribution, breakdown, quiet"
+        in SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
+    )
 
 
 def test_stage_prompts_keep_decision_scope_separated():
-    assert "Do not decide order price, quantity, holding, or exit." in SCALPING_SYSTEM_PROMPT
-    assert "Do not decide order price, quantity, holding, exit, provider route, or hard guard policy." in (
-        SCALPING_WATCHING_HOT_SYSTEM_PROMPT
+    assert (
+        "Do not decide order price, quantity, holding, or exit."
+        in SCALPING_SYSTEM_PROMPT
     )
-    assert "Do not decide order price, quantity, holding, or exit." in SCALPING_WATCHING_SYSTEM_PROMPT
+    assert (
+        "Do not decide order price, quantity, holding, exit, provider route, or hard guard policy."
+        in (SCALPING_WATCHING_HOT_SYSTEM_PROMPT)
+    )
+    assert (
+        "Do not decide order price, quantity, holding, or exit."
+        in SCALPING_WATCHING_SYSTEM_PROMPT
+    )
     assert "Do not re-decide BUY vs WAIT." in SCALPING_ENTRY_PRICE_PROMPT
-    assert "Do not change entry, order price, provider route, quantity, or hard guard policy." in (
-        SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
+    assert (
+        "Do not change entry, order price, provider route, quantity, or hard guard policy."
+        in (SCALPING_HOLDING_FLOW_SYSTEM_PROMPT)
     )
 
 
@@ -1345,14 +1533,18 @@ def test_remote_buy_guard_does_not_count_micro_vwap_without_provenance(monkeypat
         "tick_aggressor_trusted_count": 3,
         "buy_pressure_10t": 74.0,
     }
-    monkeypatch.setattr(engine, "_extract_scalping_features", lambda *_args, **_kwargs: features)
+    monkeypatch.setattr(
+        engine, "_extract_scalping_features", lambda *_args, **_kwargs: features
+    )
 
     _, risk_flags = engine._remote_buy_risk_flags({}, [], [])
 
     assert risk_flags == 0
 
 
-def test_remote_buy_guard_does_not_downgrade_instant_strength_without_micro_provenance(monkeypatch):
+def test_remote_buy_guard_does_not_downgrade_instant_strength_without_micro_provenance(
+    monkeypatch,
+):
     engine = _build_engine()
     features = {
         "large_sell_print_detected": False,
@@ -1366,7 +1558,9 @@ def test_remote_buy_guard_does_not_downgrade_instant_strength_without_micro_prov
         "latest_strength": 121.0,
         "same_price_buy_absorption": 0,
     }
-    monkeypatch.setattr(engine, "_extract_scalping_features", lambda *_args, **_kwargs: features)
+    monkeypatch.setattr(
+        engine, "_extract_scalping_features", lambda *_args, **_kwargs: features
+    )
 
     result = engine._apply_remote_entry_guard(
         {"action": "BUY", "score": 80, "reason": "strong pressure"},
@@ -1466,7 +1660,15 @@ def test_scalping_compact_entry_payload_keeps_source_quality_and_freshness(monke
                     "aggressor_quality": "fresh",
                 }
             ],
-            [{"체결시간": "09:00:00", "현재가": 1000, "고가": 1002, "저가": 998, "거래량": 100}],
+            [
+                {
+                    "체결시간": "09:00:00",
+                    "현재가": 1000,
+                    "고가": 1002,
+                    "저가": 998,
+                    "거래량": 100,
+                }
+            ],
         )
     )
 
@@ -1481,7 +1683,9 @@ def test_scalping_compact_entry_payload_keeps_source_quality_and_freshness(monke
     assert payload["source_quality"]["micro_vwap_available"] is False
     assert payload["source_quality"]["minute_candle_window_fresh"] is True
     assert payload["source_quality"]["price_change_heuristic_is_not_aggressor"] is True
-    assert payload["recent_ticks_latest_first"][0]["aggressor_source"] == "orderbook_touch"
+    assert (
+        payload["recent_ticks_latest_first"][0]["aggressor_source"] == "orderbook_touch"
+    )
 
 
 def test_scalping_legacy_text_entry_payload_includes_feature_provenance(monkeypatch):
@@ -1590,16 +1794,29 @@ def test_dual_shadow_prompts_use_functional_english_reviewers():
         assert "너는" not in prompt
         assert "반드시 JSON" not in prompt
 
-    assert "opportunity-side quantitative reviewer" in ai_engine_openai_module.DUAL_PERSONA_AGGRESSIVE_PROMPT
-    assert "risk-side quantitative reviewer" in ai_engine_openai_module.DUAL_PERSONA_CONSERVATIVE_PROMPT
+    assert (
+        "opportunity-side quantitative reviewer"
+        in ai_engine_openai_module.DUAL_PERSONA_AGGRESSIVE_PROMPT
+    )
+    assert (
+        "risk-side quantitative reviewer"
+        in ai_engine_openai_module.DUAL_PERSONA_CONSERVATIVE_PROMPT
+    )
 
 
 def test_overnight_prompt_is_internal_english_schema_first_classifier():
-    assert "pre-close scalping overnight risk classifier" in SCALPING_OVERNIGHT_DECISION_PROMPT
+    assert (
+        "pre-close scalping overnight risk classifier"
+        in SCALPING_OVERNIGHT_DECISION_PROMPT
+    )
     assert "Default action is SELL_TODAY" in SCALPING_OVERNIGHT_DECISION_PROMPT
     assert "HOLD_OVERNIGHT is a strict exception" in SCALPING_OVERNIGHT_DECISION_PROMPT
-    assert "stale, missing, insufficient, or mixed" in SCALPING_OVERNIGHT_DECISION_PROMPT
-    assert "one concise overnight decision rationale" in SCALPING_OVERNIGHT_DECISION_PROMPT
+    assert (
+        "stale, missing, insufficient, or mixed" in SCALPING_OVERNIGHT_DECISION_PROMPT
+    )
+    assert (
+        "one concise overnight decision rationale" in SCALPING_OVERNIGHT_DECISION_PROMPT
+    )
     assert "one concise main risk" in SCALPING_OVERNIGHT_DECISION_PROMPT
     assert "15년" not in SCALPING_OVERNIGHT_DECISION_PROMPT
     assert "베테랑" not in SCALPING_OVERNIGHT_DECISION_PROMPT
@@ -1609,9 +1826,13 @@ def test_overnight_prompt_is_internal_english_schema_first_classifier():
 def test_analyze_target_uses_shared_prompt_when_split_disabled(monkeypatch):
     engine = _build_engine()
     used_prompts = []
-    disabled_rules = replace(ai_engine_openai_module.TRADING_RULES, SCALPING_PROMPT_SPLIT_ENABLED=False)
+    disabled_rules = replace(
+        ai_engine_openai_module.TRADING_RULES, SCALPING_PROMPT_SPLIT_ENABLED=False
+    )
     monkeypatch.setattr(ai_engine_openai_module, "TRADING_RULES", disabled_rules)
-    monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "scalp-packet")
+    monkeypatch.setattr(
+        engine, "_format_market_data", lambda ws, ticks, candles: "scalp-packet"
+    )
 
     def _fake_call(prompt, *args, **kwargs):
         used_prompts.append(prompt)
@@ -1639,7 +1860,9 @@ def test_condition_entry_and_exit_reuse_scalping_routes(monkeypatch):
     used_prompts = []
     used_schemas = []
 
-    monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "condition-packet")
+    monkeypatch.setattr(
+        engine, "_format_market_data", lambda ws, ticks, candles: "condition-packet"
+    )
 
     def _fake_call(prompt, *args, **kwargs):
         used_prompts.append(prompt)
@@ -1650,18 +1873,27 @@ def test_condition_entry_and_exit_reuse_scalping_routes(monkeypatch):
         return {"action": "TRIM", "score": 77, "reason": "exit flow"}
 
     monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
-    monkeypatch.setattr(engine, "_apply_remote_entry_guard", lambda result, **kwargs: result)
+    monkeypatch.setattr(
+        engine, "_apply_remote_entry_guard", lambda result, **kwargs: result
+    )
 
     ws_data = {"curr": 10000, "fluctuation": 1.0, "orderbook": {"asks": [], "bids": []}}
     recent_ticks = [{"time": "10:00:00", "price": 10000, "volume": 10, "dir": "BUY"}]
     recent_candles = [{"체결시간": "10:00:00", "현재가": 10000, "거래량": 100}]
     profile = {"name": "VCP", "strategy": "SCALPING"}
 
-    entry = engine.evaluate_condition_entry("조건주", "000001", ws_data, recent_ticks, recent_candles, profile)
-    exit_result = engine.evaluate_condition_exit("조건주", "000001", ws_data, recent_ticks, recent_candles, profile, 1.2, 2.1, 78)
+    entry = engine.evaluate_condition_entry(
+        "조건주", "000001", ws_data, recent_ticks, recent_candles, profile
+    )
+    exit_result = engine.evaluate_condition_exit(
+        "조건주", "000001", ws_data, recent_ticks, recent_candles, profile, 1.2, 2.1, 78
+    )
 
     assert used_models == ["tier1-model", "tier1-model"]
-    assert used_prompts == [SCALPING_WATCHING_HOT_SYSTEM_PROMPT, SCALPING_HOLDING_SCORE_SYSTEM_PROMPT]
+    assert used_prompts == [
+        SCALPING_WATCHING_HOT_SYSTEM_PROMPT,
+        SCALPING_HOLDING_SCORE_SYSTEM_PROMPT,
+    ]
     assert used_schemas == ["entry_v1", "holding_score_v2"]
     assert entry["decision"] == "BUY"
     assert entry["confidence"] == 88
@@ -1710,22 +1942,22 @@ def test_holding_cache_tick_signature_uses_latest_touch_ticks_and_excludes_heuri
                 "dir": "BUY",
                 "aggressor_source": "price_change_heuristic",
             },
-                {
-                    "time": "10:00:02",
-                    "price": 10090,
-                    "volume": 450,
-                    "best_bid": 10090,
-                    "best_ask": 10100,
-                    "aggressor_source": "orderbook_touch",
-                },
-                {
-                    "time": "10:00:01",
-                    "price": 10100,
-                    "volume": 250,
-                    "best_bid": 10090,
-                    "best_ask": 10100,
-                    "aggressor_source": "orderbook_touch",
-                },
+            {
+                "time": "10:00:02",
+                "price": 10090,
+                "volume": 450,
+                "best_bid": 10090,
+                "best_ask": 10100,
+                "aggressor_source": "orderbook_touch",
+            },
+            {
+                "time": "10:00:01",
+                "price": 10100,
+                "volume": 250,
+                "best_bid": 10090,
+                "best_ask": 10100,
+                "aggressor_source": "orderbook_touch",
+            },
             {"time": "10:00:00", "price": 10080, "volume": 100, "dir": "BUY"},
         ]
     )
@@ -1771,7 +2003,9 @@ def test_provider_holding_matrix_context_appends_prompt_and_tags_result(monkeypa
                 "candidate:matrix_v1:price_10k_30k:volume_500k_2m:time_0930_1030"
             ),
         )
-        monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "packet")
+        monkeypatch.setattr(
+            engine, "_format_market_data", lambda ws, ticks, candles: "packet"
+        )
 
         def _fake_call(prompt, user_input, *args, **kwargs):
             seen_inputs.append(user_input)
@@ -1793,19 +2027,29 @@ def test_provider_holding_matrix_context_appends_prompt_and_tags_result(monkeypa
         assert result["holding_exit_matrix_applied"] is True
         assert result["holding_exit_matrix_version"] == "matrix_v1"
         assert result["holding_exit_matrix_cohort"] == "candidate"
-        assert result["holding_exit_matrix_decision_alignment"] == "neutral_no_clear_edge"
+        assert (
+            result["holding_exit_matrix_decision_alignment"] == "neutral_no_clear_edge"
+        )
 
 
-def test_openai_analyze_target_waits_min_interval_instead_of_score50_cooldown(monkeypatch):
+def test_openai_analyze_target_waits_min_interval_instead_of_score50_cooldown(
+    monkeypatch,
+):
     engine = _build_provider_engine(GPTSniperEngine)
     engine.last_call_time = 100.0
     engine.min_interval = 0.5
     sleeps = []
 
     monkeypatch.setattr(ai_engine_openai_module.time, "time", lambda: 100.2)
-    monkeypatch.setattr(ai_engine_openai_module.time, "sleep", lambda sec: sleeps.append(sec))
-    monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "packet")
-    monkeypatch.setattr(engine, "_apply_remote_entry_guard", lambda result, **kwargs: result)
+    monkeypatch.setattr(
+        ai_engine_openai_module.time, "sleep", lambda sec: sleeps.append(sec)
+    )
+    monkeypatch.setattr(
+        engine, "_format_market_data", lambda ws, ticks, candles: "packet"
+    )
+    monkeypatch.setattr(
+        engine, "_apply_remote_entry_guard", lambda result, **kwargs: result
+    )
 
     def _fake_call(*args, **kwargs):
         return {"action": "BUY", "score": 88, "reason": "strong"}
@@ -1842,9 +2086,17 @@ def test_openai_analyze_target_waits_for_lock_contention_retry(monkeypatch):
             return None
 
     engine.lock = ContendedThenAvailableLock()
-    monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "packet")
-    monkeypatch.setattr(engine, "_apply_remote_entry_guard", lambda result, **kwargs: result)
-    monkeypatch.setattr(engine, "_call_openai_safe", lambda *args, **kwargs: {"action": "BUY", "score": 88, "reason": "strong"})
+    monkeypatch.setattr(
+        engine, "_format_market_data", lambda ws, ticks, candles: "packet"
+    )
+    monkeypatch.setattr(
+        engine, "_apply_remote_entry_guard", lambda result, **kwargs: result
+    )
+    monkeypatch.setattr(
+        engine,
+        "_call_openai_safe",
+        lambda *args, **kwargs: {"action": "BUY", "score": 88, "reason": "strong"},
+    )
 
     result = engine.analyze_target(
         "LOCK_WAIT_TEST",
@@ -1863,7 +2115,9 @@ def test_openai_analyze_target_waits_for_lock_contention_retry(monkeypatch):
     assert result["ai_fallback_score_50"] is False
 
 
-def test_openai_analyze_target_lock_contention_exhaustion_is_not_score50_fallback(monkeypatch):
+def test_openai_analyze_target_lock_contention_exhaustion_is_not_score50_fallback(
+    monkeypatch,
+):
     engine = _build_provider_engine(GPTSniperEngine)
 
     class AlwaysContendedLock:
@@ -1874,7 +2128,11 @@ def test_openai_analyze_target_lock_contention_exhaustion_is_not_score50_fallbac
             raise AssertionError("lock must not be released when acquire failed")
 
     engine.lock = AlwaysContendedLock()
-    monkeypatch.setattr(engine, "_call_openai_safe", lambda *args, **kwargs: {"action": "BUY", "score": 88})
+    monkeypatch.setattr(
+        engine,
+        "_call_openai_safe",
+        lambda *args, **kwargs: {"action": "BUY", "score": 88},
+    )
 
     result = engine.analyze_target(
         "LOCK_FAIL_TEST",
@@ -1913,7 +2171,12 @@ def test_holding_score_lock_contention_waits_before_neutral_score50(monkeypatch)
         {"curr": 10000},
         [],
         [],
-        {"profit_rate": 0.2, "peak_profit": 0.5, "held_sec": 80, "current_ai_score": 50},
+        {
+            "profit_rate": 0.2,
+            "peak_profit": 0.5,
+            "held_sec": 80,
+            "current_ai_score": 50,
+        },
     )
 
     assert acquire_calls
@@ -1936,13 +2199,23 @@ def test_provider_holding_matrix_cache_token_separates_cache_variants(monkeypatc
         call_count = {"value": 0}
         contexts = iter(
             [
-                _holding_matrix_runtime_context("candidate:matrix_v1:price_10k_30k:volume_500k_2m:time_0930_1030"),
-                _holding_matrix_runtime_context("candidate:matrix_v2:price_10k_30k:volume_500k_2m:time_0930_1030"),
+                _holding_matrix_runtime_context(
+                    "candidate:matrix_v1:price_10k_30k:volume_500k_2m:time_0930_1030"
+                ),
+                _holding_matrix_runtime_context(
+                    "candidate:matrix_v2:price_10k_30k:volume_500k_2m:time_0930_1030"
+                ),
             ]
         )
 
-        monkeypatch.setattr(module, "build_holding_exit_matrix_runtime_context", lambda **kwargs: next(contexts))
-        monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "packet")
+        monkeypatch.setattr(
+            module,
+            "build_holding_exit_matrix_runtime_context",
+            lambda **kwargs: next(contexts),
+        )
+        monkeypatch.setattr(
+            engine, "_format_market_data", lambda ws, ticks, candles: "packet"
+        )
 
         def _fake_call(*args, **kwargs):
             call_count["value"] += 1
@@ -2033,13 +2306,36 @@ def test_openai_overnight_uses_batch_timeout_profile(monkeypatch):
     )
     engine = _build_provider_engine(GPTSniperEngine)
 
-    assert engine._get_openai_timeout_ms(endpoint_name="overnight", require_json=True) == 12000
-    assert engine._get_openai_timeout_ms(endpoint_name="scanner_report", require_json=False) == 15000
-    assert engine._get_openai_timeout_ms(endpoint_name="analyze_target", require_json=True) == 3000
-    assert engine._get_openai_timeout_ms(endpoint_name="entry_price", require_json=True) == 7000
-    assert engine._get_openai_timeout_ms(endpoint_name="holding_score", require_json=True) == 7000
-    assert engine._get_openai_timeout_ms(endpoint_name="holding_flow", require_json=True) == 7000
-    assert engine._get_openai_timeout_ms(endpoint_name="generic_json", require_json=True) == 700
+    assert (
+        engine._get_openai_timeout_ms(endpoint_name="overnight", require_json=True)
+        == 12000
+    )
+    assert (
+        engine._get_openai_timeout_ms(
+            endpoint_name="scanner_report", require_json=False
+        )
+        == 15000
+    )
+    assert (
+        engine._get_openai_timeout_ms(endpoint_name="analyze_target", require_json=True)
+        == 3000
+    )
+    assert (
+        engine._get_openai_timeout_ms(endpoint_name="entry_price", require_json=True)
+        == 7000
+    )
+    assert (
+        engine._get_openai_timeout_ms(endpoint_name="holding_score", require_json=True)
+        == 7000
+    )
+    assert (
+        engine._get_openai_timeout_ms(endpoint_name="holding_flow", require_json=True)
+        == 7000
+    )
+    assert (
+        engine._get_openai_timeout_ms(endpoint_name="generic_json", require_json=True)
+        == 700
+    )
 
 
 def test_analyze_target_timeout_reject_is_not_marked_score50_fallback(monkeypatch):
@@ -2073,7 +2369,15 @@ def test_analyze_target_timeout_reject_is_not_marked_score50_fallback(monkeypatc
             },
         },
         [{"time": "10:00:00", "price": 10000, "volume": 10, "dir": "BUY"}],
-        [{"체결시간": "10:00:00", "현재가": 10000, "고가": 10020, "저가": 9990, "거래량": 1000}],
+        [
+            {
+                "체결시간": "10:00:00",
+                "현재가": 10000,
+                "고가": 10020,
+                "저가": 9990,
+                "거래량": 1000,
+            }
+        ],
         strategy="SCALPING",
         cache_profile="timeout_reject_test",
         prompt_profile="shared",
@@ -2135,8 +2439,12 @@ def test_realtime_report_and_overnight_decision_use_tier2_model(monkeypatch):
 
     monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
 
-    engine.generate_realtime_report("리포트주", "000001", "legacy packet", analysis_mode="SWING")
-    engine.evaluate_scalping_overnight_decision("오버나이트주", "000001", {"curr_price": 10000})
+    engine.generate_realtime_report(
+        "리포트주", "000001", "legacy packet", analysis_mode="SWING"
+    )
+    engine.evaluate_scalping_overnight_decision(
+        "오버나이트주", "000001", {"curr_price": 10000}
+    )
 
     assert used_models == ["tier2-model", "tier2-model"]
 
@@ -2145,7 +2453,11 @@ def test_scanner_briefing_uses_tier3_model(monkeypatch):
     engine = _build_engine()
     used_models = []
 
-    monkeypatch.setattr(ai_engine_openai_module, "build_scanner_data_input", lambda **kwargs: "scanner-data")
+    monkeypatch.setattr(
+        ai_engine_openai_module,
+        "build_scanner_data_input",
+        lambda **kwargs: "scanner-data",
+    )
 
     def _fake_call(*args, **kwargs):
         used_models.append(kwargs.get("model_override"))
