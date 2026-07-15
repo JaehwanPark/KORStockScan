@@ -32,7 +32,10 @@ class _DummyQuery:
 
     def first(self):
         for record in self.records:
-            if all(getattr(record, key, None) == value for key, value in self.filters.items()):
+            if all(
+                getattr(record, key, None) == value
+                for key, value in self.filters.items()
+            ):
                 return record
         return None
 
@@ -40,7 +43,10 @@ class _DummyQuery:
         return [
             record
             for record in self.records
-            if all(getattr(record, key, None) == value for key, value in self.filters.items())
+            if all(
+                getattr(record, key, None) == value
+                for key, value in self.filters.items()
+            )
         ]
 
     def delete(self):
@@ -97,7 +103,10 @@ class _DummyDB:
                 continue
             if strategy is not None and getattr(record, "strategy", None) != strategy:
                 continue
-            if position_tag is not None and getattr(record, "position_tag", None) != position_tag:
+            if (
+                position_tag is not None
+                and getattr(record, "position_tag", None) != position_tag
+            ):
                 continue
             if str(getattr(record, "status", "") or "") not in {"WATCHING", "EXPIRED"}:
                 continue
@@ -163,7 +172,9 @@ def test_open_reclaim_adds_target_only_within_window(monkeypatch):
         lambda token, code: {"Name": f"TEST-{code}"},
     )
 
-    handlers.handle_condition_matched({"code": "005930", "condition_name": "scalp_open_reclaim_01"})
+    handlers.handle_condition_matched(
+        {"code": "005930", "condition_name": "scalp_open_reclaim_01"}
+    )
 
     assert len(active_targets) == 1
     assert active_targets[0]["code"] == "005930"
@@ -177,7 +188,9 @@ def test_open_reclaim_adds_target_only_within_window(monkeypatch):
     _FakeDateTime._fixed_now = datetime(2026, 4, 4, 9, 21, 0)
     monkeypatch.setattr(handlers, "datetime", _FakeDateTime)
 
-    handlers.handle_condition_matched({"code": "000660", "condition_name": "scalp_open_reclaim_01"})
+    handlers.handle_condition_matched(
+        {"code": "000660", "condition_name": "scalp_open_reclaim_01"}
+    )
 
     assert active_targets == []
     assert db.records == []
@@ -195,20 +208,33 @@ def test_open_reclaim_skips_when_code_already_active(monkeypatch):
     monkeypatch.setattr(
         handlers.kiwoom_utils,
         "get_basic_info_ka10001",
-        lambda token, code: (_ for _ in ()).throw(AssertionError("duplicate path should not load basic info")),
+        lambda token, code: (_ for _ in ()).throw(
+            AssertionError("duplicate path should not load basic info")
+        ),
     )
 
-    handlers.handle_condition_matched({"code": "005930", "condition_name": "scalp_open_reclaim_01"})
+    handlers.handle_condition_matched(
+        {"code": "005930", "condition_name": "scalp_open_reclaim_01"}
+    )
 
     assert len(active_targets) == 1
     assert db.records == []
     assert event_bus.events == []
 
 
-def test_open_reclaim_allows_same_code_when_existing_target_is_other_strategy(monkeypatch):
+def test_open_reclaim_allows_same_code_when_existing_target_is_other_strategy(
+    monkeypatch,
+):
     db = _DummyDB()
     event_bus = _DummyEventBus()
-    active_targets = [{"code": "005930", "status": "WATCHING", "strategy": "KOSPI_ML", "position_tag": "KOSPI_BASE"}]
+    active_targets = [
+        {
+            "code": "005930",
+            "status": "WATCHING",
+            "strategy": "KOSPI_ML",
+            "position_tag": "KOSPI_BASE",
+        }
+    ]
     _bind_test_deps(active_targets, db, event_bus)
     _FakeDateTime._fixed_now = datetime(2026, 4, 4, 9, 10, 0)
 
@@ -219,7 +245,9 @@ def test_open_reclaim_allows_same_code_when_existing_target_is_other_strategy(mo
         lambda token, code: {"Name": f"TEST-{code}"},
     )
 
-    handlers.handle_condition_matched({"code": "005930", "condition_name": "scalp_open_reclaim_01"})
+    handlers.handle_condition_matched(
+        {"code": "005930", "condition_name": "scalp_open_reclaim_01"}
+    )
 
     assert len(active_targets) == 2
     assert {item["strategy"] for item in active_targets} == {"KOSPI_ML", "SCALPING"}
@@ -253,7 +281,9 @@ def test_open_reclaim_does_not_overwrite_completed_scalp_row(monkeypatch):
         lambda token, code: {"Name": f"TEST-{code}"},
     )
 
-    handlers.handle_condition_matched({"code": "005930", "condition_name": "scalp_open_reclaim_01"})
+    handlers.handle_condition_matched(
+        {"code": "005930", "condition_name": "scalp_open_reclaim_01"}
+    )
 
     assert len(db.records) == 2
     assert db.records[0].status == "COMPLETED"
@@ -290,7 +320,9 @@ def test_s15_scan_base_arms_intraday_candidate_without_active_target(monkeypatch
         ),
     )
 
-    handlers.handle_condition_matched({"code": "123456", "condition_name": "s15_scan_base_01"})
+    handlers.handle_condition_matched(
+        {"code": "123456", "condition_name": "s15_scan_base_01"}
+    )
 
     assert active_targets == []
     assert db.records
@@ -336,12 +368,19 @@ def test_s15_trigger_without_arm_blocks_with_provenance(monkeypatch):
     monkeypatch.setattr(
         handlers.threading,
         "Thread",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("blocked trigger must not start thread")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("blocked trigger must not start thread")
+        ),
     )
 
-    handlers.handle_condition_matched({"code": "123456", "condition_name": "s15_trigger_break_01"})
+    handlers.handle_condition_matched(
+        {"code": "123456", "condition_name": "s15_trigger_break_01"}
+    )
 
-    assert [event["stage"] for event in emitted] == ["s15_trigger_received", "s15_trigger_blocked"]
+    assert [event["stage"] for event in emitted] == [
+        "s15_trigger_received",
+        "s15_trigger_blocked",
+    ]
     assert emitted[-1]["fields"]["s15_block_reason"] == "not_armed"
     assert active_targets == []
     assert db.records == []
@@ -382,19 +421,27 @@ def test_s15_trigger_reentry_blocked_does_not_start_thread(monkeypatch):
     monkeypatch.setattr(
         handlers.threading,
         "Thread",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("blocked trigger must not start thread")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("blocked trigger must not start thread")
+        ),
     )
 
-    handlers.handle_condition_matched({"code": "123456", "condition_name": "s15_trigger_break_01"})
+    handlers.handle_condition_matched(
+        {"code": "123456", "condition_name": "s15_trigger_break_01"}
+    )
 
     assert emitted[-1]["stage"] == "s15_trigger_blocked"
     assert emitted[-1]["fields"]["s15_block_reason"] == "reentry_blocked"
 
 
-def test_s15_trigger_bypasses_general_active_target_filter_and_emits_provenance(monkeypatch):
+def test_s15_trigger_bypasses_general_active_target_filter_and_emits_provenance(
+    monkeypatch,
+):
     db = _DummyDB()
     event_bus = _DummyEventBus()
-    active_targets = [{"code": "123456", "strategy": "SCALPING", "position_tag": "SCANNER"}]
+    active_targets = [
+        {"code": "123456", "strategy": "SCALPING", "position_tag": "SCANNER"}
+    ]
     emitted = []
     started = []
     _bind_test_deps(active_targets, db, event_bus)
@@ -435,7 +482,9 @@ def test_s15_trigger_bypasses_general_active_target_filter_and_emits_provenance(
 
     monkeypatch.setattr(handlers.threading, "Thread", _DummyThread)
 
-    handlers.handle_condition_matched({"code": "123456", "condition_name": "s15_trigger_break_01"})
+    handlers.handle_condition_matched(
+        {"code": "123456", "condition_name": "s15_trigger_break_01"}
+    )
 
     assert [event["stage"] for event in emitted] == ["s15_trigger_received"]
     assert started
@@ -487,18 +536,30 @@ def test_s15_trigger_blocks_when_same_symbol_order_or_holding_active(monkeypatch
     monkeypatch.setattr(
         handlers,
         "create_s15_shadow_record",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("active holding must not create shadow")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("active holding must not create shadow")
+        ),
     )
     monkeypatch.setattr(
         handlers.threading,
         "Thread",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("active holding must not start thread")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("active holding must not start thread")
+        ),
     )
 
-    handlers.handle_condition_matched({"code": "123456", "condition_name": "s15_trigger_break_01"})
+    handlers.handle_condition_matched(
+        {"code": "123456", "condition_name": "s15_trigger_break_01"}
+    )
 
-    assert [event["stage"] for event in emitted] == ["s15_trigger_received", "s15_trigger_blocked"]
-    assert emitted[-1]["fields"]["s15_block_reason"] == "same_symbol_active_order_or_holding"
+    assert [event["stage"] for event in emitted] == [
+        "s15_trigger_received",
+        "s15_trigger_blocked",
+    ]
+    assert (
+        emitted[-1]["fields"]["s15_block_reason"]
+        == "same_symbol_active_order_or_holding"
+    )
     assert emitted[-1]["fields"]["active_target_status"] == "HOLDING"
     assert "123456" not in s15.FAST_TRADE_STATE
 
@@ -539,17 +600,26 @@ def test_s15_trigger_missing_price_blocks_without_shadow_or_thread(monkeypatch):
     monkeypatch.setattr(
         handlers,
         "create_s15_shadow_record",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("missing price must not create shadow")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("missing price must not create shadow")
+        ),
     )
     monkeypatch.setattr(
         handlers.threading,
         "Thread",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("missing price must not start thread")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("missing price must not start thread")
+        ),
     )
 
-    handlers.handle_condition_matched({"code": "123456", "condition_name": "s15_trigger_break_01"})
+    handlers.handle_condition_matched(
+        {"code": "123456", "condition_name": "s15_trigger_break_01"}
+    )
 
-    assert [event["stage"] for event in emitted] == ["s15_trigger_received", "s15_trigger_blocked"]
+    assert [event["stage"] for event in emitted] == [
+        "s15_trigger_received",
+        "s15_trigger_blocked",
+    ]
     assert emitted[-1]["fields"]["s15_block_reason"] == "missing_price"
     assert db.records == []
     assert "123456" not in s15.FAST_TRADE_STATE
@@ -570,11 +640,15 @@ def test_s15_candidate_unmatched_unarms_candidate(monkeypatch):
     )
     monkeypatch.setattr(s15, "_log_s15_event", lambda *args, **kwargs: None)
 
-    handlers.handle_condition_matched({"code": "123456", "condition_name": "s15_scan_base_01"})
+    handlers.handle_condition_matched(
+        {"code": "123456", "condition_name": "s15_scan_base_01"}
+    )
     assert "123456" in s15.FAST_SCALP_POOL
     assert db.records
 
-    handlers.handle_condition_unmatched({"code": "123456", "condition_name": "s15_scan_base_01"})
+    handlers.handle_condition_unmatched(
+        {"code": "123456", "condition_name": "s15_scan_base_01"}
+    )
 
     assert "123456" not in s15.FAST_SCALP_POOL
     assert db.records == []
@@ -604,9 +678,13 @@ def test_vwap_reclaim_adds_target_only_when_price_is_within_vwap_band(monkeypatc
         lambda token, code: {"Name": f"TEST-{code}"},
     )
     monkeypatch.setattr(handlers, "_get_latest_price", lambda code: 1005)
-    monkeypatch.setattr(handlers, "_get_latest_open_and_vwap", lambda code: (1000, 1000))
+    monkeypatch.setattr(
+        handlers, "_get_latest_open_and_vwap", lambda code: (1000, 1000)
+    )
 
-    handlers.handle_condition_matched({"code": "035420", "condition_name": "scalp_vwap_reclaim_01"})
+    handlers.handle_condition_matched(
+        {"code": "035420", "condition_name": "scalp_vwap_reclaim_01"}
+    )
 
     assert len(active_targets) == 1
     assert active_targets[0]["position_tag"] == "VWAP_RECLAIM"
@@ -625,12 +703,18 @@ def test_vwap_reclaim_skips_when_vwap_gap_is_outside_allowed_band(monkeypatch):
     monkeypatch.setattr(
         handlers.kiwoom_utils,
         "get_basic_info_ka10001",
-        lambda token, code: (_ for _ in ()).throw(AssertionError("precheck should skip before basic info")),
+        lambda token, code: (_ for _ in ()).throw(
+            AssertionError("precheck should skip before basic info")
+        ),
     )
     monkeypatch.setattr(handlers, "_get_latest_price", lambda code: 1015)
-    monkeypatch.setattr(handlers, "_get_latest_open_and_vwap", lambda code: (1000, 1000))
+    monkeypatch.setattr(
+        handlers, "_get_latest_open_and_vwap", lambda code: (1000, 1000)
+    )
 
-    handlers.handle_condition_matched({"code": "035420", "condition_name": "scalp_vwap_reclaim_01"})
+    handlers.handle_condition_matched(
+        {"code": "035420", "condition_name": "scalp_vwap_reclaim_01"}
+    )
 
     assert active_targets == []
     assert db.records == []
@@ -664,7 +748,9 @@ def test_vwap_reclaim_uses_candle_close_when_ws_curr_missing(monkeypatch):
         ],
     )
 
-    handlers.handle_condition_matched({"code": "035420", "condition_name": "scalp_vwap_reclaim_01"})
+    handlers.handle_condition_matched(
+        {"code": "035420", "condition_name": "scalp_vwap_reclaim_01"}
+    )
 
     assert len(active_targets) == 1
     assert active_targets[0]["position_tag"] == "VWAP_RECLAIM"
@@ -699,7 +785,9 @@ def test_vwap_reclaim_parses_signed_comma_candles_when_ws_curr_missing(monkeypat
         ],
     )
 
-    handlers.handle_condition_matched({"code": "035420", "condition_name": "scalp_vwap_reclaim_01"})
+    handlers.handle_condition_matched(
+        {"code": "035420", "condition_name": "scalp_vwap_reclaim_01"}
+    )
 
     assert len(active_targets) == 1
     assert active_targets[0]["position_tag"] == "VWAP_RECLAIM"
@@ -718,12 +806,16 @@ def test_vwap_reclaim_missing_price_or_vwap_requests_ws_registration(monkeypatch
     monkeypatch.setattr(
         handlers.kiwoom_utils,
         "get_basic_info_ka10001",
-        lambda token, code: (_ for _ in ()).throw(AssertionError("precheck should skip before basic info")),
+        lambda token, code: (_ for _ in ()).throw(
+            AssertionError("precheck should skip before basic info")
+        ),
     )
     monkeypatch.setattr(handlers, "_get_latest_price", lambda code: 0)
     monkeypatch.setattr(handlers, "_get_latest_open_and_vwap", lambda code: (0, 0))
 
-    handlers.handle_condition_matched({"code": "060250", "condition_name": "scalp_vwap_reclaim_01"})
+    handlers.handle_condition_matched(
+        {"code": "060250", "condition_name": "scalp_vwap_reclaim_01"}
+    )
 
     assert active_targets == []
     assert db.records == []
@@ -751,7 +843,11 @@ def test_condition_unmatch_guard_keeps_unmatched_only_watching(monkeypatch):
         "TRADING_RULES",
         SimpleNamespace(
             SCALP_CONDITION_UNMATCH_GUARD_ENABLED=True,
-            SCALP_CONDITION_UNMATCH_GUARD_TAGS=("VWAP_RECLAIM", "DRYUP_SQUEEZE", "PRECLOSE"),
+            SCALP_CONDITION_UNMATCH_GUARD_TAGS=(
+                "VWAP_RECLAIM",
+                "DRYUP_SQUEEZE",
+                "PRECLOSE",
+            ),
         ),
     )
     monkeypatch.setattr(
@@ -760,7 +856,9 @@ def test_condition_unmatch_guard_keeps_unmatched_only_watching(monkeypatch):
         lambda token, code: {"Name": f"TEST-{code}"},
     )
     monkeypatch.setattr(handlers, "_get_latest_price", lambda code: 1005)
-    monkeypatch.setattr(handlers, "_get_latest_open_and_vwap", lambda code: (1000, 1000))
+    monkeypatch.setattr(
+        handlers, "_get_latest_open_and_vwap", lambda code: (1000, 1000)
+    )
     monkeypatch.setattr(
         handlers,
         "emit_pipeline_event",
@@ -775,9 +873,13 @@ def test_condition_unmatch_guard_keeps_unmatched_only_watching(monkeypatch):
         ),
     )
 
-    handlers.handle_condition_matched({"code": "035420", "condition_name": "scalp_vwap_reclaim_01"})
+    handlers.handle_condition_matched(
+        {"code": "035420", "condition_name": "scalp_vwap_reclaim_01"}
+    )
     now["ts"] = 1_040.0
-    handlers.handle_condition_unmatched({"code": "035420", "condition_name": "scalp_vwap_reclaim_01"})
+    handlers.handle_condition_unmatched(
+        {"code": "035420", "condition_name": "scalp_vwap_reclaim_01"}
+    )
 
     assert active_targets and active_targets[0]["status"] == "WATCHING"
     assert db.records and db.records[0].status == "WATCHING"
@@ -788,7 +890,9 @@ def test_condition_unmatch_guard_keeps_unmatched_only_watching(monkeypatch):
     assert event["stage"] == "condition_unmatch_guard"
     assert event["fields"]["condition_unmatch_guard_applied"] is True
     assert event["fields"]["condition_unmatch_guard_action"] == "pending_unmatched"
-    assert event["fields"]["condition_unmatch_guard_reason"] == "unmatched_only_guard_hold"
+    assert (
+        event["fields"]["condition_unmatch_guard_reason"] == "unmatched_only_guard_hold"
+    )
     assert event["fields"]["condition_name"] == "scalp_vwap_reclaim_01"
     assert event["fields"]["position_tag"] == "VWAP_RECLAIM"
     assert event["fields"]["actual_order_submitted"] is False
@@ -812,7 +916,11 @@ def test_condition_unmatch_guard_still_removes_below_vwap(monkeypatch):
         "TRADING_RULES",
         SimpleNamespace(
             SCALP_CONDITION_UNMATCH_GUARD_ENABLED=True,
-            SCALP_CONDITION_UNMATCH_GUARD_TAGS=("VWAP_RECLAIM", "DRYUP_SQUEEZE", "PRECLOSE"),
+            SCALP_CONDITION_UNMATCH_GUARD_TAGS=(
+                "VWAP_RECLAIM",
+                "DRYUP_SQUEEZE",
+                "PRECLOSE",
+            ),
         ),
     )
     monkeypatch.setattr(
@@ -820,8 +928,12 @@ def test_condition_unmatch_guard_still_removes_below_vwap(monkeypatch):
         "get_basic_info_ka10001",
         lambda token, code: {"Name": f"TEST-{code}"},
     )
-    monkeypatch.setattr(handlers, "_get_latest_price", lambda code: latest_price["value"])
-    monkeypatch.setattr(handlers, "_get_latest_open_and_vwap", lambda code: (1000, 1000))
+    monkeypatch.setattr(
+        handlers, "_get_latest_price", lambda code: latest_price["value"]
+    )
+    monkeypatch.setattr(
+        handlers, "_get_latest_open_and_vwap", lambda code: (1000, 1000)
+    )
     monkeypatch.setattr(
         handlers,
         "emit_pipeline_event",
@@ -836,10 +948,14 @@ def test_condition_unmatch_guard_still_removes_below_vwap(monkeypatch):
         ),
     )
 
-    handlers.handle_condition_matched({"code": "035420", "condition_name": "scalp_vwap_reclaim_01"})
+    handlers.handle_condition_matched(
+        {"code": "035420", "condition_name": "scalp_vwap_reclaim_01"}
+    )
     now["ts"] = 1_040.0
     latest_price["value"] = 990
-    handlers.handle_condition_unmatched({"code": "035420", "condition_name": "scalp_vwap_reclaim_01"})
+    handlers.handle_condition_unmatched(
+        {"code": "035420", "condition_name": "scalp_vwap_reclaim_01"}
+    )
 
     assert active_targets == []
     assert db.records and db.records[0].status == "EXPIRED"
@@ -872,7 +988,11 @@ def test_condition_unmatch_guard_state_missing_still_removes_price_damage(monkey
         "TRADING_RULES",
         SimpleNamespace(
             SCALP_CONDITION_UNMATCH_GUARD_ENABLED=True,
-            SCALP_CONDITION_UNMATCH_GUARD_TAGS=("VWAP_RECLAIM", "DRYUP_SQUEEZE", "PRECLOSE"),
+            SCALP_CONDITION_UNMATCH_GUARD_TAGS=(
+                "VWAP_RECLAIM",
+                "DRYUP_SQUEEZE",
+                "PRECLOSE",
+            ),
         ),
     )
     monkeypatch.setattr(
@@ -880,8 +1000,12 @@ def test_condition_unmatch_guard_state_missing_still_removes_price_damage(monkey
         "get_basic_info_ka10001",
         lambda token, code: {"Name": f"TEST-{code}"},
     )
-    monkeypatch.setattr(handlers, "_get_latest_price", lambda code: latest_price["value"])
-    monkeypatch.setattr(handlers, "_get_latest_open_and_vwap", lambda code: (1000, 1000))
+    monkeypatch.setattr(
+        handlers, "_get_latest_price", lambda code: latest_price["value"]
+    )
+    monkeypatch.setattr(
+        handlers, "_get_latest_open_and_vwap", lambda code: (1000, 1000)
+    )
     monkeypatch.setattr(
         handlers,
         "emit_pipeline_event",
@@ -896,11 +1020,15 @@ def test_condition_unmatch_guard_state_missing_still_removes_price_damage(monkey
         ),
     )
 
-    handlers.handle_condition_matched({"code": "035420", "condition_name": "scalp_vwap_reclaim_01"})
+    handlers.handle_condition_matched(
+        {"code": "035420", "condition_name": "scalp_vwap_reclaim_01"}
+    )
     handlers._CONDITION_STATE.clear()
     now["ts"] = 1_040.0
     latest_price["value"] = 990
-    handlers.handle_condition_unmatched({"code": "035420", "condition_name": "scalp_vwap_reclaim_01"})
+    handlers.handle_condition_unmatched(
+        {"code": "035420", "condition_name": "scalp_vwap_reclaim_01"}
+    )
 
     assert active_targets == []
     assert db.records and db.records[0].status == "EXPIRED"

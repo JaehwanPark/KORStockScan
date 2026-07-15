@@ -12,7 +12,9 @@ def _write_json(path, payload):
 
 def _patch_report_dirs(monkeypatch, tmp_path):
     report_dir = tmp_path / "report"
-    monkeypatch.setattr(mod, "WORKORDER_REPORT_DIR", report_dir / "code_improvement_workorder")
+    monkeypatch.setattr(
+        mod, "WORKORDER_REPORT_DIR", report_dir / "code_improvement_workorder"
+    )
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "codex_workorder_runner")
     monkeypatch.setattr(mod, "WORKTREE_ROOT", tmp_path / "worktrees")
     return report_dir
@@ -20,7 +22,9 @@ def _patch_report_dirs(monkeypatch, tmp_path):
 
 def _write_workorder(report_dir, orders, *, non_selected_orders=None):
     _write_json(
-        report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-06-03.json",
+        report_dir
+        / "code_improvement_workorder"
+        / "code_improvement_workorder_2026-06-03.json",
         {
             "generation_id": "g1",
             "orders": orders,
@@ -36,7 +40,11 @@ def _safe_order(order_id="safe", **extra):
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "title": "report parser gap",
-        "forbidden_uses": ["real_order_authority", "provider_route_change", "bot_restart"],
+        "forbidden_uses": [
+            "real_order_authority",
+            "provider_route_change",
+            "bot_restart",
+        ],
     }
     payload.update(extra)
     return payload
@@ -59,7 +67,11 @@ def test_credit_min_small_implementation_uses_spark_medium(monkeypatch):
     monkeypatch.delenv("CODEX_WORKORDER_SPARK_MODEL", raising=False)
     selection = mod._select_agent_model(
         "implement",
-        [_safe_order("small", files_likely_touched=["src/engine/automation/example.py"])],
+        [
+            _safe_order(
+                "small", files_likely_touched=["src/engine/automation/example.py"]
+            )
+        ],
         model_policy="credit_min",
         model=None,
         effort=None,
@@ -151,7 +163,9 @@ def test_credit_min_recovery_plan_escalates_to_gpt54_medium():
 
 
 def test_credit_min_recovery_plan_keeps_operator_recovery_models(monkeypatch):
-    monkeypatch.setenv("CODEX_WORKORDER_RECOVERY_MODELS", "fallback-a:low,gpt-5.4:medium")
+    monkeypatch.setenv(
+        "CODEX_WORKORDER_RECOVERY_MODELS", "fallback-a:low,gpt-5.4:medium"
+    )
 
     plan = mod._codex_recovery_model_plan(None, None, model_policy="credit_min")
 
@@ -162,7 +176,9 @@ def test_credit_min_recovery_plan_keeps_operator_recovery_models(monkeypatch):
     ]
 
 
-def test_safe_missing_forbidden_uses_is_repaired_into_canonical_queue(monkeypatch, tmp_path):
+def test_safe_missing_forbidden_uses_is_repaired_into_canonical_queue(
+    monkeypatch, tmp_path
+):
     report_dir = _patch_report_dirs(monkeypatch, tmp_path)
     _write_workorder(
         report_dir,
@@ -196,7 +212,9 @@ def test_unsafe_implement_now_is_removed_from_canonical_queue(monkeypatch, tmp_p
         ],
     )
 
-    report = mod.build_codex_workorder_runner("2026-06-03", command_runner=lambda cmd, cwd=None: 0)
+    report = mod.build_codex_workorder_runner(
+        "2026-06-03", command_runner=lambda cmd, cwd=None: 0
+    )
 
     assert report["status"] == "blocked_non_recoverable"
     assert report["canonical_implement_order_ids"] == []
@@ -212,7 +230,9 @@ def test_unsafe_implement_now_is_removed_from_canonical_queue(monkeypatch, tmp_p
     ]
 
 
-def test_implement_now_without_code_contract_is_rejudged_terminal(monkeypatch, tmp_path):
+def test_implement_now_without_code_contract_is_rejudged_terminal(
+    monkeypatch, tmp_path
+):
     report_dir = _patch_report_dirs(monkeypatch, tmp_path)
     _write_workorder(
         report_dir,
@@ -229,12 +249,23 @@ def test_implement_now_without_code_contract_is_rejudged_terminal(monkeypatch, t
     report = mod.build_codex_workorder_runner("2026-06-03", dry_run=True)
 
     assert report["canonical_implement_order_ids"] == []
-    assert report["normalized_out_orders"][0]["terminal_status"] == "deferred_evidence_terminal"
-    assert report["normalized_out_orders"][0]["reason"] == "not_code_actionable_missing_files_and_acceptance"
-    assert report["non_implement_dispositions"][0]["triage"] == "rejudged_implement_now_not_code_actionable"
+    assert (
+        report["normalized_out_orders"][0]["terminal_status"]
+        == "deferred_evidence_terminal"
+    )
+    assert (
+        report["normalized_out_orders"][0]["reason"]
+        == "not_code_actionable_missing_files_and_acceptance"
+    )
+    assert (
+        report["non_implement_dispositions"][0]["triage"]
+        == "rejudged_implement_now_not_code_actionable"
+    )
 
 
-def test_implement_now_with_review_text_acceptance_only_is_rejudged_terminal(monkeypatch, tmp_path):
+def test_implement_now_with_review_text_acceptance_only_is_rejudged_terminal(
+    monkeypatch, tmp_path
+):
     report_dir = _patch_report_dirs(monkeypatch, tmp_path)
     _write_workorder(
         report_dir,
@@ -251,10 +282,15 @@ def test_implement_now_with_review_text_acceptance_only_is_rejudged_terminal(mon
     report = mod.build_codex_workorder_runner("2026-06-03", dry_run=True)
 
     assert report["canonical_implement_order_ids"] == []
-    assert report["normalized_out_orders"][0]["reason"] == "not_code_actionable_unsupported_acceptance_only"
+    assert (
+        report["normalized_out_orders"][0]["reason"]
+        == "not_code_actionable_unsupported_acceptance_only"
+    )
 
 
-def test_missing_forbidden_uses_with_unsafe_scope_is_user_authority_blocker(monkeypatch, tmp_path):
+def test_missing_forbidden_uses_with_unsafe_scope_is_user_authority_blocker(
+    monkeypatch, tmp_path
+):
     report_dir = _patch_report_dirs(monkeypatch, tmp_path)
     _write_workorder(
         report_dir,
@@ -269,21 +305,36 @@ def test_missing_forbidden_uses_with_unsafe_scope_is_user_authority_blocker(monk
         ],
     )
 
-    report = mod.build_codex_workorder_runner("2026-06-03", command_runner=lambda cmd, cwd=None: 0)
+    report = mod.build_codex_workorder_runner(
+        "2026-06-03", command_runner=lambda cmd, cwd=None: 0
+    )
 
     assert report["status"] == "blocked_non_recoverable"
     assert report["canonical_implement_order_ids"] == []
-    assert report["normalized_out_orders"][0]["terminal_status"] == "requires_user_authority"
+    assert (
+        report["normalized_out_orders"][0]["terminal_status"]
+        == "requires_user_authority"
+    )
     assert report["normalized_out_orders"][0]["reason"] == "forbidden_or_not_safe"
 
 
-def test_non_implement_orders_receive_terminal_dispositions_without_implicit_attach_promotion(monkeypatch, tmp_path):
+def test_non_implement_orders_receive_terminal_dispositions_without_implicit_attach_promotion(
+    monkeypatch, tmp_path
+):
     report_dir = _patch_report_dirs(monkeypatch, tmp_path)
     _write_workorder(
         report_dir,
         [
-            {"order_id": "attach", "decision": "attach_existing_family", "runtime_effect": False},
-            {"order_id": "defer", "decision": "defer_evidence", "runtime_effect": False},
+            {
+                "order_id": "attach",
+                "decision": "attach_existing_family",
+                "runtime_effect": False,
+            },
+            {
+                "order_id": "defer",
+                "decision": "defer_evidence",
+                "runtime_effect": False,
+            },
             {"order_id": "reject", "decision": "reject", "runtime_effect": False},
         ],
     )
@@ -291,7 +342,10 @@ def test_non_implement_orders_receive_terminal_dispositions_without_implicit_att
     report = mod.build_codex_workorder_runner("2026-06-03", dry_run=True)
 
     assert report["canonical_implement_order_ids"] == []
-    dispositions = {item["order_id"]: item["terminal_status"] for item in report["non_implement_dispositions"]}
+    dispositions = {
+        item["order_id"]: item["terminal_status"]
+        for item in report["non_implement_dispositions"]
+    }
     assert dispositions == {
         "attach": "no_code_required",
         "defer": "deferred_evidence_terminal",
@@ -300,7 +354,9 @@ def test_non_implement_orders_receive_terminal_dispositions_without_implicit_att
     assert set(dispositions.values()).issubset(mod.TERMINAL_NON_IMPLEMENT_STATUSES)
 
 
-def test_explicit_instrumentation_attach_order_promotes_to_canonical_queue(monkeypatch, tmp_path):
+def test_explicit_instrumentation_attach_order_promotes_to_canonical_queue(
+    monkeypatch, tmp_path
+):
     report_dir = _patch_report_dirs(monkeypatch, tmp_path)
     _write_workorder(
         report_dir,
@@ -318,7 +374,10 @@ def test_explicit_instrumentation_attach_order_promotes_to_canonical_queue(monke
     report = mod.build_codex_workorder_runner("2026-06-03", dry_run=True)
 
     assert report["canonical_implement_order_ids"] == ["attach_instrumentation"]
-    assert report["non_implement_dispositions"][0]["terminal_status"] == "promoted_to_implement_now"
+    assert (
+        report["non_implement_dispositions"][0]["terminal_status"]
+        == "promoted_to_implement_now"
+    )
 
 
 def test_exact_instrumentation_route_promotes_to_canonical_queue(monkeypatch, tmp_path):
@@ -339,10 +398,15 @@ def test_exact_instrumentation_route_promotes_to_canonical_queue(monkeypatch, tm
     report = mod.build_codex_workorder_runner("2026-06-03", dry_run=True)
 
     assert report["canonical_implement_order_ids"] == ["attach_instrumentation_route"]
-    assert report["non_implement_dispositions"][0]["terminal_status"] == "promoted_to_implement_now"
+    assert (
+        report["non_implement_dispositions"][0]["terminal_status"]
+        == "promoted_to_implement_now"
+    )
 
 
-def test_free_text_instrumentation_phrase_does_not_promote_attach_order(monkeypatch, tmp_path):
+def test_free_text_instrumentation_phrase_does_not_promote_attach_order(
+    monkeypatch, tmp_path
+):
     report_dir = _patch_report_dirs(monkeypatch, tmp_path)
     _write_workorder(
         report_dir,
@@ -360,8 +424,13 @@ def test_free_text_instrumentation_phrase_does_not_promote_attach_order(monkeypa
     report = mod.build_codex_workorder_runner("2026-06-03", dry_run=True)
 
     assert report["canonical_implement_order_ids"] == []
-    assert report["non_implement_dispositions"][0]["terminal_status"] == "no_code_required"
-    assert report["non_implement_dispositions"][0]["triage"] == "attached_to_existing_family"
+    assert (
+        report["non_implement_dispositions"][0]["terminal_status"] == "no_code_required"
+    )
+    assert (
+        report["non_implement_dispositions"][0]["triage"]
+        == "attached_to_existing_family"
+    )
 
 
 def test_non_selected_orders_are_not_promoted_or_executed(monkeypatch, tmp_path):
@@ -385,8 +454,14 @@ def test_non_selected_orders_are_not_promoted_or_executed(monkeypatch, tmp_path)
     report = mod.build_codex_workorder_runner("2026-06-03", dry_run=True)
 
     assert report["canonical_implement_order_ids"] == ["selected"]
-    assert report["non_selected_order_ids"] == ["non_selected_implement", "non_selected_attach"]
-    dispositions = {item["order_id"]: item["terminal_status"] for item in report["non_selected_dispositions"]}
+    assert report["non_selected_order_ids"] == [
+        "non_selected_implement",
+        "non_selected_attach",
+    ]
+    dispositions = {
+        item["order_id"]: item["terminal_status"]
+        for item in report["non_selected_dispositions"]
+    }
     assert dispositions == {
         "non_selected_implement": "deferred_evidence_terminal",
         "non_selected_attach": "deferred_evidence_terminal",
@@ -404,30 +479,47 @@ def test_strict_completion_requires_branch_commit_merge_and_push(monkeypatch, tm
     monkeypatch.setattr(
         mod,
         "_codex_turns",
-        lambda worktree, orders, dry_run, **kwargs: ([mod.CodexTurnSummary("implement", "ok")], None),
+        lambda worktree, orders, dry_run, **kwargs: (
+            [mod.CodexTurnSummary("implement", "ok")],
+            None,
+        ),
     )
     monkeypatch.setattr(
         mod,
         "_run_branch_validation_acceptance",
         lambda **kwargs: (
-            [{"command": ["git", "diff", "--check", "HEAD"], "exit_code": 0, "status": "pass"}],
+            [
+                {
+                    "command": ["git", "diff", "--check", "HEAD"],
+                    "exit_code": 0,
+                    "status": "pass",
+                }
+            ],
             [],
             [],
             {"status": "pass", "matches": []},
             True,
         ),
     )
-    monkeypatch.setattr(mod, "_commit_worktree_diff", lambda **kwargs: (0, "branch-sha"))
+    monkeypatch.setattr(
+        mod, "_commit_worktree_diff", lambda **kwargs: (0, "branch-sha")
+    )
     monkeypatch.setattr(
         mod,
         "_merge_and_push_main",
         lambda **kwargs: (
-            {"status": "merged_main", "merged_main_sha": "main-sha", "branches": ["codex-workorder-2026-06-03"]},
+            {
+                "status": "merged_main",
+                "merged_main_sha": "main-sha",
+                "branches": ["codex-workorder-2026-06-03"],
+            },
             {"status": "pushed", "pushed": True, "exit_code": 0},
         ),
     )
 
-    report = mod.build_codex_workorder_runner("2026-06-03", command_runner=lambda cmd, cwd=None: 0)
+    report = mod.build_codex_workorder_runner(
+        "2026-06-03", command_runner=lambda cmd, cwd=None: 0
+    )
 
     assert report["status"] == "completed"
     assert report["order_execution_results"][0]["final_status"] == "completed"
@@ -443,14 +535,25 @@ def test_push_disabled_keeps_runner_incomplete(monkeypatch, tmp_path):
     monkeypatch.setattr(
         mod,
         "_codex_turns",
-        lambda worktree, orders, dry_run, **kwargs: ([mod.CodexTurnSummary("implement", "ok")], None),
+        lambda worktree, orders, dry_run, **kwargs: (
+            [mod.CodexTurnSummary("implement", "ok")],
+            None,
+        ),
     )
     monkeypatch.setattr(
         mod,
         "_run_branch_validation_acceptance",
-        lambda **kwargs: ([{"command": ["ok"], "exit_code": 0, "status": "pass"}], [], [], {"status": "pass", "matches": []}, True),
+        lambda **kwargs: (
+            [{"command": ["ok"], "exit_code": 0, "status": "pass"}],
+            [],
+            [],
+            {"status": "pass", "matches": []},
+            True,
+        ),
     )
-    monkeypatch.setattr(mod, "_commit_worktree_diff", lambda **kwargs: (0, "branch-sha"))
+    monkeypatch.setattr(
+        mod, "_commit_worktree_diff", lambda **kwargs: (0, "branch-sha")
+    )
     monkeypatch.setattr(
         mod,
         "_merge_and_push_main",
@@ -460,7 +563,9 @@ def test_push_disabled_keeps_runner_incomplete(monkeypatch, tmp_path):
         ),
     )
 
-    report = mod.build_codex_workorder_runner("2026-06-03", auto_push=False, command_runner=lambda cmd, cwd=None: 0)
+    report = mod.build_codex_workorder_runner(
+        "2026-06-03", auto_push=False, command_runner=lambda cmd, cwd=None: 0
+    )
 
     assert report["status"] == "blocked_uncompleted_implementation"
     assert report["order_execution_results"][0]["final_status"] == "committed_branch"
@@ -473,19 +578,33 @@ def test_no_diff_after_codex_turn_is_not_completed(monkeypatch, tmp_path):
     monkeypatch.setattr(
         mod,
         "_codex_turns",
-        lambda worktree, orders, dry_run, **kwargs: ([mod.CodexTurnSummary("implement", "ok")], None),
+        lambda worktree, orders, dry_run, **kwargs: (
+            [mod.CodexTurnSummary("implement", "ok")],
+            None,
+        ),
     )
     monkeypatch.setattr(
         mod,
         "_run_branch_validation_acceptance",
-        lambda **kwargs: ([{"command": ["ok"], "exit_code": 0, "status": "pass"}], [], [], {"status": "pass", "matches": []}, True),
+        lambda **kwargs: (
+            [{"command": ["ok"], "exit_code": 0, "status": "pass"}],
+            [],
+            [],
+            {"status": "pass", "matches": []},
+            True,
+        ),
     )
     monkeypatch.setattr(mod, "_has_head_diff", lambda worktree: False)
 
-    report = mod.build_codex_workorder_runner("2026-06-03", command_runner=lambda cmd, cwd=None: 0)
+    report = mod.build_codex_workorder_runner(
+        "2026-06-03", command_runner=lambda cmd, cwd=None: 0
+    )
 
     assert report["status"] == "blocked_uncompleted_implementation"
-    assert report["order_execution_results"][0]["final_status"] == "blocked_uncompleted_implementation"
+    assert (
+        report["order_execution_results"][0]["final_status"]
+        == "blocked_uncompleted_implementation"
+    )
     assert report["order_execution_results"][0]["reason"] == "commit_failed"
 
 
@@ -495,7 +614,11 @@ def test_batch_timeout_splits_to_single_order_retries(monkeypatch, tmp_path):
     branch_commits = []
     attempt_counter = [0]
 
-    monkeypatch.setattr(mod, "_codex_recovery_model_plan", lambda model, effort, **kwargs: [(model, effort, "primary")])
+    monkeypatch.setattr(
+        mod,
+        "_codex_recovery_model_plan",
+        lambda model, effort, **kwargs: [(model, effort, "primary")],
+    )
     monkeypatch.setattr(mod, "_expanded_timeout_values", lambda: ["1"])
 
     def fake_attempt(**kwargs):
@@ -514,7 +637,9 @@ def test_batch_timeout_splits_to_single_order_retries(monkeypatch, tmp_path):
             "codex_error": None,
             "order_ids": [kwargs["orders"][0]["order_id"]],
             "branch": f"branch-{kwargs['orders'][0]['order_id']}",
-            "validation_results": [{"command": ["ok"], "exit_code": 0, "status": "pass"}],
+            "validation_results": [
+                {"command": ["ok"], "exit_code": 0, "status": "pass"}
+            ],
             "commit_sha": f"sha-{kwargs['orders'][0]['order_id']}",
         }
 
@@ -535,13 +660,24 @@ def test_batch_timeout_splits_to_single_order_retries(monkeypatch, tmp_path):
         max_recovery_attempts=4,
     )
 
-    assert [item["final_status"] for item in results] == ["committed_branch", "committed_branch"]
-    assert [attempt["order_ids"] for attempt in recovery_attempts] == [["a", "b"], ["a"], ["b"]]
+    assert [item["final_status"] for item in results] == [
+        "committed_branch",
+        "committed_branch",
+    ]
+    assert [attempt["order_ids"] for attempt in recovery_attempts] == [
+        ["a", "b"],
+        ["a"],
+        ["b"],
+    ]
     assert [item["commit_sha"] for item in branch_commits] == ["sha-a", "sha-b"]
 
 
 def test_single_order_timeout_exhausted_blocks_completion(monkeypatch):
-    monkeypatch.setattr(mod, "_codex_recovery_model_plan", lambda model, effort, **kwargs: [(model, effort, "primary")])
+    monkeypatch.setattr(
+        mod,
+        "_codex_recovery_model_plan",
+        lambda model, effort, **kwargs: [(model, effort, "primary")],
+    )
     monkeypatch.setattr(mod, "_expanded_timeout_values", lambda: ["1"])
     monkeypatch.setattr(
         mod,
@@ -588,7 +724,11 @@ def test_single_order_timeout_exhausted_blocks_completion(monkeypatch):
 
 
 def test_validation_failure_after_retries_remains_incomplete(monkeypatch):
-    monkeypatch.setattr(mod, "_codex_recovery_model_plan", lambda model, effort, **kwargs: [(model, effort, "primary")])
+    monkeypatch.setattr(
+        mod,
+        "_codex_recovery_model_plan",
+        lambda model, effort, **kwargs: [(model, effort, "primary")],
+    )
     monkeypatch.setattr(mod, "_expanded_timeout_values", lambda: ["1"])
     monkeypatch.setattr(
         mod,
@@ -599,7 +739,9 @@ def test_validation_failure_after_retries_remains_incomplete(monkeypatch):
             "codex_error": None,
             "order_ids": [item["order_id"] for item in kwargs["orders"]],
             "branch": "branch-a",
-            "validation_results": [{"command": ["pytest"], "exit_code": 1, "status": "fail"}],
+            "validation_results": [
+                {"command": ["pytest"], "exit_code": 1, "status": "fail"}
+            ],
         },
     )
 
@@ -731,21 +873,32 @@ def test_unsupported_acceptance_tests_block_completion(monkeypatch, tmp_path):
     report_dir = _patch_report_dirs(monkeypatch, tmp_path)
     _write_workorder(
         report_dir,
-        [_safe_order("unsupported_acceptance", acceptance_tests=["bash deploy/run_bot.sh"])],
+        [
+            _safe_order(
+                "unsupported_acceptance", acceptance_tests=["bash deploy/run_bot.sh"]
+            )
+        ],
     )
     monkeypatch.setenv("CODEX_WORKORDER_MAX_RECOVERY_ATTEMPTS", "1")
     monkeypatch.setattr(
         mod,
         "_codex_turns",
-        lambda worktree, orders, dry_run, **kwargs: ([mod.CodexTurnSummary("implement", "ok")], None),
+        lambda worktree, orders, dry_run, **kwargs: (
+            [mod.CodexTurnSummary("implement", "ok")],
+            None,
+        ),
     )
     monkeypatch.setattr(
         mod,
         "_run_validation",
-        lambda worktree, command_runner, dry_run: [{"command": ["ok"], "exit_code": 0, "status": "pass"}],
+        lambda worktree, command_runner, dry_run: [
+            {"command": ["ok"], "exit_code": 0, "status": "pass"}
+        ],
     )
 
-    report = mod.build_codex_workorder_runner("2026-06-03", command_runner=lambda cmd, cwd=None: 0)
+    report = mod.build_codex_workorder_runner(
+        "2026-06-03", command_runner=lambda cmd, cwd=None: 0
+    )
 
     assert report["status"] == "blocked_uncompleted_implementation"
     assert report["unsupported_acceptance_tests"] == ["bash deploy/run_bot.sh"]
@@ -753,7 +906,9 @@ def test_unsupported_acceptance_tests_block_completion(monkeypatch, tmp_path):
     assert report["order_execution_results"][0]["reason"] == "validation_failed"
 
 
-def test_merge_and_push_updates_main_sha_after_push_rejected_rebase_retry(monkeypatch, tmp_path):
+def test_merge_and_push_updates_main_sha_after_push_rejected_rebase_retry(
+    monkeypatch, tmp_path
+):
     commands = []
     push_calls = [0]
     head_values = iter(["pre-rebase-sha", "post-rebase-sha"])
@@ -761,7 +916,9 @@ def test_merge_and_push_updates_main_sha_after_push_rejected_rebase_retry(monkey
     monkeypatch.setattr(
         mod,
         "_run_validation",
-        lambda worktree, command_runner, dry_run: [{"command": ["ok"], "exit_code": 0, "status": "pass"}],
+        lambda worktree, command_runner, dry_run: [
+            {"command": ["ok"], "exit_code": 0, "status": "pass"}
+        ],
     )
     monkeypatch.setattr(mod, "_head_sha", lambda worktree: next(head_values))
 
@@ -791,14 +948,25 @@ def test_regeneration_commands_run_in_required_order():
     commands = mod._regeneration_commands("2026-06-03", 7)
     joined = [" ".join(command) for command in commands]
 
-    assert "src.engine.observation_source_quality_audit --target-date 2026-06-03 --write" in joined[0]
+    assert (
+        "src.engine.observation_source_quality_audit --target-date 2026-06-03 --write"
+        in joined[0]
+    )
     assert "src.engine.automation.key_lineage_ledger --date 2026-06-03" in joined[1]
     assert "src.engine.automation.conversion_lane --date 2026-06-03" in joined[2]
-    assert "src.engine.build_code_improvement_workorder --date 2026-06-03 --max-orders 7" in joined[3]
-    assert "src.engine.verify_threshold_cycle_postclose_chain --date 2026-06-03" in joined[4]
+    assert (
+        "src.engine.build_code_improvement_workorder --date 2026-06-03 --max-orders 7"
+        in joined[3]
+    )
+    assert (
+        "src.engine.verify_threshold_cycle_postclose_chain --date 2026-06-03"
+        in joined[4]
+    )
 
 
-def test_two_pass_skips_pass2_when_regenerated_workorder_has_no_new_safe_orders(monkeypatch, tmp_path):
+def test_two_pass_skips_pass2_when_regenerated_workorder_has_no_new_safe_orders(
+    monkeypatch, tmp_path
+):
     report_dir = _patch_report_dirs(monkeypatch, tmp_path)
     order = _safe_order("pass1")
     _write_workorder(report_dir, [order])
@@ -807,20 +975,34 @@ def test_two_pass_skips_pass2_when_regenerated_workorder_has_no_new_safe_orders(
         mod,
         "_run_two_pass_regeneration",
         lambda **kwargs: (
-            {"status": "regeneration_completed", "results": [{"status": "merged_pass1"}]},
-            {"generation_id": "g2", "source_hash": "h2", "orders": [order], "lineage": {}},
+            {
+                "status": "regeneration_completed",
+                "results": [{"status": "merged_pass1"}],
+            },
+            {
+                "generation_id": "g2",
+                "source_hash": "h2",
+                "orders": [order],
+                "lineage": {},
+            },
         ),
     )
     monkeypatch.setattr(
         mod,
         "_merge_and_push_main",
         lambda **kwargs: (
-            {"status": "merged_main", "merged_main_sha": "main-sha", "branches": ["pass1"]},
+            {
+                "status": "merged_main",
+                "merged_main_sha": "main-sha",
+                "branches": ["pass1"],
+            },
             {"status": "pushed", "pushed": True, "exit_code": 0},
         ),
     )
 
-    report = mod.build_codex_workorder_runner("2026-06-03", command_runner=lambda cmd, cwd=None: 0)
+    report = mod.build_codex_workorder_runner(
+        "2026-06-03", command_runner=lambda cmd, cwd=None: 0
+    )
 
     assert report["status"] == "completed"
     assert report["two_pass_status"] == "pass2_not_required"
@@ -845,7 +1027,10 @@ def test_two_pass_new_safe_order_runs_pass2_before_final_merge(monkeypatch, tmp_
         mod,
         "_run_two_pass_regeneration",
         lambda **kwargs: (
-            {"status": "regeneration_completed", "results": [{"status": "merged_pass1"}]},
+            {
+                "status": "regeneration_completed",
+                "results": [{"status": "merged_pass1"}],
+            },
             {
                 "generation_id": "g2",
                 "orders": [pass1, pass2],
@@ -866,15 +1051,25 @@ def test_two_pass_new_safe_order_runs_pass2_before_final_merge(monkeypatch, tmp_
         ),
     )
 
-    report = mod.build_codex_workorder_runner("2026-06-03", command_runner=lambda cmd, cwd=None: 0)
+    report = mod.build_codex_workorder_runner(
+        "2026-06-03", command_runner=lambda cmd, cwd=None: 0
+    )
 
     assert report["status"] == "completed"
     assert report["two_pass_status"] == "pass2_completed"
     assert report["canonical_implement_order_ids"] == ["pass1", "pass2"]
     assert report["pass2_order_ids"] == ["pass2"]
-    assert report["pass2_selection_reason"] == [{"order_id": "pass2", "reason": "new_or_changed_order"}]
-    assert all(item["final_status"] == "completed" for item in report["order_execution_results"])
-    assert ("codex-workorder-pass2", "codex-regeneration-2026-06-03") in attempt_base_refs
+    assert report["pass2_selection_reason"] == [
+        {"order_id": "pass2", "reason": "new_or_changed_order"}
+    ]
+    assert all(
+        item["final_status"] == "completed"
+        for item in report["order_execution_results"]
+    )
+    assert (
+        "codex-workorder-pass2",
+        "codex-regeneration-2026-06-03",
+    ) in attempt_base_refs
 
 
 def test_two_pass_regeneration_failure_blocks_completion(monkeypatch, tmp_path):
@@ -890,18 +1085,25 @@ def test_two_pass_regeneration_failure_blocks_completion(monkeypatch, tmp_path):
         ),
     )
 
-    report = mod.build_codex_workorder_runner("2026-06-03", command_runner=lambda cmd, cwd=None: 0)
+    report = mod.build_codex_workorder_runner(
+        "2026-06-03", command_runner=lambda cmd, cwd=None: 0
+    )
 
     assert report["status"] == "blocked_regeneration_failed"
     assert report["two_pass_status"] == "blocked_regeneration_failed"
     assert report["main_merge_result"]["status"] == "not_required"
 
 
-def test_two_pass_regeneration_blocks_when_regenerated_workorder_is_missing(monkeypatch, tmp_path):
+def test_two_pass_regeneration_blocks_when_regenerated_workorder_is_missing(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(
         mod,
         "_prepare_regeneration_worktree",
-        lambda **kwargs: (tmp_path / "regen", {"status": "merged_pass1", "worktree": str(tmp_path / "regen")}),
+        lambda **kwargs: (
+            tmp_path / "regen",
+            {"status": "merged_pass1", "worktree": str(tmp_path / "regen")},
+        ),
     )
 
     status, regenerated = mod._run_two_pass_regeneration(
@@ -917,7 +1119,9 @@ def test_two_pass_regeneration_blocks_when_regenerated_workorder_is_missing(monk
     assert status["results"][-1]["reason"] == "regenerated_workorder_missing_or_invalid"
 
 
-def test_two_pass_new_unsafe_order_is_terminal_user_authority_not_pass2(monkeypatch, tmp_path):
+def test_two_pass_new_unsafe_order_is_terminal_user_authority_not_pass2(
+    monkeypatch, tmp_path
+):
     report_dir = _patch_report_dirs(monkeypatch, tmp_path)
     pass1 = _safe_order("pass1")
     unsafe = _safe_order("unsafe", title="provider route change")
@@ -927,17 +1131,29 @@ def test_two_pass_new_unsafe_order_is_terminal_user_authority_not_pass2(monkeypa
         mod,
         "_run_two_pass_regeneration",
         lambda **kwargs: (
-            {"status": "regeneration_completed", "results": [{"status": "merged_pass1"}]},
-            {"generation_id": "g2", "orders": [pass1, unsafe], "lineage": {"new_order_ids": ["unsafe"]}},
+            {
+                "status": "regeneration_completed",
+                "results": [{"status": "merged_pass1"}],
+            },
+            {
+                "generation_id": "g2",
+                "orders": [pass1, unsafe],
+                "lineage": {"new_order_ids": ["unsafe"]},
+            },
         ),
     )
 
-    report = mod.build_codex_workorder_runner("2026-06-03", command_runner=lambda cmd, cwd=None: 0)
+    report = mod.build_codex_workorder_runner(
+        "2026-06-03", command_runner=lambda cmd, cwd=None: 0
+    )
 
     assert report["status"] == "blocked_non_recoverable"
     assert report["pass2_order_ids"] == []
     assert report["normalized_out_orders"][-1]["order_id"] == "unsafe"
-    assert report["normalized_out_orders"][-1]["terminal_status"] == "requires_user_authority"
+    assert (
+        report["normalized_out_orders"][-1]["terminal_status"]
+        == "requires_user_authority"
+    )
 
 
 def test_two_pass_pass2_incomplete_blocks_completion(monkeypatch, tmp_path):
@@ -954,7 +1170,9 @@ def test_two_pass_pass2_incomplete_blocks_completion(monkeypatch, tmp_path):
                 "codex_error": None,
                 "order_ids": [item["order_id"] for item in kwargs["orders"]],
                 "branch": "pass2",
-                "validation_results": [{"command": ["pytest"], "exit_code": 1, "status": "fail"}],
+                "validation_results": [
+                    {"command": ["pytest"], "exit_code": 1, "status": "fail"}
+                ],
             }
         return _successful_attempt(**kwargs)
 
@@ -963,8 +1181,15 @@ def test_two_pass_pass2_incomplete_blocks_completion(monkeypatch, tmp_path):
         mod,
         "_run_two_pass_regeneration",
         lambda **kwargs: (
-            {"status": "regeneration_completed", "results": [{"status": "merged_pass1"}]},
-            {"generation_id": "g2", "orders": [pass1, pass2], "lineage": {"new_order_ids": ["pass2"]}},
+            {
+                "status": "regeneration_completed",
+                "results": [{"status": "merged_pass1"}],
+            },
+            {
+                "generation_id": "g2",
+                "orders": [pass1, pass2],
+                "lineage": {"new_order_ids": ["pass2"]},
+            },
         ),
     )
 
@@ -979,7 +1204,9 @@ def test_two_pass_pass2_incomplete_blocks_completion(monkeypatch, tmp_path):
     assert report["pass2_order_ids"] == ["pass2"]
 
 
-def test_two_pass_regenerated_non_implement_instrumentation_promotes_to_pass2(monkeypatch, tmp_path):
+def test_two_pass_regenerated_non_implement_instrumentation_promotes_to_pass2(
+    monkeypatch, tmp_path
+):
     report_dir = _patch_report_dirs(monkeypatch, tmp_path)
     pass1 = _safe_order("pass1")
     attach = {
@@ -995,8 +1222,15 @@ def test_two_pass_regenerated_non_implement_instrumentation_promotes_to_pass2(mo
         mod,
         "_run_two_pass_regeneration",
         lambda **kwargs: (
-            {"status": "regeneration_completed", "results": [{"status": "merged_pass1"}]},
-            {"generation_id": "g2", "orders": [pass1, attach], "lineage": {"new_order_ids": ["attach_instrumentation"]}},
+            {
+                "status": "regeneration_completed",
+                "results": [{"status": "merged_pass1"}],
+            },
+            {
+                "generation_id": "g2",
+                "orders": [pass1, attach],
+                "lineage": {"new_order_ids": ["attach_instrumentation"]},
+            },
         ),
     )
     monkeypatch.setattr(
@@ -1008,12 +1242,15 @@ def test_two_pass_regenerated_non_implement_instrumentation_promotes_to_pass2(mo
         ),
     )
 
-    report = mod.build_codex_workorder_runner("2026-06-03", command_runner=lambda cmd, cwd=None: 0)
+    report = mod.build_codex_workorder_runner(
+        "2026-06-03", command_runner=lambda cmd, cwd=None: 0
+    )
 
     assert report["status"] == "completed"
     assert report["pass2_order_ids"] == ["attach_instrumentation"]
     assert any(
-        item["order_id"] == "attach_instrumentation" and item["terminal_status"] == "promoted_to_implement_now"
+        item["order_id"] == "attach_instrumentation"
+        and item["terminal_status"] == "promoted_to_implement_now"
         for item in report["non_implement_dispositions"]
     )
 
@@ -1028,7 +1265,10 @@ def test_two_pass_regenerated_non_selected_order_is_not_promoted(monkeypatch, tm
             "lineage": {"new_order_ids": ["non_selected"]},
         },
         completed_pass1_ids={"pass1"},
-        lineage_diff={"new_order_ids": ["non_selected"], "decision_changed_order_ids": []},
+        lineage_diff={
+            "new_order_ids": ["non_selected"],
+            "decision_changed_order_ids": [],
+        },
     )
 
     assert pass2 == []
@@ -1037,7 +1277,9 @@ def test_two_pass_regenerated_non_selected_order_is_not_promoted(monkeypatch, tm
     assert reasons == []
 
 
-def test_codex_turns_requires_login_without_waiting_when_interactive_disabled(monkeypatch, tmp_path):
+def test_codex_turns_requires_login_without_waiting_when_interactive_disabled(
+    monkeypatch, tmp_path
+):
     wait_called = []
 
     class FakeLogin:
@@ -1060,7 +1302,9 @@ def test_codex_turns_requires_login_without_waiting_when_interactive_disabled(mo
         def login_chatgpt_device_code(self):
             return FakeLogin()
 
-    fake_module = SimpleNamespace(Codex=FakeCodex, Sandbox=SimpleNamespace(workspace_write="w", read_only="r"))
+    fake_module = SimpleNamespace(
+        Codex=FakeCodex, Sandbox=SimpleNamespace(workspace_write="w", read_only="r")
+    )
     monkeypatch.setitem(sys.modules, "openai_codex", fake_module)
     monkeypatch.delenv("CODEX_WORKORDER_ALLOW_INTERACTIVE_LOGIN", raising=False)
 

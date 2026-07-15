@@ -64,14 +64,18 @@ def test_run_uses_snapshot_manifest_without_db_fallback(tmp_path, monkeypatch):
     assert stats["skipped_unverified"] == 0
 
 
-def test_run_compresses_pipeline_events_only_after_parquet_verification(tmp_path, monkeypatch):
+def test_run_compresses_pipeline_events_only_after_parquet_verification(
+    tmp_path, monkeypatch
+):
     pipeline_dir = tmp_path / "pipeline_events"
     pipeline_dir.mkdir(parents=True, exist_ok=True)
     monitor_snapshot_dir = tmp_path / "monitor_snapshots"
     monitor_snapshot_dir.mkdir(parents=True, exist_ok=True)
     manifest_dir = monitor_snapshot_dir / "manifests"
     manifest_dir.mkdir(parents=True, exist_ok=True)
-    parquet_partition = tmp_path / "analytics" / "parquet" / "pipeline_events" / "date=2026-04-22"
+    parquet_partition = (
+        tmp_path / "analytics" / "parquet" / "pipeline_events" / "date=2026-04-22"
+    )
     parquet_partition.mkdir(parents=True, exist_ok=True)
     (parquet_partition / "part-000001.parquet").write_bytes(b"parquet-placeholder")
     raw_path = pipeline_dir / "pipeline_events_2026-04-22.jsonl"
@@ -80,7 +84,9 @@ def test_run_compresses_pipeline_events_only_after_parquet_verification(tmp_path
     monkeypatch.setattr(archive, "PIPELINE_EVENTS_DIR", pipeline_dir)
     monkeypatch.setattr(archive, "MONITOR_SNAPSHOT_DIR", monitor_snapshot_dir)
     monkeypatch.setattr(archive, "MONITOR_SNAPSHOT_MANIFEST_DIR", manifest_dir)
-    monkeypatch.setattr(archive, "ANALYTICS_PARQUET_DIR", tmp_path / "analytics" / "parquet")
+    monkeypatch.setattr(
+        archive, "ANALYTICS_PARQUET_DIR", tmp_path / "analytics" / "parquet"
+    )
 
     stats = archive.run(retention_days=1, today=date(2026, 4, 23), dry_run=True)
 
@@ -97,12 +103,16 @@ def test_run_skips_pipeline_events_without_parquet_verification(tmp_path, monkey
     monitor_snapshot_dir.mkdir(parents=True, exist_ok=True)
     manifest_dir = monitor_snapshot_dir / "manifests"
     manifest_dir.mkdir(parents=True, exist_ok=True)
-    (pipeline_dir / "pipeline_events_2026-04-22.jsonl").write_text('{"stage":"sample"}\n', encoding="utf-8")
+    (pipeline_dir / "pipeline_events_2026-04-22.jsonl").write_text(
+        '{"stage":"sample"}\n', encoding="utf-8"
+    )
 
     monkeypatch.setattr(archive, "PIPELINE_EVENTS_DIR", pipeline_dir)
     monkeypatch.setattr(archive, "MONITOR_SNAPSHOT_DIR", monitor_snapshot_dir)
     monkeypatch.setattr(archive, "MONITOR_SNAPSHOT_MANIFEST_DIR", manifest_dir)
-    monkeypatch.setattr(archive, "ANALYTICS_PARQUET_DIR", tmp_path / "analytics" / "parquet")
+    monkeypatch.setattr(
+        archive, "ANALYTICS_PARQUET_DIR", tmp_path / "analytics" / "parquet"
+    )
 
     stats = archive.run(retention_days=1, today=date(2026, 4, 23), dry_run=True)
 
@@ -122,12 +132,18 @@ def test_run_compresses_verified_threshold_snapshots(tmp_path, monkeypatch):
     threshold_dir = tmp_path / "threshold_cycle"
     threshold_snapshot_dir = threshold_dir / "snapshots"
     threshold_snapshot_dir.mkdir(parents=True, exist_ok=True)
-    backfill_dir = threshold_dir / "date=2026-04-22" / "family=score65_74_recovery_probe"
+    backfill_dir = (
+        threshold_dir / "date=2026-04-22" / "family=score65_74_recovery_probe"
+    )
     backfill_dir.mkdir(parents=True, exist_ok=True)
 
-    snapshot = threshold_snapshot_dir / "pipeline_events_2026-04-22_20260422_161001.jsonl"
+    snapshot = (
+        threshold_snapshot_dir / "pipeline_events_2026-04-22_20260422_161001.jsonl"
+    )
     snapshot.write_text('{"stage":"sample"}\n', encoding="utf-8")
-    (backfill_dir / "part-000001.jsonl").write_text('{"stage":"sample"}\n', encoding="utf-8")
+    (backfill_dir / "part-000001.jsonl").write_text(
+        '{"stage":"sample"}\n', encoding="utf-8"
+    )
 
     monkeypatch.setattr(archive, "PIPELINE_EVENTS_DIR", pipeline_dir)
     monkeypatch.setattr(archive, "MONITOR_SNAPSHOT_DIR", monitor_snapshot_dir)
