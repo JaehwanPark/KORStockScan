@@ -1,11 +1,18 @@
 from pathlib import Path
 
-from src.engine.collect_remote_latency_baseline import _default_output_paths, _render_markdown
+from src.engine.collect_remote_latency_baseline import (
+    _default_output_paths,
+    _render_markdown,
+)
 
 
 def test_default_output_paths_group_by_date_and_window(tmp_path: Path) -> None:
-    json_path, md_path = _default_output_paths(tmp_path, "2026-04-13", "preopen", "20260413_082000")
-    assert json_path == tmp_path / "2026-04-13" / "2026-04-13_preopen_20260413_082000.json"
+    json_path, md_path = _default_output_paths(
+        tmp_path, "2026-04-13", "preopen", "20260413_082000"
+    )
+    assert (
+        json_path == tmp_path / "2026-04-13" / "2026-04-13_preopen_20260413_082000.json"
+    )
     assert md_path == tmp_path / "2026-04-13" / "2026-04-13_preopen_20260413_082000.md"
 
 

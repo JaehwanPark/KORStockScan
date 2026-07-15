@@ -27,7 +27,9 @@ def main():
     parser = argparse.ArgumentParser(description="동적 체결강도 관측 로그 집계")
     parser.add_argument("--date", help="집계 대상 날짜 (YYYY-MM-DD). 기본값은 오늘")
     parser.add_argument("--top", type=int, default=10, help="상위 사례 표시 개수")
-    parser.add_argument("--since", help="이 시각 이후 로그만 집계 (HH:MM 또는 HH:MM:SS)")
+    parser.add_argument(
+        "--since", help="이 시각 이후 로그만 집계 (HH:MM 또는 HH:MM:SS)"
+    )
     args = parser.parse_args()
 
     target_date = args.date or datetime.now().strftime("%Y-%m-%d")

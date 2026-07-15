@@ -3,7 +3,9 @@ import json
 import src.engine.scalp_sim_ai_deferred_review as deferred_review
 
 
-def test_deferred_review_preserves_ai_budget_critical_attribution(tmp_path, monkeypatch):
+def test_deferred_review_preserves_ai_budget_critical_attribution(
+    tmp_path, monkeypatch
+):
     data_dir = tmp_path / "data"
     event_dir = data_dir / "pipeline_events"
     event_dir.mkdir(parents=True)

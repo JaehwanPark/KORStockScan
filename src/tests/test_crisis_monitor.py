@@ -18,7 +18,9 @@ def test_should_send_crisis_risk_alert_once_per_slot(tmp_path):
     state_path = tmp_path / "crisis_monitor_alert_state.json"
     now = _kst_at(8, 30)
 
-    allowed, reason, slot = crisis_monitor.should_send_crisis_risk_alert(now, state_path)
+    allowed, reason, slot = crisis_monitor.should_send_crisis_risk_alert(
+        now, state_path
+    )
 
     assert allowed is True
     assert reason == "slot_allowed:preopen"
@@ -26,7 +28,9 @@ def test_should_send_crisis_risk_alert_once_per_slot(tmp_path):
 
     crisis_monitor.mark_crisis_risk_alert_sent(now, slot, risk_count=4, path=state_path)
 
-    allowed, reason, slot = crisis_monitor.should_send_crisis_risk_alert(now, state_path)
+    allowed, reason, slot = crisis_monitor.should_send_crisis_risk_alert(
+        now, state_path
+    )
 
     assert allowed is False
     assert reason == "slot_already_sent:preopen"
@@ -38,9 +42,13 @@ def test_should_send_crisis_risk_alert_allows_next_slot(tmp_path):
     preopen = _kst_at(8, 30)
     noon = _kst_at(12, 0)
 
-    crisis_monitor.mark_crisis_risk_alert_sent(preopen, "preopen", risk_count=4, path=state_path)
+    crisis_monitor.mark_crisis_risk_alert_sent(
+        preopen, "preopen", risk_count=4, path=state_path
+    )
 
-    allowed, reason, slot = crisis_monitor.should_send_crisis_risk_alert(noon, state_path)
+    allowed, reason, slot = crisis_monitor.should_send_crisis_risk_alert(
+        noon, state_path
+    )
 
     assert allowed is True
     assert reason == "slot_allowed:noon"

@@ -4,13 +4,24 @@ from src.scanners import kosdaq_scanner
 def test_build_kosdaq_candidate_map_normalizes_codes_and_skips_empty_rows():
     candidates = kosdaq_scanner.build_kosdaq_candidate_map(
         raw_targets=[
-            {"Code": "A005930", "Name": "삼성전자", "Price": "70000", "OpenFluRate": 2.1, "DayFluRate": 7.8},
+            {
+                "Code": "A005930",
+                "Name": "삼성전자",
+                "Price": "70000",
+                "OpenFluRate": 2.1,
+                "DayFluRate": 7.8,
+            },
             {"Code": "", "Name": "빈코드"},
         ],
         supernova_targets=[
             {"code": "005930_AL", "name": "삼성전자", "spike_rate": 31.5},
             {"Code": None, "Name": "누락코드"},
-            {"code": "000660.0", "name": "SK하이닉스", "cur_prc": "180000", "flu_rate": 1.2},
+            {
+                "code": "000660.0",
+                "name": "SK하이닉스",
+                "cur_prc": "180000",
+                "flu_rate": 1.2,
+            },
         ],
     )
 
