@@ -615,7 +615,19 @@ def test_rejected_live_holding_score_keeps_raw_and_effective_provenance(monkeypa
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "get_minute_candles_ka10080",
-        lambda *args, **kwargs: [{"현재가": 100, "고가": 101, "저가": 99, "거래량": 1000}],
+        lambda *args, **kwargs: [
+            {"현재가": 100, "고가": 101, "저가": 99, "거래량": 1000}
+        ],
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_holding_score_preflight_source_quality",
+        lambda *args, **kwargs: {
+            "blocked": False,
+            "block_reason": "-",
+            "data_quality": "fresh",
+            "source_quality_reason": "feature_packet_fresh",
+        },
     )
     monkeypatch.setattr(
         state_handlers,

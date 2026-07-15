@@ -15617,17 +15617,22 @@ def _holding_score_preflight_source_quality(
     recent_ticks: list | None,
     recent_candles: list | None,
     *,
-    now_ts: float | None = None,
+    now_ts: float | datetime | None = None,
 ) -> dict:
     try:
+        feature_now = now_ts if isinstance(now_ts, datetime) else None
+        if isinstance(now_ts, (int, float)) and float(now_ts) > 0:
+            feature_now = datetime.fromtimestamp(float(now_ts))
         feature_packet = extract_scalping_feature_packet(
             ws_data or {},
             recent_ticks or [],
             recent_candles or [],
-            now=now_ts,
+            now=feature_now,
         )
         audit_fields = build_scalping_feature_audit_fields(feature_packet)
-        source_quality = _holding_score_source_quality_from_feature_packet(feature_packet, audit_fields)
+        source_quality = _holding_score_source_quality_from_feature_packet(
+            feature_packet, audit_fields
+        )
     except Exception as exc:
         return {
             "blocked": False,

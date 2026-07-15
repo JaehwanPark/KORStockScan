@@ -1,4 +1,5 @@
 from dataclasses import replace
+from datetime import datetime
 import inspect
 from types import SimpleNamespace
 
@@ -2685,8 +2686,50 @@ def test_holding_score_preflight_blocks_stale_tick_context():
     assert "tick_context_quality:stale_tick" in preflight["source_quality_reason"]
 
 
+def test_holding_score_preflight_accepts_runtime_epoch_timestamp():
+    now_dt = datetime(2026, 7, 15, 11, 40, 10)
+    now_ts = now_dt.timestamp()
+    preflight = handlers._holding_score_preflight_source_quality(
+        {
+            "curr": 100,
+            "last_ws_update_ts": now_ts,
+            "orderbook": {
+                "asks": [{"price": 101, "volume": 1000}],
+                "bids": [{"price": 100, "volume": 1200}],
+            },
+        },
+        [
+            {
+                "time": f"1140{second:02d}",
+                "price": 100,
+                "volume": 10,
+                "dir": "NEUTRAL",
+                "aggressor_source": "price_change_heuristic",
+            }
+            for second in range(9, -1, -1)
+        ],
+        [
+            {
+                "체결시간": "20260715114000",
+                "source_timestamp": "20260715114000",
+                "현재가": 100,
+                "고가": 101,
+                "저가": 99,
+                "거래량": 1000,
+            }
+        ],
+        now_ts=now_ts,
+    )
+
+    assert preflight["source_quality_reason"] != "preflight_error:AttributeError"
+    assert preflight["data_quality"] == "partial"
+    assert preflight["tick_context_quality"] == "fresh_computed"
+
+
 def test_ai_source_quality_fields_marks_not_evaluated_without_snapshot():
-    fields = _ensure_ai_source_quality_fields({}, {}, not_evaluated_reason="watching_ai_cooldown_active")
+    fields = _ensure_ai_source_quality_fields(
+        {}, {}, not_evaluated_reason="watching_ai_cooldown_active"
+    )
 
     assert fields["ai_input_source_quality_status"] == "not_evaluated"
     assert fields["ai_input_source_quality_reason"] == "watching_ai_cooldown_active"
