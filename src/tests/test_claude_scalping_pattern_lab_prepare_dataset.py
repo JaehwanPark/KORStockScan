@@ -96,14 +96,18 @@ def test_claude_pattern_lab_duckdb_query_is_column_bounded(monkeypatch):
     assert captured["params"][0] == "2026-05-14"
 
 
-def test_claude_pattern_lab_empty_input_overwrites_trade_fact_with_header(monkeypatch, tmp_path):
+def test_claude_pattern_lab_empty_input_overwrites_trade_fact_with_header(
+    monkeypatch, tmp_path
+):
     output_dir = tmp_path / "outputs"
     output_dir.mkdir()
     stale_path = output_dir / "trade_fact.csv"
     stale_path.write_text("stale_col\nstale\n", encoding="utf-8")
 
     monkeypatch.setattr(prepare, "OUTPUT_DIR", output_dir)
-    monkeypatch.setattr(prepare, "_load_snapshot_payload", lambda *_args, **_kwargs: (None, "missing"))
+    monkeypatch.setattr(
+        prepare, "_load_snapshot_payload", lambda *_args, **_kwargs: (None, "missing")
+    )
 
     df = prepare.build_trade_fact()
 
@@ -113,11 +117,15 @@ def test_claude_pattern_lab_empty_input_overwrites_trade_fact_with_header(monkey
     assert len(written) == 0
 
 
-def test_claude_payload_feedback_selector_uses_daily_clean_baseline_artifacts(monkeypatch, tmp_path):
+def test_claude_payload_feedback_selector_uses_daily_clean_baseline_artifacts(
+    monkeypatch, tmp_path
+):
     report_dir = tmp_path / "data" / "report"
     ev_dir = report_dir / "threshold_cycle_ev"
     ev_dir.mkdir(parents=True)
-    (ev_dir / "threshold_cycle_ev_2026-06-05_rolling5d.json").write_text("{}", encoding="utf-8")
+    (ev_dir / "threshold_cycle_ev_2026-06-05_rolling5d.json").write_text(
+        "{}", encoding="utf-8"
+    )
     (ev_dir / "threshold_cycle_ev_2026-06-03.json").write_text("{}", encoding="utf-8")
     (ev_dir / "threshold_cycle_ev_2026-06-04.json").write_text("{}", encoding="utf-8")
     monkeypatch.setattr(payload, "REPORT_DIR", report_dir)

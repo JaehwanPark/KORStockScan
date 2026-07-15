@@ -4,7 +4,9 @@ import json
 from src.engine import codebase_performance_workorder_report as mod
 
 
-def test_codebase_performance_workorder_report_classifies_candidates(tmp_path, monkeypatch):
+def test_codebase_performance_workorder_report_classifies_candidates(
+    tmp_path, monkeypatch
+):
     source_doc = tmp_path / "codebase-performance-bottleneck-analysis.md"
     source_doc.write_text("# perf report\n\ncontent", encoding="utf-8")
     report_dir = tmp_path / "report"
@@ -32,7 +34,11 @@ def test_codebase_performance_workorder_report_classifies_candidates(tmp_path, m
         assert item["data_quality_effect"] is False
         assert item["tuning_axis_effect"] is False
         assert item["parity_contract"]
-        assert item["implementation_status"] in {"implemented", "pending", "not_checked"}
+        assert item["implementation_status"] in {
+            "implemented",
+            "pending",
+            "not_checked",
+        }
         assert isinstance(item["implementation_checks"], list)
         assert "runtime_threshold_mutation" in item["forbidden_uses"]
 

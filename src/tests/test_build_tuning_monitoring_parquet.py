@@ -83,10 +83,8 @@ def test_convert_to_dataframe():
 def test_deduplicate_by_event_id():
     """중복 제거 테스트."""
     import pandas as pd
-    df = pd.DataFrame({
-        "event_id": ["a", "a", "b"],
-        "value": [1, 2, 3]
-    })
+
+    df = pd.DataFrame({"event_id": ["a", "a", "b"], "value": [1, 2, 3]})
     deduped = deduplicate_by_event_id(df)
     assert len(deduped) == 2
     assert deduped["event_id"].nunique() == 2
@@ -95,6 +93,7 @@ def test_deduplicate_by_event_id():
 def test_write_parquet_partition(tmp_path):
     """Parquet 파티션 쓰기 테스트."""
     import pandas as pd
+
     df = pd.DataFrame({"col": [1, 2, 3]})
     target_date = date(2026, 4, 20)
     # 임시 analytics 디렉토리 사용
@@ -153,7 +152,9 @@ def test_process_single_date_post_sell_ignores_candidates(monkeypatch, tmp_path)
 
     assert read == 1
     assert written == 1
-    out_file = analytics_root / "post_sell" / "date=2026-04-20" / "post_sell_20260420.parquet"
+    out_file = (
+        analytics_root / "post_sell" / "date=2026-04-20" / "post_sell_20260420.parquet"
+    )
     df = pd.read_parquet(out_file)
     assert df["outcome"].tolist() == ["COMPLETED"]
 
@@ -165,7 +166,9 @@ def test_process_single_date_removes_stale_partition(monkeypatch, tmp_path):
     source_dir.mkdir(parents=True)
     stale_dir = analytics_root / "pipeline_events" / "date=2026-04-20"
     stale_dir.mkdir(parents=True)
-    (stale_dir / "pipeline_events_20260420.parquet").write_text("stale", encoding="utf-8")
+    (stale_dir / "pipeline_events_20260420.parquet").write_text(
+        "stale", encoding="utf-8"
+    )
 
     monkeypatch.setitem(parquet_builder.DATASET_PATHS, "pipeline_events", source_dir)
     monkeypatch.setattr(parquet_builder, "ANALYTICS_ROOT", analytics_root)

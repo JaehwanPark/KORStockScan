@@ -32,11 +32,25 @@ def test_buy_pause_guard_does_not_alert_before_sample_ready(tmp_path, monkeypatc
         guard_mod,
         "_collect_trade_rows",
         lambda target_date: [
-            _make_trade(1, profit_rate=-0.8, realized_pnl_krw=-11000, sell_time=f"{target_date} 09:33:00"),
-            _make_trade(2, profit_rate=-0.7, realized_pnl_krw=-12000, sell_time=f"{target_date} 09:34:00"),
+            _make_trade(
+                1,
+                profit_rate=-0.8,
+                realized_pnl_krw=-11000,
+                sell_time=f"{target_date} 09:33:00",
+            ),
+            _make_trade(
+                2,
+                profit_rate=-0.7,
+                realized_pnl_krw=-12000,
+                sell_time=f"{target_date} 09:34:00",
+            ),
         ],
     )
-    monkeypatch.setattr(guard_mod, "_find_previous_trading_day_avg_loss", lambda now_dt: ("2026-04-08", -0.5))
+    monkeypatch.setattr(
+        guard_mod,
+        "_find_previous_trading_day_avg_loss",
+        lambda now_dt: ("2026-04-08", -0.5),
+    )
 
     result = guard_mod.evaluate_buy_pause_guard(
         "2026-04-09",
@@ -56,14 +70,35 @@ def test_buy_pause_guard_creates_pending_on_two_of_three(tmp_path, monkeypatch):
         guard_mod,
         "_collect_trade_rows",
         lambda target_date: [
-            _make_trade(1, profit_rate=-0.82, realized_pnl_krw=-9000, sell_time=f"{target_date} 09:46:00"),
-            _make_trade(2, profit_rate=-0.71, realized_pnl_krw=-8000, sell_time=f"{target_date} 09:48:00"),
-            _make_trade(3, profit_rate=-0.66, realized_pnl_krw=-7000, sell_time=f"{target_date} 09:52:00"),
+            _make_trade(
+                1,
+                profit_rate=-0.82,
+                realized_pnl_krw=-9000,
+                sell_time=f"{target_date} 09:46:00",
+            ),
+            _make_trade(
+                2,
+                profit_rate=-0.71,
+                realized_pnl_krw=-8000,
+                sell_time=f"{target_date} 09:48:00",
+            ),
+            _make_trade(
+                3,
+                profit_rate=-0.66,
+                realized_pnl_krw=-7000,
+                sell_time=f"{target_date} 09:52:00",
+            ),
         ],
     )
-    monkeypatch.setattr(guard_mod, "_find_previous_trading_day_avg_loss", lambda now_dt: ("2026-04-08", -0.45))
+    monkeypatch.setattr(
+        guard_mod,
+        "_find_previous_trading_day_avg_loss",
+        lambda now_dt: ("2026-04-08", -0.45),
+    )
     alerts = []
-    monkeypatch.setattr(guard_mod, "_publish_guard_alert", lambda message: alerts.append(message))
+    monkeypatch.setattr(
+        guard_mod, "_publish_guard_alert", lambda message: alerts.append(message)
+    )
 
     result = guard_mod.evaluate_buy_pause_guard(
         "2026-04-09",
@@ -79,20 +114,46 @@ def test_buy_pause_guard_creates_pending_on_two_of_three(tmp_path, monkeypatch):
 
     state = guard_mod.load_buy_pause_guard_state(now_dt=datetime(2026, 4, 9, 9, 55, 0))
     assert state["status"] == "pending"
-    assert state["latest_trade_fingerprint"] == result["metrics_snapshot"]["latest_trade_fingerprint"]
+    assert (
+        state["latest_trade_fingerprint"]
+        == result["metrics_snapshot"]["latest_trade_fingerprint"]
+    )
 
 
-def test_buy_pause_guard_pending_and_reject_suppress_same_fingerprint(tmp_path, monkeypatch):
+def test_buy_pause_guard_pending_and_reject_suppress_same_fingerprint(
+    tmp_path, monkeypatch
+):
     state_path = tmp_path / "buy_pause_guard_state.json"
     monkeypatch.setattr(guard_mod, "BUY_PAUSE_GUARD_STATE_PATH", state_path)
     base_rows = [
-        _make_trade(1, profit_rate=-0.82, realized_pnl_krw=-9000, sell_time="2026-04-09 09:46:00"),
-        _make_trade(2, profit_rate=-0.71, realized_pnl_krw=-8000, sell_time="2026-04-09 09:48:00"),
-        _make_trade(3, profit_rate=-0.66, realized_pnl_krw=-7000, sell_time="2026-04-09 09:52:00"),
+        _make_trade(
+            1,
+            profit_rate=-0.82,
+            realized_pnl_krw=-9000,
+            sell_time="2026-04-09 09:46:00",
+        ),
+        _make_trade(
+            2,
+            profit_rate=-0.71,
+            realized_pnl_krw=-8000,
+            sell_time="2026-04-09 09:48:00",
+        ),
+        _make_trade(
+            3,
+            profit_rate=-0.66,
+            realized_pnl_krw=-7000,
+            sell_time="2026-04-09 09:52:00",
+        ),
     ]
     rows_holder = {"rows": list(base_rows)}
-    monkeypatch.setattr(guard_mod, "_collect_trade_rows", lambda target_date: list(rows_holder["rows"]))
-    monkeypatch.setattr(guard_mod, "_find_previous_trading_day_avg_loss", lambda now_dt: ("2026-04-08", -0.45))
+    monkeypatch.setattr(
+        guard_mod, "_collect_trade_rows", lambda target_date: list(rows_holder["rows"])
+    )
+    monkeypatch.setattr(
+        guard_mod,
+        "_find_previous_trading_day_avg_loss",
+        lambda now_dt: ("2026-04-08", -0.45),
+    )
 
     first = guard_mod.evaluate_buy_pause_guard(
         "2026-04-09",
@@ -104,7 +165,9 @@ def test_buy_pause_guard_pending_and_reject_suppress_same_fingerprint(tmp_path, 
         now_dt=datetime(2026, 4, 9, 10, 0, 0),
         send_alert=False,
     )
-    rejected = guard_mod.reject_buy_pause_guard(first["guard_id"], now_dt=datetime(2026, 4, 9, 10, 1, 0))
+    rejected = guard_mod.reject_buy_pause_guard(
+        first["guard_id"], now_dt=datetime(2026, 4, 9, 10, 1, 0)
+    )
     after_reject_same = guard_mod.evaluate_buy_pause_guard(
         "2026-04-09",
         now_dt=datetime(2026, 4, 9, 10, 2, 0),
@@ -112,7 +175,12 @@ def test_buy_pause_guard_pending_and_reject_suppress_same_fingerprint(tmp_path, 
     )
 
     rows_holder["rows"].append(
-        _make_trade(4, profit_rate=-0.73, realized_pnl_krw=-6000, sell_time="2026-04-09 10:03:00")
+        _make_trade(
+            4,
+            profit_rate=-0.73,
+            realized_pnl_krw=-6000,
+            sell_time="2026-04-09 10:03:00",
+        )
     )
     after_new_trade = guard_mod.evaluate_buy_pause_guard(
         "2026-04-09",
@@ -170,7 +238,11 @@ def test_evaluate_cli_prints_detector_done_marker(monkeypatch, capsys):
             "metrics_snapshot": {},
         },
     )
-    monkeypatch.setattr(sys, "argv", ["buy_pause_guard", "evaluate", "--date", "2026-05-11", "--no-alert"])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["buy_pause_guard", "evaluate", "--date", "2026-05-11", "--no-alert"],
+    )
 
     assert guard_mod._main() == 0
     captured = capsys.readouterr()
