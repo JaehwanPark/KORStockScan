@@ -45,7 +45,12 @@ def _assert_object_schemas_are_strict(node):
 
 
 def test_openai_text_format_normalizes_response_schemas_for_strict_outputs():
-    for schema_name in ("entry_v1", "entry_price_v1", "holding_exit_v1", "condition_entry_v1"):
+    for schema_name in (
+        "entry_v1",
+        "entry_price_v1",
+        "holding_exit_v1",
+        "condition_entry_v1",
+    ):
         text_format = build_openai_response_text_format(schema_name)
 
         assert text_format["type"] == "json_schema"
@@ -64,7 +69,10 @@ def test_swing_ai_structured_output_eval_contract_is_report_only():
     contract = swing_ai_structured_output_eval_contract()
     provenance = contract["implementation_provenance"]
 
-    assert contract["implementation_status"] == "implemented_source_quality_contract_available"
+    assert (
+        contract["implementation_status"]
+        == "implemented_source_quality_contract_available"
+    )
     assert provenance["decision_authority"] == "swing_ai_contract_eval_report_only"
     assert provenance["runtime_effect"] is False
     assert provenance["allowed_runtime_apply"] is False

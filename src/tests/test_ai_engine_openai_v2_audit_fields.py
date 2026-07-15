@@ -53,26 +53,121 @@ def _sample_ws_data():
 
 def _sample_ticks():
     return [
-        {"time": "09:00:10", "price": 10100, "volume": 220, "dir": "BUY", "strength": 135.0},
-        {"time": "09:00:09", "price": 10100, "volume": 180, "dir": "BUY", "strength": 133.0},
-        {"time": "09:00:08", "price": 10100, "volume": 160, "dir": "BUY", "strength": 131.0},
-        {"time": "09:00:07", "price": 10095, "volume": 100, "dir": "SELL", "strength": 125.0},
-        {"time": "09:00:06", "price": 10095, "volume": 90, "dir": "BUY", "strength": 122.0},
-        {"time": "09:00:05", "price": 10090, "volume": 95, "dir": "BUY", "strength": 120.0},
-        {"time": "09:00:00", "price": 10090, "volume": 80, "dir": "SELL", "strength": 119.0},
-        {"time": "08:59:56", "price": 10085, "volume": 70, "dir": "BUY", "strength": 118.0},
-        {"time": "08:59:52", "price": 10085, "volume": 60, "dir": "SELL", "strength": 117.0},
-        {"time": "08:59:48", "price": 10080, "volume": 55, "dir": "BUY", "strength": 116.0},
+        {
+            "time": "09:00:10",
+            "price": 10100,
+            "volume": 220,
+            "dir": "BUY",
+            "strength": 135.0,
+        },
+        {
+            "time": "09:00:09",
+            "price": 10100,
+            "volume": 180,
+            "dir": "BUY",
+            "strength": 133.0,
+        },
+        {
+            "time": "09:00:08",
+            "price": 10100,
+            "volume": 160,
+            "dir": "BUY",
+            "strength": 131.0,
+        },
+        {
+            "time": "09:00:07",
+            "price": 10095,
+            "volume": 100,
+            "dir": "SELL",
+            "strength": 125.0,
+        },
+        {
+            "time": "09:00:06",
+            "price": 10095,
+            "volume": 90,
+            "dir": "BUY",
+            "strength": 122.0,
+        },
+        {
+            "time": "09:00:05",
+            "price": 10090,
+            "volume": 95,
+            "dir": "BUY",
+            "strength": 120.0,
+        },
+        {
+            "time": "09:00:00",
+            "price": 10090,
+            "volume": 80,
+            "dir": "SELL",
+            "strength": 119.0,
+        },
+        {
+            "time": "08:59:56",
+            "price": 10085,
+            "volume": 70,
+            "dir": "BUY",
+            "strength": 118.0,
+        },
+        {
+            "time": "08:59:52",
+            "price": 10085,
+            "volume": 60,
+            "dir": "SELL",
+            "strength": 117.0,
+        },
+        {
+            "time": "08:59:48",
+            "price": 10080,
+            "volume": 55,
+            "dir": "BUY",
+            "strength": 116.0,
+        },
     ]
 
 
 def _sample_candles():
     return [
-        {"체결시간": "08:56:00", "시가": 10020, "현재가": 10040, "고가": 10060, "저가": 10010, "거래량": 800},
-        {"체결시간": "08:57:00", "시가": 10040, "현재가": 10060, "고가": 10080, "저가": 10030, "거래량": 900},
-        {"체결시간": "08:58:00", "시가": 10060, "현재가": 10080, "고가": 10090, "저가": 10040, "거래량": 1000},
-        {"체결시간": "08:59:00", "시가": 10080, "현재가": 10090, "고가": 10120, "저가": 10070, "거래량": 1200},
-        {"체결시간": "09:00:00", "시가": 10090, "현재가": 10100, "고가": 10130, "저가": 10080, "거래량": 1600},
+        {
+            "체결시간": "08:56:00",
+            "시가": 10020,
+            "현재가": 10040,
+            "고가": 10060,
+            "저가": 10010,
+            "거래량": 800,
+        },
+        {
+            "체결시간": "08:57:00",
+            "시가": 10040,
+            "현재가": 10060,
+            "고가": 10080,
+            "저가": 10030,
+            "거래량": 900,
+        },
+        {
+            "체결시간": "08:58:00",
+            "시가": 10060,
+            "현재가": 10080,
+            "고가": 10090,
+            "저가": 10040,
+            "거래량": 1000,
+        },
+        {
+            "체결시간": "08:59:00",
+            "시가": 10080,
+            "현재가": 10090,
+            "고가": 10120,
+            "저가": 10070,
+            "거래량": 1200,
+        },
+        {
+            "체결시간": "09:00:00",
+            "시가": 10090,
+            "현재가": 10100,
+            "고가": 10130,
+            "저가": 10080,
+            "거래량": 1600,
+        },
     ]
 
 
@@ -149,13 +244,11 @@ def test_openai_scalping_analyze_target_returns_parse_fallback_meta(monkeypatch)
 def test_openai_parse_json_response_text_accepts_code_fence():
     engine = _build_engine()
 
-    parsed = engine._parse_json_response_text(
-        """
+    parsed = engine._parse_json_response_text("""
         ```json
         {"action":"BUY","score":81,"reason":"momentum"}
         ```
-        """
-    )
+        """)
 
     assert parsed["action"] == "BUY"
     assert parsed["score"] == 81
