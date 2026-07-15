@@ -114,6 +114,8 @@ _ADD_RECEIPT_SNAPSHOT_KEYS = (
     "hard_stop_price",
     "msg_audience",
     "name",
+    "pending_add_initial_buy_price",
+    "pending_add_initial_buy_qty",
     "post_add_avg_price",
     "post_add_qty",
     "pyramid_count",
@@ -140,6 +142,9 @@ _PENDING_ADD_META_KEYS = (
     "pending_add_counted",
     "pending_add_filled_qty",
     "pending_add_filled_amount",
+    "pending_add_initial_buy_price",
+    "pending_add_initial_buy_qty",
+    "pending_add_execution_notice_pending",
     "_add_receipt_requested_by_order_no",
     "_add_receipt_filled_by_order_no",
     "_add_receipt_filled_amount_by_order_no",
@@ -1390,10 +1395,82 @@ def flush_deferred_entry_partial_fill_notice(target_stock: dict[str, Any] | None
     )
 
 
-def _update_db_for_add(target_id, exec_price, exec_qty, now, receipt_snapshot, add_type, count_increment):
+def _publish_add_execution_notification(
+    receipt_snapshot,
+    add_type,
+    *,
+    fallback_prev_price=0.0,
+    fallback_prev_qty=0,
+):
+    if event_bus is None:
+        return False
+    _type_kr = {'AVG_DOWN': '물타기', 'PYRAMID': '불타기'}.get(add_type, add_type)
+    _strategy_kr = {'SCALPING': '스캘핑', 'SWING': '스윙'}.get(
+        receipt_snapshot.get('strategy', ''), receipt_snapshot.get('strategy', ''))
+    new_avg = _safe_float(receipt_snapshot.get('buy_price'), 0.0)
+    new_qty = _safe_int(receipt_snapshot.get('buy_qty'), 0)
+    notice_prev_price = _safe_float(
+        receipt_snapshot.get('pending_add_initial_buy_price'), fallback_prev_price
+    )
+    notice_prev_qty = _safe_int(
+        receipt_snapshot.get('pending_add_initial_buy_qty'), fallback_prev_qty
+    )
+    notice_fill_qty = max(0, new_qty - notice_prev_qty)
+    notice_fill_avg = 0.0
+    if notice_fill_qty > 0 and notice_prev_qty > 0:
+        notice_fill_avg = (
+            (new_avg * new_qty) - (notice_prev_price * notice_prev_qty)
+        ) / notice_fill_qty
+    if notice_fill_avg <= 0:
+        notice_fill_avg = _safe_float(receipt_snapshot.get('last_add_fill_price'), 0.0)
+    msg = (
+        f"➕ 추가매수 체결 완료\n"
+        f"종목: {receipt_snapshot.get('name')} ({receipt_snapshot.get('code')})\n"
+        f"전략: {_strategy_kr} | 유형: {_type_kr}\n"
+        f"기존 평단가: {int(notice_prev_price):,}원 ({notice_prev_qty}주)\n"
+        f"추가 체결: {notice_fill_qty}주 (평균 {int(round(notice_fill_avg)):,}원)\n"
+        f"새 평단가: {int(new_avg):,}원 | 총 수량: {new_qty}주\n"
+        f"누적 추가매수: {_safe_int(receipt_snapshot.get('add_count'), 0)}회"
+    )
+    event_bus.publish('TELEGRAM_BROADCAST', {
+        'message': msg,
+        'audience': _receipt_audience(receipt_snapshot),
+        'parse_mode': None,
+    })
+    return True
+
+
+def flush_deferred_add_completion_notice(target_stock: dict[str, Any] | None) -> bool:
+    target_stock = target_stock if isinstance(target_stock, dict) else {}
+    if not target_stock.get('pending_add_execution_notice_pending'):
+        return False
+    requested_qty = _safe_int(target_stock.get('pending_add_qty'), 0)
+    filled_qty = _safe_int(target_stock.get('pending_add_filled_qty'), 0)
+    if requested_qty > 0 and filled_qty < requested_qty:
+        return False
+    snapshot = _receipt_snapshot(target_stock, _ADD_RECEIPT_SNAPSHOT_KEYS)
+    snapshot['last_add_fill_price'] = _safe_int(target_stock.get('last_add_fill_price'), 0)
+    published = _publish_add_execution_notification(
+        snapshot,
+        str(target_stock.get('pending_add_type') or '').upper(),
+    )
+    if published:
+        target_stock.pop('pending_add_execution_notice_pending', None)
+    return published
+
+
+def _update_db_for_add(
+    target_id,
+    exec_price,
+    exec_qty,
+    now,
+    receipt_snapshot,
+    add_type,
+    count_increment,
+    publish_notification=None,
+):
     """비동기로 실행되는 추가매수 체결 DB 업데이트"""
     try:
-        add_count_after = int(receipt_snapshot.get('add_count') or 0)
         with DB.get_session() as session:
             record = session.query(RecommendationHistory).filter_by(id=target_id).first()
             if not record:
@@ -1436,23 +1513,16 @@ def _update_db_for_add(target_id, exec_price, exec_qty, now, receipt_snapshot, a
             f"(avg={new_avg}, qty={new_qty}, type={add_type})"
         )
 
-        if event_bus and count_increment:
-            _type_kr = {'AVG_DOWN': '물타기', 'PYRAMID': '불타기'}.get(add_type, add_type)
-            _strategy_kr = {'SCALPING': '스캘핑', 'SWING': '스윙'}.get(
-                receipt_snapshot.get('strategy', ''), receipt_snapshot.get('strategy', ''))
-            msg = (
-                f"➕ 추가매수 체결\n"
-                f"종목: {receipt_snapshot.get('name')} ({receipt_snapshot.get('code')})\n"
-                f"전략: {_strategy_kr} | 유형: {_type_kr}\n"
-                f"기존 평단가: {int(old_price):,}원 → 체결가: {int(exec_price):,}원\n"
-                f"새 평단가: {int(new_avg):,}원 | 총 수량: {new_qty}주\n"
-                f"누적 추가매수: {add_count_after}회"
+        if publish_notification is None:
+            publish_notification = bool(count_increment)
+        if event_bus and publish_notification:
+            receipt_snapshot['last_add_fill_price'] = int(exec_price or 0)
+            _publish_add_execution_notification(
+                receipt_snapshot,
+                add_type,
+                fallback_prev_price=old_price,
+                fallback_prev_qty=old_qty,
             )
-            event_bus.publish('TELEGRAM_BROADCAST', {
-                'message': msg,
-                'audience': _receipt_audience(receipt_snapshot),
-                'parse_mode': None
-            })
     except Exception as e:
         log_error(f"🚨 [DB 에러] ID {target_id} ADD 처리 중 에러: {e}")
 
@@ -1583,6 +1653,10 @@ def _handle_add_buy_execution(
     add_type = (target_stock.get('pending_add_type') or '').upper()
     old_price = float(target_stock.get('buy_price') or 0)
     old_qty = int(target_stock.get('buy_qty') or 0)
+    if 'pending_add_initial_buy_price' not in target_stock:
+        target_stock['pending_add_initial_buy_price'] = old_price
+    if 'pending_add_initial_buy_qty' not in target_stock:
+        target_stock['pending_add_initial_buy_qty'] = old_qty
     request_qty = int(requested_qty or target_stock.get('pending_add_qty', 0) or 0)
     pending_ord_no = str(target_stock.get('pending_add_ord_no', '') or '').strip()
     pending_ord_nos = {part.strip() for part in pending_ord_no.split(',') if part.strip()}
@@ -1605,6 +1679,7 @@ def _handle_add_buy_execution(
     pending_add_reason = str(target_stock.get('pending_add_reason') or '').strip()
     target_stock['last_add_reason'] = pending_add_reason
     target_stock['last_add_at'] = now
+    target_stock['last_add_fill_price'] = int(exec_price or 0)
     now_ts = time.time()
     target_stock['last_add_time'] = now_ts
     if (
@@ -1634,7 +1709,14 @@ def _handle_add_buy_execution(
         target_stock['pending_add_counted'] = True
         count_increment = True
 
+    if count_increment:
+        target_stock['pending_add_execution_notice_pending'] = True
+
     pending_qty = int(target_stock.get('pending_add_qty', 0) or 0)
+    add_bundle_completed = pending_qty <= 0 or filled_qty >= pending_qty
+    publish_add_notification = bool(
+        target_stock.get('pending_add_execution_notice_pending')
+    ) and add_bundle_completed
 
     protection_ok = _apply_scale_in_protection(target_stock, add_type)
     strategy = normalize_strategy(target_stock.get('strategy'))
@@ -1664,6 +1746,7 @@ def _handle_add_buy_execution(
         add_receipt_snapshot,
         add_type,
         count_increment,
+        publish_notification=publish_add_notification,
     )
     record_add_history_event(
         DB,
@@ -1685,6 +1768,8 @@ def _handle_add_buy_execution(
         reason='receipt_confirmed',
         note=history_note,
     )
+    if publish_add_notification:
+        target_stock.pop('pending_add_execution_notice_pending', None)
     if pending_qty > 0 and filled_qty >= pending_qty:
         _clear_pending_add_meta(target_stock)
     log_info(

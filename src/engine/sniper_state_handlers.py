@@ -47818,6 +47818,9 @@ def _clear_pending_add_meta(stock, reason=None):
             'pending_add_counted',
             'pending_add_filled_qty',
             'pending_add_filled_amount',
+            'pending_add_initial_buy_price',
+            'pending_add_initial_buy_qty',
+            'pending_add_execution_notice_pending',
             '_add_receipt_requested_by_order_no',
             '_add_receipt_filled_by_order_no',
             '_add_receipt_filled_amount_by_order_no',
@@ -49949,6 +49952,9 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             'pending_add_requested_at': pending_registered_at,
             'pending_add_filled_qty': 0,
             'pending_add_filled_amount': 0,
+            'pending_add_initial_buy_price': float(stock.get('buy_price') or 0),
+            'pending_add_initial_buy_qty': _safe_int(stock.get('buy_qty'), 0),
+            'pending_add_execution_notice_pending': False,
             '_add_receipt_requested_by_order_no': {},
             '_add_receipt_filled_by_order_no': {},
             '_add_receipt_filled_amount_by_order_no': {},
@@ -50109,6 +50115,16 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         or (not bool(stock.get('pending_add_order')) and last_add_time >= pending_registered_at)
     )
     if receipt_completed_before_finalize:
+        if submitted_qty > 0:
+            _mutate_stock_state(stock, set_fields={'pending_add_qty': submitted_qty})
+        try:
+            from src.engine import sniper_execution_receipts as _receipt_handlers
+
+            _receipt_handlers.flush_deferred_add_completion_notice(stock)
+        except Exception as exc:
+            log_error(
+                f"[ADD_COMPLETION_NOTICE_FLUSH] {stock.get('name')}({code}) failed: {exc}"
+            )
         _clear_pending_add_meta(stock, reason="scale_in_receipt_completed_before_submit_finalize")
         if partial_submit_failure:
             _mutate_stock_state(

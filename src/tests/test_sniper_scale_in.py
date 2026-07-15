@@ -11344,6 +11344,8 @@ def test_update_db_for_add_does_not_touch_detached_record_after_commit(monkeypat
             "buy_qty": 8,
             "add_count": 2,
             "avg_down_count": 2,
+            "pending_add_initial_buy_price": 10000,
+            "pending_add_initial_buy_qty": 5,
             "last_add_reason": "shallow_volatility_avg_down",
             "shallow_volatility_avg_down_count": 1,
             "shallow_volatility_avg_down_last_at": 1_775_765_514.0,
@@ -11359,8 +11361,97 @@ def test_update_db_for_add_does_not_touch_detached_record_after_commit(monkeypat
     assert record.__dict__["shallow_volatility_avg_down_count"] == 1
     assert record.__dict__["shallow_volatility_avg_down_last_at"] == datetime.fromtimestamp(1_775_765_514.0)
     assert len(receipts.event_bus.published) == 1
-    assert receipts.event_bus.published[0][1]["message"].startswith("➕ 추가매수 체결")
+    assert receipts.event_bus.published[0][1]["message"].startswith("➕ 추가매수 체결 완료")
+    assert "기존 평단가: 10,000원 (5주)" in receipts.event_bus.published[0][1]["message"]
+    assert "추가 체결: 3주" in receipts.event_bus.published[0][1]["message"]
     assert "누적 추가매수: 2회" in receipts.event_bus.published[0][1]["message"]
+
+
+def test_add_multi_leg_notification_waits_for_completed_bundle(monkeypatch):
+    receipts.ACTIVE_TARGETS = []
+    receipts.highest_prices = {}
+    receipts._get_fast_state = lambda code: None
+
+    db_updates = []
+
+    def capture_db_update(*args, **kwargs):
+        db_updates.append((args, kwargs))
+
+    monkeypatch.setattr(receipts, "_update_db_for_add", capture_db_update)
+    monkeypatch.setattr(receipts, "record_add_history_event", lambda *args, **kwargs: True)
+    monkeypatch.setattr(receipts, "_refresh_scalp_preset_exit_order", lambda *args, **kwargs: True)
+
+    target_stock = {
+        "id": 2197,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 10000,
+        "buy_qty": 10,
+        "pending_add_order": True,
+        "pending_add_type": "AVG_DOWN",
+        "pending_add_qty": 5,
+        "pending_add_ord_no": "A1,A2",
+        "_add_receipt_requested_by_order_no": {"A1": 3, "A2": 2},
+        "add_count": 0,
+        "avg_down_count": 0,
+    }
+    receipts.ACTIVE_TARGETS.append(target_stock)
+
+    receipts.handle_real_execution(
+        {"code": "123456", "type": "BUY", "order_no": "A1", "price": 9500, "qty": 3}
+    )
+
+    assert target_stock["buy_qty"] == 13
+    assert target_stock["pending_add_execution_notice_pending"] is True
+    assert db_updates[-1][1]["publish_notification"] is False
+
+    receipts.handle_real_execution(
+        {"code": "123456", "type": "BUY", "order_no": "A2", "price": 9400, "qty": 2}
+    )
+
+    assert target_stock["buy_qty"] == 15
+    assert target_stock.get("pending_add_order") is None
+    assert db_updates[-1][1]["publish_notification"] is True
+    final_snapshot = db_updates[-1][0][4]
+    assert final_snapshot["pending_add_initial_buy_price"] == 10000
+    assert final_snapshot["pending_add_initial_buy_qty"] == 10
+
+
+def test_flush_deferred_add_completion_notice_uses_final_bundle_state(monkeypatch):
+    class DummyEventBus:
+        def __init__(self):
+            self.published = []
+
+        def publish(self, topic, payload):
+            self.published.append((topic, payload))
+
+    event_bus = DummyEventBus()
+    monkeypatch.setattr(receipts, "event_bus", event_bus)
+
+    target_stock = {
+        "code": "123456",
+        "name": "TEST",
+        "strategy": "SCALPING",
+        "pending_add_order": True,
+        "pending_add_type": "AVG_DOWN",
+        "pending_add_qty": 5,
+        "pending_add_filled_qty": 5,
+        "pending_add_execution_notice_pending": True,
+        "pending_add_initial_buy_price": 10000,
+        "pending_add_initial_buy_qty": 10,
+        "buy_price": 9800,
+        "buy_qty": 15,
+        "add_count": 1,
+        "last_add_fill_price": 9400,
+    }
+
+    assert receipts.flush_deferred_add_completion_notice(target_stock) is True
+    assert target_stock.get("pending_add_execution_notice_pending") is None
+    message = event_bus.published[0][1]["message"]
+    assert "추가 체결: 5주" in message
+    assert "새 평단가: 9,800원 | 총 수량: 15주" in message
 
 
 def test_execute_scale_in_order_failure_no_pending(monkeypatch):
