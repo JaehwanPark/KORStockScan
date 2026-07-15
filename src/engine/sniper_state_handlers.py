@@ -11174,10 +11174,14 @@ def _register_rising_missed_nxt_post_block_sampler(
         "last_sample_at": 0.0,
         "sample_attempt_count": 0,
         "fresh_sample_count": 0,
+        "trade_price_sample_count": 0,
+        "quote_proxy_sample_count": 0,
         "source_gap_sample_count": 0,
         "first_hit_label": None,
         "first_hit_ts": None,
         "first_hit_move_pct": None,
+        "first_hit_price_source": None,
+        "first_hit_price_basis": None,
         "max_move_pct": None,
         "min_move_pct": None,
     }
@@ -11316,7 +11320,9 @@ def observe_rising_missed_nxt_post_block_samplers(
         type_routes = type_routes if isinstance(type_routes, dict) else {}
         received_at = _safe_float(type_ts.get("0B"), 0.0)
         age_ms = (
-            max(0.0, (observed_ts - received_at) * 1000.0) if received_at > 0 else None
+            max(0.0, (observed_ts - received_at) * 1000.0)
+            if received_at > 0
+            else None
         )
         actual_item = str(type_items.get("0B") or "").strip()
         actual_suffix = str(type_suffixes.get("0B") or "").strip()
@@ -11355,6 +11361,55 @@ def observe_rising_missed_nxt_post_block_samplers(
         else:
             source_reason = "fresh_absolute_ws_0b_nxt"
 
+        quote_received_at = _safe_float(type_ts.get("0D"), 0.0)
+        quote_age_ms = (
+            max(0.0, (observed_ts - quote_received_at) * 1000.0)
+            if quote_received_at > 0
+            else None
+        )
+        quote_item = str(type_items.get("0D") or "").strip()
+        quote_suffix = str(type_suffixes.get("0D") or "").strip()
+        quote_route = str(type_routes.get("0D") or "unknown").strip()
+        quote_item_is_nxt = bool(
+            quote_suffix in {"_AL", "_NX"}
+            or quote_item.endswith("_AL")
+            or quote_item.endswith("_NX")
+        )
+        quote_route_is_nxt = quote_route in {"krx_nxt_integrated", "nxt_only"}
+        quote_within_horizon = bool(
+            quote_received_at > 0
+            and quote_received_at <= _safe_float(due.get("expires_at"), 0.0)
+        )
+        best_ask, best_bid = _get_best_levels_from_ws(snapshot)
+        quote_proxy_fresh = bool(
+            not fresh
+            and best_bid > 0
+            and best_ask >= best_bid
+            and quote_age_ms is not None
+            and quote_age_ms <= max_ws_age_ms
+            and quote_item_is_nxt
+            and quote_route_is_nxt
+            and quote_within_horizon
+        )
+        fallback_from_reason = source_reason
+        if quote_proxy_fresh:
+            price = best_bid
+            fresh = True
+            source_reason = "fresh_absolute_ws_0d_nxt_trade_quiet"
+
+        if fresh and quote_proxy_fresh:
+            observation_state = "fresh_ws_0d_nxt_quote_proxy"
+            price_source = "trusted_ws_0d_nxt_executable_bid_proxy"
+            price_basis = "executable_sell_touch_quote_proxy"
+        elif fresh:
+            observation_state = "fresh_ws_0b_nxt"
+            price_source = "trusted_ws_0b_nxt"
+            price_basis = "last_trade_price"
+        else:
+            observation_state = "source_gap"
+            price_source = "unavailable"
+            price_basis = "unavailable"
+
         entry_price = _safe_float(due.get("entry_price"), 0.0)
         move_pct = (
             ((price - entry_price) / entry_price) * 100.0
@@ -11373,6 +11428,12 @@ def observe_rising_missed_nxt_post_block_samplers(
                 sampler["fresh_sample_count"] = (
                     _safe_int(sampler.get("fresh_sample_count"), 0) + 1
                 )
+                sample_counter = (
+                    "quote_proxy_sample_count"
+                    if quote_proxy_fresh
+                    else "trade_price_sample_count"
+                )
+                sampler[sample_counter] = _safe_int(sampler.get(sample_counter), 0) + 1
                 current_max = sampler.get("max_move_pct")
                 current_min = sampler.get("min_move_pct")
                 sampler["max_move_pct"] = (
@@ -11393,6 +11454,8 @@ def observe_rising_missed_nxt_post_block_samplers(
                     if sampler.get("first_hit_label") is not None:
                         sampler["first_hit_ts"] = observed_ts
                         sampler["first_hit_move_pct"] = move_pct
+                        sampler["first_hit_price_source"] = price_source
+                        sampler["first_hit_price_basis"] = price_basis
             else:
                 sampler["source_gap_sample_count"] = (
                     _safe_int(sampler.get("source_gap_sample_count"), 0) + 1
@@ -11400,13 +11463,13 @@ def observe_rising_missed_nxt_post_block_samplers(
             emitted_sampler = dict(sampler)
 
         sample_fields = {
-            "rising_missed_nxt_post_block_price_observation_state": (
-                "fresh_ws_0b_nxt" if fresh else "source_gap"
-            ),
-            "rising_missed_nxt_post_block_price_source": (
-                "trusted_ws_0b_nxt" if fresh else "unavailable"
-            ),
+            "rising_missed_nxt_post_block_price_observation_state": observation_state,
+            "rising_missed_nxt_post_block_price_source": price_source,
             "rising_missed_nxt_post_block_price_source_reason": source_reason,
+            "rising_missed_nxt_post_block_price_fallback_from_reason": (
+                fallback_from_reason if quote_proxy_fresh else "not_applicable"
+            ),
+            "rising_missed_nxt_post_block_price_basis": price_basis,
             "rising_missed_nxt_post_block_ws_0b_age_ms": (
                 round(age_ms, 3) if age_ms is not None else "-"
             ),
@@ -11414,6 +11477,15 @@ def observe_rising_missed_nxt_post_block_samplers(
             "rising_missed_nxt_post_block_ws_0b_item": actual_item or "-",
             "rising_missed_nxt_post_block_ws_0b_suffix": actual_suffix or "-",
             "rising_missed_nxt_post_block_ws_0b_route": actual_route,
+            "rising_missed_nxt_post_block_ws_0d_age_ms": (
+                round(quote_age_ms, 3) if quote_age_ms is not None else "-"
+            ),
+            "rising_missed_nxt_post_block_ws_0d_item": quote_item or "-",
+            "rising_missed_nxt_post_block_ws_0d_suffix": quote_suffix or "-",
+            "rising_missed_nxt_post_block_ws_0d_route": quote_route,
+            "rising_missed_nxt_post_block_ws_0d_best_bid": best_bid,
+            "rising_missed_nxt_post_block_ws_0d_best_ask": best_ask,
+            "rising_missed_nxt_post_block_ws_0d_quote_proxy_applied": quote_proxy_fresh,
             "rising_missed_nxt_post_block_fresh_sample": fresh,
             "rising_missed_nxt_post_block_sample_attempt_count": emitted_sampler[
                 "sample_attempt_count"
@@ -11421,6 +11493,12 @@ def observe_rising_missed_nxt_post_block_samplers(
             "rising_missed_nxt_post_block_fresh_sample_count": emitted_sampler[
                 "fresh_sample_count"
             ],
+            "rising_missed_nxt_post_block_trade_price_sample_count": _safe_int(
+                emitted_sampler.get("trade_price_sample_count"), 0
+            ),
+            "rising_missed_nxt_post_block_quote_proxy_sample_count": _safe_int(
+                emitted_sampler.get("quote_proxy_sample_count"), 0
+            ),
             "rising_missed_nxt_post_block_source_gap_sample_count": emitted_sampler[
                 "source_gap_sample_count"
             ],
@@ -11467,6 +11545,12 @@ def observe_rising_missed_nxt_post_block_samplers(
                 "sample_attempt_count"
             ],
             rising_missed_nxt_post_block_fresh_sample_count=fresh_count,
+            rising_missed_nxt_post_block_trade_price_sample_count=_safe_int(
+                emitted_sampler.get("trade_price_sample_count"), 0
+            ),
+            rising_missed_nxt_post_block_quote_proxy_sample_count=_safe_int(
+                emitted_sampler.get("quote_proxy_sample_count"), 0
+            ),
             rising_missed_nxt_post_block_source_gap_sample_count=emitted_sampler[
                 "source_gap_sample_count"
             ],
@@ -11478,6 +11562,12 @@ def observe_rising_missed_nxt_post_block_samplers(
                 round(_safe_float(emitted_sampler.get("first_hit_move_pct"), 0.0), 6)
                 if emitted_sampler.get("first_hit_move_pct") is not None
                 else "-"
+            ),
+            rising_missed_nxt_post_block_first_hit_price_source=(
+                emitted_sampler.get("first_hit_price_source") or "-"
+            ),
+            rising_missed_nxt_post_block_first_hit_price_basis=(
+                emitted_sampler.get("first_hit_price_basis") or "-"
             ),
             rising_missed_nxt_post_block_max_move_pct=(
                 round(_safe_float(emitted_sampler.get("max_move_pct"), 0.0), 6)
@@ -25724,6 +25814,152 @@ def _holding_rest_quote_fallback_min_interval_sec():
 
 def _holding_ws_repair_min_interval_sec():
     return max(20.0, _rule_float("HOLDING_EXIT_WS_REPAIR_MIN_INTERVAL_SEC", 60.0))
+
+
+def _scalp_nxt_trailing_bid_guard_context(
+    ws_data: dict | None,
+    *,
+    code: str,
+    curr_price: int,
+    now_ts: float,
+) -> dict[str, Any]:
+    enabled = _env_bool("KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_ENABLED", False)
+    active_date = str(
+        os.getenv("KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_ACTIVE_DATE", "")
+    ).strip()
+    observed_dt = datetime.fromtimestamp(float(now_ts), tz=_KST)
+    current_date = observed_dt.date().isoformat()
+    max_quote_age_ms = max(
+        100.0,
+        min(
+            3000.0,
+            _env_float(
+                "KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_MAX_0D_AGE_MS",
+                1500.0,
+            ),
+        ),
+    )
+    min_trade_stale_ms = max(
+        500.0,
+        min(
+            10000.0,
+            _env_float(
+                "KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_MIN_0B_STALE_MS",
+                1500.0,
+            ),
+        ),
+    )
+    snapshot = ws_data if isinstance(ws_data, dict) else {}
+    type_ts = snapshot.get("last_realtime_type_ts")
+    type_ts = type_ts if isinstance(type_ts, dict) else {}
+    type_items = snapshot.get("last_realtime_type_item")
+    type_items = type_items if isinstance(type_items, dict) else {}
+    type_suffixes = snapshot.get("last_realtime_type_market_suffix")
+    type_suffixes = type_suffixes if isinstance(type_suffixes, dict) else {}
+    type_routes = snapshot.get("last_realtime_type_market_route")
+    type_routes = type_routes if isinstance(type_routes, dict) else {}
+
+    trade_received_at = _safe_float(type_ts.get("0B"), 0.0)
+    quote_received_at = _safe_float(type_ts.get("0D"), 0.0)
+    trade_age_ms = (
+        max(0.0, (float(now_ts) - trade_received_at) * 1000.0)
+        if 0 < trade_received_at <= float(now_ts)
+        else None
+    )
+    quote_age_ms = (
+        max(0.0, (float(now_ts) - quote_received_at) * 1000.0)
+        if 0 < quote_received_at <= float(now_ts)
+        else None
+    )
+    quote_item = str(type_items.get("0D") or "").strip()
+    quote_item_code = quote_item.split("_", 1)[0][:6]
+    expected_code = str(code or "").strip()[:6]
+    quote_suffix = str(type_suffixes.get("0D") or "").strip()
+    quote_route = str(type_routes.get("0D") or "unknown").strip()
+    quote_item_is_nxt = bool(
+        quote_suffix in {"_AL", "_NX"}
+        or quote_item.endswith("_AL")
+        or quote_item.endswith("_NX")
+    )
+    quote_route_is_nxt = quote_route in {"krx_nxt_integrated", "nxt_only"}
+    best_ask, best_bid = _get_best_levels_from_ws(snapshot)
+    in_nxt_exit_window = 16 <= observed_dt.hour < 20
+    trade_stale = trade_age_ms is None or trade_age_ms >= min_trade_stale_ms
+    quote_fresh = quote_age_ms is not None and quote_age_ms <= max_quote_age_ms
+
+    reason = "eligible"
+    if not enabled:
+        reason = "runtime_disabled"
+    elif not active_date:
+        reason = "active_date_missing"
+    elif active_date != current_date:
+        reason = "runtime_inactive_date"
+    elif not in_nxt_exit_window:
+        reason = "outside_nxt_exit_window"
+    elif not quote_item_is_nxt:
+        reason = "actual_nxt_0d_item_missing"
+    elif not expected_code or quote_item_code != expected_code:
+        reason = "actual_nxt_0d_symbol_mismatch"
+    elif not quote_route_is_nxt:
+        reason = "actual_nxt_0d_route_missing"
+    elif not quote_fresh:
+        reason = "ws_0d_missing_or_stale"
+    elif not trade_stale:
+        reason = "ws_0b_still_fresh"
+    elif best_bid <= 0 or best_ask <= 0 or best_ask < best_bid:
+        reason = "nxt_top_of_book_invalid"
+    elif int(curr_price or 0) <= 0:
+        reason = "current_trade_mark_missing"
+    elif best_bid >= int(curr_price):
+        reason = "executable_bid_not_below_trade_mark"
+
+    return {
+        "nxt_trailing_bid_guard_applied": reason == "eligible",
+        "nxt_trailing_bid_guard_reason": reason,
+        "nxt_trailing_bid_guard_enabled": enabled,
+        "nxt_trailing_bid_guard_active_date": active_date or "-",
+        "nxt_trailing_bid_guard_current_date": current_date,
+        "nxt_trailing_bid_guard_window": "16:00:00~20:00:00_KST",
+        "nxt_trailing_bid_guard_max_0d_age_ms": round(max_quote_age_ms, 3),
+        "nxt_trailing_bid_guard_min_0b_stale_ms": round(min_trade_stale_ms, 3),
+        "nxt_trailing_bid_guard_ws_0b_age_ms": (
+            round(trade_age_ms, 3) if trade_age_ms is not None else "-"
+        ),
+        "nxt_trailing_bid_guard_ws_0d_age_ms": (
+            round(quote_age_ms, 3) if quote_age_ms is not None else "-"
+        ),
+        "nxt_trailing_bid_guard_ws_0d_item": quote_item or "-",
+        "nxt_trailing_bid_guard_ws_0d_item_code": quote_item_code or "-",
+        "nxt_trailing_bid_guard_expected_code": expected_code or "-",
+        "nxt_trailing_bid_guard_ws_0d_suffix": quote_suffix or "-",
+        "nxt_trailing_bid_guard_ws_0d_route": quote_route,
+        "nxt_trailing_bid_guard_best_bid": best_bid,
+        "nxt_trailing_bid_guard_best_ask": best_ask,
+        "nxt_trailing_bid_guard_original_trade_mark": int(curr_price or 0),
+        "nxt_trailing_bid_guard_price_source": (
+            "trusted_ws_0d_nxt_executable_bid"
+            if reason == "eligible"
+            else "unavailable"
+        ),
+        "nxt_trailing_bid_guard_peak_source": "trusted_trade_mark_only",
+        "metric_role": "bounded_tunable_exit_input",
+        "decision_authority": "operator_runtime_override_scalp_nxt_trailing_bid_guard",
+        "window_policy": "same_position_nxt_0b_stale_fresh_0d_quote",
+        "sample_floor": "fresh_actual_nxt_ws_0d_with_stale_or_missing_ws_0b",
+        "primary_decision_metric": "executable_bid_drawdown_from_trade_peak",
+        "source_quality_gate": (
+            "absolute_0d_receive_ts_actual_nxt_symbol_item_and_route"
+        ),
+        "runtime_effect": reason == "eligible",
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": False,
+        "forbidden_uses": (
+            "krx_exit_change|peak_inflation|rest_positive_authority|buy_or_scale_in_authority|"
+            "hard_stop_bypass|protect_stop_bypass|emergency_stop_bypass|broker_guard_bypass|"
+            "provider_route_change|quantity_or_cap_change"
+        ),
+    }
 
 
 def _maybe_publish_holding_ws_repair(state, code, fields, *, now_ts):
@@ -43837,6 +44073,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
     sell_reason_type = "PROFIT"
     reason = ""
     exit_rule = ""
+    nxt_trailing_bid_guard_fields: dict[str, Any] = {}
 
     last_ai_time = LAST_AI_CALL_TIMES.get(code, 0)
     current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
@@ -44845,22 +45082,69 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             'SCALP_SCANNER_FALLBACK_NEAR_AI_EXIT_SUSTAIN_SEC', 120
         )
         scanner_fallback_retrace_sustain_sec = _rule_int(
-            'SCALP_SCANNER_FALLBACK_RETRACE_NEAR_AI_EXIT_SUSTAIN_SEC', 150
+            "SCALP_SCANNER_FALLBACK_RETRACE_NEAR_AI_EXIT_SUSTAIN_SEC", 150
         )
         if highest_prices.get(price_key, 0) > 0:
-            drawdown = (highest_prices[price_key] - curr_p) / highest_prices[price_key] * 100
+            drawdown = (
+                (highest_prices[price_key] - curr_p) / highest_prices[price_key] * 100
+            )
         else:
             drawdown = 0
+        trailing_decision_price = curr_p
+        trailing_decision_profit_rate = profit_rate
+        trailing_decision_drawdown = drawdown
+        nxt_trailing_bid_guard_fields = _scalp_nxt_trailing_bid_guard_context(
+            ws_data,
+            code=code,
+            curr_price=curr_p,
+            now_ts=now_ts,
+        )
+        if nxt_trailing_bid_guard_fields.get("nxt_trailing_bid_guard_applied"):
+            trailing_decision_price = _safe_int(
+                nxt_trailing_bid_guard_fields.get("nxt_trailing_bid_guard_best_bid"),
+                curr_p,
+            )
+            trailing_decision_profit_rate = calculate_net_profit_rate(
+                buy_p,
+                trailing_decision_price,
+            )
+            if highest_prices.get(price_key, 0) > 0:
+                trailing_decision_drawdown = (
+                    (highest_prices[price_key] - trailing_decision_price)
+                    / highest_prices[price_key]
+                    * 100
+                )
+            nxt_trailing_bid_guard_fields.update(
+                {
+                    "nxt_trailing_bid_guard_effective_price": trailing_decision_price,
+                    "nxt_trailing_bid_guard_effective_profit_rate": round(
+                        trailing_decision_profit_rate,
+                        6,
+                    ),
+                    "nxt_trailing_bid_guard_effective_drawdown": round(
+                        trailing_decision_drawdown,
+                        6,
+                    ),
+                    "nxt_trailing_bid_guard_peak_price": _safe_int(
+                        highest_prices.get(price_key),
+                        0,
+                    ),
+                }
+            )
 
         soft_stop_pct = max(base_stop_pct, hard_stop_pct)
         hard_stop_pct = min(base_stop_pct, hard_stop_pct)
-        if _holding_strong_trailing_enabled(holding_score_exit_role_ctx, current_ai_score):
+        if _holding_strong_trailing_enabled(
+            holding_score_exit_role_ctx, current_ai_score
+        ):
             dynamic_stop_pct = max(soft_stop_pct - 1.0, hard_stop_pct)
-            dynamic_trailing_limit = _rule_float('SCALP_TRAILING_LIMIT_STRONG', 0.8)
+            dynamic_trailing_limit = _rule_float("SCALP_TRAILING_LIMIT_STRONG", 0.8)
         else:
             dynamic_stop_pct = soft_stop_pct
-            dynamic_trailing_limit = _rule_float('SCALP_TRAILING_LIMIT_WEAK', 0.4)
-        scalp_trailing_start_pct = _rule_float('SCALP_TRAILING_START_PCT', safe_profit_pct)
+            dynamic_trailing_limit = _rule_float("SCALP_TRAILING_LIMIT_WEAK", 0.4)
+        scalp_trailing_start_pct = _rule_float(
+            "SCALP_TRAILING_START_PCT", safe_profit_pct
+        )
         scalp_trailing_peak_armed = peak_profit >= scalp_trailing_start_pct
         _evaluate_scalp_profit_stagnation_exit(
             stock,
@@ -45824,19 +46108,47 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 )
                 exit_rule = "scalp_ai_momentum_decay"
 
-            elif scalp_trailing_peak_armed and drawdown >= dynamic_trailing_limit:
-                in_pyramid_trailing_grace, _, _ = _pyramid_post_add_trailing_grace(stock, now_ts)
+            elif (
+                scalp_trailing_peak_armed
+                and trailing_decision_drawdown >= dynamic_trailing_limit
+            ):
+                in_pyramid_trailing_grace, _, _ = _pyramid_post_add_trailing_grace(
+                    stock, now_ts
+                )
                 if in_pyramid_trailing_grace:
                     _log_pyramid_post_add_trailing_grace(
                         stock,
                         code,
                         now_ts=now_ts,
                         exit_rule_candidate="scalp_trailing_take_profit",
-                        profit_rate=profit_rate,
+                        profit_rate=trailing_decision_profit_rate,
                         peak_profit=peak_profit,
-                        drawdown=drawdown,
+                        drawdown=trailing_decision_drawdown,
                     )
                 else:
+                    if nxt_trailing_bid_guard_fields.get(
+                        "nxt_trailing_bid_guard_applied"
+                    ):
+                        original_trade_mark = curr_p
+                        original_profit_rate = profit_rate
+                        curr_p = trailing_decision_price
+                        profit_rate = trailing_decision_profit_rate
+                        drawdown = trailing_decision_drawdown
+                        ws_data = dict(ws_data or {})
+                        ws_data["curr"] = curr_p
+                        ws_data["executable_sell_price"] = curr_p
+                        ws_data["nxt_trailing_bid_guard_applied"] = True
+                        _log_holding_pipeline(
+                            stock,
+                            code,
+                            "nxt_trailing_bid_guard_applied",
+                            original_trade_mark=original_trade_mark,
+                            original_profit_rate=f"{original_profit_rate:+.2f}",
+                            profit_rate=f"{profit_rate:+.2f}",
+                            peak_profit=f"{peak_profit:+.2f}",
+                            drawdown=f"{drawdown:.2f}",
+                            **nxt_trailing_bid_guard_fields,
+                        )
                     is_sell_signal = True
                     sell_reason_type = "LOSS" if profit_rate < 0 else "TRAILING"
                     trailing_label = (
@@ -46459,19 +46771,34 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
         exit_extra_fields = {
             **exit_extra_fields,
             **_holding_score_role_log_fields(holding_score_exit_role_ctx),
+            **(
+                {
+                    key: value
+                    for key, value in nxt_trailing_bid_guard_fields.items()
+                    if key.startswith("nxt_trailing_bid_guard_")
+                }
+                if str(exit_rule or "").strip() == "scalp_trailing_take_profit"
+                and nxt_trailing_bid_guard_fields.get("nxt_trailing_bid_guard_applied")
+                else {}
+            ),
         }
-        if not hard_stop_revalidation_already_passed and _hard_stop_quote_revalidation_block(
-            stock,
-            code,
-            exit_rule=exit_rule,
-            profit_rate=profit_rate,
-            threshold_pct=_safe_float(locals().get("hard_stop_pct"), _rule_float("SCALP_HARD_STOP", -2.5)),
-            curr_price=curr_p,
-            buy_price=buy_p,
-            current_ai_score=current_ai_score,
-            held_sec=held_sec,
-            peak_profit=peak_profit,
-            now_ts=now_ts,
+        if (
+            not hard_stop_revalidation_already_passed
+            and _hard_stop_quote_revalidation_block(
+                stock,
+                code,
+                exit_rule=exit_rule,
+                profit_rate=profit_rate,
+                threshold_pct=_safe_float(
+                    locals().get("hard_stop_pct"), _rule_float("SCALP_HARD_STOP", -2.5)
+                ),
+                curr_price=curr_p,
+                buy_price=buy_p,
+                current_ai_score=current_ai_score,
+                held_sec=held_sec,
+                peak_profit=peak_profit,
+                now_ts=now_ts,
+            )
         ):
             return
         _emit_stat_action_decision_snapshot(
@@ -46911,7 +47238,8 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     **sell_quote_fields,
                     "exit_rule": exit_rule or stock.get("last_exit_rule") or "-",
                     "sell_reason_type": sell_reason_type or "-",
-                    "exit_decision_source": stock.get("last_exit_decision_source") or "MANUAL",
+                    "exit_decision_source": stock.get("last_exit_decision_source")
+                    or "MANUAL",
                     "profit_rate": f"{profit_rate:+.2f}",
                     "peak_profit": f"{peak_profit:+.2f}",
                     "current_ai_score": f"{current_ai_score:.0f}",
@@ -46929,6 +47257,25 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             curr_p = int(sell_mark_price)
             profit_rate = calculate_net_profit_rate(buy_p, curr_p)
         sell_order_price = int(sell_order_price or curr_p or 0)
+        if (
+            nxt_trailing_bid_guard_fields.get("nxt_trailing_bid_guard_applied")
+            and sell_order_price > 0
+            and (curr_p <= 0 or sell_order_price < curr_p)
+        ):
+            curr_p = sell_order_price
+            profit_rate = calculate_net_profit_rate(buy_p, curr_p)
+            sell_quote_fields.update(
+                {
+                    "nxt_trailing_bid_guard_pre_submit_price": curr_p,
+                    "nxt_trailing_bid_guard_pre_submit_profit_rate": round(
+                        profit_rate,
+                        6,
+                    ),
+                    "nxt_trailing_bid_guard_pre_submit_basis": (
+                        "freshest_revalidated_executable_sell_price"
+                    ),
+                }
+            )
         if sell_order_price > 0:
             ws_data = dict(ws_data or {})
             ws_data["executable_sell_price"] = sell_order_price
@@ -46941,7 +47288,9 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 bids = [
                     {
                         "price": sell_order_price,
-                        "volume": _safe_int((rest_snapshot or {}).get("best_bid_qty"), 0),
+                        "volume": _safe_int(
+                            (rest_snapshot or {}).get("best_bid_qty"), 0
+                        ),
                     }
                 ]
             orderbook["bids"] = bids

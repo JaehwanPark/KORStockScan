@@ -113,6 +113,19 @@
   - 금지: source-only sampler 표본으로 KRX threshold, broker submit, provider, sizing/cap, TP/exit 또는 hard/protect/emergency guard를 변경하지 않는다.
   - 다음 액션: `nxt_sampler_observed`, `no_natural_candidate`, `nxt_route_or_timestamp_gap`, `runtime_activation_regression` 중 하나로 닫는다.
 
+- [x] `[NxtTrailingExecutableBidGuard0715] NXT 0B quiet 구간 트레일링 executable bid 보호` (`Due: 2026-07-15`, `Slot: INTRADAY`, `TimeWindow: 16:50~17:20`, `Track: ScalpingLogic`)
+  - Source: [pipeline_events_2026-07-15.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-15.jsonl), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [operator_runtime_overrides.env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/operator_runtime_overrides.env)
+  - 판정 기준: 큐리오시스(494120)의 실제 peak=`+0.99%`, 마지막 양수 관측=`+0.80%`, 다음 관측=`-0.68%` 사이 NXT 0B quiet gap을 재현한다. 16:00~20:00 KST에서 실제 NXT 0B가 stale이고 실제 NXT 0D가 fresh일 때만 executable best bid를 기존 trailing drawdown 입력으로 사용하며 peak는 trade mark로 유지한다.
+  - 금지: KRX 로직, trailing threshold, REST authority, BUY/scale-in, hard/protect/emergency, broker/account/order/quantity/cooldown, provider, sizing/cap을 변경하지 않는다.
+  - rollback: `KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_ENABLED=false`로 전환하고 active date를 비운 뒤 review gate 후 graceful restart한다.
+  - 실행 기록 (2026-07-15 17:14 KST): 판정=`implemented_reviewed_and_runtime_applied`. shared `last_ws_update_ts`가 fresh 0D로 갱신돼 stale `curr(0B)`가 fresh mark처럼 보이는 NXT 경로를 보완했다. guard는 16:00~20:00 KST, active date 일치, stale/missing absolute 0B timestamp, age `<=1500ms`인 fresh 0D, 현재 종목과 일치하는 실제 `_AL/_NX` item 및 NXT route, 유효 top-of-book, bid가 stale trade mark보다 낮은 경우에만 기존 trailing drawdown을 앞당긴다. peak는 trade mark로만 갱신하며 REST/KRX/BUY/scale-in/hard/protect/emergency 권한은 변경하지 않았다. 리뷰 finding 1건(symbol provenance 강제 및 pre-submit executable price 정렬)을 보완 후 재리뷰 미해결 finding=`0`; tests=`743+169+23 passed`, focused=`2+3 passed`, compile/env syntax/line-range Black/diff/parser/runtime verifier=`pass`다. `./restart.sh`가 PID `188719 -> 203245`를 graceful handoff했고 final verifier는 passed/pid_passed=`true`, runtime/dated policy fail=`0/0`, findings/mismatch/missing=`[]`; 새 PID env와 WS `0B`/`0D` 실수신을 확인했다.
+
+- [ ] `[QuoteConsistencyPerTypeFreshness0716] KRX/NXT 공통 mark/book freshness 분리` (`Due: 2026-07-16`, `Slot: PREOPEN`, `TimeWindow: 07:35~08:10`, `Track: RuntimeStability`)
+  - Source: [quote_consistency.py](/home/ubuntu/KORStockScan/src/trading/market/quote_consistency.py), [kiwoom_websocket.py](/home/ubuntu/KORStockScan/src/engine/kiwoom_websocket.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py)
+  - 판정 기준: shared `last_ws_update_ts` 대신 trade mark freshness는 절대 `0B` receive timestamp, executable book freshness는 절대 `0D` receive timestamp로 분리하고 KRX/NXT entry·holding·scale-in consumer 회귀를 검증한다. fresh 0D와 stale 0B가 함께 있을 때 stale trade mark를 fresh로 승격하지 않아야 한다.
+  - 금지: 단일 장중 NXT 사례만으로 KRX threshold·order authority를 변경하거나 REST quote를 trade mark/positive micro provenance로 승격하지 않는다.
+  - 다음 액션: quote input/schema, canonical mark fallback, executable bid/ask, source-quality event fields, KRX/NXT 회귀 테스트를 함께 닫은 뒤 다음 PREOPEN 적용 여부를 판정한다.
+
 ## 장후 체크리스트 (20:05~21:55)
 
 - [ ] `[PostcloseSourceQualityGateReview0715] 장후 source-quality gate 결과 및 튜닝 입력 허용/제외 확인` (`Due: 2026-07-15`, `Slot: POSTCLOSE`, `TimeWindow: 16:25~16:35`, `Track: RuntimeStability`)
@@ -160,3 +173,18 @@
 ```bash
 PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar
 ```
+
+<!-- AUTO_SERVER_COMPARISON_START -->
+### 본서버 vs songstockscan 자동 비교 (`2026-07-15 15:46:54`)
+
+- 기준: `profit-derived metrics are excluded by default because fallback-normalized values such as NULL -> 0 can distort comparison`
+- 상세 리포트: `data/report/server_comparison/server_comparison_2026-07-15.md`
+- `Trade Review`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Performance Tuning`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Post Sell Feedback`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Entry Pipeline Flow`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+<!-- AUTO_SERVER_COMPARISON_END -->

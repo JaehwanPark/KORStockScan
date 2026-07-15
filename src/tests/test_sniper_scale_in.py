@@ -5739,6 +5739,122 @@ def test_rising_missed_nxt_post_block_sampler_uses_only_fresh_actual_nxt_ws(
     )
 
 
+def test_rising_missed_nxt_post_block_sampler_uses_fresh_0d_bid_as_price_proxy(
+    monkeypatch,
+):
+    start_ts = datetime(2026, 7, 15, 16, 10, tzinfo=state_handlers._KST).timestamp()
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ACTIVE_DATE",
+        "2026-07-15",
+    )
+    events = []
+    snapshot = {
+        "curr": 10000,
+        "orderbook": {
+            "asks": [{"price": 10020, "qty": 100}],
+            "bids": [{"price": 10010, "qty": 120}],
+        },
+        "last_realtime_type_ts": {
+            "0B": start_ts - 30,
+            "0D": start_ts,
+        },
+        "last_realtime_type_item": {
+            "0B": "123471_AL",
+            "0D": "123471_AL",
+        },
+        "last_realtime_type_market_suffix": {"0B": "_AL", "0D": "_AL"},
+        "last_realtime_type_market_route": {
+            "0B": "krx_nxt_integrated",
+            "0D": "krx_nxt_integrated",
+        },
+    }
+    monkeypatch.setattr(
+        state_handlers,
+        "EVENT_BUS",
+        SimpleNamespace(publish=lambda *_args, **_kwargs: None),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "WS_MANAGER",
+        SimpleNamespace(get_latest_data=lambda code: dict(snapshot)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, record_id=None, fields=None: events.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+
+    assert state_handlers._register_rising_missed_nxt_post_block_sampler(
+        {"id": 13, "name": "NXT QUOTE TEST"},
+        "123471",
+        {
+            "rising_missed_tp1_evaluation_id": "nxt-quote-block-1",
+            "rising_missed_market_session_bucket": "nxt_entry_window",
+            "rising_missed_effective_venue": "NXT",
+            "rising_missed_tp1_effective_price": 10000,
+            "selector_reason": "rising_missed_tp1_lane_not_eligible",
+            "selector_deferred": False,
+        },
+        now_ts=start_ts,
+    )
+
+    observed = state_handlers.observe_rising_missed_nxt_post_block_samplers(
+        now_ts=start_ts
+    )
+    assert observed["fresh"] == 1
+    sample = next(
+        item
+        for item in events
+        if item["stage"] == "rising_missed_nxt_post_block_price_sample"
+    )["fields"]
+    assert sample["current_price_observed"] == 10010
+    assert sample["rising_missed_nxt_post_block_price_observation_state"] == (
+        "fresh_ws_0d_nxt_quote_proxy"
+    )
+    assert sample["rising_missed_nxt_post_block_price_source"] == (
+        "trusted_ws_0d_nxt_executable_bid_proxy"
+    )
+    assert sample["rising_missed_nxt_post_block_price_basis"] == (
+        "executable_sell_touch_quote_proxy"
+    )
+    assert sample["rising_missed_nxt_post_block_price_fallback_from_reason"] == (
+        "ws_0b_stale"
+    )
+    assert sample["rising_missed_nxt_post_block_ws_0d_quote_proxy_applied"] is True
+    assert sample["rising_missed_nxt_post_block_trade_price_sample_count"] == 0
+    assert sample["rising_missed_nxt_post_block_quote_proxy_sample_count"] == 1
+
+    snapshot["last_realtime_type_ts"] = {
+        "0B": start_ts - 30,
+        "0D": start_ts + 15,
+    }
+    snapshot["last_realtime_type_item"]["0D"] = "123471"
+    snapshot["last_realtime_type_market_suffix"]["0D"] = ""
+    snapshot["last_realtime_type_market_route"]["0D"] = "krx_only"
+    rejected = state_handlers.observe_rising_missed_nxt_post_block_samplers(
+        now_ts=start_ts + 15
+    )
+    assert rejected["source_gap"] == 1
+    rejected_sample = [
+        item
+        for item in events
+        if item["stage"] == "rising_missed_nxt_post_block_price_sample"
+    ][-1]["fields"]
+    assert rejected_sample["rising_missed_nxt_post_block_price_source"] == (
+        "unavailable"
+    )
+    assert (
+        rejected_sample["rising_missed_nxt_post_block_ws_0d_quote_proxy_applied"]
+        is False
+    )
+    assert "current_price_observed" not in rejected_sample
+
+
 def test_rising_missed_nxt_post_block_sampler_rejects_krx_evaluation(monkeypatch):
     start_ts = datetime(2026, 7, 14, 14, 0, tzinfo=state_handlers._KST).timestamp()
     monkeypatch.setenv(
@@ -14435,6 +14551,218 @@ def test_scalp_trailing_uses_peak_start_after_profit_falls_below_safe_profit(mon
     assert exit_logs and exit_logs[-1]["exit_rule"] == "scalp_trailing_take_profit"
     assert float(str(exit_logs[-1]["profit_rate"]).replace("+", "")) < 1.0
     assert "peak=+" in exit_logs[-1]["reason"]
+
+
+def test_scalp_nxt_trailing_bid_guard_requires_stale_0b_and_fresh_actual_nxt_0d(
+    monkeypatch,
+):
+    now_ts = datetime(2026, 7, 15, 16, 48, tzinfo=state_handlers._KST).timestamp()
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_ENABLED", "true")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_ACTIVE_DATE",
+        "2026-07-15",
+    )
+    ws_data = {
+        "curr": 10_120,
+        "orderbook": {
+            "asks": [{"price": 10_100, "volume": 100}],
+            "bids": [{"price": 10_090, "volume": 120}],
+        },
+        "last_realtime_type_ts": {"0B": now_ts - 4.0, "0D": now_ts - 0.05},
+        "last_realtime_type_item": {"0B": "123456_AL", "0D": "123456_AL"},
+        "last_realtime_type_market_suffix": {"0B": "_AL", "0D": "_AL"},
+        "last_realtime_type_market_route": {
+            "0B": "krx_nxt_integrated",
+            "0D": "krx_nxt_integrated",
+        },
+    }
+
+    decision = state_handlers._scalp_nxt_trailing_bid_guard_context(
+        ws_data,
+        code="123456",
+        curr_price=10_120,
+        now_ts=now_ts,
+    )
+
+    assert decision["nxt_trailing_bid_guard_applied"] is True
+    assert decision["nxt_trailing_bid_guard_reason"] == "eligible"
+    assert decision["nxt_trailing_bid_guard_best_bid"] == 10_090
+    assert decision["nxt_trailing_bid_guard_price_source"] == (
+        "trusted_ws_0d_nxt_executable_bid"
+    )
+    assert decision["nxt_trailing_bid_guard_peak_source"] == ("trusted_trade_mark_only")
+
+    ws_data["last_realtime_type_ts"]["0B"] = now_ts - 0.1
+    fresh_trade = state_handlers._scalp_nxt_trailing_bid_guard_context(
+        ws_data,
+        code="123456",
+        curr_price=10_120,
+        now_ts=now_ts,
+    )
+    assert fresh_trade["nxt_trailing_bid_guard_applied"] is False
+    assert fresh_trade["nxt_trailing_bid_guard_reason"] == "ws_0b_still_fresh"
+
+    ws_data["last_realtime_type_ts"]["0B"] = now_ts - 4.0
+    ws_data["last_realtime_type_item"]["0D"] = "123456"
+    ws_data["last_realtime_type_market_suffix"]["0D"] = ""
+    ws_data["last_realtime_type_market_route"]["0D"] = "krx_only"
+    krx_quote = state_handlers._scalp_nxt_trailing_bid_guard_context(
+        ws_data,
+        code="123456",
+        curr_price=10_120,
+        now_ts=now_ts,
+    )
+    assert krx_quote["nxt_trailing_bid_guard_applied"] is False
+    assert krx_quote["nxt_trailing_bid_guard_reason"] == ("actual_nxt_0d_item_missing")
+
+    ws_data["last_realtime_type_item"]["0D"] = "654321_AL"
+    ws_data["last_realtime_type_market_suffix"]["0D"] = "_AL"
+    ws_data["last_realtime_type_market_route"]["0D"] = "krx_nxt_integrated"
+    wrong_symbol = state_handlers._scalp_nxt_trailing_bid_guard_context(
+        ws_data,
+        code="123456",
+        curr_price=10_120,
+        now_ts=now_ts,
+    )
+    assert wrong_symbol["nxt_trailing_bid_guard_applied"] is False
+    assert wrong_symbol["nxt_trailing_bid_guard_reason"] == (
+        "actual_nxt_0d_symbol_mismatch"
+    )
+
+
+def test_scalp_nxt_trailing_uses_fresh_0d_bid_without_inflating_trade_peak(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    class _RulesProxy:
+        def __getattr__(self, name):
+            overrides = {
+                "SCALE_IN_REQUIRE_HISTORY_TABLE": False,
+                "SCALP_SAFE_PROFIT": 1.0,
+                "SCALP_TRAILING_START_PCT": 0.6,
+                "SCALP_TRAILING_LIMIT_WEAK": 0.4,
+                "SCALP_TRAILING_LIMIT_STRONG": 0.8,
+                "SCALP_MFE_PROTECT_EXIT_ENABLED": False,
+                "SCALP_PROFIT_STAGNATION_EXIT_ENABLED": False,
+            }
+            if name in overrides:
+                return overrides[name]
+            return getattr(CONFIG, name)
+
+    now_dt = datetime(2026, 7, 15, 16, 48, tzinfo=state_handlers._KST)
+    now_ts = now_dt.timestamp()
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_ENABLED", "true")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_ACTIVE_DATE",
+        "2026-07-15",
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        _RulesProxy(),
+    )
+    monkeypatch.setattr(state_handlers, "COOLDOWNS", {})
+    monkeypatch.setattr(state_handlers, "ALERTED_STOCKS", set())
+    monkeypatch.setattr(state_handlers, "HIGHEST_PRICES", {"123456": 10_150})
+    monkeypatch.setattr(state_handlers, "LAST_AI_CALL_TIMES", {})
+    monkeypatch.setattr(state_handlers, "LAST_LOG_TIMES", {})
+    monkeypatch.setattr(state_handlers, "DB", _DummyDB())
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "token")
+
+    sell_calls = []
+    pipeline_logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: pipeline_logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_evaluate_holding_flow_override",
+        lambda *args, **kwargs: True,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": False, "reason": "test_no_add"},
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_smart_sell_order",
+        lambda **kwargs: sell_calls.append(kwargs)
+        or {"return_code": "0", "ord_no": "S-NXT-1"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_fetch_rest_orderbook_snapshot_bounded",
+        lambda code, timeout_ms: (
+            {
+                "best_bid": 10_090,
+                "best_ask": 10_100,
+                "rest_mid_price": 10_095,
+                "age_ms": 0,
+            },
+            "ok",
+            0.0,
+        ),
+    )
+    stock = {
+        "id": 17,
+        "code": "123456",
+        "name": "NXT TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 10_000,
+        "buy_qty": 2,
+        "rt_ai_prob": 0.50,
+        "is_nxt": True,
+    }
+    ws_data = {
+        "curr": 10_120,
+        "last_ws_update_ts": state_handlers.time.time(),
+        "orderbook": {
+            "asks": [{"price": 10_100, "volume": 100}],
+            "bids": [{"price": 10_090, "volume": 120}],
+        },
+        "last_realtime_type_ts": {"0B": now_ts - 4.0, "0D": now_ts - 0.05},
+        "last_realtime_type_item": {"0B": "123456_AL", "0D": "123456_AL"},
+        "last_realtime_type_market_suffix": {"0B": "_AL", "0D": "_AL"},
+        "last_realtime_type_market_route": {
+            "0B": "krx_nxt_integrated",
+            "0D": "krx_nxt_integrated",
+        },
+    }
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data=ws_data,
+        admin_id=1,
+        market_regime="BULL",
+        now_ts=now_ts,
+        now_dt=now_dt,
+        radar=None,
+        ai_engine=None,
+    )
+
+    assert sell_calls, pipeline_logs
+    assert stock["status"] == "SELL_ORDERED"
+    assert stock["last_exit_rule"] == "scalp_trailing_take_profit"
+    assert state_handlers.HIGHEST_PRICES["123456"] == 10_150
+    guard_fields = next(
+        fields
+        for stage, fields in pipeline_logs
+        if stage == "nxt_trailing_bid_guard_applied"
+    )
+    assert guard_fields["original_trade_mark"] == 10_120
+    assert guard_fields["nxt_trailing_bid_guard_effective_price"] == 10_090
+    assert guard_fields["nxt_trailing_bid_guard_peak_price"] == 10_150
+    exit_fields = next(
+        fields for stage, fields in pipeline_logs if stage == "exit_signal"
+    )
+    assert exit_fields["nxt_trailing_bid_guard_applied"] is True
+    assert exit_fields["nxt_trailing_bid_guard_price_source"] == (
+        "trusted_ws_0d_nxt_executable_bid"
+    )
 
 
 def test_protect_trailing_uses_smoothing_not_single_tick(monkeypatch):

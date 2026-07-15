@@ -2303,6 +2303,12 @@ def _build_nxt_session_observation(
                     "price_source_reason": fields.get(
                         "rising_missed_nxt_post_block_price_source_reason"
                     ),
+                    "price_fallback_from_reason": fields.get(
+                        "rising_missed_nxt_post_block_price_fallback_from_reason"
+                    ),
+                    "price_basis": fields.get(
+                        "rising_missed_nxt_post_block_price_basis"
+                    ),
                     "current_price_observed": _safe_float(
                         fields.get("current_price_observed")
                     ),
@@ -2313,6 +2319,24 @@ def _build_nxt_session_observation(
                     "ws_0b_route": fields.get(
                         "rising_missed_nxt_post_block_ws_0b_route"
                     ),
+                    "ws_0d_age_ms": _safe_float(
+                        fields.get("rising_missed_nxt_post_block_ws_0d_age_ms")
+                    ),
+                    "ws_0d_item": fields.get("rising_missed_nxt_post_block_ws_0d_item"),
+                    "ws_0d_route": fields.get(
+                        "rising_missed_nxt_post_block_ws_0d_route"
+                    ),
+                    "ws_0d_best_bid": _safe_int(
+                        fields.get("rising_missed_nxt_post_block_ws_0d_best_bid")
+                    ),
+                    "ws_0d_best_ask": _safe_int(
+                        fields.get("rising_missed_nxt_post_block_ws_0d_best_ask")
+                    ),
+                    "ws_0d_quote_proxy_applied": _boolish(
+                        fields.get(
+                            "rising_missed_nxt_post_block_ws_0d_quote_proxy_applied"
+                        )
+                    ),
                     "fresh_sample": _boolish(
                         fields.get("rising_missed_nxt_post_block_fresh_sample")
                     ),
@@ -2321,6 +2345,16 @@ def _build_nxt_session_observation(
                     ),
                     "fresh_sample_count": _safe_int(
                         fields.get("rising_missed_nxt_post_block_fresh_sample_count")
+                    ),
+                    "trade_price_sample_count": _safe_int(
+                        fields.get(
+                            "rising_missed_nxt_post_block_trade_price_sample_count"
+                        )
+                    ),
+                    "quote_proxy_sample_count": _safe_int(
+                        fields.get(
+                            "rising_missed_nxt_post_block_quote_proxy_sample_count"
+                        )
                     ),
                     "source_gap_sample_count": _safe_int(
                         fields.get(
@@ -2332,6 +2366,12 @@ def _build_nxt_session_observation(
                     ),
                     "first_hit_move_pct": _safe_float(
                         fields.get("rising_missed_nxt_post_block_first_hit_move_pct")
+                    ),
+                    "first_hit_price_source": fields.get(
+                        "rising_missed_nxt_post_block_first_hit_price_source"
+                    ),
+                    "first_hit_price_basis": fields.get(
+                        "rising_missed_nxt_post_block_first_hit_price_basis"
                     ),
                     "mfe_after_block_pct": _safe_float(
                         fields.get("rising_missed_nxt_post_block_max_move_pct")
@@ -2412,6 +2452,18 @@ def _build_nxt_session_observation(
                 for item in sampler_rows
                 if item.get("stage") == "rising_missed_nxt_post_block_price_sample"
                 and not item.get("fresh_sample")
+            ),
+            "rising_missed_nxt_post_block_trade_price_sample_count": sum(
+                1
+                for item in sampler_rows
+                if item.get("stage") == "rising_missed_nxt_post_block_price_sample"
+                and item.get("price_source") == "trusted_ws_0b_nxt"
+            ),
+            "rising_missed_nxt_post_block_quote_proxy_sample_count": sum(
+                1
+                for item in sampler_rows
+                if item.get("stage") == "rising_missed_nxt_post_block_price_sample"
+                and item.get("price_source") == "trusted_ws_0d_nxt_executable_bid_proxy"
             ),
             "rising_missed_nxt_post_block_sampler_completed_count": sampler_stage_counts.get(
                 "rising_missed_nxt_post_block_price_sampler_completed", 0

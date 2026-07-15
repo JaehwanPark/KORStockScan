@@ -3393,6 +3393,11 @@ DATED_RUNTIME_OVERRIDE_SPECS: tuple[dict[str, str], ...] = (
         "enabled_key": "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_ENABLED",
         "active_date_key": "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_ACTIVE_DATE",
     },
+    {
+        "family": "scalp_nxt_trailing_bid_guard",
+        "enabled_key": "KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_ENABLED",
+        "active_date_key": "KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_ACTIVE_DATE",
+    },
 )
 
 

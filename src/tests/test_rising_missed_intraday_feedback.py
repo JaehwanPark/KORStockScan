@@ -179,16 +179,51 @@ def test_nxt_post_block_sampler_recovers_counterfactual_first_hit_label(tmp_path
             "rising_missed_nxt_post_block_price_sample",
             {
                 **common,
+                "current_price_observed": 10130,
+                "rising_missed_nxt_post_block_price_observation_state": "fresh_ws_0d_nxt_quote_proxy",
+                "rising_missed_nxt_post_block_price_source": "trusted_ws_0d_nxt_executable_bid_proxy",
+                "rising_missed_nxt_post_block_price_source_reason": "fresh_absolute_ws_0d_nxt_trade_quiet",
+                "rising_missed_nxt_post_block_price_fallback_from_reason": "ws_0b_stale",
+                "rising_missed_nxt_post_block_price_basis": "executable_sell_touch_quote_proxy",
+                "rising_missed_nxt_post_block_ws_0b_age_ms": 30000.0,
+                "rising_missed_nxt_post_block_ws_0b_item": "000901_AL",
+                "rising_missed_nxt_post_block_ws_0b_route": "krx_nxt_integrated",
+                "rising_missed_nxt_post_block_ws_0d_age_ms": 80.0,
+                "rising_missed_nxt_post_block_ws_0d_item": "000901_AL",
+                "rising_missed_nxt_post_block_ws_0d_route": "krx_nxt_integrated",
+                "rising_missed_nxt_post_block_ws_0d_best_bid": 10130,
+                "rising_missed_nxt_post_block_ws_0d_best_ask": 10140,
+                "rising_missed_nxt_post_block_ws_0d_quote_proxy_applied": True,
+                "rising_missed_nxt_post_block_fresh_sample": True,
+                "rising_missed_nxt_post_block_sample_attempt_count": 1,
+                "rising_missed_nxt_post_block_fresh_sample_count": 1,
+                "rising_missed_nxt_post_block_trade_price_sample_count": 0,
+                "rising_missed_nxt_post_block_quote_proxy_sample_count": 1,
+                "rising_missed_nxt_post_block_source_gap_sample_count": 0,
+                "rising_missed_nxt_post_block_move_pct": 1.3,
+            },
+            emitted_at="2026-07-14T16:24:00+09:00",
+        ),
+        _event(
+            901,
+            "000901",
+            "nxt-block",
+            "rising_missed_nxt_post_block_price_sample",
+            {
+                **common,
                 "current_price_observed": 10140,
                 "rising_missed_nxt_post_block_price_observation_state": "fresh_ws_0b_nxt",
                 "rising_missed_nxt_post_block_price_source": "trusted_ws_0b_nxt",
                 "rising_missed_nxt_post_block_price_source_reason": "fresh_absolute_ws_0b_nxt",
+                "rising_missed_nxt_post_block_price_basis": "last_trade_price",
                 "rising_missed_nxt_post_block_ws_0b_age_ms": 100.0,
                 "rising_missed_nxt_post_block_ws_0b_item": "000901_AL",
                 "rising_missed_nxt_post_block_ws_0b_route": "krx_nxt_integrated",
                 "rising_missed_nxt_post_block_fresh_sample": True,
                 "rising_missed_nxt_post_block_sample_attempt_count": 2,
                 "rising_missed_nxt_post_block_fresh_sample_count": 2,
+                "rising_missed_nxt_post_block_trade_price_sample_count": 1,
+                "rising_missed_nxt_post_block_quote_proxy_sample_count": 1,
                 "rising_missed_nxt_post_block_source_gap_sample_count": 0,
                 "rising_missed_nxt_post_block_move_pct": 1.4,
             },
@@ -206,8 +241,12 @@ def test_nxt_post_block_sampler_recovers_counterfactual_first_hit_label(tmp_path
                 "rising_missed_nxt_post_block_sampler_source_quality_state": "pass",
                 "rising_missed_nxt_post_block_sample_attempt_count": 80,
                 "rising_missed_nxt_post_block_fresh_sample_count": 78,
+                "rising_missed_nxt_post_block_trade_price_sample_count": 1,
+                "rising_missed_nxt_post_block_quote_proxy_sample_count": 1,
                 "rising_missed_nxt_post_block_source_gap_sample_count": 2,
-                "rising_missed_nxt_post_block_first_hit_move_pct": 1.4,
+                "rising_missed_nxt_post_block_first_hit_move_pct": 1.3,
+                "rising_missed_nxt_post_block_first_hit_price_source": "trusted_ws_0d_nxt_executable_bid_proxy",
+                "rising_missed_nxt_post_block_first_hit_price_basis": "executable_sell_touch_quote_proxy",
                 "rising_missed_nxt_post_block_max_move_pct": 1.8,
                 "rising_missed_nxt_post_block_min_move_pct": -0.2,
             },
@@ -228,15 +267,30 @@ def test_nxt_post_block_sampler_recovers_counterfactual_first_hit_label(tmp_path
     assert label["min_move_pct_within_20m"] == -0.2
     summary = report["summary"]
     assert summary["rising_missed_nxt_post_block_sampler_registered_count"] == 1
-    assert summary["rising_missed_nxt_post_block_fresh_price_sample_count"] == 1
+    assert summary["rising_missed_nxt_post_block_fresh_price_sample_count"] == 2
+    assert summary["rising_missed_nxt_post_block_trade_price_sample_count"] == 1
+    assert summary["rising_missed_nxt_post_block_quote_proxy_sample_count"] == 1
     assert summary["rising_missed_nxt_post_block_sampler_completed_count"] == 1
     assert summary["rising_missed_nxt_post_block_sampler_outcome_counts"] == [
         {"outcome_label": "gross_target_first", "count": 1}
     ]
     completion = report["rising_missed_nxt_post_block_price_sampler_rows"][-1]
-    assert completion["first_hit_move_pct"] == 1.4
+    assert completion["first_hit_move_pct"] == 1.3
     assert completion["mfe_after_block_pct"] == 1.8
     assert completion["mae_after_block_pct"] == -0.2
+    assert completion["trade_price_sample_count"] == 1
+    assert completion["quote_proxy_sample_count"] == 1
+    assert completion["first_hit_price_source"] == (
+        "trusted_ws_0d_nxt_executable_bid_proxy"
+    )
+    proxy = next(
+        item
+        for item in report["rising_missed_nxt_post_block_price_sampler_rows"]
+        if item.get("ws_0d_quote_proxy_applied")
+    )
+    assert proxy["current_price_observed"] == 10130.0
+    assert proxy["price_basis"] == "executable_sell_touch_quote_proxy"
+    assert proxy["ws_0d_route"] == "krx_nxt_integrated"
 
 
 def test_tp1_first_hit_label_marks_adverse_first_and_can_confirm_net_with_costs(
