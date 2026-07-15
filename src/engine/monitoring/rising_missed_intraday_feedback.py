@@ -131,6 +131,7 @@ def _event_price_with_source(row: dict[str, Any]) -> tuple[float | None, str]:
         "latest_price",
         "current_price",
         "current_price_observed",
+        "holding_ws_recovered_curr",
         "rising_missed_one_share_entry_price",
         "submitted_order_price",
         "rising_missed_tp1_effective_price",
@@ -156,12 +157,14 @@ def _decision_stage_current_price_unusable(row: dict[str, Any], source: str) -> 
 
 def _tp1_observation_price(row: dict[str, Any]) -> tuple[float | None, str]:
     fields = _fields(row)
-    is_tp1_evaluation = bool(
-        fields.get("rising_missed_tp1_evaluation_id")
-        or fields.get("rising_missed_tp1_candidate_reason")
-        or str(row.get("stage") or "")
-        == "rising_missed_tp1_counterfactual_submit_safety"
-    )
+    stage = str(row.get("stage") or "")
+    is_tp1_evaluation = stage in {
+        "rising_missed_one_share_entry",
+        "rising_missed_normal_buy_bridge_unlocked",
+        "rising_missed_tp1_candidate_blocked",
+        "rising_missed_tp1_candidate_deferred",
+        "rising_missed_tp1_counterfactual_submit_safety",
+    }
     if is_tp1_evaluation:
         effective_price = _safe_float(fields.get("rising_missed_tp1_effective_price"))
         if effective_price is not None and effective_price > 0:

@@ -38,6 +38,7 @@ SCANNER_PROMOTION_POLICY_VERSION = "scanner_priority_v6_20260709_breakout_confir
 SCANNER_UNDER_10000_PRIORITY_PRICE_CEILING = 10000
 SCANNER_UNDER_10000_VOLUME_SURGE_RANK_PCT_DEFAULT = 0.40
 SCANNER_UNDER_10000_VOLUME_SURGE_RANK_MIN_COUNT_DEFAULT = 10
+SCANNER_SOURCE_IDENTITY_QUARANTINE_SEC_DEFAULT = 300
 PRIMARY_RISING_START_SOURCES = {
     "REALTIME_RANK_START",
     "PRICE_JUMP_START",
@@ -1707,6 +1708,17 @@ def _scanner_candidate_identity_decision(db, target):
     return {"blocked": False, "reason": "scanner_identity_ok", **fields}
 
 
+def _scanner_source_identity_quarantine_sec():
+    raw_value = os.getenv(
+        "KORSTOCKSCAN_SCANNER_SOURCE_IDENTITY_QUARANTINE_SEC",
+        str(SCANNER_SOURCE_IDENTITY_QUARANTINE_SEC_DEFAULT),
+    )
+    try:
+        return max(0, int(float(raw_value)))
+    except (TypeError, ValueError):
+        return SCANNER_SOURCE_IDENTITY_QUARANTINE_SEC_DEFAULT
+
+
 def _should_promote_candidate(target, recent_picks, now_ts, reentry_cooldown_sec):
     code = target.get("Code")
     previous = (recent_picks or {}).get(code)
@@ -1734,14 +1746,38 @@ def _should_promote_candidate(target, recent_picks, now_ts, reentry_cooldown_sec
 
 
 def _scanner_real_source_guard_decision(target, recent_picks, now_ts):
-    if not bool(getattr(TRADING_RULES, "SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED", False)):
-        return {"blocked": False, "reason": "guard_disabled"}
-
     source_signature = _source_signature(target)
-    source_set = set(source_signature)
     raw_previous = (recent_picks or {}).get(target.get("Code")) or {}
     anchor_reset = _scanner_anchor_reset_context(target, raw_previous)
     previous = {} if anchor_reset["reset"] else raw_previous
+    quarantine_sec = _scanner_source_identity_quarantine_sec()
+    last_guard_reason = str(previous.get("last_guard_block_reason") or "")
+    last_guard_blocked_at = _safe_float(previous.get("last_guard_blocked_at"), 0.0)
+    quarantine_age_sec = (
+        max(0.0, now_ts - last_guard_blocked_at) if last_guard_blocked_at > 0 else 0.0
+    )
+    if (
+        quarantine_sec > 0
+        and last_guard_reason == "scanner_identity_name_mismatch"
+        and last_guard_blocked_at > 0
+        and quarantine_age_sec < quarantine_sec
+    ):
+        return {
+            "blocked": True,
+            "reason": "scanner_identity_name_mismatch_quarantine",
+            "candidate_role": _scanner_candidate_role(target),
+            "source_signature": ",".join(source_signature),
+            "scanner_source_identity_quarantine_sec": quarantine_sec,
+            "scanner_source_identity_quarantine_age_sec": round(quarantine_age_sec, 3),
+            "scanner_source_identity_quarantine_remaining_sec": round(
+                quarantine_sec - quarantine_age_sec, 3
+            ),
+            "scanner_source_identity_quarantine_basis": "first_identity_mismatch_for_same_anchor",
+        }
+    if not bool(getattr(TRADING_RULES, "SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED", False)):
+        return {"blocked": False, "reason": "guard_disabled"}
+
+    source_set = set(source_signature)
     candidate_role = _scanner_candidate_role(target)
     acceleration_reason = _acceleration_reason(target, previous)
     priority_profile = _scanner_priority_profile(target, previous)
@@ -2411,7 +2447,8 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
                 f"probe_age={source_guard.get('probe_age_sec')} "
                 f"last_promoted_at={source_guard.get('last_promoted_at')}"
             )
-            _remember_guard_block(recent_picks, target, now_ts, source_guard.get("reason"))
+            if source_guard.get("reason") != "scanner_identity_name_mismatch_quarantine":
+                _remember_guard_block(recent_picks, target, now_ts, source_guard.get("reason"))
             continue
 
         curr_p = float(target.get("Price", 0))
@@ -2446,6 +2483,12 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
                 f"code={code} payload_name={identity_decision.get('scanner_source_identity_payload_name')} "
                 "authoritative_name="
                 f"{identity_decision.get('scanner_source_identity_authoritative_name')}"
+            )
+            _remember_guard_block(
+                recent_picks,
+                target,
+                now_ts,
+                "scanner_identity_name_mismatch",
             )
             continue
         source_guard = {

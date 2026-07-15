@@ -2586,6 +2586,139 @@ def _enable_latency_true_ofi_direct_canary(monkeypatch):
     )
 
 
+def _enable_latency_true_ofi_nxt_probability_band(monkeypatch):
+    _enable_latency_true_ofi_direct_canary(monkeypatch)
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_ACTIVE_DATE",
+        datetime.now(entry_latency_module._KST).strftime("%Y-%m-%d"),
+    )
+
+
+def test_latency_true_ofi_nxt_probability_band_is_nxt_only_and_bounded(monkeypatch):
+    _enable_latency_true_ofi_nxt_probability_band(monkeypatch)
+    common_stock = {
+        "rising_missed_entry_lineage": True,
+        "rising_missed_effective_venue": "NXT",
+        "rising_missed_market_session_bucket": "nxt_entry_window",
+        "rising_missed_nxt_eligible": True,
+        "rising_missed_ws_0b_route": "krx_nxt_integrated",
+        "rising_missed_ws_0d_route": "krx_nxt_integrated",
+        "rising_missed_tp1_evaluation_id": "nxt-probability-eval",
+        "rising_missed_tp1_submit_context_fresh": True,
+        "price_delta_since_first_seen_pct": "15.40",
+    }
+    estimator_context = {
+        "latency_false_negative_remeasure_true_ofi_ewma": -0.0104,
+        "latency_false_negative_remeasure_true_ofi_sample_count": 122,
+        "latency_false_negative_remeasure_ws_age_ms": 60.0,
+        "latency_false_negative_remeasure_source_state": (
+            "fresh_ws_order_flow_delta"
+        ),
+        "latency_false_negative_remeasure_estimator_confidence": 0.8494,
+        "latency_false_negative_remeasure_pressure_ewma": 61.462,
+        "latency_false_negative_remeasure_top_depth_ratio": 1.6032,
+    }
+    ws_data = {
+        "recent_trade_ticks": [
+            {
+                "signed_trade_volume": "-1",
+                "aggressor_source": "kiwoom_0b_signed_trade_volume",
+            }
+            for _ in range(5)
+        ]
+    }
+
+    fields = entry_latency_module._latency_true_ofi_direct_canary_fields(
+        stock=common_stock,
+        ws_data=ws_data,
+        strategy_id="SCALPING",
+        policy_decision=entry_latency_module.EntryDecision.REJECT_DANGER,
+        effective_decision=entry_latency_module.EntryDecision.REJECT_DANGER,
+        latency_status=SimpleNamespace(quote_stale=False),
+        danger_reasons=["spread_too_wide"],
+        spread_bps=125.261,
+        signal_score=0.0,
+        micro_estimator_reason="true_ofi_below_floor",
+        estimator_context=estimator_context,
+        danger_relief_forbidden=False,
+    )
+
+    assert fields["latency_true_ofi_direct_canary_applied"] is True
+    assert fields["latency_true_ofi_nxt_probability_band_applied"] is True
+    assert fields["latency_true_ofi_direct_canary_reason"] == (
+        "direct_canary_nxt_probability_band_allow"
+    )
+    assert fields["latency_true_ofi_direct_canary_signed_tape_sell_dominated"] is True
+
+    aged_fields = entry_latency_module._latency_true_ofi_direct_canary_fields(
+        stock=common_stock,
+        ws_data=ws_data,
+        strategy_id="SCALPING",
+        policy_decision=entry_latency_module.EntryDecision.REJECT_DANGER,
+        effective_decision=entry_latency_module.EntryDecision.REJECT_DANGER,
+        latency_status=SimpleNamespace(quote_stale=False),
+        danger_reasons=["ws_age_too_high", "spread_too_wide"],
+        spread_bps=103.734,
+        signal_score=0.0,
+        micro_estimator_reason="true_ofi_below_floor",
+        estimator_context={
+            **estimator_context,
+            "latency_false_negative_remeasure_true_ofi_ewma": -0.0109,
+            "latency_false_negative_remeasure_true_ofi_sample_count": 77,
+            "latency_false_negative_remeasure_ws_age_ms": 587.0,
+            "latency_false_negative_remeasure_pressure_ewma": 64.688,
+            "latency_false_negative_remeasure_top_depth_ratio": 1.8239,
+        },
+        danger_relief_forbidden=False,
+    )
+
+    assert aged_fields["latency_true_ofi_nxt_probability_band_applied"] is True
+
+    krx_fields = entry_latency_module._latency_true_ofi_direct_canary_fields(
+        stock={**common_stock, "rising_missed_effective_venue": "KRX"},
+        ws_data=ws_data,
+        strategy_id="SCALPING",
+        policy_decision=entry_latency_module.EntryDecision.REJECT_DANGER,
+        effective_decision=entry_latency_module.EntryDecision.REJECT_DANGER,
+        latency_status=SimpleNamespace(quote_stale=False),
+        danger_reasons=["spread_too_wide"],
+        spread_bps=125.261,
+        signal_score=0.0,
+        micro_estimator_reason="true_ofi_below_floor",
+        estimator_context=estimator_context,
+        danger_relief_forbidden=False,
+    )
+
+    assert krx_fields["latency_true_ofi_nxt_probability_band_context"] is False
+    assert krx_fields["latency_true_ofi_nxt_probability_band_applied"] is False
+    assert krx_fields["latency_true_ofi_direct_canary_applied"] is False
+
+    missing_route_fields = entry_latency_module._latency_true_ofi_direct_canary_fields(
+        stock={**common_stock, "rising_missed_ws_0d_route": "unknown"},
+        ws_data=ws_data,
+        strategy_id="SCALPING",
+        policy_decision=entry_latency_module.EntryDecision.REJECT_DANGER,
+        effective_decision=entry_latency_module.EntryDecision.REJECT_DANGER,
+        latency_status=SimpleNamespace(quote_stale=False),
+        danger_reasons=["spread_too_wide"],
+        spread_bps=125.261,
+        signal_score=0.0,
+        micro_estimator_reason="true_ofi_below_floor",
+        estimator_context=estimator_context,
+        danger_relief_forbidden=False,
+    )
+
+    assert (
+        missing_route_fields["latency_true_ofi_nxt_probability_band_context"] is False
+    )
+    assert (
+        missing_route_fields["latency_true_ofi_nxt_probability_band_applied"] is False
+    )
+
+
 def test_latency_true_ofi_direct_canary_allows_high_opportunity_without_report_marker(monkeypatch):
     _enable_latency_true_ofi_direct_canary(monkeypatch)
     monkeypatch.setattr(

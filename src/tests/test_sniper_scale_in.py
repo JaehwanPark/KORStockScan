@@ -23768,6 +23768,7 @@ def test_holding_sell_cancels_pending_entry_orders_first(monkeypatch):
         ws_data={"curr": 90},
         admin_id=1,
         market_regime="BULL",
+        now_dt=datetime(2026, 5, 4, 15, 0, 0),
         radar=None,
         ai_engine=None,
     )
@@ -26058,6 +26059,222 @@ def test_sell_reject_with_positive_sellable_qty_keeps_holding(monkeypatch):
     assert fail_logs
     assert fail_logs[-1]["new_status"] == "HOLDING"
     assert fail_logs[-1]["sellable_qty"] == 125
+
+
+def test_sell_reconciles_partial_entry_qty_before_residual_cancel(monkeypatch):
+    state_handlers.TRADING_RULES = replace(CONFIG, SCALE_IN_REQUIRE_HISTORY_TABLE=False)
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 100}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+
+    pipeline_logs = []
+    sell_calls = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: pipeline_logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_cancel_pending_entry_orders",
+        lambda *args, **kwargs: "cancelled",
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_smart_sell_order",
+        lambda *args, **kwargs: sell_calls.append(kwargs)
+        or {"return_code": "0", "ord_no": "SELL-PARTIAL-1"},
+    )
+
+    stock = {
+        "id": 141,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 100,
+        "buy_qty": 61,
+        "entry_requested_qty": 61,
+        "entry_filled_qty": 30,
+        "pending_entry_orders": [
+            {
+                "ord_no": "BUY-RESIDUAL-1",
+                "requested_qty": 61,
+                "filled_qty": 30,
+                "status": "PARTIAL",
+            }
+        ],
+        "rt_ai_prob": 0.50,
+    }
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 98.0, "orderbook": {"bids": [{"price": 98, "volume": 1000}]}},
+        admin_id=1,
+        market_regime="BULL",
+        now_dt=datetime(2026, 5, 4, 15, 0, 0),
+        radar=None,
+        ai_engine=None,
+    )
+
+    reconciled = [
+        fields for stage, fields in pipeline_logs if stage == "split_residual_sell_qty_reconciled"
+    ]
+    assert sell_calls
+    assert sell_calls[-1]["qty"] == 30
+    assert stock["buy_qty"] == 30
+    assert reconciled[-1]["requested_sell_qty"] == 61
+    assert reconciled[-1]["reconciled_sell_qty"] == 30
+
+
+def test_nxt_rising_missed_tp1_submits_half_and_keeps_runner(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_NXT_RISING_MISSED_TP1_PARTIAL_RUNNER_ENABLED", "true")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_NXT_RISING_MISSED_TP1_PARTIAL_RUNNER_ACTIVE_DATE",
+        "2026-07-15",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_NXT_RISING_MISSED_TP1_PARTIAL_TRIGGER_PCT", "1.30")
+    monkeypatch.setenv("KORSTOCKSCAN_NXT_RISING_MISSED_TP1_PARTIAL_RATIO", "0.50")
+    state_handlers.DB = _DummyDB()
+    pipeline_logs = []
+    sell_calls = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: pipeline_logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_smart_sell_order",
+        lambda *args, **kwargs: sell_calls.append(kwargs)
+        or {"return_code": "0", "ord_no": "NXT-TP1-1"},
+    )
+    now_dt = datetime(2026, 7, 15, 17, 0, 0)
+    stock = {
+        "id": 142,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 10000,
+        "buy_qty": 10,
+        "rising_missed_class": "acceleration",
+        "is_nxt": True,
+    }
+
+    submitted = state_handlers._maybe_submit_nxt_rising_missed_tp1_partial_runner(
+        stock,
+        "123456",
+        {"curr": 10150, "executable_sell_price": 10140},
+        strategy="SCALPING",
+        curr_price=10150,
+        buy_price=10000,
+        now_ts=now_dt.replace(tzinfo=state_handlers._KST).timestamp(),
+        now_dt=now_dt,
+        admin_id=1,
+        quote_fields={"quote_consistency_reason": "freshest_age"},
+    )
+
+    assert submitted is True
+    assert sell_calls[-1]["qty"] == 5
+    assert sell_calls[-1]["dmst_stex_tp"] == "NXT"
+    assert stock["status"] == "SELL_ORDERED"
+    assert stock["nxt_rising_missed_tp1_partial_requested_qty"] == 5
+    assert stock["sell_odno"] == "NXT-TP1-1"
+    sent = [fields for stage, fields in pipeline_logs if stage == "nxt_rising_missed_tp1_partial_order_sent"]
+    assert sent[-1]["runner_qty"] == 5
+
+
+def test_nxt_rising_missed_tp1_partial_receipts_restore_holding_runner(monkeypatch):
+    receipts.ACTIVE_TARGETS = []
+    receipts.highest_prices = {}
+    receipts._get_fast_state = lambda code: None
+    emitted = []
+
+    class SellRecord:
+        buy_price = 10000.0
+        strategy = "SCALPING"
+        buy_qty = 10
+        status = "SELL_ORDERED"
+
+    record = SellRecord()
+
+    class SellQuery:
+        def filter_by(self, **kwargs):
+            return self
+
+        def first(self):
+            return record
+
+    class SellSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def query(self, *args, **kwargs):
+            return SellQuery()
+
+    class SellDB:
+        def get_session(self):
+            return SellSession()
+
+    receipts.DB = SellDB()
+    receipt_messages = []
+    receipts.event_bus = SimpleNamespace(
+        publish=lambda name, payload: receipt_messages.append((name, payload))
+    )
+    monkeypatch.setattr(
+        receipts,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+    stock = {
+        "id": 143,
+        "code": "123456",
+        "name": "TEST",
+        "status": "SELL_ORDERED",
+        "strategy": "SCALPING",
+        "buy_price": 10000,
+        "buy_qty": 10,
+        "sell_odno": "NXT-TP1-2",
+        "pending_sell_msg": "TP1 partial",
+        "nxt_rising_missed_tp1_partial_pending": True,
+        "nxt_rising_missed_tp1_partial_requested_qty": 5,
+        "nxt_rising_missed_tp1_partial_filled_qty": 0,
+        "nxt_rising_missed_tp1_partial_fill_amount": 0,
+        "nxt_rising_missed_tp1_partial_original_qty": 10,
+    }
+    receipts.ACTIVE_TARGETS.append(stock)
+
+    receipts.handle_real_execution(
+        {"code": "123456", "type": "SELL", "order_no": "NXT-TP1-2", "price": 10140, "qty": 2}
+    )
+    assert stock["status"] == "SELL_ORDERED"
+    assert stock["buy_qty"] == 8
+
+    receipts.handle_real_execution(
+        {"code": "123456", "type": "SELL", "order_no": "NXT-TP1-2", "price": 10150, "qty": 3}
+    )
+
+    assert stock["status"] == "HOLDING"
+    assert stock["buy_qty"] == 5
+    assert stock["nxt_rising_missed_tp1_partial_applied"] is True
+    assert stock["nxt_rising_missed_tp1_partial_pending"] is False
+    assert record.status == "HOLDING"
+    assert record.buy_qty == 5
+    completed = [
+        row for row in emitted if row["stage"] == "nxt_rising_missed_tp1_partial_sell_completed"
+    ]
+    assert completed[-1]["fields"]["sold_qty"] == 5
+    assert completed[-1]["fields"]["runner_qty"] == 5
 
 
 def test_sell_reject_retry_backoff_suppresses_burst(monkeypatch):

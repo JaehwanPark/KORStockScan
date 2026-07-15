@@ -116,7 +116,7 @@ def test_scanner_resets_legacy_anchor_on_price_discontinuity_without_identity():
     assert reset["price_ratio"] == 2.0
 
 
-def test_scanner_rejects_source_name_mismatch_without_polluting_recent_state(monkeypatch):
+def test_scanner_rejects_source_name_mismatch_and_records_quarantine_anchor(monkeypatch):
     emitted = []
     db = _DB()
     db.get_latest_stock_name = lambda code: "삼화콘덴서"
@@ -161,7 +161,9 @@ def test_scanner_rejects_source_name_mismatch_without_polluting_recent_state(mon
     )
 
     assert codes == []
-    assert recent == {}
+    assert recent["001820"]["last_guard_block_reason"] == "scanner_identity_name_mismatch"
+    assert recent["001820"]["last_guard_blocked_at"] == 1000.0
+    assert recent["001820"]["identity_name"] == "1Q K반도체TOP2+"
     assert db.records == []
     assert event_bus.events == []
     fields = [
@@ -173,6 +175,66 @@ def test_scanner_rejects_source_name_mismatch_without_polluting_recent_state(mon
     assert fields["scanner_source_identity_guard_applied"] is True
     assert fields["scanner_source_identity_payload_name"] == "1Q K반도체TOP2+"
     assert fields["scanner_source_identity_authoritative_name"] == "삼화콘덴서"
+
+
+def test_scanner_source_identity_quarantine_is_bounded(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_SOURCE_IDENTITY_QUARANTINE_SEC", "300")
+    monkeypatch.setattr(
+        scalping_scanner,
+        "TRADING_RULES",
+        SimpleNamespace(SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED=True),
+    )
+    target = {
+        "Code": "001820",
+        "Name": "1Q K반도체TOP2+",
+        "Price": 10662,
+        "Source": "VOLUME_SURGE_POSITIVE",
+        "SourceSet": {"VOLUME_SURGE_POSITIVE"},
+        "VolumeSurgeFluRate": 0.54,
+    }
+    recent = {}
+    scalping_scanner._remember_guard_block(
+        recent,
+        target,
+        1000.0,
+        "scanner_identity_name_mismatch",
+    )
+
+    blocked = scalping_scanner._scanner_real_source_guard_decision(target, recent, 1100.0)
+    expired = scalping_scanner._scanner_real_source_guard_decision(target, recent, 1300.0)
+
+    assert blocked["blocked"] is True
+    assert blocked["reason"] == "scanner_identity_name_mismatch_quarantine"
+    assert blocked["scanner_source_identity_quarantine_remaining_sec"] == 200.0
+    assert expired["reason"] != "scanner_identity_name_mismatch_quarantine"
+
+
+def test_scanner_source_identity_quarantine_does_not_depend_on_real_source_guard(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_SOURCE_IDENTITY_QUARANTINE_SEC", "300")
+    monkeypatch.setattr(
+        scalping_scanner,
+        "TRADING_RULES",
+        SimpleNamespace(SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED=False),
+    )
+    target = {
+        "Code": "001200",
+        "Name": "삼양바이오팜",
+        "Price": 12000,
+        "Source": "VALUE_TOP",
+        "SourceSet": {"VALUE_TOP"},
+    }
+    recent = {}
+    scalping_scanner._remember_guard_block(
+        recent,
+        target,
+        1000.0,
+        "scanner_identity_name_mismatch",
+    )
+
+    decision = scalping_scanner._scanner_real_source_guard_decision(target, recent, 1010.0)
+
+    assert decision["blocked"] is True
+    assert decision["reason"] == "scanner_identity_name_mismatch_quarantine"
 
 
 def test_scanner_records_source_identity_pass_on_promotion(monkeypatch):

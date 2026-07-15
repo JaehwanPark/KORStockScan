@@ -7089,6 +7089,10 @@ def test_dated_runtime_override_audits_require_current_date_and_dependency():
         "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ACTIVE_DATE": target_date,
         "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ENABLED": "true",
         "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ACTIVE_DATE": "",
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_ENABLED": "true",
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_ACTIVE_DATE": (
+            "2026-07-14"
+        ),
         "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ENABLED": "true",
         "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ACTIVE_DATE": "2026-07-14",
     }
@@ -7103,6 +7107,9 @@ def test_dated_runtime_override_audits_require_current_date_and_dependency():
         == "active_date_missing"
     )
     assert by_family["rising_missed_nxt_post_block_sampler"]["reason"] == (
+        "runtime_inactive_date"
+    )
+    assert by_family["latency_true_ofi_nxt_probability_band"]["reason"] == (
         "runtime_inactive_date"
     )
 
@@ -7152,8 +7159,12 @@ def test_dated_runtime_override_audits_accept_current_runtime_bundle():
         "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ACTIVE_DATE": target_date,
         "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ENABLED": "true",
         "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ACTIVE_DATE": target_date,
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_ENABLED": "true",
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_ACTIVE_DATE": target_date,
         "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ENABLED": "true",
         "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ACTIVE_DATE": target_date,
+        "KORSTOCKSCAN_NXT_RISING_MISSED_TP1_PARTIAL_RUNNER_ENABLED": "true",
+        "KORSTOCKSCAN_NXT_RISING_MISSED_TP1_PARTIAL_RUNNER_ACTIVE_DATE": target_date,
         "KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_ENABLED": "true",
         "KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_ACTIVE_DATE": target_date,
         "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_ENABLED": "true",

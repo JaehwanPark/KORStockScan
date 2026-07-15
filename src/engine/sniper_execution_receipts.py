@@ -719,6 +719,141 @@ def _finalize_standard_sell_execution(
     ).start()
 
 
+def _handle_nxt_rising_missed_tp1_partial_sell_execution(
+    *,
+    target_id: int,
+    target_stock: dict[str, Any],
+    code: str,
+    order_no: str,
+    exec_price: int,
+    exec_qty: int,
+    now: datetime,
+    safe_buy_price: float,
+) -> None:
+    requested_qty = max(
+        0,
+        _safe_int(target_stock.get("nxt_rising_missed_tp1_partial_requested_qty"), 0),
+    )
+    filled_before = max(
+        0,
+        _safe_int(target_stock.get("nxt_rising_missed_tp1_partial_filled_qty"), 0),
+    )
+    remaining_to_fill = max(0, requested_qty - filled_before)
+    effective_exec_qty = min(max(0, exec_qty), remaining_to_fill)
+    if requested_qty <= 0 or effective_exec_qty <= 0:
+        log_error(
+            f"⚠️ [NXT_TP1_PARTIAL_RECEIPT] {target_stock.get('name')}({code}) "
+            f"invalid fill requested={requested_qty} filled={filled_before} exec_qty={exec_qty}"
+        )
+        return
+
+    filled_qty = filled_before + effective_exec_qty
+    fill_amount = max(
+        0,
+        _safe_int(target_stock.get("nxt_rising_missed_tp1_partial_fill_amount"), 0),
+    ) + (exec_price * effective_exec_qty)
+    original_qty = max(
+        requested_qty,
+        _safe_int(
+            target_stock.get("nxt_rising_missed_tp1_partial_original_qty"),
+            target_stock.get("buy_qty"),
+        ),
+    )
+    runner_qty = max(0, original_qty - filled_qty)
+    target_stock["nxt_rising_missed_tp1_partial_filled_qty"] = filled_qty
+    target_stock["nxt_rising_missed_tp1_partial_fill_amount"] = fill_amount
+    target_stock["nxt_rising_missed_tp1_partial_avg_sell_price"] = _avg_from_totals(
+        fill_amount,
+        filled_qty,
+    )
+    target_stock["buy_qty"] = runner_qty
+    partial_completed = filled_qty >= requested_qty
+    try:
+        with DB.get_session() as session:
+            record = session.query(RecommendationHistory).filter_by(id=target_id).first()
+            if record:
+                record.status = "HOLDING" if partial_completed else "SELL_ORDERED"
+                record.buy_qty = runner_qty
+    except Exception as exc:
+        log_error(f"🚨 [DB 에러] ID {target_id} NXT TP1 체결수량 반영 실패: {exc}")
+
+    if not partial_completed:
+        _log_holding_pipeline(
+            target_stock.get("name"),
+            code,
+            target_id,
+            "nxt_rising_missed_tp1_partial_fill_progress",
+            ord_no=order_no or "-",
+            fill_qty=effective_exec_qty,
+            filled_qty=filled_qty,
+            requested_qty=requested_qty,
+            runner_qty=runner_qty,
+            fill_price=exec_price,
+            runtime_effect=True,
+        )
+        return
+
+    avg_sell_price = _safe_int(
+        target_stock.get("nxt_rising_missed_tp1_partial_avg_sell_price"),
+        exec_price,
+    )
+    realized_profit_pct = (
+        calculate_net_profit_rate(safe_buy_price, avg_sell_price) if safe_buy_price > 0 else 0.0
+    )
+    realized_pnl_krw = round(
+        ((avg_sell_price - safe_buy_price) * filled_qty) if safe_buy_price > 0 else 0.0
+    )
+    target_stock["status"] = "HOLDING"
+    target_stock["nxt_rising_missed_tp1_partial_pending"] = False
+    target_stock["nxt_rising_missed_tp1_partial_applied"] = True
+    target_stock["nxt_rising_missed_tp1_partial_completed_at"] = now.timestamp()
+    target_stock["nxt_rising_missed_tp1_partial_realized_profit_pct"] = round(
+        realized_profit_pct,
+        6,
+    )
+    target_stock["nxt_rising_missed_tp1_partial_realized_pnl_krw"] = realized_pnl_krw
+    target_stock.pop("sell_odno", None)
+    target_stock.pop("sell_order_time", None)
+    target_stock.pop("sell_target_price", None)
+    pending_msg = str(target_stock.pop("pending_sell_msg", "") or "")
+
+    _log_holding_pipeline(
+        target_stock.get("name"),
+        code,
+        target_id,
+        "nxt_rising_missed_tp1_partial_sell_completed",
+        ord_no=order_no or "-",
+        sell_price=avg_sell_price,
+        sold_qty=filled_qty,
+        runner_qty=runner_qty,
+        realized_profit_pct=f"{realized_profit_pct:+.2f}",
+        realized_pnl_krw=realized_pnl_krw,
+        exit_rule="nxt_rising_missed_tp1_partial_runner",
+        actual_order_submitted=True,
+        runtime_effect=True,
+        decision_authority="nxt_rising_missed_tp1_partial_runner_canary",
+    )
+    log_info(
+        f"[NXT_TP1_PARTIAL_COMPLETED] {target_stock.get('name')}({code}) "
+        f"sold={filled_qty} runner={runner_qty} avg_sell={avg_sell_price} "
+        f"profit={realized_profit_pct:+.2f}%"
+    )
+    if event_bus:
+        event_bus.publish(
+            "TELEGRAM_BROADCAST",
+            {
+                "message": (
+                    f"{pending_msg}\n"
+                    f"✅ **부분익절 체결:** `{avg_sell_price:,}원` "
+                    f"(`{realized_profit_pct:+.2f}%`)\n"
+                    f"🏃 runner: `{runner_qty}주`"
+                ),
+                "audience": _receipt_audience(target_stock),
+                "parse_mode": "HTML",
+            },
+        )
+
+
 def _handle_scalp_revive_sell_execution(
     *,
     target_id: int,
@@ -2237,6 +2372,19 @@ def handle_real_execution(exec_data):
             if not sell_context:
                 return
             _, safe_buy_price, profit_rate, strategy, is_scalp_revive = sell_context
+
+            if target_stock.get("nxt_rising_missed_tp1_partial_pending"):
+                _handle_nxt_rising_missed_tp1_partial_sell_execution(
+                    target_id=target_id,
+                    target_stock=target_stock,
+                    code=code,
+                    order_no=order_no,
+                    exec_price=exec_price,
+                    exec_qty=exec_qty,
+                    now=now,
+                    safe_buy_price=safe_buy_price,
+                )
+                return
 
             if is_scalp_revive:
                 if not _handle_scalp_revive_sell_execution(

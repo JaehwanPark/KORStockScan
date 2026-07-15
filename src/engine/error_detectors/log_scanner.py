@@ -63,6 +63,10 @@ _register_pattern(
     r"sor.*주문|원주문이\s*krx주문이\s*아닙니다|원주문이\s*sor주문"
     r")",
 )
+_register_pattern(
+    "SOURCE_IDENTITY_ERROR",
+    r"(?:scanner_source_identity_guard|scanner_identity_name_mismatch)",
+)
 _register_pattern("UNKNOWN", r"(?:error|exception|critical|fatal)",)
 
 

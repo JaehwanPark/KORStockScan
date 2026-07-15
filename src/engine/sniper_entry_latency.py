@@ -1442,6 +1442,8 @@ def _latency_false_negative_runtime_estimator_context(code: str) -> dict[str, An
         "latency_false_negative_remeasure_true_ofi_sample_count": 0,
         "latency_false_negative_remeasure_ws_age_ms": -1.0,
         "latency_false_negative_remeasure_estimator_confidence": 0.0,
+        "latency_false_negative_remeasure_pressure_ewma": 0.0,
+        "latency_false_negative_remeasure_top_depth_ratio": 0.0,
     }
     if not str(code or "").strip():
         context["latency_false_negative_remeasure_source_state"] = "missing_code"
@@ -1471,6 +1473,14 @@ def _latency_false_negative_runtime_estimator_context(code: str) -> dict[str, An
             "latency_false_negative_remeasure_ws_age_ms": round(ws_age_ms, 3),
             "latency_false_negative_remeasure_estimator_confidence": round(
                 _to_float(snapshot.get("confidence"), 0.0),
+                4,
+            ),
+            "latency_false_negative_remeasure_pressure_ewma": round(
+                _to_float(snapshot.get("pressure_ewma"), 0.0),
+                4,
+            ),
+            "latency_false_negative_remeasure_top_depth_ratio": round(
+                _to_float(snapshot.get("top_depth_ratio"), 0.0),
                 4,
             ),
         }
@@ -1705,6 +1715,86 @@ def _latency_true_ofi_direct_canary_fields(
     )
     min_true_ofi = _to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MIN_TRUE_OFI"), -0.09)
     max_true_ofi = _to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MAX_TRUE_OFI"), 0.12)
+    nxt_probability_band_configured = _truthy(
+        os.getenv(
+            "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_ENABLED",
+            "false",
+        )
+    )
+    nxt_probability_band_active_date = str(
+        os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_ACTIVE_DATE")
+        or ""
+    ).strip()
+    nxt_probability_band_active = bool(
+        enabled
+        and nxt_probability_band_configured
+        and nxt_probability_band_active_date == current_date
+    )
+    nxt_probability_band_min_samples = max(
+        1,
+        int(
+            _to_float(
+                os.getenv(
+                    "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_MIN_SAMPLES"
+                ),
+                50.0,
+            )
+        ),
+    )
+    nxt_probability_band_max_ws_age_ms = max(
+        1.0,
+        _to_float(
+            os.getenv(
+                "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_MAX_WS_AGE_MS"
+            ),
+            700.0,
+        ),
+    )
+    nxt_probability_band_max_spread_bps = max(
+        1.0,
+        _to_float(
+            os.getenv(
+                "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_MAX_SPREAD_BPS"
+            ),
+            130.0,
+        ),
+    )
+    nxt_probability_band_min_true_ofi = _to_float(
+        os.getenv(
+            "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_MIN_TRUE_OFI"
+        ),
+        -0.02,
+    )
+    nxt_probability_band_min_confidence = min(
+        1.0,
+        max(
+            0.0,
+            _to_float(
+                os.getenv(
+                    "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_MIN_CONFIDENCE"
+                ),
+                0.80,
+            ),
+        ),
+    )
+    nxt_probability_band_min_pressure = _to_float(
+        os.getenv(
+            "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_MIN_PRESSURE"
+        ),
+        60.0,
+    )
+    nxt_probability_band_min_depth_ratio = _to_float(
+        os.getenv(
+            "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_MIN_DEPTH_RATIO"
+        ),
+        1.50,
+    )
+    nxt_probability_band_min_delta_pct = _to_float(
+        os.getenv(
+            "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_MIN_DELTA_PCT"
+        ),
+        8.0,
+    )
     min_signal_score = max(
         0.0,
         _to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MIN_SIGNAL_SCORE"), 70.0),
@@ -1805,6 +1895,44 @@ def _latency_true_ofi_direct_canary_fields(
         or ""
     ).strip().lower()
     micro_reason = str(micro_estimator_reason or "").strip().lower()
+    estimator_confidence = _to_float(
+        estimator_context.get("latency_false_negative_remeasure_estimator_confidence"),
+        0.0,
+    )
+    estimator_pressure = _to_float(
+        estimator_context.get("latency_false_negative_remeasure_pressure_ewma")
+        or estimator_context.get("pressure_ewma"),
+        0.0,
+    )
+    estimator_depth_ratio = _to_float(
+        estimator_context.get("latency_false_negative_remeasure_top_depth_ratio")
+        or estimator_context.get("top_depth_ratio"),
+        0.0,
+    )
+    effective_venue = str(
+        (stock or {}).get("rising_missed_effective_venue")
+        or (stock or {}).get("effective_venue")
+        or ""
+    ).strip().upper()
+    market_session_bucket = str(
+        (stock or {}).get("rising_missed_market_session_bucket") or ""
+    ).strip().lower()
+    ws_0b_route = str(
+        (stock or {}).get("rising_missed_ws_0b_route") or ""
+    ).strip().lower()
+    ws_0d_route = str(
+        (stock or {}).get("rising_missed_ws_0d_route") or ""
+    ).strip().lower()
+    nxt_probability_band_context = bool(
+        nxt_probability_band_active
+        and effective_venue == "NXT"
+        and market_session_bucket == "nxt_entry_window"
+        and _truthy((stock or {}).get("rising_missed_nxt_eligible"))
+        and ws_0b_route == "krx_nxt_integrated"
+        and ws_0d_route == "krx_nxt_integrated"
+        and str((stock or {}).get("rising_missed_tp1_evaluation_id") or "").strip()
+        and _truthy((stock or {}).get("rising_missed_tp1_submit_context_fresh"))
+    )
     derived_true_ofi_below_floor = (
         micro_reason == "true_ofi_below_floor"
         or (
@@ -1854,6 +1982,61 @@ def _latency_true_ofi_direct_canary_fields(
         "latency_true_ofi_direct_canary_extended_tier_applied": False,
         "latency_true_ofi_direct_canary_min_true_ofi": round(min_true_ofi, 4),
         "latency_true_ofi_direct_canary_max_true_ofi": round(max_true_ofi, 4),
+        "latency_true_ofi_nxt_probability_band_configured": (
+            nxt_probability_band_configured
+        ),
+        "latency_true_ofi_nxt_probability_band_active": nxt_probability_band_active,
+        "latency_true_ofi_nxt_probability_band_active_date": (
+            nxt_probability_band_active_date or "-"
+        ),
+        "latency_true_ofi_nxt_probability_band_context": (
+            nxt_probability_band_context
+        ),
+        "latency_true_ofi_nxt_probability_band_applied": False,
+        "latency_true_ofi_nxt_probability_band_reason": (
+            "not_evaluated" if nxt_probability_band_active else "runtime_inactive"
+        ),
+        "latency_true_ofi_nxt_probability_band_effective_venue": (
+            effective_venue or "-"
+        ),
+        "latency_true_ofi_nxt_probability_band_market_session_bucket": (
+            market_session_bucket or "-"
+        ),
+        "latency_true_ofi_nxt_probability_band_ws_0b_route": ws_0b_route or "-",
+        "latency_true_ofi_nxt_probability_band_ws_0d_route": ws_0d_route or "-",
+        "latency_true_ofi_nxt_probability_band_min_samples": (
+            nxt_probability_band_min_samples
+        ),
+        "latency_true_ofi_nxt_probability_band_max_ws_age_ms": round(
+            nxt_probability_band_max_ws_age_ms, 3
+        ),
+        "latency_true_ofi_nxt_probability_band_max_spread_bps": round(
+            nxt_probability_band_max_spread_bps, 3
+        ),
+        "latency_true_ofi_nxt_probability_band_min_true_ofi": round(
+            nxt_probability_band_min_true_ofi, 4
+        ),
+        "latency_true_ofi_nxt_probability_band_min_confidence": round(
+            nxt_probability_band_min_confidence, 4
+        ),
+        "latency_true_ofi_nxt_probability_band_min_pressure": round(
+            nxt_probability_band_min_pressure, 3
+        ),
+        "latency_true_ofi_nxt_probability_band_min_depth_ratio": round(
+            nxt_probability_band_min_depth_ratio, 4
+        ),
+        "latency_true_ofi_nxt_probability_band_min_delta_pct": round(
+            nxt_probability_band_min_delta_pct, 3
+        ),
+        "latency_true_ofi_nxt_probability_band_confidence": round(
+            estimator_confidence, 4
+        ),
+        "latency_true_ofi_nxt_probability_band_pressure": round(
+            estimator_pressure, 3
+        ),
+        "latency_true_ofi_nxt_probability_band_depth_ratio": round(
+            estimator_depth_ratio, 4
+        ),
         "latency_true_ofi_direct_canary_min_signal_score": round(min_signal_score, 3),
         "latency_true_ofi_direct_canary_min_delta_pct": round(min_delta_pct, 3),
         "latency_true_ofi_direct_canary_signal_score": round(float(signal_score or 0.0), 3),
@@ -1925,6 +2108,79 @@ def _latency_true_ofi_direct_canary_fields(
         "spread_above_caution",
         "spread_too_wide",
     }
+    if nxt_probability_band_context:
+        nxt_allowed_reasons = spread_reasons | {"ws_age_too_high"}
+        nxt_probability_band_checks = (
+            (
+                "unsupported_latency_reason",
+                bool(normalized_reasons)
+                and normalized_reasons.issubset(nxt_allowed_reasons),
+            ),
+            ("fresh_ws_source_required", source_state.startswith("fresh_ws")),
+            (
+                "sample_count_below_floor",
+                sample_count >= nxt_probability_band_min_samples,
+            ),
+            (
+                "ws_age_above_cap",
+                0.0 <= ws_age_ms <= nxt_probability_band_max_ws_age_ms,
+            ),
+            (
+                "spread_above_cap",
+                float(spread_bps or 0.0) <= nxt_probability_band_max_spread_bps,
+            ),
+            (
+                "true_ofi_outside_band",
+                nxt_probability_band_min_true_ofi <= true_ofi <= max_true_ofi,
+            ),
+            (
+                "confidence_below_floor",
+                estimator_confidence >= nxt_probability_band_min_confidence,
+            ),
+            (
+                "pressure_below_floor",
+                estimator_pressure >= nxt_probability_band_min_pressure,
+            ),
+            (
+                "depth_ratio_below_floor",
+                estimator_depth_ratio >= nxt_probability_band_min_depth_ratio,
+            ),
+            (
+                "price_delta_below_floor",
+                delta_pct >= nxt_probability_band_min_delta_pct,
+            ),
+            (
+                "bearish_orderbook_micro_state",
+                micro_state not in {"bearish", "strong_bearish"},
+            ),
+            (
+                "large_sell_print_detected",
+                not bool(
+                    fields.get(
+                        "latency_true_ofi_direct_canary_large_sell_print_detected"
+                    )
+                ),
+            ),
+        )
+        failed_check = next(
+            (reason for reason, passed in nxt_probability_band_checks if not passed),
+            "",
+        )
+        if not failed_check:
+            fields.update(
+                {
+                    "latency_true_ofi_direct_canary_applied": True,
+                    "latency_true_ofi_direct_canary_reason": (
+                        "direct_canary_nxt_probability_band_allow"
+                    ),
+                    "latency_true_ofi_direct_canary_runtime_effect": True,
+                    "latency_true_ofi_direct_canary_allowed_runtime_apply": True,
+                    "latency_true_ofi_nxt_probability_band_applied": True,
+                    "latency_true_ofi_nxt_probability_band_reason": "eligible",
+                }
+            )
+            return fields
+        fields["latency_true_ofi_nxt_probability_band_reason"] = failed_check
     if not normalized_reasons or not normalized_reasons.issubset(spread_reasons):
         fields["latency_true_ofi_direct_canary_reason"] = "non_spread_latency_danger"
         return fields

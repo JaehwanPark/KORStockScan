@@ -10098,6 +10098,8 @@ _LATENCY_FALSE_NEGATIVE_REMEASURE_LOG_KEYS = (
     "latency_false_negative_remeasure_true_ofi_sample_count",
     "latency_false_negative_remeasure_ws_age_ms",
     "latency_false_negative_remeasure_estimator_confidence",
+    "latency_false_negative_remeasure_pressure_ewma",
+    "latency_false_negative_remeasure_top_depth_ratio",
     "latency_false_negative_remeasure_report_loaded",
     "latency_false_negative_remeasure_report_reason",
     "latency_false_negative_remeasure_report_generated_at",
@@ -10202,6 +10204,27 @@ _LATENCY_FALSE_NEGATIVE_REMEASURE_LOG_KEYS = (
     "latency_true_ofi_direct_canary_signed_tape_latest_buy_single",
     "latency_true_ofi_direct_canary_signed_tape_latest_sell_single",
     "latency_true_ofi_direct_canary_signed_tape_latest_single_sell_dominated",
+    "latency_true_ofi_nxt_probability_band_configured",
+    "latency_true_ofi_nxt_probability_band_active",
+    "latency_true_ofi_nxt_probability_band_active_date",
+    "latency_true_ofi_nxt_probability_band_context",
+    "latency_true_ofi_nxt_probability_band_applied",
+    "latency_true_ofi_nxt_probability_band_reason",
+    "latency_true_ofi_nxt_probability_band_effective_venue",
+    "latency_true_ofi_nxt_probability_band_market_session_bucket",
+    "latency_true_ofi_nxt_probability_band_ws_0b_route",
+    "latency_true_ofi_nxt_probability_band_ws_0d_route",
+    "latency_true_ofi_nxt_probability_band_min_samples",
+    "latency_true_ofi_nxt_probability_band_max_ws_age_ms",
+    "latency_true_ofi_nxt_probability_band_max_spread_bps",
+    "latency_true_ofi_nxt_probability_band_min_true_ofi",
+    "latency_true_ofi_nxt_probability_band_min_confidence",
+    "latency_true_ofi_nxt_probability_band_min_pressure",
+    "latency_true_ofi_nxt_probability_band_min_depth_ratio",
+    "latency_true_ofi_nxt_probability_band_min_delta_pct",
+    "latency_true_ofi_nxt_probability_band_confidence",
+    "latency_true_ofi_nxt_probability_band_pressure",
+    "latency_true_ofi_nxt_probability_band_depth_ratio",
 )
 
 
@@ -41162,6 +41185,182 @@ def _resolve_holding_sell_dmst_stex_tp(stock: dict | None, code: str, now_t=None
     }
 
 
+def _nxt_rising_missed_tp1_partial_runner_enabled(now_dt: datetime) -> bool:
+    if not _env_bool("KORSTOCKSCAN_NXT_RISING_MISSED_TP1_PARTIAL_RUNNER_ENABLED", False):
+        return False
+    active_date = str(
+        os.getenv("KORSTOCKSCAN_NXT_RISING_MISSED_TP1_PARTIAL_RUNNER_ACTIVE_DATE", "")
+    ).strip()
+    return bool(active_date and active_date == now_dt.strftime("%Y-%m-%d"))
+
+
+def _maybe_submit_nxt_rising_missed_tp1_partial_runner(
+    stock: dict,
+    code: str,
+    ws_data: dict,
+    *,
+    strategy: str,
+    curr_price: int,
+    buy_price: float,
+    now_ts: float,
+    now_dt: datetime,
+    admin_id,
+    quote_fields: dict | None = None,
+) -> bool:
+    if not _nxt_rising_missed_tp1_partial_runner_enabled(now_dt):
+        return False
+    if strategy != "SCALPING" or not _has_rising_missed_entry_lineage(stock):
+        return False
+    if stock.get("nxt_rising_missed_tp1_partial_pending") or stock.get(
+        "nxt_rising_missed_tp1_partial_applied"
+    ):
+        return False
+    if _has_active_sell_order_pending(stock) or _has_open_pending_entry_orders(stock):
+        return False
+    if not admin_id or curr_price <= 0 or buy_price <= 0:
+        return False
+
+    session_bucket = _rising_missed_nxt_session_bucket(now_ts)
+    if not session_bucket.startswith("nxt_"):
+        return False
+    exchange = _resolve_holding_sell_dmst_stex_tp(stock, code, now_t=now_dt.time())
+    if exchange.get("blocked") or exchange.get("nxt_enabled") is not True:
+        return False
+
+    gross_profit_pct = ((float(curr_price) - float(buy_price)) / float(buy_price)) * 100.0
+    trigger_pct = _env_float("KORSTOCKSCAN_NXT_RISING_MISSED_TP1_PARTIAL_TRIGGER_PCT", 1.30)
+    if gross_profit_pct < trigger_pct:
+        return False
+
+    total_qty = _safe_int(stock.get("buy_qty"), 0)
+    min_remaining_qty = max(
+        1,
+        _env_int("KORSTOCKSCAN_NXT_RISING_MISSED_TP1_PARTIAL_MIN_REMAINING_QTY", 1),
+    )
+    if total_qty <= min_remaining_qty:
+        return False
+    ratio = min(
+        0.90,
+        max(0.10, _env_float("KORSTOCKSCAN_NXT_RISING_MISSED_TP1_PARTIAL_RATIO", 0.50)),
+    )
+    partial_qty = min(
+        total_qty - min_remaining_qty,
+        max(1, int(math.floor(total_qty * ratio))),
+    )
+    if partial_qty <= 0:
+        return False
+
+    quote_fields = quote_fields if isinstance(quote_fields, dict) else {}
+    quote_reason = str(quote_fields.get("quote_consistency_reason") or "").strip().lower()
+    if quote_reason in {"quote_stale", "stale_quote", "conflicted", "price_conflict"}:
+        return False
+    executable_sell_price = _safe_int(
+        ws_data.get("executable_sell_price") or quote_fields.get("executable_sell_price"),
+        0,
+    )
+    if executable_sell_price <= 0:
+        return False
+
+    pending_msg = (
+        f"🎯 **{stock.get('name', code)} NXT TP1 부분익절 주문 ({strategy})**\n"
+        f"gross: `{gross_profit_pct:+.2f}%` | 수량: `{partial_qty}/{total_qty}주`\n"
+        "잔여 수량은 runner로 계속 관리"
+    )
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "status": "SELL_ORDERED",
+            "nxt_rising_missed_tp1_partial_pending": True,
+            "nxt_rising_missed_tp1_partial_applied": False,
+            "nxt_rising_missed_tp1_partial_requested_qty": partial_qty,
+            "nxt_rising_missed_tp1_partial_filled_qty": 0,
+            "nxt_rising_missed_tp1_partial_fill_amount": 0,
+            "nxt_rising_missed_tp1_partial_original_qty": total_qty,
+            "nxt_rising_missed_tp1_partial_trigger_price": curr_price,
+            "nxt_rising_missed_tp1_partial_trigger_profit_pct": round(gross_profit_pct, 6),
+            "nxt_rising_missed_tp1_partial_triggered_at": now_ts,
+            "pending_sell_msg": pending_msg,
+            "sell_order_time": now_ts,
+            "sell_target_price": executable_sell_price,
+            "last_exit_rule": "nxt_rising_missed_tp1_partial_runner",
+            "last_exit_decision_source": "NXT_RISING_MISSED_TP1",
+        },
+    )
+    try:
+        with DB.get_session() as session:
+            session.query(RecommendationHistory).filter_by(id=stock.get("id")).update(
+                {"status": "SELL_ORDERED"}
+            )
+    except Exception as exc:
+        log_error(f"🚨 [DB 에러] {stock.get('name')} NXT TP1 SELL_ORDERED 반영 실패: {exc}")
+    try:
+        result = kiwoom_orders.send_smart_sell_order(
+            code=code,
+            qty=partial_qty,
+            token=KIWOOM_TOKEN,
+            ws_data=ws_data,
+            reason_type="PROFIT",
+            strategy=strategy,
+            bypass_open_time_block=False,
+            dmst_stex_tp="NXT",
+        )
+    except Exception as exc:
+        result = {"return_code": "exception", "return_msg": str(exc)}
+    return_code = str(
+        result.get("return_code", result.get("rt_cd", "")) if isinstance(result, dict) else "0"
+    )
+    if not result or return_code != "0":
+        error = str(result.get("return_msg") or "unknown") if isinstance(result, dict) else "unknown"
+        _mutate_stock_state(
+            stock,
+            set_fields={"status": "HOLDING", "nxt_rising_missed_tp1_partial_pending": False},
+            pop_fields=["sell_odno", "sell_order_time", "pending_sell_msg", "sell_target_price"],
+        )
+        try:
+            with DB.get_session() as session:
+                session.query(RecommendationHistory).filter_by(id=stock.get("id")).update(
+                    {"status": "HOLDING"}
+                )
+        except Exception as exc:
+            log_error(f"🚨 [DB 에러] {stock.get('name')} NXT TP1 HOLDING 복구 실패: {exc}")
+        _log_holding_pipeline(
+            stock,
+            code,
+            "nxt_rising_missed_tp1_partial_submit_failed",
+            error=error,
+            requested_qty=partial_qty,
+            gross_profit_pct=f"{gross_profit_pct:+.2f}",
+            actual_order_submitted=False,
+            runtime_effect=True,
+        )
+        return False
+
+    ord_no = str(result.get("ord_no", "") or result.get("odno", "")) if isinstance(result, dict) else ""
+    set_fields = {}
+    if ord_no:
+        set_fields["sell_odno"] = ord_no
+        set_fields["nxt_rising_missed_tp1_partial_ord_no"] = ord_no
+    _mutate_stock_state(stock, set_fields=set_fields)
+    _log_holding_pipeline(
+        stock,
+        code,
+        "nxt_rising_missed_tp1_partial_order_sent",
+        qty=partial_qty,
+        original_qty=total_qty,
+        runner_qty=total_qty - partial_qty,
+        ord_no=ord_no or "-",
+        gross_profit_pct=f"{gross_profit_pct:+.2f}",
+        trigger_pct=f"{trigger_pct:.2f}",
+        session_bucket=session_bucket,
+        dmst_stex_tp="NXT",
+        actual_order_submitted=True,
+        runtime_effect=True,
+        decision_authority="nxt_rising_missed_tp1_partial_runner_canary",
+        **quote_fields,
+    )
+    return True
+
+
 def _cancel_reject_indicates_sor_exchange_mismatch(message: str) -> bool:
     text = str(message or "")
     return "571412" in text or "원주문이 SOR주문" in text
@@ -43815,6 +44014,20 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 "runtime_effect": False,
             },
         )
+        return
+
+    if not daily_limit_up_triggered and _maybe_submit_nxt_rising_missed_tp1_partial_runner(
+        stock,
+        code,
+        ws_data,
+        strategy=strategy,
+        curr_price=curr_p,
+        buy_price=buy_p,
+        now_ts=now_ts,
+        now_dt=now_dt,
+        admin_id=admin_id,
+        quote_fields=holding_quote_fields,
+    ):
         return
 
     if stock.get('exit_mode') == 'SCALP_PRESET_TP':
@@ -46872,7 +47085,11 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     mae_pct="-",
                 ),
             )
-        if _has_open_pending_entry_orders(stock):
+        had_open_pending_entry_orders = _has_open_pending_entry_orders(stock)
+        entry_filled_before_sell_cancel = (
+            _entry_bundle_filled_qty(stock) if had_open_pending_entry_orders else 0
+        )
+        if had_open_pending_entry_orders:
             cancel_state = _cancel_pending_entry_orders(stock, code, force=False)
             if cancel_state == 'failed':
                 log_error(
@@ -46915,6 +47132,40 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     buy_qty = max(buy_qty, int(record.buy_qty))
         except Exception as e:
             log_error(f"🚨 [DB 조회 에러] ID {target_id} 수량 조회 실패: {e}")
+
+        if had_open_pending_entry_orders:
+            requested_sell_qty = buy_qty
+            if entry_filled_before_sell_cancel > 0:
+                buy_qty = min(buy_qty, entry_filled_before_sell_cancel)
+                _mutate_stock_state(stock, set_fields={'buy_qty': buy_qty})
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "split_residual_sell_qty_reconciled",
+                    requested_sell_qty=requested_sell_qty,
+                    reconciled_sell_qty=buy_qty,
+                    entry_filled_qty_before_cancel=entry_filled_before_sell_cancel,
+                    reconciliation_basis="entry_receipt_filled_qty_before_residual_cancel",
+                    runtime_effect=True,
+                    decision_authority="partial_entry_sell_quantity_safety",
+                )
+                log_info(
+                    f"[SELL_QTY_RECONCILE] {stock.get('name')}({code}) "
+                    f"requested={requested_sell_qty} filled={entry_filled_before_sell_cancel} "
+                    f"sell_qty={buy_qty}"
+                )
+            else:
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "split_residual_sell_qty_reconciled",
+                    requested_sell_qty=requested_sell_qty,
+                    reconciled_sell_qty=buy_qty,
+                    entry_filled_qty_before_cancel=0,
+                    reconciliation_basis="existing_holding_qty_after_zero_fill_residual_cancel",
+                    runtime_effect=True,
+                    decision_authority="partial_entry_sell_quantity_safety",
+                )
 
         if buy_qty <= 0:
             log_info(f"⚠️ [{stock['name']}] 고유 ID({target_id})의 수량이 0주입니다. 실제 키움 잔고로 폴백합니다...")

@@ -308,6 +308,23 @@ class TestLogScanner:
             assert errors == 4
             assert counter == {"ORDER_REJECT": 4}
 
+    def test_scan_file_classifies_scanner_source_identity_guard(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_file = Path(tmpdir) / "scalping_scanner_error.log"
+            log_file.write_text(
+                "[2026-07-15 18:50:42] ERROR "
+                "[SCANNER_SOURCE_IDENTITY_GUARD] candidate rejected "
+                "code=001200 payload_name=삼양바이오팜 authoritative_name=유진투자증권\n",
+                encoding="utf-8",
+            )
+
+            scanner = LogScanner()
+            counter = __import__("collections").Counter()
+            errors, _, _ = scanner._scan_file(log_file, 0, counter)
+
+            assert errors == 1
+            assert counter == {"SOURCE_IDENTITY_ERROR": 1}
+
     def test_scan_file_no_change(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             log_file = Path(tmpdir) / "test_error.log"

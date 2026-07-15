@@ -3379,9 +3379,24 @@ DATED_RUNTIME_OVERRIDE_SPECS: tuple[dict[str, str], ...] = (
         "dependency_enabled_key": "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ENABLED",
     },
     {
+        "family": "latency_true_ofi_nxt_probability_band",
+        "enabled_key": "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_ENABLED",
+        "active_date_key": (
+            "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_ACTIVE_DATE"
+        ),
+        "dependency_enabled_key": "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ENABLED",
+    },
+    {
         "family": "rising_missed_nxt_post_block_sampler",
         "enabled_key": "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ENABLED",
         "active_date_key": "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ACTIVE_DATE",
+    },
+    {
+        "family": "nxt_rising_missed_tp1_partial_runner",
+        "enabled_key": "KORSTOCKSCAN_NXT_RISING_MISSED_TP1_PARTIAL_RUNNER_ENABLED",
+        "active_date_key": (
+            "KORSTOCKSCAN_NXT_RISING_MISSED_TP1_PARTIAL_RUNNER_ACTIVE_DATE"
+        ),
     },
     {
         "family": "shallow_avg_down_source_gap_recheck",
