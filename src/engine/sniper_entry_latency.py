@@ -1093,9 +1093,24 @@ def _latency_false_negative_report_ready(stock: dict[str, Any] | None) -> bool:
     return grade == "ready_for_recheck"
 
 
+def _latency_true_ofi_direct_canary_runtime_state() -> dict[str, Any]:
+    configured_enabled = _truthy(
+        os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ENABLED", "false")
+    )
+    active_date = str(
+        os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ACTIVE_DATE") or ""
+    ).strip()
+    current_date = datetime.now(_KST).strftime("%Y-%m-%d")
+    return {
+        "configured_enabled": configured_enabled,
+        "active_date": active_date,
+        "current_date": current_date,
+        "active": bool(configured_enabled and active_date == current_date),
+    }
+
+
 def _latency_true_ofi_direct_canary_enabled() -> bool:
-    raw = os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ENABLED")
-    return True if raw is None else _truthy(raw)
+    return bool(_latency_true_ofi_direct_canary_runtime_state()["active"])
 
 
 def _latency_opportunity_price_delta_pct(
@@ -1383,6 +1398,43 @@ def _latency_direct_canary_tape_pressure_fields(
     return fields
 
 
+def _latency_direct_canary_top_depth_ratio(
+    stock: dict[str, Any] | None,
+    ws_data: dict[str, Any] | None,
+) -> tuple[float, str]:
+    ws = ws_data if isinstance(ws_data, dict) else {}
+    quote_refresh_source = str(ws.get("quote_refresh_source") or "").strip().lower()
+    rest_replaced_orderbook = bool(
+        quote_refresh_source == "ka10004_rest_orderbook"
+        or _truthy(ws.get("pre_submit_rest_orderbook_refresh_applied", False))
+    )
+    orderbook = ws.get("orderbook") if isinstance(ws.get("orderbook"), dict) else {}
+    asks = orderbook.get("asks") if isinstance(orderbook.get("asks"), list) else []
+    bids = orderbook.get("bids") if isinstance(orderbook.get("bids"), list) else []
+    top_ask = asks[0] if asks and isinstance(asks[0], dict) else {}
+    top_bid = bids[0] if bids and isinstance(bids[0], dict) else {}
+    ask_volume = _to_float(top_ask.get("volume"), 0.0)
+    bid_volume = _to_float(top_bid.get("volume"), 0.0)
+    if ask_volume > 0.0 and bid_volume > 0.0:
+        source = (
+            "rest.orderbook.top_bid_over_ask"
+            if rest_replaced_orderbook
+            else "ws.orderbook.top_bid_over_ask"
+        )
+        return bid_volume / ask_volume, source
+
+    stock_data = stock if isinstance(stock, dict) else {}
+    for key in (
+        "rising_missed_tp1_top_depth_ratio",
+        "tp1_top_depth_ratio",
+        "top_depth_ratio",
+    ):
+        value = _to_float(stock_data.get(key), 0.0)
+        if value > 0.0:
+            return value, f"stock.{key}"
+    return 0.0, "unavailable"
+
+
 def _latency_false_negative_runtime_estimator_context(code: str) -> dict[str, Any]:
     context = {
         "latency_false_negative_remeasure_source_state": "not_evaluated",
@@ -1584,7 +1636,8 @@ def _latency_true_ofi_direct_canary_fields(
     estimator_context: dict[str, Any],
     danger_relief_forbidden: bool,
 ) -> dict[str, Any]:
-    enabled = _latency_true_ofi_direct_canary_enabled()
+    runtime_state = _latency_true_ofi_direct_canary_runtime_state()
+    enabled = bool(runtime_state["active"])
     min_samples = max(
         1,
         int(_to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MIN_SAMPLES"), 75.0)),
@@ -1605,7 +1658,7 @@ def _latency_true_ofi_direct_canary_fields(
         or os.getenv("KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE")
         or ""
     ).strip()
-    current_date = datetime.now(_KST).strftime("%Y-%m-%d")
+    current_date = str(runtime_state["current_date"])
     extended_active = bool(
         extended_enabled and extended_active_date and extended_active_date == current_date
     )
@@ -1677,6 +1730,75 @@ def _latency_true_ofi_direct_canary_fields(
         or _latency_opportunity_source_support(stock, ws_data)
     )
     tape_fields = _latency_direct_canary_tape_pressure_fields(stock, ws_data)
+    tp1_submit_safety_action = str(
+        (stock or {}).get("rising_missed_tp1_counterfactual_submit_safety_action") or ""
+    ).strip().upper()
+    raw_tp1_risks = (stock or {}).get("rising_missed_tp1_counterfactual_risks") or []
+    if isinstance(raw_tp1_risks, str):
+        tp1_risk_tokens = {
+            token.strip().lower()
+            for token in raw_tp1_risks.replace(";", ",").split(",")
+            if token.strip()
+        }
+    else:
+        try:
+            tp1_risk_tokens = {
+                str(token).strip().lower() for token in raw_tp1_risks if str(token).strip()
+            }
+        except TypeError:
+            tp1_risk_tokens = set()
+    tp1_recheck_required = bool(
+        tp1_submit_safety_action == "RECHECK_REQUIRED"
+        or {"true_ofi_nonpositive", "depth_support_weak"}.issubset(tp1_risk_tokens)
+    )
+    recheck_configured = _truthy(
+        os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ENABLED", "false")
+    )
+    recheck_active_date = str(
+        os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ACTIVE_DATE")
+        or runtime_state["active_date"]
+        or ""
+    ).strip()
+    recheck_active = bool(
+        enabled and recheck_configured and recheck_active_date == current_date
+    )
+    recheck_min_wait_sec = min(
+        5.0,
+        max(
+            2.0,
+            _to_float(
+                os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_MIN_WAIT_SEC"),
+                2.0,
+            ),
+        ),
+    )
+    recheck_ttl_sec = min(
+        5.0,
+        max(
+            recheck_min_wait_sec,
+            _to_float(
+                os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_TTL_SEC"),
+                5.0,
+            ),
+        ),
+    )
+    recheck_armed = _truthy(
+        (stock or {}).get("latency_true_ofi_direct_canary_recheck_armed", False)
+    )
+    recheck_started_at = _to_float(
+        (stock or {}).get("latency_true_ofi_direct_canary_recheck_started_at"), 0.0
+    )
+    recheck_elapsed_sec = max(0.0, time.time() - recheck_started_at) if recheck_started_at > 0 else 0.0
+    top_depth_ratio, top_depth_ratio_source = _latency_direct_canary_top_depth_ratio(stock, ws_data)
+    fresh_ws_micro = source_state.startswith("fresh_ws")
+    positive_micro_recovered = bool(
+        fresh_ws_micro
+        and true_ofi > 0.0
+        and top_depth_ratio >= 0.95
+        and top_depth_ratio_source.startswith("ws.")
+        and bool(tape_fields.get("latency_true_ofi_direct_canary_tape_pressure_usable"))
+        and bool(tape_fields.get("latency_true_ofi_direct_canary_tape_support_ok"))
+    )
     micro_state = str(
         (ws_data or {}).get("orderbook_micro_state")
         or (stock or {}).get("orderbook_micro_state")
@@ -1692,6 +1814,11 @@ def _latency_true_ofi_direct_canary_fields(
     )
     fields: dict[str, Any] = {
         "latency_true_ofi_direct_canary_enabled": enabled,
+        "latency_true_ofi_direct_canary_configured_enabled": bool(
+            runtime_state["configured_enabled"]
+        ),
+        "latency_true_ofi_direct_canary_active_date": runtime_state["active_date"] or "-",
+        "latency_true_ofi_direct_canary_current_date": current_date,
         "latency_true_ofi_direct_canary_applied": False,
         "latency_true_ofi_direct_canary_reason": "disabled" if not enabled else "not_evaluated",
         "latency_true_ofi_direct_canary_decision_authority": _LATENCY_TRUE_OFI_DIRECT_CANARY_AUTHORITY,
@@ -1743,9 +1870,35 @@ def _latency_true_ofi_direct_canary_fields(
         "latency_true_ofi_direct_canary_opportunity_supported": bool(opportunity_supported),
         "latency_true_ofi_direct_canary_rising_missed_lineage": _latency_rising_missed_lineage(stock),
         "latency_true_ofi_direct_canary_micro_state": micro_state or "-",
+        "latency_true_ofi_direct_canary_tp1_submit_safety_action": (
+            tp1_submit_safety_action or "not_evaluated"
+        ),
+        "latency_true_ofi_direct_canary_tp1_risk_tokens": ",".join(sorted(tp1_risk_tokens)) or "-",
+        "latency_true_ofi_direct_canary_recheck_configured": recheck_configured,
+        "latency_true_ofi_direct_canary_recheck_active": recheck_active,
+        "latency_true_ofi_direct_canary_recheck_active_date": recheck_active_date or "-",
+        "latency_true_ofi_direct_canary_recheck_required": tp1_recheck_required,
+        "latency_true_ofi_direct_canary_recheck_armed": recheck_armed,
+        "latency_true_ofi_direct_canary_recheck_started_at": round(recheck_started_at, 3),
+        "latency_true_ofi_direct_canary_recheck_elapsed_sec": round(recheck_elapsed_sec, 3),
+        "latency_true_ofi_direct_canary_recheck_min_wait_sec": round(recheck_min_wait_sec, 3),
+        "latency_true_ofi_direct_canary_recheck_ttl_sec": round(recheck_ttl_sec, 3),
+        "latency_true_ofi_direct_canary_recheck_until_epoch": (
+            round(recheck_started_at + recheck_ttl_sec, 3) if recheck_started_at > 0 else 0.0
+        ),
+        "latency_true_ofi_direct_canary_recheck_top_depth_ratio": round(top_depth_ratio, 4),
+        "latency_true_ofi_direct_canary_recheck_top_depth_ratio_source": top_depth_ratio_source,
+        "latency_true_ofi_direct_canary_recheck_positive_micro_recovered": (
+            positive_micro_recovered
+        ),
+        "latency_true_ofi_direct_canary_recheck_state": (
+            "not_required" if not tp1_recheck_required else "not_evaluated"
+        ),
         **tape_fields,
     }
     if not enabled:
+        if runtime_state["configured_enabled"] and runtime_state["active_date"]:
+            fields["latency_true_ofi_direct_canary_reason"] = "inactive_date"
         return fields
     if danger_relief_forbidden:
         fields["latency_true_ofi_direct_canary_reason"] = "latency_relief_runtime_disabled"
@@ -1900,11 +2053,41 @@ def _latency_true_ofi_direct_canary_fields(
             or "tape_pressure_unavailable"
         )
         return fields
+    if fields["latency_true_ofi_direct_canary_recheck_required"]:
+        if not fields["latency_true_ofi_direct_canary_recheck_active"]:
+            fields["latency_true_ofi_direct_canary_recheck_state"] = "runtime_inactive"
+            fields["latency_true_ofi_direct_canary_reason"] = "tp1_recheck_runtime_inactive"
+            return fields
+        if not fields["latency_true_ofi_direct_canary_recheck_armed"]:
+            fields["latency_true_ofi_direct_canary_recheck_state"] = "arm_required"
+            fields["latency_true_ofi_direct_canary_reason"] = "tp1_recheck_arm_required"
+            return fields
+        if (
+            fields["latency_true_ofi_direct_canary_recheck_elapsed_sec"]
+            < fields["latency_true_ofi_direct_canary_recheck_min_wait_sec"]
+        ):
+            fields["latency_true_ofi_direct_canary_recheck_state"] = "min_wait_pending"
+            fields["latency_true_ofi_direct_canary_reason"] = "tp1_recheck_min_wait_pending"
+            return fields
+        if (
+            fields["latency_true_ofi_direct_canary_recheck_elapsed_sec"]
+            > fields["latency_true_ofi_direct_canary_recheck_ttl_sec"]
+        ):
+            fields["latency_true_ofi_direct_canary_recheck_state"] = "expired"
+            fields["latency_true_ofi_direct_canary_reason"] = "tp1_recheck_expired"
+            return fields
+        if not fields["latency_true_ofi_direct_canary_recheck_positive_micro_recovered"]:
+            fields["latency_true_ofi_direct_canary_recheck_state"] = "positive_micro_not_recovered"
+            fields["latency_true_ofi_direct_canary_reason"] = "tp1_recheck_positive_micro_not_recovered"
+            return fields
+        fields["latency_true_ofi_direct_canary_recheck_state"] = "recovered"
     fields.update(
         {
             "latency_true_ofi_direct_canary_applied": True,
             "latency_true_ofi_direct_canary_reason": (
-                "direct_canary_extended_spread_true_ofi_allow"
+                "direct_canary_tp1_recheck_recovered_allow"
+                if fields["latency_true_ofi_direct_canary_recheck_required"]
+                else "direct_canary_extended_spread_true_ofi_allow"
                 if fields["latency_true_ofi_direct_canary_extended_tier_applied"]
                 else "direct_canary_true_ofi_false_negative_allow"
             ),

@@ -1760,6 +1760,42 @@ def test_runtime_iteration_targets_prioritizes_due_rising_recheck():
     assert [target["id"] for target in ordered] == ["due_recheck", "evaluated_positive"]
 
 
+def test_runtime_iteration_targets_prioritizes_due_latency_direct_recheck():
+    targets = [
+        {
+            "id": "evaluated_positive",
+            "code": "000001",
+            "status": "WATCHING",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "entry_armed_at_epoch": 1400.0,
+            "_scanner_last_full_eval_epoch": 1500.0,
+            "price_delta_since_first_seen_pct": "1.20",
+        },
+        {
+            "id": "due_latency_direct_recheck",
+            "code": "000002",
+            "status": "WATCHING",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "entry_armed_at_epoch": 1450.0,
+            "_scanner_last_full_eval_epoch": 1510.0,
+            "_scanner_rising_latency_direct_recheck_after_epoch": 1599.0,
+            "price_delta_since_first_seen_pct": "0.80",
+        },
+    ]
+
+    assert not kiwoom_sniper_v2._scanner_rising_recheck_pending(targets[1], now_ts=1598.0)
+    assert kiwoom_sniper_v2._scanner_rising_recheck_pending(targets[1], now_ts=1600.0)
+
+    ordered = kiwoom_sniper_v2._runtime_iteration_targets(targets, now_ts=1600.0)
+
+    assert [target["id"] for target in ordered] == [
+        "due_latency_direct_recheck",
+        "evaluated_positive",
+    ]
+
+
 def test_runtime_iteration_targets_prioritizes_due_terminal_hardgate_recheck():
     targets = [
         {

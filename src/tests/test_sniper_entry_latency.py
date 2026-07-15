@@ -2578,7 +2578,16 @@ def test_latency_false_negative_remeasure_requires_report_ready_marker(monkeypat
     assert result["latency_false_negative_remeasure_reason"] == "report_ready_for_recheck_missing"
 
 
+def _enable_latency_true_ofi_direct_canary(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ENABLED", "true")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ACTIVE_DATE",
+        datetime.now(entry_latency_module._KST).strftime("%Y-%m-%d"),
+    )
+
+
 def test_latency_true_ofi_direct_canary_allows_high_opportunity_without_report_marker(monkeypatch):
+    _enable_latency_true_ofi_direct_canary(monkeypatch)
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -2653,6 +2662,7 @@ def test_latency_true_ofi_direct_canary_allows_high_opportunity_without_report_m
 
 
 def test_latency_true_ofi_direct_canary_allows_near_cap_spread(monkeypatch):
+    _enable_latency_true_ofi_direct_canary(monkeypatch)
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -2722,6 +2732,7 @@ def test_latency_true_ofi_direct_canary_allows_near_cap_spread(monkeypatch):
 
 
 def test_latency_true_ofi_direct_canary_allows_bounded_extended_spread_tier(monkeypatch):
+    _enable_latency_true_ofi_direct_canary(monkeypatch)
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -2804,6 +2815,7 @@ def test_latency_true_ofi_direct_canary_allows_bounded_extended_spread_tier(monk
 def test_latency_true_ofi_direct_canary_extended_tier_keeps_weak_support_blocked(
     monkeypatch,
 ):
+    _enable_latency_true_ofi_direct_canary(monkeypatch)
     monkeypatch.setenv(
         "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ENABLED", "true"
     )
@@ -2853,6 +2865,7 @@ def test_latency_true_ofi_direct_canary_extended_tier_keeps_weak_support_blocked
 def test_latency_true_ofi_direct_canary_extended_tier_rejects_rest_positive_tape(
     monkeypatch,
 ):
+    _enable_latency_true_ofi_direct_canary(monkeypatch)
     monkeypatch.setenv(
         "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ENABLED", "true"
     )
@@ -2904,6 +2917,7 @@ def test_latency_true_ofi_direct_canary_extended_tier_rejects_rest_positive_tape
 def test_latency_true_ofi_direct_canary_extended_tier_rejects_unknown_tape_source(
     monkeypatch,
 ):
+    _enable_latency_true_ofi_direct_canary(monkeypatch)
     monkeypatch.setenv(
         "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ENABLED", "true"
     )
@@ -2950,6 +2964,7 @@ def test_latency_true_ofi_direct_canary_extended_tier_rejects_unknown_tape_sourc
 
 
 def test_latency_true_ofi_direct_canary_treats_missing_tape_as_neutral(monkeypatch):
+    _enable_latency_true_ofi_direct_canary(monkeypatch)
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -3014,6 +3029,7 @@ def test_latency_true_ofi_direct_canary_treats_missing_tape_as_neutral(monkeypat
 
 
 def test_latency_true_ofi_direct_canary_blocks_sell_dominated_tape(monkeypatch):
+    _enable_latency_true_ofi_direct_canary(monkeypatch)
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -3085,6 +3101,7 @@ def test_latency_true_ofi_direct_canary_blocks_sell_dominated_tape(monkeypatch):
 
 
 def test_latency_true_ofi_direct_canary_blocks_recent_signed_sell_tape(monkeypatch):
+    _enable_latency_true_ofi_direct_canary(monkeypatch)
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -3162,6 +3179,7 @@ def test_latency_true_ofi_direct_canary_blocks_recent_signed_sell_tape(monkeypat
 
 
 def test_latency_true_ofi_direct_canary_blocks_rest_signed_sell_tape(monkeypatch):
+    _enable_latency_true_ofi_direct_canary(monkeypatch)
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -3326,6 +3344,7 @@ def test_rest_signed_tape_stale_sell_rows_cannot_block_latency_canary():
 
 
 def test_latency_true_ofi_direct_canary_keeps_wide_spread_blocked(monkeypatch):
+    _enable_latency_true_ofi_direct_canary(monkeypatch)
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -3388,6 +3407,7 @@ def test_latency_true_ofi_direct_canary_keeps_wide_spread_blocked(monkeypatch):
 
 
 def test_latency_true_ofi_direct_canary_reports_stale_true_ofi_source_before_value(monkeypatch):
+    _enable_latency_true_ofi_direct_canary(monkeypatch)
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -3455,6 +3475,115 @@ def test_latency_true_ofi_direct_canary_reports_stale_true_ofi_source_before_val
     assert result["latency_true_ofi_direct_canary_ws_age_ms"] > result[
         "latency_true_ofi_direct_canary_max_ws_age_ms"
     ]
+
+
+def test_latency_true_ofi_direct_canary_is_off_without_dated_runtime(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ENABLED", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ACTIVE_DATE", raising=False)
+
+    state = entry_latency_module._latency_true_ofi_direct_canary_runtime_state()
+
+    assert state["configured_enabled"] is False
+    assert state["active"] is False
+    assert entry_latency_module._latency_true_ofi_direct_canary_enabled() is False
+
+
+def test_latency_true_ofi_direct_canary_requires_tp1_micro_recheck_before_allow(monkeypatch):
+    _enable_latency_true_ofi_direct_canary(monkeypatch)
+    monkeypatch.setenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ENABLED", "true")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ACTIVE_DATE",
+        datetime.now(entry_latency_module._KST).strftime("%Y-%m-%d"),
+    )
+    now_ts = time.time()
+    base_stock = {
+        "rising_missed_entry_lineage": True,
+        "price_delta_since_first_seen_pct": "4.20",
+        "rising_missed_tp1_top_depth_ratio": 1.02,
+        "rising_missed_tp1_counterfactual_submit_safety_action": "RECHECK_REQUIRED",
+        "rising_missed_tp1_counterfactual_risks": [
+            "true_ofi_nonpositive",
+            "depth_support_weak",
+        ],
+    }
+    ws_data = {
+        "tick_aggressor_pressure_usable": True,
+        "tick_aggressor_trusted_count": 10,
+        "buy_pressure_10t": 68.0,
+        "buy_exec_volume": 680,
+        "sell_exec_volume": 320,
+        "net_buy_exec_volume": 360,
+        "orderbook": {
+            "asks": [{"price": 10_060, "volume": 100}],
+            "bids": [{"price": 10_000, "volume": 102}],
+        },
+    }
+    kwargs = {
+        "ws_data": ws_data,
+        "strategy_id": "SCALPING",
+        "policy_decision": entry_latency_module.EntryDecision.REJECT_DANGER,
+        "effective_decision": entry_latency_module.EntryDecision.REJECT_DANGER,
+        "latency_status": SimpleNamespace(quote_stale=False),
+        "danger_reasons": ["spread_above_caution"],
+        "spread_bps": 60.0,
+        "signal_score": 75.0,
+        "micro_estimator_reason": "true_ofi_below_floor",
+        "estimator_context": {
+            "latency_false_negative_remeasure_true_ofi_ewma": 0.041,
+            "latency_false_negative_remeasure_true_ofi_sample_count": 120,
+            "latency_false_negative_remeasure_ws_age_ms": 40.0,
+            "latency_false_negative_remeasure_source_state": "fresh_ws_order_flow_delta",
+        },
+        "danger_relief_forbidden": False,
+    }
+
+    first = entry_latency_module._latency_true_ofi_direct_canary_fields(
+        stock=base_stock,
+        **kwargs,
+    )
+
+    assert first["latency_true_ofi_direct_canary_applied"] is False
+    assert first["latency_true_ofi_direct_canary_recheck_state"] == "arm_required"
+    assert first["latency_true_ofi_direct_canary_reason"] == "tp1_recheck_arm_required"
+
+    recovered_stock = {
+        **base_stock,
+        "latency_true_ofi_direct_canary_recheck_armed": True,
+        "latency_true_ofi_direct_canary_recheck_started_at": now_ts - 2.5,
+    }
+    recovered = entry_latency_module._latency_true_ofi_direct_canary_fields(
+        stock=recovered_stock,
+        **kwargs,
+    )
+
+    assert recovered["latency_true_ofi_direct_canary_applied"] is True
+    assert recovered["latency_true_ofi_direct_canary_recheck_state"] == "recovered"
+    assert recovered["latency_true_ofi_direct_canary_recheck_top_depth_ratio_source"] == (
+        "ws.orderbook.top_bid_over_ask"
+    )
+    assert recovered["latency_true_ofi_direct_canary_reason"] == (
+        "direct_canary_tp1_recheck_recovered_allow"
+    )
+
+    rest_replaced = entry_latency_module._latency_true_ofi_direct_canary_fields(
+        stock=recovered_stock,
+        **{
+            **kwargs,
+            "ws_data": {
+                **ws_data,
+                "quote_refresh_source": "ka10004_rest_orderbook",
+                "pre_submit_rest_orderbook_refresh_applied": True,
+            },
+        },
+    )
+
+    assert rest_replaced["latency_true_ofi_direct_canary_applied"] is False
+    assert rest_replaced["latency_true_ofi_direct_canary_recheck_top_depth_ratio_source"] == (
+        "rest.orderbook.top_bid_over_ask"
+    )
+    assert rest_replaced["latency_true_ofi_direct_canary_reason"] == (
+        "tp1_recheck_positive_micro_not_recovered"
+    )
 
 
 def test_latency_false_negative_remeasure_preserves_explicit_ai_wait(monkeypatch):
