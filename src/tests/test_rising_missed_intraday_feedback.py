@@ -566,6 +566,11 @@ def test_tp1_counterfactual_submit_safety_is_aggregated_without_label_duplicatio
                 ),
                 "rising_missed_tp1_positive_support_count": 1,
                 "rising_missed_tp1_positive_support_families": "depth",
+                "market_data_effective_price_source": "ws",
+                "market_data_ws_quote_age_ms": "50",
+                "market_data_rest_quote_age_ms": "100",
+                "rising_missed_tp1_micro_confidence": "0.85",
+                "rising_missed_tp1_true_ofi_ewma": "0.12",
             },
         ),
         _event(
@@ -608,6 +613,55 @@ def test_tp1_counterfactual_submit_safety_is_aggregated_without_label_duplicatio
         and row["runtime_effect"] is False
         for row in report["rising_missed_tp1_counterfactual_submit_safety_rows"]
     )
+    context_row = report["rising_missed_tp1_counterfactual_submit_safety_rows"][0]
+    assert context_row["effective_price_source"] == "ws"
+    assert context_row["ws_quote_age_ms"] == 50.0
+    assert context_row["micro_confidence"] == 0.85
+    assert context_row["true_ofi_ewma"] == 0.12
+
+
+def test_submit_safety_source_quality_unknown_breakdown_is_structured(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-15.jsonl"
+    pipeline_path.write_text(
+        json.dumps(
+            _event(
+                901,
+                "000901",
+                "missing-pressure",
+                "real_weak_ai_micro_entry_block",
+                {
+                    "forced_entry_reason": "rising_missed_one_share_entry",
+                    "reason": "source_quality_unknown",
+                    "source_quality_gate": "weak_ai_micro_context_contract",
+                    "weak_ai_micro_entry_block_source_quality_state": "missing",
+                    "weak_ai_micro_entry_block_missing_fields": "buy_pressure_10t,tick_aggressor_pressure",
+                    "weak_ai_micro_entry_block_buy_pressure_usable": False,
+                    "weak_ai_micro_entry_block_tick_aggressor_pressure_usable": False,
+                    "weak_ai_micro_entry_block_ai_action": "WAIT",
+                    "weak_ai_micro_entry_block_ai_score": "0",
+                    "orderbook_micro_state": "neutral",
+                    "orderbook_micro_reason": "ready",
+                },
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod.build_report("2026-07-15", pipeline_path=pipeline_path, generated_at="fixed")
+
+    block = report["submit_safety_blocker_rows"][0]
+    assert block["source_quality_missing_fields"] == ["buy_pressure_10t", "tick_aggressor_pressure"]
+    assert block["ai_action"] == "WAIT"
+    assert block["ai_score"] == 0.0
+    assert block["buy_pressure_usable"] is False
+    assert block["tick_aggressor_pressure_usable"] is False
+    assert report["summary"]["submit_safety_source_quality_unknown_gate_counts"] == [
+        {"source_quality_gate": "weak_ai_micro_context_contract", "count": 1}
+    ]
+    assert report["summary"]["submit_safety_source_quality_unknown_missing_field_counts"] == [
+        {"missing_field": "buy_pressure_10t", "count": 1},
+        {"missing_field": "tick_aggressor_pressure", "count": 1},
+    ]
 
 
 def test_build_report_flags_rising_missed_avg_down_ge2_initial_quality_fail(tmp_path):
@@ -703,6 +757,9 @@ def test_write_outputs_renders_json_and_markdown(tmp_path):
             "scale_in_rescue_warning_count": 0,
             "code_improvement_order_count": 1,
             "first_touch_entry_submitted_count": 1,
+            "submit_safety_source_quality_unknown_missing_field_counts": [
+                {"missing_field": "buy_pressure_10t", "count": 1}
+            ],
         },
         "records": [
             {
@@ -715,6 +772,28 @@ def test_write_outputs_renders_json_and_markdown(tmp_path):
                 "min_profit_seen": -2.1,
                 "max_profit_seen": -1.2,
                 "latest_gate_reason": "scale_in_cooldown",
+            }
+        ],
+        "rising_missed_tp1_counterfactual_first_hit_label_rows": [
+            {
+                "candidate_ts": "2026-07-02T09:00:00",
+                "stock_code": "000901",
+                "stock_name": "context",
+                "selector_reason": "rising_missed_tp1_insufficient_positive_support",
+                "counterfactual_action": "RECHECK_REQUIRED",
+                "counterfactual_risks": ["momentum_support_weak"],
+                "gross_first_hit_label": "gross_target_first",
+                "entry_price": 1000.0,
+                "effective_price_source": "ws",
+                "ws_quote_age_ms": 50.0,
+                "rest_quote_age_ms": 100.0,
+                "ws_rest_gap_bps": 4.0,
+                "spread_ratio": 0.001,
+                "true_ofi_ewma": 0.12,
+                "pressure_ewma": 55.0,
+                "depth_imbalance_ewma": 0.1,
+                "tick_acceleration": 1.2,
+                "micro_source_state": "fresh_ws_order_flow_delta",
             }
         ],
         "first_touch_regression_rows": [
@@ -750,6 +829,9 @@ def test_write_outputs_renders_json_and_markdown(tmp_path):
     assert "avgdown_submitted_count=2" in markdown
     assert "shadow_cap1=-" in markdown
     assert "rising_missed_initial_quality_fail" in markdown
+    assert "submit_safety_source_quality_unknown_missing_field_counts" in markdown
+    assert "## TP1 Counterfactual First-hit Labels" in markdown
+    assert "ws_age_ms=50.0" in markdown
 
 
 def test_profit_recovered_sell_order_is_rescue_warning_not_initial_fail(tmp_path):

@@ -880,6 +880,63 @@ def _classify_submit_safety_block(row: dict[str, Any]) -> tuple[str, str, list[s
     return reason or "unspecified", reason or stage or "unspecified", []
 
 
+def _split_csv_values(value: Any) -> list[str]:
+    return [
+        item.strip()
+        for item in str(value or "").split(",")
+        if item.strip() and item.strip() != "-"
+    ]
+
+
+def _tp1_counterfactual_decision_context(fields: dict[str, Any]) -> dict[str, Any]:
+    """Preserve decision-time inputs alongside a post-horizon TP1 label."""
+    return {
+        "effective_price_source": fields.get("market_data_effective_price_source"),
+        "effective_quote_age_ms": _safe_float(
+            fields.get("rising_missed_tp1_effective_quote_age_ms")
+        ),
+        "ws_quote_age_ms": _safe_float(fields.get("market_data_ws_quote_age_ms")),
+        "ws_age_basis": fields.get("market_data_ws_age_basis"),
+        "rest_quote_age_ms": _safe_float(fields.get("market_data_rest_quote_age_ms")),
+        "rest_age_basis": fields.get("market_data_rest_age_basis"),
+        "ws_rest_gap_bps": _safe_float(fields.get("market_data_ws_rest_gap_bps")),
+        "freshness_state": fields.get("market_data_freshness_state"),
+        "spread_ratio": _safe_float(fields.get("rising_missed_tp1_spread_ratio")),
+        "watch_delta_pct": _safe_float(
+            fields.get("rising_missed_tp1_actual_watch_delta_pct")
+        ),
+        "ai_action": fields.get("rising_missed_tp1_ai_action"),
+        "bid_imbalance_surge": _optional_boolish(
+            fields.get("rising_missed_tp1_bid_imbalance_surge")
+        ),
+        "source_family_count": _safe_int(fields.get("rising_missed_tp1_source_family_count")),
+        "ws_micro_ready": _optional_boolish(
+            fields.get("rising_missed_tp1_ws_micro_provenance_ready")
+        ),
+        "ws_signed_fid15_present": _optional_boolish(
+            fields.get("rising_missed_tp1_ws_0b_signed_fid15_present")
+        ),
+        "micro_source_state": fields.get("rising_missed_tp1_micro_source_state"),
+        "micro_age_sec": _safe_float(fields.get("rising_missed_tp1_micro_age_sec")),
+        "micro_confidence": _safe_float(fields.get("rising_missed_tp1_micro_confidence")),
+        "true_ofi_ewma": _safe_float(fields.get("rising_missed_tp1_true_ofi_ewma")),
+        "true_ofi_sample_count": _safe_int(fields.get("rising_missed_tp1_true_ofi_sample_count")),
+        "pressure_ewma": _safe_float(fields.get("rising_missed_tp1_pressure_ewma")),
+        "depth_imbalance_ewma": _safe_float(fields.get("rising_missed_tp1_depth_imbalance_ewma")),
+        "top_depth_ratio": _safe_float(fields.get("rising_missed_tp1_top_depth_ratio")),
+        "tick_acceleration": _safe_float(
+            fields.get("rising_missed_tp1_tick_acceleration")
+        ),
+        "tick_acceleration_fresh": _optional_boolish(
+            fields.get("rising_missed_tp1_tick_acceleration_fresh")
+        ),
+        "micro_vwap_gap_bps": _safe_float(fields.get("rising_missed_tp1_micro_vwap_gap_bps")),
+        "micro_vwap_fresh": _optional_boolish(
+            fields.get("rising_missed_tp1_micro_vwap_fresh")
+        ),
+    }
+
+
 def _submit_safety_block_row(row: dict[str, Any]) -> dict[str, Any]:
     fields = _fields(row)
     reason, bucket, components = _classify_submit_safety_block(row)
@@ -904,11 +961,13 @@ def _submit_safety_block_row(row: dict[str, Any]) -> dict[str, Any]:
         "max_quote_age_ms": _safe_float(fields.get("rising_missed_scout_quality_guard_max_quote_age_ms")),
         "ai_action": fields.get("rising_missed_scout_quality_guard_ai_action")
         or fields.get("rising_missed_rest_quote_ai_recheck_ai_action")
-        or fields.get("rising_missed_entry_ai_action"),
+        or fields.get("rising_missed_entry_ai_action")
+        or fields.get("weak_ai_micro_entry_block_ai_action"),
         "ai_score": _safe_float(
             fields.get("rising_missed_scout_quality_guard_ai_score")
             or fields.get("rising_missed_rest_quote_ai_recheck_ai_score")
             or fields.get("ai_score")
+            or fields.get("weak_ai_micro_entry_block_ai_score")
         ),
         "rest_refresh_applied": _optional_boolish(fields.get("pre_submit_rest_orderbook_refresh_applied")),
         "rest_refresh_reason": fields.get("pre_submit_rest_orderbook_refresh_reason"),
@@ -918,6 +977,19 @@ def _submit_safety_block_row(row: dict[str, Any]) -> dict[str, Any]:
         "true_ofi_ewma": _safe_float(fields.get("latency_spread_relief_micro_estimator_true_ofi_ewma")),
         "true_ofi_sample_count": _safe_int(fields.get("latency_spread_relief_micro_estimator_true_ofi_sample_count")),
         "true_ofi_reason": fields.get("latency_spread_relief_micro_estimator_reason"),
+        "source_quality_gate": fields.get("source_quality_gate"),
+        "source_quality_state": fields.get("weak_ai_micro_entry_block_source_quality_state"),
+        "source_quality_missing_fields": _split_csv_values(
+            fields.get("weak_ai_micro_entry_block_missing_fields")
+        ),
+        "orderbook_micro_state": fields.get("orderbook_micro_state"),
+        "orderbook_micro_reason": fields.get("orderbook_micro_reason"),
+        "buy_pressure_usable": _optional_boolish(
+            fields.get("weak_ai_micro_entry_block_buy_pressure_usable")
+        ),
+        "tick_aggressor_pressure_usable": _optional_boolish(
+            fields.get("weak_ai_micro_entry_block_tick_aggressor_pressure_usable")
+        ),
         "source_signature": fields.get("source_signature"),
         "scanner_promotion_reason": fields.get("scanner_promotion_reason"),
         "decision_authority": "source_only_submit_safety_blocker_attribution",
@@ -981,6 +1053,9 @@ def _build_submit_safety_and_backoff_audit(pipeline_path: Path) -> tuple[dict[st
     reason_counts: Counter[str] = Counter()
     bucket_counts: Counter[str] = Counter()
     component_counts: Counter[str] = Counter()
+    source_quality_gate_counts: Counter[str] = Counter()
+    source_quality_state_counts: Counter[str] = Counter()
+    source_quality_missing_field_counts: Counter[str] = Counter()
     source_counts: Counter[str] = Counter()
     latest_seen_ts: datetime | None = None
 
@@ -1032,6 +1107,17 @@ def _build_submit_safety_and_backoff_audit(pipeline_path: Path) -> tuple[dict[st
             bucket_counts[block["blocker_bucket"]] += 1
             for component in block.get("components") or []:
                 component_counts[str(component)] += 1
+            if block["reason"] == "source_quality_unknown":
+                source_quality_gate_counts[
+                    str(block.get("source_quality_gate") or "missing")
+                ] += 1
+                source_quality_state_counts[
+                    str(block.get("source_quality_state") or "missing")
+                ] += 1
+                source_quality_missing_field_counts.update(
+                    str(item)
+                    for item in block.get("source_quality_missing_fields") or []
+                )
             source = fields.get("scanner_budget_reallocation_source") or fields.get("rising_missed_budget_reallocation_source")
             if source:
                 source_counts[str(source)] += 1
@@ -1105,6 +1191,15 @@ def _build_submit_safety_and_backoff_audit(pipeline_path: Path) -> tuple[dict[st
         ],
         "submit_safety_component_counts": [
             {"component": key, "count": value} for key, value in component_counts.most_common()
+        ],
+        "submit_safety_source_quality_unknown_gate_counts": [
+            {"source_quality_gate": key, "count": value} for key, value in source_quality_gate_counts.most_common()
+        ],
+        "submit_safety_source_quality_unknown_state_counts": [
+            {"source_quality_state": key, "count": value} for key, value in source_quality_state_counts.most_common()
+        ],
+        "submit_safety_source_quality_unknown_missing_field_counts": [
+            {"missing_field": key, "count": value} for key, value in source_quality_missing_field_counts.most_common()
         ],
         "budget_reallocation_source_counts": [
             {"source": key, "count": value} for key, value in source_counts.most_common()
@@ -1536,6 +1631,7 @@ def _build_tp1_counterfactual_submit_safety(
                 ),
                 "counterfactual_action": action,
                 "counterfactual_risks": risks,
+                **_tp1_counterfactual_decision_context(fields),
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
                 "actual_order_submitted": False,
@@ -1699,6 +1795,8 @@ def _build_tp1_counterfactual_first_hit_labels(
                 "counterfactual_action": fields.get(
                     "rising_missed_tp1_counterfactual_submit_safety_action"
                 ),
+                "counterfactual_risks": _split_csv_values(fields.get("rising_missed_tp1_counterfactual_submit_safety_risks")),
+                **_tp1_counterfactual_decision_context(fields),
                 "entry_price": entry_price,
                 "entry_price_source": entry_price_source,
                 "gross_first_hit_label": label,
@@ -2412,6 +2510,12 @@ def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path)
         f"- initial_quality_fail_count: {summary.get('initial_quality_fail_count')}",
         f"- scale_in_rescue_warning_count: {summary.get('scale_in_rescue_warning_count')}",
         f"- submit_safety_block_count: {summary.get('submit_safety_block_count')}",
+        f"- submit_safety_source_quality_unknown_gate_counts: "
+        f"{summary.get('submit_safety_source_quality_unknown_gate_counts')}",
+        f"- submit_safety_source_quality_unknown_state_counts: "
+        f"{summary.get('submit_safety_source_quality_unknown_state_counts')}",
+        f"- submit_safety_source_quality_unknown_missing_field_counts: "
+        f"{summary.get('submit_safety_source_quality_unknown_missing_field_counts')}",
         f"- backoff_audit_symbol_count: {summary.get('backoff_audit_symbol_count')}",
         f"- backoff_recovered_eval_symbol_count: {summary.get('backoff_recovered_eval_symbol_count')}",
         f"- backoff_active_positive_delta_symbol_count: "
@@ -2548,7 +2652,9 @@ def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path)
             "mfe_after={mfe_after_block_pct} mae_after={mae_after_block_pct} "
             "quote_age_sec={quote_age_sec} ai_action={ai_action} ai_score={ai_score} "
             "true_ofi={true_ofi_ewma} true_ofi_reason={true_ofi_reason} "
-            "spread_bps={spread_bps}".format(**item)
+            "spread_bps={spread_bps} source_quality_gate={source_quality_gate} "
+            "source_quality_state={source_quality_state} missing_fields={source_quality_missing_fields} "
+            "micro_state={orderbook_micro_state}".format(**item)
         )
     lines.extend(
         [
@@ -2600,6 +2706,17 @@ def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path)
             "spread_bps={spread_bps} true_ofi={true_ofi_ewma} samples={true_ofi_sample_count} "
             "ws_age_ms={ws_age_ms} reason={canary_reason} next_action={canary_next_action} "
             "decision_authority={decision_authority}".format(**item)
+        )
+    lines.extend(["", "## TP1 Counterfactual First-hit Labels", ""])
+    for item in report.get("rising_missed_tp1_counterfactual_first_hit_label_rows") or []:
+        lines.append(
+            "- ts={candidate_ts} code={stock_code} name={stock_name} "
+            "selector={selector_reason} action={counterfactual_action} risks={counterfactual_risks} "
+            "label={gross_first_hit_label} entry={entry_price} source={effective_price_source} "
+            "ws_age_ms={ws_quote_age_ms} rest_age_ms={rest_quote_age_ms} gap_bps={ws_rest_gap_bps} "
+            "spread={spread_ratio} true_ofi={true_ofi_ewma} pressure={pressure_ewma} "
+            "depth={depth_imbalance_ewma} tick_accel={tick_acceleration} "
+            "micro_state={micro_source_state}".format(**item)
         )
     lines.extend(
         [
