@@ -29597,6 +29597,7 @@ def _clear_holding_flow_override_candidate(
             "holding_flow_max_defer_extension_used",
             "holding_flow_max_defer_extension_until",
             "holding_flow_max_defer_extension_started_at",
+            *_SCALP_TRAILING_CONTINUATION_RECHECK_STATE_FIELDS,
         ),
     )
     _log_holding_pipeline(
@@ -29636,6 +29637,249 @@ def _should_revert_overnight_flow_override_hold(
     return (
         _overnight_flow_override_worsen_from_candidate(stock, profit_rate) + 1e-9
     ) >= worsen_pct
+
+
+_SCALP_TRAILING_CONTINUATION_RECHECK_STATE_FIELDS = (
+    "scalp_trailing_continuation_recheck_started_at",
+    "scalp_trailing_continuation_recheck_until_epoch",
+    "scalp_trailing_continuation_recheck_anchor_profit",
+    "scalp_trailing_continuation_recheck_min_profit",
+)
+
+
+def _scalp_trailing_continuation_recheck_config(now_ts: float) -> dict[str, Any]:
+    enabled = _env_bool("KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_ENABLED", False)
+    active_date = str(
+        os.getenv("KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_ACTIVE_DATE", "")
+    ).strip()
+    current_date = datetime.fromtimestamp(float(now_ts), tz=_KST).date().isoformat()
+    return {
+        "enabled": enabled,
+        "active_date": active_date,
+        "current_date": current_date,
+        "active": bool(enabled and active_date == current_date),
+        "ttl_sec": max(
+            5.0,
+            min(
+                30.0,
+                _safe_float(
+                    os.getenv("KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_TTL_SEC"),
+                    15.0,
+                ),
+            ),
+        ),
+        "min_peak_pct": max(
+            0.0,
+            _safe_float(
+                os.getenv("KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_MIN_PEAK_PCT"),
+                0.60,
+            ),
+        ),
+        "max_peak_pct": max(
+            0.0,
+            _safe_float(
+                os.getenv("KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_MAX_PEAK_PCT"),
+                1.50,
+            ),
+        ),
+        "min_profit_pct": max(
+            0.01,
+            _safe_float(
+                os.getenv("KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_MIN_PROFIT_PCT"),
+                0.05,
+            ),
+        ),
+        "max_worsen_pct": max(
+            0.0,
+            _safe_float(
+                os.getenv("KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_MAX_WORSEN_PCT"),
+                0.90,
+            ),
+        ),
+        "min_ai_score": max(
+            0.0,
+            _safe_float(
+                os.getenv("KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_MIN_AI_SCORE"),
+                65.0,
+            ),
+        ),
+    }
+
+
+def _clear_scalp_trailing_continuation_recheck(stock: dict) -> None:
+    _mutate_stock_state(stock, pop_fields=_SCALP_TRAILING_CONTINUATION_RECHECK_STATE_FIELDS)
+
+
+def _scalp_trailing_continuation_recheck_contract_fields() -> dict[str, Any]:
+    return {
+        "threshold_family": "scalp_trailing_continuation_recheck",
+        "metric_role": "bounded_tunable",
+        "decision_authority": "operator_runtime_override_scalp_trailing_continuation_recheck",
+        "window_policy": "same_trailing_candidate_bounded_recheck",
+        "sample_floor": "positive_profit_with_fresh_trusted_ws_composite_micro",
+        "primary_decision_metric": "post_recheck_mfe_before_trailing_exit",
+        "source_quality_gate": "fresh_trusted_ws_and_composite_micro_support",
+        "runtime_effect": True,
+        "allowed_runtime_apply": True,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": (
+            "hard_stop_bypass|protect_stop_bypass|emergency_stop_bypass|"
+            "stale_ws_bypass|broker_guard_bypass|provider_route_change|"
+            "quantity_or_cap_change|second_extension"
+        ),
+    }
+
+
+def _evaluate_scalp_trailing_continuation_recheck(
+    *,
+    stock: dict,
+    code: str,
+    ws_data: dict | None,
+    micro_fields: dict | None,
+    profit_rate: float,
+    peak_profit: float,
+    trailing_peak_worsen: float,
+    current_ai_score: float,
+    now_ts: float,
+) -> bool:
+    """Defer only a shallow profitable trailing exit while fresh WS support persists."""
+    config = _scalp_trailing_continuation_recheck_config(now_ts)
+    if not config["active"]:
+        return False
+
+    micro_fields = micro_fields if isinstance(micro_fields, dict) else {}
+    features, has_features = _normalize_soft_stop_expert_features(stock)
+    feature_context_usable = bool(
+        has_features
+        and _truthy_field(features.get("micro_context_usable"))
+        and _truthy_field(features.get("tick_aggressor_pressure_usable"))
+    )
+    large_sell_print = bool(
+        feature_context_usable
+        and _truthy_field(features.get("large_sell_print_detected"))
+    )
+    micro_supported, micro_support_fields = _holding_flow_max_defer_micro_support(
+        ws_data,
+        micro_fields,
+        now_ts=now_ts,
+    )
+    micro_source_state = str(
+        micro_fields.get("holding_flow_micro_estimator_source_state") or ""
+    ).strip().lower()
+    micro_source_trusted_ws = micro_source_state.startswith("fresh_ws")
+    eligible = bool(
+        config["min_peak_pct"] <= float(peak_profit) <= config["max_peak_pct"]
+        and float(profit_rate) >= config["min_profit_pct"]
+        and float(trailing_peak_worsen) <= config["max_worsen_pct"]
+        and float(current_ai_score) >= config["min_ai_score"]
+        and feature_context_usable
+        and not large_sell_print
+        and micro_source_trusted_ws
+        and micro_supported
+    )
+    started_at = _safe_float(
+        stock.get("scalp_trailing_continuation_recheck_started_at"), 0.0
+    )
+    state_fields = {
+        "recheck_enabled": bool(config["enabled"]),
+        "recheck_active": bool(config["active"]),
+        "recheck_active_date": config["active_date"] or "-",
+        "recheck_current_date": config["current_date"],
+        "recheck_ttl_sec": f"{config['ttl_sec']:.3f}",
+        "recheck_min_peak_pct": f"{config['min_peak_pct']:.2f}",
+        "recheck_max_peak_pct": f"{config['max_peak_pct']:.2f}",
+        "recheck_min_profit_pct": f"{config['min_profit_pct']:+.2f}",
+        "recheck_max_worsen_pct": f"{config['max_worsen_pct']:.2f}",
+        "recheck_min_ai_score": f"{config['min_ai_score']:.0f}",
+        "profit_rate": f"{float(profit_rate):+.2f}",
+        "peak_profit": f"{float(peak_profit):+.2f}",
+        "trailing_peak_worsen": f"{float(trailing_peak_worsen):.2f}",
+        "current_ai_score": f"{float(current_ai_score):.0f}",
+        "reversal_feature_context_usable": bool(feature_context_usable),
+        "large_sell_print_detected": bool(large_sell_print),
+        "micro_source_state": micro_source_state or "missing",
+        "micro_source_trusted_ws": bool(micro_source_trusted_ws),
+        "composite_micro_supported": bool(micro_supported),
+        **micro_support_fields,
+        **micro_fields,
+        **_scalp_trailing_continuation_recheck_contract_fields(),
+    }
+    if started_at <= 0:
+        if not eligible:
+            return False
+        until_epoch = float(now_ts) + float(config["ttl_sec"])
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "scalp_trailing_continuation_recheck_started_at": float(now_ts),
+                "scalp_trailing_continuation_recheck_until_epoch": until_epoch,
+                "scalp_trailing_continuation_recheck_anchor_profit": float(profit_rate),
+                "scalp_trailing_continuation_recheck_min_profit": float(profit_rate),
+            },
+        )
+        _log_holding_pipeline(
+            stock,
+            code,
+            "scalp_trailing_continuation_recheck",
+            recheck_state="armed",
+            recheck_until_epoch=f"{until_epoch:.3f}",
+            **state_fields,
+        )
+        return True
+
+    until_epoch = _safe_float(
+        stock.get("scalp_trailing_continuation_recheck_until_epoch"),
+        started_at + float(config["ttl_sec"]),
+    )
+    elapsed_sec = max(0.0, float(now_ts) - started_at)
+    if not eligible:
+        _clear_scalp_trailing_continuation_recheck(stock)
+        _log_holding_pipeline(
+            stock,
+            code,
+            "scalp_trailing_continuation_recheck",
+            recheck_state="vetoed",
+            recheck_elapsed_sec=f"{elapsed_sec:.3f}",
+            recheck_until_epoch=f"{until_epoch:.3f}",
+            **state_fields,
+        )
+        return False
+    if float(now_ts) >= until_epoch:
+        _clear_scalp_trailing_continuation_recheck(stock)
+        _log_holding_pipeline(
+            stock,
+            code,
+            "scalp_trailing_continuation_recheck",
+            recheck_state="ttl_expired",
+            recheck_elapsed_sec=f"{elapsed_sec:.3f}",
+            recheck_until_epoch=f"{until_epoch:.3f}",
+            **state_fields,
+        )
+        return False
+
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "scalp_trailing_continuation_recheck_min_profit": min(
+                _safe_float(
+                    stock.get("scalp_trailing_continuation_recheck_min_profit"),
+                    profit_rate,
+                ),
+                float(profit_rate),
+            )
+        },
+    )
+    _log_holding_pipeline(
+        stock,
+        code,
+        "scalp_trailing_continuation_recheck",
+        recheck_state="deferred",
+        recheck_elapsed_sec=f"{elapsed_sec:.3f}",
+        recheck_until_epoch=f"{until_epoch:.3f}",
+        **state_fields,
+    )
+    return True
 
 
 def _evaluate_holding_flow_override(
@@ -29735,6 +29979,7 @@ def _evaluate_holding_flow_override(
                 "holding_flow_max_defer_extension_until": None,
                 "holding_flow_max_defer_extension_started_at": None,
             },
+            pop_fields=_SCALP_TRAILING_CONTINUATION_RECHECK_STATE_FIELDS,
         )
 
     elapsed_sec = max(0, int(now_ts - candidate_started_at))
@@ -29896,6 +30141,18 @@ def _evaluate_holding_flow_override(
             if _holding_strong_trailing_enabled(holding_score_trailing_ctx, current_ai_score)
             else _rule_float("SCALP_TRAILING_LIMIT_WEAK", 0.4)
         )
+        if _evaluate_scalp_trailing_continuation_recheck(
+            stock=stock,
+            code=code,
+            ws_data=ws_data,
+            micro_fields=holding_flow_micro_estimator_fields,
+            profit_rate=profit_rate,
+            peak_profit=peak_profit,
+            trailing_peak_worsen=trailing_peak_worsen,
+            current_ai_score=current_ai_score,
+            now_ts=now_ts,
+        ):
+            return False
         if trailing_peak_worsen + 1e-9 >= max(0.0, trailing_force_worsen_pct):
             _log_holding_pipeline(
                 stock,

@@ -3376,6 +3376,11 @@ DATED_RUNTIME_OVERRIDE_SPECS: tuple[dict[str, str], ...] = (
         "enabled_key": "KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_ENABLED",
         "active_date_key": "KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_ACTIVE_DATE",
     },
+    {
+        "family": "scalp_trailing_continuation_recheck",
+        "enabled_key": "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_ENABLED",
+        "active_date_key": "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_ACTIVE_DATE",
+    },
 )
 
 

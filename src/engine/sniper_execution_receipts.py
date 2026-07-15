@@ -806,6 +806,7 @@ def _handle_scalp_revive_sell_execution(
         code=code,
         new_watch_id=new_watch_id,
         revived_position_tag=revived_position_tag,
+        revived_at_ts=now.timestamp(),
     )
     return True
 
@@ -816,6 +817,7 @@ def _apply_scalp_revive_memory_state(
     code: str,
     new_watch_id: int,
     revived_position_tag: str,
+    revived_at_ts: float | None = None,
 ) -> None:
     highest_prices.pop(code, None)
     target_stock['id'] = new_watch_id
@@ -824,6 +826,10 @@ def _apply_scalp_revive_memory_state(
     target_stock['buy_qty'] = 0
     target_stock['added_time'] = time.time()
     target_stock['position_tag'] = revived_position_tag
+    # Prevent a pre-sell WS snapshot from becoming the revived watcher's entry input.
+    target_stock['_scalp_revive_min_quote_ts'] = float(
+        revived_at_ts if revived_at_ts is not None else time.time()
+    )
     move_orders_to_terminal(target_stock, reason='sell_revive_cleanup')
     _clear_runtime_keys(target_stock, _SELL_REVIVE_RESET_KEYS)
 

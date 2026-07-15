@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from datetime import time as dt_time
+from datetime import datetime, time as dt_time, timedelta, timezone
 
 from src.engine import sniper_overnight_gatekeeper as overnight
 from src.engine import sniper_state_handlers as handlers
@@ -67,6 +67,44 @@ def _ws():
         "v_pw": 120,
         "buy_ratio": 58,
         "orderbook": {"asks": [{"price": 10010}], "bids": [{"price": 9990}]},
+    }
+
+
+def _trailing_continuation_micro_fields():
+    return {
+        "holding_flow_micro_estimator_source_state": "fresh_ws_order_flow_delta",
+        "holding_flow_micro_estimator_confidence": 0.85,
+        "holding_flow_micro_estimator_true_ofi_ewma": 0.01,
+        "holding_flow_micro_estimator_depth_imbalance_ewma": 0.46,
+        "holding_flow_micro_estimator_pressure_ewma": 65.0,
+        "holding_flow_micro_estimator_top_depth_ratio": 2.0,
+        "holding_flow_micro_estimator_true_ofi_sample_count": 6,
+        "holding_flow_micro_estimator_age_sec": 0.2,
+    }
+
+
+def _enable_trailing_continuation_recheck(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_ENABLED", "true")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_ACTIVE_DATE",
+        "2026-07-15",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_TTL_SEC", "15")
+
+
+def _fresh_reversal_features():
+    return {
+        "tick_context_quality": "fresh_computed",
+        "tick_context_stale": False,
+        "tick_latest_age_ms": 100,
+        "quote_stale": False,
+        "quote_age_ms": 100,
+        "tick_aggressor_pressure_usable": True,
+        "tick_aggressor_trusted_count": 6,
+        "large_sell_print_detected": False,
+        "micro_vwap_available": True,
+        "minute_candle_window_fresh": True,
+        "curr_vs_micro_vwap_bp": 3.0,
     }
 
 
@@ -976,6 +1014,232 @@ def test_trailing_peak_worsen_floor_allows_original_exit_without_flow_review(mon
     assert force_exit["trailing_peak_worsen"] == "1.51"
     assert force_exit["trailing_force_worsen_pct"] == "0.40"
     assert force_exit["decision_authority"] == "holding_flow_override_safety_exit_guard"
+
+
+def test_trailing_continuation_recheck_defers_only_fresh_supportive_shallow_profit(
+    monkeypatch,
+):
+    logs = []
+    _patch_holding_context(monkeypatch, logs)
+    _enable_trailing_continuation_recheck(monkeypatch)
+    micro_fields = _trailing_continuation_micro_fields()
+    monkeypatch.setattr(
+        handlers,
+        "_scalping_micro_estimator_log_fields",
+        lambda **kwargs: dict(micro_fields),
+    )
+    now_ts = datetime(2026, 7, 15, 10, 0, tzinfo=timezone(timedelta(hours=9))).timestamp()
+    stock = {
+        **_stock(),
+        "last_reversal_features": _fresh_reversal_features(),
+    }
+    ws_data = {**_ws(), "last_ws_update_ts": now_ts - 0.1}
+    ai = DummyFlowAI("HOLD")
+
+    proceed = handlers._evaluate_holding_flow_override(
+        stock=stock,
+        code="002990",
+        strategy="SCALPING",
+        ws_data=ws_data,
+        ai_engine=ai,
+        exit_rule="scalp_trailing_take_profit",
+        sell_reason_type="TRAILING",
+        reason="trailing pullback",
+        profit_rate=0.13,
+        peak_profit=0.83,
+        drawdown=0.70,
+        current_ai_score=71,
+        held_sec=120,
+        curr_price=13000,
+        buy_price=12953,
+        now_ts=now_ts,
+    )
+
+    assert proceed is False
+    assert ai.calls == []
+    assert stock["scalp_trailing_continuation_recheck_until_epoch"] == now_ts + 15
+    assert any(
+        stage == "scalp_trailing_continuation_recheck"
+        and fields["recheck_state"] == "armed"
+        and fields["composite_micro_supported"] is True
+        for stage, fields in logs
+    )
+
+    proceed_after_ttl = handlers._evaluate_holding_flow_override(
+        stock=stock,
+        code="002990",
+        strategy="SCALPING",
+        ws_data={**ws_data, "last_ws_update_ts": now_ts + 15.9},
+        ai_engine=ai,
+        exit_rule="scalp_trailing_take_profit",
+        sell_reason_type="TRAILING",
+        reason="trailing pullback",
+        profit_rate=0.13,
+        peak_profit=0.83,
+        drawdown=0.70,
+        current_ai_score=71,
+        held_sec=136,
+        curr_price=13000,
+        buy_price=12953,
+        now_ts=now_ts + 16,
+    )
+
+    assert proceed_after_ttl is True
+    assert "scalp_trailing_continuation_recheck_started_at" not in stock
+    assert any(
+        stage == "scalp_trailing_continuation_recheck"
+        and fields["recheck_state"] == "ttl_expired"
+        for stage, fields in logs
+    )
+    assert any(
+        stage == "holding_flow_override_force_exit"
+        and fields.get("force_reason") == "trailing_peak_worsen_floor"
+        for stage, fields in logs
+    )
+
+
+def test_trailing_continuation_recheck_fails_closed_without_fresh_signed_tape_features(
+    monkeypatch,
+):
+    logs = []
+    _patch_holding_context(monkeypatch, logs)
+    _enable_trailing_continuation_recheck(monkeypatch)
+    monkeypatch.setattr(
+        handlers,
+        "_scalping_micro_estimator_log_fields",
+        lambda **kwargs: _trailing_continuation_micro_fields(),
+    )
+    now_ts = datetime(2026, 7, 15, 10, 0, tzinfo=timezone(timedelta(hours=9))).timestamp()
+    stock = _stock()
+    ai = DummyFlowAI("HOLD")
+
+    proceed = handlers._evaluate_holding_flow_override(
+        stock=stock,
+        code="002990",
+        strategy="SCALPING",
+        ws_data={**_ws(), "last_ws_update_ts": now_ts - 0.1},
+        ai_engine=ai,
+        exit_rule="scalp_trailing_take_profit",
+        sell_reason_type="TRAILING",
+        reason="trailing pullback",
+        profit_rate=0.13,
+        peak_profit=0.83,
+        drawdown=0.70,
+        current_ai_score=71,
+        held_sec=120,
+        curr_price=13000,
+        buy_price=12953,
+        now_ts=now_ts,
+    )
+
+    assert proceed is True
+    assert "scalp_trailing_continuation_recheck_started_at" not in stock
+    assert not any(stage == "scalp_trailing_continuation_recheck" for stage, _ in logs)
+    assert any(
+        stage == "holding_flow_override_force_exit"
+        and fields.get("force_reason") == "trailing_peak_worsen_floor"
+        for stage, fields in logs
+    )
+
+
+def test_trailing_continuation_recheck_rejects_rest_or_feature_only_micro_provenance(
+    monkeypatch,
+):
+    logs = []
+    _patch_holding_context(monkeypatch, logs)
+    _enable_trailing_continuation_recheck(monkeypatch)
+    micro_fields = {
+        **_trailing_continuation_micro_fields(),
+        "holding_flow_micro_estimator_source_state": "rest_orderbook_delta_estimate",
+    }
+    monkeypatch.setattr(
+        handlers,
+        "_scalping_micro_estimator_log_fields",
+        lambda **kwargs: micro_fields,
+    )
+    now_ts = datetime(2026, 7, 15, 10, 0, tzinfo=timezone(timedelta(hours=9))).timestamp()
+    stock = {**_stock(), "last_reversal_features": _fresh_reversal_features()}
+
+    proceed = handlers._evaluate_holding_flow_override(
+        stock=stock,
+        code="002990",
+        strategy="SCALPING",
+        ws_data={**_ws(), "last_ws_update_ts": now_ts - 0.1},
+        ai_engine=DummyFlowAI("HOLD"),
+        exit_rule="scalp_trailing_take_profit",
+        sell_reason_type="TRAILING",
+        reason="trailing pullback",
+        profit_rate=0.13,
+        peak_profit=0.83,
+        drawdown=0.70,
+        current_ai_score=71,
+        held_sec=120,
+        curr_price=13000,
+        buy_price=12953,
+        now_ts=now_ts,
+    )
+
+    assert proceed is True
+    assert "scalp_trailing_continuation_recheck_started_at" not in stock
+    assert not any(stage == "scalp_trailing_continuation_recheck" for stage, _ in logs)
+
+
+def test_trailing_continuation_recheck_clamps_negative_min_profit_to_positive_floor(
+    monkeypatch,
+):
+    _enable_trailing_continuation_recheck(monkeypatch)
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_MIN_PROFIT_PCT", "-1")
+    now_ts = datetime(2026, 7, 15, 10, 0, tzinfo=timezone(timedelta(hours=9))).timestamp()
+
+    config = handlers._scalp_trailing_continuation_recheck_config(now_ts)
+
+    assert config["active"] is True
+    assert config["min_profit_pct"] == 0.01
+
+
+def test_trailing_continuation_recheck_is_cleared_when_holding_candidate_changes(
+    monkeypatch,
+):
+    logs = []
+    _patch_holding_context(monkeypatch, logs)
+    monkeypatch.setattr(
+        handlers,
+        "_scalping_micro_estimator_log_fields",
+        lambda **kwargs: _trailing_continuation_micro_fields(),
+    )
+    stock = {
+        **_stock(),
+        "holding_flow_override_candidate_key": "scalp_trailing_take_profit:TRAILING",
+        "holding_flow_override_started_at": 1000.0,
+        "holding_flow_override_candidate_profit": 0.13,
+        "scalp_trailing_continuation_recheck_started_at": 1000.0,
+        "scalp_trailing_continuation_recheck_until_epoch": 1015.0,
+        "scalp_trailing_continuation_recheck_anchor_profit": 0.13,
+        "scalp_trailing_continuation_recheck_min_profit": 0.10,
+    }
+
+    handlers._evaluate_holding_flow_override(
+        stock=stock,
+        code="002990",
+        strategy="SCALPING",
+        ws_data={**_ws(), "last_ws_update_ts": 1001.0},
+        ai_engine=DummyFlowAI("HOLD"),
+        exit_rule="scalp_soft_stop_pct",
+        sell_reason_type="LOSS",
+        reason="soft stop",
+        profit_rate=0.13,
+        peak_profit=0.83,
+        drawdown=0.70,
+        current_ai_score=71,
+        held_sec=120,
+        curr_price=13000,
+        buy_price=12953,
+        now_ts=1001.0,
+    )
+
+    assert stock["holding_flow_override_candidate_key"] == "scalp_soft_stop_pct:LOSS"
+    assert "scalp_trailing_continuation_recheck_started_at" not in stock
+    assert "scalp_trailing_continuation_recheck_until_epoch" not in stock
 
 
 def test_hard_stop_is_outside_holding_flow_override_scope():

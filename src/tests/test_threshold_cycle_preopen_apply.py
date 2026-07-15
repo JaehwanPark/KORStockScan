@@ -7150,6 +7150,8 @@ def test_dated_runtime_override_audits_accept_current_runtime_bundle():
         "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ACTIVE_DATE": target_date,
         "KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_ENABLED": "true",
         "KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_ACTIVE_DATE": target_date,
+        "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_ENABLED": "true",
+        "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_ACTIVE_DATE": target_date,
     }
 
     audits = mod._dated_runtime_override_audits(target_date, env)

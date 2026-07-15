@@ -119,6 +119,53 @@ def test_low_profit_stagnation_confirmation_contract_passes(monkeypatch, tmp_pat
     )
 
 
+def test_scalp_trailing_continuation_recheck_contract_passes(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-07-15",
+        [
+            _event(
+                "scalp_trailing_continuation_recheck",
+                {
+                    "metric_role": "bounded_tunable",
+                    "decision_authority": "operator_runtime_override_scalp_trailing_continuation_recheck",
+                    "window_policy": "same_trailing_candidate_bounded_recheck",
+                    "sample_floor": "positive_profit_with_fresh_trusted_ws_composite_micro",
+                    "primary_decision_metric": "post_recheck_mfe_before_trailing_exit",
+                    "source_quality_gate": "fresh_trusted_ws_and_composite_micro_support",
+                    "runtime_effect": True,
+                    "allowed_runtime_apply": True,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "forbidden_uses": "hard_stop_bypass",
+                    "threshold_family": "scalp_trailing_continuation_recheck",
+                    "recheck_state": "armed",
+                    "recheck_enabled": True,
+                    "recheck_active": True,
+                    "recheck_ttl_sec": "15.000",
+                    "profit_rate": "+0.13",
+                    "peak_profit": "+0.83",
+                    "trailing_peak_worsen": "0.70",
+                    "current_ai_score": "71",
+                    "reversal_feature_context_usable": True,
+                    "large_sell_print_detected": False,
+                    "micro_source_state": "fresh_ws_order_flow_delta",
+                    "micro_source_trusted_ws": True,
+                    "composite_micro_supported": True,
+                },
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-07-15")
+
+    assert (
+        report["stage_contracts"]["scalp_trailing_continuation_recheck"]["status"]
+        == "pass"
+    )
+
+
 def test_market_halt_session_events_artifact_is_gitignored():
     path = Path("data/source_quality/market_halt_windows/session_events/2026-06-08.json")
     result = subprocess.run(

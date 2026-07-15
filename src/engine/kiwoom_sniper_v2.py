@@ -4140,6 +4140,73 @@ def _scanner_ws_quote_age_ms(ws_data, now_ts):
     return None
 
 
+def _scanner_snapshot_receive_ts(ws_data) -> float:
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    for key in ("last_ws_update_ts", "received_at", "received_ts", "timestamp", "ts"):
+        received_ts = _safe_float(ws_data.get(key), 0.0)
+        if received_ts <= 0:
+            continue
+        if received_ts > 10_000_000_000:
+            received_ts = received_ts / 1000.0
+        return float(received_ts)
+    return 0.0
+
+
+def _scanner_rest_recovery_receive_ts(ws_data) -> float:
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    for key in ("ws_snapshot_recovery_epoch", "rest_received_ts", "rest_received_at"):
+        received_ts = _safe_float(ws_data.get(key), 0.0)
+        if received_ts <= 0:
+            continue
+        if received_ts > 10_000_000_000:
+            received_ts = received_ts / 1000.0
+        return float(received_ts)
+    return 0.0
+
+
+def _discard_pre_revive_scanner_snapshot(stock, ws_data, *, now_ts: float):
+    """Require a quote received after a scalp revive before scanner evaluation."""
+    stock = stock if isinstance(stock, dict) else {}
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    min_quote_ts = _safe_float(stock.get("_scalp_revive_min_quote_ts"), 0.0)
+    if min_quote_ts <= 0:
+        return ws_data, {}
+
+    received_ts = _scanner_snapshot_receive_ts(ws_data)
+    if received_ts > min_quote_ts:
+        stock.pop("_scalp_revive_min_quote_ts", None)
+        return ws_data, {
+            "scalp_revive_quote_barrier_applied": True,
+            "scalp_revive_quote_barrier_state": "fresh_ws_after_revive",
+            "scalp_revive_quote_barrier_min_ts": round(min_quote_ts, 3),
+            "scalp_revive_quote_barrier_received_ts": round(received_ts, 3),
+        }
+
+    rest_received_ts = _scanner_rest_recovery_receive_ts(ws_data)
+    if rest_received_ts > min_quote_ts:
+        # A current REST recovery can repair the quote price but must not promote
+        # itself to trusted WS micro provenance or clear the WS revival barrier.
+        return ws_data, {
+            "scalp_revive_quote_barrier_applied": True,
+            "scalp_revive_quote_barrier_state": "fresh_rest_after_revive_ws_pending",
+            "scalp_revive_quote_barrier_min_ts": round(min_quote_ts, 3),
+            "scalp_revive_quote_barrier_received_ts": round(rest_received_ts, 3),
+            "scalp_revive_quote_barrier_ws_pending": True,
+        }
+
+    return {}, {
+        "scalp_revive_quote_barrier_applied": True,
+        "scalp_revive_quote_barrier_state": "pre_revive_ws_discarded",
+        "scalp_revive_quote_barrier_min_ts": round(min_quote_ts, 3),
+        "scalp_revive_quote_barrier_received_ts": (
+            round(received_ts, 3) if received_ts > 0 else "missing"
+        ),
+        "scalp_revive_quote_barrier_wait_sec": round(
+            max(0.0, float(now_ts) - min_quote_ts), 3
+        ),
+    }
+
+
 def _scanner_boolish_true(value):
     if isinstance(value, bool):
         return value
@@ -6476,6 +6543,13 @@ def run_sniper(is_test_mode=False):
                     ws_data = scanner_ws_snapshot_cache.get(code) or {}
                 else:
                     ws_data = WS_MANAGER.get_latest_data(code) if WS_MANAGER else {}
+                revive_quote_barrier_fields = {}
+                if _is_scanner_watching_target(stock):
+                    ws_data, revive_quote_barrier_fields = _discard_pre_revive_scanner_snapshot(
+                        stock,
+                        ws_data,
+                        now_ts=now_ts,
+                    )
                 if not ws_data or ws_data.get('curr', 0) == 0:
                     if status == 'WATCHING':
                         recheck_snapshot_applied = False
@@ -6499,6 +6573,10 @@ def run_sniper(is_test_mode=False):
                             else (ws_data, {})
                         )
                         if _is_scanner_watching_target(stock):
+                            recovery_fields = {
+                                **revive_quote_barrier_fields,
+                                **recovery_fields,
+                            }
                             if recovery_fields.get("ws_repair_batch_required"):
                                 recovery_fields.update(
                                     _queue_scanner_ws_persistent_repair(
