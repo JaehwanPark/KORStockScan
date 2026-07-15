@@ -413,13 +413,111 @@ def test_prior_ofi_debounce_max_defer_force_exit_is_post_debounce_guard(monkeypa
     force_exit = next(
         fields
         for stage, fields in logs
-        if stage == "holding_flow_override_force_exit" and fields.get("force_reason") == "max_defer_sec"
+        if stage == "holding_flow_override_force_exit"
+        and fields.get("force_reason") == "max_defer_sec"
     )
     assert force_exit["ofi_force_exit_phase"] == "post_debounce_guard"
     assert force_exit["ofi_debounce_prior"] is True
     assert force_exit["ofi_debounce_elapsed_sec"] == 50
     assert force_exit["ofi_debounce_profit_delta"] == "-0.25"
     assert force_exit["ofi_force_exit_terminal_reason"] == "max_defer_sec"
+
+
+def test_max_defer_gets_one_bounded_extension_for_fresh_supportive_composite_micro(
+    monkeypatch,
+):
+    logs = []
+    _patch_holding_context(monkeypatch, logs)
+    ai = DummyFlowAI("EXIT")
+    micro_fields = {
+        "holding_flow_micro_estimator_confidence": "0.85",
+        "holding_flow_micro_estimator_true_ofi_ewma": "-0.001",
+        "holding_flow_micro_estimator_depth_imbalance_ewma": "0.7752",
+        "holding_flow_micro_estimator_pressure_ewma": "72.048",
+        "holding_flow_micro_estimator_top_depth_ratio": "4.8527",
+        "holding_flow_micro_estimator_true_ofi_sample_count": "780",
+        "holding_flow_micro_estimator_age_sec": "0.0",
+    }
+    monkeypatch.setattr(
+        handlers,
+        "_scalping_micro_estimator_log_fields",
+        lambda **kwargs: dict(micro_fields),
+    )
+    stock = {
+        **_stock(),
+        "holding_flow_override_candidate_key": "scalp_soft_stop_pct:LOSS",
+        "holding_flow_override_started_at": 900.0,
+        "holding_flow_override_candidate_profit": -3.55,
+    }
+
+    first = handlers._evaluate_holding_flow_override(
+        stock=stock,
+        code="105560",
+        strategy="SCALPING",
+        ws_data={**_ws(), "last_ws_update_ts": 999.5},
+        ai_engine=ai,
+        exit_rule="scalp_soft_stop_pct",
+        sell_reason_type="LOSS",
+        reason="soft stop",
+        profit_rate=-3.72,
+        peak_profit=-0.23,
+        drawdown=3.49,
+        current_ai_score=68,
+        held_sec=64_697,
+        curr_price=176700,
+        buy_price=183100,
+        now_ts=1000.0,
+    )
+
+    assert first is False
+    assert ai.calls == []
+    assert stock["holding_flow_max_defer_extension_used"] is True
+    assert stock["holding_flow_max_defer_extension_until"] == 1090.0
+    extension = next(
+        fields
+        for stage, fields in logs
+        if stage == "holding_flow_max_defer_bullish_extension"
+    )
+    assert (
+        extension["max_defer_extension_support_reason"] == "supportive_composite_micro"
+    )
+    assert extension["max_defer_extension_trusted_ws"] is True
+
+    second = handlers._evaluate_holding_flow_override(
+        stock=stock,
+        code="105560",
+        strategy="SCALPING",
+        ws_data={**_ws(), "last_ws_update_ts": 1090.5},
+        ai_engine=ai,
+        exit_rule="scalp_soft_stop_pct",
+        sell_reason_type="LOSS",
+        reason="soft stop",
+        profit_rate=-3.70,
+        peak_profit=-0.23,
+        drawdown=3.47,
+        current_ai_score=68,
+        held_sec=64_788,
+        curr_price=176700,
+        buy_price=183100,
+        now_ts=1091.0,
+    )
+
+    assert second is True
+    assert (
+        len(
+            [
+                1
+                for stage, _ in logs
+                if stage == "holding_flow_max_defer_bullish_extension"
+            ]
+        )
+        == 1
+    )
+    assert any(
+        stage == "holding_flow_override_force_exit"
+        and fields.get("force_reason") == "max_defer_sec"
+        for stage, fields in logs
+    )
 
 
 def test_stale_ws_force_exit_is_source_quality_guard_without_debounce(monkeypatch):

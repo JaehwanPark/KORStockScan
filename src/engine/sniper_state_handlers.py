@@ -598,12 +598,19 @@ _HOLDING_FLOW_OVERRIDE_EXIT_RULES = {
     "scalp_ai_momentum_decay",
     "scalp_trailing_take_profit",
     "scalp_profit_stagnation_time_exit",
+    "scalp_low_profit_stagnation_hard_exit",
     "scalp_bad_entry_refined_canary",
 }
 _PROFIT_STAGNATION_STATE_FIELDS = (
     "profit_stagnation_started_at",
     "profit_stagnation_anchor_profit",
     "profit_stagnation_anchor_peak",
+)
+_LOW_PROFIT_STAGNATION_STATE_FIELDS = (
+    "low_profit_stagnation_started_at",
+    "low_profit_stagnation_anchor_profit",
+    "low_profit_stagnation_anchor_peak",
+    "low_profit_stagnation_state",
 )
 _PRESET_TP_SOFT_STOP_STATE_FIELDS = (
     "preset_tp_soft_stop_started_at",
@@ -615,7 +622,9 @@ SCALP_SIM_PENDING_STATUS = "SCALP_SIM_PENDING_BUY"
 SCALP_SIM_STATE_PATH = DATA_DIR / "runtime" / "scalp_live_simulator_state.json"
 _SCALP_SIM_STATE_LAST_SEEN_MTIME_NS: int | None = None
 SWING_INTRADAY_PROBE_BOOK = "swing_intraday_live_equiv_probe"
-SWING_INTRADAY_PROBE_STATE_PATH = DATA_DIR / "runtime" / "swing_intraday_probe_state.json"
+SWING_INTRADAY_PROBE_STATE_PATH = (
+    DATA_DIR / "runtime" / "swing_intraday_probe_state.json"
+)
 _SWING_PROBE_STATE_LAST_SEEN_MTIME_NS: int | None = None
 RISING_MISSED_NXT_POST_BLOCK_SAMPLER_STATE_PATH = (
     DATA_DIR / "runtime" / "rising_missed_nxt_post_block_sampler_state.json"
@@ -2154,13 +2163,22 @@ def _evaluate_scalp_low_profit_stagnation_hard_exit(
     *,
     strategy: str | None,
     profit_rate: float,
+    peak_profit: float,
     held_sec: int,
+    now_ts: float,
 ) -> dict:
     if not _rule_bool("SCALP_LOW_PROFIT_STAGNATION_HARD_EXIT_ENABLED", False):
+        if isinstance(stock, dict):
+            _mutate_stock_state(stock, pop_fields=_LOW_PROFIT_STAGNATION_STATE_FIELDS)
         return {"should_exit": False, "reason": "disabled"}
     if not isinstance(stock, dict) or not _is_scalp_strategy(strategy):
+        if isinstance(stock, dict):
+            _mutate_stock_state(stock, pop_fields=_LOW_PROFIT_STAGNATION_STATE_FIELDS)
         return {"should_exit": False, "reason": "not_real_scalping"}
-    if _is_scalp_simulated_position(stock, strategy) or _has_sim_probe_provenance(stock):
+    if _is_scalp_simulated_position(stock, strategy) or _has_sim_probe_provenance(
+        stock
+    ):
+        _mutate_stock_state(stock, pop_fields=_LOW_PROFIT_STAGNATION_STATE_FIELDS)
         return {"should_exit": False, "reason": "simulated_position"}
 
     min_hold_sec = max(1, _rule_int("SCALP_LOW_PROFIT_STAGNATION_MIN_HOLD_SEC", 1800))
@@ -2173,14 +2191,27 @@ def _evaluate_scalp_low_profit_stagnation_hard_exit(
         1.00,
     )
     if max_adjusted_profit < min_adjusted_profit:
-        min_adjusted_profit, max_adjusted_profit = max_adjusted_profit, min_adjusted_profit
+        min_adjusted_profit, max_adjusted_profit = (
+            max_adjusted_profit,
+            min_adjusted_profit,
+        )
     slippage_bps = max(
         0.0,
         _rule_float("SCALP_LOW_PROFIT_STAGNATION_ASSUMED_EXIT_SLIPPAGE_BPS", 15.0),
     )
+    confirmation_sec = max(1, _rule_int("SCALP_PROFIT_STAGNATION_MIN_SEC", 180))
+    max_profit_move = max(
+        0.0,
+        _rule_float("SCALP_PROFIT_STAGNATION_MAX_PROFIT_MOVE_PCT", 0.15),
+    )
+    max_peak_improve = max(
+        0.0,
+        _rule_float("SCALP_PROFIT_STAGNATION_MAX_PEAK_IMPROVE_PCT", 0.10),
+    )
     adjusted_profit = float(profit_rate) - (slippage_bps / 100.0)
 
     if int(held_sec or 0) < min_hold_sec:
+        _mutate_stock_state(stock, pop_fields=_LOW_PROFIT_STAGNATION_STATE_FIELDS)
         return {
             "should_exit": False,
             "reason": "hold_time_below_min",
@@ -2189,6 +2220,7 @@ def _evaluate_scalp_low_profit_stagnation_hard_exit(
             "adjusted_profit_pct": adjusted_profit,
         }
     if adjusted_profit < min_adjusted_profit:
+        _mutate_stock_state(stock, pop_fields=_LOW_PROFIT_STAGNATION_STATE_FIELDS)
         return {
             "should_exit": False,
             "reason": "adjusted_profit_below_min",
@@ -2196,6 +2228,7 @@ def _evaluate_scalp_low_profit_stagnation_hard_exit(
             "min_adjusted_profit_pct": min_adjusted_profit,
         }
     if adjusted_profit > max_adjusted_profit:
+        _mutate_stock_state(stock, pop_fields=_LOW_PROFIT_STAGNATION_STATE_FIELDS)
         return {
             "should_exit": False,
             "reason": "adjusted_profit_above_max",
@@ -2203,6 +2236,80 @@ def _evaluate_scalp_low_profit_stagnation_hard_exit(
             "max_adjusted_profit_pct": max_adjusted_profit,
         }
 
+    started_at = _safe_float(stock.get("low_profit_stagnation_started_at"), 0.0)
+    anchor_profit = _safe_float(
+        stock.get("low_profit_stagnation_anchor_profit"),
+        profit_rate,
+    )
+    anchor_peak = _safe_float(
+        stock.get("low_profit_stagnation_anchor_peak"),
+        peak_profit,
+    )
+    profit_move = abs(float(profit_rate) - anchor_profit)
+    profit_improve = float(profit_rate) - anchor_profit
+    peak_improve = float(peak_profit) - anchor_peak
+    previous_state = str(stock.get("low_profit_stagnation_state") or "").strip()
+
+    if (
+        started_at <= 0
+        or profit_improve > max_profit_move
+        or peak_improve > max_peak_improve
+    ):
+        reason = (
+            "confirmation_started"
+            if started_at <= 0
+            else "anchor_reset_on_price_progress"
+        )
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "low_profit_stagnation_started_at": float(now_ts),
+                "low_profit_stagnation_anchor_profit": float(profit_rate),
+                "low_profit_stagnation_anchor_peak": float(peak_profit),
+                "low_profit_stagnation_state": "WAITING_CONFIRMATION",
+            },
+        )
+        return {
+            "should_exit": False,
+            "reason": reason,
+            "state_changed": True,
+            "elapsed_sec": 0,
+            "confirmation_sec": confirmation_sec,
+            "anchor_profit": float(profit_rate),
+            "anchor_peak": float(peak_profit),
+            "profit_move": 0.0,
+            "peak_improve": 0.0,
+            "max_profit_move": max_profit_move,
+            "max_peak_improve": max_peak_improve,
+            "adjusted_profit_pct": adjusted_profit,
+        }
+
+    elapsed_sec = max(0, int(float(now_ts) - started_at))
+    if elapsed_sec < confirmation_sec:
+        if previous_state != "WAITING_CONFIRMATION":
+            _mutate_stock_state(
+                stock,
+                set_fields={"low_profit_stagnation_state": "WAITING_CONFIRMATION"},
+            )
+        return {
+            "should_exit": False,
+            "reason": "confirmation_waiting",
+            "state_changed": previous_state != "WAITING_CONFIRMATION",
+            "elapsed_sec": elapsed_sec,
+            "confirmation_sec": confirmation_sec,
+            "anchor_profit": anchor_profit,
+            "anchor_peak": anchor_peak,
+            "profit_move": profit_move,
+            "peak_improve": max(0.0, peak_improve),
+            "max_profit_move": max_profit_move,
+            "max_peak_improve": max_peak_improve,
+            "adjusted_profit_pct": adjusted_profit,
+        }
+
+    _mutate_stock_state(
+        stock,
+        set_fields={"low_profit_stagnation_state": "EXIT_CONFIRMED"},
+    )
     return {
         "should_exit": True,
         "exit_rule": "scalp_low_profit_stagnation_hard_exit",
@@ -2214,6 +2321,14 @@ def _evaluate_scalp_low_profit_stagnation_hard_exit(
         "assumed_exit_slippage_bps": slippage_bps,
         "min_adjusted_profit_pct": min_adjusted_profit,
         "max_adjusted_profit_pct": max_adjusted_profit,
+        "elapsed_sec": elapsed_sec,
+        "confirmation_sec": confirmation_sec,
+        "anchor_profit": anchor_profit,
+        "anchor_peak": anchor_peak,
+        "profit_move": profit_move,
+        "peak_improve": max(0.0, peak_improve),
+        "max_profit_move": max_profit_move,
+        "max_peak_improve": max_peak_improve,
     }
 
 
@@ -2230,7 +2345,9 @@ def _evaluate_scalp_mfe_protect_exit(
         return {"should_exit": False, "reason": "disabled"}
     if not isinstance(stock, dict) or not _is_scalp_strategy(strategy):
         return {"should_exit": False, "reason": "not_real_scalping"}
-    if _is_scalp_simulated_position(stock, strategy) or _has_sim_probe_provenance(stock):
+    if _is_scalp_simulated_position(stock, strategy) or _has_sim_probe_provenance(
+        stock
+    ):
         return {"should_exit": False, "reason": "simulated_position"}
 
     min_peak_pct = max(0.0, _rule_float("SCALP_MFE_PROTECT_MIN_PEAK_PCT", 0.60))
@@ -2242,7 +2359,11 @@ def _evaluate_scalp_mfe_protect_exit(
     giveback_pct = float(peak_profit) - float(profit_rate)
 
     if held_sec < min_hold_sec:
-        return {"should_exit": False, "reason": "hold_time_below_min", "held_sec": held_sec}
+        return {
+            "should_exit": False,
+            "reason": "hold_time_below_min",
+            "held_sec": held_sec,
+        }
     if peak_profit < min_peak_pct:
         return {
             "should_exit": False,
@@ -2288,7 +2409,9 @@ def _evaluate_scalp_mfe_protect_exit(
         "current_ai_score": current_ai_score,
         "score_gate_converted_to_prior": True,
         "hard_gate_veto": False,
-        "score_prior_band": "hold_supportive" if current_ai_score > max_ai_score else "neutral_or_low",
+        "score_prior_band": (
+            "hold_supportive" if current_ai_score > max_ai_score else "neutral_or_low"
+        ),
         "ai_score_prior_weight": -0.3 if current_ai_score > max_ai_score else 0.0,
     }
 
@@ -2304,12 +2427,17 @@ def _evaluate_stop_line_touch_mandatory_avg_down(
     current_ai_score: float,
     held_sec: int,
     dynamic_stop_pct: float,
+    now_ts: float | None = None,
+    composite_micro_support: bool = False,
+    composite_micro_fields: dict | None = None,
 ) -> dict:
     if not _rule_bool("DEEP_RECOVERY_AVG_DOWN_ENABLED", True):
         return {"should_retry": False, "reason": "disabled"}
     if not isinstance(stock, dict) or not _is_scalp_strategy(strategy):
         return {"should_retry": False, "reason": "not_real_scalping"}
-    if _is_scalp_simulated_position(stock, strategy) or _has_sim_probe_provenance(stock):
+    if _is_scalp_simulated_position(stock, strategy) or _has_sim_probe_provenance(
+        stock
+    ):
         return {"should_retry": False, "reason": "simulated_position"}
 
     rule = str(exit_rule or "").strip()
@@ -2344,15 +2472,61 @@ def _evaluate_stop_line_touch_mandatory_avg_down(
             "pnl_min": pnl_min,
             "pnl_max": pnl_max,
         }
+    raw_held_sec = max(0, _safe_int(held_sec, 0))
+    effective_held_sec = raw_held_sec
+    held_sec_basis = "position_wall_clock"
+    session_elapsed_sec = None
+    if now_ts is not None:
+        now_dt = datetime.fromtimestamp(float(now_ts), tz=_KST)
+        nxt_marker = next(
+            (
+                stock.get(key)
+                for key in ("is_nxt", "nxt_enabled", "nxt_available", "is_nxt_enabled")
+                if stock.get(key) is not None
+            ),
+            None,
+        )
+        nxt_explicitly_disabled = str(nxt_marker).strip().lower() in {
+            "false",
+            "0",
+            "no",
+            "off",
+        }
+        session_open_time = (
+            datetime_time(9, 0) if nxt_explicitly_disabled else datetime_time(8, 0)
+        )
+        session_open = datetime.combine(now_dt.date(), session_open_time, tzinfo=_KST)
+        session_close = datetime.combine(
+            now_dt.date(), datetime_time(20, 0), tzinfo=_KST
+        )
+        if session_open <= now_dt <= session_close:
+            session_elapsed_sec = max(0, int((now_dt - session_open).total_seconds()))
+            if raw_held_sec > session_elapsed_sec:
+                effective_held_sec = session_elapsed_sec
+                held_sec_basis = (
+                    "active_session_elapsed_from_krx_open"
+                    if nxt_explicitly_disabled
+                    else "active_session_elapsed_from_nxt_open"
+                )
+    hold_context = {
+        "raw_held_sec": raw_held_sec,
+        "effective_held_sec": effective_held_sec,
+        "held_sec_basis": held_sec_basis,
+        "active_session_elapsed_sec": (
+            session_elapsed_sec if session_elapsed_sec is not None else "not_applicable"
+        ),
+    }
+
     min_hold = max(0, _rule_int("DEEP_RECOVERY_AVG_DOWN_MIN_HOLD_SEC", 120))
     max_hold = max(min_hold, _rule_int("DEEP_RECOVERY_AVG_DOWN_MAX_HOLD_SEC", 480))
-    if not (min_hold <= held_sec <= max_hold):
+    if not (min_hold <= effective_held_sec <= max_hold):
         return {
             "should_retry": False,
             "reason": "deep_recovery_hold_sec_out_of_range",
-            "held_sec": held_sec,
+            "held_sec": effective_held_sec,
             "min_hold_sec": min_hold,
             "max_hold_sec": max_hold,
+            **hold_context,
         }
     min_ai = _rule_float("DEEP_RECOVERY_AVG_DOWN_MIN_AI_SCORE", 60.0)
     max_ai = _rule_float("DEEP_RECOVERY_AVG_DOWN_MAX_AI_SCORE", 74.0)
@@ -2365,13 +2539,16 @@ def _evaluate_stop_line_touch_mandatory_avg_down(
             "max_ai_score": max_ai,
         }
     feat = stock.get("last_reversal_features", {}) if isinstance(stock, dict) else {}
-    feature_quality = reversal_feature_source_quality(feat if isinstance(feat, dict) else {})
+    feature_quality = reversal_feature_source_quality(
+        feat if isinstance(feat, dict) else {}
+    )
     if not feat:
         return {"should_retry": False, "reason": "deep_recovery_features_missing"}
     if feature_quality.get("reversal_feature_stale"):
         return {
             "should_retry": False,
-            "reason": "deep_recovery_features_stale:" + str(feature_quality.get("reversal_feature_stale_reason")),
+            "reason": "deep_recovery_features_stale:"
+            + str(feature_quality.get("reversal_feature_stale_reason")),
             **feature_quality,
         }
     quote_age_raw = feature_quality.get("quote_age_ms")
@@ -2391,16 +2568,30 @@ def _evaluate_stop_line_touch_mandatory_avg_down(
     min_buy_pressure = _rule_float("DEEP_RECOVERY_AVG_DOWN_MIN_BUY_PRESSURE", 70.0)
     min_tick_accel = _rule_float("DEEP_RECOVERY_AVG_DOWN_MIN_TICK_ACCEL", 1.0)
     min_micro_vwap = _rule_float("DEEP_RECOVERY_AVG_DOWN_MIN_MICRO_VWAP_BP", -5.0)
-    if buy_pressure < min_buy_pressure:
-        return {"should_retry": False, "reason": "deep_recovery_buy_pressure_not_met", "buy_pressure_10t": buy_pressure}
+    if buy_pressure < min_buy_pressure and not composite_micro_support:
+        return {
+            "should_retry": False,
+            "reason": "deep_recovery_buy_pressure_not_met",
+            "buy_pressure_10t": buy_pressure,
+        }
     if tick_accel < min_tick_accel:
-        return {"should_retry": False, "reason": "deep_recovery_tick_accel_not_met", "tick_acceleration_ratio": tick_accel}
+        return {
+            "should_retry": False,
+            "reason": "deep_recovery_tick_accel_not_met",
+            "tick_acceleration_ratio": tick_accel,
+        }
     if large_sell:
         return {"should_retry": False, "reason": "deep_recovery_large_sell_detected"}
-    if micro_vwap_bp < min_micro_vwap:
-        return {"should_retry": False, "reason": "deep_recovery_micro_vwap_not_met", "curr_vs_micro_vwap_bp": micro_vwap_bp}
+    if micro_vwap_bp < min_micro_vwap and not composite_micro_support:
+        return {
+            "should_retry": False,
+            "reason": "deep_recovery_micro_vwap_not_met",
+            "curr_vs_micro_vwap_bp": micro_vwap_bp,
+        }
 
-    configured_max_per_position = max(0, _rule_int("DEEP_RECOVERY_AVG_DOWN_MAX_PER_POSITION", 1))
+    configured_max_per_position = max(
+        0, _rule_int("DEEP_RECOVERY_AVG_DOWN_MAX_PER_POSITION", 1)
+    )
     max_per_position = configured_max_per_position
     used_count = _defensive_avg_down_used_count(stock)
     if max_per_position <= 0:
@@ -2426,12 +2617,17 @@ def _evaluate_stop_line_touch_mandatory_avg_down(
         "peak_profit": peak_profit,
         "stop_line_pct": stop_pct,
         "current_ai_score": current_ai_score,
-        "held_sec": held_sec,
+        "held_sec": effective_held_sec,
+        **hold_context,
+        "deep_recovery_composite_micro_support": bool(composite_micro_support),
+        **(composite_micro_fields or {}),
         "buy_pressure_10t": buy_pressure,
         "tick_acceleration_ratio": tick_accel,
         "curr_vs_micro_vwap_bp": micro_vwap_bp,
         "quote_age_ms": quote_age_ms,
-        "post_add_take_profit_pct": _rule_float("DEEP_RECOVERY_AVG_DOWN_POST_ADD_TAKE_PROFIT_PCT", 0.30),
+        "post_add_take_profit_pct": _rule_float(
+            "DEEP_RECOVERY_AVG_DOWN_POST_ADD_TAKE_PROFIT_PCT", 0.30
+        ),
         "emergency_pct": _rule_float("DEEP_RECOVERY_AVG_DOWN_EMERGENCY_PCT", -5.50),
         "used_count": used_count,
         "max_per_position": max_per_position,
@@ -3568,6 +3764,23 @@ def _attempt_stop_line_touch_mandatory_avg_down(
         _log_stop_touch_avg_down_not_eligible(reason)
         return {"attempted": False, "submitted": False, "reason": reason}
 
+    deep_recovery_micro_estimator_fields = _scalping_micro_estimator_log_fields(
+        stock=stock,
+        code=code,
+        ws_data=ws_data or {},
+        now_ts=now_ts,
+        prefix="deep_recovery_micro_estimator",
+        consumer_stage="deep_recovery_avg_down",
+        tier="hot",
+    )
+    composite_micro_support, composite_micro_fields = (
+        _holding_flow_max_defer_micro_support(
+            ws_data or {},
+            deep_recovery_micro_estimator_fields,
+            now_ts=now_ts,
+            prefix="deep_recovery_micro_estimator",
+        )
+    )
     stop_touch_avg_down = _evaluate_stop_line_touch_mandatory_avg_down(
         stock,
         strategy=strategy,
@@ -3578,6 +3791,9 @@ def _attempt_stop_line_touch_mandatory_avg_down(
         current_ai_score=current_ai_score,
         held_sec=held_sec,
         dynamic_stop_pct=dynamic_stop_pct,
+        now_ts=now_ts,
+        composite_micro_support=composite_micro_support,
+        composite_micro_fields=composite_micro_fields,
     )
     if not stop_touch_avg_down.get("should_retry"):
         reason = stop_touch_avg_down.get("reason", "not_eligible")
@@ -3620,15 +3836,32 @@ def _attempt_stop_line_touch_mandatory_avg_down(
         "stop_line_pct": f"{_safe_float(stop_touch_avg_down.get('stop_line_pct'), dynamic_stop_pct):+.2f}",
         "current_ai_score": f"{current_ai_score:.0f}",
         "held_sec": held_sec,
+        "deep_recovery_raw_held_sec": stop_touch_avg_down.get("raw_held_sec", held_sec),
+        "deep_recovery_effective_held_sec": stop_touch_avg_down.get(
+            "effective_held_sec", held_sec
+        ),
+        "deep_recovery_held_sec_basis": stop_touch_avg_down.get(
+            "held_sec_basis", "position_wall_clock"
+        ),
+        "deep_recovery_active_session_elapsed_sec": stop_touch_avg_down.get(
+            "active_session_elapsed_sec", "not_applicable"
+        ),
+        "deep_recovery_composite_micro_support": stop_touch_avg_down.get(
+            "deep_recovery_composite_micro_support", False
+        ),
         "gate_allowed": bool(retry_gate.get("allowed")),
         "gate_reason": retry_gate.get("reason", "-"),
         "add_type": "AVG_DOWN",
         "add_reason": _DEEP_RECOVERY_AVG_DOWN_REASON,
         "replaced_legacy_add_reason": _STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON,
-        "deep_recovery_post_add_take_profit_pct": stop_touch_avg_down.get("post_add_take_profit_pct"),
+        "deep_recovery_post_add_take_profit_pct": stop_touch_avg_down.get(
+            "post_add_take_profit_pct"
+        ),
         "deep_recovery_emergency_pct": stop_touch_avg_down.get("emergency_pct"),
         "actual_order_submitted": False,
         "broker_order_forbidden": False,
+        **composite_micro_fields,
+        **deep_recovery_micro_estimator_fields,
         **(context_fields or {}),
     }
     retry_common_fields.update(
@@ -3640,7 +3873,8 @@ def _attempt_stop_line_touch_mandatory_avg_down(
     )
     if (
         bool((stock or {}).get("first_touch_avgdown_decision_blocked"))
-        and str((stock or {}).get("first_touch_avgdown_exit_defer_state") or "") == "active"
+        and str((stock or {}).get("first_touch_avgdown_exit_defer_state") or "")
+        == "active"
         and retry_common_fields.get("exit_defer_state") != "active"
     ):
         reason = "first_touch_recheck_exit_defer_inactive"
@@ -4479,7 +4713,20 @@ def _attempt_late_loss_avg_down_retry_before_sell(
             "broker_order_forbidden": True,
         },
     )
-    return {"attempted": True, "submitted": False, "reason": retry_gate.get("reason", "-")}
+    return {
+        "attempted": True,
+        "submitted": False,
+        "reason": retry_gate.get("reason", "-"),
+    }
+
+
+def _loss_recovery_intercepts_sell(result: dict | None) -> bool:
+    result = result if isinstance(result, dict) else {}
+    return bool(
+        result.get("submitted")
+        or result.get("deferred")
+        or result.get("manual_control_excluded")
+    )
 
 
 def _boolish_true(value) -> bool:
@@ -4490,7 +4737,9 @@ def _boolish_true(value) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def _is_scalp_sim_ai_budget_target(stock: dict | None, strategy: str | None = None) -> bool:
+def _is_scalp_sim_ai_budget_target(
+    stock: dict | None, strategy: str | None = None
+) -> bool:
     if not _rule_bool("SCALP_SIM_AI_BUDGET_ENABLED", False):
         return False
     if not _is_scalp_simulated_position(stock, strategy):
@@ -17304,7 +17553,9 @@ def _dispatch_scalp_preset_exit(
         )
         return
 
-    rem_qty = _confirm_cancel_or_reload_remaining(code, orig_ord_no, KIWOOM_TOKEN, expected_qty)
+    rem_qty = _confirm_cancel_or_reload_remaining(
+        code, orig_ord_no, KIWOOM_TOKEN, expected_qty
+    )
     ws_context = dict(ws_data or {})
     ws_context.setdefault("curr", curr_p)
     if rem_qty > 0:
@@ -17329,21 +17580,23 @@ def _dispatch_scalp_preset_exit(
                 "preset_expected_qty": expected_qty,
             },
         )
-        if retry_result.get("submitted") or retry_result.get("deferred"):
+        if _loss_recovery_intercepts_sell(retry_result):
             return
 
     try:
         if target_id:
             with DB.get_session() as session:
-                session.query(RecommendationHistory).filter_by(id=target_id).update({"status": "SELL_ORDERED"})
+                session.query(RecommendationHistory).filter_by(id=target_id).update(
+                    {"status": "SELL_ORDERED"}
+                )
     except Exception as e:
         log_error(f"🚨 [DB 에러] {stock['name']} SELL_ORDERED 장부 잠금 실패: {e}")
 
     pending_sell_msg = ""
     set_fields = {
-        'last_exit_reason': reason,
+        "last_exit_reason": reason,
     }
-    ord_no = ''
+    ord_no = ""
     if rem_qty > 0:
         sell_res = _send_exit_best_ioc(code, rem_qty, KIWOOM_TOKEN)
         set_fields.update({
@@ -27584,6 +27837,95 @@ def _holding_flow_override_force_exit_contract_fields() -> dict:
     }
 
 
+def _holding_flow_max_defer_micro_support(
+    ws_data: dict | None,
+    micro_fields: dict | None,
+    *,
+    now_ts: float,
+    prefix: str = "holding_flow_micro_estimator",
+) -> tuple[bool, dict]:
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    micro_fields = micro_fields if isinstance(micro_fields, dict) else {}
+    ws_update_ts = _safe_float(ws_data.get("last_ws_update_ts"), 0.0)
+    ws_age_sec = max(0.0, float(now_ts) - ws_update_ts) if ws_update_ts > 0 else None
+    quote_age_source = str(ws_data.get("quote_age_source") or "").lower()
+    trusted_ws = bool(
+        ws_update_ts > 0
+        and not ws_data.get("ws_snapshot_recovery_source")
+        and "rest" not in quote_age_source
+        and "ka100" not in quote_age_source
+    )
+    max_ws_age_sec = max(
+        0.1, _rule_float("HOLDING_FLOW_MAX_DEFER_EXTENSION_MAX_WS_AGE_SEC", 3.0)
+    )
+    confidence = _safe_float(micro_fields.get(f"{prefix}_confidence"), 0.0)
+    true_ofi = _safe_float(micro_fields.get(f"{prefix}_true_ofi_ewma"), None)
+    depth_imbalance = _safe_float(
+        micro_fields.get(f"{prefix}_depth_imbalance_ewma"), None
+    )
+    pressure = _safe_float(micro_fields.get(f"{prefix}_pressure_ewma"), None)
+    top_depth_ratio = _safe_float(micro_fields.get(f"{prefix}_top_depth_ratio"), None)
+    true_ofi_samples = _safe_int(micro_fields.get(f"{prefix}_true_ofi_sample_count"), 0)
+    estimator_age_sec = _safe_float(micro_fields.get(f"{prefix}_age_sec"), None)
+    thresholds = {
+        "min_confidence": _rule_float(
+            "HOLDING_FLOW_MAX_DEFER_EXTENSION_MIN_MICRO_CONFIDENCE", 0.75
+        ),
+        "min_true_ofi": _rule_float(
+            "HOLDING_FLOW_MAX_DEFER_EXTENSION_MIN_TRUE_OFI", -0.05
+        ),
+        "min_depth_imbalance": _rule_float(
+            "HOLDING_FLOW_MAX_DEFER_EXTENSION_MIN_DEPTH_IMBALANCE", 0.20
+        ),
+        "min_pressure": _rule_float(
+            "HOLDING_FLOW_MAX_DEFER_EXTENSION_MIN_PRESSURE", 55.0
+        ),
+        "min_top_depth_ratio": _rule_float(
+            "HOLDING_FLOW_MAX_DEFER_EXTENSION_MIN_TOP_DEPTH_RATIO", 1.25
+        ),
+        "min_true_ofi_samples": max(
+            3, _rule_int("HOLDING_FLOW_MAX_DEFER_EXTENSION_MIN_TRUE_OFI_SAMPLES", 3)
+        ),
+    }
+    reasons = []
+    if not trusted_ws or ws_age_sec is None or ws_age_sec > max_ws_age_sec:
+        reasons.append("ws_untrusted_or_stale")
+    if estimator_age_sec is None or estimator_age_sec > max_ws_age_sec:
+        reasons.append("micro_stale")
+    if true_ofi_samples < thresholds["min_true_ofi_samples"]:
+        reasons.append("true_ofi_samples_low")
+    for value, threshold, reason in (
+        (confidence, thresholds["min_confidence"], "confidence_low"),
+        (true_ofi, thresholds["min_true_ofi"], "true_ofi_low"),
+        (depth_imbalance, thresholds["min_depth_imbalance"], "depth_imbalance_low"),
+        (pressure, thresholds["min_pressure"], "pressure_low"),
+        (top_depth_ratio, thresholds["min_top_depth_ratio"], "top_depth_ratio_low"),
+    ):
+        if value is None or value < threshold:
+            reasons.append(reason)
+    return not reasons, {
+        "max_defer_extension_support_reason": (
+            "supportive_composite_micro" if not reasons else "|".join(reasons)
+        ),
+        "max_defer_extension_trusted_ws": trusted_ws,
+        "max_defer_extension_ws_age_sec": (
+            round(ws_age_sec, 3) if ws_age_sec is not None else "missing"
+        ),
+        "max_defer_extension_max_ws_age_sec": max_ws_age_sec,
+        "max_defer_extension_micro_confidence": confidence,
+        "max_defer_extension_true_ofi": true_ofi if true_ofi is not None else "missing",
+        "max_defer_extension_depth_imbalance": (
+            depth_imbalance if depth_imbalance is not None else "missing"
+        ),
+        "max_defer_extension_pressure": pressure if pressure is not None else "missing",
+        "max_defer_extension_top_depth_ratio": (
+            top_depth_ratio if top_depth_ratio is not None else "missing"
+        ),
+        "max_defer_extension_true_ofi_samples": true_ofi_samples,
+        **{f"max_defer_extension_{key}": value for key, value in thresholds.items()},
+    }
+
+
 _HOLDING_FLOW_OFI_SOURCE_QUALITY_FORCE_REASONS = {
     "ai_engine_unavailable",
     "context_fetch_failed",
@@ -27603,7 +27945,9 @@ def _holding_flow_ofi_force_exit_phase_fields(
     stock = stock if isinstance(stock, dict) else {}
     reason = str(force_reason or "-").strip() or "-"
     debounce_count = _safe_int(stock.get("holding_flow_ofi_debounce_count"), 0)
-    started_at = _safe_float(stock.get("holding_flow_ofi_debounce_started_at"), 0.0) or 0.0
+    started_at = (
+        _safe_float(stock.get("holding_flow_ofi_debounce_started_at"), 0.0) or 0.0
+    )
     prior = bool(debounce_count > 0 or started_at > 0)
     if reason in _HOLDING_FLOW_OFI_SOURCE_QUALITY_FORCE_REASONS:
         phase = "source_quality_guard"
@@ -27618,14 +27962,23 @@ def _holding_flow_ofi_force_exit_phase_fields(
     }
     if prior:
         now_value = float(now_ts or time.time())
-        anchor_profit = _safe_float(stock.get("holding_flow_ofi_debounce_anchor_profit"), profit_rate)
+        anchor_profit = _safe_float(
+            stock.get("holding_flow_ofi_debounce_anchor_profit"), profit_rate
+        )
         profit_value = _safe_float(profit_rate, None)
         fields.update(
             {
-                "ofi_debounce_elapsed_sec": max(0, int(now_value - started_at)) if started_at > 0 else 0,
+                "ofi_debounce_elapsed_sec": (
+                    max(0, int(now_value - started_at)) if started_at > 0 else 0
+                ),
                 "ofi_debounce_count": debounce_count,
-                "ofi_debounce_exit_rule": stock.get("holding_flow_ofi_debounce_exit_rule") or "-",
-                "ofi_debounce_anchor_profit": f"{float(anchor_profit):+.2f}" if anchor_profit is not None else "-",
+                "ofi_debounce_exit_rule": stock.get(
+                    "holding_flow_ofi_debounce_exit_rule"
+                )
+                or "-",
+                "ofi_debounce_anchor_profit": (
+                    f"{float(anchor_profit):+.2f}" if anchor_profit is not None else "-"
+                ),
                 "ofi_debounce_profit_delta": (
                     f"{float(profit_value) - float(anchor_profit):+.2f}"
                     if profit_value is not None and anchor_profit is not None
@@ -28592,7 +28945,9 @@ def _append_holding_flow_history(stock: dict, *, now_ts: float, exit_rule: str, 
     history = list(stock.get("holding_flow_review_history") or [])
     history.append(
         {
-            "time": datetime.fromtimestamp(float(now_ts or time.time())).strftime("%H:%M:%S"),
+            "time": datetime.fromtimestamp(float(now_ts or time.time())).strftime(
+                "%H:%M:%S"
+            ),
             "action": str(flow_result.get("action", "-") or "-"),
             "flow_state": flow_state,
             "score": _safe_int(flow_result.get("score"), 0),
@@ -28607,7 +28962,11 @@ def _append_holding_flow_history(stock: dict, *, now_ts: float, exit_rule: str, 
 def _flow_evidence_text(flow_result: dict) -> str:
     evidence = flow_result.get("evidence") if isinstance(flow_result, dict) else None
     if isinstance(evidence, list):
-        cleaned = [str(item).replace("\n", " ").strip() for item in evidence if str(item).strip()]
+        cleaned = [
+            str(item).replace("\n", " ").strip()
+            for item in evidence
+            if str(item).strip()
+        ]
         return "|".join(cleaned[:5]) if cleaned else "-"
     return str(evidence or "-").replace("\n", " ")
 
@@ -28620,7 +28979,9 @@ def _holding_flow_override_applicable(strategy: str, exit_rule: str) -> bool:
     )
 
 
-def _clear_holding_flow_override_candidate(stock: dict, code: str, *, reason: str, profit_rate: float | None = None):
+def _clear_holding_flow_override_candidate(
+    stock: dict, code: str, *, reason: str, profit_rate: float | None = None
+):
     if not stock.get("holding_flow_override_candidate_key"):
         return
     previous_key = str(stock.get("holding_flow_override_candidate_key") or "-")
@@ -28645,6 +29006,9 @@ def _clear_holding_flow_override_candidate(stock: dict, code: str, *, reason: st
             "holding_flow_ofi_debounce_count",
             "holding_flow_ofi_debounce_exit_rule",
             "holding_flow_ofi_debounce_anchor_micro_vwap_bp",
+            "holding_flow_max_defer_extension_used",
+            "holding_flow_max_defer_extension_until",
+            "holding_flow_max_defer_extension_started_at",
         ),
     )
     _log_holding_pipeline(
@@ -28658,12 +29022,18 @@ def _clear_holding_flow_override_candidate(stock: dict, code: str, *, reason: st
     )
 
 
-def _overnight_flow_override_worsen_from_candidate(stock: dict, profit_rate: float) -> float:
-    candidate_profit = _safe_float(stock.get("overnight_flow_override_candidate_profit"), profit_rate)
+def _overnight_flow_override_worsen_from_candidate(
+    stock: dict, profit_rate: float
+) -> float:
+    candidate_profit = _safe_float(
+        stock.get("overnight_flow_override_candidate_profit"), profit_rate
+    )
     return float(candidate_profit or 0.0) - float(profit_rate or 0.0)
 
 
-def _should_revert_overnight_flow_override_hold(stock: dict, profit_rate: float, now_t) -> bool:
+def _should_revert_overnight_flow_override_hold(
+    stock: dict, profit_rate: float, now_t
+) -> bool:
     if not stock.get("overnight_flow_override_hold"):
         return False
     if not (TIME_SCALPING_OVERNIGHT_DECISION <= now_t < TIME_15_30):
@@ -28675,7 +29045,9 @@ def _should_revert_overnight_flow_override_hold(stock: dict, profit_rate: float,
             _rule_float("HOLDING_FLOW_OVERRIDE_WORSEN_PCT", 0.80),
         ),
     )
-    return (_overnight_flow_override_worsen_from_candidate(stock, profit_rate) + 1e-9) >= worsen_pct
+    return (
+        _overnight_flow_override_worsen_from_candidate(stock, profit_rate) + 1e-9
+    ) >= worsen_pct
 
 
 def _evaluate_holding_flow_override(
@@ -28738,13 +29110,21 @@ def _evaluate_holding_flow_override(
     worsen_pct = max(0.0, _rule_float("HOLDING_FLOW_OVERRIDE_WORSEN_PCT", 0.80))
     max_defer_sec = max(1, _rule_int("HOLDING_FLOW_OVERRIDE_MAX_DEFER_SEC", 90))
     min_review_sec = max(1, _rule_int("HOLDING_FLOW_REVIEW_MIN_INTERVAL_SEC", 30))
-    max_review_sec = max(min_review_sec, _rule_int("HOLDING_FLOW_REVIEW_MAX_INTERVAL_SEC", 90))
-    price_trigger_pct = max(0.0, _rule_float("HOLDING_FLOW_REVIEW_PRICE_TRIGGER_PCT", 0.35))
+    max_review_sec = max(
+        min_review_sec, _rule_int("HOLDING_FLOW_REVIEW_MAX_INTERVAL_SEC", 90)
+    )
+    price_trigger_pct = max(
+        0.0, _rule_float("HOLDING_FLOW_REVIEW_PRICE_TRIGGER_PCT", 0.35)
+    )
     max_ws_age = max(0.0, _rule_float("HOLDING_FLOW_REVIEW_MAX_WS_AGE_SEC", 3.0))
     candidate_key = f"{exit_rule}:{sell_reason_type}"
     existing_key = str(stock.get("holding_flow_override_candidate_key", "") or "")
-    candidate_started_at = _safe_float(stock.get("holding_flow_override_started_at"), 0.0)
-    candidate_profit = _safe_float(stock.get("holding_flow_override_candidate_profit"), profit_rate)
+    candidate_started_at = _safe_float(
+        stock.get("holding_flow_override_started_at"), 0.0
+    )
+    candidate_profit = _safe_float(
+        stock.get("holding_flow_override_candidate_profit"), profit_rate
+    )
 
     if existing_key != candidate_key or candidate_started_at <= 0:
         candidate_started_at = now_ts
@@ -28763,17 +29143,30 @@ def _evaluate_holding_flow_override(
                 "holding_flow_ofi_debounce_count": 0,
                 "holding_flow_ofi_debounce_exit_rule": None,
                 "holding_flow_ofi_debounce_anchor_micro_vwap_bp": None,
+                "holding_flow_max_defer_extension_used": False,
+                "holding_flow_max_defer_extension_until": None,
+                "holding_flow_max_defer_extension_started_at": None,
             },
         )
 
     elapsed_sec = max(0, int(now_ts - candidate_started_at))
     worsen_from_candidate = float(candidate_profit or 0.0) - float(profit_rate or 0.0)
     last_review_at = _safe_float(stock.get("holding_flow_override_last_review_at"), 0.0)
-    last_review_profit = _safe_float(stock.get("holding_flow_override_last_review_profit"), profit_rate)
-    last_review_action = str(stock.get("holding_flow_override_last_action", "") or "").upper()
-    review_elapsed_sec = max(0, int(now_ts - last_review_at)) if last_review_at > 0 else None
-    profit_move_since_review = abs(float(profit_rate or 0.0) - float(last_review_profit or 0.0))
-    state_change_worsen_pct = max(0.0, _rule_float("HOLDING_FLOW_STATE_CHANGE_WORSEN_PCT", 0.20))
+    last_review_profit = _safe_float(
+        stock.get("holding_flow_override_last_review_profit"), profit_rate
+    )
+    last_review_action = str(
+        stock.get("holding_flow_override_last_action", "") or ""
+    ).upper()
+    review_elapsed_sec = (
+        max(0, int(now_ts - last_review_at)) if last_review_at > 0 else None
+    )
+    profit_move_since_review = abs(
+        float(profit_rate or 0.0) - float(last_review_profit or 0.0)
+    )
+    state_change_worsen_pct = max(
+        0.0, _rule_float("HOLDING_FLOW_STATE_CHANGE_WORSEN_PCT", 0.20)
+    )
     state_change_review_requested = (
         bool(_rule("HOLDING_FLOW_STATE_CHANGE_REVIEW_ENABLED", False))
         and last_review_at > 0
@@ -28781,6 +29174,85 @@ def _evaluate_holding_flow_override(
         and float(profit_rate or 0.0) < float(last_review_profit or 0.0)
         and profit_move_since_review >= state_change_worsen_pct
     )
+    extension_enabled = _rule_bool(
+        "HOLDING_FLOW_MAX_DEFER_BULLISH_EXTENSION_ENABLED", True
+    )
+    extension_sec = max(
+        1, _rule_int("HOLDING_FLOW_MAX_DEFER_BULLISH_EXTENSION_SEC", 90)
+    )
+    extension_used = bool(stock.get("holding_flow_max_defer_extension_used"))
+    extension_until = _safe_float(
+        stock.get("holding_flow_max_defer_extension_until"), 0.0
+    )
+    extension_active = bool(extension_used and extension_until > now_ts)
+    if (
+        elapsed_sec >= max_defer_sec
+        and extension_active
+        and worsen_from_candidate < worsen_pct
+    ):
+        extension_still_supported, _ = _holding_flow_max_defer_micro_support(
+            ws_data,
+            holding_flow_micro_estimator_fields,
+            now_ts=now_ts,
+        )
+        if extension_still_supported:
+            return False
+    extension_scope_allowed = bool(
+        _is_scalp_strategy(strategy)
+        and str(sell_reason_type or "").upper() == "LOSS"
+        and str(exit_rule or "").strip() == "scalp_soft_stop_pct"
+    )
+    if (
+        elapsed_sec >= max_defer_sec
+        and not extension_used
+        and extension_enabled
+        and extension_scope_allowed
+        and worsen_from_candidate < worsen_pct
+    ):
+        extension_allowed, extension_fields = _holding_flow_max_defer_micro_support(
+            ws_data,
+            holding_flow_micro_estimator_fields,
+            now_ts=now_ts,
+        )
+        if extension_allowed:
+            extension_until = float(now_ts) + extension_sec
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "holding_flow_max_defer_extension_used": True,
+                    "holding_flow_max_defer_extension_started_at": float(now_ts),
+                    "holding_flow_max_defer_extension_until": extension_until,
+                },
+            )
+            _log_holding_pipeline(
+                stock,
+                code,
+                "holding_flow_max_defer_bullish_extension",
+                exit_rule=exit_rule,
+                elapsed_sec=elapsed_sec,
+                max_defer_sec=max_defer_sec,
+                extension_sec=extension_sec,
+                extension_until=f"{extension_until:.3f}",
+                profit_rate=f"{profit_rate:+.2f}",
+                candidate_profit=f"{candidate_profit:+.2f}",
+                metric_role="bounded_tunable_exit_defer",
+                decision_authority="holding_flow_max_defer_composite_micro_extension",
+                window_policy="same_exit_candidate_one_shot_extension",
+                sample_floor="trusted_ws_true_ofi_samples_gte_3",
+                primary_decision_metric="post_extension_mfe_before_adverse_stop",
+                source_quality_gate="fresh_trusted_ws_and_composite_micro_support",
+                runtime_effect=True,
+                allowed_runtime_apply=False,
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                forbidden_uses=(
+                    "hard_stop_bypass|protect_stop_bypass|emergency_stop_bypass|worsen_floor_bypass|"
+                    "stale_ws_bypass|second_extension|provider_route_change|quantity_or_cap_change"
+                ),
+                **extension_fields,
+                **holding_flow_micro_estimator_fields,
+            )
+            return False
     if elapsed_sec >= max_defer_sec:
         _log_holding_pipeline(
             stock,
@@ -41801,7 +42273,6 @@ def handle_watching_state(
         return
 
 
-
 def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_ts=None, now_dt=None, radar=None, ai_engine=None):
     """
     [HOLDING 상태] 보유 종목 익절/손절 감시 및 AI 조기 개입
@@ -44232,7 +44703,9 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 else:
                     is_sell_signal = True
                     sell_reason_type = "LOSS" if profit_rate < 0 else "TRAILING"
-                    trailing_label = "트레일링 손실방어" if profit_rate < 0 else "트레일링 익절"
+                    trailing_label = (
+                        "트레일링 손실방어" if profit_rate < 0 else "트레일링 익절"
+                    )
                     reason = (
                         f"🔥 고점 대비 밀림 (-{drawdown:.2f}%). "
                         f"{trailing_label} ({profit_rate:+.2f}%, peak={peak_profit:+.2f}%)"
@@ -44263,11 +44736,15 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     exit_rule = "scalp_profit_stagnation_time_exit"
 
         if not is_sell_signal:
-            low_profit_stagnation_exit = _evaluate_scalp_low_profit_stagnation_hard_exit(
-                stock,
-                strategy=strategy,
-                profit_rate=profit_rate,
-                held_sec=held_sec,
+            low_profit_stagnation_exit = (
+                _evaluate_scalp_low_profit_stagnation_hard_exit(
+                    stock,
+                    strategy=strategy,
+                    profit_rate=profit_rate,
+                    peak_profit=peak_profit,
+                    held_sec=held_sec,
+                    now_ts=now_ts,
+                )
             )
             if low_profit_stagnation_exit.get("should_exit"):
                 adjusted_profit = _safe_float(
@@ -44281,64 +44758,105 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 is_sell_signal = True
                 sell_reason_type = "LOW_PROFIT_STAGNATION"
                 reason = (
-                    "조정수익권 장기횡보 하드청산 "
+                    "조정수익권 횡보확인 청산 "
                     f"(hold={held_sec}s/{low_profit_stagnation_exit.get('min_hold_sec', 0)}s, "
+                    f"stable={low_profit_stagnation_exit.get('elapsed_sec', 0)}s/"
+                    f"{low_profit_stagnation_exit.get('confirmation_sec', 0)}s, "
                     f"profit=+{profit_rate:.2f}%, adjusted=+{adjusted_profit:.2f}%, "
                     f"slippage={slippage_bps:.0f}bp)"
                 )
                 exit_rule = "scalp_low_profit_stagnation_hard_exit"
+            elif low_profit_stagnation_exit.get("state_changed"):
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "low_profit_stagnation_confirmation",
+                    reason=low_profit_stagnation_exit.get("reason"),
+                    profit_rate=f"{profit_rate:+.2f}",
+                    peak_profit=f"{peak_profit:+.2f}",
+                    adjusted_profit_pct=f"{_safe_float(low_profit_stagnation_exit.get('adjusted_profit_pct'), profit_rate):+.2f}",
+                    elapsed_sec=low_profit_stagnation_exit.get("elapsed_sec", 0),
+                    confirmation_sec=low_profit_stagnation_exit.get(
+                        "confirmation_sec", 0
+                    ),
+                    anchor_profit=low_profit_stagnation_exit.get("anchor_profit", "-"),
+                    anchor_peak=low_profit_stagnation_exit.get("anchor_peak", "-"),
+                    max_profit_move=low_profit_stagnation_exit.get(
+                        "max_profit_move", "-"
+                    ),
+                    max_peak_improve=low_profit_stagnation_exit.get(
+                        "max_peak_improve", "-"
+                    ),
+                    quote_stale=holding_ws_fields.get("quote_stale", "-"),
+                    quote_age_ms=holding_ws_fields.get("quote_age_ms", "-"),
+                    quote_age_source=holding_ws_fields.get("quote_age_source", "-"),
+                    metric_role="bounded_tunable_exit_confirmation",
+                    decision_authority="profit_stagnation_exit_runtime_confirmation_only",
+                    window_policy="same_position_runtime_state",
+                    sample_floor="existing_preopen_selected_stagnation_thresholds",
+                    primary_decision_metric="confirmed_low_profit_stagnation_duration_sec",
+                    source_quality_gate="holding_quote_freshness_and_profit_peak_state",
+                    runtime_effect=True,
+                    allowed_runtime_apply=False,
+                    actual_order_submitted=False,
+                    broker_order_forbidden=True,
+                    forbidden_uses="hard_stop_bypass,protect_stop_bypass,emergency_stop_bypass,trailing_exit_bypass,provider_route_change,quantity_or_cap_change",
+                )
 
-    elif strategy == 'KOSDAQ_ML':
+    elif strategy == "KOSDAQ_ML":
         try:
-            buy_date = _parse_holding_entry_date(stock.get('date'))
-            kosdaq_holding_days = _rule_int('KOSDAQ_HOLDING_DAYS', 2)
+            buy_date = _parse_holding_entry_date(stock.get("date"))
+            kosdaq_holding_days = _rule_int("KOSDAQ_HOLDING_DAYS", 2)
             if np.busday_count(buy_date, datetime.now().date()) >= kosdaq_holding_days:
                 is_sell_signal = True
                 sell_reason_type = "TIMEOUT"
                 reason = "⏳ 코스닥 스윙 기한 만료 청산"
                 exit_rule = "kosdaq_timeout"
         except Exception as exc:
-            log_error(f"[KOSDAQ_TIMEOUT] holding 기간 파싱 실패 ({stock.get('code', '-')}, date={stock.get('date')}) ({exc})")
+            log_error(
+                f"[KOSDAQ_TIMEOUT] holding 기간 파싱 실패 ({stock.get('code', '-')}, date={stock.get('date')}) ({exc})"
+            )
 
-        kosdaq_target = _rule_float('KOSDAQ_TARGET', 4.0)
+        kosdaq_target = _rule_float("KOSDAQ_TARGET", 4.0)
         if not is_sell_signal and peak_profit >= kosdaq_target:
             # Follow-up tracked in checklist: SwingTrailingPolicy0506
-            drawdown = (highest_prices.get(price_key, curr_p) - curr_p) / max(highest_prices.get(price_key, curr_p), 1) * 100
+            drawdown = (
+                (highest_prices.get(price_key, curr_p) - curr_p)
+                / max(highest_prices.get(price_key, curr_p), 1)
+                * 100
+            )
             if drawdown >= 1.0:
                 is_sell_signal = True
                 sell_reason_type = "TRAILING"
-                reason = (
-                    "🏆 KOSDAQ 트레일링 익절 (+"
-                    f"{kosdaq_target}% 돌파 후 하락)"
-                )
+                reason = "🏆 KOSDAQ 트레일링 익절 (+" f"{kosdaq_target}% 돌파 후 하락)"
                 exit_rule = "kosdaq_trailing_take_profit"
 
-        kosdaq_stop = _rule_float('KOSDAQ_STOP', -2.0)
+        kosdaq_stop = _rule_float("KOSDAQ_STOP", -2.0)
         if not is_sell_signal and profit_rate <= kosdaq_stop:
             is_sell_signal = True
             sell_reason_type = "LOSS"
             reason = f"🛑 KOSDAQ 전용 방어선 이탈 ({kosdaq_stop}%)"
             exit_rule = "kosdaq_stop_loss"
 
-    elif strategy == 'KOSPI_ML':
-        pos_tag = normalize_position_tag(strategy, stock.get('position_tag'))
-        if pos_tag == 'BREAKOUT':
-            current_stop_loss = _rule_float('STOP_LOSS_BREAKOUT', -2.5)
+    elif strategy == "KOSPI_ML":
+        pos_tag = normalize_position_tag(strategy, stock.get("position_tag"))
+        if pos_tag == "BREAKOUT":
+            current_stop_loss = _rule_float("STOP_LOSS_BREAKOUT", -2.5)
             regime_name = "전고점 돌파"
-        elif pos_tag == 'BOTTOM':
-            current_stop_loss = _rule_float('STOP_LOSS_BOTTOM', -2.5)
+        elif pos_tag == "BOTTOM":
+            current_stop_loss = _rule_float("STOP_LOSS_BOTTOM", -2.5)
             regime_name = "바닥 탈출"
         else:
             current_stop_loss = (
-                _rule_float('STOP_LOSS_BULL', -2.5)
-                if market_regime == 'BULL'
-                else _rule_float('STOP_LOSS_BEAR', -2.5)
+                _rule_float("STOP_LOSS_BULL", -2.5)
+                if market_regime == "BULL"
+                else _rule_float("STOP_LOSS_BEAR", -2.5)
             )
-            regime_name = "상승장" if market_regime == 'BULL' else "조정장"
+            regime_name = "상승장" if market_regime == "BULL" else "조정장"
 
         try:
-            buy_date = _parse_holding_entry_date(stock.get('date'))
-            holding_days = _rule_int('HOLDING_DAYS', 3)
+            buy_date = _parse_holding_entry_date(stock.get("date"))
+            holding_days = _rule_int("HOLDING_DAYS", 3)
             if np.busday_count(buy_date, datetime.now().date()) >= holding_days:
                 is_sell_signal = True
                 sell_reason_type = "TIMEOUT"
@@ -45163,7 +45681,8 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         **sell_retry_backoff,
                         "sell_reason_type": sell_reason_type,
                         "exit_rule": exit_rule or stock.get("last_exit_rule") or "-",
-                        "exit_decision_source": stock.get("last_exit_decision_source") or "MANUAL",
+                        "exit_decision_source": stock.get("last_exit_decision_source")
+                        or "MANUAL",
                         "qty": buy_qty,
                         "profit_rate": f"{profit_rate:+.2f}",
                         "metric_role": "broker_reject_burst_suppression",
@@ -45202,7 +45721,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             now_ts=now_ts,
             context_fields={"sell_intercept_context": "standard_exit_before_submit"},
         )
-        if late_loss_retry_result.get("submitted") or late_loss_retry_result.get("deferred"):
+        if _loss_recovery_intercepts_sell(late_loss_retry_result):
             return
 
         sell_safety_exit = _is_sell_side_open_time_safety_exit(
@@ -45214,19 +45733,24 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
         rest_check_elapsed_ms = 0.0
         trailing_pre_submit_recheck = (
             strategy == "SCALPING"
-            and str(exit_rule or stock.get("last_exit_rule") or "").strip() == "scalp_trailing_take_profit"
+            and str(exit_rule or stock.get("last_exit_rule") or "").strip()
+            == "scalp_trailing_take_profit"
         )
         if sell_safety_exit or trailing_pre_submit_recheck:
-            rest_snapshot, rest_check_state, rest_check_elapsed_ms = _fetch_rest_orderbook_snapshot_bounded(
-                code,
-                QuoteConsistencyConfig.from_env().emergency_rest_timeout_ms,
+            rest_snapshot, rest_check_state, rest_check_elapsed_ms = (
+                _fetch_rest_orderbook_snapshot_bounded(
+                    code,
+                    QuoteConsistencyConfig.from_env().emergency_rest_timeout_ms,
+                )
             )
-        sell_quote_fields, sell_mark_price, _, sell_order_price = _build_quote_consistency_fields(
-            ws_data,
-            rest_snapshot=rest_snapshot if rest_snapshot else None,
-            side="sell",
-            safety_exit=sell_safety_exit,
-            now_ts=now_ts,
+        sell_quote_fields, sell_mark_price, _, sell_order_price = (
+            _build_quote_consistency_fields(
+                ws_data,
+                rest_snapshot=rest_snapshot if rest_snapshot else None,
+                side="sell",
+                safety_exit=sell_safety_exit,
+                now_ts=now_ts,
+            )
         )
         if not sell_quote_fields and holding_quote_fields:
             sell_quote_fields = dict(holding_quote_fields)

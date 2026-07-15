@@ -55,6 +55,70 @@ def test_nxt_post_block_sampler_stages_have_source_quality_contracts():
     )
 
 
+def test_low_profit_stagnation_confirmation_has_source_quality_contract():
+    contract = audit.STAGE_CONTRACTS["low_profit_stagnation_confirmation"]
+
+    assert (
+        contract.decision_authority
+        == "profit_stagnation_exit_runtime_confirmation_only"
+    )
+    assert {
+        "runtime_effect",
+        "allowed_runtime_apply",
+        "actual_order_submitted",
+        "broker_order_forbidden",
+        "confirmation_sec",
+        "anchor_profit",
+        "anchor_peak",
+    }.issubset(contract.required_fields)
+
+
+def test_low_profit_stagnation_confirmation_contract_passes(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-15",
+        [
+            _event(
+                "low_profit_stagnation_confirmation",
+                {
+                    "metric_role": "bounded_tunable_exit_confirmation",
+                    "decision_authority": "profit_stagnation_exit_runtime_confirmation_only",
+                    "window_policy": "same_position_runtime_state",
+                    "sample_floor": "existing_preopen_selected_stagnation_thresholds",
+                    "primary_decision_metric": "confirmed_low_profit_stagnation_duration_sec",
+                    "source_quality_gate": "holding_quote_freshness_and_profit_peak_state",
+                    "runtime_effect": True,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "forbidden_uses": "hard_stop_bypass",
+                    "reason": "confirmation_started",
+                    "profit_rate": "+0.38",
+                    "peak_profit": "+0.40",
+                    "adjusted_profit_pct": "+0.23",
+                    "elapsed_sec": 0,
+                    "confirmation_sec": 180,
+                    "anchor_profit": 0.38,
+                    "anchor_peak": 0.40,
+                    "max_profit_move": 0.15,
+                    "max_peak_improve": 0.10,
+                    "quote_stale": False,
+                    "quote_age_ms": 2288,
+                    "quote_age_source": "last_ws_update_ts",
+                },
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-05-15")
+
+    assert (
+        report["stage_contracts"]["low_profit_stagnation_confirmation"]["status"]
+        == "pass"
+    )
+
+
 def test_market_halt_session_events_artifact_is_gitignored():
     path = Path("data/source_quality/market_halt_windows/session_events/2026-06-08.json")
     result = subprocess.run(

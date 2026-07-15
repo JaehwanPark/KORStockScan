@@ -11692,7 +11692,9 @@ def test_execute_scalping_pyramid_uses_dynamic_budget_for_one_share_position(mon
     assert sent_orders[0][0] == "240810"
     assert sent_orders[0][1] == 13
     assert sent_orders[0][3] == "00"
-    resolved = [fields for stage, fields in logs if stage == "scale_in_price_resolved"][0]
+    resolved = [fields for stage, fields in logs if stage == "scale_in_price_resolved"][
+        0
+    ]
     assert sent_orders[0][2] == resolved["resolved_price"]
     assert resolved["scale_in_budget_qty"] == 13
     assert resolved["would_qty"] == 13
@@ -11709,14 +11711,26 @@ def test_execute_defensive_avg_down_passes_buy_time_block_override(monkeypatch):
     state_handlers.KIWOOM_TOKEN = "test"
 
     sent_orders = []
-    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_pre_submit_refresh_real_ws_snapshot",
+        lambda code, ws_data, strategy: (dict(ws_data), {}),
+    )
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_buy_order",
-        lambda *args, **kwargs: sent_orders.append((args, kwargs)) or {"return_code": "0", "ord_no": "D1"},
+        lambda *args, **kwargs: sent_orders.append((args, kwargs))
+        or {"return_code": "0", "ord_no": "D1"},
     )
-    monkeypatch.setattr(state_handlers, "record_add_history_event", lambda *args, **kwargs: True)
-    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        state_handlers, "record_add_history_event", lambda *args, **kwargs: True
+    )
+    monkeypatch.setattr(
+        state_handlers, "_log_holding_pipeline", lambda *args, **kwargs: None
+    )
 
     stock = {
         "id": 1,
@@ -11754,10 +11768,15 @@ def test_execute_defensive_avg_down_passes_buy_time_block_override(monkeypatch):
     assert result["ord_no"] == "D1"
     assert sent_orders
     assert sent_orders[0][1]["allow_time_block_override"] is True
-    assert sent_orders[0][1]["time_block_override_reason"] == "stop_line_touch_mandatory_avg_down"
+    assert (
+        sent_orders[0][1]["time_block_override_reason"]
+        == "stop_line_touch_mandatory_avg_down"
+    )
 
 
-def test_late_loss_avg_down_bypasses_quote_divergence_when_executable_price_exists(monkeypatch):
+def test_late_loss_avg_down_bypasses_quote_divergence_when_executable_price_exists(
+    monkeypatch,
+):
     rules = replace(CONFIG, MAX_POSITION_PCT=1.0)
     monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
     monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
@@ -14963,7 +14982,6 @@ def test_missing_pending_ordno_locks_scale_in(monkeypatch):
     assert result["reason"] == "pending_add_recovered"
     assert stock["scale_in_locked"] is True
     assert stock.get("pending_add_order") is None
-
 
 
 def test_unfilled_defensive_avg_down_recheck_skips_missing_ordno():
@@ -29443,10 +29461,17 @@ def test_scalp_low_profit_stagnation_hard_exit_triggers_for_real_position(monkey
         )
 
         decision = state_handlers._evaluate_scalp_low_profit_stagnation_hard_exit(
-            {"strategy": "SCALPING"},
+            {
+                "strategy": "SCALPING",
+                "low_profit_stagnation_started_at": 1_000.0,
+                "low_profit_stagnation_anchor_profit": 0.80,
+                "low_profit_stagnation_anchor_peak": 0.85,
+            },
             strategy="SCALPING",
             profit_rate=0.80,
+            peak_profit=0.85,
             held_sec=1800,
+            now_ts=1_180.0,
         )
     finally:
         state_handlers.TRADING_RULES = original_rules
@@ -29455,6 +29480,157 @@ def test_scalp_low_profit_stagnation_hard_exit_triggers_for_real_position(monkey
     assert decision["exit_rule"] == "scalp_low_profit_stagnation_hard_exit"
     assert decision["sell_reason_type"] == "LOW_PROFIT_STAGNATION"
     assert decision["adjusted_profit_pct"] == pytest.approx(0.65)
+    assert decision["elapsed_sec"] == 180
+
+
+def test_scalp_low_profit_stagnation_starts_confirmation_before_exit(monkeypatch):
+    original_rules = state_handlers.TRADING_RULES
+    try:
+        state_handlers.TRADING_RULES = replace(
+            CONFIG,
+            SCALP_LOW_PROFIT_STAGNATION_HARD_EXIT_ENABLED=True,
+            SCALP_LOW_PROFIT_STAGNATION_MIN_HOLD_SEC=1800,
+            SCALP_PROFIT_STAGNATION_MIN_SEC=180,
+        )
+        stock = {"strategy": "SCALPING"}
+
+        decision = state_handlers._evaluate_scalp_low_profit_stagnation_hard_exit(
+            stock,
+            strategy="SCALPING",
+            profit_rate=0.38,
+            peak_profit=0.40,
+            held_sec=55_953,
+            now_ts=1_000.0,
+        )
+    finally:
+        state_handlers.TRADING_RULES = original_rules
+
+    assert decision["should_exit"] is False
+    assert decision["reason"] == "confirmation_started"
+    assert decision["confirmation_sec"] == 180
+    assert stock["low_profit_stagnation_started_at"] == pytest.approx(1_000.0)
+
+
+def test_scalp_low_profit_stagnation_resets_when_price_progresses(monkeypatch):
+    original_rules = state_handlers.TRADING_RULES
+    try:
+        state_handlers.TRADING_RULES = replace(
+            CONFIG,
+            SCALP_LOW_PROFIT_STAGNATION_HARD_EXIT_ENABLED=True,
+            SCALP_LOW_PROFIT_STAGNATION_MIN_HOLD_SEC=1800,
+            SCALP_PROFIT_STAGNATION_MIN_SEC=180,
+            SCALP_PROFIT_STAGNATION_MAX_PROFIT_MOVE_PCT=0.15,
+            SCALP_PROFIT_STAGNATION_MAX_PEAK_IMPROVE_PCT=0.10,
+        )
+        stock = {
+            "strategy": "SCALPING",
+            "low_profit_stagnation_started_at": 1_000.0,
+            "low_profit_stagnation_anchor_profit": 0.38,
+            "low_profit_stagnation_anchor_peak": 0.40,
+        }
+
+        decision = state_handlers._evaluate_scalp_low_profit_stagnation_hard_exit(
+            stock,
+            strategy="SCALPING",
+            profit_rate=0.60,
+            peak_profit=0.65,
+            held_sec=55_953,
+            now_ts=1_181.0,
+        )
+    finally:
+        state_handlers.TRADING_RULES = original_rules
+
+    assert decision["should_exit"] is False
+    assert decision["reason"] == "anchor_reset_on_price_progress"
+    assert stock["low_profit_stagnation_started_at"] == pytest.approx(1_181.0)
+    assert stock["low_profit_stagnation_anchor_profit"] == pytest.approx(0.60)
+
+
+def test_scalp_low_profit_stagnation_replay_does_not_exit_rising_open(monkeypatch):
+    original_rules = state_handlers.TRADING_RULES
+    try:
+        state_handlers.TRADING_RULES = replace(
+            CONFIG,
+            SCALP_LOW_PROFIT_STAGNATION_HARD_EXIT_ENABLED=True,
+            SCALP_LOW_PROFIT_STAGNATION_MIN_ADJUSTED_PROFIT_PCT=0.20,
+            SCALP_LOW_PROFIT_STAGNATION_MAX_ADJUSTED_PROFIT_PCT=1.00,
+            SCALP_LOW_PROFIT_STAGNATION_MIN_HOLD_SEC=1800,
+            SCALP_LOW_PROFIT_STAGNATION_ASSUMED_EXIT_SLIPPAGE_BPS=15,
+            SCALP_PROFIT_STAGNATION_MIN_SEC=180,
+            SCALP_PROFIT_STAGNATION_MAX_PROFIT_MOVE_PCT=0.15,
+            SCALP_PROFIT_STAGNATION_MAX_PEAK_IMPROVE_PCT=0.10,
+        )
+        stock = {"strategy": "SCALPING"}
+
+        first = state_handlers._evaluate_scalp_low_profit_stagnation_hard_exit(
+            stock,
+            strategy="SCALPING",
+            profit_rate=0.38,
+            peak_profit=0.40,
+            held_sec=55_953,
+            now_ts=1_000.0,
+        )
+        progressed = state_handlers._evaluate_scalp_low_profit_stagnation_hard_exit(
+            stock,
+            strategy="SCALPING",
+            profit_rate=0.60,
+            peak_profit=0.65,
+            held_sec=56_073,
+            now_ts=1_120.0,
+        )
+        escaped_band = state_handlers._evaluate_scalp_low_profit_stagnation_hard_exit(
+            stock,
+            strategy="SCALPING",
+            profit_rate=2.21,
+            peak_profit=2.21,
+            held_sec=56_133,
+            now_ts=1_180.0,
+        )
+    finally:
+        state_handlers.TRADING_RULES = original_rules
+
+    assert first["reason"] == "confirmation_started"
+    assert progressed["reason"] == "anchor_reset_on_price_progress"
+    assert escaped_band["reason"] == "adjusted_profit_above_max"
+    assert not any(row["should_exit"] for row in (first, progressed, escaped_band))
+    assert (
+        "scalp_low_profit_stagnation_hard_exit"
+        in state_handlers._HOLDING_FLOW_OVERRIDE_EXIT_RULES
+    )
+
+
+def test_scalp_low_profit_stagnation_does_not_reset_on_deterioration(monkeypatch):
+    original_rules = state_handlers.TRADING_RULES
+    try:
+        state_handlers.TRADING_RULES = replace(
+            CONFIG,
+            SCALP_LOW_PROFIT_STAGNATION_HARD_EXIT_ENABLED=True,
+            SCALP_LOW_PROFIT_STAGNATION_MIN_ADJUSTED_PROFIT_PCT=0.20,
+            SCALP_LOW_PROFIT_STAGNATION_MIN_HOLD_SEC=1800,
+            SCALP_PROFIT_STAGNATION_MIN_SEC=180,
+            SCALP_PROFIT_STAGNATION_MAX_PROFIT_MOVE_PCT=0.15,
+        )
+        stock = {
+            "strategy": "SCALPING",
+            "low_profit_stagnation_started_at": 1_000.0,
+            "low_profit_stagnation_anchor_profit": 0.80,
+            "low_profit_stagnation_anchor_peak": 0.85,
+        }
+
+        decision = state_handlers._evaluate_scalp_low_profit_stagnation_hard_exit(
+            stock,
+            strategy="SCALPING",
+            profit_rate=0.45,
+            peak_profit=0.85,
+            held_sec=2_000,
+            now_ts=1_180.0,
+        )
+    finally:
+        state_handlers.TRADING_RULES = original_rules
+
+    assert decision["should_exit"] is True
+    assert decision["elapsed_sec"] == 180
+    assert stock["low_profit_stagnation_started_at"] == pytest.approx(1_000.0)
 
 
 def test_scalp_low_profit_stagnation_hard_exit_waits_for_hold_floor(monkeypatch):
@@ -29471,7 +29647,9 @@ def test_scalp_low_profit_stagnation_hard_exit_waits_for_hold_floor(monkeypatch)
             {"strategy": "SCALPING"},
             strategy="SCALPING",
             profit_rate=0.80,
+            peak_profit=0.85,
             held_sec=1799,
+            now_ts=1_000.0,
         )
     finally:
         state_handlers.TRADING_RULES = original_rules
@@ -29495,7 +29673,9 @@ def test_scalp_low_profit_stagnation_hard_exit_skips_above_adjusted_band(monkeyp
             {"strategy": "SCALPING"},
             strategy="SCALPING",
             profit_rate=1.30,
+            peak_profit=1.35,
             held_sec=2400,
+            now_ts=1_000.0,
         )
     finally:
         state_handlers.TRADING_RULES = original_rules
@@ -29522,7 +29702,9 @@ def test_scalp_low_profit_stagnation_hard_exit_skips_simulated_position(monkeypa
             },
             strategy="SCALPING",
             profit_rate=0.80,
+            peak_profit=0.85,
             held_sec=1800,
+            now_ts=1_000.0,
         )
     finally:
         state_handlers.TRADING_RULES = original_rules
@@ -30488,34 +30670,95 @@ def test_stop_line_touch_mandatory_avg_down_includes_ollix_like_case(monkeypatch
     assert inferred_prior_avg_down["reason"] == "already_used"
     assert inferred_prior_avg_down["used_count"] == 1
 
-    shallow_prior_avg_down = state_handlers._evaluate_stop_line_touch_mandatory_avg_down(
-        {
-            **stock_without_count,
-            "avg_down_count": 1,
-            "shallow_volatility_avg_down_count": 1,
-            "last_add_type": "AVG_DOWN",
-            "last_add_reason": "shallow_volatility_avg_down",
-            "reversal_add_used": True,
-        },
-        strategy="SCALPING",
-        sell_reason_type="LOSS",
-        exit_rule="scalp_soft_stop_pct",
-        profit_rate=-3.65,
-        peak_profit=0.31,
-        current_ai_score=70,
-        held_sec=180,
-        dynamic_stop_pct=-3.00,
+    shallow_prior_avg_down = (
+        state_handlers._evaluate_stop_line_touch_mandatory_avg_down(
+            {
+                **stock_without_count,
+                "avg_down_count": 1,
+                "shallow_volatility_avg_down_count": 1,
+                "last_add_type": "AVG_DOWN",
+                "last_add_reason": "shallow_volatility_avg_down",
+                "reversal_add_used": True,
+            },
+            strategy="SCALPING",
+            sell_reason_type="LOSS",
+            exit_rule="scalp_soft_stop_pct",
+            profit_rate=-3.65,
+            peak_profit=0.31,
+            current_ai_score=70,
+            held_sec=180,
+            dynamic_stop_pct=-3.00,
+        )
     )
     assert shallow_prior_avg_down["should_retry"] is True
     assert shallow_prior_avg_down["used_count"] == 0
 
 
-def test_first_touch_avgdown_decision_gate_blocks_repeated_blockers_without_recovery(monkeypatch):
+def test_stop_line_touch_overnight_position_uses_current_active_session_elapsed(
+    monkeypatch,
+):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        DEEP_RECOVERY_AVG_DOWN_ENABLED=True,
+        DEEP_RECOVERY_AVG_DOWN_MIN_HOLD_SEC=120,
+        DEEP_RECOVERY_AVG_DOWN_MAX_HOLD_SEC=480,
+    )
+    now_ts = datetime(2026, 7, 15, 8, 7, tzinfo=state_handlers._KST).timestamp()
+    stock = {
+        "strategy": "SCALPING",
+        "buy_qty": 1,
+        "actual_order_submitted": True,
+        "last_reversal_features": _trusted_reversal_features(
+            buy_pressure_10t=50.39,
+            tick_acceleration_ratio=1.0,
+            large_sell_print_detected=False,
+            curr_vs_micro_vwap_bp=-7.85,
+        ),
+    }
+
+    result = state_handlers._evaluate_stop_line_touch_mandatory_avg_down(
+        stock,
+        strategy="SCALPING",
+        sell_reason_type="LOSS",
+        exit_rule="scalp_soft_stop_pct",
+        profit_rate=-3.72,
+        peak_profit=-0.23,
+        current_ai_score=68,
+        held_sec=64_697,
+        dynamic_stop_pct=-3.0,
+        now_ts=now_ts,
+        composite_micro_support=True,
+        composite_micro_fields={
+            "max_defer_extension_support_reason": "supportive_composite_micro"
+        },
+    )
+
+    assert result["should_retry"] is True
+    assert result["raw_held_sec"] == 64_697
+    assert result["effective_held_sec"] == 420
+    assert result["held_sec"] == 420
+    assert result["held_sec_basis"] == "active_session_elapsed_from_nxt_open"
+    assert result["deep_recovery_composite_micro_support"] is True
+
+
+@pytest.mark.parametrize("key", ["submitted", "deferred", "manual_control_excluded"])
+def test_loss_recovery_result_intercepts_same_loop_sell(key):
+    assert state_handlers._loss_recovery_intercepts_sell({key: True}) is True
+    assert state_handlers._loss_recovery_intercepts_sell({"attempted": True}) is False
+
+
+def test_first_touch_avgdown_decision_gate_blocks_repeated_blockers_without_recovery(
+    monkeypatch,
+):
     monkeypatch.setattr(state_handlers, "TRADING_RULES", CONFIG)
     stock = {
         "strategy": "SCALPING",
         "trade_quality_block_history": [
-            {"stage": "blocked_strength_momentum", "ts": 995.0, "risk_state": "weak_momentum_context"}
+            {
+                "stage": "blocked_strength_momentum",
+                "ts": 995.0,
+                "risk_state": "weak_momentum_context",
+            }
             for _ in range(9)
         ],
     }
