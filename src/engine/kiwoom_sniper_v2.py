@@ -3694,6 +3694,18 @@ def _runtime_iteration_targets(targets, now_ts):
         if status in {"BUY_ORDERED", "SELL_ORDERED"}:
             status_rank = 0
             recency_key = 0.0
+        elif (
+            status == "HOLDING"
+            and _env_bool_from_value(
+                (target or {}).get("shallow_source_gap_recheck_armed"),
+                default=False,
+            )
+            and _is_real_holding_target(target)
+        ):
+            # The recheck's decision window is 10-20 seconds. Keep it behind
+            # in-flight orders but ahead of regular holding/scanner work.
+            status_rank = 0
+            recency_key = 1.0
         elif _is_real_holding_target(target):
             status_rank = 1
             recency_key = 0.0

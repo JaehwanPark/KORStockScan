@@ -18949,6 +18949,7 @@ def _evaluate_shallow_source_gap_recheck(
     held_sec: float,
     now_ts: float,
     ws_data: dict | None = None,
+    observe_only: bool = False,
 ) -> dict | None:
     if not stock.get("shallow_source_gap_recheck_armed"):
         return None
@@ -19001,6 +19002,12 @@ def _evaluate_shallow_source_gap_recheck(
     pnl_still_eligible = (
         config["candidate_pnl_min"] <= profit_rate <= config["trigger_pnl_max"]
     )
+    gate_recheck_due = (
+        elapsed_sec >= config["min_wait_sec"]
+        and now_ts <= until_epoch
+        and pnl_still_eligible
+        and config["min_hold_sec"] <= held_sec <= config["max_hold_sec"]
+    )
     recovered = all(
         (
             elapsed_sec >= config["min_wait_sec"],
@@ -19045,8 +19052,32 @@ def _evaluate_shallow_source_gap_recheck(
         "curr_vs_micro_vwap_bp": round(micro_vwap_bp, 3),
         "large_sell_print_detected": not large_sell_absent,
         "source_gap_components": stock.get("shallow_source_gap_recheck_source_reason") or "-",
+        "recheck_gate_recheck_due": gate_recheck_due,
     }
     if recovered:
+        if observe_only:
+            observed_reason = "recovered_pending_submit_gate"
+            if observed_reason != stock.get("shallow_source_gap_recheck_last_observed_reason"):
+                _log_shallow_source_gap_recheck(
+                    stock,
+                    code,
+                    state="pending",
+                    now_ts=now_ts,
+                    config=config,
+                    recheck_observation=observed_reason,
+                    **observation,
+                )
+                _mutate_stock_state(
+                    stock,
+                    set_fields={"shallow_source_gap_recheck_last_observed_reason": observed_reason},
+                )
+            return {
+                "should_add": False,
+                "shallow_source_gap_recheck_observe_only": True,
+                "shallow_source_gap_recheck_recovered": True,
+                "shallow_source_gap_recheck_gate_recheck_due": gate_recheck_due,
+                **observation,
+            }
         _log_shallow_source_gap_recheck(
             stock,
             code,
@@ -19113,6 +19144,14 @@ def _evaluate_shallow_source_gap_recheck(
             stock,
             set_fields={"shallow_source_gap_recheck_last_observed_reason": observed_reason},
         )
+    if observe_only:
+        return {
+            "should_add": False,
+            "shallow_source_gap_recheck_observe_only": True,
+            "shallow_source_gap_recheck_recovered": False,
+            "shallow_source_gap_recheck_gate_recheck_due": gate_recheck_due,
+            **observation,
+        }
     return None
 
 
@@ -46912,6 +46951,29 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
     # --------------------------------------------------------
     # [추가매수 레이어] SELL 신호가 없을 때만 진입
     # --------------------------------------------------------
+    # A source-gap recheck is an observation before the generic add gate. It
+    # cannot submit or consume the candidate here; the normal gate and submit
+    # path still own all order authority.
+    shallow_recheck_observation = None
+    if (
+        str(strategy or "").upper() == "SCALPING"
+        and stock.get("shallow_source_gap_recheck_armed")
+    ):
+        shallow_recheck_observation = _evaluate_shallow_source_gap_recheck(
+            stock=stock,
+            code=code,
+            profit_rate=profit_rate,
+            curr_price=curr_p,
+            held_sec=held_sec,
+            now_ts=now_ts,
+            ws_data=ws_data,
+            observe_only=True,
+        )
+    shallow_recheck_gate_recheck_due = bool(
+        (shallow_recheck_observation or {}).get(
+            "shallow_source_gap_recheck_gate_recheck_due"
+        )
+    )
     pending_scale_in_revalidation = _pending_scale_in_revalidation_context(
         stock,
         strategy=strategy,
@@ -46952,6 +47014,9 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
         ws_data=ws_data,
         strategy=strategy,
         market_regime=market_regime,
+        # The regular 20s de-dup lock would otherwise consume the complete
+        # 10-20s source-gap window. All other scale-in safety checks remain.
+        skip_add_judgment_lock=shallow_recheck_gate_recheck_due,
     )
     if gate.get('allowed'):
         scale_in_action = _evaluate_scale_in_signal(
@@ -46967,8 +47032,14 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             held_sec=held_sec,
             ai_engine=ai_engine,
             now_ts=now_ts,
+            shallow_recheck_only=shallow_recheck_gate_recheck_due,
         )
         if scale_in_action:
+            if shallow_recheck_gate_recheck_due:
+                scale_in_action = {
+                    **scale_in_action,
+                    "shallow_source_gap_recheck_add_judgment_lock_bypassed": True,
+                }
             scale_in_stop_line_pct = _safe_float(
                 locals().get("dynamic_stop_pct"),
                 _rule_float("SCALP_STOP", -1.5),
@@ -48050,12 +48121,15 @@ def _evaluate_scale_in_signal(
     held_sec=0,
     ai_engine=None,
     now_ts=None,
+    shallow_recheck_only=False,
 ):
     """전략별 추가매수 시그널 평가."""
     now_ts = time.time() if now_ts is None else float(now_ts)
 
     raw_strategy = (strategy or "").upper()
     if raw_strategy == 'SCALPING':
+        if shallow_recheck_only and _is_any_simulated_position(stock, raw_strategy):
+            return None
         if _rule_bool("SCALP_SIM_PANIC_SCALE_IN_BLOCK_ENABLED", True) and _scalp_sim_panic_eligible(stock, raw_strategy):
             panic_context = _resolve_scalp_sim_panic_context()
             if str(panic_context.get("panic_context_status") or "") != "OK":
@@ -48152,6 +48226,32 @@ def _evaluate_scale_in_signal(
                 **feature_refresh_fields,
                 **scale_in_micro_estimator_fields,
             )
+
+        if shallow_recheck_only:
+            # REST/feature recovery can consume several seconds. Recheck TTL
+            # at the actual consume point rather than the holding-loop start.
+            shallow_recheck_now_ts = max(float(now_ts), time.time())
+            shallow_recheck_action = _evaluate_shallow_source_gap_recheck(
+                stock=stock,
+                code=code,
+                profit_rate=profit_rate,
+                curr_price=_safe_int(curr_price, 0),
+                held_sec=held_sec,
+                now_ts=shallow_recheck_now_ts,
+                ws_data=ws_data,
+            )
+            if shallow_recheck_action and shallow_recheck_action.get("should_add"):
+                shallow_recheck_action.update(
+                    {
+                        "profit_rate": profit_rate,
+                        "peak_profit": peak_profit,
+                        "current_ai_score": current_ai_score,
+                        "held_sec": held_sec,
+                        **scale_in_micro_estimator_fields,
+                    }
+                )
+                return shallow_recheck_action
+            return None
 
         scale_in_ai_retry_fields = {}
         if not (_is_any_simulated_position(stock, raw_strategy) or _is_swing_live_order_dry_run(raw_strategy)):

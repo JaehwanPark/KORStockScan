@@ -1449,6 +1449,71 @@ def test_runtime_iteration_targets_moves_non_real_holding_behind_scanner():
     assert context["pre_scanner_runtime_count"] == 2
 
 
+def test_runtime_iteration_targets_prioritizes_armed_real_shallow_recheck():
+    targets = [
+        {
+            "id": "ordinary_holding",
+            "code": "000010",
+            "status": "HOLDING",
+            "strategy": "SCALPING",
+        },
+        {
+            "id": "armed_recheck",
+            "code": "000011",
+            "status": "HOLDING",
+            "strategy": "SCALPING",
+            "shallow_source_gap_recheck_armed": True,
+        },
+        {
+            "id": "scanner",
+            "code": "000012",
+            "status": "WATCHING",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+        },
+        {
+            "id": "ordered",
+            "code": "000013",
+            "status": "BUY_ORDERED",
+            "strategy": "SCALPING",
+        },
+    ]
+
+    ordered = kiwoom_sniper_v2._runtime_iteration_targets(targets, now_ts=1300.0)
+
+    assert [target["id"] for target in ordered] == [
+        "ordered",
+        "armed_recheck",
+        "ordinary_holding",
+        "scanner",
+    ]
+
+
+def test_runtime_iteration_targets_does_not_prioritize_false_string_shallow_recheck():
+    targets = [
+        {
+            "id": "false_armed_holding",
+            "code": "000010",
+            "status": "HOLDING",
+            "strategy": "SCALPING",
+            "shallow_source_gap_recheck_armed": "false",
+        },
+        {
+            "id": "ordinary_holding",
+            "code": "000011",
+            "status": "HOLDING",
+            "strategy": "SCALPING",
+        },
+    ]
+
+    ordered = kiwoom_sniper_v2._runtime_iteration_targets(targets, now_ts=1300.0)
+
+    assert [target["id"] for target in ordered] == [
+        "false_armed_holding",
+        "ordinary_holding",
+    ]
+
+
 def test_runtime_iteration_targets_uses_added_time_when_scanner_armed_epoch_missing():
     targets = [
         {"id": "old", "code": "000001", "status": "WATCHING", "strategy": "SCALPING", "position_tag": "SCANNER", "added_time": 1000.0},

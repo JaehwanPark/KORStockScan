@@ -29053,6 +29053,145 @@ def test_shallow_source_gap_recheck_waits_then_reenters_existing_avg_down_path(m
     ]
 
 
+def test_shallow_source_gap_recheck_observes_before_gate_without_consuming_candidate(monkeypatch):
+    _enable_shallow_source_gap_recheck(monkeypatch)
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    now_ts = datetime.fromisoformat("2026-07-15T10:00:00+09:00").timestamp()
+    stock = {"name": "observation-gate"}
+    state_handlers._maybe_arm_shallow_source_gap_recheck(
+        stock=stock,
+        code="240810",
+        reversal=_shallow_source_gap_blocked_reversal(),
+        profit_rate=-1.43,
+        curr_price=139000,
+        held_sec=235,
+        now_ts=now_ts,
+    )
+    stock["last_reversal_features"] = _fresh_trusted_shallow_recheck_features(now_ts + 10)
+    ws_data = _trusted_shallow_recheck_ws(now_ts + 10.5)
+
+    observed = state_handlers._evaluate_shallow_source_gap_recheck(
+        stock=stock,
+        code="240810",
+        profit_rate=-0.95,
+        curr_price=139500,
+        held_sec=241,
+        now_ts=now_ts + 11,
+        ws_data=ws_data,
+        observe_only=True,
+    )
+
+    assert observed["should_add"] is False
+    assert observed["shallow_source_gap_recheck_recovered"] is True
+    assert observed["shallow_source_gap_recheck_gate_recheck_due"] is True
+    assert stock["shallow_source_gap_recheck_armed"] is True
+    pending = [fields for stage, fields in logs if stage == "shallow_source_gap_recheck"][-1]
+    assert pending["recheck_state"] == "pending"
+    assert pending["recheck_observation"] == "recovered_pending_submit_gate"
+    assert pending["runtime_effect"] is False
+    assert pending["broker_order_forbidden"] is True
+
+    action = state_handlers._evaluate_shallow_source_gap_recheck(
+        stock=stock,
+        code="240810",
+        profit_rate=-0.95,
+        curr_price=139500,
+        held_sec=241,
+        now_ts=now_ts + 11,
+        ws_data=ws_data,
+    )
+
+    assert action["should_add"] is True
+    assert stock.get("shallow_source_gap_recheck_armed") is None
+
+
+def test_shallow_recheck_only_does_not_fall_through_to_regular_scale_in(monkeypatch):
+    calls = {"reversal": 0, "pyramid": 0}
+    monkeypatch.setattr(
+        state_handlers,
+        "_refresh_scale_in_reversal_features_if_needed",
+        lambda **kwargs: (kwargs["ws_data"], {}),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_evaluate_shallow_source_gap_recheck",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_scalping_reversal_add",
+        lambda *args, **kwargs: calls.__setitem__("reversal", calls["reversal"] + 1),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_scalping_pyramid",
+        lambda *args, **kwargs: calls.__setitem__("pyramid", calls["pyramid"] + 1),
+    )
+
+    action = state_handlers._evaluate_scale_in_signal(
+        stock={"name": "shallow-only", "strategy": "SCALPING"},
+        code="240810",
+        strategy="SCALPING",
+        market_regime="BULL",
+        profit_rate=-0.95,
+        peak_profit=-0.80,
+        curr_price=139500,
+        ws_data={"curr": 139500},
+        current_ai_score=70,
+        held_sec=241,
+        now_ts=1_000.0,
+        shallow_recheck_only=True,
+    )
+
+    assert action is None
+    assert calls == {"reversal": 0, "pyramid": 0}
+
+
+def test_shallow_recheck_only_rechecks_ttl_after_feature_refresh(monkeypatch):
+    _enable_shallow_source_gap_recheck(monkeypatch)
+    now_ts = datetime.fromisoformat("2026-07-15T10:00:00+09:00").timestamp()
+    stock = {"name": "ttl-refresh", "strategy": "SCALPING"}
+    state_handlers._maybe_arm_shallow_source_gap_recheck(
+        stock=stock,
+        code="240810",
+        reversal=_shallow_source_gap_blocked_reversal(),
+        profit_rate=-1.43,
+        curr_price=139000,
+        held_sec=235,
+        now_ts=now_ts,
+    )
+    stock["last_reversal_features"] = _fresh_trusted_shallow_recheck_features(now_ts + 18)
+    monkeypatch.setattr(
+        state_handlers,
+        "_refresh_scale_in_reversal_features_if_needed",
+        lambda **kwargs: (kwargs["ws_data"], {}),
+    )
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts + 21)
+
+    action = state_handlers._evaluate_scale_in_signal(
+        stock=stock,
+        code="240810",
+        strategy="SCALPING",
+        market_regime="BULL",
+        profit_rate=-0.95,
+        peak_profit=-0.80,
+        curr_price=139500,
+        ws_data=_trusted_shallow_recheck_ws(now_ts + 20.5),
+        current_ai_score=70,
+        held_sec=241,
+        now_ts=now_ts + 19,
+        shallow_recheck_only=True,
+    )
+
+    assert action is None
+    assert stock.get("shallow_source_gap_recheck_armed") is None
+
+
 def test_shallow_source_gap_recheck_never_promotes_untrusted_pressure(monkeypatch):
     _enable_shallow_source_gap_recheck(monkeypatch)
     logs = []
