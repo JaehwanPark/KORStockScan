@@ -1519,6 +1519,8 @@ def _implementation_marker_for_conclusion(
                 },
             )
     source_quality_review_ids = {
+        "lifecycle_decision_matrix",
+        "lifecycle_decision_matrix_source_quality_blocked",
         "lifecycle_bucket_discovery",
         "pattern_lab_propagation_audit",
         "swing_lifecycle_bucket_discovery",
@@ -1561,12 +1563,56 @@ def _implementation_marker_for_conclusion(
             )
     if review_id not in {
         "ai_review_gap",
+        "pattern_lab_propagation_audit_missing",
         "swing_lifecycle_bucket_discovery_ai_two_pass_partial",
         "swing_ai_two_pass_review_incomplete",
     }:
         return None, None
     if str(conclusion.get("final_state") or "") != "ai_review_gap":
         return None, None
+    if review_id == "pattern_lab_propagation_audit_missing":
+        source_paths = conclusion.get("source_paths") if isinstance(conclusion.get("source_paths"), list) else []
+        propagation_wrapper = _source_wrapper(context, "pattern_lab_propagation_audit")
+        propagation_summary = _source_summary(context, "pattern_lab_propagation_audit")
+        if (
+            not _feedback_handoff_closed(context)
+            or propagation_wrapper.get("exists") is not True
+            or propagation_wrapper.get("runtime_effect") is not False
+            or propagation_wrapper.get("allowed_runtime_apply") is True
+        ):
+            return None, None
+        return (
+            "implemented",
+            {
+                "implementation_type": "pattern_lab_ai_review_propagation_audit_source_provenance",
+                "implemented_scope": (
+                    "Pattern Lab AI review now records the present propagation audit as source-only "
+                    "handoff provenance instead of leaving a stale missing-source follow-up open."
+                ),
+                "source_report_type": "pattern_lab_propagation_audit",
+                "review_id": review_id,
+                "normalized_review_id": review_id,
+                "final_state": conclusion.get("final_state"),
+                "final_decision": conclusion.get("final_decision"),
+                "explicit_gap_type": conclusion.get("explicit_gap_type"),
+                "auditor_pass": conclusion.get("auditor_pass"),
+                "decision_authority": "pattern_lab_ai_review_source_only",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "requires_separate_runtime_apply_candidate": True,
+                "runtime_mutation_allowed": False,
+                "forbidden_uses": FORBIDDEN_USES,
+                "source_paths": source_paths,
+                "source_status": propagation_wrapper.get("status") or propagation_summary.get("status"),
+                "source_warning_count": _safe_int(
+                    (_nested_report_summary(propagation_summary) or propagation_summary).get("warning_count"),
+                    0,
+                ),
+                "root_cause_closure_status_hint": "root_cause_closed",
+            },
+        )
     source_resolution = (
         conclusion.get("source_context_resolution")
         if isinstance(conclusion.get("source_context_resolution"), dict)

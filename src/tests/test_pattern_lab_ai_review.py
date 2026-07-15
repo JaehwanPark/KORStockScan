@@ -2437,7 +2437,12 @@ def test_pattern_lab_ai_review_marks_recursive_workorder_review_id_as_implemente
 
 
 def test_pattern_lab_ai_review_marks_report_only_source_quality_reviews_as_implemented():
-    for review_id in ("threshold_cycle_ev", "pattern_lab_propagation_audit"):
+    for review_id in (
+        "threshold_cycle_ev",
+        "pattern_lab_propagation_audit",
+        "lifecycle_decision_matrix",
+        "lifecycle_decision_matrix_source_quality_blocked",
+    ):
         status, provenance = mod._implementation_marker_for_conclusion(
             {
                 "review_id": review_id,
@@ -2455,6 +2460,37 @@ def test_pattern_lab_ai_review_marks_report_only_source_quality_reviews_as_imple
         assert provenance["runtime_effect"] is False
         assert provenance["allowed_runtime_apply"] is False
         assert provenance["requires_separate_runtime_apply_candidate"] is True
+
+
+def test_pattern_lab_ai_review_marks_present_propagation_audit_missing_review_as_implemented():
+    status, provenance = mod._implementation_marker_for_conclusion(
+        {
+            "review_id": "pattern_lab_propagation_audit_missing",
+            "final_state": "ai_review_gap",
+            "final_decision": "block_runtime_use",
+            "explicit_gap_type": "ai_review_gap",
+            "auditor_pass": False,
+            "source_paths": ["/tmp/pattern_lab_propagation_audit.json"],
+        },
+        {
+            "feedback_handoff_summary": {"status": "pass"},
+            "sources": {
+                "pattern_lab_propagation_audit": {
+                    "exists": True,
+                    "status": "warning",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "summary": {"warning_count": 2},
+                }
+            },
+        },
+    )
+
+    assert status == "implemented"
+    assert provenance["source_report_type"] == "pattern_lab_propagation_audit"
+    assert provenance["source_warning_count"] == 2
+    assert provenance["runtime_effect"] is False
+    assert provenance["allowed_runtime_apply"] is False
 
 
 def test_pattern_lab_ai_review_marks_workorder_duplicate_warnings_as_source_only_provenance():

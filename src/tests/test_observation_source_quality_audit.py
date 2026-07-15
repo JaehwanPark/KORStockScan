@@ -28,6 +28,18 @@ def _write_events(tmp_path, target_date: str, rows: list[dict]) -> None:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+def _write_events_gzip(tmp_path, target_date: str, rows: list[dict]) -> None:
+    event_dir = tmp_path / "pipeline_events"
+    event_dir.mkdir(parents=True, exist_ok=True)
+    with gzip.open(
+        event_dir / f"pipeline_events_{target_date}.jsonl.gz",
+        "wt",
+        encoding="utf-8",
+    ) as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
 def test_market_halt_window_artifact_is_not_gitignored():
     path = Path("data/source_quality/market_halt_windows/windows/2026-06-08.json")
     result = subprocess.run(
@@ -164,6 +176,57 @@ def test_scalp_trailing_continuation_recheck_contract_passes(monkeypatch, tmp_pa
         report["stage_contracts"]["scalp_trailing_continuation_recheck"]["status"]
         == "pass"
     )
+
+
+def test_protect_trailing_smooth_hold_contract_passes(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-07-15",
+        [
+            _event(
+                "protect_trailing_smooth_hold",
+                {
+                    "metric_role": "ops_volume_diagnostic",
+                    "decision_authority": "protect_trailing_smoothing_observation_only",
+                    "window_policy": "same_day_intraday_events",
+                    "sample_floor": 1,
+                    "primary_decision_metric": "source_quality_gate",
+                    "source_quality_gate": "protect_trailing_smooth_hold_contract_fields_present",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
+                    "threshold_family": "protect_trailing_smoothing",
+                    "exit_rule_candidate": "protect_trailing_stop",
+                    "curr_price": 10000,
+                    "trailing_stop_price": "9950",
+                    "buffered_stop_price": "9940",
+                    "median_price": "9960",
+                    "sample_count": 4,
+                    "sample_span_sec": 6,
+                    "below_ratio": "0.50",
+                    "min_below_ratio": "0.80",
+                    "window_sec": 10,
+                    "min_span_sec": 5,
+                    "min_samples": 3,
+                    "buffer_pct": "0.10",
+                    "profit_rate": "+0.42",
+                    "peak_profit": "+0.88",
+                    "emergency_pct": "-3.00",
+                },
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-07-15")
+
+    assert (
+        report["stage_contracts"]["protect_trailing_smooth_hold"]["status"]
+        == "pass"
+    )
+    assert report["summary"]["hard_blocking_contract_gap_count"] == 0
 
 
 def test_market_halt_session_events_artifact_is_gitignored():
@@ -1091,6 +1154,94 @@ def test_observation_source_quality_audit_reviews_score_and_micro_context_unknow
     )
     assert reviewed["scalp_entry_action_decision_snapshot"]["score_prior_confidence"]["reviewed_reason"] == (
         "reviewed_score_prior_neutral_unknown_not_decision_input"
+    )
+
+
+def test_observation_source_quality_audit_reviews_rising_missed_nxt_unknown_provenance(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-07-15",
+        [
+            _event(
+                "rising_missed_one_share_entry",
+                {
+                    "rising_missed_nxt_eligible": "unknown",
+                    "rising_missed_nxt_observation_only": True,
+                    "rising_missed_nxt_metric_role": "source_quality_gate",
+                    "rising_missed_nxt_decision_authority": "observe_only_no_runtime_mutation",
+                    "rising_missed_nxt_source_quality_gate": (
+                        "absolute_type_receive_ts_and_actual_ws_item_route"
+                    ),
+                    "rising_missed_effective_venue": "NXT_ELIGIBILITY_UNKNOWN",
+                },
+            ),
+            _event(
+                "rising_missed_nxt_post_block_price_sample",
+                {
+                    "metric_role": "source_quality_gate",
+                    "decision_authority": "source_only_nxt_post_block_price_observation",
+                    "runtime_effect": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "source_quality_gate": "fresh_absolute_0b_receive_ts_and_actual_nxt_item_route",
+                    "rising_missed_nxt_post_block_ws_0b_route": "unknown",
+                },
+                record_id=2,
+            ),
+            _event(
+                "rising_missed_one_share_entry",
+                {
+                    "rising_missed_nxt_eligible": "unknown",
+                    "rising_missed_nxt_observation_only": True,
+                    "rising_missed_nxt_metric_role": "source_quality_gate",
+                    "rising_missed_nxt_decision_authority": "observe_only_no_runtime_mutation",
+                    "rising_missed_nxt_source_quality_gate": (
+                        "absolute_type_receive_ts_and_actual_ws_item_route"
+                    ),
+                    "rising_missed_effective_venue": "OFF_SESSION",
+                },
+                record_id=3,
+            ),
+            _event(
+                "budget_pass",
+                {
+                    "rising_missed_nxt_eligible": "unknown",
+                    "rising_missed_effective_venue": "OFF_SESSION",
+                    "rising_missed_nxt_micro_state_role": (
+                        "ws_transport_activity_not_positive_evidence"
+                    ),
+                    "rising_missed_nxt_positive_micro_authority": (
+                        "trusted_signed_ws_0b_existing_tp1_contract"
+                    ),
+                },
+                record_id=4,
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-07-15")
+
+    assert report["summary"]["unknown_token_stage_count"] == 0
+    reviewed = {
+        item["stage"]: {field["field"]: field for field in item["fields"]}
+        for item in report["reviewed_unknown_token_findings"]
+    }
+    nxt_reviewed = reviewed["rising_missed_one_share_entry"]
+    assert nxt_reviewed["rising_missed_nxt_eligible"]["reviewed_reason"] == (
+        "reviewed_rising_missed_nxt_eligibility_not_available"
+    )
+    assert nxt_reviewed["rising_missed_effective_venue"]["reviewed_reason"] == (
+        "reviewed_rising_missed_nxt_eligibility_not_available"
+    )
+    assert reviewed["rising_missed_nxt_post_block_price_sample"][
+        "rising_missed_nxt_post_block_ws_0b_route"
+    ]["reviewed_reason"] == "reviewed_rising_missed_nxt_post_block_route_not_available"
+    assert reviewed["budget_pass"]["rising_missed_nxt_eligible"]["reviewed_reason"] == (
+        "reviewed_rising_missed_nxt_eligibility_not_available"
     )
 
 
@@ -2161,7 +2312,10 @@ def test_observation_source_quality_audit_accepts_shallow_source_gap_recheck_con
                     "allowed_runtime_apply": True,
                     "actual_order_submitted": False,
                     "broker_order_forbidden": False,
-                    "forbidden_uses": "rest_positive_micro|hard_safety_bypass",
+                    "forbidden_uses": (
+                        "stale_or_unknown_pressure_as_positive|rest_positive_micro|"
+                        "hard_safety_bypass"
+                    ),
                     "recheck_enabled": True,
                     "recheck_active": True,
                     "recheck_active_date": "2026-07-15",
@@ -2190,6 +2344,14 @@ def test_observation_source_quality_audit_accepts_shallow_source_gap_recheck_con
     report = audit.build_observation_source_quality_audit("2026-07-15")
 
     assert report["stage_contracts"]["shallow_source_gap_recheck"]["status"] == "pass"
+    reviewed = {
+        item["stage"]: {field["field"]: field for field in item["fields"]}
+        for item in report["reviewed_unknown_token_findings"]
+    }
+    assert reviewed["shallow_source_gap_recheck"]["forbidden_uses"]["reviewed_reason"] == (
+        "reviewed_forbidden_uses_unknown_literal_not_source_value"
+    )
+    assert report["summary"]["unknown_token_stage_count"] == 0
     assert report["summary"]["tuning_input_allowed"] is True
 
 
@@ -3313,6 +3475,58 @@ def test_observation_source_quality_write_excludes_bad_rows_instead_of_blocking_
     assert backup_path.suffix == ".gz"
     with gzip.open(backup_path, "rt", encoding="utf-8") as handle:
         backup_rows = [json.loads(line) for line in handle if line.strip()]
+    assert [row["record_id"] for row in backup_rows] == [1, 2]
+
+
+def test_observation_source_quality_excludes_raw_rows_from_gzip_source(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    valid_id = "swing_dry_run:2026-06-04:KOSPI_ML:004710:exit:1780556300"
+    _write_events_gzip(
+        tmp_path,
+        "2026-06-04",
+        [
+            _event(
+                "swing_same_symbol_loss_reentry_cooldown",
+                {
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "source_book": "swing_dry_run",
+                    "source_probe_id": "-",
+                    "source_record_id": "-",
+                    "source_stage": "exit",
+                },
+                record_id=1,
+            ),
+            _event(
+                "swing_same_symbol_loss_reentry_cooldown",
+                {
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "source_book": "swing_dry_run",
+                    "source_probe_id": valid_id,
+                    "source_record_id": valid_id,
+                    "source_stage": "exit",
+                },
+                record_id=2,
+            ),
+        ],
+    )
+
+    report = audit.write_report("2026-06-04")
+    raw_path = tmp_path / "pipeline_events" / "pipeline_events_2026-06-04.jsonl.gz"
+    with gzip.open(raw_path, "rt", encoding="utf-8") as handle:
+        rows = [json.loads(line) for line in handle if line.strip()]
+    manifest = json.loads(
+        Path(report["raw_row_exclusion"]["manifest_path"]).read_text(encoding="utf-8")
+    )
+    with gzip.open(manifest["backup_path"], "rt", encoding="utf-8") as handle:
+        backup_rows = [json.loads(line) for line in handle if line.strip()]
+
+    assert report["summary"]["tuning_input_allowed"] is True
+    assert report["summary"]["hard_blocking_contract_gap_count"] == 0
+    assert report["summary"]["raw_row_exclusion_applied"] is True
+    assert manifest["source_path"] == str(raw_path)
+    assert [row["record_id"] for row in rows] == [2]
     assert [row["record_id"] for row in backup_rows] == [1, 2]
 
 

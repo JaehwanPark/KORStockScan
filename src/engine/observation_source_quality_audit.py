@@ -1384,6 +1384,40 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         decision_authority="operator_runtime_override_scalp_trailing_continuation_recheck",
         forbidden_uses="hard_stop_bypass/protect_stop_bypass/emergency_stop_bypass/stale_ws_bypass/broker_guard_bypass/provider_route_change/quantity_or_cap_change/second_extension",
     ),
+    "protect_trailing_smooth_hold": StageContract(
+        required_fields=(
+            "metric_role",
+            "decision_authority",
+            "window_policy",
+            "sample_floor",
+            "primary_decision_metric",
+            "source_quality_gate",
+            "runtime_effect",
+            "allowed_runtime_apply",
+            "actual_order_submitted",
+            "broker_order_forbidden",
+            "forbidden_uses",
+            "threshold_family",
+            "exit_rule_candidate",
+            "curr_price",
+            "trailing_stop_price",
+            "buffered_stop_price",
+            "median_price",
+            "sample_count",
+            "sample_span_sec",
+            "below_ratio",
+            "min_below_ratio",
+            "window_sec",
+            "min_span_sec",
+            "min_samples",
+            "buffer_pct",
+            "profit_rate",
+            "peak_profit",
+            "emergency_pct",
+        ),
+        decision_authority="protect_trailing_smoothing_observation_only",
+        forbidden_uses="runtime_threshold_apply/order_submit/provider_route_change/bot_restart/protect_stop_bypass/emergency_stop_bypass",
+    ),
     "low_profit_stagnation_confirmation": StageContract(
         required_fields=(
             "metric_role",
@@ -2300,6 +2334,52 @@ def _reviewed_unknown_reason_for_stage_field(
             return False
         return str(value or "").strip().lower() == "source_quality_missing_or_unknown"
 
+    def _is_reviewed_rising_missed_nxt_eligibility_not_available() -> bool:
+        if str(key or "") not in {"rising_missed_nxt_eligible", "rising_missed_effective_venue"}:
+            return False
+        if str(key or "") == "rising_missed_nxt_eligible" and str(value or "").strip().lower() != "unknown":
+            return False
+        if str(key or "") == "rising_missed_effective_venue" and str(value or "") != "NXT_ELIGIBILITY_UNKNOWN":
+            return False
+        effective_venue = _field_text("rising_missed_effective_venue")
+        standard_contract_present = (
+            _field_text("rising_missed_nxt_metric_role") == "source_quality_gate"
+            and _field_text("rising_missed_nxt_decision_authority") == "observe_only_no_runtime_mutation"
+            and _field_text("rising_missed_nxt_observation_only").lower() in {"true", "1", "yes"}
+            and _field_text("rising_missed_nxt_source_quality_gate")
+            == "absolute_type_receive_ts_and_actual_ws_item_route"
+        )
+        legacy_context_provenance_present = (
+            str(key or "") == "rising_missed_nxt_eligible"
+            and effective_venue in {"OFF_SESSION", "KRX"}
+            and _field_text("rising_missed_nxt_micro_state_role")
+            == "ws_transport_activity_not_positive_evidence"
+            and _field_text("rising_missed_nxt_positive_micro_authority")
+            == "trusted_signed_ws_0b_existing_tp1_contract"
+        )
+        return (
+            standard_contract_present
+            and effective_venue in {"NXT_ELIGIBILITY_UNKNOWN", "OFF_SESSION", "KRX"}
+        ) or legacy_context_provenance_present
+
+    def _is_reviewed_rising_missed_nxt_post_block_route_not_available() -> bool:
+        if str(key or "") not in {
+            "rising_missed_nxt_post_block_ws_0b_route",
+            "rising_missed_nxt_post_block_ws_0d_route",
+        }:
+            return False
+        if str(value or "").strip().lower() != "unknown":
+            return False
+        return (
+            _field_text("metric_role") == "source_quality_gate"
+            and _field_text("decision_authority") == "source_only_nxt_post_block_price_observation"
+            and _field_text("runtime_effect").lower() in {"false", "0", "no"}
+            and _field_text("actual_order_submitted").lower() in {"false", "0", "no"}
+            and _field_text("broker_order_forbidden").lower() in {"true", "1", "yes"}
+            and _field_text("source_quality_gate")
+            == "fresh_absolute_0b_receive_ts_and_actual_nxt_item_route"
+        )
+
     def _is_reviewed_entry_adm_bucket_provenance() -> bool:
         if stage not in {"scalp_entry_action_decision_snapshot", "ai_confirmed"}:
             return False
@@ -2320,8 +2400,18 @@ def _reviewed_unknown_reason_for_stage_field(
             return False
         return price_bucket == "price_unknown" and "price_unknown" in bucket_token and "price_unknown" in cache_token
 
+    def _is_reviewed_forbidden_uses_unknown_literal() -> bool:
+        if str(key or "") != "forbidden_uses":
+            return False
+        text = str(value or "").strip().lower()
+        if text in {"", "-", "unknown"}:
+            return False
+        return "unknown" in text
+
     if not _unknown_token_present(value):
         return None
+    if _is_reviewed_forbidden_uses_unknown_literal():
+        return "reviewed_forbidden_uses_unknown_literal_not_source_value"
     if _is_reviewed_runtime_skip_context_not_evaluated():
         return "reviewed_runtime_skip_context_not_evaluated"
     if _is_reviewed_unusable_micro_context_not_available():
@@ -2342,6 +2432,10 @@ def _reviewed_unknown_reason_for_stage_field(
         return "reviewed_first_touch_quote_stale_not_available"
     if _is_reviewed_rising_missed_submit_safety_backoff_source_quality():
         return "reviewed_rising_missed_submit_safety_backoff_source_quality_provenance"
+    if _is_reviewed_rising_missed_nxt_eligibility_not_available():
+        return "reviewed_rising_missed_nxt_eligibility_not_available"
+    if _is_reviewed_rising_missed_nxt_post_block_route_not_available():
+        return "reviewed_rising_missed_nxt_post_block_route_not_available"
     if str(key or "") in {"tick_context_stale", "quote_stale"} and _is_reviewed_stale_flag_not_available():
         return "reviewed_stale_flag_not_available"
     if str(key or "") in {
@@ -3990,7 +4084,7 @@ def _exclude_hard_blocking_rows_from_raw(target_date: str, report: dict[str, Any
     exclusions = report.get("hard_blocking_row_exclusions")
     if not isinstance(exclusions, list) or not exclusions:
         return None
-    raw_path = _pipeline_events_path(target_date)
+    raw_path = existing_or_gzip_path(_pipeline_events_path(target_date))
     if not raw_path.exists():
         return None
     excluded_lines = {
@@ -4002,8 +4096,12 @@ def _exclude_hard_blocking_rows_from_raw(target_date: str, report: dict[str, Any
         return None
     manifest_path, backup_path = _raw_row_exclusion_paths(target_date)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    with raw_path.open("rb") as source, gzip.open(backup_path, "wb", compresslevel=9) as target:
-        shutil.copyfileobj(source, target)
+    if raw_path.name.endswith(".gz"):
+        with raw_path.open("rb") as source, backup_path.open("wb") as target:
+            shutil.copyfileobj(source, target)
+    else:
+        with raw_path.open("rb") as source, gzip.open(backup_path, "wb", compresslevel=9) as target:
+            shutil.copyfileobj(source, target)
     exclusions_by_line = {
         int(item.get("line_no")): item
         for item in exclusions
@@ -4011,7 +4109,11 @@ def _exclude_hard_blocking_rows_from_raw(target_date: str, report: dict[str, Any
     }
     kept: list[str] = []
     excluded_payloads: list[dict[str, Any]] = []
-    with raw_path.open("r", encoding="utf-8") as fh:
+    if raw_path.name.endswith(".gz"):
+        raw_handle = gzip.open(raw_path, "rt", encoding="utf-8")
+    else:
+        raw_handle = raw_path.open("r", encoding="utf-8")
+    with raw_handle as fh:
         for line_no, line in enumerate(fh, 1):
             if line_no not in excluded_lines:
                 kept.append(line)
@@ -4027,7 +4129,11 @@ def _exclude_hard_blocking_rows_from_raw(target_date: str, report: dict[str, Any
         target_date=target_date,
     )
     tmp_path = raw_path.with_suffix(raw_path.suffix + ".tmp_row_exclusion")
-    tmp_path.write_text("".join(kept), encoding="utf-8")
+    if raw_path.name.endswith(".gz"):
+        with gzip.open(tmp_path, "wt", encoding="utf-8", compresslevel=9) as fh:
+            fh.write("".join(kept))
+    else:
+        tmp_path.write_text("".join(kept), encoding="utf-8")
     tmp_path.replace(raw_path)
     manifest = {
         "report_type": "raw_row_exclusion",

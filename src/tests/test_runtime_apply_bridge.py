@@ -644,6 +644,8 @@ def test_runtime_apply_bridge_writes_greenfield_real_env_policy(tmp_path, monkey
                         "canonical_parent_bucket": "lifecycle_flow:combo_lifecycle_flow:entry=score_mid_recovery|submit=submit_observed|holding=holding_observed|scale_in=none|exit=exit_observed",
                         "parent_live_floor_passed": True,
                         "parent_joined_sample": 22,
+                        "parent_primary_sample_book": "real",
+                        "parent_real_joined_sample": 22,
                         "selected_parent_level": "L2_default",
                         "parent_granularity_status": "target_pass",
                         "absorbed_child_bucket_ids": [
@@ -758,6 +760,8 @@ def test_runtime_apply_bridge_reports_greenfield_policy_contract_gap_blocker(tmp
                         "canonical_parent_bucket": "lifecycle_flow:combo_lifecycle_flow:entry=ok|submit=ok|holding=ok|exit=ok",
                         "parent_live_floor_passed": True,
                         "parent_joined_sample": 22,
+                        "parent_primary_sample_book": "real",
+                        "parent_real_joined_sample": 22,
                         "selected_parent_level": "L2_default",
                         "parent_granularity_status": "target_pass",
                         "entry_bucket_id": "entry:combo_entry_spot:score_66_69",
