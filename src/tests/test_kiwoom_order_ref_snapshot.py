@@ -53,7 +53,9 @@ def test_order_reference_snapshot_2nd_pass_uses_finalized_params(monkeypatch):
         ]
 
     monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fake_fetch)
-    monkeypatch.setattr(kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+    monkeypatch.setattr(
+        kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}"
+    )
 
     rows = kiwoom_utils.get_order_reference_snapshot_2nd_pass(
         "token",
@@ -127,7 +129,9 @@ def test_unfilled_order_snapshot_ka10075_preserves_exchange_fields(monkeypatch):
         ]
 
     monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fake_fetch)
-    monkeypatch.setattr(kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+    monkeypatch.setattr(
+        kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}"
+    )
 
     rows = kiwoom_utils.get_unfilled_order_snapshot_ka10075(
         "token",

@@ -75,12 +75,23 @@ def test_get_deposit_request_contract_matches_kiwoom_kt00001_guide(monkeypatch):
         status_code = 200
 
         def json(self):
-            return {"return_code": 0, "return_msg": "조회가 완료되었습니다.", "ord_alow_amt": "000000000085341"}
+            return {
+                "return_code": 0,
+                "return_msg": "조회가 완료되었습니다.",
+                "ord_alow_amt": "000000000085341",
+            }
 
     calls = []
 
     def _post(url, headers=None, json=None, timeout=None):
-        calls.append({"url": url, "headers": dict(headers or {}), "json": dict(json or {}), "timeout": timeout})
+        calls.append(
+            {
+                "url": url,
+                "headers": dict(headers or {}),
+                "json": dict(json or {}),
+                "timeout": timeout,
+            }
+        )
         return DummyResponse()
 
     monkeypatch.setattr(sniper_config, "CONF", {"VIRTUAL_ORDERABLE_AMOUNT": 0})
@@ -155,7 +166,11 @@ def test_get_deposit_reuses_loop_cache_within_ttl(monkeypatch):
         return DummyResponse()
 
     monkeypatch.setattr(sniper_config, "CONF", {"VIRTUAL_ORDERABLE_AMOUNT": 0})
-    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+    monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils,
+        "get_api_url",
+        lambda path: f"https://example.test{path}",
+    )
     monkeypatch.setattr(kiwoom_orders.requests, "post", _post)
     monkeypatch.setattr(kiwoom_orders.time, "time", lambda: current_time["value"])
     monkeypatch.setattr(
@@ -197,7 +212,11 @@ def test_get_deposit_refreshes_after_loop_cache_ttl(monkeypatch):
         return responses.pop(0)
 
     monkeypatch.setattr(sniper_config, "CONF", {"VIRTUAL_ORDERABLE_AMOUNT": 0})
-    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+    monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils,
+        "get_api_url",
+        lambda path: f"https://example.test{path}",
+    )
     monkeypatch.setattr(kiwoom_orders.requests, "post", _post)
     monkeypatch.setattr(kiwoom_orders.time, "time", lambda: current_time["value"])
     monkeypatch.setattr(
@@ -225,7 +244,9 @@ def test_send_smart_sell_order_limit_up_uses_marketable_best_order(monkeypatch):
         calls.append({"args": args, **kwargs})
         return {"return_code": "0", "ord_no": "S1"}
 
-    monkeypatch.setattr(kiwoom_orders, "send_sell_order_market", fake_send_sell_order_market)
+    monkeypatch.setattr(
+        kiwoom_orders, "send_sell_order_market", fake_send_sell_order_market
+    )
 
     result = kiwoom_orders.send_smart_sell_order(
         code="123456",
@@ -255,7 +276,11 @@ def test_send_sell_order_market_uses_requested_exchange(monkeypatch):
         captured["payload"] = payload
         return DummyResponse(), {"rt_cd": "0", "ord_no": "SKRX"}
 
-    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+    monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils,
+        "get_api_url",
+        lambda path: f"https://example.test{path}",
+    )
     monkeypatch.setattr(kiwoom_orders, "_post_kiwoom_with_auth_retry", fake_post)
 
     result = kiwoom_orders.send_sell_order_market(
@@ -278,7 +303,9 @@ def test_send_smart_sell_order_forwards_requested_exchange(monkeypatch):
         calls.append({"args": args, **kwargs})
         return {"return_code": "0", "ord_no": "SKRX"}
 
-    monkeypatch.setattr(kiwoom_orders, "send_sell_order_market", fake_send_sell_order_market)
+    monkeypatch.setattr(
+        kiwoom_orders, "send_sell_order_market", fake_send_sell_order_market
+    )
 
     result = kiwoom_orders.send_smart_sell_order(
         code="347700",
@@ -303,7 +330,11 @@ def test_send_cancel_order_uses_requested_exchange(monkeypatch):
         def json(self):
             return {"return_code": "0", "ord_no": "C1", "cncl_qty": "전량"}
 
-    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+    monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils,
+        "get_api_url",
+        lambda path: f"https://example.test{path}",
+    )
 
     def fake_post(url, headers, json, timeout):
         captured["payload"] = json
@@ -343,7 +374,11 @@ def test_get_deposit_loop_cache_can_be_disabled_by_string_config(monkeypatch):
         return responses.pop(0)
 
     monkeypatch.setattr(sniper_config, "CONF", {"VIRTUAL_ORDERABLE_AMOUNT": 0})
-    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+    monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils,
+        "get_api_url",
+        lambda path: f"https://example.test{path}",
+    )
     monkeypatch.setattr(kiwoom_orders.requests, "post", _post)
     monkeypatch.setattr(kiwoom_orders.time, "time", lambda: current_time["value"])
     monkeypatch.setattr(
@@ -380,7 +415,11 @@ def test_get_deposit_loop_cache_isolated_by_token(monkeypatch):
         return responses.pop(0)
 
     monkeypatch.setattr(sniper_config, "CONF", {"VIRTUAL_ORDERABLE_AMOUNT": 0})
-    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+    monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils,
+        "get_api_url",
+        lambda path: f"https://example.test{path}",
+    )
     monkeypatch.setattr(kiwoom_orders.requests, "post", _post)
     monkeypatch.setattr(kiwoom_orders.time, "time", lambda: current_time["value"])
     monkeypatch.setattr(
@@ -402,11 +441,15 @@ def test_get_deposit_loop_cache_isolated_by_token(monkeypatch):
 
 
 def test_reset_orderable_amount_cache_keeps_last_errors():
-    kiwoom_orders._LAST_DEPOSIT_ERRORS.append({"classification": "deposit_transport_failure"})
+    kiwoom_orders._LAST_DEPOSIT_ERRORS.append(
+        {"classification": "deposit_transport_failure"}
+    )
 
     kiwoom_orders.reset_orderable_amount_cache()
 
-    assert kiwoom_orders.get_last_deposit_errors() == [{"classification": "deposit_transport_failure"}]
+    assert kiwoom_orders.get_last_deposit_errors() == [
+        {"classification": "deposit_transport_failure"}
+    ]
 
 
 def test_get_deposit_uses_recent_cached_amount_after_api_failure(monkeypatch):
@@ -475,7 +518,10 @@ def test_get_deposit_enters_short_cooldown_after_request_limit(monkeypatch):
     assert kiwoom_orders.get_deposit("TOKEN") == 9_876_543
     assert kiwoom_orders.get_deposit("TOKEN") == 9_876_543
     assert post_count["value"] == 1
-    assert kiwoom_orders.get_last_deposit_errors()[0]["classification"] == "request_count_exceeded_cooldown"
+    assert (
+        kiwoom_orders.get_last_deposit_errors()[0]["classification"]
+        == "request_count_exceeded_cooldown"
+    )
 
 
 def test_get_deposit_request_limit_breaks_same_call_retry(monkeypatch):
@@ -483,7 +529,10 @@ def test_get_deposit_request_limit_breaks_same_call_retry(monkeypatch):
         status_code = 200
 
         def json(self):
-            return {"return_code": "1700", "return_msg": "허용된 요청 개수를 초과하였습니다"}
+            return {
+                "return_code": "1700",
+                "return_msg": "허용된 요청 개수를 초과하였습니다",
+            }
 
     post_count = {"value": 0}
 
@@ -519,7 +568,10 @@ def test_get_deposit_request_limit_breaks_same_call_retry(monkeypatch):
 
     assert kiwoom_orders.get_deposit("TOKEN") == 9_876_543
     assert post_count["value"] == 1
-    assert kiwoom_orders.get_last_deposit_errors()[0]["classification"] == "request_count_exceeded"
+    assert (
+        kiwoom_orders.get_last_deposit_errors()[0]["classification"]
+        == "request_count_exceeded"
+    )
 
 
 def test_get_deposit_transport_failure_enters_short_cooldown(monkeypatch):
@@ -532,7 +584,9 @@ def test_get_deposit_transport_failure_enters_short_cooldown(monkeypatch):
                 "return_msg": "(-994:fail to sendReceive:WINGSj)",
             }
 
-    times = iter([1_000.0, 1_000.0, 1_000.0, 1_000.0, 1_001.0, 1_001.0, 1_001.0, 1_001.0])
+    times = iter(
+        [1_000.0, 1_000.0, 1_000.0, 1_000.0, 1_001.0, 1_001.0, 1_001.0, 1_001.0]
+    )
     post_count = {"value": 0}
 
     def _post(*args, **kwargs):
@@ -567,12 +621,18 @@ def test_get_deposit_transport_failure_enters_short_cooldown(monkeypatch):
 
     assert kiwoom_orders.get_deposit("TOKEN") == 9_876_543
     assert post_count["value"] == 1
-    assert kiwoom_orders.get_last_deposit_errors()[0]["classification"] == "deposit_transport_failure"
+    assert (
+        kiwoom_orders.get_last_deposit_errors()[0]["classification"]
+        == "deposit_transport_failure"
+    )
     assert kiwoom_orders.get_last_deposit_meta()["source"] == "stale_cache_fallback"
 
     assert kiwoom_orders.get_deposit("TOKEN") == 9_876_543
     assert post_count["value"] == 1
-    assert kiwoom_orders.get_last_deposit_errors()[0]["classification"] == "deposit_transport_cooldown"
+    assert (
+        kiwoom_orders.get_last_deposit_errors()[0]["classification"]
+        == "deposit_transport_cooldown"
+    )
     assert kiwoom_orders.get_last_deposit_meta()["source"] == "cooldown_fallback"
 
 
@@ -594,8 +654,14 @@ def test_get_deposit_transport_failure_with_cache_is_not_error_logged(monkeypatc
     _seed_successful_deposit_for_token("TOKEN", 9_876_543, 995.0)
     monkeypatch.setattr(kiwoom_orders, "_DEPOSIT_API_COOLDOWN_UNTIL", 0.0)
     monkeypatch.setattr(kiwoom_orders, "_DEPOSIT_API_COOLDOWN_REASON", "")
-    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
-    monkeypatch.setattr(kiwoom_orders.requests, "post", lambda *args, **kwargs: TransportResponse())
+    monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils,
+        "get_api_url",
+        lambda path: f"https://example.test{path}",
+    )
+    monkeypatch.setattr(
+        kiwoom_orders.requests, "post", lambda *args, **kwargs: TransportResponse()
+    )
     monkeypatch.setattr(kiwoom_orders, "log_info", lambda msg: info_logs.append(msg))
     monkeypatch.setattr(kiwoom_orders, "log_error", lambda msg: error_logs.append(msg))
     monkeypatch.setattr(kiwoom_orders.time, "sleep", lambda _: None)
@@ -616,7 +682,9 @@ def test_get_deposit_transport_failure_with_cache_is_not_error_logged(monkeypatc
     assert kiwoom_orders.get_deposit("TOKEN") == 9_876_543
     assert error_logs == []
     assert any("[예수금조회 transport fallback]" in msg for msg in info_logs)
-    assert kiwoom_orders.get_last_deposit_errors()[0]["cache_fallback_available"] is True
+    assert (
+        kiwoom_orders.get_last_deposit_errors()[0]["cache_fallback_available"] is True
+    )
 
 
 def test_get_deposit_cooldown_fallback_populates_loop_cache(monkeypatch):
@@ -642,7 +710,11 @@ def test_get_deposit_cooldown_fallback_populates_loop_cache(monkeypatch):
     _seed_successful_deposit_for_token("TOKEN", 9_876_543, 995.0)
     monkeypatch.setattr(kiwoom_orders, "_DEPOSIT_API_COOLDOWN_UNTIL", 0.0)
     monkeypatch.setattr(kiwoom_orders, "_DEPOSIT_API_COOLDOWN_REASON", "")
-    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+    monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils,
+        "get_api_url",
+        lambda path: f"https://example.test{path}",
+    )
     monkeypatch.setattr(kiwoom_orders.requests, "post", _post)
     monkeypatch.setattr(kiwoom_orders, "log_info", lambda msg: info_logs.append(msg))
     monkeypatch.setattr(kiwoom_orders, "log_error", lambda *args, **kwargs: None)
@@ -693,7 +765,9 @@ def test_get_deposit_transport_cooldown_without_cache_fails_closed(monkeypatch):
         "get_api_url",
         lambda path: f"https://example.test{path}",
     )
-    monkeypatch.setattr(kiwoom_orders.requests, "post", lambda *args, **kwargs: TransportResponse())
+    monkeypatch.setattr(
+        kiwoom_orders.requests, "post", lambda *args, **kwargs: TransportResponse()
+    )
     monkeypatch.setattr(kiwoom_orders, "log_info", lambda *args, **kwargs: None)
     monkeypatch.setattr(kiwoom_orders, "log_error", lambda *args, **kwargs: None)
     monkeypatch.setattr(kiwoom_orders.time, "sleep", lambda _: None)
@@ -710,7 +784,10 @@ def test_get_deposit_transport_cooldown_without_cache_fails_closed(monkeypatch):
     )
 
     assert kiwoom_orders.get_deposit("TOKEN") == 0
-    assert kiwoom_orders.get_last_deposit_errors()[0]["classification"] == "deposit_transport_failure"
+    assert (
+        kiwoom_orders.get_last_deposit_errors()[0]["classification"]
+        == "deposit_transport_failure"
+    )
     assert kiwoom_orders.get_last_deposit_meta()["source"] == "fail_closed_zero"
 
 
@@ -735,7 +812,11 @@ def test_get_deposit_transport_message_code_enters_cooldown(monkeypatch):
     _seed_successful_deposit_for_token("TOKEN", 9_876_543, 995.0)
     monkeypatch.setattr(kiwoom_orders, "_DEPOSIT_API_COOLDOWN_UNTIL", 0.0)
     monkeypatch.setattr(kiwoom_orders, "_DEPOSIT_API_COOLDOWN_REASON", "")
-    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+    monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils,
+        "get_api_url",
+        lambda path: f"https://example.test{path}",
+    )
     monkeypatch.setattr(kiwoom_orders.requests, "post", _post)
     monkeypatch.setattr(kiwoom_orders, "log_info", lambda *args, **kwargs: None)
     monkeypatch.setattr(kiwoom_orders, "log_error", lambda *args, **kwargs: None)
@@ -754,7 +835,10 @@ def test_get_deposit_transport_message_code_enters_cooldown(monkeypatch):
 
     assert kiwoom_orders.get_deposit("TOKEN") == 9_876_543
     assert post_count["value"] == 1
-    assert kiwoom_orders.get_last_deposit_errors()[0]["classification"] == "deposit_transport_failure"
+    assert (
+        kiwoom_orders.get_last_deposit_errors()[0]["classification"]
+        == "deposit_transport_failure"
+    )
 
 
 def test_get_deposit_success_with_invalid_orderable_amount_uses_cache(monkeypatch):
@@ -762,22 +846,35 @@ def test_get_deposit_success_with_invalid_orderable_amount_uses_cache(monkeypatc
         status_code = 200
 
         def json(self):
-            return {"return_code": 0, "return_msg": "조회가 완료되었습니다.", "ord_alow_amt": "J대한통운"}
+            return {
+                "return_code": 0,
+                "return_msg": "조회가 완료되었습니다.",
+                "ord_alow_amt": "J대한통운",
+            }
 
     monkeypatch.setattr(sniper_config, "CONF", {"VIRTUAL_ORDERABLE_AMOUNT": 0})
     monkeypatch.setattr(kiwoom_orders, "_LAST_DEPOSIT_OVERRIDE", None)
     _seed_successful_deposit_for_token("TOKEN", 9_876_543, 995.0)
     monkeypatch.setattr(kiwoom_orders, "_DEPOSIT_API_COOLDOWN_UNTIL", 0.0)
     monkeypatch.setattr(kiwoom_orders, "_DEPOSIT_API_COOLDOWN_REASON", "")
-    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
-    monkeypatch.setattr(kiwoom_orders.requests, "post", lambda *args, **kwargs: InvalidSchemaResponse())
+    monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils,
+        "get_api_url",
+        lambda path: f"https://example.test{path}",
+    )
+    monkeypatch.setattr(
+        kiwoom_orders.requests, "post", lambda *args, **kwargs: InvalidSchemaResponse()
+    )
     monkeypatch.setattr(kiwoom_orders, "log_info", lambda *args, **kwargs: None)
     monkeypatch.setattr(kiwoom_orders, "log_error", lambda *args, **kwargs: None)
     monkeypatch.setattr(kiwoom_orders.time, "sleep", lambda _: None)
     monkeypatch.setattr(kiwoom_orders.time, "time", lambda: 1_000.0)
 
     assert kiwoom_orders.get_deposit("TOKEN") == 9_876_543
-    assert kiwoom_orders.get_last_deposit_errors()[0]["classification"] == "deposit_response_schema_invalid"
+    assert (
+        kiwoom_orders.get_last_deposit_errors()[0]["classification"]
+        == "deposit_response_schema_invalid"
+    )
 
 
 def test_get_deposit_records_auth_failure(monkeypatch):
@@ -803,8 +900,14 @@ def test_get_deposit_records_auth_failure(monkeypatch):
     )
     monkeypatch.setattr(kiwoom_orders, "log_info", lambda *args, **kwargs: None)
     monkeypatch.setattr(kiwoom_orders, "log_error", lambda *args, **kwargs: None)
-    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "invalidate_kiwoom_token_cache", lambda reason="": True)
-    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_kiwoom_token", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils,
+        "invalidate_kiwoom_token_cache",
+        lambda reason="": True,
+    )
+    monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils, "get_kiwoom_token", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr(kiwoom_orders.time, "sleep", lambda _: None)
 
     assert kiwoom_orders.get_deposit("TOKEN") == 0
@@ -815,8 +918,13 @@ def test_get_deposit_records_auth_failure(monkeypatch):
 
 
 def test_get_deposit_refreshes_token_and_retries_once_on_8005(monkeypatch, tmp_path):
-    monkeypatch.setenv("KIWOOM_TOKEN_CACHE_PATH", str(tmp_path / "kiwoom_token_cache.json"))
-    monkeypatch.setenv("KIWOOM_TOKEN_LOCK_PATH", str(tmp_path / "kiwoom_token_cache.lock"))
+    monkeypatch.setenv(
+        "KIWOOM_TOKEN_CACHE_PATH", str(tmp_path / "kiwoom_token_cache.json")
+    )
+    monkeypatch.setenv(
+        "KIWOOM_TOKEN_LOCK_PATH", str(tmp_path / "kiwoom_token_cache.lock")
+    )
+
     class DummyResponse:
         def __init__(self, payload, status_code=200):
             self._payload = payload
@@ -828,7 +936,9 @@ def test_get_deposit_refreshes_token_and_retries_once_on_8005(monkeypatch, tmp_p
     posts = []
     invalidations = []
     responses = [
-        DummyResponse({"return_code": "8005", "return_msg": "Token이 유효하지 않습니다"}),
+        DummyResponse(
+            {"return_code": "8005", "return_msg": "Token이 유효하지 않습니다"}
+        ),
         DummyResponse({"rt_cd": "0", "ord_alow_amt": "123000"}),
     ]
 
@@ -853,7 +963,11 @@ def test_get_deposit_refreshes_token_and_retries_once_on_8005(monkeypatch, tmp_p
         "invalidate_kiwoom_token_cache",
         lambda reason="": invalidations.append(reason) or True,
     )
-    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_kiwoom_token", lambda *args, **kwargs: "FRESH_TOKEN")
+    monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils,
+        "get_kiwoom_token",
+        lambda *args, **kwargs: "FRESH_TOKEN",
+    )
 
     assert kiwoom_orders.get_deposit("STALE_TOKEN") == 123_000
     assert len(posts) == 2
@@ -862,9 +976,16 @@ def test_get_deposit_refreshes_token_and_retries_once_on_8005(monkeypatch, tmp_p
     assert invalidations == []
 
 
-def test_get_deposit_returns_auth_failure_when_token_refresh_raises(monkeypatch, tmp_path):
-    monkeypatch.setenv("KIWOOM_TOKEN_CACHE_PATH", str(tmp_path / "kiwoom_token_cache.json"))
-    monkeypatch.setenv("KIWOOM_TOKEN_LOCK_PATH", str(tmp_path / "kiwoom_token_cache.lock"))
+def test_get_deposit_returns_auth_failure_when_token_refresh_raises(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv(
+        "KIWOOM_TOKEN_CACHE_PATH", str(tmp_path / "kiwoom_token_cache.json")
+    )
+    monkeypatch.setenv(
+        "KIWOOM_TOKEN_LOCK_PATH", str(tmp_path / "kiwoom_token_cache.lock")
+    )
+
     class DummyResponse:
         status_code = 200
 
@@ -884,11 +1005,19 @@ def test_get_deposit_returns_auth_failure_when_token_refresh_raises(monkeypatch,
     monkeypatch.setattr(kiwoom_orders, "_LAST_DEPOSIT_OVERRIDE", None)
     monkeypatch.setattr(kiwoom_orders, "_LAST_SUCCESSFUL_DEPOSIT", 0)
     monkeypatch.setattr(kiwoom_orders, "_LAST_SUCCESSFUL_DEPOSIT_AT", 0.0)
-    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+    monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils,
+        "get_api_url",
+        lambda path: f"https://example.test{path}",
+    )
     monkeypatch.setattr(kiwoom_orders.requests, "post", _post)
     monkeypatch.setattr(kiwoom_orders, "log_info", lambda *args, **kwargs: None)
     monkeypatch.setattr(kiwoom_orders, "log_error", lambda *args, **kwargs: None)
-    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "invalidate_kiwoom_token_cache", lambda reason="": True)
+    monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils,
+        "invalidate_kiwoom_token_cache",
+        lambda reason="": True,
+    )
     monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_kiwoom_token", _raise_refresh)
     monkeypatch.setattr(kiwoom_orders.time, "sleep", lambda _: None)
 

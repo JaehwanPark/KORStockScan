@@ -4,7 +4,9 @@ from src.utils import kiwoom_utils as mod
 def test_ka10061_period_total_parsing(monkeypatch):
     monkeypatch.setattr(mod, "_cache_get", lambda namespace, key: None)
     monkeypatch.setattr(mod, "_cache_set", lambda namespace, key, value, ttl_sec: value)
-    monkeypatch.setattr(mod, "get_effective_kiwoom_code", lambda code, is_nxt=None: code)
+    monkeypatch.setattr(
+        mod, "get_effective_kiwoom_code", lambda code, is_nxt=None: code
+    )
     monkeypatch.setattr(mod, "get_api_url", lambda path: f"https://kiwoom.test{path}")
 
     def fake_fetch(url, token, api_id, payload, use_continuous=False, **kwargs):
@@ -28,7 +30,9 @@ def test_ka10061_period_total_parsing(monkeypatch):
 
     monkeypatch.setattr(mod, "fetch_kiwoom_api_continuous", fake_fetch)
 
-    result = mod.get_investor_period_total_ka10061("TOKEN", "005930", "2026-05-14", "2026-05-20")
+    result = mod.get_investor_period_total_ka10061(
+        "TOKEN", "005930", "2026-05-14", "2026-05-20"
+    )
 
     assert result["row_count"] == 1
     assert result["foreign_net"] == 1000
@@ -39,7 +43,9 @@ def test_ka10061_period_total_parsing(monkeypatch):
 def test_ka10064_intraday_chart_parsing(monkeypatch):
     monkeypatch.setattr(mod, "_cache_get", lambda namespace, key: None)
     monkeypatch.setattr(mod, "_cache_set", lambda namespace, key, value, ttl_sec: value)
-    monkeypatch.setattr(mod, "get_effective_kiwoom_code", lambda code, is_nxt=None: code)
+    monkeypatch.setattr(
+        mod, "get_effective_kiwoom_code", lambda code, is_nxt=None: code
+    )
     monkeypatch.setattr(mod, "get_api_url", lambda path: f"https://kiwoom.test{path}")
 
     def fake_fetch(url, token, api_id, payload, use_continuous=False, **kwargs):
@@ -70,7 +76,13 @@ def test_ka10063_intraday_trade_parsing(monkeypatch):
 
     def fake_fetch(url, token, api_id, payload, use_continuous=False, **kwargs):
         assert api_id == "ka10063"
-        return [{"opmr_invsr_trde": [{"stk_cd": "A005930", "netprps_qty": "+10", "netprps_amt": "1000"}]}]
+        return [
+            {
+                "opmr_invsr_trde": [
+                    {"stk_cd": "A005930", "netprps_qty": "+10", "netprps_amt": "1000"}
+                ]
+            }
+        ]
 
     monkeypatch.setattr(mod, "fetch_kiwoom_api_continuous", fake_fetch)
 
@@ -87,7 +99,9 @@ def test_ka10066_postclose_trade_parsing(monkeypatch):
 
     def fake_fetch(url, token, api_id, payload, use_continuous=False, **kwargs):
         assert api_id == "ka10066"
-        return [{"opaf_invsr_trde": [{"stk_cd": "005930", "frgnr_invsr": "5", "orgn": "7"}]}]
+        return [
+            {"opaf_invsr_trde": [{"stk_cd": "005930", "frgnr_invsr": "5", "orgn": "7"}]}
+        ]
 
     monkeypatch.setattr(mod, "fetch_kiwoom_api_continuous", fake_fetch)
 
