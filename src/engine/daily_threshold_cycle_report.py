@@ -8521,11 +8521,28 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
                     source_metrics.get("counterfactual_joined_sample"),
                 )
                 source_metrics.setdefault(
+                    "latency_classifier_counterfactual_join_rate_pct",
+                    source_metrics.get("counterfactual_join_rate_pct"),
+                )
+                source_metrics.setdefault(
                     "latency_classifier_events_without_counterfactual",
                     source_metrics.get("events_without_counterfactual"),
                 )
-                source_metrics["counterfactual_joined_sample"] = (
-                    _safe_int(diagnostics.get("joined_sample"), 0) or 0
+                joined_sample = _safe_int(diagnostics.get("joined_sample"), 0) or 0
+                join_eligible_event_count = (
+                    _safe_int(diagnostics.get("join_eligible_event_count"), 0) or 0
+                )
+                source_metrics["counterfactual_joined_sample"] = joined_sample
+                source_metrics["counterfactual_join_eligible_event_count"] = (
+                    join_eligible_event_count
+                )
+                source_metrics["counterfactual_join_rate_pct"] = (
+                    round(joined_sample / join_eligible_event_count * 100.0, 1)
+                    if join_eligible_event_count > 0
+                    else None
+                )
+                source_metrics["counterfactual_join_rate_scope"] = (
+                    "dynamic_entry_price_counterfactual_diagnostics"
                 )
                 source_metrics["events_without_counterfactual"] = (
                     _safe_int(diagnostics.get("events_without_counterfactual"), 0) or 0

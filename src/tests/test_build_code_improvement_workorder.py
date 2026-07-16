@@ -6862,6 +6862,44 @@ def test_build_code_improvement_workorder_forces_swing_entry_bottleneck_selected
     assert report["summary"]["swing_entry_bottleneck_selected"] is True
 
 
+def test_followup_order_ids_keep_hash_for_long_source_keys():
+    prefix = "same_long_source_prefix_" + ("x" * 120)
+    ldm_ids = {
+        mod._swing_ldm_order_id(
+            {
+                "lifecycle_stage": "selection",
+                "bucket_type": "discovery_arm_attribution",
+                "bucket_key": f"{prefix}_{suffix}",
+            }
+        )
+        for suffix in ("first", "second")
+    }
+    bucket_orders = mod._swing_lifecycle_bucket_discovery_followup_orders(
+        {
+            "code_improvement_workorders": [
+                {"bucket_id": f"{prefix}_{suffix}", "lifecycle_stage": "selection"}
+                for suffix in ("first", "second")
+            ]
+        }
+    )
+    conversion_orders = mod._conversion_lane_followup_orders(
+        {
+            "conversion_blocker_rank": [
+                {
+                    "blocker_class": "source_quality",
+                    "conversion_candidate_id": f"{prefix}_{suffix}",
+                    "conversion_impact_rank": index,
+                }
+                for index, suffix in enumerate(("first", "second"), start=1)
+            ]
+        }
+    )
+
+    assert len(ldm_ids) == 2
+    assert len({item["order_id"] for item in bucket_orders}) == 2
+    assert len({item["order_id"] for item in conversion_orders}) == 2
+
+
 def test_build_code_improvement_workorder_dedupes_duplicate_orders(
     tmp_path, monkeypatch
 ):

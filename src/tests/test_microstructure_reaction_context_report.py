@@ -304,6 +304,16 @@ def test_microstructure_reaction_context_report_preserves_contract_and_keys(
     assert report["summary"]["tick_trade_value_1313_missing_rate_pct"] == 70.0
     assert report["summary"]["trade_volume_1030_1031_vs_15_mismatch_count"] == 1
     assert report["summary"]["trade_volume_1030_1031_vs_15_mismatch_rate_pct"] == 20.0
+    assert (
+        report["summary"]["trade_volume_1030_1031_vs_15_noncomparable_count"]
+        == 5
+    )
+    assert (
+        report["summary"]["trade_volume_1030_1031_vs_15_contract_violation_count"]
+        == 0
+    )
+    assert report["summary"]["v_pw_expected_count"] == 2
+    assert report["summary"]["v_pw_missing_count"] == 0
     assert report["summary"]["kiwoom_0b_aux_observed_count"] == 13
     assert report["summary"]["kiwoom_0b_1313_missing_count"] == 7
     assert report["summary"]["kiwoom_0b_1313_missing_rate_pct"] == 53.846
@@ -381,3 +391,90 @@ def test_microstructure_reaction_context_report_preserves_contract_and_keys(
     assert "order_microstructure_signed_tape_runtime_candidate_review" in markdown
     assert (report_dir / "microstructure_reaction_context_2026-05-31.json").exists()
     assert (report_dir / "microstructure_reaction_context_2026-05-31.md").exists()
+
+
+def test_microstructure_report_emits_full_gap_source_quality_orders(
+    tmp_path, monkeypatch
+):
+    event_dir = tmp_path / "pipeline_events"
+    report_dir = tmp_path / "report" / "microstructure_reaction_context"
+    event_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", event_dir)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    event_path = event_dir / "pipeline_events_2026-07-16.jsonl"
+    event_path.write_text(
+        "\n".join(
+            json.dumps(
+                {
+                    "stage": "scalp_sim_entry_armed",
+                    "stock_code": f"{index:06d}",
+                    "fields": {
+                        "microstructure_reaction_context_status": "missing",
+                        "v_pw_source": "missing",
+                        "latest_strength": "-",
+                        "trade_volume_1030_1031_vs_15_evaluable_count": 1,
+                        "trade_volume_1030_1031_vs_15_mismatch_count": 1,
+                        "trade_volume_1030_1031_vs_15_comparison_contract": (
+                            "same_tick_comparable"
+                        ),
+                    },
+                }
+            )
+            for index in range(1, 21)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = mod.build_microstructure_reaction_context_report("2026-07-16")
+
+    orders = {item["order_id"]: item for item in report["code_improvement_orders"]}
+    assert "order_microstructure_v_pw_full_source_gap" in orders
+    assert "order_microstructure_trade_volume_split_contract_mismatch" in orders
+    assert all(item["route"] == "instrumentation_order" for item in orders.values())
+    assert all(item["runtime_effect"] is False for item in orders.values())
+    assert all(item["allowed_runtime_apply"] is False for item in orders.values())
+
+
+def test_microstructure_report_backfills_vpw_and_classifies_legacy_volume_scope(
+    tmp_path, monkeypatch
+):
+    event_dir = tmp_path / "pipeline_events"
+    report_dir = tmp_path / "report" / "microstructure_reaction_context"
+    event_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", event_dir)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    event_path = event_dir / "pipeline_events_2026-07-16.jsonl"
+    event_path.write_text(
+        "\n".join(
+            json.dumps(
+                {
+                    "stage": "scalp_entry_action_decision_snapshot",
+                    "stock_code": f"{index:06d}",
+                    "fields": {
+                        "microstructure_reaction_context_status": "ok",
+                        "v_pw_source": "missing",
+                        "latest_strength": "88.3",
+                        "trade_volume_source_counts": {"1030_1031_sum": 1},
+                        "trade_volume_1030_1031_vs_15_evaluable_count": 1,
+                        "trade_volume_1030_1031_vs_15_mismatch_count": 1,
+                    },
+                }
+            )
+            for index in range(1, 21)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = mod.build_microstructure_reaction_context_report("2026-07-16")
+    summary = report["summary"]
+
+    assert summary["v_pw_expected_count"] == 20
+    assert summary["v_pw_ws_0b_count"] == 20
+    assert summary["v_pw_report_provenance_backfilled_count"] == 20
+    assert summary["v_pw_missing_count"] == 0
+    assert summary["trade_volume_1030_1031_vs_15_mismatch_rate_pct"] == 100.0
+    assert summary["trade_volume_1030_1031_vs_15_noncomparable_count"] == 20
+    assert summary["trade_volume_1030_1031_vs_15_contract_violation_count"] == 0
+    assert report["code_improvement_orders"] == []

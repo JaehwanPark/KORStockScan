@@ -502,6 +502,9 @@ def _event_field_values(
                         )
                     else:
                         eligible = explicit_eligible
+                    if active_count == 0:
+                        eligible = False
+                        exclusion_reason = "policy_active_seed_count_zero_effect_excluded"
                     if not eligible:
                         reason = exclusion_reason or (
                             "diagnostic_followup_without_seed_context"

@@ -1523,19 +1523,29 @@ def _implementation_marker_for_conclusion(
         "lifecycle_decision_matrix_source_quality_blocked",
         "lifecycle_bucket_discovery",
         "pattern_lab_propagation_audit",
+        "source-quality",
+        "source_quality",
+        "source_quality_gap",
         "swing_lifecycle_bucket_discovery",
         "swing_lifecycle_decision_matrix",
         "swing_strategy_discovery_ev",
         "threshold_cycle_ev",
     }
+    generic_source_quality_followup = normalized_review_id.endswith(
+        ("_source_quality", "_warnings")
+    )
     if (
-        normalized_review_id in source_quality_review_ids
+        (normalized_review_id in source_quality_review_ids or generic_source_quality_followup)
         and str(conclusion.get("final_state") or "") in {"source_quality_gap", "code_patch_required"}
     ):
         source_paths = conclusion.get("source_paths") if isinstance(conclusion.get("source_paths"), list) else []
         if source_paths:
             return (
-                "implemented",
+                (
+                    "implemented_but_waiting_sample"
+                    if generic_source_quality_followup
+                    else "implemented"
+                ),
                 {
                     "implementation_type": "pattern_lab_ai_review_source_quality_followup_provenance",
                     "implemented_scope": (
@@ -1558,7 +1568,11 @@ def _implementation_marker_for_conclusion(
                     "runtime_mutation_allowed": False,
                     "forbidden_uses": FORBIDDEN_USES,
                     "source_paths": source_paths,
-                    "root_cause_closure_status_hint": "root_cause_closed",
+                    "root_cause_closure_status_hint": (
+                        "handoff_closed_root_cause_open"
+                        if generic_source_quality_followup
+                        else "root_cause_closed"
+                    ),
                 },
             )
     if review_id not in {

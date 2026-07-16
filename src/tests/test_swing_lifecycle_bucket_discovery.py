@@ -1328,6 +1328,17 @@ def test_bucket_discovery_normalizes_explicit_workorder_contract(tmp_path, monke
     assert "real_order_submit" in workorder["forbidden_uses"]
 
 
+def test_bucket_workorder_slug_keeps_digest_for_long_ids():
+    prefix = "same_long_bucket_prefix_" + ("x" * 100)
+
+    first = mod._bucket_key_slug(f"{prefix}_first")
+    second = mod._bucket_key_slug(f"{prefix}_second")
+
+    assert first != second
+    assert len(first.rsplit("_", 1)[-1]) == 12
+    assert len(second.rsplit("_", 1)[-1]) == 12
+
+
 def test_bucket_discovery_excludes_implemented_explicit_workorder_from_active_workorders(
     tmp_path, monkeypatch
 ):

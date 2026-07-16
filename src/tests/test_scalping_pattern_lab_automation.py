@@ -96,6 +96,27 @@ def test_pattern_lab_automation_builds_consensus_orders_and_family_candidates(
     assert report["ev_report_summary"]["code_improvement_order_count"] >= 2
 
 
+def test_entry_adm_source_quality_contract_blocks_below_sample_floor():
+    contract = mod._entry_adm_source_quality_contract(
+        {
+            "available": True,
+            "status": "warning",
+            "joined_sample": 6,
+            "sample_floor": 20,
+            "missing_actions": [],
+        }
+    )
+
+    assert contract["source_contract_status"] == "implemented"
+    assert contract["sample_count"] == 6
+    assert contract["sample_floor"] == 20
+    assert contract["sample_floor_status"] == "hold_sample"
+    assert contract["tuning_input_allowed"] is False
+    assert contract["blocked_reasons"] == ["joined_sample_below_sample_floor"]
+    assert contract["runtime_effect"] is False
+    assert contract["allowed_runtime_apply"] is False
+
+
 def test_pattern_lab_automation_routes_stale_lab_to_rejected_and_solo_order(
     tmp_path, monkeypatch
 ):

@@ -623,6 +623,10 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
             "trade_volume_1030_1031_vs_15_mismatch_rate_pct",
             0.0,
         ),
+        "trade_volume_1030_1031_vs_15_comparison_contract": (
+            "cumulative_split_vs_tick_not_comparable"
+        ),
+        "trade_volume_1030_1031_vs_15_decision_usable": False,
         "kiwoom_0b_aux_observed_count": kiwoom_0b_aux_observed_count,
         "kiwoom_0b_1313_present_count": int(ws_data.get("kiwoom_0b_1313_present_count") or 0),
         "kiwoom_0b_1313_missing_count": kiwoom_0b_1313_missing_count,

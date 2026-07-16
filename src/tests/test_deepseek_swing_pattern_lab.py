@@ -1300,12 +1300,43 @@ def test_swing_pattern_lab_automation_marks_ofi_qi_instrumentation_implemented(
     assert contract["metric_role"] == "source_quality_gate"
     assert contract["runtime_effect"] is False
     assert contract["allowed_runtime_apply"] is False
+    assert contract["sample_floor"] == 3
+    assert contract["sample_floor_status"] == "ready"
+    assert contract["tuning_input_allowed"] is False
+    assert contract["blocked_reasons"] == ["invalid_micro_context_present"]
     blocked = report["data_quality"]["source_quality_blocked_families"][0]
     assert blocked["source_contract_version"] == "swing_micro_context_source_quality_v1"
     assert (
         blocked["decision_authority"]
         == "swing_pattern_lab_analysis_workorder_source_only"
     )
+
+
+def test_swing_micro_context_contract_blocks_below_sample_floor():
+    from src.engine import swing_pattern_lab_automation as mod
+
+    quality = {
+        "sample_count": 2,
+        "stale_missing_count": 0,
+        "stale_missing_ratio": 0.0,
+        "reason_counts": {},
+        "reason_combination_counts": {},
+        "reason_combination_unique_record_counts": {},
+        "stale_missing_group_counts": {},
+        "stale_missing_group_unique_record_counts": {},
+        "observer_unhealthy_overlap": {},
+    }
+
+    contract = mod._micro_context_source_contract(quality, [])
+
+    assert contract["source_contract_status"] == "implemented"
+    assert contract["sample_count"] == 2
+    assert contract["sample_floor"] == 3
+    assert contract["sample_floor_status"] == "hold_sample"
+    assert contract["tuning_input_allowed"] is False
+    assert contract["blocked_reasons"] == ["sample_floor_not_met"]
+    assert contract["runtime_effect"] is False
+    assert contract["allowed_runtime_apply"] is False
 
 
 def test_swing_pattern_lab_automation_marks_scale_in_events_observed_implemented(

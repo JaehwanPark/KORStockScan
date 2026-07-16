@@ -26,6 +26,7 @@ FORBIDDEN_USES = [
     "recommendation_history_replace",
 ]
 MICRO_CONTEXT_SOURCE_CONTRACT_VERSION = "swing_micro_context_source_quality_v1"
+MICRO_CONTEXT_SAMPLE_FLOOR = 3
 
 SWING_TARGET_SUBSYSTEM_MAP = {
     "selection": "swing_model_selection",
@@ -231,7 +232,7 @@ def _source_quality_blocked_families(ofi_qi_quality: dict[str, Any]) -> list[dic
                 "metric_role": "source_quality_gate",
                 "decision_authority": DECISION_AUTHORITY,
                 "window_policy": "same_day_pattern_lab_source_quality",
-                "sample_floor": 1,
+                "sample_floor": MICRO_CONTEXT_SAMPLE_FLOOR,
                 "primary_decision_metric": "source_quality_gate",
                 "source_quality_gate": "swing_orderbook_micro_context_ready_or_blocker_provenance_recorded",
                 "source_contract_version": MICRO_CONTEXT_SOURCE_CONTRACT_VERSION,
@@ -269,14 +270,32 @@ def _micro_context_source_contract(
         "observer_unhealthy_overlap",
     )
     present = {key: key in ofi_qi_quality for key in required_metric_keys}
+    sample_count = _safe_int(ofi_qi_quality.get("sample_count"), 0)
+    contract_ready = all(present.values())
+    sample_ready = sample_count >= MICRO_CONTEXT_SAMPLE_FLOOR
+    tuning_input_allowed = (
+        contract_ready
+        and sample_ready
+        and not source_quality_blocked_families
+    )
+    blocked_reasons = []
+    if not contract_ready:
+        blocked_reasons.append("required_metric_missing")
+    if not sample_ready:
+        blocked_reasons.append("sample_floor_not_met")
+    if source_quality_blocked_families:
+        blocked_reasons.append("invalid_micro_context_present")
     return {
         "contract_id": "swing_micro_context_source_quality",
         "source_contract_version": MICRO_CONTEXT_SOURCE_CONTRACT_VERSION,
-        "source_contract_status": "implemented" if all(present.values()) else "instrumentation_gap",
+        "source_contract_status": "implemented" if contract_ready else "instrumentation_gap",
         "metric_role": "source_quality_gate",
         "decision_authority": DECISION_AUTHORITY,
         "window_policy": "same_day_pattern_lab_source_quality",
-        "sample_floor": 1,
+        "sample_floor": MICRO_CONTEXT_SAMPLE_FLOOR,
+        "sample_floor_status": "ready" if sample_ready else "hold_sample",
+        "tuning_input_allowed": tuning_input_allowed,
+        "blocked_reasons": blocked_reasons,
         "primary_decision_metric": "source_quality_gate",
         "source_quality_gate": "swing_orderbook_micro_context_ready_or_blocker_provenance_recorded",
         "runtime_effect": False,
@@ -284,7 +303,7 @@ def _micro_context_source_contract(
         "forbidden_uses": FORBIDDEN_USES,
         "required_metric_keys": list(required_metric_keys),
         "missing_metric_keys": [key for key, exists in present.items() if not exists],
-        "sample_count": _safe_int(ofi_qi_quality.get("sample_count"), 0),
+        "sample_count": sample_count,
         "stale_missing_count": _safe_int(ofi_qi_quality.get("stale_missing_count"), 0),
         "stale_missing_ratio": _safe_float(ofi_qi_quality.get("stale_missing_ratio"), 0.0),
         "reason_counts": ofi_qi_quality.get("reason_counts") or {},

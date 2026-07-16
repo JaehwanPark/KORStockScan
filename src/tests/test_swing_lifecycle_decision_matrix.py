@@ -1,5 +1,7 @@
 import json
 
+import math
+
 from src.engine import swing_lifecycle_decision_matrix as mod
 
 TEST_DB_URL = mod.POSTGRES_URL
@@ -138,6 +140,23 @@ def test_labeled_discovery_arm_expands_to_source_only_complete_flow():
     assert attribution["flows"][0]["source_quality_adjusted_ev_pct"] == 1.6
     assert "one_share" in attribution["flows"][0]["bucket_key"]
     assert "policy_exit" in attribution["flows"][0]["bucket_key"]
+
+
+def test_discovery_row_normalizes_nonfinite_text_dimensions():
+    row = mod._discovery_row(
+        {
+            "source_date": "2026-05-22",
+            "stock_code": "000660",
+            "arm_id": "arm_a",
+            "position_tag": math.nan,
+            "sector": math.nan,
+            "theme_tags": "NaN",
+        }
+    )
+
+    assert row["runtime_features"]["position_tag"] == "-"
+    assert row["runtime_features"]["sector"] == "-"
+    assert row["runtime_features"]["theme_tags"] == "-"
 
 
 def test_swing_sim_events_are_consumed_as_source_only_probe_rows(tmp_path, monkeypatch):
@@ -755,6 +774,28 @@ def test_swing_ldm_workorders_remain_source_only(tmp_path, monkeypatch):
     assert all(
         "runtime_threshold_mutation" in item["forbidden_uses"] for item in workorders
     )
+
+
+def test_swing_ldm_workorder_ids_keep_digest_for_long_bucket_keys():
+    prefix = "same_long_bucket_prefix_" + ("x" * 100)
+    workorders = mod._code_workorders(
+        "selection",
+        [
+            {
+                "bucket_type": "discovery_arm_attribution",
+                "bucket_key": f"{prefix}_first",
+                "recommended_route": "code_patch_required",
+            },
+            {
+                "bucket_type": "discovery_arm_attribution",
+                "bucket_key": f"{prefix}_second",
+                "recommended_route": "code_patch_required",
+            },
+        ],
+    )
+
+    assert len({item["workorder_id"] for item in workorders}) == 2
+    assert all(len(item["workorder_id"].rsplit("_", 1)[-1]) == 10 for item in workorders)
 
 
 def test_swing_ldm_reports_clean_baseline_discovery_filter(tmp_path, monkeypatch):

@@ -712,10 +712,14 @@ def _slug(value: str) -> str:
 
 def _slug_with_hash(value: str, *, limit: int = 80) -> str:
     raw = str(value or "unknown")
-    base = _slug(raw)
+    normalized = re.sub(r"[^a-zA-Z0-9가-힣]+", "_", raw.strip().lower()).strip("_")
+    if not normalized:
+        return "unknown"
+    if len(normalized) <= limit:
+        return normalized
     digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:8]
     keep = max(1, int(limit) - len(digest) - 1)
-    return f"{base[:keep].rstrip('_')}_{digest}"
+    return f"{normalized[:keep].rstrip('_')}_{digest}"
 
 
 def _entry_bucket_order_id(item: dict[str, Any]) -> str:
@@ -760,7 +764,9 @@ def _lifecycle_flow_bucket_order_id(item: dict[str, Any]) -> str:
 def _swing_ldm_order_id(item: dict[str, Any]) -> str:
     stage = _slug(str(item.get("lifecycle_stage") or "swing"))
     bucket_type = _slug(str(item.get("bucket_type") or "bucket"))
-    bucket_key = _slug(str(item.get("bucket_key") or item.get("workorder_id") or "unknown"))
+    bucket_key = _slug_with_hash(
+        str(item.get("bucket_key") or item.get("workorder_id") or "unknown")
+    )
     return f"order_swing_ldm_{stage}_{bucket_type}_{bucket_key}"
 
 
@@ -1286,7 +1292,9 @@ def _swing_lifecycle_handoff_status(
         if isinstance(item, dict):
             bucket_id = str(item.get("bucket_id") or item.get("workorder_id") or "")
             if bucket_id:
-                expected_order_ids.add(f"order_swing_lifecycle_bucket_discovery_{_slug(bucket_id)}")
+                expected_order_ids.add(
+                    f"order_swing_lifecycle_bucket_discovery_{_slug_with_hash(bucket_id)}"
+                )
     actual_order_ids = {
         str(item.get("order_id"))
         for item in (workorder.get("orders") if isinstance(workorder.get("orders"), list) else [])

@@ -617,6 +617,10 @@ def test_extract_scalping_feature_packet_prefers_signed_0b_ws_ticks_without_touc
     assert packet["trade_volume_source_counts"] == {"1030_1031_sum": 4, "15_abs": 1}
     assert packet["trade_volume_1030_1031_vs_15_mismatch_count"] == 2
     assert packet["trade_volume_1030_1031_vs_15_mismatch_rate_pct"] == 40.0
+    assert packet["trade_volume_1030_1031_vs_15_comparison_contract"] == (
+        "cumulative_split_vs_tick_not_comparable"
+    )
+    assert packet["trade_volume_1030_1031_vs_15_decision_usable"] is False
     assert packet["kiwoom_0b_1313_missing_rate_pct"] == 57.143
     assert packet["kiwoom_0b_1030_1031_vs_15_mismatch_rate_pct"] == 33.333
 

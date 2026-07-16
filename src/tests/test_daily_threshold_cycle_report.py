@@ -4506,6 +4506,47 @@ def test_dynamic_entry_price_counterfactual_join_diagnostics_breaks_down_reasons
     assert diagnostics["runtime_effect"] is False
 
 
+def test_dynamic_entry_price_uses_own_counterfactual_join_rate():
+    report_sources = {
+        "sources": {},
+        "source_metrics": {
+            "dynamic_entry_price_resolver": {
+                "counterfactual_joined_sample": 0,
+                "counterfactual_join_rate_pct": 0.0,
+                "counterfactual_join_diagnostics": {
+                    "joined_sample": 11,
+                    "join_eligible_event_count": 32,
+                    "events_without_counterfactual": 21,
+                    "events_without_counterfactual_event_count": 21,
+                    "counterfactual_unmatched_row_count": 0,
+                }
+            },
+        },
+    }
+
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-05-20",
+        pipeline_loader=lambda target_date: [],
+        report_source_loader=lambda target_date: report_sources,
+        completed_rows_loader=lambda start_date, end_date: [],
+    )
+
+    candidate = next(
+        item
+        for item in report["calibration_candidates"]
+        if item["family"] == "dynamic_entry_price_resolver"
+    )
+    metrics = candidate["source_metrics"]
+    assert metrics["counterfactual_joined_sample"] == 11
+    assert metrics["counterfactual_join_eligible_event_count"] == 32
+    assert metrics["counterfactual_join_rate_pct"] == 34.4
+    assert metrics["counterfactual_join_rate_scope"] == (
+        "dynamic_entry_price_counterfactual_diagnostics"
+    )
+    assert metrics["latency_classifier_counterfactual_joined_sample"] == 0
+    assert metrics["latency_classifier_counterfactual_join_rate_pct"] == 0.0
+
+
 def test_active_seed_matched_string_boolean_separation():
     from src.engine import daily_threshold_cycle_report as target
 

@@ -233,6 +233,66 @@ def test_active_seed_count_positive_window_allows_natural_match_zero(
     assert report["summary"]["natural_match_0_count"] == 1
 
 
+def test_active_seed_zero_count_candidate_is_not_match_eligible(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-06-04"
+    _write(
+        tmp_path
+        / "report"
+        / "lifecycle_bucket_discovery"
+        / f"lifecycle_bucket_discovery_{target}.json",
+        {},
+    )
+    _write(
+        tmp_path
+        / "threshold_cycle"
+        / "scalp_sim_policies"
+        / f"scalp_sim_policy_catalog_{target}.json",
+        {},
+    )
+    _write(
+        tmp_path
+        / "threshold_cycle"
+        / "swing_sim_policies"
+        / f"swing_sim_policy_catalog_{target}.json",
+        {},
+    )
+    _write(
+        tmp_path / "threshold_cycle" / "apply_plans" / f"threshold_apply_{target}.json",
+        {"source_date": target},
+    )
+    event_path = tmp_path / "pipeline_events" / f"pipeline_events_{target}.jsonl"
+    event_path.parent.mkdir(parents=True, exist_ok=True)
+    event_path.write_text(
+        json.dumps(
+            {
+                "stage": "scalp_sim_entry_armed",
+                "fields": {
+                    "scalp_sim_auto_policy_active_seed_count": "0",
+                    "active_seed_candidate_observable_prefix": (
+                        '{"entry_score_parent":"score_mid_recovery"}'
+                    ),
+                    "scalp_sim_active_priority_seed_matched": "False",
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = ledger.build_key_lineage_ledger(target)
+    summary = report["summary"]
+
+    assert summary["active_seed_candidate_event_count"] == 1
+    assert summary["active_seed_candidate_eligible_event_count"] == 0
+    assert summary["active_seed_candidate_not_match_eligible_event_count"] == 1
+    assert summary["active_seed_candidate_without_seed_id_event_count"] == 0
+    assert summary["active_seed_candidate_lineage_followup_required"] is False
+    assert summary["active_seed_candidate_not_match_eligible_reason_counts"] == {
+        "policy_active_seed_count_zero_effect_excluded": 1
+    }
+
+
 def test_key_lineage_splits_active_seed_new_entry_from_followup_context(
     monkeypatch, tmp_path
 ):

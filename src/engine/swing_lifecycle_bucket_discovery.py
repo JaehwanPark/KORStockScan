@@ -1568,7 +1568,9 @@ def build_swing_lifecycle_bucket_discovery(
         "sim_auto_approved_candidates": sim_auto,
         "code_improvement_workorders": [
             {
-                "workorder_id": f"swing_bucket_discovery_{_slug(item.get('bucket_id'))}",
+                "workorder_id": (
+                    f"swing_bucket_discovery_{_bucket_key_slug(item.get('bucket_id'))}"
+                ),
                 "candidate_id": item.get("candidate_id") or item.get("bucket_id"),
                 "bucket_id": item.get("bucket_id"),
                 "stage": item.get("stage") or item.get("lifecycle_stage"),

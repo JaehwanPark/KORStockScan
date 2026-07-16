@@ -116,6 +116,17 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _safe_text(value: Any, default: str = "-") -> str:
+    if value is None:
+        return default
+    if isinstance(value, float) and not math.isfinite(value):
+        return default
+    text = str(value).strip()
+    if text.lower() in {"", "nan", "none", "null", "<na>"}:
+        return default
+    return text
+
+
 def _as_bool(value: Any, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value
@@ -410,7 +421,7 @@ def _discovery_row(row: dict[str, Any], *, lifecycle_stage: str | None = None) -
         "origin": "swing_strategy_discovery_sim_v1",
         "block_reason": str(row.get("block_reason") or "-"),
         "strategy": str(row.get("entry_policy") or row.get("arm_id") or "-"),
-        "position_tag": str(row.get("position_tag") or "-"),
+        "position_tag": _safe_text(row.get("position_tag")),
         "gap_pct": None,
         "gap_bucket": "discovery_gap_unobserved",
         "score": None,
@@ -431,8 +442,8 @@ def _discovery_row(row: dict[str, Any], *, lifecycle_stage: str | None = None) -
         "sizing_policy": str(row.get("sizing_policy") or "-"),
         "exit_policy": str(row.get("exit_policy") or "-"),
         "selection_arm": str(row.get("selection_arm") or "-"),
-        "sector": str(row.get("sector") or "-"),
-        "theme_tags": str(row.get("theme_tags") or "-"),
+        "sector": _safe_text(row.get("sector")),
+        "theme_tags": _safe_text(row.get("theme_tags")),
         "legacy_ml_cohort": str(row.get("legacy_pick_type") or "-"),
     }
     exit_labels = stage == "exit"
@@ -1001,7 +1012,10 @@ def _code_workorders(stage: str, buckets: list[dict[str, Any]], *, limit: int = 
                 "bucket_type": item.get("bucket_type"),
                 "bucket_key": item.get("bucket_key"),
                 "lifecycle_stage": stage,
-                "workorder_id": f"swing_ldm_{stage}_{_slug(item.get('bucket_type'))}_{_slug(item.get('bucket_key'))}",
+                "workorder_id": (
+                    f"swing_ldm_{stage}_{_slug(item.get('bucket_type'))}_"
+                    f"{_slug_digest(item.get('bucket_key'))}"
+                ),
                 "reason": "source_quality_or_instrumentation_gap",
                 "target_subsystem": "swing_lifecycle_decision_matrix",
                 "decision_authority": DECISION_AUTHORITY,

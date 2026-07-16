@@ -164,12 +164,47 @@ def _is_present(value: Any) -> bool:
     return bool(value)
 
 
+def _first_present_value(*values: Any, default: Any = None) -> Any:
+    for value in values:
+        if _is_present(value):
+            return value
+    return default
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if value is None:
+        return None
+    try:
+        if bool(pd.isna(value)):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if hasattr(value, "item"):
+        try:
+            return _json_safe(value.item())
+        except (TypeError, ValueError):
+            pass
+    return value
+
+
 def _norm_code(value: Any) -> str:
     return str(value or "").replace(".0", "").strip().zfill(6)
 
 
 def _json_text(payload: Any) -> str:
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+    return json.dumps(
+        _json_safe(payload),
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+        allow_nan=False,
+    )
 
 
 def _load_csv(path: str | Path) -> pd.DataFrame:
@@ -528,7 +563,7 @@ def _lifecycle_bootstrap_score(row: dict[str, Any], quote: dict[str, Any], block
 
 
 def _selection_mode(row: dict[str, Any]) -> str:
-    return str(row.get("selection_mode") or "").strip().upper()
+    return str(_first_present_value(row.get("selection_mode"), default="")).strip().upper()
 
 
 def _is_legacy_selected(row: dict[str, Any]) -> bool:
@@ -567,8 +602,20 @@ def build_candidate_rows(
         quote = quote_features.get(code, {})
         sector_theme = sector_theme_map.get(code, {})
         block_reason = block_reasons.get(code, "no_block_observed")
-        position_tag = str(source.get("position_tag") or quote.get("position_tag") or "UNKNOWN")
-        volatility_bucket = str(quote.get("volatility_bucket") or source.get("volatility_bucket") or "unknown")
+        position_tag = str(
+            _first_present_value(
+                source.get("position_tag"),
+                quote.get("position_tag"),
+                default="UNKNOWN",
+            )
+        )
+        volatility_bucket = str(
+            _first_present_value(
+                quote.get("volatility_bucket"),
+                source.get("volatility_bucket"),
+                default="unknown",
+            )
+        )
         source_family_bucket = "bottom_rebound" if _is_present(source.get("bottom_rebound_source_present")) else "safe_pool"
         diversity_bucket = "|".join([position_tag, block_reason, volatility_bucket])
         score = _lifecycle_bootstrap_score(source, quote, block_reason)
@@ -577,7 +624,14 @@ def build_candidate_rows(
                 "candidate_key": code,
                 "source_date": target_date,
                 "stock_code": code,
-                "stock_name": str(source.get("name") or source.get("stock_name") or quote.get("stock_name") or ""),
+                "stock_name": str(
+                    _first_present_value(
+                        source.get("name"),
+                        source.get("stock_name"),
+                        quote.get("stock_name"),
+                        default="",
+                    )
+                ),
                 "policy_version": POLICY_VERSION,
                 "selection_arm": "",
                 "diversity_bucket": diversity_bucket,
@@ -585,9 +639,27 @@ def build_candidate_rows(
                 "block_reason": block_reason,
                 "volatility_bucket": volatility_bucket,
                 "source_family_bucket": source_family_bucket,
-                "sector": str(sector_theme.get("sector") or source.get("sector") or ""),
-                "industry": str(sector_theme.get("industry") or source.get("industry") or ""),
-                "theme_tags": _json_text(sector_theme.get("theme_tags") or source.get("theme_tags") or []),
+                "sector": str(
+                    _first_present_value(
+                        sector_theme.get("sector"),
+                        source.get("sector"),
+                        default="",
+                    )
+                ),
+                "industry": str(
+                    _first_present_value(
+                        sector_theme.get("industry"),
+                        source.get("industry"),
+                        default="",
+                    )
+                ),
+                "theme_tags": _json_text(
+                    _first_present_value(
+                        sector_theme.get("theme_tags"),
+                        source.get("theme_tags"),
+                        default=[],
+                    )
+                ),
                 "legacy_model_prob": _safe_float(source.get("prob", source.get("hybrid_mean")), 0.0),
                 "legacy_model_rank": _safe_int(source.get("score_rank"), 999),
                 "legacy_selection_mode": _selection_mode(source),
@@ -1057,7 +1129,7 @@ def build_swing_strategy_discovery_report(
         warnings.append("quote_features_partial")
     for warning in sector_theme_payload.get("warnings") or []:
         warnings.append(f"sector_theme:{warning}")
-    return {
+    report = {
         "schema_version": 1,
         "report_type": "swing_strategy_discovery_sim",
         "date": date_key,
@@ -1158,6 +1230,7 @@ def build_swing_strategy_discovery_report(
         ],
         "warnings": warnings,
     }
+    return _json_safe(report)
 
 
 def render_markdown(report: dict[str, Any]) -> str:
@@ -1237,7 +1310,16 @@ def write_swing_strategy_discovery_report(
     date_key = _date_text(target_date)
     json_path = output_dir / f"swing_strategy_discovery_sim_{date_key}.json"
     md_path = output_dir / f"swing_strategy_discovery_sim_{date_key}.md"
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(
+            report,
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+            allow_nan=False,
+        ),
+        encoding="utf-8",
+    )
     md_path.write_text(render_markdown(report), encoding="utf-8")
     return {"json": json_path, "md": md_path}
 

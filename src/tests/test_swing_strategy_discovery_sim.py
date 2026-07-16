@@ -625,6 +625,70 @@ def test_discovery_can_include_bottom_rebound_source_without_runtime_authority(
     assert report["examples"][0]["source_family_bucket"] == "bottom_rebound"
 
 
+def test_discovery_report_normalizes_missing_optional_values_to_strict_json(
+    tmp_path, monkeypatch
+):
+    source_path = tmp_path / "swing_bottom_rebound_candidate_source_2026-05-22.json"
+    source_path.write_text(
+        json.dumps(
+            {
+                "report_type": "swing_bottom_rebound_candidate_source",
+                "date": "2026-05-22",
+                "decision_authority": "swing_sim_candidate_source_only",
+                "runtime_effect": False,
+                "broker_order_forbidden": True,
+                "allowed_runtime_apply": False,
+                "candidate_rows": [
+                    {
+                        "stock_code": "000101",
+                        "stock_name": "BottomOnly",
+                        "candidate_id": None,
+                        "candidate_rank": None,
+                        "source_quality_adjusted_ev_pct": None,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "load_safe_pool_rows", lambda target_date: _source_rows(1))
+    monkeypatch.setattr(mod, "load_block_reason_map", lambda target_date: {})
+    monkeypatch.setattr(mod, "fetch_quote_features", lambda codes, db_url=mod.POSTGRES_URL: _quote_features(1))
+    monkeypatch.setattr(
+        mod,
+        "build_sector_theme_map",
+        lambda codes, target_date, allow_external=True: {
+            "mapped_code_count": 0,
+            "missing_count": len(codes),
+            "rows_by_code": {},
+            "warnings": [],
+        },
+    )
+
+    report = mod.build_swing_strategy_discovery_report(
+        "2026-05-22",
+        persist=False,
+        include_bottom_rebound_source=True,
+        bottom_rebound_source_path=source_path,
+    )
+
+    json.dumps(report, allow_nan=False)
+    optional_source = next(
+        item["bottom_rebound_source"]
+        for item in report["examples"]
+        if item["source_family_bucket"] == "bottom_rebound"
+    )
+    assert optional_source["candidate_id"] is None
+    assert optional_source["candidate_rank"] is None
+    assert optional_source["source_quality_adjusted_ev_pct"] is None
+    assert "nan" not in {
+        str(key).lower() for key in report["summary"]["position_tag_counts"]
+    }
+    assert "nan" not in {
+        str(key).lower() for key in report["summary"]["volatility_bucket_counts"]
+    }
+
+
 def test_bottom_rebound_source_persists_candidate_and_dedicated_arms(
     tmp_path, monkeypatch
 ):

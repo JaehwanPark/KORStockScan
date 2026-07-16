@@ -98,6 +98,47 @@ def _entry_adm_summary(target_date: str) -> tuple[dict[str, Any], str | None]:
     )
 
 
+def _entry_adm_source_quality_contract(summary: dict[str, Any]) -> dict[str, Any]:
+    available = bool(summary.get("available"))
+    joined_sample = _safe_int(summary.get("joined_sample"), 0)
+    sample_floor = _safe_int(summary.get("sample_floor"), 0)
+    missing_actions = (
+        summary.get("missing_actions")
+        if isinstance(summary.get("missing_actions"), list)
+        else []
+    )
+    sample_ready = sample_floor > 0 and joined_sample >= sample_floor
+    tuning_input_allowed = available and sample_ready and not missing_actions
+    blocked_reasons = []
+    if not available:
+        blocked_reasons.append("source_report_missing")
+    if sample_floor <= 0:
+        blocked_reasons.append("sample_floor_missing")
+    elif not sample_ready:
+        blocked_reasons.append("joined_sample_below_sample_floor")
+    if missing_actions:
+        blocked_reasons.append("required_action_missing")
+    return {
+        "contract_id": "scalp_entry_adm_pattern_lab_source_quality",
+        "source_contract_version": "scalp_entry_adm_pattern_lab_source_quality_v1",
+        "source_contract_status": "implemented" if available and sample_floor > 0 else "instrumentation_gap",
+        "metric_role": "source_quality_gate",
+        "decision_authority": DECISION_AUTHORITY,
+        "window_policy": "same_day_adm_report_plus_postclose_pattern_lab",
+        "sample_floor": sample_floor,
+        "sample_count": joined_sample,
+        "sample_floor_status": "ready" if sample_ready else "hold_sample",
+        "primary_decision_metric": "source_quality_gate",
+        "source_quality_gate": "joined_sample_meets_floor_and_required_actions_present",
+        "tuning_input_allowed": tuning_input_allowed,
+        "blocked_reasons": blocked_reasons,
+        "missing_actions": missing_actions,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "forbidden_uses": FORBIDDEN_USES,
+    }
+
+
 def _lab_output_paths(lab_dir: Path, lab_name: str) -> dict[str, Path]:
     outputs = lab_dir / "outputs"
     final_name = "final_review_report_for_lead_ai.md"
@@ -574,6 +615,9 @@ def build_scalping_pattern_lab_automation_report(target_date: str) -> dict[str, 
     orders = _code_improvement_orders(consensus, solo)
     rejected = [item for result in lab_results for item in result.get("rejected_findings") or []]
     entry_adm_summary, entry_adm_path = _entry_adm_summary(target_date)
+    entry_adm_source_quality_contract = _entry_adm_source_quality_contract(
+        entry_adm_summary
+    )
     report = {
         "schema_version": AUTOMATION_SCHEMA_VERSION,
         "date": target_date,
@@ -601,6 +645,9 @@ def build_scalping_pattern_lab_automation_report(target_date: str) -> dict[str, 
         "code_improvement_orders": orders,
         "rejected_findings": rejected,
         "scalp_entry_adm_summary": entry_adm_summary,
+        "source_quality_contracts": {
+            "scalp_entry_adm": entry_adm_source_quality_contract,
+        },
         "ev_report_summary": {
             "gemini_enabled": False,
             "gemini_fresh": False,
@@ -620,6 +667,9 @@ def build_scalping_pattern_lab_automation_report(target_date: str) -> dict[str, 
             ],
             "scalp_entry_adm_status": entry_adm_summary.get("status"),
             "scalp_entry_adm_joined_sample": entry_adm_summary.get("joined_sample"),
+            "source_quality_contracts": {
+                "scalp_entry_adm": entry_adm_source_quality_contract,
+            },
             "decision_authority": DECISION_AUTHORITY,
             "runtime_mutation_allowed": False,
         },

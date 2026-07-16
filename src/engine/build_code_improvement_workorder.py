@@ -291,7 +291,7 @@ def _conversion_lane_followup_orders(conversion_lane: dict[str, Any], *, limit: 
         candidate_id = str(blocker.get("conversion_candidate_id") or "").strip()
         if not candidate_id:
             continue
-        safe_slug = _slug(f"{blocker_class}_{candidate_id}")[:80]
+        safe_slug = _slug_with_hash(f"{blocker_class}_{candidate_id}")
         instrumentation_implemented = (
             blocker.get("blocker_runtime_effect") is False
             and blocker.get("blocker_allowed_runtime_apply") is False
@@ -1379,10 +1379,15 @@ def _slug(value: str) -> str:
 
 
 def _slug_with_hash(value: str, *, limit: int = 80) -> str:
-    base = _slug(value)
-    digest = hashlib.sha1(str(value or "").encode("utf-8")).hexdigest()[:8]
+    raw = str(value or "")
+    normalized = re.sub(r"[^a-zA-Z0-9가-힣]+", "_", raw.strip().lower()).strip("_")
+    if not normalized:
+        return "unknown"
+    if len(normalized) <= limit:
+        return normalized
+    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:8]
     keep = max(1, int(limit) - len(digest) - 1)
-    return f"{base[:keep].rstrip('_')}_{digest}"
+    return f"{normalized[:keep].rstrip('_')}_{digest}"
 
 
 def _next_calendar_day(target_date: str) -> str:
@@ -6156,7 +6161,9 @@ def _swing_strategy_discovery_followup_orders(report: dict[str, Any]) -> list[di
 def _swing_ldm_order_id(item: dict[str, Any]) -> str:
     stage = _slug(str(item.get("lifecycle_stage") or "swing"))
     bucket_type = _slug(str(item.get("bucket_type") or "bucket"))
-    bucket_key = _slug(str(item.get("bucket_key") or item.get("workorder_id") or "unknown"))
+    bucket_key = _slug_with_hash(
+        str(item.get("bucket_key") or item.get("workorder_id") or "unknown")
+    )
     return f"order_swing_ldm_{stage}_{bucket_type}_{bucket_key}"
 
 
@@ -6374,7 +6381,10 @@ def _swing_lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) ->
         bucket_id = str(item.get("bucket_id") or item.get("workorder_id") or "")
         orders.append(
             {
-                "order_id": f"order_swing_lifecycle_bucket_discovery_{_slug(bucket_id)}",
+                "order_id": (
+                    "order_swing_lifecycle_bucket_discovery_"
+                    f"{_slug_with_hash(bucket_id)}"
+                ),
                 "title": f"Swing lifecycle bucket discovery handoff follow-up: {bucket_id}",
                 "source_report_type": "swing_lifecycle_bucket_discovery",
                 "lifecycle_stage": item.get("lifecycle_stage") or "source_quality",

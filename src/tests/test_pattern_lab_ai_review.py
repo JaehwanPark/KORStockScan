@@ -2838,6 +2838,7 @@ def test_pattern_lab_ai_review_marks_report_only_source_quality_reviews_as_imple
         "pattern_lab_propagation_audit",
         "lifecycle_decision_matrix",
         "lifecycle_decision_matrix_source_quality_blocked",
+        "order_pattern_lab_ai_review_source_quality_gap",
     ):
         status, provenance = mod._implementation_marker_for_conclusion(
             {
@@ -2852,10 +2853,37 @@ def test_pattern_lab_ai_review_marks_report_only_source_quality_reviews_as_imple
         )
 
         assert status == "implemented"
-        assert provenance["normalized_review_id"] == review_id
+        expected_review_id = (
+            "source_quality_gap"
+            if review_id == "order_pattern_lab_ai_review_source_quality_gap"
+            else review_id
+        )
+        assert provenance["normalized_review_id"] == expected_review_id
         assert provenance["runtime_effect"] is False
         assert provenance["allowed_runtime_apply"] is False
         assert provenance["requires_separate_runtime_apply_candidate"] is True
+
+
+def test_pattern_lab_ai_review_keeps_sample_warning_followup_visible():
+    status, provenance = mod._implementation_marker_for_conclusion(
+        {
+            "review_id": "scalp_entry_adm_source_quality",
+            "final_state": "source_quality_gap",
+            "final_decision": "block_runtime_use",
+            "explicit_gap_type": "source_quality_gap",
+            "auditor_pass": False,
+            "source_paths": ["/tmp/scalp_entry_action_decision_matrix.json"],
+        },
+        {},
+    )
+
+    assert status == "implemented_but_waiting_sample"
+    assert provenance["normalized_review_id"] == "scalp_entry_adm_source_quality"
+    assert provenance["root_cause_closure_status_hint"] == (
+        "handoff_closed_root_cause_open"
+    )
+    assert provenance["runtime_effect"] is False
+    assert provenance["allowed_runtime_apply"] is False
 
 
 def test_pattern_lab_ai_review_marks_present_propagation_audit_missing_review_as_implemented():

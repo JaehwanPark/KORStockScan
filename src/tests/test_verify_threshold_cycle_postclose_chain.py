@@ -3582,6 +3582,44 @@ def test_swing_entry_bottleneck_handoff_passes_when_surfaced():
     assert report["missing"] == []
 
 
+def test_swing_lifecycle_handoff_uses_hashed_long_workorder_ids():
+    long_bucket_key = "selection_discovery_arm_attribution_" + ("long_dimension_" * 10)
+    matrix_workorder = {
+        "lifecycle_stage": "entry",
+        "bucket_type": "source_quality",
+        "bucket_key": long_bucket_key,
+    }
+    discovery_bucket_id = "swing_bucket_" + ("long_dimension_" * 10)
+    matrix = {
+        "input_contract": {"swing_daily_simulation_consumed": False},
+        "discovery_arm_attribution": {
+            "code_improvement_workorders": [matrix_workorder],
+        },
+    }
+    discovery = {
+        "summary": {"ai_two_pass_review_status": "parsed", "ai_fail_closed": False},
+        "code_improvement_workorders": [{"bucket_id": discovery_bucket_id}],
+    }
+    workorder = {
+        "orders": [
+            {"order_id": mod._swing_ldm_order_id(matrix_workorder)},
+            {
+                "order_id": (
+                    "order_swing_lifecycle_bucket_discovery_"
+                    f"{mod._slug_with_hash(discovery_bucket_id)}"
+                )
+            },
+        ]
+    }
+
+    report = mod._swing_lifecycle_handoff_status(
+        matrix, discovery, {}, {}, workorder
+    )
+
+    assert report["status"] == "pass"
+    assert report["missing_workorder_order_ids"] == []
+
+
 def test_swing_parent_flow_handoff_passes_when_ev_and_runtime_include_candidate():
     candidate = {
         "candidate_id": "swing_ldm_lifecycle_flow_combo_parent",

@@ -39,6 +39,8 @@ CONTEXT_KEYS = (
     "trade_volume_1030_1031_vs_15_evaluable_count",
     "trade_volume_1030_1031_vs_15_mismatch_count",
     "trade_volume_1030_1031_vs_15_mismatch_rate_pct",
+    "trade_volume_1030_1031_vs_15_comparison_contract",
+    "trade_volume_1030_1031_vs_15_decision_usable",
     "tick_aggressor_source_counts",
     "kiwoom_0b_aux_observed_count",
     "kiwoom_0b_1313_present_count",
@@ -842,6 +844,45 @@ def _row_from_event(event: dict[str, Any]) -> dict[str, Any] | None:
         ),
     }
     row.update({key: fields.get(key) for key in CONTEXT_KEYS})
+    v_pw_expected = any(
+        key in fields for key in ("v_pw_now", "v_pw_source", "latest_strength", "current_vpw")
+    )
+    row["v_pw_expected"] = v_pw_expected
+    current_v_pw_source = str(row.get("v_pw_source") or "").strip().lower()
+    if current_v_pw_source in {"", "missing", "unknown", "not_available"}:
+        legacy_v_pw = _safe_float(
+            fields.get("latest_strength")
+            if fields.get("latest_strength") not in (None, "", "-")
+            else fields.get("current_vpw"),
+            0.0,
+        )
+        if legacy_v_pw > 0:
+            row["v_pw_now"] = legacy_v_pw
+            row["v_pw_ws_value"] = legacy_v_pw
+            row["v_pw_source"] = "ws_0b_latest_strength"
+            row["v_pw_report_provenance_backfilled"] = True
+        elif not v_pw_expected:
+            row["v_pw_source"] = "not_applicable"
+
+    comparison_contract = str(
+        row.get("trade_volume_1030_1031_vs_15_comparison_contract") or ""
+    ).strip()
+    comparison_evaluable_count = _safe_int(
+        row.get("trade_volume_1030_1031_vs_15_evaluable_count"),
+        0,
+    )
+    if not comparison_contract and comparison_evaluable_count > 0:
+        volume_sources = _dict_counter(row.get("trade_volume_source_counts"))
+        if volume_sources.get("1030_1031_sum", 0) > 0:
+            comparison_contract = "cumulative_split_vs_tick_not_comparable"
+        else:
+            comparison_contract = "comparison_scope_unknown"
+        row["trade_volume_1030_1031_vs_15_comparison_contract"] = comparison_contract
+        row["trade_volume_1030_1031_vs_15_contract_inferred_for_report"] = True
+    if comparison_contract:
+        row["trade_volume_1030_1031_vs_15_decision_usable"] = (
+            comparison_contract == "same_tick_comparable"
+        )
     observation = fields.get("ka10003_buy_dominance_observation")
     if isinstance(observation, dict):
         row["ka10003_buy_dominance_observation_source_counts"] = (
@@ -1043,6 +1084,56 @@ def _microstructure_code_improvement_orders(summary: dict[str, Any], report_path
             )
         )
 
+    row_count = _safe_int(summary.get("row_count"), 0)
+    v_pw_expected_count = _safe_int(summary.get("v_pw_expected_count"), 0)
+    v_pw_missing_count = _safe_int(summary.get("v_pw_missing_count"), 0)
+    v_pw_missing_rate_pct = _safe_float(
+        summary.get("v_pw_expected_missing_rate_pct"),
+        0.0,
+    )
+    if v_pw_expected_count >= 20 and v_pw_missing_rate_pct >= 95.0:
+        orders.append(
+            base_order(
+                "order_microstructure_v_pw_full_source_gap",
+                "microstructure v_pw full source coverage gap",
+                route="instrumentation_order",
+                improvement_type="source_quality_coverage_gap",
+                evidence=[
+                    f"row_count={row_count}",
+                    f"v_pw_expected_count={v_pw_expected_count}",
+                    f"v_pw_missing_count={v_pw_missing_count}",
+                    f"v_pw_expected_missing_rate_pct={v_pw_missing_rate_pct}",
+                ],
+            )
+        )
+
+    mismatch_evaluable_count = _safe_int(
+        summary.get("trade_volume_1030_1031_vs_15_comparable_evaluable_count"),
+        0,
+    )
+    mismatch_count = _safe_int(
+        summary.get("trade_volume_1030_1031_vs_15_contract_violation_count"),
+        0,
+    )
+    mismatch_rate_pct = _safe_float(
+        summary.get("trade_volume_1030_1031_vs_15_contract_violation_rate_pct"),
+        0.0,
+    )
+    if mismatch_evaluable_count >= 20 and mismatch_rate_pct >= 95.0:
+        orders.append(
+            base_order(
+                "order_microstructure_trade_volume_split_contract_mismatch",
+                "microstructure trade-volume split contract mismatch",
+                route="instrumentation_order",
+                improvement_type="source_quality_contract_mismatch",
+                evidence=[
+                    f"trade_volume_1030_1031_vs_15_comparable_evaluable_count={mismatch_evaluable_count}",
+                    f"trade_volume_1030_1031_vs_15_contract_violation_count={mismatch_count}",
+                    f"trade_volume_1030_1031_vs_15_contract_violation_rate_pct={mismatch_rate_pct}",
+                ],
+            )
+        )
+
     if _safe_int(summary.get("row_count"), 0) > 0 and _safe_int(summary.get("rest_signed_trade_ticks_row_count"), 0) > 0:
         orders.append(
             base_order(
@@ -1099,6 +1190,13 @@ def build_microstructure_reaction_context_report(target_date: str) -> dict[str, 
     real_rows = [row for row in rows if row.get("actual_order_submitted") is True]
     latest_stock_rows = _latest_rows_by_stock(rows)
     v_pw_source_counts = _field_counter(rows, "v_pw_source")
+    v_pw_expected_count = sum(1 for row in rows if row.get("v_pw_expected") is True)
+    v_pw_expected_missing_count = sum(
+        1
+        for row in rows
+        if row.get("v_pw_expected") is True
+        and str(row.get("v_pw_source") or "missing") == "missing"
+    )
     ka10046_fallback_rows = [row for row in rows if str(row.get("v_pw_source") or "") == "ka10046_rest_fallback"]
     ka10046_fallback_quote_freshness_counts = dict(
         sorted(Counter(_quote_freshness_state(row) for row in ka10046_fallback_rows).items())
@@ -1114,6 +1212,40 @@ def build_microstructure_reaction_context_report(target_date: str) -> dict[str, 
     window_trade_volume_mismatch_count = _sum_int(
         rows,
         "trade_volume_1030_1031_vs_15_mismatch_count",
+    )
+    comparable_trade_volume_rows = [
+        row
+        for row in rows
+        if str(row.get("trade_volume_1030_1031_vs_15_comparison_contract") or "")
+        == "same_tick_comparable"
+    ]
+    noncomparable_trade_volume_rows = [
+        row
+        for row in rows
+        if str(row.get("trade_volume_1030_1031_vs_15_comparison_contract") or "")
+        == "cumulative_split_vs_tick_not_comparable"
+    ]
+    unknown_contract_trade_volume_rows = [
+        row
+        for row in rows
+        if str(row.get("trade_volume_1030_1031_vs_15_comparison_contract") or "")
+        == "comparison_scope_unknown"
+    ]
+    comparable_trade_volume_evaluable_count = _sum_int(
+        comparable_trade_volume_rows,
+        "trade_volume_1030_1031_vs_15_evaluable_count",
+    )
+    comparable_trade_volume_mismatch_count = _sum_int(
+        comparable_trade_volume_rows,
+        "trade_volume_1030_1031_vs_15_mismatch_count",
+    )
+    noncomparable_trade_volume_evaluable_count = _sum_int(
+        noncomparable_trade_volume_rows,
+        "trade_volume_1030_1031_vs_15_evaluable_count",
+    )
+    unknown_contract_trade_volume_evaluable_count = _sum_int(
+        unknown_contract_trade_volume_rows,
+        "trade_volume_1030_1031_vs_15_evaluable_count",
     )
     cumulative_0b_count = _sum_int(latest_stock_rows, "kiwoom_0b_aux_observed_count")
     cumulative_1313_missing_count = _sum_int(latest_stock_rows, "kiwoom_0b_1313_missing_count")
@@ -1145,8 +1277,20 @@ def build_microstructure_reaction_context_report(target_date: str) -> dict[str, 
         "real_submitted_count": len(real_rows),
         "v_pw_source_counts": v_pw_source_counts,
         "v_pw_rest_fallback_count": v_pw_source_counts.get("ka10046_rest_fallback", 0),
-        "v_pw_ws_0b_count": v_pw_source_counts.get("ws_0b", 0),
-        "v_pw_missing_count": v_pw_source_counts.get("missing", 0),
+        "v_pw_ws_0b_count": (
+            v_pw_source_counts.get("ws_0b", 0)
+            + v_pw_source_counts.get("ws_0b_latest_strength", 0)
+        ),
+        "v_pw_report_provenance_backfilled_count": sum(
+            1 for row in rows if row.get("v_pw_report_provenance_backfilled") is True
+        ),
+        "v_pw_expected_count": v_pw_expected_count,
+        "v_pw_not_applicable_count": len(rows) - v_pw_expected_count,
+        "v_pw_missing_count": v_pw_expected_missing_count,
+        "v_pw_expected_missing_rate_pct": _rate_pct(
+            v_pw_expected_missing_count,
+            v_pw_expected_count,
+        ),
         "v_pw_rest_fallback_rate_pct": _rate_pct(
             v_pw_source_counts.get("ka10046_rest_fallback", 0),
             len(rows),
@@ -1241,6 +1385,26 @@ def build_microstructure_reaction_context_report(target_date: str) -> dict[str, 
         "trade_volume_1030_1031_vs_15_mismatch_rate_pct": _rate_pct(
             window_trade_volume_mismatch_count,
             window_trade_volume_mismatch_evaluable_count,
+        ),
+        "trade_volume_1030_1031_vs_15_comparison_contract_counts": _field_counter(
+            rows,
+            "trade_volume_1030_1031_vs_15_comparison_contract",
+        ),
+        "trade_volume_1030_1031_vs_15_comparable_evaluable_count": (
+            comparable_trade_volume_evaluable_count
+        ),
+        "trade_volume_1030_1031_vs_15_contract_violation_count": (
+            comparable_trade_volume_mismatch_count
+        ),
+        "trade_volume_1030_1031_vs_15_contract_violation_rate_pct": _rate_pct(
+            comparable_trade_volume_mismatch_count,
+            comparable_trade_volume_evaluable_count,
+        ),
+        "trade_volume_1030_1031_vs_15_noncomparable_count": (
+            noncomparable_trade_volume_evaluable_count
+        ),
+        "trade_volume_1030_1031_vs_15_unknown_contract_count": (
+            unknown_contract_trade_volume_evaluable_count
         ),
         "kiwoom_0b_latest_stock_count": len(latest_stock_rows),
         "kiwoom_0b_aux_observed_count": cumulative_0b_count,
