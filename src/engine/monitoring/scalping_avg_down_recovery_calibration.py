@@ -10,7 +10,6 @@ from typing import Any
 
 from src.utils.constants import DATA_DIR, TRADING_RULES
 
-
 KST = timezone(timedelta(hours=9))
 REPORT_TYPE = "scalping_avg_down_recovery_calibration"
 FAMILY = "scalping_avg_down_recovery_quality_gate"
@@ -118,7 +117,11 @@ def _iter_events_paths_for_window(target_date: str) -> list[Path]:
                 paths_by_date[date_part] = path
     for path in _events_paths_for_date(target_date):
         date_part = _date_from_events_path(path)
-        if date_part and CLEAN_BASELINE_DATE <= date_part <= target_date and date_part not in paths_by_date:
+        if (
+            date_part
+            and CLEAN_BASELINE_DATE <= date_part <= target_date
+            and date_part not in paths_by_date
+        ):
             paths_by_date[date_part] = path
     return [paths_by_date[date_part] for date_part in sorted(paths_by_date)]
 
@@ -135,57 +138,126 @@ def _iter_events(paths: list[Path]):
                     event = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                fields = event.get("fields") if isinstance(event.get("fields"), dict) else {}
+                fields = (
+                    event.get("fields") if isinstance(event.get("fields"), dict) else {}
+                )
                 yield {**event, **fields, "_source_event_date": source_date}
 
 
 def _current_values() -> dict[str, Any]:
     return {
-        "shallow_enabled": bool(getattr(TRADING_RULES, "SHALLOW_VOLATILITY_AVG_DOWN_ENABLED", True)),
-        "shallow_pnl_min": float(getattr(TRADING_RULES, "SHALLOW_VOLATILITY_AVG_DOWN_PNL_MIN", -0.7)),
-        "shallow_pnl_max": float(getattr(TRADING_RULES, "SHALLOW_VOLATILITY_AVG_DOWN_PNL_MAX", -0.3)),
-        "shallow_min_hold_sec": int(getattr(TRADING_RULES, "SHALLOW_VOLATILITY_AVG_DOWN_MIN_HOLD_SEC", 60)),
-        "shallow_max_hold_sec": int(getattr(TRADING_RULES, "SHALLOW_VOLATILITY_AVG_DOWN_MAX_HOLD_SEC", 120)),
+        "shallow_enabled": bool(
+            getattr(TRADING_RULES, "SHALLOW_VOLATILITY_AVG_DOWN_ENABLED", True)
+        ),
+        "shallow_pnl_min": float(
+            getattr(TRADING_RULES, "SHALLOW_VOLATILITY_AVG_DOWN_PNL_MIN", -0.7)
+        ),
+        "shallow_pnl_max": float(
+            getattr(TRADING_RULES, "SHALLOW_VOLATILITY_AVG_DOWN_PNL_MAX", -0.3)
+        ),
+        "shallow_min_hold_sec": int(
+            getattr(TRADING_RULES, "SHALLOW_VOLATILITY_AVG_DOWN_MIN_HOLD_SEC", 60)
+        ),
+        "shallow_max_hold_sec": int(
+            getattr(TRADING_RULES, "SHALLOW_VOLATILITY_AVG_DOWN_MAX_HOLD_SEC", 120)
+        ),
         "shallow_observation_max_hold_sec": int(
-            getattr(TRADING_RULES, "SHALLOW_VOLATILITY_AVG_DOWN_OBSERVATION_MAX_HOLD_SEC", 240)
+            getattr(
+                TRADING_RULES,
+                "SHALLOW_VOLATILITY_AVG_DOWN_OBSERVATION_MAX_HOLD_SEC",
+                240,
+            )
         ),
-        "shallow_min_buy_pressure": float(getattr(TRADING_RULES, "SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE", 85.0)),
-        "shallow_min_tick_accel": float(getattr(TRADING_RULES, "SHALLOW_VOLATILITY_AVG_DOWN_MIN_TICK_ACCEL", 1.05)),
-        "shallow_min_micro_vwap_bp": float(getattr(TRADING_RULES, "SHALLOW_VOLATILITY_AVG_DOWN_MIN_MICRO_VWAP_BP", 0.0)),
-        "shallow_max_quote_age_ms": float(getattr(TRADING_RULES, "SHALLOW_VOLATILITY_AVG_DOWN_MAX_QUOTE_AGE_MS", 1500.0)),
-        "shallow_max_per_position": int(getattr(TRADING_RULES, "SHALLOW_VOLATILITY_AVG_DOWN_MAX_PER_POSITION", 2)),
+        "shallow_min_buy_pressure": float(
+            getattr(TRADING_RULES, "SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE", 85.0)
+        ),
+        "shallow_min_tick_accel": float(
+            getattr(TRADING_RULES, "SHALLOW_VOLATILITY_AVG_DOWN_MIN_TICK_ACCEL", 1.05)
+        ),
+        "shallow_min_micro_vwap_bp": float(
+            getattr(TRADING_RULES, "SHALLOW_VOLATILITY_AVG_DOWN_MIN_MICRO_VWAP_BP", 0.0)
+        ),
+        "shallow_max_quote_age_ms": float(
+            getattr(
+                TRADING_RULES, "SHALLOW_VOLATILITY_AVG_DOWN_MAX_QUOTE_AGE_MS", 1500.0
+            )
+        ),
+        "shallow_max_per_position": int(
+            getattr(TRADING_RULES, "SHALLOW_VOLATILITY_AVG_DOWN_MAX_PER_POSITION", 2)
+        ),
         "shallow_post_add_take_profit_pct": float(
-            getattr(TRADING_RULES, "SHALLOW_VOLATILITY_AVG_DOWN_POST_ADD_TAKE_PROFIT_PCT", 0.3)
+            getattr(
+                TRADING_RULES,
+                "SHALLOW_VOLATILITY_AVG_DOWN_POST_ADD_TAKE_PROFIT_PCT",
+                0.3,
+            )
         ),
-        "deep_enabled": bool(getattr(TRADING_RULES, "DEEP_RECOVERY_AVG_DOWN_ENABLED", True)),
-        "deep_pnl_min": float(getattr(TRADING_RULES, "DEEP_RECOVERY_AVG_DOWN_PNL_MIN", -4.0)),
-        "deep_pnl_max": float(getattr(TRADING_RULES, "DEEP_RECOVERY_AVG_DOWN_PNL_MAX", -3.25)),
-        "deep_min_hold_sec": int(getattr(TRADING_RULES, "DEEP_RECOVERY_AVG_DOWN_MIN_HOLD_SEC", 120)),
-        "deep_max_hold_sec": int(getattr(TRADING_RULES, "DEEP_RECOVERY_AVG_DOWN_MAX_HOLD_SEC", 480)),
-        "deep_min_ai_score": int(getattr(TRADING_RULES, "DEEP_RECOVERY_AVG_DOWN_MIN_AI_SCORE", 60)),
-        "deep_max_ai_score": int(getattr(TRADING_RULES, "DEEP_RECOVERY_AVG_DOWN_MAX_AI_SCORE", 74)),
-        "deep_min_buy_pressure": float(getattr(TRADING_RULES, "DEEP_RECOVERY_AVG_DOWN_MIN_BUY_PRESSURE", 70.0)),
-        "deep_min_tick_accel": float(getattr(TRADING_RULES, "DEEP_RECOVERY_AVG_DOWN_MIN_TICK_ACCEL", 1.0)),
-        "deep_min_micro_vwap_bp": float(getattr(TRADING_RULES, "DEEP_RECOVERY_AVG_DOWN_MIN_MICRO_VWAP_BP", -5.0)),
-        "deep_max_quote_age_ms": float(getattr(TRADING_RULES, "DEEP_RECOVERY_AVG_DOWN_MAX_QUOTE_AGE_MS", 1500.0)),
-        "deep_max_per_position": int(getattr(TRADING_RULES, "DEEP_RECOVERY_AVG_DOWN_MAX_PER_POSITION", 1)),
+        "deep_enabled": bool(
+            getattr(TRADING_RULES, "DEEP_RECOVERY_AVG_DOWN_ENABLED", True)
+        ),
+        "deep_pnl_min": float(
+            getattr(TRADING_RULES, "DEEP_RECOVERY_AVG_DOWN_PNL_MIN", -4.0)
+        ),
+        "deep_pnl_max": float(
+            getattr(TRADING_RULES, "DEEP_RECOVERY_AVG_DOWN_PNL_MAX", -3.25)
+        ),
+        "deep_min_hold_sec": int(
+            getattr(TRADING_RULES, "DEEP_RECOVERY_AVG_DOWN_MIN_HOLD_SEC", 120)
+        ),
+        "deep_max_hold_sec": int(
+            getattr(TRADING_RULES, "DEEP_RECOVERY_AVG_DOWN_MAX_HOLD_SEC", 480)
+        ),
+        "deep_min_ai_score": int(
+            getattr(TRADING_RULES, "DEEP_RECOVERY_AVG_DOWN_MIN_AI_SCORE", 60)
+        ),
+        "deep_max_ai_score": int(
+            getattr(TRADING_RULES, "DEEP_RECOVERY_AVG_DOWN_MAX_AI_SCORE", 74)
+        ),
+        "deep_min_buy_pressure": float(
+            getattr(TRADING_RULES, "DEEP_RECOVERY_AVG_DOWN_MIN_BUY_PRESSURE", 70.0)
+        ),
+        "deep_min_tick_accel": float(
+            getattr(TRADING_RULES, "DEEP_RECOVERY_AVG_DOWN_MIN_TICK_ACCEL", 1.0)
+        ),
+        "deep_min_micro_vwap_bp": float(
+            getattr(TRADING_RULES, "DEEP_RECOVERY_AVG_DOWN_MIN_MICRO_VWAP_BP", -5.0)
+        ),
+        "deep_max_quote_age_ms": float(
+            getattr(TRADING_RULES, "DEEP_RECOVERY_AVG_DOWN_MAX_QUOTE_AGE_MS", 1500.0)
+        ),
+        "deep_max_per_position": int(
+            getattr(TRADING_RULES, "DEEP_RECOVERY_AVG_DOWN_MAX_PER_POSITION", 1)
+        ),
         "deep_post_add_take_profit_pct": float(
-            getattr(TRADING_RULES, "DEEP_RECOVERY_AVG_DOWN_POST_ADD_TAKE_PROFIT_PCT", 0.3)
+            getattr(
+                TRADING_RULES, "DEEP_RECOVERY_AVG_DOWN_POST_ADD_TAKE_PROFIT_PCT", 0.3
+            )
         ),
-        "deep_emergency_pct": float(getattr(TRADING_RULES, "DEEP_RECOVERY_AVG_DOWN_EMERGENCY_PCT", -5.5)),
+        "deep_emergency_pct": float(
+            getattr(TRADING_RULES, "DEEP_RECOVERY_AVG_DOWN_EMERGENCY_PCT", -5.5)
+        ),
     }
 
 
 def _row_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     if not rows:
-        return {"sample_count": 0, "hit0_rate": 0.0, "hit03_rate": 0.0, "avg_mfe_30m_pct": 0.0, "avg_mae_30m_pct": 0.0}
+        return {
+            "sample_count": 0,
+            "hit0_rate": 0.0,
+            "hit03_rate": 0.0,
+            "avg_mfe_30m_pct": 0.0,
+            "avg_mae_30m_pct": 0.0,
+        }
     return {
         "sample_count": len(rows),
         "hit0_rate": sum(1 for row in rows if row.get("hit0")) / len(rows),
         "hit03_rate": sum(1 for row in rows if row.get("hit03")) / len(rows),
-        "avg_mfe_30m_pct": sum(float(row.get("mfe_30m_pct") or 0.0) for row in rows) / len(rows),
-        "avg_mae_30m_pct": sum(float(row.get("mae_30m_pct") or 0.0) for row in rows) / len(rows),
-        "avg_final_30m_pct": sum(float(row.get("final_30m_pct") or 0.0) for row in rows) / len(rows),
+        "avg_mfe_30m_pct": sum(float(row.get("mfe_30m_pct") or 0.0) for row in rows)
+        / len(rows),
+        "avg_mae_30m_pct": sum(float(row.get("mae_30m_pct") or 0.0) for row in rows)
+        / len(rows),
+        "avg_final_30m_pct": sum(float(row.get("final_30m_pct") or 0.0) for row in rows)
+        / len(rows),
     }
 
 
@@ -203,9 +275,17 @@ def _build_rows(paths: list[Path]) -> tuple[list[dict[str, Any]], list[dict[str,
         profit = _safe_float(event.get("profit_rate"), None)
         source_date = str(event.get("_source_event_date") or "")
         raw_sim_id = str(event.get("sim_record_id") or "")
-        raw_record_id = str(event.get("record_id") or event.get("recommendation_id") or "")
-        sim_id = f"{source_date}:{raw_sim_id}" if source_date and raw_sim_id else raw_sim_id
-        record_id = f"{source_date}:{raw_record_id}" if source_date and raw_record_id else raw_record_id
+        raw_record_id = str(
+            event.get("record_id") or event.get("recommendation_id") or ""
+        )
+        sim_id = (
+            f"{source_date}:{raw_sim_id}" if source_date and raw_sim_id else raw_sim_id
+        )
+        record_id = (
+            f"{source_date}:{raw_record_id}"
+            if source_date and raw_record_id
+            else raw_record_id
+        )
         if sim_id and profit is not None:
             sim_series[sim_id].append((event_time, float(profit)))
         if record_id and profit is not None:
@@ -214,12 +294,17 @@ def _build_rows(paths: list[Path]) -> tuple[list[dict[str, Any]], list[dict[str,
             sim_flags[sim_id].add("liquidity")
         if sim_id and stage == "scalp_sim_pre_submit_overbought_guard_would_pass":
             sim_flags[sim_id].add("overbought")
-        if sim_id and stage == "scalp_sim_buy_order_assumed_filled" and event.get("would_submit_stage") == "order_leg_sent":
+        if (
+            sim_id
+            and stage == "scalp_sim_buy_order_assumed_filled"
+            and event.get("would_submit_stage") == "order_leg_sent"
+        ):
             sim_flags[sim_id].add("filled")
         if (
             sim_id
             and stage == "scalp_sim_scale_in_candidate_funnel"
-            and str(event.get("add_type") or event.get("scale_in_arm") or "").upper() == "AVG_DOWN"
+            and str(event.get("add_type") or event.get("scale_in_arm") or "").upper()
+            == "AVG_DOWN"
             and str(event.get("scale_in_candidate_funnel_state") or "") == "eligible"
         ):
             sim_candidates.append(
@@ -247,16 +332,26 @@ def _build_rows(paths: list[Path]) -> tuple[list[dict[str, Any]], list[dict[str,
             )
 
     def post_add(future_pct: float, decision_pct: float, ratio: float = 0.33) -> float:
-        return ((1.0 + future_pct / 100.0) / (1.0 + (ratio * decision_pct / 100.0) / (1.0 + ratio)) - 1.0) * 100.0
+        return (
+            (1.0 + future_pct / 100.0)
+            / (1.0 + (ratio * decision_pct / 100.0) / (1.0 + ratio))
+            - 1.0
+        ) * 100.0
 
     shallow_rows: list[dict[str, Any]] = []
     seen: set[str] = set()
     for row in sorted(sim_candidates, key=lambda item: item["time"]):
-        if row["id"] in seen or not {"liquidity", "overbought", "filled"}.issubset(sim_flags.get(row["id"], set())):
+        if row["id"] in seen or not {"liquidity", "overbought", "filled"}.issubset(
+            sim_flags.get(row["id"], set())
+        ):
             continue
         seen.add(row["id"])
         p0 = row["profit_rate"]
-        future = [post_add(p, p0) for t, p in sim_series.get(row["id"], []) if row["time"] <= t <= row["time"] + timedelta(minutes=30)]
+        future = [
+            post_add(p, p0)
+            for t, p in sim_series.get(row["id"], [])
+            if row["time"] <= t <= row["time"] + timedelta(minutes=30)
+        ]
         if not future:
             continue
         shallow_rows.append(
@@ -273,7 +368,11 @@ def _build_rows(paths: list[Path]) -> tuple[list[dict[str, Any]], list[dict[str,
 
     deep_rows: list[dict[str, Any]] = []
     for row in real_candidates:
-        future = [p for t, p in real_series.get(row["id"], []) if row["time"] <= t <= row["time"] + timedelta(minutes=30)]
+        future = [
+            p
+            for t, p in real_series.get(row["id"], [])
+            if row["time"] <= t <= row["time"] + timedelta(minutes=30)
+        ]
         if not future:
             continue
         deep_rows.append(
@@ -290,14 +389,26 @@ def _build_rows(paths: list[Path]) -> tuple[list[dict[str, Any]], list[dict[str,
     return shallow_rows, deep_rows
 
 
-def build_report(target_date: str, *, generated_at: str | None = None) -> dict[str, Any]:
+def build_report(
+    target_date: str, *, generated_at: str | None = None
+) -> dict[str, Any]:
     generated_at = generated_at or datetime.now(KST).isoformat(timespec="seconds")
     window_paths = _iter_events_paths_for_window(target_date)
     daily_paths = _events_paths_for_date(target_date)
     shallow_rows, deep_rows = _build_rows(window_paths)
     daily_shallow_rows, daily_deep_rows = _build_rows(daily_paths)
-    shallow_primary = [r for r in shallow_rows if -0.70 <= r["profit_rate"] <= -0.30 and 60 <= float(r.get("held_sec") or 0) <= 120]
-    shallow_observation = [r for r in shallow_rows if -0.70 <= r["profit_rate"] <= -0.30 and 120 < float(r.get("held_sec") or 0) <= 240]
+    shallow_primary = [
+        r
+        for r in shallow_rows
+        if -0.70 <= r["profit_rate"] <= -0.30
+        and 60 <= float(r.get("held_sec") or 0) <= 120
+    ]
+    shallow_observation = [
+        r
+        for r in shallow_rows
+        if -0.70 <= r["profit_rate"] <= -0.30
+        and 120 < float(r.get("held_sec") or 0) <= 240
+    ]
     deep_primary = [
         r
         for r in deep_rows
@@ -306,7 +417,10 @@ def build_report(target_date: str, *, generated_at: str | None = None) -> dict[s
         and 60 <= float(r.get("current_ai_score") or 0) <= 74
     ]
     daily_shallow_primary = [
-        r for r in daily_shallow_rows if -0.70 <= r["profit_rate"] <= -0.30 and 60 <= float(r.get("held_sec") or 0) <= 120
+        r
+        for r in daily_shallow_rows
+        if -0.70 <= r["profit_rate"] <= -0.30
+        and 60 <= float(r.get("held_sec") or 0) <= 120
     ]
     daily_deep_primary = [
         r
@@ -349,17 +463,27 @@ def build_report(target_date: str, *, generated_at: str | None = None) -> dict[s
     deep_metrics = _row_summary(deep_primary)
     daily_shallow_metrics = _row_summary(daily_shallow_primary)
     daily_deep_metrics = _row_summary(daily_deep_primary)
-    sample_floor_met = shallow_metrics["sample_count"] >= 10 and deep_metrics["sample_count"] >= 5
-    edge_ok = shallow_metrics["hit03_rate"] >= 0.25 and deep_metrics["hit03_rate"] >= 0.50
+    sample_floor_met = (
+        shallow_metrics["sample_count"] >= 10 and deep_metrics["sample_count"] >= 5
+    )
+    edge_ok = (
+        shallow_metrics["hit03_rate"] >= 0.25 and deep_metrics["hit03_rate"] >= 0.50
+    )
     source_available = bool(window_paths)
-    state = "adjust_up" if source_available and sample_floor_met and edge_ok else "hold_sample"
+    state = (
+        "adjust_up"
+        if source_available and sample_floor_met and edge_ok
+        else "hold_sample"
+    )
     source_quality_gate = "pass" if source_available else "source_quality_blocked"
     calibration_reason = (
         "post_add_mfe_mae_edge_ok"
         if state == "adjust_up"
-        else "source_pipeline_events_missing"
-        if not source_available
-        else "sample_or_edge_floor_not_met"
+        else (
+            "source_pipeline_events_missing"
+            if not source_available
+            else "sample_or_edge_floor_not_met"
+        )
     )
     metric_contract = {
         "metric_role": "bounded_tunable_recovery_quality_gate",
@@ -437,11 +561,20 @@ def _default_output_paths(target_date: str) -> tuple[Path, Path]:
     return base.with_suffix(".json"), base.with_suffix(".md")
 
 
-def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path) -> None:
+def write_outputs(
+    report: dict[str, Any], *, output_json: Path, output_md: Path
+) -> None:
     output_json.parent.mkdir(parents=True, exist_ok=True)
-    output_json.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    output_json.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     candidate = (report.get("calibration_candidates") or [{}])[0]
-    metrics = candidate.get("source_metrics") if isinstance(candidate.get("source_metrics"), dict) else {}
+    metrics = (
+        candidate.get("source_metrics")
+        if isinstance(candidate.get("source_metrics"), dict)
+        else {}
+    )
     lines = [
         f"# {report.get('target_date')} Scalping AVG_DOWN Recovery Calibration",
         "",
@@ -460,7 +593,9 @@ def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path)
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build scalping AVG_DOWN recovery calibration candidate.")
+    parser = argparse.ArgumentParser(
+        description="Build scalping AVG_DOWN recovery calibration candidate."
+    )
     parser.add_argument("--target-date", default=datetime.now(KST).strftime("%Y-%m-%d"))
     parser.add_argument("--output-json", type=Path)
     parser.add_argument("--output-md", type=Path)
@@ -474,7 +609,13 @@ def main(argv: list[str] | None = None) -> int:
     report = build_report(args.target_date)
     write_outputs(report, output_json=output_json, output_md=output_md)
     if args.print_summary:
-        print(json.dumps(report.get("calibration_candidates", [{}])[0], ensure_ascii=False, sort_keys=True))
+        print(
+            json.dumps(
+                report.get("calibration_candidates", [{}])[0],
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
     return 0
 
 

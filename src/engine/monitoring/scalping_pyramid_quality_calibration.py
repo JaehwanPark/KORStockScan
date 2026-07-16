@@ -9,7 +9,6 @@ from typing import Any
 
 from src.utils.constants import DATA_DIR, TRADING_RULES
 
-
 KST = timezone(timedelta(hours=9))
 FAMILY = "scalping_pyramid_quality_gate"
 STAGE = "scale_in"
@@ -80,7 +79,9 @@ def _feedback_report_path(target_date: str) -> Path:
 
 def _iter_feedback_report_paths(target_date: str) -> list[Path]:
     paths: list[Path] = []
-    for path in sorted(INPUT_REPORT_DIR.glob("scalping_pyramid_intraday_feedback_*.json")):
+    for path in sorted(
+        INPUT_REPORT_DIR.glob("scalping_pyramid_intraday_feedback_*.json")
+    ):
         date_part = path.stem.removeprefix("scalping_pyramid_intraday_feedback_")
         if CLEAN_BASELINE_DATE <= date_part <= target_date:
             paths.append(path)
@@ -100,20 +101,44 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 def _current_values() -> dict[str, Any]:
     return {
-        "min_profit_pct": float(getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_PROFIT_PCT", 1.5) or 1.5),
-        "min_ai_score": float(getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_AI_SCORE", 70) or 70),
-        "min_buy_pressure": float(getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_BUY_PRESSURE", 60.0) or 60.0),
-        "min_tick_accel": float(getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_TICK_ACCEL", 0.5) or 0.5),
-        "max_micro_vwap_bps": float(getattr(TRADING_RULES, "SCALPING_PYRAMID_MAX_MICRO_VWAP_BPS", 60.0) or 60.0),
-        "max_spread_bps": float(getattr(TRADING_RULES, "SCALPING_PYRAMID_MAX_SPREAD_BPS", 80.0) or 80.0),
+        "min_profit_pct": float(
+            getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_PROFIT_PCT", 1.5) or 1.5
+        ),
+        "min_ai_score": float(
+            getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_AI_SCORE", 70) or 70
+        ),
+        "min_buy_pressure": float(
+            getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_BUY_PRESSURE", 60.0) or 60.0
+        ),
+        "min_tick_accel": float(
+            getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_TICK_ACCEL", 0.5) or 0.5
+        ),
+        "max_micro_vwap_bps": float(
+            getattr(TRADING_RULES, "SCALPING_PYRAMID_MAX_MICRO_VWAP_BPS", 60.0) or 60.0
+        ),
+        "max_spread_bps": float(
+            getattr(TRADING_RULES, "SCALPING_PYRAMID_MAX_SPREAD_BPS", 80.0) or 80.0
+        ),
         "strong_continuation_enabled": bool(
-            getattr(TRADING_RULES, "SCALPING_PYRAMID_STRONG_CONTINUATION_ENABLED", False)
+            getattr(
+                TRADING_RULES, "SCALPING_PYRAMID_STRONG_CONTINUATION_ENABLED", False
+            )
         ),
         "strong_continuation_min_profit_pct": float(
-            getattr(TRADING_RULES, "SCALPING_PYRAMID_STRONG_CONTINUATION_MIN_PROFIT_PCT", 0.9) or 0.9
+            getattr(
+                TRADING_RULES,
+                "SCALPING_PYRAMID_STRONG_CONTINUATION_MIN_PROFIT_PCT",
+                0.9,
+            )
+            or 0.9
         ),
         "strong_continuation_max_drawdown_pct": float(
-            getattr(TRADING_RULES, "SCALPING_PYRAMID_STRONG_CONTINUATION_MAX_DRAWDOWN_PCT", 0.2) or 0.2
+            getattr(
+                TRADING_RULES,
+                "SCALPING_PYRAMID_STRONG_CONTINUATION_MAX_DRAWDOWN_PCT",
+                0.2,
+            )
+            or 0.2
         ),
     }
 
@@ -130,7 +155,9 @@ def _closed_pyramid_rows(reports: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return rows
 
 
-def _closed_one_share_pyramid_rows(reports: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
+def _closed_one_share_pyramid_rows(
+    reports: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], bool]:
     rows: list[dict[str, Any]] = []
     section_present = False
     for report in reports:
@@ -160,10 +187,24 @@ def _provenance_present(rows: list[dict[str, Any]]) -> bool:
 
 def _row_rates(rows: list[dict[str, Any]]) -> dict[str, Any]:
     sample_count = len(rows)
-    recovered = sum(1 for row in rows if row.get("pyramid_feedback_label") == "pyramid_would_have_helped")
-    correct_block = sum(1 for row in rows if row.get("pyramid_feedback_label") == "pyramid_correctly_blocked")
-    reversal = sum(1 for row in rows if row.get("pyramid_feedback_label") == "pyramid_overheat_or_reversal_risk")
-    label_counts = Counter(str(row.get("pyramid_feedback_label") or "unknown") for row in rows)
+    recovered = sum(
+        1
+        for row in rows
+        if row.get("pyramid_feedback_label") == "pyramid_would_have_helped"
+    )
+    correct_block = sum(
+        1
+        for row in rows
+        if row.get("pyramid_feedback_label") == "pyramid_correctly_blocked"
+    )
+    reversal = sum(
+        1
+        for row in rows
+        if row.get("pyramid_feedback_label") == "pyramid_overheat_or_reversal_risk"
+    )
+    label_counts = Counter(
+        str(row.get("pyramid_feedback_label") or "unknown") for row in rows
+    )
     return {
         "sample_count": sample_count,
         "recovered_or_extended_count": recovered,
@@ -172,7 +213,9 @@ def _row_rates(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "recovered_or_extended_rate": recovered / sample_count if sample_count else 0.0,
         "correctly_blocked_rate": correct_block / sample_count if sample_count else 0.0,
         "reversal_or_flat_rate": reversal / sample_count if sample_count else 0.0,
-        "label_counts": [{"label": key, "count": value} for key, value in label_counts.most_common()],
+        "label_counts": [
+            {"label": key, "count": value} for key, value in label_counts.most_common()
+        ],
     }
 
 
@@ -199,29 +242,43 @@ def _profit_threshold_grid(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     usable_rows = [
         (float(reached), float(final), row)
         for row in rows
-        if (reached := _profit_reached(row)) is not None and (final := _final_profit(row)) is not None
+        if (reached := _profit_reached(row)) is not None
+        and (final := _final_profit(row)) is not None
     ]
     grid: list[dict[str, Any]] = []
     steps = int(round((PROFIT_GRID_MAX - PROFIT_GRID_MIN) / PROFIT_GRID_STEP)) + 1
     for index in range(steps):
         threshold = round(PROFIT_GRID_MIN + (index * PROFIT_GRID_STEP), 1)
-        eligible = [(reached, final, row) for reached, final, row in usable_rows if reached >= threshold]
+        eligible = [
+            (reached, final, row)
+            for reached, final, row in usable_rows
+            if reached >= threshold
+        ]
         eligible_count = len(eligible)
         positive_exit_count = sum(1 for _, final, _ in eligible if final > threshold)
         loss_or_flat_count = eligible_count - positive_exit_count
         incremental = [final - threshold for _, final, _ in eligible]
         missed_upside = [max(0.0, reached - threshold) for reached, _, _ in eligible]
-        label_counts = Counter(str(row.get("pyramid_feedback_label") or "unknown") for _, _, row in eligible)
+        label_counts = Counter(
+            str(row.get("pyramid_feedback_label") or "unknown")
+            for _, _, row in eligible
+        )
         grid.append(
             {
                 "min_profit_pct": threshold,
                 "source_row_count": len(usable_rows),
                 "eligible_count": eligible_count,
-                "eligible_rate": eligible_count / len(usable_rows) if usable_rows else 0.0,
+                "eligible_rate": (
+                    eligible_count / len(usable_rows) if usable_rows else 0.0
+                ),
                 "positive_exit_count": positive_exit_count,
-                "positive_exit_rate": positive_exit_count / eligible_count if eligible_count else 0.0,
+                "positive_exit_rate": (
+                    positive_exit_count / eligible_count if eligible_count else 0.0
+                ),
                 "loss_or_flat_count": loss_or_flat_count,
-                "loss_or_flat_rate": loss_or_flat_count / eligible_count if eligible_count else 0.0,
+                "loss_or_flat_rate": (
+                    loss_or_flat_count / eligible_count if eligible_count else 0.0
+                ),
                 "avg_incremental_exit_profit_pct": (
                     sum(incremental) / len(incremental) if incremental else 0.0
                 ),
@@ -229,20 +286,27 @@ def _profit_threshold_grid(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     sum(missed_upside) / len(missed_upside) if missed_upside else 0.0
                 ),
                 "label_counts": [
-                    {"label": key, "count": value} for key, value in label_counts.most_common()
+                    {"label": key, "count": value}
+                    for key, value in label_counts.most_common()
                 ],
             }
         )
     return grid
 
 
-def _nearest_grid_row(grid: list[dict[str, Any]], threshold: float) -> dict[str, Any] | None:
+def _nearest_grid_row(
+    grid: list[dict[str, Any]], threshold: float
+) -> dict[str, Any] | None:
     if not grid:
         return None
-    return min(grid, key=lambda row: abs(float(row.get("min_profit_pct") or 0.0) - threshold))
+    return min(
+        grid, key=lambda row: abs(float(row.get("min_profit_pct") or 0.0) - threshold)
+    )
 
 
-def _profit_grid_decision(current: dict[str, Any], grid: list[dict[str, Any]]) -> dict[str, Any]:
+def _profit_grid_decision(
+    current: dict[str, Any], grid: list[dict[str, Any]]
+) -> dict[str, Any]:
     current_threshold = float(current["min_profit_pct"])
     current_row = _nearest_grid_row(grid, current_threshold)
     eligible_rows = [
@@ -307,27 +371,41 @@ def _profit_grid_decision(current: dict[str, Any], grid: list[dict[str, Any]]) -
     }
 
 
-def _one_step_candidate_values(current: dict[str, Any], rates: dict[str, Any]) -> tuple[str, dict[str, Any], str]:
+def _one_step_candidate_values(
+    current: dict[str, Any], rates: dict[str, Any]
+) -> tuple[str, dict[str, Any], str]:
     recommended = dict(current)
     recovery_rate = _safe_float(rates.get("recovered_or_extended_rate"))
     reversal_rate = _safe_float(rates.get("reversal_or_flat_rate"))
     if reversal_rate >= 0.60:
         recommended["min_profit_pct"] = min(float(current["min_profit_pct"]) + 0.2, 3.0)
         recommended["min_ai_score"] = min(float(current["min_ai_score"]) + 5.0, 85.0)
-        recommended["min_buy_pressure"] = min(float(current["min_buy_pressure"]) + 5.0, 80.0)
+        recommended["min_buy_pressure"] = min(
+            float(current["min_buy_pressure"]) + 5.0, 80.0
+        )
         recommended["min_tick_accel"] = min(float(current["min_tick_accel"]) + 0.1, 1.5)
-        recommended["max_micro_vwap_bps"] = max(float(current["max_micro_vwap_bps"]) - 10.0, 30.0)
-        recommended["max_spread_bps"] = max(float(current["max_spread_bps"]) - 10.0, 40.0)
+        recommended["max_micro_vwap_bps"] = max(
+            float(current["max_micro_vwap_bps"]) - 10.0, 30.0
+        )
+        recommended["max_spread_bps"] = max(
+            float(current["max_spread_bps"]) - 10.0, 40.0
+        )
         if _boolish(current.get("strong_continuation_enabled")):
             recommended["strong_continuation_enabled"] = False
         return "adjust_up", recommended, "reversal_cluster_tighten_one_step"
     if recovery_rate >= 0.60:
         recommended["min_profit_pct"] = max(float(current["min_profit_pct"]) - 0.2, 0.8)
         recommended["min_ai_score"] = max(float(current["min_ai_score"]) - 5.0, 60.0)
-        recommended["min_buy_pressure"] = max(float(current["min_buy_pressure"]) - 5.0, 45.0)
+        recommended["min_buy_pressure"] = max(
+            float(current["min_buy_pressure"]) - 5.0, 45.0
+        )
         recommended["min_tick_accel"] = max(float(current["min_tick_accel"]) - 0.1, 0.2)
-        recommended["max_micro_vwap_bps"] = min(float(current["max_micro_vwap_bps"]) + 10.0, 100.0)
-        recommended["max_spread_bps"] = min(float(current["max_spread_bps"]) + 10.0, 120.0)
+        recommended["max_micro_vwap_bps"] = min(
+            float(current["max_micro_vwap_bps"]) + 10.0, 100.0
+        )
+        recommended["max_spread_bps"] = min(
+            float(current["max_spread_bps"]) + 10.0, 120.0
+        )
         if not _boolish(current.get("strong_continuation_enabled")):
             recommended["strong_continuation_enabled"] = True
         return "adjust_down", recommended, "recovery_cluster_loosen_one_step"
@@ -343,11 +421,14 @@ def _calibration_candidate(
     one_share_rows, one_share_source_present = _closed_one_share_pyramid_rows(reports)
     rows = one_share_rows if one_share_source_present else _closed_pyramid_rows(reports)
     calibration_source_scope = (
-        "one_share_event_opportunity" if one_share_source_present else "legacy_pyramid_feedback_rows"
+        "one_share_event_opportunity"
+        if one_share_source_present
+        else "legacy_pyramid_feedback_rows"
     )
     rates = _row_rates(rows)
     source_quality_pass = bool(reports) and all(
-        ((report.get("source_quality") or {}).get("status") == "pass") for report in reports
+        ((report.get("source_quality") or {}).get("status") == "pass")
+        for report in reports
     )
     provenance_present = _provenance_present(rows)
     source_contract_pass = bool(source_quality_pass and provenance_present)
@@ -386,11 +467,17 @@ def _calibration_candidate(
             if state in {"adjust_up", "adjust_down"} and state != grid_status:
                 state = "hold"
                 recommended = dict(current)
-                reason = f"cluster_grid_conflict_hold:{reason},{grid_decision.get('reason')}"
+                reason = (
+                    f"cluster_grid_conflict_hold:{reason},{grid_decision.get('reason')}"
+                )
             else:
                 state = grid_status
-                recommended = dict(recommended if reason != "mixed_cluster_hold" else current)
-                recommended["min_profit_pct"] = float(grid_decision["selected_min_profit_pct"])
+                recommended = dict(
+                    recommended if reason != "mixed_cluster_hold" else current
+                )
+                recommended["min_profit_pct"] = float(
+                    grid_decision["selected_min_profit_pct"]
+                )
                 reason = str(grid_decision.get("reason") or reason)
         allowed = state in {"adjust_up", "adjust_down"}
 
@@ -406,9 +493,15 @@ def _calibration_candidate(
         "sample_floor": 20,
         "allowed_runtime_apply": allowed,
         "safety_revert_required": False,
-        "source_quality_gate": "pass" if source_contract_pass else "source_quality_blocked",
+        "source_quality_gate": (
+            "pass" if source_contract_pass else "source_quality_blocked"
+        ),
         "source_quality_status": "pass" if source_contract_pass else "blocked",
-        "source_quality_blocked": None if source_contract_pass else ",".join(blockers) or "source_quality_or_provenance_not_pass",
+        "source_quality_blocked": (
+            None
+            if source_contract_pass
+            else ",".join(blockers) or "source_quality_or_provenance_not_pass"
+        ),
         "current_values": current,
         "recommended_values": recommended,
         "target_env_keys": TARGET_ENV_KEYS if allowed else [],
@@ -418,7 +511,9 @@ def _calibration_candidate(
             "one_share_event_source_present": one_share_source_present,
             "one_share_closed_pyramid_row_count": len(one_share_rows),
             "one_share_pyramid_avg_opportunity_cost_pct": (
-                sum(opportunity_costs) / len(opportunity_costs) if opportunity_costs else 0.0
+                sum(opportunity_costs) / len(opportunity_costs)
+                if opportunity_costs
+                else 0.0
             ),
             "profit_threshold_grid": profit_grid,
             "profit_threshold_grid_decision": grid_decision,
@@ -443,9 +538,15 @@ def build_report(
     generated_at: str | None = None,
 ) -> dict[str, Any]:
     generated_at = generated_at or datetime.now(KST).isoformat(timespec="seconds")
-    paths = input_paths if input_paths is not None else _iter_feedback_report_paths(target_date)
+    paths = (
+        input_paths
+        if input_paths is not None
+        else _iter_feedback_report_paths(target_date)
+    )
     reports = [_load_json(path) for path in paths if path.exists()]
-    candidate = _calibration_candidate(target_date=target_date, reports=reports, source_paths=paths)
+    candidate = _calibration_candidate(
+        target_date=target_date, reports=reports, source_paths=paths
+    )
     return {
         "schema_version": 1,
         "report_type": REPORT_TYPE,
@@ -469,7 +570,11 @@ def build_report(
             "forbidden_uses": FORBIDDEN_USES,
         },
         "source_quality": {
-            "status": "pass" if candidate["source_metrics"]["source_quality_pass"] else "blocked",
+            "status": (
+                "pass"
+                if candidate["source_metrics"]["source_quality_pass"]
+                else "blocked"
+            ),
             "input_report_count": len(reports),
             "input_paths": [str(path) for path in paths],
             "provenance_present": candidate["source_metrics"]["provenance_present"],
@@ -478,12 +583,21 @@ def build_report(
     }
 
 
-def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path) -> None:
+def write_outputs(
+    report: dict[str, Any], *, output_json: Path, output_md: Path
+) -> None:
     output_json.parent.mkdir(parents=True, exist_ok=True)
     output_md.parent.mkdir(parents=True, exist_ok=True)
-    output_json.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    output_json.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
     candidate = (report.get("calibration_candidates") or [{}])[0]
-    metrics = candidate.get("source_metrics") if isinstance(candidate.get("source_metrics"), dict) else {}
+    metrics = (
+        candidate.get("source_metrics")
+        if isinstance(candidate.get("source_metrics"), dict)
+        else {}
+    )
     grid_decision = (
         metrics.get("profit_threshold_grid_decision")
         if isinstance(metrics.get("profit_threshold_grid_decision"), dict)
@@ -530,7 +644,9 @@ def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path)
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build scalping PYRAMID quality calibration candidate.")
+    parser = argparse.ArgumentParser(
+        description="Build scalping PYRAMID quality calibration candidate."
+    )
     parser.add_argument("--target-date", default=datetime.now(KST).strftime("%Y-%m-%d"))
     parser.add_argument("--output-json", type=Path)
     parser.add_argument("--output-md", type=Path)
@@ -544,7 +660,13 @@ def main(argv: list[str] | None = None) -> int:
     report = build_report(args.target_date)
     write_outputs(report, output_json=output_json, output_md=output_md)
     if args.print_summary:
-        print(json.dumps(report.get("calibration_candidates", [{}])[0], ensure_ascii=False, sort_keys=True))
+        print(
+            json.dumps(
+                report.get("calibration_candidates", [{}])[0],
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
     return 0
 
 
