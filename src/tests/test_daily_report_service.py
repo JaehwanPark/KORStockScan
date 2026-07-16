@@ -82,11 +82,19 @@ def test_previous_day_performance_uses_completed_rows_and_net_realized_pnl(monke
         },
     ]
 
-    monkeypatch.setattr(report_mod, "_resolve_previous_trade_date", lambda target_date, ctx: "2026-04-06")
-    monkeypatch.setattr(report_mod, "_import_sqlalchemy", lambda: (None, lambda sql: sql))
+    monkeypatch.setattr(
+        report_mod,
+        "_resolve_previous_trade_date",
+        lambda target_date, ctx: "2026-04-06",
+    )
+    monkeypatch.setattr(
+        report_mod, "_import_sqlalchemy", lambda: (None, lambda sql: sql)
+    )
     monkeypatch.setattr(report_mod, "_get_engine", lambda: _FakeEngine(rows))
 
-    performance = report_mod._build_previous_day_performance("2026-04-07", report_mod._ReportContext(warnings=[]))
+    performance = report_mod._build_previous_day_performance(
+        "2026-04-07", report_mod._ReportContext(warnings=[])
+    )
 
     assert performance["summary"]["completed_records"] == 2
     assert performance["summary"]["win_rate"] == 50.0
@@ -97,10 +105,16 @@ def test_previous_day_performance_uses_completed_rows_and_net_realized_pnl(monke
 
 
 def test_load_saved_daily_report_rejects_old_schema(tmp_path, monkeypatch):
-    monkeypatch.setattr(report_mod, "report_path_for_date", lambda target_date: tmp_path / f"report_{target_date}.json")
+    monkeypatch.setattr(
+        report_mod,
+        "report_path_for_date",
+        lambda target_date: tmp_path / f"report_{target_date}.json",
+    )
 
     legacy_path = report_mod.report_path_for_date("2026-04-07")
-    legacy_path.write_text(json.dumps({"date": "2026-04-07", "meta": {}}), encoding="utf-8")
+    legacy_path.write_text(
+        json.dumps({"date": "2026-04-07", "meta": {}}), encoding="utf-8"
+    )
     assert report_mod.load_saved_daily_report("2026-04-07") is None
 
     current_payload = {
@@ -112,11 +126,21 @@ def test_load_saved_daily_report_rejects_old_schema(tmp_path, monkeypatch):
 
 
 def test_build_daily_report_sets_schema_version(monkeypatch):
-    monkeypatch.setattr(report_mod, "_build_market_snapshot", lambda target_date, ctx: {"stocks": [], "model_ready": True})
+    monkeypatch.setattr(
+        report_mod,
+        "_build_market_snapshot",
+        lambda target_date, ctx: {"stocks": [], "model_ready": True},
+    )
     monkeypatch.setattr(
         report_mod,
         "_build_previous_day_performance",
-        lambda target_date, ctx: {"summary": {}, "insight": "", "top_winners": [], "top_losers": [], "strategy_breakdown": []},
+        lambda target_date, ctx: {
+            "summary": {},
+            "insight": "",
+            "top_winners": [],
+            "top_losers": [],
+            "strategy_breakdown": [],
+        },
     )
 
     report = report_mod.build_daily_report("2026-04-07")
