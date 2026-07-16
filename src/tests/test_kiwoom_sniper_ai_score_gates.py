@@ -32,14 +32,26 @@ def _watching_stock(**updates):
 
 
 def _patch_watching_dependencies(monkeypatch):
-    monkeypatch.setattr(kiwoom_sniper_v2, "is_scalping_buy_time_allowed", lambda _now: True)
-    monkeypatch.setattr(kiwoom_sniper_v2, "describe_scalping_buy_windows", lambda: "test_window")
+    monkeypatch.setattr(
+        kiwoom_sniper_v2, "is_scalping_buy_time_allowed", lambda _now: True
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2, "describe_scalping_buy_windows", lambda: "test_window"
+    )
     monkeypatch.setattr(
         kiwoom_sniper_v2,
         "evaluate_scalping_strength_momentum",
-        lambda _ws: {"allowed": True, "reason": "test_pass", "vpw_delta": 0, "window_buy_value": 0, "threshold_profile": "test"},
+        lambda _ws: {
+            "allowed": True,
+            "reason": "test_pass",
+            "vpw_delta": 0,
+            "window_buy_value": 0,
+            "threshold_profile": "test",
+        },
     )
-    monkeypatch.setattr(kiwoom_sniper_v2, "_resolve_stock_marcap", lambda _stock, _code: 100_000_000_000)
+    monkeypatch.setattr(
+        kiwoom_sniper_v2, "_resolve_stock_marcap", lambda _stock, _code: 100_000_000_000
+    )
     monkeypatch.setattr(kiwoom_sniper_v2, "get_entry_buy_score_threshold", lambda: 75)
     monkeypatch.setattr(
         kiwoom_sniper_v2,

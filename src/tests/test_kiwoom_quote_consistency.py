@@ -17,7 +17,9 @@ def test_ka10004_orderbook_does_not_publish_best_ask_as_curr(monkeypatch):
             }
         ]
 
-    monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fake_fetch_kiwoom_api_continuous)
+    monkeypatch.setattr(
+        kiwoom_utils, "fetch_kiwoom_api_continuous", fake_fetch_kiwoom_api_continuous
+    )
     snapshot = kiwoom_utils.get_stock_orderbook_ka10004("token", "005930")
 
     assert snapshot["curr"] == 0
@@ -56,7 +58,9 @@ def test_ka10004_preserves_explicit_nxt_market_suffix(monkeypatch):
             }
         ]
 
-    monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fake_fetch_kiwoom_api_continuous)
+    monkeypatch.setattr(
+        kiwoom_utils, "fetch_kiwoom_api_continuous", fake_fetch_kiwoom_api_continuous
+    )
 
     snapshot = kiwoom_utils.get_stock_orderbook_ka10004("token", "005930_NX")
 
@@ -67,5 +71,10 @@ def test_ka10004_preserves_explicit_nxt_market_suffix(monkeypatch):
 
 def test_effective_kiwoom_code_preserves_explicit_market_suffix():
     assert kiwoom_utils.normalize_stock_code("A005930_NX") == "005930"
-    assert kiwoom_utils.get_effective_kiwoom_code("A005930_NX", is_nxt=False) == "005930_NX"
-    assert kiwoom_utils.get_effective_kiwoom_code("005930_AL", is_nxt=False) == "005930_AL"
+    assert (
+        kiwoom_utils.get_effective_kiwoom_code("A005930_NX", is_nxt=False)
+        == "005930_NX"
+    )
+    assert (
+        kiwoom_utils.get_effective_kiwoom_code("005930_AL", is_nxt=False) == "005930_AL"
+    )
