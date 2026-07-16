@@ -46,7 +46,10 @@ def test_quote_consistency_report_flags_defective_rows(monkeypatch, tmp_path):
             },
         },
     ]
-    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n", encoding="utf-8")
+    path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
+        encoding="utf-8",
+    )
     monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", pipeline_dir)
     monkeypatch.setattr(mod, "THRESHOLD_EVENTS_DIR", threshold_dir)
 
@@ -56,17 +59,25 @@ def test_quote_consistency_report_flags_defective_rows(monkeypatch, tmp_path):
     assert report["summary"]["ev_input_blocked_count"] == 1
     assert report["summary"]["safety_exit_count"] == 1
     assert report["summary"]["gap_bps"]["max"] == 120.5
-    assert report["stage_state_counts"]["entry_submit_revalidation_block"]["diverged"] == 1
-    assert report["defective_row_candidates"][0]["quote_consistency_state"] == "diverged"
+    assert (
+        report["stage_state_counts"]["entry_submit_revalidation_block"]["diverged"] == 1
+    )
+    assert (
+        report["defective_row_candidates"][0]["quote_consistency_state"] == "diverged"
+    )
 
 
-def test_quote_consistency_missing_required_fields_are_warning_when_ev_blocked(monkeypatch, tmp_path):
+def test_quote_consistency_missing_required_fields_are_warning_when_ev_blocked(
+    monkeypatch, tmp_path
+):
     pipeline_dir = tmp_path / "pipeline_events"
     threshold_dir = tmp_path / "threshold_cycle"
     pipeline_dir.mkdir()
     threshold_dir.mkdir()
     path = pipeline_dir / "pipeline_events_2026-06-29.jsonl"
-    (threshold_dir / "threshold_events_2026-06-29.jsonl").write_text("", encoding="utf-8")
+    (threshold_dir / "threshold_events_2026-06-29.jsonl").write_text(
+        "", encoding="utf-8"
+    )
     row = {
         "event_type": "pipeline_event",
         "pipeline": "SCALE_IN_PIPELINE",
@@ -101,11 +112,15 @@ def test_quote_consistency_missing_required_fields_are_warning_when_ev_blocked(m
     ]
 
 
-def test_quote_consistency_partitioned_threshold_events_satisfy_source_contract(monkeypatch, tmp_path):
+def test_quote_consistency_partitioned_threshold_events_satisfy_source_contract(
+    monkeypatch, tmp_path
+):
     pipeline_dir = tmp_path / "pipeline_events"
     threshold_dir = tmp_path / "threshold_cycle"
     pipeline_dir.mkdir()
-    partition_dir = threshold_dir / "date=2026-06-30" / "family=quote_consistency_normalization"
+    partition_dir = (
+        threshold_dir / "date=2026-06-30" / "family=quote_consistency_normalization"
+    )
     partition_dir.mkdir(parents=True)
     (pipeline_dir / "pipeline_events_2026-06-30.jsonl").write_text("", encoding="utf-8")
     (partition_dir / "part-000001.jsonl").write_text(
@@ -135,17 +150,24 @@ def test_quote_consistency_partitioned_threshold_events_satisfy_source_contract(
     report = mod.build_quote_consistency_report("2026-06-30")
 
     assert report["summary"]["observed_count"] == 1
-    assert not any(item["code"] == "quote_consistency_source_missing" for item in report["verifier_findings"])
+    assert not any(
+        item["code"] == "quote_consistency_source_missing"
+        for item in report["verifier_findings"]
+    )
     assert report["sources"]["threshold_events"] is None
     assert len(report["sources"]["threshold_events_partitioned"]) == 1
 
 
-def test_quote_consistency_report_backfills_blank_ws_price_source(monkeypatch, tmp_path):
+def test_quote_consistency_report_backfills_blank_ws_price_source(
+    monkeypatch, tmp_path
+):
     pipeline_dir = tmp_path / "pipeline_events"
     threshold_dir = tmp_path / "threshold_cycle"
     pipeline_dir.mkdir()
     threshold_dir.mkdir()
-    (threshold_dir / "threshold_events_2026-06-30.jsonl").write_text("", encoding="utf-8")
+    (threshold_dir / "threshold_events_2026-06-30.jsonl").write_text(
+        "", encoding="utf-8"
+    )
     (pipeline_dir / "pipeline_events_2026-06-30.jsonl").write_text(
         json.dumps(
             {

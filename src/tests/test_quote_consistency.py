@@ -8,7 +8,13 @@ from src.trading.market.quote_consistency import (
 )
 
 
-def _ws(price: int, *, age_ms: int = 100, best_bid: int | None = None, best_ask: int | None = None):
+def _ws(
+    price: int,
+    *,
+    age_ms: int = 100,
+    best_bid: int | None = None,
+    best_ask: int | None = None,
+):
     best_bid = best_bid if best_bid is not None else price - 10
     best_ask = best_ask if best_ask is not None else price + 10
     return quote_input_from_ws(
@@ -47,17 +53,23 @@ def _config() -> QuoteConsistencyConfig:
 def test_quote_consistency_ok_warning_and_diverged(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_QUOTE_CONSISTENCY_RUNTIME_ENABLED", "true")
 
-    ok = build_quote_consistency_snapshot(ws=_ws(10000), rest=_rest(9980, 10020), config=_config())
+    ok = build_quote_consistency_snapshot(
+        ws=_ws(10000), rest=_rest(9980, 10020), config=_config()
+    )
     assert ok.quality_state == "ok"
     assert ok.entry_blocked is False
     assert ok.executable_buy_price == 10020
     assert ok.passive_buy_price == 9980
 
-    warning = build_quote_consistency_snapshot(ws=_ws(10000), rest=_rest(9920, 9960), config=_config())
+    warning = build_quote_consistency_snapshot(
+        ws=_ws(10000), rest=_rest(9920, 9960), config=_config()
+    )
     assert warning.quality_state == "warning"
     assert warning.entry_blocked is False
 
-    diverged = build_quote_consistency_snapshot(ws=_ws(10000), rest=_rest(9700, 9740), config=_config())
+    diverged = build_quote_consistency_snapshot(
+        ws=_ws(10000), rest=_rest(9700, 9740), config=_config()
+    )
     assert diverged.quality_state == "diverged"
     assert diverged.entry_blocked is True
     assert diverged.runtime_action == "block_entry_reprice_scale_in"
@@ -70,7 +82,11 @@ def test_quote_consistency_stale_missing_and_single_source(monkeypatch):
     assert ws_only.quality_state == "single_source"
     assert ws_only.canonical_mark_price == 10000
 
-    stale = build_quote_consistency_snapshot(ws=_ws(10000, age_ms=2000), rest=_rest(9980, 10020, age_ms=4000), config=_config())
+    stale = build_quote_consistency_snapshot(
+        ws=_ws(10000, age_ms=2000),
+        rest=_rest(9980, 10020, age_ms=4000),
+        config=_config(),
+    )
     assert stale.quality_state == "stale"
     assert stale.entry_blocked is True
 

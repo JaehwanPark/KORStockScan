@@ -77,7 +77,9 @@ def test_quote_stale_frequency_report_summarizes_stale_classes(monkeypatch, tmp_
         "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
         encoding="utf-8",
     )
-    (threshold_dir / f"threshold_events_{target_date}.jsonl").write_text("", encoding="utf-8")
+    (threshold_dir / f"threshold_events_{target_date}.jsonl").write_text(
+        "", encoding="utf-8"
+    )
     repair_log = tmp_path / "bot_history.log"
     repair_log.write_text(
         "\n".join(
@@ -106,18 +108,26 @@ def test_quote_stale_frequency_report_summarizes_stale_classes(monkeypatch, tmp_
     assert by_class["actual_submit"]["stale_count"] == 0
     assert report["top_stale_streaks"][0]["stock_code"] == "000001"
     assumptions = {
-        item["topic"]: item
-        for item in report["kiwoom_freshness_operating_assumptions"]
+        item["topic"]: item for item in report["kiwoom_freshness_operating_assumptions"]
     }
-    assert assumptions["subscription_item_limit"]["status"] == "official_number_not_documented"
-    assert any("concurrent subscription limit" in question for question in report["kiwoom_support_questions"])
+    assert (
+        assumptions["subscription_item_limit"]["status"]
+        == "official_number_not_documented"
+    )
+    assert any(
+        "concurrent subscription limit" in question
+        for question in report["kiwoom_support_questions"]
+    )
     refresh = report["scale_in_feature_context_refresh"]
     assert refresh["counts"]["total"] == 1
     assert refresh["reasons"][0] == {"key": "refreshed_feature_still_stale", "count": 1}
     assert {"key": "quote_stale", "count": 2} in refresh["stale_reason_tokens"]
     repair = report["ws_repair_log_summary"]
     assert repair["counts"]["persistent_no_tick_cooldown"] == 1
-    assert repair["top_codes"]["persistent_no_tick_cooldown"][0] == {"stock_code": "000001", "count": 1}
+    assert repair["top_codes"]["persistent_no_tick_cooldown"][0] == {
+        "stock_code": "000001",
+        "count": 1,
+    }
 
 
 def test_quote_stale_frequency_write_outputs(monkeypatch, tmp_path):
@@ -128,19 +138,26 @@ def test_quote_stale_frequency_write_outputs(monkeypatch, tmp_path):
     target_date = "2026-07-06"
     (pipeline_dir / f"pipeline_events_{target_date}.jsonl").write_text(
         json.dumps(
-            _event("ai_holding_review", {"quote_age_ms": "1000", "quote_age_source": "last_ws_update_ts"}),
+            _event(
+                "ai_holding_review",
+                {"quote_age_ms": "1000", "quote_age_source": "last_ws_update_ts"},
+            ),
             ensure_ascii=False,
         )
         + "\n",
         encoding="utf-8",
     )
-    (threshold_dir / f"threshold_events_{target_date}.jsonl").write_text("", encoding="utf-8")
+    (threshold_dir / f"threshold_events_{target_date}.jsonl").write_text(
+        "", encoding="utf-8"
+    )
     monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", pipeline_dir)
     monkeypatch.setattr(mod, "THRESHOLD_EVENTS_DIR", threshold_dir)
     monkeypatch.setattr(mod, "BOT_HISTORY_LOG", tmp_path / "missing.log")
 
     report = mod.build_quote_stale_frequency_report(target_date)
-    json_path, md_path = mod.write_quote_stale_frequency_report(report, output_dir=tmp_path / "out")
+    json_path, md_path = mod.write_quote_stale_frequency_report(
+        report, output_dir=tmp_path / "out"
+    )
 
     assert json_path.exists()
     assert md_path.exists()
