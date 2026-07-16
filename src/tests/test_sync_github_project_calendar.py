@@ -67,7 +67,11 @@ def test_parse_project_item_returns_item_when_due_exists():
 
 def test_parse_project_item_returns_none_when_due_missing():
     node = _sample_node()
-    node["fieldValues"]["nodes"] = [fv for fv in node["fieldValues"]["nodes"] if fv.get("__typename") != "ProjectV2ItemFieldDateValue"]
+    node["fieldValues"]["nodes"] = [
+        fv
+        for fv in node["fieldValues"]["nodes"]
+        if fv.get("__typename") != "ProjectV2ItemFieldDateValue"
+    ]
     parsed = _parse_project_item(
         node,
         due_field_name="Due",
@@ -103,7 +107,9 @@ def test_parse_project_item_reads_slot_single_select():
 def test_parse_project_item_reads_status_from_text_fallback():
     node = _sample_node()
     node["fieldValues"]["nodes"] = [
-        fv for fv in node["fieldValues"]["nodes"] if fv.get("field", {}).get("name") != "Status"
+        fv
+        for fv in node["fieldValues"]["nodes"]
+        if fv.get("field", {}).get("name") != "Status"
     ]
     node["fieldValues"]["nodes"].append(
         {
@@ -240,7 +246,9 @@ def test_fetch_project_items_excludes_managed_title_missing_from_docs(monkeypatc
     assert [item.title for item in items] == ["[Checklist0414] still open in docs"]
 
 
-def test_fetch_project_items_excludes_all_managed_titles_when_docs_open_set_empty(monkeypatch):
+def test_fetch_project_items_excludes_all_managed_titles_when_docs_open_set_empty(
+    monkeypatch,
+):
     managed_node = _sample_node()
     managed_node["content"]["title"] = "[Checklist0414] closed in docs"
 
@@ -326,7 +334,9 @@ def test_fetch_project_items_keeps_managed_titles_when_docs_parse_fails(monkeypa
         sync_only_statuses={"Todo", "In Progress"},
     )
 
-    assert [item.title for item in items] == ["[Checklist0414] fallback keep on parse failure"]
+    assert [item.title for item in items] == [
+        "[Checklist0414] fallback keep on parse failure"
+    ]
 
 
 def test_calendar_graphql_request_retries_transient_graphql_internal_error(monkeypatch):
@@ -351,10 +361,16 @@ def test_calendar_graphql_request_retries_transient_graphql_internal_error(monke
             return _FakeResponse(
                 b'{"errors":[{"message":"Something went wrong while executing your query on 2026-04-24T02:40:09Z. Please include `ABC` when reporting this issue."}]}'
             )
-        return _FakeResponse(b'{"data":{"organization":{"projectV2":null},"user":{"projectV2":null}}}')
+        return _FakeResponse(
+            b'{"data":{"organization":{"projectV2":null},"user":{"projectV2":null}}}'
+        )
 
-    monkeypatch.setattr("src.engine.sync_github_project_calendar.request.urlopen", _fake_urlopen)
-    monkeypatch.setattr("src.engine.sync_github_project_calendar.time.sleep", lambda _: None)
+    monkeypatch.setattr(
+        "src.engine.sync_github_project_calendar.request.urlopen", _fake_urlopen
+    )
+    monkeypatch.setattr(
+        "src.engine.sync_github_project_calendar.time.sleep", lambda _: None
+    )
 
     data = _graphql_request("token", "query Test { viewer { login } }", {})
     assert data == {"organization": {"projectV2": None}, "user": {"projectV2": None}}
@@ -763,11 +779,15 @@ def test_prune_stale_events_dry_run_counts_candidates():
                 "items": [
                     {
                         "id": "evt_keep",
-                        "extendedProperties": {"private": {"gh_project_item_id": "PVTI_keep"}},
+                        "extendedProperties": {
+                            "private": {"gh_project_item_id": "PVTI_keep"}
+                        },
                     },
                     {
                         "id": "evt_drop",
-                        "extendedProperties": {"private": {"gh_project_item_id": "PVTI_drop"}},
+                        "extendedProperties": {
+                            "private": {"gh_project_item_id": "PVTI_drop"}
+                        },
                     },
                 ]
             }
@@ -799,7 +819,9 @@ def test_prune_stale_events_deletes_removed_items():
                 "items": [
                     {
                         "id": "evt_drop",
-                        "extendedProperties": {"private": {"gh_project_item_id": "PVTI_drop"}},
+                        "extendedProperties": {
+                            "private": {"gh_project_item_id": "PVTI_drop"}
+                        },
                     }
                 ]
             }
@@ -911,7 +933,10 @@ def test_prune_stale_events_ignores_legacy_event_without_project_marker():
 
 def test_codex_daily_workorder_slot_parser():
     assert _codex_daily_workorder_slot("Codex Daily Workorder (PREOPEN)") == "PREOPEN"
-    assert _codex_daily_workorder_slot("[KORStockScan] Codex Daily Workorder (POSTCLOSE)") == "POSTCLOSE"
+    assert (
+        _codex_daily_workorder_slot("[KORStockScan] Codex Daily Workorder (POSTCLOSE)")
+        == "POSTCLOSE"
+    )
     assert _codex_daily_workorder_slot("regular task") == ""
 
 

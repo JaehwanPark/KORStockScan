@@ -14,7 +14,9 @@ def _disable_clean_baseline_by_default(monkeypatch):
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+    path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8"
+    )
 
 
 def _write_gzip_jsonl(path: Path, rows: list[dict]) -> None:
@@ -29,15 +31,21 @@ def _write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
-def test_time_window_regime_joins_entry_event_and_keeps_metrics_separate(tmp_path, monkeypatch):
+def test_time_window_regime_joins_entry_event_and_keeps_metrics_separate(
+    tmp_path, monkeypatch
+):
     post_sell = tmp_path / "post_sell"
     threshold = tmp_path / "threshold_cycle"
     report = tmp_path / "report"
     monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell)
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_DIR", threshold)
     monkeypatch.setattr(mod, "MONITOR_SNAPSHOT_DIR", report / "monitor_snapshots")
-    monkeypatch.setattr(mod, "REPORT_BASE_DIR", report / "time_window_regime_counterfactual")
-    monkeypatch.setattr(mod, "SYSTEM_METRIC_SAMPLE_PATH", tmp_path / "missing-system-metrics.jsonl")
+    monkeypatch.setattr(
+        mod, "REPORT_BASE_DIR", report / "time_window_regime_counterfactual"
+    )
+    monkeypatch.setattr(
+        mod, "SYSTEM_METRIC_SAMPLE_PATH", tmp_path / "missing-system-metrics.jsonl"
+    )
 
     _write_jsonl(
         post_sell / "sim_post_sell_candidates_2026-05-26.jsonl",
@@ -71,7 +79,10 @@ def test_time_window_regime_joins_entry_event_and_keeps_metrics_separate(tmp_pat
         ],
     )
     _write_jsonl(
-        threshold / "date=2026-05-26" / "family=scalp_entry_action_decision_matrix" / "part-000001.jsonl",
+        threshold
+        / "date=2026-05-26"
+        / "family=scalp_entry_action_decision_matrix"
+        / "part-000001.jsonl",
         [
             {
                 "stage": "scalp_entry_action_decision_snapshot",
@@ -99,23 +110,35 @@ def test_time_window_regime_joins_entry_event_and_keeps_metrics_separate(tmp_pat
         },
     )
 
-    built = mod.build_time_window_regime_counterfactual_report("2026-05-26", max_rows=1000, max_seconds=100)
+    built = mod.build_time_window_regime_counterfactual_report(
+        "2026-05-26", max_rows=1000, max_seconds=100
+    )
 
     assert built["runtime_effect"] is False
     assert built["allowed_runtime_apply"] is False
     assert built["actual_order_submitted"] is False
     assert built["broker_order_forbidden"] is True
-    assert built["operator_seed_cutoffs"] == [{"cutoff": "09:30", "operator_seed_cutoff": True, "hard_gate": False}]
+    assert built["operator_seed_cutoffs"] == [
+        {"cutoff": "09:30", "operator_seed_cutoff": True, "hard_gate": False}
+    ]
     assert built["summary"]["entry_time_join_rate"] == 0.5
     assert built["summary"]["unjoined_rate"] == 0.5
     assert built["summary"]["sell_time_fallback_rate"] == 0.0
     assert built["summary"]["completed_counterfactual_netting_allowed"] is False
-    daily = next(item for item in built["rolling_windows"] if item["rolling_window"] == "daily")
+    daily = next(
+        item for item in built["rolling_windows"] if item["rolling_window"] == "daily"
+    )
     assert daily["completed_rows"] == 1
     assert daily["counterfactual_rows"] == 1
-    before_0930 = next(item for item in daily["window_comparisons"] if item["window_id"] == "before_0930")
+    before_0930 = next(
+        item
+        for item in daily["window_comparisons"]
+        if item["window_id"] == "before_0930"
+    )
     assert before_0930["operator_seed_cutoff"] is True
-    exception_policy = before_0930["policies"]["block_general_allow_exception_in_window"]
+    exception_policy = before_0930["policies"][
+        "block_general_allow_exception_in_window"
+    ]
     assert exception_policy["combined_ev_netting_allowed"] is False
     assert exception_policy["blocked_completed_profit_krw_sum"] == -300
     assert exception_policy["counterfactual_expected_ev_krw_sum"] == 7000
@@ -127,8 +150,12 @@ def test_time_window_regime_io_guard_partial_resume_required(tmp_path, monkeypat
     monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell)
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_DIR", tmp_path / "threshold_cycle")
     monkeypatch.setattr(mod, "MONITOR_SNAPSHOT_DIR", report / "monitor_snapshots")
-    monkeypatch.setattr(mod, "REPORT_BASE_DIR", report / "time_window_regime_counterfactual")
-    monkeypatch.setattr(mod, "SYSTEM_METRIC_SAMPLE_PATH", tmp_path / "missing-system-metrics.jsonl")
+    monkeypatch.setattr(
+        mod, "REPORT_BASE_DIR", report / "time_window_regime_counterfactual"
+    )
+    monkeypatch.setattr(
+        mod, "SYSTEM_METRIC_SAMPLE_PATH", tmp_path / "missing-system-metrics.jsonl"
+    )
     _write_jsonl(
         post_sell / "sim_post_sell_candidates_2026-05-26.jsonl",
         [
@@ -144,7 +171,9 @@ def test_time_window_regime_io_guard_partial_resume_required(tmp_path, monkeypat
         ],
     )
 
-    built = mod.build_time_window_regime_counterfactual_report("2026-05-26", max_rows=1, max_seconds=100)
+    built = mod.build_time_window_regime_counterfactual_report(
+        "2026-05-26", max_rows=1, max_seconds=100
+    )
 
     assert built["status"] == "partial"
     assert built["summary"]["resume_required"] is True
@@ -161,15 +190,21 @@ def test_time_window_regime_io_guard_partial_resume_required(tmp_path, monkeypat
     assert resumed["summary"]["resume_cache_hits"] == ["2026-05-26"]
 
 
-def test_time_window_regime_reads_gzip_post_sell_and_threshold_legacy(tmp_path, monkeypatch):
+def test_time_window_regime_reads_gzip_post_sell_and_threshold_legacy(
+    tmp_path, monkeypatch
+):
     post_sell = tmp_path / "post_sell"
     threshold = tmp_path / "threshold_cycle"
     report = tmp_path / "report"
     monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell)
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_DIR", threshold)
     monkeypatch.setattr(mod, "MONITOR_SNAPSHOT_DIR", report / "monitor_snapshots")
-    monkeypatch.setattr(mod, "REPORT_BASE_DIR", report / "time_window_regime_counterfactual")
-    monkeypatch.setattr(mod, "SYSTEM_METRIC_SAMPLE_PATH", tmp_path / "missing-system-metrics.jsonl")
+    monkeypatch.setattr(
+        mod, "REPORT_BASE_DIR", report / "time_window_regime_counterfactual"
+    )
+    monkeypatch.setattr(
+        mod, "SYSTEM_METRIC_SAMPLE_PATH", tmp_path / "missing-system-metrics.jsonl"
+    )
     _write_gzip_jsonl(
         post_sell / "sim_post_sell_candidates_2026-05-26.jsonl.gz",
         [
@@ -196,13 +231,17 @@ def test_time_window_regime_reads_gzip_post_sell_and_threshold_legacy(tmp_path, 
         ],
     )
 
-    built = mod.build_time_window_regime_counterfactual_report("2026-05-26", max_rows=1000, max_seconds=100)
+    built = mod.build_time_window_regime_counterfactual_report(
+        "2026-05-26", max_rows=1000, max_seconds=100
+    )
 
     assert built["summary"]["completed_rows"] == 1
     assert built["summary"]["entry_time_join_rate"] == 1.0
 
 
-def test_time_window_regime_excludes_pre_clean_baseline_dates_and_does_not_cache_them(tmp_path, monkeypatch):
+def test_time_window_regime_excludes_pre_clean_baseline_dates_and_does_not_cache_them(
+    tmp_path, monkeypatch
+):
     monkeypatch.setenv("KORSTOCKSCAN_CLEAN_TUNING_BASELINE_ENABLED", "true")
     monkeypatch.setenv("KORSTOCKSCAN_CLEAN_TUNING_BASELINE_DATE", "2026-06-04")
     post_sell = tmp_path / "post_sell"
@@ -210,8 +249,12 @@ def test_time_window_regime_excludes_pre_clean_baseline_dates_and_does_not_cache
     monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell)
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_DIR", tmp_path / "threshold_cycle")
     monkeypatch.setattr(mod, "MONITOR_SNAPSHOT_DIR", report / "monitor_snapshots")
-    monkeypatch.setattr(mod, "REPORT_BASE_DIR", report / "time_window_regime_counterfactual")
-    monkeypatch.setattr(mod, "SYSTEM_METRIC_SAMPLE_PATH", tmp_path / "missing-system-metrics.jsonl")
+    monkeypatch.setattr(
+        mod, "REPORT_BASE_DIR", report / "time_window_regime_counterfactual"
+    )
+    monkeypatch.setattr(
+        mod, "SYSTEM_METRIC_SAMPLE_PATH", tmp_path / "missing-system-metrics.jsonl"
+    )
     _write_jsonl(
         post_sell / "sim_post_sell_candidates_2026-05-29.jsonl",
         [
@@ -239,9 +282,19 @@ def test_time_window_regime_excludes_pre_clean_baseline_dates_and_does_not_cache
         ],
     )
 
-    built = mod.build_time_window_regime_counterfactual_report("2026-06-04", max_rows=1000, max_seconds=100)
+    built = mod.build_time_window_regime_counterfactual_report(
+        "2026-06-04", max_rows=1000, max_seconds=100
+    )
 
     assert built["summary"]["processed_dates"] == ["2026-06-04"]
     assert built["summary"]["clean_baseline_excluded_dates"] == ["2026-05-29"]
-    assert not (report / "time_window_regime_counterfactual" / "cache" / "date=2026-05-29").exists()
-    assert (report / "time_window_regime_counterfactual" / "cache" / "date=2026-06-04" / "part-000001.jsonl").exists()
+    assert not (
+        report / "time_window_regime_counterfactual" / "cache" / "date=2026-05-29"
+    ).exists()
+    assert (
+        report
+        / "time_window_regime_counterfactual"
+        / "cache"
+        / "date=2026-06-04"
+        / "part-000001.jsonl"
+    ).exists()

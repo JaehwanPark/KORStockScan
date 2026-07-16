@@ -31,7 +31,9 @@ def test_duckdb_repository_init(temp_duckdb_file):
 def test_register_parquet_dataset(temp_duckdb_file, tmp_path):
     """Parquet 데이터셋 등록 테스트."""
     # 임시 Parquet 파일 생성
-    parquet_dir = tmp_path / "analytics" / "parquet" / "pipeline_events" / "date=2026-04-20"
+    parquet_dir = (
+        tmp_path / "analytics" / "parquet" / "pipeline_events" / "date=2026-04-20"
+    )
     parquet_dir.mkdir(parents=True)
     df = pd.DataFrame({"col1": [1, 2], "emitted_date": ["2026-04-20", "2026-04-20"]})
     df.to_parquet(parquet_dir / "test.parquet")

@@ -80,7 +80,9 @@ def _runtime_bridge() -> dict:
     }
 
 
-def test_scalp_control_tower_merges_lifecycle_and_scale_in_sources(tmp_path, monkeypatch):
+def test_scalp_control_tower_merges_lifecycle_and_scale_in_sources(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(mod, "SIM_AUTO_APPROVAL_DIR", tmp_path / "approvals")
     monkeypatch.setattr(mod, "SCALP_SIM_POLICY_DIR", tmp_path / "policies")
     catalog = tmp_path / "lifecycle_bucket_catalog_2026-05-26.json"
@@ -104,15 +106,26 @@ def test_scalp_control_tower_merges_lifecycle_and_scale_in_sources(tmp_path, mon
     assert approval["allowed_runtime_apply"] is False
     assert approval["actual_order_submitted"] is False
     assert approval["broker_order_forbidden"] is True
-    assert approval["source_status"]["runtime_apply_bridge"]["live_auto_apply_ready_count"] == 1
-    lifecycle_policy = next(item for item in approval["approved_policies"] if item["source_id"] == "lifecycle_bucket_discovery")
+    assert (
+        approval["source_status"]["runtime_apply_bridge"]["live_auto_apply_ready_count"]
+        == 1
+    )
+    lifecycle_policy = next(
+        item
+        for item in approval["approved_policies"]
+        if item["source_id"] == "lifecycle_bucket_discovery"
+    )
     assert lifecycle_policy["approved_bucket_count"] == 2
     assert lifecycle_policy["approved_unique_source_bucket_count"] == 2
-    assert [row["source_bucket_id"] for row in lifecycle_policy["approved_bucket_rows"]] == [
+    assert [
+        row["source_bucket_id"] for row in lifecycle_policy["approved_bucket_rows"]
+    ] == [
         "entry:combo:full:entry_bucket_a",
         "scale_in:combo:full:scale_bucket_b",
     ]
-    assert all(item["allowed_runtime_apply"] is False for item in approval["approved_policies"])
+    assert all(
+        item["allowed_runtime_apply"] is False for item in approval["approved_policies"]
+    )
 
 
 def test_scalp_control_tower_allows_active_seed_without_bucket_rows(tmp_path):
@@ -149,7 +162,10 @@ def test_scalp_control_tower_allows_active_seed_without_bucket_rows(tmp_path):
 
     assert approval["approved"] is True
     assert approval["approved_policy_count"] == 1
-    assert catalog_payload["active_sim_priority_seeds"][0]["active_seed_id"] == "active_seed_test"
+    assert (
+        catalog_payload["active_sim_priority_seeds"][0]["active_seed_id"]
+        == "active_seed_test"
+    )
     assert catalog_payload["runtime_effect"] is False
     assert catalog_payload["broker_order_forbidden"] is True
 
@@ -200,12 +216,17 @@ def test_scalp_control_tower_adds_rising_missed_prior_active_seed(tmp_path):
         "entry_score_parent": "score_watch_recovery",
         "entry_source_parent": "entry_source_wait6579",
     }
-    assert catalog_payload["rising_missed_prior_observation_lanes"][0]["recommendation"] == "positive_prior"
+    assert (
+        catalog_payload["rising_missed_prior_observation_lanes"][0]["recommendation"]
+        == "positive_prior"
+    )
     assert catalog_payload["runtime_effect"] is False
     assert catalog_payload["broker_order_forbidden"] is True
 
 
-def test_scalp_control_tower_rising_missed_prior_cools_down_blocked_existing_seed(tmp_path):
+def test_scalp_control_tower_rising_missed_prior_cools_down_blocked_existing_seed(
+    tmp_path,
+):
     catalog = tmp_path / "lifecycle_bucket_catalog_2026-07-02.json"
     catalog.write_text(json.dumps({"buckets": []}), encoding="utf-8")
     lifecycle = _lifecycle_approval()
@@ -235,7 +256,10 @@ def test_scalp_control_tower_rising_missed_prior_cools_down_blocked_existing_see
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
         "decision_authority": "rising_missed_classifier_prior_source_only",
-        "summary": {"prior_count": 1, "recommendation_counts": {"source_quality_blocked": 1}},
+        "summary": {
+            "prior_count": 1,
+            "recommendation_counts": {"source_quality_blocked": 1},
+        },
         "priors": [
             {
                 "prior_key": "entry_score_parent=score_mid_recovery|entry_source_parent=entry_source_wait6579",
@@ -266,8 +290,18 @@ def test_scalp_control_tower_rising_missed_prior_cools_down_blocked_existing_see
     assert seed["rising_missed_prior_status_override"]["reason"] == (
         "rising_missed_prior_source_quality_blocked"
     )
-    assert catalog_payload["rising_missed_prior_active_seed_status_overrides"][0]["forced_status"] == "cooldown"
-    assert approval["source_status"]["rising_missed_classifier_prior"]["active_seed_status_override_count"] == 1
+    assert (
+        catalog_payload["rising_missed_prior_active_seed_status_overrides"][0][
+            "forced_status"
+        ]
+        == "cooldown"
+    )
+    assert (
+        approval["source_status"]["rising_missed_classifier_prior"][
+            "active_seed_status_override_count"
+        ]
+        == 1
+    )
 
 
 def test_scalp_control_tower_blocks_when_source_contract_invalid(tmp_path):

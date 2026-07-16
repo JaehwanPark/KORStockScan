@@ -7,11 +7,25 @@ def _event(stage, emitted_at, **fields):
 
 def test_final_price_uses_latest_sell_after_decision():
     events = [
-        _event("scalp_sim_sell_order_assumed_filled", "2026-06-12T09:00:00+09:00", assumed_fill_price=900),
-        _event("scalp_sim_sell_order_assumed_filled", "2026-06-12T10:10:00+09:00", assumed_fill_price=1050),
-        _event("scalp_sim_sell_order_assumed_filled", "2026-06-12T10:20:00+09:00", assumed_fill_price=1100),
+        _event(
+            "scalp_sim_sell_order_assumed_filled",
+            "2026-06-12T09:00:00+09:00",
+            assumed_fill_price=900,
+        ),
+        _event(
+            "scalp_sim_sell_order_assumed_filled",
+            "2026-06-12T10:10:00+09:00",
+            assumed_fill_price=1050,
+        ),
+        _event(
+            "scalp_sim_sell_order_assumed_filled",
+            "2026-06-12T10:20:00+09:00",
+            assumed_fill_price=1100,
+        ),
     ]
-    decision_time = mod._parse_emitted_at(_event("decision", "2026-06-12T10:00:00+09:00"))
+    decision_time = mod._parse_emitted_at(
+        _event("decision", "2026-06-12T10:00:00+09:00")
+    )
 
     assert mod._find_evaluation_price(events, decision_time, None) == 1100.0
 
@@ -48,8 +62,18 @@ def test_horizon_summary_is_independent_and_unfilled_is_not_primary():
     assert summary["horizon_summary"]["30min"]["sample"] == 0
     assert summary["horizon_summary"]["final"]["sample"] == 1
     assert summary["horizon_summary"]["final"]["incremental_notional_ev_pct"] == 2.0
-    assert cohorts["by_quote_touched"]["unfilled"]["horizons"]["final"]["incremental_notional_ev_pct"] == 99.0
-    assert cohorts["combined_primary_filled"]["horizons"]["final"]["incremental_notional_ev_pct"] == 2.0
+    assert (
+        cohorts["by_quote_touched"]["unfilled"]["horizons"]["final"][
+            "incremental_notional_ev_pct"
+        ]
+        == 99.0
+    )
+    assert (
+        cohorts["combined_primary_filled"]["horizons"]["final"][
+            "incremental_notional_ev_pct"
+        ]
+        == 2.0
+    )
 
 
 def test_clean_baseline_timestamp_excludes_earlier_same_day_event():
@@ -65,16 +89,34 @@ def test_clean_baseline_timestamp_excludes_earlier_same_day_event():
 
 def test_sim_counterfactual_authority_rejects_real_or_incomplete_contract():
     assert mod._has_sim_counterfactual_authority(
-        _event("scalp_sim_scale_in_counterfactual_started", "2026-06-12T10:00:00+09:00", actual_order_submitted=False, broker_order_forbidden=True)
+        _event(
+            "scalp_sim_scale_in_counterfactual_started",
+            "2026-06-12T10:00:00+09:00",
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+        )
     )
     assert not mod._has_sim_counterfactual_authority(
-        _event("scalp_sim_scale_in_counterfactual_started", "2026-06-12T10:00:00+09:00", actual_order_submitted=True, broker_order_forbidden=False)
+        _event(
+            "scalp_sim_scale_in_counterfactual_started",
+            "2026-06-12T10:00:00+09:00",
+            actual_order_submitted=True,
+            broker_order_forbidden=False,
+        )
     )
     assert not mod._has_sim_counterfactual_authority(
-        _event("scalp_sim_scale_in_counterfactual_started", "2026-06-12T10:00:00+09:00", actual_order_submitted=False)
+        _event(
+            "scalp_sim_scale_in_counterfactual_started",
+            "2026-06-12T10:00:00+09:00",
+            actual_order_submitted=False,
+        )
     )
     assert mod._has_sim_counterfactual_authority(
-        _event("scalp_sim_scale_in_order_unfilled", "2026-06-12T10:00:00+09:00", actual_order_submitted=False)
+        _event(
+            "scalp_sim_scale_in_order_unfilled",
+            "2026-06-12T10:00:00+09:00",
+            actual_order_submitted=False,
+        )
     )
 
 
@@ -104,7 +146,9 @@ def test_mixed_canonical_and_legacy_events_are_merged(monkeypatch):
         limit_price=1000,
         actual_order_submitted=False,
     )
-    monkeypatch.setattr(mod, "_iter_events", lambda target_date: iter([canonical, legacy]))
+    monkeypatch.setattr(
+        mod, "_iter_events", lambda target_date: iter([canonical, legacy])
+    )
 
     events = mod._find_counterfactual_events("2026-06-12")
 
@@ -175,7 +219,9 @@ def test_marketable_shadow_with_terminal_control_remains_runtime_blocked(monkeyp
         sim_record_id="sim-1",
         assumed_fill_price=1050,
     )
-    monkeypatch.setattr(mod, "_iter_events", lambda target_date: iter([decision_event, terminal]))
+    monkeypatch.setattr(
+        mod, "_iter_events", lambda target_date: iter([decision_event, terminal])
+    )
 
     report = mod.build_report("2026-06-12")
     row = report["rows"][0]
@@ -183,5 +229,8 @@ def test_marketable_shadow_with_terminal_control_remains_runtime_blocked(monkeyp
     assert row["execution_arm"] == "MARKETABLE_OBSERVATION"
     assert row["runtime_ev_eligible"] is True
     assert row["runtime_authority_ready"] is False
-    assert row["runtime_authority_block_reason"] == "paired_add_lifecycle_replay_not_implemented"
+    assert (
+        row["runtime_authority_block_reason"]
+        == "paired_add_lifecycle_replay_not_implemented"
+    )
     assert row["final_horizon_complete"] is True

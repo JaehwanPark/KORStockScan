@@ -74,7 +74,9 @@ def test_scalping_scanner_discovery_ignores_legacy_open_close_env(monkeypatch):
     sys.modules.pop("src.scanners.scalping_scanner", None)
 
     module = importlib.import_module("src.scanners.scalping_scanner")
-    monkeypatch.setattr(module, "is_scalping_buy_time_allowed", lambda now_time: now_time == time(9, 5))
+    monkeypatch.setattr(
+        module, "is_scalping_buy_time_allowed", lambda now_time: now_time == time(9, 5)
+    )
 
     assert module._is_scanner_discovery_time(time(8, 0)) is False
     assert module._is_scanner_discovery_time(time(9, 5)) is True

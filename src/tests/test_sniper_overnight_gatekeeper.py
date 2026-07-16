@@ -58,14 +58,19 @@ def test_run_sniper_eod_holding_fallback_is_guarded_by_runtime_enable_flag():
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
             for target in node.targets:
-                if isinstance(target, ast.Name) and target.id == "eod_ai_holding_fallback":
+                if (
+                    isinstance(target, ast.Name)
+                    and target.id == "eod_ai_holding_fallback"
+                ):
                     fallback_assign = node
                     break
         if fallback_assign is not None:
             break
 
     assert fallback_assign is not None, "eod_ai_holding_fallback assignment not found"
-    assert isinstance(fallback_assign.value, ast.BoolOp), "fallback must stay a boolean gate"
+    assert isinstance(
+        fallback_assign.value, ast.BoolOp
+    ), "fallback must stay a boolean gate"
 
     name_ids = {
         node.id
@@ -130,7 +135,9 @@ def test_snapshot_record_can_be_built_before_detached_refresh_failure():
 
 
 def test_format_order_error_prefers_return_msg_and_code():
-    msg = _format_order_error({"return_msg": "[2000](521790:주문 불가능합니다.)", "return_code": 20})
+    msg = _format_order_error(
+        {"return_msg": "[2000](521790:주문 불가능합니다.)", "return_code": 20}
+    )
     assert msg == "[2000](521790:주문 불가능합니다.) (code=20)"
 
 
@@ -139,7 +146,9 @@ def test_format_order_error_fallback_to_string():
 
 
 def test_format_order_error_unescapes_markdown_style_backslashes():
-    msg = _format_order_error({"return_msg": r"[2000]\(521790:주문 불가능합니다\.\)", "return_code": 20})
+    msg = _format_order_error(
+        {"return_msg": r"[2000]\(521790:주문 불가능합니다\.\)", "return_code": 20}
+    )
     assert msg == "[2000](521790:주문 불가능합니다.) (code=20)"
 
 
@@ -149,7 +158,9 @@ def test_humanize_eod_action_and_clean_text():
     assert _clean_telegram_text(r"\[ABC\]\(test\)\.") == "[ABC](test)."
 
 
-def test_submit_overnight_dual_persona_shadow_is_disabled_when_dual_persona_off(monkeypatch):
+def test_submit_overnight_dual_persona_shadow_is_disabled_when_dual_persona_off(
+    monkeypatch,
+):
     submit_calls = []
     monkeypatch.setattr(
         "src.engine.sniper_overnight_gatekeeper.TRADING_RULES",
@@ -157,9 +168,13 @@ def test_submit_overnight_dual_persona_shadow_is_disabled_when_dual_persona_off(
     )
     monkeypatch.setattr(
         "src.engine.sniper_overnight_gatekeeper.DUAL_PERSONA_ENGINE",
-        SimpleNamespace(submit_overnight_shadow=lambda **kwargs: submit_calls.append(kwargs)),
+        SimpleNamespace(
+            submit_overnight_shadow=lambda **kwargs: submit_calls.append(kwargs)
+        ),
     )
 
-    _submit_overnight_dual_persona_shadow("테스트", "005930", {"curr_price": 70000}, {"action": "SELL_TODAY"})
+    _submit_overnight_dual_persona_shadow(
+        "테스트", "005930", {"curr_price": 70000}, {"action": "SELL_TODAY"}
+    )
 
     assert submit_calls == []

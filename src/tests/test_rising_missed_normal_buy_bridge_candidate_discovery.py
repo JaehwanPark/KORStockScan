@@ -1,6 +1,8 @@
 import json
 
-from src.engine.monitoring import rising_missed_normal_buy_bridge_candidate_discovery as mod
+from src.engine.monitoring import (
+    rising_missed_normal_buy_bridge_candidate_discovery as mod,
+)
 
 
 def _write(path, payload):
@@ -52,7 +54,9 @@ def test_bridge_candidate_discovery_surfaces_preopen_env_candidate(tmp_path):
             ]
         },
     )
-    scout = _write(tmp_path / "scout.json", {"summary": {"profitable_forced_scout_count": 3}})
+    scout = _write(
+        tmp_path / "scout.json", {"summary": {"profitable_forced_scout_count": 3}}
+    )
     prior = _write(tmp_path / "prior.json", {"summary": {"prior_count": 2}})
 
     report = mod.build_report(
@@ -74,12 +78,16 @@ def test_bridge_candidate_discovery_surfaces_preopen_env_candidate(tmp_path):
     assert report["actual_order_submitted"] is False
     assert report["broker_order_forbidden"] is True
     order = report["code_improvement_orders"][0]
-    assert order["order_id"] == "order_rising_missed_normal_buy_bridge_preopen_env_review"
+    assert (
+        order["order_id"] == "order_rising_missed_normal_buy_bridge_preopen_env_review"
+    )
     assert order["next_preopen_candidate"]["env"] == {
         "KORSTOCKSCAN_RISING_MISSED_NORMAL_BUY_BRIDGE_ENABLED": "true"
     }
     assert order["implementation_provenance"]["uses_normal_buy_sizing"] is True
-    assert order["implementation_provenance"]["forced_one_share_qty_or_tag_used"] is False
+    assert (
+        order["implementation_provenance"]["forced_one_share_qty_or_tag_used"] is False
+    )
     assert "broker_guard_bypass" in order["forbidden_uses"]
 
 
@@ -102,13 +110,18 @@ def test_bridge_candidate_discovery_write_outputs(tmp_path):
     output_md = tmp_path / "bridge.md"
     mod.write_outputs(report, output_json=output_json, output_md=output_md)
 
-    assert json.loads(output_json.read_text(encoding="utf-8"))["summary"]["status"] == "hold_no_candidate"
+    assert (
+        json.loads(output_json.read_text(encoding="utf-8"))["summary"]["status"]
+        == "hold_no_candidate"
+    )
     markdown = output_md.read_text(encoding="utf-8")
     assert "KORSTOCKSCAN_RISING_MISSED_NORMAL_BUY_BRIDGE_ENABLED" in markdown
     assert "- none" in markdown
 
 
-def test_bridge_candidate_discovery_reports_missing_required_diagnostic_source(tmp_path):
+def test_bridge_candidate_discovery_reports_missing_required_diagnostic_source(
+    tmp_path,
+):
     report = mod.build_report(
         "2026-07-07",
         source_paths={
@@ -120,6 +133,8 @@ def test_bridge_candidate_discovery_reports_missing_required_diagnostic_source(t
     )
 
     assert report["summary"]["status"] == "source_missing"
-    assert report["summary"]["missing_required_sources"] == ["intraday_entry_blocker_diagnostics"]
+    assert report["summary"]["missing_required_sources"] == [
+        "intraday_entry_blocker_diagnostics"
+    ]
     assert report["summary"]["bridge_candidate_count"] == 0
     assert report["code_improvement_orders"] == []

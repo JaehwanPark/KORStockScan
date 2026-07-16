@@ -6,7 +6,9 @@ from src.engine.scalping.rising_missed_selection_prior import (
 )
 
 
-def _write_catalog(tmp_path, *, lanes=None, seeds=None, overrides=None, runtime_effect=False):
+def _write_catalog(
+    tmp_path, *, lanes=None, seeds=None, overrides=None, runtime_effect=False
+):
     path = tmp_path / "scalp_sim_policy_catalog.json"
     path.write_text(
         json.dumps(
@@ -76,7 +78,10 @@ def test_recheck_prior_has_lower_delta_than_positive_prior(tmp_path):
         ],
     )
     positive = rising_missed_selection_prior_fields(
-        {"entry_score_parent": "score_mid_recovery", "entry_source_parent": "entry_source_wait6579"},
+        {
+            "entry_score_parent": "score_mid_recovery",
+            "entry_source_parent": "entry_source_wait6579",
+        },
         policy_file=positive_policy,
     )
     recheck_policy = _write_catalog(
@@ -93,11 +98,18 @@ def test_recheck_prior_has_lower_delta_than_positive_prior(tmp_path):
         ],
     )
     recheck = rising_missed_selection_prior_fields(
-        {"entry_score_parent": "score_mid_recovery", "entry_source_parent": "entry_source_wait6579"},
+        {
+            "entry_score_parent": "score_mid_recovery",
+            "entry_source_parent": "entry_source_wait6579",
+        },
         policy_file=recheck_policy,
     )
 
-    assert positive["rising_missed_selection_score_delta"] > recheck["rising_missed_selection_score_delta"] > 0
+    assert (
+        positive["rising_missed_selection_score_delta"]
+        > recheck["rising_missed_selection_score_delta"]
+        > 0
+    )
 
 
 def test_risk_prior_returns_negative_delta(tmp_path):
@@ -117,13 +129,19 @@ def test_risk_prior_returns_negative_delta(tmp_path):
     )
 
     fields = rising_missed_selection_prior_fields(
-        {"entry_score_parent": "score_mid_recovery", "entry_source_parent": "entry_source_wait6579"},
+        {
+            "entry_score_parent": "score_mid_recovery",
+            "entry_source_parent": "entry_source_wait6579",
+        },
         policy_file=policy,
     )
 
     assert fields["rising_missed_selection_recommendation"] == "source_quality_blocked"
     assert fields["rising_missed_selection_score_delta"] < 0
-    assert fields["rising_missed_selection_rank_reason"] == "rising_missed_prior_source_quality_blocked"
+    assert (
+        fields["rising_missed_selection_rank_reason"]
+        == "rising_missed_prior_source_quality_blocked"
+    )
 
 
 def test_risk_override_recovers_recommendation_from_reason(tmp_path):
@@ -143,7 +161,10 @@ def test_risk_override_recovers_recommendation_from_reason(tmp_path):
     )
 
     fields = rising_missed_selection_prior_fields(
-        {"entry_score_parent": "score_mid_recovery", "entry_source_parent": "entry_source_wait6579"},
+        {
+            "entry_score_parent": "score_mid_recovery",
+            "entry_source_parent": "entry_source_wait6579",
+        },
         policy_file=policy,
     )
 
@@ -153,12 +174,18 @@ def test_risk_override_recovers_recommendation_from_reason(tmp_path):
 
 def test_missing_or_invalid_catalog_returns_empty_result(tmp_path):
     missing = rising_missed_selection_prior_fields(
-        {"entry_score_parent": "score_mid_recovery", "entry_source_parent": "entry_source_wait6579"},
+        {
+            "entry_score_parent": "score_mid_recovery",
+            "entry_source_parent": "entry_source_wait6579",
+        },
         policy_file=tmp_path / "missing.json",
     )
     invalid_policy = _write_catalog(tmp_path, runtime_effect=True)
     invalid = rising_missed_selection_prior_fields(
-        {"entry_score_parent": "score_mid_recovery", "entry_source_parent": "entry_source_wait6579"},
+        {
+            "entry_score_parent": "score_mid_recovery",
+            "entry_source_parent": "entry_source_wait6579",
+        },
         policy_file=invalid_policy,
     )
 
@@ -186,7 +213,9 @@ def test_source_signature_and_promotion_reason_fallback_match(tmp_path):
         ],
     )
 
-    by_signature = rising_missed_selection_prior_fields({"source_signature": "sig_a"}, policy_file=policy)
+    by_signature = rising_missed_selection_prior_fields(
+        {"source_signature": "sig_a"}, policy_file=policy
+    )
     by_promotion = rising_missed_selection_prior_fields(
         {"scanner_promotion_reason": "wait6579_gap"},
         policy_file=policy,
@@ -195,7 +224,9 @@ def test_source_signature_and_promotion_reason_fallback_match(tmp_path):
     assert by_signature["rising_missed_selection_prior_key"] == "signature_prior"
     assert by_signature["rising_missed_selection_match_type"] == "source_signature"
     assert by_promotion["rising_missed_selection_prior_key"] == "promotion_prior"
-    assert by_promotion["rising_missed_selection_match_type"] == "scanner_promotion_reason"
+    assert (
+        by_promotion["rising_missed_selection_match_type"] == "scanner_promotion_reason"
+    )
 
 
 def test_exact_prefix_requires_matching_source_signature_when_present(tmp_path):

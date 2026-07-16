@@ -63,7 +63,10 @@ def test_is_valid_stock_blocks_fund_prefix_products():
     ]
 
     for idx, name in enumerate(blocked_names):
-        assert kiwoom_utils.is_valid_stock(f"00{idx:04d}", name, current_price=10000) is False
+        assert (
+            kiwoom_utils.is_valid_stock(f"00{idx:04d}", name, current_price=10000)
+            is False
+        )
 
 
 def test_is_valid_stock_allows_low_price_common_stock():
@@ -95,7 +98,9 @@ def test_scanner_resets_code_reuse_anchor_before_cooldown_and_remember():
 
     assert reset["reset"] is True
     assert reset["reason"] == "scanner_identity_name_changed"
-    assert scalping_scanner._should_promote_candidate(target, recent, 1000.0, 1500) is True
+    assert (
+        scalping_scanner._should_promote_candidate(target, recent, 1000.0, 1500) is True
+    )
 
     scalping_scanner._remember_pick(recent, target, 1000.0)
 
@@ -116,7 +121,9 @@ def test_scanner_resets_legacy_anchor_on_price_discontinuity_without_identity():
     assert reset["price_ratio"] == 2.0
 
 
-def test_scanner_rejects_source_name_mismatch_and_records_quarantine_anchor(monkeypatch):
+def test_scanner_rejects_source_name_mismatch_and_records_quarantine_anchor(
+    monkeypatch,
+):
     emitted = []
     db = _DB()
     db.get_latest_stock_name = lambda code: "삼화콘덴서"
@@ -161,7 +168,9 @@ def test_scanner_rejects_source_name_mismatch_and_records_quarantine_anchor(monk
     )
 
     assert codes == []
-    assert recent["001820"]["last_guard_block_reason"] == "scanner_identity_name_mismatch"
+    assert (
+        recent["001820"]["last_guard_block_reason"] == "scanner_identity_name_mismatch"
+    )
     assert recent["001820"]["last_guard_blocked_at"] == 1000.0
     assert recent["001820"]["identity_name"] == "1Q K반도체TOP2+"
     assert db.records == []
@@ -171,7 +180,10 @@ def test_scanner_rejects_source_name_mismatch_and_records_quarantine_anchor(monk
         for row in emitted
         if row["stage"] == "scalping_scanner_real_source_guard_block"
     ][-1]
-    assert fields["scanner_real_source_guard_skip_reason"] == "scanner_identity_name_mismatch"
+    assert (
+        fields["scanner_real_source_guard_skip_reason"]
+        == "scanner_identity_name_mismatch"
+    )
     assert fields["scanner_source_identity_guard_applied"] is True
     assert fields["scanner_source_identity_payload_name"] == "1Q K반도체TOP2+"
     assert fields["scanner_source_identity_authoritative_name"] == "삼화콘덴서"
@@ -200,8 +212,12 @@ def test_scanner_source_identity_quarantine_is_bounded(monkeypatch):
         "scanner_identity_name_mismatch",
     )
 
-    blocked = scalping_scanner._scanner_real_source_guard_decision(target, recent, 1100.0)
-    expired = scalping_scanner._scanner_real_source_guard_decision(target, recent, 1300.0)
+    blocked = scalping_scanner._scanner_real_source_guard_decision(
+        target, recent, 1100.0
+    )
+    expired = scalping_scanner._scanner_real_source_guard_decision(
+        target, recent, 1300.0
+    )
 
     assert blocked["blocked"] is True
     assert blocked["reason"] == "scanner_identity_name_mismatch_quarantine"
@@ -209,7 +225,9 @@ def test_scanner_source_identity_quarantine_is_bounded(monkeypatch):
     assert expired["reason"] != "scanner_identity_name_mismatch_quarantine"
 
 
-def test_scanner_source_identity_quarantine_does_not_depend_on_real_source_guard(monkeypatch):
+def test_scanner_source_identity_quarantine_does_not_depend_on_real_source_guard(
+    monkeypatch,
+):
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_SOURCE_IDENTITY_QUARANTINE_SEC", "300")
     monkeypatch.setattr(
         scalping_scanner,
@@ -231,7 +249,9 @@ def test_scanner_source_identity_quarantine_does_not_depend_on_real_source_guard
         "scanner_identity_name_mismatch",
     )
 
-    decision = scalping_scanner._scanner_real_source_guard_decision(target, recent, 1010.0)
+    decision = scalping_scanner._scanner_real_source_guard_decision(
+        target, recent, 1010.0
+    )
 
     assert decision["blocked"] is True
     assert decision["reason"] == "scanner_identity_name_mismatch_quarantine"
@@ -314,7 +334,14 @@ def test_promote_candidates_skips_when_active_scanner_cap_reached(monkeypatch):
     codes, recent = scalping_scanner.promote_candidates(
         db,
         event_bus,
-        [{"Code": "000001", "Name": "CAPPED", "Price": 10000, "Source": "PRICE_JUMP_START"}],
+        [
+            {
+                "Code": "000001",
+                "Name": "CAPPED",
+                "Price": 10000,
+                "Source": "PRICE_JUMP_START",
+            }
+        ],
         {},
         max_new_codes=12,
         reentry_cooldown_sec=1500,
@@ -331,9 +358,17 @@ def test_promote_candidates_skips_when_active_scanner_cap_reached(monkeypatch):
 def test_promote_candidates_limits_new_codes_to_remaining_active_slots(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "2")
     monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
-    monkeypatch.setattr(scalping_scanner, "_scanner_candidate_pre_filter_reason", lambda target: "")
-    monkeypatch.setattr(scalping_scanner, "_should_promote_candidate", lambda *args, **kwargs: True)
-    monkeypatch.setattr(scalping_scanner, "_scanner_real_source_guard_decision", lambda *args, **kwargs: {"blocked": False})
+    monkeypatch.setattr(
+        scalping_scanner, "_scanner_candidate_pre_filter_reason", lambda target: ""
+    )
+    monkeypatch.setattr(
+        scalping_scanner, "_should_promote_candidate", lambda *args, **kwargs: True
+    )
+    monkeypatch.setattr(
+        scalping_scanner,
+        "_scanner_real_source_guard_decision",
+        lambda *args, **kwargs: {"blocked": False},
+    )
     db = _DB()
     db.records.append(
         SimpleNamespace(
@@ -347,8 +382,18 @@ def test_promote_candidates_limits_new_codes_to_remaining_active_slots(monkeypat
     event_bus = _EventBus()
 
     ranked_targets = [
-        {"Code": "000001", "Name": "FIRST", "Price": 10000, "Source": "PRICE_JUMP_START"},
-        {"Code": "000002", "Name": "SECOND", "Price": 11000, "Source": "PRICE_JUMP_START"},
+        {
+            "Code": "000001",
+            "Name": "FIRST",
+            "Price": 10000,
+            "Source": "PRICE_JUMP_START",
+        },
+        {
+            "Code": "000002",
+            "Name": "SECOND",
+            "Price": 11000,
+            "Source": "PRICE_JUMP_START",
+        },
     ]
     codes, _ = scalping_scanner.promote_candidates(
         db,
@@ -372,9 +417,17 @@ def test_promote_candidates_limits_new_codes_to_remaining_active_slots(monkeypat
 def test_promote_candidates_skips_code_with_active_manual_scalp_base(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "2")
     monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
-    monkeypatch.setattr(scalping_scanner, "_scanner_candidate_pre_filter_reason", lambda target: "")
-    monkeypatch.setattr(scalping_scanner, "_should_promote_candidate", lambda *args, **kwargs: True)
-    monkeypatch.setattr(scalping_scanner, "_scanner_real_source_guard_decision", lambda *args, **kwargs: {"blocked": False})
+    monkeypatch.setattr(
+        scalping_scanner, "_scanner_candidate_pre_filter_reason", lambda target: ""
+    )
+    monkeypatch.setattr(
+        scalping_scanner, "_should_promote_candidate", lambda *args, **kwargs: True
+    )
+    monkeypatch.setattr(
+        scalping_scanner,
+        "_scanner_real_source_guard_decision",
+        lambda *args, **kwargs: {"blocked": False},
+    )
     db = _DB()
     db.records.append(
         SimpleNamespace(
@@ -391,7 +444,14 @@ def test_promote_candidates_skips_code_with_active_manual_scalp_base(monkeypatch
     codes, recent = scalping_scanner.promote_candidates(
         db,
         event_bus,
-        [{"Code": "000001", "Name": "MANUAL", "Price": 10000, "Source": "PRICE_JUMP_START"}],
+        [
+            {
+                "Code": "000001",
+                "Name": "MANUAL",
+                "Price": 10000,
+                "Source": "PRICE_JUMP_START",
+            }
+        ],
         {},
         max_new_codes=12,
         reentry_cooldown_sec=1500,
@@ -409,9 +469,17 @@ def test_promote_candidates_skips_code_with_active_manual_scalp_base(monkeypatch
 def test_promote_candidates_skips_code_with_legacy_manual_scalp_base(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "2")
     monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
-    monkeypatch.setattr(scalping_scanner, "_scanner_candidate_pre_filter_reason", lambda target: "")
-    monkeypatch.setattr(scalping_scanner, "_should_promote_candidate", lambda *args, **kwargs: True)
-    monkeypatch.setattr(scalping_scanner, "_scanner_real_source_guard_decision", lambda *args, **kwargs: {"blocked": False})
+    monkeypatch.setattr(
+        scalping_scanner, "_scanner_candidate_pre_filter_reason", lambda target: ""
+    )
+    monkeypatch.setattr(
+        scalping_scanner, "_should_promote_candidate", lambda *args, **kwargs: True
+    )
+    monkeypatch.setattr(
+        scalping_scanner,
+        "_scanner_real_source_guard_decision",
+        lambda *args, **kwargs: {"blocked": False},
+    )
     db = _DB()
     db.records.append(
         SimpleNamespace(
@@ -428,7 +496,14 @@ def test_promote_candidates_skips_code_with_legacy_manual_scalp_base(monkeypatch
     codes, recent = scalping_scanner.promote_candidates(
         db,
         event_bus,
-        [{"Code": "000001", "Name": "MANUAL", "Price": 10000, "Source": "PRICE_JUMP_START"}],
+        [
+            {
+                "Code": "000001",
+                "Name": "MANUAL",
+                "Price": 10000,
+                "Source": "PRICE_JUMP_START",
+            }
+        ],
         {},
         max_new_codes=12,
         reentry_cooldown_sec=1500,
@@ -447,16 +522,39 @@ def test_promote_candidates_reserves_two_slots_for_low_rebound(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "3")
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_LOW_REBOUND_RESERVE_SLOTS", "2")
     monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
-    monkeypatch.setattr(scalping_scanner, "_scanner_candidate_pre_filter_reason", lambda target: "")
-    monkeypatch.setattr(scalping_scanner, "_should_promote_candidate", lambda *args, **kwargs: True)
-    monkeypatch.setattr(scalping_scanner, "_scanner_real_source_guard_decision", lambda *args, **kwargs: {"blocked": False})
+    monkeypatch.setattr(
+        scalping_scanner, "_scanner_candidate_pre_filter_reason", lambda target: ""
+    )
+    monkeypatch.setattr(
+        scalping_scanner, "_should_promote_candidate", lambda *args, **kwargs: True
+    )
+    monkeypatch.setattr(
+        scalping_scanner,
+        "_scanner_real_source_guard_decision",
+        lambda *args, **kwargs: {"blocked": False},
+    )
     db = _DB()
     event_bus = _EventBus()
 
     ranked_targets = [
-        {"Code": "000001", "Name": "GENERAL1", "Price": 10000, "Source": "PRICE_JUMP_START"},
-        {"Code": "000002", "Name": "GENERAL2", "Price": 11000, "Source": "PRICE_JUMP_START"},
-        {"Code": "000003", "Name": "GENERAL3", "Price": 12000, "Source": "PRICE_JUMP_START"},
+        {
+            "Code": "000001",
+            "Name": "GENERAL1",
+            "Price": 10000,
+            "Source": "PRICE_JUMP_START",
+        },
+        {
+            "Code": "000002",
+            "Name": "GENERAL2",
+            "Price": 11000,
+            "Source": "PRICE_JUMP_START",
+        },
+        {
+            "Code": "000003",
+            "Name": "GENERAL3",
+            "Price": 12000,
+            "Source": "PRICE_JUMP_START",
+        },
         {
             "Code": "100001",
             "Name": "LOW1",
@@ -497,8 +595,15 @@ def test_promote_candidates_reserves_two_slots_for_low_rebound(monkeypatch):
         {"codes": ["000001", "100001", "100002"], "source": "scalping_scanner_promote"}
     ]
     promoted_payloads = _event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")
-    assert [payload["code"] for payload in promoted_payloads] == ["000001", "100001", "100002"]
-    assert promoted_payloads[1]["source_signature"] == scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE
+    assert [payload["code"] for payload in promoted_payloads] == [
+        "000001",
+        "100001",
+        "100002",
+    ]
+    assert (
+        promoted_payloads[1]["source_signature"]
+        == scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE
+    )
     assert promoted_payloads[1]["actual_order_submitted"] is False
     assert promoted_payloads[1]["broker_order_forbidden"] is True
 
@@ -508,15 +613,33 @@ def test_promote_candidates_does_not_reserve_under_10000_low_rebound(monkeypatch
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_LOW_REBOUND_ACTIVE_FLOOR", "0")
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_LOW_REBOUND_RESERVE_SLOTS", "1")
     monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
-    monkeypatch.setattr(scalping_scanner, "_scanner_candidate_pre_filter_reason", lambda target: "")
-    monkeypatch.setattr(scalping_scanner, "_should_promote_candidate", lambda *args, **kwargs: True)
-    monkeypatch.setattr(scalping_scanner, "_scanner_real_source_guard_decision", lambda *args, **kwargs: {"blocked": False})
+    monkeypatch.setattr(
+        scalping_scanner, "_scanner_candidate_pre_filter_reason", lambda target: ""
+    )
+    monkeypatch.setattr(
+        scalping_scanner, "_should_promote_candidate", lambda *args, **kwargs: True
+    )
+    monkeypatch.setattr(
+        scalping_scanner,
+        "_scanner_real_source_guard_decision",
+        lambda *args, **kwargs: {"blocked": False},
+    )
     db = _DB()
     event_bus = _EventBus()
 
     ranked_targets = [
-        {"Code": "000001", "Name": "GENERAL1", "Price": 12000, "Source": "PRICE_JUMP_START"},
-        {"Code": "000002", "Name": "GENERAL2", "Price": 13000, "Source": "PRICE_JUMP_START"},
+        {
+            "Code": "000001",
+            "Name": "GENERAL1",
+            "Price": 12000,
+            "Source": "PRICE_JUMP_START",
+        },
+        {
+            "Code": "000002",
+            "Name": "GENERAL2",
+            "Price": 13000,
+            "Source": "PRICE_JUMP_START",
+        },
         {
             "Code": "100001",
             "Name": "LOW_UNDER",
@@ -558,26 +681,49 @@ def test_promote_candidates_does_not_reserve_under_10000_low_rebound(monkeypatch
     ]
 
 
-def test_promote_candidates_reserves_under_10000_low_rebound_with_liquidity(monkeypatch):
+def test_promote_candidates_reserves_under_10000_low_rebound_with_liquidity(
+    monkeypatch,
+):
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "2")
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_LOW_REBOUND_ACTIVE_FLOOR", "0")
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_LOW_REBOUND_RESERVE_SLOTS", "1")
     monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
-    monkeypatch.setattr(scalping_scanner, "_scanner_candidate_pre_filter_reason", lambda target: "")
-    monkeypatch.setattr(scalping_scanner, "_should_promote_candidate", lambda *args, **kwargs: True)
-    monkeypatch.setattr(scalping_scanner, "_scanner_real_source_guard_decision", lambda *args, **kwargs: {"blocked": False})
+    monkeypatch.setattr(
+        scalping_scanner, "_scanner_candidate_pre_filter_reason", lambda target: ""
+    )
+    monkeypatch.setattr(
+        scalping_scanner, "_should_promote_candidate", lambda *args, **kwargs: True
+    )
+    monkeypatch.setattr(
+        scalping_scanner,
+        "_scanner_real_source_guard_decision",
+        lambda *args, **kwargs: {"blocked": False},
+    )
     db = _DB()
     event_bus = _EventBus()
 
     ranked_targets = [
-        {"Code": "000001", "Name": "GENERAL1", "Price": 12000, "Source": "PRICE_JUMP_START"},
-        {"Code": "000002", "Name": "GENERAL2", "Price": 13000, "Source": "PRICE_JUMP_START"},
+        {
+            "Code": "000001",
+            "Name": "GENERAL1",
+            "Price": 12000,
+            "Source": "PRICE_JUMP_START",
+        },
+        {
+            "Code": "000002",
+            "Name": "GENERAL2",
+            "Price": 13000,
+            "Source": "PRICE_JUMP_START",
+        },
         {
             "Code": "100001",
             "Name": "LOW_UNDER_LIQUID",
             "Price": 9900,
             "Source": scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE,
-            "SourceSet": {scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE, "VOLUME_SURGE_POSITIVE"},
+            "SourceSet": {
+                scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE,
+                "VOLUME_SURGE_POSITIVE",
+            },
             "LowReboundPct": 3.0,
             "IntradayLowPrice": 9400,
             "IntradayHighPrice": 11000,
@@ -618,9 +764,17 @@ def test_promote_candidates_passes_low_price_to_product_filter(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_LOW_REBOUND_ACTIVE_FLOOR", "0")
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_LOW_REBOUND_RESERVE_SLOTS", "1")
     monkeypatch.setattr(kiwoom_utils, "is_valid_stock", fake_is_valid_stock)
-    monkeypatch.setattr(scalping_scanner, "_scanner_candidate_pre_filter_reason", lambda target: "")
-    monkeypatch.setattr(scalping_scanner, "_should_promote_candidate", lambda *args, **kwargs: True)
-    monkeypatch.setattr(scalping_scanner, "_scanner_real_source_guard_decision", lambda *args, **kwargs: {"blocked": False})
+    monkeypatch.setattr(
+        scalping_scanner, "_scanner_candidate_pre_filter_reason", lambda target: ""
+    )
+    monkeypatch.setattr(
+        scalping_scanner, "_should_promote_candidate", lambda *args, **kwargs: True
+    )
+    monkeypatch.setattr(
+        scalping_scanner,
+        "_scanner_real_source_guard_decision",
+        lambda *args, **kwargs: {"blocked": False},
+    )
     db = _DB()
     event_bus = _EventBus()
 
@@ -630,7 +784,10 @@ def test_promote_candidates_passes_low_price_to_product_filter(monkeypatch):
             "Name": "LOW_VOLUME_SURGE",
             "Price": 3900,
             "Source": scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE,
-            "SourceSet": {scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE, "VOLUME_SURGE_RAW"},
+            "SourceSet": {
+                scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE,
+                "VOLUME_SURGE_RAW",
+            },
             "LowReboundPct": 3.0,
             "IntradayLowPrice": 3600,
             "IntradayHighPrice": 4500,
@@ -658,14 +815,24 @@ def test_promote_candidates_passes_low_price_to_product_filter(monkeypatch):
     assert calls == [("100000", {"token": "TOKEN", "current_price": 3900.0})]
 
 
-def test_low_rebound_floor_replaces_old_general_watching_without_increasing_cap(monkeypatch):
+def test_low_rebound_floor_replaces_old_general_watching_without_increasing_cap(
+    monkeypatch,
+):
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "1")
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_LOW_REBOUND_ACTIVE_FLOOR", "2")
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_LOW_REBOUND_RESERVE_SLOTS", "2")
     monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
-    monkeypatch.setattr(scalping_scanner, "_scanner_candidate_pre_filter_reason", lambda target: "")
-    monkeypatch.setattr(scalping_scanner, "_should_promote_candidate", lambda *args, **kwargs: True)
-    monkeypatch.setattr(scalping_scanner, "_scanner_real_source_guard_decision", lambda *args, **kwargs: {"blocked": False})
+    monkeypatch.setattr(
+        scalping_scanner, "_scanner_candidate_pre_filter_reason", lambda target: ""
+    )
+    monkeypatch.setattr(
+        scalping_scanner, "_should_promote_candidate", lambda *args, **kwargs: True
+    )
+    monkeypatch.setattr(
+        scalping_scanner,
+        "_scanner_real_source_guard_decision",
+        lambda *args, **kwargs: {"blocked": False},
+    )
     db = _DB()
     db.records.append(
         SimpleNamespace(
@@ -724,9 +891,17 @@ def test_low_rebound_floor_protects_known_low_rebound_watching(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "2")
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_LOW_REBOUND_ACTIVE_FLOOR", "2")
     monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
-    monkeypatch.setattr(scalping_scanner, "_scanner_candidate_pre_filter_reason", lambda target: "")
-    monkeypatch.setattr(scalping_scanner, "_should_promote_candidate", lambda *args, **kwargs: True)
-    monkeypatch.setattr(scalping_scanner, "_scanner_real_source_guard_decision", lambda *args, **kwargs: {"blocked": False})
+    monkeypatch.setattr(
+        scalping_scanner, "_scanner_candidate_pre_filter_reason", lambda target: ""
+    )
+    monkeypatch.setattr(
+        scalping_scanner, "_should_promote_candidate", lambda *args, **kwargs: True
+    )
+    monkeypatch.setattr(
+        scalping_scanner,
+        "_scanner_real_source_guard_decision",
+        lambda *args, **kwargs: {"blocked": False},
+    )
     db = _DB()
     db.records.extend(
         [
@@ -755,7 +930,9 @@ def test_low_rebound_floor_protects_known_low_rebound_watching(monkeypatch):
     event_bus = _EventBus()
     recent_picks = {
         "100000": {
-            "last_source_signature": [scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE],
+            "last_source_signature": [
+                scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE
+            ],
             "last_promoted_at": 900.0,
         }
     }
@@ -790,12 +967,24 @@ def test_low_rebound_floor_protects_known_low_rebound_watching(monkeypatch):
 
 def test_promote_candidates_releases_after_window_scanner_cap(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "2")
-    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_AFTER_BUY_WINDOW_CAP_RELEASE_START_TIME", "00:00:00")
-    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_AFTER_BUY_WINDOW_CAP_RELEASE_MAX_PER_LOOP", "1")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCANNER_AFTER_BUY_WINDOW_CAP_RELEASE_START_TIME", "00:00:00"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCANNER_AFTER_BUY_WINDOW_CAP_RELEASE_MAX_PER_LOOP", "1"
+    )
     monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
-    monkeypatch.setattr(scalping_scanner, "_scanner_candidate_pre_filter_reason", lambda target: "")
-    monkeypatch.setattr(scalping_scanner, "_should_promote_candidate", lambda *args, **kwargs: True)
-    monkeypatch.setattr(scalping_scanner, "_scanner_real_source_guard_decision", lambda *args, **kwargs: {"blocked": False})
+    monkeypatch.setattr(
+        scalping_scanner, "_scanner_candidate_pre_filter_reason", lambda target: ""
+    )
+    monkeypatch.setattr(
+        scalping_scanner, "_should_promote_candidate", lambda *args, **kwargs: True
+    )
+    monkeypatch.setattr(
+        scalping_scanner,
+        "_scanner_real_source_guard_decision",
+        lambda *args, **kwargs: {"blocked": False},
+    )
     db = _DB()
     db.records.extend(
         [
@@ -824,7 +1013,14 @@ def test_promote_candidates_releases_after_window_scanner_cap(monkeypatch):
     codes, _ = scalping_scanner.promote_candidates(
         db,
         event_bus,
-        [{"Code": "000001", "Name": "AFTER", "Price": 10000, "Source": "PRICE_JUMP_START"}],
+        [
+            {
+                "Code": "000001",
+                "Name": "AFTER",
+                "Price": 10000,
+                "Source": "PRICE_JUMP_START",
+            }
+        ],
         {},
         max_new_codes=12,
         reentry_cooldown_sec=1500,
@@ -892,7 +1088,12 @@ def test_reset_scanner_watch_targets_expires_unbought_scalping_watch_targets_onl
     )
 
     assert expired == ["111111", "333333"]
-    assert [record.status for record in db.records] == ["EXPIRED", "WATCHING", "EXPIRED", "WATCHING"]
+    assert [record.status for record in db.records] == [
+        "EXPIRED",
+        "WATCHING",
+        "EXPIRED",
+        "WATCHING",
+    ]
     assert _event_payloads(event_bus, "COMMAND_WS_UNREG") == [
         {
             "codes": ["111111", "333333"],
@@ -941,7 +1142,9 @@ def test_reset_scanner_watch_targets_preserves_current_window_candidates():
     assert _event_payloads(event_bus, "COMMAND_WS_UNREG")[0]["codes"] == ["111111"]
 
 
-def test_scanner_priority_tiering_sorts_acceleration_before_plain_price_jump(monkeypatch):
+def test_scanner_priority_tiering_sorts_acceleration_before_plain_price_jump(
+    monkeypatch,
+):
     monkeypatch.setattr(
         scalping_scanner,
         "TRADING_RULES",
@@ -991,12 +1194,12 @@ def test_scanner_priority_tiering_sorts_acceleration_before_plain_price_jump(mon
     ranked = scalping_scanner.rank_candidates(candidates)
 
     assert [item["Code"] for item in ranked] == ["000002", "000001"]
-    assert scalping_scanner._scanner_priority_profile(ranked[0])["scanner_priority_tier"] == (
-        "tier_a_acceleration_confirmed"
-    )
-    assert scalping_scanner._scanner_priority_profile(ranked[1])["scanner_priority_tier"] == (
-        "tier_b_price_jump_candidate"
-    )
+    assert scalping_scanner._scanner_priority_profile(ranked[0])[
+        "scanner_priority_tier"
+    ] == ("tier_a_acceleration_confirmed")
+    assert scalping_scanner._scanner_priority_profile(ranked[1])[
+        "scanner_priority_tier"
+    ] == ("tier_b_price_jump_candidate")
 
 
 def test_scanner_priority_tiering_sorts_under_10000_after_same_tier(monkeypatch):
@@ -1037,15 +1240,17 @@ def test_scanner_priority_tiering_sorts_under_10000_after_same_tier(monkeypatch)
     ranked = scalping_scanner.rank_candidates(candidates)
 
     assert [item["Code"] for item in ranked] == ["000002", "000001"]
-    assert scalping_scanner._scanner_priority_profile(ranked[0])["scanner_priority_tier"] == (
-        "tier_b_price_jump_candidate"
-    )
-    assert scalping_scanner._scanner_priority_profile(ranked[1])["scanner_priority_tier"] == (
-        "tier_b_price_jump_candidate"
-    )
+    assert scalping_scanner._scanner_priority_profile(ranked[0])[
+        "scanner_priority_tier"
+    ] == ("tier_b_price_jump_candidate")
+    assert scalping_scanner._scanner_priority_profile(ranked[1])[
+        "scanner_priority_tier"
+    ] == ("tier_b_price_jump_candidate")
 
 
-def test_scanner_priority_tiering_keeps_under_10000_liquid_candidate_in_score_order(monkeypatch):
+def test_scanner_priority_tiering_keeps_under_10000_liquid_candidate_in_score_order(
+    monkeypatch,
+):
     monkeypatch.setattr(
         scalping_scanner,
         "TRADING_RULES",
@@ -1089,7 +1294,9 @@ def test_scanner_priority_tiering_keeps_under_10000_liquid_candidate_in_score_or
     assert [item["Code"] for item in ranked] == ["000001", "000002"]
 
 
-def test_scanner_priority_tiering_demotes_under_10000_volume_source_without_volume_metrics(monkeypatch):
+def test_scanner_priority_tiering_demotes_under_10000_volume_source_without_volume_metrics(
+    monkeypatch,
+):
     monkeypatch.setattr(
         scalping_scanner,
         "TRADING_RULES",
@@ -1130,7 +1337,9 @@ def test_scanner_priority_tiering_demotes_under_10000_volume_source_without_volu
     assert [item["Code"] for item in ranked] == ["000002", "000001"]
 
 
-def test_scanner_priority_tiering_keeps_under_10000_positive_volume_surge_candidate(monkeypatch):
+def test_scanner_priority_tiering_keeps_under_10000_positive_volume_surge_candidate(
+    monkeypatch,
+):
     monkeypatch.setattr(
         scalping_scanner,
         "TRADING_RULES",
@@ -1170,15 +1379,27 @@ def test_scanner_priority_tiering_keeps_under_10000_positive_volume_surge_candid
 
     ranked = scalping_scanner.rank_candidates(candidates)
 
-    assert scalping_scanner._under_10000_runtime_priority_rank(candidates["000001"]) == 0
+    assert (
+        scalping_scanner._under_10000_runtime_priority_rank(candidates["000001"]) == 0
+    )
     assert [item["Code"] for item in ranked] == ["000001", "000002"]
 
 
 def test_volume_surge_rank_annotation_controls_under_10000_relief(monkeypatch):
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_UNDER_10000_VOLUME_SURGE_RANK_PCT", "0.40")
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_UNDER_10000_VOLUME_SURGE_RANK_MIN_COUNT", "0")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_SCANNER_UNDER_10000_VOLUME_SURGE_RANK_PCT", "0.40"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_SCANNER_UNDER_10000_VOLUME_SURGE_RANK_MIN_COUNT", "0"
+    )
     raw_targets = [
-        {"Code": f"00000{index}", "Name": f"RAW{index}", "Price": 9900, "FluRate": 1.0, "PreSig": "2"}
+        {
+            "Code": f"00000{index}",
+            "Name": f"RAW{index}",
+            "Price": 9900,
+            "FluRate": 1.0,
+            "PreSig": "2",
+        }
         for index in range(1, 6)
     ]
     annotated = scalping_scanner._annotate_volume_surge_rank(raw_targets)
@@ -1193,7 +1414,9 @@ def test_volume_surge_rank_annotation_controls_under_10000_relief(monkeypatch):
     assert scalping_scanner._under_10000_runtime_priority_rank(pool["000003"]) == 0
 
 
-def test_breakout_confirmation_sources_do_not_relieve_under_10000_without_volume_rank(monkeypatch):
+def test_breakout_confirmation_sources_do_not_relieve_under_10000_without_volume_rank(
+    monkeypatch,
+):
     monkeypatch.setattr(
         scalping_scanner,
         "TRADING_RULES",
@@ -1233,16 +1456,22 @@ def test_breakout_confirmation_sources_do_not_relieve_under_10000_without_volume
     target = pool["000001"]
 
     assert scalping_scanner._under_10000_runtime_priority_rank(target) == 1
-    assert scalping_scanner._scanner_priority_profile(target)["scanner_priority_tier"] == "tier_b_price_jump_candidate"
-    assert scalping_scanner._scanner_candidate_pre_filter_reason(
-        {
-            "Code": "000002",
-            "Price": 12000,
-            "Source": scalping_scanner.HIGH_PROXIMITY_CONFIRMATION_SOURCE,
-            "SourceSet": {scalping_scanner.HIGH_PROXIMITY_CONFIRMATION_SOURCE},
-            "HighProximityFluRate": 3.0,
-        }
-    ) == "breakout_confirmation_only_source_not_seed"
+    assert (
+        scalping_scanner._scanner_priority_profile(target)["scanner_priority_tier"]
+        == "tier_b_price_jump_candidate"
+    )
+    assert (
+        scalping_scanner._scanner_candidate_pre_filter_reason(
+            {
+                "Code": "000002",
+                "Price": 12000,
+                "Source": scalping_scanner.HIGH_PROXIMITY_CONFIRMATION_SOURCE,
+                "SourceSet": {scalping_scanner.HIGH_PROXIMITY_CONFIRMATION_SOURCE},
+                "HighProximityFluRate": 3.0,
+            }
+        )
+        == "breakout_confirmation_only_source_not_seed"
+    )
 
 
 def test_value_top_only_role_is_not_breakout_confirmation(monkeypatch):
@@ -1251,12 +1480,19 @@ def test_value_top_only_role_is_not_breakout_confirmation(monkeypatch):
         "TRADING_RULES",
         SimpleNamespace(SCALP_SCANNER_PRIORITY_TIERING_ENABLED=False),
     )
-    target = {"Code": "000001", "Source": "VALUE_TOP", "SourceSet": {"VALUE_TOP"}, "ValueFluRate": 1.0}
+    target = {
+        "Code": "000001",
+        "Source": "VALUE_TOP",
+        "SourceSet": {"VALUE_TOP"},
+        "ValueFluRate": 1.0,
+    }
 
-    assert scalping_scanner._scanner_candidate_role(target) == "liquidity_enrichment_only"
-    assert scalping_scanner._scanner_priority_profile(target)["scanner_priority_reason"] == (
-        "late_rank_or_liquidity_only_source"
+    assert (
+        scalping_scanner._scanner_candidate_role(target) == "liquidity_enrichment_only"
     )
+    assert scalping_scanner._scanner_priority_profile(target)[
+        "scanner_priority_reason"
+    ] == ("late_rank_or_liquidity_only_source")
 
 
 def test_breakout_confirmation_boosts_price_jump_volume_candidate(monkeypatch):
@@ -1316,9 +1552,9 @@ def test_breakout_confirmation_boosts_price_jump_volume_candidate(monkeypatch):
     ranked = scalping_scanner.rank_candidates(pool)
 
     assert [item["Code"] for item in ranked] == ["000002", "000001"]
-    assert scalping_scanner._scanner_priority_profile(pool["000002"])["scanner_priority_reason"] == (
-        "price_jump_breakout_confirmation"
-    )
+    assert scalping_scanner._scanner_priority_profile(pool["000002"])[
+        "scanner_priority_reason"
+    ] == ("price_jump_breakout_confirmation")
 
 
 def test_scanner_priority_non_tier_sorts_under_10000_after_price_band(monkeypatch):
@@ -1352,7 +1588,9 @@ def test_scanner_priority_non_tier_sorts_under_10000_after_price_band(monkeypatc
     assert [item["Code"] for item in ranked] == ["000002", "000001"]
 
 
-def test_scanner_priority_non_tier_keeps_under_10000_liquid_candidate_in_score_order(monkeypatch):
+def test_scanner_priority_non_tier_keeps_under_10000_liquid_candidate_in_score_order(
+    monkeypatch,
+):
     monkeypatch.setattr(
         scalping_scanner,
         "TRADING_RULES",
@@ -1446,11 +1684,18 @@ def test_scanner_priority_tiering_blocks_rank_only_first_seen(monkeypatch):
     )
 
     assert codes == []
-    guard_events = [event for event in emitted if event["stage"] == "scalping_scanner_real_source_guard_block"]
+    guard_events = [
+        event
+        for event in emitted
+        if event["stage"] == "scalping_scanner_real_source_guard_block"
+    ]
     assert guard_events
     fields = guard_events[-1]["fields"]
     assert fields["scanner_priority_tier"] == "tier_d_late_rank_only"
-    assert fields["scanner_real_source_guard_skip_reason"] == "late_confirmation_first_seen_probe"
+    assert (
+        fields["scanner_real_source_guard_skip_reason"]
+        == "late_confirmation_first_seen_probe"
+    )
 
 
 def test_scanner_priority_tiering_allows_rank_jump_acceleration(monkeypatch):
@@ -1508,8 +1753,14 @@ def test_scanner_priority_tiering_allows_rank_jump_acceleration(monkeypatch):
     )
 
     assert codes == ["000033"]
-    promoted = [event for event in emitted if event["stage"] == "scalping_scanner_candidate_promoted"][-1]
-    assert promoted["fields"]["scanner_priority_tier"] == "tier_a_acceleration_confirmed"
+    promoted = [
+        event
+        for event in emitted
+        if event["stage"] == "scalping_scanner_candidate_promoted"
+    ][-1]
+    assert (
+        promoted["fields"]["scanner_priority_tier"] == "tier_a_acceleration_confirmed"
+    )
     assert promoted["fields"]["scanner_priority_reason"] == "rank_jump_acceleration"
     assert promoted["fields"]["scanner_promotion_reason"] == "rank_jump_acceleration"
     assert promoted["fields"]["scanner_promotion_id"] == "SCANPROM-000033-1000000"
@@ -1569,11 +1820,16 @@ def test_scanner_priority_tiering_blocks_bid_imbalance_only(monkeypatch):
     )
 
     assert codes == []
-    fields = [event for event in emitted if event["stage"] == "scalping_scanner_real_source_guard_block"][-1][
-        "fields"
-    ]
+    fields = [
+        event
+        for event in emitted
+        if event["stage"] == "scalping_scanner_real_source_guard_block"
+    ][-1]["fields"]
     assert fields["scanner_priority_tier"] == "tier_z_source_only"
-    assert fields["scanner_real_source_guard_skip_reason"] == "scanner_priority_source_only"
+    assert (
+        fields["scanner_real_source_guard_skip_reason"]
+        == "scanner_priority_source_only"
+    )
 
 
 def test_scanner_priority_tiering_keeps_plain_price_jump_promotable(monkeypatch):
@@ -1629,7 +1885,11 @@ def test_scanner_priority_tiering_keeps_plain_price_jump_promotable(monkeypatch)
     )
 
     assert codes == ["000005"]
-    promoted = [event for event in emitted if event["stage"] == "scalping_scanner_candidate_promoted"][-1]
+    promoted = [
+        event
+        for event in emitted
+        if event["stage"] == "scalping_scanner_candidate_promoted"
+    ][-1]
     assert promoted["fields"]["scanner_priority_tier"] == "tier_b_price_jump_candidate"
 
 
@@ -1653,7 +1913,12 @@ def test_scanner_priority_tiering_marks_price_jump_multisource_as_tier_a(monkeyp
             "Name": "MULTI",
             "Price": 10000,
             "Source": "PRICE_JUMP_START",
-            "SourceSet": {"PRICE_JUMP_START", "REALTIME_RANK_START", "VALUE_TOP", "VOLUME_SURGE_POSITIVE"},
+            "SourceSet": {
+                "PRICE_JUMP_START",
+                "REALTIME_RANK_START",
+                "VALUE_TOP",
+                "VOLUME_SURGE_POSITIVE",
+            },
             "PriceJumpFluRate": 2.0,
             "RealtimeRankFluRate": 2.0,
             "VolumeSurgeFluRate": 2.0,
@@ -1734,12 +1999,17 @@ def test_scanner_demotes_open_price_jump_without_volume(monkeypatch):
 
     assert codes == []
     assert recent["000066"]["scanner_probe_state"] == "first_seen_probe"
-    fields = [event for event in emitted if event["stage"] == "scalping_scanner_real_source_guard_block"][-1][
-        "fields"
-    ]
+    fields = [
+        event
+        for event in emitted
+        if event["stage"] == "scalping_scanner_real_source_guard_block"
+    ][-1]["fields"]
     assert fields["scanner_priority_tier"] == "tier_b_price_jump_candidate"
     assert fields["scanner_priority_reason"] == "open_price_jump_without_volume_demoted"
-    assert fields["scanner_real_source_guard_skip_reason"] == "open_price_jump_requires_volume_or_followthrough"
+    assert (
+        fields["scanner_real_source_guard_skip_reason"]
+        == "open_price_jump_requires_volume_or_followthrough"
+    )
     assert fields["scanner_source_guard_context"] == "normal_first_seen_block"
 
 
@@ -1856,8 +2126,14 @@ def test_scanner_promotes_demoted_open_price_jump_on_probe_followthrough(monkeyp
     )
 
     assert codes == ["000068"]
-    promoted = [event for event in emitted if event["stage"] == "scalping_scanner_candidate_promoted"][-1]
-    assert promoted["fields"]["scanner_promotion_reason"] == "probe_acceleration_confirmed"
+    promoted = [
+        event
+        for event in emitted
+        if event["stage"] == "scalping_scanner_candidate_promoted"
+    ][-1]
+    assert (
+        promoted["fields"]["scanner_promotion_reason"] == "probe_acceleration_confirmed"
+    )
     assert promoted["fields"]["price_delta_since_first_seen_pct"] == "0.20"
 
 
@@ -1935,11 +2211,20 @@ def test_scanner_promotes_demoted_open_price_jump_when_volume_attaches(monkeypat
     )
 
     assert codes == ["000070"]
-    promoted = [event for event in emitted if event["stage"] == "scalping_scanner_candidate_promoted"][-1]
-    assert promoted["fields"]["scanner_promotion_reason"] == "open_price_jump_volume_confirmed"
+    promoted = [
+        event
+        for event in emitted
+        if event["stage"] == "scalping_scanner_candidate_promoted"
+    ][-1]
+    assert (
+        promoted["fields"]["scanner_promotion_reason"]
+        == "open_price_jump_volume_confirmed"
+    )
 
 
-def test_scanner_blocks_demoted_open_price_jump_volume_attach_when_price_declines(monkeypatch):
+def test_scanner_blocks_demoted_open_price_jump_volume_attach_when_price_declines(
+    monkeypatch,
+):
     emitted = []
     monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
     monkeypatch.setattr(
@@ -2013,10 +2298,15 @@ def test_scanner_blocks_demoted_open_price_jump_volume_attach_when_price_decline
     )
 
     assert codes == []
-    fields = [event for event in emitted if event["stage"] == "scalping_scanner_real_source_guard_block"][-1][
-        "fields"
-    ]
-    assert fields["scanner_real_source_guard_skip_reason"] == "late_confirmation_price_declined"
+    fields = [
+        event
+        for event in emitted
+        if event["stage"] == "scalping_scanner_real_source_guard_block"
+    ][-1]["fields"]
+    assert (
+        fields["scanner_real_source_guard_skip_reason"]
+        == "late_confirmation_price_declined"
+    )
     assert fields["price_delta_since_first_seen_pct"] == "-0.10"
 
 
@@ -2093,10 +2383,15 @@ def test_scanner_blocks_demoted_open_price_jump_when_probe_declines(monkeypatch)
     )
 
     assert codes == []
-    fields = [event for event in emitted if event["stage"] == "scalping_scanner_real_source_guard_block"][-1][
-        "fields"
-    ]
-    assert fields["scanner_real_source_guard_skip_reason"] == "late_confirmation_price_declined"
+    fields = [
+        event
+        for event in emitted
+        if event["stage"] == "scalping_scanner_real_source_guard_block"
+    ][-1]["fields"]
+    assert (
+        fields["scanner_real_source_guard_skip_reason"]
+        == "late_confirmation_price_declined"
+    )
     assert fields["price_delta_since_first_seen_pct"] == "-0.10"
 
 
@@ -2321,7 +2616,10 @@ def test_realtime_rank_change_sign_authority_reaches_scanner_payload(monkeypatch
     assert payload["rank_change_sign_state"] == "positive"
     assert payload["rank_change_sign_consistency"] == "consistent"
     assert payload["rank_change_score_input"] == 12
-    assert payload["rank_change_score_policy"] == "positive_signed_rank_delta_only_raw_rank_sign_unverified"
+    assert (
+        payload["rank_change_score_policy"]
+        == "positive_signed_rank_delta_only_raw_rank_sign_unverified"
+    )
 
 
 def test_ka00198_realtime_rank_change_preserves_negative_sign(monkeypatch):
@@ -2384,9 +2682,17 @@ def test_negative_rank_change_does_not_raise_rising_start_score():
     positive = positive_pool["005930"]
     negative = negative_pool["005930"]
     assert positive["RisingStartScore"] > negative["RisingStartScore"]
-    assert scalping_scanner._scanner_event_fields(positive)["rank_change_score_input"] == 12
-    assert scalping_scanner._scanner_event_fields(negative)["rank_change_score_input"] == 0
-    assert scalping_scanner._scanner_event_fields(negative)["rank_change_sign_state"] == "negative"
+    assert (
+        scalping_scanner._scanner_event_fields(positive)["rank_change_score_input"]
+        == 12
+    )
+    assert (
+        scalping_scanner._scanner_event_fields(negative)["rank_change_score_input"] == 0
+    )
+    assert (
+        scalping_scanner._scanner_event_fields(negative)["rank_change_sign_state"]
+        == "negative"
+    )
     assert (
         scalping_scanner._scanner_event_fields(negative)["rank_change_sign_consistency"]
         == "consistent"
@@ -2463,9 +2769,27 @@ def test_ka10023_positive_volume_surge_filters_non_positive(monkeypatch):
         kiwoom_utils,
         "scan_volume_spike_ka10023",
         lambda *args, **kwargs: [
-            {"Code": "000001", "Name": "NEG", "Price": 10000, "FluRate": -0.1, "PreSig": "2"},
-            {"Code": "000002", "Name": "BAD_SIG", "Price": 10000, "FluRate": 0.4, "PreSig": "5"},
-            {"Code": "000003", "Name": "POS", "Price": 10000, "FluRate": 0.8, "PreSig": "2"},
+            {
+                "Code": "000001",
+                "Name": "NEG",
+                "Price": 10000,
+                "FluRate": -0.1,
+                "PreSig": "2",
+            },
+            {
+                "Code": "000002",
+                "Name": "BAD_SIG",
+                "Price": 10000,
+                "FluRate": 0.4,
+                "PreSig": "5",
+            },
+            {
+                "Code": "000003",
+                "Name": "POS",
+                "Price": 10000,
+                "FluRate": 0.8,
+                "PreSig": "2",
+            },
         ],
     )
 
@@ -2475,7 +2799,9 @@ def test_ka10023_positive_volume_surge_filters_non_positive(monkeypatch):
     assert rows[0]["Source"] == "VOLUME_SURGE_POSITIVE"
 
 
-def test_ka10023_volume_surge_uses_lowest_api_volume_and_all_price_defaults(monkeypatch):
+def test_ka10023_volume_surge_uses_lowest_api_volume_and_all_price_defaults(
+    monkeypatch,
+):
     def fake_fetch(**kwargs):
         assert kwargs["api_id"] == "ka10023"
         assert kwargs["payload"]["sort_tp"] == "1"
@@ -2524,7 +2850,13 @@ def test_low_rebound_negative_display_candidate_builds_from_intraday_low(monkeyp
     rows = scalping_scanner._build_low_rebound_rising_missed_targets(
         "TOKEN",
         raw_volume_surge_targets=[
-            {"Code": "000001", "Name": "NEG", "Price": 10240, "FluRate": -0.4, "SpikeRate": 130.0}
+            {
+                "Code": "000001",
+                "Name": "NEG",
+                "Price": 10240,
+                "FluRate": -0.4,
+                "SpikeRate": 130.0,
+            }
         ],
     )
 
@@ -2543,8 +2875,18 @@ def test_low_rebound_negative_display_candidate_builds_from_intraday_low(monkeyp
 def test_low_rebound_preserves_breakout_confirmation_enrichment(monkeypatch):
     def fake_candles(_token, code, limit=420):
         return [
-            {"체결시간": "20260709090100", "현재가": 10000, "고가": 10100, "저가": 10000},
-            {"체결시간": "20260709090200", "현재가": 10260, "고가": 10400, "저가": 10120},
+            {
+                "체결시간": "20260709090100",
+                "현재가": 10000,
+                "고가": 10100,
+                "저가": 10000,
+            },
+            {
+                "체결시간": "20260709090200",
+                "현재가": 10260,
+                "고가": 10400,
+                "저가": 10120,
+            },
         ]
 
     monkeypatch.setattr(kiwoom_utils, "get_minute_candles_ka10080", fake_candles)
@@ -2657,11 +2999,16 @@ def test_low_rebound_source_observation_emits_cap_independent_summary(monkeypatc
     assert event["name"] == scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE
     assert event["stage"] == "scalping_scanner_low_rebound_source_observed"
     assert fields["metric_role"] == "funnel_count"
-    assert fields["decision_authority"] == "scalping_scanner_source_only_low_rebound_observation"
+    assert (
+        fields["decision_authority"]
+        == "scalping_scanner_source_only_low_rebound_observation"
+    )
     assert fields["runtime_effect"] is False
     assert fields["actual_order_submitted"] is False
     assert fields["broker_order_forbidden"] is True
-    assert fields["source_signature"] == scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE
+    assert (
+        fields["source_signature"] == scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE
+    )
     assert fields["scanner_source_family"] == "rising_missed_low_rebound_source_v1"
     assert fields["rising_missed_lineage"] == "low_rebound_from_intraday_low"
     assert fields["low_rebound_universe_count"] == 3
@@ -2692,7 +3039,9 @@ def test_low_rebound_excludes_below_threshold(monkeypatch):
 
     rows = scalping_scanner._build_low_rebound_rising_missed_targets(
         "TOKEN",
-        value_targets=[{"Code": "000001", "Name": "LOW", "Price": 10240, "FluRate": -0.2}],
+        value_targets=[
+            {"Code": "000001", "Name": "LOW", "Price": 10240, "FluRate": -0.2}
+        ],
     )
 
     assert rows == []
@@ -2742,7 +3091,13 @@ def test_low_rebound_uses_latest_trading_day_candles_only(monkeypatch):
     rows = scalping_scanner._build_low_rebound_rising_missed_targets(
         "TOKEN",
         raw_volume_surge_targets=[
-            {"Code": "005720", "Name": "넥센", "Price": 6070, "FluRate": -0.17, "SpikeRate": 28.47}
+            {
+                "Code": "005720",
+                "Name": "넥센",
+                "Price": 6070,
+                "FluRate": -0.17,
+                "SpikeRate": 28.47,
+            }
         ],
         emit_observation=True,
     )
@@ -2819,8 +3174,14 @@ def test_low_rebound_excludes_missing_candles_chase_and_invalid_prices(monkeypat
 
 def test_low_rebound_promoted_payload_keeps_watching_only_authority(monkeypatch):
     monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
-    monkeypatch.setattr(scalping_scanner, "_should_promote_candidate", lambda *args, **kwargs: True)
-    monkeypatch.setattr(scalping_scanner, "_scanner_real_source_guard_decision", lambda *args, **kwargs: {"blocked": False})
+    monkeypatch.setattr(
+        scalping_scanner, "_should_promote_candidate", lambda *args, **kwargs: True
+    )
+    monkeypatch.setattr(
+        scalping_scanner,
+        "_scanner_real_source_guard_decision",
+        lambda *args, **kwargs: {"blocked": False},
+    )
     db = _DB()
     event_bus = _EventBus()
     target = scalping_scanner.build_candidate_pool(
@@ -2855,7 +3216,9 @@ def test_low_rebound_promoted_payload_keeps_watching_only_authority(monkeypatch)
 
     payload = _event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")[0]
     assert codes == ["000001"]
-    assert payload["source_signature"] == scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE
+    assert (
+        payload["source_signature"] == scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE
+    )
     assert payload["scanner_source_family"] == "rising_missed_low_rebound_source_v1"
     assert payload["scanner_source_role"] == "rising_missed_low_rebound_candidate"
     assert payload["rising_missed_lineage"] == "low_rebound_from_intraday_low"
@@ -2873,7 +3236,13 @@ def test_low_rebound_priority_sits_between_volume_and_open_top(monkeypatch):
     )
     pool = scalping_scanner.build_candidate_pool(
         volume_surge_targets=[
-            {"Code": "000001", "Name": "VOL", "Price": 10300, "FluRate": 1.0, "SpikeRate": 90.0}
+            {
+                "Code": "000001",
+                "Name": "VOL",
+                "Price": 10300,
+                "FluRate": 1.0,
+                "SpikeRate": 90.0,
+            }
         ],
         low_rebound_targets=[
             {
@@ -2890,11 +3259,21 @@ def test_low_rebound_priority_sits_between_volume_and_open_top(monkeypatch):
             }
         ],
         soaring_targets=[
-            {"Code": "000003", "Name": "OPEN", "Price": 10300, "FluRate": 1.0, "OpenFluRate": 1.0}
+            {
+                "Code": "000003",
+                "Name": "OPEN",
+                "Price": 10300,
+                "FluRate": 1.0,
+                "OpenFluRate": 1.0,
+            }
         ],
     )
 
-    assert [row["Code"] for row in scalping_scanner.rank_candidates(pool)] == ["000001", "000002", "000003"]
+    assert [row["Code"] for row in scalping_scanner.rank_candidates(pool)] == [
+        "000001",
+        "000002",
+        "000003",
+    ]
 
 
 def test_low_rebound_minute_candle_fetch_is_capped(monkeypatch):
@@ -2944,7 +3323,13 @@ def test_low_rebound_prefetch_skips_etf_products_before_candle_fetch(monkeypatch
                 "TradeValue": 999999999999,
                 "SpikeRate": 999.0,
             },
-            {"Code": "000010", "Name": "REAL", "Price": 10300, "FluRate": -0.2, "SpikeRate": 120.0},
+            {
+                "Code": "000010",
+                "Name": "REAL",
+                "Price": 10300,
+                "FluRate": -0.2,
+                "SpikeRate": 120.0,
+            },
         ],
     )
 
@@ -2952,7 +3337,9 @@ def test_low_rebound_prefetch_skips_etf_products_before_candle_fetch(monkeypatch
     assert [row["Code"] for row in rows] == ["000010"]
 
 
-def test_low_rebound_prefetch_keeps_under_min_price_with_volume_surge_evidence(monkeypatch):
+def test_low_rebound_prefetch_keeps_under_min_price_with_volume_surge_evidence(
+    monkeypatch,
+):
     calls = []
 
     def fake_candles(_token, code, limit=420):
@@ -3204,9 +3591,13 @@ def test_vi_triggered_without_primary_source_is_secondary_only_block(monkeypatch
     assert codes == []
     assert event_bus.events == []
     assert db.records == []
-    assert recent["005930"]["last_guard_block_reason"] == "vi_secondary_confirmation_only"
+    assert (
+        recent["005930"]["last_guard_block_reason"] == "vi_secondary_confirmation_only"
+    )
     assert emitted[0]["fields"]["scanner_candidate_role"] == "late_confirmation"
-    assert emitted[0]["fields"]["scanner_block_reason"] == "vi_secondary_confirmation_only"
+    assert (
+        emitted[0]["fields"]["scanner_block_reason"] == "vi_secondary_confirmation_only"
+    )
 
 
 def test_candidate_pool_preserves_vi_flu_metric():
@@ -3259,23 +3650,42 @@ def test_freshness_score_does_not_treat_vi_disparity_as_flu_acceleration():
         "ViFluRateMetric": "vi_dynamic_disparity_rate",
     }
 
-    assert scalping_scanner._freshness_score(open_rate_target) - scalping_scanner._freshness_score(disparity_target) == 80.0
+    assert (
+        scalping_scanner._freshness_score(open_rate_target)
+        - scalping_scanner._freshness_score(disparity_target)
+        == 80.0
+    )
 
 
 def test_candidate_pool_merges_sources_and_prefers_value_vi_combo():
     pool = scalping_scanner.build_candidate_pool(
         soaring_targets=[
-            {"Code": "005930", "Name": "삼성전자", "Price": 70000, "FluRate": 2.0, "CntrStr": 110.0}
+            {
+                "Code": "005930",
+                "Name": "삼성전자",
+                "Price": 70000,
+                "FluRate": 2.0,
+                "CntrStr": 110.0,
+            }
         ],
         supernova_targets=[
-            {"code": "005930", "name": "삼성전자", "spike_rate": 180.0, "priority_score": 20.0}
+            {
+                "code": "005930",
+                "name": "삼성전자",
+                "spike_rate": 180.0,
+                "priority_score": 20.0,
+            }
         ],
         value_targets=[
-            {"Code": "005930", "Name": "삼성전자", "TradeValue": 50000000000, "RankNow": 5, "RankPrev": 60}
+            {
+                "Code": "005930",
+                "Name": "삼성전자",
+                "TradeValue": 50000000000,
+                "RankNow": 5,
+                "RankPrev": 60,
+            }
         ],
-        vi_targets=[
-            {"Code": "005930", "Name": "삼성전자", "VIMotionCount": 2}
-        ],
+        vi_targets=[{"Code": "005930", "Name": "삼성전자", "VIMotionCount": 2}],
     )
 
     target = pool["005930"]
@@ -3367,7 +3777,13 @@ def test_value_top_without_primary_source_is_liquidity_only_block(monkeypatch):
     event_bus = _EventBus()
     pool = scalping_scanner.build_candidate_pool(
         value_targets=[
-            {"Code": "005930", "Name": "삼성전자", "Price": 70000, "FluRate": 1.0, "TradeValue": 50000000000}
+            {
+                "Code": "005930",
+                "Name": "삼성전자",
+                "Price": 70000,
+                "FluRate": 1.0,
+                "TradeValue": 50000000000,
+            }
         ]
     )
 
@@ -3387,14 +3803,23 @@ def test_value_top_without_primary_source_is_liquidity_only_block(monkeypatch):
     assert event_bus.events == []
     assert db.records == []
     assert target["CntrStrAvailable"] is False
-    assert emitted[0]["fields"]["scanner_filter_reason"] == "liquidity_only_source_not_seed"
+    assert (
+        emitted[0]["fields"]["scanner_filter_reason"]
+        == "liquidity_only_source_not_seed"
+    )
     assert emitted[0]["fields"]["scanner_candidate_role"] == "liquidity_enrichment_only"
 
 
 def test_strength_aliases_are_preserved_for_scanner_display():
     pool = scalping_scanner.build_candidate_pool(
         value_targets=[
-            {"Code": "005930", "Name": "삼성전자", "Price": 70000, "FluRate": 1.0, "cntr_strg": "132.5"}
+            {
+                "Code": "005930",
+                "Name": "삼성전자",
+                "Price": 70000,
+                "FluRate": 1.0,
+                "cntr_strg": "132.5",
+            }
         ]
     )
 
@@ -3429,7 +3854,9 @@ def test_rank_prev_negative_sentinel_does_not_create_rank_jump_score():
     no_previous_rank = {**base, "RankPrev": -1}
     real_rank_jump = {**base, "RankPrev": 61}
 
-    assert scalping_scanner._freshness_score(real_rank_jump) > scalping_scanner._freshness_score(no_previous_rank)
+    assert scalping_scanner._freshness_score(
+        real_rank_jump
+    ) > scalping_scanner._freshness_score(no_previous_rank)
 
 
 def test_candidate_pool_keeps_latest_vi_release_time():
@@ -3538,10 +3965,15 @@ def test_promote_candidates_allows_value_top_reentry(monkeypatch):
     assert _event_payloads(event_bus, "COMMAND_WS_REG") == [
         {"codes": ["005930"], "source": "scalping_scanner_promote"}
     ]
-    assert _event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")[0]["code"] == "005930"
+    assert (
+        _event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")[0]["code"]
+        == "005930"
+    )
 
 
-def test_real_source_guard_blocks_deteriorating_value_top_only_without_strength(monkeypatch, capsys):
+def test_real_source_guard_blocks_deteriorating_value_top_only_without_strength(
+    monkeypatch, capsys
+):
     emitted = []
     monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
     monkeypatch.setattr(
@@ -3618,13 +4050,21 @@ def test_real_source_guard_blocks_deteriorating_value_top_only_without_strength(
     assert event["pipeline"] == "ENTRY_PIPELINE"
     assert event["stage"] == "scalping_scanner_real_source_guard_block"
     assert event["fields"]["scanner_real_source_guard_applied"] is True
-    assert event["fields"]["scanner_real_source_guard_skip_reason"] == "non_positive_liquidity_only_source"
+    assert (
+        event["fields"]["scanner_real_source_guard_skip_reason"]
+        == "non_positive_liquidity_only_source"
+    )
     assert event["fields"]["scanner_real_source_guard_block_event_emitted"] is True
     assert event["fields"]["actual_order_submitted"] is False
     assert event["fields"]["broker_order_forbidden"] is True
-    assert event["fields"]["decision_authority"] == "real_scalping_scanner_source_guard_only"
+    assert (
+        event["fields"]["decision_authority"]
+        == "real_scalping_scanner_source_guard_only"
+    )
     assert event["fields"]["zero_context_domain"] == "scanner_source_guard"
-    assert event["fields"]["zero_context_blocker"] == "non_positive_liquidity_only_source"
+    assert (
+        event["fields"]["zero_context_blocker"] == "non_positive_liquidity_only_source"
+    )
     assert event["fields"]["zero_context_cntr_str_state"] == "missing_defaulted_zero"
     assert "broker_guard_bypass" in event["fields"]["zero_context_forbidden_uses"]
 
@@ -3702,7 +4142,9 @@ def test_real_source_guard_blocks_value_top_first_seen_as_probe(monkeypatch):
         "scalping_scanner_real_source_guard_block",
     ]
     assert emitted[0]["fields"]["scanner_candidate_role"] == "liquidity_enrichment_only"
-    assert emitted[0]["fields"]["scanner_block_reason"] == "liquidity_only_source_not_seed"
+    assert (
+        emitted[0]["fields"]["scanner_block_reason"] == "liquidity_only_source_not_seed"
+    )
 
 
 def test_real_source_guard_blocks_open_top_first_seen_without_acceleration(monkeypatch):
@@ -3846,7 +4288,9 @@ def test_real_source_guard_promotes_probe_after_price_or_flu_acceleration(monkey
     assert blocked_fields["broker_order_forbidden"] is True
 
 
-def test_real_source_guard_reports_price_declined_even_when_flu_accelerated(monkeypatch):
+def test_real_source_guard_reports_price_declined_even_when_flu_accelerated(
+    monkeypatch,
+):
     emitted = []
     monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
     monkeypatch.setattr(
@@ -4341,7 +4785,10 @@ def test_real_source_guard_promotes_immediate_acceleration_sources(monkeypatch):
     assert _event_payloads(event_bus, "COMMAND_WS_REG") == [
         {"codes": ["000101", "000102"], "source": "scalping_scanner_promote"}
     ]
-    assert [p["code"] for p in _event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")] == [
+    assert [
+        p["code"]
+        for p in _event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")
+    ] == [
         "000101",
         "000102",
     ]
@@ -4407,9 +4854,13 @@ def test_real_source_guard_blocks_vi_value_without_primary_source(monkeypatch):
     assert codes == []
     assert event_bus.events == []
     assert db.records == []
-    assert recent["005930"]["last_guard_block_reason"] == "vi_secondary_confirmation_only"
+    assert (
+        recent["005930"]["last_guard_block_reason"] == "vi_secondary_confirmation_only"
+    )
     assert emitted[0]["fields"]["scanner_candidate_role"] == "late_confirmation"
-    assert emitted[0]["fields"]["scanner_block_reason"] == "vi_secondary_confirmation_only"
+    assert (
+        emitted[0]["fields"]["scanner_block_reason"] == "vi_secondary_confirmation_only"
+    )
 
 
 def test_promote_candidates_records_invalid_stock_filter_as_block(monkeypatch):
@@ -4474,20 +4925,35 @@ def test_run_scalper_iteration_keeps_ws_payload_and_max_new_codes(monkeypatch):
         kiwoom_utils,
         "get_realtime_item_rank_ka00198",
         lambda *args, **kwargs: [
-            {"Code": f"00000{i}", "Name": f"RANK{i}", "Price": 10000 + i, "FluRate": 1.0}
+            {
+                "Code": f"00000{i}",
+                "Name": f"RANK{i}",
+                "Price": 10000 + i,
+                "FluRate": 1.0,
+            }
             for i in range(5)
         ],
     )
-    monkeypatch.setattr(kiwoom_utils, "get_price_jump_ka10019", lambda *args, **kwargs: [])
-    monkeypatch.setattr(kiwoom_utils, "scan_volume_spike_ka10023", lambda *args, **kwargs: [])
-    monkeypatch.setattr(kiwoom_utils, "get_bid_balance_surge_ka10021", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        kiwoom_utils, "get_price_jump_ka10019", lambda *args, **kwargs: []
+    )
+    monkeypatch.setattr(
+        kiwoom_utils, "scan_volume_spike_ka10023", lambda *args, **kwargs: []
+    )
+    monkeypatch.setattr(
+        kiwoom_utils, "get_bid_balance_surge_ka10021", lambda *args, **kwargs: []
+    )
     monkeypatch.setattr(
         kiwoom_utils,
         "get_top_open_fluctuation_ka10028",
         lambda *args, **kwargs: [],
     )
-    monkeypatch.setattr(kiwoom_utils, "get_value_top_ka10032", lambda *args, **kwargs: [])
-    monkeypatch.setattr(kiwoom_utils, "get_vi_triggered_ka10054", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        kiwoom_utils, "get_value_top_ka10032", lambda *args, **kwargs: []
+    )
+    monkeypatch.setattr(
+        kiwoom_utils, "get_vi_triggered_ka10054", lambda *args, **kwargs: []
+    )
     radar = SimpleNamespace(find_supernova_targets=lambda *args, **kwargs: [])
     db = _DB()
     event_bus = _EventBus()
@@ -4508,7 +4974,10 @@ def test_run_scalper_iteration_keeps_ws_payload_and_max_new_codes(monkeypatch):
     assert _event_payloads(event_bus, "COMMAND_WS_REG") == [
         {"codes": ["000000", "000001", "000002"], "source": "scalping_scanner_promote"}
     ]
-    assert [p["code"] for p in _event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")] == [
+    assert [
+        p["code"]
+        for p in _event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")
+    ] == [
         "000000",
         "000001",
         "000002",
@@ -4526,19 +4995,37 @@ def test_run_scalper_iteration_observes_low_rebound_before_scanner_cap(monkeypat
             {"stage": stage, "name": name, "fields": fields or {}}
         ),
     )
-    monkeypatch.setattr(kiwoom_utils, "get_realtime_item_rank_ka00198", lambda *args, **kwargs: [])
-    monkeypatch.setattr(kiwoom_utils, "get_price_jump_ka10019", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        kiwoom_utils, "get_realtime_item_rank_ka00198", lambda *args, **kwargs: []
+    )
+    monkeypatch.setattr(
+        kiwoom_utils, "get_price_jump_ka10019", lambda *args, **kwargs: []
+    )
     monkeypatch.setattr(
         kiwoom_utils,
         "scan_volume_spike_ka10023",
         lambda *args, **kwargs: [
-            {"Code": "000001", "Name": "LOW", "Price": 10300, "FluRate": -0.2, "SpikeRate": 140.0}
+            {
+                "Code": "000001",
+                "Name": "LOW",
+                "Price": 10300,
+                "FluRate": -0.2,
+                "SpikeRate": 140.0,
+            }
         ],
     )
-    monkeypatch.setattr(kiwoom_utils, "get_bid_balance_surge_ka10021", lambda *args, **kwargs: [])
-    monkeypatch.setattr(kiwoom_utils, "get_top_open_fluctuation_ka10028", lambda *args, **kwargs: [])
-    monkeypatch.setattr(kiwoom_utils, "get_value_top_ka10032", lambda *args, **kwargs: [])
-    monkeypatch.setattr(kiwoom_utils, "get_vi_triggered_ka10054", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        kiwoom_utils, "get_bid_balance_surge_ka10021", lambda *args, **kwargs: []
+    )
+    monkeypatch.setattr(
+        kiwoom_utils, "get_top_open_fluctuation_ka10028", lambda *args, **kwargs: []
+    )
+    monkeypatch.setattr(
+        kiwoom_utils, "get_value_top_ka10032", lambda *args, **kwargs: []
+    )
+    monkeypatch.setattr(
+        kiwoom_utils, "get_vi_triggered_ka10054", lambda *args, **kwargs: []
+    )
     monkeypatch.setattr(
         kiwoom_utils,
         "get_minute_candles_ka10080",
@@ -4572,7 +5059,11 @@ def test_run_scalper_iteration_observes_low_rebound_before_scanner_cap(monkeypat
         supernova_limit=30,
     )
 
-    low_events = [event for event in emitted if event["stage"] == "scalping_scanner_low_rebound_source_observed"]
+    low_events = [
+        event
+        for event in emitted
+        if event["stage"] == "scalping_scanner_low_rebound_source_observed"
+    ]
     assert codes == []
     assert recent == {}
     assert event_bus.events == []
@@ -4598,11 +5089,21 @@ def test_run_scalper_iteration_continues_when_one_source_fails(monkeypatch):
         kiwoom_utils,
         "get_price_jump_ka10019",
         lambda *args, **kwargs: [
-            {"Code": "005930", "Name": "삼성전자", "Price": 70000, "FluRate": 1.2, "JumpRate": 0.5}
+            {
+                "Code": "005930",
+                "Name": "삼성전자",
+                "Price": 70000,
+                "FluRate": 1.2,
+                "JumpRate": 0.5,
+            }
         ],
     )
-    monkeypatch.setattr(kiwoom_utils, "scan_volume_spike_ka10023", lambda *args, **kwargs: [])
-    monkeypatch.setattr(kiwoom_utils, "get_bid_balance_surge_ka10021", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        kiwoom_utils, "scan_volume_spike_ka10023", lambda *args, **kwargs: []
+    )
+    monkeypatch.setattr(
+        kiwoom_utils, "get_bid_balance_surge_ka10021", lambda *args, **kwargs: []
+    )
     monkeypatch.setattr(
         kiwoom_utils,
         "get_top_open_fluctuation_ka10028",
@@ -4613,7 +5114,9 @@ def test_run_scalper_iteration_continues_when_one_source_fails(monkeypatch):
         "get_value_top_ka10032",
         lambda *args, **kwargs: [],
     )
-    monkeypatch.setattr(kiwoom_utils, "get_vi_triggered_ka10054", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        kiwoom_utils, "get_vi_triggered_ka10054", lambda *args, **kwargs: []
+    )
     radar = SimpleNamespace(find_supernova_targets=lambda *args, **kwargs: [])
     db = _DB()
     event_bus = _EventBus()
@@ -4634,7 +5137,10 @@ def test_run_scalper_iteration_continues_when_one_source_fails(monkeypatch):
     assert _event_payloads(event_bus, "COMMAND_WS_REG") == [
         {"codes": ["005930"], "source": "scalping_scanner_promote"}
     ]
-    assert _event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")[0]["code"] == "005930"
+    assert (
+        _event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")[0]["code"]
+        == "005930"
+    )
 
 
 def test_new_kiwoom_source_helpers_return_empty_list_on_fetch_failure(monkeypatch):

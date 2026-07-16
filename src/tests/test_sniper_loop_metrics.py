@@ -10,6 +10,7 @@ Verifies:
 - _RECENT_SNAPSHOT_SIGNATURES TTL prune (축 B)
 - _append_jsonl_async best-effort enqueue (축 B)
 """
+
 import time
 import re
 import json
@@ -33,7 +34,6 @@ from src.engine.sniper_gatekeeper_replay import (
     record_gatekeeper_snapshot,
     _snapshot_signature,
 )
-
 
 # ──────────────────────────────────────────────
 # _resolve_stock_marcap TTL cache
@@ -171,13 +171,18 @@ def test_marcap_cache_ttl_positive():
 
 def test_handle_watching_state_accepts_now_kwargs():
     """handle_watching_state가 now_ts/now_dt kwargs를 정상 수용하는지 검증.
-    
+
     직접 호출하여 예외 없이 시간 kwargs를 처리할 수 있는지 확인.
     """
     from src.engine.sniper_state_handlers import handle_watching_state
     from datetime import datetime
 
-    stock = {"name": "TEST", "code": "000000", "strategy": "SCALPING", "status": "WATCHING"}
+    stock = {
+        "name": "TEST",
+        "code": "000000",
+        "strategy": "SCALPING",
+        "status": "WATCHING",
+    }
     ws_data = {"curr": 10000, "fluctuation": 1.0, "v_pw": 100}
 
     # now_ts/now_dt를 전달해도 정상 동작 (다른 의존성 부족으로 early return)
@@ -185,8 +190,12 @@ def test_handle_watching_state_accepts_now_kwargs():
     now_dt = datetime.now()
     try:
         handle_watching_state(
-            stock, "000000", ws_data, None,
-            now_ts=now_ts, now_dt=now_dt,
+            stock,
+            "000000",
+            ws_data,
+            None,
+            now_ts=now_ts,
+            now_dt=now_dt,
         )
     except Exception as e:
         # DB/AI 미초기화로 인한 에러는 허용 (시간 파라미터 전달 자체가 문제없는지가 핵심)
@@ -200,15 +209,26 @@ def test_handle_holding_state_accepts_now_kwargs():
     from src.engine.sniper_state_handlers import handle_holding_state
     from datetime import datetime
 
-    stock = {"name": "TEST", "code": "000000", "strategy": "SCALPING", "buy_price": 10000, "status": "HOLDING"}
+    stock = {
+        "name": "TEST",
+        "code": "000000",
+        "strategy": "SCALPING",
+        "buy_price": 10000,
+        "status": "HOLDING",
+    }
     ws_data = {"curr": 10100, "fluctuation": 1.0}
 
     now_ts = time.time()
     now_dt = datetime.now()
     try:
         handle_holding_state(
-            stock, "000000", ws_data, None, "NORMAL",
-            now_ts=now_ts, now_dt=now_dt,
+            stock,
+            "000000",
+            ws_data,
+            None,
+            "NORMAL",
+            now_ts=now_ts,
+            now_dt=now_dt,
         )
     except Exception as e:
         msg = str(e)
@@ -229,6 +249,7 @@ def test_global_constants_exist():
         _ACCOUNT_SYNC_EXECUTOR,
         _LOOP_METRICS_LAST_LOG_TS,
     )
+
     assert _MARCAP_CACHE_TTL >= 60  # 최소 1분
     assert isinstance(_LOOP_METRICS_LAST_LOG_TS, float)
 
@@ -249,6 +270,7 @@ def test_state_handler_deps_wrappers_no_longer_call_ensure():
         process_sell_cancellation,
         process_order_cancellation,
     )
+
     wrappers = [
         handle_watching_state,
         handle_holding_state,
@@ -259,9 +281,9 @@ def test_state_handler_deps_wrappers_no_longer_call_ensure():
     ]
     for fn in wrappers:
         source = inspect.getsource(fn)
-        assert "_ensure_state_handler_deps" not in source, (
-            f"{fn.__name__} still calls _ensure_state_handler_deps"
-        )
+        assert (
+            "_ensure_state_handler_deps" not in source
+        ), f"{fn.__name__} still calls _ensure_state_handler_deps"
 
 
 def test_run_sniper_loop_calls_ensure_state_handler_deps():
@@ -271,16 +293,17 @@ def test_run_sniper_loop_calls_ensure_state_handler_deps():
     """
     import inspect
     from src.engine.kiwoom_sniper_v2 import run_sniper
+
     source = inspect.getsource(run_sniper)
     # while True: 이후 _ensure_state_handler_deps()가 루프 내에 존재하는지 확인
-    assert "_ensure_state_handler_deps()" in source, (
-        "run_sniper() does not contain _ensure_state_handler_deps() call"
-    )
+    assert (
+        "_ensure_state_handler_deps()" in source
+    ), "run_sniper() does not contain _ensure_state_handler_deps() call"
     # 루프 상단(while True 이후)에 위치하는지 확인
-    loop_section = source[source.find("while True:"):source.find("while True:") + 500]
-    assert "_ensure_state_handler_deps()" in loop_section, (
-        "_ensure_state_handler_deps() not found in loop top section"
-    )
+    loop_section = source[source.find("while True:") : source.find("while True:") + 500]
+    assert (
+        "_ensure_state_handler_deps()" in loop_section
+    ), "_ensure_state_handler_deps() not found in loop top section"
 
 
 # ──────────────────────────────────────────────
@@ -323,6 +346,7 @@ def test_prune_stale_signatures_keeps_recent():
 def test_prune_stale_signatures_skips_within_interval(monkeypatch):
     """prune interval(300초) 이내에는 중복 실행되지 않음."""
     import src.engine.sniper_gatekeeper_replay as gkr
+
     monkeypatch.setattr(gkr, "_LAST_SNAPSHOT_PRUNE_TS", 0.0)
     _RECENT_SNAPSHOT_SIGNATURES.clear()
     now = time.time()
@@ -376,8 +400,9 @@ def test_record_gatekeeper_snapshot_failure_returns_none(monkeypatch):
     # enqueue 실패 + 동기 fallback write 실패 → None 반환
     assert result2 is None, "모든 write 경로 실패 시 None 반환"
     # dedup 시그니처가 롤백되었는지 확인
-    assert len(_RECENT_SNAPSHOT_SIGNATURES) == 0, \
-        f"dedup이 모두 롤백되어야 함: {_RECENT_SNAPSHOT_SIGNATURES}"
+    assert (
+        len(_RECENT_SNAPSHOT_SIGNATURES) == 0
+    ), f"dedup이 모두 롤백되어야 함: {_RECENT_SNAPSHOT_SIGNATURES}"
 
 
 def test_snapshot_signature_deterministic():
@@ -483,7 +508,8 @@ def test_append_jsonl_async_worker_failure_rolls_back_dedup(monkeypatch):
 
     # async write (worker에서 실패 → 롤백)
     _append_jsonl_async(
-        test_file, payload,
+        test_file,
+        payload,
         _rollback_signature=rollback_sig,
     )
     _flush_jsonl_writer()
@@ -523,12 +549,16 @@ def test_flush_jsonl_writer_called_on_shutdown(monkeypatch):
 
     # 소스 코드에 atexit.register(_flush_jsonl_writer) 호출이 있는지 확인
     import inspect
+
     source = inspect.getsource(gkr)
-    assert "atexit.register" in source and "_flush_jsonl_writer" in source, \
-        "소스 코드에 atexit.register(_flush_jsonl_writer) 호출이 없음"
+    assert (
+        "atexit.register" in source and "_flush_jsonl_writer" in source
+    ), "소스 코드에 atexit.register(_flush_jsonl_writer) 호출이 없음"
 
 
-def test_record_gatekeeper_snapshot_dedup_prevents_duplicate_file_lines(monkeypatch, tmp_path):
+def test_record_gatekeeper_snapshot_dedup_prevents_duplicate_file_lines(
+    monkeypatch, tmp_path
+):
     """동일 payload 2회 연속 호출 시 JSONL에 1줄만 기록되는지 검증.
 
     DATA_DIR을 tmp_path로 monkeypatch하여 _replay_dir()이 tmp_path를 반환하도록 한다.
@@ -559,8 +589,9 @@ def test_record_gatekeeper_snapshot_dedup_prevents_duplicate_file_lines(monkeypa
 
     # 첫 번째 호출로 기록된 dedup 시그니처 확인
     sig = gkr._snapshot_signature(result1)
-    assert sig in _RECENT_SNAPSHOT_SIGNATURES, \
-        "첫 번째 호출 후 dedup 시그니처가 즉시 기록되어야 함"
+    assert (
+        sig in _RECENT_SNAPSHOT_SIGNATURES
+    ), "첫 번째 호출 후 dedup 시그니처가 즉시 기록되어야 함"
 
     # 첫 번째 write 완료 보장
     _flush_jsonl_writer()
@@ -622,7 +653,8 @@ def test_prune_and_callback_concurrent_access(monkeypatch):
 
     # async write (worker에서 느리게 실행)
     _append_jsonl_async(
-        test_file, payload,
+        test_file,
+        payload,
         _rollback_signature="fresh_sig_0",  # 유지 대상 시그니처 중 하나
     )
 
@@ -634,13 +666,15 @@ def test_prune_and_callback_concurrent_access(monkeypatch):
 
     # stale 시그니처가 제거되었는지 확인
     for i in range(100):
-        assert f"stale_sig_{i}" not in gkr._RECENT_SNAPSHOT_SIGNATURES, \
-            f"stale_sig_{i} should have been pruned"
+        assert (
+            f"stale_sig_{i}" not in gkr._RECENT_SNAPSHOT_SIGNATURES
+        ), f"stale_sig_{i} should have been pruned"
 
     # fresh 시그니처는 유지되어야 함 (단, fresh_sig_0는 callback에서 롤백될 수 있음)
     for i in range(1, 50):
-        assert f"fresh_sig_{i}" in gkr._RECENT_SNAPSHOT_SIGNATURES, \
-            f"fresh_sig_{i} should still exist"
+        assert (
+            f"fresh_sig_{i}" in gkr._RECENT_SNAPSHOT_SIGNATURES
+        ), f"fresh_sig_{i} should still exist"
 
     test_file.unlink(missing_ok=True)
 
@@ -683,5 +717,6 @@ def test_enqueue_fallback_write_failure_rolls_back_dedup(monkeypatch):
     assert result is None, "모든 write 경로 실패 시 None 반환"
 
     # dedup 시그니처가 롤백되었는지 확인
-    assert len(_RECENT_SNAPSHOT_SIGNATURES) == 0, \
-        f"dedup이 모두 롤백되어야 함: {_RECENT_SNAPSHOT_SIGNATURES}"
+    assert (
+        len(_RECENT_SNAPSHOT_SIGNATURES) == 0
+    ), f"dedup이 모두 롤백되어야 함: {_RECENT_SNAPSHOT_SIGNATURES}"

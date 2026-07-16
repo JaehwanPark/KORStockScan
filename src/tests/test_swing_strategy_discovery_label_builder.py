@@ -14,15 +14,21 @@ from src.database.models import (
     SwingStrategyDiscoveryLabel,
 )
 from src.engine import swing_strategy_discovery_label_builder as mod
-from src.engine.swing_strategy_discovery_schema import ensure_swing_strategy_discovery_schema
+from src.engine.swing_strategy_discovery_schema import (
+    ensure_swing_strategy_discovery_schema,
+)
 
 
 def _external_test_db_url() -> str:
     db_url = os.getenv("KORSTOCKSCAN_TEST_DATABASE_URL", "").strip()
     if not db_url:
-        pytest.skip("set KORSTOCKSCAN_TEST_DATABASE_URL to run DB-backed discovery label tests")
+        pytest.skip(
+            "set KORSTOCKSCAN_TEST_DATABASE_URL to run DB-backed discovery label tests"
+        )
     if "test" not in db_url.lower():
-        pytest.skip("KORSTOCKSCAN_TEST_DATABASE_URL must point to an isolated test database")
+        pytest.skip(
+            "KORSTOCKSCAN_TEST_DATABASE_URL must point to an isolated test database"
+        )
     return db_url
 
 
@@ -106,7 +112,9 @@ def test_label_builder_generates_horizon_and_policy_exit_labels(tmp_path):
         _seed_arm(session)
         _seed_quotes(session)
 
-    report = mod.build_swing_strategy_discovery_labels("2026-05-20", db_url=db_url, refresh_matured=True)
+    report = mod.build_swing_strategy_discovery_labels(
+        "2026-05-20", db_url=db_url, refresh_matured=True
+    )
 
     assert report["runtime_effect"] is False
     assert report["allowed_runtime_apply"] is False
@@ -114,7 +122,12 @@ def test_label_builder_generates_horizon_and_policy_exit_labels(tmp_path):
     with Session() as session:
         labels = session.query(SwingStrategyDiscoveryLabel).all()
         arm = session.query(SwingStrategyDiscoveryArm).first()
-    assert {label.label_horizon for label in labels} == {"1d", "5d", "10d", "policy_exit"}
+    assert {label.label_horizon for label in labels} == {
+        "1d",
+        "5d",
+        "10d",
+        "policy_exit",
+    }
     assert all(label.label_status == "labeled" for label in labels)
     assert arm.status == "EXITED"
     assert arm.actual_order_submitted is False
@@ -148,12 +161,19 @@ def test_pullback_entry_expires_when_limit_not_touched(tmp_path):
                 )
             )
 
-    mod.build_swing_strategy_discovery_labels("2026-05-20", db_url=db_url, refresh_matured=True)
+    mod.build_swing_strategy_discovery_labels(
+        "2026-05-20", db_url=db_url, refresh_matured=True
+    )
 
     with Session() as session:
         arm = session.query(SwingStrategyDiscoveryArm).first()
-        statuses = {label.label_status for label in session.query(SwingStrategyDiscoveryLabel).all()}
-        features = json.loads(session.query(SwingStrategyDiscoveryLabel).first().label_features)
+        statuses = {
+            label.label_status
+            for label in session.query(SwingStrategyDiscoveryLabel).all()
+        }
+        features = json.loads(
+            session.query(SwingStrategyDiscoveryLabel).first().label_features
+        )
     assert arm.status == "EXPIRED"
     assert statuses == {"expired_entry_no_trigger"}
     assert features["stop_touch_outcome_bucket"] == "not_entered_or_pending"
@@ -184,21 +204,39 @@ def test_entry_day_stop_touch_recovered_bucket_is_recorded(tmp_path):
                 )
             )
 
-    mod.build_swing_strategy_discovery_labels("2026-05-20", db_url=db_url, refresh_matured=True)
+    mod.build_swing_strategy_discovery_labels(
+        "2026-05-20", db_url=db_url, refresh_matured=True
+    )
 
     with Session() as session:
         arm = session.query(SwingStrategyDiscoveryArm).first()
-        policy_label = session.query(SwingStrategyDiscoveryLabel).filter_by(label_horizon="policy_exit").first()
+        policy_label = (
+            session.query(SwingStrategyDiscoveryLabel)
+            .filter_by(label_horizon="policy_exit")
+            .first()
+        )
     arm_features = json.loads(arm.arm_features)
     label_features = json.loads(policy_label.label_features)
-    assert arm_features["stop_touch_outcome_bucket"] == "wick_stop_recovered_close_above_stop"
-    assert label_features["stop_touch_outcome_bucket"] == "wick_stop_recovered_close_above_stop"
+    assert (
+        arm_features["stop_touch_outcome_bucket"]
+        == "wick_stop_recovered_close_above_stop"
+    )
+    assert (
+        label_features["stop_touch_outcome_bucket"]
+        == "wick_stop_recovered_close_above_stop"
+    )
     assert label_features["entry_day_low_from_entry_bucket"] == "stop_zone_3_5pct"
     assert label_features["entry_day_observation_role"] == "source_only_no_hard_gate"
     assert label_features["entry_day_observation_runtime_effect"] is False
     assert label_features["entry_day_observation_allowed_runtime_apply"] is False
-    assert label_features["entry_position_objective"] == "observe_entry_location_for_better_price_or_momentum_entry"
-    assert label_features["entry_position_opportunity_bucket"] == "pullback_retest_observation"
+    assert (
+        label_features["entry_position_objective"]
+        == "observe_entry_location_for_better_price_or_momentum_entry"
+    )
+    assert (
+        label_features["entry_position_opportunity_bucket"]
+        == "pullback_retest_observation"
+    )
     assert arm_features["allowed_runtime_apply"] is False
     assert arm_features["runtime_effect"] is False
 
@@ -228,10 +266,16 @@ def test_entry_day_stop_touch_close_below_stop_bucket_is_recorded(tmp_path):
                 )
             )
 
-    mod.build_swing_strategy_discovery_labels("2026-05-20", db_url=db_url, refresh_matured=True)
+    mod.build_swing_strategy_discovery_labels(
+        "2026-05-20", db_url=db_url, refresh_matured=True
+    )
 
     with Session() as session:
-        policy_label = session.query(SwingStrategyDiscoveryLabel).filter_by(label_horizon="policy_exit").first()
+        policy_label = (
+            session.query(SwingStrategyDiscoveryLabel)
+            .filter_by(label_horizon="policy_exit")
+            .first()
+        )
     features = json.loads(policy_label.label_features)
     assert features["stop_touch_outcome_bucket"] == "close_below_stop"
     assert features["entry_day_close_from_entry_bucket"] == "close_below_stop"
@@ -263,10 +307,16 @@ def test_entry_day_momentum_chase_opportunity_bucket_is_source_only(tmp_path):
                 )
             )
 
-    mod.build_swing_strategy_discovery_labels("2026-05-20", db_url=db_url, refresh_matured=True)
+    mod.build_swing_strategy_discovery_labels(
+        "2026-05-20", db_url=db_url, refresh_matured=True
+    )
 
     with Session() as session:
-        policy_label = session.query(SwingStrategyDiscoveryLabel).filter_by(label_horizon="policy_exit").first()
+        policy_label = (
+            session.query(SwingStrategyDiscoveryLabel)
+            .filter_by(label_horizon="policy_exit")
+            .first()
+        )
     features = json.loads(policy_label.label_features)
     assert features["stop_touch_outcome_bucket"] == "no_touch"
     assert features["entry_position_opportunity_bucket"] == "momentum_chase_observation"
@@ -292,8 +342,12 @@ def test_bottom_rebound_entry_policies_are_anticipatory_without_breakout_confirm
     ]
 
     next_open = mod.simulate_entry("bottom_rebound_next_open_entry", 1000, quotes)
-    retest = mod.simulate_entry("bottom_rebound_signal_close_retest_limit_entry", 1000, quotes)
-    atr_pullback = mod.simulate_entry("bottom_rebound_atr_pullback_limit_entry", 1000, quotes)
+    retest = mod.simulate_entry(
+        "bottom_rebound_signal_close_retest_limit_entry", 1000, quotes
+    )
+    atr_pullback = mod.simulate_entry(
+        "bottom_rebound_atr_pullback_limit_entry", 1000, quotes
+    )
 
     assert next_open.status == "entered"
     assert next_open.reason == "bottom_rebound_next_open"

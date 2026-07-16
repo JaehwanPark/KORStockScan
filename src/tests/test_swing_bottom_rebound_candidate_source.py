@@ -74,20 +74,30 @@ def test_candidate_source_blocks_bad_research_contract() -> None:
     source = _bottom_report()
     source["runtime_effect"] = True
 
-    report = build_candidate_source_report(bottom_report=source, config=CandidateSourceConfig())
+    report = build_candidate_source_report(
+        bottom_report=source, config=CandidateSourceConfig()
+    )
 
     assert report["source_quality"]["contract_pass"] is False
-    assert "source_runtime_effect_not_false" in report["source_quality"]["contract_block_reasons"]
+    assert (
+        "source_runtime_effect_not_false"
+        in report["source_quality"]["contract_block_reasons"]
+    )
     assert report["candidate_rows"] == []
     assert "no_bottom_rebound_candidates_selected" in report["warnings"]
 
 
 def test_candidate_source_documents_feedback_loop_without_runtime_authority() -> None:
-    report = build_candidate_source_report(bottom_report=_bottom_report(), config=CandidateSourceConfig())
+    report = build_candidate_source_report(
+        bottom_report=_bottom_report(), config=CandidateSourceConfig()
+    )
     loop = report["scannerization_feedback_loop"]
 
     assert loop["state"] == "source_only_design_ready"
-    assert loop["allowed_next_mutation"] == "versioned_candidate_source_config_proposal_only"
+    assert (
+        loop["allowed_next_mutation"]
+        == "versioned_candidate_source_config_proposal_only"
+    )
     assert "swing_strategy_discovery_labels" in loop["feedback_sources"]
     assert "broker order enablement" in loop["forbidden_automatic_mutations"]
 
@@ -96,7 +106,10 @@ def test_candidate_source_consumes_only_sim_auto_approved_policy() -> None:
     approved = {
         "report_type": "swing_bottom_rebound_policy_auto_loop",
         "date": "2026-05-22",
-        "final_conclusion": {"classification_state": "sim_auto_approved", "promote_policy": True},
+        "final_conclusion": {
+            "classification_state": "sim_auto_approved",
+            "promote_policy": True,
+        },
         "sim_auto_approved_policy": {
             "policy_version": "bottom_rebound_swing_source_v2",
             "max_candidates": 40,
@@ -131,7 +144,10 @@ def test_candidate_source_blocks_policy_without_control_tower_approval() -> None
     approved = {
         "report_type": "swing_bottom_rebound_policy_auto_loop",
         "date": "2026-05-22",
-        "final_conclusion": {"classification_state": "sim_auto_approved", "promote_policy": True},
+        "final_conclusion": {
+            "classification_state": "sim_auto_approved",
+            "promote_policy": True,
+        },
         "sim_auto_approved_policy": {
             "policy_version": "bottom_rebound_swing_source_v2",
             "max_candidates": 40,
@@ -140,7 +156,9 @@ def test_candidate_source_blocks_policy_without_control_tower_approval() -> None
         },
     }
 
-    config, diagnostics = config_from_policy_auto_loop(approved, require_sim_auto_approved=True)
+    config, diagnostics = config_from_policy_auto_loop(
+        approved, require_sim_auto_approved=True
+    )
 
     assert diagnostics["block_reason"] == "control_tower_sim_auto_approval_missing"
     assert diagnostics["policy_approved"] is True
@@ -152,11 +170,16 @@ def test_candidate_source_blocks_policy_without_sim_auto_approval() -> None:
     blocked = {
         "report_type": "swing_bottom_rebound_policy_auto_loop",
         "date": "2026-05-22",
-        "final_conclusion": {"classification_state": "source_only_keep_collecting", "promote_policy": False},
+        "final_conclusion": {
+            "classification_state": "source_only_keep_collecting",
+            "promote_policy": False,
+        },
         "sim_auto_approved_policy": None,
     }
 
-    config, diagnostics = config_from_policy_auto_loop(blocked, require_sim_auto_approved=True)
+    config, diagnostics = config_from_policy_auto_loop(
+        blocked, require_sim_auto_approved=True
+    )
     report = build_candidate_source_report(
         bottom_report=_bottom_report(),
         config=config,

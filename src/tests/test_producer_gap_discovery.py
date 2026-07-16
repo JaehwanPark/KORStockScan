@@ -35,7 +35,9 @@ def _write_json(path: Path, payload: dict) -> None:
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+    path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8"
+    )
 
 
 def _write_gzip_jsonl(path: Path, rows: list[dict]) -> None:
@@ -79,7 +81,9 @@ def _ai_response(candidate_ids: list[str]) -> dict:
         "candidate_reviews": [
             {
                 "candidate_id": candidate_id,
-                "pattern_type": pattern_by_id.get(candidate_id, candidate_id.replace("producer_gap_", "")),
+                "pattern_type": pattern_by_id.get(
+                    candidate_id, candidate_id.replace("producer_gap_", "")
+                ),
                 "priority": "high",
                 "recommended_route": "implement_now",
                 "confidence": "high",
@@ -87,18 +91,25 @@ def _ai_response(candidate_ids: list[str]) -> dict:
                 "reason": "dedicated source-only producer is required",
                 "implementation_requirements": ["preserve runtime_effect=false"],
                 "acceptance_tests": ["pytest producer gap tests"],
-                "files_likely_touched": ["src/engine/automation/producer_gap_discovery.py"],
+                "files_likely_touched": [
+                    "src/engine/automation/producer_gap_discovery.py"
+                ],
             }
             for candidate_id in candidate_ids
         ],
         "ai_tier2_proposals": [
             {
                 "candidate_id": candidate_id,
-                "proposal_decision": "absorb_as_metric_dimension"
-                if "submit_fill_quality" in candidate_id
-                else "new_producer",
+                "proposal_decision": (
+                    "absorb_as_metric_dimension"
+                    if "submit_fill_quality" in candidate_id
+                    else "new_producer"
+                ),
                 "recommended_canonical_bucket": f"producer_gap:{pattern_by_id.get(candidate_id, candidate_id)}",
-                "recommended_metric_or_dimension": ["source_quality_adjusted_ev_pct", "diagnostic_win_rate"],
+                "recommended_metric_or_dimension": [
+                    "source_quality_adjusted_ev_pct",
+                    "diagnostic_win_rate",
+                ],
                 "reasoning_summary": "AI proposal remains source-only",
                 "confidence": "high",
                 "required_source_fields": contract_fields,
@@ -109,12 +120,17 @@ def _ai_response(candidate_ids: list[str]) -> dict:
         "comparative_reviews": [
             {
                 "candidate_id": candidate_id,
-                "selected_decision": "absorb_as_metric_dimension"
-                if "submit_fill_quality" in candidate_id
-                else "new_producer",
+                "selected_decision": (
+                    "absorb_as_metric_dimension"
+                    if "submit_fill_quality" in candidate_id
+                    else "new_producer"
+                ),
                 "selected_source": "hybrid",
                 "recommended_canonical_bucket": f"producer_gap:{pattern_by_id.get(candidate_id, candidate_id)}",
-                "recommended_metric_or_dimension": ["source_quality_adjusted_ev_pct", "diagnostic_win_rate"],
+                "recommended_metric_or_dimension": [
+                    "source_quality_adjusted_ev_pct",
+                    "diagnostic_win_rate",
+                ],
                 "comparison_summary": "deterministic and AI proposals agree",
                 "rejected_alternative_reason": "",
                 "confidence": "high",
@@ -144,7 +160,9 @@ def test_producer_gap_ai_review_rejects_real_preapply_primary_ev_claim():
     status, _, warnings = mod._parse_ai_review_response(payload)
 
     assert status == "parse_rejected"
-    assert f"ai_review_comparative_evidence_authority_violation:{candidate_id}" in warnings
+    assert (
+        f"ai_review_comparative_evidence_authority_violation:{candidate_id}" in warnings
+    )
 
 
 def _minimal_runner_fixture(post_sell_dir: Path) -> None:
@@ -171,7 +189,9 @@ def _minimal_runner_fixture(post_sell_dir: Path) -> None:
     )
 
 
-def test_producer_gap_discovery_detects_seven_patterns_and_ai_orders(tmp_path, monkeypatch):
+def test_producer_gap_discovery_detects_seven_patterns_and_ai_orders(
+    tmp_path, monkeypatch
+):
     report_dir = tmp_path / "data" / "report"
     post_sell_dir = tmp_path / "data" / "post_sell"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
@@ -179,14 +199,36 @@ def test_producer_gap_discovery_detects_seven_patterns_and_ai_orders(tmp_path, m
 
     _write_jsonl(
         post_sell_dir / "sim_post_sell_evaluations_2026-05-26.jsonl",
-        [{"code": "036010", "exit_reason": "hard_stop", "profit_rate": -2.5, "mfe_pct": 1.1}],
+        [
+            {
+                "code": "036010",
+                "exit_reason": "hard_stop",
+                "profit_rate": -2.5,
+                "mfe_pct": 1.1,
+            }
+        ],
     )
     _write_jsonl(
         post_sell_dir / "sim_post_sell_candidates_2026-05-26.jsonl",
         [
-            {"code": "031330", "entry_time": "09:08:00", "profit_rate": -2.2, "exit_reason": "hard_stop"},
-            {"code": "036010", "entry_time": "09:18:00", "profit_rate": -1.1, "exit_reason": "soft_stop"},
-            {"code": "000100", "entry_time": "10:40:00", "profit_rate": 0.4, "exit_reason": "take_profit"},
+            {
+                "code": "031330",
+                "entry_time": "09:08:00",
+                "profit_rate": -2.2,
+                "exit_reason": "hard_stop",
+            },
+            {
+                "code": "036010",
+                "entry_time": "09:18:00",
+                "profit_rate": -1.1,
+                "exit_reason": "soft_stop",
+            },
+            {
+                "code": "000100",
+                "entry_time": "10:40:00",
+                "profit_rate": 0.4,
+                "exit_reason": "take_profit",
+            },
             {
                 "stock_code": "003720",
                 "stock_name": "Samyoung",
@@ -242,7 +284,7 @@ def test_producer_gap_discovery_detects_seven_patterns_and_ai_orders(tmp_path, m
                 "peak_profit": 0.96,
                 "held_sec": 12674,
                 "exit_rule": "scalp_hard_stop_pct",
-            }
+            },
         ],
     )
     _write_json(
@@ -250,14 +292,22 @@ def test_producer_gap_discovery_detects_seven_patterns_and_ai_orders(tmp_path, m
         {"metrics": {"avg_expected_ev_pct": 0.82, "expected_ev_krw_sum": 12850}},
     )
     _write_json(
-        report_dir / "lifecycle_decision_matrix" / "lifecycle_decision_matrix_2026-05-26.json",
+        report_dir
+        / "lifecycle_decision_matrix"
+        / "lifecycle_decision_matrix_2026-05-26.json",
         {
-            "submit_bucket_attribution": {"rows": [{"reason": "missed_fill defensive_price cancelled"}]},
-            "scale_in_bucket_attribution": {"rows": [{"arm": "AVG_DOWN", "blocker_reason": "price_guard_missing"}]},
+            "submit_bucket_attribution": {
+                "rows": [{"reason": "missed_fill defensive_price cancelled"}]
+            },
+            "scale_in_bucket_attribution": {
+                "rows": [{"arm": "AVG_DOWN", "blocker_reason": "price_guard_missing"}]
+            },
         },
     )
     _write_json(
-        report_dir / "swing_strategy_discovery_ev" / "swing_strategy_discovery_ev_2026-05-26.json",
+        report_dir
+        / "swing_strategy_discovery_ev"
+        / "swing_strategy_discovery_ev_2026-05-26.json",
         {"arms": [{"state": "pending_label", "source_quality": "handoff_missing"}]},
     )
 
@@ -299,18 +349,23 @@ def test_producer_gap_discovery_detects_seven_patterns_and_ai_orders(tmp_path, m
         "metric_scope=completed_sim_exit_pnl_vs_missed_entry_counterfactual_ev_not_directly_nettable"
         in time_window_candidate["evidence"]
     )
-    assert any(item.startswith("time_window_measurement_keys=") for item in time_window_candidate["evidence"])
+    assert any(
+        item.startswith("time_window_measurement_keys=")
+        for item in time_window_candidate["evidence"]
+    )
     assert (
         "required_policy_comparison=allow_all_vs_block_all_vs_block_general_allow_recovery"
         in time_window_candidate["evidence"]
     )
-    assert time_window_candidate["recommended_producer_contract"]["preferred_producer_name"] == (
-        "time_window_regime_counterfactual"
-    )
-    assert time_window_candidate["recommended_producer_contract"]["candidate_producer_name"] == (
-        "time_window_regime_counterfactual"
-    )
-    assert time_window_candidate["recommended_producer_contract"]["compare_policies"] == [
+    assert time_window_candidate["recommended_producer_contract"][
+        "preferred_producer_name"
+    ] == ("time_window_regime_counterfactual")
+    assert time_window_candidate["recommended_producer_contract"][
+        "candidate_producer_name"
+    ] == ("time_window_regime_counterfactual")
+    assert time_window_candidate["recommended_producer_contract"][
+        "compare_policies"
+    ] == [
         "allow_all_in_window",
         "block_all_in_window",
         "block_general_allow_exception_in_window",
@@ -320,24 +375,42 @@ def test_producer_gap_discovery_detects_seven_patterns_and_ai_orders(tmp_path, m
         for item in report["producer_gap_candidates"]
         if item["pattern_type"] == "volatile_runner_exit_counterfactual_missing"
     )
-    assert "required_comparison=real_exit_profit_vs_same_parent_sim_runner_profit" in runner_candidate["evidence"]
+    assert (
+        "required_comparison=real_exit_profit_vs_same_parent_sim_runner_profit"
+        in runner_candidate["evidence"]
+    )
     assert any("003720:Samyoung" in item for item in runner_candidate["evidence"])
     plateau_candidate = next(
         item
         for item in report["producer_gap_candidates"]
         if item["pattern_type"] == "limit_up_plateau_breakdown_exit_missing"
     )
-    assert "required_comparison=current_stop_exit_vs_plateau_take_profit_vs_breakdown_exit" in plateau_candidate["evidence"]
+    assert (
+        "required_comparison=current_stop_exit_vs_plateau_take_profit_vs_breakdown_exit"
+        in plateau_candidate["evidence"]
+    )
     assert any("036010:Avaco" in item for item in plateau_candidate["evidence"])
     assert len(report["code_improvement_orders"]) >= len(candidate_ids)
     assert report["summary"]["sim_first_pattern_count"] >= 2
-    assert all(order["runtime_effect"] is False for order in report["code_improvement_orders"])
-    assert all(order["allowed_runtime_apply"] is False for order in report["code_improvement_orders"])
-    assert all(order["broker_order_forbidden"] is True for order in report["code_improvement_orders"])
-    assert (report_dir / "producer_gap_discovery" / "producer_gap_discovery_2026-05-26.json").exists()
+    assert all(
+        order["runtime_effect"] is False for order in report["code_improvement_orders"]
+    )
+    assert all(
+        order["allowed_runtime_apply"] is False
+        for order in report["code_improvement_orders"]
+    )
+    assert all(
+        order["broker_order_forbidden"] is True
+        for order in report["code_improvement_orders"]
+    )
+    assert (
+        report_dir / "producer_gap_discovery" / "producer_gap_discovery_2026-05-26.json"
+    ).exists()
 
 
-def test_sim_first_rolling_detects_runner_plateau_and_ambiguous_chronology(tmp_path, monkeypatch):
+def test_sim_first_rolling_detects_runner_plateau_and_ambiguous_chronology(
+    tmp_path, monkeypatch
+):
     report_dir = tmp_path / "data" / "report"
     post_sell_dir = tmp_path / "data" / "post_sell"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
@@ -408,8 +481,16 @@ def test_sim_first_rolling_detects_runner_plateau_and_ambiguous_chronology(tmp_p
         rolling_sim_scan=True,
     )
 
-    runner = next(item for item in report["producer_gap_candidates"] if item["pattern_type"] == "sim_holding_runner_gap_missing")
-    plateau = next(item for item in report["producer_gap_candidates"] if item["pattern_type"] == "sim_exit_plateau_breakdown_gap_missing")
+    runner = next(
+        item
+        for item in report["producer_gap_candidates"]
+        if item["pattern_type"] == "sim_holding_runner_gap_missing"
+    )
+    plateau = next(
+        item
+        for item in report["producer_gap_candidates"]
+        if item["pattern_type"] == "sim_exit_plateau_breakdown_gap_missing"
+    )
     assert "strict_match_count=1" in runner["evidence"]
     assert "ambiguous_match_count=1" in runner["evidence"]
     assert "strict_match_count=1" in plateau["evidence"]
@@ -464,10 +545,14 @@ def test_producer_gap_discovery_reads_gzip_post_sell_sources(tmp_path, monkeypat
         item["pattern_type"] == "sim_holding_runner_gap_missing"
         for item in report["producer_gap_candidates"]
     )
-    assert all(item["runtime_effect"] is False for item in report["producer_gap_candidates"])
+    assert all(
+        item["runtime_effect"] is False for item in report["producer_gap_candidates"]
+    )
 
 
-def test_ai_runtime_hook_contract_is_ignored_and_cannot_escalate_authority(tmp_path, monkeypatch):
+def test_ai_runtime_hook_contract_is_ignored_and_cannot_escalate_authority(
+    tmp_path, monkeypatch
+):
     report_dir = tmp_path / "data" / "report"
     post_sell_dir = tmp_path / "data" / "post_sell"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
@@ -505,14 +590,18 @@ def test_ai_runtime_hook_contract_is_ignored_and_cannot_escalate_authority(tmp_p
     assert order["allowed_runtime_apply"] is False
 
 
-def test_ai_forbidden_use_violation_surfaces_followup_workorder_without_retry(tmp_path, monkeypatch):
+def test_ai_forbidden_use_violation_surfaces_followup_workorder_without_retry(
+    tmp_path, monkeypatch
+):
     report_dir = tmp_path / "data" / "report"
     post_sell_dir = tmp_path / "data" / "post_sell"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
     _minimal_runner_fixture(post_sell_dir)
     response = _ai_response(["producer_gap_sim_holding_runner_gap_missing"])
-    response["audit"]["forbidden_use_violations"] = ["attempted_runtime_apply_authority"]
+    response["audit"]["forbidden_use_violations"] = [
+        "attempted_runtime_apply_authority"
+    ]
 
     report = mod.build_producer_gap_discovery_report(
         "2026-05-26",
@@ -525,11 +614,18 @@ def test_ai_forbidden_use_violation_surfaces_followup_workorder_without_retry(tm
     assert report["summary"]["ai_fail_closed"] is False
     assert report["summary"]["ai_review_followup_required"] is True
     assert report["ai_two_pass_review"]["provider_status"]["retry_attempted"] is False
-    assert report["code_improvement_orders"][0]["improvement_type"] == "ai_review_followup"
-    assert "forbidden_use_violation" in report["code_improvement_orders"][0]["ai_review_followup_reasons"]
+    assert (
+        report["code_improvement_orders"][0]["improvement_type"] == "ai_review_followup"
+    )
+    assert (
+        "forbidden_use_violation"
+        in report["code_improvement_orders"][0]["ai_review_followup_reasons"]
+    )
 
 
-def test_ai_forbidden_use_violation_handled_by_source_quality_blocker_does_not_surface_followup(tmp_path, monkeypatch):
+def test_ai_forbidden_use_violation_handled_by_source_quality_blocker_does_not_surface_followup(
+    tmp_path, monkeypatch
+):
     report_dir = tmp_path / "data" / "report"
     post_sell_dir = tmp_path / "data" / "post_sell"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
@@ -553,12 +649,22 @@ def test_ai_forbidden_use_violation_handled_by_source_quality_blocker_does_not_s
     assert report["summary"]["ai_review_followup_reasons"] == []
     assert report["ai_two_pass_review"]["unresolved_forbidden_use_violations"] == []
     assert report["ai_two_pass_review"]["handled_forbidden_use_violations"]
-    assert not any(order["improvement_type"] == "ai_review_followup" for order in report["code_improvement_orders"])
+    assert not any(
+        order["improvement_type"] == "ai_review_followup"
+        for order in report["code_improvement_orders"]
+    )
 
 
-def test_source_bundle_marks_entry_selection_and_missed_fill_candidates_implemented(tmp_path, monkeypatch):
+def test_source_bundle_marks_entry_selection_and_missed_fill_candidates_implemented(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "report")
-    bundle_path = tmp_path / "report" / "producer_gap_source_bundle" / "producer_gap_source_bundle_2026-05-26.json"
+    bundle_path = (
+        tmp_path
+        / "report"
+        / "producer_gap_source_bundle"
+        / "producer_gap_source_bundle_2026-05-26.json"
+    )
     bundle_path.parent.mkdir(parents=True)
     bundle_path.write_text(
         json.dumps(
@@ -570,7 +676,12 @@ def test_source_bundle_marks_entry_selection_and_missed_fill_candidates_implemen
                         "source_quality_status": "implemented",
                         "sample_count": 2,
                         "source_paths": ["lifecycle_decision_matrix.json"],
-                        "join_keys": ["sim_record_id", "code", "submit_time", "fill_quality"],
+                        "join_keys": [
+                            "sim_record_id",
+                            "code",
+                            "submit_time",
+                            "fill_quality",
+                        ],
                         "missing_fields": [],
                         "runtime_effect": False,
                         "allowed_runtime_apply": False,
@@ -581,7 +692,12 @@ def test_source_bundle_marks_entry_selection_and_missed_fill_candidates_implemen
                         "source_quality_status": "implemented",
                         "sample_count": 2,
                         "source_paths": ["sim_post_sell_candidates.jsonl"],
-                        "join_keys": ["sim_record_id", "candidate_id", "code", "source_stage"],
+                        "join_keys": [
+                            "sim_record_id",
+                            "candidate_id",
+                            "code",
+                            "source_stage",
+                        ],
                         "missing_fields": [],
                         "runtime_effect": False,
                         "allowed_runtime_apply": False,
@@ -638,14 +754,22 @@ def test_source_bundle_marks_entry_selection_and_missed_fill_candidates_implemen
     assert report["code_improvement_orders"] == []
 
 
-def test_openai_review_retries_with_low_reasoning_after_parse_reject(tmp_path, monkeypatch):
+def test_openai_review_retries_with_low_reasoning_after_parse_reject(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "report")
     monkeypatch.setattr(
         mod,
         "producer_gap_source_bundle_paths",
         lambda target_date: (
-            tmp_path / "report" / "producer_gap_source_bundle" / f"producer_gap_source_bundle_{target_date}.json",
-            tmp_path / "report" / "producer_gap_source_bundle" / f"producer_gap_source_bundle_{target_date}.md",
+            tmp_path
+            / "report"
+            / "producer_gap_source_bundle"
+            / f"producer_gap_source_bundle_{target_date}.json",
+            tmp_path
+            / "report"
+            / "producer_gap_source_bundle"
+            / f"producer_gap_source_bundle_{target_date}.md",
         ),
     )
     candidate = {
@@ -664,13 +788,20 @@ def test_openai_review_retries_with_low_reasoning_after_parse_reject(tmp_path, m
     monkeypatch.setattr(
         mod,
         "_deterministic_candidates",
-        lambda target_date, rolling_sim_scan=False: ([candidate], {"date": target_date}),
+        lambda target_date, rolling_sim_scan=False: (
+            [candidate],
+            {"date": target_date},
+        ),
     )
     calls = []
 
     def fake_call(context, *, config=None):
         calls.append(config)
-        status = {"provider": "openai", "status": "success", **config.provider_status_fields()}
+        status = {
+            "provider": "openai",
+            "status": "success",
+            **config.provider_status_fields(),
+        }
         if len(calls) == 1:
             return "{not-json", status
         return _ai_response([candidate["candidate_id"]]), status
@@ -688,14 +819,22 @@ def test_openai_review_retries_with_low_reasoning_after_parse_reject(tmp_path, m
     assert report["summary"]["ai_fail_closed"] is False
 
 
-def test_openai_review_does_not_retry_parsed_audit_correction_and_surfaces_workorder(tmp_path, monkeypatch):
+def test_openai_review_does_not_retry_parsed_audit_correction_and_surfaces_workorder(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "report")
     monkeypatch.setattr(
         mod,
         "producer_gap_source_bundle_paths",
         lambda target_date: (
-            tmp_path / "report" / "producer_gap_source_bundle" / f"producer_gap_source_bundle_{target_date}.json",
-            tmp_path / "report" / "producer_gap_source_bundle" / f"producer_gap_source_bundle_{target_date}.md",
+            tmp_path
+            / "report"
+            / "producer_gap_source_bundle"
+            / f"producer_gap_source_bundle_{target_date}.json",
+            tmp_path
+            / "report"
+            / "producer_gap_source_bundle"
+            / f"producer_gap_source_bundle_{target_date}.md",
         ),
     )
     candidate = {
@@ -714,7 +853,10 @@ def test_openai_review_does_not_retry_parsed_audit_correction_and_surfaces_worko
     monkeypatch.setattr(
         mod,
         "_deterministic_candidates",
-        lambda target_date, rolling_sim_scan=False: ([candidate], {"date": target_date}),
+        lambda target_date, rolling_sim_scan=False: (
+            [candidate],
+            {"date": target_date},
+        ),
     )
     calls = []
 
@@ -723,7 +865,11 @@ def test_openai_review_does_not_retry_parsed_audit_correction_and_surfaces_worko
         payload = _ai_response([candidate["candidate_id"]])
         payload["audit"]["status"] = "correction_required"
         payload["audit"]["issues"] = ["surface source-quality follow-up"]
-        return payload, {"provider": "openai", "status": "success", **config.provider_status_fields()}
+        return payload, {
+            "provider": "openai",
+            "status": "success",
+            **config.provider_status_fields(),
+        }
 
     monkeypatch.setattr(mod, "_call_openai_ai_review", fake_call)
 
@@ -733,7 +879,10 @@ def test_openai_review_does_not_retry_parsed_audit_correction_and_surfaces_worko
     assert report["summary"]["ai_fail_closed"] is False
     assert report["summary"]["ai_review_followup_required"] is True
     assert report["ai_two_pass_review"]["provider_status"]["retry_attempted"] is False
-    assert any(order["improvement_type"] == "ai_review_followup" for order in report["code_improvement_orders"])
+    assert any(
+        order["improvement_type"] == "ai_review_followup"
+        for order in report["code_improvement_orders"]
+    )
 
 
 def test_main_accepts_ai_review_response_json(tmp_path, monkeypatch):
@@ -775,17 +924,23 @@ def test_main_accepts_ai_review_response_json(tmp_path, monkeypatch):
 
     assert exit_code == 0
     report = json.loads(
-        (report_dir / "producer_gap_discovery" / "producer_gap_discovery_2026-05-26.json").read_text(
-            encoding="utf-8"
-        )
+        (
+            report_dir
+            / "producer_gap_discovery"
+            / "producer_gap_discovery_2026-05-26.json"
+        ).read_text(encoding="utf-8")
     )
     assert report["summary"]["ai_two_pass_review_status"] == "parsed"
     assert report["summary"]["audit_status"] == "pass"
-    assert report["ai_two_pass_review"]["provider_status"]["status"] == "provided_response"
+    assert (
+        report["ai_two_pass_review"]["provider_status"]["status"] == "provided_response"
+    )
     assert report["code_improvement_orders"]
 
 
-def test_sim_submit_quality_gap_ignores_false_actual_order_submitted(tmp_path, monkeypatch):
+def test_sim_submit_quality_gap_ignores_false_actual_order_submitted(
+    tmp_path, monkeypatch
+):
     report_dir = tmp_path / "data" / "report"
     post_sell_dir = tmp_path / "data" / "post_sell"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
@@ -823,8 +978,14 @@ def test_rolling_scan_dates_reflect_guarded_dates_only(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
 
-    _write_jsonl(post_sell_dir / "sim_post_sell_candidates_2026-05-25.jsonl", [{"stock_code": "000001"}])
-    _write_jsonl(post_sell_dir / "sim_post_sell_candidates_2026-05-26.jsonl", [{"stock_code": "000002"}])
+    _write_jsonl(
+        post_sell_dir / "sim_post_sell_candidates_2026-05-25.jsonl",
+        [{"stock_code": "000001"}],
+    )
+    _write_jsonl(
+        post_sell_dir / "sim_post_sell_candidates_2026-05-26.jsonl",
+        [{"stock_code": "000002"}],
+    )
 
     sources = mod._rolling_sim_sources("2026-05-26", rolling_sim_scan=True, max_rows=1)
 
@@ -842,7 +1003,14 @@ def test_producer_gap_discovery_ai_unavailable_fails_closed(tmp_path, monkeypatc
 
     _write_jsonl(
         post_sell_dir / "sim_post_sell_evaluations_2026-05-26.jsonl",
-        [{"code": "000001", "exit_reason": "hard_stop", "profit_rate": -2.5, "mfe_pct": 0.5}],
+        [
+            {
+                "code": "000001",
+                "exit_reason": "hard_stop",
+                "profit_rate": -2.5,
+                "mfe_pct": 0.5,
+            }
+        ],
     )
 
     report = mod.build_producer_gap_discovery_report("2026-05-26", provider="none")
@@ -854,7 +1022,9 @@ def test_producer_gap_discovery_ai_unavailable_fails_closed(tmp_path, monkeypatc
     assert report["code_improvement_orders"] == []
 
 
-def test_producer_gap_discovery_uses_time_window_regime_artifact_instead_of_missing_candidate(tmp_path, monkeypatch):
+def test_producer_gap_discovery_uses_time_window_regime_artifact_instead_of_missing_candidate(
+    tmp_path, monkeypatch
+):
     report_dir = tmp_path / "data" / "report"
     post_sell_dir = tmp_path / "data" / "post_sell"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
@@ -863,8 +1033,18 @@ def test_producer_gap_discovery_uses_time_window_regime_artifact_instead_of_miss
     _write_jsonl(
         post_sell_dir / "sim_post_sell_candidates_2026-05-26.jsonl",
         [
-            {"code": "031330", "entry_time": "09:08:00", "profit_rate": -2.2, "exit_reason": "hard_stop"},
-            {"code": "036010", "entry_time": "09:18:00", "profit_rate": -1.1, "exit_reason": "soft_stop"},
+            {
+                "code": "031330",
+                "entry_time": "09:08:00",
+                "profit_rate": -2.2,
+                "exit_reason": "hard_stop",
+            },
+            {
+                "code": "036010",
+                "entry_time": "09:18:00",
+                "profit_rate": -1.1,
+                "exit_reason": "soft_stop",
+            },
         ],
     )
     _write_json(
@@ -872,7 +1052,9 @@ def test_producer_gap_discovery_uses_time_window_regime_artifact_instead_of_miss
         {"metrics": {"avg_expected_ev_pct": 0.82, "expected_ev_krw_sum": 12850}},
     )
     _write_json(
-        report_dir / "time_window_regime_counterfactual" / "time_window_regime_counterfactual_2026-05-26.json",
+        report_dir
+        / "time_window_regime_counterfactual"
+        / "time_window_regime_counterfactual_2026-05-26.json",
         {
             "report_type": "time_window_regime_counterfactual",
             "status": "pass",
@@ -885,4 +1067,6 @@ def test_producer_gap_discovery_uses_time_window_regime_artifact_instead_of_miss
 
     candidates, _ = mod._deterministic_candidates("2026-05-26")
 
-    assert "time_window_policy_exception_missing" not in {item["pattern_type"] for item in candidates}
+    assert "time_window_policy_exception_missing" not in {
+        item["pattern_type"] for item in candidates
+    }

@@ -45,7 +45,11 @@ def test_record_and_evaluate_post_sell_feedback(monkeypatch, tmp_path):
 
     candidate_upside = feedback_mod.record_post_sell_candidate(
         recommendation_id=1,
-        stock={"name": "상승후보", "strategy": "SCALPING", "position_tag": "SCALP_BASE"},
+        stock={
+            "name": "상승후보",
+            "strategy": "SCALPING",
+            "position_tag": "SCALP_BASE",
+        },
         code="111111",
         sell_time="2026-04-08 10:00:30",
         buy_price=9900,
@@ -57,7 +61,11 @@ def test_record_and_evaluate_post_sell_feedback(monkeypatch, tmp_path):
     )
     candidate_good_exit = feedback_mod.record_post_sell_candidate(
         recommendation_id=2,
-        stock={"name": "하락후보", "strategy": "SCALPING", "position_tag": "SCALP_BASE"},
+        stock={
+            "name": "하락후보",
+            "strategy": "SCALPING",
+            "position_tag": "SCALP_BASE",
+        },
         code="222222",
         sell_time="2026-04-08 10:00:30",
         buy_price=10200,
@@ -101,7 +109,9 @@ def test_record_and_evaluate_post_sell_feedback(monkeypatch, tmp_path):
 
     fake_kiwoom = types.SimpleNamespace(
         get_kiwoom_token=lambda: "dummy",
-        get_minute_candles_ka10080=lambda _token, code, limit=700: candle_map.get(code, []),
+        get_minute_candles_ka10080=lambda _token, code, limit=700: candle_map.get(
+            code, []
+        ),
     )
     monkeypatch.setitem(sys.modules, "src.utils.kiwoom_utils", fake_kiwoom)
     monkeypatch.setattr(utils_pkg, "kiwoom_utils", fake_kiwoom, raising=False)
@@ -125,7 +135,9 @@ def test_record_and_evaluate_post_sell_feedback(monkeypatch, tmp_path):
     assert "GOOD_EXIT 1" in text
 
 
-def test_profitable_hard_stop_keeps_exit_rule_but_labels_realized_profit(monkeypatch, tmp_path):
+def test_profitable_hard_stop_keeps_exit_rule_but_labels_realized_profit(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(feedback_mod, "DATA_DIR", tmp_path)
     monkeypatch.setattr(
         feedback_mod,
@@ -277,8 +289,14 @@ def test_record_and_evaluate_sim_post_sell_feedback_isolated(monkeypatch, tmp_pa
     assert candidate["hard_stop_conflict_hard_gate"] is False
     assert candidate["ai_model_at_exit"] == "bedrock-nova-lite-v2"
     assert candidate["ai_data_quality"] == "fresh"
-    assert candidate["hard_stop_conflict_contract"]["metric_role"] == "exit_post_sell_dimension"
-    assert "hard stop relaxation" in candidate["hard_stop_conflict_contract"]["forbidden_uses"]
+    assert (
+        candidate["hard_stop_conflict_contract"]["metric_role"]
+        == "exit_post_sell_dimension"
+    )
+    assert (
+        "hard stop relaxation"
+        in candidate["hard_stop_conflict_contract"]["forbidden_uses"]
+    )
     assert feedback_mod._candidate_path("2026-05-18").exists() is False
     assert feedback_mod._sim_candidate_path("2026-05-18").exists() is True
 
@@ -298,20 +316,28 @@ def test_record_and_evaluate_sim_post_sell_feedback_isolated(monkeypatch, tmp_pa
     }
     fake_kiwoom = types.SimpleNamespace(
         get_kiwoom_token=lambda: "dummy",
-        get_minute_candles_ka10080=lambda _token, code, limit=700: candle_map.get(code, []),
+        get_minute_candles_ka10080=lambda _token, code, limit=700: candle_map.get(
+            code, []
+        ),
     )
     monkeypatch.setitem(sys.modules, "src.utils.kiwoom_utils", fake_kiwoom)
     monkeypatch.setattr(utils_pkg, "kiwoom_utils", fake_kiwoom, raising=False)
 
-    summary = feedback_mod.evaluate_sim_post_sell_candidates("2026-05-18", token="dummy")
+    summary = feedback_mod.evaluate_sim_post_sell_candidates(
+        "2026-05-18", token="dummy"
+    )
     assert summary.total_candidates == 1
     assert summary.evaluated_candidates == 1
     assert summary.outcome_counts.get("MISSED_UPSIDE") == 1
-    evaluations = feedback_mod._load_jsonl(feedback_mod._sim_evaluation_path("2026-05-18"))
+    evaluations = feedback_mod._load_jsonl(
+        feedback_mod._sim_evaluation_path("2026-05-18")
+    )
     assert evaluations[0]["sim_record_id"] == "SIM-005950-1"
     assert evaluations[0]["runtime_effect"] is False
     assert evaluations[0]["high_ai_hard_stop_conflict"] is True
-    assert evaluations[0]["hard_stop_conflict_dimension"] == "high_ai_hard_stop_conflict"
+    assert (
+        evaluations[0]["hard_stop_conflict_dimension"] == "high_ai_hard_stop_conflict"
+    )
     assert evaluations[0]["ai_score_at_exit"] == 76
     assert evaluations[0]["metrics_10m"]["mfe_pct"] > 4.0
 
@@ -360,21 +386,29 @@ def test_backfill_sim_post_sell_candidates_is_idempotent(monkeypatch, tmp_path):
         encoding="utf-8",
     )
 
-    first = feedback_mod.backfill_sim_post_sell_candidates_from_threshold_events("2026-05-18")
-    second = feedback_mod.backfill_sim_post_sell_candidates_from_threshold_events("2026-05-18")
+    first = feedback_mod.backfill_sim_post_sell_candidates_from_threshold_events(
+        "2026-05-18"
+    )
+    second = feedback_mod.backfill_sim_post_sell_candidates_from_threshold_events(
+        "2026-05-18"
+    )
 
     assert first["events_seen"] == 1
     assert first["candidates_created"] == 1
     assert second["events_seen"] == 1
     assert second["candidates_created"] == 0
-    candidates = feedback_mod._load_jsonl(feedback_mod._sim_candidate_path("2026-05-18"))
+    candidates = feedback_mod._load_jsonl(
+        feedback_mod._sim_candidate_path("2026-05-18")
+    )
     assert len(candidates) == 1
     assert candidates[0]["high_ai_hard_stop_conflict"] is True
     assert candidates[0]["ai_score_at_exit"] == 74
     assert candidates[0]["ai_model_at_exit"] == "bedrock-nova-lite-v2"
 
 
-def test_sim_post_sell_high_ai_conflict_falls_back_to_runtime_ai_prob(monkeypatch, tmp_path):
+def test_sim_post_sell_high_ai_conflict_falls_back_to_runtime_ai_prob(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(feedback_mod, "DATA_DIR", tmp_path)
     monkeypatch.setattr(
         feedback_mod,
@@ -442,7 +476,11 @@ def test_soft_stop_forensics_report(monkeypatch, tmp_path):
     )
     feedback_mod.record_post_sell_candidate(
         recommendation_id=202,
-        stock={"name": "지속약세B", "strategy": "SCALPING", "position_tag": "OPEN_RECLAIM"},
+        stock={
+            "name": "지속약세B",
+            "strategy": "SCALPING",
+            "position_tag": "OPEN_RECLAIM",
+        },
         code="662222",
         sell_time="2026-04-08 12:00:10",
         buy_price=10000,
@@ -485,13 +523,17 @@ def test_soft_stop_forensics_report(monkeypatch, tmp_path):
     }
     fake_kiwoom = types.SimpleNamespace(
         get_kiwoom_token=lambda: "dummy",
-        get_minute_candles_ka10080=lambda _token, code, limit=700: candle_map.get(code, []),
+        get_minute_candles_ka10080=lambda _token, code, limit=700: candle_map.get(
+            code, []
+        ),
     )
     monkeypatch.setitem(sys.modules, "src.utils.kiwoom_utils", fake_kiwoom)
     monkeypatch.setattr(utils_pkg, "kiwoom_utils", fake_kiwoom, raising=False)
 
     feedback_mod.evaluate_post_sell_candidates("2026-04-08", token="dummy")
-    report = feedback_mod.build_post_sell_feedback_report("2026-04-08", top_n=5, evaluate_now=False)
+    report = feedback_mod.build_post_sell_feedback_report(
+        "2026-04-08", top_n=5, evaluate_now=False
+    )
 
     forensic = report["soft_stop_forensics"]
     assert forensic["total_soft_stop"] == 2
@@ -643,8 +685,14 @@ def test_post_sell_ws_retain_window(monkeypatch, tmp_path):
     retain_until = base_ts + 180.0
     feedback_mod._WS_RETAIN_UNTIL["444444"] = retain_until
 
-    assert feedback_mod.should_retain_ws_subscription("444444", now_ts=base_ts + 60.0) is True
-    assert feedback_mod.should_retain_ws_subscription("444444", now_ts=base_ts + 181.0) is False
+    assert (
+        feedback_mod.should_retain_ws_subscription("444444", now_ts=base_ts + 60.0)
+        is True
+    )
+    assert (
+        feedback_mod.should_retain_ws_subscription("444444", now_ts=base_ts + 181.0)
+        is False
+    )
 
 
 def test_build_post_sell_feedback_report(monkeypatch, tmp_path):
@@ -739,7 +787,9 @@ def test_build_post_sell_feedback_report(monkeypatch, tmp_path):
     }
     fake_kiwoom = types.SimpleNamespace(
         get_kiwoom_token=lambda: "dummy",
-        get_minute_candles_ka10080=lambda _token, code, limit=700: candle_map.get(code, []),
+        get_minute_candles_ka10080=lambda _token, code, limit=700: candle_map.get(
+            code, []
+        ),
     )
     monkeypatch.setitem(sys.modules, "src.utils.kiwoom_utils", fake_kiwoom)
     monkeypatch.setattr(utils_pkg, "kiwoom_utils", fake_kiwoom, raising=False)

@@ -12,15 +12,21 @@ from src.database.models import (
     SwingStrategyDiscoveryLabel,
 )
 from src.engine import swing_strategy_discovery_ev_report as mod
-from src.engine.swing_strategy_discovery_schema import ensure_swing_strategy_discovery_schema
+from src.engine.swing_strategy_discovery_schema import (
+    ensure_swing_strategy_discovery_schema,
+)
 
 
 def _external_test_db_url() -> str:
     db_url = os.getenv("KORSTOCKSCAN_TEST_DATABASE_URL", "").strip()
     if not db_url:
-        pytest.skip("set KORSTOCKSCAN_TEST_DATABASE_URL to run DB-backed discovery EV tests")
+        pytest.skip(
+            "set KORSTOCKSCAN_TEST_DATABASE_URL to run DB-backed discovery EV tests"
+        )
     if "test" not in db_url.lower():
-        pytest.skip("KORSTOCKSCAN_TEST_DATABASE_URL must point to an isolated test database")
+        pytest.skip(
+            "KORSTOCKSCAN_TEST_DATABASE_URL must point to an isolated test database"
+        )
     return db_url
 
 
@@ -136,7 +142,9 @@ def test_ev_report_aggregates_surviving_arms_and_contract(tmp_path):
             _seed_labeled_arm(session, idx, ret=ret)
         _seed_labeled_arm(session, 20, ret=-2.0, selection_arm="legacy_ml")
 
-    report = mod.build_swing_strategy_discovery_ev_report("2026-05-20", db_url=db_url, lookback_days=30)
+    report = mod.build_swing_strategy_discovery_ev_report(
+        "2026-05-20", db_url=db_url, lookback_days=30
+    )
 
     assert report["runtime_effect"] is False
     assert report["source_only"] is True
@@ -148,7 +156,10 @@ def test_ev_report_aggregates_surviving_arms_and_contract(tmp_path):
     assert report["surviving_arms"][0]["arm_id"] == "arm01_next_open_equal_fixed5d"
     assert report["legacy_vs_discovery"]["discovery_combined"]["sample_count"] == 6
     assert report["source_quality_summary"]["implementation_status"] == "implemented"
-    assert report["source_quality_summary"]["maturity_status_counts"]["matured_labeled"] == 7
+    assert (
+        report["source_quality_summary"]["maturity_status_counts"]["matured_labeled"]
+        == 7
+    )
     assert report["source_quality_summary"]["runtime_effect"] is False
 
 
@@ -171,7 +182,9 @@ def test_ev_report_adds_source_only_morning_turbulence_analysis(tmp_path):
             entry_position_opportunity_bucket="invalidation_observation",
         )
 
-    report = mod.build_swing_strategy_discovery_ev_report("2026-05-20", db_url=db_url, lookback_days=30)
+    report = mod.build_swing_strategy_discovery_ev_report(
+        "2026-05-20", db_url=db_url, lookback_days=30
+    )
     analysis = report["morning_turbulence_analysis"]
     contract = analysis["metric_contract"]
     stop_rows = {
@@ -186,7 +199,9 @@ def test_ev_report_adds_source_only_morning_turbulence_analysis(tmp_path):
     assert report["runtime_effect"] is False
     assert report["allowed_runtime_apply"] is False
     assert report["broker_order_forbidden"] is True
-    assert report["morning_turbulence_metric_contract"]["allowed_runtime_apply"] is False
+    assert (
+        report["morning_turbulence_metric_contract"]["allowed_runtime_apply"] is False
+    )
     assert contract["metric_role"] == "sim_probe_ev"
     assert contract["sample_floor_behavior"] == "hold_sample"
     assert "time_hard_gate" in contract["forbidden_uses"]
@@ -206,11 +221,15 @@ def test_ev_report_clean_baseline_filters_pre_baseline_discovery_rows(tmp_path):
         _seed_labeled_arm(session, 1, ret=-10.0, source_date=date(2026, 5, 20))
         _seed_labeled_arm(session, 2, ret=2.0, source_date=date(2026, 6, 4))
 
-    report = mod.build_swing_strategy_discovery_ev_report("2026-06-04", db_url=db_url, lookback_days=90)
+    report = mod.build_swing_strategy_discovery_ev_report(
+        "2026-06-04", db_url=db_url, lookback_days=90
+    )
 
     assert report["summary"]["labeled_sample_count"] == 1
     assert report["summary"]["candidate_count"] == 1
     assert report["clean_tuning_baseline"]["filter_active"] is True
     assert report["clean_tuning_baseline"]["requested_start_date"] == "2026-03-06"
     assert report["clean_tuning_baseline"]["effective_start_date"] == "2026-06-04"
-    assert "clean_tuning_baseline_swing_discovery_lookback_filtered" in report["warnings"]
+    assert (
+        "clean_tuning_baseline_swing_discovery_lookback_filtered" in report["warnings"]
+    )

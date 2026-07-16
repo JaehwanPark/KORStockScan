@@ -6,7 +6,11 @@ import src.engine.sniper_execution_receipts as receipts
 
 def test_emit_split_entry_followup_shadows_is_off_by_default(monkeypatch):
     logged = []
-    monkeypatch.setattr(receipts, "_log_holding_pipeline", lambda *args, **kwargs: logged.append((args, kwargs)))
+    monkeypatch.setattr(
+        receipts,
+        "_log_holding_pipeline",
+        lambda *args, **kwargs: logged.append((args, kwargs)),
+    )
 
     target_stock = {"name": "테스트A"}
 
@@ -26,9 +30,15 @@ def test_emit_split_entry_followup_shadows_is_off_by_default(monkeypatch):
     assert logged == []
 
 
-def test_emit_split_entry_followup_shadows_logs_integrity_and_recheck_when_enabled(monkeypatch):
+def test_emit_split_entry_followup_shadows_logs_integrity_and_recheck_when_enabled(
+    monkeypatch,
+):
     logged = []
-    monkeypatch.setattr(receipts, "_log_holding_pipeline", lambda *args, **kwargs: logged.append((args, kwargs)))
+    monkeypatch.setattr(
+        receipts,
+        "_log_holding_pipeline",
+        lambda *args, **kwargs: logged.append((args, kwargs)),
+    )
     monkeypatch.setattr(
         receipts,
         "TRADING_RULES",
@@ -73,7 +83,9 @@ def test_emit_split_entry_followup_shadows_logs_integrity_and_recheck_when_enabl
         "split_entry_immediate_recheck_shadow",
     ]
     integrity_kwargs = logged[1][1]
-    assert integrity_kwargs["integrity_flags"] == "cum_gt_requested,same_ts_multi_rebase"
+    assert (
+        integrity_kwargs["integrity_flags"] == "cum_gt_requested,same_ts_multi_rebase"
+    )
     assert integrity_kwargs["rebase_count"] == 2
     recheck_kwargs = logged[2][1]
     assert recheck_kwargs["trigger_reason"] == "partial_then_expand"

@@ -169,7 +169,10 @@ def test_early_accel_strong_bundle_pre_recheck_fields_are_contract_values(monkey
 
 
 def test_early_accel_strong_bundle_recheck_failure_class_is_canonical():
-    assert state_handlers._early_accel_strong_bundle_recheck_failure_class("DROP") == "drop_action"
+    assert (
+        state_handlers._early_accel_strong_bundle_recheck_failure_class("DROP")
+        == "drop_action"
+    )
     assert (
         state_handlers._early_accel_strong_bundle_recheck_failure_class("WAIT")
         == "wait_below_min_score"
@@ -205,16 +208,32 @@ def test_ai_numeric_consistency_pre_recheck_fields_are_contract_values(monkeypat
     assert decision["recheck_reason_excerpt"] == "not_evaluated"
 
 
-def test_latency_entry_runtime_override_uses_more_conservative_defensive_ticks(monkeypatch):
+def test_latency_entry_runtime_override_uses_more_conservative_defensive_ticks(
+    monkeypatch,
+):
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
         replace(CONFIG, SCALPING_NORMAL_DEFENSIVE_TICKS=3),
     )
-    monkeypatch.setattr(entry_latency_module, "_CONFIG", entry_latency_module._build_entry_config())
-    monkeypatch.setattr(entry_latency_module, "_NORMAL_BUILDER", entry_latency_module.NormalEntryBuilder(entry_latency_module._CONFIG))
-    monkeypatch.setattr(entry_latency_module, "_ENTRY_POLICY", entry_latency_module.EntryPolicy(entry_latency_module._CONFIG))
-    monkeypatch.setattr(entry_latency_module, "_LATENCY_MONITOR", entry_latency_module.LatencyMonitor(entry_latency_module._CONFIG))
+    monkeypatch.setattr(
+        entry_latency_module, "_CONFIG", entry_latency_module._build_entry_config()
+    )
+    monkeypatch.setattr(
+        entry_latency_module,
+        "_NORMAL_BUILDER",
+        entry_latency_module.NormalEntryBuilder(entry_latency_module._CONFIG),
+    )
+    monkeypatch.setattr(
+        entry_latency_module,
+        "_ENTRY_POLICY",
+        entry_latency_module.EntryPolicy(entry_latency_module._CONFIG),
+    )
+    monkeypatch.setattr(
+        entry_latency_module,
+        "_LATENCY_MONITOR",
+        entry_latency_module.LatencyMonitor(entry_latency_module._CONFIG),
+    )
 
     stock = {"name": "TEST", "position_tag": "MIDDLE"}
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
@@ -256,10 +275,24 @@ def test_latency_entry_conditional_real_1tick_override_for_strong_micro(monkeypa
         "TRADING_RULES",
         replace(CONFIG, SCALPING_NORMAL_DEFENSIVE_TICKS=3),
     )
-    monkeypatch.setattr(entry_latency_module, "_CONFIG", entry_latency_module._build_entry_config())
-    monkeypatch.setattr(entry_latency_module, "_NORMAL_BUILDER", entry_latency_module.NormalEntryBuilder(entry_latency_module._CONFIG))
-    monkeypatch.setattr(entry_latency_module, "_ENTRY_POLICY", entry_latency_module.EntryPolicy(entry_latency_module._CONFIG))
-    monkeypatch.setattr(entry_latency_module, "_LATENCY_MONITOR", entry_latency_module.LatencyMonitor(entry_latency_module._CONFIG))
+    monkeypatch.setattr(
+        entry_latency_module, "_CONFIG", entry_latency_module._build_entry_config()
+    )
+    monkeypatch.setattr(
+        entry_latency_module,
+        "_NORMAL_BUILDER",
+        entry_latency_module.NormalEntryBuilder(entry_latency_module._CONFIG),
+    )
+    monkeypatch.setattr(
+        entry_latency_module,
+        "_ENTRY_POLICY",
+        entry_latency_module.EntryPolicy(entry_latency_module._CONFIG),
+    )
+    monkeypatch.setattr(
+        entry_latency_module,
+        "_LATENCY_MONITOR",
+        entry_latency_module.LatencyMonitor(entry_latency_module._CONFIG),
+    )
 
     stock = {"name": "TEST", "position_tag": "MIDDLE"}
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
@@ -308,10 +341,24 @@ def test_latency_entry_conditional_1tick_does_not_apply_to_non_scalping(monkeypa
         "TRADING_RULES",
         replace(CONFIG, SCALPING_NORMAL_DEFENSIVE_TICKS=3),
     )
-    monkeypatch.setattr(entry_latency_module, "_CONFIG", entry_latency_module._build_entry_config())
-    monkeypatch.setattr(entry_latency_module, "_NORMAL_BUILDER", entry_latency_module.NormalEntryBuilder(entry_latency_module._CONFIG))
-    monkeypatch.setattr(entry_latency_module, "_ENTRY_POLICY", entry_latency_module.EntryPolicy(entry_latency_module._CONFIG))
-    monkeypatch.setattr(entry_latency_module, "_LATENCY_MONITOR", entry_latency_module.LatencyMonitor(entry_latency_module._CONFIG))
+    monkeypatch.setattr(
+        entry_latency_module, "_CONFIG", entry_latency_module._build_entry_config()
+    )
+    monkeypatch.setattr(
+        entry_latency_module,
+        "_NORMAL_BUILDER",
+        entry_latency_module.NormalEntryBuilder(entry_latency_module._CONFIG),
+    )
+    monkeypatch.setattr(
+        entry_latency_module,
+        "_ENTRY_POLICY",
+        entry_latency_module.EntryPolicy(entry_latency_module._CONFIG),
+    )
+    monkeypatch.setattr(
+        entry_latency_module,
+        "_LATENCY_MONITOR",
+        entry_latency_module.LatencyMonitor(entry_latency_module._CONFIG),
+    )
 
     stock = {"name": "TEST", "position_tag": "MIDDLE"}
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
@@ -346,7 +393,9 @@ def test_latency_entry_conditional_1tick_does_not_apply_to_non_scalping(monkeypa
     assert result["order_price"] == 9_990
     assert result["entry_price_defensive_ticks"] == 1
     assert result["conditional_1tick_real_override_applied"] is False
-    assert result["conditional_1tick_real_override_reason"] == "disabled_or_non_scalping"
+    assert (
+        result["conditional_1tick_real_override_reason"] == "disabled_or_non_scalping"
+    )
 
 
 def test_latency_entry_three_tick_override_is_limited_to_scalping(monkeypatch):
@@ -355,10 +404,24 @@ def test_latency_entry_three_tick_override_is_limited_to_scalping(monkeypatch):
         "TRADING_RULES",
         replace(CONFIG, SCALPING_NORMAL_DEFENSIVE_TICKS=3),
     )
-    monkeypatch.setattr(entry_latency_module, "_CONFIG", entry_latency_module._build_entry_config())
-    monkeypatch.setattr(entry_latency_module, "_NORMAL_BUILDER", entry_latency_module.NormalEntryBuilder(entry_latency_module._CONFIG))
-    monkeypatch.setattr(entry_latency_module, "_ENTRY_POLICY", entry_latency_module.EntryPolicy(entry_latency_module._CONFIG))
-    monkeypatch.setattr(entry_latency_module, "_LATENCY_MONITOR", entry_latency_module.LatencyMonitor(entry_latency_module._CONFIG))
+    monkeypatch.setattr(
+        entry_latency_module, "_CONFIG", entry_latency_module._build_entry_config()
+    )
+    monkeypatch.setattr(
+        entry_latency_module,
+        "_NORMAL_BUILDER",
+        entry_latency_module.NormalEntryBuilder(entry_latency_module._CONFIG),
+    )
+    monkeypatch.setattr(
+        entry_latency_module,
+        "_ENTRY_POLICY",
+        entry_latency_module.EntryPolicy(entry_latency_module._CONFIG),
+    )
+    monkeypatch.setattr(
+        entry_latency_module,
+        "_LATENCY_MONITOR",
+        entry_latency_module.LatencyMonitor(entry_latency_module._CONFIG),
+    )
 
     stock = {"name": "TEST", "position_tag": "MIDDLE"}
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
@@ -399,10 +462,24 @@ def test_latency_entry_conditional_1tick_requires_complete_depth_context(monkeyp
         "TRADING_RULES",
         replace(CONFIG, SCALPING_NORMAL_DEFENSIVE_TICKS=3),
     )
-    monkeypatch.setattr(entry_latency_module, "_CONFIG", entry_latency_module._build_entry_config())
-    monkeypatch.setattr(entry_latency_module, "_NORMAL_BUILDER", entry_latency_module.NormalEntryBuilder(entry_latency_module._CONFIG))
-    monkeypatch.setattr(entry_latency_module, "_ENTRY_POLICY", entry_latency_module.EntryPolicy(entry_latency_module._CONFIG))
-    monkeypatch.setattr(entry_latency_module, "_LATENCY_MONITOR", entry_latency_module.LatencyMonitor(entry_latency_module._CONFIG))
+    monkeypatch.setattr(
+        entry_latency_module, "_CONFIG", entry_latency_module._build_entry_config()
+    )
+    monkeypatch.setattr(
+        entry_latency_module,
+        "_NORMAL_BUILDER",
+        entry_latency_module.NormalEntryBuilder(entry_latency_module._CONFIG),
+    )
+    monkeypatch.setattr(
+        entry_latency_module,
+        "_ENTRY_POLICY",
+        entry_latency_module.EntryPolicy(entry_latency_module._CONFIG),
+    )
+    monkeypatch.setattr(
+        entry_latency_module,
+        "_LATENCY_MONITOR",
+        entry_latency_module.LatencyMonitor(entry_latency_module._CONFIG),
+    )
 
     stock = {"name": "TEST", "position_tag": "MIDDLE"}
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
@@ -475,7 +552,9 @@ def test_pre_submit_quote_refresh_uses_fresh_observer_quote_for_stale_ws(monkeyp
         "TRADING_RULES",
         runtime_rules,
     )
-    monkeypatch.setattr(entry_latency_module.constants_module, "TRADING_RULES", runtime_rules)
+    monkeypatch.setattr(
+        entry_latency_module.constants_module, "TRADING_RULES", runtime_rules
+    )
 
     stock = {"name": "TEST", "position_tag": "MIDDLE"}
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
@@ -515,7 +594,9 @@ def test_pre_submit_quote_refresh_uses_fresh_observer_quote_for_stale_ws(monkeyp
     assert result["orderbook_stability"]["best_ask"] == 10_030
 
 
-def test_pre_submit_quote_refresh_uses_pid_env_when_runtime_rules_are_stale(monkeypatch):
+def test_pre_submit_quote_refresh_uses_pid_env_when_runtime_rules_are_stale(
+    monkeypatch,
+):
     stale_rules = replace(
         CONFIG,
         SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED=False,
@@ -523,10 +604,14 @@ def test_pre_submit_quote_refresh_uses_pid_env_when_runtime_rules_are_stale(monk
         SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_SPREAD_RATIO=0.001,
     )
     monkeypatch.setattr(entry_latency_module, "TRADING_RULES", stale_rules)
-    monkeypatch.setattr(entry_latency_module.constants_module, "TRADING_RULES", stale_rules)
+    monkeypatch.setattr(
+        entry_latency_module.constants_module, "TRADING_RULES", stale_rules
+    )
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED", "true")
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS", "700")
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_SPREAD_RATIO", "0.015")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_SPREAD_RATIO", "0.015"
+    )
 
     stock = {"name": "TEST", "position_tag": "MIDDLE"}
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
@@ -567,10 +652,14 @@ def test_pre_submit_quote_refresh_treats_kospi_ml_as_real_scalping_alias(monkeyp
         SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_SPREAD_RATIO=0.001,
     )
     monkeypatch.setattr(entry_latency_module, "TRADING_RULES", stale_rules)
-    monkeypatch.setattr(entry_latency_module.constants_module, "TRADING_RULES", stale_rules)
+    monkeypatch.setattr(
+        entry_latency_module.constants_module, "TRADING_RULES", stale_rules
+    )
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED", "true")
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS", "700")
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_SPREAD_RATIO", "0.015")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_SPREAD_RATIO", "0.015"
+    )
 
     stock = {"name": "TEST", "position_tag": "MIDDLE"}
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
@@ -634,7 +723,9 @@ def test_latency_entry_accepts_flat_best_levels_from_ws_snapshot():
     assert result["spread_ratio"] > 0
 
 
-def test_real_pre_submit_ws_snapshot_refresh_uses_fresh_ws_manager_snapshot(monkeypatch):
+def test_real_pre_submit_ws_snapshot_refresh_uses_fresh_ws_manager_snapshot(
+    monkeypatch,
+):
     class FakeWsManager:
         def get_latest_data(self, code):
             assert code == "123456"
@@ -685,7 +776,10 @@ def test_pre_submit_effective_quote_fields_mark_stale_ai_recovered_by_ws_refresh
 
     assert fields["pre_submit_effective_quote_stale"] is False
     assert fields["pre_submit_effective_quote_age_ms"] == 79.165
-    assert fields["pre_submit_effective_quote_age_source"] == "pre_submit_ws_snapshot_refresh"
+    assert (
+        fields["pre_submit_effective_quote_age_source"]
+        == "pre_submit_ws_snapshot_refresh"
+    )
     assert fields["pre_submit_ai_input_quote_stale"] is True
     assert fields["pre_submit_ai_input_quote_age_ms"] == 4955
     assert fields["pre_submit_refresh_recovered_stale_ai_context"] is True
@@ -707,10 +801,14 @@ def test_pre_submit_effective_quote_fields_fall_back_to_latency_gate_age():
     assert fields["pre_submit_refresh_recovered_stale_ai_context"] is False
 
 
-def test_real_pre_submit_ws_snapshot_refresh_keeps_valid_input_when_timestamp_missing(monkeypatch):
+def test_real_pre_submit_ws_snapshot_refresh_keeps_valid_input_when_timestamp_missing(
+    monkeypatch,
+):
     class FakeWsManager:
         def get_latest_data(self, code):
-            raise AssertionError("WS manager should not be consulted for a valid input snapshot")
+            raise AssertionError(
+                "WS manager should not be consulted for a valid input snapshot"
+            )
 
     monkeypatch.setattr(state_handlers, "WS_MANAGER", FakeWsManager())
     valid_input = {
@@ -730,7 +828,10 @@ def test_real_pre_submit_ws_snapshot_refresh_keeps_valid_input_when_timestamp_mi
     assert refreshed == valid_input
     assert fields["pre_submit_ws_snapshot_refresh_enabled"] is True
     assert fields["pre_submit_ws_snapshot_refresh_applied"] is False
-    assert fields["pre_submit_ws_snapshot_refresh_reason"] == "input_snapshot_timestamp_missing"
+    assert (
+        fields["pre_submit_ws_snapshot_refresh_reason"]
+        == "input_snapshot_timestamp_missing"
+    )
 
 
 def test_pre_ai_strength_ws_snapshot_refresh_uses_fresh_ws_manager_history(monkeypatch):
@@ -769,7 +870,9 @@ def test_pre_ai_strength_ws_snapshot_refresh_uses_fresh_ws_manager_history(monke
     assert refreshed["v_pw"] == 121.0
 
 
-def test_pre_ai_strength_ws_snapshot_refresh_normalizes_latest_tick_timestamp(monkeypatch):
+def test_pre_ai_strength_ws_snapshot_refresh_normalizes_latest_tick_timestamp(
+    monkeypatch,
+):
     now = time.time()
 
     class FakeWsManager:
@@ -806,12 +909,20 @@ def test_pre_ai_strength_ws_snapshot_refresh_normalizes_latest_tick_timestamp(mo
 
     assert fields["pre_ai_ws_snapshot_refresh_applied"] is True
     assert fields["pre_ai_ws_snapshot_refresh_reason"] == "latest_ws_snapshot_fresh"
-    assert fields["pre_ai_ws_snapshot_refresh_latest_timestamp_normalized_from"] == "last_realtime_type_ts_0B"
+    assert (
+        fields["pre_ai_ws_snapshot_refresh_latest_timestamp_normalized_from"]
+        == "last_realtime_type_ts_0B"
+    )
     assert fields["pre_ai_ws_snapshot_refresh_age_ms"] < 1000
-    assert refreshed["pre_ai_last_ws_update_ts_normalized_from"] == "last_realtime_type_ts_0B"
+    assert (
+        refreshed["pre_ai_last_ws_update_ts_normalized_from"]
+        == "last_realtime_type_ts_0B"
+    )
 
 
-def test_pre_ai_strength_ws_snapshot_refresh_keeps_fresh_input_history_count(monkeypatch):
+def test_pre_ai_strength_ws_snapshot_refresh_keeps_fresh_input_history_count(
+    monkeypatch,
+):
     now = time.time()
     monkeypatch.setattr(state_handlers, "WS_MANAGER", None)
     monkeypatch.setattr(
@@ -877,7 +988,9 @@ def test_pre_ai_strength_ws_snapshot_refresh_keeps_stale_latest_blocked(monkeypa
                 "curr": 10_020,
                 "v_pw": 121.0,
                 "last_ws_update_ts": time.time() - 10.0,
-                "strength_momentum_history": [{"ts": time.time() - 10.0, "v_pw": 121.0}],
+                "strength_momentum_history": [
+                    {"ts": time.time() - 10.0, "v_pw": 121.0}
+                ],
             }
 
     monkeypatch.setattr(state_handlers, "WS_MANAGER", FakeWsManager())
@@ -898,7 +1011,9 @@ def test_pre_ai_strength_ws_snapshot_refresh_keeps_stale_latest_blocked(monkeypa
     assert refreshed["curr"] == original["curr"]
 
 
-def test_pre_ai_quote_ws_snapshot_refresh_uses_fresh_quote_without_strength_history(monkeypatch):
+def test_pre_ai_quote_ws_snapshot_refresh_uses_fresh_quote_without_strength_history(
+    monkeypatch,
+):
     class FakeWsManager:
         def get_latest_data(self, code):
             assert code == "123456"
@@ -990,7 +1105,10 @@ def test_strength_source_quality_uses_refreshed_snapshot_age(monkeypatch):
         "pre_ai_ws_snapshot_refresh_age_ms": 120.0,
     }
 
-    assert state_handlers._strength_momentum_source_quality_block_reason(ws_data, result) == ""
+    assert (
+        state_handlers._strength_momentum_source_quality_block_reason(ws_data, result)
+        == ""
+    )
 
 
 def test_strength_source_quality_keeps_stale_refresh_blocked(monkeypatch):
@@ -1054,7 +1172,9 @@ def test_real_pre_submit_ws_snapshot_refresh_accepts_flat_best_levels(monkeypatc
 def test_real_pre_submit_ws_snapshot_refresh_honors_explicit_operator_off(monkeypatch):
     class FakeWsManager:
         def get_latest_data(self, code):
-            raise AssertionError("WS manager must not be called when refresh is explicitly disabled")
+            raise AssertionError(
+                "WS manager must not be called when refresh is explicitly disabled"
+            )
 
     monkeypatch.setattr(state_handlers, "WS_MANAGER", FakeWsManager())
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED", "false")
@@ -1090,7 +1210,9 @@ def test_latency_false_negative_report_marker_defaults_disabled(monkeypatch, tmp
         ),
         encoding="utf-8",
     )
-    monkeypatch.delenv("KORSTOCKSCAN_LATENCY_FALSE_NEGATIVE_REMEASURE_ENABLED", raising=False)
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_LATENCY_FALSE_NEGATIVE_REMEASURE_ENABLED", raising=False
+    )
     monkeypatch.setattr(state_handlers, "DATA_DIR", tmp_path)
     stock = {
         "latency_false_negative_remeasure_candidate": True,
@@ -1111,7 +1233,9 @@ def test_latency_false_negative_report_marker_defaults_disabled(monkeypatch, tmp
     assert "latency_false_negative_report_canary_grade" not in stock
 
 
-def test_latency_false_negative_report_marker_loads_ready_and_clears_stale(monkeypatch, tmp_path):
+def test_latency_false_negative_report_marker_loads_ready_and_clears_stale(
+    monkeypatch, tmp_path
+):
     monkeypatch.setenv("KORSTOCKSCAN_LATENCY_FALSE_NEGATIVE_REMEASURE_ENABLED", "true")
     target_date = "2026-07-10"
     report_dir = tmp_path / "report" / "rising_missed_intraday_feedback"
@@ -1138,7 +1262,13 @@ def test_latency_false_negative_report_marker_loads_ready_and_clears_stale(monke
     )
     monkeypatch.setattr(state_handlers, "DATA_DIR", tmp_path)
     state_handlers._LATENCY_FALSE_NEGATIVE_READY_CACHE.update(
-        {"target_date": "", "loaded_at": 0.0, "generated_at": "", "rows": {}, "reason": "reset"}
+        {
+            "target_date": "",
+            "loaded_at": 0.0,
+            "generated_at": "",
+            "rows": {},
+            "reason": "reset",
+        }
     )
     stock = {}
 
@@ -1149,17 +1279,34 @@ def test_latency_false_negative_report_marker_loads_ready_and_clears_stale(monke
         now_ts=1.0,
     )
 
-    assert fields["latency_false_negative_remeasure_report_reason"] == "ready_for_recheck_marker_applied"
+    assert (
+        fields["latency_false_negative_remeasure_report_reason"]
+        == "ready_for_recheck_marker_applied"
+    )
     assert stock["latency_false_negative_remeasure_candidate"] is True
-    assert stock["latency_false_negative_remeasure_candidate_source"] == "intraday_feedback_report"
+    assert (
+        stock["latency_false_negative_remeasure_candidate_source"]
+        == "intraday_feedback_report"
+    )
     assert stock["latency_false_negative_report_canary_grade"] == "ready_for_recheck"
 
     report_path.write_text(
-        json.dumps({"generated_at": "2026-07-10T10:00:00+09:00", "latency_false_negative_canary_candidate_rows": []}),
+        json.dumps(
+            {
+                "generated_at": "2026-07-10T10:00:00+09:00",
+                "latency_false_negative_canary_candidate_rows": [],
+            }
+        ),
         encoding="utf-8",
     )
     state_handlers._LATENCY_FALSE_NEGATIVE_READY_CACHE.update(
-        {"target_date": "", "loaded_at": 0.0, "generated_at": "", "rows": {}, "reason": "reset"}
+        {
+            "target_date": "",
+            "loaded_at": 0.0,
+            "generated_at": "",
+            "rows": {},
+            "reason": "reset",
+        }
     )
     fields = state_handlers._apply_latency_false_negative_remeasure_report_marker(
         stock,
@@ -1168,13 +1315,17 @@ def test_latency_false_negative_report_marker_loads_ready_and_clears_stale(monke
         now_ts=2.0,
     )
 
-    assert fields["latency_false_negative_remeasure_report_reason"] == "ready_rows_empty"
+    assert (
+        fields["latency_false_negative_remeasure_report_reason"] == "ready_rows_empty"
+    )
     assert "latency_false_negative_remeasure_candidate" not in stock
     assert "latency_false_negative_report_canary_grade" not in stock
 
 
 def test_pre_submit_secondary_recheck_defaults_disabled(monkeypatch):
-    monkeypatch.delenv("KORSTOCKSCAN_PRE_SUBMIT_SECONDARY_RECHECK_ENABLED", raising=False)
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_PRE_SUBMIT_SECONDARY_RECHECK_ENABLED", raising=False
+    )
 
     assert state_handlers._pre_submit_secondary_recheck_enabled() is False
 
@@ -1334,7 +1485,9 @@ def test_intraday_entry_price_discovery_reprice_chooses_fresher_rest(monkeypatch
     assert snapshot["last_trade_price"] == 10_020
 
 
-def test_real_pre_submit_rest_orderbook_refresh_uses_ka10004_fresh_snapshot(monkeypatch):
+def test_real_pre_submit_rest_orderbook_refresh_uses_ka10004_fresh_snapshot(
+    monkeypatch,
+):
     now_hhmmss = datetime.now().strftime("%H%M%S")
     received_ts = time.time()
 
@@ -1361,7 +1514,9 @@ def test_real_pre_submit_rest_orderbook_refresh_uses_ka10004_fresh_snapshot(monk
             },
         },
     )
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_REST_ORDERBOOK_MAX_AGE_MS", "3000")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_PRE_SUBMIT_REST_ORDERBOOK_MAX_AGE_MS", "3000"
+    )
 
     refreshed, fields = state_handlers._pre_submit_refresh_rest_orderbook_snapshot(
         "123456",
@@ -1383,8 +1538,12 @@ def test_pre_submit_rest_orderbook_refresh_force_ignores_disabled_env(monkeypatc
     received_ts = time.time()
 
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED", "false")
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_REST_ORDERBOOK_REFRESH_ENABLED", "false")
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_REST_ORDERBOOK_MAX_AGE_MS", "3000")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_PRE_SUBMIT_REST_ORDERBOOK_REFRESH_ENABLED", "false"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_PRE_SUBMIT_REST_ORDERBOOK_MAX_AGE_MS", "3000"
+    )
     monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
@@ -1419,7 +1578,9 @@ def test_pre_submit_rest_orderbook_refresh_force_ignores_disabled_env(monkeypatc
     assert refreshed["quote_refresh_source"] == "ka10004_rest_orderbook"
 
 
-def test_real_pre_submit_rest_orderbook_refresh_blocks_stale_ka10004_snapshot(monkeypatch):
+def test_real_pre_submit_rest_orderbook_refresh_blocks_stale_ka10004_snapshot(
+    monkeypatch,
+):
     stale_hhmmss = datetime.fromtimestamp(time.time() - 10).strftime("%H%M%S")
     stale_received_ts = time.time() - 10
 
@@ -1453,7 +1614,9 @@ def test_real_pre_submit_rest_orderbook_refresh_blocks_stale_ka10004_snapshot(mo
     assert refreshed["curr"] == 10_000
 
 
-def test_real_pre_submit_rest_orderbook_refresh_ignores_bid_req_base_tm_for_freshness(monkeypatch):
+def test_real_pre_submit_rest_orderbook_refresh_ignores_bid_req_base_tm_for_freshness(
+    monkeypatch,
+):
     stale_hhmmss = datetime.fromtimestamp(time.time() - 3600).strftime("%H%M%S")
     received_ts = time.time()
 
@@ -1474,7 +1637,9 @@ def test_real_pre_submit_rest_orderbook_refresh_ignores_bid_req_base_tm_for_fres
             },
         },
     )
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_REST_ORDERBOOK_MAX_AGE_MS", "3000")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_PRE_SUBMIT_REST_ORDERBOOK_MAX_AGE_MS", "3000"
+    )
 
     refreshed, fields = state_handlers._pre_submit_refresh_rest_orderbook_snapshot(
         "123456",
@@ -1488,7 +1653,9 @@ def test_real_pre_submit_rest_orderbook_refresh_ignores_bid_req_base_tm_for_fres
     assert refreshed["curr"] == 10_025
 
 
-def test_real_pre_submit_rest_orderbook_refresh_rejects_ka10004_age_ms_without_received_time(monkeypatch):
+def test_real_pre_submit_rest_orderbook_refresh_rejects_ka10004_age_ms_without_received_time(
+    monkeypatch,
+):
     now_hhmmss = datetime.now().strftime("%H%M%S")
 
     monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
@@ -1510,7 +1677,9 @@ def test_real_pre_submit_rest_orderbook_refresh_rejects_ka10004_age_ms_without_r
             },
         },
     )
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_REST_ORDERBOOK_MAX_AGE_MS", "3000")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_PRE_SUBMIT_REST_ORDERBOOK_MAX_AGE_MS", "3000"
+    )
 
     refreshed, fields = state_handlers._pre_submit_refresh_rest_orderbook_snapshot(
         "123456",
@@ -1519,7 +1688,10 @@ def test_real_pre_submit_rest_orderbook_refresh_rejects_ka10004_age_ms_without_r
     )
 
     assert fields["pre_submit_rest_orderbook_refresh_applied"] is False
-    assert fields["pre_submit_rest_orderbook_refresh_reason"] == "rest_orderbook_time_missing"
+    assert (
+        fields["pre_submit_rest_orderbook_refresh_reason"]
+        == "rest_orderbook_time_missing"
+    )
     assert fields["pre_submit_rest_orderbook_refresh_age_ms"] is None
     assert refreshed["curr"] == 10_000
 
@@ -1547,7 +1719,9 @@ def test_holding_ai_rest_orderbook_refresh_reuses_fresh_ka10004_snapshot(monkeyp
             },
         },
     )
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_REST_ORDERBOOK_MAX_AGE_MS", "3000")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_PRE_SUBMIT_REST_ORDERBOOK_MAX_AGE_MS", "3000"
+    )
 
     refreshed, fields = state_handlers._holding_ai_refresh_rest_orderbook_snapshot(
         "123456",
@@ -1622,7 +1796,9 @@ def test_holding_ai_rest_orderbook_refresh_skips_existing_usable_quote(monkeypat
 
     assert calls == []
     assert fields["holding_ai_rest_orderbook_refresh_applied"] is False
-    assert fields["holding_ai_rest_orderbook_refresh_reason"] == "input_orderbook_usable"
+    assert (
+        fields["holding_ai_rest_orderbook_refresh_reason"] == "input_orderbook_usable"
+    )
     assert refreshed["curr"] == 10_020
 
 
@@ -1634,7 +1810,8 @@ def test_holding_ai_rest_orderbook_refresh_rechecks_stale_usable_quote(monkeypat
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "get_stock_orderbook_ka10004",
-        lambda token, code: calls.append((token, code)) or {
+        lambda token, code: calls.append((token, code))
+        or {
             "source": "ka10004_rest_orderbook",
             "bid_req_base_tm": now_hhmmss,
             "rest_received_ts": received_ts,
@@ -1649,7 +1826,9 @@ def test_holding_ai_rest_orderbook_refresh_rechecks_stale_usable_quote(monkeypat
             },
         },
     )
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_REST_ORDERBOOK_MAX_AGE_MS", "3000")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_PRE_SUBMIT_REST_ORDERBOOK_MAX_AGE_MS", "3000"
+    )
 
     refreshed, fields = state_handlers._holding_ai_refresh_rest_orderbook_snapshot(
         "123456",
@@ -1669,7 +1848,9 @@ def test_holding_ai_rest_orderbook_refresh_rechecks_stale_usable_quote(monkeypat
     assert refreshed["best_bid"] == 10_020
 
 
-def test_real_pre_submit_ws_snapshot_refresh_blocks_stale_ws_manager_snapshot(monkeypatch):
+def test_real_pre_submit_ws_snapshot_refresh_blocks_stale_ws_manager_snapshot(
+    monkeypatch,
+):
     class FakeWsManager:
         def get_latest_data(self, code):
             return {
@@ -1824,7 +2005,9 @@ def test_latency_entry_canary_overrides_reject_danger_for_scanner(monkeypatch):
         signal_strength=90.0,
     )
 
-    _assert_danger_hard_safety_block(result, danger_reasons="spread_above_caution_below_guard_cap")
+    _assert_danger_hard_safety_block(
+        result, danger_reasons="spread_above_caution_below_guard_cap"
+    )
 
 
 def test_latency_entry_canary_normalizes_probability_signal_strength(monkeypatch):
@@ -1865,7 +2048,9 @@ def test_latency_entry_canary_normalizes_probability_signal_strength(monkeypatch
         signal_strength=0.90,
     )
 
-    _assert_danger_hard_safety_block(result, danger_reasons="spread_above_caution_below_guard_cap")
+    _assert_danger_hard_safety_block(
+        result, danger_reasons="spread_above_caution_below_guard_cap"
+    )
 
 
 def test_latency_entry_canary_does_not_apply_when_signal_score_low(monkeypatch):
@@ -1906,10 +2091,14 @@ def test_latency_entry_canary_does_not_apply_when_signal_score_low(monkeypatch):
         signal_strength=90.0,
     )
 
-    _assert_danger_hard_safety_block(result, danger_reasons="spread_above_caution_below_guard_cap")
+    _assert_danger_hard_safety_block(
+        result, danger_reasons="spread_above_caution_below_guard_cap"
+    )
 
 
-def test_latency_spread_caution_records_explicit_reason_without_taxonomy_gap(monkeypatch):
+def test_latency_spread_caution_records_explicit_reason_without_taxonomy_gap(
+    monkeypatch,
+):
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -1950,7 +2139,9 @@ def test_latency_spread_caution_records_explicit_reason_without_taxonomy_gap(mon
 
     assert result["decision"] == "REJECT_DANGER"
     assert result["latency_danger_reasons"] == "spread_above_caution_below_guard_cap"
-    assert result["latency_danger_detail_reason"] == "spread_above_caution_below_guard_cap"
+    assert (
+        result["latency_danger_detail_reason"] == "spread_above_caution_below_guard_cap"
+    )
     assert result["latency_danger_source_quality_state"] == "fresh"
     assert result["latency_danger_reason_taxonomy_gap"] is False
     assert result["latency_danger_max_spread_ratio_for_caution"] == 0.005
@@ -1958,7 +2149,9 @@ def test_latency_spread_caution_records_explicit_reason_without_taxonomy_gap(mon
     assert result["latency_spread_relief_block_reason"] == "low_signal"
     assert result["latency_relief_attempted"] is True
     assert result["latency_relief_block_reason"] == "low_signal"
-    assert result["latency_spread_relief_signal_score_source"] == "input_signal_strength"
+    assert (
+        result["latency_spread_relief_signal_score_source"] == "input_signal_strength"
+    )
     assert result["latency_spread_relief_signal_source_quality_state"] == "fresh"
     assert result["latency_spread_block_price_bucket"] == "spread_above_caution"
     assert result["latency_spread_block_signal_context_bucket"] == "signal_fresh"
@@ -2048,7 +2241,9 @@ def test_latency_spread_relief_canary_accepts_scalp_strategy_alias(monkeypatch):
     assert result["latency_strategy_id"] == "SCALP"
 
 
-def test_latency_spread_relief_canary_uses_entry_momentum_tag_when_position_tag_missing(monkeypatch):
+def test_latency_spread_relief_canary_uses_entry_momentum_tag_when_position_tag_missing(
+    monkeypatch,
+):
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -2172,17 +2367,25 @@ def test_latency_spread_relief_records_prior_ai_signal_source_gap(monkeypatch):
     assert result["latency_canary_applied"] is False
     assert result["latency_spread_relief_block_reason"] == "low_signal"
     assert result["latency_spread_relief_signal_score"] == 0.0
-    assert result["latency_spread_relief_signal_score_source"] == "input_signal_strength_zero"
+    assert (
+        result["latency_spread_relief_signal_score_source"]
+        == "input_signal_strength_zero"
+    )
     assert result["latency_spread_relief_signal_source_quality_state"] == "source_gap"
     assert result["latency_spread_relief_candidate_ai_score"] == 62.0
     assert result["latency_spread_relief_candidate_ai_score_source"] == "stock.ai_score"
-    assert result["latency_spread_relief_source_quality_gap"] == "prior_ai_available_but_signal_strength_zero"
+    assert (
+        result["latency_spread_relief_source_quality_gap"]
+        == "prior_ai_available_but_signal_strength_zero"
+    )
     assert result["latency_spread_block_price_bucket"] == "true_wide_spread"
     assert result["latency_spread_block_signal_context_bucket"] == "signal_source_gap"
     assert result["latency_spread_block_bucket"] == "true_wide_spread|signal_source_gap"
 
 
-def test_latency_spread_relief_candidate_ai_prefers_positive_ws_over_stock_zero(monkeypatch):
+def test_latency_spread_relief_candidate_ai_prefers_positive_ws_over_stock_zero(
+    monkeypatch,
+):
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -2226,7 +2429,9 @@ def test_latency_spread_relief_candidate_ai_prefers_positive_ws_over_stock_zero(
     assert result["latency_spread_relief_candidate_ai_score_source"] == "ws.ai_score"
 
 
-def test_latency_spread_relief_uses_fresh_orderbook_micro_signal_when_input_missing(monkeypatch):
+def test_latency_spread_relief_uses_fresh_orderbook_micro_signal_when_input_missing(
+    monkeypatch,
+):
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -2278,12 +2483,17 @@ def test_latency_spread_relief_uses_fresh_orderbook_micro_signal_when_input_miss
     assert result["reason"] == "latency_spread_relief_normal_override"
     assert result["latency_danger_reasons"] == "spread_above_caution_below_guard_cap"
     assert result["latency_spread_relief_signal_score"] >= 80.0
-    assert result["latency_spread_relief_signal_score_source"] == "ws.orderbook_micro_ofi_qi"
+    assert (
+        result["latency_spread_relief_signal_score_source"]
+        == "ws.orderbook_micro_ofi_qi"
+    )
     assert result["latency_spread_relief_signal_source_quality_state"] == "fresh"
     assert result["latency_spread_relief_block_reason"] == ""
 
 
-def test_latency_spread_relief_does_not_use_insufficient_orderbook_micro_signal(monkeypatch):
+def test_latency_spread_relief_does_not_use_insufficient_orderbook_micro_signal(
+    monkeypatch,
+):
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -2337,8 +2547,12 @@ def test_latency_spread_relief_does_not_use_insufficient_orderbook_micro_signal(
     assert result["latency_spread_relief_signal_source_quality_state"] == "missing"
 
 
-def test_latency_spread_relief_uses_fresh_true_ofi_estimator_when_observer_window_is_short(monkeypatch):
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_ENABLED", "true")
+def test_latency_spread_relief_uses_fresh_true_ofi_estimator_when_observer_window_is_short(
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_ENABLED", "true"
+    )
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -2397,13 +2611,20 @@ def test_latency_spread_relief_uses_fresh_true_ofi_estimator_when_observer_windo
 
     assert result["decision"] == "ALLOW_NORMAL"
     assert result["reason"] == "latency_spread_relief_normal_override"
-    assert result["latency_spread_relief_signal_score_source"] == "micro_estimator.true_ofi_ewma"
+    assert (
+        result["latency_spread_relief_signal_score_source"]
+        == "micro_estimator.true_ofi_ewma"
+    )
     assert result["latency_spread_relief_micro_estimator_eligible"] is True
     assert result["latency_spread_relief_micro_estimator_true_ofi_sample_count"] == 12
 
 
-def test_latency_spread_relief_true_ofi_estimator_keeps_block_below_sample_floor(monkeypatch):
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_ENABLED", "true")
+def test_latency_spread_relief_true_ofi_estimator_keeps_block_below_sample_floor(
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_ENABLED", "true"
+    )
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -2460,10 +2681,15 @@ def test_latency_spread_relief_true_ofi_estimator_keeps_block_below_sample_floor
 
     assert result["decision"] == "REJECT_DANGER"
     assert result["latency_spread_relief_micro_estimator_eligible"] is False
-    assert result["latency_spread_relief_micro_estimator_reason"] == "true_ofi_samples_below_floor"
+    assert (
+        result["latency_spread_relief_micro_estimator_reason"]
+        == "true_ofi_samples_below_floor"
+    )
 
 
-def test_latency_false_negative_remeasure_enqueues_report_ready_true_ofi_without_allowing_submit(monkeypatch):
+def test_latency_false_negative_remeasure_enqueues_report_ready_true_ofi_without_allowing_submit(
+    monkeypatch,
+):
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -2520,7 +2746,10 @@ def test_latency_false_negative_remeasure_enqueues_report_ready_true_ofi_without
     assert result["allowed"] is False
     assert result["latency_false_negative_remeasure_enqueued"] is True
     assert result["latency_false_negative_remeasure_grade"] == "ready_for_recheck"
-    assert result["latency_false_negative_remeasure_reason"] == "true_ofi_near_zero_or_positive_with_fresh_ws"
+    assert (
+        result["latency_false_negative_remeasure_reason"]
+        == "true_ofi_near_zero_or_positive_with_fresh_ws"
+    )
     assert result["latency_false_negative_remeasure_runtime_effect"] is False
     assert result["latency_false_negative_remeasure_allowed_runtime_apply"] is False
 
@@ -2575,7 +2804,10 @@ def test_latency_false_negative_remeasure_requires_report_ready_marker(monkeypat
 
     assert result["decision"] == "REJECT_DANGER"
     assert result["latency_false_negative_remeasure_enqueued"] is False
-    assert result["latency_false_negative_remeasure_reason"] == "report_ready_for_recheck_missing"
+    assert (
+        result["latency_false_negative_remeasure_reason"]
+        == "report_ready_for_recheck_missing"
+    )
 
 
 def _enable_latency_true_ofi_direct_canary(monkeypatch):
@@ -2614,9 +2846,7 @@ def test_latency_true_ofi_nxt_probability_band_is_nxt_only_and_bounded(monkeypat
         "latency_false_negative_remeasure_true_ofi_ewma": -0.0104,
         "latency_false_negative_remeasure_true_ofi_sample_count": 122,
         "latency_false_negative_remeasure_ws_age_ms": 60.0,
-        "latency_false_negative_remeasure_source_state": (
-            "fresh_ws_order_flow_delta"
-        ),
+        "latency_false_negative_remeasure_source_state": ("fresh_ws_order_flow_delta"),
         "latency_false_negative_remeasure_estimator_confidence": 0.8494,
         "latency_false_negative_remeasure_pressure_ewma": 61.462,
         "latency_false_negative_remeasure_top_depth_ratio": 1.6032,
@@ -2719,7 +2949,9 @@ def test_latency_true_ofi_nxt_probability_band_is_nxt_only_and_bounded(monkeypat
     )
 
 
-def test_latency_true_ofi_direct_canary_allows_high_opportunity_without_report_marker(monkeypatch):
+def test_latency_true_ofi_direct_canary_allows_high_opportunity_without_report_marker(
+    monkeypatch,
+):
     _enable_latency_true_ofi_direct_canary(monkeypatch)
     monkeypatch.setattr(
         entry_latency_module,
@@ -2737,7 +2969,9 @@ def test_latency_true_ofi_direct_canary_allows_high_opportunity_without_report_m
             SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=False,
         ),
     )
-    monkeypatch.delenv("KORSTOCKSCAN_LATENCY_FALSE_NEGATIVE_REMEASURE_REPASS_ENABLED", raising=False)
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_LATENCY_FALSE_NEGATIVE_REMEASURE_REPASS_ENABLED", raising=False
+    )
     now_ts = time.time()
     monkeypatch.setattr(
         entry_latency_module,
@@ -2786,12 +3020,18 @@ def test_latency_true_ofi_direct_canary_allows_high_opportunity_without_report_m
     assert result["allowed"] is True
     assert result["latency_canary_reason"] == "latency_true_ofi_direct_canary_applied"
     assert result["latency_true_ofi_direct_canary_applied"] is True
-    assert result["latency_true_ofi_direct_canary_reason"] == "direct_canary_true_ofi_false_negative_allow"
+    assert (
+        result["latency_true_ofi_direct_canary_reason"]
+        == "direct_canary_true_ofi_false_negative_allow"
+    )
     assert result["latency_true_ofi_direct_canary_max_spread_bps"] == 90.0
     assert result["latency_true_ofi_direct_canary_relief_runtime_enabled"] is True
     assert result["latency_true_ofi_direct_canary_tape_support_ok"] is True
     assert result["latency_false_negative_remeasure_enqueued"] is False
-    assert result["latency_false_negative_remeasure_reason"] == "report_ready_for_recheck_missing"
+    assert (
+        result["latency_false_negative_remeasure_reason"]
+        == "report_ready_for_recheck_missing"
+    )
 
 
 def test_latency_true_ofi_direct_canary_allows_near_cap_spread(monkeypatch):
@@ -2812,7 +3052,9 @@ def test_latency_true_ofi_direct_canary_allows_near_cap_spread(monkeypatch):
             SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=False,
         ),
     )
-    monkeypatch.delenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MAX_SPREAD_BPS", raising=False)
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MAX_SPREAD_BPS", raising=False
+    )
     now_ts = time.time()
     monkeypatch.setattr(
         entry_latency_module,
@@ -2864,7 +3106,9 @@ def test_latency_true_ofi_direct_canary_allows_near_cap_spread(monkeypatch):
     assert result["latency_true_ofi_direct_canary_max_spread_bps"] == 90.0
 
 
-def test_latency_true_ofi_direct_canary_allows_bounded_extended_spread_tier(monkeypatch):
+def test_latency_true_ofi_direct_canary_allows_bounded_extended_spread_tier(
+    monkeypatch,
+):
     _enable_latency_true_ofi_direct_canary(monkeypatch)
     monkeypatch.setattr(
         entry_latency_module,
@@ -3041,7 +3285,9 @@ def test_latency_true_ofi_direct_canary_extended_tier_rejects_rest_positive_tape
     )
 
     assert fields["latency_true_ofi_direct_canary_applied"] is False
-    assert fields["latency_true_ofi_direct_canary_extended_signed_tape_ws_only"] is False
+    assert (
+        fields["latency_true_ofi_direct_canary_extended_signed_tape_ws_only"] is False
+    )
     assert fields["latency_true_ofi_direct_canary_reason"] == (
         "extended_spread_trusted_ws_signed_tape_required"
     )
@@ -3089,8 +3335,12 @@ def test_latency_true_ofi_direct_canary_extended_tier_rejects_unknown_tape_sourc
     )
 
     assert fields["latency_true_ofi_direct_canary_applied"] is False
-    assert fields["latency_true_ofi_direct_canary_extended_signed_tape_ws_only"] is False
-    assert fields["latency_true_ofi_direct_canary_signed_tape_unknown_source_count"] == 3
+    assert (
+        fields["latency_true_ofi_direct_canary_extended_signed_tape_ws_only"] is False
+    )
+    assert (
+        fields["latency_true_ofi_direct_canary_signed_tape_unknown_source_count"] == 3
+    )
     assert fields["latency_true_ofi_direct_canary_reason"] == (
         "extended_spread_trusted_ws_signed_tape_required"
     )
@@ -3156,9 +3406,15 @@ def test_latency_true_ofi_direct_canary_treats_missing_tape_as_neutral(monkeypat
     assert result["decision"] == "ALLOW_NORMAL"
     assert result["allowed"] is True
     assert result["latency_true_ofi_direct_canary_applied"] is True
-    assert result["latency_true_ofi_direct_canary_reason"] == "direct_canary_true_ofi_false_negative_allow"
+    assert (
+        result["latency_true_ofi_direct_canary_reason"]
+        == "direct_canary_true_ofi_false_negative_allow"
+    )
     assert result["latency_true_ofi_direct_canary_tape_support_ok"] is True
-    assert result["latency_true_ofi_direct_canary_tape_block_reason"] == "tape_support_ok_missing_pressure"
+    assert (
+        result["latency_true_ofi_direct_canary_tape_block_reason"]
+        == "tape_support_ok_missing_pressure"
+    )
 
 
 def test_latency_true_ofi_direct_canary_blocks_sell_dominated_tape(monkeypatch):
@@ -3179,7 +3435,9 @@ def test_latency_true_ofi_direct_canary_blocks_sell_dominated_tape(monkeypatch):
             SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=False,
         ),
     )
-    monkeypatch.delenv("KORSTOCKSCAN_LATENCY_FALSE_NEGATIVE_REMEASURE_REPASS_ENABLED", raising=False)
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_LATENCY_FALSE_NEGATIVE_REMEASURE_REPASS_ENABLED", raising=False
+    )
     now_ts = time.time()
     monkeypatch.setattr(
         entry_latency_module,
@@ -3251,7 +3509,9 @@ def test_latency_true_ofi_direct_canary_blocks_recent_signed_sell_tape(monkeypat
             SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=False,
         ),
     )
-    monkeypatch.delenv("KORSTOCKSCAN_LATENCY_FALSE_NEGATIVE_REMEASURE_REPASS_ENABLED", raising=False)
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_LATENCY_FALSE_NEGATIVE_REMEASURE_REPASS_ENABLED", raising=False
+    )
     now_ts = time.time()
     monkeypatch.setattr(
         entry_latency_module,
@@ -3305,7 +3565,9 @@ def test_latency_true_ofi_direct_canary_blocks_recent_signed_sell_tape(monkeypat
     assert result["decision"] == "REJECT_DANGER"
     assert result["allowed"] is False
     assert result["latency_true_ofi_direct_canary_applied"] is False
-    assert result["latency_true_ofi_direct_canary_reason"] == "signed_tape_sell_dominated"
+    assert (
+        result["latency_true_ofi_direct_canary_reason"] == "signed_tape_sell_dominated"
+    )
     assert result["latency_true_ofi_direct_canary_signed_tape_sell_dominated"] is True
     assert result["latency_true_ofi_direct_canary_signed_tape_sell_count"] == 2
     assert result["latency_true_ofi_direct_canary_signed_tape_net_buy_volume"] < 0
@@ -3329,7 +3591,9 @@ def test_latency_true_ofi_direct_canary_blocks_rest_signed_sell_tape(monkeypatch
             SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=False,
         ),
     )
-    monkeypatch.delenv("KORSTOCKSCAN_LATENCY_FALSE_NEGATIVE_REMEASURE_REPASS_ENABLED", raising=False)
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_LATENCY_FALSE_NEGATIVE_REMEASURE_REPASS_ENABLED", raising=False
+    )
     now_ts = time.time()
     monkeypatch.setattr(
         entry_latency_module,
@@ -3401,7 +3665,9 @@ def test_latency_true_ofi_direct_canary_blocks_rest_signed_sell_tape(monkeypatch
     assert result["decision"] == "REJECT_DANGER"
     assert result["allowed"] is False
     assert result["latency_true_ofi_direct_canary_applied"] is False
-    assert result["latency_true_ofi_direct_canary_reason"] == "signed_tape_sell_dominated"
+    assert (
+        result["latency_true_ofi_direct_canary_reason"] == "signed_tape_sell_dominated"
+    )
     assert result["latency_true_ofi_direct_canary_signed_tape_sell_count"] == 2
     assert result["latency_true_ofi_direct_canary_signed_tape_net_buy_volume"] < 0
 
@@ -3473,7 +3739,10 @@ def test_rest_signed_tape_stale_sell_rows_cannot_block_latency_canary():
 
     assert fields["latency_true_ofi_direct_canary_signed_tape_sample_count"] == 0
     assert fields["latency_true_ofi_direct_canary_signed_tape_sell_dominated"] is False
-    assert fields["latency_true_ofi_direct_canary_signed_tape_rest_stale_or_unknown_count"] == 3
+    assert (
+        fields["latency_true_ofi_direct_canary_signed_tape_rest_stale_or_unknown_count"]
+        == 3
+    )
 
 
 def test_latency_true_ofi_direct_canary_keeps_wide_spread_blocked(monkeypatch):
@@ -3534,12 +3803,20 @@ def test_latency_true_ofi_direct_canary_keeps_wide_spread_blocked(monkeypatch):
 
     assert result["decision"] == "REJECT_DANGER"
     assert result["latency_false_negative_remeasure_enqueued"] is False
-    assert result["latency_false_negative_remeasure_reason"] == "spread_bps_above_remeasure_cap"
+    assert (
+        result["latency_false_negative_remeasure_reason"]
+        == "spread_bps_above_remeasure_cap"
+    )
     assert result["latency_true_ofi_direct_canary_applied"] is False
-    assert result["latency_true_ofi_direct_canary_reason"] == "spread_bps_above_direct_canary_cap"
+    assert (
+        result["latency_true_ofi_direct_canary_reason"]
+        == "spread_bps_above_direct_canary_cap"
+    )
 
 
-def test_latency_true_ofi_direct_canary_reports_stale_true_ofi_source_before_value(monkeypatch):
+def test_latency_true_ofi_direct_canary_reports_stale_true_ofi_source_before_value(
+    monkeypatch,
+):
     _enable_latency_true_ofi_direct_canary(monkeypatch)
     monkeypatch.setattr(
         entry_latency_module,
@@ -3603,16 +3880,27 @@ def test_latency_true_ofi_direct_canary_reports_stale_true_ofi_source_before_val
 
     assert result["decision"] == "REJECT_DANGER"
     assert result["latency_true_ofi_direct_canary_applied"] is False
-    assert result["latency_true_ofi_direct_canary_derived_reason"] == "not_true_ofi_below_floor"
-    assert result["latency_true_ofi_direct_canary_reason"] == "ws_age_above_direct_canary_cap"
-    assert result["latency_true_ofi_direct_canary_ws_age_ms"] > result[
-        "latency_true_ofi_direct_canary_max_ws_age_ms"
-    ]
+    assert (
+        result["latency_true_ofi_direct_canary_derived_reason"]
+        == "not_true_ofi_below_floor"
+    )
+    assert (
+        result["latency_true_ofi_direct_canary_reason"]
+        == "ws_age_above_direct_canary_cap"
+    )
+    assert (
+        result["latency_true_ofi_direct_canary_ws_age_ms"]
+        > result["latency_true_ofi_direct_canary_max_ws_age_ms"]
+    )
 
 
 def test_latency_true_ofi_direct_canary_is_off_without_dated_runtime(monkeypatch):
-    monkeypatch.delenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ENABLED", raising=False)
-    monkeypatch.delenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ACTIVE_DATE", raising=False)
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ENABLED", raising=False
+    )
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ACTIVE_DATE", raising=False
+    )
 
     state = entry_latency_module._latency_true_ofi_direct_canary_runtime_state()
 
@@ -3621,9 +3909,13 @@ def test_latency_true_ofi_direct_canary_is_off_without_dated_runtime(monkeypatch
     assert entry_latency_module._latency_true_ofi_direct_canary_enabled() is False
 
 
-def test_latency_true_ofi_direct_canary_requires_tp1_micro_recheck_before_allow(monkeypatch):
+def test_latency_true_ofi_direct_canary_requires_tp1_micro_recheck_before_allow(
+    monkeypatch,
+):
     _enable_latency_true_ofi_direct_canary(monkeypatch)
-    monkeypatch.setenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ENABLED", "true")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ENABLED", "true"
+    )
     monkeypatch.setenv(
         "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ACTIVE_DATE",
         datetime.now(entry_latency_module._KST).strftime("%Y-%m-%d"),
@@ -3691,9 +3983,9 @@ def test_latency_true_ofi_direct_canary_requires_tp1_micro_recheck_before_allow(
 
     assert recovered["latency_true_ofi_direct_canary_applied"] is True
     assert recovered["latency_true_ofi_direct_canary_recheck_state"] == "recovered"
-    assert recovered["latency_true_ofi_direct_canary_recheck_top_depth_ratio_source"] == (
-        "ws.orderbook.top_bid_over_ask"
-    )
+    assert recovered[
+        "latency_true_ofi_direct_canary_recheck_top_depth_ratio_source"
+    ] == ("ws.orderbook.top_bid_over_ask")
     assert recovered["latency_true_ofi_direct_canary_reason"] == (
         "direct_canary_tp1_recheck_recovered_allow"
     )
@@ -3711,9 +4003,9 @@ def test_latency_true_ofi_direct_canary_requires_tp1_micro_recheck_before_allow(
     )
 
     assert rest_replaced["latency_true_ofi_direct_canary_applied"] is False
-    assert rest_replaced["latency_true_ofi_direct_canary_recheck_top_depth_ratio_source"] == (
-        "rest.orderbook.top_bid_over_ask"
-    )
+    assert rest_replaced[
+        "latency_true_ofi_direct_canary_recheck_top_depth_ratio_source"
+    ] == ("rest.orderbook.top_bid_over_ask")
     assert rest_replaced["latency_true_ofi_direct_canary_reason"] == (
         "tp1_recheck_positive_micro_not_recovered"
     )
@@ -3778,14 +4070,33 @@ def test_latency_false_negative_remeasure_preserves_explicit_ai_wait(monkeypatch
     assert result["latency_false_negative_remeasure_reason"] == "explicit_ai_wait_veto"
 
 
-def test_latency_spread_relief_true_ofi_estimator_does_not_relax_hard_floors_from_env(monkeypatch):
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_ENABLED", "true")
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_MIN_CONFIDENCE", "0.1")
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_MIN_TRUE_OFI_SAMPLES", "2")
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_MIN_TRUE_OFI", "-0.5")
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_MIN_PRESSURE", "50")
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_MIN_TOP_DEPTH_RATIO", "1.0")
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_MAX_WS_AGE_MS", "99999")
+def test_latency_spread_relief_true_ofi_estimator_does_not_relax_hard_floors_from_env(
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_MIN_CONFIDENCE", "0.1"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_MIN_TRUE_OFI_SAMPLES",
+        "2",
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_MIN_TRUE_OFI", "-0.5"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_MIN_PRESSURE", "50"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_MIN_TOP_DEPTH_RATIO",
+        "1.0",
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_MAX_WS_AGE_MS",
+        "99999",
+    )
     monkeypatch.setattr(
         entry_latency_module,
         "MICRO_ESTIMATOR_STORE",
@@ -3808,7 +4119,10 @@ def test_latency_spread_relief_true_ofi_estimator_does_not_relax_hard_floors_fro
     )
 
     assert result["latency_spread_relief_micro_estimator_eligible"] is False
-    assert result["latency_spread_relief_micro_estimator_reason"] == "ws_state_stale_or_missing"
+    assert (
+        result["latency_spread_relief_micro_estimator_reason"]
+        == "ws_state_stale_or_missing"
+    )
     assert result["latency_spread_relief_micro_estimator_min_confidence"] == 0.70
     assert result["latency_spread_relief_micro_estimator_min_true_ofi_samples"] == 8
     assert result["latency_spread_relief_micro_estimator_min_true_ofi"] == 0.20
@@ -3818,9 +4132,16 @@ def test_latency_spread_relief_true_ofi_estimator_does_not_relax_hard_floors_fro
 
 
 def test_latency_spread_relief_true_ofi_estimator_covers_all_scalping_tags(monkeypatch):
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_ENABLED", "true")
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_ALL_SCALPING_ENABLED", "true")
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_TAGS", "SCANNER")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_ALL_SCALPING_ENABLED",
+        "true",
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_TAGS", "SCANNER"
+    )
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -3878,15 +4199,27 @@ def test_latency_spread_relief_true_ofi_estimator_covers_all_scalping_tags(monke
     )
 
     assert result["decision"] == "ALLOW_NORMAL"
-    assert result["latency_spread_relief_signal_score_source"] == "micro_estimator.true_ofi_ewma"
+    assert (
+        result["latency_spread_relief_signal_score_source"]
+        == "micro_estimator.true_ofi_ewma"
+    )
     assert result["latency_spread_relief_micro_estimator_eligible"] is True
     assert result["latency_spread_relief_micro_estimator_all_scalping_enabled"] is True
 
 
-def test_latency_spread_relief_true_ofi_estimator_keeps_non_allowlisted_tag_blocked_when_scope_off(monkeypatch):
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_ENABLED", "true")
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_ALL_SCALPING_ENABLED", "false")
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_TAGS", "SCANNER")
+def test_latency_spread_relief_true_ofi_estimator_keeps_non_allowlisted_tag_blocked_when_scope_off(
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_ALL_SCALPING_ENABLED",
+        "false",
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_TAGS", "SCANNER"
+    )
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -3947,9 +4280,16 @@ def test_latency_spread_relief_true_ofi_estimator_keeps_non_allowlisted_tag_bloc
     assert result["latency_spread_relief_signal_score_source"] == "missing"
 
 
-def test_latency_spread_relief_true_ofi_estimator_fail_closes_invalid_snapshot(monkeypatch):
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_ENABLED", "true")
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_ALL_SCALPING_ENABLED", "true")
+def test_latency_spread_relief_true_ofi_estimator_fail_closes_invalid_snapshot(
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_ALL_SCALPING_ENABLED",
+        "true",
+    )
     monkeypatch.setattr(
         entry_latency_module,
         "MICRO_ESTIMATOR_STORE",
@@ -3962,11 +4302,17 @@ def test_latency_spread_relief_true_ofi_estimator_fail_closes_invalid_snapshot(m
     )
 
     assert result["latency_spread_relief_micro_estimator_eligible"] is False
-    assert result["latency_spread_relief_micro_estimator_reason"] == "snapshot_unavailable"
+    assert (
+        result["latency_spread_relief_micro_estimator_reason"] == "snapshot_unavailable"
+    )
 
 
-def test_latency_spread_relief_preserves_explicit_ai_wait_even_with_true_ofi_support(monkeypatch):
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_ENABLED", "true")
+def test_latency_spread_relief_preserves_explicit_ai_wait_even_with_true_ofi_support(
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MICRO_ESTIMATOR_ENABLED", "true"
+    )
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -4005,7 +4351,11 @@ def test_latency_spread_relief_preserves_explicit_ai_wait_even_with_true_ofi_sup
     )
 
     result = evaluate_live_buy_entry(
-        stock={"name": "TEST", "position_tag": "SCANNER", "rising_missed_entry_ai_action": "WAIT"},
+        stock={
+            "name": "TEST",
+            "position_tag": "SCANNER",
+            "rising_missed_entry_ai_action": "WAIT",
+        },
         code="123456_true_ofi_estimator_wait_block",
         ws_data={
             "curr": 10_020,
@@ -4023,7 +4373,10 @@ def test_latency_spread_relief_preserves_explicit_ai_wait_even_with_true_ofi_sup
 
     assert result["decision"] == "REJECT_DANGER"
     assert result["latency_spread_relief_signal_score"] == 0.0
-    assert result["latency_spread_relief_signal_source_quality_state"] == "explicit_negative_ai"
+    assert (
+        result["latency_spread_relief_signal_source_quality_state"]
+        == "explicit_negative_ai"
+    )
     assert result["latency_spread_relief_explicit_negative_ai_action"] == "WAIT"
 
 
@@ -4045,12 +4398,21 @@ def test_latency_spread_relief_true_ofi_provenance_is_forwarded_to_pipeline_even
 
     assert fields["latency_spread_relief_micro_estimator_enabled"] is True
     assert fields["latency_spread_relief_micro_estimator_eligible"] is True
-    assert fields["latency_spread_relief_micro_estimator_reason"] == "fresh_true_ofi_support"
+    assert (
+        fields["latency_spread_relief_micro_estimator_reason"]
+        == "fresh_true_ofi_support"
+    )
     assert fields["latency_spread_relief_micro_estimator_true_ofi_ewma"] == 0.42
     assert fields["latency_spread_relief_micro_estimator_true_ofi_sample_count"] == 12
     assert fields["latency_spread_relief_micro_estimator_all_scalping_enabled"] is True
-    assert fields["latency_spread_relief_micro_estimator_metric_role"] == "source_quality_gate"
-    assert fields["latency_spread_relief_micro_estimator_score"] == "not_evaluated_pre_contract"
+    assert (
+        fields["latency_spread_relief_micro_estimator_metric_role"]
+        == "source_quality_gate"
+    )
+    assert (
+        fields["latency_spread_relief_micro_estimator_score"]
+        == "not_evaluated_pre_contract"
+    )
 
     remeasure_fields = state_handlers._latency_false_negative_remeasure_log_fields(
         {
@@ -4067,17 +4429,32 @@ def test_latency_spread_relief_true_ofi_provenance_is_forwarded_to_pipeline_even
         }
     )
     assert remeasure_fields["latency_false_negative_remeasure_enqueued"] is True
-    assert remeasure_fields["latency_false_negative_remeasure_candidate_source"] == "intraday_feedback_report"
-    assert remeasure_fields["latency_false_negative_remeasure_grade"] == "ready_for_recheck"
+    assert (
+        remeasure_fields["latency_false_negative_remeasure_candidate_source"]
+        == "intraday_feedback_report"
+    )
+    assert (
+        remeasure_fields["latency_false_negative_remeasure_grade"]
+        == "ready_for_recheck"
+    )
     assert (
         remeasure_fields["latency_false_negative_remeasure_reason"]
         == "true_ofi_near_zero_or_positive_with_fresh_ws"
     )
     assert remeasure_fields["latency_false_negative_remeasure_repass_attempted"] is True
-    assert remeasure_fields["latency_false_negative_remeasure_repass_decision"] == "REJECT_DANGER"
+    assert (
+        remeasure_fields["latency_false_negative_remeasure_repass_decision"]
+        == "REJECT_DANGER"
+    )
     assert remeasure_fields["latency_true_ofi_direct_canary_applied"] is True
-    assert remeasure_fields["latency_true_ofi_direct_canary_reason"] == "direct_canary_true_ofi_false_negative_allow"
-    assert remeasure_fields["latency_true_ofi_direct_canary_relief_runtime_enabled"] is True
+    assert (
+        remeasure_fields["latency_true_ofi_direct_canary_reason"]
+        == "direct_canary_true_ofi_false_negative_allow"
+    )
+    assert (
+        remeasure_fields["latency_true_ofi_direct_canary_relief_runtime_enabled"]
+        is True
+    )
     assert remeasure_fields["latency_true_ofi_direct_canary_true_ofi_ewma"] == 0.012
 
 
@@ -4137,7 +4514,9 @@ def test_latency_wide_spread_passive_requote_allows_scanner_target_price(monkeyp
     assert result["latency_canary_applied"] is True
     assert result["latency_canary_reason"] == "wide_spread_passive_requote_applied"
     assert result["latency_wide_spread_passive_requote_applied"] is True
-    assert result["entry_price_guard"] == "latency_wide_spread_passive_requote_defensive"
+    assert (
+        result["entry_price_guard"] == "latency_wide_spread_passive_requote_defensive"
+    )
     assert result["price_resolution_reason"] == "reference_target_cap"
     assert result["order_price"] == 5_410
     assert result["latency_danger_reasons"] == "spread_too_wide"
@@ -4234,7 +4613,9 @@ def test_latency_buy_pressure_blocks_untrusted_derived_fallback():
     )
 
 
-def test_latency_spread_relief_canary_uses_effective_min_signal_floor_override(monkeypatch):
+def test_latency_spread_relief_canary_uses_effective_min_signal_floor_override(
+    monkeypatch,
+):
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -4439,7 +4820,9 @@ def test_latency_ws_jitter_relief_canary_overrides_reject_danger_to_normal(monke
             SCALP_LATENCY_WS_JITTER_RELIEF_MAX_SPREAD_RATIO=0.0050,
         ),
     )
-    monkeypatch.setattr(entry_latency_module._CACHE, "update", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        entry_latency_module._CACHE, "update", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr(
         entry_latency_module._CACHE,
         "get_quote_health",
@@ -4490,7 +4873,9 @@ def test_latency_ws_jitter_relief_canary_requires_jitter_only_danger(monkeypatch
             SCALP_LATENCY_WS_JITTER_RELIEF_MAX_SPREAD_RATIO=0.0050,
         ),
     )
-    monkeypatch.setattr(entry_latency_module._CACHE, "update", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        entry_latency_module._CACHE, "update", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr(
         entry_latency_module._CACHE,
         "get_quote_health",
@@ -4528,7 +4913,9 @@ def test_latency_ws_jitter_relief_canary_requires_jitter_only_danger(monkeypatch
     assert "ws_jitter_too_high" in result["latency_danger_reasons"]
 
 
-def test_latency_other_danger_relief_canary_overrides_reject_danger_to_normal(monkeypatch):
+def test_latency_other_danger_relief_canary_overrides_reject_danger_to_normal(
+    monkeypatch,
+):
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -4546,8 +4933,14 @@ def test_latency_other_danger_relief_canary_overrides_reject_danger_to_normal(mo
             SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_SPREAD_RATIO=0.0080,
         ),
     )
-    monkeypatch.setattr(entry_latency_module._CACHE, "update", lambda *args, **kwargs: None)
-    monkeypatch.setattr(entry_latency_module, "_latency_danger_reasons", lambda latency: ["other_danger"])
+    monkeypatch.setattr(
+        entry_latency_module._CACHE, "update", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        entry_latency_module,
+        "_latency_danger_reasons",
+        lambda latency: ["other_danger"],
+    )
     monkeypatch.setattr(
         entry_latency_module._CACHE,
         "get_quote_health",
@@ -4586,7 +4979,9 @@ def test_latency_other_danger_relief_canary_overrides_reject_danger_to_normal(mo
     assert result["latency_danger_reasons"] == "other_danger"
 
 
-def test_latency_other_danger_relief_canary_enforces_stricter_residual_limits(monkeypatch):
+def test_latency_other_danger_relief_canary_enforces_stricter_residual_limits(
+    monkeypatch,
+):
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -4604,8 +4999,14 @@ def test_latency_other_danger_relief_canary_enforces_stricter_residual_limits(mo
             SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_SPREAD_RATIO=0.0080,
         ),
     )
-    monkeypatch.setattr(entry_latency_module._CACHE, "update", lambda *args, **kwargs: None)
-    monkeypatch.setattr(entry_latency_module, "_latency_danger_reasons", lambda latency: ["other_danger"])
+    monkeypatch.setattr(
+        entry_latency_module._CACHE, "update", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        entry_latency_module,
+        "_latency_danger_reasons",
+        lambda latency: ["other_danger"],
+    )
     monkeypatch.setattr(
         entry_latency_module._CACHE,
         "get_quote_health",
@@ -4660,8 +5061,14 @@ def test_latency_other_danger_relief_canary_blocks_below_85_signal(monkeypatch):
             SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_SPREAD_RATIO=0.0080,
         ),
     )
-    monkeypatch.setattr(entry_latency_module._CACHE, "update", lambda *args, **kwargs: None)
-    monkeypatch.setattr(entry_latency_module, "_latency_danger_reasons", lambda latency: ["other_danger"])
+    monkeypatch.setattr(
+        entry_latency_module._CACHE, "update", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        entry_latency_module,
+        "_latency_danger_reasons",
+        lambda latency: ["other_danger"],
+    )
     monkeypatch.setattr(
         entry_latency_module._CACHE,
         "get_quote_health",
@@ -4718,8 +5125,14 @@ def test_latency_other_danger_relief_canary_blocks_unstable_quote(monkeypatch):
             SCALP_LATENCY_OTHER_DANGER_RELIEF_BLOCK_UNSTABLE_QUOTE=True,
         ),
     )
-    monkeypatch.setattr(entry_latency_module._CACHE, "update", lambda *args, **kwargs: None)
-    monkeypatch.setattr(entry_latency_module, "_latency_danger_reasons", lambda latency: ["other_danger"])
+    monkeypatch.setattr(
+        entry_latency_module._CACHE, "update", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        entry_latency_module,
+        "_latency_danger_reasons",
+        lambda latency: ["other_danger"],
+    )
     monkeypatch.setattr(
         entry_latency_module._CACHE,
         "get_quote_health",
@@ -4764,7 +5177,9 @@ def test_latency_other_danger_relief_canary_blocks_unstable_quote(monkeypatch):
     assert result["latency_danger_reasons"] == "other_danger"
 
 
-def test_latency_quote_fresh_composite_canary_overrides_mixed_danger_to_normal(monkeypatch):
+def test_latency_quote_fresh_composite_canary_overrides_mixed_danger_to_normal(
+    monkeypatch,
+):
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -4781,7 +5196,9 @@ def test_latency_quote_fresh_composite_canary_overrides_mixed_danger_to_normal(m
             SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_SPREAD_RATIO=0.0075,
         ),
     )
-    monkeypatch.setattr(entry_latency_module._CACHE, "update", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        entry_latency_module._CACHE, "update", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr(
         entry_latency_module._CACHE,
         "get_quote_health",
@@ -4817,7 +5234,9 @@ def test_latency_quote_fresh_composite_canary_overrides_mixed_danger_to_normal(m
     )
 
 
-def test_latency_quote_fresh_composite_price_guard_respects_target_buy_price(monkeypatch):
+def test_latency_quote_fresh_composite_price_guard_respects_target_buy_price(
+    monkeypatch,
+):
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -4834,7 +5253,9 @@ def test_latency_quote_fresh_composite_price_guard_respects_target_buy_price(mon
             SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_SPREAD_RATIO=0.0075,
         ),
     )
-    monkeypatch.setattr(entry_latency_module._CACHE, "update", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        entry_latency_module._CACHE, "update", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr(
         entry_latency_module._CACHE,
         "get_quote_health",
@@ -4922,7 +5343,9 @@ def test_scalping_target_buy_price_can_override_defensive_order_price_for_daehan
     assert result["reference_target_below_bid_bps"] == 337
 
 
-def test_latency_quote_fresh_composite_price_guard_uses_valid_tick_at_price_boundary(monkeypatch):
+def test_latency_quote_fresh_composite_price_guard_uses_valid_tick_at_price_boundary(
+    monkeypatch,
+):
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -4939,7 +5362,9 @@ def test_latency_quote_fresh_composite_price_guard_uses_valid_tick_at_price_boun
             SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_SPREAD_RATIO=0.0075,
         ),
     )
-    monkeypatch.setattr(entry_latency_module._CACHE, "update", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        entry_latency_module._CACHE, "update", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr(
         entry_latency_module._CACHE,
         "get_quote_health",
@@ -4991,7 +5416,9 @@ def test_latency_quote_fresh_composite_canary_blocks_below_88_signal(monkeypatch
             SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_SPREAD_RATIO=0.0075,
         ),
     )
-    monkeypatch.setattr(entry_latency_module._CACHE, "update", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        entry_latency_module._CACHE, "update", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr(
         entry_latency_module._CACHE,
         "get_quote_health",
@@ -5027,7 +5454,9 @@ def test_latency_quote_fresh_composite_canary_blocks_below_88_signal(monkeypatch
     )
 
 
-def test_latency_signal_quality_quote_composite_backup_canary_overrides_to_normal(monkeypatch):
+def test_latency_signal_quality_quote_composite_backup_canary_overrides_to_normal(
+    monkeypatch,
+):
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -5047,7 +5476,9 @@ def test_latency_signal_quality_quote_composite_backup_canary_overrides_to_norma
             SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_MAX_SPREAD_RATIO=0.0085,
         ),
     )
-    monkeypatch.setattr(entry_latency_module._CACHE, "update", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        entry_latency_module._CACHE, "update", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr(
         entry_latency_module._CACHE,
         "get_quote_health",
@@ -5085,7 +5516,9 @@ def test_latency_signal_quality_quote_composite_backup_canary_overrides_to_norma
     )
 
 
-def test_latency_signal_quality_quote_composite_backup_blocks_weak_buy_pressure(monkeypatch):
+def test_latency_signal_quality_quote_composite_backup_blocks_weak_buy_pressure(
+    monkeypatch,
+):
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -5102,7 +5535,9 @@ def test_latency_signal_quality_quote_composite_backup_blocks_weak_buy_pressure(
             SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_MIN_BUY_PRESSURE=65.0,
         ),
     )
-    monkeypatch.setattr(entry_latency_module._CACHE, "update", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        entry_latency_module._CACHE, "update", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr(
         entry_latency_module._CACHE,
         "get_quote_health",
@@ -5140,7 +5575,9 @@ def test_latency_signal_quality_quote_composite_backup_blocks_weak_buy_pressure(
     )
 
 
-def test_latency_mechanical_momentum_relief_overrides_low_ai_score_quote_family(monkeypatch):
+def test_latency_mechanical_momentum_relief_overrides_low_ai_score_quote_family(
+    monkeypatch,
+):
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -5161,7 +5598,9 @@ def test_latency_mechanical_momentum_relief_overrides_low_ai_score_quote_family(
             SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_SPREAD_RATIO=0.0085,
         ),
     )
-    monkeypatch.setattr(entry_latency_module._CACHE, "update", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        entry_latency_module._CACHE, "update", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr(
         entry_latency_module._CACHE,
         "get_quote_health",
@@ -5199,7 +5638,9 @@ def test_latency_mechanical_momentum_relief_overrides_low_ai_score_quote_family(
     )
 
 
-def test_latency_mechanical_momentum_relief_blocks_high_ai_score_to_avoid_axis_overlap(monkeypatch):
+def test_latency_mechanical_momentum_relief_blocks_high_ai_score_to_avoid_axis_overlap(
+    monkeypatch,
+):
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -5217,7 +5658,9 @@ def test_latency_mechanical_momentum_relief_blocks_high_ai_score_to_avoid_axis_o
             SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MIN_BUY_PRESSURE=50.0,
         ),
     )
-    monkeypatch.setattr(entry_latency_module._CACHE, "update", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        entry_latency_module._CACHE, "update", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr(
         entry_latency_module._CACHE,
         "get_quote_health",
@@ -5316,7 +5759,12 @@ def test_latency_danger_reason_helper_uses_thresholds(monkeypatch):
     status = type(
         "LatencyStatusStub",
         (),
-        {"quote_stale": False, "ws_age_ms": 451, "ws_jitter_ms": 301, "spread_ratio": 0.011},
+        {
+            "quote_stale": False,
+            "ws_age_ms": 451,
+            "ws_jitter_ms": 301,
+            "spread_ratio": 0.011,
+        },
     )()
     assert _latency_danger_reasons(status) == [
         "ws_age_too_high",
@@ -5326,15 +5774,24 @@ def test_latency_danger_reason_helper_uses_thresholds(monkeypatch):
 
 
 def test_percent_bps_mode_normal_defensive_0025_pct(monkeypatch):
-    monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
+    monkeypatch.setattr(
+        entry_latency_module, "_defense_mode_is_percent_bps", lambda: True
+    )
     monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 25)
-    monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
-    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15)
+    monkeypatch.setattr(
+        entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10
+    )
+    monkeypatch.setattr(
+        entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15
+    )
     monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 40)
 
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.record_quote(
-        "005930_bps1", best_bid=10_000, best_ask=10_010, ts=time.time(),
+        "005930_bps1",
+        best_bid=10_000,
+        best_ask=10_010,
+        ts=time.time(),
     )
     result = evaluate_live_buy_entry(
         stock={"name": "삼성전자", "position_tag": "SCANNER"},
@@ -5362,16 +5819,27 @@ def test_percent_bps_mode_normal_defensive_0025_pct(monkeypatch):
 
 
 def test_percent_bps_mode_strong_defensive_001_pct(monkeypatch):
-    monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
+    monkeypatch.setattr(
+        entry_latency_module, "_defense_mode_is_percent_bps", lambda: True
+    )
     monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 25)
-    monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
-    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15)
+    monkeypatch.setattr(
+        entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10
+    )
+    monkeypatch.setattr(
+        entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15
+    )
     monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 40)
-    monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
+    monkeypatch.setattr(
+        entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True
+    )
 
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.record_quote(
-        "005930_bps2", best_bid=10_000, best_ask=10_010, ts=time.time(),
+        "005930_bps2",
+        best_bid=10_000,
+        best_ask=10_010,
+        ts=time.time(),
     )
     result = evaluate_live_buy_entry(
         stock={"name": "삼성전자", "position_tag": "SCANNER"},
@@ -5397,21 +5865,35 @@ def test_percent_bps_mode_strong_defensive_001_pct(monkeypatch):
     assert result["entry_price_gap_profile"] == "strong_1tick_pressure"
     assert result["entry_price_gap_profile_bps"] == 10
     assert result["conditional_1tick_real_override_applied"] is True
-    assert result["conditional_1tick_real_override_reason"] == "spread_1tick_strong_buy_pressure_percent_bps"
+    assert (
+        result["conditional_1tick_real_override_reason"]
+        == "spread_1tick_strong_buy_pressure_percent_bps"
+    )
     assert result["order_price"] == 9990
 
 
 def test_percent_bps_mode_favorable_micro_0015_pct(monkeypatch):
-    monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
+    monkeypatch.setattr(
+        entry_latency_module, "_defense_mode_is_percent_bps", lambda: True
+    )
     monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 25)
-    monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
-    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15)
+    monkeypatch.setattr(
+        entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10
+    )
+    monkeypatch.setattr(
+        entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15
+    )
     monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 40)
-    monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
+    monkeypatch.setattr(
+        entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True
+    )
 
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.record_quote(
-        "005930_bps_favorable", best_bid=10_000, best_ask=10_020, ts=time.time(),
+        "005930_bps_favorable",
+        best_bid=10_000,
+        best_ask=10_020,
+        ts=time.time(),
     )
     result = evaluate_live_buy_entry(
         stock={"name": "삼성전자", "position_tag": "SCANNER"},
@@ -5445,16 +5927,27 @@ def test_percent_bps_mode_favorable_micro_0015_pct(monkeypatch):
 
 
 def test_percent_bps_mode_weak_liquidity_wide_spread_0040_pct(monkeypatch):
-    monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
+    monkeypatch.setattr(
+        entry_latency_module, "_defense_mode_is_percent_bps", lambda: True
+    )
     monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 25)
-    monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
-    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15)
+    monkeypatch.setattr(
+        entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10
+    )
+    monkeypatch.setattr(
+        entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15
+    )
     monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 40)
-    monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
+    monkeypatch.setattr(
+        entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True
+    )
 
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.record_quote(
-        "005930_bps_weak", best_bid=10_000, best_ask=10_050, ts=time.time(),
+        "005930_bps_weak",
+        best_bid=10_000,
+        best_ask=10_050,
+        ts=time.time(),
     )
     result = evaluate_live_buy_entry(
         stock={"name": "삼성전자", "position_tag": "SCANNER"},
@@ -5485,29 +5978,42 @@ def test_percent_bps_mode_weak_liquidity_wide_spread_0040_pct(monkeypatch):
     assert result["order_price"] == 9960
 
 
-def test_aggressive_entry_price_override_moves_neutral_defensive_to_bid_minus_tick(monkeypatch):
-    monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
+def test_aggressive_entry_price_override_moves_neutral_defensive_to_bid_minus_tick(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        entry_latency_module, "_defense_mode_is_percent_bps", lambda: True
+    )
     monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 25)
-    monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
-    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15)
+    monkeypatch.setattr(
+        entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10
+    )
+    monkeypatch.setattr(
+        entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15
+    )
     monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 40)
-    monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
+    monkeypatch.setattr(
+        entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True
+    )
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
-            replace(
-                CONFIG,
-                SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED=True,
-                SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_TYPES="defensive_missed_upside_v1",
-                SCALP_DEFENSIVE_MISSED_UPSIDE_MIN_ORIGINAL_BPS=15,
-                SCALP_DEFENSIVE_MISSED_UPSIDE_NEUTRAL_BID_MINUS_TICKS=1,
-                SCALP_DEFENSIVE_MISSED_UPSIDE_BULLISH_BID_MINUS_TICKS=0,
-            ),
+        replace(
+            CONFIG,
+            SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED=True,
+            SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_TYPES="defensive_missed_upside_v1",
+            SCALP_DEFENSIVE_MISSED_UPSIDE_MIN_ORIGINAL_BPS=15,
+            SCALP_DEFENSIVE_MISSED_UPSIDE_NEUTRAL_BID_MINUS_TICKS=1,
+            SCALP_DEFENSIVE_MISSED_UPSIDE_BULLISH_BID_MINUS_TICKS=0,
+        ),
     )
 
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.record_quote(
-        "005930_aggressive_neutral", best_bid=10_000, best_ask=10_050, ts=time.time(),
+        "005930_aggressive_neutral",
+        best_bid=10_000,
+        best_ask=10_050,
+        ts=time.time(),
     )
     result = evaluate_live_buy_entry(
         stock={"name": "삼성전자", "position_tag": "SCANNER"},
@@ -5534,20 +6040,33 @@ def test_aggressive_entry_price_override_moves_neutral_defensive_to_bid_minus_ti
     assert result["entry_price_guard"] == "defensive_missed_upside_aggressive_entry"
     assert result["order_price"] == 9990
     assert result["aggressive_entry_price_override_applied"] is True
-    assert result["aggressive_entry_price_override_type"] == "defensive_missed_upside_v1"
-    assert result["aggressive_entry_price_original_profile"] == "weak_liquidity_wide_spread"
+    assert (
+        result["aggressive_entry_price_override_type"] == "defensive_missed_upside_v1"
+    )
+    assert (
+        result["aggressive_entry_price_original_profile"]
+        == "weak_liquidity_wide_spread"
+    )
     assert result["aggressive_entry_price_original_bps"] == 40
     assert result["aggressive_entry_price_target_mode"] == "best_bid_near"
     assert result["aggressive_entry_price_order_price"] == 9990
 
 
 def test_aggressive_entry_price_override_moves_positive_micro_to_best_bid(monkeypatch):
-    monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
+    monkeypatch.setattr(
+        entry_latency_module, "_defense_mode_is_percent_bps", lambda: True
+    )
     monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 25)
-    monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
-    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15)
+    monkeypatch.setattr(
+        entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10
+    )
+    monkeypatch.setattr(
+        entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15
+    )
     monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 40)
-    monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
+    monkeypatch.setattr(
+        entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True
+    )
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -5563,7 +6082,10 @@ def test_aggressive_entry_price_override_moves_positive_micro_to_best_bid(monkey
 
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.record_quote(
-        "005930_aggressive_positive", best_bid=10_000, best_ask=10_020, ts=time.time(),
+        "005930_aggressive_positive",
+        best_bid=10_000,
+        best_ask=10_020,
+        ts=time.time(),
     )
     result = evaluate_live_buy_entry(
         stock={"name": "삼성전자", "position_tag": "SCANNER"},
@@ -5594,13 +6116,23 @@ def test_aggressive_entry_price_override_moves_positive_micro_to_best_bid(monkey
     assert result["aggressive_entry_price_original_bps"] == 15
 
 
-def test_aggressive_entry_price_override_does_not_trust_unproven_exec_volume(monkeypatch):
-    monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
+def test_aggressive_entry_price_override_does_not_trust_unproven_exec_volume(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        entry_latency_module, "_defense_mode_is_percent_bps", lambda: True
+    )
     monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 25)
-    monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
-    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15)
+    monkeypatch.setattr(
+        entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10
+    )
+    monkeypatch.setattr(
+        entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15
+    )
     monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 40)
-    monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
+    monkeypatch.setattr(
+        entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True
+    )
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -5644,13 +6176,23 @@ def test_aggressive_entry_price_override_does_not_trust_unproven_exec_volume(mon
     assert result["aggressive_entry_price_original_profile"] == "normal"
 
 
-def test_reference_target_missed_upside_override_moves_positive_micro_to_best_bid(monkeypatch):
-    monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
+def test_reference_target_missed_upside_override_moves_positive_micro_to_best_bid(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        entry_latency_module, "_defense_mode_is_percent_bps", lambda: True
+    )
     monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 25)
-    monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
-    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15)
+    monkeypatch.setattr(
+        entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10
+    )
+    monkeypatch.setattr(
+        entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15
+    )
     monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 40)
-    monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
+    monkeypatch.setattr(
+        entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True
+    )
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -5688,27 +6230,49 @@ def test_reference_target_missed_upside_override_moves_positive_micro_to_best_bi
         target_buy_price=9_900,
     )
 
-    assert result["entry_price_guard"] == "reference_target_cap_missed_upside_aggressive_entry"
+    assert (
+        result["entry_price_guard"]
+        == "reference_target_cap_missed_upside_aggressive_entry"
+    )
     assert result["order_price"] == 10000
     assert result["price_resolution_reason"] == "aggressive_entry_price_override"
     assert result["reference_target_applied"] is False
-    assert result["reference_target_rejected_reason"] == "aggressive_entry_price_override_applied"
+    assert (
+        result["reference_target_rejected_reason"]
+        == "aggressive_entry_price_override_applied"
+    )
     assert result["aggressive_entry_price_override_applied"] is True
-    assert result["aggressive_entry_price_override_type"] == "reference_target_cap_missed_upside_v1"
-    assert result["aggressive_entry_price_override_reason"] == "reference_target_cap_missed_upside_best_bid_near"
+    assert (
+        result["aggressive_entry_price_override_type"]
+        == "reference_target_cap_missed_upside_v1"
+    )
+    assert (
+        result["aggressive_entry_price_override_reason"]
+        == "reference_target_cap_missed_upside_best_bid_near"
+    )
     context = result["entry_price_gap_profile_context"]
     assert context["reference_target_price"] == 9900
     assert context["reference_target_below_bid_bps"] == 100
     assert context["reference_target_missed_upside_min_bps"] == 20
 
 
-def test_reference_target_missed_upside_override_moves_neutral_to_bid_minus_tick(monkeypatch):
-    monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
+def test_reference_target_missed_upside_override_moves_neutral_to_bid_minus_tick(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        entry_latency_module, "_defense_mode_is_percent_bps", lambda: True
+    )
     monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 25)
-    monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
-    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15)
+    monkeypatch.setattr(
+        entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10
+    )
+    monkeypatch.setattr(
+        entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15
+    )
     monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 40)
-    monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
+    monkeypatch.setattr(
+        entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True
+    )
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -5744,19 +6308,33 @@ def test_reference_target_missed_upside_override_moves_neutral_to_bid_minus_tick
         target_buy_price=9_900,
     )
 
-    assert result["entry_price_guard"] == "reference_target_cap_missed_upside_aggressive_entry"
+    assert (
+        result["entry_price_guard"]
+        == "reference_target_cap_missed_upside_aggressive_entry"
+    )
     assert result["order_price"] == 9990
-    assert result["aggressive_entry_price_override_type"] == "reference_target_cap_missed_upside_v1"
+    assert (
+        result["aggressive_entry_price_override_type"]
+        == "reference_target_cap_missed_upside_v1"
+    )
     assert result["aggressive_entry_price_target_mode"] == "best_bid_near"
 
 
 def test_reference_target_missed_upside_override_skips_below_min_bps(monkeypatch):
-    monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
+    monkeypatch.setattr(
+        entry_latency_module, "_defense_mode_is_percent_bps", lambda: True
+    )
     monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 25)
-    monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
-    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15)
+    monkeypatch.setattr(
+        entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10
+    )
+    monkeypatch.setattr(
+        entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15
+    )
     monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 40)
-    monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
+    monkeypatch.setattr(
+        entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True
+    )
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -5795,16 +6373,29 @@ def test_reference_target_missed_upside_override_skips_below_min_bps(monkeypatch
     assert result["entry_price_guard"] == "favorable_micro_percent_bps"
     assert result["order_price"] == 9980
     assert result["aggressive_entry_price_override_applied"] is False
-    assert result["aggressive_entry_price_override_skip_reason"] == "reference_target_below_bid_bps_below_min"
+    assert (
+        result["aggressive_entry_price_override_skip_reason"]
+        == "reference_target_below_bid_bps_below_min"
+    )
 
 
-def test_aggressive_entry_price_override_skips_when_dynamic_resolver_live_selected(monkeypatch):
-    monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
+def test_aggressive_entry_price_override_skips_when_dynamic_resolver_live_selected(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        entry_latency_module, "_defense_mode_is_percent_bps", lambda: True
+    )
     monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 25)
-    monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
-    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15)
+    monkeypatch.setattr(
+        entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10
+    )
+    monkeypatch.setattr(
+        entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15
+    )
     monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 40)
-    monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
+    monkeypatch.setattr(
+        entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True
+    )
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -5843,17 +6434,30 @@ def test_aggressive_entry_price_override_skips_when_dynamic_resolver_live_select
     assert result["entry_price_guard"] == "favorable_micro_percent_bps"
     assert result["order_price"] == 9980
     assert result["aggressive_entry_price_override_applied"] is False
-    assert result["aggressive_entry_price_override_skip_reason"] == "dynamic_entry_price_resolver_live_selected"
+    assert (
+        result["aggressive_entry_price_override_skip_reason"]
+        == "dynamic_entry_price_resolver_live_selected"
+    )
 
 
-def test_intraday_entry_price_discovery_overrides_dynamic_owner_for_operator(monkeypatch):
+def test_intraday_entry_price_discovery_overrides_dynamic_owner_for_operator(
+    monkeypatch,
+):
     monkeypatch.setenv("KORSTOCKSCAN_INTRADAY_ENTRY_PRICE_DISCOVERY_ENABLED", "true")
-    monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
+    monkeypatch.setattr(
+        entry_latency_module, "_defense_mode_is_percent_bps", lambda: True
+    )
     monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 25)
-    monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
-    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15)
+    monkeypatch.setattr(
+        entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10
+    )
+    monkeypatch.setattr(
+        entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15
+    )
     monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 40)
-    monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
+    monkeypatch.setattr(
+        entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True
+    )
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -5896,13 +6500,23 @@ def test_intraday_entry_price_discovery_overrides_dynamic_owner_for_operator(mon
     assert result["price_resolution_reason"] == "aggressive_entry_price_override"
 
 
-def test_aggressive_entry_price_override_skips_when_entry_price_live_tuning_selected(monkeypatch):
-    monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
+def test_aggressive_entry_price_override_skips_when_entry_price_live_tuning_selected(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        entry_latency_module, "_defense_mode_is_percent_bps", lambda: True
+    )
     monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 25)
-    monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
-    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15)
+    monkeypatch.setattr(
+        entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10
+    )
+    monkeypatch.setattr(
+        entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15
+    )
     monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 40)
-    monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
+    monkeypatch.setattr(
+        entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True
+    )
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -5941,16 +6555,27 @@ def test_aggressive_entry_price_override_skips_when_entry_price_live_tuning_sele
     assert result["entry_price_guard"] == "favorable_micro_percent_bps"
     assert result["order_price"] == 9980
     assert result["aggressive_entry_price_override_applied"] is False
-    assert result["aggressive_entry_price_override_skip_reason"] == "dynamic_entry_price_resolver_live_selected"
+    assert (
+        result["aggressive_entry_price_override_skip_reason"]
+        == "dynamic_entry_price_resolver_live_selected"
+    )
 
 
 def test_aggressive_entry_price_override_skips_weak_pullback_like_context(monkeypatch):
-    monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
+    monkeypatch.setattr(
+        entry_latency_module, "_defense_mode_is_percent_bps", lambda: True
+    )
     monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 25)
-    monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
-    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15)
+    monkeypatch.setattr(
+        entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10
+    )
+    monkeypatch.setattr(
+        entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15
+    )
     monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 40)
-    monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
+    monkeypatch.setattr(
+        entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True
+    )
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -5993,11 +6618,16 @@ def test_aggressive_entry_price_override_skips_weak_pullback_like_context(monkey
 
 
 def test_percent_bps_mode_non_scalping_stays_tick(monkeypatch):
-    monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
+    monkeypatch.setattr(
+        entry_latency_module, "_defense_mode_is_percent_bps", lambda: True
+    )
 
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.record_quote(
-        "005930_swing1", best_bid=10_000, best_ask=10_010, ts=time.time(),
+        "005930_swing1",
+        best_bid=10_000,
+        best_ask=10_010,
+        ts=time.time(),
     )
     result = evaluate_live_buy_entry(
         stock={"name": "삼성전자", "position_tag": "SCANNER"},
@@ -6024,7 +6654,10 @@ def test_percent_bps_mode_non_scalping_stays_tick(monkeypatch):
 def test_tick_mode_default_unchanged():
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.record_quote(
-        "005930_tick", best_bid=10_000, best_ask=10_010, ts=time.time(),
+        "005930_tick",
+        best_bid=10_000,
+        best_ask=10_010,
+        ts=time.time(),
     )
     result = evaluate_live_buy_entry(
         stock={"name": "삼성전자", "position_tag": "SCANNER"},

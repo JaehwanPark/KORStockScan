@@ -28,7 +28,15 @@ def _valid_result(**overrides):
     return payload
 
 
-def _step(observations, now_ts, score, action="BUY", mode="report_only", previous=50.0, **result):
+def _step(
+    observations,
+    now_ts,
+    score,
+    action="BUY",
+    mode="report_only",
+    previous=50.0,
+    **result,
+):
     return evaluate_watching_score(
         observations,
         now_ts=now_ts,
@@ -68,8 +76,12 @@ def test_applied_mode_uses_projection_after_two_valid_observations():
 
 def test_sharp_drop_and_drop_action_are_immediate():
     _, observations = _step([], 100.0, 90.0, mode="applied")
-    sharp, observations = _step(observations, 130.0, 70.0, mode="applied", previous=90.0)
-    drop, _ = _step(observations, 160.0, 80.0, action="DROP", mode="applied", previous=70.0)
+    sharp, observations = _step(
+        observations, 130.0, 70.0, mode="applied", previous=90.0
+    )
+    drop, _ = _step(
+        observations, 160.0, 80.0, action="DROP", mode="applied", previous=70.0
+    )
 
     assert sharp.applied_score == 70.0
     assert drop.applied_score == 80.0
@@ -78,12 +90,18 @@ def test_sharp_drop_and_drop_action_are_immediate():
 @pytest.mark.parametrize(
     ("overrides", "expected"),
     [
-        ({"ai_result_source": "lock_contention", "ai_parse_ok": False}, "lock_contention"),
+        (
+            {"ai_result_source": "lock_contention", "ai_parse_ok": False},
+            "lock_contention",
+        ),
         ({"ai_fallback_score_50": True}, "fallback_score_50"),
         ({"ai_parse_fail": True}, "parse_invalid"),
         ({"cache_hit": True, "ai_result_source": "cache"}, "cache_hit_same_input"),
         ({"ai_result_source": "cache", "ai_parse_ok": None}, "cache_hit_same_input"),
-        ({"ai_result_source": "engine_disabled", "ai_parse_ok": False}, "engine_disabled"),
+        (
+            {"ai_result_source": "engine_disabled", "ai_parse_ok": False},
+            "engine_disabled",
+        ),
     ],
 )
 def test_invalid_responses_do_not_enter_buffer(overrides, expected):
@@ -129,7 +147,9 @@ def test_fallback_reason_has_priority_over_parse_invalid():
         raw_score=50.0,
         action="WAIT",
         mode="report_only",
-        ai_result=_valid_result(ai_parse_ok=False, ai_parse_fail=True, ai_fallback_score_50=True),
+        ai_result=_valid_result(
+            ai_parse_ok=False, ai_parse_fail=True, ai_fallback_score_50=True
+        ),
     )
     assert decision.excluded_reason == "fallback_score_50"
 
@@ -147,7 +167,11 @@ def test_window_and_capacity_are_bounded():
 
 def test_action_consistency_uses_last_three_valid_observations():
     observations = []
-    for now_ts, score, action in [(100.0, 70.0, "BUY"), (120.0, 71.0, "WAIT"), (140.0, 72.0, "BUY")]:
+    for now_ts, score, action in [
+        (100.0, 70.0, "BUY"),
+        (120.0, 71.0, "WAIT"),
+        (140.0, 72.0, "BUY"),
+    ]:
         decision, observations = _step(observations, now_ts, score, action=action)
     assert decision.action_consistency == pytest.approx(2 / 3)
     assert decision.confidence == "ready"
@@ -156,18 +180,31 @@ def test_action_consistency_uses_last_three_valid_observations():
 def test_applied_mode_never_promotes_subthreshold_raw_score_to_buy():
     observations = []
     for now_ts, score in [(100.0, 82.0), (120.0, 80.0)]:
-        _, observations = _step(observations, now_ts, score, action="BUY", mode="applied", previous=score)
-    decision, _ = _step(observations, 140.0, 70.0, action="BUY", mode="applied", previous=80.0)
+        _, observations = _step(
+            observations, now_ts, score, action="BUY", mode="applied", previous=score
+        )
+    decision, _ = _step(
+        observations, 140.0, 70.0, action="BUY", mode="applied", previous=80.0
+    )
     assert decision.applied_score <= 70.0
 
 
 def test_applied_buy_requires_three_samples_and_two_buy_votes():
     first, observations = _step([], 100.0, 82.0, action="BUY", mode="applied")
-    second, observations = _step(observations, 120.0, 84.0, action="BUY", mode="applied", previous=82.0)
+    second, observations = _step(
+        observations, 120.0, 84.0, action="BUY", mode="applied", previous=82.0
+    )
     assert first.applied_score == 82.0
     assert second.applied_score <= 74.0
 
-    third, _ = _step(observations, 140.0, 86.0, action="BUY", mode="applied", previous=second.applied_score)
+    third, _ = _step(
+        observations,
+        140.0,
+        86.0,
+        action="BUY",
+        mode="applied",
+        previous=second.applied_score,
+    )
     assert third.valid_observation_count == 3
     assert third.applied_score > 74.0
 
@@ -205,13 +242,20 @@ def test_diagnostic_artifact_is_explicitly_non_authoritative(tmp_path):
     assert report["metrics"]["primary_observation_stage"] == "ai_confirmed"
     assert report["metrics"]["primary_observation_count"] == 1
     assert report["metrics"]["valid_response_count"] == 1
-    assert (tmp_path / "report" / "ai_watching_score_smoothing_diagnostic" / "ai_watching_score_smoothing_diagnostic_2026-06-12.json").exists()
+    assert (
+        tmp_path
+        / "report"
+        / "ai_watching_score_smoothing_diagnostic"
+        / "ai_watching_score_smoothing_diagnostic_2026-06-12.json"
+    ).exists()
 
 
 def test_diagnostic_reads_gzip_pipeline_events(tmp_path):
     pipeline_dir = tmp_path / "pipeline_events"
     pipeline_dir.mkdir()
-    with gzip.open(pipeline_dir / "pipeline_events_2026-06-12.jsonl.gz", "wt", encoding="utf-8") as handle:
+    with gzip.open(
+        pipeline_dir / "pipeline_events_2026-06-12.jsonl.gz", "wt", encoding="utf-8"
+    ) as handle:
         handle.write(
             json.dumps(
                 {
@@ -232,7 +276,10 @@ def test_diagnostic_reads_gzip_pipeline_events(tmp_path):
     report = build_diagnostic_artifact("2026-06-12", data_root=tmp_path)
 
     assert report["metrics"]["regular_observed_count"] == 1
-    assert report["transition_guard"]["criteria"]["pipeline_input_integrity"]["status"] == "pass"
+    assert (
+        report["transition_guard"]["criteria"]["pipeline_input_integrity"]["status"]
+        == "pass"
+    )
     assert report["input_artifact_checks"][0]["path"].endswith(".jsonl.gz")
 
 
@@ -280,7 +327,9 @@ def test_external_evidence_cannot_override_transition_criteria(tmp_path):
     for target_date in ("2026-06-15", "2026-06-16", "2026-06-17"):
         for role in ("post_sell", "source_quality", "postclose_verification"):
             path = tmp_path / f"{role}_{target_date}.json"
-            path.write_text(json.dumps({"target_date": target_date, "role": role}), encoding="utf-8")
+            path.write_text(
+                json.dumps({"target_date": target_date, "role": role}), encoding="utf-8"
+            )
             artifacts.append(
                 {
                     "path": str(path),
@@ -294,16 +343,26 @@ def test_external_evidence_cannot_override_transition_criteria(tmp_path):
         "reviewed": True,
         "normal_session_dates": ["2026-06-15", "2026-06-16", "2026-06-17"],
         "artifacts": artifacts,
-        "criteria": {key: {"status": "pass", "observed": "verified"} for key in criteria_keys},
+        "criteria": {
+            key: {"status": "pass", "observed": "verified"} for key in criteria_keys
+        },
     }
-    report = build_diagnostic_artifact("2026-06-17", data_root=tmp_path, guard_evidence=evidence)
+    report = build_diagnostic_artifact(
+        "2026-06-17", data_root=tmp_path, guard_evidence=evidence
+    )
     assert report["transition_guard"]["eligible"] is False
     assert report["transition_guard"]["status"] == "await_required_evidence"
     assert report["guard_evidence_source"] == "three_session_postclose_review"
     assert report["guard_evidence_accepted"] is True
-    assert "projected_buy_source_quality_adjusted_ev_pct" in report["transition_guard"]["auto_followup_required_criteria"]
+    assert (
+        "projected_buy_source_quality_adjusted_ev_pct"
+        in report["transition_guard"]["auto_followup_required_criteria"]
+    )
 
-    assert any(item["status"] != "pass" for item in report["transition_guard"]["criteria"].values())
+    assert any(
+        item["status"] != "pass"
+        for item in report["transition_guard"]["criteria"].values()
+    )
 
 
 def _write_guard_artifacts(root, session_dates):
@@ -311,15 +370,22 @@ def _write_guard_artifacts(root, session_dates):
     for target_date in session_dates:
         report_root = root / "report"
         mapping = {
-            "post_sell": report_root / "monitor_snapshots" / f"post_sell_feedback_{target_date}.json",
-            "source_quality": report_root / "observation_source_quality_audit" / f"observation_source_quality_audit_{target_date}.json",
+            "post_sell": report_root
+            / "monitor_snapshots"
+            / f"post_sell_feedback_{target_date}.json",
+            "source_quality": report_root
+            / "observation_source_quality_audit"
+            / f"observation_source_quality_audit_{target_date}.json",
             "postclose_verification": report_root
             / "threshold_cycle_postclose_verification"
             / f"threshold_cycle_postclose_verification_{target_date}.json",
         }
         payloads = {
             "post_sell": {"target_date": target_date, "role": "post_sell"},
-            "source_quality": {"status": "pass", "summary": {"tuning_input_allowed": True}},
+            "source_quality": {
+                "status": "pass",
+                "summary": {"tuning_input_allowed": True},
+            },
             "postclose_verification": {"status": "pass"},
         }
         for role, path in mapping.items():
@@ -360,7 +426,9 @@ def _write_projection_events(root, session_dates):
                         }
                     )
                 )
-        (pipeline_dir / f"pipeline_events_{target_date}.jsonl").write_text("\n".join(rows) + "\n", encoding="utf-8")
+        (pipeline_dir / f"pipeline_events_{target_date}.jsonl").write_text(
+            "\n".join(rows) + "\n", encoding="utf-8"
+        )
 
 
 def _manual_review_criteria(root, criteria, session_dates):
@@ -419,7 +487,9 @@ def test_diagnostic_aggregates_verified_three_session_projection_metrics(tmp_pat
         "criteria": {"normal_session_count": {"status": "pass", "observed": 3}},
     }
 
-    report = build_diagnostic_artifact("2026-06-17", data_root=tmp_path, guard_evidence=evidence)
+    report = build_diagnostic_artifact(
+        "2026-06-17", data_root=tmp_path, guard_evidence=evidence
+    )
 
     assert report["guard_evidence_accepted"] is True
     assert report["metrics"]["normal_session_count"] == 3
@@ -428,9 +498,15 @@ def test_diagnostic_aggregates_verified_three_session_projection_metrics(tmp_pat
     assert report["metrics"]["sequence_3plus_count"] == 50
     assert report["transition_guard"]["automatic_criteria_passed"] is True
     assert report["transition_guard"]["eligible"] is False
-    assert report["transition_guard"]["applied_candidate_status"] == "auto_followup_required"
+    assert (
+        report["transition_guard"]["applied_candidate_status"]
+        == "auto_followup_required"
+    )
     assert report["transition_guard"]["status"] == "auto_followup_required"
-    assert all(item["exists"] and item["sha256"] for item in report["input_artifact_checks"])
+    assert all(
+        item["exists"] and item["sha256"] for item in report["input_artifact_checks"]
+    )
+
 
 def test_diagnostic_manual_review_names_only_cannot_close_applied_candidate(tmp_path):
     session_dates = ["2026-06-15", "2026-06-16", "2026-06-17"]
@@ -456,15 +532,22 @@ def test_diagnostic_manual_review_names_only_cannot_close_applied_candidate(tmp_
         },
     }
 
-    report = build_diagnostic_artifact("2026-06-17", data_root=tmp_path, guard_evidence=evidence)
+    report = build_diagnostic_artifact(
+        "2026-06-17", data_root=tmp_path, guard_evidence=evidence
+    )
 
     assert report["transition_guard"]["automatic_criteria_passed"] is True
     assert report["transition_guard"]["manual_review_passed"] is False
     assert report["transition_guard"]["eligible"] is False
-    assert report["transition_guard"]["applied_candidate_status"] == "auto_followup_required"
+    assert (
+        report["transition_guard"]["applied_candidate_status"]
+        == "auto_followup_required"
+    )
 
 
-def test_diagnostic_manual_review_can_close_applied_candidate_after_auto_metrics_pass(tmp_path):
+def test_diagnostic_manual_review_can_close_applied_candidate_after_auto_metrics_pass(
+    tmp_path,
+):
     session_dates = ["2026-06-15", "2026-06-16", "2026-06-17"]
     _write_projection_events(tmp_path, session_dates)
     manual_criteria = {
@@ -484,17 +567,24 @@ def test_diagnostic_manual_review_can_close_applied_candidate_after_auto_metrics
             "reviewed": True,
             "status": "pass",
             "source": "operator_postclose_review",
-            "criteria": _manual_review_criteria(tmp_path, manual_criteria, session_dates),
+            "criteria": _manual_review_criteria(
+                tmp_path, manual_criteria, session_dates
+            ),
         },
     }
 
-    report = build_diagnostic_artifact("2026-06-17", data_root=tmp_path, guard_evidence=evidence)
+    report = build_diagnostic_artifact(
+        "2026-06-17", data_root=tmp_path, guard_evidence=evidence
+    )
 
     assert report["transition_guard"]["automatic_criteria_passed"] is True
     assert report["transition_guard"]["manual_review_passed"] is True
     assert report["transition_guard"]["eligible"] is True
     assert report["transition_guard"]["applied_candidate_status"] == "eligible"
-    assert report["transition_guard"]["status"] == "eligible_for_next_preopen_applied_review"
+    assert (
+        report["transition_guard"]["status"]
+        == "eligible_for_next_preopen_applied_review"
+    )
 
 
 def test_diagnostic_manual_review_threshold_violation_blocks_eligible(tmp_path):
@@ -524,7 +614,9 @@ def test_diagnostic_manual_review_threshold_violation_blocks_eligible(tmp_path):
         encoding="utf-8",
     )
     criteria["sharp_drop_delay_p95_sec"]["artifact_path"] = str(path)
-    criteria["sharp_drop_delay_p95_sec"]["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    criteria["sharp_drop_delay_p95_sec"]["sha256"] = hashlib.sha256(
+        path.read_bytes()
+    ).hexdigest()
     evidence = {
         "source": "three_session_postclose_review",
         "reviewed": True,
@@ -538,7 +630,9 @@ def test_diagnostic_manual_review_threshold_violation_blocks_eligible(tmp_path):
         },
     }
 
-    report = build_diagnostic_artifact("2026-06-17", data_root=tmp_path, guard_evidence=evidence)
+    report = build_diagnostic_artifact(
+        "2026-06-17", data_root=tmp_path, guard_evidence=evidence
+    )
 
     assert report["transition_guard"]["automatic_criteria_passed"] is True
     assert report["transition_guard"]["manual_review_passed"] is False
@@ -571,7 +665,9 @@ def test_diagnostic_manual_review_artifact_mismatch_blocks_eligible(tmp_path):
         encoding="utf-8",
     )
     criteria["buy_wait_flip_rate_reduction_pct"]["artifact_path"] = str(path)
-    criteria["buy_wait_flip_rate_reduction_pct"]["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    criteria["buy_wait_flip_rate_reduction_pct"]["sha256"] = hashlib.sha256(
+        path.read_bytes()
+    ).hexdigest()
     evidence = {
         "source": "three_session_postclose_review",
         "reviewed": True,
@@ -585,7 +681,9 @@ def test_diagnostic_manual_review_artifact_mismatch_blocks_eligible(tmp_path):
         },
     }
 
-    report = build_diagnostic_artifact("2026-06-17", data_root=tmp_path, guard_evidence=evidence)
+    report = build_diagnostic_artifact(
+        "2026-06-17", data_root=tmp_path, guard_evidence=evidence
+    )
 
     assert report["transition_guard"]["manual_review_passed"] is False
     assert report["transition_guard"]["eligible"] is False
@@ -618,7 +716,9 @@ def test_diagnostic_manual_review_numeric_threshold_equivalence(tmp_path):
         encoding="utf-8",
     )
     criteria["sharp_drop_delay_p95_sec"]["artifact_path"] = str(path)
-    criteria["sharp_drop_delay_p95_sec"]["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    criteria["sharp_drop_delay_p95_sec"]["sha256"] = hashlib.sha256(
+        path.read_bytes()
+    ).hexdigest()
     evidence = {
         "source": "three_session_postclose_review",
         "reviewed": True,
@@ -632,7 +732,9 @@ def test_diagnostic_manual_review_numeric_threshold_equivalence(tmp_path):
         },
     }
 
-    report = build_diagnostic_artifact("2026-06-17", data_root=tmp_path, guard_evidence=evidence)
+    report = build_diagnostic_artifact(
+        "2026-06-17", data_root=tmp_path, guard_evidence=evidence
+    )
 
     assert report["transition_guard"]["manual_review_passed"] is True
     assert report["transition_guard"]["eligible"] is True
@@ -665,7 +767,9 @@ def test_diagnostic_manual_review_session_coverage_mismatch_blocks_eligible(tmp_
         encoding="utf-8",
     )
     criteria["safety_and_provenance_guards"]["artifact_path"] = str(path)
-    criteria["safety_and_provenance_guards"]["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    criteria["safety_and_provenance_guards"]["sha256"] = hashlib.sha256(
+        path.read_bytes()
+    ).hexdigest()
     evidence = {
         "source": "three_session_postclose_review",
         "reviewed": True,
@@ -679,13 +783,17 @@ def test_diagnostic_manual_review_session_coverage_mismatch_blocks_eligible(tmp_
         },
     }
 
-    report = build_diagnostic_artifact("2026-06-17", data_root=tmp_path, guard_evidence=evidence)
+    report = build_diagnostic_artifact(
+        "2026-06-17", data_root=tmp_path, guard_evidence=evidence
+    )
 
     assert report["transition_guard"]["manual_review_passed"] is False
     assert report["transition_guard"]["eligible"] is False
 
 
-def test_diagnostic_invalid_only_projection_session_does_not_count_as_normal_session(tmp_path):
+def test_diagnostic_invalid_only_projection_session_does_not_count_as_normal_session(
+    tmp_path,
+):
     session_dates = ["2026-06-15", "2026-06-16", "2026-06-17"]
     _write_projection_events(tmp_path, session_dates[:2])
     pipeline_dir = tmp_path / "pipeline_events"
@@ -706,7 +814,9 @@ def test_diagnostic_invalid_only_projection_session_does_not_count_as_normal_ses
                 }
             )
         )
-    (pipeline_dir / "pipeline_events_2026-06-17.jsonl").write_text("\n".join(rows) + "\n", encoding="utf-8")
+    (pipeline_dir / "pipeline_events_2026-06-17.jsonl").write_text(
+        "\n".join(rows) + "\n", encoding="utf-8"
+    )
     evidence = {
         "source": "three_session_postclose_review",
         "reviewed": True,
@@ -714,16 +824,23 @@ def test_diagnostic_invalid_only_projection_session_does_not_count_as_normal_ses
         "artifacts": _write_guard_artifacts(tmp_path, session_dates),
     }
 
-    report = build_diagnostic_artifact("2026-06-17", data_root=tmp_path, guard_evidence=evidence)
+    report = build_diagnostic_artifact(
+        "2026-06-17", data_root=tmp_path, guard_evidence=evidence
+    )
 
     assert report["metrics"]["normal_session_count"] == 2
-    assert report["transition_guard"]["criteria"]["normal_session_count"]["status"] == "pending"
+    assert (
+        report["transition_guard"]["criteria"]["normal_session_count"]["status"]
+        == "pending"
+    )
     assert "parse_invalid_rate_pct" not in report["transition_guard"]["criteria"]
     assert report["metrics"]["parse_invalid_rate_observed_pct"] > 0
     assert report["metrics"]["projection_exclusion_counts"]["parse_invalid"] == 50
 
 
-def test_diagnostic_cache_hit_projection_rows_are_observed_not_transition_criteria(tmp_path):
+def test_diagnostic_cache_hit_projection_rows_are_observed_not_transition_criteria(
+    tmp_path,
+):
     session_dates = ["2026-06-15", "2026-06-16", "2026-06-17"]
     pipeline_dir = tmp_path / "pipeline_events"
     pipeline_dir.mkdir()
@@ -745,7 +862,9 @@ def test_diagnostic_cache_hit_projection_rows_are_observed_not_transition_criter
                     }
                 )
             )
-        (pipeline_dir / f"pipeline_events_{target_date}.jsonl").write_text("\n".join(rows) + "\n", encoding="utf-8")
+        (pipeline_dir / f"pipeline_events_{target_date}.jsonl").write_text(
+            "\n".join(rows) + "\n", encoding="utf-8"
+        )
     evidence = {
         "source": "three_session_postclose_review",
         "reviewed": True,
@@ -753,14 +872,23 @@ def test_diagnostic_cache_hit_projection_rows_are_observed_not_transition_criter
         "artifacts": _write_guard_artifacts(tmp_path, session_dates),
     }
 
-    report = build_diagnostic_artifact("2026-06-17", data_root=tmp_path, guard_evidence=evidence)
+    report = build_diagnostic_artifact(
+        "2026-06-17", data_root=tmp_path, guard_evidence=evidence
+    )
 
     assert report["metrics"]["cache_hit_same_input_rate_observed_pct"] > 0
-    assert report["metrics"]["projection_exclusion_counts"]["cache_hit_same_input"] == 150
-    assert "cache_hit_same_input_rate_observed_pct" not in report["transition_guard"]["criteria"]
+    assert (
+        report["metrics"]["projection_exclusion_counts"]["cache_hit_same_input"] == 150
+    )
+    assert (
+        "cache_hit_same_input_rate_observed_pct"
+        not in report["transition_guard"]["criteria"]
+    )
 
 
-def test_diagnostic_invalid_projection_rows_do_not_count_for_symbol_or_sequence(tmp_path):
+def test_diagnostic_invalid_projection_rows_do_not_count_for_symbol_or_sequence(
+    tmp_path,
+):
     session_dates = ["2026-06-15", "2026-06-16", "2026-06-17"]
     pipeline_dir = tmp_path / "pipeline_events"
     pipeline_dir.mkdir()
@@ -783,7 +911,9 @@ def test_diagnostic_invalid_projection_rows_do_not_count_for_symbol_or_sequence(
                         }
                     )
                 )
-        (pipeline_dir / f"pipeline_events_{target_date}.jsonl").write_text("\n".join(rows) + "\n", encoding="utf-8")
+        (pipeline_dir / f"pipeline_events_{target_date}.jsonl").write_text(
+            "\n".join(rows) + "\n", encoding="utf-8"
+        )
     evidence = {
         "source": "three_session_postclose_review",
         "reviewed": True,
@@ -791,17 +921,27 @@ def test_diagnostic_invalid_projection_rows_do_not_count_for_symbol_or_sequence(
         "artifacts": _write_guard_artifacts(tmp_path, session_dates),
     }
 
-    report = build_diagnostic_artifact("2026-06-17", data_root=tmp_path, guard_evidence=evidence)
+    report = build_diagnostic_artifact(
+        "2026-06-17", data_root=tmp_path, guard_evidence=evidence
+    )
 
     assert report["metrics"]["projection_observed_count"] == 450
     assert report["metrics"]["valid_response_count"] == 0
     assert report["metrics"]["unique_symbol_count"] == 0
     assert report["metrics"]["sequence_3plus_count"] == 0
-    assert report["transition_guard"]["criteria"]["unique_symbol_count"]["status"] == "pending"
-    assert report["transition_guard"]["criteria"]["sequence_3plus_count"]["status"] == "pending"
+    assert (
+        report["transition_guard"]["criteria"]["unique_symbol_count"]["status"]
+        == "pending"
+    )
+    assert (
+        report["transition_guard"]["criteria"]["sequence_3plus_count"]["status"]
+        == "pending"
+    )
 
 
-def test_diagnostic_regular_only_sessions_count_as_primary_observation_sessions(tmp_path):
+def test_diagnostic_regular_only_sessions_count_as_primary_observation_sessions(
+    tmp_path,
+):
     session_dates = ["2026-06-15", "2026-06-16", "2026-06-17"]
     pipeline_dir = tmp_path / "pipeline_events"
     pipeline_dir.mkdir()
@@ -829,18 +969,31 @@ def test_diagnostic_regular_only_sessions_count_as_primary_observation_sessions(
         "artifacts": _write_guard_artifacts(tmp_path, session_dates),
     }
 
-    report = build_diagnostic_artifact("2026-06-17", data_root=tmp_path, guard_evidence=evidence)
+    report = build_diagnostic_artifact(
+        "2026-06-17", data_root=tmp_path, guard_evidence=evidence
+    )
 
     assert report["metrics"]["regular_observed_count"] == 3
     assert report["metrics"]["projection_observed_count"] == 0
     assert report["metrics"]["primary_observation_stage"] == "ai_confirmed"
     assert report["metrics"]["normal_session_count"] == 3
-    assert report["transition_guard"]["criteria"]["normal_session_count"]["status"] == "pass"
-    assert report["transition_guard"]["criteria"]["valid_response_count"]["status"] == "pending"
-    assert report["transition_guard"]["criteria"]["sequence_3plus_count"]["status"] == "pending"
+    assert (
+        report["transition_guard"]["criteria"]["normal_session_count"]["status"]
+        == "pass"
+    )
+    assert (
+        report["transition_guard"]["criteria"]["valid_response_count"]["status"]
+        == "pending"
+    )
+    assert (
+        report["transition_guard"]["criteria"]["sequence_3plus_count"]["status"]
+        == "pending"
+    )
 
 
-def test_diagnostic_uses_projection_fallback_per_session_when_regular_is_mixed(tmp_path):
+def test_diagnostic_uses_projection_fallback_per_session_when_regular_is_mixed(
+    tmp_path,
+):
     session_dates = ["2026-06-15", "2026-06-16", "2026-06-17"]
     pipeline_dir = tmp_path / "pipeline_events"
     pipeline_dir.mkdir()
@@ -869,7 +1022,9 @@ def test_diagnostic_uses_projection_fallback_per_session_when_regular_is_mixed(t
         "artifacts": _write_guard_artifacts(tmp_path, session_dates),
     }
 
-    report = build_diagnostic_artifact("2026-06-17", data_root=tmp_path, guard_evidence=evidence)
+    report = build_diagnostic_artifact(
+        "2026-06-17", data_root=tmp_path, guard_evidence=evidence
+    )
 
     assert report["metrics"]["primary_observation_stage"] == "mixed_by_session"
     assert report["metrics"]["primary_observation_stages_by_session"] == {
@@ -879,7 +1034,10 @@ def test_diagnostic_uses_projection_fallback_per_session_when_regular_is_mixed(t
     }
     assert report["metrics"]["primary_observation_count"] == 3
     assert report["metrics"]["normal_session_count"] == 3
-    assert report["transition_guard"]["criteria"]["normal_session_count"]["status"] == "pass"
+    assert (
+        report["transition_guard"]["criteria"]["normal_session_count"]["status"]
+        == "pass"
+    )
 
 
 def test_unreviewed_guard_evidence_cannot_make_transition_eligible(tmp_path):
@@ -960,7 +1118,11 @@ def test_report_only_mode_enables_bounded_state_change_refresh(monkeypatch):
             AI_WATCHING_STATE_CHANGE_BUY_PRESSURE_DELTA=10.0,
         ),
     )
-    stock = {"last_watching_ai_state_signature": handlers._build_watching_refresh_signature({"buy_ratio": 50.0})}
+    stock = {
+        "last_watching_ai_state_signature": handlers._build_watching_refresh_signature(
+            {"buy_ratio": 50.0}
+        )
+    }
     result = handlers._resolve_watching_state_change_refresh(
         stock,
         {"buy_ratio": 70.0},
@@ -978,10 +1140,16 @@ def test_report_only_mode_enables_bounded_state_change_refresh(monkeypatch):
         last_ai_time=100.0,
         cooldown_sec=90,
     )
-    assert too_early == {"allowed": False, "reason": "early_refresh_min_interval", "signature": {}}
+    assert too_early == {
+        "allowed": False,
+        "reason": "early_refresh_min_interval",
+        "signature": {},
+    }
 
 
-def test_report_only_ignores_legacy_feature_signature_until_next_normal_ai_call(monkeypatch):
+def test_report_only_ignores_legacy_feature_signature_until_next_normal_ai_call(
+    monkeypatch,
+):
     monkeypatch.setattr(
         handlers,
         "TRADING_RULES",
@@ -1026,7 +1194,10 @@ def test_watching_refresh_signature_uses_available_feature_axes(monkeypatch):
             AI_WATCHING_STATE_CHANGE_BUY_PRESSURE_DELTA=10.0,
         ),
     )
-    ws_data = {"buy_ratio": 50.0, "orderbook": {"asks": [{"total": 100}], "bids": [{"total": 100}]}}
+    ws_data = {
+        "buy_ratio": 50.0,
+        "orderbook": {"asks": [{"total": 100}], "bids": [{"total": 100}]},
+    }
     previous_signature = handlers._build_watching_refresh_signature(
         ws_data,
         {
@@ -1145,10 +1316,22 @@ def test_projection_refresh_does_not_mutate_runtime_score_or_last_call(monkeypat
 
     monkeypatch.setattr(handlers, "KIWOOM_TOKEN", "token")
     monkeypatch.setattr(handlers, "DUAL_PERSONA_ENGINE", ProjectionEngine())
-    monkeypatch.setattr(handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [{}])
-    monkeypatch.setattr(handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [])
-    monkeypatch.setattr(handlers, "_extract_buy_recovery_probe_features", lambda *args, **kwargs: {"buy_pressure": 60})
-    monkeypatch.setattr(handlers, "_log_entry_pipeline", lambda stock, code, stage, **fields: events.append((stage, fields)))
+    monkeypatch.setattr(
+        handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [{}]
+    )
+    monkeypatch.setattr(
+        handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: []
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_extract_buy_recovery_probe_features",
+        lambda *args, **kwargs: {"buy_pressure": 60},
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: events.append((stage, fields)),
+    )
 
     executed = handlers._run_watching_score_projection_refresh(
         stock,
@@ -1164,12 +1347,14 @@ def test_projection_refresh_does_not_mutate_runtime_score_or_last_call(monkeypat
     assert executed is True
     assert stock["watching_score_projection_inflight"] is True
     assert events == []
-    submitted["callback"]({
-        **_valid_result(),
-        "action": "WAIT",
-        "score": 55,
-        "reason": "projection",
-    })
+    submitted["callback"](
+        {
+            **_valid_result(),
+            "action": "WAIT",
+            "score": 55,
+            "reason": "projection",
+        }
+    )
     assert stock["rt_ai_prob"] == 0.81
     assert stock["last_watching_ai_action"] == "BUY"
     assert stock.get("last_watching_ai_score") is None
@@ -1179,7 +1364,9 @@ def test_projection_refresh_does_not_mutate_runtime_score_or_last_call(monkeypat
     assert events[0][1]["runtime_effect"] is False
 
 
-def test_projection_refresh_without_projection_engine_does_not_fetch_context(monkeypatch):
+def test_projection_refresh_without_projection_engine_does_not_fetch_context(
+    monkeypatch,
+):
     calls = {"ticks": 0, "candles": 0}
 
     def _ticks(*args, **kwargs):
@@ -1247,8 +1434,12 @@ def test_projection_refresh_none_submit_clears_inflight(monkeypatch):
 
     monkeypatch.setattr(handlers, "KIWOOM_TOKEN", "token")
     monkeypatch.setattr(handlers, "DUAL_PERSONA_ENGINE", ProjectionEngine())
-    monkeypatch.setattr(handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [{}])
-    monkeypatch.setattr(handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [{}]
+    )
+    monkeypatch.setattr(
+        handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: []
+    )
 
     executed = handlers._run_watching_score_projection_refresh(
         stock,

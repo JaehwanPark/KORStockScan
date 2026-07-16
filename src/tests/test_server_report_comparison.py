@@ -22,8 +22,12 @@ def test_compare_metrics_uses_safe_metric_allowlist_only():
         ),
         excluded_metric_labels=("avg_profit_rate", "profit_rate"),
     )
-    local_payload = {"metrics": {"completed_trades": 2, "open_trades": 1, "avg_profit_rate": 0.0}}
-    remote_payload = {"metrics": {"completed_trades": 3, "open_trades": 1, "avg_profit_rate": 5.0}}
+    local_payload = {
+        "metrics": {"completed_trades": 2, "open_trades": 1, "avg_profit_rate": 0.0}
+    }
+    remote_payload = {
+        "metrics": {"completed_trades": 3, "open_trades": 1, "avg_profit_rate": 5.0}
+    }
 
     rows = _compare_metrics(local_payload, remote_payload, policy)
 
@@ -47,7 +51,10 @@ def test_build_section_result_preserves_excluded_metric_labels():
     )
 
     assert result["status"] == "ok"
-    assert result["excluded_metric_labels"] == ["avg_realized_profit_rate", "profit_rate"]
+    assert result["excluded_metric_labels"] == [
+        "avg_realized_profit_rate",
+        "profit_rate",
+    ]
     assert result["safe_metric_rows"][0]["delta_remote_minus_local"] == 1.0
 
 
@@ -95,8 +102,18 @@ def test_snapshot_summary_and_checklist_block_surface_safe_diff_only():
                 "label": "Trade Review",
                 "status": "ok",
                 "safe_metric_rows": [
-                    {"label": "completed_trades", "local": 2, "remote": 3, "delta_remote_minus_local": 1.0},
-                    {"label": "open_trades", "local": 1, "remote": 1, "delta_remote_minus_local": 0.0},
+                    {
+                        "label": "completed_trades",
+                        "local": 2,
+                        "remote": 3,
+                        "delta_remote_minus_local": 1.0,
+                    },
+                    {
+                        "label": "open_trades",
+                        "local": 1,
+                        "remote": 1,
+                        "delta_remote_minus_local": 0.0,
+                    },
                 ],
             }
         },
@@ -106,7 +123,10 @@ def test_snapshot_summary_and_checklist_block_surface_safe_diff_only():
     assert summary["sections"][0]["differing_metric_count"] == 1
     assert summary["sections"][0]["top_diffs"][0]["label"] == "completed_trades"
 
-    block = render_checklist_append_block(comparison, report_relpath="data/report/server_comparison/server_comparison_2026-04-09.md")
+    block = render_checklist_append_block(
+        comparison,
+        report_relpath="data/report/server_comparison/server_comparison_2026-04-09.md",
+    )
     assert "본서버 vs songstockscan 자동 비교" in block
     assert "completed_trades" in block
     assert "safe only" in block

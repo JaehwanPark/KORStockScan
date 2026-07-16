@@ -58,7 +58,9 @@ def _candidate_source_blocked() -> dict:
     }
 
 
-def test_bootstrap_research_edge_can_promote_without_downstream_candidate_deadlock(tmp_path: Path) -> None:
+def test_bootstrap_research_edge_can_promote_without_downstream_candidate_deadlock(
+    tmp_path: Path,
+) -> None:
     report = mod.build_policy_auto_loop_report(
         "2026-05-26",
         provider="none",
@@ -88,8 +90,14 @@ def test_bootstrap_research_edge_can_promote_without_downstream_candidate_deadlo
         },
     )
 
-    assert report["final_conclusion"]["classification_state"] == "source_only_keep_collecting"
-    assert "bottom_rebound_research_contract_failed" in report["final_conclusion"]["explicit_gaps"]
+    assert (
+        report["final_conclusion"]["classification_state"]
+        == "source_only_keep_collecting"
+    )
+    assert (
+        "bottom_rebound_research_contract_failed"
+        in report["final_conclusion"]["explicit_gaps"]
+    )
 
 
 def test_policy_auto_loop_promotes_research_bootstrap_when_source_contracts_pass(
@@ -132,10 +140,21 @@ def test_policy_auto_loop_promotes_research_bootstrap_when_source_contracts_pass
     )
 
     assert report["ai_tier2_review"]["status"] == "parsed"
-    assert report["source_context"]["metrics"]["candidate_ev_evidence_source"] == "bottom_rebound_research_backtest_bootstrap"
-    assert report["source_context"]["downstream_contracts"]["candidate_source_selected_count"] == 0
+    assert (
+        report["source_context"]["metrics"]["candidate_ev_evidence_source"]
+        == "bottom_rebound_research_backtest_bootstrap"
+    )
+    assert (
+        report["source_context"]["downstream_contracts"][
+            "candidate_source_selected_count"
+        ]
+        == 0
+    )
     assert report["final_conclusion"]["classification_state"] == "sim_auto_approved"
-    assert report["sim_auto_approved_policy"]["policy_version"] == "bottom_rebound_swing_source_v2"
+    assert (
+        report["sim_auto_approved_policy"]["policy_version"]
+        == "bottom_rebound_swing_source_v2"
+    )
     assert report["runtime_effect"] is False
     assert report["broker_order_forbidden"] is True
 
@@ -179,15 +198,28 @@ def test_policy_auto_loop_generates_source_only_candidate_packet_before_review(
         },
     )
 
-    assert report["candidate_source_generation"]["status"] == "generated_candidate_source_packet"
+    assert (
+        report["candidate_source_generation"]["status"]
+        == "generated_candidate_source_packet"
+    )
     assert report["source_context"]["downstream_contracts"]["candidate_source"] is True
-    assert report["source_context"]["downstream_contracts"]["candidate_source_selected_count"] == 1
-    assert report["source_context"]["metrics"]["candidate_ev_evidence_source"] == "bottom_rebound_candidate_source_packet"
+    assert (
+        report["source_context"]["downstream_contracts"][
+            "candidate_source_selected_count"
+        ]
+        == 1
+    )
+    assert (
+        report["source_context"]["metrics"]["candidate_ev_evidence_source"]
+        == "bottom_rebound_candidate_source_packet"
+    )
     assert report["source_context"]["metrics"]["source_quality_adjusted_ev_pct"] == 1.43
     assert report["final_conclusion"]["classification_state"] == "sim_auto_approved"
 
 
-def test_policy_auto_loop_normalizes_near_miss_ai_shape(tmp_path: Path, monkeypatch) -> None:
+def test_policy_auto_loop_normalizes_near_miss_ai_shape(
+    tmp_path: Path, monkeypatch
+) -> None:
     source_payloads = {
         "bottom_rebound_research": _research(),
         "candidate_source": _candidate_source_blocked(),
@@ -226,7 +258,9 @@ def test_policy_auto_loop_normalizes_near_miss_ai_shape(tmp_path: Path, monkeypa
     assert report["final_conclusion"]["promote_policy"] is True
 
 
-def test_policy_auto_loop_does_not_treat_keep_decision_as_promotion(tmp_path: Path, monkeypatch) -> None:
+def test_policy_auto_loop_does_not_treat_keep_decision_as_promotion(
+    tmp_path: Path, monkeypatch
+) -> None:
     source_payloads = {
         "bottom_rebound_research": _research(),
         "candidate_source": _candidate_source_blocked(),
@@ -261,5 +295,8 @@ def test_policy_auto_loop_does_not_treat_keep_decision_as_promotion(tmp_path: Pa
     )
 
     assert report["ai_tier2_review"]["status"] == "parsed"
-    assert report["final_conclusion"]["classification_state"] == "source_only_keep_collecting"
+    assert (
+        report["final_conclusion"]["classification_state"]
+        == "source_only_keep_collecting"
+    )
     assert report["sim_auto_approved_policy"] is None

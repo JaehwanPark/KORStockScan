@@ -15,10 +15,18 @@ def test_sniper_safe_numeric_helpers_reject_nan_and_inf():
 
 
 def test_soft_stop_expert_decision_absorbs_nan_runtime_state(monkeypatch):
-    monkeypatch.setattr(sniper_state_handlers, "_rule_bool", lambda name, default=False: True)
-    monkeypatch.setattr(sniper_state_handlers, "_rule_int", lambda name, default=0: default)
-    monkeypatch.setattr(sniper_state_handlers, "_rule_float", lambda name, default=0.0: default)
-    monkeypatch.setattr(sniper_state_handlers, "_soft_stop_expert_time_gate_active", lambda now_ts: True)
+    monkeypatch.setattr(
+        sniper_state_handlers, "_rule_bool", lambda name, default=False: True
+    )
+    monkeypatch.setattr(
+        sniper_state_handlers, "_rule_int", lambda name, default=0: default
+    )
+    monkeypatch.setattr(
+        sniper_state_handlers, "_rule_float", lambda name, default=0.0: default
+    )
+    monkeypatch.setattr(
+        sniper_state_handlers, "_soft_stop_expert_time_gate_active", lambda now_ts: True
+    )
 
     decision = sniper_state_handlers._build_soft_stop_expert_decision(
         {

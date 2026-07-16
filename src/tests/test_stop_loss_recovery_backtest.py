@@ -96,7 +96,9 @@ def test_stop_loss_recovery_backtest_flags_recoverable_soft_stop(tmp_path, monke
         ],
     )
 
-    report = mod.build_report("2026-06-05", start_date="2026-06-05", end_date="2026-06-07")
+    report = mod.build_report(
+        "2026-06-05", start_date="2026-06-05", end_date="2026-06-07"
+    )
 
     assert report["source_dates"] == ["2026-06-05"]
     assert report["summary"]["exit_count"] == 3
@@ -109,7 +111,12 @@ def test_stop_loss_recovery_backtest_flags_recoverable_soft_stop(tmp_path, monke
     assert mfe["exit_count"] == 1
     assert mfe["hard_safety_count"] == 0
     assert report["runtime_effect"] is False
-    assert report["rows"][0]["avg_down_recovery"]["horizons"]["10m"]["avg_down_recovery_possible"] is True
+    assert (
+        report["rows"][0]["avg_down_recovery"]["horizons"]["10m"][
+            "avg_down_recovery_possible"
+        ]
+        is True
+    )
     assert report["summary"]["post_sell_evaluation_count"] == 3
     assert report["summary"]["recovery_eligible_evaluated_count"] == 2
     recommendations = report["summary"]["stop_line_recommendations_by_family"]

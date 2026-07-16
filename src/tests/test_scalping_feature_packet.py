@@ -121,11 +121,41 @@ def _sample_ticks():
 
 def _sample_candles():
     return [
-        {"체결시간": "08:56:00", "현재가": 10040, "고가": 10060, "저가": 10010, "거래량": 800},
-        {"체결시간": "08:57:00", "현재가": 10060, "고가": 10080, "저가": 10030, "거래량": 900},
-        {"체결시간": "08:58:00", "현재가": 10080, "고가": 10090, "저가": 10040, "거래량": 1000},
-        {"체결시간": "08:59:00", "현재가": 10090, "고가": 10120, "저가": 10070, "거래량": 1200},
-        {"체결시간": "09:00:00", "현재가": 10100, "고가": 10130, "저가": 10080, "거래량": 1600},
+        {
+            "체결시간": "08:56:00",
+            "현재가": 10040,
+            "고가": 10060,
+            "저가": 10010,
+            "거래량": 800,
+        },
+        {
+            "체결시간": "08:57:00",
+            "현재가": 10060,
+            "고가": 10080,
+            "저가": 10030,
+            "거래량": 900,
+        },
+        {
+            "체결시간": "08:58:00",
+            "현재가": 10080,
+            "고가": 10090,
+            "저가": 10040,
+            "거래량": 1000,
+        },
+        {
+            "체결시간": "08:59:00",
+            "현재가": 10090,
+            "고가": 10120,
+            "저가": 10070,
+            "거래량": 1200,
+        },
+        {
+            "체결시간": "09:00:00",
+            "현재가": 10100,
+            "고가": 10130,
+            "저가": 10080,
+            "거래량": 1600,
+        },
     ]
 
 
@@ -153,7 +183,10 @@ def test_extract_scalping_feature_packet_exposes_stage1_supply_fields():
     assert packet["net_aggressive_delta_10t"] > 0
     assert packet["ask_depth_ratio"] == 93.5
     assert packet["net_ask_depth"] == -4200
-    assert packet["microstructure_reaction_context_version"] == "microstructure_reaction_context_v1"
+    assert (
+        packet["microstructure_reaction_context_version"]
+        == "microstructure_reaction_context_v1"
+    )
     assert packet["microstructure_reaction_context_status"] == "ok"
     assert packet["microstructure_reaction_tick_aggressor_pressure_usable"] is True
     assert packet["microstructure_reaction_tick_aggressor_trusted_count"] > 0
@@ -282,9 +315,27 @@ def test_extract_scalping_feature_packet_normalizes_tick_side_aliases_for_buy_pr
 
 def test_extract_scalping_feature_packet_keeps_source_less_side_aliases_neutral():
     ticks = [
-        {"time": "09:00:10", "price": 10100, "volume": 100, "dir": "매수", "strength": 135.0},
-        {"time": "09:00:09", "price": 10100, "volume": 50, "dir": "B", "strength": 133.0},
-        {"time": "09:00:08", "price": 10090, "volume": 40, "side": "SELL", "strength": 125.0},
+        {
+            "time": "09:00:10",
+            "price": 10100,
+            "volume": 100,
+            "dir": "매수",
+            "strength": 135.0,
+        },
+        {
+            "time": "09:00:09",
+            "price": 10100,
+            "volume": 50,
+            "dir": "B",
+            "strength": 133.0,
+        },
+        {
+            "time": "09:00:08",
+            "price": 10090,
+            "volume": 40,
+            "side": "SELL",
+            "strength": 125.0,
+        },
     ]
 
     packet = extract_scalping_feature_packet(
@@ -346,7 +397,13 @@ def test_extract_scalping_feature_packet_prefers_fresh_ws_orderbook_touch_ticks(
         },
     ]
     rest_ticks = [
-        {"time": "09:00:10", "price": 10100, "volume": 999, "dir": "SELL", "strength": 120.0}
+        {
+            "time": "09:00:10",
+            "price": 10100,
+            "volume": 999,
+            "dir": "SELL",
+            "strength": 120.0,
+        }
         for _ in range(10)
     ]
 
@@ -453,7 +510,10 @@ def test_extract_scalping_feature_packet_prefers_signed_0b_ws_ticks_without_touc
             "kiwoom_0b_aux_observed_count": 7,
             "kiwoom_0b_1313_present_count": 3,
             "kiwoom_0b_1313_missing_count": 4,
-            "kiwoom_0b_trade_value_source_counts": {"1313": 3, "calc_price_x_1030_1031_sum": 4},
+            "kiwoom_0b_trade_value_source_counts": {
+                "1313": 3,
+                "calc_price_x_1030_1031_sum": 4,
+            },
             "kiwoom_0b_trade_volume_source_counts": {"1030_1031_sum": 6, "15_abs": 1},
             "kiwoom_0b_1030_1031_vs_15_evaluable_count": 6,
             "kiwoom_0b_1030_1031_vs_15_mismatch_count": 2,
@@ -788,7 +848,10 @@ def test_entry_reason_consistency_flags_position_pass_described_as_fail():
     assert annotated["ai_reason_numeric_inconsistency"] is True
     assert annotated["ai_reason_feature_inconsistency"] is True
     assert annotated["ai_reason_numeric_inconsistency_field"] == "position_advantage"
-    assert annotated["ai_reason_numeric_inconsistency_reason"] == "position_pass_described_as_fail"
+    assert (
+        annotated["ai_reason_numeric_inconsistency_reason"]
+        == "position_pass_described_as_fail"
+    )
 
 
 def test_entry_reason_consistency_does_not_flag_position_positive_but_other_gates_weak():
@@ -899,8 +962,13 @@ def test_entry_reason_consistency_flags_supply_pass_described_as_fail():
     )
 
     assert annotated["ai_reason_numeric_inconsistency"] is True
-    assert annotated["ai_reason_numeric_inconsistency_field"] == "supply_demand_advantage"
-    assert annotated["ai_reason_numeric_inconsistency_reason"] == "supply_demand_pass_described_as_fail"
+    assert (
+        annotated["ai_reason_numeric_inconsistency_field"] == "supply_demand_advantage"
+    )
+    assert (
+        annotated["ai_reason_numeric_inconsistency_reason"]
+        == "supply_demand_pass_described_as_fail"
+    )
 
 
 def test_entry_reason_consistency_ignores_untrusted_pressure_pass():
@@ -977,7 +1045,9 @@ def test_extract_scalping_feature_packet_missing_microstructure_context_is_neutr
     assert packet["microstructure_reaction_ask_sweep_score"] == 50
     assert packet["microstructure_reaction_post_sweep_hold_score"] == 50
     assert packet["microstructure_reaction_bid_replenishment_score"] == 50
-    assert packet["microstructure_reaction_entry_reaction_quality"] == "neutral_unusable"
+    assert (
+        packet["microstructure_reaction_entry_reaction_quality"] == "neutral_unusable"
+    )
 
 
 def test_extract_scalping_feature_packet_uses_ws_update_timestamp_for_quote_age():
@@ -1083,16 +1153,76 @@ def test_extract_scalping_feature_packet_marks_quote_stale_after_pre_ai_window()
 
 def test_extract_scalping_feature_packet_treats_same_second_ticks_as_burst():
     ticks = [
-        {"time": "09:00:10", "price": 10100, "volume": 220, "dir": "BUY", "strength": 135.0},
-        {"time": "09:00:10", "price": 10100, "volume": 180, "dir": "BUY", "strength": 133.0},
-        {"time": "09:00:10", "price": 10100, "volume": 160, "dir": "BUY", "strength": 131.0},
-        {"time": "09:00:10", "price": 10095, "volume": 100, "dir": "SELL", "strength": 125.0},
-        {"time": "09:00:10", "price": 10095, "volume": 90, "dir": "BUY", "strength": 122.0},
-        {"time": "09:00:07", "price": 10090, "volume": 95, "dir": "BUY", "strength": 120.0},
-        {"time": "09:00:05", "price": 10090, "volume": 80, "dir": "SELL", "strength": 119.0},
-        {"time": "09:00:03", "price": 10085, "volume": 70, "dir": "BUY", "strength": 118.0},
-        {"time": "09:00:01", "price": 10085, "volume": 60, "dir": "SELL", "strength": 117.0},
-        {"time": "08:59:59", "price": 10080, "volume": 55, "dir": "BUY", "strength": 116.0},
+        {
+            "time": "09:00:10",
+            "price": 10100,
+            "volume": 220,
+            "dir": "BUY",
+            "strength": 135.0,
+        },
+        {
+            "time": "09:00:10",
+            "price": 10100,
+            "volume": 180,
+            "dir": "BUY",
+            "strength": 133.0,
+        },
+        {
+            "time": "09:00:10",
+            "price": 10100,
+            "volume": 160,
+            "dir": "BUY",
+            "strength": 131.0,
+        },
+        {
+            "time": "09:00:10",
+            "price": 10095,
+            "volume": 100,
+            "dir": "SELL",
+            "strength": 125.0,
+        },
+        {
+            "time": "09:00:10",
+            "price": 10095,
+            "volume": 90,
+            "dir": "BUY",
+            "strength": 122.0,
+        },
+        {
+            "time": "09:00:07",
+            "price": 10090,
+            "volume": 95,
+            "dir": "BUY",
+            "strength": 120.0,
+        },
+        {
+            "time": "09:00:05",
+            "price": 10090,
+            "volume": 80,
+            "dir": "SELL",
+            "strength": 119.0,
+        },
+        {
+            "time": "09:00:03",
+            "price": 10085,
+            "volume": 70,
+            "dir": "BUY",
+            "strength": 118.0,
+        },
+        {
+            "time": "09:00:01",
+            "price": 10085,
+            "volume": 60,
+            "dir": "SELL",
+            "strength": 117.0,
+        },
+        {
+            "time": "08:59:59",
+            "price": 10080,
+            "volume": 55,
+            "dir": "BUY",
+            "strength": 116.0,
+        },
     ]
     packet = extract_scalping_feature_packet(
         _sample_ws_data(),
@@ -1116,7 +1246,9 @@ def test_extract_scalping_feature_packet_treats_same_second_ticks_as_burst():
 def test_openai_market_packet_includes_quant_feature_section():
     engine = GPTSniperEngine.__new__(GPTSniperEngine)
 
-    packet = engine._format_market_data(_sample_ws_data(), _sample_ticks(), _sample_candles())
+    packet = engine._format_market_data(
+        _sample_ws_data(), _sample_ticks(), _sample_candles()
+    )
     payload = json.loads(packet)
 
     assert payload["features"]["packet_version"] == SCALP_FEATURE_PACKET_VERSION
@@ -1160,4 +1292,7 @@ def test_openai_market_packet_tolerates_missing_orderbook():
     parsed = json.loads(payload)
 
     assert parsed["orderbook_top3"] == {"asks": [], "bids": []}
-    assert parsed["features"]["microstructure_reaction_context_status"] == "source_quality_missing"
+    assert (
+        parsed["features"]["microstructure_reaction_context_status"]
+        == "source_quality_missing"
+    )

@@ -27,9 +27,13 @@ def _state(monkeypatch, tmp_path):
     monkeypatch.setattr(state_handlers, "TRADING_RULES", _rules())
     monkeypatch.setattr(state_handlers, "ACTIVE_TARGETS", [])
     monkeypatch.setattr(state_handlers, "HIGHEST_PRICES", {})
-    monkeypatch.setattr(state_handlers, "SCALP_SIM_STATE_PATH", tmp_path / "scalp_sim_state.json")
+    monkeypatch.setattr(
+        state_handlers, "SCALP_SIM_STATE_PATH", tmp_path / "scalp_sim_state.json"
+    )
     monkeypatch.setattr(state_handlers, "persist_scalp_simulator_state", lambda: None)
-    monkeypatch.setattr(state_handlers, "record_sim_post_sell_candidate", lambda **kwargs: None)
+    monkeypatch.setattr(
+        state_handlers, "record_sim_post_sell_candidate", lambda **kwargs: None
+    )
     events = []
     monkeypatch.setattr(
         state_handlers,
@@ -190,7 +194,9 @@ def test_euphoria_context_maps_modes_and_blocks_bad_source(monkeypatch, tmp_path
     assert ok["euphoria_context_status"] == "OK"
     assert ok["euphoria_risk_level"] == 2
     assert ok["risk_direction"] == "risk_on_euphoria"
-    assert ok["euphoria_epoch_id"].startswith("2026-05-20|PANIC_BUY|PANIC_BUY_CONTINUATION|E2")
+    assert ok["euphoria_epoch_id"].startswith(
+        "2026-05-20|PANIC_BUY|PANIC_BUY_CONTINUATION|E2"
+    )
 
     panic_buy_dir = _panic_buying_files(
         tmp_path / "bad",
@@ -204,7 +210,10 @@ def test_euphoria_context_maps_modes_and_blocks_bad_source(monkeypatch, tmp_path
     )
     assert blocked["euphoria_context_status"] == "SOURCE_QUALITY_BLOCKED"
     assert blocked["euphoria_risk_level"] == 2
-    assert "panic_buy_orderbook_collector_coverage_gap" in blocked["source_quality_blockers"]
+    assert (
+        "panic_buy_orderbook_collector_coverage_gap"
+        in blocked["source_quality_blockers"]
+    )
 
 
 def test_breadth_only_panic_sell_report_maps_to_level1_watch(monkeypatch, tmp_path):
@@ -259,7 +268,10 @@ def test_partial_sell_idempotency_blocks_repeated_same_epoch(_state):
         "panic_epoch_id": "2026-05-20|PANIC_SELL|PANIC_DETECTED|L2|0910",
         "liquidity_state": "NORMAL",
     }
-    ws_data = {"curr": 9900, "orderbook": {"bids": [{"price": 9890}], "asks": [{"price": 9910}]}}
+    ws_data = {
+        "curr": 9900,
+        "orderbook": {"bids": [{"price": 9890}], "asks": [{"price": 9910}]},
+    }
 
     assert state_handlers.complete_scalp_sim_partial_sell(
         stock=stock,
@@ -287,7 +299,9 @@ def test_partial_sell_idempotency_blocks_repeated_same_epoch(_state):
         profit_rate=-0.2,
     )
     assert stock["buy_qty"] == 5
-    assert [stage for stage, _ in _state].count("scalp_sim_partial_sell_order_assumed_filled") == 1
+    assert [stage for stage, _ in _state].count(
+        "scalp_sim_partial_sell_order_assumed_filled"
+    ) == 1
 
 
 def test_level1_partial_does_not_escalate_to_full_exit_for_small_qty(_state):
@@ -302,7 +316,10 @@ def test_level1_partial_does_not_escalate_to_full_exit_for_small_qty(_state):
     assert not state_handlers.complete_scalp_sim_partial_sell(
         stock=stock,
         code="123456",
-        ws_data={"curr": 9900, "orderbook": {"bids": [{"price": 9890}], "asks": [{"price": 9910}]}},
+        ws_data={
+            "curr": 9900,
+            "orderbook": {"bids": [{"price": 9890}], "asks": [{"price": 9910}]},
+        },
         curr_price=9900,
         now_ts=1000.0,
         partial_ratio=0.5,
@@ -320,7 +337,10 @@ def test_level1_partial_does_not_escalate_to_full_exit_for_small_qty(_state):
 
 def test_level_rise_allows_additional_reduction(_state):
     stock = _sim_position(qty=10)
-    ws_data = {"curr": 9900, "orderbook": {"bids": [{"price": 9890}], "asks": [{"price": 9910}]}}
+    ws_data = {
+        "curr": 9900,
+        "orderbook": {"bids": [{"price": 9890}], "asks": [{"price": 9910}]},
+    }
     level2 = {
         "panic_context_status": "OK",
         "panic_level": 2,
@@ -342,7 +362,7 @@ def test_level_rise_allows_additional_reduction(_state):
     )
     assert state_handlers.complete_scalp_sim_partial_sell(
         stock=stock,
-        code= "123456",
+        code="123456",
         ws_data=ws_data,
         curr_price=9900,
         now_ts=1010.0,
@@ -374,7 +394,11 @@ def test_partial_sell_price_model_uses_slippage_when_no_bid(_state):
         panic_action_reason="level3_reduce",
         profit_rate=0.0,
     )
-    event = next(fields for stage, fields in _state if stage == "scalp_sim_partial_sell_order_assumed_filled")
+    event = next(
+        fields
+        for stage, fields in _state
+        if stage == "scalp_sim_partial_sell_order_assumed_filled"
+    )
     assert event["assumed_fill_price_source"] == "current_price_slippage"
     assert event["assumed_slippage_bps"] >= 40.0
     assert event["fill_quality"] == "DEGRADED"
@@ -395,11 +419,17 @@ def test_real_path_is_not_eligible_and_broker_not_called(monkeypatch):
     non_forbidden["broker_order_forbidden"] = False
     assert not state_handlers._scalp_sim_panic_eligible(non_forbidden, "SCALPING")
 
-    non_sim = {"strategy": "SCALPING", "actual_order_submitted": False, "broker_order_forbidden": True}
+    non_sim = {
+        "strategy": "SCALPING",
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
     assert not state_handlers._scalp_sim_panic_eligible(non_sim, "SCALPING")
 
 
-def test_lifecycle_matrix_ingests_panic_sim_rows_without_real_mix(monkeypatch, tmp_path):
+def test_lifecycle_matrix_ingests_panic_sim_rows_without_real_mix(
+    monkeypatch, tmp_path
+):
     events_dir = tmp_path / "events"
     events_dir.mkdir()
     monkeypatch.setattr(matrix, "PIPELINE_EVENTS_DIR", events_dir)
@@ -458,7 +488,10 @@ def test_lifecycle_matrix_ingests_panic_sim_rows_without_real_mix(monkeypatch, t
     assert exit_row["actual_order_submitted"] is False
     assert exit_row["source"] == "scalp_sim_panic_pipeline_events"
     assert entry_row["runtime_features"]["symbol_regime"] == "BOTTOMING"
-    assert entry_row["runtime_features"]["panic_bottoming_arm"] == "risk_off_bottoming_probe_entry"
+    assert (
+        entry_row["runtime_features"]["panic_bottoming_arm"]
+        == "risk_off_bottoming_probe_entry"
+    )
 
 
 def test_entry_and_scale_in_are_blocked_for_sim_only_panic(monkeypatch, _state):
@@ -469,14 +502,31 @@ def test_entry_and_scale_in_are_blocked_for_sim_only_panic(monkeypatch, _state):
         "panic_epoch_id": "epoch-entry",
         "liquidity_state": "NORMAL",
     }
-    monkeypatch.setattr(state_handlers, "_resolve_scalp_sim_panic_context", lambda now_ts=None: panic_context)
+    monkeypatch.setattr(
+        state_handlers,
+        "_resolve_scalp_sim_panic_context",
+        lambda now_ts=None: panic_context,
+    )
 
-    stock = {"id": 101, "name": "SIM", "strategy": "SCALPING", "target_buy_price": 10_000}
+    stock = {
+        "id": 101,
+        "name": "SIM",
+        "strategy": "SCALPING",
+        "target_buy_price": 10_000,
+    }
     assert not state_handlers.maybe_arm_scalp_live_simulator_from_buy_signal(
         stock,
         "123456",
-        {"curr": 10_000, "orderbook": {"asks": [{"price": 10_000}], "bids": [{"price": 9_990}]}},
-        {"strategy": "SCALPING", "is_trigger": True, "now_ts": 1000.0, "current_ai_score": 80},
+        {
+            "curr": 10_000,
+            "orderbook": {"asks": [{"price": 10_000}], "bids": [{"price": 9_990}]},
+        },
+        {
+            "strategy": "SCALPING",
+            "is_trigger": True,
+            "now_ts": 1000.0,
+            "current_ai_score": 80,
+        },
     )
     assert any(stage == "scalp_sim_panic_entry_blocked" for stage, _ in _state)
 
@@ -511,13 +561,22 @@ def test_entry_and_scale_in_are_blocked_for_sim_only_panic(monkeypatch, _state):
     )
     assert result is None
     assert any(stage == "scalp_sim_panic_scale_in_blocked" for stage, _ in _state)
-    scale_event = next(fields for stage, fields in _state if stage == "scalp_sim_panic_scale_in_blocked")
+    scale_event = next(
+        fields
+        for stage, fields in _state
+        if stage == "scalp_sim_panic_scale_in_blocked"
+    )
     assert scale_event["decision_authority"] == "sim_observation_only"
-    assert scale_event["scalp_sim_candidate_window_blocked_reason"] == "regression_duplicate_authority"
+    assert (
+        scale_event["scalp_sim_candidate_window_blocked_reason"]
+        == "regression_duplicate_authority"
+    )
     assert scale_event["scalp_sim_active_priority_seed_matched"] is True
     assert scale_event["active_seed_id"] == "active_seed_panic"
     assert scale_event["source_parent_bucket_id"] == "parent_positive_panic"
-    event = next(fields for stage, fields in _state if stage == "scalp_sim_panic_entry_blocked")
+    event = next(
+        fields for stage, fields in _state if stage == "scalp_sim_panic_entry_blocked"
+    )
     assert event["source_family"] == "panic_lifecycle_actuator"
     assert event["family_type"] == "sim_lifecycle_source"
     assert event["live_selectable"] is False
@@ -540,16 +599,28 @@ def test_euphoria_l2_blocks_chase_and_allows_retest_starter(monkeypatch, _state)
             "risk_direction": "risk_on_euphoria",
         },
     )
-    stock = {"id": 101, "name": "CHASE", "strategy": "SCALPING", "target_buy_price": 10_000}
+    stock = {
+        "id": 101,
+        "name": "CHASE",
+        "strategy": "SCALPING",
+        "target_buy_price": 10_000,
+    }
     blocked = state_handlers._should_block_scalp_sim_entry_for_euphoria(
         stock=stock,
         code="123456",
-        ws_data={"curr": 10_000, "orderbook": {"asks": [{"price": 10_200}], "bids": [{"price": 9_900}]}},
+        ws_data={
+            "curr": 10_000,
+            "orderbook": {"asks": [{"price": 10_200}], "bids": [{"price": 9_900}]},
+        },
         runtime={"strategy": "SCALPING", "now_ts": 1000.0, "current_ai_score": 80},
         current_ai_score=80,
     )
     assert blocked is True
-    blocked_event = next(fields for stage, fields in _state if stage == "scalp_sim_euphoria_chase_entry_blocked")
+    blocked_event = next(
+        fields
+        for stage, fields in _state
+        if stage == "scalp_sim_euphoria_chase_entry_blocked"
+    )
     assert blocked_event["euphoria_action_type"] == "BLOCK_CHASE_ENTRY"
     assert blocked_event["risk_context_owner"] == "euphoria"
     assert blocked_event["family_type"] == "sim_lifecycle_source"
@@ -560,17 +631,27 @@ def test_euphoria_l2_blocks_chase_and_allows_retest_starter(monkeypatch, _state)
         "name": "RETEST",
         "strategy": "SCALPING",
         "target_buy_price": 10_000,
-        "last_reversal_features": {"curr_vs_micro_vwap_bp": 5.0, "large_sell_print_detected": False},
+        "last_reversal_features": {
+            "curr_vs_micro_vwap_bp": 5.0,
+            "large_sell_print_detected": False,
+        },
     }
     allowed_block = state_handlers._should_block_scalp_sim_entry_for_euphoria(
         stock=stock,
         code="654321",
-        ws_data={"curr": 10_000, "orderbook": {"asks": [{"price": 10_010}], "bids": [{"price": 10_000}]}},
+        ws_data={
+            "curr": 10_000,
+            "orderbook": {"asks": [{"price": 10_010}], "bids": [{"price": 10_000}]},
+        },
         runtime={"strategy": "SCALPING", "now_ts": 1000.0, "current_ai_score": 80},
         current_ai_score=80,
     )
     assert allowed_block is False
-    allowed_event = next(fields for stage, fields in _state if stage == "scalp_sim_euphoria_retest_starter_allowed")
+    allowed_event = next(
+        fields
+        for stage, fields in _state
+        if stage == "scalp_sim_euphoria_retest_starter_allowed"
+    )
     assert allowed_event["euphoria_action_type"] == "ALLOW_RETEST_STARTER_ENTRY"
     assert allowed_event["runtime_effect"] == "sim_arm_allowed"
     assert allowed_event["actual_order_submitted"] is False
@@ -586,7 +667,10 @@ def test_euphoria_partial_runner_is_idempotent(monkeypatch, _state):
         "euphoria_source_quality": "OK",
         "risk_direction": "risk_on_euphoria",
     }
-    ws_data = {"curr": 10_200, "orderbook": {"bids": [{"price": 10_180}], "asks": [{"price": 10_200}]}}
+    ws_data = {
+        "curr": 10_200,
+        "orderbook": {"bids": [{"price": 10_180}], "asks": [{"price": 10_200}]},
+    }
     assert state_handlers.complete_scalp_sim_euphoria_partial_profit(
         stock=stock,
         code="123456",
@@ -612,7 +696,9 @@ def test_euphoria_partial_runner_is_idempotent(monkeypatch, _state):
         profit_rate=1.0,
     )
     assert stock["buy_qty"] == 7
-    assert [stage for stage, _ in _state].count("scalp_sim_euphoria_partial_profit_assumed_filled") == 1
+    assert [stage for stage, _ in _state].count(
+        "scalp_sim_euphoria_partial_profit_assumed_filled"
+    ) == 1
 
 
 def test_euphoria_bad_source_quality_creates_noop_not_mutation(monkeypatch, _state):
@@ -629,7 +715,12 @@ def test_euphoria_bad_source_quality_creates_noop_not_mutation(monkeypatch, _sta
             "risk_direction": "risk_on_euphoria",
         },
     )
-    stock = {"id": 101, "name": "BAD", "strategy": "SCALPING", "target_buy_price": 10_000}
+    stock = {
+        "id": 101,
+        "name": "BAD",
+        "strategy": "SCALPING",
+        "target_buy_price": 10_000,
+    }
     assert not state_handlers._should_block_scalp_sim_entry_for_euphoria(
         stock=stock,
         code="123456",
@@ -637,14 +728,18 @@ def test_euphoria_bad_source_quality_creates_noop_not_mutation(monkeypatch, _sta
         runtime={"now_ts": 1000.0},
         current_ai_score=80,
     )
-    event = next(fields for stage, fields in _state if stage == "scalp_sim_euphoria_context_noop")
+    event = next(
+        fields for stage, fields in _state if stage == "scalp_sim_euphoria_context_noop"
+    )
     assert event["runtime_effect"] == "SIM_NOOP_CONTEXT_NOT_OK"
     assert event["exclude_from_ev"] is True
     assert event["real_gate_allowed"] is False
     assert event["pre_submit_gate_allowed"] is False
 
 
-def test_level1_breadth_risk_off_bottoming_candidate_allows_sim_entry(monkeypatch, _state):
+def test_level1_breadth_risk_off_bottoming_candidate_allows_sim_entry(
+    monkeypatch, _state
+):
     panic_context = {
         "panic_context_status": "OK",
         "panic_level": 1,
@@ -655,7 +750,11 @@ def test_level1_breadth_risk_off_bottoming_candidate_allows_sim_entry(monkeypatc
         "confirmed_risk_off": False,
         "liquidity_state": "NORMAL",
     }
-    monkeypatch.setattr(state_handlers, "_resolve_scalp_sim_panic_context", lambda now_ts=None: panic_context)
+    monkeypatch.setattr(
+        state_handlers,
+        "_resolve_scalp_sim_panic_context",
+        lambda now_ts=None: panic_context,
+    )
 
     stock = {
         "id": 101,
@@ -681,18 +780,32 @@ def test_level1_breadth_risk_off_bottoming_candidate_allows_sim_entry(monkeypatc
     assert state_handlers.maybe_arm_scalp_live_simulator_from_buy_signal(
         stock,
         "123456",
-        {"curr": 10_000, "orderbook": {"asks": [{"price": 10_000}], "bids": [{"price": 9_990}]}},
-        {"strategy": "SCALPING", "is_trigger": True, "now_ts": 1000.0, "current_ai_score": 64},
+        {
+            "curr": 10_000,
+            "orderbook": {"asks": [{"price": 10_000}], "bids": [{"price": 9_990}]},
+        },
+        {
+            "strategy": "SCALPING",
+            "is_trigger": True,
+            "now_ts": 1000.0,
+            "current_ai_score": 64,
+        },
     )
     stages = [stage for stage, _ in _state]
     assert "scalp_sim_panic_bottoming_entry_allowed" in stages
     assert "scalp_sim_panic_entry_blocked" not in stages
-    event = next(fields for stage, fields in _state if stage == "scalp_sim_panic_bottoming_entry_allowed")
+    event = next(
+        fields
+        for stage, fields in _state
+        if stage == "scalp_sim_panic_bottoming_entry_allowed"
+    )
     assert event["symbol_regime"] == "BOTTOMING"
     assert event["panic_bottoming_arm"] == "risk_off_bottoming_probe_entry"
 
 
-def test_level1_breadth_risk_off_non_bottoming_is_observed_not_blocked(monkeypatch, _state):
+def test_level1_breadth_risk_off_non_bottoming_is_observed_not_blocked(
+    monkeypatch, _state
+):
     panic_context = {
         "panic_context_status": "OK",
         "panic_level": 1,
@@ -703,7 +816,11 @@ def test_level1_breadth_risk_off_non_bottoming_is_observed_not_blocked(monkeypat
         "confirmed_risk_off": True,
         "liquidity_state": "NORMAL",
     }
-    monkeypatch.setattr(state_handlers, "_resolve_scalp_sim_panic_context", lambda now_ts=None: panic_context)
+    monkeypatch.setattr(
+        state_handlers,
+        "_resolve_scalp_sim_panic_context",
+        lambda now_ts=None: panic_context,
+    )
 
     stock = {
         "id": 102,
@@ -725,13 +842,25 @@ def test_level1_breadth_risk_off_non_bottoming_is_observed_not_blocked(monkeypat
     assert state_handlers.maybe_arm_scalp_live_simulator_from_buy_signal(
         stock,
         "654321",
-        {"curr": 10_000, "orderbook": {"asks": [{"price": 10_000}], "bids": [{"price": 9_990}]}},
-        {"strategy": "SCALPING", "is_trigger": True, "now_ts": 1000.0, "current_ai_score": 64},
+        {
+            "curr": 10_000,
+            "orderbook": {"asks": [{"price": 10_000}], "bids": [{"price": 9_990}]},
+        },
+        {
+            "strategy": "SCALPING",
+            "is_trigger": True,
+            "now_ts": 1000.0,
+            "current_ai_score": 64,
+        },
     )
     stages = [stage for stage, _ in _state]
     assert "scalp_sim_panic_level1_entry_observed" in stages
     assert "scalp_sim_panic_entry_blocked" not in stages
-    event = next(fields for stage, fields in _state if stage == "scalp_sim_panic_level1_entry_observed")
+    event = next(
+        fields
+        for stage, fields in _state
+        if stage == "scalp_sim_panic_level1_entry_observed"
+    )
     assert event["symbol_regime"] == "WEAK"
     assert "bottoming_conditions_failed" in event["panic_bottoming_entry_reason"]
     assert event["runtime_effect"] == "sim_entry_allowed_level1_risk_off_observation"

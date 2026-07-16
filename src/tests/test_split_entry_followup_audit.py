@@ -35,7 +35,9 @@ def test_summarize_latency_canary_counts_reasons(tmp_path):
             },
         },
     ]
-    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+    path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8"
+    )
 
     summary = summarize_latency_canary(path)
 
@@ -58,7 +60,11 @@ def test_summarize_split_entry_soft_stop_detects_integrity_and_repeats(tmp_path)
             "record_id": 1,
             "stock_name": "테스트A",
             "emitted_at": "2026-04-17T09:00:00.000000",
-            "fields": {"fill_quality": "PARTIAL_FILL", "cum_filled_qty": "1", "requested_qty": "9"},
+            "fields": {
+                "fill_quality": "PARTIAL_FILL",
+                "cum_filled_qty": "1",
+                "requested_qty": "9",
+            },
         },
         {
             "pipeline": "HOLDING_PIPELINE",
@@ -66,7 +72,11 @@ def test_summarize_split_entry_soft_stop_detects_integrity_and_repeats(tmp_path)
             "record_id": 1,
             "stock_name": "테스트A",
             "emitted_at": "2026-04-17T09:00:00.500000",
-            "fields": {"fill_quality": "FULL_FILL", "cum_filled_qty": "12", "requested_qty": "9"},
+            "fields": {
+                "fill_quality": "FULL_FILL",
+                "cum_filled_qty": "12",
+                "requested_qty": "9",
+            },
         },
         {
             "pipeline": "HOLDING_PIPELINE",
@@ -82,7 +92,12 @@ def test_summarize_split_entry_soft_stop_detects_integrity_and_repeats(tmp_path)
             "record_id": 1,
             "stock_name": "테스트A",
             "emitted_at": "2026-04-17T09:01:00.000000",
-            "fields": {"exit_rule": "scalp_soft_stop_pct", "held_sec": "59", "profit_rate": "-1.50", "peak_profit": "-0.10"},
+            "fields": {
+                "exit_rule": "scalp_soft_stop_pct",
+                "held_sec": "59",
+                "profit_rate": "-1.50",
+                "peak_profit": "-0.10",
+            },
         },
         {
             "pipeline": "HOLDING_PIPELINE",
@@ -90,7 +105,11 @@ def test_summarize_split_entry_soft_stop_detects_integrity_and_repeats(tmp_path)
             "record_id": 2,
             "stock_name": "테스트A",
             "emitted_at": "2026-04-17T09:10:00.000000",
-            "fields": {"fill_quality": "PARTIAL_FILL", "cum_filled_qty": "1", "requested_qty": "8"},
+            "fields": {
+                "fill_quality": "PARTIAL_FILL",
+                "cum_filled_qty": "1",
+                "requested_qty": "8",
+            },
         },
         {
             "pipeline": "HOLDING_PIPELINE",
@@ -106,10 +125,17 @@ def test_summarize_split_entry_soft_stop_detects_integrity_and_repeats(tmp_path)
             "record_id": 2,
             "stock_name": "테스트A",
             "emitted_at": "2026-04-17T09:11:00.000000",
-            "fields": {"exit_rule": "scalp_soft_stop_pct", "held_sec": "59", "profit_rate": "-1.60", "peak_profit": "0.05"},
+            "fields": {
+                "exit_rule": "scalp_soft_stop_pct",
+                "held_sec": "59",
+                "profit_rate": "-1.60",
+                "peak_profit": "0.05",
+            },
         },
     ]
-    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+    path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8"
+    )
 
     summary = summarize_split_entry_soft_stop(path)
 
@@ -121,4 +147,7 @@ def test_summarize_split_entry_soft_stop_detects_integrity_and_repeats(tmp_path)
     assert summary["peak_le_zero_count"] == 1
     assert summary["peak_lt_point2_count"] == 1
     assert summary["same_symbol_repeats"] == {"테스트A": 2}
-    assert summary["cases"][0]["integrity_flags"] == ["cum_gt_requested", "same_ts_multi_rebase"]
+    assert summary["cases"][0]["integrity_flags"] == [
+        "cum_gt_requested",
+        "same_ts_multi_rebase",
+    ]

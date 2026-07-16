@@ -38,11 +38,19 @@ def _reset_state(monkeypatch, tmp_path):
     monkeypatch.setattr(state_handlers, "COOLDOWNS", {})
     monkeypatch.setattr(state_handlers, "ALERTED_STOCKS", set())
     monkeypatch.setattr(state_handlers, "LAST_LOG_TIMES", {})
-    monkeypatch.setattr(state_handlers, "SCALP_SIM_STATE_PATH", tmp_path / "scalp_live_sim_state.json")
+    monkeypatch.setattr(
+        state_handlers, "SCALP_SIM_STATE_PATH", tmp_path / "scalp_live_sim_state.json"
+    )
     monkeypatch.setattr(state_handlers, "_SCALP_SIM_STATE_LAST_SEEN_MTIME_NS", None)
-    monkeypatch.setattr(state_handlers, "SWING_INTRADAY_PROBE_STATE_PATH", tmp_path / "swing_probe_state.json")
+    monkeypatch.setattr(
+        state_handlers,
+        "SWING_INTRADAY_PROBE_STATE_PATH",
+        tmp_path / "swing_probe_state.json",
+    )
     monkeypatch.setattr(state_handlers, "_SWING_PROBE_STATE_LAST_SEEN_MTIME_NS", None)
-    monkeypatch.setattr(state_handlers, "record_sim_post_sell_candidate", lambda **kwargs: None)
+    monkeypatch.setattr(
+        state_handlers, "record_sim_post_sell_candidate", lambda **kwargs: None
+    )
     state_handlers._SCALP_SIM_AUTO_POLICY_CACHE.update(
         {
             "path": None,
@@ -148,10 +156,16 @@ def test_scalp_simulator_arms_and_fills_without_real_buy_order(monkeypatch):
     assert state_handlers.EVENT_BUS.published == [
         ("COMMAND_WS_REG", {"codes": ["123456"], "source": "scalp_live_simulator"})
     ]
-    fill_event = next(fields for stage, fields in logs if stage == "scalp_sim_buy_order_assumed_filled")
+    fill_event = next(
+        fields
+        for stage, fields in logs
+        if stage == "scalp_sim_buy_order_assumed_filled"
+    )
     assert fill_event["fill_source"] == "best_ask"
     assert fill_event["would_limit_fill"] is True
-    armed_event = next(fields for stage, fields in logs if stage == "scalp_sim_entry_armed")
+    armed_event = next(
+        fields for stage, fields in logs if stage == "scalp_sim_entry_armed"
+    )
     assert armed_event["runtime_effect"] == "simulated_entry_armed_only"
 
 
@@ -230,9 +244,13 @@ def test_scalp_live_simulator_restore_respects_max_open_cap(monkeypatch):
             for idx in range(7)
         ],
     }
-    state_handlers.SCALP_SIM_STATE_PATH.write_text(json.dumps(payload), encoding="utf-8")
+    state_handlers.SCALP_SIM_STATE_PATH.write_text(
+        json.dumps(payload), encoding="utf-8"
+    )
 
-    restored = state_handlers.restore_scalp_simulator_targets(state_handlers.ACTIVE_TARGETS)
+    restored = state_handlers.restore_scalp_simulator_targets(
+        state_handlers.ACTIVE_TARGETS
+    )
 
     assert restored == 4
     assert len(state_handlers._scalp_simulator_active_targets()) == 4
@@ -263,10 +281,17 @@ def test_scalp_live_simulator_sync_removes_state_rows_beyond_max_open(monkeypatc
         }
         for idx in range(7)
     )
-    payload = {"schema_version": 1, "active_positions": [dict(row) for row in state_handlers.ACTIVE_TARGETS]}
-    state_handlers.SCALP_SIM_STATE_PATH.write_text(json.dumps(payload), encoding="utf-8")
+    payload = {
+        "schema_version": 1,
+        "active_positions": [dict(row) for row in state_handlers.ACTIVE_TARGETS],
+    }
+    state_handlers.SCALP_SIM_STATE_PATH.write_text(
+        json.dumps(payload), encoding="utf-8"
+    )
 
-    result = state_handlers.sync_scalp_simulator_targets_from_state(state_handlers.ACTIVE_TARGETS)
+    result = state_handlers.sync_scalp_simulator_targets_from_state(
+        state_handlers.ACTIVE_TARGETS
+    )
 
     assert result["removed"] == 3
     assert result["restored"] == 0
@@ -306,7 +331,9 @@ def test_scalp_sim_candidate_window_runtime_cap_clamps_policy_width(monkeypatch)
     ) == (80, 240, 80)
 
 
-def test_scalp_sim_candidate_window_runtime_cap_zero_preserves_configured_width(monkeypatch):
+def test_scalp_sim_candidate_window_runtime_cap_zero_preserves_configured_width(
+    monkeypatch,
+):
     monkeypatch.setattr(
         state_handlers,
         "TRADING_RULES",
@@ -325,7 +352,9 @@ def test_scalp_sim_candidate_window_runtime_cap_zero_preserves_configured_width(
     ) == (20, 20, 0)
 
 
-def test_scalp_simulator_attaches_matched_lifecycle_bucket_provenance(monkeypatch, tmp_path):
+def test_scalp_simulator_attaches_matched_lifecycle_bucket_provenance(
+    monkeypatch, tmp_path
+):
     source_bucket_id = "lifecycle_flow:combo_lifecycle_flow:entry_score_70p:abc123"
     bucket_id = "lifecycle_flow:combo_lifecycle_flow:entry_score_70p"
     catalog_path = tmp_path / "scalp_sim_policy_catalog_2026-05-28.json"
@@ -357,7 +386,9 @@ def test_scalp_simulator_attaches_matched_lifecycle_bucket_provenance(monkeypatc
         encoding="utf-8",
     )
     monkeypatch.setenv("KORSTOCKSCAN_THRESHOLD_RUNTIME_APPLY_DATE", "2026-06-15")
-    monkeypatch.delenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_POLICY_SOURCE_DATE", raising=False)
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_POLICY_SOURCE_DATE", raising=False
+    )
     monkeypatch.setattr(
         state_handlers,
         "TRADING_RULES",
@@ -412,7 +443,9 @@ def test_scalp_simulator_attaches_matched_lifecycle_bucket_provenance(monkeypatc
         },
     }
 
-    assert state_handlers.maybe_arm_scalp_live_simulator_from_buy_signal(stock, "123456", ws_data, runtime)
+    assert state_handlers.maybe_arm_scalp_live_simulator_from_buy_signal(
+        stock, "123456", ws_data, runtime
+    )
     sim_target = state_handlers.ACTIVE_TARGETS[0]
     assert sim_target["lifecycle_bucket_match_status"] == "matched"
     assert sim_target["bucket_directed_sim_probe"] is True
@@ -427,21 +460,31 @@ def test_scalp_simulator_attaches_matched_lifecycle_bucket_provenance(monkeypatc
         assert event["bucket_directed_sim_probe"] is True
         assert event["lifecycle_bucket_source_bucket_id"] == source_bucket_id
         assert event["lifecycle_bucket_bucket_id"] == bucket_id
-        assert event["lifecycle_bucket_classification_state"] == "lifecycle_flow_sim_probe_candidate"
+        assert (
+            event["lifecycle_bucket_classification_state"]
+            == "lifecycle_flow_sim_probe_candidate"
+        )
         assert event["actual_order_submitted"] is False
         assert event["broker_order_forbidden"] is True
 
     assert state_handlers._complete_scalp_simulated_sell(
         stock=sim_target,
         code="123456",
-        ws_data={"curr": 10_100, "orderbook": {"asks": [{"price": 10_110}], "bids": [{"price": 10_090}]}},
+        ws_data={
+            "curr": 10_100,
+            "orderbook": {"asks": [{"price": 10_110}], "bids": [{"price": 10_090}]},
+        },
         curr_price=10_100,
         now_ts=1_060.0,
         sell_reason_type="PROFIT",
         exit_rule="scalp_trailing_take_profit",
         profit_rate=state_handlers.calculate_net_profit_rate(9_990, 10_100),
     )
-    sell_event = next(fields for stage, fields in holding_logs if stage == "scalp_sim_sell_order_assumed_filled")
+    sell_event = next(
+        fields
+        for stage, fields in holding_logs
+        if stage == "scalp_sim_sell_order_assumed_filled"
+    )
     assert sell_event["lifecycle_bucket_match_status"] == "matched"
     assert sell_event["lifecycle_bucket_source_bucket_id"] == source_bucket_id
     assert sell_event["bucket_directed_sim_probe"] is True
@@ -449,7 +492,9 @@ def test_scalp_simulator_attaches_matched_lifecycle_bucket_provenance(monkeypatc
     assert sell_event["broker_order_forbidden"] is True
 
 
-def test_scalp_simulator_consumes_lifecycle_bucket_catalog_handoff_when_direct_policy_off(monkeypatch, tmp_path):
+def test_scalp_simulator_consumes_lifecycle_bucket_catalog_handoff_when_direct_policy_off(
+    monkeypatch, tmp_path
+):
     source_bucket_id = "lifecycle_flow:combo_lifecycle_flow:entry_score_60_62:abc123"
     bucket_id = "lifecycle_flow:combo_lifecycle_flow:entry_score_60_62"
     catalog_path = tmp_path / "lifecycle_bucket_catalog_2026-06-12.json"
@@ -478,7 +523,9 @@ def test_scalp_simulator_consumes_lifecycle_bucket_catalog_handoff_when_direct_p
         encoding="utf-8",
     )
     monkeypatch.setenv("KORSTOCKSCAN_THRESHOLD_RUNTIME_APPLY_DATE", "2026-06-15")
-    monkeypatch.delenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_POLICY_SOURCE_DATE", raising=False)
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_POLICY_SOURCE_DATE", raising=False
+    )
     monkeypatch.setattr(
         state_handlers,
         "TRADING_RULES",
@@ -515,7 +562,10 @@ def test_scalp_simulator_consumes_lifecycle_bucket_catalog_handoff_when_direct_p
             "lifecycle_bucket_source_bucket_id": source_bucket_id,
         },
         "123456",
-        {"curr": 9_990, "orderbook": {"asks": [{"price": 9_990}], "bids": [{"price": 9_980}]}},
+        {
+            "curr": 9_990,
+            "orderbook": {"asks": [{"price": 9_990}], "bids": [{"price": 9_980}]},
+        },
         {
             "strategy": "SCALPING",
             "is_trigger": True,
@@ -532,12 +582,18 @@ def test_scalp_simulator_consumes_lifecycle_bucket_catalog_handoff_when_direct_p
     assert armed["scalp_sim_auto_policy_enabled"] is True
     assert armed["scalp_sim_auto_policy_direct_enabled"] is False
     assert armed["lifecycle_bucket_catalog_handoff_enabled"] is True
-    assert armed["scalp_sim_policy_source"] == "lifecycle_bucket_discovery_catalog_handoff"
-    assert armed["scalp_sim_auto_policy_schema_version"] == "lifecycle_bucket_catalog_v1"
+    assert (
+        armed["scalp_sim_policy_source"] == "lifecycle_bucket_discovery_catalog_handoff"
+    )
+    assert (
+        armed["scalp_sim_auto_policy_schema_version"] == "lifecycle_bucket_catalog_v1"
+    )
     assert armed["bucket_directed_sim_probe"] is True
 
 
-def test_lifecycle_bucket_catalog_handoff_does_not_direct_source_only_rows(monkeypatch, tmp_path):
+def test_lifecycle_bucket_catalog_handoff_does_not_direct_source_only_rows(
+    monkeypatch, tmp_path
+):
     source_bucket_id = "lifecycle_flow:combo_lifecycle_flow:source_only:abc123"
     catalog_path = tmp_path / "lifecycle_bucket_catalog_2026-06-12.json"
     catalog_path.write_text(
@@ -561,7 +617,9 @@ def test_lifecycle_bucket_catalog_handoff_does_not_direct_source_only_rows(monke
         encoding="utf-8",
     )
     monkeypatch.setenv("KORSTOCKSCAN_THRESHOLD_RUNTIME_APPLY_DATE", "2026-06-15")
-    monkeypatch.delenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_POLICY_SOURCE_DATE", raising=False)
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_POLICY_SOURCE_DATE", raising=False
+    )
     monkeypatch.setattr(
         state_handlers,
         "TRADING_RULES",
@@ -598,7 +656,10 @@ def test_lifecycle_bucket_catalog_handoff_does_not_direct_source_only_rows(monke
             "lifecycle_bucket_source_bucket_id": source_bucket_id,
         },
         "123456",
-        {"curr": 9_990, "orderbook": {"asks": [{"price": 9_990}], "bids": [{"price": 9_980}]}},
+        {
+            "curr": 9_990,
+            "orderbook": {"asks": [{"price": 9_990}], "bids": [{"price": 9_980}]},
+        },
         {
             "strategy": "SCALPING",
             "is_trigger": True,
@@ -613,11 +674,15 @@ def test_lifecycle_bucket_catalog_handoff_does_not_direct_source_only_rows(monke
     armed = next(fields for stage, fields in logs if stage == "scalp_sim_entry_armed")
     assert armed["lifecycle_bucket_match_status"] == "no_match"
     assert armed["bucket_directed_sim_probe"] is False
-    assert armed["scalp_sim_policy_source"] == "lifecycle_bucket_discovery_catalog_handoff"
+    assert (
+        armed["scalp_sim_policy_source"] == "lifecycle_bucket_discovery_catalog_handoff"
+    )
     assert armed["scalp_sim_auto_policy_enabled"] is True
 
 
-def test_candidate_window_resolves_approved_lifecycle_flow_from_entry_identity(monkeypatch, tmp_path):
+def test_candidate_window_resolves_approved_lifecycle_flow_from_entry_identity(
+    monkeypatch, tmp_path
+):
     logs = []
     monkeypatch.setattr(
         state_handlers,
@@ -634,7 +699,9 @@ def test_candidate_window_resolves_approved_lifecycle_flow_from_entry_identity(m
         "score=score_60_62|source=blocked_ai_score|stale=fresh_or_unflagged|"
         "liquidity=liquidity_not_available|overbought=overbought_not_available|time=time_0900_1000"
     )
-    entry_bucket_id = state_handlers._scalp_sim_ldm_bucket_id("entry", "combo_entry_spot", entry_bucket_key)
+    entry_bucket_id = state_handlers._scalp_sim_ldm_bucket_id(
+        "entry", "combo_entry_spot", entry_bucket_key
+    )
     flow_bucket_id = (
         "lifecycle_flow:combo_lifecycle_flow:"
         f"{state_handlers._greenfield_bucket_slug(f'entry={entry_bucket_id}', max_len=96)}"
@@ -695,8 +762,16 @@ def test_candidate_window_resolves_approved_lifecycle_flow_from_entry_identity(m
     assert state_handlers._maybe_arm_scalp_sim_candidate_window(
         stock=stock,
         code="123456",
-        ws_data={"curr": 9_990, "orderbook": {"asks": [{"price": 9_990}], "bids": [{"price": 9_980}]}},
-        runtime={"strategy": "SCALPING", "is_trigger": False, "now_ts": 1_000.0, "current_ai_score": 61.0},
+        ws_data={
+            "curr": 9_990,
+            "orderbook": {"asks": [{"price": 9_990}], "bids": [{"price": 9_980}]},
+        },
+        runtime={
+            "strategy": "SCALPING",
+            "is_trigger": False,
+            "now_ts": 1_000.0,
+            "current_ai_score": 61.0,
+        },
         ai_decision={"action": "WAIT", "score": 61, "reason": "below entry threshold"},
         ai_score=61,
         source_stage="blocked_ai_score",
@@ -717,7 +792,9 @@ def test_candidate_window_resolves_approved_lifecycle_flow_from_entry_identity(m
     assert armed["broker_order_forbidden"] is True
 
 
-def test_candidate_window_with_entry_identity_but_no_approved_row_is_background(monkeypatch, tmp_path):
+def test_candidate_window_with_entry_identity_but_no_approved_row_is_background(
+    monkeypatch, tmp_path
+):
     logs = []
     monkeypatch.setattr(
         state_handlers,
@@ -764,10 +841,23 @@ def test_candidate_window_with_entry_identity_but_no_approved_row_is_background(
     )
 
     assert state_handlers._maybe_arm_scalp_sim_candidate_window(
-        stock={"id": 101, "name": "WAIT_TEST", "strategy": "SCALPING", "target_buy_price": 10_000},
+        stock={
+            "id": 101,
+            "name": "WAIT_TEST",
+            "strategy": "SCALPING",
+            "target_buy_price": 10_000,
+        },
         code="123456",
-        ws_data={"curr": 9_990, "orderbook": {"asks": [{"price": 9_990}], "bids": [{"price": 9_980}]}},
-        runtime={"strategy": "SCALPING", "is_trigger": False, "now_ts": 1_000.0, "current_ai_score": 61.0},
+        ws_data={
+            "curr": 9_990,
+            "orderbook": {"asks": [{"price": 9_990}], "bids": [{"price": 9_980}]},
+        },
+        runtime={
+            "strategy": "SCALPING",
+            "is_trigger": False,
+            "now_ts": 1_000.0,
+            "current_ai_score": 61.0,
+        },
         ai_decision={"action": "WAIT", "score": 61},
         ai_score=61,
         source_stage="blocked_ai_score",
@@ -776,7 +866,9 @@ def test_candidate_window_with_entry_identity_but_no_approved_row_is_background(
     armed = next(fields for stage, fields in logs if stage == "scalp_sim_entry_armed")
     assert armed["lifecycle_bucket_match_status"] == "no_match"
     assert armed["bucket_directed_sim_probe"] is False
-    assert armed["lifecycle_bucket_entry_bucket_id"].startswith("entry:combo_entry_spot:")
+    assert armed["lifecycle_bucket_entry_bucket_id"].startswith(
+        "entry:combo_entry_spot:"
+    )
     assert armed["actual_order_submitted"] is False
     assert armed["broker_order_forbidden"] is True
 
@@ -825,10 +917,15 @@ def test_scalp_simulator_keeps_background_sim_when_policy_missing(monkeypatch):
     assert state_handlers.maybe_arm_scalp_live_simulator_from_buy_signal(
         stock,
         "123456",
-        {"curr": 9_990, "orderbook": {"asks": [{"price": 9_990}], "bids": [{"price": 9_980}]}},
+        {
+            "curr": 9_990,
+            "orderbook": {"asks": [{"price": 9_990}], "bids": [{"price": 9_980}]},
+        },
         runtime,
     )
-    armed_event = next(fields for stage, fields in logs if stage == "scalp_sim_entry_armed")
+    armed_event = next(
+        fields for stage, fields in logs if stage == "scalp_sim_entry_armed"
+    )
     assert armed_event["lifecycle_bucket_match_status"] == "policy_missing"
     assert armed_event["bucket_directed_sim_probe"] is False
     assert armed_event["actual_order_submitted"] is False
@@ -836,7 +933,9 @@ def test_scalp_simulator_keeps_background_sim_when_policy_missing(monkeypatch):
     assert len(state_handlers.ACTIVE_TARGETS) == 1
 
 
-def test_scalp_simulator_logs_pre_submit_liquidity_would_block_but_keeps_virtual_fill(monkeypatch):
+def test_scalp_simulator_logs_pre_submit_liquidity_would_block_but_keeps_virtual_fill(
+    monkeypatch,
+):
     logs = []
     monkeypatch.setattr(
         state_handlers,
@@ -870,7 +969,10 @@ def test_scalp_simulator_logs_pre_submit_liquidity_would_block_but_keeps_virtual
     assert state_handlers.maybe_arm_scalp_live_simulator_from_buy_signal(
         stock,
         "123456",
-        {"curr": 9_990, "orderbook": {"asks": [{"price": 9_990}], "bids": [{"price": 9_980}]}},
+        {
+            "curr": 9_990,
+            "orderbook": {"asks": [{"price": 9_990}], "bids": [{"price": 9_980}]},
+        },
         runtime,
     )
 
@@ -878,7 +980,11 @@ def test_scalp_simulator_logs_pre_submit_liquidity_would_block_but_keeps_virtual
     assert "scalp_sim_pre_submit_liquidity_guard_would_block" in stages
     assert "scalp_sim_buy_order_virtual_pending" in stages
     assert "scalp_sim_buy_order_assumed_filled" in stages
-    guard = next(fields for stage, fields in logs if stage == "scalp_sim_pre_submit_liquidity_guard_would_block")
+    guard = next(
+        fields
+        for stage, fields in logs
+        if stage == "scalp_sim_pre_submit_liquidity_guard_would_block"
+    )
     assert guard["decision_authority"] == "sim_submit_path_observation_only"
     assert guard["runtime_effect"] is False
     assert guard["actual_order_submitted"] is False
@@ -886,11 +992,21 @@ def test_scalp_simulator_logs_pre_submit_liquidity_would_block_but_keeps_virtual
     assert guard["sim_pre_submit_liquidity_guard_action"] == "WOULD_BLOCK"
     assert guard["sim_pre_submit_liquidity_reason"] == "below_min_liquidity"
     assert guard["sim_liquidity_value"] == 100_000_000
-    pending = next(fields for stage, fields in logs if stage == "scalp_sim_buy_order_virtual_pending")
+    pending = next(
+        fields
+        for stage, fields in logs
+        if stage == "scalp_sim_buy_order_virtual_pending"
+    )
     assert pending["sim_pre_submit_liquidity_guard_action"] == "WOULD_BLOCK"
-    filled = next(fields for stage, fields in logs if stage == "scalp_sim_buy_order_assumed_filled")
+    filled = next(
+        fields
+        for stage, fields in logs
+        if stage == "scalp_sim_buy_order_assumed_filled"
+    )
     assert filled["sim_pre_submit_liquidity_guard_action"] == "WOULD_BLOCK"
-    holding = next(fields for stage, fields in logs if stage == "scalp_sim_holding_started")
+    holding = next(
+        fields for stage, fields in logs if stage == "scalp_sim_holding_started"
+    )
     assert holding["sim_pre_submit_liquidity_guard_action"] == "WOULD_BLOCK"
     assert holding["sim_pre_submit_liquidity_reason"] == "below_min_liquidity"
 
@@ -921,19 +1037,28 @@ def test_scalp_simulator_logs_liquidity_unknown_when_source_missing(monkeypatch)
     assert state_handlers.maybe_arm_scalp_live_simulator_from_buy_signal(
         stock,
         "123456",
-        {"curr": 9_990, "orderbook": {"asks": [{"price": 9_990}], "bids": [{"price": 9_980}]}},
+        {
+            "curr": 9_990,
+            "orderbook": {"asks": [{"price": 9_990}], "bids": [{"price": 9_980}]},
+        },
         runtime,
     )
 
     stages = [stage for stage, _ in logs]
     assert "scalp_sim_pre_submit_liquidity_guard_unknown" in stages
     assert "scalp_sim_pre_submit_liquidity_guard_would_pass" not in stages
-    guard = next(fields for stage, fields in logs if stage == "scalp_sim_pre_submit_liquidity_guard_unknown")
+    guard = next(
+        fields
+        for stage, fields in logs
+        if stage == "scalp_sim_pre_submit_liquidity_guard_unknown"
+    )
     assert guard["sim_pre_submit_liquidity_guard_action"] == "WOULD_UNKNOWN"
     assert guard["sim_pre_submit_liquidity_reason"] == "liquidity_not_available"
 
 
-def test_scalp_simulator_derives_liquidity_from_ws_when_runtime_source_unset(monkeypatch):
+def test_scalp_simulator_derives_liquidity_from_ws_when_runtime_source_unset(
+    monkeypatch,
+):
     logs = []
     monkeypatch.setattr(
         state_handlers,
@@ -976,13 +1101,19 @@ def test_scalp_simulator_derives_liquidity_from_ws_when_runtime_source_unset(mon
 
     stages = [stage for stage, _ in logs]
     assert "scalp_sim_pre_submit_liquidity_guard_would_pass" in stages
-    guard = next(fields for stage, fields in logs if stage == "scalp_sim_pre_submit_liquidity_guard_would_pass")
+    guard = next(
+        fields
+        for stage, fields in logs
+        if stage == "scalp_sim_pre_submit_liquidity_guard_would_pass"
+    )
     assert guard["sim_pre_submit_liquidity_guard_action"] == "WOULD_PASS"
     assert guard["sim_pre_submit_liquidity_reason"] == "liquidity_ok"
     assert guard["sim_liquidity_value"] == 550_000_000
 
 
-def test_scalp_simulator_marks_liquidity_unknown_when_runtime_zero_is_missing_totals(monkeypatch):
+def test_scalp_simulator_marks_liquidity_unknown_when_runtime_zero_is_missing_totals(
+    monkeypatch,
+):
     logs = []
     monkeypatch.setattr(
         state_handlers,
@@ -1012,13 +1143,20 @@ def test_scalp_simulator_marks_liquidity_unknown_when_runtime_zero_is_missing_to
     assert state_handlers.maybe_arm_scalp_live_simulator_from_buy_signal(
         stock,
         "123456",
-        {"curr": 10_000, "orderbook": {"asks": [{"price": 10_010}], "bids": [{"price": 9_990}]}},
+        {
+            "curr": 10_000,
+            "orderbook": {"asks": [{"price": 10_010}], "bids": [{"price": 9_990}]},
+        },
         runtime,
     )
 
     stages = [stage for stage, _ in logs]
     assert "scalp_sim_pre_submit_liquidity_guard_unknown" in stages
-    guard = next(fields for stage, fields in logs if stage == "scalp_sim_pre_submit_liquidity_guard_unknown")
+    guard = next(
+        fields
+        for stage, fields in logs
+        if stage == "scalp_sim_pre_submit_liquidity_guard_unknown"
+    )
     assert guard["sim_pre_submit_liquidity_guard_action"] == "WOULD_UNKNOWN"
     assert guard["sim_pre_submit_liquidity_reason"] == "liquidity_not_available"
     assert guard["sim_liquidity_value"] == "not_available"
@@ -1061,7 +1199,11 @@ def test_scalp_simulator_derives_overbought_context_from_intraday_range(monkeypa
         runtime,
     )
 
-    guard = next(fields for stage, fields in logs if stage == "scalp_sim_pre_submit_overbought_guard_would_pass")
+    guard = next(
+        fields
+        for stage, fields in logs
+        if stage == "scalp_sim_pre_submit_overbought_guard_would_pass"
+    )
     assert guard["sim_pre_submit_overbought_guard_action"] == "WOULD_PASS"
     assert guard["sim_pre_submit_overbought_reason"] == "overbought_ok"
     assert guard["sim_overbought_risk_state"] == "not_overbought"
@@ -1070,7 +1212,9 @@ def test_scalp_simulator_derives_overbought_context_from_intraday_range(monkeypa
     assert guard["sim_overbought_source_quality"] == "derived_from_intraday_range"
 
 
-def test_scalp_simulator_marks_overbought_not_evaluated_when_context_missing(monkeypatch):
+def test_scalp_simulator_marks_overbought_not_evaluated_when_context_missing(
+    monkeypatch,
+):
     logs = []
     monkeypatch.setattr(
         state_handlers,
@@ -1098,18 +1242,29 @@ def test_scalp_simulator_marks_overbought_not_evaluated_when_context_missing(mon
     assert state_handlers.maybe_arm_scalp_live_simulator_from_buy_signal(
         stock,
         "123456",
-        {"curr": 10_000, "orderbook": {"asks": [{"price": 10_010}], "bids": [{"price": 9_990}]}},
+        {
+            "curr": 10_000,
+            "orderbook": {"asks": [{"price": 10_010}], "bids": [{"price": 9_990}]},
+        },
         runtime,
     )
 
-    guard = next(fields for stage, fields in logs if stage == "scalp_sim_pre_submit_overbought_guard_would_pass")
+    guard = next(
+        fields
+        for stage, fields in logs
+        if stage == "scalp_sim_pre_submit_overbought_guard_would_pass"
+    )
     assert guard["sim_pre_submit_overbought_guard_action"] == "WOULD_PASS"
     assert guard["sim_pre_submit_overbought_reason"] == "overbought_not_evaluated"
     assert guard["sim_overbought_risk_state"] == "not_evaluated"
     assert guard["sim_overbought_risk_bucket"] == "overbought_context_missing"
     assert guard["sim_overbought_context_source"] == "missing_overlap_context"
     assert guard["sim_overbought_source_quality"] == "missing_intraday_range"
-    filled = next(fields for stage, fields in logs if stage == "scalp_sim_buy_order_assumed_filled")
+    filled = next(
+        fields
+        for stage, fields in logs
+        if stage == "scalp_sim_buy_order_assumed_filled"
+    )
     assert filled["sim_overbought_context_source"] == "missing_overlap_context"
     assert filled["sim_overbought_source_quality"] == "missing_intraday_range"
 
@@ -1121,8 +1276,16 @@ def test_scalp_simulator_applies_entry_ai_price_canary_without_real_order(monkey
         "_log_entry_pipeline",
         lambda stock, code, stage, **fields: logs.append((stage, fields)),
     )
-    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [])
-    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_tick_history_ka10003",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_minute_candles_ka10080",
+        lambda *args, **kwargs: [],
+    )
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_buy_order",
@@ -1180,12 +1343,20 @@ def test_scalp_simulator_applies_entry_ai_price_canary_without_real_order(monkey
     assert sim_target["entry_ai_price_canary_applied"] is True
     assert sim_target["scalp_sim_entry_limit_price"] == 10_000
     assert sim_target["buy_price"] == 10_030
-    applied = next(fields for stage, fields in logs if stage == "entry_ai_price_canary_applied")
+    applied = next(
+        fields for stage, fields in logs if stage == "entry_ai_price_canary_applied"
+    )
     assert applied["openai_endpoint_name"] == "entry_price"
     assert applied["openai_transport_mode"] == "responses_ws"
-    sim_applied = next(fields for stage, fields in logs if stage == "scalp_sim_entry_ai_price_applied")
+    sim_applied = next(
+        fields for stage, fields in logs if stage == "scalp_sim_entry_ai_price_applied"
+    )
     assert sim_applied["runtime_effect"] == "simulated_entry_price_only"
-    pending = next(fields for stage, fields in logs if stage == "scalp_sim_buy_order_virtual_pending")
+    pending = next(
+        fields
+        for stage, fields in logs
+        if stage == "scalp_sim_buy_order_virtual_pending"
+    )
     assert pending["limit_price"] == 10_000
 
 
@@ -1196,8 +1367,16 @@ def test_scalp_simulator_blocks_stale_passive_probe_before_virtual_submit(monkey
         "_log_entry_pipeline",
         lambda stock, code, stage, **fields: logs.append((stage, fields)),
     )
-    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [])
-    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_tick_history_ka10003",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_minute_candles_ka10080",
+        lambda *args, **kwargs: [],
+    )
     monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_size", lambda price: 10)
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
@@ -1257,7 +1436,11 @@ def test_scalp_simulator_blocks_stale_passive_probe_before_virtual_submit(monkey
     stages = [stage for stage, _ in logs]
     assert "scalp_sim_entry_submit_revalidation_block" in stages
     assert "scalp_sim_buy_order_virtual_pending" not in stages
-    block = next(fields for stage, fields in logs if stage == "scalp_sim_entry_submit_revalidation_block")
+    block = next(
+        fields
+        for stage, fields in logs
+        if stage == "scalp_sim_entry_submit_revalidation_block"
+    )
     assert block["block_reason"] == "stale_context_or_quote"
     assert block["entry_order_lifecycle"] == "passive_probe"
     assert block["actual_order_submitted"] is False
@@ -1265,12 +1448,16 @@ def test_scalp_simulator_blocks_stale_passive_probe_before_virtual_submit(monkey
 
 def test_scalp_simulator_entry_uses_virtual_budget_with_live_qty_formula(monkeypatch):
     logs = []
-    rules = replace(CONFIG, SCALP_LIVE_SIMULATOR_QTY=0, SCALPING_MAX_BUY_BUDGET_KRW=1_200_000)
+    rules = replace(
+        CONFIG, SCALP_LIVE_SIMULATOR_QTY=0, SCALPING_MAX_BUY_BUDGET_KRW=1_200_000
+    )
     monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "get_deposit",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("scalp sim must not read real deposit")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("scalp sim must not read real deposit")
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -1296,13 +1483,18 @@ def test_scalp_simulator_entry_uses_virtual_budget_with_live_qty_formula(monkeyp
     assert state_handlers.maybe_arm_scalp_live_simulator_from_buy_signal(
         stock,
         "123456",
-        {"curr": 10_000, "orderbook": {"asks": [{"price": 10_000}], "bids": [{"price": 9_990}]}},
+        {
+            "curr": 10_000,
+            "orderbook": {"asks": [{"price": 10_000}], "bids": [{"price": 9_990}]},
+        },
         runtime,
     )
 
     sim_target = state_handlers.ACTIVE_TARGETS[0]
     assert sim_target["buy_qty"] == 114
-    assert sim_target["scalp_sim_entry_qty_source"] == "sim_virtual_budget_dynamic_formula"
+    assert (
+        sim_target["scalp_sim_entry_qty_source"] == "sim_virtual_budget_dynamic_formula"
+    )
     armed = next(fields for stage, fields in logs if stage == "scalp_sim_entry_armed")
     assert armed["qty"] == 114
     assert armed["qty_reason"] == "sim_uses_virtual_budget_with_live_qty_formula"
@@ -1314,11 +1506,15 @@ def test_scalp_simulator_entry_uses_virtual_budget_with_live_qty_formula(monkeyp
     assert armed["budget_authority"] == "sim_virtual_not_real_orderable_amount"
 
 
-def test_scalp_simulator_entry_ignores_real_orderable_amount_when_unaffordable(monkeypatch):
+def test_scalp_simulator_entry_ignores_real_orderable_amount_when_unaffordable(
+    monkeypatch,
+):
     logs = []
     rules = replace(CONFIG, SCALP_LIVE_SIMULATOR_QTY=0, SCALPING_MAX_BUY_BUDGET_KRW=0)
     monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
-    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 296_988)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 296_988
+    )
     monkeypatch.setattr(
         state_handlers,
         "_log_entry_pipeline",
@@ -1343,13 +1539,18 @@ def test_scalp_simulator_entry_ignores_real_orderable_amount_when_unaffordable(m
     assert state_handlers.maybe_arm_scalp_live_simulator_from_buy_signal(
         stock,
         "196170",
-        {"curr": 382_500, "orderbook": {"asks": [{"price": 382_500}], "bids": [{"price": 382_000}]}},
+        {
+            "curr": 382_500,
+            "orderbook": {"asks": [{"price": 382_500}], "bids": [{"price": 382_000}]},
+        },
         runtime,
     )
 
     sim_target = state_handlers.ACTIVE_TARGETS[0]
     assert sim_target["buy_qty"] == 24
-    assert sim_target["scalp_sim_entry_qty_source"] == "sim_virtual_budget_dynamic_formula"
+    assert (
+        sim_target["scalp_sim_entry_qty_source"] == "sim_virtual_budget_dynamic_formula"
+    )
     armed = next(fields for stage, fields in logs if stage == "scalp_sim_entry_armed")
     assert armed["qty"] == 24
     assert armed["virtual_budget_override"] is True
@@ -1359,7 +1560,9 @@ def test_scalp_simulator_entry_ignores_real_orderable_amount_when_unaffordable(m
     assert armed["budget_authority"] == "sim_virtual_not_real_orderable_amount"
 
 
-def test_scalp_simulator_signal_inclusive_fill_does_not_wait_for_limit_touch(monkeypatch):
+def test_scalp_simulator_signal_inclusive_fill_does_not_wait_for_limit_touch(
+    monkeypatch,
+):
     logs = []
     monkeypatch.setattr(
         state_handlers,
@@ -1397,7 +1600,11 @@ def test_scalp_simulator_signal_inclusive_fill_does_not_wait_for_limit_touch(mon
     sim_target = state_handlers.ACTIVE_TARGETS[0]
     assert sim_target["status"] == "HOLDING"
     assert sim_target["buy_price"] == 10_030
-    fill_event = next(fields for stage, fields in logs if stage == "scalp_sim_buy_order_assumed_filled")
+    fill_event = next(
+        fields
+        for stage, fields in logs
+        if stage == "scalp_sim_buy_order_assumed_filled"
+    )
     assert fill_event["fill_source"] == "best_ask"
     assert fill_event["would_limit_fill"] is False
     assert fill_event["limit_price"] == 10_000
@@ -1417,7 +1624,9 @@ def test_swing_dry_run_gatekeeper_report_is_source_only_without_telegram(monkeyp
     assert event_bus.published == []
 
 
-def test_actual_order_false_gatekeeper_report_is_source_only_without_telegram(monkeypatch):
+def test_actual_order_false_gatekeeper_report_is_source_only_without_telegram(
+    monkeypatch,
+):
     event_bus = FakeEventBus()
     monkeypatch.setattr(sniper_runtime, "event_bus", event_bus)
 
@@ -1457,7 +1666,11 @@ def test_live_gatekeeper_reject_report_is_source_only_without_telegram(monkeypat
     sniper_runtime._publish_gatekeeper_report(
         {"name": "LIVE", "strategy": "SCALPING"},
         "123456",
-        {"action_label": "PULLBACK_WAIT", "action_key": "pullback_wait", "report": "wait"},
+        {
+            "action_label": "PULLBACK_WAIT",
+            "action_key": "pullback_wait",
+            "report": "wait",
+        },
         False,
     )
 
@@ -1505,7 +1718,9 @@ def test_live_gatekeeper_report_handles_missing_name_and_report(monkeypatch):
     assert "123456" in payload["message"]
 
 
-def test_scalp_simulator_duplicate_buy_signal_does_not_create_second_position(monkeypatch):
+def test_scalp_simulator_duplicate_buy_signal_does_not_create_second_position(
+    monkeypatch,
+):
     logs = []
     monkeypatch.setattr(
         state_handlers,
@@ -1621,7 +1836,10 @@ def test_scalp_sim_candidate_window_expansion_arms_blocked_wait_candidate(monkey
     assert state_handlers._maybe_arm_scalp_sim_candidate_window(
         stock=stock,
         code="123456",
-        ws_data={"curr": 9_990, "orderbook": {"asks": [{"price": 9_990}], "bids": [{"price": 9_980}]}},
+        ws_data={
+            "curr": 9_990,
+            "orderbook": {"asks": [{"price": 9_990}], "bids": [{"price": 9_980}]},
+        },
         runtime=runtime,
         ai_decision=ai_decision,
         ai_score=61,
@@ -1643,7 +1861,9 @@ def test_scalp_sim_candidate_window_expansion_arms_blocked_wait_candidate(monkey
     assert armed["would_real_submit"] is False
 
 
-def test_scalp_sim_candidate_window_active_seed_uses_reserved_sim_quota(monkeypatch, tmp_path):
+def test_scalp_sim_candidate_window_active_seed_uses_reserved_sim_quota(
+    monkeypatch, tmp_path
+):
     logs = []
     monkeypatch.setattr(
         state_handlers,
@@ -1696,14 +1916,24 @@ def test_scalp_sim_candidate_window_active_seed_uses_reserved_sim_quota(monkeypa
                             "soft_hypothesis_id": "ldm_hypothesis_also_matches",
                             "rank": 1,
                             "observable_requirements": [
-                                {"field": "entry_score_parent", "op": "eq", "value": "score_watch_recovery"},
-                                {"field": "entry_source_parent", "op": "eq", "value": "entry_source_blocked_ai_score"},
+                                {
+                                    "field": "entry_score_parent",
+                                    "op": "eq",
+                                    "value": "score_watch_recovery",
+                                },
+                                {
+                                    "field": "entry_source_parent",
+                                    "op": "eq",
+                                    "value": "entry_source_blocked_ai_score",
+                                },
                             ],
                             "evidence_summary": {
                                 "source_quality_adjusted_ev_pct": 1.25,
                                 "sample_weight": 12,
                             },
-                            "observation_budget_hint": {"policy": "sim_observation_budget_hint_v1"},
+                            "observation_budget_hint": {
+                                "policy": "sim_observation_budget_hint_v1"
+                            },
                             "runtime_effect": False,
                             "allowed_runtime_apply": False,
                             "actual_order_submitted": False,
@@ -1752,7 +1982,9 @@ def test_scalp_sim_candidate_window_active_seed_uses_reserved_sim_quota(monkeypa
         }
     )
     state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_CREATED["1970-01-01"] = 6
-    state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_SOURCE_CREATED[("1970-01-01", "blocked_ai_score")] = 6
+    state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_SOURCE_CREATED[
+        ("1970-01-01", "blocked_ai_score")
+    ] = 6
 
     assert state_handlers._maybe_arm_scalp_sim_candidate_window(
         stock={
@@ -1765,8 +1997,16 @@ def test_scalp_sim_candidate_window_active_seed_uses_reserved_sim_quota(monkeypa
             "last_watching_ai_action": "WAIT",
         },
         code="123456",
-        ws_data={"curr": 9_990, "orderbook": {"asks": [{"price": 9_990}], "bids": [{"price": 9_980}]}},
-        runtime={"strategy": "SCALPING", "is_trigger": False, "now_ts": 1_000.0, "current_ai_score": 61.0},
+        ws_data={
+            "curr": 9_990,
+            "orderbook": {"asks": [{"price": 9_990}], "bids": [{"price": 9_980}]},
+        },
+        runtime={
+            "strategy": "SCALPING",
+            "is_trigger": False,
+            "now_ts": 1_000.0,
+            "current_ai_score": 61.0,
+        },
         ai_decision={"action": "WAIT", "score": 61, "reason": "below entry threshold"},
         ai_score=61,
         source_stage="blocked_ai_score",
@@ -1779,8 +2019,13 @@ def test_scalp_sim_candidate_window_active_seed_uses_reserved_sim_quota(monkeypa
     assert sim_target["ldm_hypothesis_matched"] is True
     assert sim_target["ldm_hypothesis_id"] == "ldm_hypothesis_also_matches"
     assert sim_target["source_parent_bucket_id"] == "parent_positive"
-    assert sim_target["scalp_sim_candidate_window_quota_policy"] == "active_parent_seed_v1"
-    assert sim_target["active_seed_quota_policy_version"] == "active_parent_seed_targeted_quota_v1"
+    assert (
+        sim_target["scalp_sim_candidate_window_quota_policy"] == "active_parent_seed_v1"
+    )
+    assert (
+        sim_target["active_seed_quota_policy_version"]
+        == "active_parent_seed_targeted_quota_v1"
+    )
     assert sim_target["active_seed_daily_total_share_pct"] == 35
     assert sim_target["active_seed_daily_per_seed_limit"] == 20
     assert sim_target["active_seed_sample_goal_per_bucket"] == 10
@@ -1798,14 +2043,18 @@ def test_scalp_sim_candidate_window_active_seed_uses_reserved_sim_quota(monkeypa
 
     followup_source = dict(sim_target)
     followup_source.pop("scalp_sim_candidate_window_expansion", None)
-    followup_fields = state_handlers._scalp_sim_candidate_window_context_fields(followup_source)
+    followup_fields = state_handlers._scalp_sim_candidate_window_context_fields(
+        followup_source
+    )
     assert followup_fields["scalp_sim_active_priority_seed_matched"] is True
     assert followup_fields["active_seed_id"] == "active_seed_test"
     assert followup_fields["source_parent_bucket_id"] == "parent_positive"
     assert followup_fields["would_real_submit"] is False
 
 
-def test_scalp_sim_active_seed_targeted_quota_blocks_after_per_seed_limit(monkeypatch, tmp_path):
+def test_scalp_sim_active_seed_targeted_quota_blocks_after_per_seed_limit(
+    monkeypatch, tmp_path
+):
     logs = []
     monkeypatch.setattr(
         state_handlers,
@@ -1882,7 +2131,9 @@ def test_scalp_sim_active_seed_targeted_quota_blocks_after_per_seed_limit(monkey
         }
     )
     state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_CREATED["1970-01-01"] = 6
-    state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_SOURCE_CREATED[("1970-01-01", "blocked_ai_score")] = 6
+    state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_SOURCE_CREATED[
+        ("1970-01-01", "blocked_ai_score")
+    ] = 6
     state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_ACTIVE_SEED_CREATED[
         ("1970-01-01", "active_seed_limited")
     ] = 1
@@ -1898,15 +2149,27 @@ def test_scalp_sim_active_seed_targeted_quota_blocks_after_per_seed_limit(monkey
             "last_watching_ai_action": "WAIT",
         },
         code="123456",
-        ws_data={"curr": 9_990, "orderbook": {"asks": [{"price": 9_990}], "bids": [{"price": 9_980}]}},
-        runtime={"strategy": "SCALPING", "is_trigger": False, "now_ts": 1_000.0, "current_ai_score": 61.0},
+        ws_data={
+            "curr": 9_990,
+            "orderbook": {"asks": [{"price": 9_990}], "bids": [{"price": 9_980}]},
+        },
+        runtime={
+            "strategy": "SCALPING",
+            "is_trigger": False,
+            "now_ts": 1_000.0,
+            "current_ai_score": 61.0,
+        },
         ai_decision={"action": "WAIT", "score": 61, "reason": "below entry threshold"},
         ai_score=61,
         source_stage="blocked_ai_score",
         blocked_reason="below_buy_score_threshold",
     )
 
-    discarded = next(fields for stage, fields in logs if stage == "scalp_sim_candidate_window_discarded")
+    discarded = next(
+        fields
+        for stage, fields in logs
+        if stage == "scalp_sim_candidate_window_discarded"
+    )
     assert discarded["discard_reason"] == "source_bucket_quota_reached"
     assert discarded["active_seed_daily_per_seed_limit"] == 1
     assert discarded["active_seed_daily_created"] == 1
@@ -1914,7 +2177,9 @@ def test_scalp_sim_active_seed_targeted_quota_blocks_after_per_seed_limit(monkey
     assert discarded["broker_order_forbidden"] is True
 
 
-def test_scalp_sim_active_seed_targeted_quota_zero_share_disables_reserve(monkeypatch, tmp_path):
+def test_scalp_sim_active_seed_targeted_quota_zero_share_disables_reserve(
+    monkeypatch, tmp_path
+):
     logs = []
     monkeypatch.setattr(
         state_handlers,
@@ -1987,7 +2252,9 @@ def test_scalp_sim_active_seed_targeted_quota_zero_share_disables_reserve(monkey
         }
     )
     state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_CREATED["1970-01-01"] = 6
-    state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_SOURCE_CREATED[("1970-01-01", "blocked_ai_score")] = 6
+    state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_SOURCE_CREATED[
+        ("1970-01-01", "blocked_ai_score")
+    ] = 6
 
     assert not state_handlers._maybe_arm_scalp_sim_candidate_window(
         stock={
@@ -2000,15 +2267,27 @@ def test_scalp_sim_active_seed_targeted_quota_zero_share_disables_reserve(monkey
             "last_watching_ai_action": "WAIT",
         },
         code="123456",
-        ws_data={"curr": 9_990, "orderbook": {"asks": [{"price": 9_990}], "bids": [{"price": 9_980}]}},
-        runtime={"strategy": "SCALPING", "is_trigger": False, "now_ts": 1_000.0, "current_ai_score": 61.0},
+        ws_data={
+            "curr": 9_990,
+            "orderbook": {"asks": [{"price": 9_990}], "bids": [{"price": 9_980}]},
+        },
+        runtime={
+            "strategy": "SCALPING",
+            "is_trigger": False,
+            "now_ts": 1_000.0,
+            "current_ai_score": 61.0,
+        },
         ai_decision={"action": "WAIT", "score": 61, "reason": "below entry threshold"},
         ai_score=61,
         source_stage="blocked_ai_score",
         blocked_reason="below_buy_score_threshold",
     )
 
-    discarded = next(fields for stage, fields in logs if stage == "scalp_sim_candidate_window_discarded")
+    discarded = next(
+        fields
+        for stage, fields in logs
+        if stage == "scalp_sim_candidate_window_discarded"
+    )
     assert discarded["discard_reason"] == "source_bucket_quota_reached"
     assert discarded["active_seed_daily_total_share_pct"] == 0
     assert discarded["active_seed_daily_total_limit"] == 0
@@ -2016,7 +2295,9 @@ def test_scalp_sim_active_seed_targeted_quota_zero_share_disables_reserve(monkey
     assert discarded["broker_order_forbidden"] is True
 
 
-def test_scalp_sim_active_seed_matches_first_ai_wait_wait6579_parent(monkeypatch, tmp_path):
+def test_scalp_sim_active_seed_matches_first_ai_wait_wait6579_parent(
+    monkeypatch, tmp_path
+):
     catalog_path = tmp_path / "scalp_sim_policy_catalog_2026-06-01.json"
     catalog_path.write_text(
         json.dumps(
@@ -2156,16 +2437,24 @@ def test_scalp_sim_active_seed_blocks_stale_apply_date_policy(monkeypatch, tmp_p
 
     assert fields["scalp_sim_active_priority_seed_matched"] is False
     assert fields["active_seed_match_eligible"] is False
-    assert fields["active_seed_match_exclusion_reason"] == "policy_stale_source_date_mismatch"
+    assert (
+        fields["active_seed_match_exclusion_reason"]
+        == "policy_stale_source_date_mismatch"
+    )
     assert "active_seed_id" not in fields
-    assert fields["active_seed_match_blocked_reason"] == "policy_stale_source_date_mismatch"
+    assert (
+        fields["active_seed_match_blocked_reason"]
+        == "policy_stale_source_date_mismatch"
+    )
     assert fields["active_seed_match_source"] == "policy_stale_source_date_mismatch"
     cache = state_handlers._load_scalp_sim_auto_policy_cache()
     assert cache["status"] == "policy_stale_source_date_mismatch"
     assert cache["active_seeds_by_prefix"] == {}
 
 
-def test_scalp_sim_active_seed_blocks_missing_source_date_in_runtime_apply(monkeypatch, tmp_path):
+def test_scalp_sim_active_seed_blocks_missing_source_date_in_runtime_apply(
+    monkeypatch, tmp_path
+):
     catalog_path = tmp_path / "scalp_sim_policy_catalog_2026-06-01.json"
     catalog_path.write_text(
         json.dumps(
@@ -2216,7 +2505,9 @@ def test_scalp_sim_active_seed_blocks_missing_source_date_in_runtime_apply(monke
     assert cache["active_seeds_by_prefix"] == {}
 
 
-def test_scalp_sim_active_seed_unmatched_new_axis_preserves_taxonomy_contract(monkeypatch, tmp_path):
+def test_scalp_sim_active_seed_unmatched_new_axis_preserves_taxonomy_contract(
+    monkeypatch, tmp_path
+):
     catalog_path = tmp_path / "scalp_sim_policy_catalog_2026-06-01.json"
     catalog_path.write_text(
         json.dumps(
@@ -2258,19 +2549,27 @@ def test_scalp_sim_active_seed_unmatched_new_axis_preserves_taxonomy_contract(mo
 
     assert fields["scalp_sim_active_priority_seed_matched"] is False
     assert fields["active_seed_match_eligible"] is False
-    assert fields["active_seed_match_exclusion_reason"] == "entry_source_taxonomy_pending_runtime_effect_blocked"
+    assert (
+        fields["active_seed_match_exclusion_reason"]
+        == "entry_source_taxonomy_pending_runtime_effect_blocked"
+    )
     assert "active_seed_id" not in fields
     assert json.loads(fields["active_seed_candidate_observable_prefix"]) == {
         "entry_score_parent": "score_watch_recovery",
         "entry_source_parent": "entry_source_observed_other",
     }
-    assert fields["active_seed_match_blocked_reason"] == "entry_source_taxonomy_pending_runtime_effect_blocked"
+    assert (
+        fields["active_seed_match_blocked_reason"]
+        == "entry_source_taxonomy_pending_runtime_effect_blocked"
+    )
     assert fields["entry_source_parent_contract_state"] == "new_axis_pending_taxonomy"
     assert fields["entry_source_parent_consume_data"] is True
     assert fields["entry_source_parent_runtime_effect_allowed"] is False
 
 
-def test_scalp_sim_candidate_window_context_recomputes_stale_active_seed_alias(monkeypatch, tmp_path):
+def test_scalp_sim_candidate_window_context_recomputes_stale_active_seed_alias(
+    monkeypatch, tmp_path
+):
     catalog_path = tmp_path / "scalp_sim_policy_catalog_2026-06-01.json"
     catalog_path.write_text(
         json.dumps(
@@ -2330,7 +2629,9 @@ def test_scalp_sim_candidate_window_context_recomputes_stale_active_seed_alias(m
     assert fields["entry_source_parent_contract_state"] == "canonical_alias"
 
 
-def test_scalp_sim_candidate_window_context_refreshes_stale_prefix_even_with_seed_id(monkeypatch, tmp_path):
+def test_scalp_sim_candidate_window_context_refreshes_stale_prefix_even_with_seed_id(
+    monkeypatch, tmp_path
+):
     catalog_path = tmp_path / "scalp_sim_policy_catalog_2026-06-01.json"
     catalog_path.write_text(
         json.dumps(
@@ -2385,7 +2686,9 @@ def test_scalp_sim_candidate_window_context_refreshes_stale_prefix_even_with_see
     }
 
 
-def test_scalp_sim_candidate_window_context_refreshes_stale_seed_id_with_same_prefix(monkeypatch, tmp_path):
+def test_scalp_sim_candidate_window_context_refreshes_stale_seed_id_with_same_prefix(
+    monkeypatch, tmp_path
+):
     catalog_path = tmp_path / "scalp_sim_policy_catalog_2026-06-01.json"
     catalog_path.write_text(
         json.dumps(
@@ -2446,7 +2749,9 @@ def test_scalp_sim_candidate_window_context_refreshes_stale_seed_id_with_same_pr
     assert fields["active_seed_match_source"] == "current_preopen_active_policy"
 
 
-def test_scalp_sim_candidate_window_hypothesis_uses_sim_only_reserved_quota(monkeypatch, tmp_path):
+def test_scalp_sim_candidate_window_hypothesis_uses_sim_only_reserved_quota(
+    monkeypatch, tmp_path
+):
     logs = []
     monkeypatch.setattr(
         state_handlers,
@@ -2472,14 +2777,24 @@ def test_scalp_sim_candidate_window_hypothesis_uses_sim_only_reserved_quota(monk
                             "soft_hypothesis_id": "ldm_hypothesis_test",
                             "rank": 1,
                             "observable_requirements": [
-                                {"field": "entry_score_parent", "op": "eq", "value": "score_watch_recovery"},
-                                {"field": "entry_source_parent", "op": "eq", "value": "entry_source_blocked_ai_score"},
+                                {
+                                    "field": "entry_score_parent",
+                                    "op": "eq",
+                                    "value": "score_watch_recovery",
+                                },
+                                {
+                                    "field": "entry_source_parent",
+                                    "op": "eq",
+                                    "value": "entry_source_blocked_ai_score",
+                                },
                             ],
                             "evidence_summary": {
                                 "source_quality_adjusted_ev_pct": 1.25,
                                 "sample_weight": 12,
                             },
-                            "observation_budget_hint": {"policy": "sim_observation_budget_hint_v1"},
+                            "observation_budget_hint": {
+                                "policy": "sim_observation_budget_hint_v1"
+                            },
                             "runtime_effect": False,
                             "allowed_runtime_apply": False,
                             "actual_order_submitted": False,
@@ -2528,7 +2843,9 @@ def test_scalp_sim_candidate_window_hypothesis_uses_sim_only_reserved_quota(monk
         }
     )
     state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_CREATED["1970-01-01"] = 6
-    state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_SOURCE_CREATED[("1970-01-01", "blocked_ai_score")] = 6
+    state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_SOURCE_CREATED[
+        ("1970-01-01", "blocked_ai_score")
+    ] = 6
 
     assert state_handlers._maybe_arm_scalp_sim_candidate_window(
         stock={
@@ -2541,8 +2858,16 @@ def test_scalp_sim_candidate_window_hypothesis_uses_sim_only_reserved_quota(monk
             "last_watching_ai_action": "WAIT",
         },
         code="123456",
-        ws_data={"curr": 9_990, "orderbook": {"asks": [{"price": 9_990}], "bids": [{"price": 9_980}]}},
-        runtime={"strategy": "SCALPING", "is_trigger": False, "now_ts": 1_000.0, "current_ai_score": 61.0},
+        ws_data={
+            "curr": 9_990,
+            "orderbook": {"asks": [{"price": 9_990}], "bids": [{"price": 9_980}]},
+        },
+        runtime={
+            "strategy": "SCALPING",
+            "is_trigger": False,
+            "now_ts": 1_000.0,
+            "current_ai_score": 61.0,
+        },
         ai_decision={"action": "WAIT", "score": 61, "reason": "below entry threshold"},
         ai_score=61,
         source_stage="blocked_ai_score",
@@ -2552,7 +2877,10 @@ def test_scalp_sim_candidate_window_hypothesis_uses_sim_only_reserved_quota(monk
     sim_target = state_handlers.ACTIVE_TARGETS[0]
     assert sim_target["ldm_hypothesis_matched"] is True
     assert sim_target["ldm_hypothesis_id"] == "ldm_hypothesis_test"
-    assert sim_target["scalp_sim_candidate_window_quota_policy"] == "ldm_hypothesis_observation_plan_v1"
+    assert (
+        sim_target["scalp_sim_candidate_window_quota_policy"]
+        == "ldm_hypothesis_observation_plan_v1"
+    )
     assert sim_target["actual_order_submitted"] is False
     assert sim_target["broker_order_forbidden"] is True
     armed = next(fields for stage, fields in logs if stage == "scalp_sim_entry_armed")
@@ -2561,7 +2889,9 @@ def test_scalp_sim_candidate_window_hypothesis_uses_sim_only_reserved_quota(monk
     assert armed["quota_policy"] == "ldm_hypothesis_observation_plan_v1"
 
 
-def test_scalp_sim_policy_loader_accepts_legacy_ldm_hypothesis_forbidden_use_alias(monkeypatch, tmp_path):
+def test_scalp_sim_policy_loader_accepts_legacy_ldm_hypothesis_forbidden_use_alias(
+    monkeypatch, tmp_path
+):
     catalog_path = tmp_path / "scalp_sim_policy_catalog_2026-06-01.json"
     catalog_path.write_text(
         json.dumps(
@@ -2576,8 +2906,16 @@ def test_scalp_sim_policy_loader_accepts_legacy_ldm_hypothesis_forbidden_use_ali
                             "soft_hypothesis_id": "ldm_hypothesis_legacy_alias",
                             "rank": 1,
                             "observable_requirements": [
-                                {"field": "entry_score_parent", "op": "eq", "value": "score_watch_recovery"},
-                                {"field": "entry_source_parent", "op": "eq", "value": "entry_source_wait6579"},
+                                {
+                                    "field": "entry_score_parent",
+                                    "op": "eq",
+                                    "value": "score_watch_recovery",
+                                },
+                                {
+                                    "field": "entry_source_parent",
+                                    "op": "eq",
+                                    "value": "entry_source_wait6579",
+                                },
                             ],
                             "runtime_effect": False,
                             "allowed_runtime_apply": False,
@@ -2613,7 +2951,9 @@ def test_scalp_sim_policy_loader_accepts_legacy_ldm_hypothesis_forbidden_use_ali
     assert cache["hypotheses"][0]["soft_hypothesis_id"] == "ldm_hypothesis_legacy_alias"
 
 
-def test_scalp_sim_policy_loader_rejects_invalid_hypothesis_contract(monkeypatch, tmp_path):
+def test_scalp_sim_policy_loader_rejects_invalid_hypothesis_contract(
+    monkeypatch, tmp_path
+):
     catalog_path = tmp_path / "scalp_sim_policy_catalog_2026-06-01.json"
     catalog_path.write_text(
         json.dumps(
@@ -2627,7 +2967,11 @@ def test_scalp_sim_policy_loader_rejects_invalid_hypothesis_contract(monkeypatch
                         {
                             "soft_hypothesis_id": "invalid_missing_forbidden_uses",
                             "observable_requirements": [
-                                {"field": "entry_score_parent", "op": "eq", "value": "score_watch_recovery"}
+                                {
+                                    "field": "entry_score_parent",
+                                    "op": "eq",
+                                    "value": "score_watch_recovery",
+                                }
                             ],
                             "runtime_effect": False,
                             "allowed_runtime_apply": False,
@@ -2637,7 +2981,11 @@ def test_scalp_sim_policy_loader_rejects_invalid_hypothesis_contract(monkeypatch
                         {
                             "soft_hypothesis_id": "invalid_post_arm_requirement",
                             "observable_requirements": [
-                                {"field": "submit_quality_parent", "op": "eq", "value": "submit_stale_context_or_quote"}
+                                {
+                                    "field": "submit_quality_parent",
+                                    "op": "eq",
+                                    "value": "submit_stale_context_or_quote",
+                                }
                             ],
                             "runtime_effect": False,
                             "allowed_runtime_apply": False,
@@ -2709,7 +3057,10 @@ def test_scalp_sim_candidate_window_enforces_ldm_sample_quota_sim_only(monkeypat
         "target_buy_price": 10_000,
         "last_watching_ai_action": "WAIT",
     }
-    ws_data = {"curr": 10_000, "orderbook": {"asks": [{"price": 10_000}], "bids": [{"price": 9_990}]}}
+    ws_data = {
+        "curr": 10_000,
+        "orderbook": {"asks": [{"price": 10_000}], "bids": [{"price": 9_990}]},
+    }
     ai_decision = {"action": "WAIT", "score": 61, "reason": "sample"}
 
     assert state_handlers._maybe_arm_scalp_sim_candidate_window(
@@ -2747,7 +3098,9 @@ def test_scalp_sim_candidate_window_enforces_ldm_sample_quota_sim_only(monkeypat
     assert logs[-1][1]["decision_authority"] == "sim_observation_only"
 
     state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_CREATED["2026-05-20"] = 7
-    state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_SOURCE_CREATED[("2026-05-20", "blocked_ai_score")] = 6
+    state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_SOURCE_CREATED[
+        ("2026-05-20", "blocked_ai_score")
+    ] = 6
     assert not state_handlers._maybe_arm_scalp_sim_candidate_window(
         stock=stock.copy(),
         code="654324",
@@ -2812,7 +3165,9 @@ def test_scalp_sim_scale_in_window_expansion_returns_sim_only_action(monkeypatch
     assert action["decision_authority"] == "sim_observation_only"
 
 
-def test_scalp_simulator_preset_tp_touch_flows_to_trailing_without_real_sell(monkeypatch):
+def test_scalp_simulator_preset_tp_touch_flows_to_trailing_without_real_sell(
+    monkeypatch,
+):
     holding_logs = []
     monkeypatch.setattr(
         state_handlers,
@@ -2870,7 +3225,9 @@ def test_scalp_simulator_preset_tp_touch_flows_to_trailing_without_real_sell(mon
         for stage, fields in holding_logs
         if stage == "exit_signal"
     )
-    assert not any(stage == "scalp_sim_sell_order_assumed_filled" for stage, _ in holding_logs)
+    assert not any(
+        stage == "scalp_sim_sell_order_assumed_filled" for stage, _ in holding_logs
+    )
 
 
 def test_scalp_simulator_sell_profit_uses_assumed_fill_price(monkeypatch):
@@ -2930,9 +3287,16 @@ def test_scalp_simulator_sell_profit_uses_assumed_fill_price(monkeypatch):
     expected_profit = state_handlers.calculate_net_profit_rate(10_000, 10_130)
     assert stock["sell_price"] == 10_130
     assert stock["profit_rate"] == expected_profit
-    event = next(fields for stage, fields in holding_logs if stage == "scalp_sim_sell_order_assumed_filled")
+    event = next(
+        fields
+        for stage, fields in holding_logs
+        if stage == "scalp_sim_sell_order_assumed_filled"
+    )
     assert event["profit_rate"] == f"{expected_profit:+.2f}"
-    assert event["trigger_profit_rate"] == f"{state_handlers.calculate_net_profit_rate(10_000, 10_150):+.2f}"
+    assert (
+        event["trigger_profit_rate"]
+        == f"{state_handlers.calculate_net_profit_rate(10_000, 10_150):+.2f}"
+    )
     assert event["decision_authority"] == "sim_observation_only"
     assert event["current_ai_score"] == 76
     assert event["ai_score_raw"] == 79
@@ -2955,7 +3319,9 @@ def test_scalp_simulator_scale_in_does_not_call_real_buy(monkeypatch):
         "_log_holding_pipeline",
         lambda stock, code, stage, **fields: holding_logs.append((stage, fields)),
     )
-    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000
+    )
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_buy_order",
@@ -3021,7 +3387,9 @@ def test_scalp_simulator_scale_in_does_not_call_real_buy(monkeypatch):
     assert res["simulated_order"] is True
     assert stock["buy_qty"] == 2
     assert stock["actual_order_submitted"] is False
-    assert any(stage == "scalp_sim_scale_in_order_assumed_filled" for stage, _ in holding_logs)
+    assert any(
+        stage == "scalp_sim_scale_in_order_assumed_filled" for stage, _ in holding_logs
+    )
 
 
 def test_scalp_simulator_scale_in_dynamic_qty_ignores_real_one_share_cap(monkeypatch):
@@ -3058,7 +3426,9 @@ def test_scalp_simulator_scale_in_dynamic_qty_ignores_real_one_share_cap(monkeyp
     assert details["qty"] == 3
 
 
-def test_real_scalp_scale_in_uses_orderable_percent_budget_without_one_share_cap(monkeypatch):
+def test_real_scalp_scale_in_uses_orderable_percent_budget_without_one_share_cap(
+    monkeypatch,
+):
     rules = replace(
         CONFIG,
         INVEST_RATIO_SCALPING_MIN=0.10,
@@ -3166,7 +3536,9 @@ def test_real_scalp_pyramid_uses_dynamic_budget_for_one_share_position(monkeypat
     assert details["pyramid_position_ratio_cap_applied"] is False
 
 
-def test_real_scalp_pyramid_uses_dynamic_budget_qty_without_existing_position_ratio_cap(monkeypatch):
+def test_real_scalp_pyramid_uses_dynamic_budget_qty_without_existing_position_ratio_cap(
+    monkeypatch,
+):
     rules = replace(
         CONFIG,
         INVEST_RATIO_SCALPING_MIN=0.10,
@@ -3229,7 +3601,9 @@ def test_real_scalp_pyramid_uses_dynamic_budget_qty_without_existing_position_ra
     assert details["pyramid_position_ratio_cap_applied"] is False
 
 
-def test_real_scalp_scale_in_min_one_share_floor_when_percent_budget_is_below_price(monkeypatch):
+def test_real_scalp_scale_in_min_one_share_floor_when_percent_budget_is_below_price(
+    monkeypatch,
+):
     rules = replace(
         CONFIG,
         INVEST_RATIO_SCALPING_MIN=0.10,
@@ -3279,7 +3653,9 @@ def test_scalp_simulator_scale_in_uses_virtual_budget_not_real_deposit(monkeypat
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "get_deposit",
-        lambda *args, **kwargs: pytest.fail("scalp sim scale-in must not read real deposit"),
+        lambda *args, **kwargs: pytest.fail(
+            "scalp sim scale-in must not read real deposit"
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -3328,7 +3704,11 @@ def test_scalp_simulator_scale_in_uses_virtual_budget_not_real_deposit(monkeypat
 
     assert res["simulated_order"] is True
     assert stock["actual_order_submitted"] is False
-    filled = next(fields for stage, fields in holding_logs if stage == "scalp_sim_scale_in_order_assumed_filled")
+    filled = next(
+        fields
+        for stage, fields in holding_logs
+        if stage == "scalp_sim_scale_in_order_assumed_filled"
+    )
     assert filled["virtual_budget_override"] is True
     assert filled["virtual_budget_krw"] == 10_000_000
     assert filled["budget_authority"] == "sim_virtual_not_real_orderable_amount"
@@ -3344,7 +3724,9 @@ def test_swing_probe_scale_in_uses_virtual_budget_not_real_deposit(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "get_deposit",
-        lambda *args, **kwargs: pytest.fail("swing probe scale-in must not read real deposit"),
+        lambda *args, **kwargs: pytest.fail(
+            "swing probe scale-in must not read real deposit"
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -3381,14 +3763,21 @@ def test_swing_probe_scale_in_uses_virtual_budget_not_real_deposit(monkeypatch):
     res = state_handlers.execute_scale_in_order(
         stock=stock,
         code="654321",
-        ws_data={"curr": 10_000, "orderbook": {"asks": [{"price": 10_010}], "bids": [{"price": 9_990}]}},
+        ws_data={
+            "curr": 10_000,
+            "orderbook": {"asks": [{"price": 10_010}], "bids": [{"price": 9_990}]},
+        },
         action={"add_type": "AVG_DOWN", "reason": "swing_avg_down_ok"},
         admin_id=None,
     )
 
     assert res["simulated_order"] is True
     assert stock["actual_order_submitted"] is False
-    filled = next(fields for stage, fields in holding_logs if stage == "swing_probe_scale_in_order_assumed_filled")
+    filled = next(
+        fields
+        for stage, fields in holding_logs
+        if stage == "swing_probe_scale_in_order_assumed_filled"
+    )
     assert filled["virtual_budget_override"] is True
     assert filled["virtual_budget_krw"] == 10_000_000
     assert filled["budget_authority"] == "sim_virtual_not_real_orderable_amount"
@@ -3430,7 +3819,12 @@ def test_swing_probe_state_sync_removes_exited_and_restores_active(tmp_path):
             "simulation_book": "swing_intraday_live_equiv_probe",
             "swing_intraday_probe": True,
         },
-        {"code": "005930", "name": "삼성전자", "strategy": "SCALPING", "status": "WATCHING"},
+        {
+            "code": "005930",
+            "name": "삼성전자",
+            "strategy": "SCALPING",
+            "status": "WATCHING",
+        },
     ]
 
     result = state_handlers.sync_swing_intraday_probe_targets_from_state(targets)
@@ -3445,8 +3839,14 @@ def test_swing_probe_state_sync_removes_exited_and_restores_active(tmp_path):
 
 
 def test_scalp_simulator_threshold_stages_are_included():
-    assert threshold_family_for_stage("pre_submit_liquidity_guard_block") == "liquidity_pre_submit_guard_p1"
-    assert threshold_family_for_stage("caution_weak_liquidity_entry_block") == "caution_weak_liquidity_entry_block"
+    assert (
+        threshold_family_for_stage("pre_submit_liquidity_guard_block")
+        == "liquidity_pre_submit_guard_p1"
+    )
+    assert (
+        threshold_family_for_stage("caution_weak_liquidity_entry_block")
+        == "caution_weak_liquidity_entry_block"
+    )
     assert (
         threshold_family_for_stage("pre_submit_entry_ai_authority_guard_block")
         == "pre_submit_entry_ai_authority_guard"
@@ -3455,14 +3855,38 @@ def test_scalp_simulator_threshold_stages_are_included():
         threshold_family_for_stage("pre_submit_overbought_pullback_guard_block")
         == "overbought_pullback_guard_p1"
     )
-    assert threshold_family_for_stage("scalp_sim_entry_armed") == "entry_mechanical_momentum"
-    assert threshold_family_for_stage("pre_submit_price_guard_block") == "pre_submit_price_guard"
-    assert threshold_family_for_stage("entry_submit_revalidation_block") == "pre_submit_price_guard"
-    assert threshold_family_for_stage("entry_order_cancel_confirmed") == "entry_price_execution_quality"
-    assert threshold_family_for_stage("scalp_sim_entry_ai_price_applied") == "dynamic_entry_price_resolver"
-    assert threshold_family_for_stage("scalp_sim_entry_ai_price_skip_order") == "dynamic_entry_price_resolver"
-    assert threshold_family_for_stage("scalp_sim_entry_submit_revalidation_warning") == "dynamic_entry_price_resolver"
-    assert threshold_family_for_stage("scalp_sim_entry_submit_revalidation_block") == "dynamic_entry_price_resolver"
+    assert (
+        threshold_family_for_stage("scalp_sim_entry_armed")
+        == "entry_mechanical_momentum"
+    )
+    assert (
+        threshold_family_for_stage("pre_submit_price_guard_block")
+        == "pre_submit_price_guard"
+    )
+    assert (
+        threshold_family_for_stage("entry_submit_revalidation_block")
+        == "pre_submit_price_guard"
+    )
+    assert (
+        threshold_family_for_stage("entry_order_cancel_confirmed")
+        == "entry_price_execution_quality"
+    )
+    assert (
+        threshold_family_for_stage("scalp_sim_entry_ai_price_applied")
+        == "dynamic_entry_price_resolver"
+    )
+    assert (
+        threshold_family_for_stage("scalp_sim_entry_ai_price_skip_order")
+        == "dynamic_entry_price_resolver"
+    )
+    assert (
+        threshold_family_for_stage("scalp_sim_entry_submit_revalidation_warning")
+        == "dynamic_entry_price_resolver"
+    )
+    assert (
+        threshold_family_for_stage("scalp_sim_entry_submit_revalidation_block")
+        == "dynamic_entry_price_resolver"
+    )
     assert (
         threshold_family_for_stage("scalp_sim_pre_submit_liquidity_guard_would_block")
         == "liquidity_pre_submit_guard_p1"
@@ -3483,13 +3907,34 @@ def test_scalp_simulator_threshold_stages_are_included():
         threshold_family_for_stage("scalp_sim_pre_submit_overbought_guard_would_pass")
         == "overbought_pullback_guard_p1"
     )
-    assert threshold_family_for_stage("scalp_sim_buy_order_assumed_filled") == "dynamic_entry_price_resolver"
-    assert threshold_family_for_stage("scalp_sim_sell_order_assumed_filled") == "statistical_action_weight"
-    assert threshold_family_for_stage("scalp_sim_ai_holding_live_call") == "scalp_sim_ai_budget_manager"
-    assert threshold_family_for_stage("scalp_sim_ai_holding_reuse") == "scalp_sim_ai_budget_manager"
-    assert threshold_family_for_stage("scalp_sim_ai_holding_deferred") == "scalp_sim_ai_budget_manager"
-    assert threshold_family_for_stage("sim_ai_budget_exhausted") == "scalp_sim_ai_budget_manager"
-    assert threshold_family_for_stage("sim_ai_critical_bypass") == "scalp_sim_ai_budget_manager"
+    assert (
+        threshold_family_for_stage("scalp_sim_buy_order_assumed_filled")
+        == "dynamic_entry_price_resolver"
+    )
+    assert (
+        threshold_family_for_stage("scalp_sim_sell_order_assumed_filled")
+        == "statistical_action_weight"
+    )
+    assert (
+        threshold_family_for_stage("scalp_sim_ai_holding_live_call")
+        == "scalp_sim_ai_budget_manager"
+    )
+    assert (
+        threshold_family_for_stage("scalp_sim_ai_holding_reuse")
+        == "scalp_sim_ai_budget_manager"
+    )
+    assert (
+        threshold_family_for_stage("scalp_sim_ai_holding_deferred")
+        == "scalp_sim_ai_budget_manager"
+    )
+    assert (
+        threshold_family_for_stage("sim_ai_budget_exhausted")
+        == "scalp_sim_ai_budget_manager"
+    )
+    assert (
+        threshold_family_for_stage("sim_ai_critical_bypass")
+        == "scalp_sim_ai_budget_manager"
+    )
 
 
 def _sim_budget_rules(**overrides):
@@ -3527,13 +3972,19 @@ def _sim_holding_stock(**overrides):
 def test_scalp_sim_ai_budget_targets_sim_only_positions(monkeypatch):
     monkeypatch.setattr(state_handlers, "TRADING_RULES", _sim_budget_rules())
 
-    assert state_handlers._is_scalp_sim_ai_budget_target(_sim_holding_stock(), "SCALPING")
+    assert state_handlers._is_scalp_sim_ai_budget_target(
+        _sim_holding_stock(), "SCALPING"
+    )
     assert not state_handlers._is_scalp_sim_ai_budget_target(
         {"strategy": "SCALPING", "actual_order_submitted": True},
         "SCALPING",
     )
     assert not state_handlers._is_scalp_sim_ai_budget_target(
-        {"strategy": "SCALPING", "simulation_book": "scalp_ai_buy_all", "actual_order_submitted": True},
+        {
+            "strategy": "SCALPING",
+            "simulation_book": "scalp_ai_buy_all",
+            "actual_order_submitted": True,
+        },
         "SCALPING",
     )
 
@@ -3588,7 +4039,11 @@ def test_scalp_sim_ai_budget_reuses_unchanged_signature(monkeypatch):
 
 
 def test_scalp_sim_ai_budget_defers_when_cap_exhausted(monkeypatch):
-    monkeypatch.setattr(state_handlers, "TRADING_RULES", _sim_budget_rules(SCALP_SIM_AI_MAX_CALLS_PER_MIN=1))
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        _sim_budget_rules(SCALP_SIM_AI_MAX_CALLS_PER_MIN=1),
+    )
     state_handlers._SCALP_SIM_AI_CALL_TIMES[:] = [1020.0]
 
     decision = state_handlers._resolve_scalp_sim_ai_budget_decision(
@@ -3610,7 +4065,11 @@ def test_scalp_sim_ai_budget_defers_when_cap_exhausted(monkeypatch):
 
 
 def test_scalp_sim_ai_budget_critical_bypasses_cap(monkeypatch):
-    monkeypatch.setattr(state_handlers, "TRADING_RULES", _sim_budget_rules(SCALP_SIM_AI_MAX_CALLS_PER_MIN=1))
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        _sim_budget_rules(SCALP_SIM_AI_MAX_CALLS_PER_MIN=1),
+    )
     state_handlers._SCALP_SIM_AI_CALL_TIMES[:] = [1020.0]
 
     decision = state_handlers._resolve_scalp_sim_ai_budget_decision(
@@ -3635,7 +4094,11 @@ def test_scalp_sim_ai_budget_critical_bypasses_cap(monkeypatch):
 
 
 def test_scalp_sim_ai_budget_soft_loss_defers_instead_of_bypassing_cap(monkeypatch):
-    monkeypatch.setattr(state_handlers, "TRADING_RULES", _sim_budget_rules(SCALP_SIM_AI_MAX_CALLS_PER_MIN=1))
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        _sim_budget_rules(SCALP_SIM_AI_MAX_CALLS_PER_MIN=1),
+    )
     state_handlers._SCALP_SIM_AI_CALL_TIMES[:] = [1020.0]
 
     decision = state_handlers._resolve_scalp_sim_ai_budget_decision(
@@ -3660,7 +4123,11 @@ def test_scalp_sim_ai_budget_soft_loss_defers_instead_of_bypassing_cap(monkeypat
 
 
 def test_scalp_sim_ai_budget_hard_loss_bypasses_cap(monkeypatch):
-    monkeypatch.setattr(state_handlers, "TRADING_RULES", _sim_budget_rules(SCALP_SIM_AI_MAX_CALLS_PER_MIN=1))
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        _sim_budget_rules(SCALP_SIM_AI_MAX_CALLS_PER_MIN=1),
+    )
     state_handlers._SCALP_SIM_AI_CALL_TIMES[:] = [1020.0]
 
     decision = state_handlers._resolve_scalp_sim_ai_budget_decision(
@@ -3685,7 +4152,11 @@ def test_scalp_sim_ai_budget_hard_loss_bypasses_cap(monkeypatch):
 
 
 def test_scalp_sim_ai_budget_safe_profit_near_band_does_not_bypass_cap(monkeypatch):
-    monkeypatch.setattr(state_handlers, "TRADING_RULES", _sim_budget_rules(SCALP_SIM_AI_MAX_CALLS_PER_MIN=1))
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        _sim_budget_rules(SCALP_SIM_AI_MAX_CALLS_PER_MIN=1),
+    )
     state_handlers._SCALP_SIM_AI_CALL_TIMES[:] = [1020.0]
 
     decision = state_handlers._resolve_scalp_sim_ai_budget_decision(
@@ -3715,7 +4186,9 @@ def test_ws_prune_retains_active_scalp_simulator_consumer(monkeypatch):
     fake_bus = FakeEventBus()
     monkeypatch.setattr(sniper_runtime, "WS_MANAGER", FakeWS())
     monkeypatch.setattr(sniper_runtime, "event_bus", fake_bus)
-    monkeypatch.setattr(sniper_runtime, "should_retain_ws_subscription", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        sniper_runtime, "should_retain_ws_subscription", lambda *args, **kwargs: False
+    )
 
     sniper_runtime._prune_ws_subscriptions_for_inactive_targets(
         [
@@ -3772,7 +4245,9 @@ def test_scalp_simulator_restore_skips_synthetic_state(monkeypatch, tmp_path):
     assert [target["code"] for target in targets] == ["005930"]
 
 
-def test_sync_scalp_simulator_targets_prunes_memory_rows_missing_from_state(monkeypatch, tmp_path):
+def test_sync_scalp_simulator_targets_prunes_memory_rows_missing_from_state(
+    monkeypatch, tmp_path
+):
     state_path = tmp_path / "scalp_live_sim_state.json"
     state_path.write_text(
         """
@@ -3843,7 +4318,9 @@ def test_sync_scalp_simulator_targets_restores_state_rows(monkeypatch, tmp_path)
     assert [target["sim_record_id"] for target in targets] == ["SIM-ACTIVE"]
 
 
-def test_sync_scalp_simulator_targets_if_state_changed_prunes_external_preclose_sell(monkeypatch, tmp_path):
+def test_sync_scalp_simulator_targets_if_state_changed_prunes_external_preclose_sell(
+    monkeypatch, tmp_path
+):
     state_path = tmp_path / "scalp_live_sim_state.json"
     state_path.write_text(
         """
@@ -3884,14 +4361,18 @@ def test_sync_scalp_simulator_targets_if_state_changed_prunes_external_preclose_
     )
     os.utime(state_path, ns=(last_mtime + 1_000_000_000, last_mtime + 1_000_000_000))
 
-    result = state_handlers.sync_scalp_simulator_targets_if_state_changed(targets, last_mtime=last_mtime)
+    result = state_handlers.sync_scalp_simulator_targets_if_state_changed(
+        targets, last_mtime=last_mtime
+    )
 
     assert result["synced"] is True
     assert result["removed"] == 1
     assert targets == []
 
 
-def test_sync_scalp_simulator_targets_if_state_unchanged_does_not_prune(monkeypatch, tmp_path):
+def test_sync_scalp_simulator_targets_if_state_unchanged_does_not_prune(
+    monkeypatch, tmp_path
+):
     state_path = tmp_path / "scalp_live_sim_state.json"
     state_path.write_text(
         '{"schema_version":1,"simulation_book":"scalp_ai_buy_all","active_positions":[]}',
@@ -3918,7 +4399,9 @@ def test_sync_scalp_simulator_targets_if_state_unchanged_does_not_prune(monkeypa
     assert len(targets) == 1
 
 
-def test_persist_scalp_simulator_state_reconciles_external_preclose_sell(monkeypatch, tmp_path):
+def test_persist_scalp_simulator_state_reconciles_external_preclose_sell(
+    monkeypatch, tmp_path
+):
     state_path = tmp_path / "scalp_live_sim_state.json"
     state_path.write_text(
         """
@@ -3953,7 +4436,9 @@ def test_persist_scalp_simulator_state_reconciles_external_preclose_sell(monkeyp
         }
     ]
     last_mtime = state_path.stat().st_mtime_ns
-    monkeypatch.setattr(state_handlers, "_SCALP_SIM_STATE_LAST_SEEN_MTIME_NS", last_mtime)
+    monkeypatch.setattr(
+        state_handlers, "_SCALP_SIM_STATE_LAST_SEEN_MTIME_NS", last_mtime
+    )
     state_path.write_text(
         '{"schema_version":1,"simulation_book":"scalp_ai_buy_all","active_positions":[]}',
         encoding="utf-8",
@@ -4049,7 +4534,10 @@ def test_daily_threshold_cycle_report_keeps_scalp_sim_completed_rows_diagnostic_
     assert report["summary"]["completed_valid_rolling_7d"] == 1
     assert report["completed_by_source"]["combined"]["sample"] == 2
     assert report["completed_by_source"]["sim"]["sample"] == 1
-    assert report["completed_by_source"]["combined_authority"] == "diagnostic_only_not_family_candidate_input"
+    assert (
+        report["completed_by_source"]["combined_authority"]
+        == "diagnostic_only_not_family_candidate_input"
+    )
     assert report["scalp_simulator"]["sell_completed"] == 1
 
 

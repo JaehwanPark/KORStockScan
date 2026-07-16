@@ -5,7 +5,10 @@ from src.engine.scalping import tight_stop_entry_companion_report as mod
 
 def _write_jsonl(path, rows):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n", encoding="utf-8")
+    path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _event(stage, emitted_at, *, record_id, profit_rate=None, **fields):
@@ -25,7 +28,15 @@ def _event(stage, emitted_at, *, record_id, profit_rate=None, **fields):
     return payload
 
 
-def _entry_path(record_id, *, pressure=90, tick_accel=1.25, micro_vwap=12, quote_age=120, stop_first=False):
+def _entry_path(
+    record_id,
+    *,
+    pressure=90,
+    tick_accel=1.25,
+    micro_vwap=12,
+    quote_age=120,
+    stop_first=False,
+):
     entry = _event(
         "order_bundle_submitted",
         "2026-07-10T09:00:00+09:00",
@@ -41,18 +52,40 @@ def _entry_path(record_id, *, pressure=90, tick_accel=1.25, micro_vwap=12, quote
     )
     if stop_first:
         path = [
-            _event("holding_mark", "2026-07-10T09:01:00+09:00", record_id=record_id, profit_rate=-0.8),
-            _event("holding_mark", "2026-07-10T09:04:00+09:00", record_id=record_id, profit_rate=0.4),
+            _event(
+                "holding_mark",
+                "2026-07-10T09:01:00+09:00",
+                record_id=record_id,
+                profit_rate=-0.8,
+            ),
+            _event(
+                "holding_mark",
+                "2026-07-10T09:04:00+09:00",
+                record_id=record_id,
+                profit_rate=0.4,
+            ),
         ]
     else:
         path = [
-            _event("holding_mark", "2026-07-10T09:01:00+09:00", record_id=record_id, profit_rate=0.35),
-            _event("holding_mark", "2026-07-10T09:04:00+09:00", record_id=record_id, profit_rate=-0.2),
+            _event(
+                "holding_mark",
+                "2026-07-10T09:01:00+09:00",
+                record_id=record_id,
+                profit_rate=0.35,
+            ),
+            _event(
+                "holding_mark",
+                "2026-07-10T09:04:00+09:00",
+                record_id=record_id,
+                profit_rate=-0.2,
+            ),
         ]
     return [entry, *path]
 
 
-def test_tight_stop_entry_companion_report_surfaces_source_only_companion_candidates(tmp_path, monkeypatch):
+def test_tight_stop_entry_companion_report_surfaces_source_only_companion_candidates(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", tmp_path / "pipeline_events")
     monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "report")
     monkeypatch.setattr(mod, "is_krx_trading_day", lambda day: True)
@@ -77,19 +110,39 @@ def test_tight_stop_entry_companion_report_surfaces_source_only_companion_candid
     for idx in range(20):
         rows.extend(_entry_path(f"good-{idx}"))
     for idx in range(5):
-        rows.extend(_entry_path(f"bad-{idx}", pressure=45, tick_accel=0.8, micro_vwap=-20, stop_first=True))
+        rows.extend(
+            _entry_path(
+                f"bad-{idx}",
+                pressure=45,
+                tick_accel=0.8,
+                micro_vwap=-20,
+                stop_first=True,
+            )
+        )
     _write_jsonl(mod.PIPELINE_EVENTS_DIR / "pipeline_events_2026-07-10.jsonl", rows)
 
-    report = mod.build_report("2026-07-10", start_date="2026-07-10", end_date="2026-07-10")
+    report = mod.build_report(
+        "2026-07-10", start_date="2026-07-10", end_date="2026-07-10"
+    )
 
     assert report["allowed_runtime_apply"] is False
     assert report["runtime_effect"] is False
     assert report["summary"]["entry_path_sample_count"] == 25
     assert report["summary"]["overall"]["mfe_before_tight_stop_rate"] == 0.8
     assert report["summary"]["overall"]["tight_stop_first_rate"] == 0.2
-    assert report["summary"]["row_authority_counts"] == {"real_submitted_path_observation": 25}
-    assert report["summary"]["companion_candidate_policy"]["exclude_unknown_context"] is True
-    assert report["summary"]["companion_candidate_policy"]["require_positive_survival_edge"] is True
+    assert report["summary"]["row_authority_counts"] == {
+        "real_submitted_path_observation": 25
+    }
+    assert (
+        report["summary"]["companion_candidate_policy"]["exclude_unknown_context"]
+        is True
+    )
+    assert (
+        report["summary"]["companion_candidate_policy"][
+            "require_positive_survival_edge"
+        ]
+        is True
+    )
     assert report["metric_contract"]["metric_role"] == "diagnostic_win_rate"
     assert report["companion_candidates"]
     assert report["companion_candidates"][0]["allowed_runtime_apply"] is False
@@ -99,11 +152,17 @@ def test_tight_stop_entry_companion_report_surfaces_source_only_companion_candid
     assert report["real_submitted_path_validation"]["allowed_runtime_apply"] is False
 
 
-def test_tight_stop_entry_companion_report_filters_unknown_and_negative_candidates(tmp_path, monkeypatch):
+def test_tight_stop_entry_companion_report_filters_unknown_and_negative_candidates(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", tmp_path / "pipeline_events")
     monkeypatch.setattr(mod, "is_krx_trading_day", lambda day: True)
     monkeypatch.setattr(mod, "filter_allowed_dates", lambda dates, policy: (dates, []))
-    monkeypatch.setattr(mod, "clean_baseline_policy", lambda: {"clean_tuning_baseline_date": "2026-06-04"})
+    monkeypatch.setattr(
+        mod,
+        "clean_baseline_policy",
+        lambda: {"clean_tuning_baseline_date": "2026-06-04"},
+    )
     monkeypatch.setattr(
         mod,
         "load_source_quality_preflight",
@@ -138,12 +197,17 @@ def test_tight_stop_entry_companion_report_filters_unknown_and_negative_candidat
         rows.extend(_entry_path(f"known-bad-{idx}", stop_first=True))
     _write_jsonl(mod.PIPELINE_EVENTS_DIR / "pipeline_events_2026-07-10.jsonl", rows)
 
-    report = mod.build_report("2026-07-10", start_date="2026-07-10", end_date="2026-07-10")
+    report = mod.build_report(
+        "2026-07-10", start_date="2026-07-10", end_date="2026-07-10"
+    )
 
     assert report["summary"]["entry_path_sample_count"] == 40
     assert report["companion_candidates"] == []
     assert report["summary"]["top_companion_candidate_count"] == 0
-    assert report["real_submitted_path_validation"]["decision"] == "hold_no_positive_real_submitted_pattern"
+    assert (
+        report["real_submitted_path_validation"]["decision"]
+        == "hold_no_positive_real_submitted_pattern"
+    )
     assert report["real_submitted_path_validation"]["companion_candidates"] == []
 
 
@@ -151,7 +215,11 @@ def test_tight_stop_entry_companion_report_blocks_missing_source(tmp_path, monke
     monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", tmp_path / "pipeline_events")
     monkeypatch.setattr(mod, "is_krx_trading_day", lambda day: True)
     monkeypatch.setattr(mod, "filter_allowed_dates", lambda dates, policy: (dates, []))
-    monkeypatch.setattr(mod, "clean_baseline_policy", lambda: {"clean_tuning_baseline_date": "2026-06-04"})
+    monkeypatch.setattr(
+        mod,
+        "clean_baseline_policy",
+        lambda: {"clean_tuning_baseline_date": "2026-06-04"},
+    )
     monkeypatch.setattr(
         mod,
         "load_source_quality_preflight",
@@ -164,18 +232,26 @@ def test_tight_stop_entry_companion_report_blocks_missing_source(tmp_path, monke
         },
     )
 
-    report = mod.build_report("2026-07-10", start_date="2026-07-10", end_date="2026-07-10")
+    report = mod.build_report(
+        "2026-07-10", start_date="2026-07-10", end_date="2026-07-10"
+    )
 
     assert report["source_quality"]["status"] == "source_quality_blocked"
     assert report["allowed_runtime_apply"] is False
     assert report["summary"]["entry_path_sample_count"] == 0
 
 
-def test_tight_stop_entry_companion_report_excludes_sell_order_paths(tmp_path, monkeypatch):
+def test_tight_stop_entry_companion_report_excludes_sell_order_paths(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", tmp_path / "pipeline_events")
     monkeypatch.setattr(mod, "is_krx_trading_day", lambda day: True)
     monkeypatch.setattr(mod, "filter_allowed_dates", lambda dates, policy: (dates, []))
-    monkeypatch.setattr(mod, "clean_baseline_policy", lambda: {"clean_tuning_baseline_date": "2026-06-04"})
+    monkeypatch.setattr(
+        mod,
+        "clean_baseline_policy",
+        lambda: {"clean_tuning_baseline_date": "2026-06-04"},
+    )
     monkeypatch.setattr(
         mod,
         "load_source_quality_preflight",
@@ -197,22 +273,35 @@ def test_tight_stop_entry_companion_report_excludes_sell_order_paths(tmp_path, m
             ai_action="SELL_TODAY",
             pipeline="EXIT_PIPELINE",
         ),
-        _event("holding_mark", "2026-07-10T09:01:00+09:00", record_id="sell-1", profit_rate=0.5),
+        _event(
+            "holding_mark",
+            "2026-07-10T09:01:00+09:00",
+            record_id="sell-1",
+            profit_rate=0.5,
+        ),
     ]
     rows.extend(_entry_path("buy-1"))
     _write_jsonl(mod.PIPELINE_EVENTS_DIR / "pipeline_events_2026-07-10.jsonl", rows)
 
-    report = mod.build_report("2026-07-10", start_date="2026-07-10", end_date="2026-07-10")
+    report = mod.build_report(
+        "2026-07-10", start_date="2026-07-10", end_date="2026-07-10"
+    )
 
     assert report["summary"]["entry_path_sample_count"] == 1
     assert report["entry_path_rows"][0]["key"] == "2026-07-10:real:buy-1"
 
 
-def test_tight_stop_entry_companion_report_filters_blocked_source_dates(tmp_path, monkeypatch):
+def test_tight_stop_entry_companion_report_filters_blocked_source_dates(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", tmp_path / "pipeline_events")
     monkeypatch.setattr(mod, "is_krx_trading_day", lambda day: True)
     monkeypatch.setattr(mod, "filter_allowed_dates", lambda dates, policy: (dates, []))
-    monkeypatch.setattr(mod, "clean_baseline_policy", lambda: {"clean_tuning_baseline_date": "2026-06-04"})
+    monkeypatch.setattr(
+        mod,
+        "clean_baseline_policy",
+        lambda: {"clean_tuning_baseline_date": "2026-06-04"},
+    )
 
     def _preflight(source_date):
         if source_date == "2026-07-09":
@@ -233,24 +322,41 @@ def test_tight_stop_entry_companion_report_filters_blocked_source_dates(tmp_path
         }
 
     monkeypatch.setattr(mod, "load_source_quality_preflight", _preflight)
-    _write_jsonl(mod.PIPELINE_EVENTS_DIR / "pipeline_events_2026-07-09.jsonl", _entry_path("blocked-1"))
-    _write_jsonl(mod.PIPELINE_EVENTS_DIR / "pipeline_events_2026-07-10.jsonl", _entry_path("passed-1"))
+    _write_jsonl(
+        mod.PIPELINE_EVENTS_DIR / "pipeline_events_2026-07-09.jsonl",
+        _entry_path("blocked-1"),
+    )
+    _write_jsonl(
+        mod.PIPELINE_EVENTS_DIR / "pipeline_events_2026-07-10.jsonl",
+        _entry_path("passed-1"),
+    )
 
-    report = mod.build_report("2026-07-10", start_date="2026-07-09", end_date="2026-07-10")
+    report = mod.build_report(
+        "2026-07-10", start_date="2026-07-09", end_date="2026-07-10"
+    )
 
     assert report["source_dates"] == ["2026-07-10"]
     assert report["summary"]["entry_path_sample_count"] == 1
     assert report["entry_path_rows"][0]["key"] == "2026-07-10:real:passed-1"
     assert report["source_quality"]["status"] == "warning_source_quality_excluded"
     assert report["source_quality"]["source_date_preflight"]["blocked_count"] == 1
-    assert report["source_quality"]["source_date_preflight"]["blocked_dates"][0]["date"] == "2026-07-09"
+    assert (
+        report["source_quality"]["source_date_preflight"]["blocked_dates"][0]["date"]
+        == "2026-07-09"
+    )
 
 
-def test_tight_stop_entry_companion_report_preserves_zero_feature_values(tmp_path, monkeypatch):
+def test_tight_stop_entry_companion_report_preserves_zero_feature_values(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", tmp_path / "pipeline_events")
     monkeypatch.setattr(mod, "is_krx_trading_day", lambda day: True)
     monkeypatch.setattr(mod, "filter_allowed_dates", lambda dates, policy: (dates, []))
-    monkeypatch.setattr(mod, "clean_baseline_policy", lambda: {"clean_tuning_baseline_date": "2026-06-04"})
+    monkeypatch.setattr(
+        mod,
+        "clean_baseline_policy",
+        lambda: {"clean_tuning_baseline_date": "2026-06-04"},
+    )
     monkeypatch.setattr(
         mod,
         "load_source_quality_preflight",
@@ -278,11 +384,18 @@ def test_tight_stop_entry_companion_report_preserves_zero_feature_values(tmp_pat
             micro_vwap_bp=-20,
             quote_age_ms=0,
         ),
-        _event("holding_mark", "2026-07-10T09:01:00+09:00", record_id="zero-1", profit_rate=0.35),
+        _event(
+            "holding_mark",
+            "2026-07-10T09:01:00+09:00",
+            record_id="zero-1",
+            profit_rate=0.35,
+        ),
     ]
     _write_jsonl(mod.PIPELINE_EVENTS_DIR / "pipeline_events_2026-07-10.jsonl", rows)
 
-    report = mod.build_report("2026-07-10", start_date="2026-07-10", end_date="2026-07-10")
+    report = mod.build_report(
+        "2026-07-10", start_date="2026-07-10", end_date="2026-07-10"
+    )
     row = report["entry_path_rows"][0]
 
     assert row["score"] == 0.0
@@ -297,11 +410,17 @@ def test_tight_stop_entry_companion_report_preserves_zero_feature_values(tmp_pat
     assert row["quote_age_bucket"] == "quote_age_le300ms"
 
 
-def test_tight_stop_entry_companion_report_maps_scalp_sim_entry_context(tmp_path, monkeypatch):
+def test_tight_stop_entry_companion_report_maps_scalp_sim_entry_context(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", tmp_path / "pipeline_events")
     monkeypatch.setattr(mod, "is_krx_trading_day", lambda day: True)
     monkeypatch.setattr(mod, "filter_allowed_dates", lambda dates, policy: (dates, []))
-    monkeypatch.setattr(mod, "clean_baseline_policy", lambda: {"clean_tuning_baseline_date": "2026-06-04"})
+    monkeypatch.setattr(
+        mod,
+        "clean_baseline_policy",
+        lambda: {"clean_tuning_baseline_date": "2026-06-04"},
+    )
     monkeypatch.setattr(
         mod,
         "load_source_quality_preflight",
@@ -338,7 +457,9 @@ def test_tight_stop_entry_companion_report_maps_scalp_sim_entry_context(tmp_path
     ]
     _write_jsonl(mod.PIPELINE_EVENTS_DIR / "pipeline_events_2026-07-10.jsonl", rows)
 
-    report = mod.build_report("2026-07-10", start_date="2026-07-10", end_date="2026-07-10")
+    report = mod.build_report(
+        "2026-07-10", start_date="2026-07-10", end_date="2026-07-10"
+    )
     row = report["entry_path_rows"][0]
 
     assert row["row_authority"] == "sim_assumed_fill_path_observation"
@@ -352,11 +473,17 @@ def test_tight_stop_entry_companion_report_maps_scalp_sim_entry_context(tmp_path
     assert row["quote_age_bucket"] == "quote_age_301_1000ms"
 
 
-def test_tight_stop_entry_companion_report_merges_parent_pipeline_context(tmp_path, monkeypatch):
+def test_tight_stop_entry_companion_report_merges_parent_pipeline_context(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", tmp_path / "pipeline_events")
     monkeypatch.setattr(mod, "is_krx_trading_day", lambda day: True)
     monkeypatch.setattr(mod, "filter_allowed_dates", lambda dates, policy: (dates, []))
-    monkeypatch.setattr(mod, "clean_baseline_policy", lambda: {"clean_tuning_baseline_date": "2026-06-04"})
+    monkeypatch.setattr(
+        mod,
+        "clean_baseline_policy",
+        lambda: {"clean_tuning_baseline_date": "2026-06-04"},
+    )
     monkeypatch.setattr(
         mod,
         "load_source_quality_preflight",
@@ -398,7 +525,9 @@ def test_tight_stop_entry_companion_report_merges_parent_pipeline_context(tmp_pa
     ]
     _write_jsonl(mod.PIPELINE_EVENTS_DIR / "pipeline_events_2026-07-10.jsonl", rows)
 
-    report = mod.build_report("2026-07-10", start_date="2026-07-10", end_date="2026-07-10")
+    report = mod.build_report(
+        "2026-07-10", start_date="2026-07-10", end_date="2026-07-10"
+    )
     row = report["entry_path_rows"][0]
 
     assert row["key"] == "2026-07-10:sim:SIM-2"

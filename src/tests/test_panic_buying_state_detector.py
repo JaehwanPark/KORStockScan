@@ -9,7 +9,6 @@ from src.engine.panic_buying_state_detector import (
     summarize_microstructure_detector_from_events,
 )
 
-
 BASE = datetime.fromisoformat("2026-05-13T10:00:00")
 
 
@@ -34,7 +33,9 @@ def _candle(
 
 
 def _trade(offset: int, *, buy: float, sell: float):
-    return PanicBuyingTradeFlow(ts=BASE + timedelta(minutes=offset), buy_volume=buy, sell_volume=sell)
+    return PanicBuyingTradeFlow(
+        ts=BASE + timedelta(minutes=offset), buy_volume=buy, sell_volume=sell
+    )
 
 
 def _book(
@@ -91,12 +92,28 @@ def _enter_panic_buy(detector: PanicBuyingStateDetector):
     detector.update(
         _candle(2, 102.6, open_=100.0, high=102.8, low=99.9, volume=430),
         _trade(2, buy=76, sell=24),
-        _book(2, bid_depth=1300, ask_depth=520, spread_ratio=2.0, ofi_z=3.0, ask_drop=0.48, state="bullish"),
+        _book(
+            2,
+            bid_depth=1300,
+            ask_depth=520,
+            spread_ratio=2.0,
+            ofi_z=3.0,
+            ask_drop=0.48,
+            state="bullish",
+        ),
     )
     return detector.update(
         _candle(3, 103.2, open_=102.5, high=103.4, low=102.4, volume=440),
         _trade(3, buy=75, sell=25),
-        _book(3, bid_depth=1350, ask_depth=500, spread_ratio=2.1, ofi_z=3.1, ask_drop=0.50, state="bullish"),
+        _book(
+            3,
+            bid_depth=1350,
+            ask_depth=500,
+            spread_ratio=2.1,
+            ofi_z=3.1,
+            ask_drop=0.50,
+            state="bullish",
+        ),
     )
 
 
@@ -173,7 +190,9 @@ def test_microstructure_summary_exposes_static_threshold_contract():
                 "stock_code": "000001",
                 "stock_name": "테스트종목",
                 "record_id": 1,
-                "emitted_at": (BASE + timedelta(minutes=offset)).isoformat(timespec="seconds"),
+                "emitted_at": (BASE + timedelta(minutes=offset)).isoformat(
+                    timespec="seconds"
+                ),
                 "fields": {
                     "curr_price": close,
                     "volume": 100,
@@ -185,12 +204,17 @@ def test_microstructure_summary_exposes_static_threshold_contract():
             }
         )
 
-    summary = summarize_microstructure_detector_from_events(events, as_of=BASE + timedelta(minutes=3))
+    summary = summarize_microstructure_detector_from_events(
+        events, as_of=BASE + timedelta(minutes=3)
+    )
 
     assert summary["threshold_mode"] == "static_fallback"
     assert summary["threshold_contract"]["decision_authority"] == "source_quality_only"
     assert summary["threshold_contract"]["runtime_effect"] == "report_only_no_mutation"
-    assert "panic_buy_entry_score_threshold" in summary["threshold_contract"]["static_fallback_values"]
+    assert (
+        "panic_buy_entry_score_threshold"
+        in summary["threshold_contract"]["static_fallback_values"]
+    )
     assert "runtime_threshold_apply" in summary["threshold_contract"]["forbidden_uses"]
 
 
@@ -218,7 +242,15 @@ def test_single_small_red_bar_does_not_confirm_exhaustion_when_buy_flow_stays_st
     signal = detector.update(
         _candle(4, 103.0, open_=103.2, high=103.5, low=102.9, volume=390),
         _trade(4, buy=72, sell=28),
-        _book(4, bid_depth=1400, ask_depth=460, spread_ratio=1.7, ofi_z=2.5, ask_drop=0.42, state="bullish"),
+        _book(
+            4,
+            bid_depth=1400,
+            ask_depth=460,
+            spread_ratio=1.7,
+            ofi_z=2.5,
+            ask_drop=0.42,
+            state="bullish",
+        ),
     )
 
     assert signal.exhaustion_confirmed is False
@@ -233,12 +265,28 @@ def test_exhaustion_requires_persistent_m_of_n_confirmation():
     watch = detector.update(
         _candle(4, 102.7, open_=103.3, high=103.35, low=102.4, volume=430),
         _trade(4, buy=57, sell=43),
-        _book(4, bid_depth=1100, ask_depth=900, spread_ratio=1.25, ofi_z=0.2, ask_refill=0.80, state="neutral"),
+        _book(
+            4,
+            bid_depth=1100,
+            ask_depth=900,
+            spread_ratio=1.25,
+            ofi_z=0.2,
+            ask_refill=0.80,
+            state="neutral",
+        ),
     )
     exhausted = detector.update(
         _candle(5, 102.4, open_=102.9, high=103.1, low=102.1, volume=420),
         _trade(5, buy=55, sell=45),
-        _book(5, bid_depth=1050, ask_depth=950, spread_ratio=1.20, ofi_z=0.0, ask_refill=0.85, state="neutral"),
+        _book(
+            5,
+            bid_depth=1050,
+            ask_depth=950,
+            spread_ratio=1.20,
+            ofi_z=0.0,
+            ask_refill=0.85,
+            state="neutral",
+        ),
     )
 
     assert watch.state == "EXHAUSTION_WATCH"
@@ -253,12 +301,28 @@ def test_exhaustion_candidate_returns_to_active_on_rebreak():
     watch = detector.update(
         _candle(4, 102.7, open_=103.3, high=103.35, low=102.4, volume=430),
         _trade(4, buy=57, sell=43),
-        _book(4, bid_depth=1100, ask_depth=900, spread_ratio=1.25, ofi_z=0.2, ask_refill=0.80, state="neutral"),
+        _book(
+            4,
+            bid_depth=1100,
+            ask_depth=900,
+            spread_ratio=1.25,
+            ofi_z=0.2,
+            ask_refill=0.80,
+            state="neutral",
+        ),
     )
     resumed = detector.update(
         _candle(5, 104.0, open_=103.0, high=104.3, low=102.9, volume=450),
         _trade(5, buy=76, sell=24),
-        _book(5, bid_depth=1400, ask_depth=480, spread_ratio=2.0, ofi_z=3.2, ask_drop=0.50, state="bullish"),
+        _book(
+            5,
+            bid_depth=1400,
+            ask_depth=480,
+            spread_ratio=2.0,
+            ofi_z=3.2,
+            ask_drop=0.50,
+            state="bullish",
+        ),
     )
 
     assert watch.state == "EXHAUSTION_WATCH"

@@ -33,7 +33,10 @@ def _bottom_policy() -> dict:
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
         "allowed_runtime_apply": False,
-        "final_conclusion": {"classification_state": "sim_auto_approved", "promote_policy": True},
+        "final_conclusion": {
+            "classification_state": "sim_auto_approved",
+            "promote_policy": True,
+        },
         "sim_auto_approved_policy": {
             "policy_version": "bottom_rebound_swing_source_v2",
             "max_candidates": 40,
@@ -128,7 +131,9 @@ def test_control_tower_merges_swing_ldm_and_bottom_rebound_sources() -> None:
     )
 
 
-def test_active_arm_priority_missing_uses_two_day_cooldown_and_five_day_retire(tmp_path, monkeypatch) -> None:
+def test_active_arm_priority_missing_uses_two_day_cooldown_and_five_day_retire(
+    tmp_path, monkeypatch
+) -> None:
     monkeypatch.setattr(mod, "SWING_SIM_POLICY_DIR", tmp_path)
     previous = {
         "priority_policy_id": "priority_arm05",

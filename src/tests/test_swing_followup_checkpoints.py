@@ -33,14 +33,18 @@ def test_swing_followup_decision_checkpoints_are_parser_friendly():
 
     for task_id, (source, due, slot, time_window, track) in expected.items():
         checklist = Path(source).read_text(encoding="utf-8")
-        assert re.search(rf"^\s*-\s*\[[ x]\]\s+`\[{re.escape(task_id)}\]", checklist, re.MULTILINE)
+        assert re.search(
+            rf"^\s*-\s*\[[ x]\]\s+`\[{re.escape(task_id)}\]", checklist, re.MULTILINE
+        )
         assert f"`Due: {due}`" in checklist
         assert f"`Slot: {slot}`" in checklist
         assert f"`TimeWindow: {time_window}`" in checklist
         assert f"`Track: {track}`" in checklist
 
 
-def test_checklist_parser_uses_item_due_when_it_differs_from_file_date(tmp_path, monkeypatch):
+def test_checklist_parser_uses_item_due_when_it_differs_from_file_date(
+    tmp_path, monkeypatch
+):
     checklist = tmp_path / "2026-05-11-stage2-todo-checklist.md"
     checklist.write_text(
         "\n".join(

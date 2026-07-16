@@ -3,7 +3,6 @@ from datetime import datetime
 
 from src.engine import panic_sell_defense_report as report_mod
 
-
 TARGET_DATE = "2026-05-12"
 
 
@@ -33,7 +32,9 @@ def _event(
 def _write_events(tmp_path, rows: list[dict]) -> None:
     event_dir = tmp_path / "pipeline_events"
     event_dir.mkdir(parents=True, exist_ok=True)
-    with (event_dir / f"pipeline_events_{TARGET_DATE}.jsonl").open("w", encoding="utf-8") as handle:
+    with (event_dir / f"pipeline_events_{TARGET_DATE}.jsonl").open(
+        "w", encoding="utf-8"
+    ) as handle:
         for row in rows:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
@@ -56,7 +57,10 @@ def _write_market_regime(tmp_path, *, risk_state: str = "NEUTRAL") -> None:
 
 def _write_market_panic_breadth(tmp_path, *, risk_off: bool = True) -> None:
     _write_json(
-        tmp_path / "report" / "market_panic_breadth" / f"market_panic_breadth_{TARGET_DATE}.json",
+        tmp_path
+        / "report"
+        / "market_panic_breadth"
+        / f"market_panic_breadth_{TARGET_DATE}.json",
         {
             "as_of": f"{TARGET_DATE}T10:29:00",
             "source_quality": {"status": "ok"},
@@ -71,7 +75,10 @@ def _write_market_panic_breadth(tmp_path, *, risk_off: bool = True) -> None:
                     "KOSPI": {"code": "001", "name": "종합(KOSPI)", "change_pct": -1.6},
                     "KOSDAQ": {"code": "101", "name": "코스닥", "change_pct": -2.1},
                 },
-                "reasons": ["market_index_intraday_drop", "industry_breadth_down_ratio_high"],
+                "reasons": [
+                    "market_index_intraday_drop",
+                    "industry_breadth_down_ratio_high",
+                ],
             },
         },
     )
@@ -93,7 +100,15 @@ def _panic_rows() -> list[dict]:
     ]
 
 
-def _micro_event(hhmmss: str, *, close: float, volume: float = 100.0, buy: float = 52.0, sell: float = 48.0, **fields):
+def _micro_event(
+    hhmmss: str,
+    *,
+    close: float,
+    volume: float = 100.0,
+    buy: float = 52.0,
+    sell: float = 48.0,
+    **fields,
+):
     payload = {
         "curr_price": close,
         "open": fields.pop("open", close),
@@ -119,7 +134,10 @@ def test_normal_state_without_panic_threshold(monkeypatch, tmp_path):
         [
             _event(
                 "10:00:00",
-                fields={"exit_rule": "scalp_trailing_take_profit", "profit_rate": "1.2"},
+                fields={
+                    "exit_rule": "scalp_trailing_take_profit",
+                    "profit_rate": "1.2",
+                },
             )
         ],
     )
@@ -133,7 +151,9 @@ def test_normal_state_without_panic_threshold(monkeypatch, tmp_path):
     assert report["panic_regime_mode"] == "NORMAL"
     assert report["policy"]["runtime_effect"] == "report_only_no_mutation"
     assert report["panic_metrics"]["panic_detected"] is False
-    assert report["panic_regime_contract"]["decision_authority"] == "source_quality_only"
+    assert (
+        report["panic_regime_contract"]["decision_authority"] == "source_quality_only"
+    )
     assert report["panic_regime_contract"]["allowed_runtime_apply"] is False
 
 
@@ -158,10 +178,20 @@ def test_live_market_panic_breadth_only_marks_watch_not_panic(monkeypatch, tmp_p
     assert report["panic_state"] == "RECOVERY_WATCH"
     assert report["panic_regime_mode"] == "STABILIZING"
     assert report["policy"]["runtime_effect"] == "report_only_no_mutation"
-    assert report["microstructure_market_context"]["market_panic_breadth_risk_off_advisory"] is True
+    assert (
+        report["microstructure_market_context"][
+            "market_panic_breadth_risk_off_advisory"
+        ]
+        is True
+    )
     assert report["microstructure_detector"]["panic_signal_count"] == 0
-    assert "live market panic breadth risk_off advisory" in report["panic_state_reasons"]
-    assert "market breadth risk-off watch without panic confirmation" in report["panic_state_reasons"]
+    assert (
+        "live market panic breadth risk_off advisory" in report["panic_state_reasons"]
+    )
+    assert (
+        "market breadth risk-off watch without panic confirmation"
+        in report["panic_state_reasons"]
+    )
 
 
 def test_panic_sell_state_from_five_stop_losses_in_30_minutes(monkeypatch, tmp_path):
@@ -180,17 +210,31 @@ def test_panic_sell_state_from_five_stop_losses_in_30_minutes(monkeypatch, tmp_p
     assert report["panic_metrics"]["current_30m_stop_loss_exit_count"] == 5
     assert report["panic_metrics"]["panic_by_stop_loss_count"] is True
     assert report["panic_metrics"]["rolling_30m_stop_loss_count_quantile"] == 0.95
-    assert report["panic_metrics"]["rolling_30m_stop_loss_count_quantile_threshold"] == 5
+    assert (
+        report["panic_metrics"]["rolling_30m_stop_loss_count_quantile_threshold"] == 5
+    )
     assert report["panic_metrics"]["rolling_30m_stop_loss_count_sample_ready"] is True
-    assert "panic thresholds breached with market/microstructure confirmation" in report["panic_state_reasons"]
-    assert "candidate_entry_pre_submit_freeze" in report["panic_regime_contract"]["allowed_actions"]
+    assert (
+        "panic thresholds breached with market/microstructure confirmation"
+        in report["panic_state_reasons"]
+    )
+    assert (
+        "candidate_entry_pre_submit_freeze"
+        in report["panic_regime_contract"]["allowed_actions"]
+    )
     assert "auto_sell" in report["panic_regime_contract"]["forbidden_uses"]
-    freeze = next(item for item in report["canary_candidates"] if item["family"] == "panic_entry_freeze_guard")
+    freeze = next(
+        item
+        for item in report["canary_candidates"]
+        if item["family"] == "panic_entry_freeze_guard"
+    )
     assert freeze["status"] == "report_only_candidate"
     assert freeze["allowed_runtime_apply"] is False
 
 
-def test_portfolio_stop_loss_cluster_without_market_confirmation_is_watch(monkeypatch, tmp_path):
+def test_portfolio_stop_loss_cluster_without_market_confirmation_is_watch(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     _write_events(tmp_path, _panic_rows())
     _write_market_regime(tmp_path, risk_state="NEUTRAL")
@@ -204,10 +248,18 @@ def test_portfolio_stop_loss_cluster_without_market_confirmation_is_watch(monkey
     assert report["panic_state"] == "RECOVERY_WATCH"
     assert report["panic_regime_mode"] == "STABILIZING"
     assert report["panic_metrics"]["panic_by_stop_loss_count"] is True
-    assert report["panic_metrics"]["rolling_30m_stop_loss_count_quantile_threshold"] == 5
+    assert (
+        report["panic_metrics"]["rolling_30m_stop_loss_count_quantile_threshold"] == 5
+    )
     assert "portfolio stop-loss cluster observed" in report["panic_state_reasons"]
-    assert "portfolio stop-loss cluster unconfirmed by market/breadth context" in report["panic_state_reasons"]
-    assert "portfolio-local stop-loss cluster watch without panic confirmation" in report["panic_state_reasons"]
+    assert (
+        "portfolio stop-loss cluster unconfirmed by market/breadth context"
+        in report["panic_state_reasons"]
+    )
+    assert (
+        "portfolio-local stop-loss cluster watch without panic confirmation"
+        in report["panic_state_reasons"]
+    )
 
 
 def test_stop_loss_count_quantile_requires_minimum_sample(monkeypatch, tmp_path):
@@ -235,7 +287,9 @@ def test_stop_loss_count_quantile_requires_minimum_sample(monkeypatch, tmp_path)
     )
 
     assert report["panic_state"] == "NORMAL"
-    assert report["panic_metrics"]["rolling_30m_stop_loss_count_quantile_threshold"] == 2
+    assert (
+        report["panic_metrics"]["rolling_30m_stop_loss_count_quantile_threshold"] == 2
+    )
     assert report["panic_metrics"]["rolling_30m_stop_loss_count_sample"] == 2
     assert report["panic_metrics"]["rolling_30m_stop_loss_count_sample_ready"] is False
     assert report["panic_metrics"]["panic_by_stop_loss_count"] is False
@@ -300,7 +354,10 @@ def test_unproven_exit_signal_is_not_real_panic_basis(monkeypatch, tmp_path):
     )
 
     assert report["panic_state"] == "NORMAL"
-    assert report["panic_metrics"]["panic_decision_basis"] == "real_exit_with_broker_provenance_only"
+    assert (
+        report["panic_metrics"]["panic_decision_basis"]
+        == "real_exit_with_broker_provenance_only"
+    )
     assert report["panic_metrics"]["real_exit_provenance_required"] is True
     assert report["panic_metrics"]["real_exit_count"] == 0
     assert report["panic_metrics"]["non_real_exit_count"] == 5
@@ -309,7 +366,9 @@ def test_unproven_exit_signal_is_not_real_panic_basis(monkeypatch, tmp_path):
     assert report["panic_metrics"]["panic_detected"] is False
 
 
-def test_non_real_assumed_fill_marks_sparse_exit_signal_as_non_real(monkeypatch, tmp_path):
+def test_non_real_assumed_fill_marks_sparse_exit_signal_as_non_real(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
@@ -388,7 +447,9 @@ def test_recovery_watch_uses_active_sim_probe_average(monkeypatch, tmp_path):
     assert active["provenance_check"]["passed"] is True
 
 
-def test_recovery_confirmed_keeps_probe_report_only_and_broker_forbidden(monkeypatch, tmp_path):
+def test_recovery_confirmed_keeps_probe_report_only_and_broker_forbidden(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     _write_events(tmp_path, _panic_rows())
     _write_json(
@@ -430,7 +491,11 @@ def test_recovery_confirmed_keeps_probe_report_only_and_broker_forbidden(monkeyp
 
     assert report["panic_state"] == "RECOVERY_CONFIRMED"
     assert report["panic_regime_mode"] == "RECOVERY_CONFIRMED"
-    rebound = next(item for item in report["canary_candidates"] if item["family"] == "panic_rebound_probe")
+    rebound = next(
+        item
+        for item in report["canary_candidates"]
+        if item["family"] == "panic_rebound_probe"
+    )
     assert rebound["status"] == "report_only_candidate"
     assert rebound["allowed_runtime_apply"] is False
     assert rebound["provenance_check_passed"] is True
@@ -484,7 +549,10 @@ def test_post_sell_feedback_is_separate_from_closed_pnl(monkeypatch, tmp_path):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     _write_events(tmp_path, _panic_rows())
     _write_json(
-        tmp_path / "report" / "monitor_snapshots" / f"post_sell_feedback_{TARGET_DATE}.json",
+        tmp_path
+        / "report"
+        / "monitor_snapshots"
+        / f"post_sell_feedback_{TARGET_DATE}.json",
         {
             "soft_stop_forensics": {
                 "total_soft_stop": 5,
@@ -506,7 +574,9 @@ def test_post_sell_feedback_is_separate_from_closed_pnl(monkeypatch, tmp_path):
     assert post_sell["rebound_above_buy_10_20m_pct"] == 20.0
 
 
-def test_microstructure_detector_adds_report_only_risk_off_without_order_action(monkeypatch, tmp_path):
+def test_microstructure_detector_adds_report_only_risk_off_without_order_action(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     _write_market_regime(tmp_path, risk_state="RISK_OFF")
     _write_events(
@@ -567,17 +637,23 @@ def test_microstructure_detector_adds_report_only_risk_off_without_order_action(
     assert report["policy"]["runtime_effect"] == "report_only_no_mutation"
     assert micro["risk_off_advisory_count"] == 1
     assert micro["allow_new_long_false_count"] == 1
-    assert report["microstructure_market_context"]["confirmed_risk_off_advisory"] is True
+    assert (
+        report["microstructure_market_context"]["confirmed_risk_off_advisory"] is True
+    )
     assert report["microstructure_market_context"]["market_confirms_risk_off"] is True
     assert micro["latest_signals"][0]["risk_off_advisory"] is True
     assert micro["policy"]["does_not_submit_orders"] is True
     assert micro["micro_cusum_observer"]["decision_authority"] == "source_quality_only"
     assert micro["micro_cusum_observer"]["consensus_pass_symbol_count"] == 1
     assert "order_submit" in micro["micro_cusum_observer"]["forbidden_uses"]
-    assert all(item["allowed_runtime_apply"] is False for item in report["canary_candidates"])
+    assert all(
+        item["allowed_runtime_apply"] is False for item in report["canary_candidates"]
+    )
 
 
-def test_microstructure_risk_off_needs_market_or_breadth_confirmation(monkeypatch, tmp_path):
+def test_microstructure_risk_off_needs_market_or_breadth_confirmation(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     _write_market_regime(tmp_path, risk_state="NEUTRAL")
     _write_events(
@@ -637,4 +713,7 @@ def test_microstructure_risk_off_needs_market_or_breadth_confirmation(monkeypatc
     assert market_context["confirmed_risk_off_advisory"] is False
     assert market_context["portfolio_local_risk_off_only"] is True
     assert "market_regime_not_risk_off" in market_context["reasons"]
-    assert "microstructure risk_off unconfirmed by market/breadth context" in report["panic_state_reasons"]
+    assert (
+        "microstructure risk_off unconfirmed by market/breadth context"
+        in report["panic_state_reasons"]
+    )

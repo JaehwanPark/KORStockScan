@@ -10,7 +10,9 @@ def test_probe_and_discovery_rows_build_swing_ldm_contract(tmp_path, monkeypatch
     event_dir = tmp_path / "pipeline_events"
     event_dir.mkdir()
     monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", event_dir)
-    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "report" / "swing_lifecycle_decision_matrix")
+    monkeypatch.setattr(
+        mod, "REPORT_DIR", tmp_path / "report" / "swing_lifecycle_decision_matrix"
+    )
 
     records = [
         {
@@ -43,7 +45,9 @@ def test_probe_and_discovery_rows_build_swing_ldm_contract(tmp_path, monkeypatch
             "exit_rule": "time_stop",
         },
     ]
-    with (event_dir / f"pipeline_events_{target}.jsonl").open("w", encoding="utf-8") as handle:
+    with (event_dir / f"pipeline_events_{target}.jsonl").open(
+        "w", encoding="utf-8"
+    ) as handle:
         for record in records:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
@@ -71,10 +75,15 @@ def test_probe_and_discovery_rows_build_swing_ldm_contract(tmp_path, monkeypatch
     monkeypatch.setattr(
         mod,
         "_load_discovery_lifecycle_rows",
-        lambda target_date, db_url, lookback_days: ([mod._discovery_row(discovery_source)], {"READY": 1}),
+        lambda target_date, db_url, lookback_days: (
+            [mod._discovery_row(discovery_source)],
+            {"READY": 1},
+        ),
     )
 
-    report = mod.build_swing_lifecycle_decision_matrix(target, db_url=TEST_DB_URL, lookback_days=5)
+    report = mod.build_swing_lifecycle_decision_matrix(
+        target, db_url=TEST_DB_URL, lookback_days=5
+    )
 
     assert report["runtime_effect"] is False
     assert report["actual_order_submitted"] is False
@@ -88,7 +97,10 @@ def test_probe_and_discovery_rows_build_swing_ldm_contract(tmp_path, monkeypatch
     }
     assert report["entry_bucket_attribution"]["metric_contract"]["forbidden_uses"]
     assert report["entry_bucket_attribution"]["summary"]["bucket_count"] > 0
-    assert all(row["source_book"] != "swing_daily_simulation" for row in report["lifecycle_rows"])
+    assert all(
+        row["source_book"] != "swing_daily_simulation"
+        for row in report["lifecycle_rows"]
+    )
 
 
 def test_labeled_discovery_arm_expands_to_source_only_complete_flow():
@@ -120,7 +132,9 @@ def test_labeled_discovery_arm_expands_to_source_only_complete_flow():
     assert rows[1]["label_fields"]["final_return_pct"] is None
     assert rows[2]["label_fields"]["final_return_pct"] == 1.6
     assert attribution["summary"]["complete_flow_count"] == 1
-    assert attribution["flows"][0]["identity_quality"] == "swing_strategy_discovery_arm_id"
+    assert (
+        attribution["flows"][0]["identity_quality"] == "swing_strategy_discovery_arm_id"
+    )
     assert attribution["flows"][0]["source_quality_adjusted_ev_pct"] == 1.6
     assert "one_share" in attribution["flows"][0]["bucket_key"]
     assert "policy_exit" in attribution["flows"][0]["bucket_key"]
@@ -131,8 +145,12 @@ def test_swing_sim_events_are_consumed_as_source_only_probe_rows(tmp_path, monke
     event_dir = tmp_path / "pipeline_events"
     event_dir.mkdir()
     monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", event_dir)
-    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "report" / "swing_lifecycle_decision_matrix")
-    with (event_dir / f"pipeline_events_{target}.jsonl").open("w", encoding="utf-8") as handle:
+    monkeypatch.setattr(
+        mod, "REPORT_DIR", tmp_path / "report" / "swing_lifecycle_decision_matrix"
+    )
+    with (event_dir / f"pipeline_events_{target}.jsonl").open(
+        "w", encoding="utf-8"
+    ) as handle:
         for event in (
             "swing_sim_buy_order_assumed_filled",
             "swing_sim_holding_started",
@@ -147,12 +165,18 @@ def test_swing_sim_events_are_consumed_as_source_only_probe_rows(tmp_path, monke
                         "lifecycle_flow_bridge_key": "SIM-FLOW-1",
                         "actual_order_submitted": False,
                         "broker_order_forbidden": True,
-                        "profit_rate": 1.2 if event.endswith("sell_order_assumed_filled") else None,
+                        "profit_rate": (
+                            1.2 if event.endswith("sell_order_assumed_filled") else None
+                        ),
                     }
                 )
                 + "\n"
             )
-    monkeypatch.setattr(mod, "_load_discovery_lifecycle_rows", lambda target_date, db_url, lookback_days: ([], {}))
+    monkeypatch.setattr(
+        mod,
+        "_load_discovery_lifecycle_rows",
+        lambda target_date, db_url, lookback_days: ([], {}),
+    )
 
     report = mod.build_swing_lifecycle_decision_matrix(target, db_url=TEST_DB_URL)
 
@@ -211,7 +235,12 @@ def test_pending_discovery_arm_remains_carry_only():
 
 def test_swing_lifecycle_flow_bucket_complete_flow_and_carry_normalization():
     rows = []
-    for stage, label in (("entry", None), ("carry", None), ("scale_in", None), ("exit", 1.4)):
+    for stage, label in (
+        ("entry", None),
+        ("carry", None),
+        ("scale_in", None),
+        ("exit", 1.4),
+    ):
         rows.append(
             {
                 "lifecycle_stage": stage,
@@ -228,7 +257,11 @@ def test_swing_lifecycle_flow_bucket_complete_flow_and_carry_normalization():
                     "strategy": "probe_v1",
                     "broker_order_forbidden": True,
                 },
-                "label_fields": {"final_return_pct": label, "mfe_pct": 2.0, "mae_pct": -0.3},
+                "label_fields": {
+                    "final_return_pct": label,
+                    "mfe_pct": 2.0,
+                    "mae_pct": -0.3,
+                },
                 "source_quality_status": "pass",
                 "actual_order_submitted": False,
                 "broker_order_forbidden": True,
@@ -242,7 +275,11 @@ def test_swing_lifecycle_flow_bucket_complete_flow_and_carry_normalization():
     assert attribution["summary"]["complete_flow_count"] == 1
     assert attribution["summary"]["identity_join_rate"] == 1.0
     assert attribution["flows"][0]["identity_quality"] == "lifecycle_flow_bridge_key"
-    assert attribution["flows"][0]["stage_presence"] == {"entry": True, "holding": True, "exit": True}
+    assert attribution["flows"][0]["stage_presence"] == {
+        "entry": True,
+        "holding": True,
+        "exit": True,
+    }
     assert attribution["flows"][0]["scale_in_bucket_ids"]
     assert attribution["buckets"][0]["source_quality_gate"] == "hold_sample"
     assert attribution["runtime_approval_candidates"] == []
@@ -269,8 +306,16 @@ def test_swing_lifecycle_flow_fallback_identity_does_not_promote():
 
     assert attribution["summary"]["complete_flow_count"] == 0
     assert attribution["summary"]["join_contract_blocked"] is True
-    assert attribution["summary"]["incomplete_flow_reason_counts"]["fallback_identity_incomplete"] == 3
-    assert all(flow["source_quality_gate"] == "fallback_identity_incomplete" for flow in attribution["flows"])
+    assert (
+        attribution["summary"]["incomplete_flow_reason_counts"][
+            "fallback_identity_incomplete"
+        ]
+        == 3
+    )
+    assert all(
+        flow["source_quality_gate"] == "fallback_identity_incomplete"
+        for flow in attribution["flows"]
+    )
     assert attribution["runtime_approval_candidates"] == []
 
 
@@ -281,7 +326,10 @@ def test_swing_lifecycle_flow_uses_source_record_id_bridge():
             "source_book": "swing_intraday_live_equiv_probe",
             "stock_code": "005930",
             "row_id": "source-100",
-            "runtime_features": {"source_record_id": "100", "origin": "blocked_swing_gap"},
+            "runtime_features": {
+                "source_record_id": "100",
+                "origin": "blocked_swing_gap",
+            },
             "label_fields": {},
             "source_quality_status": "pass",
             "actual_order_submitted": False,
@@ -293,7 +341,10 @@ def test_swing_lifecycle_flow_uses_source_record_id_bridge():
             "source_book": "swing_intraday_live_equiv_probe",
             "stock_code": "005930",
             "row_id": "probe-100",
-            "runtime_features": {"source_record_id": "100", "origin": "blocked_swing_gap"},
+            "runtime_features": {
+                "source_record_id": "100",
+                "origin": "blocked_swing_gap",
+            },
             "label_fields": {},
             "source_quality_status": "pass",
             "actual_order_submitted": False,
@@ -305,7 +356,10 @@ def test_swing_lifecycle_flow_uses_source_record_id_bridge():
             "source_book": "swing_intraday_live_equiv_probe",
             "stock_code": "005930",
             "row_id": "probe-100",
-            "runtime_features": {"source_record_id": "100", "origin": "blocked_swing_gap"},
+            "runtime_features": {
+                "source_record_id": "100",
+                "origin": "blocked_swing_gap",
+            },
             "label_fields": {"final_return_pct": 1.2, "mfe_pct": 2.0, "mae_pct": -0.5},
             "source_quality_status": "pass",
             "actual_order_submitted": False,
@@ -318,7 +372,11 @@ def test_swing_lifecycle_flow_uses_source_record_id_bridge():
 
     assert attribution["summary"]["complete_flow_count"] == 1
     assert attribution["flows"][0]["identity_quality"] == "source_record_id"
-    assert attribution["flows"][0]["stage_presence"] == {"entry": True, "holding": True, "exit": True}
+    assert attribution["flows"][0]["stage_presence"] == {
+        "entry": True,
+        "holding": True,
+        "exit": True,
+    }
     assert attribution["flows"][0]["entry_bucket_id"]
     assert attribution["flows"][0]["holding_bucket_id"]
 
@@ -425,9 +483,13 @@ def test_pipeline_event_probe_fields_are_consumed(tmp_path, monkeypatch):
     event_dir = tmp_path / "pipeline_events"
     event_dir.mkdir()
     monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", event_dir)
-    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "report" / "swing_lifecycle_decision_matrix")
+    monkeypatch.setattr(
+        mod, "REPORT_DIR", tmp_path / "report" / "swing_lifecycle_decision_matrix"
+    )
 
-    with (event_dir / f"pipeline_events_{target}.jsonl").open("w", encoding="utf-8") as handle:
+    with (event_dir / f"pipeline_events_{target}.jsonl").open(
+        "w", encoding="utf-8"
+    ) as handle:
         handle.write(
             json.dumps(
                 {
@@ -452,18 +514,29 @@ def test_pipeline_event_probe_fields_are_consumed(tmp_path, monkeypatch):
             )
             + "\n"
         )
-    monkeypatch.setattr(mod, "_load_discovery_lifecycle_rows", lambda target_date, db_url, lookback_days: ([], {}))
+    monkeypatch.setattr(
+        mod,
+        "_load_discovery_lifecycle_rows",
+        lambda target_date, db_url, lookback_days: ([], {}),
+    )
 
     report = mod.build_swing_lifecycle_decision_matrix(target, db_url=TEST_DB_URL)
 
     assert report["summary"]["probe_rows"] == 1
-    assert report["summary"]["source_book_counts"]["swing_intraday_live_equiv_probe"] == 1
+    assert (
+        report["summary"]["source_book_counts"]["swing_intraday_live_equiv_probe"] == 1
+    )
     assert "swing_intraday_live_equiv_probe_missing" not in report["warnings"]
-    assert report["lifecycle_rows"][0]["source_stage"] == "swing_probe_sell_order_assumed_filled"
+    assert (
+        report["lifecycle_rows"][0]["source_stage"]
+        == "swing_probe_sell_order_assumed_filled"
+    )
     assert report["lifecycle_rows"][0]["row_id"] == "field-record-10"
 
 
-def test_blocked_swing_observation_events_are_consumed_but_generic_latency_is_excluded(tmp_path, monkeypatch):
+def test_blocked_swing_observation_events_are_consumed_but_generic_latency_is_excluded(
+    tmp_path, monkeypatch
+):
     target = "2026-05-22"
     event_dir = tmp_path / "pipeline_events"
     event_dir.mkdir()
@@ -497,7 +570,9 @@ def test_blocked_swing_observation_events_are_consumed_but_generic_latency_is_ex
             "simulation_book": "swing_intraday_live_equiv_probe",
         },
     ]
-    with (event_dir / f"pipeline_events_{target}.jsonl").open("w", encoding="utf-8") as handle:
+    with (event_dir / f"pipeline_events_{target}.jsonl").open(
+        "w", encoding="utf-8"
+    ) as handle:
         for record in records:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
@@ -506,15 +581,28 @@ def test_blocked_swing_observation_events_are_consumed_but_generic_latency_is_ex
     assert diagnostics["raw_swing_event_count"] == 4
     assert diagnostics["ldm_consumed_event_count"] == 3
     assert diagnostics["ldm_event_coverage_rate"] == 0.75
-    assert diagnostics["unmapped_swing_stage_counts"]["swing_custom_unmapped_observation"] == 1
+    assert (
+        diagnostics["unmapped_swing_stage_counts"]["swing_custom_unmapped_observation"]
+        == 1
+    )
     assert [row["stock_code"] for row in rows] == ["005930", "000660", "035420"]
     assert all(row["lifecycle_stage"] == "entry" for row in rows)
     assert all(row["allowed_runtime_apply"] is False for row in rows)
 
 
 def test_swing_marker_does_not_match_downswing_reason_text():
-    assert mod._has_swing_marker({"event": "latency_block", "reason": "downswing volatility"}) is False
-    assert mod._has_swing_marker({"event": "latency_block", "block_reason": "swing_probe_latency_block"}) is True
+    assert (
+        mod._has_swing_marker(
+            {"event": "latency_block", "reason": "downswing volatility"}
+        )
+        is False
+    )
+    assert (
+        mod._has_swing_marker(
+            {"event": "latency_block", "block_reason": "swing_probe_latency_block"}
+        )
+        is True
+    )
 
 
 def test_bucket_summary_uses_notional_weighted_ev_when_virtual_notional_exists():
@@ -535,7 +623,10 @@ def test_bucket_summary_uses_notional_weighted_ev_when_virtual_notional_exists()
 
     assert summary["equal_weight_avg_profit_pct"] == 3.0
     assert summary["notional_weighted_ev_pct"] == 4.6
-    assert summary["source_quality_adjusted_ev_pct"] != summary["equal_weight_avg_profit_pct"]
+    assert (
+        summary["source_quality_adjusted_ev_pct"]
+        != summary["equal_weight_avg_profit_pct"]
+    )
 
 
 def test_bucket_summary_source_fields_available_is_not_waiting_sample():
@@ -554,11 +645,19 @@ def test_bucket_summary_source_fields_available_is_not_waiting_sample():
         for _ in range(mod.SAMPLE_FLOOR)
     ]
 
-    summary = mod._bucket_summary("discovery_arm_attribution", "bucket=a", rows, "selection")
+    summary = mod._bucket_summary(
+        "discovery_arm_attribution", "bucket=a", rows, "selection"
+    )
 
     assert summary["source_quality_gate"] == "source_quality_blocker"
-    assert summary["implementation_status"] == "implemented_source_quality_contract_available"
-    assert summary["implementation_provenance"]["sample_status"] == "source_fields_available"
+    assert (
+        summary["implementation_status"]
+        == "implemented_source_quality_contract_available"
+    )
+    assert (
+        summary["implementation_provenance"]["sample_status"]
+        == "source_fields_available"
+    )
     assert summary["implementation_provenance"]["missing_dimensions"] == []
 
 
@@ -567,9 +666,13 @@ def test_swing_ldm_stage_only_candidates_remain_child_evidence(tmp_path, monkeyp
     event_dir = tmp_path / "pipeline_events"
     event_dir.mkdir()
     monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", event_dir)
-    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "report" / "swing_lifecycle_decision_matrix")
+    monkeypatch.setattr(
+        mod, "REPORT_DIR", tmp_path / "report" / "swing_lifecycle_decision_matrix"
+    )
 
-    with (event_dir / f"pipeline_events_{target}.jsonl").open("w", encoding="utf-8") as handle:
+    with (event_dir / f"pipeline_events_{target}.jsonl").open(
+        "w", encoding="utf-8"
+    ) as handle:
         for idx in range(3):
             handle.write(
                 json.dumps(
@@ -586,15 +689,27 @@ def test_swing_ldm_stage_only_candidates_remain_child_evidence(tmp_path, monkeyp
                 )
                 + "\n"
             )
-    monkeypatch.setattr(mod, "_load_discovery_lifecycle_rows", lambda target_date, db_url, lookback_days: ([], {}))
+    monkeypatch.setattr(
+        mod,
+        "_load_discovery_lifecycle_rows",
+        lambda target_date, db_url, lookback_days: ([], {}),
+    )
 
     report = mod.build_swing_lifecycle_decision_matrix(target, db_url=TEST_DB_URL)
-    candidates = report["holding_exit_bucket_attribution"]["sim_auto_approval_candidates"]
+    candidates = report["holding_exit_bucket_attribution"][
+        "sim_auto_approval_candidates"
+    ]
 
     assert candidates == []
     assert report["holding_exit_bucket_attribution"]["summary"]["bucket_count"] > 0
-    assert report["holding_exit_bucket_attribution"]["summary"]["sim_auto_candidate_count"] == 0
-    assert report["swing_lifecycle_flow_bucket_attribution"]["runtime_approval_candidates"] == []
+    assert (
+        report["holding_exit_bucket_attribution"]["summary"]["sim_auto_candidate_count"]
+        == 0
+    )
+    assert (
+        report["swing_lifecycle_flow_bucket_attribution"]["runtime_approval_candidates"]
+        == []
+    )
 
 
 def test_swing_ldm_workorders_remain_source_only(tmp_path, monkeypatch):
@@ -602,9 +717,13 @@ def test_swing_ldm_workorders_remain_source_only(tmp_path, monkeypatch):
     event_dir = tmp_path / "pipeline_events"
     event_dir.mkdir()
     monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", event_dir)
-    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "report" / "swing_lifecycle_decision_matrix")
+    monkeypatch.setattr(
+        mod, "REPORT_DIR", tmp_path / "report" / "swing_lifecycle_decision_matrix"
+    )
 
-    with (event_dir / f"pipeline_events_{target}.jsonl").open("w", encoding="utf-8") as handle:
+    with (event_dir / f"pipeline_events_{target}.jsonl").open(
+        "w", encoding="utf-8"
+    ) as handle:
         for idx in range(3):
             handle.write(
                 json.dumps(
@@ -617,17 +736,25 @@ def test_swing_ldm_workorders_remain_source_only(tmp_path, monkeypatch):
                 )
                 + "\n"
             )
-    monkeypatch.setattr(mod, "_load_discovery_lifecycle_rows", lambda target_date, db_url, lookback_days: ([], {}))
+    monkeypatch.setattr(
+        mod,
+        "_load_discovery_lifecycle_rows",
+        lambda target_date, db_url, lookback_days: ([], {}),
+    )
 
     report = mod.build_swing_lifecycle_decision_matrix(target, db_url=TEST_DB_URL)
-    workorders = report["holding_exit_bucket_attribution"]["code_improvement_workorders"]
+    workorders = report["holding_exit_bucket_attribution"][
+        "code_improvement_workorders"
+    ]
 
     assert workorders
     assert all(item["runtime_effect"] is False for item in workorders)
     assert all(item["allowed_runtime_apply"] is False for item in workorders)
     assert all(item["actual_order_submitted"] is False for item in workorders)
     assert all(item["broker_order_forbidden"] is True for item in workorders)
-    assert all("runtime_threshold_mutation" in item["forbidden_uses"] for item in workorders)
+    assert all(
+        "runtime_threshold_mutation" in item["forbidden_uses"] for item in workorders
+    )
 
 
 def test_swing_ldm_reports_clean_baseline_discovery_filter(tmp_path, monkeypatch):
@@ -635,14 +762,24 @@ def test_swing_ldm_reports_clean_baseline_discovery_filter(tmp_path, monkeypatch
     event_dir = tmp_path / "pipeline_events"
     event_dir.mkdir()
     monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", event_dir)
-    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "report" / "swing_lifecycle_decision_matrix")
+    monkeypatch.setattr(
+        mod, "REPORT_DIR", tmp_path / "report" / "swing_lifecycle_decision_matrix"
+    )
     (event_dir / f"pipeline_events_{target}.jsonl").write_text("", encoding="utf-8")
-    monkeypatch.setattr(mod, "_load_discovery_lifecycle_rows", lambda target_date, db_url, lookback_days: ([], {}))
+    monkeypatch.setattr(
+        mod,
+        "_load_discovery_lifecycle_rows",
+        lambda target_date, db_url, lookback_days: ([], {}),
+    )
 
-    report = mod.build_swing_lifecycle_decision_matrix(target, db_url=TEST_DB_URL, lookback_days=90)
+    report = mod.build_swing_lifecycle_decision_matrix(
+        target, db_url=TEST_DB_URL, lookback_days=90
+    )
 
     assert report["clean_tuning_baseline"]["filter_active"] is True
     assert report["summary"]["clean_baseline_requested_start_date"] == "2026-03-06"
     assert report["summary"]["clean_baseline_effective_start_date"] == "2026-06-04"
     assert report["summary"]["clean_baseline_excluded_pre_start_date"] == "2026-06-04"
-    assert "clean_tuning_baseline_swing_discovery_lookback_filtered" in report["warnings"]
+    assert (
+        "clean_tuning_baseline_swing_discovery_lookback_filtered" in report["warnings"]
+    )

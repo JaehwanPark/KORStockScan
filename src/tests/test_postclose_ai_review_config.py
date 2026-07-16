@@ -14,7 +14,9 @@ from src.engine.ai import postclose_structured_review_provider as provider_mod
 
 def test_artifact_env_overrides_global_default(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_PRODUCER_GAP_DISCOVERY_AI_MODEL", "gpt-custom")
-    monkeypatch.setenv("KORSTOCKSCAN_PRODUCER_GAP_DISCOVERY_AI_REASONING_EFFORT", "high")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_PRODUCER_GAP_DISCOVERY_AI_REASONING_EFFORT", "high"
+    )
     monkeypatch.setenv("KORSTOCKSCAN_PRODUCER_GAP_DISCOVERY_AI_TIMEOUT_SEC", "77")
 
     config = resolve_postclose_ai_review_config(
@@ -28,7 +30,10 @@ def test_artifact_env_overrides_global_default(monkeypatch):
     assert config.reasoning_effort == "high"
     assert config.timeout_sec == 77
     assert config.env_prefix_name == "KORSTOCKSCAN_PRODUCER_GAP_DISCOVERY_AI"
-    assert config.provider_status_fields()["config_env_prefix"] == "KORSTOCKSCAN_PRODUCER_GAP_DISCOVERY_AI"
+    assert (
+        config.provider_status_fields()["config_env_prefix"]
+        == "KORSTOCKSCAN_PRODUCER_GAP_DISCOVERY_AI"
+    )
 
 
 def test_lifecycle_bucket_shard_defaults_preserve_scalping_review_contract(monkeypatch):
@@ -53,8 +58,14 @@ def test_lifecycle_bucket_source_only_env_overrides_do_not_affect_live(monkeypat
     for key in tuple(os.environ):
         if key.startswith("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY"):
             monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_SOURCE_ONLY_AI_MODEL", "gpt-source-only")
-    monkeypatch.setenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_SOURCE_ONLY_AI_REASONING_EFFORT", "high")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_SOURCE_ONLY_AI_MODEL",
+        "gpt-source-only",
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_SOURCE_ONLY_AI_REASONING_EFFORT",
+        "high",
+    )
     monkeypatch.setenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_AI_TIMEOUT_SEC", "91")
 
     live = lifecycle_mod._ai_review_config_for_shard("live_contract_review")
@@ -72,8 +83,14 @@ def test_lifecycle_bucket_primary_provider_env_override_is_preserved(monkeypatch
     for key in tuple(os.environ):
         if key.startswith("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY"):
             monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_SOURCE_ONLY_AI_PRIMARY_PROVIDER", "bedrock_qwen3")
-    monkeypatch.setenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_SOURCE_ONLY_AI_FAILBACK_PROVIDER", "none")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_SOURCE_ONLY_AI_PRIMARY_PROVIDER",
+        "bedrock_qwen3",
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_SOURCE_ONLY_AI_FAILBACK_PROVIDER",
+        "none",
+    )
 
     source = lifecycle_mod._ai_review_config_for_shard("sim_policy_review")
 
@@ -81,7 +98,9 @@ def test_lifecycle_bucket_primary_provider_env_override_is_preserved(monkeypatch
     assert source.failback_provider == "none"
 
 
-def test_swing_lifecycle_bucket_discovery_uses_29_baseline_mini_medium_default(monkeypatch):
+def test_swing_lifecycle_bucket_discovery_uses_29_baseline_mini_medium_default(
+    monkeypatch,
+):
     for key in tuple(os.environ):
         if key.startswith("KORSTOCKSCAN_SWING_LIFECYCLE_BUCKET_DISCOVERY"):
             monkeypatch.delenv(key, raising=False)
@@ -95,12 +114,19 @@ def test_swing_lifecycle_bucket_discovery_uses_29_baseline_mini_medium_default(m
     assert config.failback_provider == "openai"
 
 
-def test_swing_lifecycle_bucket_discovery_primary_provider_env_override_is_preserved(monkeypatch):
+def test_swing_lifecycle_bucket_discovery_primary_provider_env_override_is_preserved(
+    monkeypatch,
+):
     for key in tuple(os.environ):
         if key.startswith("KORSTOCKSCAN_SWING_LIFECYCLE_BUCKET_DISCOVERY"):
             monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("KORSTOCKSCAN_SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_PRIMARY_PROVIDER", "openai")
-    monkeypatch.setenv("KORSTOCKSCAN_SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_FAILBACK_PROVIDER", "bedrock_qwen3")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_PRIMARY_PROVIDER", "openai"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_FAILBACK_PROVIDER",
+        "bedrock_qwen3",
+    )
 
     config = swing_bucket_mod._ai_review_config()
 
@@ -155,7 +181,9 @@ def test_postclose_qwen3_env_overrides(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_TEST_ARTIFACT_AI_FAILBACK_PROVIDER", "none")
     monkeypatch.setenv("KORSTOCKSCAN_TEST_ARTIFACT_AI_BEDROCK_MODEL_ID", "qwen.custom")
     monkeypatch.setenv("KORSTOCKSCAN_TEST_ARTIFACT_AI_BEDROCK_REGION", "ap-northeast-2")
-    monkeypatch.setenv("KORSTOCKSCAN_TEST_ARTIFACT_AI_BEDROCK_MAX_OUTPUT_TOKENS", "1234")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_TEST_ARTIFACT_AI_BEDROCK_MAX_OUTPUT_TOKENS", "1234"
+    )
 
     config = resolve_postclose_ai_review_config(
         "TEST_ARTIFACT",
@@ -177,7 +205,9 @@ def test_postclose_gpt54_keeps_gemini_fields_compat_default(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_TEST_ARTIFACT_AI_GEMINI_MODEL", "gemini-custom")
     monkeypatch.setenv("KORSTOCKSCAN_TEST_ARTIFACT_AI_GEMINI_SHARD_SIZE", "7")
     monkeypatch.setenv("KORSTOCKSCAN_TEST_ARTIFACT_AI_GEMINI_MAX_OUTPUT_TOKENS", "4096")
-    monkeypatch.setenv("KORSTOCKSCAN_TEST_ARTIFACT_AI_GEMINI_KEY_ROTATION_ENABLED", "false")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_TEST_ARTIFACT_AI_GEMINI_KEY_ROTATION_ENABLED", "false"
+    )
 
     config = resolve_postclose_ai_review_config(
         "TEST_ARTIFACT",
@@ -193,10 +223,14 @@ def test_postclose_gpt54_keeps_gemini_fields_compat_default(monkeypatch):
     assert config.gemini_key_rotation_enabled is False
 
 
-def test_structured_review_openai_contract_failure_uses_bedrock_qwen3_failback(monkeypatch):
+def test_structured_review_openai_contract_failure_uses_bedrock_qwen3_failback(
+    monkeypatch,
+):
     calls = []
     monkeypatch.setenv("KORSTOCKSCAN_TEST_ARTIFACT_AI_PRIMARY_PROVIDER", "openai")
-    monkeypatch.setenv("KORSTOCKSCAN_TEST_ARTIFACT_AI_FAILBACK_PROVIDER", "bedrock_qwen3")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_TEST_ARTIFACT_AI_FAILBACK_PROVIDER", "bedrock_qwen3"
+    )
     config = resolve_postclose_ai_review_config(
         "TEST_ARTIFACT",
         default_model="gpt-5.4",
@@ -205,7 +239,11 @@ def test_structured_review_openai_contract_failure_uses_bedrock_qwen3_failback(m
 
     def fake_openai(**kwargs):
         calls.append(("openai", kwargs["config"].model))
-        return None, {"provider": "openai", "status": "contract_failed", "openai_contract_reason": "parse_rejected"}
+        return None, {
+            "provider": "openai",
+            "status": "contract_failed",
+            "openai_contract_reason": "parse_rejected",
+        }
 
     def fake_bedrock(**kwargs):
         calls.append(("bedrock_qwen3", kwargs["config"].model))
@@ -232,10 +270,16 @@ def test_structured_review_openai_contract_failure_uses_bedrock_qwen3_failback(m
 
 def test_runtime_apply_gap_audit_uses_individual_env_not_global_deep(monkeypatch):
     for key in tuple(os.environ):
-        if key.startswith("KORSTOCKSCAN_RUNTIME_APPLY_GAP_AUDIT") or key.startswith("RUNTIME_APPLY_GAP_AI_REVIEW"):
+        if key.startswith("KORSTOCKSCAN_RUNTIME_APPLY_GAP_AUDIT") or key.startswith(
+            "RUNTIME_APPLY_GAP_AI_REVIEW"
+        ):
             monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("KORSTOCKSCAN_RUNTIME_APPLY_GAP_AUDIT_AI_MODEL", "gpt-runtime-gap")
-    monkeypatch.setenv("KORSTOCKSCAN_RUNTIME_APPLY_GAP_AUDIT_AI_REASONING_EFFORT", "medium")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RUNTIME_APPLY_GAP_AUDIT_AI_MODEL", "gpt-runtime-gap"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RUNTIME_APPLY_GAP_AUDIT_AI_REASONING_EFFORT", "medium"
+    )
     monkeypatch.setenv("KORSTOCKSCAN_RUNTIME_APPLY_GAP_AUDIT_AI_TIMEOUT_SEC", "123")
 
     config = runtime_gap_mod._ai_review_config()

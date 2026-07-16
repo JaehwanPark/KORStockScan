@@ -98,9 +98,9 @@ def test_checklist_candidates_include_nested_checklist_dir(monkeypatch, tmp_path
 
     assert Path("docs/checklists/2026-05-12-stage2-todo-checklist.md") in candidates
     assert Path("docs/2026-05-11-stage2-todo-checklist.md") in candidates
-    assert candidates.index(Path("docs/checklists/2026-05-12-stage2-todo-checklist.md")) < candidates.index(
-        Path("docs/2026-05-11-stage2-todo-checklist.md")
-    )
+    assert candidates.index(
+        Path("docs/checklists/2026-05-12-stage2-todo-checklist.md")
+    ) < candidates.index(Path("docs/2026-05-11-stage2-todo-checklist.md"))
 
 
 def test_parse_checklist_collects_multiple_stage2_files(monkeypatch, tmp_path):
@@ -140,7 +140,12 @@ def test_parse_checklist_collects_multiple_stage2_files(monkeypatch, tmp_path):
 
 
 def test_checklist_track_from_source_uses_mmdd_suffix():
-    assert _checklist_track_from_source(DOC_CHECKLIST.parent / "2026-04-14-stage2-todo-checklist.md") == "Checklist0414"
+    assert (
+        _checklist_track_from_source(
+            DOC_CHECKLIST.parent / "2026-04-14-stage2-todo-checklist.md"
+        )
+        == "Checklist0414"
+    )
 
 
 def test_parse_checklist_skips_past_due_stage2_files_by_default(monkeypatch):
@@ -159,7 +164,10 @@ def test_parse_scalping_logic_has_phase2_and_phase3():
     titles = [t.title for t in tasks]
     assert any(title.startswith("2-1 ") for title in titles)
     assert any(title.startswith("3-1 ") for title in titles)
-    assert all(title != "0-1b 원격 경량 프로파일링" or titles.count(title) == 1 for title in titles)
+    assert all(
+        title != "0-1b 원격 경량 프로파일링" or titles.count(title) == 1
+        for title in titles
+    )
 
 
 def test_parse_prompt_has_detail_tasks_with_due_for_p0(monkeypatch):
@@ -344,11 +352,21 @@ def test_find_option_id_by_name_normalized():
 
 
 def test_infer_slot_label_uses_keyword_then_track_default():
-    preopen = BacklogTask(title="2026-04-13 장전 점검", source="x", section="체크", track="Plan")
-    intraday = BacklogTask(title="장중 canary 모니터링", source="x", section="체크", track="Plan")
-    postclose = BacklogTask(title="장후 리포트 검증", source="x", section="체크", track="Plan")
-    fallback = BacklogTask(title="키워드 없음", source="x", section="체크", track="ScalpingLogic")
-    plan_fallback = BacklogTask(title="키워드 없음", source="x", section="체크", track="Plan")
+    preopen = BacklogTask(
+        title="2026-04-13 장전 점검", source="x", section="체크", track="Plan"
+    )
+    intraday = BacklogTask(
+        title="장중 canary 모니터링", source="x", section="체크", track="Plan"
+    )
+    postclose = BacklogTask(
+        title="장후 리포트 검증", source="x", section="체크", track="Plan"
+    )
+    fallback = BacklogTask(
+        title="키워드 없음", source="x", section="체크", track="ScalpingLogic"
+    )
+    plan_fallback = BacklogTask(
+        title="키워드 없음", source="x", section="체크", track="Plan"
+    )
     assert _infer_slot_label(preopen) == "PREOPEN"
     assert _infer_slot_label(intraday) == "INTRADAY"
     assert _infer_slot_label(postclose) == "POSTCLOSE"
@@ -372,8 +390,16 @@ def test_slot_equals_normalized():
 
 
 def test_infer_time_window_uses_explicit_range():
-    task = BacklogTask(title="장중 2차 수집 (13:20~13:35)", source="x", section="체크", track="Checklist0414")
-    assert _infer_time_window(task, slot_label="INTRADAY", default_duration_min=30) == "13:20~13:35"
+    task = BacklogTask(
+        title="장중 2차 수집 (13:20~13:35)",
+        source="x",
+        section="체크",
+        track="Checklist0414",
+    )
+    assert (
+        _infer_time_window(task, slot_label="INTRADAY", default_duration_min=30)
+        == "13:20~13:35"
+    )
 
 
 def test_infer_time_window_preserves_explicit_preopen_and_postclose_ranges():
@@ -391,18 +417,36 @@ def test_infer_time_window_preserves_explicit_preopen_and_postclose_ranges():
         track="RunbookOps",
         due_date="2026-05-11",
     )
-    assert _infer_time_window(preopen, slot_label="PREOPEN", default_duration_min=30) == "08:00~09:00"
-    assert _infer_time_window(postclose, slot_label="POSTCLOSE", default_duration_min=30) == "20:05~21:55"
+    assert (
+        _infer_time_window(preopen, slot_label="PREOPEN", default_duration_min=30)
+        == "08:00~09:00"
+    )
+    assert (
+        _infer_time_window(postclose, slot_label="POSTCLOSE", default_duration_min=30)
+        == "20:05~21:55"
+    )
 
 
 def test_infer_time_window_uses_slot_default_when_missing():
     task = BacklogTask(title="일반 작업", source="x", section="체크", track="AIPrompt")
-    assert _infer_time_window(task, slot_label="POSTCLOSE", default_duration_min=30) == "15:40~16:10"
+    assert (
+        _infer_time_window(task, slot_label="POSTCLOSE", default_duration_min=30)
+        == "15:40~16:10"
+    )
 
 
 def test_infer_time_window_holiday_forces_intraday_default_for_postclose():
-    task = BacklogTask(title="일반 작업", source="x", section="체크", track="AIPrompt", due_date="2026-04-12")
-    assert _infer_time_window(task, slot_label="POSTCLOSE", default_duration_min=30) == "10:00~10:30"
+    task = BacklogTask(
+        title="일반 작업",
+        source="x",
+        section="체크",
+        track="AIPrompt",
+        due_date="2026-04-12",
+    )
+    assert (
+        _infer_time_window(task, slot_label="POSTCLOSE", default_duration_min=30)
+        == "10:00~10:30"
+    )
 
 
 def test_infer_time_window_holiday_ignores_explicit_postclose_range():
@@ -413,12 +457,20 @@ def test_infer_time_window_holiday_ignores_explicit_postclose_range():
         track="AIPrompt",
         due_date="2026-04-12",
     )
-    assert _infer_time_window(task, slot_label="POSTCLOSE", default_duration_min=30) == "10:00~10:30"
+    assert (
+        _infer_time_window(task, slot_label="POSTCLOSE", default_duration_min=30)
+        == "10:00~10:30"
+    )
 
 
 def test_infer_time_window_unscheduled_keyword():
-    task = BacklogTask(title="예약 작업(미정)", source="x", section="체크", track="Plan")
-    assert _infer_time_window(task, slot_label="POSTCLOSE", default_duration_min=30) == "UNSCHEDULED"
+    task = BacklogTask(
+        title="예약 작업(미정)", source="x", section="체크", track="Plan"
+    )
+    assert (
+        _infer_time_window(task, slot_label="POSTCLOSE", default_duration_min=30)
+        == "UNSCHEDULED"
+    )
 
 
 def test_infer_apply_target_text_detects_remote_and_main():
@@ -429,7 +481,9 @@ def test_infer_apply_target_text_detects_remote_and_main():
     assert _infer_apply_target_text("일반 문서 작업") == "-"
 
 
-def test_parse_runbook_operational_tasks_emit_project_calendar_queue(monkeypatch, tmp_path):
+def test_parse_runbook_operational_tasks_emit_project_calendar_queue(
+    monkeypatch, tmp_path
+):
     checklist = tmp_path / "2026-05-11-stage2-todo-checklist.md"
     checklist.write_text("# 2026-05-11\n", encoding="utf-8")
     monkeypatch.setenv("DOC_BACKLOG_TODAY", "2026-05-09")
@@ -441,7 +495,11 @@ def test_parse_runbook_operational_tasks_emit_project_calendar_queue(monkeypatch
     tasks = parse_runbook_operational_tasks()
 
     assert [task.track for task in tasks] == ["RunbookOps", "RunbookOps", "RunbookOps"]
-    assert [task.due_date for task in tasks] == ["2026-05-11", "2026-05-11", "2026-05-11"]
+    assert [task.due_date for task in tasks] == [
+        "2026-05-11",
+        "2026-05-11",
+        "2026-05-11",
+    ]
     assert "Slot: PREOPEN" in tasks[0].title
     assert "TimeWindow: 08:00~09:00" in tasks[0].title
     assert "Slot: INTRADAY" in tasks[1].title
@@ -476,7 +534,9 @@ def test_parse_runbook_operational_tasks_skips_completed_preopen(monkeypatch, tm
     assert "Slot: POSTCLOSE" in tasks[1].title
 
 
-def test_parse_runbook_operational_tasks_skips_completed_preopen_checklist_block(monkeypatch, tmp_path):
+def test_parse_runbook_operational_tasks_skips_completed_preopen_checklist_block(
+    monkeypatch, tmp_path
+):
     checklist = tmp_path / "2026-05-19-stage2-todo-checklist.md"
     checklist.write_text(
         "\n".join(
@@ -515,10 +575,18 @@ def test_collect_backlog_tasks_includes_runbook_ops(monkeypatch, tmp_path):
         "src.engine.sync_docs_backlog_to_project._checklist_doc_candidates",
         lambda: [checklist],
     )
-    monkeypatch.setattr("src.engine.sync_docs_backlog_to_project.parse_plan_tasks", lambda: [])
-    monkeypatch.setattr("src.engine.sync_docs_backlog_to_project.parse_checklist_tasks", lambda: [])
-    monkeypatch.setattr("src.engine.sync_docs_backlog_to_project.parse_scalping_logic_tasks", lambda: [])
-    monkeypatch.setattr("src.engine.sync_docs_backlog_to_project.parse_prompt_tasks", lambda: [])
+    monkeypatch.setattr(
+        "src.engine.sync_docs_backlog_to_project.parse_plan_tasks", lambda: []
+    )
+    monkeypatch.setattr(
+        "src.engine.sync_docs_backlog_to_project.parse_checklist_tasks", lambda: []
+    )
+    monkeypatch.setattr(
+        "src.engine.sync_docs_backlog_to_project.parse_scalping_logic_tasks", lambda: []
+    )
+    monkeypatch.setattr(
+        "src.engine.sync_docs_backlog_to_project.parse_prompt_tasks", lambda: []
+    )
 
     tasks = collect_backlog_tasks()
 
@@ -576,7 +644,11 @@ def test_sync_backlog_updates_due_for_existing_item(monkeypatch):
         lambda *args, **kwargs: (
             "PROJECT_1",
             {
-                "Due": {"id": "FIELD_DUE", "__typename": "ProjectV2Field", "dataType": "DATE"},
+                "Due": {
+                    "id": "FIELD_DUE",
+                    "__typename": "ProjectV2Field",
+                    "dataType": "DATE",
+                },
             },
             {existing_title},
             [
@@ -598,7 +670,10 @@ def test_sync_backlog_updates_due_for_existing_item(monkeypatch):
         calls.append(variables)
         return {}
 
-    monkeypatch.setattr("src.engine.sync_docs_backlog_to_project._graphql_request", _fake_graphql_request)
+    monkeypatch.setattr(
+        "src.engine.sync_docs_backlog_to_project._graphql_request",
+        _fake_graphql_request,
+    )
 
     summary = sync_backlog_to_project(dry_run=False, limit=10)
     assert summary["created_or_would_create"] == 0
@@ -649,7 +724,10 @@ def test_sync_backlog_skips_status_update_when_already_current(monkeypatch):
         calls.append(variables)
         return {}
 
-    monkeypatch.setattr("src.engine.sync_docs_backlog_to_project._graphql_request", _fake_graphql_request)
+    monkeypatch.setattr(
+        "src.engine.sync_docs_backlog_to_project._graphql_request",
+        _fake_graphql_request,
+    )
 
     summary = sync_backlog_to_project(dry_run=False, limit=10)
     assert summary["status_already_current"] == 1
@@ -681,8 +759,22 @@ def test_sync_backlog_deletes_duplicate_managed_project_items(monkeypatch):
             {},
             {title},
             [
-                ProjectItem("ITEM_KEEP", title, "DraftIssue", "2026-04-23", "POSTCLOSE", "16:50~17:00"),
-                ProjectItem("ITEM_DROP", title, "DraftIssue", "2026-04-23", "POSTCLOSE", "16:50~17:00"),
+                ProjectItem(
+                    "ITEM_KEEP",
+                    title,
+                    "DraftIssue",
+                    "2026-04-23",
+                    "POSTCLOSE",
+                    "16:50~17:00",
+                ),
+                ProjectItem(
+                    "ITEM_DROP",
+                    title,
+                    "DraftIssue",
+                    "2026-04-23",
+                    "POSTCLOSE",
+                    "16:50~17:00",
+                ),
             ],
         ),
     )
@@ -693,12 +785,18 @@ def test_sync_backlog_deletes_duplicate_managed_project_items(monkeypatch):
         calls.append((query, variables))
         return {}
 
-    monkeypatch.setattr("src.engine.sync_docs_backlog_to_project._graphql_request", _fake_graphql_request)
+    monkeypatch.setattr(
+        "src.engine.sync_docs_backlog_to_project._graphql_request",
+        _fake_graphql_request,
+    )
 
     summary = sync_backlog_to_project(dry_run=False, limit=10)
     assert summary["created_or_would_create"] == 0
     assert summary["duplicates_deleted_or_would_delete"] == 1
-    assert any("deleteProjectV2Item" in query and variables["itemId"] == "ITEM_DROP" for query, variables in calls)
+    assert any(
+        "deleteProjectV2Item" in query and variables["itemId"] == "ITEM_DROP"
+        for query, variables in calls
+    )
 
 
 def test_graphql_request_retries_remote_disconnected(monkeypatch):
@@ -720,8 +818,12 @@ def test_graphql_request_retries_remote_disconnected(monkeypatch):
             raise RemoteDisconnected("Remote end closed connection without response")
         return _FakeResponse()
 
-    monkeypatch.setattr("src.engine.sync_docs_backlog_to_project.request.urlopen", _fake_urlopen)
-    monkeypatch.setattr("src.engine.sync_docs_backlog_to_project.time.sleep", lambda _: None)
+    monkeypatch.setattr(
+        "src.engine.sync_docs_backlog_to_project.request.urlopen", _fake_urlopen
+    )
+    monkeypatch.setattr(
+        "src.engine.sync_docs_backlog_to_project.time.sleep", lambda _: None
+    )
 
     data = _graphql_request("token", "query Test { viewer { login } }", {})
     assert data == {"ok": True}
@@ -752,8 +854,12 @@ def test_graphql_request_retries_transient_graphql_internal_error(monkeypatch):
             )
         return _FakeResponse(b'{"data":{"ok":true}}')
 
-    monkeypatch.setattr("src.engine.sync_docs_backlog_to_project.request.urlopen", _fake_urlopen)
-    monkeypatch.setattr("src.engine.sync_docs_backlog_to_project.time.sleep", lambda _: None)
+    monkeypatch.setattr(
+        "src.engine.sync_docs_backlog_to_project.request.urlopen", _fake_urlopen
+    )
+    monkeypatch.setattr(
+        "src.engine.sync_docs_backlog_to_project.time.sleep", lambda _: None
+    )
 
     data = _graphql_request("token", "query Test { viewer { login } }", {})
     assert data == {"ok": True}

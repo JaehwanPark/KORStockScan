@@ -23,7 +23,9 @@ def _event(stage: str, fields: dict, *, record_id: int = 1) -> dict:
 def _write_events(tmp_path, target_date: str, rows: list[dict]) -> None:
     event_dir = tmp_path / "pipeline_events"
     event_dir.mkdir(parents=True, exist_ok=True)
-    with (event_dir / f"pipeline_events_{target_date}.jsonl").open("w", encoding="utf-8") as handle:
+    with (event_dir / f"pipeline_events_{target_date}.jsonl").open(
+        "w", encoding="utf-8"
+    ) as handle:
         for row in rows:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
@@ -222,15 +224,14 @@ def test_protect_trailing_smooth_hold_contract_passes(monkeypatch, tmp_path):
 
     report = audit.build_observation_source_quality_audit("2026-07-15")
 
-    assert (
-        report["stage_contracts"]["protect_trailing_smooth_hold"]["status"]
-        == "pass"
-    )
+    assert report["stage_contracts"]["protect_trailing_smooth_hold"]["status"] == "pass"
     assert report["summary"]["hard_blocking_contract_gap_count"] == 0
 
 
 def test_market_halt_session_events_artifact_is_gitignored():
-    path = Path("data/source_quality/market_halt_windows/session_events/2026-06-08.json")
+    path = Path(
+        "data/source_quality/market_halt_windows/session_events/2026-06-08.json"
+    )
     result = subprocess.run(
         ["git", "check-ignore", "-q", str(path)],
         cwd=Path(__file__).resolve().parents[2],
@@ -240,7 +241,9 @@ def test_market_halt_session_events_artifact_is_gitignored():
     assert result.returncode == 0
 
 
-def test_observation_source_quality_audit_flags_missing_ai_fields(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_flags_missing_ai_fields(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
@@ -325,12 +328,19 @@ def _early_accel_contract_fields(*, include_provenance=True):
     return fields
 
 
-def test_observation_source_quality_audit_flags_missing_early_accel_provenance(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_flags_missing_early_accel_provenance(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
         "2026-05-15",
-        [_event("early_accel_recheck_evaluated", _early_accel_contract_fields(include_provenance=False))],
+        [
+            _event(
+                "early_accel_recheck_evaluated",
+                _early_accel_contract_fields(include_provenance=False),
+            )
+        ],
     )
 
     report = audit.build_observation_source_quality_audit("2026-05-15")
@@ -343,7 +353,9 @@ def test_observation_source_quality_audit_flags_missing_early_accel_provenance(m
     assert "early_accel_recheck_evaluated" in report["summary"]["hard_blocking_stages"]
 
 
-def test_observation_source_quality_audit_accepts_early_accel_provenance(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_accepts_early_accel_provenance(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
@@ -395,13 +407,19 @@ def test_ai_confirmed_terminal_no_budget_contract_passes(monkeypatch, tmp_path):
     assert report["summary"]["hard_blocking_contract_gap_count"] == 0
 
 
-def test_observation_source_quality_audit_detects_high_volume_contract_gap(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_detects_high_volume_contract_gap(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
         "2026-05-15",
         [
-            _event("strength_momentum_observed", {"reason": "below_strength_base"}, record_id=idx)
+            _event(
+                "strength_momentum_observed",
+                {"reason": "below_strength_base"},
+                record_id=idx,
+            )
             for idx in range(60)
         ],
     )
@@ -415,7 +433,9 @@ def test_observation_source_quality_audit_detects_high_volume_contract_gap(monke
     assert report["summary"]["hard_blocking_contract_gap_count"] == 1
 
 
-def test_partial_fill_reconciled_metric_contract_prevents_high_volume_hard_block(monkeypatch, tmp_path):
+def test_partial_fill_reconciled_metric_contract_prevents_high_volume_hard_block(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
@@ -454,57 +474,59 @@ def test_partial_fill_reconciled_metric_contract_prevents_high_volume_hard_block
     assert report["summary"]["tuning_input_allowed"] is True
 
 
-def test_observation_source_quality_audit_warns_on_high_rate_unknown_tokens(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_warns_on_high_rate_unknown_tokens(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
         "2026-05-15",
         [
-                _event(
-                    "scalp_entry_action_decision_snapshot",
-                    {
-                        "candidate_id": f"ADM-{idx}",
-                        "entry_adm_candidate_id": f"ADM-{idx}",
-                        "ai_score": "62.0",
-                        "ai_action": "WAIT",
-                        "chosen_action": "NO_BUY_AI",
-                        "eligible_actions": "NO_BUY_AI",
-                        "rejected_actions": "BUY_NOW",
-                        "source_stage": "ai_confirmed",
-                        "entry_adm_score_bucket": "score_unknown",
-                        "entry_adm_stale_bucket": "stale_unknown",
-                        "entry_adm_overbought_bucket": "overbought_unknown",
-                        "entry_adm_liquidity_bucket": "liquidity_high",
-                        "metric_role": "action_decision_matrix",
-                        "decision_authority": "entry_advisory_prompt_context_only",
-                        "source_quality_gate": "entry pipeline event + post-sell sim evaluation join when available",
-                        "runtime_effect": False,
-                        "allowed_runtime_apply": False,
-                        "actual_order_submitted": False,
-                        "broker_order_forbidden": True,
-                        "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
-                        "tick_source_quality_fields_sent": True,
-                        "tick_accel_source": "computed_10ticks",
-                        "tick_context_quality": "fresh_computed",
-                        "quote_age_source": "last_ws_update_ts",
-                        "tick_acceleration_ratio": "1.250",
-                        "tick_acceleration_ratio_raw": "1.250",
-                        "recent_5tick_seconds": "2.000",
-                        "prev_5tick_seconds": "2.500",
-                        "tick_accel_effective_recent_5tick_seconds": "2.000",
-                        "buy_pressure_10t": "70.000",
-                        "curr_vs_micro_vwap_bp": "8.000",
-                        "curr_vs_ma5_bp": "5.000",
-                        "micro_vwap_available": True,
-                        "minute_candle_context_quality": "fresh_bar_window",
-                        "minute_candle_window_fresh": True,
-                        "minute_candle_latest_age_ms": 12000,
-                        "latest_strength": "120.0",
-                        "distance_from_day_high_pct": "-0.50",
-                        "intraday_range_pct": "2.10",
-                    },
-                    record_id=idx,
-                )
+            _event(
+                "scalp_entry_action_decision_snapshot",
+                {
+                    "candidate_id": f"ADM-{idx}",
+                    "entry_adm_candidate_id": f"ADM-{idx}",
+                    "ai_score": "62.0",
+                    "ai_action": "WAIT",
+                    "chosen_action": "NO_BUY_AI",
+                    "eligible_actions": "NO_BUY_AI",
+                    "rejected_actions": "BUY_NOW",
+                    "source_stage": "ai_confirmed",
+                    "entry_adm_score_bucket": "score_unknown",
+                    "entry_adm_stale_bucket": "stale_unknown",
+                    "entry_adm_overbought_bucket": "overbought_unknown",
+                    "entry_adm_liquidity_bucket": "liquidity_high",
+                    "metric_role": "action_decision_matrix",
+                    "decision_authority": "entry_advisory_prompt_context_only",
+                    "source_quality_gate": "entry pipeline event + post-sell sim evaluation join when available",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
+                    "tick_source_quality_fields_sent": True,
+                    "tick_accel_source": "computed_10ticks",
+                    "tick_context_quality": "fresh_computed",
+                    "quote_age_source": "last_ws_update_ts",
+                    "tick_acceleration_ratio": "1.250",
+                    "tick_acceleration_ratio_raw": "1.250",
+                    "recent_5tick_seconds": "2.000",
+                    "prev_5tick_seconds": "2.500",
+                    "tick_accel_effective_recent_5tick_seconds": "2.000",
+                    "buy_pressure_10t": "70.000",
+                    "curr_vs_micro_vwap_bp": "8.000",
+                    "curr_vs_ma5_bp": "5.000",
+                    "micro_vwap_available": True,
+                    "minute_candle_context_quality": "fresh_bar_window",
+                    "minute_candle_window_fresh": True,
+                    "minute_candle_latest_age_ms": 12000,
+                    "latest_strength": "120.0",
+                    "distance_from_day_high_pct": "-0.50",
+                    "intraday_range_pct": "2.10",
+                },
+                record_id=idx,
+            )
             for idx in range(60)
         ],
     )
@@ -525,7 +547,9 @@ def test_observation_source_quality_audit_warns_on_high_rate_unknown_tokens(monk
     assert finding["runtime_effect"] is False
 
 
-def test_observation_source_quality_audit_reviews_entry_block_source_quality_unknown(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_reviews_entry_block_source_quality_unknown(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     rows = [
         _event(
@@ -562,18 +586,34 @@ def test_observation_source_quality_audit_reviews_entry_block_source_quality_unk
     report = audit.build_observation_source_quality_audit("2026-05-15")
 
     assert report["unknown_token_findings"] == []
-    reviewed = {item["stage"]: item for item in report["reviewed_unknown_token_findings"]}
-    snapshot_fields = {item["field"]: item for item in reviewed["scalp_entry_action_decision_snapshot"]["fields"]}
-    weak_fields = {item["field"]: item for item in reviewed["real_weak_ai_micro_entry_block"]["fields"]}
+    reviewed = {
+        item["stage"]: item for item in report["reviewed_unknown_token_findings"]
+    }
+    snapshot_fields = {
+        item["field"]: item
+        for item in reviewed["scalp_entry_action_decision_snapshot"]["fields"]
+    }
+    weak_fields = {
+        item["field"]: item
+        for item in reviewed["real_weak_ai_micro_entry_block"]["fields"]
+    }
     assert snapshot_fields["block_reason"]["reviewed_reason"] == (
         "reviewed_entry_block_source_quality_unknown_provenance"
     )
-    assert weak_fields["reason"]["reviewed_reason"] == "reviewed_entry_block_source_quality_unknown_provenance"
-    assert weak_fields["block_reason"]["reviewed_reason"] == "reviewed_entry_block_source_quality_unknown_provenance"
+    assert (
+        weak_fields["reason"]["reviewed_reason"]
+        == "reviewed_entry_block_source_quality_unknown_provenance"
+    )
+    assert (
+        weak_fields["block_reason"]["reviewed_reason"]
+        == "reviewed_entry_block_source_quality_unknown_provenance"
+    )
     assert report["summary"]["review_warning_count"] == 0
 
 
-def test_observation_source_quality_audit_reviews_live_liquidity_would_unknown(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_reviews_live_liquidity_would_unknown(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
@@ -632,11 +672,16 @@ def test_observation_source_quality_audit_reviews_live_liquidity_would_unknown(m
     reviewed = report["reviewed_unknown_token_findings"]
     assert reviewed[0]["stage"] == "latency_pass"
     fields = {item["field"]: item for item in reviewed[0]["fields"]}
-    assert fields["liquidity_guard_action"]["reviewed_reason"] == "reviewed_pre_submit_liquidity_not_available"
+    assert (
+        fields["liquidity_guard_action"]["reviewed_reason"]
+        == "reviewed_pre_submit_liquidity_not_available"
+    )
     assert report["summary"]["review_warning_count"] == 0
 
 
-def test_observation_source_quality_audit_reviews_sell_order_exchange_resolution_unknown(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_reviews_sell_order_exchange_resolution_unknown(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
@@ -678,7 +723,9 @@ def test_observation_source_quality_audit_reviews_sell_order_exchange_resolution
     assert report["summary"]["review_warning_count"] == 0
 
 
-def test_observation_source_quality_audit_reviews_entry_adm_price_unknown_provenance(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_reviews_entry_adm_price_unknown_provenance(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
@@ -751,15 +798,23 @@ def test_observation_source_quality_audit_reviews_entry_adm_price_unknown_proven
         if item["stage"] == "scalp_entry_action_decision_snapshot"
     )
     fields = {item["field"]: item for item in reviewed["fields"]}
-    assert fields["entry_adm_cache_token"]["reviewed_reason"] == "reviewed_entry_adm_bucket_provenance_recorded"
-    assert fields["entry_adm_bucket_token"]["reviewed_reason"] == "reviewed_entry_adm_bucket_provenance_recorded"
+    assert (
+        fields["entry_adm_cache_token"]["reviewed_reason"]
+        == "reviewed_entry_adm_bucket_provenance_recorded"
+    )
+    assert (
+        fields["entry_adm_bucket_token"]["reviewed_reason"]
+        == "reviewed_entry_adm_bucket_provenance_recorded"
+    )
     assert (
         fields["entry_adm_price_resolution_bucket"]["reviewed_reason"]
         == "reviewed_entry_adm_bucket_provenance_recorded"
     )
 
 
-def test_observation_source_quality_audit_surfaces_ai_numeric_consistency_findings(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_surfaces_ai_numeric_consistency_findings(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
@@ -825,14 +880,18 @@ def test_observation_source_quality_audit_surfaces_ai_numeric_consistency_findin
     assert finding["examples"][0]["field"] == "tick_acceleration_ratio"
 
 
-def test_observation_source_quality_audit_warns_on_any_unknown_token_field(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_warns_on_any_unknown_token_field(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     rows = [
         _event(
             "arbitrary_source_stage",
             {
                 "source_id": f"SRC-{idx}",
-                "custom_context_state": "custom_unknown_placeholder" if idx == 7 else "observed",
+                "custom_context_state": (
+                    "custom_unknown_placeholder" if idx == 7 else "observed"
+                ),
             },
             record_id=idx,
         )
@@ -853,7 +912,9 @@ def test_observation_source_quality_audit_warns_on_any_unknown_token_field(monke
     assert fields["custom_context_state"]["rate"] == 0.01
 
 
-def test_observation_source_quality_audit_separates_reviewed_unknown_tokens(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_separates_reviewed_unknown_tokens(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     rows = [
         _event(
@@ -883,10 +944,15 @@ def test_observation_source_quality_audit_separates_reviewed_unknown_tokens(monk
     assert {field["field"] for field in finding["fields"]} == {"custom_context_state"}
     reviewed = report["reviewed_unknown_token_findings"][0]
     reviewed_fields = {field["field"]: field for field in reviewed["fields"]}
-    assert reviewed_fields["orderbook_micro_ofi_bucket_key"]["reviewed_reason"] == "reviewed_insufficient_sample"
+    assert (
+        reviewed_fields["orderbook_micro_ofi_bucket_key"]["reviewed_reason"]
+        == "reviewed_insufficient_sample"
+    )
 
 
-def test_observation_source_quality_audit_reviews_legacy_orderbook_micro_unknown_bucket(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_reviews_legacy_orderbook_micro_unknown_bucket(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
@@ -975,7 +1041,9 @@ def test_observation_source_quality_audit_reviews_stale_flag_unknown_when_age_no
         )
 
 
-def test_observation_source_quality_audit_warns_on_new_orderbook_micro_unknown_bucket(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_warns_on_new_orderbook_micro_unknown_bucket(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     row = _event(
         "swing_scale_in_micro_context_observed",
@@ -998,7 +1066,9 @@ def test_observation_source_quality_audit_warns_on_new_orderbook_micro_unknown_b
     assert fields["orderbook_micro_ofi_bucket_key"]["count"] == 1
 
 
-def test_observation_source_quality_audit_reviews_missing_risk_regime_context(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_reviews_missing_risk_regime_context(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
@@ -1029,11 +1099,16 @@ def test_observation_source_quality_audit_reviews_missing_risk_regime_context(mo
     assert report["summary"]["reviewed_unknown_token_stage_count"] == 1
     reviewed = report["reviewed_unknown_token_findings"][0]
     assert reviewed["stage"] == "scalp_entry_action_decision_snapshot"
-    assert reviewed["fields"][0]["reviewed_reason"] == "reviewed_missing_risk_regime_context"
+    assert (
+        reviewed["fields"][0]["reviewed_reason"]
+        == "reviewed_missing_risk_regime_context"
+    )
     assert reviewed["runtime_effect"] is False
 
 
-def test_observation_source_quality_audit_reviews_panic_context_warning_unknown_fields(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_reviews_panic_context_warning_unknown_fields(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
@@ -1057,13 +1132,22 @@ def test_observation_source_quality_audit_reviews_panic_context_warning_unknown_
     assert report["summary"]["unknown_token_stage_count"] == 0
     assert report["summary"]["reviewed_unknown_token_stage_count"] == 1
     reviewed_fields = {
-        item["field"]: item for item in report["reviewed_unknown_token_findings"][0]["fields"]
+        item["field"]: item
+        for item in report["reviewed_unknown_token_findings"][0]["fields"]
     }
-    assert reviewed_fields["panic_epoch_id"]["reviewed_reason"] == "reviewed_missing_risk_regime_context"
-    assert reviewed_fields["market_risk_state"]["reviewed_reason"] == "reviewed_missing_risk_regime_context"
+    assert (
+        reviewed_fields["panic_epoch_id"]["reviewed_reason"]
+        == "reviewed_missing_risk_regime_context"
+    )
+    assert (
+        reviewed_fields["market_risk_state"]["reviewed_reason"]
+        == "reviewed_missing_risk_regime_context"
+    )
 
 
-def test_observation_source_quality_audit_reviews_runtime_skip_context_unknown(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_reviews_runtime_skip_context_unknown(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
@@ -1090,14 +1174,19 @@ def test_observation_source_quality_audit_reviews_runtime_skip_context_unknown(m
     assert report["summary"]["unknown_token_stage_count"] == 0
     reviewed = report["reviewed_unknown_token_findings"][0]
     fields = {item["field"]: item for item in reviewed["fields"]}
-    assert fields["tick_context_quality"]["reviewed_reason"] == "reviewed_runtime_skip_context_not_evaluated"
+    assert (
+        fields["tick_context_quality"]["reviewed_reason"]
+        == "reviewed_runtime_skip_context_not_evaluated"
+    )
     assert (
         fields["minute_candle_context_quality"]["reviewed_reason"]
         == "reviewed_runtime_skip_context_not_evaluated"
     )
 
 
-def test_observation_source_quality_audit_reviews_score_and_micro_context_unknowns(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_reviews_score_and_micro_context_unknowns(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
@@ -1146,15 +1235,15 @@ def test_observation_source_quality_audit_reviews_score_and_micro_context_unknow
         item["stage"]: {field["field"]: field for field in item["fields"]}
         for item in report["reviewed_unknown_token_findings"]
     }
-    assert reviewed["early_accel_recheck_evaluated"]["tick_accel_source"]["reviewed_reason"] == (
-        "reviewed_unusable_micro_context_not_available"
-    )
-    assert reviewed["scalp_entry_action_decision_snapshot"]["entry_score_source"]["reviewed_reason"] == (
-        "reviewed_entry_score_source_not_available"
-    )
-    assert reviewed["scalp_entry_action_decision_snapshot"]["score_prior_confidence"]["reviewed_reason"] == (
-        "reviewed_score_prior_neutral_unknown_not_decision_input"
-    )
+    assert reviewed["early_accel_recheck_evaluated"]["tick_accel_source"][
+        "reviewed_reason"
+    ] == ("reviewed_unusable_micro_context_not_available")
+    assert reviewed["scalp_entry_action_decision_snapshot"]["entry_score_source"][
+        "reviewed_reason"
+    ] == ("reviewed_entry_score_source_not_available")
+    assert reviewed["scalp_entry_action_decision_snapshot"]["score_prior_confidence"][
+        "reviewed_reason"
+    ] == ("reviewed_score_prior_neutral_unknown_not_decision_input")
 
 
 def test_observation_source_quality_audit_reviews_rising_missed_nxt_unknown_provenance(
@@ -1237,15 +1326,20 @@ def test_observation_source_quality_audit_reviews_rising_missed_nxt_unknown_prov
     assert nxt_reviewed["rising_missed_effective_venue"]["reviewed_reason"] == (
         "reviewed_rising_missed_nxt_eligibility_not_available"
     )
-    assert reviewed["rising_missed_nxt_post_block_price_sample"][
-        "rising_missed_nxt_post_block_ws_0b_route"
-    ]["reviewed_reason"] == "reviewed_rising_missed_nxt_post_block_route_not_available"
+    assert (
+        reviewed["rising_missed_nxt_post_block_price_sample"][
+            "rising_missed_nxt_post_block_ws_0b_route"
+        ]["reviewed_reason"]
+        == "reviewed_rising_missed_nxt_post_block_route_not_available"
+    )
     assert reviewed["budget_pass"]["rising_missed_nxt_eligible"]["reviewed_reason"] == (
         "reviewed_rising_missed_nxt_eligibility_not_available"
     )
 
 
-def test_observation_source_quality_audit_reviews_explicit_sim_liquidity_unknown(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_reviews_explicit_sim_liquidity_unknown(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
@@ -1282,7 +1376,10 @@ def test_observation_source_quality_audit_reviews_explicit_sim_liquidity_unknown
     assert fields["sim_pre_submit_liquidity_guard_action"]["reviewed_reason"] == (
         "reviewed_sim_liquidity_not_available"
     )
-    assert fields["__stage"]["reviewed_reason"] == "reviewed_explicit_sim_liquidity_unknown_stage"
+    assert (
+        fields["__stage"]["reviewed_reason"]
+        == "reviewed_explicit_sim_liquidity_unknown_stage"
+    )
 
 
 def test_observation_source_quality_audit_warns_on_uncontracted_liquidity_unknown(
@@ -1373,12 +1470,18 @@ def test_observation_source_quality_audit_reviews_propagated_sim_liquidity_unkno
         item["stage"]: {field["field"]: field for field in item["fields"]}
         for item in report["reviewed_unknown_token_findings"]
     }
-    assert reviewed["scalp_sim_entry_armed"]["sim_pre_submit_liquidity_guard_action"][
-        "reviewed_reason"
-    ] == "reviewed_sim_liquidity_not_available"
-    assert reviewed["scalp_entry_action_decision_snapshot"]["sim_pre_submit_liquidity_guard_action"][
-        "reviewed_reason"
-    ] == "reviewed_sim_liquidity_not_available"
+    assert (
+        reviewed["scalp_sim_entry_armed"]["sim_pre_submit_liquidity_guard_action"][
+            "reviewed_reason"
+        ]
+        == "reviewed_sim_liquidity_not_available"
+    )
+    assert (
+        reviewed["scalp_entry_action_decision_snapshot"][
+            "sim_pre_submit_liquidity_guard_action"
+        ]["reviewed_reason"]
+        == "reviewed_sim_liquidity_not_available"
+    )
 
 
 def test_observation_source_quality_audit_reviews_rising_missed_submit_backoff_reason(
@@ -1542,24 +1645,42 @@ def test_observation_source_quality_audit_reviews_20260713_unknown_provenance_ga
         item["stage"]: {field["field"]: field for field in item["fields"]}
         for item in report["reviewed_unknown_token_findings"]
     }
-    assert reviewed["rising_missed_scout_quality_guard_blocked"][
-        "rising_missed_submit_safety_backoff_reason"
-    ]["reviewed_reason"] == "reviewed_rising_missed_submit_safety_backoff_source_quality_provenance"
-    assert reviewed["rising_missed_tick_speed_entry_block"]["entry_order_flow_status"][
-        "reviewed_reason"
-    ] == "reviewed_entry_order_flow_not_available"
-    assert reviewed["scalp_entry_action_decision_snapshot"]["entry_action_final_block_reason"][
-        "reviewed_reason"
-    ] == "reviewed_entry_block_source_quality_unknown_provenance"
-    assert reviewed["scalp_entry_action_decision_snapshot"]["entry_action_final_reason"][
-        "reviewed_reason"
-    ] == "reviewed_entry_block_source_quality_unknown_provenance"
-    assert reviewed["stat_action_decision_snapshot"]["shallow_tick_context_stale"][
-        "reviewed_reason"
-    ] == "reviewed_shallow_stale_flag_not_available"
-    assert reviewed["stat_action_decision_snapshot"]["shallow_quote_stale"][
-        "reviewed_reason"
-    ] == "reviewed_shallow_stale_flag_not_available"
+    assert (
+        reviewed["rising_missed_scout_quality_guard_blocked"][
+            "rising_missed_submit_safety_backoff_reason"
+        ]["reviewed_reason"]
+        == "reviewed_rising_missed_submit_safety_backoff_source_quality_provenance"
+    )
+    assert (
+        reviewed["rising_missed_tick_speed_entry_block"]["entry_order_flow_status"][
+            "reviewed_reason"
+        ]
+        == "reviewed_entry_order_flow_not_available"
+    )
+    assert (
+        reviewed["scalp_entry_action_decision_snapshot"][
+            "entry_action_final_block_reason"
+        ]["reviewed_reason"]
+        == "reviewed_entry_block_source_quality_unknown_provenance"
+    )
+    assert (
+        reviewed["scalp_entry_action_decision_snapshot"]["entry_action_final_reason"][
+            "reviewed_reason"
+        ]
+        == "reviewed_entry_block_source_quality_unknown_provenance"
+    )
+    assert (
+        reviewed["stat_action_decision_snapshot"]["shallow_tick_context_stale"][
+            "reviewed_reason"
+        ]
+        == "reviewed_shallow_stale_flag_not_available"
+    )
+    assert (
+        reviewed["stat_action_decision_snapshot"]["shallow_quote_stale"][
+            "reviewed_reason"
+        ]
+        == "reviewed_shallow_stale_flag_not_available"
+    )
 
 
 def test_observation_source_quality_audit_reviews_unknown_fill_quality_without_requested_qty(
@@ -1594,7 +1715,10 @@ def test_observation_source_quality_audit_reviews_unknown_fill_quality_without_r
     reviewed = report["reviewed_unknown_token_findings"][0]
     assert reviewed["stage"] == "position_rebased_after_fill"
     assert reviewed["fields"][0]["field"] == "fill_quality"
-    assert reviewed["fields"][0]["reviewed_reason"] == "reviewed_fill_quality_pre_contract_no_requested_qty"
+    assert (
+        reviewed["fields"][0]["reviewed_reason"]
+        == "reviewed_fill_quality_pre_contract_no_requested_qty"
+    )
 
 
 def test_observation_source_quality_audit_warns_on_unknown_fill_quality_with_missing_requested_qty(
@@ -1630,7 +1754,9 @@ def test_observation_source_quality_audit_warns_on_unknown_fill_quality_with_mis
     assert finding["fields"][0]["field"] == "fill_quality"
 
 
-def test_observation_source_quality_audit_warns_on_top_level_and_all_unknown_fields(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_warns_on_top_level_and_all_unknown_fields(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     fields = {f"custom_unknown_field_{idx}": "value_unknown" for idx in range(25)}
     rows = [
@@ -1657,7 +1783,9 @@ def test_observation_source_quality_audit_warns_on_top_level_and_all_unknown_fie
         assert f"custom_unknown_field_{idx}" in found_fields
 
 
-def test_observation_source_quality_audit_has_entry_micro_context_contract(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_has_entry_micro_context_contract(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
@@ -1686,7 +1814,9 @@ def test_observation_source_quality_audit_has_entry_micro_context_contract(monke
     assert contract["runtime_effect"] is False
 
 
-def test_observation_source_quality_audit_accepts_high_volume_contract_labels(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_accepts_high_volume_contract_labels(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
@@ -1712,13 +1842,19 @@ def test_observation_source_quality_audit_accepts_high_volume_contract_labels(mo
     assert report["high_volume_no_source_fields"] == []
 
 
-def test_observation_source_quality_audit_accepts_order_failure_diagnostic_contract(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_accepts_order_failure_diagnostic_contract(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
         "2026-05-15",
         [
-            _event("order_bundle_failed", {"reason": "broker_receipt_missing"}, record_id=idx)
+            _event(
+                "order_bundle_failed",
+                {"reason": "broker_receipt_missing"},
+                record_id=idx,
+            )
             for idx in range(60)
         ]
         + [
@@ -1734,7 +1870,9 @@ def test_observation_source_quality_audit_accepts_order_failure_diagnostic_contr
     assert report["field_presence_top"]["order_leg_fail"]["metric_role"] == 60
 
 
-def test_observation_source_quality_audit_enforces_sim_authority_contracts(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_enforces_sim_authority_contracts(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
@@ -1777,16 +1915,28 @@ def test_observation_source_quality_audit_enforces_sim_authority_contracts(monke
 
     report = audit.build_observation_source_quality_audit("2026-06-04")
 
-    assert report["stage_contracts"]["scalp_sim_duplicate_buy_signal"]["status"] == "warning"
     assert (
-        report["stage_contracts"]["scalp_sim_duplicate_buy_signal"]["missing_violations"]["runtime_effect"]
+        report["stage_contracts"]["scalp_sim_duplicate_buy_signal"]["status"]
+        == "warning"
+    )
+    assert (
+        report["stage_contracts"]["scalp_sim_duplicate_buy_signal"][
+            "missing_violations"
+        ]["runtime_effect"]
         == 1.0
     )
     assert report["stage_contracts"]["swing_probe_discarded"]["status"] == "warning"
-    assert report["stage_contracts"]["swing_probe_discarded"]["missing_violations"]["decision_authority"] == 1.0
+    assert (
+        report["stage_contracts"]["swing_probe_discarded"]["missing_violations"][
+            "decision_authority"
+        ]
+        == 1.0
+    )
 
 
-def test_observation_source_quality_audit_accepts_complete_sim_authority_contracts(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_accepts_complete_sim_authority_contracts(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
@@ -1850,8 +2000,15 @@ def test_observation_source_quality_audit_accepts_complete_sim_authority_contrac
 
     report = audit.build_observation_source_quality_audit("2026-06-04")
 
-    assert report["stage_contracts"]["scalp_sim_duplicate_buy_signal"]["status"] == "pass"
-    assert report["stage_contracts"]["scalp_sim_entry_submit_revalidation_warning"]["status"] == "pass"
+    assert (
+        report["stage_contracts"]["scalp_sim_duplicate_buy_signal"]["status"] == "pass"
+    )
+    assert (
+        report["stage_contracts"]["scalp_sim_entry_submit_revalidation_warning"][
+            "status"
+        ]
+        == "pass"
+    )
     assert report["stage_contracts"]["swing_probe_discarded"]["status"] == "pass"
 
 
@@ -1898,7 +2055,10 @@ def test_observation_source_quality_audit_accepts_score65_74_recovery_probe_bloc
 
     report = audit.build_observation_source_quality_audit("2026-06-15")
 
-    assert report["stage_contracts"]["score65_74_recovery_probe_blocked"]["status"] == "pass"
+    assert (
+        report["stage_contracts"]["score65_74_recovery_probe_blocked"]["status"]
+        == "pass"
+    )
     assert report["status"] == "pass"
 
 
@@ -1993,7 +2153,10 @@ def test_observation_source_quality_audit_blocks_score65_74_probe_without_truste
 
     contract = report["stage_contracts"]["score65_74_recovery_probe"]
     assert contract["status"] == "fail"
-    assert contract["invalid_label_violations"]["tick_aggressor_pressure_usable_contract"] == 1.0
+    assert (
+        contract["invalid_label_violations"]["tick_aggressor_pressure_usable_contract"]
+        == 1.0
+    )
     assert report["summary"]["tuning_input_allowed"] is False
     exclusion = report["hard_blocking_row_exclusions"][0]
     assert exclusion["stage"] == "score65_74_recovery_probe"
@@ -2043,7 +2206,10 @@ def test_observation_source_quality_audit_blocks_score65_74_probe_without_micro_
     assert contract["status"] == "fail"
     assert contract["missing_violations"]["micro_vwap_available"] == 1.0
     assert contract["missing_violations"]["minute_candle_window_fresh"] == 1.0
-    assert contract["invalid_label_violations"]["minute_candle_window_fresh_contract"] == 1.0
+    assert (
+        contract["invalid_label_violations"]["minute_candle_window_fresh_contract"]
+        == 1.0
+    )
     assert report["summary"]["tuning_input_allowed"] is False
     exclusion = report["hard_blocking_row_exclusions"][0]
     assert exclusion["stage"] == "score65_74_recovery_probe"
@@ -2097,8 +2263,14 @@ def test_observation_source_quality_audit_flags_score65_74_recovery_probe_succes
     assert contract["missing_violations"]["tick_aggressor_pressure_usable"] == 1.0
     assert contract["missing_violations"]["micro_vwap_available"] == 1.0
     assert contract["missing_violations"]["minute_candle_window_fresh"] == 1.0
-    assert contract["invalid_label_violations"]["tick_aggressor_pressure_usable_contract"] == 1.0
-    assert contract["invalid_label_violations"]["minute_candle_window_fresh_contract"] == 1.0
+    assert (
+        contract["invalid_label_violations"]["tick_aggressor_pressure_usable_contract"]
+        == 1.0
+    )
+    assert (
+        contract["invalid_label_violations"]["minute_candle_window_fresh_contract"]
+        == 1.0
+    )
     assert report["summary"]["tuning_input_allowed"] is False
 
 
@@ -2182,7 +2354,10 @@ def test_observation_source_quality_audit_blocks_pyramid_pressure_without_truste
 
     contract = report["stage_contracts"]["pyramid_blocked_reason"]
     assert contract["status"] == "fail"
-    assert contract["invalid_label_violations"]["tick_aggressor_pressure_usable_contract"] == 1.0
+    assert (
+        contract["invalid_label_violations"]["tick_aggressor_pressure_usable_contract"]
+        == 1.0
+    )
     assert report["summary"]["tuning_input_allowed"] is False
     assert report["summary"]["hard_blocking_excluded_row_count"] == 1
     exclusion = report["hard_blocking_row_exclusions"][0]
@@ -2216,7 +2391,10 @@ def test_observation_source_quality_audit_blocks_pyramid_micro_vwap_without_fres
 
     contract = report["stage_contracts"]["pyramid_blocked_reason"]
     assert contract["status"] == "fail"
-    assert contract["invalid_label_violations"]["minute_candle_window_fresh_contract"] == 1.0
+    assert (
+        contract["invalid_label_violations"]["minute_candle_window_fresh_contract"]
+        == 1.0
+    )
     assert report["summary"]["tuning_input_allowed"] is False
     exclusion = report["hard_blocking_row_exclusions"][0]
     assert exclusion["stage"] == "pyramid_blocked_reason"
@@ -2348,9 +2526,9 @@ def test_observation_source_quality_audit_accepts_shallow_source_gap_recheck_con
         item["stage"]: {field["field"]: field for field in item["fields"]}
         for item in report["reviewed_unknown_token_findings"]
     }
-    assert reviewed["shallow_source_gap_recheck"]["forbidden_uses"]["reviewed_reason"] == (
-        "reviewed_forbidden_uses_unknown_literal_not_source_value"
-    )
+    assert reviewed["shallow_source_gap_recheck"]["forbidden_uses"][
+        "reviewed_reason"
+    ] == ("reviewed_forbidden_uses_unknown_literal_not_source_value")
     assert report["summary"]["unknown_token_stage_count"] == 0
     assert report["summary"]["tuning_input_allowed"] is True
 
@@ -2437,7 +2615,9 @@ def test_observation_source_quality_audit_blocks_shallow_recheck_rest_positive_m
         "trusted_ws_micro_latest_age_ms": 180.0,
         "buy_pressure_10t": 72.0,
     }
-    _write_events(tmp_path, "2026-07-15", [_event("shallow_source_gap_recheck", fields)])
+    _write_events(
+        tmp_path, "2026-07-15", [_event("shallow_source_gap_recheck", fields)]
+    )
 
     report = audit.build_observation_source_quality_audit("2026-07-15")
 
@@ -2470,9 +2650,15 @@ def test_observation_source_quality_audit_blocks_reversal_add_pressure_without_t
 
     contract = report["stage_contracts"]["reversal_add_blocked_reason"]
     assert contract["status"] == "fail"
-    assert contract["invalid_label_violations"]["tick_aggressor_pressure_usable_contract"] == 1.0
+    assert (
+        contract["invalid_label_violations"]["tick_aggressor_pressure_usable_contract"]
+        == 1.0
+    )
     assert report["summary"]["tuning_input_allowed"] is False
-    assert report["hard_blocking_row_exclusions"][0]["stage"] == "reversal_add_blocked_reason"
+    assert (
+        report["hard_blocking_row_exclusions"][0]["stage"]
+        == "reversal_add_blocked_reason"
+    )
 
 
 def _first_touch_fields(**overrides):
@@ -2518,10 +2704,14 @@ def test_observation_source_quality_audit_accepts_first_touch_avgdown_contracts(
         tmp_path,
         "2026-06-15",
         [
-            _event("stop_line_touch_mandatory_avg_down_candidate", _first_touch_fields()),
+            _event(
+                "stop_line_touch_mandatory_avg_down_candidate", _first_touch_fields()
+            ),
             _event(
                 "stop_line_touch_mandatory_avg_down_submitted",
-                _first_touch_fields(actual_order_submitted=True, ord_no="A1", retry_count=1),
+                _first_touch_fields(
+                    actual_order_submitted=True, ord_no="A1", retry_count=1
+                ),
                 record_id=2,
             ),
             _event(
@@ -2542,9 +2732,24 @@ def test_observation_source_quality_audit_accepts_first_touch_avgdown_contracts(
 
     report = audit.build_observation_source_quality_audit("2026-06-15")
 
-    assert report["stage_contracts"]["stop_line_touch_mandatory_avg_down_candidate"]["status"] == "pass"
-    assert report["stage_contracts"]["stop_line_touch_mandatory_avg_down_submitted"]["status"] == "pass"
-    assert report["stage_contracts"]["stop_line_touch_first_touch_avgdown_decision_blocked"]["status"] == "pass"
+    assert (
+        report["stage_contracts"]["stop_line_touch_mandatory_avg_down_candidate"][
+            "status"
+        ]
+        == "pass"
+    )
+    assert (
+        report["stage_contracts"]["stop_line_touch_mandatory_avg_down_submitted"][
+            "status"
+        ]
+        == "pass"
+    )
+    assert (
+        report["stage_contracts"][
+            "stop_line_touch_first_touch_avgdown_decision_blocked"
+        ]["status"]
+        == "pass"
+    )
     assert report["summary"]["tuning_input_allowed"] is True
 
 
@@ -2642,7 +2847,10 @@ def test_observation_source_quality_audit_accepts_scanner_source_guard_contracts
 
     report = audit.build_observation_source_quality_audit("2026-06-15")
 
-    assert report["stage_contracts"]["scalping_scanner_real_source_guard_block"]["status"] == "pass"
+    assert (
+        report["stage_contracts"]["scalping_scanner_real_source_guard_block"]["status"]
+        == "pass"
+    )
     assert report["stage_contracts"]["condition_unmatch_guard"]["status"] == "pass"
     assert report["status"] == "pass"
 
@@ -2727,7 +2935,10 @@ def test_observation_source_quality_audit_requires_repeat_scanner_guard_provenan
 
     contract = report["stage_contracts"]["scalping_scanner_real_source_guard_block"]
     assert contract["status"] == "warning"
-    assert contract["conditional_required_fields"] == ["first_seen_flu_rate", "last_promoted_at"]
+    assert contract["conditional_required_fields"] == [
+        "first_seen_flu_rate",
+        "last_promoted_at",
+    ]
     assert contract["missing_violations"]["first_seen_flu_rate"] == 1.0
     assert contract["missing_violations"]["last_promoted_at"] == 1.0
 
@@ -2769,7 +2980,10 @@ def test_observation_source_quality_audit_requires_repeat_scanner_guard_provenan
 
     contract = report["stage_contracts"]["scalping_scanner_real_source_guard_block"]
     assert contract["status"] == "warning"
-    assert contract["conditional_required_fields"] == ["first_seen_flu_rate", "last_promoted_at"]
+    assert contract["conditional_required_fields"] == [
+        "first_seen_flu_rate",
+        "last_promoted_at",
+    ]
     assert contract["missing_violations"]["first_seen_flu_rate"] == 1.0
     assert contract["missing_violations"]["last_promoted_at"] == 1.0
 
@@ -2912,7 +3126,10 @@ def test_observation_source_quality_audit_flags_scanner_rank_sign_mismatch(
 
     contract = report["stage_contracts"]["scalping_scanner_runtime_target_attach"]
     assert contract["status"] == "fail"
-    assert contract["invalid_label_violations"]["rank_change_sign_consistency_mismatch"] == 1.0
+    assert (
+        contract["invalid_label_violations"]["rank_change_sign_consistency_mismatch"]
+        == 1.0
+    )
 
 
 def test_observation_source_quality_audit_flags_scanner_source_guard_rank_sign_unknown(
@@ -2957,7 +3174,10 @@ def test_observation_source_quality_audit_flags_scanner_source_guard_rank_sign_u
 
     contract = report["stage_contracts"]["scalping_scanner_real_source_guard_block"]
     assert contract["status"] == "fail"
-    assert contract["invalid_label_violations"]["rank_change_sign_consistency_unknown"] == 1.0
+    assert (
+        contract["invalid_label_violations"]["rank_change_sign_consistency_unknown"]
+        == 1.0
+    )
 
 
 def test_observation_source_quality_audit_accepts_early_accel_recheck_contracts(
@@ -3019,8 +3239,13 @@ def test_observation_source_quality_audit_accepts_early_accel_recheck_contracts(
 
     report = audit.build_observation_source_quality_audit("2026-06-15")
 
-    assert report["stage_contracts"]["early_accel_recheck_evaluated"]["status"] == "pass"
-    assert report["stage_contracts"]["early_accel_recheck_ai_call_allowed"]["status"] == "pass"
+    assert (
+        report["stage_contracts"]["early_accel_recheck_evaluated"]["status"] == "pass"
+    )
+    assert (
+        report["stage_contracts"]["early_accel_recheck_ai_call_allowed"]["status"]
+        == "pass"
+    )
     assert report["stage_contracts"]["early_accel_recheck_skipped"]["status"] == "pass"
     assert report["status"] == "pass"
 
@@ -3084,9 +3309,18 @@ def test_observation_source_quality_audit_accepts_ai_numeric_consistency_recheck
 
     report = audit.build_observation_source_quality_audit("2026-06-18")
 
-    assert report["stage_contracts"]["ai_numeric_consistency_recheck_evaluated"]["status"] == "pass"
-    assert report["stage_contracts"]["ai_numeric_consistency_recheck_allowed"]["status"] == "pass"
-    assert report["stage_contracts"]["ai_numeric_consistency_recheck_failed"]["status"] == "pass"
+    assert (
+        report["stage_contracts"]["ai_numeric_consistency_recheck_evaluated"]["status"]
+        == "pass"
+    )
+    assert (
+        report["stage_contracts"]["ai_numeric_consistency_recheck_allowed"]["status"]
+        == "pass"
+    )
+    assert (
+        report["stage_contracts"]["ai_numeric_consistency_recheck_failed"]["status"]
+        == "pass"
+    )
     assert report["status"] == "pass"
 
 
@@ -3154,9 +3388,20 @@ def test_observation_source_quality_audit_accepts_early_accel_strong_bundle_rech
 
     report = audit.build_observation_source_quality_audit("2026-06-18")
 
-    assert report["stage_contracts"]["early_accel_strong_bundle_recheck_evaluated"]["status"] == "pass"
-    assert report["stage_contracts"]["early_accel_strong_bundle_recheck_allowed"]["status"] == "pass"
-    assert report["stage_contracts"]["early_accel_strong_bundle_recheck_failed"]["status"] == "pass"
+    assert (
+        report["stage_contracts"]["early_accel_strong_bundle_recheck_evaluated"][
+            "status"
+        ]
+        == "pass"
+    )
+    assert (
+        report["stage_contracts"]["early_accel_strong_bundle_recheck_allowed"]["status"]
+        == "pass"
+    )
+    assert (
+        report["stage_contracts"]["early_accel_strong_bundle_recheck_failed"]["status"]
+        == "pass"
+    )
     assert report["status"] == "pass"
 
 
@@ -3284,7 +3529,9 @@ def test_observation_source_quality_audit_accepts_s15_fast_track_contracts(
     assert report["status"] == "pass"
 
 
-def test_observation_source_quality_audit_normalizes_pre_contract_ai_and_latency(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_normalizes_pre_contract_ai_and_latency(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
@@ -3348,23 +3595,35 @@ def test_observation_source_quality_audit_normalizes_pre_contract_ai_and_latency
     assert report["stage_contracts"]["latency_pass"]["status"] == "pass"
 
 
-def test_observation_source_quality_audit_accepts_real_execution_diagnostic_contracts(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_accepts_real_execution_diagnostic_contracts(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
         "2026-05-21",
         [
-            _event("holding_started", {"strategy": "SCALPING", "buy_qty": 1}, record_id=idx)
+            _event(
+                "holding_started", {"strategy": "SCALPING", "buy_qty": 1}, record_id=idx
+            )
             for idx in range(60)
         ]
         + [
-            _event("scale_in_executed", {"add_type": "PYRAMID", "new_buy_qty": 2}, record_id=100 + idx)
+            _event(
+                "scale_in_executed",
+                {"add_type": "PYRAMID", "new_buy_qty": 2},
+                record_id=100 + idx,
+            )
             for idx in range(60)
         ]
         + [
             _event(
                 "same_symbol_loss_reentry_cooldown",
-                {"exit_rule": "scalp_soft_stop_pct", "profit_rate": "-1.0", "cooldown_sec": 3600},
+                {
+                    "exit_rule": "scalp_soft_stop_pct",
+                    "profit_rate": "-1.0",
+                    "cooldown_sec": 3600,
+                },
                 record_id=200 + idx,
             )
             for idx in range(60)
@@ -3376,10 +3635,15 @@ def test_observation_source_quality_audit_accepts_real_execution_diagnostic_cont
     assert report["high_volume_no_source_fields"] == []
     assert report["stage_contracts"]["holding_started"]["status"] == "pass"
     assert report["stage_contracts"]["scale_in_executed"]["status"] == "pass"
-    assert report["stage_contracts"]["same_symbol_loss_reentry_cooldown"]["status"] == "pass"
+    assert (
+        report["stage_contracts"]["same_symbol_loss_reentry_cooldown"]["status"]
+        == "pass"
+    )
 
 
-def test_observation_source_quality_audit_blocks_swing_loss_reentry_placeholder_source(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_blocks_swing_loss_reentry_placeholder_source(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
@@ -3407,10 +3671,15 @@ def test_observation_source_quality_audit_blocks_swing_loss_reentry_placeholder_
     assert contract["missing_violations"]["source_record_id"] == 1.0
     assert report["summary"]["tuning_input_allowed"] is False
     assert report["summary"]["hard_blocking_excluded_row_count"] == 1
-    assert report["hard_blocking_row_exclusions"][0]["stage"] == "swing_same_symbol_loss_reentry_cooldown"
+    assert (
+        report["hard_blocking_row_exclusions"][0]["stage"]
+        == "swing_same_symbol_loss_reentry_cooldown"
+    )
 
 
-def test_observation_source_quality_write_excludes_bad_rows_instead_of_blocking_full_date(monkeypatch, tmp_path):
+def test_observation_source_quality_write_excludes_bad_rows_instead_of_blocking_full_date(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     valid_id = "swing_dry_run:2026-06-04:KOSPI_ML:004710:exit:1780556300"
     _write_events(
@@ -3446,7 +3715,9 @@ def test_observation_source_quality_write_excludes_bad_rows_instead_of_blocking_
 
     report = audit.write_report("2026-06-04")
     raw_path = tmp_path / "pipeline_events" / "pipeline_events_2026-06-04.jsonl"
-    rows = [json.loads(line) for line in raw_path.read_text(encoding="utf-8").splitlines()]
+    rows = [
+        json.loads(line) for line in raw_path.read_text(encoding="utf-8").splitlines()
+    ]
 
     assert report["summary"]["tuning_input_allowed"] is True
     assert report["summary"]["hard_blocking_contract_gap_count"] == 0
@@ -3465,7 +3736,10 @@ def test_observation_source_quality_write_excludes_bad_rows_instead_of_blocking_
     }
     assert payload["exclusion_reasons"]["required_field_missing"] == 1
     assert payload["exclusion_reasons"]["provenance_missing"] == 1
-    assert payload["producer_hint"][0]["stage"] == "swing_same_symbol_loss_reentry_cooldown"
+    assert (
+        payload["producer_hint"][0]["stage"]
+        == "swing_same_symbol_loss_reentry_cooldown"
+    )
     assert payload["sample_rows"][0]["gap_fields"]["missing_fields"] == [
         "source_probe_id",
         "source_record_id",
@@ -3478,7 +3752,9 @@ def test_observation_source_quality_write_excludes_bad_rows_instead_of_blocking_
     assert [row["record_id"] for row in backup_rows] == [1, 2]
 
 
-def test_observation_source_quality_excludes_raw_rows_from_gzip_source(monkeypatch, tmp_path):
+def test_observation_source_quality_excludes_raw_rows_from_gzip_source(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     valid_id = "swing_dry_run:2026-06-04:KOSPI_ML:004710:exit:1780556300"
     _write_events_gzip(
@@ -3530,7 +3806,9 @@ def test_observation_source_quality_excludes_raw_rows_from_gzip_source(monkeypat
     assert [row["record_id"] for row in backup_rows] == [1, 2]
 
 
-def test_observation_source_quality_raw_row_exclusion_summary_is_stage_generic(monkeypatch, tmp_path):
+def test_observation_source_quality_raw_row_exclusion_summary_is_stage_generic(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     monkeypatch.setitem(
         audit.STAGE_CONTRACTS,
@@ -3567,7 +3845,9 @@ def test_observation_source_quality_raw_row_exclusion_summary_is_stage_generic(m
     )
 
     report = audit.write_report("2026-06-04")
-    manifest = json.loads(Path(report["raw_row_exclusion"]["manifest_path"]).read_text(encoding="utf-8"))
+    manifest = json.loads(
+        Path(report["raw_row_exclusion"]["manifest_path"]).read_text(encoding="utf-8")
+    )
 
     assert manifest["stage_counts"] == {"custom_runtime_context_stage": 1}
     assert manifest["field_gap_counts"]["missing_fields:source_record_id"] == 1
@@ -3657,7 +3937,9 @@ def test_observation_source_quality_raw_row_exclusion_marks_market_halt_overlap(
     _write_events(tmp_path, "2026-06-08", rows)
 
     report = audit.write_report("2026-06-08")
-    manifest = json.loads(Path(report["raw_row_exclusion"]["manifest_path"]).read_text(encoding="utf-8"))
+    manifest = json.loads(
+        Path(report["raw_row_exclusion"]["manifest_path"]).read_text(encoding="utf-8")
+    )
 
     assert manifest["market_halt_or_circuit_window_overlap"] is True
     context = manifest["market_halt_or_circuit_context"]
@@ -3667,7 +3949,9 @@ def test_observation_source_quality_raw_row_exclusion_marks_market_halt_overlap(
     assert report["raw_row_exclusion"]["market_halt_or_circuit_window_overlap"] is True
 
 
-def test_observation_source_quality_does_not_exclude_rows_when_contract_passes_tolerance(monkeypatch, tmp_path):
+def test_observation_source_quality_does_not_exclude_rows_when_contract_passes_tolerance(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     monkeypatch.setitem(
         audit.STAGE_CONTRACTS,
@@ -3685,7 +3969,9 @@ def test_observation_source_quality_does_not_exclude_rows_when_contract_passes_t
 
     report = audit.write_report("2026-06-04")
     raw_path = tmp_path / "pipeline_events" / "pipeline_events_2026-06-04.jsonl"
-    rows = [json.loads(line) for line in raw_path.read_text(encoding="utf-8").splitlines()]
+    rows = [
+        json.loads(line) for line in raw_path.read_text(encoding="utf-8").splitlines()
+    ]
 
     assert report["stage_contracts"]["tolerated_contract_stage"]["status"] == "pass"
     assert report["summary"]["raw_row_exclusion_applied"] is False
@@ -3693,7 +3979,9 @@ def test_observation_source_quality_does_not_exclude_rows_when_contract_passes_t
     assert len(rows) == 2
 
 
-def test_observation_source_quality_accepts_scalping_scanner_watching_runtime_skip(monkeypatch, tmp_path):
+def test_observation_source_quality_accepts_scalping_scanner_watching_runtime_skip(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
@@ -3739,7 +4027,9 @@ def test_observation_source_quality_accepts_scalping_scanner_watching_runtime_sk
     assert report["summary"]["tuning_input_allowed"] is True
 
 
-def test_observation_source_quality_accepts_scanner_skip_without_promotion_id_when_armed(monkeypatch, tmp_path):
+def test_observation_source_quality_accepts_scanner_skip_without_promotion_id_when_armed(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
@@ -3785,7 +4075,9 @@ def test_observation_source_quality_accepts_scanner_skip_without_promotion_id_wh
     assert report["summary"]["tuning_input_allowed"] is True
 
 
-def test_observation_source_quality_accepts_scalping_scanner_watch_eviction(monkeypatch, tmp_path):
+def test_observation_source_quality_accepts_scalping_scanner_watch_eviction(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
@@ -3870,7 +4162,9 @@ def test_observation_source_quality_accepts_scalping_scanner_watch_eviction(monk
     assert report["summary"]["tuning_input_allowed"] is True
 
 
-def test_observation_source_quality_accepts_krx_open_watchlist_reset(monkeypatch, tmp_path):
+def test_observation_source_quality_accepts_krx_open_watchlist_reset(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
@@ -3914,7 +4208,9 @@ def test_observation_source_quality_accepts_krx_open_watchlist_reset(monkeypatch
     assert report["summary"]["tuning_input_allowed"] is True
 
 
-def test_observation_source_quality_accepts_scanner_promotion_latency_trace(monkeypatch, tmp_path):
+def test_observation_source_quality_accepts_scanner_promotion_latency_trace(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
@@ -3970,7 +4266,9 @@ def test_observation_source_quality_accepts_scanner_promotion_latency_trace(monk
     assert report["summary"]["tuning_input_allowed"] is True
 
 
-def test_observation_source_quality_accepts_scalping_scanner_runtime_queue_lag(monkeypatch, tmp_path):
+def test_observation_source_quality_accepts_scalping_scanner_runtime_queue_lag(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
@@ -4028,7 +4326,9 @@ def test_observation_source_quality_accepts_scalping_scanner_runtime_queue_lag(m
     assert report["summary"]["tuning_input_allowed"] is True
 
 
-def test_observation_source_quality_accepts_scanner_fast_precheck_and_heavy_eval_lag(monkeypatch, tmp_path):
+def test_observation_source_quality_accepts_scanner_fast_precheck_and_heavy_eval_lag(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     base_contract = {
         "metric_role": "funnel_count",
@@ -4092,13 +4392,19 @@ def test_observation_source_quality_accepts_scanner_fast_precheck_and_heavy_eval
 
     report = audit.write_report("2026-06-19")
 
-    assert report["stage_contracts"]["scalping_scanner_fast_precheck"]["status"] == "pass"
-    assert report["stage_contracts"]["scalping_scanner_heavy_eval_lag"]["status"] == "pass"
+    assert (
+        report["stage_contracts"]["scalping_scanner_fast_precheck"]["status"] == "pass"
+    )
+    assert (
+        report["stage_contracts"]["scalping_scanner_heavy_eval_lag"]["status"] == "pass"
+    )
     assert report["summary"]["hard_blocking_contract_gap_count"] == 0
     assert report["summary"]["tuning_input_allowed"] is True
 
 
-def test_observation_source_quality_audit_accepts_swing_loss_reentry_fallback_source(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_accepts_swing_loss_reentry_fallback_source(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     fallback_id = "swing_dry_run:2026-06-04:KOSPI_ML:004710:exit:1780556300"
     _write_events(
@@ -4126,7 +4432,9 @@ def test_observation_source_quality_audit_accepts_swing_loss_reentry_fallback_so
     assert report["summary"]["tuning_input_allowed"] is True
 
 
-def test_observation_source_quality_audit_routes_entry_arm_and_loss_diagnostics_by_contract(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_routes_entry_arm_and_loss_diagnostics_by_contract(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     rows = []
     for idx in range(60):
@@ -4185,12 +4493,18 @@ def test_observation_source_quality_audit_routes_entry_arm_and_loss_diagnostics_
 
     assert report["high_volume_no_source_fields"] == []
     assert report["stage_contracts"]["entry_armed"]["status"] == "pass"
-    assert report["stage_contracts"]["entry_armed_expired_after_wait"]["status"] == "pass"
+    assert (
+        report["stage_contracts"]["entry_armed_expired_after_wait"]["status"] == "pass"
+    )
     assert report["stage_contracts"]["loss_fallback_probe"]["status"] == "pass"
-    assert report["stage_contracts"]["soft_stop_whipsaw_confirmation"]["status"] == "pass"
+    assert (
+        report["stage_contracts"]["soft_stop_whipsaw_confirmation"]["status"] == "pass"
+    )
 
 
-def test_observation_source_quality_audit_normalizes_optional_holding_context(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_normalizes_optional_holding_context(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     rows = [
         _event(
@@ -4222,7 +4536,9 @@ def test_observation_source_quality_audit_normalizes_optional_holding_context(mo
     report = audit.build_observation_source_quality_audit("2026-05-15")
 
     assert report["stage_contracts"]["loss_fallback_probe"]["status"] == "pass"
-    assert report["stage_contracts"]["soft_stop_whipsaw_confirmation"]["status"] == "pass"
+    assert (
+        report["stage_contracts"]["soft_stop_whipsaw_confirmation"]["status"] == "pass"
+    )
 
 
 def test_observation_source_quality_audit_normalizes_legacy_flow_state_label():
@@ -4240,7 +4556,9 @@ def test_observation_source_quality_audit_normalizes_legacy_flow_state_label():
 
     assert normalized["flow_state"] == "absorption"
     assert normalized["raw_flow_state"] == "흡수"
-    assert normalized["flow_state_source"] == "audit_normalized_legacy_runtime_flow_state"
+    assert (
+        normalized["flow_state_source"] == "audit_normalized_legacy_runtime_flow_state"
+    )
 
 
 def test_observation_source_quality_audit_accepts_score_vpw_prior_sentinel():
@@ -4261,7 +4579,9 @@ def test_observation_source_quality_audit_accepts_score_vpw_prior_sentinel():
     assert normalized["runtime_effect"] is False
 
 
-def test_observation_source_quality_audit_fails_unknown_flow_state_label(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_fails_unknown_flow_state_label(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
@@ -4292,7 +4612,9 @@ def test_observation_source_quality_audit_fails_unknown_flow_state_label(monkeyp
     assert "soft_stop_whipsaw_confirmation" in report["summary"]["hard_blocking_stages"]
 
 
-def test_observation_source_quality_audit_fails_unknown_gatekeeper_action_label(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_fails_unknown_gatekeeper_action_label(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
@@ -4317,7 +4639,9 @@ def test_observation_source_quality_audit_fails_unknown_gatekeeper_action_label(
     assert report["invalid_label_findings"][0]["field"] == "gatekeeper_action"
 
 
-def test_observation_source_quality_audit_fails_unknown_labels_on_uncontracted_stage(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_fails_unknown_labels_on_uncontracted_stage(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
@@ -4366,7 +4690,9 @@ def test_observation_source_quality_audit_fails_unknown_labels_on_uncontracted_s
     ]
 
 
-def test_observation_source_quality_audit_routes_holding_diagnostics_by_contract(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_routes_holding_diagnostics_by_contract(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     rows = [
         _event(
@@ -4447,7 +4773,11 @@ def test_observation_source_quality_audit_routes_holding_diagnostics_by_contract
             },
         ),
     ]
-    _write_events(tmp_path, "2026-05-15", [dict(row, record_id=idx) for idx, row in enumerate(rows * 55)])
+    _write_events(
+        tmp_path,
+        "2026-05-15",
+        [dict(row, record_id=idx) for idx, row in enumerate(rows * 55)],
+    )
 
     report = audit.build_observation_source_quality_audit("2026-05-15")
 
@@ -4456,7 +4786,10 @@ def test_observation_source_quality_audit_routes_holding_diagnostics_by_contract
     assert report["stage_contracts"]["soft_stop_expert_shadow"]["status"] == "pass"
     assert report["stage_contracts"]["adverse_fill_observed"]["status"] == "pass"
     assert report["stage_contracts"]["soft_stop_absorption_probe"]["status"] == "pass"
-    assert report["stage_contracts"]["holding_flow_override_candidate_cleared"]["status"] == "pass"
+    assert (
+        report["stage_contracts"]["holding_flow_override_candidate_cleared"]["status"]
+        == "pass"
+    )
     assert report["status"] == "pass"
 
 
@@ -4496,7 +4829,10 @@ def test_observation_source_quality_audit_blocks_soft_stop_absorption_without_mi
 
     contract = report["stage_contracts"]["soft_stop_absorption_probe"]
     assert contract["status"] == "fail"
-    assert contract["invalid_label_violations"]["minute_candle_window_fresh_contract"] == 1.0
+    assert (
+        contract["invalid_label_violations"]["minute_candle_window_fresh_contract"]
+        == 1.0
+    )
     assert report["summary"]["tuning_input_allowed"] is False
     exclusion = report["hard_blocking_row_exclusions"][0]
     assert exclusion["stage"] == "soft_stop_absorption_probe"
@@ -4548,7 +4884,10 @@ def test_observation_source_quality_audit_blocks_soft_stop_dynamic_grace_without
 
     contract = report["stage_contracts"]["soft_stop_dynamic_grace"]
     assert contract["status"] == "fail"
-    assert contract["invalid_label_violations"]["minute_candle_window_fresh_contract"] == 1.0
+    assert (
+        contract["invalid_label_violations"]["minute_candle_window_fresh_contract"]
+        == 1.0
+    )
     assert report["summary"]["tuning_input_allowed"] is False
     exclusion = report["hard_blocking_row_exclusions"][0]
     assert exclusion["stage"] == "soft_stop_dynamic_grace"
@@ -4596,16 +4935,23 @@ def test_observation_source_quality_audit_blocks_never_green_clamp_without_micro
 
     report = audit.build_observation_source_quality_audit("2026-05-15")
 
-    contract = report["stage_contracts"]["holding_flow_override_clamped_never_green_loss"]
+    contract = report["stage_contracts"][
+        "holding_flow_override_clamped_never_green_loss"
+    ]
     assert contract["status"] == "fail"
-    assert contract["invalid_label_violations"]["minute_candle_window_fresh_contract"] == 1.0
+    assert (
+        contract["invalid_label_violations"]["minute_candle_window_fresh_contract"]
+        == 1.0
+    )
     assert report["summary"]["tuning_input_allowed"] is False
     exclusion = report["hard_blocking_row_exclusions"][0]
     assert exclusion["stage"] == "holding_flow_override_clamped_never_green_loss"
     assert exclusion["invalid_fields"] == ["minute_candle_window_fresh_contract"]
 
 
-def test_observation_source_quality_audit_routes_probe_state_persisted_by_contract(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_routes_probe_state_persisted_by_contract(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
@@ -4633,7 +4979,9 @@ def test_observation_source_quality_audit_routes_probe_state_persisted_by_contra
     assert "metric_role" in persisted["missing_violations"]
 
 
-def test_observation_source_quality_audit_accepts_pre_ai_and_pre_submit_gate_contracts(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_accepts_pre_ai_and_pre_submit_gate_contracts(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     gate_quality = {
         "quote_age_ms": 500.0,
@@ -4690,7 +5038,10 @@ def test_observation_source_quality_audit_accepts_pre_ai_and_pre_submit_gate_con
                 {
                     **risk_context,
                     **overlap,
-                    **{**gate_quality, "blocked_gate_quality_stage": "strength_momentum"},
+                    **{
+                        **gate_quality,
+                        "blocked_gate_quality_stage": "strength_momentum",
+                    },
                     "threshold_family": "strength_momentum_soft_gate_p1",
                     "window_buy_value": 100_000_000,
                     "window_buy_ratio": "55.00",
@@ -4703,7 +5054,10 @@ def test_observation_source_quality_audit_accepts_pre_ai_and_pre_submit_gate_con
                 "strength_momentum_stability_recheck_pending",
                 {
                     **risk_context,
-                    **{**gate_quality, "blocked_gate_quality_stage": "strength_momentum"},
+                    **{
+                        **gate_quality,
+                        "blocked_gate_quality_stage": "strength_momentum",
+                    },
                     "threshold_family": "strength_momentum_soft_gate_p1",
                     "gate_action": "stability_recheck_pending",
                     "window_buy_value": 0,
@@ -4798,12 +5152,26 @@ def test_observation_source_quality_audit_accepts_pre_ai_and_pre_submit_gate_con
 
     assert report["stage_contracts"]["blocked_liquidity"]["status"] == "pass"
     assert report["stage_contracts"]["blocked_strength_momentum"]["status"] == "pass"
-    assert report["stage_contracts"]["strength_momentum_stability_recheck_pending"]["status"] == "pass"
+    assert (
+        report["stage_contracts"]["strength_momentum_stability_recheck_pending"][
+            "status"
+        ]
+        == "pass"
+    )
     assert report["stage_contracts"]["blocked_vpw"]["status"] == "pass"
     assert report["stage_contracts"]["blocked_overbought"]["status"] == "pass"
-    assert report["stage_contracts"]["pre_submit_liquidity_guard_block"]["status"] == "pass"
-    assert report["stage_contracts"]["caution_weak_liquidity_entry_block"]["status"] == "pass"
-    assert report["stage_contracts"]["pre_submit_entry_ai_authority_guard_block"]["status"] == "pass"
+    assert (
+        report["stage_contracts"]["pre_submit_liquidity_guard_block"]["status"]
+        == "pass"
+    )
+    assert (
+        report["stage_contracts"]["caution_weak_liquidity_entry_block"]["status"]
+        == "pass"
+    )
+    assert (
+        report["stage_contracts"]["pre_submit_entry_ai_authority_guard_block"]["status"]
+        == "pass"
+    )
 
 
 def test_observation_source_quality_audit_fails_pre_ai_broker_authority_contract(
@@ -4871,7 +5239,9 @@ def test_observation_source_quality_audit_fails_pre_ai_broker_authority_contract
     assert report["summary"]["tuning_input_allowed"] is True
 
 
-def test_observation_source_quality_audit_accepts_scalp_sim_stage_contracts(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_accepts_scalp_sim_stage_contracts(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     fields = {
         "simulation_book": "scalp_ai_buy_all",
@@ -4912,7 +5282,11 @@ def test_observation_source_quality_audit_accepts_scalp_sim_stage_contracts(monk
         "2026-05-20",
         [
             _event("scalp_sim_entry_armed", fields, record_id=1),
-            _event("scalp_sim_pre_submit_liquidity_guard_would_block", liquidity_guard_fields, record_id=11),
+            _event(
+                "scalp_sim_pre_submit_liquidity_guard_would_block",
+                liquidity_guard_fields,
+                record_id=11,
+            ),
             _event(
                 "scalp_sim_pre_submit_liquidity_guard_would_pass",
                 {
@@ -4933,8 +5307,16 @@ def test_observation_source_quality_audit_accepts_scalp_sim_stage_contracts(monk
                 },
                 record_id=15,
             ),
-            _event("scalp_sim_pre_submit_overbought_guard_would_block", overbought_block_fields, record_id=13),
-            _event("scalp_sim_pre_submit_overbought_guard_would_pass", overbought_guard_fields, record_id=14),
+            _event(
+                "scalp_sim_pre_submit_overbought_guard_would_block",
+                overbought_block_fields,
+                record_id=13,
+            ),
+            _event(
+                "scalp_sim_pre_submit_overbought_guard_would_pass",
+                overbought_guard_fields,
+                record_id=14,
+            ),
             _event("scalp_sim_buy_order_virtual_pending", fields, record_id=2),
             _event("scalp_sim_buy_order_assumed_filled", fields, record_id=3),
             _event("scalp_sim_entry_ai_price_skip_order", fields, record_id=4),
@@ -4993,13 +5375,17 @@ def test_observation_source_quality_audit_fails_mismatched_sim_submit_guard_stag
     )
 
     report = audit.build_observation_source_quality_audit("2026-05-20")
-    contract = report["stage_contracts"]["scalp_sim_pre_submit_liquidity_guard_would_pass"]
+    contract = report["stage_contracts"][
+        "scalp_sim_pre_submit_liquidity_guard_would_pass"
+    ]
 
     assert contract["status"] == "fail"
     assert contract["invalid_label_counts"]["sim_submit_guard_action_contract"] == 1
 
 
-def test_observation_source_quality_audit_contracts_sim_budget_and_risk_context(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_contracts_sim_budget_and_risk_context(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     budget_fields = {
         "simulation_book": "scalp_ai_buy_all",
@@ -5050,18 +5436,29 @@ def test_observation_source_quality_audit_contracts_sim_budget_and_risk_context(
         assert report["stage_contracts"][stage]["status"] == "pass"
 
 
-def test_observation_source_quality_audit_writes_json_and_markdown(monkeypatch, tmp_path):
+def test_observation_source_quality_audit_writes_json_and_markdown(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
-    _write_events(tmp_path, "2026-05-15", [_event("swing_probe_entry_candidate", {
-        "actual_order_submitted": False,
-        "broker_order_forbidden": True,
-        "runtime_effect": False,
-        "simulated_order": True,
-        "evidence_quality": "counterfactual_after_gap",
-        "source_record_id": "1",
-        "virtual_budget_override": True,
-        "budget_authority": "sim_virtual_not_real_orderable_amount",
-    })])
+    _write_events(
+        tmp_path,
+        "2026-05-15",
+        [
+            _event(
+                "swing_probe_entry_candidate",
+                {
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "runtime_effect": False,
+                    "simulated_order": True,
+                    "evidence_quality": "counterfactual_after_gap",
+                    "source_record_id": "1",
+                    "virtual_budget_override": True,
+                    "budget_authority": "sim_virtual_not_real_orderable_amount",
+                },
+            )
+        ],
+    )
 
     report = audit.write_report("2026-05-15")
     json_path, md_path = audit.report_paths("2026-05-15")
@@ -5074,7 +5471,9 @@ def test_observation_source_quality_audit_writes_json_and_markdown(monkeypatch, 
 def _write_threshold_events(tmp_path, target_date: str, rows: list[dict]) -> None:
     event_dir = tmp_path / "threshold_cycle"
     event_dir.mkdir(parents=True)
-    with (event_dir / f"threshold_events_{target_date}.jsonl").open("w", encoding="utf-8") as handle:
+    with (event_dir / f"threshold_events_{target_date}.jsonl").open(
+        "w", encoding="utf-8"
+    ) as handle:
         for row in rows:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
@@ -5169,16 +5568,24 @@ def test_observation_source_quality_backfill_quarantines_only_derived_bucket_int
         "ldm_bucket_attribution",
         "sim_overbought_context_provenance",
     }
-    assert by_date["2026-05-19"]["recommended_action"] == "regenerate_derived_reports_with_source_quality_gate"
+    assert (
+        by_date["2026-05-19"]["recommended_action"]
+        == "regenerate_derived_reports_with_source_quality_gate"
+    )
     assert report["summary"]["first_entry_adm_unknown_date"] == "2026-05-19"
     assert report["summary"]["first_ldm_unknown_date"] == "2026-05-19"
     assert report["summary"]["first_sim_overbought_unknown_date"] == "2026-05-19"
     assert report["summary"]["operator_action_required"] is False
     assert report["policy"]["runtime_effect"] is False
-    assert by_date["2026-05-19"]["stale_derived_reports"][0]["report_type"] == "scalp_entry_action_decision_matrix"
+    assert (
+        by_date["2026-05-19"]["stale_derived_reports"][0]["report_type"]
+        == "scalp_entry_action_decision_matrix"
+    )
 
 
-def test_observation_source_quality_backfill_writes_json_and_markdown(monkeypatch, tmp_path):
+def test_observation_source_quality_backfill_writes_json_and_markdown(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
@@ -5202,4 +5609,6 @@ def test_observation_source_quality_backfill_writes_json_and_markdown(monkeypatc
     assert report["status"] == "warning"
     assert json_path.exists()
     assert md_path.exists()
-    assert "Raw SIM rows and fill/outcome labels are preserved" in md_path.read_text(encoding="utf-8")
+    assert "Raw SIM rows and fill/outcome labels are preserved" in md_path.read_text(
+        encoding="utf-8"
+    )

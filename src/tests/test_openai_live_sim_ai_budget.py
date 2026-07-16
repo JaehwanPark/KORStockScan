@@ -23,7 +23,9 @@ class _RulesProxy:
 def _api_keys() -> list[str]:
     raw = os.getenv("OPENAI_API_KEYS") or os.getenv("OPENAI_API_KEY") or ""
     keys = [part.strip() for part in raw.split(",") if part.strip()]
-    keys.extend(v for k, v in sorted(CONF.items()) if str(k).startswith("OPENAI_API_KEY") and v)
+    keys.extend(
+        v for k, v in sorted(CONF.items()) if str(k).startswith("OPENAI_API_KEY") and v
+    )
     return keys
 
 
@@ -188,7 +190,9 @@ def test_live_openai_compare_gpt5_nano_and_gpt54_nano_sample(monkeypatch):
         pytest.skip("live OpenAI test disabled; set RUN_OPENAI_LIVE_TESTS=1")
     keys = _api_keys()
     if not keys:
-        pytest.fail("RUN_OPENAI_LIVE_TESTS=1 requires OPENAI_API_KEY or OPENAI_API_KEYS")
+        pytest.fail(
+            "RUN_OPENAI_LIVE_TESTS=1 requires OPENAI_API_KEY or OPENAI_API_KEYS"
+        )
 
     monkeypatch.setattr(
         openai_module,
@@ -239,7 +243,9 @@ def test_live_openai_compare_gpt5_nano_and_gpt54_nano_sample(monkeypatch):
         score = int(float(result.get("score", 0) or 0))
         row = {
             "model": model_name,
-            "reasoning_effort": engine._resolve_openai_reasoning_effort(model_name=model_name),
+            "reasoning_effort": engine._resolve_openai_reasoning_effort(
+                model_name=model_name
+            ),
             "elapsed_ms": elapsed_ms,
             "model_action": str(result.get("action") or ""),
             "action": _entry_action_from_suitability_score(score),
@@ -252,7 +258,9 @@ def test_live_openai_compare_gpt5_nano_and_gpt54_nano_sample(monkeypatch):
         }
         rows.append(row)
 
-    print("\n| model | effort | elapsed_ms | model_action | calibrated_action | score | tokens | reason |")
+    print(
+        "\n| model | effort | elapsed_ms | model_action | calibrated_action | score | tokens | reason |"
+    )
     print("| --- | --- | ---: | --- | --- | ---: | ---: | --- |")
     for row in rows:
         print(
@@ -278,7 +286,9 @@ def test_live_openai_compare_models_on_bad_entry_or_stop_loss_performance(monkey
         pytest.skip("live OpenAI test disabled; set RUN_OPENAI_LIVE_TESTS=1")
     keys = _api_keys()
     if not keys:
-        pytest.fail("RUN_OPENAI_LIVE_TESTS=1 requires OPENAI_API_KEY or OPENAI_API_KEYS")
+        pytest.fail(
+            "RUN_OPENAI_LIVE_TESTS=1 requires OPENAI_API_KEY or OPENAI_API_KEYS"
+        )
 
     report_path = "data/report/report_2026-07-10.json"
     ev_path = "data/report/threshold_cycle_ev/threshold_cycle_ev_2026-07-10.json"
@@ -368,7 +378,9 @@ def test_live_openai_compare_models_on_bad_entry_or_stop_loss_performance(monkey
                 "stock_name": sample.get("stock_name"),
                 "profit_rate": sample.get("profit_rate"),
                 "model": model_name,
-                "effort": engine._resolve_openai_reasoning_effort(model_name=model_name),
+                "effort": engine._resolve_openai_reasoning_effort(
+                    model_name=model_name
+                ),
                 "elapsed_ms": elapsed_ms,
                 "model_action": str(result.get("action") or ""),
                 "score": int(float(result.get("score", 0) or 0)),
@@ -383,11 +395,15 @@ def test_live_openai_compare_models_on_bad_entry_or_stop_loss_performance(monkey
         "\n| case | stock | pnl_pct | model | effort | elapsed_ms | model_action | "
         "calibrated_action | score | issue | tokens | reason |"
     )
-    print("| --- | --- | ---: | --- | --- | ---: | --- | --- | ---: | --- | ---: | --- |")
+    print(
+        "| --- | --- | ---: | --- | --- | ---: | --- | --- | ---: | --- | ---: | --- |"
+    )
     for row in rows:
         print(
             "| {case_id} | {stock_name} | {profit_rate} | {model} | {effort} | {elapsed_ms} | "
-            "{model_action} | {action} | {score} | {issue} | {tokens} | {reason} |".format(**row)
+            "{model_action} | {action} | {score} | {issue} | {tokens} | {reason} |".format(
+                **row
+            )
         )
 
     assert {row["case_id"] for row in rows} == {sample["case_id"] for sample in samples}
@@ -397,7 +413,12 @@ def test_live_openai_compare_models_on_bad_entry_or_stop_loss_performance(monkey
         assert row["action"] in {"BUY", "WAIT", "DROP"}
         assert 0 <= row["score"] <= 100
         _assert_entry_action_score_consistent(row)
-        assert row["issue"] in {"bad_entry", "stop_loss_timing", "insufficient_context", "acceptable_risk"}
+        assert row["issue"] in {
+            "bad_entry",
+            "stop_loss_timing",
+            "insufficient_context",
+            "acceptable_risk",
+        }
         assert row["reason"]
         assert row["elapsed_ms"] > 0
 
@@ -407,7 +428,9 @@ def test_live_openai_compare_models_on_loss_after_entry_decision(monkeypatch):
         pytest.skip("live OpenAI test disabled; set RUN_OPENAI_LIVE_TESTS=1")
     keys = _api_keys()
     if not keys:
-        pytest.fail("RUN_OPENAI_LIVE_TESTS=1 requires OPENAI_API_KEY or OPENAI_API_KEYS")
+        pytest.fail(
+            "RUN_OPENAI_LIVE_TESTS=1 requires OPENAI_API_KEY or OPENAI_API_KEYS"
+        )
 
     entry_matrix_path = "data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_2026-07-09.json"
     realized_report_path = "data/report/report_2026-07-10.json"
@@ -438,7 +461,8 @@ def test_live_openai_compare_models_on_loss_after_entry_decision(monkeypatch):
     realized_trade = next(
         row
         for row in realized_report["performance"]["top_losers"]
-        if row.get("code") == entry_decision["stock_code"] and float(row.get("profit_rate", 0) or 0) < 0
+        if row.get("code") == entry_decision["stock_code"]
+        and float(row.get("profit_rate", 0) or 0) < 0
     )
 
     sample = {
@@ -458,7 +482,9 @@ def test_live_openai_compare_models_on_loss_after_entry_decision(monkeypatch):
         "entry_ai_score": entry_decision.get("ai_score"),
         "entry_matrix_profit_rate": entry_decision.get("profit_rate"),
         "entry_outcome_joined": entry_decision.get("outcome_joined"),
-        "source_quality_block_reason": entry_decision.get("source_quality_block_reason"),
+        "source_quality_block_reason": entry_decision.get(
+            "source_quality_block_reason"
+        ),
         "submit_event_time": submitted_order.get("event_time"),
         "actual_order_submitted": submitted_order.get("actual_order_submitted"),
         "broker_order_submitted": submitted_order.get("broker_order_submitted"),
@@ -516,7 +542,9 @@ def test_live_openai_compare_models_on_loss_after_entry_decision(monkeypatch):
                 "entry_action": sample["entry_chosen_action"],
                 "realized_profit_rate": sample["realized_profit_rate"],
                 "model": model_name,
-                "effort": engine._resolve_openai_reasoning_effort(model_name=model_name),
+                "effort": engine._resolve_openai_reasoning_effort(
+                    model_name=model_name
+                ),
                 "elapsed_ms": elapsed_ms,
                 "model_action": str(result.get("action") or ""),
                 "score": int(float(result.get("score", 0) or 0)),
@@ -531,7 +559,9 @@ def test_live_openai_compare_models_on_loss_after_entry_decision(monkeypatch):
         "\n| case | record | stock | entry_action | realized_pnl_pct | model | effort | elapsed_ms | "
         "model_action | calibrated_action | score | issue | tokens | reason |"
     )
-    print("| --- | --- | --- | --- | ---: | --- | --- | ---: | --- | --- | ---: | --- | ---: | --- |")
+    print(
+        "| --- | --- | --- | --- | ---: | --- | --- | ---: | --- | --- | ---: | --- | ---: | --- |"
+    )
     for row in rows:
         print(
             "| {case_id} | {record_id} | {stock_name} | {entry_action} | {realized_profit_rate} | "
@@ -550,17 +580,26 @@ def test_live_openai_compare_models_on_loss_after_entry_decision(monkeypatch):
         assert row["action"] in {"BUY", "WAIT", "DROP"}
         assert 0 <= row["score"] <= 100
         _assert_entry_action_score_consistent(row)
-        assert row["issue"] in {"bad_entry", "stop_loss_timing", "insufficient_context", "acceptable_risk"}
+        assert row["issue"] in {
+            "bad_entry",
+            "stop_loss_timing",
+            "insufficient_context",
+            "acceptable_risk",
+        }
         assert row["reason"]
         assert row["elapsed_ms"] > 0
 
 
-def test_live_openai_blind_replay_action_score_accuracy_on_realized_entries(monkeypatch):
+def test_live_openai_blind_replay_action_score_accuracy_on_realized_entries(
+    monkeypatch,
+):
     if os.getenv("RUN_OPENAI_LIVE_TESTS") != "1":
         pytest.skip("live OpenAI test disabled; set RUN_OPENAI_LIVE_TESTS=1")
     keys = _api_keys()
     if not keys:
-        pytest.fail("RUN_OPENAI_LIVE_TESTS=1 requires OPENAI_API_KEY or OPENAI_API_KEYS")
+        pytest.fail(
+            "RUN_OPENAI_LIVE_TESTS=1 requires OPENAI_API_KEY or OPENAI_API_KEYS"
+        )
 
     entry_matrix_path = "data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_2026-07-09.json"
     realized_report_path = "data/report/report_2026-07-10.json"
@@ -584,7 +623,9 @@ def test_live_openai_blind_replay_action_score_accuracy_on_realized_entries(monk
             and row.get("broker_order_submitted") is True
         ):
             submitted_rows_by_stock.setdefault(str(row.get("stock_code") or ""), row)
-    submitted_stock_codes = {stock_code for _, stock_code in submitted_keys if stock_code}
+    submitted_stock_codes = {
+        stock_code for _, stock_code in submitted_keys if stock_code
+    }
     realized_entries = []
     for row in entry_matrix["rows"]:
         profit_rate = _float_or_none(row.get("profit_rate"))
@@ -599,7 +640,9 @@ def test_live_openai_blind_replay_action_score_accuracy_on_realized_entries(monk
         ):
             realized_entries.append((profit_rate, row))
 
-    cases_per_side = int(os.getenv("KORSTOCKSCAN_OPENAI_LIVE_ACCURACY_CASES_PER_SIDE", "5"))
+    cases_per_side = int(
+        os.getenv("KORSTOCKSCAN_OPENAI_LIVE_ACCURACY_CASES_PER_SIDE", "5")
+    )
     entry_profit_cases = [
         {
             "case_id": f"profit:entry:{row.get('record_id')}:{row.get('stock_code')}",
@@ -656,14 +699,20 @@ def test_live_openai_blind_replay_action_score_accuracy_on_realized_entries(monk
         for row in realized_report.get("performance", {}).get(source_key, []) or []:
             profit_rate = _float_or_none(row.get("profit_rate"))
             stock_code = str(row.get("code") or row.get("stock_code") or "")
-            if not stock_code or stock_code not in submitted_stock_codes or profit_rate is None:
+            if (
+                not stock_code
+                or stock_code not in submitted_stock_codes
+                or profit_rate is None
+            ):
                 continue
             if outcome_label == "profit" and profit_rate <= 0:
                 continue
             if outcome_label == "loss" and profit_rate >= 0:
                 continue
             rows.append((profit_rate, row))
-        for _, row in sorted(rows, key=lambda item: item[0], reverse=reverse_sort)[:cases_per_side]:
+        for _, row in sorted(rows, key=lambda item: item[0], reverse=reverse_sort)[
+            :cases_per_side
+        ]:
             stock_code = str(row.get("code") or row.get("stock_code") or "")
             submitted_row = submitted_rows_by_stock.get(stock_code) or {}
             report_cases.append(
@@ -692,7 +741,11 @@ def test_live_openai_blind_replay_action_score_accuracy_on_realized_entries(monk
         for sample in [*primary, *fallback]:
             if sample["known_outcome_label"] != outcome_label:
                 continue
-            key = (sample.get("stock_code"), sample.get("record_id"), sample.get("realized_profit_rate"))
+            key = (
+                sample.get("stock_code"),
+                sample.get("record_id"),
+                sample.get("realized_profit_rate"),
+            )
             if key in seen:
                 continue
             seen.add(key)
@@ -706,8 +759,12 @@ def test_live_openai_blind_replay_action_score_accuracy_on_realized_entries(monk
         *_take_unique_by_side(entry_loss_cases, report_cases, "loss"),
     ]
 
-    assert any(sample["known_outcome_label"] == "profit" for sample in samples), "expected at least one profit case"
-    assert any(sample["known_outcome_label"] == "loss" for sample in samples), "expected at least one loss case"
+    assert any(
+        sample["known_outcome_label"] == "profit" for sample in samples
+    ), "expected at least one profit case"
+    assert any(
+        sample["known_outcome_label"] == "loss" for sample in samples
+    ), "expected at least one loss case"
 
     model_name = os.getenv("KORSTOCKSCAN_OPENAI_LIVE_ACCURACY_MODEL", "gpt-5-nano")
     reasoning_effort = os.getenv("KORSTOCKSCAN_OPENAI_LIVE_ACCURACY_EFFORT", "minimal")
@@ -746,7 +803,11 @@ def test_live_openai_blind_replay_action_score_accuracy_on_realized_entries(monk
         started = time.perf_counter()
         result = engine._call_openai_safe(
             prompt,
-            json.dumps(_blind_replay_payload(sample, len(rows) + 1), ensure_ascii=False, separators=(",", ":")),
+            json.dumps(
+                _blind_replay_payload(sample, len(rows) + 1),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
             require_json=True,
             context_name=f"LIVE_BLIND_REPLAY_ACTION_SCORE_ACCURACY:{model_name}:{reasoning_effort}:{sample['case_id']}",
             model_override=model_name,
@@ -759,14 +820,20 @@ def test_live_openai_blind_replay_action_score_accuracy_on_realized_entries(monk
         score = int(float(result.get("score", 0) or 0))
         model_action = str(result.get("action") or "")
         calibrated_action = _entry_action_from_suitability_score(score)
-        expected_signal = "BUY" if sample["known_outcome_label"] == "profit" else "AVOID"
+        expected_signal = (
+            "BUY" if sample["known_outcome_label"] == "profit" else "AVOID"
+        )
         model_signal = "BUY" if model_action == "BUY" else "AVOID"
         score_signal = "BUY" if calibrated_action == "BUY" else "AVOID"
         missing_features = result.get("missing_features")
-        missing_features_display = ",".join(str(item) for item in missing_features or [])[:180] if isinstance(
-            missing_features,
-            list,
-        ) else str(missing_features or "")[:180]
+        missing_features_display = (
+            ",".join(str(item) for item in missing_features or [])[:180]
+            if isinstance(
+                missing_features,
+                list,
+            )
+            else str(missing_features or "")[:180]
+        )
         rows.append(
             {
                 "case_id": sample["case_id"],
@@ -774,7 +841,9 @@ def test_live_openai_blind_replay_action_score_accuracy_on_realized_entries(monk
                 "outcome": sample["known_outcome_label"],
                 "profit_rate": sample["realized_profit_rate"],
                 "model": model_name,
-                "effort": engine._resolve_openai_reasoning_effort(model_name=model_name),
+                "effort": engine._resolve_openai_reasoning_effort(
+                    model_name=model_name
+                ),
                 "elapsed_ms": elapsed_ms,
                 "model_action": model_action,
                 "calibrated_action": calibrated_action,
@@ -796,8 +865,12 @@ def test_live_openai_blind_replay_action_score_accuracy_on_realized_entries(monk
     action_correct = sum(1 for row in rows if row["action_correct"])
     score_correct = sum(1 for row in rows if row["score_correct"])
     mismatch_count = sum(1 for row in rows if row["mismatch"])
-    profit_buy = sum(1 for row in rows if row["outcome"] == "profit" and row["model_action"] == "BUY")
-    loss_buy = sum(1 for row in rows if row["outcome"] == "loss" and row["model_action"] == "BUY")
+    profit_buy = sum(
+        1 for row in rows if row["outcome"] == "profit" and row["model_action"] == "BUY"
+    )
+    loss_buy = sum(
+        1 for row in rows if row["outcome"] == "loss" and row["model_action"] == "BUY"
+    )
 
     print(
         "\n| outcome | stock | pnl_pct | model | effort | elapsed_ms | model_action | "
@@ -828,19 +901,37 @@ def test_live_openai_blind_replay_action_score_accuracy_on_realized_entries(monk
 
     assert total == len(samples)
     assert {row["model"] for row in rows} == {model_name}
-    assert {row["effort"] for row in rows} == {engine._resolve_openai_reasoning_effort(model_name=model_name)}
+    assert {row["effort"] for row in rows} == {
+        engine._resolve_openai_reasoning_effort(model_name=model_name)
+    }
     for row in rows:
         assert row["model_action"] in {"BUY", "WAIT", "DROP"}
         assert row["calibrated_action"] in {"BUY", "WAIT", "DROP"}
         assert 0 <= row["score"] <= 100
-        _assert_entry_action_score_consistent({"action": row["calibrated_action"], "score": row["score"]})
-        assert row["issue"] in {"bad_entry", "stop_loss_timing", "insufficient_context", "acceptable_risk"}
+        _assert_entry_action_score_consistent(
+            {"action": row["calibrated_action"], "score": row["score"]}
+        )
+        assert row["issue"] in {
+            "bad_entry",
+            "stop_loss_timing",
+            "insufficient_context",
+            "acceptable_risk",
+        }
         if row["confidence"] is not None:
             assert 0 <= int(float(row["confidence"])) <= 100
         if row["missing_features"] is not None:
             assert isinstance(row["missing_features"], list)
-            missing_text = ",".join(str(item).lower() for item in row["missing_features"])
-            for forbidden in ("realized", "outcome", "prior_model", "pnl", "profit_rate", "known"):
+            missing_text = ",".join(
+                str(item).lower() for item in row["missing_features"]
+            )
+            for forbidden in (
+                "realized",
+                "outcome",
+                "prior_model",
+                "pnl",
+                "profit_rate",
+                "known",
+            ):
                 assert forbidden not in missing_text
         assert row["reason"]
         assert row["elapsed_ms"] > 0
@@ -851,14 +942,18 @@ def test_live_openai_holding_schema_for_sim_ai_budget(monkeypatch):
         pytest.skip("live OpenAI test disabled; set RUN_OPENAI_LIVE_TESTS=1")
     keys = _api_keys()
     if not keys:
-        pytest.fail("RUN_OPENAI_LIVE_TESTS=1 requires OPENAI_API_KEY or OPENAI_API_KEYS")
+        pytest.fail(
+            "RUN_OPENAI_LIVE_TESTS=1 requires OPENAI_API_KEY or OPENAI_API_KEYS"
+        )
 
     monkeypatch.setattr(
         openai_module,
         "TRADING_RULES",
         _RulesProxy(
             openai_module.TRADING_RULES,
-            GPT_FAST_MODEL=os.getenv("KORSTOCKSCAN_OPENAI_LIVE_TEST_MODEL", "gpt-5-nano"),
+            GPT_FAST_MODEL=os.getenv(
+                "KORSTOCKSCAN_OPENAI_LIVE_TEST_MODEL", "gpt-5-nano"
+            ),
             OPENAI_TRANSPORT_MODE="responses_ws",
             OPENAI_RESPONSES_WS_ENABLED=True,
             OPENAI_RESPONSES_WS_POOL_SIZE=1,
@@ -879,18 +974,56 @@ def test_live_openai_holding_schema_for_sim_ai_budget(monkeypatch):
             "ask_tot": 80000,
             "bid_tot": 95000,
             "orderbook": {
-                "asks": [{"price": 10010, "volume": 3000}, {"price": 10020, "volume": 4500}],
-                "bids": [{"price": 10000, "volume": 3800}, {"price": 9990, "volume": 4200}],
+                "asks": [
+                    {"price": 10010, "volume": 3000},
+                    {"price": 10020, "volume": 4500},
+                ],
+                "bids": [
+                    {"price": 10000, "volume": 3800},
+                    {"price": 9990, "volume": 4200},
+                ],
             },
         },
         [
-            {"time": "10:00:00", "price": 10000, "volume": 120, "dir": "BUY", "strength": 121.0},
-            {"time": "09:59:59", "price": 9990, "volume": 80, "dir": "SELL", "strength": 119.0},
-            {"time": "09:59:58", "price": 10000, "volume": 150, "dir": "BUY", "strength": 120.5},
+            {
+                "time": "10:00:00",
+                "price": 10000,
+                "volume": 120,
+                "dir": "BUY",
+                "strength": 121.0,
+            },
+            {
+                "time": "09:59:59",
+                "price": 9990,
+                "volume": 80,
+                "dir": "SELL",
+                "strength": 119.0,
+            },
+            {
+                "time": "09:59:58",
+                "price": 10000,
+                "volume": 150,
+                "dir": "BUY",
+                "strength": 120.5,
+            },
         ],
         [
-            {"체결시간": "09:58:00", "시가": 9980, "현재가": 9990, "고가": 10010, "저가": 9970, "거래량": 1200},
-            {"체결시간": "09:59:00", "시가": 9990, "현재가": 10000, "고가": 10020, "저가": 9980, "거래량": 1400},
+            {
+                "체결시간": "09:58:00",
+                "시가": 9980,
+                "현재가": 9990,
+                "고가": 10010,
+                "저가": 9970,
+                "거래량": 1200,
+            },
+            {
+                "체결시간": "09:59:00",
+                "시가": 9990,
+                "현재가": 10000,
+                "고가": 10020,
+                "저가": 9980,
+                "거래량": 1400,
+            },
         ],
         strategy="SCALPING",
         cache_profile="holding",
@@ -913,14 +1046,18 @@ def test_live_openai_scalp_sim_overnight_schema(monkeypatch):
         pytest.skip("live OpenAI test disabled; set RUN_OPENAI_LIVE_TESTS=1")
     keys = _api_keys()
     if not keys:
-        pytest.fail("RUN_OPENAI_LIVE_TESTS=1 requires OPENAI_API_KEY or OPENAI_API_KEYS")
+        pytest.fail(
+            "RUN_OPENAI_LIVE_TESTS=1 requires OPENAI_API_KEY or OPENAI_API_KEYS"
+        )
 
     monkeypatch.setattr(
         openai_module,
         "TRADING_RULES",
         _RulesProxy(
             openai_module.TRADING_RULES,
-            GPT_FAST_MODEL=os.getenv("KORSTOCKSCAN_OPENAI_LIVE_TEST_MODEL", "gpt-5-nano"),
+            GPT_FAST_MODEL=os.getenv(
+                "KORSTOCKSCAN_OPENAI_LIVE_TEST_MODEL", "gpt-5-nano"
+            ),
             OPENAI_TRANSPORT_MODE="responses_ws",
             OPENAI_RESPONSES_WS_ENABLED=True,
             OPENAI_RESPONSES_WS_POOL_SIZE=1,

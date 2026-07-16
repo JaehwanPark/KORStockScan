@@ -34,7 +34,9 @@ def test_summarize_today_entry_metrics(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    summary = entry_metrics.summarize_today_entry_metrics(now=datetime(2026, 4, 2, 12, 0, 0))
+    summary = entry_metrics.summarize_today_entry_metrics(
+        now=datetime(2026, 4, 2, 12, 0, 0)
+    )
 
     assert summary.latency_counts["SAFE"] == 1
     assert summary.latency_counts["CAUTION"] == 1

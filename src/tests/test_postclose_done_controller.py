@@ -10,7 +10,9 @@ def _write_json(path, payload):
 
 def _write_succeeded_status(report_dir, target_date="2026-06-03"):
     _write_json(
-        report_dir / "threshold_cycle_postclose_status" / f"threshold_cycle_postclose_{target_date}.status.json",
+        report_dir
+        / "threshold_cycle_postclose_status"
+        / f"threshold_cycle_postclose_{target_date}.status.json",
         {"status": "succeeded"},
     )
 
@@ -26,13 +28,17 @@ def _passable_artifact_status():
     return [{"label": "threshold_cycle_ev", "exists": True, "json_valid": True}]
 
 
-def test_postclose_done_controller_does_not_require_codex_runner_by_default(monkeypatch, tmp_path):
+def test_postclose_done_controller_does_not_require_codex_runner_by_default(
+    monkeypatch, tmp_path
+):
     report_dir = tmp_path / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
     _write_succeeded_status(report_dir)
     _write_json(
-        report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json",
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json",
         _pass_verification(),
     )
     calls = []
@@ -71,7 +77,9 @@ def test_postclose_done_controller_passes_without_recovery(monkeypatch, tmp_path
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
     _write_succeeded_status(report_dir)
     _write_json(
-        report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json",
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json",
         _pass_verification(),
     )
     calls = []
@@ -87,17 +95,23 @@ def test_postclose_done_controller_passes_without_recovery(monkeypatch, tmp_path
     assert report["actions"] == []
 
 
-def test_postclose_done_controller_does_not_accept_pass_without_done_marker(monkeypatch, tmp_path):
+def test_postclose_done_controller_does_not_accept_pass_without_done_marker(
+    monkeypatch, tmp_path
+):
     report_dir = tmp_path / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
     _write_succeeded_status(report_dir)
     _write_json(
-        report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json",
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json",
         {"status": "pass"},
     )
     _write_json(
-        report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-06-03.json",
+        report_dir
+        / "code_improvement_workorder"
+        / "code_improvement_workorder_2026-06-03.json",
         {"generation_id": "g1"},
     )
 
@@ -132,13 +146,19 @@ def test_postclose_done_controller_refreshes_recoverable_sources(monkeypatch, tm
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
     _write_succeeded_status(report_dir)
-    verification = report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json"
+    verification = (
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json"
+    )
     _write_json(
         verification,
         {
             "status": "fail",
             "missing_downstream_links": ["threshold_cycle_ev_sources_workorder"],
-            "stale_downstream_links": ["runtime_approval_summary_stale_before_threshold_cycle_ev"],
+            "stale_downstream_links": [
+                "runtime_approval_summary_stale_before_threshold_cycle_ev"
+            ],
         },
     )
     calls = []
@@ -159,20 +179,31 @@ def test_postclose_done_controller_refreshes_recoverable_sources(monkeypatch, tm
     assert report["status"] == "done"
     assert "threshold_cycle_ev_report" in joined
     assert "runtime_approval_summary" in joined
-    assert any(item["action"] == "refresh_code_improvement_workorder" for item in report["actions"])
+    assert any(
+        item["action"] == "refresh_code_improvement_workorder"
+        for item in report["actions"]
+    )
 
 
-def test_postclose_done_controller_repairs_ev_workorder_stale_link_without_full_wrapper_rerun(monkeypatch, tmp_path):
+def test_postclose_done_controller_repairs_ev_workorder_stale_link_without_full_wrapper_rerun(
+    monkeypatch, tmp_path
+):
     report_dir = tmp_path / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
     _write_succeeded_status(report_dir)
-    verification = report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json"
+    verification = (
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json"
+    )
     _write_json(
         verification,
         {
             "status": "fail",
-            "stale_downstream_links": ["threshold_cycle_ev_stale_before_code_improvement_workorder"],
+            "stale_downstream_links": [
+                "threshold_cycle_ev_stale_before_code_improvement_workorder"
+            ],
         },
     )
     calls = []
@@ -210,19 +241,34 @@ def test_postclose_done_controller_repairs_ev_workorder_stale_link_without_full_
         "refresh_runtime_apply_gap_audit",
         "verify_postclose_chain",
     ]
-    assert not any(cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"] for cmd in calls)
+    assert not any(
+        cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"] for cmd in calls
+    )
     assert report["full_wrapper_rerun_used"] is False
-    assert report["root_cause"] == "threshold_cycle_ev_stale_before_code_improvement_workorder"
+    assert (
+        report["root_cause"]
+        == "threshold_cycle_ev_stale_before_code_improvement_workorder"
+    )
     assert report["selected_recovery_action"] == "refresh_daily_threshold_cycle_report"
 
 
-def test_postclose_done_controller_reconciles_done_marker_without_full_wrapper_rerun(monkeypatch, tmp_path):
+def test_postclose_done_controller_reconciles_done_marker_without_full_wrapper_rerun(
+    monkeypatch, tmp_path
+):
     report_dir = tmp_path / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
-    monkeypatch.setattr(mod, "POSTCLOSE_LOG_PATH", tmp_path / "logs" / "threshold_cycle_postclose_cron.log")
+    monkeypatch.setattr(
+        mod,
+        "POSTCLOSE_LOG_PATH",
+        tmp_path / "logs" / "threshold_cycle_postclose_cron.log",
+    )
     _write_succeeded_status(report_dir)
-    verification = report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json"
+    verification = (
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json"
+    )
     _write_json(
         verification,
         {
@@ -249,9 +295,13 @@ def test_postclose_done_controller_reconciles_done_marker_without_full_wrapper_r
     )
 
     assert report["status"] == "done"
-    assert not any(cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"] for cmd in calls)
+    assert not any(
+        cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"] for cmd in calls
+    )
     assert any(item["action"] == "marker_reconciliation" for item in report["actions"])
-    assert not any(env.get("THRESHOLD_CYCLE_POSTCLOSE_BOT_ACTION") == "stop" for env in envs)
+    assert not any(
+        env.get("THRESHOLD_CYCLE_POSTCLOSE_BOT_ACTION") == "stop" for env in envs
+    )
     assert report["full_wrapper_rerun_used"] is False
     marker_text = mod.POSTCLOSE_LOG_PATH.read_text(encoding="utf-8")
     assert "recovery_action=marker_reconciliation" in marker_text
@@ -259,13 +309,23 @@ def test_postclose_done_controller_reconciles_done_marker_without_full_wrapper_r
     assert "runtime_approval_summary=true" not in marker_text
 
 
-def test_postclose_done_controller_reconciles_fail_marker_without_full_wrapper_rerun(monkeypatch, tmp_path):
+def test_postclose_done_controller_reconciles_fail_marker_without_full_wrapper_rerun(
+    monkeypatch, tmp_path
+):
     report_dir = tmp_path / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
-    monkeypatch.setattr(mod, "POSTCLOSE_LOG_PATH", tmp_path / "logs" / "threshold_cycle_postclose_cron.log")
+    monkeypatch.setattr(
+        mod,
+        "POSTCLOSE_LOG_PATH",
+        tmp_path / "logs" / "threshold_cycle_postclose_cron.log",
+    )
     _write_succeeded_status(report_dir)
-    verification = report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json"
+    verification = (
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json"
+    )
     _write_json(
         verification,
         {
@@ -290,7 +350,9 @@ def test_postclose_done_controller_reconciles_fail_marker_without_full_wrapper_r
     )
 
     assert report["status"] == "done"
-    assert not any(cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"] for cmd in calls)
+    assert not any(
+        cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"] for cmd in calls
+    )
     assert any(item["action"] == "marker_reconciliation" for item in report["actions"])
     assert report["full_wrapper_rerun_used"] is False
     assert report["selected_recovery_action"] == "marker_reconciliation"
@@ -305,7 +367,9 @@ def test_postclose_done_controller_reconciles_repaired_failed_status_without_ful
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
     monkeypatch.setattr(mod, "POSTCLOSE_LOG_PATH", log_path)
     _write_json(
-        report_dir / "threshold_cycle_postclose_status" / "threshold_cycle_postclose_2026-06-03.status.json",
+        report_dir
+        / "threshold_cycle_postclose_status"
+        / "threshold_cycle_postclose_2026-06-03.status.json",
         {"status": "failed", "reason": "command_failed"},
     )
     log_path.parent.mkdir(parents=True)
@@ -320,7 +384,11 @@ def test_postclose_done_controller_reconciles_repaired_failed_status_without_ful
         + "\n",
         encoding="utf-8",
     )
-    verification = report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json"
+    verification = (
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json"
+    )
     _write_json(
         verification,
         {
@@ -328,7 +396,10 @@ def test_postclose_done_controller_reconciles_repaired_failed_status_without_ful
             "predecessor_integrity": {"log_issues": ["postclose_fail_marker_present"]},
             "artifact_status": _passable_artifact_status(),
             "handoff_warnings": ["active_sim_priority_preopen_handoff_pending"],
-            "conversion_kpi": {"status": "warning", "warnings": ["active_or_hypothesis_preopen_handoff_pending"]},
+            "conversion_kpi": {
+                "status": "warning",
+                "warnings": ["active_or_hypothesis_preopen_handoff_pending"],
+            },
         },
     )
     calls = []
@@ -336,22 +407,32 @@ def test_postclose_done_controller_reconciles_repaired_failed_status_without_ful
     def fake_runner(cmd, env=None):
         calls.append(cmd)
         joined = " ".join(cmd)
-        if "verify_threshold_cycle_postclose_chain" in joined and "--allow-pending-done-marker" in cmd:
+        if (
+            "verify_threshold_cycle_postclose_chain" in joined
+            and "--allow-pending-done-marker" in cmd
+        ):
             _write_json(
                 verification,
                 {
                     "status": "warning",
-                    "predecessor_integrity": {"log_issues": ["postclose_fail_marker_present"]},
+                    "predecessor_integrity": {
+                        "log_issues": ["postclose_fail_marker_present"]
+                    },
                     "artifact_status": _passable_artifact_status(),
                     "handoff_warnings": ["active_sim_priority_preopen_handoff_pending"],
-                    "conversion_kpi": {"status": "warning", "warnings": ["active_or_hypothesis_preopen_handoff_pending"]},
+                    "conversion_kpi": {
+                        "status": "warning",
+                        "warnings": ["active_or_hypothesis_preopen_handoff_pending"],
+                    },
                 },
             )
         elif "verify_threshold_cycle_postclose_chain" in joined:
             status_payload = json.loads(
-                (report_dir / "threshold_cycle_postclose_status" / "threshold_cycle_postclose_2026-06-03.status.json").read_text(
-                    encoding="utf-8"
-                )
+                (
+                    report_dir
+                    / "threshold_cycle_postclose_status"
+                    / "threshold_cycle_postclose_2026-06-03.status.json"
+                ).read_text(encoding="utf-8")
             )
             if status_payload.get("status") == "succeeded":
                 _write_json(
@@ -361,10 +442,14 @@ def test_postclose_done_controller_reconciles_repaired_failed_status_without_ful
                         "latest_done_marker": "[DONE] threshold-cycle postclose target_date=2026-06-03 recovery_action=tail_repair_done_reconciliation",
                         "predecessor_integrity": {"log_issues": []},
                         "artifact_status": _passable_artifact_status(),
-                        "handoff_warnings": ["active_sim_priority_preopen_handoff_pending"],
+                        "handoff_warnings": [
+                            "active_sim_priority_preopen_handoff_pending"
+                        ],
                         "conversion_kpi": {
                             "status": "warning",
-                            "warnings": ["active_or_hypothesis_preopen_handoff_pending"],
+                            "warnings": [
+                                "active_or_hypothesis_preopen_handoff_pending"
+                            ],
                         },
                     },
                 )
@@ -378,19 +463,28 @@ def test_postclose_done_controller_reconciles_repaired_failed_status_without_ful
     )
 
     assert report["status"] == "done"
-    assert any(item["action"] == "tail_repair_done_reconciliation" for item in report["actions"])
-    assert not any(cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"] for cmd in calls)
+    assert any(
+        item["action"] == "tail_repair_done_reconciliation"
+        for item in report["actions"]
+    )
+    assert not any(
+        cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"] for cmd in calls
+    )
     assert report["full_wrapper_rerun_used"] is False
 
 
-def test_postclose_done_controller_repairs_failed_tail_stage_without_full_wrapper_rerun(monkeypatch, tmp_path):
+def test_postclose_done_controller_repairs_failed_tail_stage_without_full_wrapper_rerun(
+    monkeypatch, tmp_path
+):
     report_dir = tmp_path / "report"
     log_path = tmp_path / "logs" / "threshold_cycle_postclose_cron.log"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
     monkeypatch.setattr(mod, "POSTCLOSE_LOG_PATH", log_path)
     _write_json(
-        report_dir / "threshold_cycle_postclose_status" / "threshold_cycle_postclose_2026-06-03.status.json",
+        report_dir
+        / "threshold_cycle_postclose_status"
+        / "threshold_cycle_postclose_2026-06-03.status.json",
         {"status": "failed", "reason": "command_failed"},
     )
     log_path.parent.mkdir(parents=True)
@@ -407,7 +501,11 @@ def test_postclose_done_controller_repairs_failed_tail_stage_without_full_wrappe
         + "\n",
         encoding="utf-8",
     )
-    verification = report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json"
+    verification = (
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json"
+    )
     _write_json(
         verification,
         {
@@ -421,20 +519,27 @@ def test_postclose_done_controller_repairs_failed_tail_stage_without_full_wrappe
     def fake_runner(cmd, env=None):
         calls.append(cmd)
         joined = " ".join(cmd)
-        if "verify_threshold_cycle_postclose_chain" in joined and "--allow-pending-done-marker" in cmd:
+        if (
+            "verify_threshold_cycle_postclose_chain" in joined
+            and "--allow-pending-done-marker" in cmd
+        ):
             _write_json(
                 verification,
                 {
                     "status": "pass_with_pending_done_marker",
-                    "predecessor_integrity": {"log_issues": ["postclose_fail_marker_present"]},
+                    "predecessor_integrity": {
+                        "log_issues": ["postclose_fail_marker_present"]
+                    },
                     "artifact_status": _tail_passable_artifact_status(),
                 },
             )
         elif "verify_threshold_cycle_postclose_chain" in joined:
             status_payload = json.loads(
-                (report_dir / "threshold_cycle_postclose_status" / "threshold_cycle_postclose_2026-06-03.status.json").read_text(
-                    encoding="utf-8"
-                )
+                (
+                    report_dir
+                    / "threshold_cycle_postclose_status"
+                    / "threshold_cycle_postclose_2026-06-03.status.json"
+                ).read_text(encoding="utf-8")
             )
             if status_payload.get("status") == "succeeded":
                 _write_json(verification, _pass_verification())
@@ -454,8 +559,13 @@ def test_postclose_done_controller_repairs_failed_tail_stage_without_full_wrappe
     assert "src.engine.build_code_improvement_workorder" in joined_calls
     assert "src.engine.build_next_stage2_checklist" in joined_calls
     assert "src.engine.automation.tuning_performance_control_tower" in joined_calls
-    assert not any(cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"] for cmd in calls)
-    assert any(item["action"] == "tail_repair_done_reconciliation" for item in report["actions"])
+    assert not any(
+        cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"] for cmd in calls
+    )
+    assert any(
+        item["action"] == "tail_repair_done_reconciliation"
+        for item in report["actions"]
+    )
     assert report["selected_recovery_action"] == "refresh_key_lineage_ledger"
     assert report["latest_failed_tail_stage"] == "key_lineage_ledger"
     assert report["tail_stage_minimal_repair_supported"] is True
@@ -466,10 +576,14 @@ def test_postclose_done_controller_repairs_failed_tail_stage_without_full_wrappe
         and "12" in cmd
         for cmd in calls
     )
-    assert "recovery_action=tail_repair_done_reconciliation" in log_path.read_text(encoding="utf-8")
+    assert "recovery_action=tail_repair_done_reconciliation" in log_path.read_text(
+        encoding="utf-8"
+    )
 
 
-def test_postclose_done_controller_tail_repair_can_skip_tuning_performance_control_tower(monkeypatch, tmp_path):
+def test_postclose_done_controller_tail_repair_can_skip_tuning_performance_control_tower(
+    monkeypatch, tmp_path
+):
     report_dir = tmp_path / "report"
     log_path = tmp_path / "logs" / "threshold_cycle_postclose_cron.log"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
@@ -477,7 +591,9 @@ def test_postclose_done_controller_tail_repair_can_skip_tuning_performance_contr
     monkeypatch.setattr(mod, "POSTCLOSE_LOG_PATH", log_path)
     monkeypatch.setenv("THRESHOLD_CYCLE_RUN_TUNING_PERFORMANCE_CONTROL_TOWER", "false")
     _write_json(
-        report_dir / "threshold_cycle_postclose_status" / "threshold_cycle_postclose_2026-06-03.status.json",
+        report_dir
+        / "threshold_cycle_postclose_status"
+        / "threshold_cycle_postclose_2026-06-03.status.json",
         {"status": "failed", "reason": "command_failed"},
     )
     log_path.parent.mkdir(parents=True)
@@ -492,7 +608,11 @@ def test_postclose_done_controller_tail_repair_can_skip_tuning_performance_contr
         + "\n",
         encoding="utf-8",
     )
-    verification = report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json"
+    verification = (
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json"
+    )
     _write_json(
         verification,
         {
@@ -506,20 +626,27 @@ def test_postclose_done_controller_tail_repair_can_skip_tuning_performance_contr
     def fake_runner(cmd, env=None):
         calls.append(cmd)
         joined = " ".join(cmd)
-        if "verify_threshold_cycle_postclose_chain" in joined and "--allow-pending-done-marker" in cmd:
+        if (
+            "verify_threshold_cycle_postclose_chain" in joined
+            and "--allow-pending-done-marker" in cmd
+        ):
             _write_json(
                 verification,
                 {
                     "status": "pass_with_pending_done_marker",
-                    "predecessor_integrity": {"log_issues": ["postclose_fail_marker_present"]},
+                    "predecessor_integrity": {
+                        "log_issues": ["postclose_fail_marker_present"]
+                    },
                     "artifact_status": _tail_passable_artifact_status(),
                 },
             )
         elif "verify_threshold_cycle_postclose_chain" in joined:
             status_payload = json.loads(
-                (report_dir / "threshold_cycle_postclose_status" / "threshold_cycle_postclose_2026-06-03.status.json").read_text(
-                    encoding="utf-8"
-                )
+                (
+                    report_dir
+                    / "threshold_cycle_postclose_status"
+                    / "threshold_cycle_postclose_2026-06-03.status.json"
+                ).read_text(encoding="utf-8")
             )
             if status_payload.get("status") == "succeeded":
                 _write_json(verification, _pass_verification())
@@ -538,7 +665,9 @@ def test_postclose_done_controller_tail_repair_can_skip_tuning_performance_contr
     assert report["full_wrapper_rerun_used"] is False
 
 
-def test_postclose_done_controller_tail_repair_uses_workorder_max_orders_env(monkeypatch, tmp_path):
+def test_postclose_done_controller_tail_repair_uses_workorder_max_orders_env(
+    monkeypatch, tmp_path
+):
     report_dir = tmp_path / "report"
     log_path = tmp_path / "logs" / "threshold_cycle_postclose_cron.log"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
@@ -546,7 +675,9 @@ def test_postclose_done_controller_tail_repair_uses_workorder_max_orders_env(mon
     monkeypatch.setattr(mod, "POSTCLOSE_LOG_PATH", log_path)
     monkeypatch.setenv("CODE_IMPROVEMENT_WORKORDER_MAX_ORDERS", "7")
     _write_json(
-        report_dir / "threshold_cycle_postclose_status" / "threshold_cycle_postclose_2026-06-03.status.json",
+        report_dir
+        / "threshold_cycle_postclose_status"
+        / "threshold_cycle_postclose_2026-06-03.status.json",
         {"status": "failed", "reason": "command_failed"},
     )
     log_path.parent.mkdir(parents=True)
@@ -561,7 +692,11 @@ def test_postclose_done_controller_tail_repair_uses_workorder_max_orders_env(mon
         + "\n",
         encoding="utf-8",
     )
-    verification = report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json"
+    verification = (
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json"
+    )
     _write_json(
         verification,
         {
@@ -575,20 +710,27 @@ def test_postclose_done_controller_tail_repair_uses_workorder_max_orders_env(mon
     def fake_runner(cmd, env=None):
         calls.append(cmd)
         joined = " ".join(cmd)
-        if "verify_threshold_cycle_postclose_chain" in joined and "--allow-pending-done-marker" in cmd:
+        if (
+            "verify_threshold_cycle_postclose_chain" in joined
+            and "--allow-pending-done-marker" in cmd
+        ):
             _write_json(
                 verification,
                 {
                     "status": "pass_with_pending_done_marker",
-                    "predecessor_integrity": {"log_issues": ["postclose_fail_marker_present"]},
+                    "predecessor_integrity": {
+                        "log_issues": ["postclose_fail_marker_present"]
+                    },
                     "artifact_status": _tail_passable_artifact_status(),
                 },
             )
         elif "verify_threshold_cycle_postclose_chain" in joined:
             status_payload = json.loads(
-                (report_dir / "threshold_cycle_postclose_status" / "threshold_cycle_postclose_2026-06-03.status.json").read_text(
-                    encoding="utf-8"
-                )
+                (
+                    report_dir
+                    / "threshold_cycle_postclose_status"
+                    / "threshold_cycle_postclose_2026-06-03.status.json"
+                ).read_text(encoding="utf-8")
             )
             if status_payload.get("status") == "succeeded":
                 _write_json(verification, _pass_verification())
@@ -614,8 +756,12 @@ def test_tail_stage_repair_actions_refresh_final_ev_after_workorder():
     actions = mod._tail_stage_repair_actions("2026-06-03", "key_lineage_ledger")
     action_names = [item.action for item in actions]
 
-    assert action_names.index("refresh_code_improvement_workorder") < action_names.index("refresh_threshold_cycle_ev")
-    assert action_names.index("refresh_threshold_cycle_ev") < action_names.index("refresh_runtime_approval_summary")
+    assert action_names.index(
+        "refresh_code_improvement_workorder"
+    ) < action_names.index("refresh_threshold_cycle_ev")
+    assert action_names.index("refresh_threshold_cycle_ev") < action_names.index(
+        "refresh_runtime_approval_summary"
+    )
 
 
 def test_postclose_done_controller_tail_repair_requires_artifact_status_before_done_reconciliation(
@@ -628,7 +774,9 @@ def test_postclose_done_controller_tail_repair_requires_artifact_status_before_d
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
     monkeypatch.setattr(mod, "POSTCLOSE_LOG_PATH", log_path)
     _write_json(
-        report_dir / "threshold_cycle_postclose_status" / "threshold_cycle_postclose_2026-06-03.status.json",
+        report_dir
+        / "threshold_cycle_postclose_status"
+        / "threshold_cycle_postclose_2026-06-03.status.json",
         {"status": "failed", "reason": "command_failed"},
     )
     log_path.parent.mkdir(parents=True)
@@ -643,7 +791,11 @@ def test_postclose_done_controller_tail_repair_requires_artifact_status_before_d
         + "\n",
         encoding="utf-8",
     )
-    verification = report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json"
+    verification = (
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json"
+    )
     _write_json(
         verification,
         {
@@ -656,12 +808,17 @@ def test_postclose_done_controller_tail_repair_requires_artifact_status_before_d
 
     def fake_runner(cmd, env=None):
         calls.append(cmd)
-        if "verify_threshold_cycle_postclose_chain" in " ".join(cmd) and "--allow-pending-done-marker" in cmd:
+        if (
+            "verify_threshold_cycle_postclose_chain" in " ".join(cmd)
+            and "--allow-pending-done-marker" in cmd
+        ):
             _write_json(
                 verification,
                 {
                     "status": "pass_with_pending_done_marker",
-                    "predecessor_integrity": {"log_issues": ["postclose_fail_marker_present"]},
+                    "predecessor_integrity": {
+                        "log_issues": ["postclose_fail_marker_present"]
+                    },
                 },
             )
         return 0
@@ -675,17 +832,24 @@ def test_postclose_done_controller_tail_repair_requires_artifact_status_before_d
 
     assert report["status"] == "blocked_recoverable_action_failed"
     assert report["blocked_reasons"] == ["tail_repair_done_reconciliation_failed"]
-    assert not any("[DONE] threshold-cycle postclose" in line for line in log_path.read_text(encoding="utf-8").splitlines())
+    assert not any(
+        "[DONE] threshold-cycle postclose" in line
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+    )
 
 
-def test_postclose_done_controller_uses_previous_supported_tail_stage_after_bad_full_rerun(monkeypatch, tmp_path):
+def test_postclose_done_controller_uses_previous_supported_tail_stage_after_bad_full_rerun(
+    monkeypatch, tmp_path
+):
     report_dir = tmp_path / "report"
     log_path = tmp_path / "logs" / "threshold_cycle_postclose_cron.log"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
     monkeypatch.setattr(mod, "POSTCLOSE_LOG_PATH", log_path)
     _write_json(
-        report_dir / "threshold_cycle_postclose_status" / "threshold_cycle_postclose_2026-06-03.status.json",
+        report_dir
+        / "threshold_cycle_postclose_status"
+        / "threshold_cycle_postclose_2026-06-03.status.json",
         {"status": "failed", "reason": "command_failed"},
     )
     log_path.parent.mkdir(parents=True)
@@ -703,7 +867,11 @@ def test_postclose_done_controller_uses_previous_supported_tail_stage_after_bad_
         + "\n",
         encoding="utf-8",
     )
-    verification = report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json"
+    verification = (
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json"
+    )
     _write_json(
         verification,
         {
@@ -717,20 +885,27 @@ def test_postclose_done_controller_uses_previous_supported_tail_stage_after_bad_
     def fake_runner(cmd, env=None):
         calls.append(cmd)
         joined = " ".join(cmd)
-        if "verify_threshold_cycle_postclose_chain" in joined and "--allow-pending-done-marker" in cmd:
+        if (
+            "verify_threshold_cycle_postclose_chain" in joined
+            and "--allow-pending-done-marker" in cmd
+        ):
             _write_json(
                 verification,
                 {
                     "status": "pass_with_pending_done_marker",
-                    "predecessor_integrity": {"log_issues": ["postclose_fail_marker_present"]},
+                    "predecessor_integrity": {
+                        "log_issues": ["postclose_fail_marker_present"]
+                    },
                     "artifact_status": _tail_passable_artifact_status(),
                 },
             )
         elif "verify_threshold_cycle_postclose_chain" in joined:
             status_payload = json.loads(
-                (report_dir / "threshold_cycle_postclose_status" / "threshold_cycle_postclose_2026-06-03.status.json").read_text(
-                    encoding="utf-8"
-                )
+                (
+                    report_dir
+                    / "threshold_cycle_postclose_status"
+                    / "threshold_cycle_postclose_2026-06-03.status.json"
+                ).read_text(encoding="utf-8")
             )
             if status_payload.get("status") == "succeeded":
                 _write_json(verification, _pass_verification())
@@ -746,8 +921,12 @@ def test_postclose_done_controller_uses_previous_supported_tail_stage_after_bad_
     assert report["status"] == "done"
     assert report["latest_failed_tail_stage"] == "key_lineage_ledger"
     assert report["full_wrapper_rerun_used"] is False
-    assert any("src.engine.automation.key_lineage_ledger" in " ".join(cmd) for cmd in calls)
-    assert not any(cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"] for cmd in calls)
+    assert any(
+        "src.engine.automation.key_lineage_ledger" in " ".join(cmd) for cmd in calls
+    )
+    assert not any(
+        cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"] for cmd in calls
+    )
 
 
 def test_postclose_done_controller_prefers_full_rerun_for_required_artifact_missing_over_tail_repair(
@@ -760,7 +939,9 @@ def test_postclose_done_controller_prefers_full_rerun_for_required_artifact_miss
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
     monkeypatch.setattr(mod, "POSTCLOSE_LOG_PATH", log_path)
     _write_json(
-        report_dir / "threshold_cycle_postclose_status" / "threshold_cycle_postclose_2026-06-03.status.json",
+        report_dir
+        / "threshold_cycle_postclose_status"
+        / "threshold_cycle_postclose_2026-06-03.status.json",
         {"status": "failed", "reason": "command_failed"},
     )
     log_path.parent.mkdir(parents=True)
@@ -775,7 +956,11 @@ def test_postclose_done_controller_prefers_full_rerun_for_required_artifact_miss
         + "\n",
         encoding="utf-8",
     )
-    verification = report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json"
+    verification = (
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json"
+    )
     _write_json(
         verification,
         {
@@ -790,7 +975,9 @@ def test_postclose_done_controller_prefers_full_rerun_for_required_artifact_miss
         calls.append(cmd)
         if cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"]:
             _write_json(
-                report_dir / "threshold_cycle_postclose_status" / "threshold_cycle_postclose_2026-06-03.status.json",
+                report_dir
+                / "threshold_cycle_postclose_status"
+                / "threshold_cycle_postclose_2026-06-03.status.json",
                 {"status": "succeeded"},
             )
             _write_json(verification, _pass_verification())
@@ -806,8 +993,12 @@ def test_postclose_done_controller_prefers_full_rerun_for_required_artifact_miss
     assert report["status"] == "done"
     assert report["full_wrapper_rerun_used"] is True
     assert report["selected_recovery_action"] == "rerun_threshold_cycle_postclose"
-    assert any(cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"] for cmd in calls)
-    assert not any("src.engine.automation.key_lineage_ledger" in " ".join(cmd) for cmd in calls)
+    assert any(
+        cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"] for cmd in calls
+    )
+    assert not any(
+        "src.engine.automation.key_lineage_ledger" in " ".join(cmd) for cmd in calls
+    )
 
 
 def test_postclose_done_controller_allows_marker_reconciliation_with_optional_absent_artifact(
@@ -817,9 +1008,17 @@ def test_postclose_done_controller_allows_marker_reconciliation_with_optional_ab
     report_dir = tmp_path / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
-    monkeypatch.setattr(mod, "POSTCLOSE_LOG_PATH", tmp_path / "logs" / "threshold_cycle_postclose_cron.log")
+    monkeypatch.setattr(
+        mod,
+        "POSTCLOSE_LOG_PATH",
+        tmp_path / "logs" / "threshold_cycle_postclose_cron.log",
+    )
     _write_succeeded_status(report_dir)
-    verification = report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json"
+    verification = (
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json"
+    )
     _write_json(
         verification,
         {
@@ -844,7 +1043,9 @@ def test_postclose_done_controller_allows_marker_reconciliation_with_optional_ab
     )
 
     assert report["status"] == "done"
-    assert not any(cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"] for cmd in calls)
+    assert not any(
+        cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"] for cmd in calls
+    )
     assert any(item["action"] == "marker_reconciliation" for item in report["actions"])
     assert report["full_wrapper_rerun_used"] is False
 
@@ -857,10 +1058,16 @@ def test_postclose_done_controller_does_not_select_marker_reconciliation_when_st
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
     _write_json(
-        report_dir / "threshold_cycle_postclose_status" / "threshold_cycle_postclose_2026-06-03.status.json",
+        report_dir
+        / "threshold_cycle_postclose_status"
+        / "threshold_cycle_postclose_2026-06-03.status.json",
         {"status": "failed"},
     )
-    verification = report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json"
+    verification = (
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json"
+    )
     _write_json(
         verification,
         {
@@ -878,7 +1085,9 @@ def test_postclose_done_controller_does_not_select_marker_reconciliation_when_st
     )
 
     assert report["status"] == "exhausted_recoverable_actions"
-    assert not any(item["action"] == "marker_reconciliation" for item in report["actions"])
+    assert not any(
+        item["action"] == "marker_reconciliation" for item in report["actions"]
+    )
 
 
 def test_postclose_done_controller_does_not_select_marker_reconciliation_without_artifact_status(
@@ -888,9 +1097,17 @@ def test_postclose_done_controller_does_not_select_marker_reconciliation_without
     report_dir = tmp_path / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
-    monkeypatch.setattr(mod, "POSTCLOSE_LOG_PATH", tmp_path / "logs" / "threshold_cycle_postclose_cron.log")
+    monkeypatch.setattr(
+        mod,
+        "POSTCLOSE_LOG_PATH",
+        tmp_path / "logs" / "threshold_cycle_postclose_cron.log",
+    )
     _write_succeeded_status(report_dir)
-    verification = report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json"
+    verification = (
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json"
+    )
     _write_json(
         verification,
         {
@@ -899,7 +1116,9 @@ def test_postclose_done_controller_does_not_select_marker_reconciliation_without
         },
     )
     _write_json(
-        report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-06-03.json",
+        report_dir
+        / "code_improvement_workorder"
+        / "code_improvement_workorder_2026-06-03.json",
         {"generation_id": "g1"},
     )
 
@@ -911,7 +1130,9 @@ def test_postclose_done_controller_does_not_select_marker_reconciliation_without
     )
 
     assert report["status"] == "blocked_recoverable_action_failed"
-    assert not any(item["action"] == "marker_reconciliation" for item in report["actions"])
+    assert not any(
+        item["action"] == "marker_reconciliation" for item in report["actions"]
+    )
     assert not mod.POSTCLOSE_LOG_PATH.exists()
 
 
@@ -922,9 +1143,17 @@ def test_postclose_done_controller_does_not_select_marker_reconciliation_with_ma
     report_dir = tmp_path / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
-    monkeypatch.setattr(mod, "POSTCLOSE_LOG_PATH", tmp_path / "logs" / "threshold_cycle_postclose_cron.log")
+    monkeypatch.setattr(
+        mod,
+        "POSTCLOSE_LOG_PATH",
+        tmp_path / "logs" / "threshold_cycle_postclose_cron.log",
+    )
     _write_succeeded_status(report_dir)
-    verification = report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json"
+    verification = (
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json"
+    )
     _write_json(
         verification,
         {
@@ -946,7 +1175,9 @@ def test_postclose_done_controller_does_not_select_marker_reconciliation_with_ma
     )
 
     assert report["status"] == "exhausted_recoverable_actions"
-    assert not any(item["action"] == "marker_reconciliation" for item in report["actions"])
+    assert not any(
+        item["action"] == "marker_reconciliation" for item in report["actions"]
+    )
     assert not mod.POSTCLOSE_LOG_PATH.exists()
 
 
@@ -957,9 +1188,17 @@ def test_postclose_done_controller_does_not_select_marker_reconciliation_with_un
     report_dir = tmp_path / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
-    monkeypatch.setattr(mod, "POSTCLOSE_LOG_PATH", tmp_path / "logs" / "threshold_cycle_postclose_cron.log")
+    monkeypatch.setattr(
+        mod,
+        "POSTCLOSE_LOG_PATH",
+        tmp_path / "logs" / "threshold_cycle_postclose_cron.log",
+    )
     _write_succeeded_status(report_dir)
-    verification = report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json"
+    verification = (
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json"
+    )
     _write_json(
         verification,
         {
@@ -969,7 +1208,9 @@ def test_postclose_done_controller_does_not_select_marker_reconciliation_with_un
         },
     )
     _write_json(
-        report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-06-03.json",
+        report_dir
+        / "code_improvement_workorder"
+        / "code_improvement_workorder_2026-06-03.json",
         {"generation_id": "g1"},
     )
 
@@ -981,7 +1222,9 @@ def test_postclose_done_controller_does_not_select_marker_reconciliation_with_un
     )
 
     assert report["status"] == "blocked_recoverable_action_failed"
-    assert not any(item["action"] == "marker_reconciliation" for item in report["actions"])
+    assert not any(
+        item["action"] == "marker_reconciliation" for item in report["actions"]
+    )
     assert not mod.POSTCLOSE_LOG_PATH.exists()
 
 
@@ -992,9 +1235,17 @@ def test_postclose_done_controller_does_not_select_marker_reconciliation_with_co
     report_dir = tmp_path / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
-    monkeypatch.setattr(mod, "POSTCLOSE_LOG_PATH", tmp_path / "logs" / "threshold_cycle_postclose_cron.log")
+    monkeypatch.setattr(
+        mod,
+        "POSTCLOSE_LOG_PATH",
+        tmp_path / "logs" / "threshold_cycle_postclose_cron.log",
+    )
     _write_succeeded_status(report_dir)
-    verification = report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json"
+    verification = (
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json"
+    )
     _write_json(
         verification,
         {
@@ -1007,7 +1258,9 @@ def test_postclose_done_controller_does_not_select_marker_reconciliation_with_co
         },
     )
     _write_json(
-        report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-06-03.json",
+        report_dir
+        / "code_improvement_workorder"
+        / "code_improvement_workorder_2026-06-03.json",
         {"generation_id": "g1"},
     )
 
@@ -1020,7 +1273,9 @@ def test_postclose_done_controller_does_not_select_marker_reconciliation_with_co
 
     assert report["status"] == "blocked_recoverable_action_failed"
     assert "active_or_hypothesis_catalog_missing" in report["blocked_reasons"]
-    assert not any(item["action"] == "marker_reconciliation" for item in report["actions"])
+    assert not any(
+        item["action"] == "marker_reconciliation" for item in report["actions"]
+    )
     assert not mod.POSTCLOSE_LOG_PATH.exists()
 
 
@@ -1031,9 +1286,17 @@ def test_postclose_done_controller_does_not_select_marker_reconciliation_with_mi
     report_dir = tmp_path / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
-    monkeypatch.setattr(mod, "POSTCLOSE_LOG_PATH", tmp_path / "logs" / "threshold_cycle_postclose_cron.log")
+    monkeypatch.setattr(
+        mod,
+        "POSTCLOSE_LOG_PATH",
+        tmp_path / "logs" / "threshold_cycle_postclose_cron.log",
+    )
     _write_succeeded_status(report_dir)
-    verification = report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json"
+    verification = (
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json"
+    )
     _write_json(
         verification,
         {
@@ -1043,7 +1306,9 @@ def test_postclose_done_controller_does_not_select_marker_reconciliation_with_mi
         },
     )
     _write_json(
-        report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-06-03.json",
+        report_dir
+        / "code_improvement_workorder"
+        / "code_improvement_workorder_2026-06-03.json",
         {"generation_id": "g1"},
     )
 
@@ -1056,7 +1321,9 @@ def test_postclose_done_controller_does_not_select_marker_reconciliation_with_mi
 
     assert report["status"] == "blocked_recoverable_action_failed"
     assert "workorder_snapshot_missing_snapshot_identity" in report["blocked_reasons"]
-    assert not any(item["action"] == "marker_reconciliation" for item in report["actions"])
+    assert not any(
+        item["action"] == "marker_reconciliation" for item in report["actions"]
+    )
     assert not mod.POSTCLOSE_LOG_PATH.exists()
 
 
@@ -1069,7 +1336,9 @@ def test_postclose_done_controller_blocks_done_with_unknown_conversion_kpi_warni
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
     _write_succeeded_status(report_dir)
     _write_json(
-        report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json",
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json",
         {
             "status": "warning",
             "latest_done_marker": "[DONE] threshold-cycle postclose target_date=2026-06-03",
@@ -1080,7 +1349,9 @@ def test_postclose_done_controller_blocks_done_with_unknown_conversion_kpi_warni
         },
     )
     _write_json(
-        report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-06-03.json",
+        report_dir
+        / "code_improvement_workorder"
+        / "code_improvement_workorder_2026-06-03.json",
         {"generation_id": "g1"},
     )
 
@@ -1104,7 +1375,9 @@ def test_postclose_done_controller_accepts_next_preopen_handoff_conversion_warni
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
     _write_succeeded_status(report_dir)
     _write_json(
-        report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json",
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json",
         {
             "status": "warning",
             "latest_done_marker": "[DONE] threshold-cycle postclose target_date=2026-06-03",
@@ -1116,7 +1389,9 @@ def test_postclose_done_controller_accepts_next_preopen_handoff_conversion_warni
         },
     )
     _write_json(
-        report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-06-03.json",
+        report_dir
+        / "code_improvement_workorder"
+        / "code_improvement_workorder_2026-06-03.json",
         {"generation_id": "g1"},
     )
 
@@ -1141,7 +1416,9 @@ def test_postclose_done_controller_accepts_report_only_followup_warnings(
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
     _write_succeeded_status(report_dir)
     _write_json(
-        report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json",
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json",
         {
             "status": "warning",
             "latest_done_marker": "[DONE] threshold-cycle postclose target_date=2026-06-03",
@@ -1186,7 +1463,9 @@ def test_postclose_done_controller_accepts_active_priority_natural_absence_warni
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
     _write_succeeded_status(report_dir)
     _write_json(
-        report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json",
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json",
         {
             "status": "warning",
             "latest_done_marker": "[DONE] threshold-cycle postclose target_date=2026-06-03",
@@ -1233,7 +1512,11 @@ def test_postclose_done_controller_repairs_active_priority_handoff_by_refreshing
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
     _write_succeeded_status(report_dir)
-    verification = report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json"
+    verification = (
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json"
+    )
     _write_json(
         verification,
         {
@@ -1250,7 +1533,10 @@ def test_postclose_done_controller_repairs_active_priority_handoff_by_refreshing
     def fake_runner(cmd, env=None):
         calls.append(cmd)
         joined = " ".join(cmd)
-        if "verify_threshold_cycle_postclose_chain" in joined and "--allow-pending-done-marker" in cmd:
+        if (
+            "verify_threshold_cycle_postclose_chain" in joined
+            and "--allow-pending-done-marker" in cmd
+        ):
             _write_json(verification, _pass_verification())
         return 0
 
@@ -1267,7 +1553,9 @@ def test_postclose_done_controller_repairs_active_priority_handoff_by_refreshing
     assert "--date 2026-06-04" in joined
     assert "--source-date 2026-06-03" in joined
     assert "runtime_apply_gap_audit" in joined
-    assert not any(cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"] for cmd in calls)
+    assert not any(
+        cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"] for cmd in calls
+    )
 
 
 def test_postclose_done_controller_accepts_missing_next_preopen_apply_as_optional(
@@ -1279,7 +1567,9 @@ def test_postclose_done_controller_accepts_missing_next_preopen_apply_as_optiona
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
     _write_succeeded_status(report_dir)
     _write_json(
-        report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json",
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json",
         {
             "status": "warning",
             "latest_done_marker": "[DONE] threshold-cycle postclose target_date=2026-06-03",
@@ -1290,12 +1580,18 @@ def test_postclose_done_controller_accepts_missing_next_preopen_apply_as_optiona
             },
             "artifact_status": [
                 {"label": "threshold_cycle_ev", "exists": True, "json_valid": True},
-                {"label": "threshold_preopen_apply_next", "exists": False, "json_valid": False},
+                {
+                    "label": "threshold_preopen_apply_next",
+                    "exists": False,
+                    "json_valid": False,
+                },
             ],
         },
     )
     _write_json(
-        report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-06-03.json",
+        report_dir
+        / "code_improvement_workorder"
+        / "code_improvement_workorder_2026-06-03.json",
         {"generation_id": "g1"},
     )
 
@@ -1310,12 +1606,18 @@ def test_postclose_done_controller_accepts_missing_next_preopen_apply_as_optiona
     assert report["blocked_reasons"] == []
 
 
-def test_postclose_done_controller_reruns_wrapper_only_for_missing_start_marker(monkeypatch, tmp_path):
+def test_postclose_done_controller_reruns_wrapper_only_for_missing_start_marker(
+    monkeypatch, tmp_path
+):
     report_dir = tmp_path / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
     _write_succeeded_status(report_dir)
-    verification = report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json"
+    verification = (
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json"
+    )
     _write_json(
         verification,
         {
@@ -1339,16 +1641,24 @@ def test_postclose_done_controller_reruns_wrapper_only_for_missing_start_marker(
     )
 
     assert report["status"] == "done"
-    assert any(cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"] for cmd in calls)
+    assert any(
+        cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"] for cmd in calls
+    )
     assert report["full_wrapper_rerun_used"] is True
 
 
-def test_postclose_done_controller_reruns_wrapper_for_required_artifact_missing(monkeypatch, tmp_path):
+def test_postclose_done_controller_reruns_wrapper_for_required_artifact_missing(
+    monkeypatch, tmp_path
+):
     report_dir = tmp_path / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
     _write_succeeded_status(report_dir)
-    verification = report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json"
+    verification = (
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json"
+    )
     _write_json(
         verification,
         {
@@ -1372,21 +1682,31 @@ def test_postclose_done_controller_reruns_wrapper_for_required_artifact_missing(
     )
 
     assert report["status"] == "done"
-    assert any(cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"] for cmd in calls)
+    assert any(
+        cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"] for cmd in calls
+    )
     assert report["full_wrapper_rerun_used"] is True
 
 
-def test_postclose_done_controller_reruns_wrapper_for_invalid_json_artifact(monkeypatch, tmp_path):
+def test_postclose_done_controller_reruns_wrapper_for_invalid_json_artifact(
+    monkeypatch, tmp_path
+):
     report_dir = tmp_path / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
     _write_succeeded_status(report_dir)
-    verification = report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json"
+    verification = (
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json"
+    )
     _write_json(
         verification,
         {
             "status": "fail",
-            "artifact_status": [{"label": "threshold_cycle_ev", "exists": True, "json_valid": False}],
+            "artifact_status": [
+                {"label": "threshold_cycle_ev", "exists": True, "json_valid": False}
+            ],
         },
     )
     calls = []
@@ -1405,21 +1725,29 @@ def test_postclose_done_controller_reruns_wrapper_for_invalid_json_artifact(monk
     )
 
     assert report["status"] == "done"
-    assert any(cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"] for cmd in calls)
+    assert any(
+        cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"] for cmd in calls
+    )
     assert report["full_wrapper_rerun_used"] is True
 
 
-def test_postclose_done_controller_does_not_rerun_wrapper_for_unclassified_warning(monkeypatch, tmp_path):
+def test_postclose_done_controller_does_not_rerun_wrapper_for_unclassified_warning(
+    monkeypatch, tmp_path
+):
     report_dir = tmp_path / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
     _write_succeeded_status(report_dir)
     _write_json(
-        report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json",
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json",
         {"status": "warning"},
     )
     _write_json(
-        report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-06-03.json",
+        report_dir
+        / "code_improvement_workorder"
+        / "code_improvement_workorder_2026-06-03.json",
         {"generation_id": "g1"},
     )
     calls = []
@@ -1433,16 +1761,22 @@ def test_postclose_done_controller_does_not_rerun_wrapper_for_unclassified_warni
 
     assert report["status"] == "blocked_unclassified_verifier_status"
     assert report["blocked_reasons"] == ["verifier_status=warning"]
-    assert not any(cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"] for cmd in calls)
+    assert not any(
+        cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"] for cmd in calls
+    )
 
 
-def test_postclose_done_controller_accepts_done_marker_with_known_warning(monkeypatch, tmp_path):
+def test_postclose_done_controller_accepts_done_marker_with_known_warning(
+    monkeypatch, tmp_path
+):
     report_dir = tmp_path / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
     _write_succeeded_status(report_dir)
     _write_json(
-        report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json",
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json",
         {
             "status": "warning",
             "latest_done_marker": "[DONE] threshold-cycle postclose target_date=2026-06-03",
@@ -1461,20 +1795,28 @@ def test_postclose_done_controller_accepts_done_marker_with_known_warning(monkey
     assert report["status"] == "done"
     assert report["final_verifier_status"] == "warning"
     assert report["blocked_reasons"] == []
-    assert not any(cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"] for cmd in calls)
+    assert not any(
+        cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"] for cmd in calls
+    )
 
 
-def test_postclose_done_controller_blocks_done_when_codex_runner_incomplete_is_required(monkeypatch, tmp_path):
+def test_postclose_done_controller_blocks_done_when_codex_runner_incomplete_is_required(
+    monkeypatch, tmp_path
+):
     report_dir = tmp_path / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
     _write_succeeded_status(report_dir)
     _write_json(
-        report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json",
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json",
         _pass_verification(),
     )
     _write_json(
-        report_dir / "codex_workorder_runner" / "codex_workorder_runner_2026-06-03.json",
+        report_dir
+        / "codex_workorder_runner"
+        / "codex_workorder_runner_2026-06-03.json",
         {"status": "blocked_uncompleted_implementation"},
     )
 
@@ -1488,7 +1830,9 @@ def test_postclose_done_controller_blocks_done_when_codex_runner_incomplete_is_r
     )
 
     assert report["status"] == "blocked_uncompleted_implementation"
-    assert report["codex_workorder_runner_status"] == "blocked_uncompleted_implementation"
+    assert (
+        report["codex_workorder_runner_status"] == "blocked_uncompleted_implementation"
+    )
     assert report["codex_workorder_runner_two_pass_status"] == "missing"
     assert report["blocked_reasons"] == [
         "codex_workorder_runner_not_completed:blocked_uncompleted_implementation:missing"
@@ -1496,17 +1840,23 @@ def test_postclose_done_controller_blocks_done_when_codex_runner_incomplete_is_r
     assert any("codex_workorder_runner" in " ".join(cmd) for cmd in calls)
 
 
-def test_postclose_done_controller_accepts_done_when_required_codex_runner_completed(monkeypatch, tmp_path):
+def test_postclose_done_controller_accepts_done_when_required_codex_runner_completed(
+    monkeypatch, tmp_path
+):
     report_dir = tmp_path / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
     _write_succeeded_status(report_dir)
     _write_json(
-        report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json",
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json",
         _pass_verification(),
     )
     _write_json(
-        report_dir / "codex_workorder_runner" / "codex_workorder_runner_2026-06-03.json",
+        report_dir
+        / "codex_workorder_runner"
+        / "codex_workorder_runner_2026-06-03.json",
         {"status": "completed", "two_pass_status": "pass2_not_required"},
     )
 
@@ -1520,17 +1870,23 @@ def test_postclose_done_controller_accepts_done_when_required_codex_runner_compl
     assert report["codex_workorder_runner_completed"] is True
 
 
-def test_postclose_done_controller_rejects_completed_runner_without_two_pass_terminal_status(monkeypatch, tmp_path):
+def test_postclose_done_controller_rejects_completed_runner_without_two_pass_terminal_status(
+    monkeypatch, tmp_path
+):
     report_dir = tmp_path / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
     _write_succeeded_status(report_dir)
     _write_json(
-        report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json",
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json",
         _pass_verification(),
     )
     _write_json(
-        report_dir / "codex_workorder_runner" / "codex_workorder_runner_2026-06-03.json",
+        report_dir
+        / "codex_workorder_runner"
+        / "codex_workorder_runner_2026-06-03.json",
         {"status": "completed", "two_pass_status": "blocked_regeneration_failed"},
     )
 
@@ -1548,23 +1904,38 @@ def test_postclose_done_controller_rejects_completed_runner_without_two_pass_ter
     ]
 
 
-def test_postclose_done_controller_runs_codex_runner_recovery_until_two_pass_completed(monkeypatch, tmp_path):
+def test_postclose_done_controller_runs_codex_runner_recovery_until_two_pass_completed(
+    monkeypatch, tmp_path
+):
     report_dir = tmp_path / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
     _write_succeeded_status(report_dir)
     _write_json(
-        report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json",
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json",
         _pass_verification(),
     )
-    runner_path = report_dir / "codex_workorder_runner" / "codex_workorder_runner_2026-06-03.json"
-    _write_json(runner_path, {"status": "blocked_regeneration_failed", "two_pass_status": "blocked_regeneration_failed"})
+    runner_path = (
+        report_dir / "codex_workorder_runner" / "codex_workorder_runner_2026-06-03.json"
+    )
+    _write_json(
+        runner_path,
+        {
+            "status": "blocked_regeneration_failed",
+            "two_pass_status": "blocked_regeneration_failed",
+        },
+    )
     calls = []
 
     def fake_runner(cmd, env=None):
         calls.append(cmd)
         if "codex_workorder_runner" in " ".join(cmd):
-            _write_json(runner_path, {"status": "completed", "two_pass_status": "pass2_completed"})
+            _write_json(
+                runner_path,
+                {"status": "completed", "two_pass_status": "pass2_completed"},
+            )
         return 0
 
     report = mod.build_postclose_done_controller(
@@ -1579,13 +1950,17 @@ def test_postclose_done_controller_runs_codex_runner_recovery_until_two_pass_com
     assert any("codex_workorder_runner" in " ".join(cmd) for cmd in calls)
 
 
-def test_postclose_done_controller_blocks_done_marker_with_unknown_warning(monkeypatch, tmp_path):
+def test_postclose_done_controller_blocks_done_marker_with_unknown_warning(
+    monkeypatch, tmp_path
+):
     report_dir = tmp_path / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
     _write_succeeded_status(report_dir)
     _write_json(
-        report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json",
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json",
         {
             "status": "warning",
             "latest_done_marker": "[DONE] threshold-cycle postclose target_date=2026-06-03",
@@ -1593,7 +1968,9 @@ def test_postclose_done_controller_blocks_done_marker_with_unknown_warning(monke
         },
     )
     _write_json(
-        report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-06-03.json",
+        report_dir
+        / "code_improvement_workorder"
+        / "code_improvement_workorder_2026-06-03.json",
         {"generation_id": "g1"},
     )
 
@@ -1608,13 +1985,17 @@ def test_postclose_done_controller_blocks_done_marker_with_unknown_warning(monke
     assert report["blocked_reasons"] == ["source_generation_needs_review"]
 
 
-def test_postclose_done_controller_allows_real_sample_unused_followup_warning(monkeypatch, tmp_path):
+def test_postclose_done_controller_allows_real_sample_unused_followup_warning(
+    monkeypatch, tmp_path
+):
     report_dir = tmp_path / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
     _write_succeeded_status(report_dir)
     _write_json(
-        report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json",
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json",
         {
             "status": "warning",
             "latest_done_marker": "[DONE] threshold-cycle postclose target_date=2026-06-03",
@@ -1625,7 +2006,9 @@ def test_postclose_done_controller_allows_real_sample_unused_followup_warning(mo
         },
     )
     _write_json(
-        report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-06-03.json",
+        report_dir
+        / "code_improvement_workorder"
+        / "code_improvement_workorder_2026-06-03.json",
         {"generation_id": "g1"},
     )
 
@@ -1648,8 +2031,13 @@ def test_postclose_done_controller_blocks_non_recoverable(monkeypatch, tmp_path)
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
     _write_succeeded_status(report_dir)
     _write_json(
-        report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json",
-        {"status": "fail", "missing_downstream_links": ["provider_route_change_required"]},
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json",
+        {
+            "status": "fail",
+            "missing_downstream_links": ["provider_route_change_required"],
+        },
     )
 
     report = mod.build_postclose_done_controller(
@@ -1661,13 +2049,17 @@ def test_postclose_done_controller_blocks_non_recoverable(monkeypatch, tmp_path)
     assert report["actions"] == []
 
 
-def test_postclose_done_controller_classifies_structural_source_quality_gap(monkeypatch, tmp_path):
+def test_postclose_done_controller_classifies_structural_source_quality_gap(
+    monkeypatch, tmp_path
+):
     report_dir = tmp_path / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
     _write_succeeded_status(report_dir)
     _write_json(
-        report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json",
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json",
         {
             "status": "fail",
             "source_quality_hard_block": {
@@ -1687,19 +2079,31 @@ def test_postclose_done_controller_classifies_structural_source_quality_gap(monk
     assert report["status"] == "blocked_structural_contract_gap"
     assert report["requires_code_fix"] is True
     assert report["requires_policy_lineage_fix"] is False
-    assert report["structural_blockers"] == ["requires_code_fix:source_quality_hard_contract_gap"]
-    assert report["structural_next_actions"] == ["fix_source_quality_metric_contract_and_rerun_postclose_audit"]
-    md_path = report_dir / "postclose_done_controller" / "postclose_done_controller_2026-06-03.md"
+    assert report["structural_blockers"] == [
+        "requires_code_fix:source_quality_hard_contract_gap"
+    ]
+    assert report["structural_next_actions"] == [
+        "fix_source_quality_metric_contract_and_rerun_postclose_audit"
+    ]
+    md_path = (
+        report_dir
+        / "postclose_done_controller"
+        / "postclose_done_controller_2026-06-03.md"
+    )
     assert "Structural Blockers" in md_path.read_text(encoding="utf-8")
 
 
-def test_postclose_done_controller_classifies_active_priority_lineage_gap(monkeypatch, tmp_path):
+def test_postclose_done_controller_classifies_active_priority_lineage_gap(
+    monkeypatch, tmp_path
+):
     report_dir = tmp_path / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
     _write_succeeded_status(report_dir)
     _write_json(
-        report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json",
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json",
         {
             "status": "fail",
             "active_sim_priority_handoff": {
@@ -1707,7 +2111,9 @@ def test_postclose_done_controller_classifies_active_priority_lineage_gap(monkey
                 "missing": ["active_sim_priority_inactive_key_consumed"],
                 "inactive_consumed_ids": ["active_seed_old"],
             },
-            "predecessor_integrity": {"log_issues": ["active_sim_priority_handoff_missing"]},
+            "predecessor_integrity": {
+                "log_issues": ["active_sim_priority_handoff_missing"]
+            },
         },
     )
 
@@ -1720,19 +2126,35 @@ def test_postclose_done_controller_classifies_active_priority_lineage_gap(monkey
     assert report["status"] == "blocked_structural_contract_gap"
     assert report["requires_code_fix"] is False
     assert report["requires_policy_lineage_fix"] is True
-    assert "requires_policy_lineage_fix:active_sim_priority_inactive_key_consumed" in report["structural_blockers"]
-    assert "requires_policy_lineage_fix:active_sim_priority_handoff_missing" in report["structural_blockers"]
+    assert (
+        "requires_policy_lineage_fix:active_sim_priority_inactive_key_consumed"
+        in report["structural_blockers"]
+    )
+    assert (
+        "requires_policy_lineage_fix:active_sim_priority_handoff_missing"
+        in report["structural_blockers"]
+    )
     assert report["structural_next_actions"] == [
         "fix_active_sim_priority_seed_lineage_and_verify_no_inactive_runtime_key"
     ]
 
 
-def test_postclose_done_controller_waits_for_running_predecessor_without_spending_recovery_attempts(monkeypatch, tmp_path):
+def test_postclose_done_controller_waits_for_running_predecessor_without_spending_recovery_attempts(
+    monkeypatch, tmp_path
+):
     report_dir = tmp_path / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
-    status_path = report_dir / "threshold_cycle_postclose_status" / "threshold_cycle_postclose_2026-06-03.status.json"
-    verification = report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json"
+    status_path = (
+        report_dir
+        / "threshold_cycle_postclose_status"
+        / "threshold_cycle_postclose_2026-06-03.status.json"
+    )
+    verification = (
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json"
+    )
     _write_json(status_path, {"status": "running"})
     _write_json(verification, _pass_verification())
     sleep_calls = []
@@ -1755,7 +2177,10 @@ def test_postclose_done_controller_waits_for_running_predecessor_without_spendin
     assert report["status"] == "done"
     assert sleep_calls == [1]
     assert len(calls) == 1
-    assert [item["verifier_status"] for item in report["attempts"]] == ["predecessor_running", "pass"]
+    assert [item["verifier_status"] for item in report["attempts"]] == [
+        "predecessor_running",
+        "pass",
+    ]
 
 
 def test_postclose_done_controller_waits_for_missing_predecessor_status_without_spending_recovery_attempts(
@@ -1765,8 +2190,16 @@ def test_postclose_done_controller_waits_for_missing_predecessor_status_without_
     report_dir = tmp_path / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
-    status_path = report_dir / "threshold_cycle_postclose_status" / "threshold_cycle_postclose_2026-06-03.status.json"
-    verification = report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json"
+    status_path = (
+        report_dir
+        / "threshold_cycle_postclose_status"
+        / "threshold_cycle_postclose_2026-06-03.status.json"
+    )
+    verification = (
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json"
+    )
     _write_json(verification, _pass_verification())
     sleep_calls = []
 
@@ -1788,4 +2221,7 @@ def test_postclose_done_controller_waits_for_missing_predecessor_status_without_
     assert report["status"] == "done"
     assert sleep_calls == [1]
     assert len(calls) == 1
-    assert [item["verifier_status"] for item in report["attempts"]] == ["predecessor_status_missing", "pass"]
+    assert [item["verifier_status"] for item in report["attempts"]] == [
+        "predecessor_status_missing",
+        "pass",
+    ]

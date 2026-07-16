@@ -8,11 +8,18 @@ from src.engine.panic_sell_state_detector import (
     PanicTradeFlow,
 )
 
-
 BASE = datetime.fromisoformat("2026-05-12T10:00:00")
 
 
-def _candle(offset: int, close: float, *, open_: float | None = None, high: float | None = None, low: float | None = None, volume: float = 100.0):
+def _candle(
+    offset: int,
+    close: float,
+    *,
+    open_: float | None = None,
+    high: float | None = None,
+    low: float | None = None,
+    volume: float = 100.0,
+):
     open_value = close if open_ is None else open_
     return PanicCandle(
         ts=BASE + timedelta(minutes=offset),
@@ -25,7 +32,9 @@ def _candle(offset: int, close: float, *, open_: float | None = None, high: floa
 
 
 def _trade(offset: int, *, buy: float, sell: float):
-    return PanicTradeFlow(ts=BASE + timedelta(minutes=offset), buy_volume=buy, sell_volume=sell)
+    return PanicTradeFlow(
+        ts=BASE + timedelta(minutes=offset), buy_volume=buy, sell_volume=sell
+    )
 
 
 def _book(
@@ -93,12 +102,26 @@ def test_composite_panic_sets_report_only_risk_off_advisory():
     first = detector.update(
         _candle(2, 97.5, open_=100.0, high=100.1, low=97.45, volume=420),
         _trade(2, buy=28, sell=72),
-        _book(2, bid_depth=540, ask_depth=1400, spread_ratio=2.0, ofi_z=-2.7, state="bearish"),
+        _book(
+            2,
+            bid_depth=540,
+            ask_depth=1400,
+            spread_ratio=2.0,
+            ofi_z=-2.7,
+            state="bearish",
+        ),
     )
     second = detector.update(
         _candle(3, 97.0, open_=97.6, high=97.7, low=96.9, volume=430),
         _trade(3, buy=27, sell=73),
-        _book(3, bid_depth=500, ask_depth=1500, spread_ratio=2.1, ofi_z=-2.8, state="bearish"),
+        _book(
+            3,
+            bid_depth=500,
+            ask_depth=1500,
+            spread_ratio=2.1,
+            ofi_z=-2.8,
+            state="bearish",
+        ),
     )
 
     assert first.state == "PANIC_SELL"
@@ -149,18 +172,39 @@ def test_single_green_rebound_does_not_confirm_recovery_when_sell_flow_stays_bad
     detector.update(
         _candle(2, 97.5, open_=100.0, high=100.1, low=97.45, volume=420),
         _trade(2, buy=28, sell=72),
-        _book(2, bid_depth=540, ask_depth=1400, spread_ratio=2.0, ofi_z=-2.7, state="bearish"),
+        _book(
+            2,
+            bid_depth=540,
+            ask_depth=1400,
+            spread_ratio=2.0,
+            ofi_z=-2.7,
+            state="bearish",
+        ),
     )
     detector.update(
         _candle(3, 97.0, open_=97.6, high=97.7, low=96.9, volume=430),
         _trade(3, buy=27, sell=73),
-        _book(3, bid_depth=500, ask_depth=1500, spread_ratio=2.1, ofi_z=-2.8, state="bearish"),
+        _book(
+            3,
+            bid_depth=500,
+            ask_depth=1500,
+            spread_ratio=2.1,
+            ofi_z=-2.8,
+            state="bearish",
+        ),
     )
 
     signal = detector.update(
         _candle(4, 97.6, open_=97.0, high=97.7, low=97.0, volume=300),
         _trade(4, buy=30, sell=70),
-        _book(4, bid_depth=430, ask_depth=1550, spread_ratio=2.0, ofi_z=-1.8, state="bearish"),
+        _book(
+            4,
+            bid_depth=430,
+            ask_depth=1550,
+            spread_ratio=2.0,
+            ofi_z=-1.8,
+            state="bearish",
+        ),
     )
 
     assert signal.recovery_confirmed is False
@@ -174,23 +218,51 @@ def test_recovery_requires_persistent_microstructure_improvement_and_remains_adv
     detector.update(
         _candle(2, 97.5, open_=100.0, high=100.1, low=97.45, volume=420),
         _trade(2, buy=28, sell=72),
-        _book(2, bid_depth=540, ask_depth=1400, spread_ratio=2.0, ofi_z=-2.7, state="bearish"),
+        _book(
+            2,
+            bid_depth=540,
+            ask_depth=1400,
+            spread_ratio=2.0,
+            ofi_z=-2.7,
+            state="bearish",
+        ),
     )
     detector.update(
         _candle(3, 97.0, open_=97.6, high=97.7, low=96.9, volume=430),
         _trade(3, buy=27, sell=73),
-        _book(3, bid_depth=500, ask_depth=1500, spread_ratio=2.1, ofi_z=-2.8, state="bearish"),
+        _book(
+            3,
+            bid_depth=500,
+            ask_depth=1500,
+            spread_ratio=2.1,
+            ofi_z=-2.8,
+            state="bearish",
+        ),
     )
 
     watch = detector.update(
         _candle(4, 98.2, open_=97.2, high=98.4, low=97.05, volume=380),
         _trade(4, buy=45, sell=55),
-        _book(4, bid_depth=760, ask_depth=950, spread_ratio=1.20, ofi_z=-0.2, state="neutral"),
+        _book(
+            4,
+            bid_depth=760,
+            ask_depth=950,
+            spread_ratio=1.20,
+            ofi_z=-0.2,
+            state="neutral",
+        ),
     )
     confirmed = detector.update(
         _candle(5, 98.6, open_=98.1, high=98.8, low=97.2, volume=390),
         _trade(5, buy=48, sell=52),
-        _book(5, bid_depth=820, ask_depth=900, spread_ratio=1.15, ofi_z=0.1, state="bullish"),
+        _book(
+            5,
+            bid_depth=820,
+            ask_depth=900,
+            spread_ratio=1.15,
+            ofi_z=0.1,
+            state="bullish",
+        ),
     )
 
     assert watch.state == "RECOVERY_WATCH"

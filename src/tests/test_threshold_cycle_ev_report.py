@@ -84,7 +84,10 @@ def test_runtime_apply_bridge_summary_preserves_post_apply_provenance():
     assert summary["selected_count"] == 1
     assert summary["selected"][0]["approval_id"] == "scale-approval"
     assert summary["selected"][0]["source_bucket_key"] == "PYRAMID,AVG_DOWN"
-    assert summary["selected"][0]["actual_runtime_effect"] == "bounded_scale_in_policy_tighten_live_auto"
+    assert (
+        summary["selected"][0]["actual_runtime_effect"]
+        == "bounded_scale_in_policy_tighten_live_auto"
+    )
 
 
 def test_runtime_apply_bridge_summary_does_not_select_entry_metadata():
@@ -121,13 +124,17 @@ def test_calibration_path_does_not_fallback_to_intraday_artifact(tmp_path, monke
     monkeypatch.setattr(mod, "CALIBRATION_REPORT_DIR", calibration_dir)
 
     intraday = calibration_dir / "threshold_cycle_calibration_2026-05-22_intraday.json"
-    postclose = calibration_dir / "threshold_cycle_calibration_2026-05-22_postclose.json"
+    postclose = (
+        calibration_dir / "threshold_cycle_calibration_2026-05-22_postclose.json"
+    )
     intraday.write_text(json.dumps({"run_phase": "intraday"}), encoding="utf-8")
 
     assert mod._calibration_path("2026-05-22") == postclose
 
 
-def test_scalp_entry_adm_summary_preserves_unknown_bucket_summary(tmp_path, monkeypatch):
+def test_scalp_entry_adm_summary_preserves_unknown_bucket_summary(
+    tmp_path, monkeypatch
+):
     adm_dir = tmp_path / "entry_adm"
     adm_dir.mkdir(parents=True)
     adm_path = adm_dir / "scalp_entry_action_decision_matrix_2026-05-22.json"
@@ -163,7 +170,10 @@ def test_scalp_entry_adm_summary_preserves_unknown_bucket_summary(tmp_path, monk
     monkeypatch.setattr(
         mod,
         "scalp_entry_adm_report_paths",
-        lambda target_date: (adm_path, adm_dir / f"scalp_entry_action_decision_matrix_{target_date}.md"),
+        lambda target_date: (
+            adm_path,
+            adm_dir / f"scalp_entry_action_decision_matrix_{target_date}.md",
+        ),
     )
 
     summary, path, warnings = mod._scalp_entry_adm_summary("2026-05-22")
@@ -177,31 +187,51 @@ def test_scalp_entry_adm_summary_preserves_unknown_bucket_summary(tmp_path, monk
 
 @pytest.fixture(autouse=True)
 def _isolate_pattern_lab_audit_dirs(tmp_path, monkeypatch):
-    monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing_currentness_audit")
-    monkeypatch.setattr(mod, "PATTERN_LAB_PROPAGATION_AUDIT_DIR", tmp_path / "missing_propagation_audit")
-    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", tmp_path / "missing_latency_classifier_recommendation")
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing_currentness_audit"
+    )
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_PROPAGATION_AUDIT_DIR", tmp_path / "missing_propagation_audit"
+    )
+    monkeypatch.setattr(
+        mod,
+        "LATENCY_CLASSIFIER_RECOMMENDATION_DIR",
+        tmp_path / "missing_latency_classifier_recommendation",
+    )
     monkeypatch.setattr(
         mod,
         "scalp_entry_adm_report_paths",
         lambda target_date: (
-            tmp_path / "missing_entry_adm" / f"scalp_entry_action_decision_matrix_{target_date}.json",
-            tmp_path / "missing_entry_adm" / f"scalp_entry_action_decision_matrix_{target_date}.md",
+            tmp_path
+            / "missing_entry_adm"
+            / f"scalp_entry_action_decision_matrix_{target_date}.json",
+            tmp_path
+            / "missing_entry_adm"
+            / f"scalp_entry_action_decision_matrix_{target_date}.md",
         ),
     )
     monkeypatch.setattr(
         mod,
         "lifecycle_matrix_report_paths",
         lambda target_date: (
-            tmp_path / "missing_lifecycle_matrix" / f"lifecycle_decision_matrix_{target_date}.json",
-            tmp_path / "missing_lifecycle_matrix" / f"lifecycle_decision_matrix_{target_date}.md",
+            tmp_path
+            / "missing_lifecycle_matrix"
+            / f"lifecycle_decision_matrix_{target_date}.json",
+            tmp_path
+            / "missing_lifecycle_matrix"
+            / f"lifecycle_decision_matrix_{target_date}.md",
         ),
     )
     monkeypatch.setattr(
         mod,
         "lifecycle_ai_context_report_paths",
         lambda target_date: (
-            tmp_path / "missing_lifecycle_ai_context" / f"lifecycle_ai_context_{target_date}.json",
-            tmp_path / "missing_lifecycle_ai_context" / f"lifecycle_ai_context_{target_date}.md",
+            tmp_path
+            / "missing_lifecycle_ai_context"
+            / f"lifecycle_ai_context_{target_date}.json",
+            tmp_path
+            / "missing_lifecycle_ai_context"
+            / f"lifecycle_ai_context_{target_date}.md",
         ),
     )
     monkeypatch.setattr(
@@ -220,31 +250,45 @@ def _isolate_pattern_lab_audit_dirs(tmp_path, monkeypatch):
         mod,
         "institutional_flow_report_paths",
         lambda target_date: (
-            tmp_path / "missing_institutional_flow_context" / f"institutional_flow_context_{target_date}.json",
-            tmp_path / "missing_institutional_flow_context" / f"institutional_flow_context_{target_date}.md",
+            tmp_path
+            / "missing_institutional_flow_context"
+            / f"institutional_flow_context_{target_date}.json",
+            tmp_path
+            / "missing_institutional_flow_context"
+            / f"institutional_flow_context_{target_date}.md",
         ),
     )
     monkeypatch.setattr(
         mod,
         "microstructure_reaction_report_paths",
         lambda target_date: (
-            tmp_path / "missing_microstructure_reaction_context" / f"microstructure_reaction_context_{target_date}.json",
-            tmp_path / "missing_microstructure_reaction_context" / f"microstructure_reaction_context_{target_date}.md",
+            tmp_path
+            / "missing_microstructure_reaction_context"
+            / f"microstructure_reaction_context_{target_date}.json",
+            tmp_path
+            / "missing_microstructure_reaction_context"
+            / f"microstructure_reaction_context_{target_date}.md",
         ),
     )
 
 
-def test_lifecycle_bucket_windows_summary_separates_daily_and_promotion(tmp_path, monkeypatch):
+def test_lifecycle_bucket_windows_summary_separates_daily_and_promotion(
+    tmp_path, monkeypatch
+):
     discovery_dir = tmp_path / "lifecycle_bucket_discovery"
     discovery_dir.mkdir()
     daily_path = discovery_dir / "lifecycle_bucket_discovery_2026-05-29.json"
-    monkeypatch.setattr(mod, "lifecycle_bucket_discovery_report_path", lambda target_date: daily_path)
+    monkeypatch.setattr(
+        mod, "lifecycle_bucket_discovery_report_path", lambda target_date: daily_path
+    )
     daily_path.write_text(
         json.dumps({"summary": {"status": "pass", "live_auto_apply_ready_count": 1}}),
         encoding="utf-8",
     )
     for suffix, count in {"rolling5d": 34, "rolling10d": 35, "mtd": 36}.items():
-        (discovery_dir / f"lifecycle_bucket_discovery_2026-05-29_{suffix}.json").write_text(
+        (
+            discovery_dir / f"lifecycle_bucket_discovery_2026-05-29_{suffix}.json"
+        ).write_text(
             json.dumps(
                 {
                     "window_policy": suffix,
@@ -292,7 +336,11 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeyp
     monkeypatch.setattr(mod, "MONITOR_SNAPSHOT_DIR", monitor_dir)
     monkeypatch.setattr(mod, "CALIBRATION_REPORT_DIR", calibration_dir)
     monkeypatch.setattr(mod, "EV_REPORT_DIR", ev_dir)
-    monkeypatch.setattr(mod, "apply_manifest_path", lambda target_date: apply_dir / f"threshold_apply_{target_date}.json")
+    monkeypatch.setattr(
+        mod,
+        "apply_manifest_path",
+        lambda target_date: apply_dir / f"threshold_apply_{target_date}.json",
+    )
     monkeypatch.setattr(
         mod,
         "automation_report_paths",
@@ -378,7 +426,9 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeyp
         ),
         encoding="utf-8",
     )
-    (calibration_dir / "threshold_cycle_calibration_2026-05-08_postclose.json").write_text(
+    (
+        calibration_dir / "threshold_cycle_calibration_2026-05-08_postclose.json"
+    ).write_text(
         json.dumps(
             {
                 "run_phase": "postclose",
@@ -482,7 +532,9 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeyp
         ),
         encoding="utf-8",
     )
-    (workorder_doc_dir / "code_improvement_workorder_2026-05-08.md").write_text("# workorder\n", encoding="utf-8")
+    (workorder_doc_dir / "code_improvement_workorder_2026-05-08.md").write_text(
+        "# workorder\n", encoding="utf-8"
+    )
 
     report = mod.build_threshold_cycle_ev_report("2026-05-08")
 
@@ -498,9 +550,14 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeyp
     assert report["summary"]["live_auto_ready_count"] == 0
     assert report["summary"]["runtime_effect"] is False
     assert report["entry_funnel"]["budget_pass_to_submitted_rate_pct"] == 5.0
-    assert report["missed_probe_counterfactual"]["book"] == "scalp_score65_74_probe_counterfactual"
+    assert (
+        report["missed_probe_counterfactual"]["book"]
+        == "scalp_score65_74_probe_counterfactual"
+    )
     assert report["missed_probe_counterfactual"]["score65_74_probe_candidates"] == 2
-    assert report["missed_probe_counterfactual"]["real_execution_quality_source"] == "none"
+    assert (
+        report["missed_probe_counterfactual"]["real_execution_quality_source"] == "none"
+    )
     assert report["pattern_lab_automation"]["consensus_count"] == 1
     assert report["scalp_entry_action_decision_matrix"]["available"] is False
     assert report["microstructure_reaction_context"]["available"] is False
@@ -508,9 +565,15 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeyp
     assert report["swing_runtime_approval"]["requested"] == 1
     assert "real_canary_policy" not in report["swing_runtime_approval"]
     assert report["swing_runtime_approval"]["requests"][0]["tradeoff_score"] == 0.72
-    assert report["pattern_lab_automation"]["top_consensus_findings"][0]["mapped_family"] == "score65_74_recovery_probe"
+    assert (
+        report["pattern_lab_automation"]["top_consensus_findings"][0]["mapped_family"]
+        == "score65_74_recovery_probe"
+    )
     assert report["code_improvement_workorder"]["selected_order_count"] == 1
-    assert report["code_improvement_workorder"]["top_orders"][0]["order_id"] == "order_ai_threshold"
+    assert (
+        report["code_improvement_workorder"]["top_orders"][0]["order_id"]
+        == "order_ai_threshold"
+    )
     assert (ev_dir / "threshold_cycle_ev_2026-05-08.json").exists()
     assert (ev_dir / "threshold_cycle_ev_2026-05-08.md").exists()
     markdown = (ev_dir / "threshold_cycle_ev_2026-05-08.md").read_text(encoding="utf-8")
@@ -523,7 +586,9 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeyp
     assert "swing_runtime_approval:2026-05-08:swing_model_floor" in markdown
 
 
-def test_build_threshold_cycle_ev_report_surfaces_latency_apply_permission(tmp_path, monkeypatch):
+def test_build_threshold_cycle_ev_report_surfaces_latency_apply_permission(
+    tmp_path, monkeypatch
+):
     report_dir = tmp_path / "report"
     monitor_dir = report_dir / "monitor_snapshots"
     calibration_dir = report_dir / "threshold_cycle_calibration"
@@ -536,14 +601,24 @@ def test_build_threshold_cycle_ev_report_surfaces_latency_apply_permission(tmp_p
     monkeypatch.setattr(mod, "CALIBRATION_REPORT_DIR", calibration_dir)
     monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
     monkeypatch.setattr(mod, "EV_REPORT_DIR", ev_dir)
-    monkeypatch.setattr(mod, "apply_manifest_path", lambda target_date: apply_dir / f"threshold_apply_{target_date}.json")
+    monkeypatch.setattr(
+        mod,
+        "apply_manifest_path",
+        lambda target_date: apply_dir / f"threshold_apply_{target_date}.json",
+    )
 
-    (monitor_dir / "trade_review_2026-05-20.json").write_text(json.dumps({"metrics": {}}), encoding="utf-8")
+    (monitor_dir / "trade_review_2026-05-20.json").write_text(
+        json.dumps({"metrics": {}}), encoding="utf-8"
+    )
     (monitor_dir / "performance_tuning_2026-05-20.json").write_text(
-        json.dumps({"metrics": {"latency_block_events": 621, "latency_pass_events": 0}}),
+        json.dumps(
+            {"metrics": {"latency_block_events": 621, "latency_pass_events": 0}}
+        ),
         encoding="utf-8",
     )
-    (calibration_dir / "threshold_cycle_calibration_2026-05-20_postclose.json").write_text(
+    (
+        calibration_dir / "threshold_cycle_calibration_2026-05-20_postclose.json"
+    ).write_text(
         json.dumps({"run_phase": "postclose", "calibration_candidates": []}),
         encoding="utf-8",
     )
@@ -554,7 +629,10 @@ def test_build_threshold_cycle_ev_report_surfaces_latency_apply_permission(tmp_p
     (latency_dir / "latency_classifier_recommendation_2026-05-20.json").write_text(
         json.dumps(
             {
-                "profile_generation": {"mode": "grid_quantile_search", "profile_count": 486},
+                "profile_generation": {
+                    "mode": "grid_quantile_search",
+                    "profile_count": 486,
+                },
                 "calibration_candidate": {
                     "family": "latency_classifier_runtime_profile",
                     "allowed_runtime_apply": False,
@@ -575,14 +653,19 @@ def test_build_threshold_cycle_ev_report_surfaces_latency_apply_permission(tmp_p
 
     report = mod.build_threshold_cycle_ev_report("2026-05-20")
 
-    assert report["entry_funnel"]["latency_submit_routing"] == "latency_submit_recovery_hold"
+    assert (
+        report["entry_funnel"]["latency_submit_routing"]
+        == "latency_submit_recovery_hold"
+    )
     assert report["entry_funnel"]["allowed_runtime_apply"] is False
     assert report["entry_funnel"]["calibration_state"] == "hold_sample"
     assert report["entry_funnel"]["recommended_action"] == "hold"
     assert report["entry_funnel"]["would_recovery_canary_events"] == 220
 
 
-def test_threshold_cycle_ev_lifecycle_summary_surfaces_submit_contract(tmp_path, monkeypatch):
+def test_threshold_cycle_ev_lifecycle_summary_surfaces_submit_contract(
+    tmp_path, monkeypatch
+):
     matrix_dir = tmp_path / "ldm"
     matrix_dir.mkdir()
     matrix_path = matrix_dir / "lifecycle_decision_matrix_2026-05-20.json"
@@ -604,13 +687,23 @@ def test_threshold_cycle_ev_lifecycle_summary_surfaces_submit_contract(tmp_path,
                     "submit_bucket_contract_gap_count": 1,
                 },
                 "submit_bucket_attribution": {
-                    "summary": {"submit_rows": 4, "contract_gap_count": 1, "workorder_count": 1},
+                    "summary": {
+                        "submit_rows": 4,
+                        "contract_gap_count": 1,
+                        "workorder_count": 1,
+                    },
                     "runtime_approval_candidates": [],
                     "code_improvement_workorders": [{"workorder_id": "submit_order"}],
-                    "post_submit_contract_gaps": [{"gap_type": "broker_receipt_contract_gap"}],
+                    "post_submit_contract_gaps": [
+                        {"gap_type": "broker_receipt_contract_gap"}
+                    ],
                 },
                 "entry_bucket_attribution": {
-                    "summary": {"bucket_count": 3, "runtime_candidate_count": 2, "workorder_count": 1},
+                    "summary": {
+                        "bucket_count": 3,
+                        "runtime_candidate_count": 2,
+                        "workorder_count": 1,
+                    },
                     "runtime_approval_candidates": [
                         {"candidate_id": "entry_bucket_5"},
                         {"candidate_id": "entry_bucket_6"},
@@ -618,7 +711,11 @@ def test_threshold_cycle_ev_lifecycle_summary_surfaces_submit_contract(tmp_path,
                     "code_improvement_workorders": [{"workorder_id": "entry_order"}],
                 },
                 "scale_in_bucket_attribution": {
-                    "summary": {"bucket_count": 4, "runtime_candidate_count": 3, "workorder_count": 1},
+                    "summary": {
+                        "bucket_count": 4,
+                        "runtime_candidate_count": 3,
+                        "workorder_count": 1,
+                    },
                     "runtime_approval_candidates": [
                         {"candidate_id": "scale_in_bucket_5"},
                         {"candidate_id": "scale_in_bucket_7"},
@@ -650,15 +747,21 @@ def test_threshold_cycle_ev_lifecycle_summary_surfaces_submit_contract(tmp_path,
     assert summary["bundle_ev_tuning_state"] == "blocked_join_gap"
     assert summary["top_incomplete_reason"] == "identity_namespace_mismatch"
     assert summary["submit_bucket_contract_gap_count"] == 1
-    assert summary["submit_bucket_code_improvement_workorders"] == [{"workorder_id": "submit_order"}]
-    assert summary["post_submit_contract_gaps"] == [{"gap_type": "broker_receipt_contract_gap"}]
+    assert summary["submit_bucket_code_improvement_workorders"] == [
+        {"workorder_id": "submit_order"}
+    ]
+    assert summary["post_submit_contract_gaps"] == [
+        {"gap_type": "broker_receipt_contract_gap"}
+    ]
     assert summary["entry_bucket_runtime_candidate_count"] == 2
     assert summary["entry_bucket_workorder_count"] == 1
     assert summary["entry_bucket_runtime_approval_candidates"] == [
         {"candidate_id": "entry_bucket_5"},
         {"candidate_id": "entry_bucket_6"},
     ]
-    assert summary["entry_bucket_code_improvement_workorders"] == [{"workorder_id": "entry_order"}]
+    assert summary["entry_bucket_code_improvement_workorders"] == [
+        {"workorder_id": "entry_order"}
+    ]
     assert summary["scale_in_bucket_runtime_candidate_count"] == 3
     assert summary["scale_in_bucket_workorder_count"] == 1
     assert summary["scale_in_bucket_runtime_approval_candidates"] == [
@@ -666,10 +769,14 @@ def test_threshold_cycle_ev_lifecycle_summary_surfaces_submit_contract(tmp_path,
         {"candidate_id": "scale_in_bucket_7"},
         {"candidate_id": "scale_in_bucket_9"},
     ]
-    assert summary["scale_in_bucket_code_improvement_workorders"] == [{"workorder_id": "scale_in_order"}]
+    assert summary["scale_in_bucket_code_improvement_workorders"] == [
+        {"workorder_id": "scale_in_order"}
+    ]
 
 
-def test_threshold_cycle_ev_lifecycle_bucket_summary_extracts_positive_sim_cases(tmp_path, monkeypatch):
+def test_threshold_cycle_ev_lifecycle_bucket_summary_extracts_positive_sim_cases(
+    tmp_path, monkeypatch
+):
     report_dir = tmp_path / "lifecycle_bucket_discovery"
     report_dir.mkdir()
     path = report_dir / "lifecycle_bucket_discovery_2026-06-26.json"
@@ -761,7 +868,8 @@ def test_threshold_cycle_ev_lifecycle_bucket_summary_extracts_positive_sim_cases
     monkeypatch.setattr(
         mod,
         "lifecycle_bucket_discovery_report_path",
-        lambda target_date: report_dir / f"lifecycle_bucket_discovery_{target_date}.json",
+        lambda target_date: report_dir
+        / f"lifecycle_bucket_discovery_{target_date}.json",
     )
 
     summary, artifact, warnings = mod._lifecycle_bucket_discovery_summary("2026-06-26")
@@ -771,7 +879,10 @@ def test_threshold_cycle_ev_lifecycle_bucket_summary_extracts_positive_sim_cases
     assert summary["positive_parent_count"] == 1
     assert summary["positive_parent_sample_ready_count"] == 1
     assert summary["positive_parent_conflict_count"] == 1
-    assert summary["top_sample_ready_positive_parent_buckets"][0]["parent_bucket_id"] == "parent_positive"
+    assert (
+        summary["top_sample_ready_positive_parent_buckets"][0]["parent_bucket_id"]
+        == "parent_positive"
+    )
     assert summary["top_active_positive_seeds"][0]["active_seed_id"] == "seed_positive"
     assert summary["sim_auto_positive_ev_count"] == 1
     assert summary["sim_auto_nonpositive_ev_count"] == 1
@@ -801,7 +912,9 @@ def test_audit_summary_resolves_source_only_candidate_warning(tmp_path):
         encoding="utf-8",
     )
 
-    summary, artifact, warnings = mod._audit_summary("2026-05-26", "producer_gap_discovery", report_dir)
+    summary, artifact, warnings = mod._audit_summary(
+        "2026-05-26", "producer_gap_discovery", report_dir
+    )
 
     assert artifact == str(path)
     assert warnings == []
@@ -833,7 +946,9 @@ def test_audit_summary_surfaces_parsed_ai_review_followup_without_fail_closed(tm
         encoding="utf-8",
     )
 
-    summary, artifact, warnings = mod._audit_summary("2026-05-26", "producer_gap_discovery", report_dir)
+    summary, artifact, warnings = mod._audit_summary(
+        "2026-05-26", "producer_gap_discovery", report_dir
+    )
 
     assert artifact == str(path)
     assert summary["ai_review_followup_required"] is True
@@ -842,7 +957,9 @@ def test_audit_summary_surfaces_parsed_ai_review_followup_without_fail_closed(tm
     assert "producer_gap_discovery_ai_review_followup_required" in warnings
 
 
-def test_swing_lifecycle_bucket_discovery_summary_surfaces_ai_fail_closed(tmp_path, monkeypatch):
+def test_swing_lifecycle_bucket_discovery_summary_surfaces_ai_fail_closed(
+    tmp_path, monkeypatch
+):
     report_dir = tmp_path / "swing_lifecycle_bucket_discovery"
     report_dir.mkdir()
     path = report_dir / "swing_lifecycle_bucket_discovery_2026-05-27.json"
@@ -874,18 +991,28 @@ def test_swing_lifecycle_bucket_discovery_summary_surfaces_ai_fail_closed(tmp_pa
         lambda target_date: (path, path.with_suffix(".md")),
     )
 
-    summary, artifact, warnings = mod._swing_lifecycle_bucket_discovery_summary("2026-05-27")
+    summary, artifact, warnings = mod._swing_lifecycle_bucket_discovery_summary(
+        "2026-05-27"
+    )
 
     assert artifact == str(path)
     assert summary["ai_two_pass_review_status"] == "missing"
     assert summary["ai_fail_closed"] is True
     assert summary["ai_review_blocker_state"] == "provider_disabled"
     assert summary["pre_review_sim_auto_candidate_count"] == 1
-    assert "swing_lifecycle_bucket_discovery:ai_two_pass_review_missing_fail_closed" in warnings
-    assert "swing_lifecycle_bucket_discovery:ai_two_pass_review_fail_closed_sim_auto_blocked" in summary["warnings"]
+    assert (
+        "swing_lifecycle_bucket_discovery:ai_two_pass_review_missing_fail_closed"
+        in warnings
+    )
+    assert (
+        "swing_lifecycle_bucket_discovery:ai_two_pass_review_fail_closed_sim_auto_blocked"
+        in summary["warnings"]
+    )
 
 
-def test_swing_lifecycle_matrix_summary_includes_parent_flow_candidates(tmp_path, monkeypatch):
+def test_swing_lifecycle_matrix_summary_includes_parent_flow_candidates(
+    tmp_path, monkeypatch
+):
     report_dir = tmp_path / "swing_lifecycle_decision_matrix"
     report_dir.mkdir()
     path = report_dir / "swing_lifecycle_decision_matrix_2026-05-27.json"
@@ -944,14 +1071,18 @@ def test_swing_lifecycle_matrix_summary_includes_parent_flow_candidates(tmp_path
     assert warnings == []
     assert summary["swing_lifecycle_flow_bucket_count"] == 1
     assert summary["complete_flow_count"] == 3
-    assert summary["sim_auto_candidate_ids"] == ["swing_ldm_lifecycle_flow_combo_parent"]
+    assert summary["sim_auto_candidate_ids"] == [
+        "swing_ldm_lifecycle_flow_combo_parent"
+    ]
     assert summary["raw_swing_event_count"] == 1200
     assert summary["ldm_consumed_event_count"] == 48
     assert summary["ldm_event_coverage_rate"] == 0.04
     assert summary["unmapped_swing_stage_counts"] == {"swing_other": 5}
 
 
-def test_swing_lifecycle_bucket_discovery_summary_includes_flow_metrics(tmp_path, monkeypatch):
+def test_swing_lifecycle_bucket_discovery_summary_includes_flow_metrics(
+    tmp_path, monkeypatch
+):
     report_dir = tmp_path / "swing_lifecycle_bucket_discovery"
     report_dir.mkdir()
     path = report_dir / "swing_lifecycle_bucket_discovery_2026-05-27.json"
@@ -1005,7 +1136,9 @@ def test_swing_lifecycle_bucket_discovery_summary_includes_flow_metrics(tmp_path
     assert summary["sim_auto_review_shard_count"] == 2
 
 
-def test_swing_lifecycle_bucket_discovery_summary_surfaces_parsed_followup(tmp_path, monkeypatch):
+def test_swing_lifecycle_bucket_discovery_summary_surfaces_parsed_followup(
+    tmp_path, monkeypatch
+):
     report_dir = tmp_path / "swing_lifecycle_bucket_discovery"
     report_dir.mkdir()
     path = report_dir / "swing_lifecycle_bucket_discovery_2026-05-27.json"
@@ -1022,10 +1155,16 @@ def test_swing_lifecycle_bucket_discovery_summary_surfaces_parsed_followup(tmp_p
                     "ai_review_followup_required": True,
                     "ai_review_followup_reasons": ["audit_status=correction_required"],
                     "sim_auto_blocked_by_ai_review_followup": True,
-                    "code_improvement_workorder_ids": ["swing_lifecycle_bucket_discovery_ai_review_followup"],
-                    "implemented_code_improvement_workorder_ids": ["swing_lifecycle_bucket_discovery_ai_review_followup"],
+                    "code_improvement_workorder_ids": [
+                        "swing_lifecycle_bucket_discovery_ai_review_followup"
+                    ],
+                    "implemented_code_improvement_workorder_ids": [
+                        "swing_lifecycle_bucket_discovery_ai_review_followup"
+                    ],
                     "pending_code_improvement_workorder_ids": [],
-                    "ai_review_followup_workorder_ids": ["swing_lifecycle_bucket_discovery_ai_review_followup"],
+                    "ai_review_followup_workorder_ids": [
+                        "swing_lifecycle_bucket_discovery_ai_review_followup"
+                    ],
                     "candidate_count": 1,
                     "surfaced_candidate_count": 1,
                 },
@@ -1042,21 +1181,32 @@ def test_swing_lifecycle_bucket_discovery_summary_surfaces_parsed_followup(tmp_p
         lambda target_date: (path, path.with_suffix(".md")),
     )
 
-    summary, artifact, warnings = mod._swing_lifecycle_bucket_discovery_summary("2026-05-27")
+    summary, artifact, warnings = mod._swing_lifecycle_bucket_discovery_summary(
+        "2026-05-27"
+    )
 
     assert artifact == str(path)
     assert summary["ai_two_pass_review_status"] == "parsed"
     assert summary["ai_fail_closed"] is False
     assert summary["ai_review_followup_required"] is True
     assert summary["sim_auto_blocked_by_ai_review_followup"] is True
-    assert summary["code_improvement_workorder_ids"] == ["swing_lifecycle_bucket_discovery_ai_review_followup"]
-    assert summary["ai_review_followup_workorder_ids"] == ["swing_lifecycle_bucket_discovery_ai_review_followup"]
+    assert summary["code_improvement_workorder_ids"] == [
+        "swing_lifecycle_bucket_discovery_ai_review_followup"
+    ]
+    assert summary["ai_review_followup_workorder_ids"] == [
+        "swing_lifecycle_bucket_discovery_ai_review_followup"
+    ]
     assert "swing_lifecycle_bucket_discovery:ai_review_followup_required" in warnings
-    assert "swing_lifecycle_bucket_discovery:ai_review_followup_sim_auto_blocked" in warnings
+    assert (
+        "swing_lifecycle_bucket_discovery:ai_review_followup_sim_auto_blocked"
+        in warnings
+    )
     assert not any("fail_closed" in warning for warning in warnings)
 
 
-def test_build_threshold_cycle_ev_report_warns_when_pattern_lab_artifact_missing(tmp_path, monkeypatch):
+def test_build_threshold_cycle_ev_report_warns_when_pattern_lab_artifact_missing(
+    tmp_path, monkeypatch
+):
     report_dir = tmp_path / "report"
     monitor_dir = report_dir / "monitor_snapshots"
     calibration_dir = report_dir / "threshold_cycle_calibration"
@@ -1071,7 +1221,11 @@ def test_build_threshold_cycle_ev_report_warns_when_pattern_lab_artifact_missing
     monkeypatch.setattr(mod, "MONITOR_SNAPSHOT_DIR", monitor_dir)
     monkeypatch.setattr(mod, "CALIBRATION_REPORT_DIR", calibration_dir)
     monkeypatch.setattr(mod, "EV_REPORT_DIR", ev_dir)
-    monkeypatch.setattr(mod, "apply_manifest_path", lambda target_date: apply_dir / f"threshold_apply_{target_date}.json")
+    monkeypatch.setattr(
+        mod,
+        "apply_manifest_path",
+        lambda target_date: apply_dir / f"threshold_apply_{target_date}.json",
+    )
     monkeypatch.setattr(
         mod,
         "automation_report_paths",
@@ -1089,13 +1243,21 @@ def test_build_threshold_cycle_ev_report_warns_when_pattern_lab_artifact_missing
         ),
     )
 
-    (monitor_dir / "trade_review_2026-05-08.json").write_text(json.dumps({"metrics": {}}), encoding="utf-8")
-    (monitor_dir / "performance_tuning_2026-05-08.json").write_text(json.dumps({"metrics": {}}), encoding="utf-8")
-    (calibration_dir / "threshold_cycle_calibration_2026-05-08_postclose.json").write_text(
+    (monitor_dir / "trade_review_2026-05-08.json").write_text(
+        json.dumps({"metrics": {}}), encoding="utf-8"
+    )
+    (monitor_dir / "performance_tuning_2026-05-08.json").write_text(
+        json.dumps({"metrics": {}}), encoding="utf-8"
+    )
+    (
+        calibration_dir / "threshold_cycle_calibration_2026-05-08_postclose.json"
+    ).write_text(
         json.dumps({"run_phase": "postclose"}),
         encoding="utf-8",
     )
-    (apply_dir / "threshold_apply_2026-05-08.json").write_text(json.dumps({"status": "manifest_ready"}), encoding="utf-8")
+    (apply_dir / "threshold_apply_2026-05-08.json").write_text(
+        json.dumps({"status": "manifest_ready"}), encoding="utf-8"
+    )
 
     report = mod.build_threshold_cycle_ev_report("2026-05-08")
 
@@ -1105,7 +1267,9 @@ def test_build_threshold_cycle_ev_report_warns_when_pattern_lab_artifact_missing
     assert "codebase_performance_workorder_missing" in report["warnings"]
 
 
-def test_build_threshold_cycle_ev_report_surfaces_source_parse_errors(tmp_path, monkeypatch):
+def test_build_threshold_cycle_ev_report_surfaces_source_parse_errors(
+    tmp_path, monkeypatch
+):
     report_dir = tmp_path / "report"
     monitor_dir = report_dir / "monitor_snapshots"
     calibration_dir = report_dir / "threshold_cycle_calibration"
@@ -1113,17 +1277,29 @@ def test_build_threshold_cycle_ev_report_surfaces_source_parse_errors(tmp_path, 
     ev_dir = report_dir / "threshold_cycle_ev"
     workorder_report_dir = report_dir / "code_improvement_workorder"
     workorder_doc_dir = tmp_path / "docs" / "code-improvement-workorders"
-    for path in (monitor_dir, calibration_dir, apply_dir, workorder_report_dir, workorder_doc_dir):
+    for path in (
+        monitor_dir,
+        calibration_dir,
+        apply_dir,
+        workorder_report_dir,
+        workorder_doc_dir,
+    ):
         path.mkdir(parents=True)
     monkeypatch.setattr(mod, "MONITOR_SNAPSHOT_DIR", monitor_dir)
     monkeypatch.setattr(mod, "CALIBRATION_REPORT_DIR", calibration_dir)
     monkeypatch.setattr(mod, "EV_REPORT_DIR", ev_dir)
-    monkeypatch.setattr(mod, "apply_manifest_path", lambda target_date: apply_dir / f"threshold_apply_{target_date}.json")
+    monkeypatch.setattr(
+        mod,
+        "apply_manifest_path",
+        lambda target_date: apply_dir / f"threshold_apply_{target_date}.json",
+    )
     monkeypatch.setattr(
         mod,
         "automation_report_paths",
         lambda target_date: (
-            tmp_path / "missing" / f"scalping_pattern_lab_automation_{target_date}.json",
+            tmp_path
+            / "missing"
+            / f"scalping_pattern_lab_automation_{target_date}.json",
             tmp_path / "missing" / f"scalping_pattern_lab_automation_{target_date}.md",
         ),
     )
@@ -1136,18 +1312,28 @@ def test_build_threshold_cycle_ev_report_surfaces_source_parse_errors(tmp_path, 
         ),
     )
 
-    (monitor_dir / "trade_review_2026-05-08.json").write_text("{bad json", encoding="utf-8")
-    (monitor_dir / "performance_tuning_2026-05-08.json").write_text(json.dumps({"metrics": {}}), encoding="utf-8")
-    (calibration_dir / "threshold_cycle_calibration_2026-05-08_postclose.json").write_text(
+    (monitor_dir / "trade_review_2026-05-08.json").write_text(
+        "{bad json", encoding="utf-8"
+    )
+    (monitor_dir / "performance_tuning_2026-05-08.json").write_text(
+        json.dumps({"metrics": {}}), encoding="utf-8"
+    )
+    (
+        calibration_dir / "threshold_cycle_calibration_2026-05-08_postclose.json"
+    ).write_text(
         json.dumps({"run_phase": "postclose"}),
         encoding="utf-8",
     )
-    (apply_dir / "threshold_apply_2026-05-08.json").write_text(json.dumps({"status": "manifest_ready"}), encoding="utf-8")
+    (apply_dir / "threshold_apply_2026-05-08.json").write_text(
+        json.dumps({"status": "manifest_ready"}), encoding="utf-8"
+    )
     (workorder_report_dir / "code_improvement_workorder_2026-05-08.json").write_text(
         json.dumps({"summary": {}, "orders": []}),
         encoding="utf-8",
     )
-    (workorder_doc_dir / "code_improvement_workorder_2026-05-08.md").write_text("# workorder\n", encoding="utf-8")
+    (workorder_doc_dir / "code_improvement_workorder_2026-05-08.md").write_text(
+        "# workorder\n", encoding="utf-8"
+    )
 
     report = mod.build_threshold_cycle_ev_report("2026-05-08")
 
@@ -1157,7 +1343,9 @@ def test_build_threshold_cycle_ev_report_surfaces_source_parse_errors(tmp_path, 
     assert "Source Load Diagnostics" in markdown
 
 
-def test_threshold_cycle_ev_report_exposes_codebase_performance_source_as_ops_summary(tmp_path, monkeypatch):
+def test_threshold_cycle_ev_report_exposes_codebase_performance_source_as_ops_summary(
+    tmp_path, monkeypatch
+):
     report_dir = tmp_path / "report"
     monitor_dir = report_dir / "monitor_snapshots"
     calibration_dir = report_dir / "threshold_cycle_calibration"
@@ -1166,20 +1354,35 @@ def test_threshold_cycle_ev_report_exposes_codebase_performance_source_as_ops_su
     ev_dir = report_dir / "threshold_cycle_ev"
     workorder_report_dir = report_dir / "code_improvement_workorder"
     workorder_doc_dir = tmp_path / "docs" / "code-improvement-workorders"
-    for path in (monitor_dir, calibration_dir, perf_dir, apply_dir, workorder_report_dir, workorder_doc_dir):
+    for path in (
+        monitor_dir,
+        calibration_dir,
+        perf_dir,
+        apply_dir,
+        workorder_report_dir,
+        workorder_doc_dir,
+    ):
         path.mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "MONITOR_SNAPSHOT_DIR", monitor_dir)
     monkeypatch.setattr(mod, "CALIBRATION_REPORT_DIR", calibration_dir)
     monkeypatch.setattr(mod, "EV_REPORT_DIR", ev_dir)
-    monkeypatch.setattr(mod, "apply_manifest_path", lambda target_date: apply_dir / f"threshold_apply_{target_date}.json")
+    monkeypatch.setattr(
+        mod,
+        "apply_manifest_path",
+        lambda target_date: apply_dir / f"threshold_apply_{target_date}.json",
+    )
     monkeypatch.setattr(
         mod,
         "automation_report_paths",
         lambda target_date: (
-            report_dir / "missing" / f"scalping_pattern_lab_automation_{target_date}.json",
-            report_dir / "missing" / f"scalping_pattern_lab_automation_{target_date}.md",
+            report_dir
+            / "missing"
+            / f"scalping_pattern_lab_automation_{target_date}.json",
+            report_dir
+            / "missing"
+            / f"scalping_pattern_lab_automation_{target_date}.md",
         ),
     )
     monkeypatch.setattr(
@@ -1191,23 +1394,37 @@ def test_threshold_cycle_ev_report_exposes_codebase_performance_source_as_ops_su
         ),
     )
 
-    (monitor_dir / "trade_review_2026-05-14.json").write_text(json.dumps({"metrics": {}}), encoding="utf-8")
-    (monitor_dir / "performance_tuning_2026-05-14.json").write_text(json.dumps({"metrics": {}}), encoding="utf-8")
-    (calibration_dir / "threshold_cycle_calibration_2026-05-14_postclose.json").write_text(
+    (monitor_dir / "trade_review_2026-05-14.json").write_text(
+        json.dumps({"metrics": {}}), encoding="utf-8"
+    )
+    (monitor_dir / "performance_tuning_2026-05-14.json").write_text(
+        json.dumps({"metrics": {}}), encoding="utf-8"
+    )
+    (
+        calibration_dir / "threshold_cycle_calibration_2026-05-14_postclose.json"
+    ).write_text(
         json.dumps({"run_phase": "postclose"}),
         encoding="utf-8",
     )
-    (apply_dir / "threshold_apply_2026-05-14.json").write_text(json.dumps({"status": "manifest_ready"}), encoding="utf-8")
+    (apply_dir / "threshold_apply_2026-05-14.json").write_text(
+        json.dumps({"status": "manifest_ready"}), encoding="utf-8"
+    )
     (workorder_report_dir / "code_improvement_workorder_2026-05-14.json").write_text(
         json.dumps({"summary": {}, "orders": []}),
         encoding="utf-8",
     )
-    (workorder_doc_dir / "code_improvement_workorder_2026-05-14.md").write_text("# workorder\n", encoding="utf-8")
+    (workorder_doc_dir / "code_improvement_workorder_2026-05-14.md").write_text(
+        "# workorder\n", encoding="utf-8"
+    )
     (perf_dir / "codebase_performance_workorder_2026-05-14.json").write_text(
         json.dumps(
             {
                 "source_doc_hash": "abc123",
-                "summary": {"accepted_count": 7, "deferred_count": 3, "rejected_count": 2},
+                "summary": {
+                    "accepted_count": 7,
+                    "deferred_count": 3,
+                    "rejected_count": 2,
+                },
                 "policy": {
                     "runtime_effect": False,
                     "strategy_effect": False,
@@ -1240,7 +1457,9 @@ def test_threshold_cycle_ev_report_exposes_codebase_performance_source_as_ops_su
     assert "ops_performance_workorder_source" in markdown
 
 
-def test_entry_split_summary_treats_real_detail_book_as_real_evidence(tmp_path, monkeypatch):
+def test_entry_split_summary_treats_real_detail_book_as_real_evidence(
+    tmp_path, monkeypatch
+):
     report_dir = tmp_path / "entry_split_order_plan"
     report_dir.mkdir()
     monkeypatch.setattr(mod, "ENTRY_SPLIT_ORDER_PLAN_DIR", report_dir)
@@ -1287,7 +1506,9 @@ def test_entry_split_summary_treats_real_detail_book_as_real_evidence(tmp_path, 
 def test_top_level_summary_treats_real_detail_book_as_real_ready():
     summary = mod._top_level_summary(
         {
-            "daily_ev_summary": {"source_split": {"real": {"sample": 0}, "sim": {"sample": 0}}},
+            "daily_ev_summary": {
+                "source_split": {"real": {"sample": 0}, "sim": {"sample": 0}}
+            },
             "calibration_outcome": {
                 "decisions": [
                     {
@@ -1301,7 +1522,10 @@ def test_top_level_summary_treats_real_detail_book_as_real_ready():
                 ]
             },
             "lifecycle_bucket_discovery": {"live_auto_apply_ready_count": 0},
-            "source_quality_preflight_gate": {"status": "pass", "tuning_input_allowed": True},
+            "source_quality_preflight_gate": {
+                "status": "pass",
+                "tuning_input_allowed": True,
+            },
         }
     )
 
@@ -1310,7 +1534,9 @@ def test_top_level_summary_treats_real_detail_book_as_real_ready():
     assert summary["primary_verdict"] == "real_primary_evidence_present"
 
 
-def test_threshold_cycle_ev_report_prefers_candidate_sample_counts_from_calibration(tmp_path, monkeypatch):
+def test_threshold_cycle_ev_report_prefers_candidate_sample_counts_from_calibration(
+    tmp_path, monkeypatch
+):
     report_dir = tmp_path / "report"
     monitor_dir = report_dir / "monitor_snapshots"
     calibration_dir = report_dir / "threshold_cycle_calibration"
@@ -1318,18 +1544,31 @@ def test_threshold_cycle_ev_report_prefers_candidate_sample_counts_from_calibrat
     ev_dir = report_dir / "threshold_cycle_ev"
     workorder_report_dir = report_dir / "code_improvement_workorder"
     workorder_doc_dir = tmp_path / "docs" / "code-improvement-workorders"
-    for path in (monitor_dir, calibration_dir, apply_dir, ev_dir, workorder_report_dir, workorder_doc_dir):
+    for path in (
+        monitor_dir,
+        calibration_dir,
+        apply_dir,
+        ev_dir,
+        workorder_report_dir,
+        workorder_doc_dir,
+    ):
         path.mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setattr(mod, "MONITOR_SNAPSHOT_DIR", monitor_dir)
     monkeypatch.setattr(mod, "CALIBRATION_REPORT_DIR", calibration_dir)
     monkeypatch.setattr(mod, "EV_REPORT_DIR", ev_dir)
-    monkeypatch.setattr(mod, "apply_manifest_path", lambda target_date: apply_dir / f"threshold_apply_{target_date}.json")
+    monkeypatch.setattr(
+        mod,
+        "apply_manifest_path",
+        lambda target_date: apply_dir / f"threshold_apply_{target_date}.json",
+    )
     monkeypatch.setattr(
         mod,
         "automation_report_paths",
         lambda target_date: (
-            tmp_path / "missing" / f"scalping_pattern_lab_automation_{target_date}.json",
+            tmp_path
+            / "missing"
+            / f"scalping_pattern_lab_automation_{target_date}.json",
             tmp_path / "missing" / f"scalping_pattern_lab_automation_{target_date}.md",
         ),
     )
@@ -1343,14 +1582,27 @@ def test_threshold_cycle_ev_report_prefers_candidate_sample_counts_from_calibrat
     )
 
     (monitor_dir / "trade_review_2026-05-12.json").write_text(
-        json.dumps({"metrics": {"completed_trades": 0, "open_trades": 0, "win_trades": 0, "loss_trades": 0}}),
+        json.dumps(
+            {
+                "metrics": {
+                    "completed_trades": 0,
+                    "open_trades": 0,
+                    "win_trades": 0,
+                    "loss_trades": 0,
+                }
+            }
+        ),
         encoding="utf-8",
     )
     (monitor_dir / "performance_tuning_2026-05-12.json").write_text(
-        json.dumps({"metrics": {"budget_pass_events": 0, "order_bundle_submitted_events": 0}}),
+        json.dumps(
+            {"metrics": {"budget_pass_events": 0, "order_bundle_submitted_events": 0}}
+        ),
         encoding="utf-8",
     )
-    (calibration_dir / "threshold_cycle_calibration_2026-05-12_postclose.json").write_text(
+    (
+        calibration_dir / "threshold_cycle_calibration_2026-05-12_postclose.json"
+    ).write_text(
         json.dumps(
             {
                 "run_phase": "postclose",
@@ -1405,7 +1657,9 @@ def test_threshold_cycle_ev_report_prefers_candidate_sample_counts_from_calibrat
     assert "sample=`14/1`" in markdown
 
 
-def test_build_threshold_cycle_ev_report_renders_swing_pattern_lab_section(tmp_path, monkeypatch):
+def test_build_threshold_cycle_ev_report_renders_swing_pattern_lab_section(
+    tmp_path, monkeypatch
+):
     report_dir = tmp_path / "report"
     monitor_dir = report_dir / "monitor_snapshots"
     calibration_dir = report_dir / "threshold_cycle_calibration"
@@ -1415,12 +1669,24 @@ def test_build_threshold_cycle_ev_report_renders_swing_pattern_lab_section(tmp_p
     swing_lab_automation_dir = report_dir / "swing_pattern_lab_automation"
     workorder_report_dir = report_dir / "code_improvement_workorder"
     workorder_doc_dir = tmp_path / "docs" / "code-improvement-workorders"
-    for d in (monitor_dir, calibration_dir, apply_dir, automation_dir, swing_lab_automation_dir, workorder_report_dir, workorder_doc_dir):
+    for d in (
+        monitor_dir,
+        calibration_dir,
+        apply_dir,
+        automation_dir,
+        swing_lab_automation_dir,
+        workorder_report_dir,
+        workorder_doc_dir,
+    ):
         d.mkdir(parents=True)
     monkeypatch.setattr(mod, "MONITOR_SNAPSHOT_DIR", monitor_dir)
     monkeypatch.setattr(mod, "CALIBRATION_REPORT_DIR", calibration_dir)
     monkeypatch.setattr(mod, "EV_REPORT_DIR", ev_dir)
-    monkeypatch.setattr(mod, "apply_manifest_path", lambda target_date: apply_dir / f"threshold_apply_{target_date}.json")
+    monkeypatch.setattr(
+        mod,
+        "apply_manifest_path",
+        lambda target_date: apply_dir / f"threshold_apply_{target_date}.json",
+    )
     monkeypatch.setattr(
         mod,
         "automation_report_paths",
@@ -1433,7 +1699,8 @@ def test_build_threshold_cycle_ev_report_renders_swing_pattern_lab_section(tmp_p
         mod,
         "swing_pattern_lab_automation_report_paths",
         lambda target_date: (
-            swing_lab_automation_dir / f"swing_pattern_lab_automation_{target_date}.json",
+            swing_lab_automation_dir
+            / f"swing_pattern_lab_automation_{target_date}.json",
             swing_lab_automation_dir / f"swing_pattern_lab_automation_{target_date}.md",
         ),
     )
@@ -1446,13 +1713,21 @@ def test_build_threshold_cycle_ev_report_renders_swing_pattern_lab_section(tmp_p
         ),
     )
 
-    (monitor_dir / "trade_review_2026-05-08.json").write_text(json.dumps({"metrics": {}}), encoding="utf-8")
-    (monitor_dir / "performance_tuning_2026-05-08.json").write_text(json.dumps({"metrics": {}}), encoding="utf-8")
-    (calibration_dir / "threshold_cycle_calibration_2026-05-08_postclose.json").write_text(
-        json.dumps({"run_phase": "postclose"}), encoding="utf-8"
+    (monitor_dir / "trade_review_2026-05-08.json").write_text(
+        json.dumps({"metrics": {}}), encoding="utf-8"
     )
-    (apply_dir / "threshold_apply_2026-05-08.json").write_text(json.dumps({"status": "manifest_ready"}), encoding="utf-8")
-    (swing_lab_automation_dir / "swing_pattern_lab_automation_2026-05-08.json").write_text(
+    (monitor_dir / "performance_tuning_2026-05-08.json").write_text(
+        json.dumps({"metrics": {}}), encoding="utf-8"
+    )
+    (
+        calibration_dir / "threshold_cycle_calibration_2026-05-08_postclose.json"
+    ).write_text(json.dumps({"run_phase": "postclose"}), encoding="utf-8")
+    (apply_dir / "threshold_apply_2026-05-08.json").write_text(
+        json.dumps({"status": "manifest_ready"}), encoding="utf-8"
+    )
+    (
+        swing_lab_automation_dir / "swing_pattern_lab_automation_2026-05-08.json"
+    ).write_text(
         json.dumps(
             {
                 "ev_report_summary": {
@@ -1466,19 +1741,35 @@ def test_build_threshold_cycle_ev_report_renders_swing_pattern_lab_section(tmp_p
                         {
                             "family": "swing_scale_in_ofi_qi_confirmation",
                             "stage": "scale_in",
-                            "source_quality_blockers": ["scale_in_ofi_qi_invalid_micro_context"],
+                            "source_quality_blockers": [
+                                "scale_in_ofi_qi_invalid_micro_context"
+                            ],
                         }
                     ],
                 },
                 "consensus_findings": [
-                    {"finding_id": "f1", "title": "selection gap", "route": "design_family_candidate"},
-                    {"finding_id": "f2", "title": "entry block", "route": "attach_existing_family"},
+                    {
+                        "finding_id": "f1",
+                        "title": "selection gap",
+                        "route": "design_family_candidate",
+                    },
+                    {
+                        "finding_id": "f2",
+                        "title": "entry block",
+                        "route": "attach_existing_family",
+                    },
                 ],
                 "code_improvement_orders": [
-                    {"order_id": "order_f1", "title": "selection gap", "decision": "design_family_candidate"},
+                    {
+                        "order_id": "order_f1",
+                        "title": "selection gap",
+                        "decision": "design_family_candidate",
+                    },
                 ],
                 "data_quality": {
-                    "warnings": ["OFI/QI stale/missing ratio: 0.5000 (1/2); reasons: micro_missing=1"],
+                    "warnings": [
+                        "OFI/QI stale/missing ratio: 0.5000 (1/2); reasons: micro_missing=1"
+                    ],
                     "ofi_qi_quality": {
                         "stale_missing_unique_record_count": 1,
                         "sample_count": 20,
@@ -1503,18 +1794,27 @@ def test_build_threshold_cycle_ev_report_renders_swing_pattern_lab_section(tmp_p
     (workorder_report_dir / "code_improvement_workorder_2026-05-08.json").write_text(
         json.dumps({"summary": {}, "orders": []}), encoding="utf-8"
     )
-    (workorder_doc_dir / "code_improvement_workorder_2026-05-08.md").write_text("# workorder\n", encoding="utf-8")
+    (workorder_doc_dir / "code_improvement_workorder_2026-05-08.md").write_text(
+        "# workorder\n", encoding="utf-8"
+    )
 
     report = mod.build_threshold_cycle_ev_report("2026-05-08")
     assert report["swing_pattern_lab_automation"]["available"] is True
     assert report["swing_pattern_lab_automation"]["findings_count"] == 2
     assert report["swing_pattern_lab_automation"]["carryover_warning_count"] == 1
-    assert report["swing_pattern_lab_automation"]["resolved_data_quality_warning_count"] == 1
-    assert not any("swing_lab_dq:OFI/QI stale/missing" in item for item in report["warnings"])
-    assert report["swing_pattern_lab_automation"]["source_quality_blocked_families"][0]["family"] == (
-        "swing_scale_in_ofi_qi_confirmation"
+    assert (
+        report["swing_pattern_lab_automation"]["resolved_data_quality_warning_count"]
+        == 1
     )
-    blocked = report["swing_pattern_lab_automation"]["source_quality_blocked_families"][0]
+    assert not any(
+        "swing_lab_dq:OFI/QI stale/missing" in item for item in report["warnings"]
+    )
+    assert report["swing_pattern_lab_automation"]["source_quality_blocked_families"][0][
+        "family"
+    ] == ("swing_scale_in_ofi_qi_confirmation")
+    blocked = report["swing_pattern_lab_automation"]["source_quality_blocked_families"][
+        0
+    ]
     assert blocked["provenance_gap_count"] == 5
     assert blocked["readiness_counts"]["micro_ready_count"] == 7
     assert blocked["readiness_counts"]["micro_insufficient_samples_count"] == 3

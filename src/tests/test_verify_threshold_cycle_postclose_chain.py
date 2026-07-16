@@ -68,10 +68,16 @@ def test_source_quality_hard_block_status_detects_bridge_selected_alias_without_
             "runtime_apply_bridge": {
                 "selected": [{"family": "entry_wait6579_score66_69_recovery_gate_v1"}],
                 "selected_count": 1,
-                "approved_requests": [{"family": "entry_wait6579_score66_69_recovery_gate_v1"}],
+                "approved_requests": [
+                    {"family": "entry_wait6579_score66_69_recovery_gate_v1"}
+                ],
             }
         },
-        workorder={"orders": [{"order_id": "order_observation_source_quality_hard_block_contract_gap"}]},
+        workorder={
+            "orders": [
+                {"order_id": "order_observation_source_quality_hard_block_contract_gap"}
+            ]
+        },
     )
 
     assert status["status"] == "fail"
@@ -91,10 +97,20 @@ def test_source_quality_hard_block_status_passes_when_blocked_artifacts_handoff_
     status = mod._source_quality_hard_block_status(
         preflight,
         ev_report={"status": "source_quality_blocked", "allowed_runtime_apply": False},
-        runtime_summary={"status": "source_quality_blocked", "summary": {"runtime_candidate_count": 0}},
-        ldm_report={"status": "source_quality_blocked", "runtime_approval_candidates": []},
+        runtime_summary={
+            "status": "source_quality_blocked",
+            "summary": {"runtime_candidate_count": 0},
+        },
+        ldm_report={
+            "status": "source_quality_blocked",
+            "runtime_approval_candidates": [],
+        },
         bridge_report={},
-        workorder={"orders": [{"order_id": "order_observation_source_quality_hard_block_contract_gap"}]},
+        workorder={
+            "orders": [
+                {"order_id": "order_observation_source_quality_hard_block_contract_gap"}
+            ]
+        },
     )
 
     assert status["status"] == "pass"
@@ -178,7 +194,10 @@ def test_raw_row_exclusion_handoff_passes_with_limit_up_review_only_context():
         {
             "raw_row_exclusion": {
                 "excluded_row_count": 6,
-                "stage_counts": {"blocked_overbought": 3, "blocked_strength_momentum": 3},
+                "stage_counts": {
+                    "blocked_overbought": 3,
+                    "blocked_strength_momentum": 3,
+                },
                 "field_gap_counts": {"zero_fields:intraday_range_pct": 6},
             }
         },
@@ -328,15 +347,26 @@ def test_read_lines_includes_rotated_numeric_log(tmp_path):
 
     lines = mod._read_lines(log_path)
 
-    assert any("[DONE] threshold-cycle postclose target_date=2026-05-22" in line for line in lines)
+    assert any(
+        "[DONE] threshold-cycle postclose target_date=2026-05-22" in line
+        for line in lines
+    )
 
 
-def test_clean_baseline_report_residue_status_fails_pre_baseline_reports(tmp_path, monkeypatch):
+def test_clean_baseline_report_residue_status_fails_pre_baseline_reports(
+    tmp_path, monkeypatch
+):
     monkeypatch.setenv("KORSTOCKSCAN_CLEAN_TUNING_BASELINE_DATE", "2026-06-04")
-    monkeypatch.setenv("KORSTOCKSCAN_CLEAN_TUNING_BASELINE_TS_KST", "2026-06-04T14:29:09+09:00")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_CLEAN_TUNING_BASELINE_TS_KST", "2026-06-04T14:29:09+09:00"
+    )
     old_report = tmp_path / "threshold_cycle_ev" / "threshold_cycle_ev_2026-06-02.json"
-    same_day_old_report = tmp_path / "threshold_cycle_ev" / "threshold_cycle_ev_2026-06-04.json"
-    future_report = tmp_path / "threshold_cycle_ev" / "threshold_cycle_ev_2026-06-05.json"
+    same_day_old_report = (
+        tmp_path / "threshold_cycle_ev" / "threshold_cycle_ev_2026-06-04.json"
+    )
+    future_report = (
+        tmp_path / "threshold_cycle_ev" / "threshold_cycle_ev_2026-06-05.json"
+    )
     for path, generated_at in (
         (old_report, "2026-06-02T18:00:00+09:00"),
         (same_day_old_report, "2026-06-04T13:00:00+09:00"),
@@ -354,11 +384,27 @@ def test_clean_baseline_report_residue_status_fails_pre_baseline_reports(tmp_pat
     assert "same_day_pre_clean_baseline_report_archive_only" in reasons
 
 
-def test_clean_baseline_analytics_residue_status_fails_old_parquet_and_duckdb(tmp_path, monkeypatch):
+def test_clean_baseline_analytics_residue_status_fails_old_parquet_and_duckdb(
+    tmp_path, monkeypatch
+):
     monkeypatch.setenv("KORSTOCKSCAN_CLEAN_TUNING_BASELINE_DATE", "2026-06-04")
-    monkeypatch.setenv("KORSTOCKSCAN_CLEAN_TUNING_BASELINE_TS_KST", "2026-06-04T14:29:09+09:00")
-    old_parquet = tmp_path / "parquet" / "pipeline_events" / "date=2026-06-02" / "pipeline_events.parquet"
-    new_parquet = tmp_path / "parquet" / "pipeline_events" / "date=2026-06-04" / "pipeline_events.parquet"
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_CLEAN_TUNING_BASELINE_TS_KST", "2026-06-04T14:29:09+09:00"
+    )
+    old_parquet = (
+        tmp_path
+        / "parquet"
+        / "pipeline_events"
+        / "date=2026-06-02"
+        / "pipeline_events.parquet"
+    )
+    new_parquet = (
+        tmp_path
+        / "parquet"
+        / "pipeline_events"
+        / "date=2026-06-04"
+        / "pipeline_events.parquet"
+    )
     duckdb_path = tmp_path / "duckdb" / "korstockscan_analytics.duckdb"
     for path in (old_parquet, new_parquet, duckdb_path):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -383,7 +429,9 @@ def test_latest_run_lines_prefers_repaired_full_done_marker_after_partial_marker
     ]
 
     run_lines, start_line = mod._latest_run_lines(log_lines, "2026-05-28")
-    done_line = next(line for line in run_lines if "[DONE] threshold-cycle postclose" in line)
+    done_line = next(
+        line for line in run_lines if "[DONE] threshold-cycle postclose" in line
+    )
 
     assert "2026-05-29T12:35:33+0900" in (start_line or "")
     assert "2026-05-29T12:58:25+0900" in done_line
@@ -407,10 +455,14 @@ def test_postclose_verifier_fails_runtime_apply_gap_audit_fail(tmp_path, monkeyp
     monkeypatch.setattr(mod, "PROJECT_ROOT", project_root)
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "LOG_PATH", log_path)
-    monkeypatch.setattr(mod, "VERIFY_DIR", report_dir / "threshold_cycle_postclose_verification")
+    monkeypatch.setattr(
+        mod, "VERIFY_DIR", report_dir / "threshold_cycle_postclose_verification"
+    )
     monkeypatch.setattr(mod, "_next_krx_trading_day", lambda target_date: "2026-05-13")
     (project_root / "docs" / "checklists").mkdir(parents=True)
-    (project_root / "docs" / "checklists" / "2026-05-13-stage2-todo-checklist.md").write_text(
+    (
+        project_root / "docs" / "checklists" / "2026-05-13-stage2-todo-checklist.md"
+    ).write_text(
         "# checklist\n",
         encoding="utf-8",
     )
@@ -443,10 +495,14 @@ def test_postclose_verifier_fails_runtime_apply_gap_audit_fail(tmp_path, monkeyp
     report = mod.build_threshold_cycle_postclose_verification("2026-05-12")
 
     assert report["status"] == "fail"
-    assert "runtime_apply_gap_audit_failed" in report["runtime_apply_gap_audit"]["issues"]
+    assert (
+        "runtime_apply_gap_audit_failed" in report["runtime_apply_gap_audit"]["issues"]
+    )
 
 
-def test_postclose_verifier_fails_stale_runtime_apply_gap_after_bridge_update(tmp_path, monkeypatch):
+def test_postclose_verifier_fails_stale_runtime_apply_gap_after_bridge_update(
+    tmp_path, monkeypatch
+):
     project_root = tmp_path
     report_dir = project_root / "data" / "report"
     log_path = project_root / "logs" / "threshold_cycle_postclose_cron.log"
@@ -454,10 +510,14 @@ def test_postclose_verifier_fails_stale_runtime_apply_gap_after_bridge_update(tm
     monkeypatch.setattr(mod, "PROJECT_ROOT", project_root)
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "LOG_PATH", log_path)
-    monkeypatch.setattr(mod, "VERIFY_DIR", report_dir / "threshold_cycle_postclose_verification")
+    monkeypatch.setattr(
+        mod, "VERIFY_DIR", report_dir / "threshold_cycle_postclose_verification"
+    )
     monkeypatch.setattr(mod, "_next_krx_trading_day", lambda target_date: "2026-05-27")
     (project_root / "docs" / "checklists").mkdir(parents=True)
-    (project_root / "docs" / "checklists" / "2026-05-27-stage2-todo-checklist.md").write_text(
+    (
+        project_root / "docs" / "checklists" / "2026-05-27-stage2-todo-checklist.md"
+    ).write_text(
         "# checklist\n",
         encoding="utf-8",
     )
@@ -471,7 +531,10 @@ def test_postclose_verifier_fails_stale_runtime_apply_gap_after_bridge_update(tm
                 "report_type": label,
                 "status": "pass",
                 "generated_at": "2026-05-26T21:00:00+09:00",
-                "summary": {"critical_failure_count": 0, "ai_review_retry_pending": False},
+                "summary": {
+                    "critical_failure_count": 0,
+                    "ai_review_retry_pending": False,
+                },
                 "retry_queue": [],
             }
         elif label == "runtime_apply_bridge":
@@ -499,15 +562,25 @@ def test_postclose_verifier_fails_stale_runtime_apply_gap_after_bridge_update(tm
     report = mod.build_threshold_cycle_postclose_verification("2026-05-26")
 
     assert report["status"] == "fail"
-    assert "runtime_apply_gap_audit_stale_before_runtime_apply_bridge" in report["runtime_apply_gap_audit"]["issues"]
-    assert "runtime_apply_gap_audit_stale_before_threshold_preopen_apply" in report["runtime_apply_gap_audit"]["issues"]
+    assert (
+        "runtime_apply_gap_audit_stale_before_runtime_apply_bridge"
+        in report["runtime_apply_gap_audit"]["issues"]
+    )
+    assert (
+        "runtime_apply_gap_audit_stale_before_threshold_preopen_apply"
+        in report["runtime_apply_gap_audit"]["issues"]
+    )
 
 
 def test_overnight_bucket_handoff_status_detects_downstream_drops():
     ldm = {
         "overnight_bucket_attribution": {
             "runtime_approval_candidates": [
-                {"candidate_id": "overnight_bucket_1", "bucket_type": "overnight_action", "bucket_key": "SELL_TODAY"}
+                {
+                    "candidate_id": "overnight_bucket_1",
+                    "bucket_type": "overnight_action",
+                    "bucket_key": "SELL_TODAY",
+                }
             ],
             "code_improvement_workorders": [
                 {"bucket_type": "overnight_status", "bucket_key": "HOLD_OVERNIGHT"}
@@ -540,12 +613,22 @@ def test_lifecycle_bucket_discovery_handoff_detects_missing_downstream():
         ]
     }
 
-    report = mod._lifecycle_bucket_discovery_handoff_status(discovery, {}, {}, {"orders": []})
+    report = mod._lifecycle_bucket_discovery_handoff_status(
+        discovery, {}, {}, {"orders": []}
+    )
 
     assert report["status"] == "fail"
-    assert report["missing_bridge_families"] == ["entry_wait6579_score66_69_recovery_gate_v1"]
-    assert "runtime_approval_summary_lifecycle_bucket_discovery_missing" in report["missing"]
-    assert "code_improvement_workorder_lifecycle_bucket_discovery_orders_missing" in report["missing"]
+    assert report["missing_bridge_families"] == [
+        "entry_wait6579_score66_69_recovery_gate_v1"
+    ]
+    assert (
+        "runtime_approval_summary_lifecycle_bucket_discovery_missing"
+        in report["missing"]
+    )
+    assert (
+        "code_improvement_workorder_lifecycle_bucket_discovery_orders_missing"
+        in report["missing"]
+    )
 
 
 def test_lifecycle_bucket_discovery_handoff_warns_when_source_dimension_gap_not_surfaced():
@@ -562,11 +645,15 @@ def test_lifecycle_bucket_discovery_handoff_warns_when_source_dimension_gap_not_
     }
     runtime_summary = {"surfaced_candidate_ids": ["entry:combo:unknown"]}
 
-    report = mod._lifecycle_bucket_discovery_handoff_status(discovery, {}, runtime_summary, {"orders": []})
+    report = mod._lifecycle_bucket_discovery_handoff_status(
+        discovery, {}, runtime_summary, {"orders": []}
+    )
 
     assert report["status"] == "warning"
     assert "lifecycle_source_dimension_gap_handoff_missing" in report["warnings"]
-    assert report["actionable_source_dimension_gap_bucket_ids"] == ["entry:combo:unknown"]
+    assert report["actionable_source_dimension_gap_bucket_ids"] == [
+        "entry:combo:unknown"
+    ]
 
 
 def test_lifecycle_bucket_discovery_handoff_warns_from_source_dimension_summary():
@@ -578,11 +665,15 @@ def test_lifecycle_bucket_discovery_handoff_warns_from_source_dimension_summary(
         "surfaced_candidates": [],
     }
 
-    report = mod._lifecycle_bucket_discovery_handoff_status(discovery, {}, {}, {"orders": []})
+    report = mod._lifecycle_bucket_discovery_handoff_status(
+        discovery, {}, {}, {"orders": []}
+    )
 
     assert report["status"] == "warning"
     assert "lifecycle_source_dimension_gap_handoff_missing" in report["warnings"]
-    assert report["actionable_source_dimension_gap_bucket_ids"] == ["source_dimension_gap_summary"]
+    assert report["actionable_source_dimension_gap_bucket_ids"] == [
+        "source_dimension_gap_summary"
+    ]
     assert report["actionable_source_dimension_gap_count"] == 2
 
 
@@ -600,11 +691,15 @@ def test_lifecycle_bucket_discovery_handoff_fails_when_sim_source_dimension_gap_
     }
     runtime_summary = {"surfaced_candidate_ids": ["lifecycle_flow:combo:unknown"]}
 
-    report = mod._lifecycle_bucket_discovery_handoff_status(discovery, {}, runtime_summary, {"orders": []})
+    report = mod._lifecycle_bucket_discovery_handoff_status(
+        discovery, {}, runtime_summary, {"orders": []}
+    )
 
     assert report["status"] == "fail"
     assert "lifecycle_source_dimension_gap_handoff_missing" in report["missing"]
-    assert report["blocking_source_dimension_gap_bucket_ids"] == ["lifecycle_flow:combo:unknown"]
+    assert report["blocking_source_dimension_gap_bucket_ids"] == [
+        "lifecycle_flow:combo:unknown"
+    ]
 
 
 def test_lifecycle_bucket_discovery_handoff_warns_when_quiet_gap_rollup_missing():
@@ -617,7 +712,9 @@ def test_lifecycle_bucket_discovery_handoff_warns_when_quiet_gap_rollup_missing(
         "surfaced_candidates": [],
     }
 
-    report = mod._lifecycle_bucket_discovery_handoff_status(discovery, {}, {}, {"orders": []})
+    report = mod._lifecycle_bucket_discovery_handoff_status(
+        discovery, {}, {}, {"orders": []}
+    )
 
     assert report["status"] == "warning"
     assert "lifecycle_quiet_gap_handoff_missing" in report["warnings"]
@@ -636,7 +733,9 @@ def test_lifecycle_bucket_discovery_handoff_fails_when_sim_quiet_gap_rollup_miss
         "surfaced_candidates": [],
     }
 
-    report = mod._lifecycle_bucket_discovery_handoff_status(discovery, {}, {}, {"orders": []})
+    report = mod._lifecycle_bucket_discovery_handoff_status(
+        discovery, {}, {}, {"orders": []}
+    )
 
     assert report["status"] == "fail"
     assert "lifecycle_quiet_gap_handoff_missing" in report["missing"]
@@ -648,9 +747,13 @@ def test_lifecycle_bucket_discovery_handoff_passes_when_quiet_gap_rollup_exists(
         "quiet_gap_summary": {"quiet_gap_count": 1, "rollup_required_count": 1},
         "surfaced_candidates": [],
     }
-    workorder = {"orders": [{"order_id": "order_lifecycle_quiet_gap_parent_conflict_rollup"}]}
+    workorder = {
+        "orders": [{"order_id": "order_lifecycle_quiet_gap_parent_conflict_rollup"}]
+    }
 
-    report = mod._lifecycle_bucket_discovery_handoff_status(discovery, {}, {}, workorder)
+    report = mod._lifecycle_bucket_discovery_handoff_status(
+        discovery, {}, {}, workorder
+    )
 
     assert report["status"] == "pass"
     assert report["has_quiet_gap_rollup_workorder"] is True
@@ -668,18 +771,27 @@ def test_lifecycle_bucket_discovery_handoff_warns_when_quiet_gap_rollup_is_parti
         },
         "surfaced_candidates": [],
     }
-    workorder = {"orders": [{"order_id": "order_lifecycle_quiet_gap_parent_conflict_rollup"}]}
+    workorder = {
+        "orders": [{"order_id": "order_lifecycle_quiet_gap_parent_conflict_rollup"}]
+    }
 
-    report = mod._lifecycle_bucket_discovery_handoff_status(discovery, {}, {}, workorder)
+    report = mod._lifecycle_bucket_discovery_handoff_status(
+        discovery, {}, {}, workorder
+    )
 
     assert report["status"] == "warning"
-    assert report["missing_quiet_gap_workorder_order_ids"] == ["order_lifecycle_quiet_gap_ai_review_coverage_rollup"]
+    assert report["missing_quiet_gap_workorder_order_ids"] == [
+        "order_lifecycle_quiet_gap_ai_review_coverage_rollup"
+    ]
     assert report["has_quiet_gap_rollup_workorder"] is False
 
 
 def test_lifecycle_bucket_discovery_greenfield_bridge_exclusion_is_not_missing_family():
     discovery = {
-        "summary": {"source_contract_status": "pass", "ai_two_pass_review_status": "parsed"},
+        "summary": {
+            "source_contract_status": "pass",
+            "ai_two_pass_review_status": "parsed",
+        },
         "surfaced_candidates": [
             {
                 "bucket_id": "lifecycle_flow:combo:greenfield",
@@ -689,21 +801,33 @@ def test_lifecycle_bucket_discovery_greenfield_bridge_exclusion_is_not_missing_f
             }
         ],
     }
-    bridge = {"summary": {"greenfield_policy_emit_state": "not_emitted_no_complete_lifecycle_flow"}}
+    bridge = {
+        "summary": {
+            "greenfield_policy_emit_state": "not_emitted_no_complete_lifecycle_flow"
+        }
+    }
     runtime_summary = {"surfaced_candidate_ids": ["lifecycle_flow:combo:greenfield"]}
 
-    report = mod._lifecycle_bucket_discovery_handoff_status(discovery, bridge, runtime_summary, {"orders": []})
+    report = mod._lifecycle_bucket_discovery_handoff_status(
+        discovery, bridge, runtime_summary, {"orders": []}
+    )
 
     assert report["status"] == "pass"
     assert report["missing_bridge_families"] == []
-    assert report["explicit_bridge_exclusion_families"] == ["greenfield_real_environment_authority"]
+    assert report["explicit_bridge_exclusion_families"] == [
+        "greenfield_real_environment_authority"
+    ]
 
 
 def test_lifecycle_bucket_windows_status_fails_missing_enabled_windows(tmp_path):
     paths = {}
     for suffix in ("rolling5d", "rolling10d", "mtd"):
-        paths[f"lifecycle_decision_matrix_{suffix}"] = tmp_path / f"lifecycle_decision_matrix_2026-05-29_{suffix}.json"
-        paths[f"lifecycle_bucket_discovery_{suffix}"] = tmp_path / f"lifecycle_bucket_discovery_2026-05-29_{suffix}.json"
+        paths[f"lifecycle_decision_matrix_{suffix}"] = (
+            tmp_path / f"lifecycle_decision_matrix_2026-05-29_{suffix}.json"
+        )
+        paths[f"lifecycle_bucket_discovery_{suffix}"] = (
+            tmp_path / f"lifecycle_bucket_discovery_2026-05-29_{suffix}.json"
+        )
 
     report = mod._lifecycle_bucket_windows_status(
         paths=paths,
@@ -714,7 +838,10 @@ def test_lifecycle_bucket_windows_status_fails_missing_enabled_windows(tmp_path)
     )
 
     assert report["status"] == "fail"
-    assert "lifecycle_bucket_windows_marker_true_but_artifacts_missing" in report["missing"]
+    assert (
+        "lifecycle_bucket_windows_marker_true_but_artifacts_missing"
+        in report["missing"]
+    )
     assert "lifecycle_bucket_discovery_mtd_missing" in report["missing"]
 
 
@@ -742,7 +869,12 @@ def test_lifecycle_bucket_windows_status_blocks_daily_only_authority(tmp_path):
     report = mod._lifecycle_bucket_windows_status(
         paths=paths,
         done_line="[DONE] threshold-cycle postclose target_date=2026-05-29 lifecycle_bucket_windows=true",
-        bridge_report={"summary": {"live_auto_apply_ready_count": 1, "lifecycle_bucket_promotion_contract_passed": False}},
+        bridge_report={
+            "summary": {
+                "live_auto_apply_ready_count": 1,
+                "lifecycle_bucket_promotion_contract_passed": False,
+            }
+        },
         ev_report={},
         runtime_summary={},
     )
@@ -751,7 +883,9 @@ def test_lifecycle_bucket_windows_status_blocks_daily_only_authority(tmp_path):
     assert "runtime_apply_bridge_daily_only_live_authority" in report["missing"]
 
 
-def test_lifecycle_bucket_windows_status_warns_when_non_promotion_confirmation_window_is_too_broad(tmp_path):
+def test_lifecycle_bucket_windows_status_warns_when_non_promotion_confirmation_window_is_too_broad(
+    tmp_path,
+):
     paths = {}
     for suffix, granularity in (
         ("rolling5d", "too_broad"),
@@ -791,10 +925,15 @@ def test_lifecycle_bucket_windows_status_warns_when_non_promotion_confirmation_w
 
     assert report["status"] == "warning"
     assert report["missing"] == []
-    assert "lifecycle_bucket_discovery_rolling5d_parent_granularity_not_target" in report["warnings"]
+    assert (
+        "lifecycle_bucket_discovery_rolling5d_parent_granularity_not_target"
+        in report["warnings"]
+    )
 
 
-def test_lifecycle_bucket_windows_status_warns_promotion_granularity_without_live_authority(tmp_path):
+def test_lifecycle_bucket_windows_status_warns_promotion_granularity_without_live_authority(
+    tmp_path,
+):
     paths = {}
     for suffix, granularity in (
         ("rolling5d", "target_pass"),
@@ -839,7 +978,10 @@ def test_lifecycle_bucket_windows_status_warns_promotion_granularity_without_liv
 
     assert report["status"] == "warning"
     assert report["missing"] == []
-    assert "lifecycle_bucket_discovery_mtd_parent_granularity_not_target" in report["warnings"]
+    assert (
+        "lifecycle_bucket_discovery_mtd_parent_granularity_not_target"
+        in report["warnings"]
+    )
 
 
 def test_real_detail_primary_sample_book_counts_as_real_for_verifier():
@@ -849,7 +991,9 @@ def test_real_detail_primary_sample_book_counts_as_real_for_verifier():
     assert not mod._is_real_primary_sample_book("sim_diagnostic")
 
 
-def test_lifecycle_bucket_windows_status_fails_promotion_granularity_when_live_authority_open(tmp_path):
+def test_lifecycle_bucket_windows_status_fails_promotion_granularity_when_live_authority_open(
+    tmp_path,
+):
     paths = {}
     for suffix, granularity in (
         ("rolling5d", "target_pass"),
@@ -893,7 +1037,10 @@ def test_lifecycle_bucket_windows_status_fails_promotion_granularity_when_live_a
     )
 
     assert report["status"] == "fail"
-    assert "lifecycle_bucket_discovery_mtd_parent_granularity_not_target" in report["missing"]
+    assert (
+        "lifecycle_bucket_discovery_mtd_parent_granularity_not_target"
+        in report["missing"]
+    )
 
 
 def test_stage_hook_workorder_handoff_detects_missing_selected_order():
@@ -904,12 +1051,16 @@ def test_stage_hook_workorder_handoff_detects_missing_selected_order():
             "provider": "openai",
             "provider_status": {"provider": "openai", "status": "success"},
         },
-        "context": {"consumed_candidate_ids": ["producer_gap_sim_holding_runner_gap_missing"]},
+        "context": {
+            "consumed_candidate_ids": ["producer_gap_sim_holding_runner_gap_missing"]
+        },
         "code_improvement_orders": [
             {
                 "order_id": "order_stage_hook_runner",
                 "stage_hook_priority": "high",
-                "stage_hook_candidate_contract": {"readiness_tier": "implementation_workorder_ready"},
+                "stage_hook_candidate_contract": {
+                    "readiness_tier": "implementation_workorder_ready"
+                },
             }
         ],
     }
@@ -922,7 +1073,9 @@ def test_stage_hook_workorder_handoff_detects_missing_selected_order():
         ]
     }
 
-    report = mod._stage_hook_workorder_handoff_status(stage_hook, producer_gap, {"orders": []})
+    report = mod._stage_hook_workorder_handoff_status(
+        stage_hook, producer_gap, {"orders": []}
+    )
 
     assert report["status"] == "fail"
     assert report["missing_workorder_order_ids"] == ["order_stage_hook_runner"]
@@ -937,7 +1090,11 @@ def test_stage_hook_workorder_handoff_allows_blocked_source_quality_without_orde
             "provider": "openai",
             "provider_status": {"provider": "openai", "status": "success"},
         },
-        "context": {"consumed_candidate_ids": ["producer_gap_sim_source_quality_join_gap_missing"]},
+        "context": {
+            "consumed_candidate_ids": [
+                "producer_gap_sim_source_quality_join_gap_missing"
+            ]
+        },
         "code_improvement_orders": [],
     }
     producer_gap = {
@@ -949,7 +1106,9 @@ def test_stage_hook_workorder_handoff_allows_blocked_source_quality_without_orde
         ]
     }
 
-    report = mod._stage_hook_workorder_handoff_status(stage_hook, producer_gap, {"orders": []})
+    report = mod._stage_hook_workorder_handoff_status(
+        stage_hook, producer_gap, {"orders": []}
+    )
 
     assert report["status"] == "pass"
     assert report["missing_workorder_order_ids"] == []
@@ -974,11 +1133,16 @@ def test_lifecycle_bucket_discovery_handoff_surfaces_ai_followup_without_fail():
     bridge = {"candidates": [{"family": "entry_wait6579_score66_69_recovery_gate_v1"}]}
     runtime_summary = {"surfaced_candidate_ids": ["entry:combo:test"]}
 
-    report = mod._lifecycle_bucket_discovery_handoff_status(discovery, bridge, runtime_summary, {"orders": []})
+    report = mod._lifecycle_bucket_discovery_handoff_status(
+        discovery, bridge, runtime_summary, {"orders": []}
+    )
 
     assert report["status"] == "pass"
     assert report["ai_post_apply_followup_bucket_ids"] == ["entry:combo:test"]
-    assert "lifecycle_bucket_discovery_ai_post_apply_followup_required" in report["warnings"]
+    assert (
+        "lifecycle_bucket_discovery_ai_post_apply_followup_required"
+        in report["warnings"]
+    )
 
 
 def test_lifecycle_bucket_discovery_handoff_fails_source_contract_fail():
@@ -987,7 +1151,9 @@ def test_lifecycle_bucket_discovery_handoff_fails_source_contract_fail():
         "surfaced_candidates": [],
     }
 
-    report = mod._lifecycle_bucket_discovery_handoff_status(discovery, {}, {}, {"orders": []})
+    report = mod._lifecycle_bucket_discovery_handoff_status(
+        discovery, {}, {}, {"orders": []}
+    )
 
     assert report["status"] == "fail"
     assert "lifecycle_bucket_discovery_source_contract_fail" in report["missing"]
@@ -997,30 +1163,45 @@ def test_lifecycle_bucket_discovery_handoff_warns_policy_key_required_missing():
     discovery = {
         "source_dimension_gap_summary": {
             "missing_dimension_key_counts": {"policy_key": 5},
-            "policy_key_gap_classification_counts": {"policy_key_required_missing": 3, "policy_key_provided": 12},
+            "policy_key_gap_classification_counts": {
+                "policy_key_required_missing": 3,
+                "policy_key_provided": 12,
+            },
         },
         "surfaced_candidates": [],
     }
 
-    report = mod._lifecycle_bucket_discovery_handoff_status(discovery, {}, {}, {"orders": []})
+    report = mod._lifecycle_bucket_discovery_handoff_status(
+        discovery, {}, {}, {"orders": []}
+    )
 
     assert report["status"] == "warning"
-    assert "lifecycle_bucket_discovery_policy_key_required_missing" in report["warnings"]
+    assert (
+        "lifecycle_bucket_discovery_policy_key_required_missing" in report["warnings"]
+    )
 
 
 def test_lifecycle_bucket_discovery_handoff_warns_policy_key_missing_non_blocking_context():
     discovery = {
         "source_dimension_gap_summary": {
             "missing_dimension_key_counts": {"policy_key": 8},
-            "policy_key_gap_classification_counts": {"policy_key_not_required_context_row": 5, "policy_key_not_applicable_matrix_missing": 3},
+            "policy_key_gap_classification_counts": {
+                "policy_key_not_required_context_row": 5,
+                "policy_key_not_applicable_matrix_missing": 3,
+            },
         },
         "surfaced_candidates": [],
     }
 
-    report = mod._lifecycle_bucket_discovery_handoff_status(discovery, {}, {}, {"orders": []})
+    report = mod._lifecycle_bucket_discovery_handoff_status(
+        discovery, {}, {}, {"orders": []}
+    )
 
     assert report["status"] == "warning"
-    assert "lifecycle_bucket_discovery_policy_key_missing_non_blocking_context" in report["warnings"]
+    assert (
+        "lifecycle_bucket_discovery_policy_key_missing_non_blocking_context"
+        in report["warnings"]
+    )
 
 
 def test_lifecycle_bucket_discovery_handoff_warns_policy_key_missing_await_classification():
@@ -1031,10 +1212,15 @@ def test_lifecycle_bucket_discovery_handoff_warns_policy_key_missing_await_class
         "surfaced_candidates": [],
     }
 
-    report = mod._lifecycle_bucket_discovery_handoff_status(discovery, {}, {}, {"orders": []})
+    report = mod._lifecycle_bucket_discovery_handoff_status(
+        discovery, {}, {}, {"orders": []}
+    )
 
     assert report["status"] == "warning"
-    assert "lifecycle_bucket_discovery_policy_key_missing_await_classification" in report["warnings"]
+    assert (
+        "lifecycle_bucket_discovery_policy_key_missing_await_classification"
+        in report["warnings"]
+    )
 
 
 def test_warning_followup_summary_breaks_down_postclose_warning_priorities():
@@ -1095,18 +1281,27 @@ def test_warning_followup_summary_breaks_down_postclose_warning_priorities():
     assert items["scalp_entry_adm_unknown_bucket_source_quality_gap"]["decision"] == (
         "source_quality_followup_required"
     )
-    assert items["pattern_lab_warning"]["decision"] == "pass_no_current_handoff_workorder"
-    assert items["live_auto_ready_zero_breakdown"]["decision"] == "warning_explained_no_live_auto_ready"
-    assert items["live_auto_ready_zero_breakdown"]["evidence"]["runtime_gap_categories"] == {
-        "source_quality_blocker": 536
-    }
+    assert (
+        items["pattern_lab_warning"]["decision"] == "pass_no_current_handoff_workorder"
+    )
+    assert (
+        items["live_auto_ready_zero_breakdown"]["decision"]
+        == "warning_explained_no_live_auto_ready"
+    )
+    assert items["live_auto_ready_zero_breakdown"]["evidence"][
+        "runtime_gap_categories"
+    ] == {"source_quality_blocker": 536}
 
 
 def test_submit_bucket_handoff_status_detects_downstream_drops():
     ldm = {
         "submit_bucket_attribution": {
             "runtime_approval_candidates": [
-                {"candidate_id": "submit_bucket_1", "bucket_type": "revalidation_state", "bucket_key": "ok"}
+                {
+                    "candidate_id": "submit_bucket_1",
+                    "bucket_type": "revalidation_state",
+                    "bucket_key": "ok",
+                }
             ],
             "code_improvement_workorders": [
                 {
@@ -1142,7 +1337,9 @@ def test_submit_bucket_handoff_preserves_named_entry_contract_order_ids():
 
     report = mod._submit_bucket_handoff_status(ldm, {}, {}, {"orders": []})
 
-    assert report["missing_workorder_order_ids"] == ["order_entry_broker_receipt_contract_gap_review"]
+    assert report["missing_workorder_order_ids"] == [
+        "order_entry_broker_receipt_contract_gap_review"
+    ]
 
 
 def test_stage_only_holding_bucket_handoff_detects_runtime_candidates_and_drops():
@@ -1158,18 +1355,29 @@ def test_stage_only_holding_bucket_handoff_detects_runtime_candidates_and_drops(
             "code_improvement_workorders": [workorder],
         }
     }
-    ev = {"lifecycle_decision_matrix": {"holding_bucket_code_improvement_workorders": []}}
-    runtime = {"lifecycle_decision_matrix": {"holding_bucket_code_improvement_workorders": []}}
+    ev = {
+        "lifecycle_decision_matrix": {"holding_bucket_code_improvement_workorders": []}
+    }
+    runtime = {
+        "lifecycle_decision_matrix": {"holding_bucket_code_improvement_workorders": []}
+    }
 
-    report = mod._stage_only_bucket_handoff_status(ldm, ev, runtime, {"orders": []}, stage="holding")
+    report = mod._stage_only_bucket_handoff_status(
+        ldm, ev, runtime, {"orders": []}, stage="holding"
+    )
 
     assert report["status"] == "fail"
     assert "holding_stage_only_runtime_candidates_forbidden" in report["missing"]
     assert "threshold_cycle_ev_holding_bucket_count_missing" in report["missing"]
     assert "runtime_approval_summary_holding_bucket_count_missing" in report["missing"]
     assert "threshold_cycle_ev_holding_bucket_workorders_missing" in report["missing"]
-    assert "runtime_approval_summary_holding_bucket_workorders_missing" in report["missing"]
-    assert report["missing_workorder_order_ids"] == [mod._stage_bucket_order_id("holding", workorder)]
+    assert (
+        "runtime_approval_summary_holding_bucket_workorders_missing"
+        in report["missing"]
+    )
+    assert report["missing_workorder_order_ids"] == [
+        mod._stage_bucket_order_id("holding", workorder)
+    ]
 
 
 def test_stage_only_holding_bucket_handoff_passes_when_counts_and_orders_propagate():
@@ -1269,7 +1477,10 @@ def test_lifecycle_flow_handoff_keeps_adm_bridge_direct_zero_closure_fields():
     assert report["status"] == "pass"
     assert report["direct_sim_record_complete_flow_count"] == 0
     assert report["adm_bridge_complete_flow_count"] == 1
-    assert report["direct_flow_zero_reason"] == "no_direct_complete_but_adm_bridge_complete"
+    assert (
+        report["direct_flow_zero_reason"]
+        == "no_direct_complete_but_adm_bridge_complete"
+    )
     assert report["direct_flow_zero_closure_status"] == "closed_by_adm_bridge_complete"
     assert report["direct_flow_zero_followup_required"] is False
 
@@ -1282,13 +1493,24 @@ def test_buy_funnel_submit_drought_handoff_fails_when_downstream_missing():
         }
     }
 
-    report = mod._buy_funnel_submit_drought_handoff_status(buy, {}, {}, {}, {"orders": []})
+    report = mod._buy_funnel_submit_drought_handoff_status(
+        buy, {}, {}, {}, {"orders": []}
+    )
 
     assert report["status"] == "fail"
     assert report["critical"] is True
-    assert "code_improvement_workorder_entry_submit_drought_orders_missing" in report["missing"]
-    assert "order_entry_submit_drought_auto_resolution" in report["missing_workorder_order_ids"]
-    assert "order_entry_broker_receipt_contract_gap_review" in report["missing_workorder_order_ids"]
+    assert (
+        "code_improvement_workorder_entry_submit_drought_orders_missing"
+        in report["missing"]
+    )
+    assert (
+        "order_entry_submit_drought_auto_resolution"
+        in report["missing_workorder_order_ids"]
+    )
+    assert (
+        "order_entry_broker_receipt_contract_gap_review"
+        in report["missing_workorder_order_ids"]
+    )
     assert "ldm_submit_bucket_attribution_missing" in report["missing"]
 
 
@@ -1302,12 +1524,17 @@ def test_buy_funnel_submit_drought_handoff_warns_when_handoff_exists_but_downstr
         "followup": {"route": "entry_submit_drought_auto_workorder"},
     }
 
-    report = mod._buy_funnel_submit_drought_handoff_status(buy, {}, {}, {}, {"orders": []})
+    report = mod._buy_funnel_submit_drought_handoff_status(
+        buy, {}, {}, {}, {"orders": []}
+    )
 
     assert report["status"] == "warning"
     assert report["handoff_status"] == "pass"
     assert report["downstream_closure_status"] == "fail"
-    assert "code_improvement_workorder_entry_submit_drought_orders_missing" in report["missing"]
+    assert (
+        "code_improvement_workorder_entry_submit_drought_orders_missing"
+        in report["missing"]
+    )
     assert "ldm_submit_bucket_attribution_missing" in report["missing"]
 
 
@@ -1625,7 +1852,10 @@ def test_warning_followup_submit_drought_reports_exact_bot_history_resolution():
     submit_item = summary["items"][0]
 
     assert summary["status"] == "pass"
-    assert submit_item["decision"] == "post_submit_provenance_join_gap_resolved_by_bot_history"
+    assert (
+        submit_item["decision"]
+        == "post_submit_provenance_join_gap_resolved_by_bot_history"
+    )
     assert submit_item["evidence"]["ldm_submit_bot_history_exact_mapping_count"] == 17
     assert "Exact same-stock" in submit_item["next_action"]
 
@@ -1673,7 +1903,11 @@ def test_producer_gap_discovery_handoff_passes_when_ai_and_workorder_close():
         "ai_two_pass_review": {
             "provider": "openai",
             "model": "gpt-5.4",
-            "provider_status": {"provider": "openai", "status": "success", "model": "gpt-5.4"},
+            "provider_status": {
+                "provider": "openai",
+                "status": "success",
+                "model": "gpt-5.4",
+            },
         },
         "code_improvement_orders": [
             {
@@ -1707,7 +1941,11 @@ def test_producer_gap_discovery_handoff_treats_parsed_followup_as_workorder_not_
         "ai_two_pass_review": {
             "provider": "openai",
             "model": "gpt-5.4-mini",
-            "provider_status": {"provider": "openai", "status": "success", "model": "gpt-5.4-mini"},
+            "provider_status": {
+                "provider": "openai",
+                "status": "success",
+                "model": "gpt-5.4-mini",
+            },
         },
         "code_improvement_orders": [
             {
@@ -1741,7 +1979,11 @@ def test_producer_gap_discovery_handoff_fails_without_openai_tier2_review():
         "ai_two_pass_review": {
             "provider": "none",
             "model": None,
-            "provider_status": {"provider": "none", "status": "provided_response", "model": None},
+            "provider_status": {
+                "provider": "none",
+                "status": "provided_response",
+                "model": None,
+            },
         },
         "code_improvement_orders": [
             {
@@ -1759,7 +2001,9 @@ def test_producer_gap_discovery_handoff_fails_without_openai_tier2_review():
 
 
 def test_stage_hook_handoff_treats_parsed_followup_as_workorder_not_ai_failure():
-    followup_order_id = "order_stage_hook_workorder_discovery_ai_review_followup_20260526"
+    followup_order_id = (
+        "order_stage_hook_workorder_discovery_ai_review_followup_20260526"
+    )
     stage_hook = {
         "status": "warning",
         "summary": {
@@ -1773,7 +2017,11 @@ def test_stage_hook_handoff_treats_parsed_followup_as_workorder_not_ai_failure()
         },
         "ai_two_pass_review": {
             "provider": "openai",
-            "provider_status": {"provider": "openai", "status": "success", "model": "gpt-5.4-mini"},
+            "provider_status": {
+                "provider": "openai",
+                "status": "success",
+                "model": "gpt-5.4-mini",
+            },
         },
         "code_improvement_orders": [
             {
@@ -1817,7 +2065,9 @@ def test_ai_correction_status_reads_current_provider_status_key(tmp_path, monkey
         ),
         encoding="utf-8",
     )
-    (calibration_dir / "threshold_cycle_calibration_2026-05-26_postclose.json").write_text(
+    (
+        calibration_dir / "threshold_cycle_calibration_2026-05-26_postclose.json"
+    ).write_text(
         json.dumps({"calibration_candidates": []}),
         encoding="utf-8",
     )
@@ -1851,7 +2101,9 @@ def test_producer_gap_discovery_handoff_fails_sim_first_coverage_gap_without_wor
     report = mod._producer_gap_discovery_handoff_status(producer_gap, {"orders": []})
 
     assert report["status"] == "fail"
-    assert "producer_gap_discovery_sim_first_coverage_handoff_missing" in report["missing"]
+    assert (
+        "producer_gap_discovery_sim_first_coverage_handoff_missing" in report["missing"]
+    )
     assert report["missing_workorder_order_ids"] == [
         "order_producer_gap_discovery_producer_gap_sim_first_coverage_gap"
     ]
@@ -1917,7 +2169,9 @@ def test_bottom_rebound_sim_handoff_not_applicable_when_source_absent():
     assert report["included"] is False
 
 
-def test_active_sim_priority_handoff_passes_with_matching_preopen_and_runtime(monkeypatch):
+def test_active_sim_priority_handoff_passes_with_matching_preopen_and_runtime(
+    monkeypatch,
+):
     monkeypatch.setattr(
         mod,
         "_iter_pipeline_event_fields",
@@ -1956,7 +2210,7 @@ def test_active_sim_priority_handoff_passes_with_matching_preopen_and_runtime(mo
                     "broker_order_forbidden": True,
                     "runtime_effect": False,
                 }
-            ]
+            ],
         },
         swing_catalog={
             "schema_version": "swing_sim_policy_catalog_v1",
@@ -1970,7 +2224,7 @@ def test_active_sim_priority_handoff_passes_with_matching_preopen_and_runtime(mo
                     "broker_order_forbidden": True,
                     "runtime_effect": False,
                 }
-            ]
+            ],
         },
         preopen_apply={
             "selected": [
@@ -2025,7 +2279,7 @@ def test_active_sim_priority_handoff_fails_unknown_runtime_key(monkeypatch):
                     "broker_order_forbidden": True,
                     "runtime_effect": False,
                 }
-            ]
+            ],
         },
         swing_catalog={},
         preopen_apply={
@@ -2088,7 +2342,9 @@ def test_active_sim_priority_handoff_reports_inactive_consumed_ids(monkeypatch):
     assert status["inactive_consumed_ids"] == ["active_seed_cooldown"]
 
 
-def test_active_sim_priority_accepts_runtime_referenced_preopen_catalog(monkeypatch, tmp_path):
+def test_active_sim_priority_accepts_runtime_referenced_preopen_catalog(
+    monkeypatch, tmp_path
+):
     runtime_catalog = tmp_path / "scalp_sim_policy_catalog_2026-06-02.json"
     runtime_catalog.write_text(
         json.dumps(
@@ -2128,7 +2384,10 @@ def test_active_sim_priority_accepts_runtime_referenced_preopen_catalog(monkeypa
     status = mod._active_sim_priority_handoff_status(
         target_date="2026-06-04",
         discovery={},
-        scalp_catalog={"schema_version": "scalp_sim_policy_catalog_v1", "active_sim_priority_seeds": []},
+        scalp_catalog={
+            "schema_version": "scalp_sim_policy_catalog_v1",
+            "active_sim_priority_seeds": [],
+        },
         swing_catalog={},
         preopen_apply={},
         swing_sim_report={},
@@ -2139,7 +2398,9 @@ def test_active_sim_priority_accepts_runtime_referenced_preopen_catalog(monkeypa
     assert "active_sim_priority_unknown_key_observed" not in status["missing"]
 
 
-def test_active_sim_priority_uses_runtime_catalog_before_current_postclose_status(monkeypatch, tmp_path):
+def test_active_sim_priority_uses_runtime_catalog_before_current_postclose_status(
+    monkeypatch, tmp_path
+):
     runtime_catalog = tmp_path / "scalp_sim_policy_catalog_2026-06-15.json"
     runtime_catalog.write_text(
         json.dumps(
@@ -2206,7 +2467,9 @@ def test_active_sim_priority_uses_runtime_catalog_before_current_postclose_statu
     assert status["referenced_runtime_seed_ids"] == ["active_seed_runtime"]
 
 
-def test_active_sim_priority_uses_preopen_ids_before_current_postclose_status(monkeypatch):
+def test_active_sim_priority_uses_preopen_ids_before_current_postclose_status(
+    monkeypatch,
+):
     monkeypatch.setattr(
         mod,
         "_iter_pipeline_event_fields",
@@ -2257,7 +2520,9 @@ def test_active_sim_priority_uses_preopen_ids_before_current_postclose_status(mo
     assert status["referenced_runtime_seed_ids"] == ["active_seed_preopen"]
 
 
-def test_active_sim_priority_warns_stale_seed_alias_when_same_prefix_active_exists(monkeypatch, tmp_path):
+def test_active_sim_priority_warns_stale_seed_alias_when_same_prefix_active_exists(
+    monkeypatch, tmp_path
+):
     runtime_catalog = tmp_path / "scalp_sim_policy_catalog_2026-06-24.json"
     runtime_catalog.write_text(
         json.dumps(
@@ -2364,7 +2629,9 @@ def test_active_sim_priority_warns_stale_seed_alias_when_same_prefix_active_exis
     assert status["stale_alias_consumed_ids"] == ["active_seed_stale"]
 
 
-def test_active_sim_priority_handoff_fails_unknown_runtime_key_when_catalog_empty(monkeypatch):
+def test_active_sim_priority_handoff_fails_unknown_runtime_key_when_catalog_empty(
+    monkeypatch,
+):
     monkeypatch.setattr(
         mod,
         "_iter_pipeline_event_fields",
@@ -2381,8 +2648,14 @@ def test_active_sim_priority_handoff_fails_unknown_runtime_key_when_catalog_empt
     status = mod._active_sim_priority_handoff_status(
         target_date="2026-06-01",
         discovery={},
-        scalp_catalog={"schema_version": "scalp_sim_policy_catalog_v1", "active_sim_priority_seeds": []},
-        swing_catalog={"schema_version": "swing_sim_policy_catalog_v1", "active_arm_priority_policies": []},
+        scalp_catalog={
+            "schema_version": "scalp_sim_policy_catalog_v1",
+            "active_sim_priority_seeds": [],
+        },
+        swing_catalog={
+            "schema_version": "swing_sim_policy_catalog_v1",
+            "active_arm_priority_policies": [],
+        },
         preopen_apply={},
         swing_sim_report={},
     )
@@ -2445,11 +2718,16 @@ def test_active_sim_priority_zero_match_gets_absence_diagnosis(monkeypatch):
 
     assert status["status"] == "warning"
     assert "active_sim_priority_runtime_observation_missing" in status["warnings"]
-    assert status["active_priority_match_absence_diagnosis"]["diagnosis"] == "active_prefix_too_narrow"
+    assert (
+        status["active_priority_match_absence_diagnosis"]["diagnosis"]
+        == "active_prefix_too_narrow"
+    )
     assert status["active_priority_match_absence_diagnosis"]["status"] == "warning"
 
 
-def test_active_sim_priority_pending_preopen_does_not_require_runtime_observation(monkeypatch):
+def test_active_sim_priority_pending_preopen_does_not_require_runtime_observation(
+    monkeypatch,
+):
     monkeypatch.setattr(mod, "_iter_pipeline_event_fields", lambda target_date: [])
 
     status = mod._active_sim_priority_handoff_status(
@@ -2492,12 +2770,19 @@ def test_active_sim_priority_pending_preopen_does_not_require_runtime_observatio
 
     assert status["status"] == "pass"
     assert "active_sim_priority_preopen_handoff_pending" not in status["warnings"]
-    assert "active_sim_priority_preopen_handoff_pending" in status["next_preopen_pending"]
+    assert (
+        "active_sim_priority_preopen_handoff_pending" in status["next_preopen_pending"]
+    )
     assert "active_sim_priority_runtime_observation_missing" not in status["warnings"]
-    assert "swing_active_arm_priority_runtime_observation_missing" not in status["warnings"]
+    assert (
+        "swing_active_arm_priority_runtime_observation_missing"
+        not in status["warnings"]
+    )
 
 
-def test_active_sim_priority_current_preopen_only_requires_due_prior_source_seeds(monkeypatch):
+def test_active_sim_priority_current_preopen_only_requires_due_prior_source_seeds(
+    monkeypatch,
+):
     monkeypatch.setattr(
         mod,
         "_iter_pipeline_event_fields",
@@ -2560,11 +2845,15 @@ def test_active_sim_priority_current_preopen_only_requires_due_prior_source_seed
     assert status["status"] == "pass"
     assert "active_sim_priority_preopen_handoff_missing" not in status["missing"]
     assert "active_sim_priority_preopen_handoff_pending" not in status["warnings"]
-    assert "active_sim_priority_preopen_handoff_pending" in status["next_preopen_pending"]
+    assert (
+        "active_sim_priority_preopen_handoff_pending" in status["next_preopen_pending"]
+    )
     assert "active_sim_priority_runtime_observation_missing" not in status["warnings"]
 
 
-def test_active_sim_priority_handoff_fails_when_preopen_apply_omits_active_seed(monkeypatch):
+def test_active_sim_priority_handoff_fails_when_preopen_apply_omits_active_seed(
+    monkeypatch,
+):
     monkeypatch.setattr(mod, "_iter_pipeline_event_fields", lambda target_date: [])
 
     status = mod._active_sim_priority_handoff_status(
@@ -2605,7 +2894,9 @@ def test_active_sim_priority_handoff_fails_when_preopen_apply_omits_active_seed(
     assert "active_sim_priority_preopen_handoff_pending" not in status["warnings"]
 
 
-def test_active_sim_priority_zero_match_prioritizes_posterior_dimension_diagnosis(monkeypatch):
+def test_active_sim_priority_zero_match_prioritizes_posterior_dimension_diagnosis(
+    monkeypatch,
+):
     monkeypatch.setattr(
         mod,
         "_iter_pipeline_event_fields",
@@ -2659,8 +2950,14 @@ def test_active_sim_priority_zero_match_prioritizes_posterior_dimension_diagnosi
     )
 
     assert status["status"] == "fail"
-    assert "active_sim_priority_seed_observable_prefix_forbidden_dimension" in status["missing"]
-    assert status["active_priority_match_absence_diagnosis"]["diagnosis"] == "posterior_dimension_leaked_into_priority"
+    assert (
+        "active_sim_priority_seed_observable_prefix_forbidden_dimension"
+        in status["missing"]
+    )
+    assert (
+        status["active_priority_match_absence_diagnosis"]["diagnosis"]
+        == "posterior_dimension_leaked_into_priority"
+    )
     assert status["active_priority_match_absence_diagnosis"]["status"] == "fail"
 
 
@@ -2682,7 +2979,9 @@ def test_ldm_refinement_consumption_fails_when_lifecycle_ledger_missing():
     assert "ldm_refinement_consumption_ledger_missing" in status["missing"]
 
 
-def test_ldm_refinement_consumption_warns_when_hypothesis_contract_drift_suppresses_matches(monkeypatch):
+def test_ldm_refinement_consumption_warns_when_hypothesis_contract_drift_suppresses_matches(
+    monkeypatch,
+):
     monkeypatch.setattr(
         mod,
         "_iter_pipeline_event_fields",
@@ -2714,9 +3013,21 @@ def test_ldm_refinement_consumption_warns_when_hypothesis_contract_drift_suppres
                     {
                         "soft_hypothesis_id": "ldm_hypothesis_legacy",
                         "observable_requirements": [
-                            {"field": "entry_score_parent", "op": "eq", "value": "score_watch_recovery"},
-                            {"field": "entry_source_parent", "op": "eq", "value": "entry_source_wait6579"},
-                            {"field": "submit_quality_parent", "op": "eq", "value": "submit_revalidation_ok"},
+                            {
+                                "field": "entry_score_parent",
+                                "op": "eq",
+                                "value": "score_watch_recovery",
+                            },
+                            {
+                                "field": "entry_source_parent",
+                                "op": "eq",
+                                "value": "entry_source_wait6579",
+                            },
+                            {
+                                "field": "submit_quality_parent",
+                                "op": "eq",
+                                "value": "submit_revalidation_ok",
+                            },
                         ],
                         "runtime_effect": False,
                         "allowed_runtime_apply": False,
@@ -2741,14 +3052,18 @@ def test_ldm_refinement_consumption_warns_when_hypothesis_contract_drift_suppres
     assert "ldm_hypothesis_contract_drift" in status["warnings"]
     assert status["contract_drift"]["recomputable_match_count"] == 1
     assert status["contract_drift"]["runtime_matched_event_count"] == 0
-    assert status["contract_drift"]["recomputable_hypothesis_ids"] == ["ldm_hypothesis_legacy"]
+    assert status["contract_drift"]["recomputable_hypothesis_ids"] == [
+        "ldm_hypothesis_legacy"
+    ]
 
 
 def test_ldm_contract_drift_reads_gzip_pipeline_events(tmp_path, monkeypatch):
     root = tmp_path
     event_dir = root / "data" / "pipeline_events"
     event_dir.mkdir(parents=True)
-    with gzip.open(event_dir / "pipeline_events_2026-06-15.jsonl.gz", "wt", encoding="utf-8") as fh:
+    with gzip.open(
+        event_dir / "pipeline_events_2026-06-15.jsonl.gz", "wt", encoding="utf-8"
+    ) as fh:
         fh.write(
             json.dumps(
                 {
@@ -2776,8 +3091,16 @@ def test_ldm_contract_drift_reads_gzip_pipeline_events(tmp_path, monkeypatch):
                     {
                         "soft_hypothesis_id": "ldm_hypothesis_legacy",
                         "observable_requirements": [
-                            {"field": "entry_score_parent", "op": "eq", "value": "score_watch_recovery"},
-                            {"field": "entry_source_parent", "op": "eq", "value": "entry_source_wait6579"},
+                            {
+                                "field": "entry_score_parent",
+                                "op": "eq",
+                                "value": "score_watch_recovery",
+                            },
+                            {
+                                "field": "entry_source_parent",
+                                "op": "eq",
+                                "value": "entry_source_wait6579",
+                            },
                         ],
                         "runtime_effect": False,
                         "allowed_runtime_apply": False,
@@ -2803,7 +3126,9 @@ def test_ldm_contract_drift_reads_gzip_pipeline_events(tmp_path, monkeypatch):
     assert drift["runtime_matched_event_count"] == 0
 
 
-def test_ldm_refinement_consumption_accepts_derived_contract_drift_recompute(monkeypatch):
+def test_ldm_refinement_consumption_accepts_derived_contract_drift_recompute(
+    monkeypatch,
+):
     monkeypatch.setattr(
         mod,
         "_iter_pipeline_event_fields",
@@ -2856,8 +3181,16 @@ def test_ldm_refinement_consumption_accepts_derived_contract_drift_recompute(mon
                     {
                         "soft_hypothesis_id": "ldm_hypothesis_legacy",
                         "observable_requirements": [
-                            {"field": "entry_score_parent", "op": "eq", "value": "score_watch_recovery"},
-                            {"field": "entry_source_parent", "op": "eq", "value": "entry_source_wait6579"},
+                            {
+                                "field": "entry_score_parent",
+                                "op": "eq",
+                                "value": "score_watch_recovery",
+                            },
+                            {
+                                "field": "entry_source_parent",
+                                "op": "eq",
+                                "value": "entry_source_wait6579",
+                            },
                         ],
                         "runtime_effect": False,
                         "allowed_runtime_apply": False,
@@ -2885,8 +3218,12 @@ def test_ldm_refinement_consumption_accepts_derived_contract_drift_recompute(mon
     assert status["derived_contract_drift_recompute_consumed"] is True
 
 
-def test_ldm_refinement_consumption_keeps_noop_pass_without_hypothesis_candidate(monkeypatch):
-    monkeypatch.setattr(mod, "_iter_pipeline_event_fields", lambda target_date: iter([]))
+def test_ldm_refinement_consumption_keeps_noop_pass_without_hypothesis_candidate(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        mod, "_iter_pipeline_event_fields", lambda target_date: iter([])
+    )
 
     status = mod._ldm_refinement_consumption_status(
         {"refinement_inputs": []},
@@ -2900,7 +3237,11 @@ def test_ldm_refinement_consumption_keeps_noop_pass_without_hypothesis_candidate
                     {
                         "soft_hypothesis_id": "ldm_hypothesis_no_candidate",
                         "observable_requirements": [
-                            {"field": "entry_score_parent", "op": "eq", "value": "score_watch_recovery"},
+                            {
+                                "field": "entry_score_parent",
+                                "op": "eq",
+                                "value": "score_watch_recovery",
+                            },
                         ],
                         "runtime_effect": False,
                         "allowed_runtime_apply": False,
@@ -2969,7 +3310,9 @@ def test_ldm_refinement_consumption_ignores_stale_artifact_when_stage_disabled()
 
     assert status["status"] == "disabled"
     assert status["missing"] == []
-    assert status["disabled_reason"] == "ldm_hypothesis_parent_refinement_stage_disabled"
+    assert (
+        status["disabled_reason"] == "ldm_hypothesis_parent_refinement_stage_disabled"
+    )
 
 
 def test_ldm_refinement_consumption_warns_for_all_needs_more_sample_with_reason():
@@ -3160,7 +3503,9 @@ def test_postclose_markdown_surfaces_ldm_and_active_priority_diagnosis():
                 "status": "fail",
                 "active_seed_ids": ["active_seed_bad"],
                 "observed_seed_ids": [],
-                "missing": ["active_sim_priority_seed_observable_prefix_forbidden_dimension"],
+                "missing": [
+                    "active_sim_priority_seed_observable_prefix_forbidden_dimension"
+                ],
                 "warnings": [],
                 "active_priority_match_absence_diagnosis": {
                     "diagnosis": "posterior_dimension_leaked_into_priority",
@@ -3174,7 +3519,10 @@ def test_postclose_markdown_surfaces_ldm_and_active_priority_diagnosis():
 
     assert "runtime_authority_violation_input_ids: `['ref_auth']`" in markdown
     assert "## Active Sim Priority Handoff" in markdown
-    assert "match_absence_diagnosis: `posterior_dimension_leaked_into_priority`" in markdown
+    assert (
+        "match_absence_diagnosis: `posterior_dimension_leaked_into_priority`"
+        in markdown
+    )
 
 
 def test_swing_entry_bottleneck_handoff_fails_when_downstream_missing():
@@ -3191,7 +3539,10 @@ def test_swing_entry_bottleneck_handoff_fails_when_downstream_missing():
     assert report["status"] == "fail"
     assert report["swing_entry_bottleneck_critical"] is True
     assert "swing_entry_bottleneck_handoff_missing" in report["missing"]
-    assert "order_swing_entry_bottleneck_auto_resolution" in report["missing_workorder_order_ids"]
+    assert (
+        "order_swing_entry_bottleneck_auto_resolution"
+        in report["missing_workorder_order_ids"]
+    )
 
 
 def test_swing_entry_bottleneck_handoff_passes_when_surfaced():
@@ -3203,7 +3554,9 @@ def test_swing_entry_bottleneck_handoff_passes_when_surfaced():
         },
     }
     discovery = {
-        "surfaced_candidate_ids": ["swing_entry_bottleneck_swing_entry_drought_critical"],
+        "surfaced_candidate_ids": [
+            "swing_entry_bottleneck_swing_entry_drought_critical"
+        ],
     }
     ev_report = {
         "swing_lifecycle_decision_matrix": {
@@ -3217,9 +3570,13 @@ def test_swing_entry_bottleneck_handoff_passes_when_surfaced():
         },
         "swing_lifecycle_bucket_discovery": discovery,
     }
-    workorder = {"orders": [{"order_id": "order_swing_entry_bottleneck_auto_resolution"}]}
+    workorder = {
+        "orders": [{"order_id": "order_swing_entry_bottleneck_auto_resolution"}]
+    }
 
-    report = mod._swing_lifecycle_handoff_status(matrix, discovery, ev_report, runtime_summary, workorder)
+    report = mod._swing_lifecycle_handoff_status(
+        matrix, discovery, ev_report, runtime_summary, workorder
+    )
 
     assert report["status"] == "pass"
     assert report["missing"] == []
@@ -3254,7 +3611,9 @@ def test_swing_parent_flow_handoff_passes_when_ev_and_runtime_include_candidate(
         "swing_lifecycle_bucket_discovery": discovery,
     }
 
-    report = mod._swing_lifecycle_handoff_status(matrix, discovery, ev_report, runtime_summary, {"orders": []})
+    report = mod._swing_lifecycle_handoff_status(
+        matrix, discovery, ev_report, runtime_summary, {"orders": []}
+    )
 
     assert report["status"] == "pass"
     assert report["missing"] == []
@@ -3297,12 +3656,17 @@ def test_swing_lifecycle_handoff_ignores_discovery_source_only_extras_for_requir
         },
     }
 
-    report = mod._swing_lifecycle_handoff_status(matrix, discovery, ev_report, runtime_summary, {"orders": []})
+    report = mod._swing_lifecycle_handoff_status(
+        matrix, discovery, ev_report, runtime_summary, {"orders": []}
+    )
 
     assert report["status"] == "warning"
     assert report["missing"] == []
     assert report["expected_candidate_ids"] == ["swing_ldm_lifecycle_flow_combo_parent"]
-    assert "swing_lifecycle_bucket_discovery:ai_two_pass_review_missing_fail_closed" in report["warnings"]
+    assert (
+        "swing_lifecycle_bucket_discovery:ai_two_pass_review_missing_fail_closed"
+        in report["warnings"]
+    )
 
 
 def test_swing_lifecycle_handoff_requires_non_flow_matrix_approval_candidate():
@@ -3333,11 +3697,15 @@ def test_swing_lifecycle_handoff_requires_non_flow_matrix_approval_candidate():
         },
     }
 
-    report = mod._swing_lifecycle_handoff_status(matrix, discovery, ev_report, runtime_summary, {"orders": []})
+    report = mod._swing_lifecycle_handoff_status(
+        matrix, discovery, ev_report, runtime_summary, {"orders": []}
+    )
 
     assert report["status"] == "pass"
     assert report["missing"] == []
-    assert report["required_matrix_candidate_ids"] == ["swing_ldm_entry_policy_candidate"]
+    assert report["required_matrix_candidate_ids"] == [
+        "swing_ldm_entry_policy_candidate"
+    ]
     assert report["expected_candidate_ids"] == ["swing_ldm_entry_policy_candidate"]
 
 
@@ -3370,11 +3738,18 @@ def test_swing_lifecycle_handoff_fails_when_matrix_candidate_missing_from_discov
         "swing_lifecycle_bucket_discovery": discovery,
     }
 
-    report = mod._swing_lifecycle_handoff_status(matrix, discovery, ev_report, runtime_summary, {"orders": []})
+    report = mod._swing_lifecycle_handoff_status(
+        matrix, discovery, ev_report, runtime_summary, {"orders": []}
+    )
 
     assert report["status"] == "fail"
-    assert "swing_lifecycle_matrix_to_discovery_candidate_handoff_missing" in report["missing"]
-    assert report["missing_matrix_to_discovery_candidate_ids"] == ["swing_ldm_lifecycle_flow_combo_parent"]
+    assert (
+        "swing_lifecycle_matrix_to_discovery_candidate_handoff_missing"
+        in report["missing"]
+    )
+    assert report["missing_matrix_to_discovery_candidate_ids"] == [
+        "swing_ldm_lifecycle_flow_combo_parent"
+    ]
 
 
 def test_swing_lifecycle_handoff_warns_on_ai_two_pass_missing():
@@ -3395,14 +3770,19 @@ def test_swing_lifecycle_handoff_warns_on_ai_two_pass_missing():
         "warnings": ["ai_two_pass_review_missing_fail_closed"],
     }
 
-    report = mod._swing_lifecycle_handoff_status(matrix, discovery, {}, {}, {"orders": []})
+    report = mod._swing_lifecycle_handoff_status(
+        matrix, discovery, {}, {}, {"orders": []}
+    )
 
     assert report["status"] == "warning"
     assert report["missing"] == []
     assert report["ai_two_pass_review_status"] == "missing"
     assert report["ai_review_blocker_state"] == "provider_disabled"
     assert report["pre_review_sim_auto_candidate_count"] == 1
-    assert "swing_lifecycle_bucket_discovery:ai_two_pass_review_fail_closed_sim_auto_blocked" in report["warnings"]
+    assert (
+        "swing_lifecycle_bucket_discovery:ai_two_pass_review_fail_closed_sim_auto_blocked"
+        in report["warnings"]
+    )
 
 
 def test_swing_lifecycle_handoff_warns_on_discovery_stage_unknown():
@@ -3412,14 +3792,18 @@ def test_swing_lifecycle_handoff_warns_on_discovery_stage_unknown():
     }
     discovery = {
         "summary": {"ai_two_pass_review_status": "parsed", "ai_fail_closed": False},
-        "surfaced_candidates": [{"candidate_id": "swing:unknown-stage", "bucket_id": "swing:unknown-stage"}],
+        "surfaced_candidates": [
+            {"candidate_id": "swing:unknown-stage", "bucket_id": "swing:unknown-stage"}
+        ],
         "surfaced_candidate_ids": [],
         "warnings": [],
     }
     ev_report = {"swing_lifecycle_bucket_discovery": discovery}
     runtime_summary = {"swing_lifecycle_bucket_discovery": discovery}
 
-    report = mod._swing_lifecycle_handoff_status(matrix, discovery, ev_report, runtime_summary, {"orders": []})
+    report = mod._swing_lifecycle_handoff_status(
+        matrix, discovery, ev_report, runtime_summary, {"orders": []}
+    )
 
     assert report["status"] == "warning"
     assert report["stage_unknown_candidate_ids"] == ["swing:unknown-stage"]
@@ -3443,7 +3827,9 @@ def test_swing_lifecycle_handoff_warns_on_low_ldm_event_coverage():
         "warnings": [],
     }
 
-    report = mod._swing_lifecycle_handoff_status(matrix, discovery, {}, {}, {"orders": []})
+    report = mod._swing_lifecycle_handoff_status(
+        matrix, discovery, {}, {}, {"orders": []}
+    )
 
     assert report["status"] == "warning"
     assert report["raw_swing_event_count"] == 1200
@@ -3470,7 +3856,9 @@ def test_swing_lifecycle_handoff_warns_on_nan_ldm_event_coverage():
         "warnings": [],
     }
 
-    report = mod._swing_lifecycle_handoff_status(matrix, discovery, {}, {}, {"orders": []})
+    report = mod._swing_lifecycle_handoff_status(
+        matrix, discovery, {}, {}, {"orders": []}
+    )
 
     assert report["status"] == "warning"
     assert report["ldm_event_coverage_rate"] == 0.0
@@ -3495,7 +3883,9 @@ def test_swing_lifecycle_handoff_passes_without_ai_warning_when_parsed():
         "warnings": [],
     }
 
-    report = mod._swing_lifecycle_handoff_status(matrix, discovery, {}, {}, {"orders": []})
+    report = mod._swing_lifecycle_handoff_status(
+        matrix, discovery, {}, {}, {"orders": []}
+    )
 
     assert report["status"] == "pass"
     assert report["missing"] == []
@@ -3530,20 +3920,26 @@ def test_consumer_stale_detects_generated_at_ordering():
     assert mod._consumer_stale(source, consumer) is False
 
 
-def test_postclose_verifier_does_not_flag_ev_stale_when_ev_is_newer_than_tail_sources(tmp_path, monkeypatch):
+def test_postclose_verifier_does_not_flag_ev_stale_when_ev_is_newer_than_tail_sources(
+    tmp_path, monkeypatch
+):
     project_root = tmp_path
     report_dir = project_root / "data" / "report"
     log_path = project_root / "logs" / "threshold_cycle_postclose_cron.log"
     (project_root / "logs").mkdir(parents=True)
     (project_root / "docs" / "checklists").mkdir(parents=True)
-    (project_root / "docs" / "checklists" / "2026-05-13-stage2-todo-checklist.md").write_text(
+    (
+        project_root / "docs" / "checklists" / "2026-05-13-stage2-todo-checklist.md"
+    ).write_text(
         "# next\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PROJECT_ROOT", project_root)
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "LOG_PATH", log_path)
-    monkeypatch.setattr(mod, "VERIFY_DIR", report_dir / "threshold_cycle_postclose_verification")
+    monkeypatch.setattr(
+        mod, "VERIFY_DIR", report_dir / "threshold_cycle_postclose_verification"
+    )
     monkeypatch.setattr(mod, "_next_krx_trading_day", lambda target_date: "2026-05-13")
 
     for label, path in mod._artifact_paths("2026-05-12").items():
@@ -3580,15 +3976,41 @@ def test_postclose_verifier_does_not_flag_ev_stale_when_ev_is_newer_than_tail_so
                 }
             )
         elif label == "code_improvement_workorder":
-            payload.update({"generated_at": "2026-05-12T17:59:55+09:00", "generation_id": "g1", "source_hash": "h1", "lineage": {"previous_exists": False}, "orders": []})
-        elif label in {"pattern_lab_currentness_audit", "pattern_lab_ai_review", "producer_gap_discovery", "pattern_lab_propagation_audit"}:
+            payload.update(
+                {
+                    "generated_at": "2026-05-12T17:59:55+09:00",
+                    "generation_id": "g1",
+                    "source_hash": "h1",
+                    "lineage": {"previous_exists": False},
+                    "orders": [],
+                }
+            )
+        elif label in {
+            "pattern_lab_currentness_audit",
+            "pattern_lab_ai_review",
+            "producer_gap_discovery",
+            "pattern_lab_propagation_audit",
+        }:
             payload["generated_at"] = "2026-05-12T17:59:50+09:00"
         elif label in {"lifecycle_decision_matrix", "lifecycle_bucket_discovery"}:
             payload["summary"] = {"status": "pass"}
         elif label == "runtime_apply_gap_audit":
-            payload.update({"status": "pass", "summary": {"critical_failure_count": 0, "ai_review_retry_pending": False}})
+            payload.update(
+                {
+                    "status": "pass",
+                    "summary": {
+                        "critical_failure_count": 0,
+                        "ai_review_retry_pending": False,
+                    },
+                }
+            )
         elif label == "swing_strategy_discovery_sim":
-            payload.update({"source_quality": {"bottom_rebound_source": {"status": "disabled"}}, "persist_summary": {}})
+            payload.update(
+                {
+                    "source_quality": {"bottom_rebound_source": {"status": "disabled"}},
+                    "persist_summary": {},
+                }
+            )
         path.write_text(json.dumps(payload), encoding="utf-8")
     log_path.write_text(
         "[START] threshold-cycle postclose target_date=2026-05-12 started_at=2026-05-12T17:00:00+0900\n"
@@ -3606,20 +4028,26 @@ def test_postclose_verifier_does_not_flag_ev_stale_when_ev_is_newer_than_tail_so
     assert report["stale_downstream_links"] == []
 
 
-def test_postclose_verifier_warns_when_ev_runtime_stale_before_ldm_sources(tmp_path, monkeypatch):
+def test_postclose_verifier_warns_when_ev_runtime_stale_before_ldm_sources(
+    tmp_path, monkeypatch
+):
     project_root = tmp_path
     report_dir = project_root / "data" / "report"
     log_path = project_root / "logs" / "threshold_cycle_postclose_cron.log"
     (project_root / "logs").mkdir(parents=True)
     (project_root / "docs" / "checklists").mkdir(parents=True)
-    (project_root / "docs" / "checklists" / "2026-05-13-stage2-todo-checklist.md").write_text(
+    (
+        project_root / "docs" / "checklists" / "2026-05-13-stage2-todo-checklist.md"
+    ).write_text(
         "# next\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PROJECT_ROOT", project_root)
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "LOG_PATH", log_path)
-    monkeypatch.setattr(mod, "VERIFY_DIR", report_dir / "threshold_cycle_postclose_verification")
+    monkeypatch.setattr(
+        mod, "VERIFY_DIR", report_dir / "threshold_cycle_postclose_verification"
+    )
     monkeypatch.setattr(mod, "_next_krx_trading_day", lambda target_date: "2026-05-13")
 
     for label, path in mod._artifact_paths("2026-05-12").items():
@@ -3664,11 +4092,31 @@ def test_postclose_verifier_warns_when_ev_runtime_stale_before_ldm_sources(tmp_p
             payload["allowed_runtime_apply"] = False
             payload["summary"] = {"status": "pass"}
         elif label == "runtime_apply_gap_audit":
-            payload.update({"status": "pass", "summary": {"critical_failure_count": 0, "ai_review_retry_pending": False}})
+            payload.update(
+                {
+                    "status": "pass",
+                    "summary": {
+                        "critical_failure_count": 0,
+                        "ai_review_retry_pending": False,
+                    },
+                }
+            )
         elif label == "code_improvement_workorder":
-            payload.update({"generation_id": "g1", "source_hash": "h1", "lineage": {"previous_exists": False}, "orders": []})
+            payload.update(
+                {
+                    "generation_id": "g1",
+                    "source_hash": "h1",
+                    "lineage": {"previous_exists": False},
+                    "orders": [],
+                }
+            )
         elif label == "swing_strategy_discovery_sim":
-            payload.update({"source_quality": {"bottom_rebound_source": {"status": "disabled"}}, "persist_summary": {}})
+            payload.update(
+                {
+                    "source_quality": {"bottom_rebound_source": {"status": "disabled"}},
+                    "persist_summary": {},
+                }
+            )
         path.write_text(json.dumps(payload), encoding="utf-8")
     log_path.write_text(
         "[START] threshold-cycle postclose target_date=2026-05-12 started_at=2026-05-12T17:00:00+0900\n"
@@ -3684,8 +4132,14 @@ def test_postclose_verifier_warns_when_ev_runtime_stale_before_ldm_sources(tmp_p
 
     report = mod.build_threshold_cycle_postclose_verification("2026-05-12")
 
-    assert "threshold_cycle_ev_stale_before_swing_lifecycle_decision_matrix" in report["source_generation_warnings"]
-    assert "runtime_approval_summary_stale_before_lifecycle_bucket_discovery" in report["handoff_warnings"]
+    assert (
+        "threshold_cycle_ev_stale_before_swing_lifecycle_decision_matrix"
+        in report["source_generation_warnings"]
+    )
+    assert (
+        "runtime_approval_summary_stale_before_lifecycle_bucket_discovery"
+        in report["handoff_warnings"]
+    )
     assert report["stale_downstream_links"] == []
 
 
@@ -3696,19 +4150,36 @@ def _write_adm_artifact(report_dir: Path, target_date: str = "2026-05-12") -> Pa
         / f"scalp_entry_action_decision_matrix_{target_date}.json"
     )
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"report_type": "scalp_entry_action_decision_matrix"}), encoding="utf-8")
+    path.write_text(
+        json.dumps({"report_type": "scalp_entry_action_decision_matrix"}),
+        encoding="utf-8",
+    )
     return path
 
 
-def _write_lifecycle_artifact(report_dir: Path, target_date: str = "2026-05-12") -> Path:
-    path = report_dir / "lifecycle_decision_matrix" / f"lifecycle_decision_matrix_{target_date}.json"
+def _write_lifecycle_artifact(
+    report_dir: Path, target_date: str = "2026-05-12"
+) -> Path:
+    path = (
+        report_dir
+        / "lifecycle_decision_matrix"
+        / f"lifecycle_decision_matrix_{target_date}.json"
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"report_type": "lifecycle_decision_matrix"}), encoding="utf-8")
+    path.write_text(
+        json.dumps({"report_type": "lifecycle_decision_matrix"}), encoding="utf-8"
+    )
     return path
 
 
-def _write_swing_discovery_sim_artifact(report_dir: Path, target_date: str = "2026-05-12") -> Path:
-    path = report_dir / "swing_strategy_discovery_sim" / f"swing_strategy_discovery_sim_{target_date}.json"
+def _write_swing_discovery_sim_artifact(
+    report_dir: Path, target_date: str = "2026-05-12"
+) -> Path:
+    path = (
+        report_dir
+        / "swing_strategy_discovery_sim"
+        / f"swing_strategy_discovery_sim_{target_date}.json"
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
@@ -3727,7 +4198,9 @@ def _write_swing_discovery_sim_artifact(report_dir: Path, target_date: str = "20
     return path
 
 
-def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(tmp_path, monkeypatch):
+def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
+    tmp_path, monkeypatch
+):
     project_root = tmp_path
     report_dir = project_root / "data" / "report"
     (project_root / "logs").mkdir(parents=True)
@@ -3759,18 +4232,26 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
         encoding="utf-8",
     )
 
-    (report_dir / "threshold_cycle_ev" / "threshold_cycle_ev_2026-05-12.json").write_text(
+    (
+        report_dir / "threshold_cycle_ev" / "threshold_cycle_ev_2026-05-12.json"
+    ).write_text(
         json.dumps(
             {
                 "sources": {
                     "code_improvement_workorder": str(
-                        report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-05-12.json"
+                        report_dir
+                        / "code_improvement_workorder"
+                        / "code_improvement_workorder_2026-05-12.json"
                     ),
                     "pattern_lab_currentness_audit": str(
-                        report_dir / "pattern_lab_currentness_audit" / "pattern_lab_currentness_audit_2026-05-12.json"
+                        report_dir
+                        / "pattern_lab_currentness_audit"
+                        / "pattern_lab_currentness_audit_2026-05-12.json"
                     ),
                     "pattern_lab_propagation_audit": str(
-                        report_dir / "pattern_lab_propagation_audit" / "pattern_lab_propagation_audit_2026-05-12.json"
+                        report_dir
+                        / "pattern_lab_propagation_audit"
+                        / "pattern_lab_propagation_audit_2026-05-12.json"
                     ),
                     "scalp_entry_action_decision_matrix": str(adm_path),
                     "lifecycle_decision_matrix": str(lifecycle_path),
@@ -3779,7 +4260,11 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
         ),
         encoding="utf-8",
     )
-    (report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-05-12.json").write_text(
+    (
+        report_dir
+        / "code_improvement_workorder"
+        / "code_improvement_workorder_2026-05-12.json"
+    ).write_text(
         json.dumps(
             {
                 "generation_id": "2026-05-12-newhash",
@@ -3791,7 +4276,10 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
                     "repeat_unresolved_structural_blocker_count": 1,
                     "repeat_unresolved_structural_blocker_order_ids": ["order_new"],
                     "selected_terminal_non_implement_longstanding_count": 2,
-                    "selected_terminal_non_implement_longstanding_order_ids": ["order_old_a", "order_old_b"],
+                    "selected_terminal_non_implement_longstanding_order_ids": [
+                        "order_old_a",
+                        "order_old_b",
+                    ],
                 },
                 "lineage": {
                     "previous_exists": True,
@@ -3805,13 +4293,23 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
         ),
         encoding="utf-8",
     )
-    (report_dir / "runtime_approval_summary" / "runtime_approval_summary_2026-05-12.json").write_text(
+    (
+        report_dir
+        / "runtime_approval_summary"
+        / "runtime_approval_summary_2026-05-12.json"
+    ).write_text(
         json.dumps(
             {
                 "sources": {
-                    "threshold_cycle_ev": str(report_dir / "threshold_cycle_ev" / "threshold_cycle_ev_2026-05-12.json"),
+                    "threshold_cycle_ev": str(
+                        report_dir
+                        / "threshold_cycle_ev"
+                        / "threshold_cycle_ev_2026-05-12.json"
+                    ),
                     "pattern_lab_propagation_audit": str(
-                        report_dir / "pattern_lab_propagation_audit" / "pattern_lab_propagation_audit_2026-05-12.json"
+                        report_dir
+                        / "pattern_lab_propagation_audit"
+                        / "pattern_lab_propagation_audit_2026-05-12.json"
                     ),
                     "scalp_entry_action_decision_matrix": str(adm_path),
                     "lifecycle_decision_matrix": str(lifecycle_path),
@@ -3820,19 +4318,31 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
         ),
         encoding="utf-8",
     )
-    (report_dir / "pattern_lab_currentness_audit" / "pattern_lab_currentness_audit_2026-05-12.json").write_text(
+    (
+        report_dir
+        / "pattern_lab_currentness_audit"
+        / "pattern_lab_currentness_audit_2026-05-12.json"
+    ).write_text(
         json.dumps({"report_type": "pattern_lab_currentness_audit"}),
         encoding="utf-8",
     )
-    (report_dir / "pattern_lab_propagation_audit" / "pattern_lab_propagation_audit_2026-05-12.json").write_text(
+    (
+        report_dir
+        / "pattern_lab_propagation_audit"
+        / "pattern_lab_propagation_audit_2026-05-12.json"
+    ).write_text(
         json.dumps({"report_type": "pattern_lab_propagation_audit"}),
         encoding="utf-8",
     )
-    (report_dir / "market_panic_breadth" / "market_panic_breadth_2026-05-12.json").write_text(
+    (
+        report_dir / "market_panic_breadth" / "market_panic_breadth_2026-05-12.json"
+    ).write_text(
         json.dumps({"report_type": "market_panic_breadth"}),
         encoding="utf-8",
     )
-    (report_dir / "panic_sell_defense" / "panic_sell_defense_2026-05-12.json").write_text(
+    (
+        report_dir / "panic_sell_defense" / "panic_sell_defense_2026-05-12.json"
+    ).write_text(
         json.dumps({"report_type": "panic_sell_defense"}),
         encoding="utf-8",
     )
@@ -3840,18 +4350,26 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
         json.dumps({"report_type": "panic_buying"}),
         encoding="utf-8",
     )
-    (report_dir / "swing_daily_simulation" / "swing_daily_simulation_2026-05-12.json").write_text("{}", encoding="utf-8")
-    (report_dir / "swing_lifecycle_audit" / "swing_lifecycle_audit_2026-05-12.json").write_text("{}", encoding="utf-8")
+    (
+        report_dir / "swing_daily_simulation" / "swing_daily_simulation_2026-05-12.json"
+    ).write_text("{}", encoding="utf-8")
+    (
+        report_dir / "swing_lifecycle_audit" / "swing_lifecycle_audit_2026-05-12.json"
+    ).write_text("{}", encoding="utf-8")
     _write_swing_discovery_sim_artifact(report_dir)
     (project_root / "docs" / "checklists").mkdir(parents=True)
-    (project_root / "docs" / "checklists" / "2026-05-13-stage2-todo-checklist.md").write_text(
+    (
+        project_root / "docs" / "checklists" / "2026-05-13-stage2-todo-checklist.md"
+    ).write_text(
         "# next\n",
         encoding="utf-8",
     )
 
     monkeypatch.setattr(mod, "PROJECT_ROOT", project_root)
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
-    monkeypatch.setattr(mod, "VERIFY_DIR", report_dir / "threshold_cycle_postclose_verification")
+    monkeypatch.setattr(
+        mod, "VERIFY_DIR", report_dir / "threshold_cycle_postclose_verification"
+    )
     monkeypatch.setattr(mod, "LOG_PATH", log_path)
     monkeypatch.setattr(mod, "_next_krx_trading_day", lambda target_date: "2026-05-13")
 
@@ -3861,14 +4379,21 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
     assert report["predecessor_integrity"]["wait_count"] == 0
     assert report["workorder_snapshot"]["status"] == "source_changed_with_lineage"
     assert report["workorder_snapshot"]["new_order_ids"] == ["order_new"]
-    assert report["workorder_snapshot"]["repeat_unresolved_structural_blocker_count"] == 1
-    assert report["workorder_snapshot"]["selected_terminal_non_implement_longstanding_count"] == 2
+    assert (
+        report["workorder_snapshot"]["repeat_unresolved_structural_blocker_count"] == 1
+    )
+    assert (
+        report["workorder_snapshot"][
+            "selected_terminal_non_implement_longstanding_count"
+        ]
+        == 2
+    )
     assert report["downstream_links"]["runtime_approval_summary_sources_ev"].endswith(
         "threshold_cycle_ev_2026-05-12.json"
     )
-    assert report["downstream_links"]["threshold_cycle_ev_sources_pattern_lab_currentness_audit"].endswith(
-        "pattern_lab_currentness_audit_2026-05-12.json"
-    )
+    assert report["downstream_links"][
+        "threshold_cycle_ev_sources_pattern_lab_currentness_audit"
+    ].endswith("pattern_lab_currentness_audit_2026-05-12.json")
     artifact_labels = {item["label"] for item in report["artifact_status"]}
     assert {
         "market_panic_breadth",
@@ -3896,13 +4421,23 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
     assert pending_report["status"] == "pass_with_pending_done_marker"
     assert pending_report["execution_profile"]["status"] == "pending_done_marker"
     assert pending_report["execution_profile"]["pending_done_marker"] is True
-    assert pending_report["predecessor_integrity"]["status"] == "pass_pending_done_marker"
-    assert "postclose_done_marker_missing" not in pending_report["predecessor_integrity"]["log_issues"]
+    assert (
+        pending_report["predecessor_integrity"]["status"] == "pass_pending_done_marker"
+    )
+    assert (
+        "postclose_done_marker_missing"
+        not in pending_report["predecessor_integrity"]["log_issues"]
+    )
 
-    strict_missing_report = mod.build_threshold_cycle_postclose_verification("2026-05-12")
+    strict_missing_report = mod.build_threshold_cycle_postclose_verification(
+        "2026-05-12"
+    )
 
     assert strict_missing_report["status"] == "fail"
-    assert "postclose_done_marker_missing" in strict_missing_report["predecessor_integrity"]["log_issues"]
+    assert (
+        "postclose_done_marker_missing"
+        in strict_missing_report["predecessor_integrity"]["log_issues"]
+    )
 
     log_path.write_text(
         "\n".join(
@@ -3919,10 +4454,16 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
     assert reconciled_report["status"] == "pass"
     assert reconciled_report["execution_profile"]["marker_reconciliation_done"] is True
     assert reconciled_report["execution_profile"]["recovery_done"] is True
-    assert reconciled_report["execution_profile"]["recovery_action"] == "marker_reconciliation"
+    assert (
+        reconciled_report["execution_profile"]["recovery_action"]
+        == "marker_reconciliation"
+    )
     assert reconciled_report["execution_profile"]["required_flags_checked"] is False
     assert reconciled_report["execution_profile"]["missing_required_flags"] == []
-    assert "marker_reconciliation" in reconciled_report["execution_profile"]["interpretation"]
+    assert (
+        "marker_reconciliation"
+        in reconciled_report["execution_profile"]["interpretation"]
+    )
 
     log_path.write_text(
         "\n".join(
@@ -3938,20 +4479,33 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
     tail_repair_report = mod.build_threshold_cycle_postclose_verification("2026-05-12")
 
     assert tail_repair_report["status"] == "pass"
-    assert tail_repair_report["execution_profile"]["marker_reconciliation_done"] is False
+    assert (
+        tail_repair_report["execution_profile"]["marker_reconciliation_done"] is False
+    )
     assert tail_repair_report["execution_profile"]["recovery_done"] is True
-    assert tail_repair_report["execution_profile"]["recovery_action"] == "tail_repair_done_reconciliation"
+    assert (
+        tail_repair_report["execution_profile"]["recovery_action"]
+        == "tail_repair_done_reconciliation"
+    )
     assert tail_repair_report["execution_profile"]["required_flags_checked"] is False
     assert tail_repair_report["execution_profile"]["missing_required_flags"] == []
-    assert "postclose_fail_marker_present" not in tail_repair_report["predecessor_integrity"]["log_issues"]
-    assert "tail_repair_done_reconciliation" in tail_repair_report["execution_profile"]["interpretation"]
+    assert (
+        "postclose_fail_marker_present"
+        not in tail_repair_report["predecessor_integrity"]["log_issues"]
+    )
+    assert (
+        "tail_repair_done_reconciliation"
+        in tail_repair_report["execution_profile"]["interpretation"]
+    )
 
     strict_report = mod.build_threshold_cycle_postclose_verification("2026-05-12")
 
     assert strict_report["status"] == "pass"
 
 
-def test_build_threshold_cycle_postclose_verification_warns_on_predecessor_wait(tmp_path, monkeypatch):
+def test_build_threshold_cycle_postclose_verification_warns_on_predecessor_wait(
+    tmp_path, monkeypatch
+):
     project_root = tmp_path
     report_dir = project_root / "data" / "report"
     (project_root / "logs").mkdir(parents=True)
@@ -3997,13 +4551,27 @@ def test_build_threshold_cycle_postclose_verification_warns_on_predecessor_wait(
     ):
         path = report_dir / rel
         path.write_text("{}", encoding="utf-8")
-    (report_dir / "threshold_cycle_ev" / "threshold_cycle_ev_2026-05-12.json").write_text(
+    (
+        report_dir / "threshold_cycle_ev" / "threshold_cycle_ev_2026-05-12.json"
+    ).write_text(
         json.dumps(
             {
                 "sources": {
-                    "code_improvement_workorder": str(report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-05-12.json"),
-                    "pattern_lab_currentness_audit": str(report_dir / "pattern_lab_currentness_audit" / "pattern_lab_currentness_audit_2026-05-12.json"),
-                    "pattern_lab_propagation_audit": str(report_dir / "pattern_lab_propagation_audit" / "pattern_lab_propagation_audit_2026-05-12.json"),
+                    "code_improvement_workorder": str(
+                        report_dir
+                        / "code_improvement_workorder"
+                        / "code_improvement_workorder_2026-05-12.json"
+                    ),
+                    "pattern_lab_currentness_audit": str(
+                        report_dir
+                        / "pattern_lab_currentness_audit"
+                        / "pattern_lab_currentness_audit_2026-05-12.json"
+                    ),
+                    "pattern_lab_propagation_audit": str(
+                        report_dir
+                        / "pattern_lab_propagation_audit"
+                        / "pattern_lab_propagation_audit_2026-05-12.json"
+                    ),
                     "scalp_entry_action_decision_matrix": str(adm_path),
                     "lifecycle_decision_matrix": str(lifecycle_path),
                 }
@@ -4011,7 +4579,11 @@ def test_build_threshold_cycle_postclose_verification_warns_on_predecessor_wait(
         ),
         encoding="utf-8",
     )
-    (report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-05-12.json").write_text(
+    (
+        report_dir
+        / "code_improvement_workorder"
+        / "code_improvement_workorder_2026-05-12.json"
+    ).write_text(
         json.dumps(
             {
                 "generation_id": "2026-05-12-source",
@@ -4021,12 +4593,24 @@ def test_build_threshold_cycle_postclose_verification_warns_on_predecessor_wait(
         ),
         encoding="utf-8",
     )
-    (report_dir / "runtime_approval_summary" / "runtime_approval_summary_2026-05-12.json").write_text(
+    (
+        report_dir
+        / "runtime_approval_summary"
+        / "runtime_approval_summary_2026-05-12.json"
+    ).write_text(
         json.dumps(
             {
                 "sources": {
-                    "threshold_cycle_ev": str(report_dir / "threshold_cycle_ev" / "threshold_cycle_ev_2026-05-12.json"),
-                    "pattern_lab_propagation_audit": str(report_dir / "pattern_lab_propagation_audit" / "pattern_lab_propagation_audit_2026-05-12.json"),
+                    "threshold_cycle_ev": str(
+                        report_dir
+                        / "threshold_cycle_ev"
+                        / "threshold_cycle_ev_2026-05-12.json"
+                    ),
+                    "pattern_lab_propagation_audit": str(
+                        report_dir
+                        / "pattern_lab_propagation_audit"
+                        / "pattern_lab_propagation_audit_2026-05-12.json"
+                    ),
                     "scalp_entry_action_decision_matrix": str(adm_path),
                     "lifecycle_decision_matrix": str(lifecycle_path),
                 }
@@ -4035,14 +4619,18 @@ def test_build_threshold_cycle_postclose_verification_warns_on_predecessor_wait(
         encoding="utf-8",
     )
     (project_root / "docs" / "checklists").mkdir(parents=True)
-    (project_root / "docs" / "checklists" / "2026-05-13-stage2-todo-checklist.md").write_text(
+    (
+        project_root / "docs" / "checklists" / "2026-05-13-stage2-todo-checklist.md"
+    ).write_text(
         "# next\n",
         encoding="utf-8",
     )
 
     monkeypatch.setattr(mod, "PROJECT_ROOT", project_root)
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
-    monkeypatch.setattr(mod, "VERIFY_DIR", report_dir / "threshold_cycle_postclose_verification")
+    monkeypatch.setattr(
+        mod, "VERIFY_DIR", report_dir / "threshold_cycle_postclose_verification"
+    )
     monkeypatch.setattr(mod, "LOG_PATH", log_path)
     monkeypatch.setattr(mod, "_next_krx_trading_day", lambda target_date: "2026-05-13")
 
@@ -4051,18 +4639,29 @@ def test_build_threshold_cycle_postclose_verification_warns_on_predecessor_wait(
     assert report["status"] == "warning"
     assert report["predecessor_integrity"]["wait_count"] == 1
 
-    (report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-05-12.json").write_text(
+    (
+        report_dir
+        / "code_improvement_workorder"
+        / "code_improvement_workorder_2026-05-12.json"
+    ).write_text(
         "{}",
         encoding="utf-8",
     )
 
-    missing_snapshot_report = mod.build_threshold_cycle_postclose_verification("2026-05-12")
+    missing_snapshot_report = mod.build_threshold_cycle_postclose_verification(
+        "2026-05-12"
+    )
 
     assert missing_snapshot_report["status"] == "fail"
-    assert missing_snapshot_report["workorder_snapshot"]["status"] == "missing_snapshot_identity"
+    assert (
+        missing_snapshot_report["workorder_snapshot"]["status"]
+        == "missing_snapshot_identity"
+    )
 
 
-def test_build_threshold_cycle_postclose_verification_warns_on_recovery_profile(tmp_path, monkeypatch):
+def test_build_threshold_cycle_postclose_verification_warns_on_recovery_profile(
+    tmp_path, monkeypatch
+):
     project_root = tmp_path
     report_dir = project_root / "data" / "report"
     (project_root / "logs").mkdir(parents=True)
@@ -4105,14 +4704,24 @@ def test_build_threshold_cycle_postclose_verification_warns_on_recovery_profile(
         "swing_lifecycle_audit/swing_lifecycle_audit_2026-05-12.json",
     ):
         (report_dir / rel).write_text(
-            json.dumps({"generation_id": "g", "source_hash": "h"} if "code_improvement" in rel else {}),
+            json.dumps(
+                {"generation_id": "g", "source_hash": "h"}
+                if "code_improvement" in rel
+                else {}
+            ),
             encoding="utf-8",
         )
-    (report_dir / "threshold_cycle_ev" / "threshold_cycle_ev_2026-05-12.json").write_text(
+    (
+        report_dir / "threshold_cycle_ev" / "threshold_cycle_ev_2026-05-12.json"
+    ).write_text(
         json.dumps(
             {
                 "sources": {
-                    "code_improvement_workorder": str(report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-05-12.json"),
+                    "code_improvement_workorder": str(
+                        report_dir
+                        / "code_improvement_workorder"
+                        / "code_improvement_workorder_2026-05-12.json"
+                    ),
                     "scalp_entry_action_decision_matrix": str(
                         report_dir
                         / "scalp_entry_action_decision_matrix"
@@ -4123,11 +4732,19 @@ def test_build_threshold_cycle_postclose_verification_warns_on_recovery_profile(
         ),
         encoding="utf-8",
     )
-    (report_dir / "runtime_approval_summary" / "runtime_approval_summary_2026-05-12.json").write_text(
+    (
+        report_dir
+        / "runtime_approval_summary"
+        / "runtime_approval_summary_2026-05-12.json"
+    ).write_text(
         json.dumps(
             {
                 "sources": {
-                    "threshold_cycle_ev": str(report_dir / "threshold_cycle_ev" / "threshold_cycle_ev_2026-05-12.json"),
+                    "threshold_cycle_ev": str(
+                        report_dir
+                        / "threshold_cycle_ev"
+                        / "threshold_cycle_ev_2026-05-12.json"
+                    ),
                     "scalp_entry_action_decision_matrix": str(
                         report_dir
                         / "scalp_entry_action_decision_matrix"
@@ -4138,14 +4755,18 @@ def test_build_threshold_cycle_postclose_verification_warns_on_recovery_profile(
         ),
         encoding="utf-8",
     )
-    (project_root / "docs" / "checklists" / "2026-05-13-stage2-todo-checklist.md").write_text(
+    (
+        project_root / "docs" / "checklists" / "2026-05-13-stage2-todo-checklist.md"
+    ).write_text(
         "# next\n",
         encoding="utf-8",
     )
 
     monkeypatch.setattr(mod, "PROJECT_ROOT", project_root)
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
-    monkeypatch.setattr(mod, "VERIFY_DIR", report_dir / "threshold_cycle_postclose_verification")
+    monkeypatch.setattr(
+        mod, "VERIFY_DIR", report_dir / "threshold_cycle_postclose_verification"
+    )
     monkeypatch.setattr(mod, "LOG_PATH", log_path)
     monkeypatch.setattr(mod, "_next_krx_trading_day", lambda target_date: "2026-05-13")
 
@@ -4200,7 +4821,9 @@ def test_build_threshold_cycle_postclose_verification_fails_on_unavailable_ai_co
     )
     ev_path = report_dir / "threshold_cycle_ev" / "threshold_cycle_ev_2026-05-12.json"
     workorder_path = (
-        report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-05-12.json"
+        report_dir
+        / "code_improvement_workorder"
+        / "code_improvement_workorder_2026-05-12.json"
     )
     propagation_path = (
         report_dir
@@ -4230,7 +4853,11 @@ def test_build_threshold_cycle_postclose_verification_fails_on_unavailable_ai_co
         json.dumps({"generation_id": "g", "source_hash": "h", "lineage": {}}),
         encoding="utf-8",
     )
-    (report_dir / "runtime_approval_summary" / "runtime_approval_summary_2026-05-12.json").write_text(
+    (
+        report_dir
+        / "runtime_approval_summary"
+        / "runtime_approval_summary_2026-05-12.json"
+    ).write_text(
         json.dumps(
             {
                 "sources": {
@@ -4249,15 +4876,23 @@ def test_build_threshold_cycle_postclose_verification_fails_on_unavailable_ai_co
         report_dir / "market_panic_breadth" / "market_panic_breadth_2026-05-12.json",
         report_dir / "panic_sell_defense" / "panic_sell_defense_2026-05-12.json",
         report_dir / "panic_buying" / "panic_buying_2026-05-12.json",
-        report_dir / "swing_daily_simulation" / "swing_daily_simulation_2026-05-12.json",
+        report_dir
+        / "swing_daily_simulation"
+        / "swing_daily_simulation_2026-05-12.json",
         report_dir / "swing_lifecycle_audit" / "swing_lifecycle_audit_2026-05-12.json",
     ):
         path.write_text("{}", encoding="utf-8")
-    (project_root / "docs" / "checklists" / "2026-05-13-stage2-todo-checklist.md").write_text(
+    (
+        project_root / "docs" / "checklists" / "2026-05-13-stage2-todo-checklist.md"
+    ).write_text(
         "# next\n",
         encoding="utf-8",
     )
-    (report_dir / "threshold_cycle_ai_review" / "threshold_cycle_ai_review_2026-05-12_postclose.json").write_text(
+    (
+        report_dir
+        / "threshold_cycle_ai_review"
+        / "threshold_cycle_ai_review_2026-05-12_postclose.json"
+    ).write_text(
         json.dumps(
             {
                 "ai_status": "unavailable",
@@ -4289,7 +4924,9 @@ def test_build_threshold_cycle_postclose_verification_fails_on_unavailable_ai_co
 
     monkeypatch.setattr(mod, "PROJECT_ROOT", project_root)
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
-    monkeypatch.setattr(mod, "VERIFY_DIR", report_dir / "threshold_cycle_postclose_verification")
+    monkeypatch.setattr(
+        mod, "VERIFY_DIR", report_dir / "threshold_cycle_postclose_verification"
+    )
     monkeypatch.setattr(mod, "LOG_PATH", log_path)
     monkeypatch.setattr(mod, "_next_krx_trading_day", lambda target_date: "2026-05-13")
 
@@ -4306,7 +4943,9 @@ def test_build_threshold_cycle_postclose_verification_fails_on_unavailable_ai_co
     )
 
 
-def test_build_threshold_cycle_postclose_verification_not_yet_due_before_postclose(tmp_path, monkeypatch):
+def test_build_threshold_cycle_postclose_verification_not_yet_due_before_postclose(
+    tmp_path, monkeypatch
+):
     project_root = tmp_path
     report_dir = project_root / "data" / "report"
     (project_root / "logs").mkdir(parents=True)
@@ -4320,7 +4959,9 @@ def test_build_threshold_cycle_postclose_verification_not_yet_due_before_postclo
 
     monkeypatch.setattr(mod, "PROJECT_ROOT", project_root)
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
-    monkeypatch.setattr(mod, "VERIFY_DIR", report_dir / "threshold_cycle_postclose_verification")
+    monkeypatch.setattr(
+        mod, "VERIFY_DIR", report_dir / "threshold_cycle_postclose_verification"
+    )
     monkeypatch.setattr(mod, "LOG_PATH", log_path)
     monkeypatch.setattr(mod, "_next_krx_trading_day", lambda target_date: "2026-05-13")
     monkeypatch.setattr(mod, "datetime", FakeDateTime)
@@ -4353,17 +4994,28 @@ def test_build_threshold_cycle_postclose_verification_fails_on_ldm_entry_bucket_
         (report_dir / folder).mkdir(parents=True)
     (project_root / "docs" / "checklists").mkdir(parents=True)
     adm_path = _write_adm_artifact(report_dir)
-    lifecycle_path = report_dir / "lifecycle_decision_matrix" / "lifecycle_decision_matrix_2026-05-12.json"
+    lifecycle_path = (
+        report_dir
+        / "lifecycle_decision_matrix"
+        / "lifecycle_decision_matrix_2026-05-12.json"
+    )
     lifecycle_path.parent.mkdir(parents=True, exist_ok=True)
     lifecycle_path.write_text(
         json.dumps(
             {
                 "entry_bucket_attribution": {
                     "runtime_approval_candidates": [
-                        {"candidate_id": "entry_bucket_1", "bucket_type": "score_band", "bucket_key": "score_66_69"}
+                        {
+                            "candidate_id": "entry_bucket_1",
+                            "bucket_type": "score_band",
+                            "bucket_key": "score_66_69",
+                        }
                     ],
                     "code_improvement_workorders": [
-                        {"bucket_type": "liquidity_bucket", "bucket_key": "liquidity_unknown"}
+                        {
+                            "bucket_type": "liquidity_bucket",
+                            "bucket_key": "liquidity_unknown",
+                        }
                     ],
                 }
             }
@@ -4380,10 +5032,22 @@ def test_build_threshold_cycle_postclose_verification_fails_on_ldm_entry_bucket_
         ),
         encoding="utf-8",
     )
-    workorder_path = report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-05-12.json"
+    workorder_path = (
+        report_dir
+        / "code_improvement_workorder"
+        / "code_improvement_workorder_2026-05-12.json"
+    )
     ev_path = report_dir / "threshold_cycle_ev" / "threshold_cycle_ev_2026-05-12.json"
-    propagation_path = report_dir / "pattern_lab_propagation_audit" / "pattern_lab_propagation_audit_2026-05-12.json"
-    currentness_path = report_dir / "pattern_lab_currentness_audit" / "pattern_lab_currentness_audit_2026-05-12.json"
+    propagation_path = (
+        report_dir
+        / "pattern_lab_propagation_audit"
+        / "pattern_lab_propagation_audit_2026-05-12.json"
+    )
+    currentness_path = (
+        report_dir
+        / "pattern_lab_currentness_audit"
+        / "pattern_lab_currentness_audit_2026-05-12.json"
+    )
     ev_path.write_text(
         json.dumps(
             {
@@ -4398,8 +5062,15 @@ def test_build_threshold_cycle_postclose_verification_fails_on_ldm_entry_bucket_
         ),
         encoding="utf-8",
     )
-    workorder_path.write_text(json.dumps({"generation_id": "g", "source_hash": "h", "orders": []}), encoding="utf-8")
-    (report_dir / "runtime_approval_summary" / "runtime_approval_summary_2026-05-12.json").write_text(
+    workorder_path.write_text(
+        json.dumps({"generation_id": "g", "source_hash": "h", "orders": []}),
+        encoding="utf-8",
+    )
+    (
+        report_dir
+        / "runtime_approval_summary"
+        / "runtime_approval_summary_2026-05-12.json"
+    ).write_text(
         json.dumps(
             {
                 "sources": {
@@ -4418,18 +5089,24 @@ def test_build_threshold_cycle_postclose_verification_fails_on_ldm_entry_bucket_
         report_dir / "market_panic_breadth" / "market_panic_breadth_2026-05-12.json",
         report_dir / "panic_sell_defense" / "panic_sell_defense_2026-05-12.json",
         report_dir / "panic_buying" / "panic_buying_2026-05-12.json",
-        report_dir / "swing_daily_simulation" / "swing_daily_simulation_2026-05-12.json",
+        report_dir
+        / "swing_daily_simulation"
+        / "swing_daily_simulation_2026-05-12.json",
         report_dir / "swing_lifecycle_audit" / "swing_lifecycle_audit_2026-05-12.json",
     ):
         path.write_text("{}", encoding="utf-8")
-    (project_root / "docs" / "checklists" / "2026-05-13-stage2-todo-checklist.md").write_text(
+    (
+        project_root / "docs" / "checklists" / "2026-05-13-stage2-todo-checklist.md"
+    ).write_text(
         "# next\n",
         encoding="utf-8",
     )
 
     monkeypatch.setattr(mod, "PROJECT_ROOT", project_root)
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
-    monkeypatch.setattr(mod, "VERIFY_DIR", report_dir / "threshold_cycle_postclose_verification")
+    monkeypatch.setattr(
+        mod, "VERIFY_DIR", report_dir / "threshold_cycle_postclose_verification"
+    )
     monkeypatch.setattr(mod, "LOG_PATH", log_path)
     monkeypatch.setattr(mod, "_next_krx_trading_day", lambda target_date: "2026-05-13")
 
@@ -4437,12 +5114,19 @@ def test_build_threshold_cycle_postclose_verification_fails_on_ldm_entry_bucket_
 
     assert report["status"] == "fail"
     assert report["entry_bucket_handoff"]["status"] == "fail"
-    assert report["entry_bucket_handoff"]["missing_ev_candidate_ids"] == ["entry_bucket_1"]
-    assert report["entry_bucket_handoff"]["missing_runtime_summary_candidate_ids"] == ["entry_bucket_1"]
+    assert report["entry_bucket_handoff"]["missing_ev_candidate_ids"] == [
+        "entry_bucket_1"
+    ]
+    assert report["entry_bucket_handoff"]["missing_runtime_summary_candidate_ids"] == [
+        "entry_bucket_1"
+    ]
     assert report["entry_bucket_handoff"]["missing_workorder_order_ids"] == [
         "order_lifecycle_entry_bucket_liquidity_bucket_liquidity_unknown"
     ]
-    assert "ldm_entry_bucket_handoff_missing" in report["predecessor_integrity"]["log_issues"]
+    assert (
+        "ldm_entry_bucket_handoff_missing"
+        in report["predecessor_integrity"]["log_issues"]
+    )
 
 
 def test_build_threshold_cycle_postclose_verification_fails_on_ldm_scale_in_bucket_handoff_drop(
@@ -4466,7 +5150,11 @@ def test_build_threshold_cycle_postclose_verification_fails_on_ldm_scale_in_buck
         (report_dir / folder).mkdir(parents=True)
     (project_root / "docs" / "checklists").mkdir(parents=True)
     adm_path = _write_adm_artifact(report_dir)
-    lifecycle_path = report_dir / "lifecycle_decision_matrix" / "lifecycle_decision_matrix_2026-05-12.json"
+    lifecycle_path = (
+        report_dir
+        / "lifecycle_decision_matrix"
+        / "lifecycle_decision_matrix_2026-05-12.json"
+    )
     lifecycle_path.parent.mkdir(parents=True, exist_ok=True)
     lifecycle_path.write_text(
         json.dumps(
@@ -4474,10 +5162,17 @@ def test_build_threshold_cycle_postclose_verification_fails_on_ldm_scale_in_buck
                 "sources": {"scale_in_attribution": {"rows": 12}},
                 "scale_in_bucket_attribution": {
                     "runtime_approval_candidates": [
-                        {"candidate_id": "scale_in_bucket_1", "bucket_type": "arm", "bucket_key": "PYRAMID"}
+                        {
+                            "candidate_id": "scale_in_bucket_1",
+                            "bucket_type": "arm",
+                            "bucket_key": "PYRAMID",
+                        }
                     ],
                     "code_improvement_workorders": [
-                        {"bucket_type": "blocker_namespace", "bucket_key": "PRICE_GUARD"}
+                        {
+                            "bucket_type": "blocker_namespace",
+                            "bucket_key": "PRICE_GUARD",
+                        }
                     ],
                 },
             }
@@ -4494,10 +5189,22 @@ def test_build_threshold_cycle_postclose_verification_fails_on_ldm_scale_in_buck
         ),
         encoding="utf-8",
     )
-    workorder_path = report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-05-12.json"
+    workorder_path = (
+        report_dir
+        / "code_improvement_workorder"
+        / "code_improvement_workorder_2026-05-12.json"
+    )
     ev_path = report_dir / "threshold_cycle_ev" / "threshold_cycle_ev_2026-05-12.json"
-    propagation_path = report_dir / "pattern_lab_propagation_audit" / "pattern_lab_propagation_audit_2026-05-12.json"
-    currentness_path = report_dir / "pattern_lab_currentness_audit" / "pattern_lab_currentness_audit_2026-05-12.json"
+    propagation_path = (
+        report_dir
+        / "pattern_lab_propagation_audit"
+        / "pattern_lab_propagation_audit_2026-05-12.json"
+    )
+    currentness_path = (
+        report_dir
+        / "pattern_lab_currentness_audit"
+        / "pattern_lab_currentness_audit_2026-05-12.json"
+    )
     ev_path.write_text(
         json.dumps(
             {
@@ -4512,8 +5219,15 @@ def test_build_threshold_cycle_postclose_verification_fails_on_ldm_scale_in_buck
         ),
         encoding="utf-8",
     )
-    workorder_path.write_text(json.dumps({"generation_id": "g", "source_hash": "h", "orders": []}), encoding="utf-8")
-    (report_dir / "runtime_approval_summary" / "runtime_approval_summary_2026-05-12.json").write_text(
+    workorder_path.write_text(
+        json.dumps({"generation_id": "g", "source_hash": "h", "orders": []}),
+        encoding="utf-8",
+    )
+    (
+        report_dir
+        / "runtime_approval_summary"
+        / "runtime_approval_summary_2026-05-12.json"
+    ).write_text(
         json.dumps(
             {
                 "sources": {
@@ -4532,18 +5246,24 @@ def test_build_threshold_cycle_postclose_verification_fails_on_ldm_scale_in_buck
         report_dir / "market_panic_breadth" / "market_panic_breadth_2026-05-12.json",
         report_dir / "panic_sell_defense" / "panic_sell_defense_2026-05-12.json",
         report_dir / "panic_buying" / "panic_buying_2026-05-12.json",
-        report_dir / "swing_daily_simulation" / "swing_daily_simulation_2026-05-12.json",
+        report_dir
+        / "swing_daily_simulation"
+        / "swing_daily_simulation_2026-05-12.json",
         report_dir / "swing_lifecycle_audit" / "swing_lifecycle_audit_2026-05-12.json",
     ):
         path.write_text("{}", encoding="utf-8")
-    (project_root / "docs" / "checklists" / "2026-05-13-stage2-todo-checklist.md").write_text(
+    (
+        project_root / "docs" / "checklists" / "2026-05-13-stage2-todo-checklist.md"
+    ).write_text(
         "# next\n",
         encoding="utf-8",
     )
 
     monkeypatch.setattr(mod, "PROJECT_ROOT", project_root)
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
-    monkeypatch.setattr(mod, "VERIFY_DIR", report_dir / "threshold_cycle_postclose_verification")
+    monkeypatch.setattr(
+        mod, "VERIFY_DIR", report_dir / "threshold_cycle_postclose_verification"
+    )
     monkeypatch.setattr(mod, "LOG_PATH", log_path)
     monkeypatch.setattr(mod, "_next_krx_trading_day", lambda target_date: "2026-05-13")
 
@@ -4551,12 +5271,19 @@ def test_build_threshold_cycle_postclose_verification_fails_on_ldm_scale_in_buck
 
     assert report["status"] == "fail"
     assert report["scale_in_bucket_handoff"]["status"] == "fail"
-    assert report["scale_in_bucket_handoff"]["missing_ev_candidate_ids"] == ["scale_in_bucket_1"]
-    assert report["scale_in_bucket_handoff"]["missing_runtime_summary_candidate_ids"] == ["scale_in_bucket_1"]
+    assert report["scale_in_bucket_handoff"]["missing_ev_candidate_ids"] == [
+        "scale_in_bucket_1"
+    ]
+    assert report["scale_in_bucket_handoff"][
+        "missing_runtime_summary_candidate_ids"
+    ] == ["scale_in_bucket_1"]
     assert report["scale_in_bucket_handoff"]["missing_workorder_order_ids"] == [
         "order_lifecycle_scale_in_bucket_blocker_namespace_price_guard"
     ]
-    assert "ldm_scale_in_bucket_handoff_missing" in report["predecessor_integrity"]["log_issues"]
+    assert (
+        "ldm_scale_in_bucket_handoff_missing"
+        in report["predecessor_integrity"]["log_issues"]
+    )
 
 
 def test_scale_in_policy_contract_passes_with_source_link_and_reopen_trigger():
@@ -4695,10 +5422,19 @@ def test_build_threshold_cycle_postclose_verification_fails_when_scale_in_source
         (report_dir / folder).mkdir(parents=True)
     (project_root / "docs" / "checklists").mkdir(parents=True)
     adm_path = _write_adm_artifact(report_dir)
-    lifecycle_path = report_dir / "lifecycle_decision_matrix" / "lifecycle_decision_matrix_2026-05-12.json"
+    lifecycle_path = (
+        report_dir
+        / "lifecycle_decision_matrix"
+        / "lifecycle_decision_matrix_2026-05-12.json"
+    )
     lifecycle_path.parent.mkdir(parents=True, exist_ok=True)
     lifecycle_path.write_text(
-        json.dumps({"sources": {"scale_in_attribution": {"rows": 3}}, "summary": {"stage_counts": {"scale_in": 3}}}),
+        json.dumps(
+            {
+                "sources": {"scale_in_attribution": {"rows": 3}},
+                "summary": {"stage_counts": {"scale_in": 3}},
+            }
+        ),
         encoding="utf-8",
     )
     log_path = project_root / "logs" / "threshold_cycle_postclose_cron.log"
@@ -4711,10 +5447,22 @@ def test_build_threshold_cycle_postclose_verification_fails_when_scale_in_source
         ),
         encoding="utf-8",
     )
-    workorder_path = report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-05-12.json"
+    workorder_path = (
+        report_dir
+        / "code_improvement_workorder"
+        / "code_improvement_workorder_2026-05-12.json"
+    )
     ev_path = report_dir / "threshold_cycle_ev" / "threshold_cycle_ev_2026-05-12.json"
-    propagation_path = report_dir / "pattern_lab_propagation_audit" / "pattern_lab_propagation_audit_2026-05-12.json"
-    currentness_path = report_dir / "pattern_lab_currentness_audit" / "pattern_lab_currentness_audit_2026-05-12.json"
+    propagation_path = (
+        report_dir
+        / "pattern_lab_propagation_audit"
+        / "pattern_lab_propagation_audit_2026-05-12.json"
+    )
+    currentness_path = (
+        report_dir
+        / "pattern_lab_currentness_audit"
+        / "pattern_lab_currentness_audit_2026-05-12.json"
+    )
     ev_path.write_text(
         json.dumps(
             {
@@ -4729,8 +5477,15 @@ def test_build_threshold_cycle_postclose_verification_fails_when_scale_in_source
         ),
         encoding="utf-8",
     )
-    workorder_path.write_text(json.dumps({"generation_id": "g", "source_hash": "h", "orders": []}), encoding="utf-8")
-    (report_dir / "runtime_approval_summary" / "runtime_approval_summary_2026-05-12.json").write_text(
+    workorder_path.write_text(
+        json.dumps({"generation_id": "g", "source_hash": "h", "orders": []}),
+        encoding="utf-8",
+    )
+    (
+        report_dir
+        / "runtime_approval_summary"
+        / "runtime_approval_summary_2026-05-12.json"
+    ).write_text(
         json.dumps(
             {
                 "sources": {
@@ -4749,18 +5504,24 @@ def test_build_threshold_cycle_postclose_verification_fails_when_scale_in_source
         report_dir / "market_panic_breadth" / "market_panic_breadth_2026-05-12.json",
         report_dir / "panic_sell_defense" / "panic_sell_defense_2026-05-12.json",
         report_dir / "panic_buying" / "panic_buying_2026-05-12.json",
-        report_dir / "swing_daily_simulation" / "swing_daily_simulation_2026-05-12.json",
+        report_dir
+        / "swing_daily_simulation"
+        / "swing_daily_simulation_2026-05-12.json",
         report_dir / "swing_lifecycle_audit" / "swing_lifecycle_audit_2026-05-12.json",
     ):
         path.write_text("{}", encoding="utf-8")
-    (project_root / "docs" / "checklists" / "2026-05-13-stage2-todo-checklist.md").write_text(
+    (
+        project_root / "docs" / "checklists" / "2026-05-13-stage2-todo-checklist.md"
+    ).write_text(
         "# next\n",
         encoding="utf-8",
     )
 
     monkeypatch.setattr(mod, "PROJECT_ROOT", project_root)
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
-    monkeypatch.setattr(mod, "VERIFY_DIR", report_dir / "threshold_cycle_postclose_verification")
+    monkeypatch.setattr(
+        mod, "VERIFY_DIR", report_dir / "threshold_cycle_postclose_verification"
+    )
     monkeypatch.setattr(mod, "LOG_PATH", log_path)
     monkeypatch.setattr(mod, "_next_krx_trading_day", lambda target_date: "2026-05-13")
 
@@ -4769,4 +5530,7 @@ def test_build_threshold_cycle_postclose_verification_fails_when_scale_in_source
     assert report["status"] == "fail"
     assert report["scale_in_source_present"] is True
     assert report["scale_in_bucket_attribution_present"] is False
-    assert "ldm_scale_in_bucket_attribution_missing" in report["predecessor_integrity"]["log_issues"]
+    assert (
+        "ldm_scale_in_bucket_attribution_missing"
+        in report["predecessor_integrity"]["log_issues"]
+    )

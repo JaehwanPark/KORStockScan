@@ -12,6 +12,7 @@ def _install_telebot_stub(monkeypatch):
         def message_handler(self, *args, **kwargs):
             def decorator(func):
                 return func
+
             return decorator
 
         def reply_to(self, *args, **kwargs):
@@ -22,17 +23,22 @@ def _install_telebot_stub(monkeypatch):
 
         def __getattr__(self, name):
             if name.endswith("_handler"):
+
                 def registrar(*args, **kwargs):
                     def decorator(func):
                         return func
+
                     return decorator
+
                 return registrar
             raise AttributeError(name)
 
     telebot_module.TeleBot = DummyTeleBot
     telebot_module.logger = types.SimpleNamespace(setLevel=lambda *args, **kwargs: None)
     telebot_module.types = types.SimpleNamespace(
-        ReplyKeyboardMarkup=lambda *args, **kwargs: types.SimpleNamespace(add=lambda *a, **k: None),
+        ReplyKeyboardMarkup=lambda *args, **kwargs: types.SimpleNamespace(
+            add=lambda *a, **k: None
+        ),
         ChatMemberUpdated=object,
     )
 
@@ -66,13 +72,26 @@ def test_admin_buy_pause_confirm_invokes_guard(monkeypatch):
 
     replies = []
     broadcasts = []
-    monkeypatch.setattr(telegram_manager.bot, "reply_to", lambda *args, **kwargs: replies.append((args, kwargs)))
-    monkeypatch.setattr(telegram_manager.event_bus, "publish", lambda *args, **kwargs: broadcasts.append((args, kwargs)))
-    monkeypatch.setattr(telegram_manager, "get_main_keyboard", lambda chat_id=None: None)
+    monkeypatch.setattr(
+        telegram_manager.bot,
+        "reply_to",
+        lambda *args, **kwargs: replies.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        telegram_manager.event_bus,
+        "publish",
+        lambda *args, **kwargs: broadcasts.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        telegram_manager, "get_main_keyboard", lambda chat_id=None: None
+    )
     monkeypatch.setattr(
         telegram_manager,
         "confirm_buy_pause_guard",
-        lambda guard_id, event_bus=None: {"ok": True, "message": f"confirmed {guard_id}"},
+        lambda guard_id, event_bus=None: {
+            "ok": True,
+            "message": f"confirmed {guard_id}",
+        },
     )
 
     class Chat:
@@ -94,7 +113,11 @@ def test_non_admin_buy_pause_reject_is_rejected(monkeypatch):
     import src.notify.telegram_manager as telegram_manager
 
     replies = []
-    monkeypatch.setattr(telegram_manager.bot, "reply_to", lambda *args, **kwargs: replies.append((args, kwargs)))
+    monkeypatch.setattr(
+        telegram_manager.bot,
+        "reply_to",
+        lambda *args, **kwargs: replies.append((args, kwargs)),
+    )
     monkeypatch.setattr(
         telegram_manager,
         "reject_buy_pause_guard",

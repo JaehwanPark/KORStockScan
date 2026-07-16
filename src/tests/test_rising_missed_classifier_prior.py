@@ -123,16 +123,23 @@ def test_prior_report_merges_daily_rolling_mtd_and_blocks_child_conflict(tmp_pat
     assert wait_prior["window_metrics"]["daily"]["joined_sample"] == 3
     assert wait_prior["window_metrics"]["rolling5d"]["joined_sample"] == 10
     assert wait_prior["window_metrics"]["rolling10d"]["joined_sample"] == 18
-    assert wait_prior["window_metrics"]["mtd"]["ev_metric"] == "equal_weight_avg_profit_pct_fallback"
+    assert (
+        wait_prior["window_metrics"]["mtd"]["ev_metric"]
+        == "equal_weight_avg_profit_pct_fallback"
+    )
 
     conflict_prior = next(
-        row for row in report["priors"] if row["observable_prefix"]["liquidity_bucket"] == "liquidity_high"
+        row
+        for row in report["priors"]
+        if row["observable_prefix"]["liquidity_bucket"] == "liquidity_high"
     )
     assert conflict_prior["recommendation"] == "source_quality_blocked"
     assert conflict_prior["conflict_status"]["child_conflict"] is True
 
     feedback_prior = next(
-        row for row in report["priors"] if row["observable_prefix"]["source_signature"] == "OPEN_TOP,PRICE_JUMP_START"
+        row
+        for row in report["priors"]
+        if row["observable_prefix"]["source_signature"] == "OPEN_TOP,PRICE_JUMP_START"
     )
     assert feedback_prior["recommendation"] == "quality_risk"
     assert feedback_prior["rising_missed_metrics"]["winner_count"] == 1
@@ -142,10 +149,14 @@ def test_prior_report_merges_daily_rolling_mtd_and_blocks_child_conflict(tmp_pat
     loser_prior = next(
         row
         for row in report["priors"]
-        if row["observable_prefix"]["source_signature"] == "OPEN_TOP,PRICE_JUMP_START_LOSS"
+        if row["observable_prefix"]["source_signature"]
+        == "OPEN_TOP,PRICE_JUMP_START_LOSS"
     )
     assert loser_prior["recommendation"] == "loss_filter"
-    assert report["summary"]["counterfactual_status"] == "counterfactual_source_unavailable"
+    assert (
+        report["summary"]["counterfactual_status"]
+        == "counterfactual_source_unavailable"
+    )
     assert report["runtime_effect"] is False
     assert report["allowed_runtime_apply"] is False
 
@@ -181,7 +192,10 @@ def test_write_outputs_renders_prior_report(tmp_path):
     output_md = tmp_path / "prior.md"
     mod.write_outputs(report, output_json=output_json, output_md=output_md)
 
-    assert json.loads(output_json.read_text(encoding="utf-8"))["summary"]["prior_count"] == 1
+    assert (
+        json.loads(output_json.read_text(encoding="utf-8"))["summary"]["prior_count"]
+        == 1
+    )
     markdown = output_md.read_text(encoding="utf-8")
     assert "order_rising_missed_classifier_prior_bridge" in markdown
     assert "runtime_effect: false" in markdown
@@ -213,7 +227,8 @@ def test_prior_report_ingests_missed_entry_counterfactual_when_available(tmp_pat
         source_paths={
             "lifecycle_bucket_discovery_daily": tmp_path / "missing_daily.json",
             "lifecycle_bucket_discovery_rolling5d": tmp_path / "missing_rolling5d.json",
-            "lifecycle_bucket_discovery_rolling10d": tmp_path / "missing_rolling10d.json",
+            "lifecycle_bucket_discovery_rolling10d": tmp_path
+            / "missing_rolling10d.json",
             "lifecycle_bucket_discovery_mtd": tmp_path / "missing_mtd.json",
             "lifecycle_decision_matrix": tmp_path / "missing_ldm.json",
             "key_lineage_ledger": tmp_path / "missing_lineage.json",
@@ -226,7 +241,9 @@ def test_prior_report_ingests_missed_entry_counterfactual_when_available(tmp_pat
     )
 
     prior = next(
-        row for row in report["priors"] if row["observable_prefix"]["source_signature"] == "OPEN_TOP,PRICE_JUMP_START"
+        row
+        for row in report["priors"]
+        if row["observable_prefix"]["source_signature"] == "OPEN_TOP,PRICE_JUMP_START"
     )
     assert report["summary"]["counterfactual_status"] == "available"
     assert report["summary"]["counterfactual_missed_winner_count"] == 2
@@ -234,7 +251,9 @@ def test_prior_report_ingests_missed_entry_counterfactual_when_available(tmp_pat
     assert prior["rising_missed_metrics"]["counterfactual_missed_winner_count"] == 2
     assert prior["rising_missed_metrics"]["counterfactual_avoided_loser_count"] == 1
     assert prior["recommendation"] == "hold_sample"
-    assert prior["reason"] == "counterfactual_missed_winner_waiting_rolling_confirmation"
+    assert (
+        prior["reason"] == "counterfactual_missed_winner_waiting_rolling_confirmation"
+    )
 
 
 def test_counterfactual_rows_do_not_double_count_top_examples(tmp_path):
@@ -263,7 +282,8 @@ def test_counterfactual_rows_do_not_double_count_top_examples(tmp_path):
         source_paths={
             "lifecycle_bucket_discovery_daily": tmp_path / "missing_daily.json",
             "lifecycle_bucket_discovery_rolling5d": tmp_path / "missing_rolling5d.json",
-            "lifecycle_bucket_discovery_rolling10d": tmp_path / "missing_rolling10d.json",
+            "lifecycle_bucket_discovery_rolling10d": tmp_path
+            / "missing_rolling10d.json",
             "lifecycle_bucket_discovery_mtd": tmp_path / "missing_mtd.json",
             "lifecycle_decision_matrix": tmp_path / "missing_ldm.json",
             "key_lineage_ledger": tmp_path / "missing_lineage.json",

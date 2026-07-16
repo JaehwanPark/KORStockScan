@@ -10,7 +10,11 @@ def test_sector_theme_uses_ka90001_stock_theme_membership(tmp_path, monkeypatch)
         target_date="2026-05-20",
         token="token",
         stock_theme_fetcher=lambda token, code: {
-            "thema_grp": [{"thema_grp_cd": "100", "thema_nm": "반도체"}] if code != "000001" else [],
+            "thema_grp": (
+                [{"thema_grp_cd": "100", "thema_nm": "반도체"}]
+                if code != "000001"
+                else []
+            ),
             "return_code": 0,
             "return_msg": "정상적으로 처리되었습니다",
         },
@@ -26,7 +30,9 @@ def test_sector_theme_uses_ka90001_stock_theme_membership(tmp_path, monkeypatch)
     assert (tmp_path / "sector_theme_map_2026-05-20.json").exists()
 
 
-def test_sector_theme_prefers_stock_theme_lookup_for_default_path(tmp_path, monkeypatch):
+def test_sector_theme_prefers_stock_theme_lookup_for_default_path(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(mod, "CACHE_DIR", tmp_path)
     monkeypatch.setattr(mod, "REFERENCE_DIR", tmp_path)
     monkeypatch.setenv("KORSTOCKSCAN_SWING_THEME_KIWOOM_CALL_INTERVAL_SEC", "0")
@@ -57,7 +63,9 @@ def test_sector_theme_prefers_stock_theme_lookup_for_default_path(tmp_path, monk
     assert payload["mapped_code_count"] == 2
     assert calls["stock"] == 2
     assert calls["group"] == 0
-    assert payload["diagnostics"]["kiwoom"]["lookup_mode"] == "stock_theme_groups_ka90001"
+    assert (
+        payload["diagnostics"]["kiwoom"]["lookup_mode"] == "stock_theme_groups_ka90001"
+    )
 
 
 def test_sector_theme_catalog_fallback_does_not_map_membership(tmp_path, monkeypatch):
@@ -84,7 +92,10 @@ def test_sector_theme_catalog_fallback_does_not_map_membership(tmp_path, monkeyp
     )
 
     assert calls == {"groups": 1}
-    assert payload["diagnostics"]["kiwoom"]["lookup_mode"] == "theme_group_catalog_only_ka90001"
+    assert (
+        payload["diagnostics"]["kiwoom"]["lookup_mode"]
+        == "theme_group_catalog_only_ka90001"
+    )
     assert payload["mapped_code_count"] == 0
     assert payload["coverage"] == 0.0
     assert payload["warnings"] == ["manual_sector_missing", "sector_theme_missing"]
@@ -99,7 +110,10 @@ def test_sector_theme_treats_kiwoom_error_as_source_gap(tmp_path, monkeypatch):
         ["005930"],
         target_date="2026-05-20",
         token="token",
-        theme_group_fetcher=lambda token: {"return_code": 1, "return_msg": "잘못된 요청입니다"},
+        theme_group_fetcher=lambda token: {
+            "return_code": 1,
+            "return_msg": "잘못된 요청입니다",
+        },
         stock_theme_fetcher=None,
         allow_external=False,
     )
@@ -121,7 +135,11 @@ def test_sector_theme_external_fallback_only_for_missing(tmp_path, monkeypatch):
         token=None,
         theme_group_fetcher=lambda token: [],
         stock_theme_fetcher=None,
-        external_fetcher=lambda code: {"sector": "IT", "industry": "software", "theme_tags": ["cloud"]},
+        external_fetcher=lambda code: {
+            "sector": "IT",
+            "industry": "software",
+            "theme_tags": ["cloud"],
+        },
         allow_external=True,
     )
 

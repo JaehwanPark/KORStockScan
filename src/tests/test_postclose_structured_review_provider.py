@@ -45,12 +45,20 @@ def test_qwen3_success_skips_openai(monkeypatch):
 
 def test_qwen3_unavailable_falls_back_to_openai(monkeypatch):
     def bedrock(**kwargs):
-        return None, {"provider": "bedrock_qwen3", "status": "unavailable", "reason": "boom"}
+        return None, {
+            "provider": "bedrock_qwen3",
+            "status": "unavailable",
+            "reason": "boom",
+        }
 
     def openai(**kwargs):
         assert kwargs["failback_used"] is True
         assert kwargs["failback_reason"] == "unavailable"
-        return '{"openai":true}', {"provider": "openai", "status": "success", "failback_used": True}
+        return '{"openai":true}', {
+            "provider": "openai",
+            "status": "success",
+            "failback_used": True,
+        }
 
     monkeypatch.setattr(mod, "_call_bedrock_qwen3", bedrock)
     monkeypatch.setattr(mod, "_call_openai", openai)
@@ -78,8 +86,15 @@ def test_qwen3_contract_failure_falls_back_to_openai(monkeypatch):
         }
 
     def openai(**kwargs):
-        assert kwargs["primary_status"]["bedrock_contract_reason"] == "missing_candidate_reviews"
-        return '{"openai":true}', {"provider": "openai", "status": "success", "failback_used": True}
+        assert (
+            kwargs["primary_status"]["bedrock_contract_reason"]
+            == "missing_candidate_reviews"
+        )
+        return '{"openai":true}', {
+            "provider": "openai",
+            "status": "success",
+            "failback_used": True,
+        }
 
     monkeypatch.setattr(mod, "_call_bedrock_qwen3", bedrock)
     monkeypatch.setattr(mod, "_call_openai", openai)
@@ -128,7 +143,11 @@ def test_gpt54_gemini_success_skips_openai(monkeypatch):
 
     def gemini(**kwargs):
         calls["gemini"] += 1
-        return '{"gemini":true}', {"provider": "gemini", "status": "success", "gemini_key_slot_used": 1}
+        return '{"gemini":true}', {
+            "provider": "gemini",
+            "status": "success",
+            "gemini_key_slot_used": 1,
+        }
 
     def openai(**kwargs):
         calls["openai"] += 1
@@ -163,7 +182,11 @@ def test_gpt54_gemini_failure_falls_back_to_openai(monkeypatch):
         assert kwargs["failback_used"] is True
         assert kwargs["failback_reason"] == "unavailable"
         assert kwargs["primary_status"]["gemini_key_rotation_exhausted"] is True
-        return '{"openai":true}', {"provider": "openai", "status": "success", "failback_used": True}
+        return '{"openai":true}', {
+            "provider": "openai",
+            "status": "success",
+            "failback_used": True,
+        }
 
     monkeypatch.setattr(mod, "_call_gemini_3_5_flash", gemini)
     monkeypatch.setattr(mod, "_call_openai", openai)

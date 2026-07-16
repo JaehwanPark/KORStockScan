@@ -5,7 +5,9 @@ from src.engine.risk import manual_control_exclusion
 
 
 def test_manual_control_exclusion_matches_env_codes(monkeypatch):
-    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_ENV, "5930, 001820;A000660")
+    monkeypatch.setenv(
+        manual_control_exclusion.EXCLUDED_CODES_ENV, "5930, 001820;A000660"
+    )
     decision = manual_control_exclusion.evaluate_manual_control_exclusion("005930")
 
     assert decision.excluded is True
@@ -14,22 +16,39 @@ def test_manual_control_exclusion_matches_env_codes(monkeypatch):
     assert decision.source == manual_control_exclusion.EXCLUDED_CODES_ENV
     assert decision.as_log_fields()["actual_order_submitted"] is False
     assert decision.as_log_fields()["broker_order_forbidden"] is True
-    assert decision.as_log_fields()["decision_authority"] == "operator_manual_control_exclusion_no_bot_action"
+    assert (
+        decision.as_log_fields()["decision_authority"]
+        == "operator_manual_control_exclusion_no_bot_action"
+    )
 
 
-def test_manual_control_exclusion_loads_file_and_reloads_on_mtime_change(monkeypatch, tmp_path):
+def test_manual_control_exclusion_loads_file_and_reloads_on_mtime_change(
+    monkeypatch, tmp_path
+):
     path = tmp_path / "manual_control_excluded_codes.txt"
     path.write_text("005930 # Samsung\n001820\n", encoding="utf-8")
     monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
     monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
 
-    assert manual_control_exclusion.evaluate_manual_control_exclusion("005930").excluded is True
-    assert manual_control_exclusion.evaluate_manual_control_exclusion("000660").excluded is False
+    assert (
+        manual_control_exclusion.evaluate_manual_control_exclusion("005930").excluded
+        is True
+    )
+    assert (
+        manual_control_exclusion.evaluate_manual_control_exclusion("000660").excluded
+        is False
+    )
 
     path.write_text("000660\n", encoding="utf-8")
 
-    assert manual_control_exclusion.evaluate_manual_control_exclusion("005930").excluded is False
-    assert manual_control_exclusion.evaluate_manual_control_exclusion("000660").excluded is True
+    assert (
+        manual_control_exclusion.evaluate_manual_control_exclusion("005930").excluded
+        is False
+    )
+    assert (
+        manual_control_exclusion.evaluate_manual_control_exclusion("000660").excluded
+        is True
+    )
 
 
 def test_manual_control_exclusion_append_adds_code_once(monkeypatch, tmp_path):
@@ -46,7 +65,10 @@ def test_manual_control_exclusion_append_adds_code_once(monkeypatch, tmp_path):
     assert first.excluded is True
     assert first.code == "005930"
     assert second.excluded is True
-    assert manual_control_exclusion.evaluate_manual_control_exclusion("005930").excluded is True
+    assert (
+        manual_control_exclusion.evaluate_manual_control_exclusion("005930").excluded
+        is True
+    )
     assert path.read_text(encoding="utf-8").count("005930") == 1
 
 
@@ -66,12 +88,20 @@ def test_manual_control_exclusion_remove_deletes_file_code(monkeypatch, tmp_path
 
     assert result.removed is True
     assert result.code == "005930"
-    assert manual_control_exclusion.evaluate_manual_control_exclusion("005930").excluded is False
-    assert manual_control_exclusion.evaluate_manual_control_exclusion("000660").excluded is True
+    assert (
+        manual_control_exclusion.evaluate_manual_control_exclusion("005930").excluded
+        is False
+    )
+    assert (
+        manual_control_exclusion.evaluate_manual_control_exclusion("000660").excluded
+        is True
+    )
     assert "005930" not in path.read_text(encoding="utf-8")
 
 
-def test_manual_control_exclusion_remove_preserves_other_codes_on_same_line(monkeypatch, tmp_path):
+def test_manual_control_exclusion_remove_preserves_other_codes_on_same_line(
+    monkeypatch, tmp_path
+):
     path = tmp_path / "manual_control_excluded_codes.txt"
     path.write_text("005930,000660,001820 # grouped\n", encoding="utf-8")
     monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
@@ -80,13 +110,24 @@ def test_manual_control_exclusion_remove_preserves_other_codes_on_same_line(monk
     result = manual_control_exclusion.remove_manual_control_exclusion_code("000660")
 
     assert result.removed is True
-    assert manual_control_exclusion.evaluate_manual_control_exclusion("000660").excluded is False
-    assert manual_control_exclusion.evaluate_manual_control_exclusion("005930").excluded is True
-    assert manual_control_exclusion.evaluate_manual_control_exclusion("001820").excluded is True
+    assert (
+        manual_control_exclusion.evaluate_manual_control_exclusion("000660").excluded
+        is False
+    )
+    assert (
+        manual_control_exclusion.evaluate_manual_control_exclusion("005930").excluded
+        is True
+    )
+    assert (
+        manual_control_exclusion.evaluate_manual_control_exclusion("001820").excluded
+        is True
+    )
     assert path.read_text(encoding="utf-8") == "005930,001820 # grouped\n"
 
 
-def test_manual_control_exclusion_remove_file_code_does_not_clear_env_override(monkeypatch, tmp_path):
+def test_manual_control_exclusion_remove_file_code_does_not_clear_env_override(
+    monkeypatch, tmp_path
+):
     path = tmp_path / "manual_control_excluded_codes.txt"
     path.write_text("005930 # Samsung manual control\n", encoding="utf-8")
     monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_ENV, "005930")
@@ -103,7 +144,9 @@ def test_manual_control_exclusion_remove_file_code_does_not_clear_env_override(m
 
 def test_manual_control_exclusion_empty_config_does_not_block(monkeypatch, tmp_path):
     monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
-    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(tmp_path / "missing.txt"))
+    monkeypatch.setenv(
+        manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(tmp_path / "missing.txt")
+    )
 
     decision = manual_control_exclusion.evaluate_manual_control_exclusion("005930")
 
@@ -127,16 +170,31 @@ def test_manual_control_exclusion_blocks_pending_order_cancellations(monkeypatch
         sniper_state_handlers,
         "emit_pipeline_event",
         lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
-            {"pipeline": pipeline, "name": name, "code": code, "stage": stage, "fields": fields or {}}
+            {
+                "pipeline": pipeline,
+                "name": name,
+                "code": code,
+                "stage": stage,
+                "fields": fields or {},
+            }
         ),
     )
 
     def fail_cancel(*args, **kwargs):
-        raise AssertionError("cancel order must not be called for manual-control excluded symbols")
+        raise AssertionError(
+            "cancel order must not be called for manual-control excluded symbols"
+        )
 
-    monkeypatch.setattr(sniper_state_handlers.kiwoom_orders, "send_cancel_order", fail_cancel)
+    monkeypatch.setattr(
+        sniper_state_handlers.kiwoom_orders, "send_cancel_order", fail_cancel
+    )
 
-    assert sniper_state_handlers.process_order_cancellation(stock, "005930", "123", db=None, strategy="SCALPING") is False
+    assert (
+        sniper_state_handlers.process_order_cancellation(
+            stock, "005930", "123", db=None, strategy="SCALPING"
+        )
+        is False
+    )
 
     assert stock["status"] == "BUY_ORDERED"
     assert stock["odno"] == "123"
@@ -159,14 +217,24 @@ def test_manual_control_exclusion_blocks_holding_handler_before_sell_logic(monke
         sniper_state_handlers,
         "emit_pipeline_event",
         lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
-            {"pipeline": pipeline, "name": name, "code": code, "stage": stage, "fields": fields or {}}
+            {
+                "pipeline": pipeline,
+                "name": name,
+                "code": code,
+                "stage": stage,
+                "fields": fields or {},
+            }
         ),
     )
 
     def fail_reconcile(*args, **kwargs):
-        raise AssertionError("holding control path must not run for manual-control excluded symbols")
+        raise AssertionError(
+            "holding control path must not run for manual-control excluded symbols"
+        )
 
-    monkeypatch.setattr(sniper_state_handlers, "_reconcile_pending_entry_orders", fail_reconcile)
+    monkeypatch.setattr(
+        sniper_state_handlers, "_reconcile_pending_entry_orders", fail_reconcile
+    )
 
     sniper_state_handlers.handle_holding_state(
         stock,
@@ -182,7 +250,9 @@ def test_manual_control_exclusion_blocks_holding_handler_before_sell_logic(monke
     assert emitted[-1]["fields"]["manual_control_exclusion_applied"] is True
 
 
-def test_open_loss_holding_auto_exclusion_blocks_before_reconcile(monkeypatch, tmp_path):
+def test_open_loss_holding_auto_exclusion_blocks_before_reconcile(
+    monkeypatch, tmp_path
+):
     emitted = []
     path = tmp_path / "manual_control_excluded_codes.txt"
     stock = {
@@ -200,14 +270,24 @@ def test_open_loss_holding_auto_exclusion_blocks_before_reconcile(monkeypatch, t
         sniper_state_handlers,
         "emit_pipeline_event",
         lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
-            {"pipeline": pipeline, "name": name, "code": code, "stage": stage, "fields": fields or {}}
+            {
+                "pipeline": pipeline,
+                "name": name,
+                "code": code,
+                "stage": stage,
+                "fields": fields or {},
+            }
         ),
     )
 
     def fail_reconcile(*args, **kwargs):
-        raise AssertionError("open-loss auto exclusion must run before reconcile/sell control")
+        raise AssertionError(
+            "open-loss auto exclusion must run before reconcile/sell control"
+        )
 
-    monkeypatch.setattr(sniper_state_handlers, "_reconcile_pending_entry_orders", fail_reconcile)
+    monkeypatch.setattr(
+        sniper_state_handlers, "_reconcile_pending_entry_orders", fail_reconcile
+    )
 
     sniper_state_handlers.handle_holding_state(
         stock,
@@ -219,7 +299,10 @@ def test_open_loss_holding_auto_exclusion_blocks_before_reconcile(monkeypatch, t
         now_dt=datetime(2026, 7, 2, 9, 0, 5),
     )
 
-    assert manual_control_exclusion.evaluate_manual_control_exclusion("005930").excluded is True
+    assert (
+        manual_control_exclusion.evaluate_manual_control_exclusion("005930").excluded
+        is True
+    )
     assert "005930" in path.read_text(encoding="utf-8")
     assert stock["manual_control_exclusion_blocked"] is True
     assert stock["manual_control_auto_exclusion_session"] == "KRX_OPEN"
@@ -230,20 +313,33 @@ def test_open_loss_holding_auto_exclusion_blocks_before_reconcile(monkeypatch, t
 
 
 def test_open_loss_session_resolves_nxt_and_krx_windows(monkeypatch):
-    monkeypatch.delenv("KORSTOCKSCAN_MANUAL_CONTROL_OPEN_LOSS_EXCLUSION_WINDOW_SEC", raising=False)
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_MANUAL_CONTROL_OPEN_LOSS_EXCLUSION_WINDOW_SEC", raising=False
+    )
 
     assert (
-        sniper_state_handlers._manual_control_open_loss_session(datetime(2026, 7, 2, 8, 0, 0))
+        sniper_state_handlers._manual_control_open_loss_session(
+            datetime(2026, 7, 2, 8, 0, 0)
+        )
         == "NXT_OPEN"
     )
     assert (
-        sniper_state_handlers._manual_control_open_loss_session(datetime(2026, 7, 2, 9, 0, 0))
+        sniper_state_handlers._manual_control_open_loss_session(
+            datetime(2026, 7, 2, 9, 0, 0)
+        )
         == "KRX_OPEN"
     )
-    assert sniper_state_handlers._manual_control_open_loss_session(datetime(2026, 7, 2, 9, 6, 0)) == ""
+    assert (
+        sniper_state_handlers._manual_control_open_loss_session(
+            datetime(2026, 7, 2, 9, 6, 0)
+        )
+        == ""
+    )
 
 
-def test_open_loss_holding_auto_exclusion_ignores_non_open_window(monkeypatch, tmp_path):
+def test_open_loss_holding_auto_exclusion_ignores_non_open_window(
+    monkeypatch, tmp_path
+):
     path = tmp_path / "manual_control_excluded_codes.txt"
     stock = {
         "id": 4,
@@ -261,9 +357,19 @@ def test_open_loss_holding_auto_exclusion_ignores_non_open_window(monkeypatch, t
     def mark_reconcile(*args, **kwargs):
         called["reconcile"] = True
 
-    monkeypatch.setattr(sniper_state_handlers, "_reconcile_pending_entry_orders", mark_reconcile)
-    monkeypatch.setattr(sniper_state_handlers, "_holding_ws_freshness_recover_or_block", lambda *args, **kwargs: (args[2], False, {}))
-    monkeypatch.setattr(sniper_state_handlers, "_maybe_submit_rising_missed_scout_upgrade", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        sniper_state_handlers, "_reconcile_pending_entry_orders", mark_reconcile
+    )
+    monkeypatch.setattr(
+        sniper_state_handlers,
+        "_holding_ws_freshness_recover_or_block",
+        lambda *args, **kwargs: (args[2], False, {}),
+    )
+    monkeypatch.setattr(
+        sniper_state_handlers,
+        "_maybe_submit_rising_missed_scout_upgrade",
+        lambda *args, **kwargs: True,
+    )
 
     sniper_state_handlers.handle_holding_state(
         stock,
@@ -276,7 +382,10 @@ def test_open_loss_holding_auto_exclusion_ignores_non_open_window(monkeypatch, t
     )
 
     assert called["reconcile"] is True
-    assert manual_control_exclusion.evaluate_manual_control_exclusion("005930").excluded is False
+    assert (
+        manual_control_exclusion.evaluate_manual_control_exclusion("005930").excluded
+        is False
+    )
 
 
 def test_hard_stop_manual_handoff_registers_and_blocks_real_sell(monkeypatch, tmp_path):
@@ -316,7 +425,10 @@ def test_hard_stop_manual_handoff_registers_and_blocks_real_sell(monkeypatch, tm
     )
 
     assert blocked is True
-    assert manual_control_exclusion.evaluate_manual_control_exclusion("005930").excluded is True
+    assert (
+        manual_control_exclusion.evaluate_manual_control_exclusion("005930").excluded
+        is True
+    )
     assert path.read_text(encoding="utf-8").count("005930") == 1
     assert stock["status"] == "HOLDING"
     assert stock["manual_control_auto_hard_stop_blocked"] is True
@@ -324,10 +436,15 @@ def test_hard_stop_manual_handoff_registers_and_blocks_real_sell(monkeypatch, tm
     assert emitted[-1]["stage"] == "hard_stop_manual_control_handoff"
     assert emitted[-1]["fields"]["actual_order_submitted"] is False
     assert emitted[-1]["fields"]["broker_order_forbidden"] is True
-    assert emitted[-1]["fields"]["source_quality_gate"] == "manual_control_exclusion_active"
+    assert (
+        emitted[-1]["fields"]["source_quality_gate"]
+        == "manual_control_exclusion_active"
+    )
 
 
-def test_hard_stop_manual_handoff_preserves_emergency_and_simulated_exit(monkeypatch, tmp_path):
+def test_hard_stop_manual_handoff_preserves_emergency_and_simulated_exit(
+    monkeypatch, tmp_path
+):
     path = tmp_path / "manual_control_excluded_codes.txt"
     monkeypatch.setenv("KORSTOCKSCAN_HARD_STOP_MANUAL_HANDOFF_ENABLED", "true")
     monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
@@ -367,7 +484,9 @@ def test_hard_stop_manual_handoff_preserves_emergency_and_simulated_exit(monkeyp
     assert not path.exists()
 
 
-def test_hard_stop_manual_handoff_blocks_and_retries_when_registration_fails(monkeypatch):
+def test_hard_stop_manual_handoff_blocks_and_retries_when_registration_fails(
+    monkeypatch,
+):
     emitted = []
     add_calls = []
     stock = {
@@ -394,7 +513,9 @@ def test_hard_stop_manual_handoff_blocks_and_retries_when_registration_fails(mon
             "/tmp/manual.txt",
         )
 
-    monkeypatch.setattr(sniper_state_handlers, "add_manual_control_exclusion_code", fake_add)
+    monkeypatch.setattr(
+        sniper_state_handlers, "add_manual_control_exclusion_code", fake_add
+    )
     monkeypatch.setattr(
         sniper_state_handlers,
         "emit_pipeline_event",
@@ -413,23 +534,32 @@ def test_hard_stop_manual_handoff_blocks_and_retries_when_registration_fails(mon
         "buy_price": 10000,
         "source_stage": "standard_hard_stop_after_quote_revalidation",
     }
-    assert sniper_state_handlers._handoff_hard_stop_to_manual_control_if_enabled(
-        stock, "005930", now_ts=1000.0, **kwargs
-    ) is True
+    assert (
+        sniper_state_handlers._handoff_hard_stop_to_manual_control_if_enabled(
+            stock, "005930", now_ts=1000.0, **kwargs
+        )
+        is True
+    )
     assert stock["manual_control_hard_stop_handoff_pending"] is True
     assert stock.get("manual_control_auto_hard_stop_blocked") is None
     assert emitted[-1]["stage"] == "hard_stop_manual_control_handoff_deferred"
     assert emitted[-1]["fields"]["broker_order_forbidden"] is True
 
-    assert sniper_state_handlers._retry_pending_hard_stop_manual_handoff(
-        stock, "005930", now_ts=1002.0
-    ) is True
+    assert (
+        sniper_state_handlers._retry_pending_hard_stop_manual_handoff(
+            stock, "005930", now_ts=1002.0
+        )
+        is True
+    )
     assert len(emitted) == 1
     assert len(add_calls) == 1
 
-    assert sniper_state_handlers._retry_pending_hard_stop_manual_handoff(
-        stock, "005930", now_ts=1006.0
-    ) is True
+    assert (
+        sniper_state_handlers._retry_pending_hard_stop_manual_handoff(
+            stock, "005930", now_ts=1006.0
+        )
+        is True
+    )
     assert len(add_calls) == 2
     assert stock["manual_control_hard_stop_handoff_pending"] is False
     assert stock["manual_control_auto_hard_stop_blocked"] is True
@@ -448,9 +578,12 @@ def test_pending_hard_stop_manual_handoff_runtime_off_clears_pending(monkeypatch
     }
     monkeypatch.setenv("KORSTOCKSCAN_HARD_STOP_MANUAL_HANDOFF_ENABLED", "false")
 
-    assert sniper_state_handlers._retry_pending_hard_stop_manual_handoff(
-        stock, "005930", now_ts=1006.0
-    ) is False
+    assert (
+        sniper_state_handlers._retry_pending_hard_stop_manual_handoff(
+            stock, "005930", now_ts=1006.0
+        )
+        is False
+    )
     assert "manual_control_hard_stop_handoff_pending" not in stock
     assert "manual_control_hard_stop_handoff_exit_rule" not in stock
 
@@ -483,7 +616,9 @@ def test_holding_handler_retries_pending_hard_stop_handoff_before_quote_logic(
     monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
 
     def fail_quote_logic(*args, **kwargs):
-        raise AssertionError("pending handoff retry must run before holding quote logic")
+        raise AssertionError(
+            "pending handoff retry must run before holding quote logic"
+        )
 
     monkeypatch.setattr(
         sniper_state_handlers,
@@ -503,4 +638,7 @@ def test_holding_handler_retries_pending_hard_stop_handoff_before_quote_logic(
 
     assert stock["status"] == "HOLDING"
     assert stock["manual_control_auto_hard_stop_blocked"] is True
-    assert manual_control_exclusion.evaluate_manual_control_exclusion("005930").excluded is True
+    assert (
+        manual_control_exclusion.evaluate_manual_control_exclusion("005930").excluded
+        is True
+    )

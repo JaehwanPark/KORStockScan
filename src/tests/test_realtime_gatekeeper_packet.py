@@ -85,7 +85,9 @@ def test_realtime_quant_packet_includes_ws_microstructure_fields():
         "drawdown_from_high_pct": -1.1,
     }
 
-    packet = engine._build_realtime_quant_packet("쏠리드", "050890", realtime_ctx, "SWING")
+    packet = engine._build_realtime_quant_packet(
+        "쏠리드", "050890", realtime_ctx, "SWING"
+    )
 
     assert "프로그램 절대 매수/매도" in packet
     assert "순간 체결대금/누적: 28,500 / 950,000" in packet

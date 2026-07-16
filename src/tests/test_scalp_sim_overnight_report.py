@@ -128,7 +128,9 @@ def test_build_report_counts_overnight_events(tmp_path, monkeypatch):
     assert report["summary"]["source_quality_status"] == "pass"
     assert report["summary"]["ai_failure_fallback"] == 1
     assert report["summary"]["ai_timeout_fallback"] == 1
-    assert all(row["actual_order_submitted"] in {"False", None} for row in report["rows"])
+    assert all(
+        row["actual_order_submitted"] in {"False", None} for row in report["rows"]
+    )
 
 
 def test_build_report_flags_active_undecided_positions(tmp_path, monkeypatch):
@@ -136,7 +138,9 @@ def test_build_report_flags_active_undecided_positions(tmp_path, monkeypatch):
     events_dir = data_dir / "pipeline_events"
     events_dir.mkdir(parents=True)
     target_date = "2026-05-19"
-    (events_dir / f"pipeline_events_{target_date}.jsonl").write_text("", encoding="utf-8")
+    (events_dir / f"pipeline_events_{target_date}.jsonl").write_text(
+        "", encoding="utf-8"
+    )
     state_path = tmp_path / "state.json"
     state_path.write_text(
         json.dumps(
@@ -166,7 +170,10 @@ def test_build_report_flags_active_undecided_positions(tmp_path, monkeypatch):
     assert report["summary"]["active_undecided_count"] == 1
     assert report["summary"]["decision_coverage_rate"] == 0.0
     assert report["summary"]["source_quality_status"] == "source_quality_blocker"
-    assert "active_undecided_scalp_sim_overnight_positions" in report["summary"]["source_quality_warnings"]
+    assert (
+        "active_undecided_scalp_sim_overnight_positions"
+        in report["summary"]["source_quality_warnings"]
+    )
 
 
 def test_build_report_does_not_reflag_event_decided_active_state(tmp_path, monkeypatch):
@@ -226,7 +233,9 @@ def test_build_report_does_not_reflag_event_decided_active_state(tmp_path, monke
     assert report["summary"]["source_quality_status"] == "pass"
 
 
-def test_build_report_ignores_stale_fallback_class_on_success_event(tmp_path, monkeypatch):
+def test_build_report_ignores_stale_fallback_class_on_success_event(
+    tmp_path, monkeypatch
+):
     data_dir = tmp_path / "data"
     events_dir = data_dir / "pipeline_events"
     events_dir.mkdir(parents=True)
@@ -270,7 +279,9 @@ def test_build_report_ignores_stale_fallback_class_on_success_event(tmp_path, mo
     assert report["rows"][0]["ai_fallback_class"] == "none"
 
 
-def test_build_report_keeps_explicit_fallback_class_when_parse_state_missing(tmp_path, monkeypatch):
+def test_build_report_keeps_explicit_fallback_class_when_parse_state_missing(
+    tmp_path, monkeypatch
+):
     data_dir = tmp_path / "data"
     events_dir = data_dir / "pipeline_events"
     events_dir.mkdir(parents=True)
@@ -309,7 +320,9 @@ def test_build_report_keeps_explicit_fallback_class_when_parse_state_missing(tmp
     assert report["rows"][0]["ai_fallback_class"] == "timeout"
 
 
-def test_build_report_excludes_positions_created_after_decision_window(tmp_path, monkeypatch):
+def test_build_report_excludes_positions_created_after_decision_window(
+    tmp_path, monkeypatch
+):
     data_dir = tmp_path / "data"
     events_dir = data_dir / "pipeline_events"
     events_dir.mkdir(parents=True)
@@ -383,4 +396,7 @@ def test_write_outputs_creates_json_and_md(tmp_path):
 
     assert json_path.exists()
     assert md_path.exists()
-    assert json.loads(json_path.read_text(encoding="utf-8"))["decision_authority"] == "sim_observation_only"
+    assert (
+        json.loads(json_path.read_text(encoding="utf-8"))["decision_authority"]
+        == "sim_observation_only"
+    )

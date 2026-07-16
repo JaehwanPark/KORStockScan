@@ -4,7 +4,15 @@ import json
 from src.engine.monitoring import one_share_threshold_opportunity as mod
 
 
-def _event(record_id, stage, fields=None, *, code="000001", name="sample", emitted_at="2026-07-01T09:00:00+09:00"):
+def _event(
+    record_id,
+    stage,
+    fields=None,
+    *,
+    code="000001",
+    name="sample",
+    emitted_at="2026-07-01T09:00:00+09:00",
+):
     return {
         "pipeline": "ENTRY_PIPELINE",
         "record_id": record_id,
@@ -43,7 +51,9 @@ def test_build_report_aggregates_threshold_opportunity_and_orders(tmp_path):
                 ),
             ]
         )
-    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
     post_sell_path.write_text(
         "\n".join(
             json.dumps(
@@ -53,7 +63,9 @@ def test_build_report_aggregates_threshold_opportunity_and_orders(tmp_path):
                     "stock_name": "sample",
                     "profit_rate": profit,
                     "peak_profit": profit + 0.2,
-                    "exit_rule": "scalp_take_profit" if profit > 0 else "scalp_soft_stop",
+                    "exit_rule": (
+                        "scalp_take_profit" if profit > 0 else "scalp_soft_stop"
+                    ),
                 }
             )
             for idx, profit in enumerate([0.8, 0.5, -0.1], start=1)
@@ -82,7 +94,10 @@ def test_build_report_aggregates_threshold_opportunity_and_orders(tmp_path):
     assert order["runtime_effect"] is False
     assert order["allowed_runtime_apply"] is False
     assert order["implementation_status"] == "implemented"
-    assert order["implementation_provenance"]["requires_separate_runtime_apply_candidate"] is True
+    assert (
+        order["implementation_provenance"]["requires_separate_runtime_apply_candidate"]
+        is True
+    )
     assert order["implementation_provenance"]["broker_order_forbidden"] is True
     assert "broker_guard_bypass" in order["forbidden_uses"]
     assert report["ai_review"]["status"] == "unavailable"
@@ -98,7 +113,10 @@ def test_valid_profit_sample_floor_blocks_incomplete_pnl_order(tmp_path):
                 _event(
                     idx,
                     "blocked_ai_score",
-                    {"reason": "blocked_ai_score_below_buy_score_threshold", "ai_score": "72"},
+                    {
+                        "reason": "blocked_ai_score_below_buy_score_threshold",
+                        "ai_score": "72",
+                    },
                     code=f"00000{idx}",
                 ),
                 _event(
@@ -109,7 +127,9 @@ def test_valid_profit_sample_floor_blocks_incomplete_pnl_order(tmp_path):
                 ),
             ]
         )
-    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
     post_sell_path.write_text(
         "\n".join(
             json.dumps(
@@ -221,7 +241,12 @@ def test_hard_safety_group_does_not_create_code_order():
         }
     ]
 
-    assert mod._build_code_orders(opportunities, {"pipeline_events": [], "post_sell_candidates": []}) == []
+    assert (
+        mod._build_code_orders(
+            opportunities, {"pipeline_events": [], "post_sell_candidates": []}
+        )
+        == []
+    )
 
 
 def test_write_outputs(tmp_path):
@@ -266,7 +291,10 @@ def test_write_outputs(tmp_path):
 
     mod.write_outputs(report, output_json=output_json, output_md=output_md)
 
-    assert json.loads(output_json.read_text(encoding="utf-8"))["target_date"] == "2026-07-01"
+    assert (
+        json.loads(output_json.read_text(encoding="utf-8"))["target_date"]
+        == "2026-07-01"
+    )
     markdown = output_md.read_text(encoding="utf-8")
     assert "One Share Threshold Opportunity" in markdown
     assert "runtime_effect: false" in markdown
@@ -346,7 +374,10 @@ def test_source_coverage_gap_fails_closed_for_code_orders(tmp_path):
         ),
         encoding="utf-8",
     )
-    post_sell_path.write_text(json.dumps({"recommendation_id": 1, "profit_rate": 1.0}) + "\n", encoding="utf-8")
+    post_sell_path.write_text(
+        json.dumps({"recommendation_id": 1, "profit_rate": 1.0}) + "\n",
+        encoding="utf-8",
+    )
 
     report = mod.build_report(
         "2026-07-02",

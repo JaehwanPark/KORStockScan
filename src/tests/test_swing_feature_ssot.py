@@ -28,7 +28,10 @@ def _raw_quote_fixture(rows: int = 80) -> pd.DataFrame:
 
 
 def test_common_v2_reexports_feature_engineering_ssot():
-    assert common_v2.calculate_all_features is feature_engineering_v2.calculate_all_features
+    assert (
+        common_v2.calculate_all_features
+        is feature_engineering_v2.calculate_all_features
+    )
 
 
 def test_update_kospi_uses_common_v2_feature_facade():
@@ -127,15 +130,31 @@ def test_update_kospi_status_payload_records_warning_steps(monkeypatch, tmp_path
     monkeypatch.setattr(
         update_kospi,
         "_load_latest_quote_state",
-        lambda: {"db_state_status": "available", "latest_quote_date": "2026-05-11", "rows_on_latest_date": 2500},
+        lambda: {
+            "db_state_status": "available",
+            "latest_quote_date": "2026-05-11",
+            "rows_on_latest_date": 2500,
+        },
     )
     steps = [
-        {"name": "update_kospi_data", "status": "completed", "finished_at": "2026-05-11T21:05:00"},
-        {"name": "recommend_daily_v2", "status": "failed", "finished_at": "2026-05-11T21:06:00"},
+        {
+            "name": "update_kospi_data",
+            "status": "completed",
+            "finished_at": "2026-05-11T21:05:00",
+        },
+        {
+            "name": "recommend_daily_v2",
+            "status": "failed",
+            "finished_at": "2026-05-11T21:06:00",
+        },
     ]
 
-    payload = update_kospi._build_update_kospi_status("2026-05-11", "2026-05-11T21:00:00", steps)
-    status_path = update_kospi._write_update_kospi_status(payload, tmp_path / "update_kospi_2026-05-11.json")
+    payload = update_kospi._build_update_kospi_status(
+        "2026-05-11", "2026-05-11T21:00:00", steps
+    )
+    status_path = update_kospi._write_update_kospi_status(
+        payload, tmp_path / "update_kospi_2026-05-11.json"
+    )
 
     written = json.loads(status_path.read_text(encoding="utf-8"))
     assert written["status"] == "completed_with_warnings"
@@ -226,20 +245,34 @@ def test_calculate_all_features_matches_expected_numeric_values():
         "ma60": close.rolling(60).mean().iloc[-1],
         "ma_ratio": close.iloc[-1] / (close.rolling(20).mean().iloc[-1] + 1e-9),
         "dist_ma5": close.iloc[-1] / (close.rolling(5).mean().iloc[-1] + 1e-9),
-        "vwap20": ((typical * volume).rolling(20).sum() / (volume.rolling(20).sum() + 1e-9)).iloc[-1],
+        "vwap20": (
+            (typical * volume).rolling(20).sum() / (volume.rolling(20).sum() + 1e-9)
+        ).iloc[-1],
         "close_vwap_ratio": close.iloc[-1]
-        / (((typical * volume).rolling(20).sum() / (volume.rolling(20).sum() + 1e-9)).iloc[-1] + 1e-9),
-        "foreign_net_roll5": foreign_net.rolling(5).sum().iloc[-1] / (volume.rolling(5).sum().iloc[-1] + 1e-9),
-        "inst_net_roll5": inst_net.rolling(5).sum().iloc[-1] / (volume.rolling(5).sum().iloc[-1] + 1e-9),
-        "turnover_shock": turnover.iloc[-1] / (turnover.rolling(20).median().iloc[-1] + 1e-9),
-        "breakout_20": close.iloc[-1] / (high.rolling(20).max().shift(1).iloc[-1] + 1e-9),
-        "body_ratio": abs(close.iloc[-1] - open_.iloc[-1]) / (abs(high.iloc[-1] - low.iloc[-1]) + 1e-9),
+        / (
+            (
+                (typical * volume).rolling(20).sum() / (volume.rolling(20).sum() + 1e-9)
+            ).iloc[-1]
+            + 1e-9
+        ),
+        "foreign_net_roll5": foreign_net.rolling(5).sum().iloc[-1]
+        / (volume.rolling(5).sum().iloc[-1] + 1e-9),
+        "inst_net_roll5": inst_net.rolling(5).sum().iloc[-1]
+        / (volume.rolling(5).sum().iloc[-1] + 1e-9),
+        "turnover_shock": turnover.iloc[-1]
+        / (turnover.rolling(20).median().iloc[-1] + 1e-9),
+        "breakout_20": close.iloc[-1]
+        / (high.rolling(20).max().shift(1).iloc[-1] + 1e-9),
+        "body_ratio": abs(close.iloc[-1] - open_.iloc[-1])
+        / (abs(high.iloc[-1] - low.iloc[-1]) + 1e-9),
         "range_ratio": (high.iloc[-1] - low.iloc[-1]) / (close.iloc[-1] + 1e-9),
         "gap_ratio": open_.iloc[-1] / (close.shift(1).iloc[-1] + 1e-9) - 1.0,
     }
 
     for column, expected_value in expected.items():
-        assert np.isclose(latest[column], expected_value, rtol=1e-10, atol=1e-10), column
+        assert np.isclose(
+            latest[column], expected_value, rtol=1e-10, atol=1e-10
+        ), column
 
     assert latest["dual_net_buy"] == 1
     assert latest["up_trend_2d"] == 1

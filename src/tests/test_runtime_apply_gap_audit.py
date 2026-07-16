@@ -27,7 +27,11 @@ def _disable_real_bedrock_runtime_gap_failback(monkeypatch):
                         }
                         for item in context.get("review_candidates", [])
                     ],
-                    "audit": {"status": "pass", "issues": [], "reason": "test bedrock failback"},
+                    "audit": {
+                        "status": "pass",
+                        "issues": [],
+                        "reason": "test bedrock failback",
+                    },
                     "codex_directives": [],
                 }
             ),
@@ -53,19 +57,27 @@ def _write_json(path: Path, payload: dict):
 
 def _write_core_artifacts(report_dir: Path, target_date: str = "2026-05-22"):
     _write_json(
-        report_dir / "runtime_approval_summary" / f"runtime_approval_summary_{target_date}.json",
+        report_dir
+        / "runtime_approval_summary"
+        / f"runtime_approval_summary_{target_date}.json",
         {"report_type": "runtime_approval_summary", "summary": {}},
     )
     _write_json(
-        report_dir / "code_improvement_workorder" / f"code_improvement_workorder_{target_date}.json",
+        report_dir
+        / "code_improvement_workorder"
+        / f"code_improvement_workorder_{target_date}.json",
         {"report_type": "code_improvement_workorder", "orders": []},
     )
     _write_json(
-        report_dir / "runtime_apply_bridge" / f"runtime_apply_bridge_{target_date}.json",
+        report_dir
+        / "runtime_apply_bridge"
+        / f"runtime_apply_bridge_{target_date}.json",
         {"report_type": "runtime_apply_bridge", "candidates": []},
     )
     _write_json(
-        report_dir / "lifecycle_bucket_discovery" / f"lifecycle_bucket_discovery_{target_date}.json",
+        report_dir
+        / "lifecycle_bucket_discovery"
+        / f"lifecycle_bucket_discovery_{target_date}.json",
         {"report_type": "lifecycle_bucket_discovery", "surfaced_candidates": []},
     )
 
@@ -82,11 +94,15 @@ def _runtime_openai_bedrock_config() -> PostcloseAIReviewConfig:
     )
 
 
-def test_runtime_apply_gap_audit_emits_source_dimension_gap_directive(tmp_path, monkeypatch):
+def test_runtime_apply_gap_audit_emits_source_dimension_gap_directive(
+    tmp_path, monkeypatch
+):
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_core_artifacts(report_dir, "2026-05-22")
     _write_json(
-        report_dir / "lifecycle_bucket_discovery" / "lifecycle_bucket_discovery_2026-05-22.json",
+        report_dir
+        / "lifecycle_bucket_discovery"
+        / "lifecycle_bucket_discovery_2026-05-22.json",
         {
             "report_type": "lifecycle_bucket_discovery",
             "source_dimension_gap_summary": {
@@ -114,16 +130,27 @@ def test_runtime_apply_gap_audit_emits_source_dimension_gap_directive(tmp_path, 
 
     directives = report["codex_workorder_directives"]
     assert report["summary"]["actionable_unknown_gap_count"] == 1
-    assert report["source_dimension_gap_summary"]["decision_authority"] == "source_quality_gap_discovery"
-    source_gap_directives = [item for item in directives if item["directive_type"] == "RESOLVE_SOURCE_DIMENSION_GAP"]
+    assert (
+        report["source_dimension_gap_summary"]["decision_authority"]
+        == "source_quality_gap_discovery"
+    )
+    source_gap_directives = [
+        item
+        for item in directives
+        if item["directive_type"] == "RESOLVE_SOURCE_DIMENSION_GAP"
+    ]
     assert len(source_gap_directives) == 1
 
 
-def test_runtime_apply_gap_audit_uses_source_dimension_summary_when_candidates_are_truncated(tmp_path, monkeypatch):
+def test_runtime_apply_gap_audit_uses_source_dimension_summary_when_candidates_are_truncated(
+    tmp_path, monkeypatch
+):
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_core_artifacts(report_dir, "2026-05-22")
     _write_json(
-        report_dir / "lifecycle_bucket_discovery" / "lifecycle_bucket_discovery_2026-05-22.json",
+        report_dir
+        / "lifecycle_bucket_discovery"
+        / "lifecycle_bucket_discovery_2026-05-22.json",
         {
             "report_type": "lifecycle_bucket_discovery",
             "source_dimension_gap_summary": {
@@ -155,11 +182,15 @@ def test_runtime_apply_gap_audit_uses_source_dimension_summary_when_candidates_a
     )
 
 
-def test_runtime_apply_gap_audit_emits_quiet_gap_directive_when_rollup_missing(tmp_path, monkeypatch):
+def test_runtime_apply_gap_audit_emits_quiet_gap_directive_when_rollup_missing(
+    tmp_path, monkeypatch
+):
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_core_artifacts(report_dir, "2026-05-22")
     _write_json(
-        report_dir / "lifecycle_bucket_discovery" / "lifecycle_bucket_discovery_2026-05-22.json",
+        report_dir
+        / "lifecycle_bucket_discovery"
+        / "lifecycle_bucket_discovery_2026-05-22.json",
         {
             "report_type": "lifecycle_bucket_discovery",
             "quiet_gap_summary": {
@@ -169,7 +200,10 @@ def test_runtime_apply_gap_audit_emits_quiet_gap_directive_when_rollup_missing(t
                 "quiet_gap_count": 2,
                 "rollup_required_count": 2,
                 "sim_live_connected_quiet_gap_count": 0,
-                "quiet_gap_type_counts": {"parent_conflict_child": 1, "positive_source_only_keep_collecting": 1},
+                "quiet_gap_type_counts": {
+                    "parent_conflict_child": 1,
+                    "positive_source_only_keep_collecting": 1,
+                },
             },
             "surfaced_candidates": [],
         },
@@ -180,21 +214,32 @@ def test_runtime_apply_gap_audit_emits_quiet_gap_directive_when_rollup_missing(t
     assert report["summary"]["quiet_gap_count"] == 2
     assert report["summary"]["quiet_gap_rollup_count"] == 2
     assert report["summary"]["quiet_gap_codex_directive_count"] == 1
-    assert any(item["directive_type"] == "REVIEW_LIFECYCLE_QUIET_GAP" for item in report["codex_workorder_directives"])
+    assert any(
+        item["directive_type"] == "REVIEW_LIFECYCLE_QUIET_GAP"
+        for item in report["codex_workorder_directives"]
+    )
 
 
-def test_runtime_apply_gap_audit_does_not_duplicate_quiet_gap_directive_when_workorder_exists(tmp_path, monkeypatch):
+def test_runtime_apply_gap_audit_does_not_duplicate_quiet_gap_directive_when_workorder_exists(
+    tmp_path, monkeypatch
+):
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_core_artifacts(report_dir, "2026-05-22")
     _write_json(
-        report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-05-22.json",
+        report_dir
+        / "code_improvement_workorder"
+        / "code_improvement_workorder_2026-05-22.json",
         {
             "report_type": "code_improvement_workorder",
-            "orders": [{"order_id": "order_lifecycle_quiet_gap_parent_conflict_rollup"}],
+            "orders": [
+                {"order_id": "order_lifecycle_quiet_gap_parent_conflict_rollup"}
+            ],
         },
     )
     _write_json(
-        report_dir / "lifecycle_bucket_discovery" / "lifecycle_bucket_discovery_2026-05-22.json",
+        report_dir
+        / "lifecycle_bucket_discovery"
+        / "lifecycle_bucket_discovery_2026-05-22.json",
         {
             "report_type": "lifecycle_bucket_discovery",
             "quiet_gap_summary": {
@@ -210,21 +255,32 @@ def test_runtime_apply_gap_audit_does_not_duplicate_quiet_gap_directive_when_wor
 
     assert report["summary"]["quiet_gap_count"] == 1
     assert report["summary"]["quiet_gap_codex_directive_count"] == 0
-    assert not any(item["directive_type"] == "REVIEW_LIFECYCLE_QUIET_GAP" for item in report["codex_workorder_directives"])
+    assert not any(
+        item["directive_type"] == "REVIEW_LIFECYCLE_QUIET_GAP"
+        for item in report["codex_workorder_directives"]
+    )
 
 
-def test_runtime_apply_gap_audit_emits_quiet_gap_directive_for_partial_rollup_handoff(tmp_path, monkeypatch):
+def test_runtime_apply_gap_audit_emits_quiet_gap_directive_for_partial_rollup_handoff(
+    tmp_path, monkeypatch
+):
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_core_artifacts(report_dir, "2026-05-22")
     _write_json(
-        report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-05-22.json",
+        report_dir
+        / "code_improvement_workorder"
+        / "code_improvement_workorder_2026-05-22.json",
         {
             "report_type": "code_improvement_workorder",
-            "orders": [{"order_id": "order_lifecycle_quiet_gap_parent_conflict_rollup"}],
+            "orders": [
+                {"order_id": "order_lifecycle_quiet_gap_parent_conflict_rollup"}
+            ],
         },
     )
     _write_json(
-        report_dir / "lifecycle_bucket_discovery" / "lifecycle_bucket_discovery_2026-05-22.json",
+        report_dir
+        / "lifecycle_bucket_discovery"
+        / "lifecycle_bucket_discovery_2026-05-22.json",
         {
             "report_type": "lifecycle_bucket_discovery",
             "quiet_gap_summary": {
@@ -241,16 +297,26 @@ def test_runtime_apply_gap_audit_emits_quiet_gap_directive_for_partial_rollup_ha
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
 
-    directive = next(item for item in report["codex_workorder_directives"] if item["directive_type"] == "REVIEW_LIFECYCLE_QUIET_GAP")
+    directive = next(
+        item
+        for item in report["codex_workorder_directives"]
+        if item["directive_type"] == "REVIEW_LIFECYCLE_QUIET_GAP"
+    )
     assert report["summary"]["quiet_gap_codex_directive_count"] == 1
-    assert directive["missing_workorder_order_ids"] == ["order_lifecycle_quiet_gap_ai_review_coverage_rollup"]
+    assert directive["missing_workorder_order_ids"] == [
+        "order_lifecycle_quiet_gap_ai_review_coverage_rollup"
+    ]
 
 
-def test_runtime_apply_gap_audit_emits_observation_warning_rollup_directive(tmp_path, monkeypatch):
+def test_runtime_apply_gap_audit_emits_observation_warning_rollup_directive(
+    tmp_path, monkeypatch
+):
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_core_artifacts(report_dir, "2026-05-22")
     _write_json(
-        report_dir / "observation_source_quality_audit" / "observation_source_quality_audit_2026-05-22.json",
+        report_dir
+        / "observation_source_quality_audit"
+        / "observation_source_quality_audit_2026-05-22.json",
         {"status": "warning", "summary": {"warning_stage_count": 1}},
     )
 
@@ -263,7 +329,9 @@ def test_runtime_apply_gap_audit_emits_observation_warning_rollup_directive(tmp_
     )
 
 
-def test_runtime_apply_gap_openai_review_splits_40_candidates_into_10_candidate_shards(monkeypatch):
+def test_runtime_apply_gap_openai_review_splits_40_candidates_into_10_candidate_shards(
+    monkeypatch,
+):
     calls = []
 
     def fake_call(context, config):
@@ -294,10 +362,14 @@ def test_runtime_apply_gap_openai_review_splits_40_candidates_into_10_candidate_
     monkeypatch.setattr(mod, "_call_openai_ai_review", fake_call)
     context = {
         "reviewer": "runtime_apply_gap_ai_review",
-        "review_candidates": [{"candidate_id": f"candidate-{index}"} for index in range(40)],
+        "review_candidates": [
+            {"candidate_id": f"candidate-{index}"} for index in range(40)
+        ],
     }
 
-    raw, status = mod._call_sharded_openai_bedrock_runtime_review(context, config=_runtime_openai_bedrock_config())
+    raw, status = mod._call_sharded_openai_bedrock_runtime_review(
+        context, config=_runtime_openai_bedrock_config()
+    )
     parse_status, payload, warnings = mod._parse_ai_review_response(raw)
 
     assert parse_status == "parsed"
@@ -315,7 +387,9 @@ def test_runtime_apply_gap_openai_review_splits_40_candidates_into_10_candidate_
     assert status["parsed_shard_count"] == 4
 
 
-def test_runtime_apply_gap_openai_shard_failure_uses_bedrock_same_shard_failback(monkeypatch):
+def test_runtime_apply_gap_openai_shard_failure_uses_bedrock_same_shard_failback(
+    monkeypatch,
+):
     calls = []
 
     def fake_call(context, config):
@@ -340,7 +414,11 @@ def test_runtime_apply_gap_openai_shard_failure_uses_bedrock_same_shard_failback
                         }
                         for item in context["review_candidates"]
                     ],
-                    "audit": {"status": "pass", "issues": [], "reason": "bedrock failback"},
+                    "audit": {
+                        "status": "pass",
+                        "issues": [],
+                        "reason": "bedrock failback",
+                    },
                     "codex_directives": [],
                 }
             ),
@@ -351,13 +429,22 @@ def test_runtime_apply_gap_openai_shard_failure_uses_bedrock_same_shard_failback
     monkeypatch.setattr(mod, "_call_bedrock_qwen3_ai_review", fake_bedrock)
     context = {
         "reviewer": "runtime_apply_gap_ai_review",
-        "review_candidates": [{"candidate_id": f"candidate-{index}"} for index in range(12)],
+        "review_candidates": [
+            {"candidate_id": f"candidate-{index}"} for index in range(12)
+        ],
     }
 
-    raw, status = mod._call_sharded_openai_bedrock_runtime_review(context, config=_runtime_openai_bedrock_config())
+    raw, status = mod._call_sharded_openai_bedrock_runtime_review(
+        context, config=_runtime_openai_bedrock_config()
+    )
 
     assert json.loads(raw)["audit"]["reason"] == "Merged bounded shard reviews."
-    assert calls == [("openai", 10), ("bedrock_qwen3", 10), ("openai", 2), ("bedrock_qwen3", 2)]
+    assert calls == [
+        ("openai", 10),
+        ("bedrock_qwen3", 10),
+        ("openai", 2),
+        ("bedrock_qwen3", 2),
+    ]
     assert status["provider"] == "openai"
     assert status["failback_used"] is True
     assert status["failed_shard_ids"] == [1, 2]
@@ -367,7 +454,9 @@ def test_positive_edge_source_only_is_fail_visible(tmp_path, monkeypatch):
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_core_artifacts(report_dir)
     _write_json(
-        report_dir / "lifecycle_bucket_discovery" / "lifecycle_bucket_discovery_2026-05-22.json",
+        report_dir
+        / "lifecycle_bucket_discovery"
+        / "lifecycle_bucket_discovery_2026-05-22.json",
         {
             "surfaced_candidates": [
                 {
@@ -387,19 +476,26 @@ def test_positive_edge_source_only_is_fail_visible(tmp_path, monkeypatch):
 
     assert report["status"] == "fail"
     assert report["summary"]["critical_failure_count"] >= 1
-    assert any(row["failure_reason"] == "positive_edge_stuck_source_only" for row in report["candidate_route_ledger"])
+    assert any(
+        row["failure_reason"] == "positive_edge_stuck_source_only"
+        for row in report["candidate_route_ledger"]
+    )
     assert any(
         item["directive_type"] == "RESOLVE_SOURCE_ONLY_STUCK_POSITIVE_EDGE"
         for item in report["codex_workorder_directives"]
     )
 
 
-def test_positive_edge_source_only_explicit_exclusion_is_provenance_not_fail(tmp_path, monkeypatch):
+def test_positive_edge_source_only_explicit_exclusion_is_provenance_not_fail(
+    tmp_path, monkeypatch
+):
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_core_artifacts(report_dir)
     candidate_id = "lifecycle_flow:combo_lifecycle_flow:source-only"
     _write_json(
-        report_dir / "lifecycle_bucket_discovery" / "lifecycle_bucket_discovery_2026-05-22.json",
+        report_dir
+        / "lifecycle_bucket_discovery"
+        / "lifecycle_bucket_discovery_2026-05-22.json",
         {
             "surfaced_candidates": [
                 {
@@ -420,23 +516,39 @@ def test_positive_edge_source_only_explicit_exclusion_is_provenance_not_fail(tmp
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
 
-    row = next(item for item in report["candidate_route_ledger"] if item["candidate_id"] == candidate_id)
+    row = next(
+        item
+        for item in report["candidate_route_ledger"]
+        if item["candidate_id"] == candidate_id
+    )
     assert row["failure_state"] == "pass"
     assert row["final_disposition"] == "source_only_explicit_exclusion"
     assert row["explicit_runtime_exclusion"] is True
-    assert row["runtime_exclusion_reason"] == "greenfield_policy_not_emitted_no_complete_lifecycle_flow"
+    assert (
+        row["runtime_exclusion_reason"]
+        == "greenfield_policy_not_emitted_no_complete_lifecycle_flow"
+    )
     assert row["derived_review_category"] == "source_only_keep_collecting"
     assert row["derived_review_sub_state"] == "greenfield_policy_not_emitted"
     assert report["summary"]["critical_failure_count"] == 0
-    assert report["summary"]["derived_review_category_counts"]["source_only_keep_collecting"] == 1
+    assert (
+        report["summary"]["derived_review_category_counts"][
+            "source_only_keep_collecting"
+        ]
+        == 1
+    )
     assert not report["codex_workorder_directives"]
 
 
-def test_ai_source_quality_blocker_positive_edge_is_not_runtime_gap_fail(tmp_path, monkeypatch):
+def test_ai_source_quality_blocker_positive_edge_is_not_runtime_gap_fail(
+    tmp_path, monkeypatch
+):
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_core_artifacts(report_dir)
     _write_json(
-        report_dir / "swing_lifecycle_bucket_discovery" / "swing_lifecycle_bucket_discovery_2026-05-22.json",
+        report_dir
+        / "swing_lifecycle_bucket_discovery"
+        / "swing_lifecycle_bucket_discovery_2026-05-22.json",
         {
             "surfaced_candidates": [
                 {
@@ -446,7 +558,9 @@ def test_ai_source_quality_blocker_positive_edge_is_not_runtime_gap_fail(tmp_pat
                     "sample_count": 20,
                     "source_quality_gate": "pass",
                     "source_quality_adjusted_ev_pct": 8.2,
-                    "comparative_review": {"selected_decision": "source_quality_blocker"},
+                    "comparative_review": {
+                        "selected_decision": "source_quality_blocker"
+                    },
                 }
             ]
         },
@@ -460,7 +574,11 @@ def test_ai_source_quality_blocker_positive_edge_is_not_runtime_gap_fail(tmp_pat
                     "schema_version": 1,
                     "reviewer": "runtime_apply_gap_ai_review",
                     "candidate_reviews": [],
-                    "audit": {"status": "pass", "issues": [], "reason": "source quality blocker already explicit"},
+                    "audit": {
+                        "status": "pass",
+                        "issues": [],
+                        "reason": "source quality blocker already explicit",
+                    },
                     "codex_directives": [],
                 }
             ),
@@ -468,9 +586,15 @@ def test_ai_source_quality_blocker_positive_edge_is_not_runtime_gap_fail(tmp_pat
         ),
     )
 
-    report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="openai")
+    report = mod.build_runtime_apply_gap_audit(
+        "2026-05-22", ai_review_provider="openai"
+    )
 
-    row = next(item for item in report["candidate_route_ledger"] if item["candidate_id"] == "swing:blocked-positive")
+    row = next(
+        item
+        for item in report["candidate_route_ledger"]
+        if item["candidate_id"] == "swing:blocked-positive"
+    )
     assert row["failure_state"] == "blocked_source_quality"
     assert row["failure_reason"] == "ai_tier2_source_quality_blocker"
     assert row["final_disposition"] == "source_quality_blocker"
@@ -482,11 +606,15 @@ def test_ai_source_quality_blocker_positive_edge_is_not_runtime_gap_fail(tmp_pat
     )
 
 
-def test_swing_positive_edge_source_only_tier2_missing_is_fail_closed_handoff(tmp_path, monkeypatch):
+def test_swing_positive_edge_source_only_tier2_missing_is_fail_closed_handoff(
+    tmp_path, monkeypatch
+):
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_core_artifacts(report_dir)
     _write_json(
-        report_dir / "swing_lifecycle_bucket_discovery" / "swing_lifecycle_bucket_discovery_2026-05-22.json",
+        report_dir
+        / "swing_lifecycle_bucket_discovery"
+        / "swing_lifecycle_bucket_discovery_2026-05-22.json",
         {
             "surfaced_candidates": [
                 {
@@ -506,7 +634,10 @@ def test_swing_positive_edge_source_only_tier2_missing_is_fail_closed_handoff(tm
                         "sizing_formula_runtime_apply_without_guard",
                     ],
                     "ai_review_status": "missing",
-                    "ai_tier2_proposal": {"proposal_status": "not_provided", "proposal_decision": "reject"},
+                    "ai_tier2_proposal": {
+                        "proposal_status": "not_provided",
+                        "proposal_decision": "reject",
+                    },
                 }
             ]
         },
@@ -514,14 +645,25 @@ def test_swing_positive_edge_source_only_tier2_missing_is_fail_closed_handoff(tm
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
 
-    row = next(item for item in report["candidate_route_ledger"] if item["candidate_id"] == "swing:positive-source-only")
+    row = next(
+        item
+        for item in report["candidate_route_ledger"]
+        if item["candidate_id"] == "swing:positive-source-only"
+    )
     assert row["failure_state"] == "pass"
     assert row["failure_reason"] == ""
     assert row["final_disposition"] == "tier2_fail_closed"
-    assert row["runtime_exclusion_reason"] == "swing_tier2_missing_fail_closed_source_only"
+    assert (
+        row["runtime_exclusion_reason"] == "swing_tier2_missing_fail_closed_source_only"
+    )
     assert row["derived_review_category"] == "tier2_fail_closed_source_only"
     assert report["summary"]["critical_failure_count"] == 0
-    assert report["summary"]["derived_review_category_counts"]["tier2_fail_closed_source_only"] == 1
+    assert (
+        report["summary"]["derived_review_category_counts"][
+            "tier2_fail_closed_source_only"
+        ]
+        == 1
+    )
     assert report["runtime_uptake_kpi"]["runtime_uptake_rate_pct"] == 0.0
     assert not any(
         item["candidate_id"] == "swing:positive-source-only"
@@ -530,11 +672,15 @@ def test_swing_positive_edge_source_only_tier2_missing_is_fail_closed_handoff(tm
     )
 
 
-def test_swing_discovery_candidate_ledger_falls_back_to_lifecycle_stage_and_family(tmp_path, monkeypatch):
+def test_swing_discovery_candidate_ledger_falls_back_to_lifecycle_stage_and_family(
+    tmp_path, monkeypatch
+):
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_core_artifacts(report_dir)
     _write_json(
-        report_dir / "swing_lifecycle_bucket_discovery" / "swing_lifecycle_bucket_discovery_2026-05-22.json",
+        report_dir
+        / "swing_lifecycle_bucket_discovery"
+        / "swing_lifecycle_bucket_discovery_2026-05-22.json",
         {
             "surfaced_candidates": [
                 {
@@ -552,7 +698,11 @@ def test_swing_discovery_candidate_ledger_falls_back_to_lifecycle_stage_and_fami
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
 
-    row = next(item for item in report["candidate_route_ledger"] if item["candidate_id"] == "swing:stage-fallback")
+    row = next(
+        item
+        for item in report["candidate_route_ledger"]
+        if item["candidate_id"] == "swing:stage-fallback"
+    )
     assert row["stage"] == "entry"
     assert row["family"] == "swing_lifecycle_bucket_discovery"
 
@@ -561,7 +711,9 @@ def test_swing_discovery_candidates_do_not_collapse_by_family(tmp_path, monkeypa
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_core_artifacts(report_dir)
     _write_json(
-        report_dir / "swing_lifecycle_bucket_discovery" / "swing_lifecycle_bucket_discovery_2026-05-22.json",
+        report_dir
+        / "swing_lifecycle_bucket_discovery"
+        / "swing_lifecycle_bucket_discovery_2026-05-22.json",
         {
             "surfaced_candidates": [
                 {
@@ -594,11 +746,15 @@ def test_swing_discovery_candidates_do_not_collapse_by_family(tmp_path, monkeypa
     assert {"swing:candidate-a", "swing:candidate-b"}.issubset(swing_ids)
 
 
-def test_swing_ldm_candidates_enter_runtime_gap_ledger_before_discovery(tmp_path, monkeypatch):
+def test_swing_ldm_candidates_enter_runtime_gap_ledger_before_discovery(
+    tmp_path, monkeypatch
+):
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_core_artifacts(report_dir)
     _write_json(
-        report_dir / "swing_lifecycle_decision_matrix" / "swing_lifecycle_decision_matrix_2026-05-22.json",
+        report_dir
+        / "swing_lifecycle_decision_matrix"
+        / "swing_lifecycle_decision_matrix_2026-05-22.json",
         {
             "swing_lifecycle_flow_bucket_attribution": {
                 "sim_auto_approval_candidates": [
@@ -617,7 +773,11 @@ def test_swing_ldm_candidates_enter_runtime_gap_ledger_before_discovery(tmp_path
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
 
-    row = next(item for item in report["candidate_route_ledger"] if item["candidate_id"] == "swing_ldm:flow-a")
+    row = next(
+        item
+        for item in report["candidate_route_ledger"]
+        if item["candidate_id"] == "swing_ldm:flow-a"
+    )
     assert row["source_artifact"] == "swing_lifecycle_decision_matrix"
     assert row["stage"] == "lifecycle_flow"
     assert row["final_disposition"] == "sim_auto_approved"
@@ -627,7 +787,9 @@ def test_swing_ldm_candidates_enter_runtime_gap_ledger_before_discovery(tmp_path
 def test_missing_artifact_enters_retry_queue(tmp_path, monkeypatch):
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_json(
-        report_dir / "lifecycle_bucket_discovery" / "lifecycle_bucket_discovery_2026-05-22.json",
+        report_dir
+        / "lifecycle_bucket_discovery"
+        / "lifecycle_bucket_discovery_2026-05-22.json",
         {"surfaced_candidates": []},
     )
 
@@ -643,7 +805,9 @@ def test_missing_artifact_enters_retry_queue(tmp_path, monkeypatch):
     )
 
 
-def test_ai_review_parse_fail_with_bedrock_failback_failure_is_retryable(tmp_path, monkeypatch):
+def test_ai_review_parse_fail_with_bedrock_failback_failure_is_retryable(
+    tmp_path, monkeypatch
+):
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_core_artifacts(report_dir)
     _write_json(
@@ -665,19 +829,30 @@ def test_ai_review_parse_fail_with_bedrock_failback_failure_is_retryable(tmp_pat
     monkeypatch.setattr(
         mod,
         "_call_openai_ai_review",
-        lambda context, config: ("not-json", {"provider": "openai", "status": "success", "model": config.model}),
+        lambda context, config: (
+            "not-json",
+            {"provider": "openai", "status": "success", "model": config.model},
+        ),
     )
     monkeypatch.setattr(
         mod,
         "_call_bedrock_qwen3_ai_review",
-        lambda context, config, primary_status: (None, {"provider": "bedrock_qwen3", "status": "unavailable"}),
+        lambda context, config, primary_status: (
+            None,
+            {"provider": "bedrock_qwen3", "status": "unavailable"},
+        ),
     )
 
-    report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="openai")
+    report = mod.build_runtime_apply_gap_audit(
+        "2026-05-22", ai_review_provider="openai"
+    )
 
     assert report["ai_reasoning_review"]["failure_code"] == "ai_review_partial_failure"
     assert report["ai_reasoning_review"]["ai_review_retry_pending"] is True
-    assert any(item["failure_code"] == "ai_review_partial_failure" for item in report["retry_queue"])
+    assert any(
+        item["failure_code"] == "ai_review_partial_failure"
+        for item in report["retry_queue"]
+    )
 
 
 def test_ai_reason_is_stored_as_raw_en_and_user_reason_is_ko(tmp_path, monkeypatch):
@@ -725,9 +900,15 @@ def test_ai_reason_is_stored_as_raw_en_and_user_reason_is_ko(tmp_path, monkeypat
         ),
     )
 
-    report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="openai")
+    report = mod.build_runtime_apply_gap_audit(
+        "2026-05-22", ai_review_provider="openai"
+    )
 
-    row = next(item for item in report["candidate_route_ledger"] if item["candidate_id"] == "entry_gap:2026-05-22")
+    row = next(
+        item
+        for item in report["candidate_route_ledger"]
+        if item["candidate_id"] == "entry_gap:2026-05-22"
+    )
     assert row["ai_reason_en"] == "Runtime hook mapping is missing."
     assert row["ai_reason_language_violation"] is False
     assert "코드 보완" in row["reason_ko"]
@@ -755,8 +936,15 @@ def test_ready_but_not_applied_remains_retry_target(tmp_path, monkeypatch):
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
 
-    assert any(item["failure_code"] == "ready_but_not_applied" for item in report["retry_queue"])
-    row = next(item for item in report["candidate_route_ledger"] if item["candidate_id"] == "entry_ready:2026-05-22")
+    assert any(
+        item["failure_code"] == "ready_but_not_applied"
+        for item in report["retry_queue"]
+    )
+    row = next(
+        item
+        for item in report["candidate_route_ledger"]
+        if item["candidate_id"] == "entry_ready:2026-05-22"
+    )
     assert row["final_disposition"] == "post_apply_attribution_pending"
     assert row["retryable"] is True
 
@@ -782,7 +970,9 @@ def test_greenfield_ready_missing_policy_is_fail_before_preopen(tmp_path, monkey
                         "GREENFIELD_REAL_ENV_AUTHORITY_POLICY_FILE",
                     ],
                     "recommended_values": {
-                        "policy_file": str(tmp_path / "missing_greenfield_real_env_policy.json"),
+                        "policy_file": str(
+                            tmp_path / "missing_greenfield_real_env_policy.json"
+                        ),
                         "policy_version": candidate_id,
                     },
                 }
@@ -792,21 +982,32 @@ def test_greenfield_ready_missing_policy_is_fail_before_preopen(tmp_path, monkey
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
 
-    row = next(item for item in report["candidate_route_ledger"] if item["candidate_id"] == candidate_id)
+    row = next(
+        item
+        for item in report["candidate_route_ledger"]
+        if item["candidate_id"] == candidate_id
+    )
     assert report["status"] == "fail"
     assert row["failure_state"] == "fail"
     assert row["failure_reason"] == "greenfield_policy_file_missing"
     assert row["greenfield_policy_state"] == "greenfield_policy_file_missing"
-    assert any(item["failure_code"] == "greenfield_policy_file_missing" for item in report["retry_queue"])
+    assert any(
+        item["failure_code"] == "greenfield_policy_file_missing"
+        for item in report["retry_queue"]
+    )
 
 
-def test_greenfield_discovery_live_candidate_uses_bridge_exclusion_not_handoff_fail(tmp_path, monkeypatch):
+def test_greenfield_discovery_live_candidate_uses_bridge_exclusion_not_handoff_fail(
+    tmp_path, monkeypatch
+):
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_core_artifacts(report_dir)
     family = mod.GREENFIELD_REAL_ENV_FAMILY
     candidate_id = "lifecycle_flow:positive-greenfield"
     _write_json(
-        report_dir / "lifecycle_bucket_discovery" / "lifecycle_bucket_discovery_2026-05-22.json",
+        report_dir
+        / "lifecycle_bucket_discovery"
+        / "lifecycle_bucket_discovery_2026-05-22.json",
         {
             "surfaced_candidates": [
                 {
@@ -838,21 +1039,33 @@ def test_greenfield_discovery_live_candidate_uses_bridge_exclusion_not_handoff_f
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
 
-    row = next(item for item in report["candidate_route_ledger"] if item["candidate_id"] == candidate_id)
+    row = next(
+        item
+        for item in report["candidate_route_ledger"]
+        if item["candidate_id"] == candidate_id
+    )
     assert row["failure_state"] == "pass"
     assert row["final_disposition"] == "source_only_explicit_exclusion"
     assert row["consumer_state"] == "explicit_bridge_exclusion"
     assert row["runtime_exclusion_reason"] == "not_emitted_no_complete_lifecycle_flow"
     assert row["greenfield_policy_emit_blocker"] == "no_live_auto_ready_lifecycle_flow"
-    assert row["greenfield_policy_emit_blocker_detail"] == "complete flow exists but no live-auto ready lifecycle flow"
+    assert (
+        row["greenfield_policy_emit_blocker_detail"]
+        == "complete flow exists but no live-auto ready lifecycle flow"
+    )
     assert row["derived_review_category"] == "source_only_keep_collecting"
     assert row["derived_review_sub_state"] == "greenfield_policy_not_emitted"
-    assert not any(item["failure_code"] == "producer_consumer_handoff_missing" for item in report["retry_queue"])
+    assert not any(
+        item["failure_code"] == "producer_consumer_handoff_missing"
+        for item in report["retry_queue"]
+    )
     assert not report["producer_consumer_contract_drift"]
     assert report["summary"]["critical_failure_count"] == 0
 
 
-def test_ready_bridge_consumed_by_next_preopen_apply_is_not_retry_target(tmp_path, monkeypatch):
+def test_ready_bridge_consumed_by_next_preopen_apply_is_not_retry_target(
+    tmp_path, monkeypatch
+):
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_core_artifacts(report_dir)
     candidate_id = "entry_ready:2026-05-22"
@@ -894,7 +1107,11 @@ def test_ready_bridge_consumed_by_next_preopen_apply_is_not_retry_target(tmp_pat
                     "schema_version": 1,
                     "reviewer": "runtime_apply_gap_ai_review",
                     "candidate_reviews": [],
-                    "audit": {"status": "pass", "issues": [], "reason": "source quality blocker already explicit"},
+                    "audit": {
+                        "status": "pass",
+                        "issues": [],
+                        "reason": "source quality blocker already explicit",
+                    },
                     "codex_directives": [],
                 }
             ),
@@ -902,12 +1119,21 @@ def test_ready_bridge_consumed_by_next_preopen_apply_is_not_retry_target(tmp_pat
         ),
     )
 
-    report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="openai")
+    report = mod.build_runtime_apply_gap_audit(
+        "2026-05-22", ai_review_provider="openai"
+    )
 
-    row = next(item for item in report["candidate_route_ledger"] if item["candidate_id"] == candidate_id)
+    row = next(
+        item
+        for item in report["candidate_route_ledger"]
+        if item["candidate_id"] == candidate_id
+    )
     assert row["preopen_apply_state"] == "consumed_by_next_preopen"
     assert row["failure_state"] == "pass"
-    assert not any(item["failure_code"] == "ready_but_not_applied" for item in report["retry_queue"])
+    assert not any(
+        item["failure_code"] == "ready_but_not_applied"
+        for item in report["retry_queue"]
+    )
 
 
 def test_runtime_hook_gap_closes_with_codex_directive(tmp_path, monkeypatch):
@@ -938,7 +1164,9 @@ def test_runtime_hook_gap_closes_with_codex_directive(tmp_path, monkeypatch):
     )
 
 
-def test_scale_in_env_mapping_gap_emits_scale_in_contract_directive(tmp_path, monkeypatch):
+def test_scale_in_env_mapping_gap_emits_scale_in_contract_directive(
+    tmp_path, monkeypatch
+):
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_core_artifacts(report_dir)
     _write_json(
@@ -969,7 +1197,9 @@ def test_scale_in_env_mapping_gap_emits_scale_in_contract_directive(tmp_path, mo
     )
 
 
-def test_scale_in_policy_source_only_contract_closes_without_directive(tmp_path, monkeypatch):
+def test_scale_in_policy_source_only_contract_closes_without_directive(
+    tmp_path, monkeypatch
+):
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_core_artifacts(report_dir)
     candidate_id = "scale_in_bucket_runtime_policy_v1:2026-05-22"
@@ -1004,15 +1234,24 @@ def test_scale_in_policy_source_only_contract_closes_without_directive(tmp_path,
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
 
-    row = next(item for item in report["candidate_route_ledger"] if item["candidate_id"] == candidate_id)
+    row = next(
+        item
+        for item in report["candidate_route_ledger"]
+        if item["candidate_id"] == candidate_id
+    )
     assert row["final_disposition"] == "source_only_explicit_exclusion"
     assert row["failure_state"] == "pass"
     assert row["runtime_hook_state"] == "not_applicable_source_only"
     assert row["scale_in_policy_contract_state"] == "pass"
-    assert not any(item["candidate_id"] == candidate_id for item in report["codex_workorder_directives"])
+    assert not any(
+        item["candidate_id"] == candidate_id
+        for item in report["codex_workorder_directives"]
+    )
 
 
-def test_scale_in_policy_bare_exclusion_still_emits_contract_directive(tmp_path, monkeypatch):
+def test_scale_in_policy_bare_exclusion_still_emits_contract_directive(
+    tmp_path, monkeypatch
+):
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_core_artifacts(report_dir)
     candidate_id = "scale_in_bucket_runtime_policy_v1:2026-05-22"
@@ -1038,7 +1277,11 @@ def test_scale_in_policy_bare_exclusion_still_emits_contract_directive(tmp_path,
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
 
-    row = next(item for item in report["candidate_route_ledger"] if item["candidate_id"] == candidate_id)
+    row = next(
+        item
+        for item in report["candidate_route_ledger"]
+        if item["candidate_id"] == candidate_id
+    )
     assert row["explicit_runtime_exclusion"] is False
     assert row["scale_in_policy_contract_state"] == "missing_source_link"
     assert any(
@@ -1048,7 +1291,9 @@ def test_scale_in_policy_bare_exclusion_still_emits_contract_directive(tmp_path,
     )
 
 
-def test_scale_in_policy_blank_source_bucket_key_still_emits_contract_directive(tmp_path, monkeypatch):
+def test_scale_in_policy_blank_source_bucket_key_still_emits_contract_directive(
+    tmp_path, monkeypatch
+):
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_core_artifacts(report_dir)
     candidate_id = "scale_in_bucket_runtime_policy_v1:2026-05-22"
@@ -1079,7 +1324,11 @@ def test_scale_in_policy_blank_source_bucket_key_still_emits_contract_directive(
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
 
-    row = next(item for item in report["candidate_route_ledger"] if item["candidate_id"] == candidate_id)
+    row = next(
+        item
+        for item in report["candidate_route_ledger"]
+        if item["candidate_id"] == candidate_id
+    )
     assert row["explicit_runtime_exclusion"] is False
     assert row["scale_in_policy_contract_state"] == "missing_source_bucket_link"
     assert any(
@@ -1089,7 +1338,9 @@ def test_scale_in_policy_blank_source_bucket_key_still_emits_contract_directive(
     )
 
 
-def test_scale_in_policy_live_ready_exclusion_does_not_hide_env_mapping_gap(tmp_path, monkeypatch):
+def test_scale_in_policy_live_ready_exclusion_does_not_hide_env_mapping_gap(
+    tmp_path, monkeypatch
+):
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_core_artifacts(report_dir)
     candidate_id = "scale_in_bucket_runtime_policy_v1:2026-05-22"
@@ -1120,7 +1371,11 @@ def test_scale_in_policy_live_ready_exclusion_does_not_hide_env_mapping_gap(tmp_
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
 
-    row = next(item for item in report["candidate_route_ledger"] if item["candidate_id"] == candidate_id)
+    row = next(
+        item
+        for item in report["candidate_route_ledger"]
+        if item["candidate_id"] == candidate_id
+    )
     assert row["explicit_runtime_exclusion"] is False
     assert row["scale_in_policy_contract_state"] == "future_ready_reopen_required"
     assert row["runtime_hook_state"] == "env_mapping_missing"
@@ -1132,7 +1387,9 @@ def test_scale_in_policy_live_ready_exclusion_does_not_hide_env_mapping_gap(tmp_
     )
 
 
-def test_bridge_counterfactual_source_field_gap_does_not_emit_runtime_directive(tmp_path, monkeypatch):
+def test_bridge_counterfactual_source_field_gap_does_not_emit_runtime_directive(
+    tmp_path, monkeypatch
+):
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_core_artifacts(report_dir)
     candidate_id = "entry_wait6579_score66_69_recovery_gate_v1:2026-05-22"
@@ -1152,7 +1409,11 @@ def test_bridge_counterfactual_source_field_gap_does_not_emit_runtime_directive(
                     "transition_target": "sim_lifecycle_handoff",
                     "explicit_runtime_exclusion": True,
                     "bridge_exclusion_reason": "counterfactual_source_field_gap",
-                    "missing_runtime_source_fields": ["liquidity", "overbought", "time"],
+                    "missing_runtime_source_fields": [
+                        "liquidity",
+                        "overbought",
+                        "time",
+                    ],
                 }
             ]
         },
@@ -1160,7 +1421,11 @@ def test_bridge_counterfactual_source_field_gap_does_not_emit_runtime_directive(
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
 
-    row = next(item for item in report["candidate_route_ledger"] if item["candidate_id"] == candidate_id)
+    row = next(
+        item
+        for item in report["candidate_route_ledger"]
+        if item["candidate_id"] == candidate_id
+    )
     assert row["failure_state"] == "blocked_contract"
     assert row["final_disposition"] == "source_only_explicit_exclusion"
     assert row["runtime_exclusion_reason"] == "counterfactual_source_field_gap"
@@ -1200,11 +1465,18 @@ def test_entry_only_bridge_metadata_is_not_code_patch_directive(tmp_path, monkey
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
 
-    row = next(item for item in report["candidate_route_ledger"] if item["candidate_id"] == candidate_id)
+    row = next(
+        item
+        for item in report["candidate_route_ledger"]
+        if item["candidate_id"] == candidate_id
+    )
     assert row["failure_state"] == "pass"
     assert row["final_disposition"] == "source_only_explicit_exclusion"
     assert row["runtime_hook_state"] == "not_applicable_source_only"
-    assert row["runtime_exclusion_reason"] == "entry_only_bridge_metadata_not_live_candidate"
+    assert (
+        row["runtime_exclusion_reason"]
+        == "entry_only_bridge_metadata_not_live_candidate"
+    )
     assert not any(
         item["candidate_id"] == candidate_id
         and item["directive_type"] == "IMPLEMENT_RUNTIME_BRIDGE_FOR_ENTRY_BUCKET"
@@ -1212,7 +1484,9 @@ def test_entry_only_bridge_metadata_is_not_code_patch_directive(tmp_path, monkey
     )
 
 
-def test_wait6579_bridge_missing_split_bucket_is_sim_lifecycle_handoff(tmp_path, monkeypatch):
+def test_wait6579_bridge_missing_split_bucket_is_sim_lifecycle_handoff(
+    tmp_path, monkeypatch
+):
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_core_artifacts(report_dir)
     candidate_id = "entry_wait6579_score66_69_recovery_gate_v1:2026-05-22"
@@ -1239,7 +1513,11 @@ def test_wait6579_bridge_missing_split_bucket_is_sim_lifecycle_handoff(tmp_path,
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
 
-    row = next(item for item in report["candidate_route_ledger"] if item["candidate_id"] == candidate_id)
+    row = next(
+        item
+        for item in report["candidate_route_ledger"]
+        if item["candidate_id"] == candidate_id
+    )
     assert row["failure_state"] == "blocked_source_quality"
     assert row["final_disposition"] == "source_quality_blocker"
     assert row["runtime_hook_state"] == "not_applicable_source_only"
@@ -1251,7 +1529,9 @@ def test_wait6579_bridge_missing_split_bucket_is_sim_lifecycle_handoff(tmp_path,
     )
 
 
-def test_bridge_bootstrap_pending_with_env_mapping_is_not_code_directive(tmp_path, monkeypatch):
+def test_bridge_bootstrap_pending_with_env_mapping_is_not_code_directive(
+    tmp_path, monkeypatch
+):
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_core_artifacts(report_dir)
     _write_json(
@@ -1277,7 +1557,11 @@ def test_bridge_bootstrap_pending_with_env_mapping_is_not_code_directive(tmp_pat
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
 
-    row = next(item for item in report["candidate_route_ledger"] if item["candidate_id"] == "scale_hold:2026-05-22")
+    row = next(
+        item
+        for item in report["candidate_route_ledger"]
+        if item["candidate_id"] == "scale_hold:2026-05-22"
+    )
     assert row["final_disposition"] == "source_only_keep_collecting"
     assert row["runtime_hook_state"] == "mapped"
     assert not any(
@@ -1324,7 +1608,10 @@ def test_ai_prompt_is_english_and_markdown_is_korean():
             "date": "2026-05-22",
             "status": "fail",
             "summary": {"critical_failure_count": 1},
-            "runtime_uptake_kpi": {"runtime_uptake_rate_pct": 0, "positive_edge_source_quality_pass_count": 1},
+            "runtime_uptake_kpi": {
+                "runtime_uptake_rate_pct": 0,
+                "positive_edge_source_quality_pass_count": 1,
+            },
             "retry_queue": [],
             "codex_workorder_directives": [],
             "aggressive_push_targets": [],

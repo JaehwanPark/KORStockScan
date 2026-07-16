@@ -7,7 +7,9 @@ from src.engine import swing_lifecycle_bucket_discovery as mod
 
 @pytest.fixture(autouse=True)
 def _disable_default_swing_bucket_ai_provider(monkeypatch):
-    monkeypatch.setenv("KORSTOCKSCAN_SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_PROVIDER", "none")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_PROVIDER", "none"
+    )
 
 
 def _ai_response(bucket_ids: list[str]) -> dict:
@@ -53,7 +55,12 @@ def _ai_response(bucket_ids: list[str]) -> dict:
             }
             for bucket_id in bucket_ids
         ],
-        "audit": {"status": "pass", "issues": [], "forbidden_use_violations": [], "reason": "ok"},
+        "audit": {
+            "status": "pass",
+            "issues": [],
+            "forbidden_use_violations": [],
+            "reason": "ok",
+        },
     }
 
 
@@ -119,7 +126,10 @@ def test_swing_lifecycle_bucket_ai_review_rejects_real_preapply_primary_ev_claim
     status, _, warnings = mod._parse_ai_review_response(payload)
 
     assert status == "parse_rejected"
-    assert f"ai_review_comparative_reviews_evidence_authority_violation:{bucket_id}" in warnings
+    assert (
+        f"ai_review_comparative_reviews_evidence_authority_violation:{bucket_id}"
+        in warnings
+    )
 
 
 def test_bucket_discovery_auto_approves_sim_only_candidates(tmp_path, monkeypatch):
@@ -130,21 +140,36 @@ def test_bucket_discovery_auto_approves_sim_only_candidates(tmp_path, monkeypatc
     sim_policy_dir = tmp_path / "swing_sim_policies"
     matrix_dir.mkdir()
     monkeypatch.setattr(mod, "REPORT_DIR", discovery_dir)
-    monkeypatch.setattr("src.engine.swing.sim_auto_approval_control_tower.SIM_AUTO_APPROVAL_DIR", sim_approval_dir)
-    monkeypatch.setattr("src.engine.swing.sim_auto_approval_control_tower.SWING_SIM_POLICY_DIR", sim_policy_dir)
+    monkeypatch.setattr(
+        "src.engine.swing.sim_auto_approval_control_tower.SIM_AUTO_APPROVAL_DIR",
+        sim_approval_dir,
+    )
+    monkeypatch.setattr(
+        "src.engine.swing.sim_auto_approval_control_tower.SWING_SIM_POLICY_DIR",
+        sim_policy_dir,
+    )
 
     matrix_path = matrix_dir / f"swing_lifecycle_decision_matrix_{target}.json"
     matrix_path.write_text(
         json.dumps(
             {
                 "input_contract": {"swing_daily_simulation_consumed": False},
-                "swing_lifecycle_flow_bucket_attribution": {"buckets": [_flow_bucket()]},
-                "entry_bucket_attribution": {"buckets": [], "code_improvement_workorders": []},
+                "swing_lifecycle_flow_bucket_attribution": {
+                    "buckets": [_flow_bucket()]
+                },
+                "entry_bucket_attribution": {
+                    "buckets": [],
+                    "code_improvement_workorders": [],
+                },
             }
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+    monkeypatch.setattr(
+        mod,
+        "matrix_report_paths",
+        lambda target_date: (matrix_path, matrix_path.with_suffix(".md")),
+    )
 
     bucket_id = "swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_entry_good_holding_hold_good_scale_in_scale_in_none_exit_exit_good"
     report = mod.build_swing_lifecycle_bucket_discovery(
@@ -168,8 +193,12 @@ def test_bucket_discovery_auto_approves_sim_only_candidates(tmp_path, monkeypatc
     assert report["allowed_runtime_apply"] is False
 
     mod.write_report(report)
-    approval = json.loads((sim_approval_dir / "swing_sim_auto_approval_2026-05-22.json").read_text())
-    catalog = json.loads((sim_policy_dir / "swing_sim_policy_catalog_2026-05-22.json").read_text())
+    approval = json.loads(
+        (sim_approval_dir / "swing_sim_auto_approval_2026-05-22.json").read_text()
+    )
+    catalog = json.loads(
+        (sim_policy_dir / "swing_sim_policy_catalog_2026-05-22.json").read_text()
+    )
     assert approval["approved"] is True
     assert "swing_lifecycle_bucket_discovery" in approval["approved_source_ids"]
     assert catalog["policies"][0]["bucket_id"] == candidate["bucket_id"]
@@ -182,10 +211,15 @@ def test_ai_review_rejects_candidate_bucket_id_mismatch():
     status, _, warnings = mod._parse_ai_review_response(payload)
 
     assert status == "parse_rejected"
-    assert "ai_review_ai_tier2_proposals_candidate_bucket_id_mismatch:different_id" in warnings
+    assert (
+        "ai_review_ai_tier2_proposals_candidate_bucket_id_mismatch:different_id"
+        in warnings
+    )
 
 
-def test_ai_review_contract_validator_accepts_current_schema_without_candidate_reviews(monkeypatch):
+def test_ai_review_contract_validator_accepts_current_schema_without_candidate_reviews(
+    monkeypatch,
+):
     payload = _ai_response(["bucket_a"])
     captured = {}
 
@@ -193,7 +227,11 @@ def test_ai_review_contract_validator_accepts_current_schema_without_candidate_r
         captured["schema_name"] = kwargs["schema_name"]
         ok, reason = kwargs["contract_validator"](json.dumps(payload))
         assert ok, reason
-        return payload, {"provider": "openai", "status": "success", "model": "test-model"}
+        return payload, {
+            "provider": "openai",
+            "status": "success",
+            "model": "test-model",
+        }
 
     monkeypatch.setattr(
         "src.engine.ai.postclose_structured_review_provider.call_postclose_structured_review",
@@ -240,17 +278,28 @@ def test_bucket_discovery_keeps_stage_only_buckets_source_only(tmp_path, monkeyp
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+    monkeypatch.setattr(
+        mod,
+        "matrix_report_paths",
+        lambda target_date: (matrix_path, matrix_path.with_suffix(".md")),
+    )
 
     report = mod.build_swing_lifecycle_bucket_discovery(target)
 
     assert report["summary"]["sim_auto_approved_count"] == 0
     assert report["summary"]["stage_only_source_only_count"] == 1
-    assert report["surfaced_candidates"][0]["classification_state"] == "source_only_keep_collecting"
-    assert report["surfaced_candidates"][0]["source_section"] == "entry_bucket_attribution"
+    assert (
+        report["surfaced_candidates"][0]["classification_state"]
+        == "source_only_keep_collecting"
+    )
+    assert (
+        report["surfaced_candidates"][0]["source_section"] == "entry_bucket_attribution"
+    )
 
 
-def test_bucket_discovery_reviews_sim_auto_candidates_before_large_source_only_tail(tmp_path, monkeypatch):
+def test_bucket_discovery_reviews_sim_auto_candidates_before_large_source_only_tail(
+    tmp_path, monkeypatch
+):
     target = "2026-05-22"
     matrix_dir = tmp_path / "matrix"
     matrix_dir.mkdir()
@@ -280,7 +329,11 @@ def test_bucket_discovery_reviews_sim_auto_candidates_before_large_source_only_t
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+    monkeypatch.setattr(
+        mod,
+        "matrix_report_paths",
+        lambda target_date: (matrix_path, matrix_path.with_suffix(".md")),
+    )
 
     calls = []
 
@@ -291,7 +344,9 @@ def test_bucket_discovery_reviews_sim_auto_candidates_before_large_source_only_t
             "provider": "openai",
             "status": "success",
             "model": config.model if config else mod.AI_REVIEW_MODEL,
-            "reasoning_effort": config.reasoning_effort if config else mod.AI_REVIEW_REASONING_EFFORT,
+            "reasoning_effort": (
+                config.reasoning_effort if config else mod.AI_REVIEW_REASONING_EFFORT
+            ),
             "input_context_chars": 1000,
         }
 
@@ -307,10 +362,22 @@ def test_bucket_discovery_reviews_sim_auto_candidates_before_large_source_only_t
     assert report["summary"]["ai_fail_closed"] is False
     assert [call["shard_id"] for call in calls] == ["sim_policy_review"]
     assert calls[0]["candidate_ids"] == [sim_bucket_id]
-    assert report["ai_two_pass_review"]["shards"][0]["provider_status"]["model"] == "gpt-5.4-mini"
-    assert report["ai_two_pass_review"]["shards"][0]["provider_status"]["reasoning_effort"] == "medium"
-    assert [item["status"] for item in report["ai_two_pass_review"]["shards"]] == ["parsed", "deferred"]
-    assert report["summary"]["ai_review_orchestration_policy"] == "critical_sim_policy_first"
+    assert (
+        report["ai_two_pass_review"]["shards"][0]["provider_status"]["model"]
+        == "gpt-5.4-mini"
+    )
+    assert (
+        report["ai_two_pass_review"]["shards"][0]["provider_status"]["reasoning_effort"]
+        == "medium"
+    )
+    assert [item["status"] for item in report["ai_two_pass_review"]["shards"]] == [
+        "parsed",
+        "deferred",
+    ]
+    assert (
+        report["summary"]["ai_review_orchestration_policy"]
+        == "critical_sim_policy_first"
+    )
     assert report["summary"]["ai_review_optional_deferred_shard_count"] == 1
     assert report["summary"]["ai_review_optional_deferred_candidate_count"] == 10
     assert report["ai_two_pass_review"]["requested_provider"] == "openai"
@@ -324,13 +391,21 @@ def test_bucket_discovery_reviews_sim_auto_candidates_before_large_source_only_t
     assert report["sim_auto_approved_candidates"][0]["ai_review_coverage"] == "reviewed"
 
 
-def test_bucket_discovery_enabled_non_openai_provider_still_calls_configured_review(tmp_path, monkeypatch):
+def test_bucket_discovery_enabled_non_openai_provider_still_calls_configured_review(
+    tmp_path, monkeypatch
+):
     target = "2026-05-22"
     matrix_dir = tmp_path / "matrix"
     matrix_dir.mkdir()
     monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "discovery")
-    monkeypatch.setattr("src.engine.swing.sim_auto_approval_control_tower.SIM_AUTO_APPROVAL_DIR", tmp_path / "approvals")
-    monkeypatch.setattr("src.engine.swing.sim_auto_approval_control_tower.SWING_SIM_POLICY_DIR", tmp_path / "policies")
+    monkeypatch.setattr(
+        "src.engine.swing.sim_auto_approval_control_tower.SIM_AUTO_APPROVAL_DIR",
+        tmp_path / "approvals",
+    )
+    monkeypatch.setattr(
+        "src.engine.swing.sim_auto_approval_control_tower.SWING_SIM_POLICY_DIR",
+        tmp_path / "policies",
+    )
 
     flow_bucket = _flow_bucket(
         bucket_key="entry=entry_good|holding=hold_good|scale_in=scale_in:none|exit=exit_good",
@@ -347,7 +422,11 @@ def test_bucket_discovery_enabled_non_openai_provider_still_calls_configured_rev
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+    monkeypatch.setattr(
+        mod,
+        "matrix_report_paths",
+        lambda target_date: (matrix_path, matrix_path.with_suffix(".md")),
+    )
 
     calls = []
 
@@ -365,7 +444,9 @@ def test_bucket_discovery_enabled_non_openai_provider_still_calls_configured_rev
 
     monkeypatch.setattr(mod, "_call_openai_ai_review", fake_call)
 
-    report = mod.build_swing_lifecycle_bucket_discovery(target, provider="bedrock_qwen3")
+    report = mod.build_swing_lifecycle_bucket_discovery(
+        target, provider="bedrock_qwen3"
+    )
 
     assert calls
     assert calls[0][1].primary_provider == "bedrock_qwen3"
@@ -374,7 +455,9 @@ def test_bucket_discovery_enabled_non_openai_provider_still_calls_configured_rev
     assert report["ai_two_pass_review"]["primary_provider"] == "bedrock_qwen3"
 
 
-def test_bucket_discovery_repairs_ai_review_ids_by_candidate_order(tmp_path, monkeypatch):
+def test_bucket_discovery_repairs_ai_review_ids_by_candidate_order(
+    tmp_path, monkeypatch
+):
     target = "2026-05-22"
     matrix_dir = tmp_path / "matrix"
     matrix_dir.mkdir()
@@ -385,16 +468,26 @@ def test_bucket_discovery_repairs_ai_review_ids_by_candidate_order(tmp_path, mon
         json.dumps(
             {
                 "input_contract": {"swing_daily_simulation_consumed": False},
-                "swing_lifecycle_flow_bucket_attribution": {"buckets": [_flow_bucket()]},
+                "swing_lifecycle_flow_bucket_attribution": {
+                    "buckets": [_flow_bucket()]
+                },
             }
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+    monkeypatch.setattr(
+        mod,
+        "matrix_report_paths",
+        lambda target_date: (matrix_path, matrix_path.with_suffix(".md")),
+    )
 
     def fake_call(context, **_kwargs):
         payload = _ai_response(["model_rephrased_bucket_id"])
-        return payload, {"provider": "openai", "status": "success", "model": mod.AI_REVIEW_MODEL}
+        return payload, {
+            "provider": "openai",
+            "status": "success",
+            "model": mod.AI_REVIEW_MODEL,
+        }
 
     monkeypatch.setattr(mod, "_call_openai_ai_review", fake_call)
 
@@ -406,17 +499,31 @@ def test_bucket_discovery_repairs_ai_review_ids_by_candidate_order(tmp_path, mon
     assert report["summary"]["ai_review_id_repair_count"] == 2
     assert report["summary"]["sim_auto_approved_count"] == 1
     assert report["sim_auto_approved_candidates"][0]["bucket_id"] == expected_id
-    assert report["sim_auto_approved_candidates"][0]["ai_tier2_proposal"]["bucket_id"] == expected_id
-    assert report["sim_auto_approved_candidates"][0]["comparative_review"]["bucket_id"] == expected_id
+    assert (
+        report["sim_auto_approved_candidates"][0]["ai_tier2_proposal"]["bucket_id"]
+        == expected_id
+    )
+    assert (
+        report["sim_auto_approved_candidates"][0]["comparative_review"]["bucket_id"]
+        == expected_id
+    )
 
 
-def test_bucket_discovery_reviews_all_sim_auto_candidates_in_20_candidate_shards(tmp_path, monkeypatch):
+def test_bucket_discovery_reviews_all_sim_auto_candidates_in_20_candidate_shards(
+    tmp_path, monkeypatch
+):
     target = "2026-05-22"
     matrix_dir = tmp_path / "matrix"
     matrix_dir.mkdir()
     monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "discovery")
-    monkeypatch.setattr("src.engine.swing.sim_auto_approval_control_tower.SIM_AUTO_APPROVAL_DIR", tmp_path / "approvals")
-    monkeypatch.setattr("src.engine.swing.sim_auto_approval_control_tower.SWING_SIM_POLICY_DIR", tmp_path / "policies")
+    monkeypatch.setattr(
+        "src.engine.swing.sim_auto_approval_control_tower.SIM_AUTO_APPROVAL_DIR",
+        tmp_path / "approvals",
+    )
+    monkeypatch.setattr(
+        "src.engine.swing.sim_auto_approval_control_tower.SWING_SIM_POLICY_DIR",
+        tmp_path / "policies",
+    )
 
     flow_buckets = [
         _flow_bucket(
@@ -436,19 +543,30 @@ def test_bucket_discovery_reviews_all_sim_auto_candidates_in_20_candidate_shards
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+    monkeypatch.setattr(
+        mod,
+        "matrix_report_paths",
+        lambda target_date: (matrix_path, matrix_path.with_suffix(".md")),
+    )
 
     calls = []
 
     def fake_call(context, **kwargs):
         calls.append(context)
-        return _ai_response(context["candidate_ids"]), {"provider": "openai", "status": "success", "model": mod.AI_REVIEW_MODEL}
+        return _ai_response(context["candidate_ids"]), {
+            "provider": "openai",
+            "status": "success",
+            "model": mod.AI_REVIEW_MODEL,
+        }
 
     monkeypatch.setattr(mod, "_call_openai_ai_review", fake_call)
 
     report = mod.build_swing_lifecycle_bucket_discovery(target, provider="openai")
 
-    assert [call["shard_id"] for call in calls] == ["sim_policy_review", "sim_policy_review_2"]
+    assert [call["shard_id"] for call in calls] == [
+        "sim_policy_review",
+        "sim_policy_review_2",
+    ]
     assert [len(call["candidate_ids"]) for call in calls] == [20, 1]
     assert report["summary"]["sim_auto_review_shard_count"] == 2
     assert report["summary"]["sim_auto_reviewed_candidate_count"] == 21
@@ -457,13 +575,21 @@ def test_bucket_discovery_reviews_all_sim_auto_candidates_in_20_candidate_shards
     assert report["summary"]["sim_auto_approved_count"] == 21
 
 
-def test_bucket_discovery_partial_sim_auto_shard_failure_only_downgrades_failed_shard(tmp_path, monkeypatch):
+def test_bucket_discovery_partial_sim_auto_shard_failure_only_downgrades_failed_shard(
+    tmp_path, monkeypatch
+):
     target = "2026-05-22"
     matrix_dir = tmp_path / "matrix"
     matrix_dir.mkdir()
     monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "discovery")
-    monkeypatch.setattr("src.engine.swing.sim_auto_approval_control_tower.SIM_AUTO_APPROVAL_DIR", tmp_path / "approvals")
-    monkeypatch.setattr("src.engine.swing.sim_auto_approval_control_tower.SWING_SIM_POLICY_DIR", tmp_path / "policies")
+    monkeypatch.setattr(
+        "src.engine.swing.sim_auto_approval_control_tower.SIM_AUTO_APPROVAL_DIR",
+        tmp_path / "approvals",
+    )
+    monkeypatch.setattr(
+        "src.engine.swing.sim_auto_approval_control_tower.SWING_SIM_POLICY_DIR",
+        tmp_path / "policies",
+    )
 
     flow_buckets = [
         _flow_bucket(
@@ -483,12 +609,24 @@ def test_bucket_discovery_partial_sim_auto_shard_failure_only_downgrades_failed_
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+    monkeypatch.setattr(
+        mod,
+        "matrix_report_paths",
+        lambda target_date: (matrix_path, matrix_path.with_suffix(".md")),
+    )
 
     def fake_call(context, **kwargs):
         if context["shard_id"] == "sim_policy_review_2":
-            return None, {"provider": "openai", "status": "error", "model": mod.AI_REVIEW_MODEL}
-        return _ai_response(context["candidate_ids"]), {"provider": "openai", "status": "success", "model": mod.AI_REVIEW_MODEL}
+            return None, {
+                "provider": "openai",
+                "status": "error",
+                "model": mod.AI_REVIEW_MODEL,
+            }
+        return _ai_response(context["candidate_ids"]), {
+            "provider": "openai",
+            "status": "success",
+            "model": mod.AI_REVIEW_MODEL,
+        }
 
     monkeypatch.setattr(mod, "_call_openai_ai_review", fake_call)
 
@@ -500,23 +638,43 @@ def test_bucket_discovery_partial_sim_auto_shard_failure_only_downgrades_failed_
     assert report["summary"]["sim_auto_unreviewed_candidate_count"] == 1
     assert report["summary"]["sim_auto_downgraded_by_review_count"] == 1
     assert report["summary"]["sim_auto_approved_count"] == 20
-    assert sum(1 for item in report["surfaced_candidates"] if item["classification_state"] == "source_only_keep_collecting") == 1
-    assert sum(1 for item in report["surfaced_candidates"] if item["classification_state"] == "sim_auto_approved") == 20
+    assert (
+        sum(
+            1
+            for item in report["surfaced_candidates"]
+            if item["classification_state"] == "source_only_keep_collecting"
+        )
+        == 1
+    )
+    assert (
+        sum(
+            1
+            for item in report["surfaced_candidates"]
+            if item["classification_state"] == "sim_auto_approved"
+        )
+        == 20
+    )
 
 
-def test_bucket_discovery_taxonomy_correction_does_not_block_parsed_sim_policy(tmp_path, monkeypatch):
+def test_bucket_discovery_taxonomy_correction_does_not_block_parsed_sim_policy(
+    tmp_path, monkeypatch
+):
     target = "2026-05-22"
     matrix_dir = tmp_path / "matrix"
     matrix_dir.mkdir()
     monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "discovery")
-    monkeypatch.setenv("KORSTOCKSCAN_SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_RUN_OPTIONAL_SHARDS", "true")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_RUN_OPTIONAL_SHARDS", "true"
+    )
 
     matrix_path = matrix_dir / f"swing_lifecycle_decision_matrix_{target}.json"
     matrix_path.write_text(
         json.dumps(
             {
                 "input_contract": {"swing_daily_simulation_consumed": False},
-                "swing_lifecycle_flow_bucket_attribution": {"buckets": [_flow_bucket(joined_sample=12)]},
+                "swing_lifecycle_flow_bucket_attribution": {
+                    "buckets": [_flow_bucket(joined_sample=12)]
+                },
                 "entry_bucket_attribution": {
                     "buckets": [
                         {
@@ -534,14 +692,22 @@ def test_bucket_discovery_taxonomy_correction_does_not_block_parsed_sim_policy(t
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+    monkeypatch.setattr(
+        mod,
+        "matrix_report_paths",
+        lambda target_date: (matrix_path, matrix_path.with_suffix(".md")),
+    )
 
     def fake_call(context, **_kwargs):
         payload = _ai_response(context["candidate_ids"])
         if context["shard_id"] == "taxonomy_discovery_review":
             payload["audit"]["status"] = "correction_required"
             payload["audit"]["issues"] = ["source taxonomy should be normalized"]
-        return payload, {"provider": "openai", "status": "success", "model": mod.AI_REVIEW_MODEL}
+        return payload, {
+            "provider": "openai",
+            "status": "success",
+            "model": mod.AI_REVIEW_MODEL,
+        }
 
     monkeypatch.setattr(mod, "_call_openai_ai_review", fake_call)
 
@@ -554,7 +720,9 @@ def test_bucket_discovery_taxonomy_correction_does_not_block_parsed_sim_policy(t
     assert "ai_two_pass_review_fail_closed_sim_auto_blocked" not in report["warnings"]
 
 
-def test_bucket_discovery_sim_policy_audit_correction_blocks_sim_as_followup_not_call_fail(tmp_path, monkeypatch):
+def test_bucket_discovery_sim_policy_audit_correction_blocks_sim_as_followup_not_call_fail(
+    tmp_path, monkeypatch
+):
     target = "2026-05-22"
     matrix_dir = tmp_path / "matrix"
     matrix_dir.mkdir()
@@ -565,18 +733,28 @@ def test_bucket_discovery_sim_policy_audit_correction_blocks_sim_as_followup_not
         json.dumps(
             {
                 "input_contract": {"swing_daily_simulation_consumed": False},
-                "swing_lifecycle_flow_bucket_attribution": {"buckets": [_flow_bucket(joined_sample=12)]},
+                "swing_lifecycle_flow_bucket_attribution": {
+                    "buckets": [_flow_bucket(joined_sample=12)]
+                },
             }
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+    monkeypatch.setattr(
+        mod,
+        "matrix_report_paths",
+        lambda target_date: (matrix_path, matrix_path.with_suffix(".md")),
+    )
 
     def fake_call(context, **_kwargs):
         payload = _ai_response(context["candidate_ids"])
         payload["audit"]["status"] = "correction_required"
         payload["audit"]["issues"] = ["sim policy requires source-only follow-up"]
-        return payload, {"provider": "openai", "status": "success", "model": mod.AI_REVIEW_MODEL}
+        return payload, {
+            "provider": "openai",
+            "status": "success",
+            "model": mod.AI_REVIEW_MODEL,
+        }
 
     monkeypatch.setattr(mod, "_call_openai_ai_review", fake_call)
 
@@ -611,19 +789,25 @@ def test_bucket_discovery_sim_policy_audit_correction_blocks_sim_as_followup_not
     ]
 
 
-def test_bucket_discovery_non_sim_shard_missing_does_not_block_parsed_sim_policy(tmp_path, monkeypatch):
+def test_bucket_discovery_non_sim_shard_missing_does_not_block_parsed_sim_policy(
+    tmp_path, monkeypatch
+):
     target = "2026-05-22"
     matrix_dir = tmp_path / "matrix"
     matrix_dir.mkdir()
     monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "discovery")
-    monkeypatch.setenv("KORSTOCKSCAN_SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_RUN_OPTIONAL_SHARDS", "true")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_RUN_OPTIONAL_SHARDS", "true"
+    )
 
     matrix_path = matrix_dir / f"swing_lifecycle_decision_matrix_{target}.json"
     matrix_path.write_text(
         json.dumps(
             {
                 "input_contract": {"swing_daily_simulation_consumed": False},
-                "swing_lifecycle_flow_bucket_attribution": {"buckets": [_flow_bucket(joined_sample=12)]},
+                "swing_lifecycle_flow_bucket_attribution": {
+                    "buckets": [_flow_bucket(joined_sample=12)]
+                },
                 "entry_bucket_attribution": {
                     "buckets": [
                         {
@@ -641,12 +825,24 @@ def test_bucket_discovery_non_sim_shard_missing_does_not_block_parsed_sim_policy
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+    monkeypatch.setattr(
+        mod,
+        "matrix_report_paths",
+        lambda target_date: (matrix_path, matrix_path.with_suffix(".md")),
+    )
 
     def fake_call(context, **_kwargs):
         if context["shard_id"] == "taxonomy_discovery_review":
-            return None, {"provider": "openai", "status": "timeout", "model": mod.AI_REVIEW_MODEL}
-        return _ai_response(context["candidate_ids"]), {"provider": "openai", "status": "success", "model": mod.AI_REVIEW_MODEL}
+            return None, {
+                "provider": "openai",
+                "status": "timeout",
+                "model": mod.AI_REVIEW_MODEL,
+            }
+        return _ai_response(context["candidate_ids"]), {
+            "provider": "openai",
+            "status": "success",
+            "model": mod.AI_REVIEW_MODEL,
+        }
 
     monkeypatch.setattr(mod, "_call_openai_ai_review", fake_call)
 
@@ -672,13 +868,22 @@ def test_bucket_discovery_provider_disabled_downgrades_sim_auto(tmp_path, monkey
         json.dumps(
             {
                 "input_contract": {"swing_daily_simulation_consumed": False},
-                "swing_lifecycle_flow_bucket_attribution": {"buckets": [_flow_bucket()]},
-                "entry_bucket_attribution": {"buckets": [], "code_improvement_workorders": []},
+                "swing_lifecycle_flow_bucket_attribution": {
+                    "buckets": [_flow_bucket()]
+                },
+                "entry_bucket_attribution": {
+                    "buckets": [],
+                    "code_improvement_workorders": [],
+                },
             }
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+    monkeypatch.setattr(
+        mod,
+        "matrix_report_paths",
+        lambda target_date: (matrix_path, matrix_path.with_suffix(".md")),
+    )
 
     report = mod.build_swing_lifecycle_bucket_discovery(target, provider="none")
 
@@ -717,7 +922,11 @@ def test_bucket_discovery_preserves_matrix_sim_auto_candidate_id(tmp_path, monke
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+    monkeypatch.setattr(
+        mod,
+        "matrix_report_paths",
+        lambda target_date: (matrix_path, matrix_path.with_suffix(".md")),
+    )
 
     report = mod.build_swing_lifecycle_bucket_discovery(target, provider="none")
 
@@ -730,7 +939,9 @@ def test_bucket_discovery_preserves_matrix_sim_auto_candidate_id(tmp_path, monke
     assert candidate["lifecycle_stage"] == "lifecycle_flow"
 
 
-def test_bucket_discovery_consumes_non_flow_matrix_approval_candidate(tmp_path, monkeypatch):
+def test_bucket_discovery_consumes_non_flow_matrix_approval_candidate(
+    tmp_path, monkeypatch
+):
     target = "2026-05-22"
     matrix_dir = tmp_path / "matrix"
     matrix_dir.mkdir()
@@ -760,7 +971,11 @@ def test_bucket_discovery_consumes_non_flow_matrix_approval_candidate(tmp_path, 
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+    monkeypatch.setattr(
+        mod,
+        "matrix_report_paths",
+        lambda target_date: (matrix_path, matrix_path.with_suffix(".md")),
+    )
 
     report = mod.build_swing_lifecycle_bucket_discovery(target, provider="none")
 
@@ -778,7 +993,9 @@ def test_bucket_discovery_consumes_non_flow_matrix_approval_candidate(tmp_path, 
     assert candidate["classification_state"] == "source_only_keep_collecting"
 
 
-def test_bucket_discovery_openai_unavailable_marks_provider_unavailable(tmp_path, monkeypatch):
+def test_bucket_discovery_openai_unavailable_marks_provider_unavailable(
+    tmp_path, monkeypatch
+):
     target = "2026-05-22"
     matrix_dir = tmp_path / "matrix"
     matrix_dir.mkdir()
@@ -789,16 +1006,25 @@ def test_bucket_discovery_openai_unavailable_marks_provider_unavailable(tmp_path
         json.dumps(
             {
                 "input_contract": {"swing_daily_simulation_consumed": False},
-                "swing_lifecycle_flow_bucket_attribution": {"buckets": [_flow_bucket()]},
+                "swing_lifecycle_flow_bucket_attribution": {
+                    "buckets": [_flow_bucket()]
+                },
             }
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+    monkeypatch.setattr(
+        mod,
+        "matrix_report_paths",
+        lambda target_date: (matrix_path, matrix_path.with_suffix(".md")),
+    )
     monkeypatch.setattr(
         mod,
         "_call_openai_ai_review",
-        lambda *args, **kwargs: (None, {"provider": "openai", "status": "timeout", "model": mod.AI_REVIEW_MODEL}),
+        lambda *args, **kwargs: (
+            None,
+            {"provider": "openai", "status": "timeout", "model": mod.AI_REVIEW_MODEL},
+        ),
     )
 
     report = mod.build_swing_lifecycle_bucket_discovery(target, provider="openai")
@@ -822,16 +1048,25 @@ def test_bucket_discovery_parse_rejected_marks_parse_rejected(tmp_path, monkeypa
         json.dumps(
             {
                 "input_contract": {"swing_daily_simulation_consumed": False},
-                "swing_lifecycle_flow_bucket_attribution": {"buckets": [_flow_bucket()]},
+                "swing_lifecycle_flow_bucket_attribution": {
+                    "buckets": [_flow_bucket()]
+                },
             }
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+    monkeypatch.setattr(
+        mod,
+        "matrix_report_paths",
+        lambda target_date: (matrix_path, matrix_path.with_suffix(".md")),
+    )
     monkeypatch.setattr(
         mod,
         "_call_openai_ai_review",
-        lambda *args, **kwargs: ("not-json", {"provider": "openai", "status": "success", "model": mod.AI_REVIEW_MODEL}),
+        lambda *args, **kwargs: (
+            "not-json",
+            {"provider": "openai", "status": "success", "model": mod.AI_REVIEW_MODEL},
+        ),
     )
 
     report = mod.build_swing_lifecycle_bucket_discovery(target, provider="openai")
@@ -854,15 +1089,25 @@ def test_bucket_discovery_flags_daily_simulation_contract_gap(tmp_path, monkeypa
         json.dumps({"input_contract": {"swing_daily_simulation_consumed": True}}),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+    monkeypatch.setattr(
+        mod,
+        "matrix_report_paths",
+        lambda target_date: (matrix_path, matrix_path.with_suffix(".md")),
+    )
 
     report = mod.build_swing_lifecycle_bucket_discovery(target)
 
     assert report["summary"]["source_contract_status"] == "fail"
     assert report["summary"]["runtime_blocked_contract_gap_count"] == 1
-    assert report["surfaced_candidates"][0]["classification_state"] == "runtime_blocked_contract_gap"
+    assert (
+        report["surfaced_candidates"][0]["classification_state"]
+        == "runtime_blocked_contract_gap"
+    )
     assert report["surfaced_candidates"][0]["allowed_runtime_apply"] is False
-    assert "runtime_threshold_mutation" in report["surfaced_candidates"][0]["forbidden_uses"]
+    assert (
+        "runtime_threshold_mutation"
+        in report["surfaced_candidates"][0]["forbidden_uses"]
+    )
 
 
 def test_bucket_discovery_long_bucket_ids_are_unique_and_stable(tmp_path, monkeypatch):
@@ -906,7 +1151,11 @@ def test_bucket_discovery_long_bucket_ids_are_unique_and_stable(tmp_path, monkey
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+    monkeypatch.setattr(
+        mod,
+        "matrix_report_paths",
+        lambda target_date: (matrix_path, matrix_path.with_suffix(".md")),
+    )
 
     report = mod.build_swing_lifecycle_bucket_discovery(target)
 
@@ -915,7 +1164,9 @@ def test_bucket_discovery_long_bucket_ids_are_unique_and_stable(tmp_path, monkey
     assert all(len(item.rsplit("_", 1)[-1]) == 12 for item in bucket_ids)
 
 
-def test_bucket_discovery_code_patch_candidate_proposal_tracks_source_remediation(tmp_path, monkeypatch):
+def test_bucket_discovery_code_patch_candidate_proposal_tracks_source_remediation(
+    tmp_path, monkeypatch
+):
     target = "2026-05-22"
     matrix_dir = tmp_path / "matrix"
     matrix_dir.mkdir()
@@ -943,18 +1194,27 @@ def test_bucket_discovery_code_patch_candidate_proposal_tracks_source_remediatio
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+    monkeypatch.setattr(
+        mod,
+        "matrix_report_paths",
+        lambda target_date: (matrix_path, matrix_path.with_suffix(".md")),
+    )
 
     report = mod.build_swing_lifecycle_bucket_discovery(target)
 
     candidate = report["surfaced_candidates"][0]
     assert candidate["classification_state"] == "code_patch_required"
-    assert candidate["deterministic_proposal"]["proposal_decision"] == "source_quality_blocker"
+    assert (
+        candidate["deterministic_proposal"]["proposal_decision"]
+        == "source_quality_blocker"
+    )
     assert candidate["runtime_effect"] is False
     assert candidate["allowed_runtime_apply"] is False
 
 
-def test_bucket_discovery_downgrades_implemented_source_quality_waiting_sample(tmp_path, monkeypatch):
+def test_bucket_discovery_downgrades_implemented_source_quality_waiting_sample(
+    tmp_path, monkeypatch
+):
     target = "2026-05-22"
     matrix_dir = tmp_path / "matrix"
     matrix_dir.mkdir()
@@ -985,21 +1245,39 @@ def test_bucket_discovery_downgrades_implemented_source_quality_waiting_sample(t
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+    monkeypatch.setattr(
+        mod,
+        "matrix_report_paths",
+        lambda target_date: (matrix_path, matrix_path.with_suffix(".md")),
+    )
 
     report = mod.build_swing_lifecycle_bucket_discovery(target)
 
     candidate = report["surfaced_candidates"][0]
     assert candidate["classification_state"] == "source_only_keep_collecting"
-    assert candidate["source_quality_resolution"]["status"] == "implemented_source_quality_contract_waiting_sample"
+    assert (
+        candidate["source_quality_resolution"]["status"]
+        == "implemented_source_quality_contract_waiting_sample"
+    )
     assert report["summary"]["code_patch_required_count"] == 0
     assert report["summary"]["implemented_source_quality_waiting_sample_count"] == 1
-    assert report["summary"]["implemented_source_quality_waiting_sample_candidate_count"] == 1
-    assert report["summary"]["implemented_source_quality_waiting_sample_workorder_count"] == 0
-    assert report["summary"]["implemented_source_quality_waiting_sample_total_count"] == 1
+    assert (
+        report["summary"]["implemented_source_quality_waiting_sample_candidate_count"]
+        == 1
+    )
+    assert (
+        report["summary"]["implemented_source_quality_waiting_sample_workorder_count"]
+        == 0
+    )
+    assert (
+        report["summary"]["implemented_source_quality_waiting_sample_total_count"] == 1
+    )
     assert report["summary"]["raw_implemented_source_quality_waiting_sample_count"] == 1
     assert report["code_improvement_workorders"] == []
-    assert report["resolved_source_quality_candidates"][0]["bucket_id"] == candidate["bucket_id"]
+    assert (
+        report["resolved_source_quality_candidates"][0]["bucket_id"]
+        == candidate["bucket_id"]
+    )
     markdown = mod.render_markdown(report)
     assert "implemented_source_quality_waiting_sample_count: `1`" in markdown
     assert "implemented_source_quality_waiting_sample_candidate_count: `1`" in markdown
@@ -1034,7 +1312,11 @@ def test_bucket_discovery_normalizes_explicit_workorder_contract(tmp_path, monke
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+    monkeypatch.setattr(
+        mod,
+        "matrix_report_paths",
+        lambda target_date: (matrix_path, matrix_path.with_suffix(".md")),
+    )
 
     report = mod.build_swing_lifecycle_bucket_discovery(target)
     workorder = report["code_improvement_workorders"][0]
@@ -1046,7 +1328,9 @@ def test_bucket_discovery_normalizes_explicit_workorder_contract(tmp_path, monke
     assert "real_order_submit" in workorder["forbidden_uses"]
 
 
-def test_bucket_discovery_excludes_implemented_explicit_workorder_from_active_workorders(tmp_path, monkeypatch):
+def test_bucket_discovery_excludes_implemented_explicit_workorder_from_active_workorders(
+    tmp_path, monkeypatch
+):
     target = "2026-05-22"
     matrix_dir = tmp_path / "matrix"
     matrix_dir.mkdir()
@@ -1073,25 +1357,42 @@ def test_bucket_discovery_excludes_implemented_explicit_workorder_from_active_wo
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+    monkeypatch.setattr(
+        mod,
+        "matrix_report_paths",
+        lambda target_date: (matrix_path, matrix_path.with_suffix(".md")),
+    )
 
     report = mod.build_swing_lifecycle_bucket_discovery(target)
 
     assert report["summary"]["code_patch_required_count"] == 0
     assert report["summary"]["implemented_source_quality_waiting_sample_count"] == 1
-    assert report["summary"]["implemented_source_quality_waiting_sample_candidate_count"] == 0
-    assert report["summary"]["implemented_source_quality_waiting_sample_workorder_count"] == 1
-    assert report["summary"]["implemented_source_quality_waiting_sample_total_count"] == 1
+    assert (
+        report["summary"]["implemented_source_quality_waiting_sample_candidate_count"]
+        == 0
+    )
+    assert (
+        report["summary"]["implemented_source_quality_waiting_sample_workorder_count"]
+        == 1
+    )
+    assert (
+        report["summary"]["implemented_source_quality_waiting_sample_total_count"] == 1
+    )
     assert report["summary"]["raw_implemented_source_quality_waiting_sample_count"] == 0
     assert report["code_improvement_workorders"] == []
     resolved = report["resolved_source_quality_workorders"][0]
     assert resolved["workorder_id"] == "source_gap_waiting_sample"
     assert resolved["runtime_effect"] is False
-    assert resolved["resolution_state"] == "implemented_source_quality_contract_waiting_sample"
+    assert (
+        resolved["resolution_state"]
+        == "implemented_source_quality_contract_waiting_sample"
+    )
     assert "workorder `source_gap_waiting_sample`" in mod.render_markdown(report)
 
 
-def test_bucket_discovery_surfaces_ai_review_augmentation_workorders(tmp_path, monkeypatch):
+def test_bucket_discovery_surfaces_ai_review_augmentation_workorders(
+    tmp_path, monkeypatch
+):
     target = "2026-05-22"
     matrix_dir = tmp_path / "matrix"
     matrix_dir.mkdir()
@@ -1120,7 +1421,11 @@ def test_bucket_discovery_surfaces_ai_review_augmentation_workorders(tmp_path, m
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+    monkeypatch.setattr(
+        mod,
+        "matrix_report_paths",
+        lambda target_date: (matrix_path, matrix_path.with_suffix(".md")),
+    )
 
     report = mod.build_swing_lifecycle_bucket_discovery(target)
 
@@ -1135,9 +1440,16 @@ def test_bucket_discovery_surfaces_ai_review_augmentation_workorders(tmp_path, m
     assert report["summary"]["ai_audit_explicit_gap_count"] == 0
     assert report["ai_audit"]["sim_auto_policy_preserved"] is True
     assert report["ai_audit"]["status"] == "configured_deterministic_two_pass"
-    assert all(item["runtime_effect"] is False for item in report["ai_audit"]["audit_points"])
-    assert all(item["allowed_runtime_apply"] is False for item in report["ai_audit"]["audit_points"])
-    assert all(item["explicit_gap_type"] is None for item in report["ai_audit"]["audit_points"])
+    assert all(
+        item["runtime_effect"] is False for item in report["ai_audit"]["audit_points"]
+    )
+    assert all(
+        item["allowed_runtime_apply"] is False
+        for item in report["ai_audit"]["audit_points"]
+    )
+    assert all(
+        item["explicit_gap_type"] is None for item in report["ai_audit"]["audit_points"]
+    )
     assert "swing_ldm_ai_review_not_configured" not in report["warnings"]
     ai_workorders = [
         item
@@ -1147,7 +1459,9 @@ def test_bucket_discovery_surfaces_ai_review_augmentation_workorders(tmp_path, m
     assert ai_workorders == []
 
 
-def test_bucket_discovery_surfaces_swing_entry_bottleneck_handoff(tmp_path, monkeypatch):
+def test_bucket_discovery_surfaces_swing_entry_bottleneck_handoff(
+    tmp_path, monkeypatch
+):
     target = "2026-05-22"
     matrix_dir = tmp_path / "matrix"
     matrix_dir.mkdir()
@@ -1168,7 +1482,11 @@ def test_bucket_discovery_surfaces_swing_entry_bottleneck_handoff(tmp_path, monk
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+    monkeypatch.setattr(
+        mod,
+        "matrix_report_paths",
+        lambda target_date: (matrix_path, matrix_path.with_suffix(".md")),
+    )
 
     report = mod.build_swing_lifecycle_bucket_discovery(target)
 
@@ -1181,5 +1499,8 @@ def test_bucket_discovery_surfaces_swing_entry_bottleneck_handoff(tmp_path, monk
     assert candidate["next_route"] == "code_improvement_workorder"
     assert candidate["runtime_effect"] is False
     assert candidate["allowed_runtime_apply"] is False
-    assert report["summary"]["swing_entry_bottleneck_primary"] == "SWING_ENTRY_DROUGHT_CRITICAL"
+    assert (
+        report["summary"]["swing_entry_bottleneck_primary"]
+        == "SWING_ENTRY_DROUGHT_CRITICAL"
+    )
     assert report["summary"]["swing_entry_bottleneck_candidate_present"] is True

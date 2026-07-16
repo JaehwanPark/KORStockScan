@@ -18,7 +18,9 @@ def _make_candle(ts: str, open_p: int, high: int, low: int, close: int) -> dict:
 def _write_pipeline_events(tmp_path, target_date: str, rows: list[dict]) -> None:
     path = tmp_path / "pipeline_events"
     path.mkdir(parents=True, exist_ok=True)
-    with open(path / f"pipeline_events_{target_date}.jsonl", "w", encoding="utf-8") as handle:
+    with open(
+        path / f"pipeline_events_{target_date}.jsonl", "w", encoding="utf-8"
+    ) as handle:
         for row in rows:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
@@ -180,9 +182,12 @@ def test_build_wait6579_ev_cohort_report(monkeypatch, tmp_path):
     }
     fake_kiwoom = types.SimpleNamespace(
         get_kiwoom_token=lambda: "dummy",
-        get_minute_candles_ka10080=lambda _token, code, limit=700: candle_map.get(code, []),
+        get_minute_candles_ka10080=lambda _token, code, limit=700: candle_map.get(
+            code, []
+        ),
     )
     import src.utils as utils_pkg
+
     monkeypatch.setattr(utils_pkg, "kiwoom_utils", fake_kiwoom, raising=False)
     monkeypatch.setitem(sys.modules, "src.utils.kiwoom_utils", fake_kiwoom)
 
@@ -220,9 +225,14 @@ def test_build_wait6579_ev_cohort_report(monkeypatch, tmp_path):
         "time_bucket",
         "time_bucket_provenance",
     }.issubset(row_keys)
-    score_probe_row = next(row for row in report["rows"] if row["stock_code"] == "111111")
+    score_probe_row = next(
+        row for row in report["rows"] if row["stock_code"] == "111111"
+    )
     assert score_probe_row["has_score65_74_probe"] is True
-    assert score_probe_row["counterfactual_book"] == "scalp_score65_74_probe_counterfactual"
+    assert (
+        score_probe_row["counterfactual_book"]
+        == "scalp_score65_74_probe_counterfactual"
+    )
     assert score_probe_row["actual_order_submitted"] is False
     assert score_probe_row["broker_order_forbidden"] is True
     assert score_probe_row["liquidity_bucket"] == "liquidity_proxy_strong"
@@ -233,20 +243,26 @@ def test_build_wait6579_ev_cohort_report(monkeypatch, tmp_path):
     assert split_map.get("FULL", 0) == 1
     assert split_map.get("PARTIAL", 0) == 1
 
-    terminal_map = {row["terminal_blocker"]: row["samples"] for row in report["terminal_breakdown"]}
+    terminal_map = {
+        row["terminal_blocker"]: row["samples"] for row in report["terminal_breakdown"]
+    }
     assert terminal_map["blocked_ai_score"] == 1
     assert terminal_map["latency_block"] == 1
     assert report["preflight"]["behavior_change"] == "none"
     assert report["preflight"]["budget_pass_candidates"] == 2
     assert report["preflight"]["latency_block_candidates"] == 1
     assert report["preflight"]["submitted_candidates"] == 0
-    blocker_map = {row["label"]: row["samples"] for row in report["preflight"]["submission_blocker_breakdown"]}
+    blocker_map = {
+        row["label"]: row["samples"]
+        for row in report["preflight"]["submission_blocker_breakdown"]
+    }
     assert blocker_map["no_recovery_check"] == 1
     assert blocker_map["latency_block"] == 1
     assert report["approval_gate"]["min_sample_gate_passed"] is False
     assert report["counterfactual_summary"]["total_candidates"] == 2
     assert report["counterfactual_summary"]["score65_74_probe_candidates"] == 1
     assert report["counterfactual_summary"]["real_execution_quality_source"] == "none"
+
 
 def test_build_wait6579_ev_cohort_report_empty(monkeypatch, tmp_path):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
@@ -260,7 +276,10 @@ def test_build_wait6579_ev_cohort_report_empty(monkeypatch, tmp_path):
     assert report["preflight"]["behavior_change"] == "none"
     assert report["preflight"]["observability_passed"] is True
     assert report["approval_gate"]["threshold_relaxation_approved"] is False
-    assert report["counterfactual_summary"]["book"] == "scalp_score65_74_probe_counterfactual"
+    assert (
+        report["counterfactual_summary"]["book"]
+        == "scalp_score65_74_probe_counterfactual"
+    )
 
 
 def test_wait6579_ev_cohort_excludes_early_accel_recheck_retry(monkeypatch, tmp_path):
@@ -315,7 +334,9 @@ def test_wait6579_ev_cohort_excludes_early_accel_recheck_retry(monkeypatch, tmp_
     assert preflight["rows"] == []
 
 
-def test_wait6579_counterfactual_uses_virtual_qty_without_budget_pass(monkeypatch, tmp_path):
+def test_wait6579_counterfactual_uses_virtual_qty_without_budget_pass(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     target_date = "2026-04-21"
     _write_pipeline_events(
@@ -369,9 +390,12 @@ def test_wait6579_counterfactual_uses_virtual_qty_without_budget_pass(monkeypatc
     ]
     fake_kiwoom = types.SimpleNamespace(
         get_kiwoom_token=lambda: "dummy",
-        get_minute_candles_ka10080=lambda _token, code, limit=700: candles if code == "333333" else [],
+        get_minute_candles_ka10080=lambda _token, code, limit=700: (
+            candles if code == "333333" else []
+        ),
     )
     import src.utils as utils_pkg
+
     monkeypatch.setattr(utils_pkg, "kiwoom_utils", fake_kiwoom, raising=False)
     monkeypatch.setitem(sys.modules, "src.utils.kiwoom_utils", fake_kiwoom)
 

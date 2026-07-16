@@ -70,7 +70,10 @@ class _DummyDB(DBManager):
                 continue
             if strategy is not None and getattr(record, "strategy", None) != strategy:
                 continue
-            if position_tag is not None and getattr(record, "position_tag", None) != position_tag:
+            if (
+                position_tag is not None
+                and getattr(record, "position_tag", None) != position_tag
+            ):
                 continue
             if str(getattr(record, "status", "") or "") not in {"WATCHING", "EXPIRED"}:
                 continue

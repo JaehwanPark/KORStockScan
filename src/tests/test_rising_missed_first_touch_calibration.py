@@ -44,12 +44,16 @@ def test_first_touch_calibration_holds_when_sample_floor_missing(tmp_path, monke
     assert "rolling_closed_first_touch_rows_lt_10" in candidate["calibration_reason"]
 
 
-def test_first_touch_calibration_loss_cluster_creates_tighten_candidate(tmp_path, monkeypatch):
+def test_first_touch_calibration_loss_cluster_creates_tighten_candidate(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(mod, "INPUT_REPORT_DIR", tmp_path / "input")
     mod.INPUT_REPORT_DIR.mkdir(parents=True)
     rows = [_row(i, "first_touch_loss_or_flat") for i in range(7)]
     rows += [_row(100 + i, "first_touch_recovered_profit") for i in range(3)]
-    path = _feedback(mod.INPUT_REPORT_DIR / "rising_missed_intraday_feedback_2026-07-03.json", rows)
+    path = _feedback(
+        mod.INPUT_REPORT_DIR / "rising_missed_intraday_feedback_2026-07-03.json", rows
+    )
 
     report = mod.build_report("2026-07-03", input_paths=[path], generated_at="fixed")
     candidate = report["calibration_candidate"]
@@ -65,12 +69,16 @@ def test_first_touch_calibration_loss_cluster_creates_tighten_candidate(tmp_path
     assert "SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_MODERATE" in candidate["target_env_keys"]
 
 
-def test_first_touch_calibration_recovery_cluster_creates_loosen_candidate(tmp_path, monkeypatch):
+def test_first_touch_calibration_recovery_cluster_creates_loosen_candidate(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(mod, "INPUT_REPORT_DIR", tmp_path / "input")
     mod.INPUT_REPORT_DIR.mkdir(parents=True)
     rows = [_row(i, "first_touch_recovered_profit") for i in range(7)]
     rows += [_row(100 + i, "first_touch_loss_or_flat") for i in range(3)]
-    path = _feedback(mod.INPUT_REPORT_DIR / "rising_missed_intraday_feedback_2026-07-03.json", rows)
+    path = _feedback(
+        mod.INPUT_REPORT_DIR / "rising_missed_intraday_feedback_2026-07-03.json", rows
+    )
 
     report = mod.build_report("2026-07-03", input_paths=[path], generated_at="fixed")
     candidate = report["calibration_candidate"]
@@ -85,12 +93,16 @@ def test_first_touch_calibration_recovery_cluster_creates_loosen_candidate(tmp_p
     )
 
 
-def test_first_touch_calibration_forbidden_uses_and_provenance_contract(tmp_path, monkeypatch):
+def test_first_touch_calibration_forbidden_uses_and_provenance_contract(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(mod, "INPUT_REPORT_DIR", tmp_path / "input")
     mod.INPUT_REPORT_DIR.mkdir(parents=True)
     rows = [_row(i, "first_touch_loss_or_flat") for i in range(10)]
     del rows[0]["runtime_effect"]
-    path = _feedback(mod.INPUT_REPORT_DIR / "rising_missed_intraday_feedback_2026-07-03.json", rows)
+    path = _feedback(
+        mod.INPUT_REPORT_DIR / "rising_missed_intraday_feedback_2026-07-03.json", rows
+    )
 
     report = mod.build_report("2026-07-03", input_paths=[path], generated_at="fixed")
     candidate = report["calibration_candidate"]
@@ -106,7 +118,9 @@ def test_first_touch_calibration_forbidden_uses_and_provenance_contract(tmp_path
     assert "intraday_threshold_mutation" in candidate["forbidden_uses"]
 
 
-def test_first_touch_calibration_blocks_feedback_source_quality_gap(tmp_path, monkeypatch):
+def test_first_touch_calibration_blocks_feedback_source_quality_gap(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(mod, "INPUT_REPORT_DIR", tmp_path / "input")
     mod.INPUT_REPORT_DIR.mkdir(parents=True)
     rows = [_row(i, "first_touch_recovered_profit") for i in range(10)]

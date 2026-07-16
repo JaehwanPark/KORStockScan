@@ -12,44 +12,49 @@ def test_trade_review_restores_completed_trade_from_holding_events(monkeypatch):
         return holding_lines
 
     def _fake_fetch(target_date, code=None):
-        return ([
-            {
-                "id": 1085,
-                "rec_date": target_date,
-                "code": "222800",
-                "name": "심텍",
-                "status": "WATCHING",
-                "strategy": "SCALPING",
-                "position_tag": "SCANNER",
-                "buy_price": 0.0,
-                "buy_qty": 10,
-                "buy_time": "2026-04-06 09:08:57",
-                "sell_price": 56100,
-                "sell_time": "2026-04-06 09:14:45",
-                "profit_rate": -1.58,
-                "realized_pnl_krw": 0,
-            },
-            {
-                "id": 1103,
-                "rec_date": target_date,
-                "code": "222800",
-                "name": "심텍",
-                "status": "WATCHING",
-                "strategy": "SCALPING",
-                "position_tag": "SCANNER",
-                "buy_price": 0.0,
-                "buy_qty": 0,
-                "buy_time": "",
-                "sell_price": 0,
-                "sell_time": "",
-                "profit_rate": 0.0,
-                "realized_pnl_krw": 0,
-            },
-        ], [])
+        return (
+            [
+                {
+                    "id": 1085,
+                    "rec_date": target_date,
+                    "code": "222800",
+                    "name": "심텍",
+                    "status": "WATCHING",
+                    "strategy": "SCALPING",
+                    "position_tag": "SCANNER",
+                    "buy_price": 0.0,
+                    "buy_qty": 10,
+                    "buy_time": "2026-04-06 09:08:57",
+                    "sell_price": 56100,
+                    "sell_time": "2026-04-06 09:14:45",
+                    "profit_rate": -1.58,
+                    "realized_pnl_krw": 0,
+                },
+                {
+                    "id": 1103,
+                    "rec_date": target_date,
+                    "code": "222800",
+                    "name": "심텍",
+                    "status": "WATCHING",
+                    "strategy": "SCALPING",
+                    "position_tag": "SCANNER",
+                    "buy_price": 0.0,
+                    "buy_qty": 0,
+                    "buy_time": "",
+                    "sell_price": 0,
+                    "sell_time": "",
+                    "profit_rate": 0.0,
+                    "realized_pnl_krw": 0,
+                },
+            ],
+            [],
+        )
 
     monkeypatch.setattr(report_mod, "_iter_target_lines", _fake_iter)
     monkeypatch.setattr(report_mod, "_fetch_trade_rows", _fake_fetch)
-    monkeypatch.setattr(report_mod, "find_gatekeeper_snapshot_for_trade", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        report_mod, "find_gatekeeper_snapshot_for_trade", lambda *args, **kwargs: None
+    )
 
     report = report_mod.build_trade_review_report(target_date="2026-04-06")
 
@@ -78,28 +83,33 @@ def test_trade_review_restores_entry_mode_from_holding_events(monkeypatch):
         return holding_lines
 
     def _fake_fetch(target_date, code=None):
-        return ([
-            {
-                "id": 77,
-                "rec_date": target_date,
-                "code": "123456",
-                "name": "테스트",
-                "status": "COMPLETED",
-                "strategy": "SCALPING",
-                "position_tag": "SCANNER",
-                "buy_price": 10000.0,
-                "buy_qty": 1,
-                "buy_time": "2026-04-09 09:08:57",
-                "sell_price": 9900,
-                "sell_time": "2026-04-09 09:09:45",
-                "profit_rate": -1.0,
-                "realized_pnl_krw": -100,
-            },
-        ], [])
+        return (
+            [
+                {
+                    "id": 77,
+                    "rec_date": target_date,
+                    "code": "123456",
+                    "name": "테스트",
+                    "status": "COMPLETED",
+                    "strategy": "SCALPING",
+                    "position_tag": "SCANNER",
+                    "buy_price": 10000.0,
+                    "buy_qty": 1,
+                    "buy_time": "2026-04-09 09:08:57",
+                    "sell_price": 9900,
+                    "sell_time": "2026-04-09 09:09:45",
+                    "profit_rate": -1.0,
+                    "realized_pnl_krw": -100,
+                },
+            ],
+            [],
+        )
 
     monkeypatch.setattr(report_mod, "_iter_target_lines", _fake_iter)
     monkeypatch.setattr(report_mod, "_fetch_trade_rows", _fake_fetch)
-    monkeypatch.setattr(report_mod, "find_gatekeeper_snapshot_for_trade", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        report_mod, "find_gatekeeper_snapshot_for_trade", lambda *args, **kwargs: None
+    )
 
     report = report_mod.build_trade_review_report(target_date="2026-04-09")
     trade = report["sections"]["completed_trades"][0]
@@ -124,28 +134,33 @@ def test_trade_review_compacts_long_timeline(monkeypatch):
         return holding_lines
 
     def _fake_fetch(target_date, code=None):
-        return ([
-            {
-                "id": 1,
-                "rec_date": target_date,
-                "code": "123456",
-                "name": "테스트",
-                "status": "COMPLETED",
-                "strategy": "SCALPING",
-                "position_tag": "SCANNER",
-                "buy_price": 10000.0,
-                "buy_qty": 2,
-                "buy_time": "2026-04-06 09:00:01",
-                "sell_price": 9920,
-                "sell_time": "2026-04-06 09:01:02",
-                "profit_rate": -0.8,
-                "realized_pnl_krw": -160,
-            },
-        ], [])
+        return (
+            [
+                {
+                    "id": 1,
+                    "rec_date": target_date,
+                    "code": "123456",
+                    "name": "테스트",
+                    "status": "COMPLETED",
+                    "strategy": "SCALPING",
+                    "position_tag": "SCANNER",
+                    "buy_price": 10000.0,
+                    "buy_qty": 2,
+                    "buy_time": "2026-04-06 09:00:01",
+                    "sell_price": 9920,
+                    "sell_time": "2026-04-06 09:01:02",
+                    "profit_rate": -0.8,
+                    "realized_pnl_krw": -160,
+                },
+            ],
+            [],
+        )
 
     monkeypatch.setattr(report_mod, "_iter_target_lines", _fake_iter)
     monkeypatch.setattr(report_mod, "_fetch_trade_rows", _fake_fetch)
-    monkeypatch.setattr(report_mod, "find_gatekeeper_snapshot_for_trade", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        report_mod, "find_gatekeeper_snapshot_for_trade", lambda *args, **kwargs: None
+    )
 
     report = report_mod.build_trade_review_report(target_date="2026-04-06")
     trade = report["sections"]["recent_trades"][0]
@@ -172,28 +187,33 @@ def test_trade_review_builds_ai_review_summary(monkeypatch):
         return holding_lines
 
     def _fake_fetch(target_date, code=None):
-        return ([
-            {
-                "id": 1,
-                "rec_date": target_date,
-                "code": "123456",
-                "name": "테스트",
-                "status": "COMPLETED",
-                "strategy": "SCALPING",
-                "position_tag": "SCANNER",
-                "buy_price": 10000.0,
-                "buy_qty": 1,
-                "buy_time": "2026-04-06 09:00:01",
-                "sell_price": 9890,
-                "sell_time": "2026-04-06 09:00:42",
-                "profit_rate": -1.06,
-                "realized_pnl_krw": -110,
-            },
-        ], [])
+        return (
+            [
+                {
+                    "id": 1,
+                    "rec_date": target_date,
+                    "code": "123456",
+                    "name": "테스트",
+                    "status": "COMPLETED",
+                    "strategy": "SCALPING",
+                    "position_tag": "SCANNER",
+                    "buy_price": 10000.0,
+                    "buy_qty": 1,
+                    "buy_time": "2026-04-06 09:00:01",
+                    "sell_price": 9890,
+                    "sell_time": "2026-04-06 09:00:42",
+                    "profit_rate": -1.06,
+                    "realized_pnl_krw": -110,
+                },
+            ],
+            [],
+        )
 
     monkeypatch.setattr(report_mod, "_iter_target_lines", _fake_iter)
     monkeypatch.setattr(report_mod, "_fetch_trade_rows", _fake_fetch)
-    monkeypatch.setattr(report_mod, "find_gatekeeper_snapshot_for_trade", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        report_mod, "find_gatekeeper_snapshot_for_trade", lambda *args, **kwargs: None
+    )
 
     report = report_mod.build_trade_review_report(target_date="2026-04-06")
     summary = report["sections"]["recent_trades"][0]["ai_review_summary"]
@@ -214,32 +234,39 @@ def test_trade_review_hides_unrealistic_holding_age_sec(monkeypatch):
         return holding_lines
 
     def _fake_fetch(target_date, code=None):
-        return ([
-            {
-                "id": 1,
-                "rec_date": target_date,
-                "code": "123456",
-                "name": "테스트",
-                "status": "COMPLETED",
-                "strategy": "SCALPING",
-                "position_tag": "SCANNER",
-                "buy_price": 10000.0,
-                "buy_qty": 1,
-                "buy_time": "2026-04-06 09:00:01",
-                "sell_price": 10100,
-                "sell_time": "2026-04-06 09:00:42",
-                "profit_rate": 1.0,
-                "realized_pnl_krw": 100,
-            },
-        ], [])
+        return (
+            [
+                {
+                    "id": 1,
+                    "rec_date": target_date,
+                    "code": "123456",
+                    "name": "테스트",
+                    "status": "COMPLETED",
+                    "strategy": "SCALPING",
+                    "position_tag": "SCANNER",
+                    "buy_price": 10000.0,
+                    "buy_qty": 1,
+                    "buy_time": "2026-04-06 09:00:01",
+                    "sell_price": 10100,
+                    "sell_time": "2026-04-06 09:00:42",
+                    "profit_rate": 1.0,
+                    "realized_pnl_krw": 100,
+                },
+            ],
+            [],
+        )
 
     monkeypatch.setattr(report_mod, "_iter_target_lines", _fake_iter)
     monkeypatch.setattr(report_mod, "_fetch_trade_rows", _fake_fetch)
-    monkeypatch.setattr(report_mod, "find_gatekeeper_snapshot_for_trade", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        report_mod, "find_gatekeeper_snapshot_for_trade", lambda *args, **kwargs: None
+    )
 
     report = report_mod.build_trade_review_report(target_date="2026-04-06")
     timeline = report["sections"]["recent_trades"][0]["timeline"]
-    bypass_event = next(item for item in timeline if item["stage"] == "ai_holding_reuse_bypass")
+    bypass_event = next(
+        item for item in timeline if item["stage"] == "ai_holding_reuse_bypass"
+    )
 
     assert all(detail["label"] != "재사용 나이" for detail in bypass_event["details"])
 
@@ -255,41 +282,58 @@ def test_trade_review_infers_scalp_preset_hard_stop_from_sell_completed(monkeypa
         return holding_lines
 
     def _fake_fetch(target_date, code=None):
-        return ([
-            {
-                "id": 1407,
-                "rec_date": target_date,
-                "code": "062040",
-                "name": "산일전기",
-                "status": "COMPLETED",
-                "strategy": "SCALPING",
-                "position_tag": "SCALP_BASE",
-                "buy_price": 145707.0,
-                "buy_qty": 26,
-                "buy_time": "2026-04-08 09:54:52",
-                "sell_price": 145000,
-                "sell_time": "2026-04-08 09:55:29",
-                "profit_rate": -0.71,
-                "realized_pnl_krw": -27053,
-            },
-        ], [])
+        return (
+            [
+                {
+                    "id": 1407,
+                    "rec_date": target_date,
+                    "code": "062040",
+                    "name": "산일전기",
+                    "status": "COMPLETED",
+                    "strategy": "SCALPING",
+                    "position_tag": "SCALP_BASE",
+                    "buy_price": 145707.0,
+                    "buy_qty": 26,
+                    "buy_time": "2026-04-08 09:54:52",
+                    "sell_price": 145000,
+                    "sell_time": "2026-04-08 09:55:29",
+                    "profit_rate": -0.71,
+                    "realized_pnl_krw": -27053,
+                },
+            ],
+            [],
+        )
 
     monkeypatch.setattr(report_mod, "_iter_target_lines", _fake_iter)
     monkeypatch.setattr(report_mod, "_fetch_trade_rows", _fake_fetch)
-    monkeypatch.setattr(report_mod, "find_gatekeeper_snapshot_for_trade", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        report_mod, "find_gatekeeper_snapshot_for_trade", lambda *args, **kwargs: None
+    )
 
-    report = report_mod.build_trade_review_report(target_date="2026-04-08", code="062040", scope="all")
+    report = report_mod.build_trade_review_report(
+        target_date="2026-04-08", code="062040", scope="all"
+    )
     trade = report["sections"]["recent_trades"][0]
     timeline_stages = [item["stage"] for item in trade["compact_timeline"]]
-    taxonomy_rows = {item["key"]: item for item in report["sections"]["hard_stop_taxonomy"]["rows"]}
+    taxonomy_rows = {
+        item["key"]: item for item in report["sections"]["hard_stop_taxonomy"]["rows"]
+    }
 
     assert trade["exit_signal"]["exit_rule"] == "scalp_preset_hard_stop_pct"
     assert trade["exit_signal"]["exit_decision_source"] == "PRESET_HARD_STOP"
     assert trade["exit_signal"]["sell_reason_type"] == "LOSS"
     assert trade["exit_signal"]["inferred"] is True
-    assert timeline_stages == ["holding_started", "preset_exit_setup", "exit_signal", "sell_completed"]
+    assert timeline_stages == [
+        "holding_started",
+        "preset_exit_setup",
+        "exit_signal",
+        "sell_completed",
+    ]
     assert taxonomy_rows["scalp_preset_hard_stop_pct"]["count"] == 1
-    assert report["sections"]["hard_stop_taxonomy"]["metrics"]["shadow_hard_stop_events"] == 0
+    assert (
+        report["sections"]["hard_stop_taxonomy"]["metrics"]["shadow_hard_stop_events"]
+        == 0
+    )
 
 
 def test_trade_review_restores_exit_rule_from_sell_order_sent(monkeypatch):
@@ -303,30 +347,37 @@ def test_trade_review_restores_exit_rule_from_sell_order_sent(monkeypatch):
         return holding_lines
 
     def _fake_fetch(target_date, code=None):
-        return ([
-            {
-                "id": 1501,
-                "rec_date": target_date,
-                "code": "000720",
-                "name": "현대건설",
-                "status": "COMPLETED",
-                "strategy": "SCALPING",
-                "position_tag": "SCANNER",
-                "buy_price": 34400.0,
-                "buy_qty": 10,
-                "buy_time": "2026-04-09 09:45:10",
-                "sell_price": 34120,
-                "sell_time": "2026-04-09 09:52:34",
-                "profit_rate": -0.81,
-                "realized_pnl_krw": -2800,
-            },
-        ], [])
+        return (
+            [
+                {
+                    "id": 1501,
+                    "rec_date": target_date,
+                    "code": "000720",
+                    "name": "현대건설",
+                    "status": "COMPLETED",
+                    "strategy": "SCALPING",
+                    "position_tag": "SCANNER",
+                    "buy_price": 34400.0,
+                    "buy_qty": 10,
+                    "buy_time": "2026-04-09 09:45:10",
+                    "sell_price": 34120,
+                    "sell_time": "2026-04-09 09:52:34",
+                    "profit_rate": -0.81,
+                    "realized_pnl_krw": -2800,
+                },
+            ],
+            [],
+        )
 
     monkeypatch.setattr(report_mod, "_iter_target_lines", _fake_iter)
     monkeypatch.setattr(report_mod, "_fetch_trade_rows", _fake_fetch)
-    monkeypatch.setattr(report_mod, "find_gatekeeper_snapshot_for_trade", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        report_mod, "find_gatekeeper_snapshot_for_trade", lambda *args, **kwargs: None
+    )
 
-    report = report_mod.build_trade_review_report(target_date="2026-04-09", code="000720", scope="all")
+    report = report_mod.build_trade_review_report(
+        target_date="2026-04-09", code="000720", scope="all"
+    )
     trade = report["sections"]["recent_trades"][0]
 
     assert trade["exit_signal"]["exit_rule"] == "scalp_scanner_fallback_never_green"

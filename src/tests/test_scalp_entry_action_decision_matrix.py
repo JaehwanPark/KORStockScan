@@ -10,7 +10,10 @@ from src.engine.scalping import entry_ai_gate as entry_gate_mod
 
 def _write_jsonl(path, rows):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n", encoding="utf-8")
+    path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _write_gzip_jsonl(path, rows):
@@ -87,7 +90,9 @@ def test_entry_adm_excludes_early_accel_recheck_retry_rows(tmp_path, monkeypatch
     assert rows[0]["stock_code"] == "222222"
 
 
-def test_scalp_entry_adm_report_aggregates_actions_and_joins_outcomes(tmp_path, monkeypatch):
+def test_scalp_entry_adm_report_aggregates_actions_and_joins_outcomes(
+    tmp_path, monkeypatch
+):
     pipeline_dir = tmp_path / "pipeline_events"
     threshold_dir = tmp_path / "threshold_cycle"
     snapshot_dir = threshold_dir / "snapshots"
@@ -117,7 +122,10 @@ def test_scalp_entry_adm_report_aggregates_actions_and_joins_outcomes(tmp_path, 
                 "record_id": "R2",
                 "emitted_at": "2026-05-18T09:11:00",
                 "emitted_date": "2026-05-18",
-                "fields": {"entry_submit_revalidation_warning": True, "quote_age_ms": "1500"},
+                "fields": {
+                    "entry_submit_revalidation_warning": True,
+                    "quote_age_ms": "1500",
+                },
             },
             {
                 "stage": "entry_submit_revalidation_block",
@@ -125,7 +133,10 @@ def test_scalp_entry_adm_report_aggregates_actions_and_joins_outcomes(tmp_path, 
                 "record_id": "R3",
                 "emitted_at": "2026-05-18T09:12:00",
                 "emitted_date": "2026-05-18",
-                "fields": {"entry_submit_revalidation_block": True, "quote_stale": True},
+                "fields": {
+                    "entry_submit_revalidation_block": True,
+                    "quote_stale": True,
+                },
             },
             {
                 "stage": "pre_submit_liquidity_guard_block",
@@ -141,7 +152,11 @@ def test_scalp_entry_adm_report_aggregates_actions_and_joins_outcomes(tmp_path, 
                 "record_id": "R5P",
                 "emitted_at": "2026-05-18T09:13:30",
                 "emitted_date": "2026-05-18",
-                "fields": {"sim_record_id": "SIM1", "best_ask": "1000", "would_limit_fill": False},
+                "fields": {
+                    "sim_record_id": "SIM1",
+                    "best_ask": "1000",
+                    "would_limit_fill": False,
+                },
             },
             {
                 "stage": "scalp_sim_buy_order_assumed_filled",
@@ -149,7 +164,11 @@ def test_scalp_entry_adm_report_aggregates_actions_and_joins_outcomes(tmp_path, 
                 "record_id": "R5",
                 "emitted_at": "2026-05-18T09:14:00",
                 "emitted_date": "2026-05-18",
-                "fields": {"sim_record_id": "SIM1", "best_ask": "1000", "would_limit_fill": False},
+                "fields": {
+                    "sim_record_id": "SIM1",
+                    "best_ask": "1000",
+                    "would_limit_fill": False,
+                },
             },
             {
                 "stage": "scalp_sim_entry_ai_price_skip_order",
@@ -238,10 +257,19 @@ def test_scalp_entry_adm_report_aggregates_actions_and_joins_outcomes(tmp_path, 
     }
     assert report["summary"]["joined_sample"] == 2
     assert report["summary"]["outcome_join_diagnostic"]["status"] == "joined"
-    assert report["summary"]["outcome_join_diagnostic"]["candidate_post_sell_key_overlap_count"] >= 2
+    assert (
+        report["summary"]["outcome_join_diagnostic"][
+            "candidate_post_sell_key_overlap_count"
+        ]
+        >= 2
+    )
     assert report["summary"]["outcome_join_diagnostic"]["runtime_effect"] is False
-    buy_now = next(item for item in report["action_summary"] if item["action"] == "BUY_NOW")
-    defensive = next(item for item in report["action_summary"] if item["action"] == "BUY_DEFENSIVE")
+    buy_now = next(
+        item for item in report["action_summary"] if item["action"] == "BUY_NOW"
+    )
+    defensive = next(
+        item for item in report["action_summary"] if item["action"] == "BUY_DEFENSIVE"
+    )
     assert buy_now["equal_weight_avg_profit_pct"] == 1.25
     assert defensive["equal_weight_avg_profit_pct"] == -1.0
     assert report["summary"]["prompt_applied_count"] == 1
@@ -252,12 +280,16 @@ def test_scalp_entry_adm_report_aggregates_actions_and_joins_outcomes(tmp_path, 
     assert report["examples"] == report["rows"][:50]
     sim_row = next(item for item in report["rows"] if item["sim_record_id"] == "SIM1")
     assert sim_row["stage"] == "scalp_sim_buy_order_assumed_filled"
-    price_skip_row = next(item for item in report["rows"] if item["sim_record_id"] == "SIM2")
+    price_skip_row = next(
+        item for item in report["rows"] if item["sim_record_id"] == "SIM2"
+    )
     assert price_skip_row["chosen_action"] == "SKIP_PRE_SUBMIT_SAFETY"
     assert (report_dir / "scalp_entry_action_decision_matrix_2026-05-18.json").exists()
 
 
-def test_scalp_entry_adm_report_excludes_numeric_inconsistency_rows_from_aggregates(tmp_path, monkeypatch):
+def test_scalp_entry_adm_report_excludes_numeric_inconsistency_rows_from_aggregates(
+    tmp_path, monkeypatch
+):
     pipeline_dir = tmp_path / "pipeline_events"
     threshold_dir = tmp_path / "threshold_cycle"
     snapshot_dir = threshold_dir / "snapshots"
@@ -309,18 +341,25 @@ def test_scalp_entry_adm_report_excludes_numeric_inconsistency_rows_from_aggrega
     assert report["summary"]["joined_sample_all_rows"] == 0
     assert report["summary"]["aggregate_joined_sample"] == 0
     assert report["summary"]["numeric_consistency_excluded_count"] == 1
-    assert report["summary"]["outcome_join_diagnostic"]["status"] == "post_sell_evaluation_missing_or_empty"
+    assert (
+        report["summary"]["outcome_join_diagnostic"]["status"]
+        == "post_sell_evaluation_missing_or_empty"
+    )
     assert (
         report["summary"]["outcome_join_diagnostic"]["zero_join_reason"]
         == "no_post_sell_evaluation_rows_for_target_date"
     )
     assert "ai_numeric_consistency_rows_excluded_from_aggregates" in report["warnings"]
     assert "joined_sample_below_sample_floor" in report["warnings"]
-    no_buy = next(item for item in report["action_summary"] if item["action"] == "NO_BUY_AI")
+    no_buy = next(
+        item for item in report["action_summary"] if item["action"] == "NO_BUY_AI"
+    )
     assert no_buy["sample_count"] == 1
 
 
-def test_scalp_entry_adm_report_explains_zero_join_when_keys_do_not_overlap(tmp_path, monkeypatch):
+def test_scalp_entry_adm_report_explains_zero_join_when_keys_do_not_overlap(
+    tmp_path, monkeypatch
+):
     pipeline_dir = tmp_path / "pipeline_events"
     threshold_dir = tmp_path / "threshold_cycle"
     post_sell_dir = tmp_path / "post_sell"
@@ -350,7 +389,13 @@ def test_scalp_entry_adm_report_explains_zero_join_when_keys_do_not_overlap(tmp_
     )
     _write_jsonl(
         post_sell_dir / "sim_post_sell_evaluations_2026-05-18.jsonl",
-        [{"candidate_id": "OTHER-ADM", "profit_rate": 1.25, "outcome": "MISSED_UPSIDE"}],
+        [
+            {
+                "candidate_id": "OTHER-ADM",
+                "profit_rate": 1.25,
+                "outcome": "MISSED_UPSIDE",
+            }
+        ],
     )
 
     report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
@@ -383,7 +428,9 @@ def test_scalp_entry_adm_loads_gzip_sim_evaluations(tmp_path, monkeypatch):
     assert rows["SIM1"]["profit_rate"] == 1.25
 
 
-def test_scalp_entry_adm_event_paths_include_gzip_threshold_events(tmp_path, monkeypatch):
+def test_scalp_entry_adm_event_paths_include_gzip_threshold_events(
+    tmp_path, monkeypatch
+):
     threshold_dir = tmp_path / "threshold_cycle"
     monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", threshold_dir)
     monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", tmp_path / "pipeline_events")
@@ -393,10 +440,14 @@ def test_scalp_entry_adm_event_paths_include_gzip_threshold_events(tmp_path, mon
         [{"stage": "scalp_entry_action_decision_snapshot", "fields": {}}],
     )
 
-    assert mod._event_paths("2026-05-18") == [threshold_dir / "threshold_events_2026-05-18.jsonl.gz"]
+    assert mod._event_paths("2026-05-18") == [
+        threshold_dir / "threshold_events_2026-05-18.jsonl.gz"
+    ]
 
 
-def test_scalp_entry_adm_report_warns_on_unknown_bucket_source_quality(tmp_path, monkeypatch):
+def test_scalp_entry_adm_report_warns_on_unknown_bucket_source_quality(
+    tmp_path, monkeypatch
+):
     pipeline_dir = tmp_path / "pipeline_events"
     threshold_dir = tmp_path / "threshold_cycle"
     report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
@@ -429,20 +480,30 @@ def test_scalp_entry_adm_report_warns_on_unknown_bucket_source_quality(tmp_path,
     assert unknown_summary["source_quality_gate"] == "source_quality_blocker"
     assert unknown_summary["recommended_route"] == "source_quality_workorder"
     assert 1 <= unknown_summary["affected_rows"] <= unknown_summary["total_rows"]
-    assert unknown_summary["not_available_affected_rows"] <= unknown_summary["total_rows"]
+    assert (
+        unknown_summary["not_available_affected_rows"] <= unknown_summary["total_rows"]
+    )
     assert unknown_summary["dimension_counts"]["score_bucket"] == 1
-    assert unknown_summary["unknown_root_cause_counts"]["score_bucket:source_score_missing"] == 1
+    assert (
+        unknown_summary["unknown_root_cause_counts"][
+            "score_bucket:source_score_missing"
+        ]
+        == 1
+    )
     assert unknown_summary["score_source_missing_count"] == 1
     assert unknown_summary["score_source_missing_provenance"]["runtime_effect"] is False
-    assert unknown_summary["score_source_missing_provenance"]["allowed_runtime_apply"] is False
+    assert (
+        unknown_summary["score_source_missing_provenance"]["allowed_runtime_apply"]
+        is False
+    )
     assert unknown_summary["score_source_missing_examples"][0]["expected_source_fields"]
     assert "unknown_dimension_occurrence_count" in unknown_summary
     assert "not_available_dimension_counts" in unknown_summary
     assert "recomputed_unknown_count" in unknown_summary
     assert "adm_source_bucket_used_count" in unknown_summary
-    assert "unknown_bucket_affected_rows" in (report_dir / "scalp_entry_action_decision_matrix_2026-05-18.md").read_text(
-        encoding="utf-8"
-    )
+    assert "unknown_bucket_affected_rows" in (
+        report_dir / "scalp_entry_action_decision_matrix_2026-05-18.md"
+    ).read_text(encoding="utf-8")
 
 
 def test_scalp_entry_adm_normalizes_submitted_snapshot_action():
@@ -460,7 +521,10 @@ def test_scalp_entry_adm_normalizes_submitted_snapshot_action():
         "price_resolution_reason": "defensive_order_price",
     }
 
-    assert mod._chosen_action("scalp_entry_action_decision_snapshot", fields) == "BUY_DEFENSIVE"
+    assert (
+        mod._chosen_action("scalp_entry_action_decision_snapshot", fields)
+        == "BUY_DEFENSIVE"
+    )
     row = mod._base_row(
         {
             "stage": "scalp_entry_action_decision_snapshot",
@@ -473,7 +537,10 @@ def test_scalp_entry_adm_normalizes_submitted_snapshot_action():
     assert row["raw_chosen_action"] == "NO_BUY_AI"
     assert row["chosen_action"] == "BUY_DEFENSIVE"
     assert row["action_normalized"] is True
-    assert row["action_normalization_reason"] == "submitted_or_latency_pass_non_buy_action_normalized"
+    assert (
+        row["action_normalization_reason"]
+        == "submitted_or_latency_pass_non_buy_action_normalized"
+    )
     assert row["broker_order_submitted"] is True
     assert row["broker_order_no"] == "0046858"
     assert row["order_no"] == "0046858"
@@ -494,11 +561,24 @@ def test_scalp_entry_adm_normalizes_submitted_snapshot_action():
 
 
 def test_scalp_entry_adm_ai_confirmed_uses_score_as_prior_not_hard_gate(monkeypatch):
-    monkeypatch.setattr(entry_gate_mod, "TRADING_RULES", replace(entry_gate_mod.TRADING_RULES, BUY_SCORE_THRESHOLD=70))
+    monkeypatch.setattr(
+        entry_gate_mod,
+        "TRADING_RULES",
+        replace(entry_gate_mod.TRADING_RULES, BUY_SCORE_THRESHOLD=70),
+    )
 
-    assert mod._chosen_action("ai_confirmed", {"action": "BUY", "ai_score": "72"}) == "BUY_NOW"
-    assert mod._chosen_action("ai_confirmed", {"action": "BUY", "ai_score": "69"}) == "BUY_NOW"
-    assert mod._chosen_action("ai_confirmed", {"action": "WAIT", "ai_score": "90"}) == "NO_BUY_AI"
+    assert (
+        mod._chosen_action("ai_confirmed", {"action": "BUY", "ai_score": "72"})
+        == "BUY_NOW"
+    )
+    assert (
+        mod._chosen_action("ai_confirmed", {"action": "BUY", "ai_score": "69"})
+        == "BUY_NOW"
+    )
+    assert (
+        mod._chosen_action("ai_confirmed", {"action": "WAIT", "ai_score": "90"})
+        == "NO_BUY_AI"
+    )
 
 
 def test_scalp_entry_adm_preserves_submit_refresh_provenance():
@@ -557,7 +637,9 @@ def test_scalp_entry_adm_preserves_submit_refresh_provenance():
     assert row["pre_submit_ws_snapshot_refresh_age_ms"] == 12.0
 
 
-def test_scalp_entry_adm_runtime_context_adds_prompt_and_cache_token(tmp_path, monkeypatch):
+def test_scalp_entry_adm_runtime_context_adds_prompt_and_cache_token(
+    tmp_path, monkeypatch
+):
     report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
     report_dir.mkdir(parents=True)
     monkeypatch.setattr(runtime_mod, "ADM_DIR", report_dir)
@@ -597,9 +679,14 @@ def test_scalp_entry_adm_runtime_context_adds_prompt_and_cache_token(tmp_path, m
     )
 
     assert context["applied"] is True
-    assert context["cache_token"] == f"entry_adm:scalp_entry_adm_v1_2026-05-18:{bucket_token}"
+    assert (
+        context["cache_token"]
+        == f"entry_adm:scalp_entry_adm_v1_2026-05-18:{bucket_token}"
+    )
     assert "[Entry ADM Advisory Context]" in context["prompt_context"]
-    merged = runtime_mod.merge_scalp_entry_adm_result_fields({"action": "BUY", "score": 78}, context)
+    merged = runtime_mod.merge_scalp_entry_adm_result_fields(
+        {"action": "BUY", "score": 78}, context
+    )
     assert merged["entry_adm_prompt_applied"] is True
     assert merged["entry_adm_bucket_token"] == bucket_token
     assert merged["entry_adm_bucket_schema_version"] == "entry_adm_bucket_v2"
@@ -625,7 +712,9 @@ def test_scalp_entry_adm_runtime_context_adds_prompt_and_cache_token(tmp_path, m
     assert excluded["status"] == "excluded_non_entry_prompt"
 
 
-def test_scalp_entry_adm_runtime_bias_forces_wait_on_negative_buy_bucket(tmp_path, monkeypatch):
+def test_scalp_entry_adm_runtime_bias_forces_wait_on_negative_buy_bucket(
+    tmp_path, monkeypatch
+):
     report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
     report_dir.mkdir(parents=True)
     monkeypatch.setattr(runtime_mod, "ADM_DIR", report_dir)
@@ -668,20 +757,33 @@ def test_scalp_entry_adm_runtime_bias_forces_wait_on_negative_buy_bucket(tmp_pat
         ai_score=78,
     )
 
-    merged = runtime_mod.merge_scalp_entry_adm_result_fields({"action": "BUY", "score": 78}, context)
+    merged = runtime_mod.merge_scalp_entry_adm_result_fields(
+        {"action": "BUY", "score": 78}, context
+    )
 
     assert merged["action"] == "WAIT"
     assert merged["entry_adm_runtime_bias_applied"] is True
     assert merged["entry_adm_runtime_effect"] == "force_wait"
-    assert merged["entry_adm_runtime_reason"] == "bucket_negative_source_quality_adjusted_ev"
+    assert (
+        merged["entry_adm_runtime_reason"]
+        == "bucket_negative_source_quality_adjusted_ev"
+    )
 
 
-def test_scalp_entry_adm_runtime_maps_runtime_context_without_unknown_buckets(tmp_path, monkeypatch):
+def test_scalp_entry_adm_runtime_maps_runtime_context_without_unknown_buckets(
+    tmp_path, monkeypatch
+):
     report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
     report_dir.mkdir(parents=True)
     monkeypatch.setattr(runtime_mod, "ADM_DIR", report_dir)
     (report_dir / "scalp_entry_action_decision_matrix_2026-05-18.json").write_text(
-        json.dumps({"date": "2026-05-18", "matrix_version": "scalp_entry_adm_v1_2026-05-18", "bucket_summary": []}),
+        json.dumps(
+            {
+                "date": "2026-05-18",
+                "matrix_version": "scalp_entry_adm_v1_2026-05-18",
+                "bucket_summary": [],
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -907,12 +1009,16 @@ def test_scalp_entry_adm_runtime_strength_bucket_still_works_without_pressure_pr
     )
 
 
-def test_scalp_entry_adm_report_and_runtime_share_market_regime_bucket_contract(tmp_path, monkeypatch):
+def test_scalp_entry_adm_report_and_runtime_share_market_regime_bucket_contract(
+    tmp_path, monkeypatch
+):
     pipeline_dir = tmp_path / "pipeline_events"
     report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
     monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
     monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
-    monkeypatch.setattr(mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots")
+    monkeypatch.setattr(
+        mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots"
+    )
     monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
     monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
     monkeypatch.setattr(runtime_mod, "ADM_DIR", report_dir)
@@ -942,7 +1048,9 @@ def test_scalp_entry_adm_report_and_runtime_share_market_regime_bucket_contract(
 
     report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
     report_token = report["rows"][0]["entry_adm_bucket_token_recomputed"]
-    assert report["rows"][0]["market_regime_continuous_bucket"] == "market_regime_risk_on"
+    assert (
+        report["rows"][0]["market_regime_continuous_bucket"] == "market_regime_risk_on"
+    )
 
     context = runtime_mod.build_scalp_entry_adm_runtime_context(
         prompt_profile="watching",
@@ -960,7 +1068,9 @@ def test_scalp_entry_adm_report_and_runtime_share_market_regime_bucket_contract(
     )
 
     fields = context["fields"]
-    assert fields["entry_adm_market_regime_continuous_bucket"] == "market_regime_risk_on"
+    assert (
+        fields["entry_adm_market_regime_continuous_bucket"] == "market_regime_risk_on"
+    )
     assert fields["entry_adm_bucket_token"] == report_token
 
 
@@ -1006,14 +1116,18 @@ def test_scalp_entry_adm_bucket_sample_floor_blocks_force_wait(tmp_path, monkeyp
         ai_score=78,
     )
 
-    merged = runtime_mod.merge_scalp_entry_adm_result_fields({"action": "BUY", "score": 78}, context)
+    merged = runtime_mod.merge_scalp_entry_adm_result_fields(
+        {"action": "BUY", "score": 78}, context
+    )
 
     assert merged["action"] == "BUY"
     assert merged["entry_adm_runtime_bias_applied"] is False
     assert merged["entry_adm_runtime_reason"] == "bucket_sample_below_floor"
 
 
-def test_scalp_entry_adm_hypothesis_fallback_is_provenance_only_by_default(tmp_path, monkeypatch):
+def test_scalp_entry_adm_hypothesis_fallback_is_provenance_only_by_default(
+    tmp_path, monkeypatch
+):
     report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
     report_dir.mkdir(parents=True)
     monkeypatch.setattr(runtime_mod, "ADM_DIR", report_dir)
@@ -1023,7 +1137,13 @@ def test_scalp_entry_adm_hypothesis_fallback_is_provenance_only_by_default(tmp_p
         replace(runtime_mod.TRADING_RULES, SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED=True),
     )
     (report_dir / "scalp_entry_action_decision_matrix_2026-05-18.json").write_text(
-        json.dumps({"date": "2026-05-18", "matrix_version": "scalp_entry_adm_v1_2026-05-18", "bucket_summary": []}),
+        json.dumps(
+            {
+                "date": "2026-05-18",
+                "matrix_version": "scalp_entry_adm_v1_2026-05-18",
+                "bucket_summary": [],
+            }
+        ),
         encoding="utf-8",
     )
     context = runtime_mod.build_scalp_entry_adm_runtime_context(
@@ -1043,19 +1163,28 @@ def test_scalp_entry_adm_hypothesis_fallback_is_provenance_only_by_default(tmp_p
         ai_score=78,
     )
 
-    merged = runtime_mod.merge_scalp_entry_adm_result_fields({"action": "BUY", "score": 78}, context)
+    merged = runtime_mod.merge_scalp_entry_adm_result_fields(
+        {"action": "BUY", "score": 78}, context
+    )
 
     assert merged["action"] == "BUY"
     assert merged["entry_adm_runtime_bias_applied"] is False
-    assert merged["entry_adm_runtime_reason"] == "hypothesis_weak_momentum_chase_risk_provenance_only"
+    assert (
+        merged["entry_adm_runtime_reason"]
+        == "hypothesis_weak_momentum_chase_risk_provenance_only"
+    )
 
 
-def test_scalp_entry_adm_prioritizes_adm_source_buckets_over_raw_recompute(tmp_path, monkeypatch):
+def test_scalp_entry_adm_prioritizes_adm_source_buckets_over_raw_recompute(
+    tmp_path, monkeypatch
+):
     pipeline_dir = tmp_path / "pipeline_events"
     report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
     monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
     monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
-    monkeypatch.setattr(mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots")
+    monkeypatch.setattr(
+        mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots"
+    )
     monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
     monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
 
@@ -1092,8 +1221,14 @@ def test_scalp_entry_adm_prioritizes_adm_source_buckets_over_raw_recompute(tmp_p
     assert row["price_resolution_bucket"] == "quote_based"
     assert row["liquidity_bucket"] == "liquidity_high"
     assert row["overbought_bucket"] == "overbought_normal"
-    assert row["entry_adm_bucket_token"] == "score75_84|strong_strength_momentum|fresh|quote_based|liquidity_high|overbought_normal|time_0900_1000"
-    assert row["entry_adm_bucket_token_recomputed"] == "score75_84|strong_strength_momentum|-|fresh|quote_based|liquidity_high|overbought_normal|time_0900_1000"
+    assert (
+        row["entry_adm_bucket_token"]
+        == "score75_84|strong_strength_momentum|fresh|quote_based|liquidity_high|overbought_normal|time_0900_1000"
+    )
+    assert (
+        row["entry_adm_bucket_token_recomputed"]
+        == "score75_84|strong_strength_momentum|-|fresh|quote_based|liquidity_high|overbought_normal|time_0900_1000"
+    )
     assert row["entry_adm_bucket_schema_version"] == "entry_adm_bucket_v2"
     assert row["raw_token_preserved"] is True
     assert row["adm_token_backfill_applied"] is True
@@ -1103,12 +1238,16 @@ def test_scalp_entry_adm_prioritizes_adm_source_buckets_over_raw_recompute(tmp_p
     assert provenance["risk_context_bucket"] == "adm_field"
 
 
-def test_scalp_entry_adm_falls_back_to_raw_when_adm_fields_missing(tmp_path, monkeypatch):
+def test_scalp_entry_adm_falls_back_to_raw_when_adm_fields_missing(
+    tmp_path, monkeypatch
+):
     pipeline_dir = tmp_path / "pipeline_events"
     report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
     monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
     monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
-    monkeypatch.setattr(mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots")
+    monkeypatch.setattr(
+        mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots"
+    )
     monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
     monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
 
@@ -1148,7 +1287,9 @@ def test_scalp_entry_adm_uses_current_ai_score_as_score_source(tmp_path, monkeyp
     report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
     monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
     monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
-    monkeypatch.setattr(mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots")
+    monkeypatch.setattr(
+        mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots"
+    )
     monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
     monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
 
@@ -1179,15 +1320,22 @@ def test_scalp_entry_adm_uses_current_ai_score_as_score_source(tmp_path, monkeyp
 
     assert row["score_bucket"] == "score65_74"
     assert row["score_source_value"] == 66.0
-    assert "score_bucket" not in report["summary"]["unknown_bucket_summary"]["dimension_counts"]
+    assert (
+        "score_bucket"
+        not in report["summary"]["unknown_bucket_summary"]["dimension_counts"]
+    )
 
 
-def test_scalp_entry_adm_unknown_bucket_summary_separates_unknown_from_not_available(tmp_path, monkeypatch):
+def test_scalp_entry_adm_unknown_bucket_summary_separates_unknown_from_not_available(
+    tmp_path, monkeypatch
+):
     pipeline_dir = tmp_path / "pipeline_events"
     report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
     monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
     monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
-    monkeypatch.setattr(mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots")
+    monkeypatch.setattr(
+        mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots"
+    )
     monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
     monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
 
@@ -1220,14 +1368,19 @@ def test_scalp_entry_adm_unknown_bucket_summary_separates_unknown_from_not_avail
     assert unknown_summary["affected_rows"] == 1
     assert unknown_summary["affected_rows"] <= unknown_summary["total_rows"]
     assert unknown_summary["not_available_affected_rows"] >= 0
-    assert unknown_summary["not_available_affected_rows"] <= unknown_summary["total_rows"]
+    assert (
+        unknown_summary["not_available_affected_rows"] <= unknown_summary["total_rows"]
+    )
     assert unknown_summary["adm_source_bucket_used_count"] >= 1
     assert "adm_source_bucket_field_count" in unknown_summary
     assert "recomputed_unknown_count" in unknown_summary
     assert "unknown_dimension_occurrence_count" in unknown_summary
     assert "not_available_dimension_occurrence_count" in unknown_summary
     assert "not_available_dimension_counts" in unknown_summary
-    assert unknown_summary["unknown_root_cause_counts"]["score_bucket:adm_field_unknown"] == 1
+    assert (
+        unknown_summary["unknown_root_cause_counts"]["score_bucket:adm_field_unknown"]
+        == 1
+    )
     assert unknown_summary["examples"][0]["bucket_token"].count("|") == 7
 
 
@@ -1248,13 +1401,23 @@ def test_scalp_entry_adm_unknown_bucket_summary_splits_context_root_causes():
                 "risk_context_bucket": "neutral_strength_momentum",
                 "price_resolution_bucket": "price_unknown",
                 "score_bucket": "score_not_available",
-                "bucket_field_provenance": {"price_resolution_bucket": "raw_recomputed"},
+                "bucket_field_provenance": {
+                    "price_resolution_bucket": "raw_recomputed"
+                },
             },
         ]
     )
 
-    assert summary["unknown_root_cause_counts"]["risk_context_bucket:source_field_missing"] == 1
-    assert summary["unknown_root_cause_counts"]["price_resolution_bucket:post_submit_or_exit_not_required"] == 1
+    assert (
+        summary["unknown_root_cause_counts"]["risk_context_bucket:source_field_missing"]
+        == 1
+    )
+    assert (
+        summary["unknown_root_cause_counts"][
+            "price_resolution_bucket:post_submit_or_exit_not_required"
+        ]
+        == 1
+    )
     assert summary["unknown_root_cause_detail_counts"] == {
         "risk_context_bucket:source_field_missing": 1,
         "price_resolution_bucket:post_submit_or_exit_not_required": 1,
@@ -1268,8 +1431,14 @@ def test_scalp_entry_adm_unknown_bucket_summary_splits_context_root_causes():
     assert summary["actionable_unknown_route_counts"] == {
         "risk_context_bucket:source_field_missing": 1,
     }
-    assert not any("risk_context_source_missing" in key for key in summary["unknown_root_cause_counts"])
-    assert not any("price_context_source_missing" in key for key in summary["unknown_root_cause_counts"])
+    assert not any(
+        "risk_context_source_missing" in key
+        for key in summary["unknown_root_cause_counts"]
+    )
+    assert not any(
+        "price_context_source_missing" in key
+        for key in summary["unknown_root_cause_counts"]
+    )
 
 
 def test_scalp_entry_adm_non_actionable_context_unknown_does_not_create_source_quality_workorder():
@@ -1293,15 +1462,21 @@ def test_scalp_entry_adm_non_actionable_context_unknown_does_not_create_source_q
     assert summary["source_quality_gate"] == "classified_non_actionable"
     assert summary["recommended_route"] == "classified_not_applicable_no_workorder"
     assert summary["actionable_unknown_route_counts"] == {}
-    assert summary["unknown_resolution_route_counts"] == {"post_submit_or_exit_not_required": 2}
+    assert summary["unknown_resolution_route_counts"] == {
+        "post_submit_or_exit_not_required": 2
+    }
 
 
-def test_scalp_entry_adm_pre_submit_missing_context_is_not_available(tmp_path, monkeypatch):
+def test_scalp_entry_adm_pre_submit_missing_context_is_not_available(
+    tmp_path, monkeypatch
+):
     pipeline_dir = tmp_path / "pipeline_events"
     report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
     monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
     monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
-    monkeypatch.setattr(mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots")
+    monkeypatch.setattr(
+        mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots"
+    )
     monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
     monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
 
@@ -1334,15 +1509,22 @@ def test_scalp_entry_adm_pre_submit_missing_context_is_not_available(tmp_path, m
     assert "risk_context_bucket" not in unknown_summary["dimension_counts"]
     assert "price_resolution_bucket" not in unknown_summary["dimension_counts"]
     assert unknown_summary["not_available_dimension_counts"]["risk_context_bucket"] == 1
-    assert unknown_summary["not_available_dimension_counts"]["price_resolution_bucket"] == 1
+    assert (
+        unknown_summary["not_available_dimension_counts"]["price_resolution_bucket"]
+        == 1
+    )
 
 
-def test_scalp_entry_adm_post_entry_missing_score_is_not_available(tmp_path, monkeypatch):
+def test_scalp_entry_adm_post_entry_missing_score_is_not_available(
+    tmp_path, monkeypatch
+):
     pipeline_dir = tmp_path / "pipeline_events"
     report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
     monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
     monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
-    monkeypatch.setattr(mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots")
+    monkeypatch.setattr(
+        mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots"
+    )
     monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
     monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
 
@@ -1380,12 +1562,16 @@ def test_scalp_entry_adm_post_entry_missing_score_is_not_available(tmp_path, mon
     assert "unknown_bucket_source_quality_gap" not in report["warnings"]
 
 
-def test_scalp_entry_adm_pre_submit_missing_score_backfills_from_nearby_entry_event(tmp_path, monkeypatch):
+def test_scalp_entry_adm_pre_submit_missing_score_backfills_from_nearby_entry_event(
+    tmp_path, monkeypatch
+):
     pipeline_dir = tmp_path / "pipeline_events"
     report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
     monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
     monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
-    monkeypatch.setattr(mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots")
+    monkeypatch.setattr(
+        mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots"
+    )
     monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
     monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
 
@@ -1434,15 +1620,22 @@ def test_scalp_entry_adm_pre_submit_missing_score_backfills_from_nearby_entry_ev
     assert row["bucket_field_provenance"]["score_bucket"] == "backfilled"
     assert "score_bucket" not in unknown_summary["dimension_counts"]
     assert unknown_summary["score_root_cause_counts"]["backfilled"] >= 1
-    assert unknown_summary["score_backfill_match_type_counts"]["prior_same_stock_time"] >= 1
+    assert (
+        unknown_summary["score_backfill_match_type_counts"]["prior_same_stock_time"]
+        >= 1
+    )
 
 
-def test_scalp_entry_adm_score_backfill_does_not_use_future_event(tmp_path, monkeypatch):
+def test_scalp_entry_adm_score_backfill_does_not_use_future_event(
+    tmp_path, monkeypatch
+):
     pipeline_dir = tmp_path / "pipeline_events"
     report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
     monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
     monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
-    monkeypatch.setattr(mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots")
+    monkeypatch.setattr(
+        mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots"
+    )
     monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
     monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
 
@@ -1486,15 +1679,24 @@ def test_scalp_entry_adm_score_backfill_does_not_use_future_event(tmp_path, monk
 
     assert row["score_bucket"] == "score_unknown"
     assert row.get("score_backfill_source") is None
-    assert unknown_summary["unknown_root_cause_counts"]["score_bucket:source_score_missing"] == 1
+    assert (
+        unknown_summary["unknown_root_cause_counts"][
+            "score_bucket:source_score_missing"
+        ]
+        == 1
+    )
 
 
-def test_scalp_entry_adm_score_backfill_prefers_exact_key_over_nearer_stock_event(tmp_path, monkeypatch):
+def test_scalp_entry_adm_score_backfill_prefers_exact_key_over_nearer_stock_event(
+    tmp_path, monkeypatch
+):
     pipeline_dir = tmp_path / "pipeline_events"
     report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
     monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
     monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
-    monkeypatch.setattr(mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots")
+    monkeypatch.setattr(
+        mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots"
+    )
     monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
     monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
 
@@ -1568,15 +1770,21 @@ def test_scalp_entry_adm_runtime_pre_submit_missing_context_is_not_available():
     fields = context["fields"]
 
     assert fields["entry_adm_risk_context_bucket"] == "risk_context_not_available"
-    assert fields["entry_adm_price_resolution_bucket"] == "price_not_available_pre_submit"
+    assert (
+        fields["entry_adm_price_resolution_bucket"] == "price_not_available_pre_submit"
+    )
 
 
-def test_scalp_entry_adm_bucket_token_still_valid_with_adm_source_but_unknown_dimensions(tmp_path, monkeypatch):
+def test_scalp_entry_adm_bucket_token_still_valid_with_adm_source_but_unknown_dimensions(
+    tmp_path, monkeypatch
+):
     pipeline_dir = tmp_path / "pipeline_events"
     report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
     monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
     monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
-    monkeypatch.setattr(mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots")
+    monkeypatch.setattr(
+        mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots"
+    )
     monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
     monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
 
@@ -1625,7 +1833,13 @@ def test_scalp_entry_adm_hypothesis_force_requires_explicit_flag(tmp_path, monke
         ),
     )
     (report_dir / "scalp_entry_action_decision_matrix_2026-05-18.json").write_text(
-        json.dumps({"date": "2026-05-18", "matrix_version": "scalp_entry_adm_v1_2026-05-18", "bucket_summary": []}),
+        json.dumps(
+            {
+                "date": "2026-05-18",
+                "matrix_version": "scalp_entry_adm_v1_2026-05-18",
+                "bucket_summary": [],
+            }
+        ),
         encoding="utf-8",
     )
     context = runtime_mod.build_scalp_entry_adm_runtime_context(
@@ -1645,7 +1859,9 @@ def test_scalp_entry_adm_hypothesis_force_requires_explicit_flag(tmp_path, monke
         ai_score=78,
     )
 
-    merged = runtime_mod.merge_scalp_entry_adm_result_fields({"action": "BUY", "score": 78}, context)
+    merged = runtime_mod.merge_scalp_entry_adm_result_fields(
+        {"action": "BUY", "score": 78}, context
+    )
 
     assert merged["action"] == "WAIT"
     assert merged["entry_adm_runtime_bias_applied"] is True
@@ -1655,7 +1871,11 @@ def test_scalp_entry_adm_hypothesis_force_requires_explicit_flag(tmp_path, monke
 def test_adm_bucket_lookup_status_matched_prior_bucket():
     from src.engine.scalp_entry_adm_runtime import _bucket_lookup_status
 
-    payload = {"bucket_summary": [{"bucket_token": "tk", "sample_count": 114, "joined_sample": 32}]}
+    payload = {
+        "bucket_summary": [
+            {"bucket_token": "tk", "sample_count": 114, "joined_sample": 32}
+        ]
+    }
     matched = {"bucket_token": "tk", "sample_count": 114, "joined_sample": 32}
     assert _bucket_lookup_status(payload, matched) == "matched_prior_bucket"
 
@@ -1670,18 +1890,28 @@ def test_adm_bucket_lookup_status_new_or_unseen_token():
 def test_adm_bucket_lookup_status_prior_bucket_missing_sample():
     from src.engine.scalp_entry_adm_runtime import _bucket_lookup_status
 
-    payload = {"bucket_summary": [{"bucket_token": "tk", "sample_count": 0, "joined_sample": 0}]}
+    payload = {
+        "bucket_summary": [
+            {"bucket_token": "tk", "sample_count": 0, "joined_sample": 0}
+        ]
+    }
     matched = {"bucket_token": "tk", "sample_count": 0, "joined_sample": 0}
-    assert _bucket_lookup_status(payload, matched) == "prior_bucket_present_but_runtime_sample_missing"
+    assert (
+        _bucket_lookup_status(payload, matched)
+        == "prior_bucket_present_but_runtime_sample_missing"
+    )
 
 
 def test_adm_bucket_lookup_status_no_payload():
     from src.engine.scalp_entry_adm_runtime import _bucket_lookup_status
+
     assert _bucket_lookup_status({}, {}) == "bucket_lookup_not_performed"
 
 
 def test_adm_lookup_none_is_classified_for_advisory_only_stage():
-    from src.engine.scalp_entry_action_decision_matrix import _classify_adm_lookup_not_applicable
+    from src.engine.scalp_entry_action_decision_matrix import (
+        _classify_adm_lookup_not_applicable,
+    )
 
     rows = [
         {
@@ -1699,13 +1929,18 @@ def test_adm_lookup_none_is_classified_for_advisory_only_stage():
 
     _classify_adm_lookup_not_applicable(rows)
 
-    assert rows[0]["entry_adm_bucket_lookup_status"] == "advisory_only_stage_without_prior_lookup"
+    assert (
+        rows[0]["entry_adm_bucket_lookup_status"]
+        == "advisory_only_stage_without_prior_lookup"
+    )
     assert rows[0]["entry_adm_bucket_joined_sample"] == 0
     assert rows[1]["entry_adm_bucket_lookup_status"] == ""
 
 
 def test_adm_lookup_closure_splits_new_bucket_and_producer_context_missing():
-    from src.engine.scalp_entry_action_decision_matrix import _adm_lookup_closure_summary
+    from src.engine.scalp_entry_action_decision_matrix import (
+        _adm_lookup_closure_summary,
+    )
 
     rows = [
         {

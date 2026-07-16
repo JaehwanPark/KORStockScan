@@ -7,8 +7,12 @@ from src.engine import runtime_approval_summary as mod
 
 @pytest.fixture(autouse=True)
 def _isolate_pattern_lab_audit_dirs(tmp_path, monkeypatch):
-    monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing_currentness_audit")
-    monkeypatch.setattr(mod, "PATTERN_LAB_PROPAGATION_AUDIT_DIR", tmp_path / "missing_propagation_audit")
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing_currentness_audit"
+    )
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_PROPAGATION_AUDIT_DIR", tmp_path / "missing_propagation_audit"
+    )
 
 
 def test_runtime_approval_summary_combines_scalping_and_swing(tmp_path, monkeypatch):
@@ -31,7 +35,10 @@ def test_runtime_approval_summary_combines_scalping_and_swing(tmp_path, monkeypa
     monkeypatch.setattr(mod, "SUMMARY_DIR", out_dir)
 
     env_path = env_dir / "threshold_runtime_env_2026-05-11.env"
-    env_path.write_text("export KORSTOCKSCAN_THRESHOLD_RUNTIME_AUTO_APPLY_ENABLED=true\n", encoding="utf-8")
+    env_path.write_text(
+        "export KORSTOCKSCAN_THRESHOLD_RUNTIME_AUTO_APPLY_ENABLED=true\n",
+        encoding="utf-8",
+    )
     (ev_dir / "threshold_cycle_ev_2026-05-11.json").write_text(
         json.dumps(
             {
@@ -70,7 +77,10 @@ def test_runtime_approval_summary_combines_scalping_and_swing(tmp_path, monkeypa
                         "family": "swing_model_floor",
                         "calibration_state": "freeze",
                         "tradeoff_score": 0.8657,
-                        "block_reasons": ["critical_instrumentation_gap", "db_load_gap"],
+                        "block_reasons": [
+                            "critical_instrumentation_gap",
+                            "db_load_gap",
+                        ],
                     }
                 ],
             },
@@ -84,21 +94,41 @@ def test_runtime_approval_summary_combines_scalping_and_swing(tmp_path, monkeypa
     assert report["runtime_mutation_allowed"] is False
     assert report["summary"]["scalping_items"] == 1
     assert report["summary"]["scalping_selected_auto_bounded_live"] == 1
-    assert report["summary"]["scalping_legacy_hard_gate_risk_counts"]["no_unreviewed_hard_gate"] == 1
+    assert (
+        report["summary"]["scalping_legacy_hard_gate_risk_counts"][
+            "no_unreviewed_hard_gate"
+        ]
+        == 1
+    )
     assert report["summary"]["swing_blocked"] == 1
-    assert report["summary"]["swing_legacy_hard_gate_risk_counts"]["no_unreviewed_hard_gate"] == 1
+    assert (
+        report["summary"]["swing_legacy_hard_gate_risk_counts"][
+            "no_unreviewed_hard_gate"
+        ]
+        == 1
+    )
     assert report["summary"]["microstructure_reaction_available"] is False
-    assert report["microstructure_reaction_context"]["runtime_mutation_allowed"] is False
+    assert (
+        report["microstructure_reaction_context"]["runtime_mutation_allowed"] is False
+    )
     assert report["application_timing"]["runtime_env_file"] == str(env_path)
     assert "WAIT 구간" in report["scalping"][0]["description"]
-    assert report["scalping"][0]["current_application"] == "PREOPEN env 적용: 당일 runtime 변경 대상"
+    assert (
+        report["scalping"][0]["current_application"]
+        == "PREOPEN env 적용: 당일 runtime 변경 대상"
+    )
     assert report["scalping"][0]["gate_review_class"] == "entry_unlock_probe"
     assert report["scalping"][0]["legacy_hard_gate_risk"] == "no_unreviewed_hard_gate"
     assert "PREOPEN env" in report["scalping"][0]["state_interpretation"]
     assert report["swing"][0]["reason_label"] == "계측 gap, DB gap"
-    assert report["swing"][0]["current_application"] == "스윙 dry-run/probe 관찰: 실주문 변경 없음"
+    assert (
+        report["swing"][0]["current_application"]
+        == "스윙 dry-run/probe 관찰: 실주문 변경 없음"
+    )
     assert report["swing"][0]["gate_review_class"] == "approval_route_available"
-    markdown = (out_dir / "runtime_approval_summary_2026-05-11.md").read_text(encoding="utf-8")
+    markdown = (out_dir / "runtime_approval_summary_2026-05-11.md").read_text(
+        encoding="utf-8"
+    )
     assert "## Scalping" in markdown
     assert "score65_74_recovery_probe" in markdown
     assert "설명" in markdown
@@ -109,7 +139,9 @@ def test_runtime_approval_summary_combines_scalping_and_swing(tmp_path, monkeypa
     assert "swing_model_floor" in markdown
 
 
-def test_runtime_approval_summary_surfaces_microstructure_source_only_context(tmp_path, monkeypatch):
+def test_runtime_approval_summary_surfaces_microstructure_source_only_context(
+    tmp_path, monkeypatch
+):
     ev_dir = tmp_path / "threshold_cycle_ev"
     swing_dir = tmp_path / "swing_runtime_approval"
     out_dir = tmp_path / "runtime_approval_summary"
@@ -128,7 +160,9 @@ def test_runtime_approval_summary_surfaces_microstructure_source_only_context(tm
     (ev_dir / "threshold_cycle_ev_2026-05-31.json").write_text(
         json.dumps(
             {
-                "sources": {"microstructure_reaction_context": "data/report/microstructure_reaction_context/x.json"},
+                "sources": {
+                    "microstructure_reaction_context": "data/report/microstructure_reaction_context/x.json"
+                },
                 "microstructure_reaction_context": {
                     "available": True,
                     "row_count": 3,
@@ -136,7 +170,10 @@ def test_runtime_approval_summary_surfaces_microstructure_source_only_context(tm
                     "missing_or_unusable_count": 1,
                     "real_submitted_count": 1,
                     "status_counts": {"ok": 2, "stale": 1},
-                    "entry_reaction_quality_counts": {"favorable_reaction": 1, "neutral_unusable": 1},
+                    "entry_reaction_quality_counts": {
+                        "favorable_reaction": 1,
+                        "neutral_unusable": 1,
+                    },
                     "avg_ask_sweep_score": 61.5,
                     "avg_post_sweep_hold_score": 58.5,
                     "avg_bid_replenishment_score": 63.0,
@@ -151,7 +188,9 @@ def test_runtime_approval_summary_surfaces_microstructure_source_only_context(tm
         encoding="utf-8",
     )
     (swing_dir / "swing_runtime_approval_2026-05-31.json").write_text(
-        json.dumps({"summary": {"requested": 0, "approved": 0}, "blocked_requests": []}),
+        json.dumps(
+            {"summary": {"requested": 0, "approved": 0}, "blocked_requests": []}
+        ),
         encoding="utf-8",
     )
 
@@ -164,11 +203,15 @@ def test_runtime_approval_summary_surfaces_microstructure_source_only_context(tm
     assert summary["row_count"] == 3
     assert summary["ok_count"] == 2
     assert "standalone_buy" in summary["forbidden_uses"]
-    markdown = (out_dir / "runtime_approval_summary_2026-05-31.md").read_text(encoding="utf-8")
+    markdown = (out_dir / "runtime_approval_summary_2026-05-31.md").read_text(
+        encoding="utf-8"
+    )
     assert "Microstructure Reaction Context" in markdown
 
 
-def test_runtime_approval_summary_labels_hold_sample_contract_gaps(tmp_path, monkeypatch):
+def test_runtime_approval_summary_labels_hold_sample_contract_gaps(
+    tmp_path, monkeypatch
+):
     ev_dir = tmp_path / "threshold_cycle_ev"
     swing_dir = tmp_path / "swing_runtime_approval"
     out_dir = tmp_path / "runtime_approval_summary"
@@ -209,13 +252,19 @@ def test_runtime_approval_summary_labels_hold_sample_contract_gaps(tmp_path, mon
         encoding="utf-8",
     )
     (swing_dir / "swing_runtime_approval_2026-06-05.json").write_text(
-        json.dumps({"summary": {"requested": 0, "approved": 0}, "blocked_requests": []}),
+        json.dumps(
+            {"summary": {"requested": 0, "approved": 0}, "blocked_requests": []}
+        ),
         encoding="utf-8",
     )
 
     report = mod.build_runtime_approval_summary("2026-06-05")
 
-    row = next(item for item in report["scalping"] if item["family"] == "pre_submit_price_guard")
+    row = next(
+        item
+        for item in report["scalping"]
+        if item["family"] == "pre_submit_price_guard"
+    )
     assert row["reasons"] == ["counterfactual_join_gap", "recovery_floor_not_met"]
     assert row["reason_label"] == "counterfactual join gap, recovery floor 미달"
     assert "표본/소스 계약" in row["state_interpretation"]
@@ -314,7 +363,9 @@ def test_runtime_approval_summary_preserves_swing_flow_metrics():
     discovery_summary = mod._swing_lifecycle_bucket_discovery_summary(ev_report)
 
     assert matrix_summary["swing_lifecycle_flow_bucket_count"] == 1
-    assert matrix_summary["sim_auto_candidate_ids"] == ["swing_ldm_lifecycle_flow_combo_parent"]
+    assert matrix_summary["sim_auto_candidate_ids"] == [
+        "swing_ldm_lifecycle_flow_combo_parent"
+    ]
     assert matrix_summary["raw_swing_event_count"] == 1200
     assert matrix_summary["ldm_consumed_event_count"] == 48
     assert matrix_summary["ldm_event_coverage_rate"] == 0.04
@@ -343,7 +394,9 @@ def test_runtime_approval_summary_tolerates_malformed_swing_coverage_numbers():
     assert summary["raw_swing_event_count"] == 0
     assert summary["ldm_consumed_event_count"] == 0
     assert summary["ldm_event_coverage_rate"] == 0.0
-    assert "swing_lifecycle_decision_matrix_low_event_coverage" not in summary["warnings"]
+    assert (
+        "swing_lifecycle_decision_matrix_low_event_coverage" not in summary["warnings"]
+    )
 
 
 def test_runtime_approval_summary_tolerates_non_finite_swing_coverage_numbers():
@@ -380,11 +433,19 @@ def test_runtime_approval_summary_surfaces_swing_bucket_ai_followup_separately()
             "ai_review_followup_required": True,
             "ai_review_followup_reasons": ["audit_status=correction_required"],
             "sim_auto_blocked_by_ai_review_followup": True,
-            "code_improvement_workorder_ids": ["swing_lifecycle_bucket_discovery_ai_review_followup"],
-            "implemented_code_improvement_workorder_ids": ["swing_lifecycle_bucket_discovery_ai_review_followup"],
+            "code_improvement_workorder_ids": [
+                "swing_lifecycle_bucket_discovery_ai_review_followup"
+            ],
+            "implemented_code_improvement_workorder_ids": [
+                "swing_lifecycle_bucket_discovery_ai_review_followup"
+            ],
             "pending_code_improvement_workorder_ids": [],
-            "ai_review_followup_workorder_ids": ["swing_lifecycle_bucket_discovery_ai_review_followup"],
-            "warnings": ["swing_lifecycle_bucket_discovery:ai_review_followup_required"],
+            "ai_review_followup_workorder_ids": [
+                "swing_lifecycle_bucket_discovery_ai_review_followup"
+            ],
+            "warnings": [
+                "swing_lifecycle_bucket_discovery:ai_review_followup_required"
+            ],
         }
     }
 
@@ -394,8 +455,12 @@ def test_runtime_approval_summary_surfaces_swing_bucket_ai_followup_separately()
     assert summary["ai_fail_closed"] is False
     assert summary["ai_review_followup_required"] is True
     assert summary["sim_auto_blocked_by_ai_review_followup"] is True
-    assert summary["code_improvement_workorder_ids"] == ["swing_lifecycle_bucket_discovery_ai_review_followup"]
-    assert summary["ai_review_followup_workorder_ids"] == ["swing_lifecycle_bucket_discovery_ai_review_followup"]
+    assert summary["code_improvement_workorder_ids"] == [
+        "swing_lifecycle_bucket_discovery_ai_review_followup"
+    ]
+    assert summary["ai_review_followup_workorder_ids"] == [
+        "swing_lifecycle_bucket_discovery_ai_review_followup"
+    ]
     assert "ai_review_followup_required" in summary["warnings"]
     assert "ai_review_followup_sim_auto_blocked" in summary["warnings"]
     assert not any("fail_closed" in warning for warning in summary["warnings"])
@@ -436,7 +501,9 @@ def test_runtime_approval_summary_tolerates_malformed_swing_discovery_counts():
     assert summary["automation_handoff_gap_count"] == 0
 
 
-def test_runtime_approval_summary_surfaces_entry_adm_runtime_bias_summary(tmp_path, monkeypatch):
+def test_runtime_approval_summary_surfaces_entry_adm_runtime_bias_summary(
+    tmp_path, monkeypatch
+):
     ev_dir = tmp_path / "threshold_cycle_ev"
     adm_dir = tmp_path / "scalp_entry_action_decision_matrix"
     swing_dir = tmp_path / "swing_runtime_approval"
@@ -486,14 +553,18 @@ def test_runtime_approval_summary_surfaces_entry_adm_runtime_bias_summary(tmp_pa
         encoding="utf-8",
     )
     (swing_dir / "swing_runtime_approval_2026-05-18.json").write_text(
-        json.dumps({"summary": {"requested": 0, "approved": 0}, "blocked_requests": []}),
+        json.dumps(
+            {"summary": {"requested": 0, "approved": 0}, "blocked_requests": []}
+        ),
         encoding="utf-8",
     )
 
     report = mod.build_runtime_approval_summary("2026-05-18")
 
     adm_summary = report["scalp_entry_action_decision_matrix"]
-    assert adm_summary["runtime_bias_scope"] == "force_wait_force_drop_buy_defensive_bias"
+    assert (
+        adm_summary["runtime_bias_scope"] == "force_wait_force_drop_buy_defensive_bias"
+    )
     assert adm_summary["joined_action_ev_pct"] == -2.22
     assert adm_summary["ready_for_daily_policy_tuning"] is False
     assert "joined_sample_below_sample_floor" in adm_summary["warnings"]
@@ -503,16 +574,22 @@ def test_runtime_approval_summary_surfaces_entry_adm_runtime_bias_summary(tmp_pa
     assert adm_summary["unknown_bucket_summary"]["affected_rows"] == 3
     assert report["summary"]["scalp_entry_adm_ready_for_daily_policy_tuning"] is False
     adm_row = next(
-        row for row in report["scalping"] if row["family"] == "scalp_entry_action_decision_matrix_advisory"
+        row
+        for row in report["scalping"]
+        if row["family"] == "scalp_entry_action_decision_matrix_advisory"
     )
     assert adm_row["gate_review_class"] == "entry_adm_runtime_bias_operator_override"
     assert adm_row["runtime_bias_scope"] == "force_wait_force_drop_buy_defensive_bias"
-    markdown = (out_dir / "runtime_approval_summary_2026-05-18.md").read_text(encoding="utf-8")
+    markdown = (out_dir / "runtime_approval_summary_2026-05-18.md").read_text(
+        encoding="utf-8"
+    )
     assert "## Scalp Entry ADM" in markdown
     assert "BUY_DEFENSIVE" in markdown
 
 
-def test_runtime_approval_summary_dedupes_lifecycle_matrix_decision_row(tmp_path, monkeypatch):
+def test_runtime_approval_summary_dedupes_lifecycle_matrix_decision_row(
+    tmp_path, monkeypatch
+):
     ev_dir = tmp_path / "threshold_cycle_ev"
     swing_dir = tmp_path / "swing_runtime_approval"
     out_dir = tmp_path / "runtime_approval_summary"
@@ -531,7 +608,9 @@ def test_runtime_approval_summary_dedupes_lifecycle_matrix_decision_row(tmp_path
     (ev_dir / "threshold_cycle_ev_2026-05-20.json").write_text(
         json.dumps(
             {
-                "runtime_apply": {"selected_families": ["lifecycle_decision_matrix_runtime"]},
+                "runtime_apply": {
+                    "selected_families": ["lifecycle_decision_matrix_runtime"]
+                },
                 "calibration_outcome": {
                     "decisions": [
                         {
@@ -562,21 +641,27 @@ def test_runtime_approval_summary_dedupes_lifecycle_matrix_decision_row(tmp_path
         encoding="utf-8",
     )
     (swing_dir / "swing_runtime_approval_2026-05-20.json").write_text(
-        json.dumps({"summary": {"requested": 0, "approved": 0}, "blocked_requests": []}),
+        json.dumps(
+            {"summary": {"requested": 0, "approved": 0}, "blocked_requests": []}
+        ),
         encoding="utf-8",
     )
 
     report = mod.build_runtime_approval_summary("2026-05-20")
 
     lifecycle_rows = [
-        row for row in report["scalping"] if row["family"] == "lifecycle_decision_matrix_runtime"
+        row
+        for row in report["scalping"]
+        if row["family"] == "lifecycle_decision_matrix_runtime"
     ]
     assert len(lifecycle_rows) == 1
     assert lifecycle_rows[0]["sample"]["count"] == 7155
     assert report["summary"]["scalping_selected_auto_bounded_live"] == 1
 
 
-def test_runtime_approval_summary_falls_back_to_lifecycle_bucket_source(tmp_path, monkeypatch):
+def test_runtime_approval_summary_falls_back_to_lifecycle_bucket_source(
+    tmp_path, monkeypatch
+):
     ev_dir = tmp_path / "threshold_cycle_ev"
     matrix_dir = tmp_path / "lifecycle_decision_matrix"
     swing_dir = tmp_path / "swing_runtime_approval"
@@ -605,20 +690,32 @@ def test_runtime_approval_summary_falls_back_to_lifecycle_bucket_source(tmp_path
                     "code_improvement_workorders": [{"workorder_id": "entry_order"}],
                 },
                 "submit_bucket_attribution": {
-                    "summary": {"runtime_candidate_count": 0, "workorder_count": 1, "contract_gap_count": 1},
+                    "summary": {
+                        "runtime_candidate_count": 0,
+                        "workorder_count": 1,
+                        "contract_gap_count": 1,
+                    },
                     "runtime_approval_candidates": [],
                     "code_improvement_workorders": [{"workorder_id": "submit_order"}],
-                    "post_submit_contract_gaps": [{"gap_type": "broker_receipt_contract_gap"}],
+                    "post_submit_contract_gaps": [
+                        {"gap_type": "broker_receipt_contract_gap"}
+                    ],
                 },
                 "scale_in_bucket_attribution": {
                     "summary": {"runtime_candidate_count": 1, "workorder_count": 1},
-                    "runtime_approval_candidates": [{"candidate_id": "scale_in_bucket_1"}],
+                    "runtime_approval_candidates": [
+                        {"candidate_id": "scale_in_bucket_1"}
+                    ],
                     "code_improvement_workorders": [{"workorder_id": "scale_order"}],
                 },
                 "overnight_bucket_attribution": {
                     "summary": {"runtime_candidate_count": 1, "workorder_count": 1},
-                    "runtime_approval_candidates": [{"candidate_id": "overnight_bucket_1"}],
-                    "code_improvement_workorders": [{"workorder_id": "overnight_order"}],
+                    "runtime_approval_candidates": [
+                        {"candidate_id": "overnight_bucket_1"}
+                    ],
+                    "code_improvement_workorders": [
+                        {"workorder_id": "overnight_order"}
+                    ],
                 },
             },
             ensure_ascii=False,
@@ -629,7 +726,9 @@ def test_runtime_approval_summary_falls_back_to_lifecycle_bucket_source(tmp_path
         json.dumps(
             {
                 "sources": {"lifecycle_decision_matrix": str(matrix_path)},
-                "runtime_apply": {"selected_families": ["lifecycle_decision_matrix_runtime"]},
+                "runtime_apply": {
+                    "selected_families": ["lifecycle_decision_matrix_runtime"]
+                },
                 "calibration_outcome": {
                     "decisions": [
                         {
@@ -660,7 +759,9 @@ def test_runtime_approval_summary_falls_back_to_lifecycle_bucket_source(tmp_path
         encoding="utf-8",
     )
     (swing_dir / "swing_runtime_approval_2026-05-21.json").write_text(
-        json.dumps({"summary": {"requested": 0, "approved": 0}, "blocked_requests": []}),
+        json.dumps(
+            {"summary": {"requested": 0, "approved": 0}, "blocked_requests": []}
+        ),
         encoding="utf-8",
     )
 
@@ -669,14 +770,24 @@ def test_runtime_approval_summary_falls_back_to_lifecycle_bucket_source(tmp_path
 
     assert matrix["matrix_version"] == "ldm-test"
     assert matrix["entry_bucket_runtime_candidate_count"] == 1
-    assert matrix["entry_bucket_runtime_approval_candidates"] == [{"candidate_id": "entry_bucket_1"}]
+    assert matrix["entry_bucket_runtime_approval_candidates"] == [
+        {"candidate_id": "entry_bucket_1"}
+    ]
     assert matrix["submit_bucket_attribution_summary"]["contract_gap_count"] == 1
-    assert matrix["submit_bucket_code_improvement_workorders"] == [{"workorder_id": "submit_order"}]
-    assert matrix["post_submit_contract_gaps"] == [{"gap_type": "broker_receipt_contract_gap"}]
+    assert matrix["submit_bucket_code_improvement_workorders"] == [
+        {"workorder_id": "submit_order"}
+    ]
+    assert matrix["post_submit_contract_gaps"] == [
+        {"gap_type": "broker_receipt_contract_gap"}
+    ]
     assert matrix["scale_in_bucket_runtime_candidate_count"] == 1
-    assert matrix["scale_in_bucket_runtime_approval_candidates"] == [{"candidate_id": "scale_in_bucket_1"}]
+    assert matrix["scale_in_bucket_runtime_approval_candidates"] == [
+        {"candidate_id": "scale_in_bucket_1"}
+    ]
     assert matrix["overnight_bucket_runtime_candidate_count"] == 1
-    assert matrix["overnight_bucket_runtime_approval_candidates"] == [{"candidate_id": "overnight_bucket_1"}]
+    assert matrix["overnight_bucket_runtime_approval_candidates"] == [
+        {"candidate_id": "overnight_bucket_1"}
+    ]
     assert matrix["complete_flow_count"] == 0
     assert matrix["incomplete_flow_count"] == 4
     assert matrix["join_contract_blocked"] is True
@@ -684,7 +795,9 @@ def test_runtime_approval_summary_falls_back_to_lifecycle_bucket_source(tmp_path
     assert matrix["top_incomplete_reason"] == "identity_namespace_mismatch"
 
 
-def test_runtime_approval_summary_holds_latency_when_recommendation_not_allowed(tmp_path, monkeypatch):
+def test_runtime_approval_summary_holds_latency_when_recommendation_not_allowed(
+    tmp_path, monkeypatch
+):
     ev_dir = tmp_path / "threshold_cycle_ev"
     swing_dir = tmp_path / "swing_runtime_approval"
     out_dir = tmp_path / "runtime_approval_summary"
@@ -703,7 +816,9 @@ def test_runtime_approval_summary_holds_latency_when_recommendation_not_allowed(
     (ev_dir / "threshold_cycle_ev_2026-05-20.json").write_text(
         json.dumps(
             {
-                "runtime_apply": {"selected_families": ["latency_classifier_runtime_profile"]},
+                "runtime_apply": {
+                    "selected_families": ["latency_classifier_runtime_profile"]
+                },
                 "entry_funnel": {
                     "latency_submit_routing": "latency_submit_recovery_hold",
                     "latency_block_events": 621,
@@ -726,18 +841,27 @@ def test_runtime_approval_summary_holds_latency_when_recommendation_not_allowed(
         encoding="utf-8",
     )
     (swing_dir / "swing_runtime_approval_2026-05-20.json").write_text(
-        json.dumps({"summary": {"requested": 0, "approved": 0}, "blocked_requests": []}),
+        json.dumps(
+            {"summary": {"requested": 0, "approved": 0}, "blocked_requests": []}
+        ),
         encoding="utf-8",
     )
 
     report = mod.build_runtime_approval_summary("2026-05-20")
 
-    latency = next(row for row in report["scalping"] if row["family"] == "latency_classifier_runtime_profile")
+    latency = next(
+        row
+        for row in report["scalping"]
+        if row["family"] == "latency_classifier_runtime_profile"
+    )
     assert latency["state"] == "hold_sample"
     assert latency["selected_auto_bounded_live"] is False
     assert latency["previous_selected_auto_bounded_live"] is True
     assert latency["allowed_runtime_apply"] is False
-    assert latency["current_application"] == "보류: 최신 recommendation 기준 다음 PREOPEN latency env 변경 없음"
+    assert (
+        latency["current_application"]
+        == "보류: 최신 recommendation 기준 다음 PREOPEN latency env 변경 없음"
+    )
     assert report["summary"]["scalping_selected_auto_bounded_live"] == 0
 
 
@@ -778,7 +902,9 @@ def test_runtime_approval_summary_surfaces_source_parse_errors(tmp_path, monkeyp
     )
     monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_DIR", swing_dir)
     monkeypatch.setattr(mod, "SUMMARY_DIR", out_dir)
-    (ev_dir / "threshold_cycle_ev_2026-05-11.json").write_text("{bad json", encoding="utf-8")
+    (ev_dir / "threshold_cycle_ev_2026-05-11.json").write_text(
+        "{bad json", encoding="utf-8"
+    )
     (swing_dir / "swing_runtime_approval_2026-05-11.json").write_text(
         json.dumps({"summary": {"requested": 0}, "candidates": []}),
         encoding="utf-8",
@@ -787,12 +913,19 @@ def test_runtime_approval_summary_surfaces_source_parse_errors(tmp_path, monkeyp
     report = mod.build_runtime_approval_summary("2026-05-11")
 
     assert report["source_load_diagnostics"][0]["status"] == "parse_error"
-    assert "source_load_parse_error:threshold_cycle_ev_2026-05-11.json" in report["warnings"]
-    markdown = (out_dir / "runtime_approval_summary_2026-05-11.md").read_text(encoding="utf-8")
+    assert (
+        "source_load_parse_error:threshold_cycle_ev_2026-05-11.json"
+        in report["warnings"]
+    )
+    markdown = (out_dir / "runtime_approval_summary_2026-05-11.md").read_text(
+        encoding="utf-8"
+    )
     assert "Source Load Diagnostics" in markdown
 
 
-def test_runtime_approval_summary_classifies_legacy_gate_and_contract_gaps(tmp_path, monkeypatch):
+def test_runtime_approval_summary_classifies_legacy_gate_and_contract_gaps(
+    tmp_path, monkeypatch
+):
     ev_dir = tmp_path / "threshold_cycle_ev"
     swing_dir = tmp_path / "swing_runtime_approval"
     out_dir = tmp_path / "runtime_approval_summary"
@@ -814,8 +947,14 @@ def test_runtime_approval_summary_classifies_legacy_gate_and_contract_gaps(tmp_p
             {
                 "calibration_outcome": {
                     "decisions": [
-                        {"family": "liquidity_gate_refined_candidate", "calibration_state": "hold"},
-                        {"family": "pre_submit_price_guard", "calibration_state": "freeze"},
+                        {
+                            "family": "liquidity_gate_refined_candidate",
+                            "calibration_state": "hold",
+                        },
+                        {
+                            "family": "pre_submit_price_guard",
+                            "calibration_state": "freeze",
+                        },
                     ]
                 }
             }
@@ -828,7 +967,11 @@ def test_runtime_approval_summary_classifies_legacy_gate_and_contract_gaps(tmp_p
                 "date": "2026-05-15",
                 "summary": {"requested": 0, "approved": 0},
                 "candidates": [
-                    {"family": "swing_gatekeeper_accept_reject", "sample_count": 27, "sample_floor": 5}
+                    {
+                        "family": "swing_gatekeeper_accept_reject",
+                        "sample_count": 27,
+                        "sample_floor": 5,
+                    }
                 ],
                 "blocked_requests": [
                     {
@@ -847,18 +990,34 @@ def test_runtime_approval_summary_classifies_legacy_gate_and_contract_gaps(tmp_p
     report = mod.build_runtime_approval_summary("2026-05-15")
 
     scalping = {row["family"]: row for row in report["scalping"]}
-    assert scalping["liquidity_gate_refined_candidate"]["gate_review_class"] == "superseded_legacy_pre_ai_gate"
-    assert scalping["liquidity_gate_refined_candidate"]["legacy_hard_gate_risk"] == "legacy_summary_superseded"
-    assert scalping["pre_submit_price_guard"]["legacy_hard_gate_risk"] == "intentional_safety_guard"
+    assert (
+        scalping["liquidity_gate_refined_candidate"]["gate_review_class"]
+        == "superseded_legacy_pre_ai_gate"
+    )
+    assert (
+        scalping["liquidity_gate_refined_candidate"]["legacy_hard_gate_risk"]
+        == "legacy_summary_superseded"
+    )
+    assert (
+        scalping["pre_submit_price_guard"]["legacy_hard_gate_risk"]
+        == "intentional_safety_guard"
+    )
     swing = report["swing"][0]
     assert swing["gate_review_class"] == "legacy_hard_gate_contract_gap"
     assert swing["legacy_hard_gate_risk"] == "contract_gap"
     assert "blocked_gatekeeper_reject" in swing["analysis_coverage"]
-    assert report["summary"]["scalping_legacy_hard_gate_risk_counts"]["legacy_summary_superseded"] == 1
+    assert (
+        report["summary"]["scalping_legacy_hard_gate_risk_counts"][
+            "legacy_summary_superseded"
+        ]
+        == 1
+    )
     assert report["summary"]["swing_legacy_hard_gate_risk_counts"]["contract_gap"] == 1
 
 
-def test_runtime_approval_summary_decomposes_hold_defer_when_sample_ready(tmp_path, monkeypatch):
+def test_runtime_approval_summary_decomposes_hold_defer_when_sample_ready(
+    tmp_path, monkeypatch
+):
     ev_dir = tmp_path / "threshold_cycle_ev"
     swing_dir = tmp_path / "swing_runtime_approval"
     out_dir = tmp_path / "runtime_approval_summary"
@@ -904,7 +1063,10 @@ def test_runtime_approval_summary_decomposes_hold_defer_when_sample_ready(tmp_pa
                         "family": "swing_holding_flow_defer",
                         "calibration_state": "freeze",
                         "tradeoff_score": 0.32,
-                        "block_reasons": ["severe_downside_guard", "runtime_family_guard_missing"],
+                        "block_reasons": [
+                            "severe_downside_guard",
+                            "runtime_family_guard_missing",
+                        ],
                     }
                 ],
             },
@@ -918,7 +1080,10 @@ def test_runtime_approval_summary_decomposes_hold_defer_when_sample_ready(tmp_pa
     row = report["swing"][0]
     assert row["family"] == "swing_holding_flow_defer"
     assert row["sample"]["status"] == "ready"
-    assert row["gate_review_class"] == "source_quality_and_runtime_contract_gap_holding_axis"
+    assert (
+        row["gate_review_class"]
+        == "source_quality_and_runtime_contract_gap_holding_axis"
+    )
     assert row["legacy_hard_gate_risk"] == "source_quality_or_contract_gap"
     assert row["hold_defer_breakdown"] == {
         "sample_floor_status": "ready",
@@ -929,12 +1094,21 @@ def test_runtime_approval_summary_decomposes_hold_defer_when_sample_ready(tmp_pa
             "defer_sec": 0,
             "worsen_after_candidate": 0,
         },
-        "missing_component_fields": ["flow_action", "defer_sec", "worsen_after_candidate"],
+        "missing_component_fields": [
+            "flow_action",
+            "defer_sec",
+            "worsen_after_candidate",
+        ],
         "runtime_guard_status": "missing",
         "downside_guard_status": "blocked",
     }
     assert "표본 floor는 충족" in row["hard_gate_review"]
-    assert report["summary"]["swing_legacy_hard_gate_risk_counts"]["source_quality_or_contract_gap"] == 1
+    assert (
+        report["summary"]["swing_legacy_hard_gate_risk_counts"][
+            "source_quality_or_contract_gap"
+        ]
+        == 1
+    )
 
 
 def test_runtime_approval_summary_does_not_mark_sample_ready_swing_quality_axis_as_sample_gap(
@@ -993,13 +1167,20 @@ def test_runtime_approval_summary_does_not_mark_sample_ready_swing_quality_axis_
 
     row = report["swing"][0]
     assert row["sample"]["status"] == "ready"
-    assert row["gate_review_class"] == "source_quality_or_contract_gap_entry_quality_axis"
+    assert (
+        row["gate_review_class"] == "source_quality_or_contract_gap_entry_quality_axis"
+    )
     assert row["legacy_hard_gate_risk"] == "source_quality_or_contract_gap"
     assert "표본 floor는 충족" in row["hard_gate_review"]
-    assert "sample_or_contract_gap" not in report["summary"]["swing_legacy_hard_gate_risk_counts"]
+    assert (
+        "sample_or_contract_gap"
+        not in report["summary"]["swing_legacy_hard_gate_risk_counts"]
+    )
 
 
-def test_runtime_approval_summary_surfaces_swing_one_share_legacy_archive_request(tmp_path, monkeypatch):
+def test_runtime_approval_summary_surfaces_swing_one_share_legacy_archive_request(
+    tmp_path, monkeypatch
+):
     ev_dir = tmp_path / "threshold_cycle_ev"
     swing_dir = tmp_path / "swing_runtime_approval"
     approval_dir = tmp_path / "approvals"
@@ -1061,7 +1242,9 @@ def test_runtime_approval_summary_surfaces_swing_one_share_legacy_archive_reques
     assert row["broker_order_forbidden"] is True
 
 
-def test_runtime_approval_summary_surfaces_panic_approval_requests(tmp_path, monkeypatch):
+def test_runtime_approval_summary_surfaces_panic_approval_requests(
+    tmp_path, monkeypatch
+):
     ev_dir = tmp_path / "threshold_cycle_ev"
     calibration_dir = tmp_path / "threshold_cycle_calibration"
     swing_dir = tmp_path / "swing_runtime_approval"
@@ -1083,7 +1266,9 @@ def test_runtime_approval_summary_surfaces_panic_approval_requests(tmp_path, mon
                             "stop_loss_exit_count": 2,
                             "confirmation_eligible_exit_count": 1,
                             "microstructure_max_panic_score": 0.91,
-                            "candidate_status": {"panic_stop_confirmation": "report_only_candidate"},
+                            "candidate_status": {
+                                "panic_stop_confirmation": "report_only_candidate"
+                            },
                         },
                         "panic_buying": {
                             "runtime_effect": "report_only_no_mutation",
@@ -1101,7 +1286,9 @@ def test_runtime_approval_summary_surfaces_panic_approval_requests(tmp_path, mon
                             "max_panic_buy_score": 0.88,
                             "market_wide_panic_buy_confirmed": True,
                             "market_breadth_risk_on_advisory": True,
-                            "candidate_status": {"panic_buy_runner_tp_canary": "report_only_candidate"},
+                            "candidate_status": {
+                                "panic_buy_runner_tp_canary": "report_only_candidate"
+                            },
                         },
                     }
                 }
@@ -1111,7 +1298,12 @@ def test_runtime_approval_summary_surfaces_panic_approval_requests(tmp_path, mon
         encoding="utf-8",
     )
     (ev_dir / "threshold_cycle_ev_2026-05-13.json").write_text(
-        json.dumps({"sources": {"calibration": str(calibration_path)}, "calibration_outcome": {"decisions": []}}),
+        json.dumps(
+            {
+                "sources": {"calibration": str(calibration_path)},
+                "calibration_outcome": {"decisions": []},
+            }
+        ),
         encoding="utf-8",
     )
     monkeypatch.setattr(
@@ -1133,13 +1325,22 @@ def test_runtime_approval_summary_surfaces_panic_approval_requests(tmp_path, mon
         "panic_buy_runner_tp_canary",
     }
     assert all(row["state"] == "approval_contract_missing" for row in report["panic"])
-    assert all(row["approval_contract_status"] == "contract_missing" for row in report["panic"])
+    assert all(
+        row["approval_contract_status"] == "contract_missing" for row in report["panic"]
+    )
     assert all(row["selected_auto_bounded_live"] is False for row in report["panic"])
-    panic_sell = next(row for row in report["panic"] if row["family"] == "panic_entry_freeze_guard")
+    panic_sell = next(
+        row for row in report["panic"] if row["family"] == "panic_entry_freeze_guard"
+    )
     assert panic_sell["panic_regime_mode"] == "PANIC_DETECTED"
     assert panic_sell["panic_regime_decision_authority"] == "source_quality_only"
-    assert "entry_pre_submit_runtime_guard" in panic_sell["approval_contract_missing_components"]
-    panic_buy = next(row for row in report["panic"] if row["family"] == "panic_buy_runner_tp_canary")
+    assert (
+        "entry_pre_submit_runtime_guard"
+        in panic_sell["approval_contract_missing_components"]
+    )
+    panic_buy = next(
+        row for row in report["panic"] if row["family"] == "panic_buy_runner_tp_canary"
+    )
     assert panic_buy["panic_buy_regime_mode"] == "PANIC_BUY_CONTINUATION"
     assert panic_buy["panic_buy_regime_decision_authority"] == "source_quality_only"
     assert panic_buy["risk_regime_gate_state"] == "confirmed_panic_buy"
@@ -1147,12 +1348,16 @@ def test_runtime_approval_summary_surfaces_panic_approval_requests(tmp_path, mon
     assert panic_buy["confirmed_evidence_count"] == 4
     assert panic_buy["market_wide_panic_buy_confirmed"] is True
     assert panic_buy["market_breadth_risk_on_advisory"] is True
-    markdown = (out_dir / "runtime_approval_summary_2026-05-13.md").read_text(encoding="utf-8")
+    markdown = (out_dir / "runtime_approval_summary_2026-05-13.md").read_text(
+        encoding="utf-8"
+    )
     assert "## Panic" in markdown
     assert "panic_buy_runner_tp_canary" in markdown
 
 
-def test_runtime_approval_summary_freezes_panic_request_on_source_quality_blocker(tmp_path, monkeypatch):
+def test_runtime_approval_summary_freezes_panic_request_on_source_quality_blocker(
+    tmp_path, monkeypatch
+):
     ev_dir = tmp_path / "threshold_cycle_ev"
     calibration_dir = tmp_path / "threshold_cycle_calibration"
     swing_dir = tmp_path / "swing_runtime_approval"
@@ -1170,7 +1375,9 @@ def test_runtime_approval_summary_freezes_panic_request_on_source_quality_blocke
                             "panic_state": "NORMAL",
                             "active_sim_probe_positions": 3,
                             "microstructure_max_panic_score": 0.84,
-                            "candidate_status": {"panic_entry_freeze_guard": "report_only_candidate"},
+                            "candidate_status": {
+                                "panic_entry_freeze_guard": "report_only_candidate"
+                            },
                             "source_quality_blockers": ["market_regime_not_risk_off"],
                             "market_breadth_followup_candidate": True,
                         },
@@ -1189,8 +1396,12 @@ def test_runtime_approval_summary_freezes_panic_request_on_source_quality_blocke
                             "max_panic_buy_score": 0.88,
                             "market_wide_panic_buy_confirmed": False,
                             "market_breadth_risk_on_advisory": False,
-                            "source_quality_blockers": ["panic_buy_local_unconfirmed_by_market_breadth"],
-                            "candidate_status": {"panic_buy_runner_tp_canary": "report_only_candidate"},
+                            "source_quality_blockers": [
+                                "panic_buy_local_unconfirmed_by_market_breadth"
+                            ],
+                            "candidate_status": {
+                                "panic_buy_runner_tp_canary": "report_only_candidate"
+                            },
                         },
                     }
                 }
@@ -1200,7 +1411,12 @@ def test_runtime_approval_summary_freezes_panic_request_on_source_quality_blocke
         encoding="utf-8",
     )
     (ev_dir / "threshold_cycle_ev_2026-05-14.json").write_text(
-        json.dumps({"sources": {"calibration": str(calibration_path)}, "calibration_outcome": {"decisions": []}}),
+        json.dumps(
+            {
+                "sources": {"calibration": str(calibration_path)},
+                "calibration_outcome": {"decisions": []},
+            }
+        ),
         encoding="utf-8",
     )
     monkeypatch.setattr(
@@ -1225,10 +1441,14 @@ def test_runtime_approval_summary_freezes_panic_request_on_source_quality_blocke
     panic_buy = rows["panic_buy_runner_tp_canary"]
     assert panic_buy["state"] == "freeze"
     assert "source_quality_blocker" in panic_buy["reasons"]
-    assert panic_buy["source_quality_blockers"] == ["panic_buy_local_unconfirmed_by_market_breadth"]
+    assert panic_buy["source_quality_blockers"] == [
+        "panic_buy_local_unconfirmed_by_market_breadth"
+    ]
 
 
-def test_runtime_approval_summary_does_not_request_for_inactive_panic_candidate_status(tmp_path, monkeypatch):
+def test_runtime_approval_summary_does_not_request_for_inactive_panic_candidate_status(
+    tmp_path, monkeypatch
+):
     ev_dir = tmp_path / "threshold_cycle_ev"
     calibration_dir = tmp_path / "threshold_cycle_calibration"
     swing_dir = tmp_path / "swing_runtime_approval"
@@ -1259,7 +1479,12 @@ def test_runtime_approval_summary_does_not_request_for_inactive_panic_candidate_
         encoding="utf-8",
     )
     (ev_dir / "threshold_cycle_ev_2026-05-14.json").write_text(
-        json.dumps({"sources": {"calibration": str(calibration_path)}, "calibration_outcome": {"decisions": []}}),
+        json.dumps(
+            {
+                "sources": {"calibration": str(calibration_path)},
+                "calibration_outcome": {"decisions": []},
+            }
+        ),
         encoding="utf-8",
     )
     monkeypatch.setattr(

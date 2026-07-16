@@ -45,21 +45,30 @@ def test_swing_threshold_openai_review_uses_individual_mini_model(monkeypatch):
     for key in tuple(os.environ):
         if key.startswith("KORSTOCKSCAN_SWING_THRESHOLD_AI_REVIEW"):
             monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("KORSTOCKSCAN_SWING_THRESHOLD_AI_REVIEW_AI_PRIMARY_PROVIDER", "openai")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SWING_THRESHOLD_AI_REVIEW_AI_PRIMARY_PROVIDER", "openai"
+    )
 
     class _FakeResponses:
         def create(self, **kwargs):
             captured.update(kwargs)
-            return SimpleNamespace(output_text=json.dumps({"items": []}), usage=SimpleNamespace())
+            return SimpleNamespace(
+                output_text=json.dumps({"items": []}), usage=SimpleNamespace()
+            )
 
     class _FakeOpenAI:
         def __init__(self, api_key):
             self.responses = _FakeResponses()
 
-    monkeypatch.setattr("src.engine.daily_threshold_cycle_report._load_threshold_ai_openai_keys", lambda: [("OPENAI_API_KEY", "key")])
+    monkeypatch.setattr(
+        "src.engine.daily_threshold_cycle_report._load_threshold_ai_openai_keys",
+        lambda: [("OPENAI_API_KEY", "key")],
+    )
     monkeypatch.setattr("openai.OpenAI", _FakeOpenAI)
 
-    _, status = mod._call_openai_swing_threshold_review({"date": "2026-05-27", "candidates": []})
+    _, status = mod._call_openai_swing_threshold_review(
+        {"date": "2026-05-27", "candidates": []}
+    )
 
     assert status["model"] == "gpt-5.4-mini"
     assert status["attempted_models"] == ["gpt-5.4-mini"]
@@ -93,7 +102,11 @@ def test_swing_entry_bottleneck_dry_run_submit_zero_is_not_critical():
             "cooldown_policies": {"pullback_wait": 113},
             "ofi_qi_summary": {
                 "stale_missing_ratio": 0.91,
-                "stale_missing_group_unique_record_counts": {"entry": 0, "holding": 40, "exit": 20},
+                "stale_missing_group_unique_record_counts": {
+                    "entry": 0,
+                    "holding": 40,
+                    "exit": 20,
+                },
                 "entry_micro_state_counts": {"READY": 5},
             },
         }
@@ -144,7 +157,10 @@ def test_market_regime_prior_alone_does_not_create_entry_drought_critical():
     assert bottleneck["primary"] == "SWING_ENTRY_BOTTLENECK_OBSERVE"
     assert bottleneck["critical"] is False
     assert bottleneck["counts"]["hard_blocker_unique_total"] == 0
-    assert bottleneck["counts"]["legacy_prior_event_counts"]["market_regime_block_unique"] == 15
+    assert (
+        bottleneck["counts"]["legacy_prior_event_counts"]["market_regime_block_unique"]
+        == 15
+    )
 
 
 def test_lifecycle_summary_counts_market_regime_prior_reasons():
@@ -163,7 +179,10 @@ def test_lifecycle_summary_counts_market_regime_prior_reasons():
                 "stage": "market_regime_block",
                 "record_id": "r2",
                 "stock_code": "000002",
-                "fields": {"strategy": "KOSPI_ML", "market_regime_block_reason": "confirmed_risk_context"},
+                "fields": {
+                    "strategy": "KOSPI_ML",
+                    "market_regime_block_reason": "confirmed_risk_context",
+                },
             },
         ]
     )
@@ -215,7 +234,9 @@ def test_lifecycle_summary_ignores_legacy_phase0_real_canary_receipts():
     assert "swing_scale_in_real_canary_order_submitted" not in summary["raw_counts"]
     assert summary["actual_order_submitted_flags"] == {"false": 1}
     assert summary["scale_in_observation"]["action_groups"] == {"PYRAMID": 1}
-    assert summary["scale_in_observation"]["legacy_phase0_real_canary_receipts_ignored"] == {
+    assert summary["scale_in_observation"][
+        "legacy_phase0_real_canary_receipts_ignored"
+    ] == {
         "swing_one_share_real_canary_blocked": 1,
         "swing_scale_in_real_canary_order_submitted": 1,
     }
@@ -289,9 +310,18 @@ def test_swing_improvement_automation_surfaces_downstream_contract_gap_orders():
         "swing_lifecycle_contract_gaps": {
             "gap_count": 3,
             "gaps": [
-                {"gap_id": "SWING_HOLDING_EXIT_CONTRACT_GAP", "next_route": "code_improvement_workorder"},
-                {"gap_id": "SWING_SCALE_IN_CONTRACT_GAP", "next_route": "code_improvement_workorder"},
-                {"gap_id": "SWING_DISCOVERY_LABEL_CONTRACT_GAP", "next_route": "source_quality_workorder"},
+                {
+                    "gap_id": "SWING_HOLDING_EXIT_CONTRACT_GAP",
+                    "next_route": "code_improvement_workorder",
+                },
+                {
+                    "gap_id": "SWING_SCALE_IN_CONTRACT_GAP",
+                    "next_route": "code_improvement_workorder",
+                },
+                {
+                    "gap_id": "SWING_DISCOVERY_LABEL_CONTRACT_GAP",
+                    "next_route": "source_quality_workorder",
+                },
             ],
         },
         "observation_axis_summary": {},
@@ -307,7 +337,8 @@ def test_swing_improvement_automation_surfaces_downstream_contract_gap_orders():
     assert all(
         item["runtime_effect"] is False and item["allowed_runtime_apply"] is False
         for item in report["code_improvement_orders"]
-        if item["order_id"] in {
+        if item["order_id"]
+        in {
             "order_swing_holding_exit_contract_gap_review",
             "order_swing_scale_in_contract_gap_review",
             "order_swing_discovery_label_contract_gap_review",
@@ -318,9 +349,16 @@ def test_swing_improvement_automation_surfaces_downstream_contract_gap_orders():
         "order_swing_scale_in_contract_gap_review",
         "order_swing_discovery_label_contract_gap_review",
     }:
-        order = next(item for item in report["code_improvement_orders"] if item["order_id"] == order_id)
+        order = next(
+            item
+            for item in report["code_improvement_orders"]
+            if item["order_id"] == order_id
+        )
         assert order["implementation_status"] == "implemented"
-        assert order["implementation_provenance"]["source_contract"] == "swing_lifecycle_contract_gap_v1"
+        assert (
+            order["implementation_provenance"]["source_contract"]
+            == "swing_lifecycle_contract_gap_v1"
+        )
         assert order["implementation_provenance"]["runtime_effect"] is False
 
 
@@ -341,21 +379,31 @@ def test_swing_improvement_automation_marks_ofi_qi_instrumentation_implemented()
                 "stale_missing_unique_record_count": 1,
                 "stale_missing_reason_counts": {"micro_missing": 1},
                 "stale_missing_reason_combination_counts": {"micro_missing": 1},
-                "stale_missing_reason_combination_unique_record_counts": {"micro_missing": 1},
+                "stale_missing_reason_combination_unique_record_counts": {
+                    "micro_missing": 1
+                },
                 "stale_missing_group_counts": {"entry": 1},
                 "stale_missing_group_unique_record_counts": {"entry": 1},
                 "stale_missing_reason_counts_by_group": {"entry": {"micro_missing": 1}},
-                "stale_missing_reason_unique_record_counts_by_group": {"entry": {"micro_missing": 1}},
+                "stale_missing_reason_unique_record_counts_by_group": {
+                    "entry": {"micro_missing": 1}
+                },
                 "observer_unhealthy_overlap": {
                     "observer_unhealthy_total": 0,
                     "observer_unhealthy_with_other_reason": 0,
                     "observer_unhealthy_only": 0,
                 },
-                "orderbook_micro_reason_counts_by_group": {"entry": {"micro_context_missing": 1}},
+                "orderbook_micro_reason_counts_by_group": {
+                    "entry": {"micro_context_missing": 1}
+                },
                 "observer_missing_reason_counts_by_group": {"entry": {"UNKNOWN": 1}},
-                "source_quality_status_counts_by_group": {"entry": {"source_quality_blocker": 1}},
+                "source_quality_status_counts_by_group": {
+                    "entry": {"source_quality_blocker": 1}
+                },
                 "ws_quote_source_counts_by_group": {"entry": {"missing": 1}},
-                "ws_quote_stale_counts_by_group": {"entry": {"not_available_no_quote_age": 1}},
+                "ws_quote_stale_counts_by_group": {
+                    "entry": {"not_available_no_quote_age": 1}
+                },
                 "stale_missing_examples": [{"record_id": "r1"}],
                 "entry_micro_state_counts": {"insufficient": 1, "bullish": 1},
                 "scale_in_micro_state_counts": {},
@@ -381,14 +429,19 @@ def test_swing_improvement_automation_marks_ofi_qi_instrumentation_implemented()
     )
 
     assert order["implementation_status"] == "implemented"
-    assert order["implementation_provenance"]["source_contract"] == "swing_orderbook_micro_context_v2"
-    assert order["implementation_provenance"]["group"] == "entry"
-    assert order["implementation_provenance"]["root_cause_closure_status_hint"] == "root_cause_closed"
-    assert order["implementation_provenance"]["runtime_effect"] is False
     assert (
-        order["implementation_provenance"]["root_cause_dimensions"]["orderbook_micro_reason_counts_by_group"]
-        == {"micro_context_missing": 1}
+        order["implementation_provenance"]["source_contract"]
+        == "swing_orderbook_micro_context_v2"
     )
+    assert order["implementation_provenance"]["group"] == "entry"
+    assert (
+        order["implementation_provenance"]["root_cause_closure_status_hint"]
+        == "root_cause_closed"
+    )
+    assert order["implementation_provenance"]["runtime_effect"] is False
+    assert order["implementation_provenance"]["root_cause_dimensions"][
+        "orderbook_micro_reason_counts_by_group"
+    ] == {"micro_context_missing": 1}
 
 
 def test_swing_improvement_automation_marks_existing_family_metric_orders_implemented():
@@ -450,4 +503,7 @@ def test_swing_improvement_automation_marks_existing_family_metric_orders_implem
         assert order["implementation_provenance"]["allowed_runtime_apply"] is False
         assert order["implementation_provenance"]["actual_order_submitted"] is False
         assert order["implementation_provenance"]["broker_order_forbidden"] is True
-        assert order["implementation_provenance"]["source_metric_snapshot"]["sample_count"] > 0
+        assert (
+            order["implementation_provenance"]["source_metric_snapshot"]["sample_count"]
+            > 0
+        )

@@ -1,9 +1,13 @@
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
 QNA = ROOT / "docs" / "plan-korStockScanPerformanceOptimization.qna.md"
-ARCHIVE = ROOT / "docs" / "archive" / "plan-korStockScanPerformanceOptimization.qna.pre-automation-renewal-2026-05-13.md"
+ARCHIVE = (
+    ROOT
+    / "docs"
+    / "archive"
+    / "plan-korStockScanPerformanceOptimization.qna.pre-automation-renewal-2026-05-13.md"
+)
 
 
 def test_qna_is_automation_chain_oriented():

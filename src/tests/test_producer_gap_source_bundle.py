@@ -8,7 +8,9 @@ from src.engine.automation import producer_gap_source_bundle as bundle
 
 def test_producer_gap_source_bundle_emits_source_only_sections(monkeypatch, tmp_path):
     monkeypatch.setattr(bundle, "REPORT_DIR", tmp_path / "report")
-    monkeypatch.setattr(bundle, "OUT_DIR", tmp_path / "report" / "producer_gap_source_bundle")
+    monkeypatch.setattr(
+        bundle, "OUT_DIR", tmp_path / "report" / "producer_gap_source_bundle"
+    )
     monkeypatch.setattr(bundle, "POST_SELL_DIR", tmp_path / "post_sell")
     (tmp_path / "post_sell").mkdir(parents=True)
     (tmp_path / "post_sell" / "sim_post_sell_evaluations_2026-05-27.jsonl").write_text(
@@ -28,15 +30,28 @@ def test_producer_gap_source_bundle_emits_source_only_sections(monkeypatch, tmp_
     report = bundle.build_producer_gap_source_bundle("2026-05-27")
 
     sections = {item["section_id"]: item for item in report["sections"]}
-    assert sections["sim_scale_in_would_add_counterfactual"]["source_quality_status"] == "implemented"
+    assert (
+        sections["sim_scale_in_would_add_counterfactual"]["source_quality_status"]
+        == "implemented"
+    )
     assert sections["sim_scale_in_would_add_counterfactual"]["runtime_effect"] is False
-    assert sections["sim_scale_in_would_add_counterfactual"]["broker_order_forbidden"] is True
-    assert sections["swing_sim_probe_label_gap"]["source_quality_status"] == "implemented_but_hold_sample"
+    assert (
+        sections["sim_scale_in_would_add_counterfactual"]["broker_order_forbidden"]
+        is True
+    )
+    assert (
+        sections["swing_sim_probe_label_gap"]["source_quality_status"]
+        == "implemented_but_hold_sample"
+    )
 
 
-def test_producer_gap_source_bundle_covers_entry_selection_and_missed_fill(monkeypatch, tmp_path):
+def test_producer_gap_source_bundle_covers_entry_selection_and_missed_fill(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(bundle, "REPORT_DIR", tmp_path / "report")
-    monkeypatch.setattr(bundle, "OUT_DIR", tmp_path / "report" / "producer_gap_source_bundle")
+    monkeypatch.setattr(
+        bundle, "OUT_DIR", tmp_path / "report" / "producer_gap_source_bundle"
+    )
     monkeypatch.setattr(bundle, "POST_SELL_DIR", tmp_path / "post_sell")
     (tmp_path / "post_sell").mkdir(parents=True)
     (tmp_path / "post_sell" / "sim_post_sell_candidates_2026-05-27.jsonl").write_text(
@@ -73,15 +88,26 @@ def test_producer_gap_source_bundle_covers_entry_selection_and_missed_fill(monke
     report = bundle.build_producer_gap_source_bundle("2026-05-27")
 
     sections = {item["section_id"]: item for item in report["sections"]}
-    assert sections["sim_entry_selection_bucket_producer"]["source_quality_status"] == "implemented"
-    assert sections["missed_fill_recovery_counterfactual"]["source_quality_status"] == "implemented"
+    assert (
+        sections["sim_entry_selection_bucket_producer"]["source_quality_status"]
+        == "implemented"
+    )
+    assert (
+        sections["missed_fill_recovery_counterfactual"]["source_quality_status"]
+        == "implemented"
+    )
     assert sections["sim_entry_selection_bucket_producer"]["runtime_effect"] is False
-    assert sections["missed_fill_recovery_counterfactual"]["allowed_runtime_apply"] is False
+    assert (
+        sections["missed_fill_recovery_counterfactual"]["allowed_runtime_apply"]
+        is False
+    )
 
 
 def test_producer_gap_source_bundle_reads_jsonl_gzip_sibling(monkeypatch, tmp_path):
     monkeypatch.setattr(bundle, "REPORT_DIR", tmp_path / "report")
-    monkeypatch.setattr(bundle, "OUT_DIR", tmp_path / "report" / "producer_gap_source_bundle")
+    monkeypatch.setattr(
+        bundle, "OUT_DIR", tmp_path / "report" / "producer_gap_source_bundle"
+    )
     monkeypatch.setattr(bundle, "POST_SELL_DIR", tmp_path / "post_sell")
     (tmp_path / "post_sell").mkdir(parents=True)
     gz_path = tmp_path / "post_sell" / "sim_post_sell_evaluations_2026-05-27.jsonl.gz"
@@ -109,9 +135,13 @@ def test_producer_gap_source_bundle_reads_jsonl_gzip_sibling(monkeypatch, tmp_pa
     assert report["sources"]["sim_post_sell_evaluations"] == str(gz_path)
 
 
-def test_producer_gap_source_bundle_covers_volatile_runner_exit_counterfactual(monkeypatch, tmp_path):
+def test_producer_gap_source_bundle_covers_volatile_runner_exit_counterfactual(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(bundle, "REPORT_DIR", tmp_path / "report")
-    monkeypatch.setattr(bundle, "OUT_DIR", tmp_path / "report" / "producer_gap_source_bundle")
+    monkeypatch.setattr(
+        bundle, "OUT_DIR", tmp_path / "report" / "producer_gap_source_bundle"
+    )
     monkeypatch.setattr(bundle, "POST_SELL_DIR", tmp_path / "post_sell")
     (tmp_path / "post_sell").mkdir(parents=True)
     (tmp_path / "post_sell" / "sim_post_sell_candidates_2026-05-27.jsonl").write_text(

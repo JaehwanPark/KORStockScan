@@ -33,7 +33,9 @@ def _artifact(value):
     }
 
 
-def test_build_base_score_frame_disabled_neutralizes_bull_without_loading_bull(monkeypatch):
+def test_build_base_score_frame_disabled_neutralizes_bull_without_loading_bull(
+    monkeypatch,
+):
     loaded = []
 
     def fake_load(path):
@@ -102,8 +104,12 @@ def test_recommend_daily_disabled_writes_bull_provenance(tmp_path, monkeypatch):
     monkeypatch.setattr(reco, "get_latest_quote_date", lambda: latest)
     monkeypatch.setattr(reco, "get_top_kospi_codes", lambda limit=300: ["000001"])
     monkeypatch.setattr(reco, "build_panel_dataset", lambda *args, **kwargs: panel)
-    monkeypatch.setattr(reco, "build_base_score_frame", lambda *args, **kwargs: scored.copy())
-    monkeypatch.setattr(reco, "load_model_artifact", lambda path: {"model": _DummyModel(0.5)})
+    monkeypatch.setattr(
+        reco, "build_base_score_frame", lambda *args, **kwargs: scored.copy()
+    )
+    monkeypatch.setattr(
+        reco, "load_model_artifact", lambda path: {"model": _DummyModel(0.5)}
+    )
     monkeypatch.setattr(reco, "RECO_PATH", str(tmp_path / "reco.csv"))
     monkeypatch.setattr(reco, "RECO_DIAGNOSTIC_PATH", str(tmp_path / "diag.csv"))
     monkeypatch.setattr(reco, "RECO_DIAGNOSTIC_JSON_PATH", str(tmp_path / "diag.json"))
@@ -118,21 +124,55 @@ def test_recommend_daily_disabled_writes_bull_provenance(tmp_path, monkeypatch):
 
 
 def test_evaluate_bull_specialist_mode_enabled_disabled_and_hold():
-    enabled = {"sample_count": 20, "avg_net_pct": 0.4, "downside_p10_pct": -1.0, "selected_count": 8}
-    disabled = {"sample_count": 20, "avg_net_pct": 0.2, "downside_p10_pct": -1.1, "selected_count": 8}
-    assert pipeline.evaluate_bull_specialist_mode(enabled, disabled)["bull_specialist_mode"] == "enabled"
+    enabled = {
+        "sample_count": 20,
+        "avg_net_pct": 0.4,
+        "downside_p10_pct": -1.0,
+        "selected_count": 8,
+    }
+    disabled = {
+        "sample_count": 20,
+        "avg_net_pct": 0.2,
+        "downside_p10_pct": -1.1,
+        "selected_count": 8,
+    }
+    assert (
+        pipeline.evaluate_bull_specialist_mode(enabled, disabled)[
+            "bull_specialist_mode"
+        ]
+        == "enabled"
+    )
 
-    weak = {"sample_count": 20, "avg_net_pct": 0.1, "downside_p10_pct": -1.8, "selected_count": 8}
-    assert pipeline.evaluate_bull_specialist_mode(weak, disabled)["bull_specialist_mode"] == "disabled"
+    weak = {
+        "sample_count": 20,
+        "avg_net_pct": 0.1,
+        "downside_p10_pct": -1.8,
+        "selected_count": 8,
+    }
+    assert (
+        pipeline.evaluate_bull_specialist_mode(weak, disabled)["bull_specialist_mode"]
+        == "disabled"
+    )
 
-    small = {"sample_count": 2, "avg_net_pct": 0.9, "downside_p10_pct": -0.5, "selected_count": 8}
-    assert pipeline.evaluate_bull_specialist_mode(small, disabled)["bull_specialist_mode"] == "hold_current"
+    small = {
+        "sample_count": 2,
+        "avg_net_pct": 0.9,
+        "downside_p10_pct": -0.5,
+        "selected_count": 8,
+    }
+    assert (
+        pipeline.evaluate_bull_specialist_mode(small, disabled)["bull_specialist_mode"]
+        == "hold_current"
+    )
 
 
 def test_mlflow_tracking_uri_defaults_to_plan_contract(monkeypatch):
     monkeypatch.delenv("KORSTOCKSCAN_SWING_MODEL_MLFLOW_TRACKING_URI", raising=False)
 
-    assert swing_model_tracking.tracking_uri() == "file:data/model_registry/swing_v2/mlruns"
+    assert (
+        swing_model_tracking.tracking_uri()
+        == "file:data/model_registry/swing_v2/mlruns"
+    )
 
 
 def test_backtest_v2_uses_configured_max_hold_days_for_time_exit(monkeypatch):
@@ -199,7 +239,9 @@ def test_bull_period_guard_blocks_leakage_and_uses_hold_current():
     assert report["decision"]["bull_specialist_mode"] == "hold_current"
 
 
-def test_promote_candidate_disabled_removes_active_bull_and_rollback_restores(tmp_path, monkeypatch):
+def test_promote_candidate_disabled_removes_active_bull_and_rollback_restores(
+    tmp_path, monkeypatch
+):
     data_dir = tmp_path / "data"
     run_dir = tmp_path / "run"
     backup_dir = tmp_path / "backup"
@@ -215,15 +257,23 @@ def test_promote_candidate_disabled_removes_active_bull_and_rollback_restores(tm
 
     assert "bull_xgb_v2.pkl" not in result["promoted_files"]
     assert not (data_dir / "bull_xgb_v2.pkl").exists()
-    assert (data_dir / "stacking_meta_v2.pkl").read_text(encoding="utf-8").startswith("candidate:")
+    assert (
+        (data_dir / "stacking_meta_v2.pkl")
+        .read_text(encoding="utf-8")
+        .startswith("candidate:")
+    )
 
     restored = pipeline._rollback_active_models(backup_dir)
 
     assert "bull_xgb_v2.pkl" in restored
-    assert (data_dir / "bull_xgb_v2.pkl").read_text(encoding="utf-8").startswith("active:")
+    assert (
+        (data_dir / "bull_xgb_v2.pkl").read_text(encoding="utf-8").startswith("active:")
+    )
 
 
-def test_rollback_removes_artifacts_that_were_absent_before_promotion(tmp_path, monkeypatch):
+def test_rollback_removes_artifacts_that_were_absent_before_promotion(
+    tmp_path, monkeypatch
+):
     data_dir = tmp_path / "data"
     run_dir = tmp_path / "run"
     backup_dir = tmp_path / "backup"
@@ -243,14 +293,24 @@ def test_rollback_removes_artifacts_that_were_absent_before_promotion(tmp_path, 
     assert "removed:bull_xgb_v2.pkl" in restored
     assert "removed:bull_lgbm_v2.pkl" in restored
     assert not (data_dir / "bull_xgb_v2.pkl").exists()
-    assert (data_dir / "stacking_meta_v2.pkl").read_text(encoding="utf-8").startswith("active:")
+    assert (
+        (data_dir / "stacking_meta_v2.pkl")
+        .read_text(encoding="utf-8")
+        .startswith("active:")
+    )
 
 
-def test_pipeline_trains_enabled_and_disabled_then_selects_better_candidate(tmp_path, monkeypatch):
+def test_pipeline_trains_enabled_and_disabled_then_selects_better_candidate(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(pipeline, "RUNS_DIR", tmp_path / "runs")
     monkeypatch.setattr(pipeline, "PROMOTIONS_DIR", tmp_path / "promotions")
     monkeypatch.setattr(pipeline, "REPORT_DIR", tmp_path / "reports")
-    monkeypatch.setattr(pipeline, "write_diagnosis", lambda target, force=False: {"retrain_required": True})
+    monkeypatch.setattr(
+        pipeline,
+        "write_diagnosis",
+        lambda target, force=False: {"retrain_required": True},
+    )
     monkeypatch.setattr(
         pipeline,
         "write_review",
@@ -310,9 +370,17 @@ def test_pipeline_trains_enabled_and_disabled_then_selects_better_candidate(tmp_
             "label_safety_days": 5,
         },
     )
-    monkeypatch.setattr(pipeline, "_promote_candidate", lambda run_dir, backup_dir, mode: {"promoted_files": [mode]})
-    monkeypatch.setattr(pipeline, "_smoke_after_promote", lambda mode: {"returncode": 0})
-    monkeypatch.setattr(pipeline, "_validate_live_recommendation_schema", lambda: {"passed": True})
+    monkeypatch.setattr(
+        pipeline,
+        "_promote_candidate",
+        lambda run_dir, backup_dir, mode: {"promoted_files": [mode]},
+    )
+    monkeypatch.setattr(
+        pipeline, "_smoke_after_promote", lambda mode: {"returncode": 0}
+    )
+    monkeypatch.setattr(
+        pipeline, "_validate_live_recommendation_schema", lambda: {"passed": True}
+    )
     monkeypatch.setattr(
         pipeline,
         "write_tier2_review_report",
@@ -328,10 +396,13 @@ def test_pipeline_trains_enabled_and_disabled_then_selects_better_candidate(tmp_
     monkeypatch.setattr(
         pipeline,
         "_write_current_manifest",
-        lambda run_id, target_date, run_dir, mode, metrics, **kwargs: tmp_path / "current.json",
+        lambda run_id, target_date, run_dir, mode, metrics, **kwargs: tmp_path
+        / "current.json",
     )
     monkeypatch.setattr(pipeline, "BENCHMARK_REPORT_DIR", tmp_path / "benchmark")
-    monkeypatch.setattr(pipeline, "log_model_run", lambda **kwargs: {"status": "skipped_test"})
+    monkeypatch.setattr(
+        pipeline, "log_model_run", lambda **kwargs: {"status": "skipped_test"}
+    )
 
     report = pipeline.run_pipeline("2026-05-10", auto_promote=True, force=True)
 
@@ -363,7 +434,11 @@ def test_pipeline_blocks_auto_promotion_when_tier2_unavailable(tmp_path, monkeyp
     monkeypatch.setattr(pipeline, "PROMOTIONS_DIR", tmp_path / "promotions")
     monkeypatch.setattr(pipeline, "REPORT_DIR", tmp_path / "reports")
     monkeypatch.setattr(pipeline, "BENCHMARK_REPORT_DIR", tmp_path / "benchmark")
-    monkeypatch.setattr(pipeline, "write_diagnosis", lambda target, force=False: {"retrain_required": True})
+    monkeypatch.setattr(
+        pipeline,
+        "write_diagnosis",
+        lambda target, force=False: {"retrain_required": True},
+    )
     monkeypatch.setattr(
         pipeline,
         "write_review",
@@ -439,9 +514,13 @@ def test_pipeline_blocks_auto_promotion_when_tier2_unavailable(tmp_path, monkeyp
     monkeypatch.setattr(
         pipeline,
         "_promote_candidate",
-        lambda run_dir, backup_dir, mode: (_ for _ in ()).throw(AssertionError("promotion must be blocked before copy")),
+        lambda run_dir, backup_dir, mode: (_ for _ in ()).throw(
+            AssertionError("promotion must be blocked before copy")
+        ),
     )
-    monkeypatch.setattr(pipeline, "log_model_run", lambda **kwargs: {"status": "skipped_test"})
+    monkeypatch.setattr(
+        pipeline, "log_model_run", lambda **kwargs: {"status": "skipped_test"}
+    )
 
     report = pipeline.run_pipeline("2026-05-10", auto_promote=True, force=True)
 
@@ -493,7 +572,9 @@ def test_remediation_schema_block_allows_safe_retry_env(tmp_path, monkeypatch):
     assert report["next_cron_allowed"] is True
 
 
-def test_remediation_candidate_artifact_retry_uses_capped_optuna_env(tmp_path, monkeypatch):
+def test_remediation_candidate_artifact_retry_uses_capped_optuna_env(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(remediation, "REMEDIATION_DIR", tmp_path / "remediation")
     monkeypatch.setattr(remediation, "REPORT_DIR", tmp_path / "reports")
     benchmark_path = tmp_path / "benchmark.json"
@@ -522,7 +603,10 @@ def test_remediation_candidate_artifact_retry_uses_capped_optuna_env(tmp_path, m
     assert report["remediation_state"] == "retry_allowed"
     assert report["retry_env"]["KORSTOCKSCAN_SWING_MODEL_OPTUNA_TRIALS"] == "80"
     assert report["retry_env"]["KORSTOCKSCAN_SWING_MODEL_OPTUNA_TIMEOUT_SEC"] == "3600"
-    assert report["retry_env"]["KORSTOCKSCAN_SWING_MODEL_UPGRADE_FAMILIES"] == "optuna_lgbm_ranker_v1"
+    assert (
+        report["retry_env"]["KORSTOCKSCAN_SWING_MODEL_UPGRADE_FAMILIES"]
+        == "optuna_lgbm_ranker_v1"
+    )
 
 
 def test_remediation_manual_for_label_and_metric_policy(tmp_path, monkeypatch):
@@ -531,11 +615,19 @@ def test_remediation_manual_for_label_and_metric_policy(tmp_path, monkeypatch):
 
     label = remediation.write_remediation_report(
         target_date="2026-05-26",
-        tier2_review={"status": "parsed", "decision": "blocked", "blocking_reasons": ["label_leakage"]},
+        tier2_review={
+            "status": "parsed",
+            "decision": "blocked",
+            "blocking_reasons": ["label_leakage"],
+        },
     )
     metric = remediation.write_remediation_report(
         target_date="2026-05-27",
-        tier2_review={"status": "parsed", "decision": "blocked", "blocking_reasons": ["metric_contract"]},
+        tier2_review={
+            "status": "parsed",
+            "decision": "blocked",
+            "blocking_reasons": ["metric_contract"],
+        },
     )
 
     assert label["remediation_state"] == "manual_required"
@@ -550,7 +642,11 @@ def test_remediation_forbidden_use_blocks_retry_env(tmp_path, monkeypatch):
 
     report = remediation.write_remediation_report(
         target_date="2026-05-26",
-        tier2_review={"status": "parsed", "decision": "blocked", "blocking_reasons": ["forbidden_use"]},
+        tier2_review={
+            "status": "parsed",
+            "decision": "blocked",
+            "blocking_reasons": ["forbidden_use"],
+        },
     )
 
     assert report["remediation_state"] == "blocked_forbidden_use"
@@ -568,7 +664,11 @@ def test_remediation_retry_budget_exhaustion_becomes_manual(tmp_path, monkeypatc
 
     report = remediation.write_remediation_report(
         target_date="2026-05-26",
-        tier2_review={"status": "parsed", "decision": "blocked", "blocking_reasons": ["schema_compatibility"]},
+        tier2_review={
+            "status": "parsed",
+            "decision": "blocked",
+            "blocking_reasons": ["schema_compatibility"],
+        },
     )
 
     assert report["retry_count"] == 1
@@ -604,7 +704,9 @@ def test_remediation_resolver_sanitizes_disallowed_env(tmp_path, monkeypatch):
         "KORSTOCKSCAN_SWING_RETRAIN_FORCE": "true",
         "KORSTOCKSCAN_SWING_MODEL_OPTUNA_TRIALS": "80",
     }
-    assert "removed_disallowed_env:KORSTOCKSCAN_SCALPING_AI_ROUTE" in resolved["warnings"]
+    assert (
+        "removed_disallowed_env:KORSTOCKSCAN_SCALPING_AI_ROUTE" in resolved["warnings"]
+    )
 
 
 def test_tier2_review_parser_fail_closes_unknown_status_and_decision():
@@ -641,7 +743,9 @@ def test_model_upgrade_promotion_gate_requires_ev_schema_sample_and_downside():
         "sample_count": 45,
     }
 
-    passed = pipeline.evaluate_model_upgrade_promotion(candidate, incumbent, {"passed": True})
+    passed = pipeline.evaluate_model_upgrade_promotion(
+        candidate, incumbent, {"passed": True}
+    )
 
     assert passed["passed"] is True
     assert passed["ev_delta_pct"] == 0.7
@@ -664,7 +768,9 @@ def test_live_recommendation_schema_checks_csv_and_diagnostics(tmp_path, monkeyp
     row = {column: "x" for column in pipeline.REQUIRED_LIVE_RECOMMENDATION_COLUMNS}
     pd.DataFrame([row]).to_csv(csv_path, index=False)
     diagnostics_path.write_text(
-        json.dumps({key: "x" for key in pipeline.REQUIRED_RECOMMENDATION_DIAGNOSTIC_KEYS}),
+        json.dumps(
+            {key: "x" for key in pipeline.REQUIRED_RECOMMENDATION_DIAGNOSTIC_KEYS}
+        ),
         encoding="utf-8",
     )
     monkeypatch.setattr(pipeline, "RECO_PATH", str(csv_path))
@@ -674,7 +780,9 @@ def test_live_recommendation_schema_checks_csv_and_diagnostics(tmp_path, monkeyp
 
     assert passed["passed"] is True
 
-    diagnostics_path.write_text(json.dumps({"owner": "missing_fields"}), encoding="utf-8")
+    diagnostics_path.write_text(
+        json.dumps({"owner": "missing_fields"}), encoding="utf-8"
+    )
     blocked = pipeline._validate_live_recommendation_schema()
     assert blocked["passed"] is False
     assert "latest_date" in blocked["diagnostic_json"]["missing_keys"]
@@ -707,7 +815,10 @@ def test_swing_live_dry_run_wrapper_tracks_runtime_approval_artifact():
     assert "runtime_approval_markdown_artifact" in script
     assert "runtime_approval_missing" in script
     assert "swing_runtime_approval_${TARGET_DATE}.json" in script
-    assert 'RUN_LIFECYCLE_AUDIT="${SWING_LIVE_DRY_RUN_RUN_LIFECYCLE_AUDIT:-false}"' in script
+    assert (
+        'RUN_LIFECYCLE_AUDIT="${SWING_LIVE_DRY_RUN_RUN_LIFECYCLE_AUDIT:-false}"'
+        in script
+    )
     assert "selection_completed_lifecycle_deferred_to_postclose" in script
     assert "lifecycle_audit_mode" in script
 
@@ -721,10 +832,16 @@ def test_auto_retrain_status_tracks_promotion_guard():
     assert '"current_manifest": promotion.get("current_manifest")' in script
     assert '"recommendation_smoke": _object(promotion.get("smoke"))' in script
     assert '"rollback_files": promotion.get("rollback_files") or []' in script
-    assert '"remediation_applied": bool(remediation_context.get("remediation_applied"))' in script
+    assert (
+        '"remediation_applied": bool(remediation_context.get("remediation_applied"))'
+        in script
+    )
     assert '"remediation_state": remediation_context.get("remediation_state")' in script
     assert '"retry_count": remediation_context.get("retry_count")' in script
     assert '"retry_env_keys": _retry_env_keys(remediation_context)' in script
     assert "src.model.swing_model_auto_remediation --resolve-cron" in script
-    assert 'KORSTOCKSCAN_SWING_MODEL_TIER2_REVIEW_PROVIDER="$MODEL_TIER2_REVIEW_PROVIDER"' in script
+    assert (
+        'KORSTOCKSCAN_SWING_MODEL_TIER2_REVIEW_PROVIDER="$MODEL_TIER2_REVIEW_PROVIDER"'
+        in script
+    )
     assert 'write_status "blocked_ai_tier2" 0 "ai_tier2_not_approved"' in script

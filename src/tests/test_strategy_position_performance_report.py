@@ -32,7 +32,10 @@ def test_build_trade_fact_rows_normalizes_strategy_and_exit_fields(monkeypatch):
                             "sell_reason_type": "TRAILING",
                         },
                         "ai_review_summary": {"headline": "AI 보유 유지 우세"},
-                        "gatekeeper_replay": {"action": "즉시 매수", "allow_entry": True},
+                        "gatekeeper_replay": {
+                            "action": "즉시 매수",
+                            "allow_entry": True,
+                        },
                     }
                 ]
             },
@@ -77,7 +80,10 @@ def test_strategy_position_report_falls_back_without_db(monkeypatch):
                         "profit_rate": 5.0,
                         "realized_pnl_krw": 50,
                         "holding_seconds": 120,
-                        "exit_signal": {"exit_rule": "take_profit", "sell_reason_type": "PROFIT"},
+                        "exit_signal": {
+                            "exit_rule": "take_profit",
+                            "sell_reason_type": "PROFIT",
+                        },
                     },
                     {
                         "id": 2,
@@ -95,7 +101,10 @@ def test_strategy_position_report_falls_back_without_db(monkeypatch):
                         "profit_rate": -5.0,
                         "realized_pnl_krw": -100,
                         "holding_seconds": 600,
-                        "exit_signal": {"exit_rule": "stop_loss", "sell_reason_type": "LOSS"},
+                        "exit_signal": {
+                            "exit_rule": "stop_loss",
+                            "sell_reason_type": "LOSS",
+                        },
                     },
                     {
                         "id": 4,
@@ -113,7 +122,10 @@ def test_strategy_position_report_falls_back_without_db(monkeypatch):
                         "profit_rate": 1.0,
                         "realized_pnl_krw": 1000,
                         "holding_seconds": 600,
-                        "exit_signal": {"exit_rule": "take_profit", "sell_reason_type": "PROFIT"},
+                        "exit_signal": {
+                            "exit_rule": "take_profit",
+                            "sell_reason_type": "PROFIT",
+                        },
                     },
                     {
                         "id": 5,
@@ -131,7 +143,10 @@ def test_strategy_position_report_falls_back_without_db(monkeypatch):
                         "profit_rate": -2.0,
                         "realized_pnl_krw": -200,
                         "holding_seconds": 600,
-                        "exit_signal": {"exit_rule": "stop_loss", "sell_reason_type": "LOSS"},
+                        "exit_signal": {
+                            "exit_rule": "stop_loss",
+                            "sell_reason_type": "LOSS",
+                        },
                     },
                     {
                         "id": 3,
@@ -216,7 +231,10 @@ def test_scanner_discovery_type_performance_section(monkeypatch):
                         "profit_rate": 2.0,
                         "realized_pnl_krw": 20,
                         "holding_seconds": 600,
-                        "exit_signal": {"exit_rule": "take_profit", "sell_reason_type": "PROFIT"},
+                        "exit_signal": {
+                            "exit_rule": "take_profit",
+                            "sell_reason_type": "PROFIT",
+                        },
                     },
                     {
                         "id": 12,
@@ -234,7 +252,10 @@ def test_scanner_discovery_type_performance_section(monkeypatch):
                         "profit_rate": -1.0,
                         "realized_pnl_krw": -10,
                         "holding_seconds": 600,
-                        "exit_signal": {"exit_rule": "stop_loss", "sell_reason_type": "LOSS"},
+                        "exit_signal": {
+                            "exit_rule": "stop_loss",
+                            "sell_reason_type": "LOSS",
+                        },
                     },
                 ]
             },
@@ -275,8 +296,16 @@ def test_scanner_discovery_type_performance_section(monkeypatch):
         [
             {
                 **fact,
-                "buy_time": fact["buy_time"].strftime("%Y-%m-%d %H:%M:%S") if fact["buy_time"] else "",
-                "sell_time": fact["sell_time"].strftime("%Y-%m-%d %H:%M:%S") if fact["sell_time"] else "",
+                "buy_time": (
+                    fact["buy_time"].strftime("%Y-%m-%d %H:%M:%S")
+                    if fact["buy_time"]
+                    else ""
+                ),
+                "sell_time": (
+                    fact["sell_time"].strftime("%Y-%m-%d %H:%M:%S")
+                    if fact["sell_time"]
+                    else ""
+                ),
             }
             for fact in facts
         ],
@@ -290,6 +319,9 @@ def test_scanner_discovery_type_performance_section(monkeypatch):
     assert report["summary"]["scanner_discovery_type_count"] == 2
     assert report["summary"]["scanner_provenance_matched_count"] == 2
     assert scanner_rows["price_jump_acceleration"]["realized_pnl_krw"] == 20
-    assert scanner_rows["price_jump_acceleration"]["top_promotion_reason"] == "price_jump_start_acceleration"
+    assert (
+        scanner_rows["price_jump_acceleration"]["top_promotion_reason"]
+        == "price_jump_start_acceleration"
+    )
     assert scanner_rows["low_rebound_rising_missed"]["realized_pnl_krw"] == -10
     assert scanner_rows["low_rebound_rising_missed"]["provenance_missing_count"] == 0

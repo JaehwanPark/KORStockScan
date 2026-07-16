@@ -1,4 +1,6 @@
-from src.engine.swing.entry_lifecycle_policy import evaluate_swing_entry_lifecycle_policy
+from src.engine.swing.entry_lifecycle_policy import (
+    evaluate_swing_entry_lifecycle_policy,
+)
 
 
 def test_score_gap_gatekeeper_reject_are_features_not_hard_blocks():
@@ -22,7 +24,10 @@ def test_score_gap_gatekeeper_reject_are_features_not_hard_blocks():
     assert result.submit_allowed_by_policy is True
     assert result.hard_safety_block is False
     assert result.policy_action == "ALLOW_SUBMIT_EVALUATION"
-    assert result.decision_authority == "swing_entry_lifecycle_policy_baseline_prior_features"
+    assert (
+        result.decision_authority
+        == "swing_entry_lifecycle_policy_baseline_prior_features"
+    )
     assert result.baseline_prior_features["score_vpw"]["vpw_condition"] is False
     assert result.baseline_prior_features["gap"]["gap_pct"] == 4.8
     assert result.baseline_prior_features["gatekeeper"]["allow_entry"] is False
@@ -55,4 +60,6 @@ def test_market_regime_prior_observed_is_not_submit_veto():
     assert result.submit_allowed_by_policy is True
     assert result.hard_safety_block is False
     assert result.baseline_prior_features["market_regime"]["prior_observed"] is True
-    assert result.baseline_prior_features["market_regime"]["confirmed_risk_block"] is False
+    assert (
+        result.baseline_prior_features["market_regime"]["confirmed_risk_block"] is False
+    )

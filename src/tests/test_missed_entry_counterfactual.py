@@ -5,7 +5,9 @@ import json
 from src.engine import sniper_missed_entry_counterfactual as report_mod
 
 
-def _make_candle(ts: str, open_p: int, high: int, low: int, close: int, *, source_timestamp: str = "") -> dict:
+def _make_candle(
+    ts: str, open_p: int, high: int, low: int, close: int, *, source_timestamp: str = ""
+) -> dict:
     row = {
         "체결시간": ts,
         "시가": open_p,
@@ -21,7 +23,9 @@ def _make_candle(ts: str, open_p: int, high: int, low: int, close: int, *, sourc
 def _write_pipeline_events(tmp_path, target_date: str, rows: list[dict]) -> None:
     path = tmp_path / "pipeline_events"
     path.mkdir(parents=True, exist_ok=True)
-    with open(path / f"pipeline_events_{target_date}.jsonl", "w", encoding="utf-8") as handle:
+    with open(
+        path / f"pipeline_events_{target_date}.jsonl", "w", encoding="utf-8"
+    ) as handle:
         for row in rows:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
@@ -223,13 +227,18 @@ def test_build_missed_entry_counterfactual_report(monkeypatch, tmp_path):
     }
     fake_kiwoom = types.SimpleNamespace(
         get_kiwoom_token=lambda: "dummy",
-        get_minute_candles_ka10080=lambda _token, code, limit=700: candle_map.get(code, []),
+        get_minute_candles_ka10080=lambda _token, code, limit=700: candle_map.get(
+            code, []
+        ),
     )
     import src.utils as utils_pkg
+
     monkeypatch.setattr(utils_pkg, "kiwoom_utils", fake_kiwoom, raising=False)
     monkeypatch.setitem(sys.modules, "src.utils.kiwoom_utils", fake_kiwoom)
 
-    report = report_mod.build_missed_entry_counterfactual_report(target_date, token="dummy")
+    report = report_mod.build_missed_entry_counterfactual_report(
+        target_date, token="dummy"
+    )
 
     assert report["summary"]["total_candidates"] == 2
     assert report["summary"]["evaluated_candidates"] == 2
@@ -251,37 +260,59 @@ def test_build_missed_entry_counterfactual_report(monkeypatch, tmp_path):
     assert winner["minute_candle_source_quality_gate"] == "pass"
     assert winner["minute_candle_forward_10m_bars"] == 10
     assert winner["minute_candle_forward_15m_bars"] == 10
-    assert winner["minute_candle_forward_15m_source_quality_gate"] == "source_quality_warning"
-    assert winner["minute_candle_forward_15m_source_quality_reason"] == "insufficient_ka10080_bars_in_forward_15m_window"
+    assert (
+        winner["minute_candle_forward_15m_source_quality_gate"]
+        == "source_quality_warning"
+    )
+    assert (
+        winner["minute_candle_forward_15m_source_quality_reason"]
+        == "insufficient_ka10080_bars_in_forward_15m_window"
+    )
     assert winner["minute_candle_source_meta"]["api_id"] == "ka10080"
     assert report["metrics"]["minute_candle_source_quality_counts"] == {"pass": 2}
     assert winner["rising_missed_stage_count"] == 1
-    assert winner["rising_missed_postclose_label"] == "rising_missed_missed_winner_positive"
+    assert (
+        winner["rising_missed_postclose_label"]
+        == "rising_missed_missed_winner_positive"
+    )
     assert winner["source_signature"] == "OPEN_TOP,PRICE_JUMP_START"
     assert winner["scanner_promotion_reason"] == "price_jump_start_acceleration"
     assert winner["price_delta_since_first_seen_pct"] == 2.5
     assert winner["rising_missed_class"] == "rising_missed_raw"
     assert winner["counterfactual_qty"] > 0
-    assert report["top_missed_winners"][0]["counterfactual_qty_source"] == "sim_virtual_budget_dynamic_formula"
+    assert (
+        report["top_missed_winners"][0]["counterfactual_qty_source"]
+        == "sim_virtual_budget_dynamic_formula"
+    )
     assert report["top_missed_winners"][0]["virtual_budget_krw"] == 10_000_000
-    assert winner["counterfactual_notional_krw"] == winner["entry_price_used"] * winner["counterfactual_qty"]
+    assert (
+        winner["counterfactual_notional_krw"]
+        == winner["entry_price_used"] * winner["counterfactual_qty"]
+    )
     assert winner["counterfactual_notional_krw"] <= winner["counterfactual_safe_budget"]
     assert 0.10 <= winner["counterfactual_ratio"] <= 0.30
     assert report["top_avoided_losers"][0]["stock_code"] == "222222"
     stages = {row["stage"] for row in report["reason_breakdown"]}
     assert "latency_block" in stages
     assert "blocked_liquidity" in stages
-    tiers = {row["tier"] for row in report["buy_signal_universe"]["confidence_breakdown"]}
+    tiers = {
+        row["tier"] for row in report["buy_signal_universe"]["confidence_breakdown"]
+    }
     assert "A" in tiers
     rising_metrics = report["metrics"]["rising_missed_refinement"]
-    assert rising_metrics["decision_authority"] == "postclose_source_only_refinement_no_runtime_apply"
+    assert (
+        rising_metrics["decision_authority"]
+        == "postclose_source_only_refinement_no_runtime_apply"
+    )
     assert rising_metrics["runtime_effect"] is False
     assert rising_metrics["allowed_runtime_apply"] is False
     assert rising_metrics["rising_missed_candidate_count"] == 1
     assert rising_metrics["rising_missed_missed_winner_count"] == 1
     assert rising_metrics["rising_missed_share_of_all_missed_winners"] == 100.0
     assert rising_metrics["by_terminal_stage"][0]["key"] == "latency_block"
-    assert rising_metrics["by_source_signature"][0]["key"] == "OPEN_TOP,PRICE_JUMP_START"
+    assert (
+        rising_metrics["by_source_signature"][0]["key"] == "OPEN_TOP,PRICE_JUMP_START"
+    )
     action_plan = report["metrics"]["rising_missed_refinement_action_plan"]
     assert action_plan["metric_role"] == "source_quality_gate"
     assert action_plan["plan_type"] == "rising_missed_classifier_refinement_source_only"
@@ -290,17 +321,27 @@ def test_build_missed_entry_counterfactual_report(monkeypatch, tmp_path):
     assert action_plan["window_policy"] == "same_day_missed_entry_counterfactual_rows"
     assert action_plan["sample_floor"] == 3
     assert action_plan["primary_decision_metric"] == "diagnostic_win_rate"
-    assert action_plan["source_quality_gate"] == "pipeline_stage_flow_and_counterfactual_outcome_present"
+    assert (
+        action_plan["source_quality_gate"]
+        == "pipeline_stage_flow_and_counterfactual_outcome_present"
+    )
     assert action_plan["runtime_effect"] is False
     assert action_plan["allowed_runtime_apply"] is False
     assert "forced_scout_success_counting" in action_plan["forbidden_uses"]
     assert action_plan["hold_sample_candidates"][0]["axis"] == "source_signature"
-    assert action_plan["hold_sample_candidates"][0]["key"] == "OPEN_TOP,PRICE_JUMP_START"
-    assert action_plan["next_actions"][0] == "surface_positive_prior_candidates_in_daily_calibration_source_bundle"
+    assert (
+        action_plan["hold_sample_candidates"][0]["key"] == "OPEN_TOP,PRICE_JUMP_START"
+    )
+    assert (
+        action_plan["next_actions"][0]
+        == "surface_positive_prior_candidates_in_daily_calibration_source_bundle"
+    )
     assert len(report["full_rows"]) == 2
 
 
-def test_missed_entry_counterfactual_adds_15m_metrics_and_quick_profit_bucket(monkeypatch, tmp_path):
+def test_missed_entry_counterfactual_adds_15m_metrics_and_quick_profit_bucket(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     target_date = "2026-07-08"
     _write_pipeline_events(
@@ -356,35 +397,50 @@ def test_missed_entry_counterfactual_adds_15m_metrics_and_quick_profit_bucket(mo
         ],
     )
     candles = [
-        _make_candle(f"10:{minute:02d}:00", 7000, 7100 if minute == 3 else 7070, 6980, 7080)
+        _make_candle(
+            f"10:{minute:02d}:00", 7000, 7100 if minute == 3 else 7070, 6980, 7080
+        )
         for minute in range(1, 16)
     ]
     fake_kiwoom = types.SimpleNamespace(
         get_kiwoom_token=lambda: "dummy",
-        get_minute_candles_ka10080=lambda _token, code, limit=700: candles if code == "444444" else [],
+        get_minute_candles_ka10080=lambda _token, code, limit=700: (
+            candles if code == "444444" else []
+        ),
     )
     import src.utils as utils_pkg
+
     monkeypatch.setattr(utils_pkg, "kiwoom_utils", fake_kiwoom, raising=False)
     monkeypatch.setitem(sys.modules, "src.utils.kiwoom_utils", fake_kiwoom)
 
-    report = report_mod.build_missed_entry_counterfactual_report(target_date, token="dummy")
+    report = report_mod.build_missed_entry_counterfactual_report(
+        target_date, token="dummy"
+    )
 
     row = report["full_rows"][0]
     assert row["minute_candle_forward_15m_bars"] == 15
     assert row["minute_candle_forward_15m_source_quality"] == "pass"
     assert row["mfe_15m_pct"] >= 1.0
     assert row["close_15m_pct"] >= 1.0
-    assert "avg_close_15m_pct" in report["metrics"]["blocker_outcome_metrics"]["latency_block"]
+    assert (
+        "avg_close_15m_pct"
+        in report["metrics"]["blocker_outcome_metrics"]["latency_block"]
+    )
     quick = report["metrics"]["quick_profit_5k_10k_rising_missed_latency_source_only"]
     assert quick["runtime_effect"] is False
     assert quick["allowed_runtime_apply"] is False
     assert "spread_guard_relaxation" in quick["forbidden_uses"]
     assert quick["target_sample_count"] == 1
-    assert quick["spread_bucket_metrics"][0]["spread_ratio_bucket"] == "spread_ratio_0_0075_to_0_010"
+    assert (
+        quick["spread_bucket_metrics"][0]["spread_ratio_bucket"]
+        == "spread_ratio_0_0075_to_0_010"
+    )
     assert quick["spread_bucket_metrics"][0]["mfe_15m_ge_1_count"] == 1
 
 
-def test_missed_entry_counterfactual_splits_ai_and_pre_submit_cohorts(monkeypatch, tmp_path):
+def test_missed_entry_counterfactual_splits_ai_and_pre_submit_cohorts(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     target_date = "2026-06-18"
     _write_pipeline_events(
@@ -554,30 +610,51 @@ def test_missed_entry_counterfactual_splits_ai_and_pre_submit_cohorts(monkeypatc
     }
     fake_kiwoom = types.SimpleNamespace(
         get_kiwoom_token=lambda: "dummy",
-        get_minute_candles_ka10080=lambda _token, code, limit=700: candle_map.get(code, []),
+        get_minute_candles_ka10080=lambda _token, code, limit=700: candle_map.get(
+            code, []
+        ),
     )
     import src.utils as utils_pkg
+
     monkeypatch.setattr(utils_pkg, "kiwoom_utils", fake_kiwoom, raising=False)
     monkeypatch.setitem(sys.modules, "src.utils.kiwoom_utils", fake_kiwoom)
 
-    report = report_mod.build_missed_entry_counterfactual_report(target_date, token="dummy")
+    report = report_mod.build_missed_entry_counterfactual_report(
+        target_date, token="dummy"
+    )
 
     cohorts = report["metrics"]["cohort_outcome_metrics"]
     assert cohorts["ai_numeric_inconsistency_no_buy"]["evaluated_candidates"] == 1
     assert cohorts["ai_numeric_consistency_recheck_failed"]["evaluated_candidates"] == 1
-    assert cohorts["entry_armed_pre_submit_liquidity_block"]["evaluated_candidates"] == 1
-    assert cohorts["early_accel_strong_bundle_recheck_skipped"]["evaluated_candidates"] == 1
+    assert (
+        cohorts["entry_armed_pre_submit_liquidity_block"]["evaluated_candidates"] == 1
+    )
+    assert (
+        cohorts["early_accel_strong_bundle_recheck_skipped"]["evaluated_candidates"]
+        == 1
+    )
     assert cohorts["buy_like_no_submit_terminal"]["evaluated_candidates"] == 1
     rows = {row["stock_code"]: row for row in report["rows"]}
     assert rows["111111"]["missed_submit_cohort"] == "ai_numeric_inconsistency_no_buy"
-    assert rows["333333"]["missed_submit_cohort"] == "ai_numeric_consistency_recheck_failed"
-    assert rows["222222"]["missed_submit_cohort"] == "entry_armed_pre_submit_liquidity_block"
-    assert rows["444444"]["missed_submit_cohort"] == "early_accel_strong_bundle_recheck_skipped"
+    assert (
+        rows["333333"]["missed_submit_cohort"]
+        == "ai_numeric_consistency_recheck_failed"
+    )
+    assert (
+        rows["222222"]["missed_submit_cohort"]
+        == "entry_armed_pre_submit_liquidity_block"
+    )
+    assert (
+        rows["444444"]["missed_submit_cohort"]
+        == "early_accel_strong_bundle_recheck_skipped"
+    )
     assert rows["555555"]["missed_submit_cohort"] == "buy_like_no_submit_terminal"
     assert rows["555555"]["no_submit_reason"] == "broker_submit_not_reached"
 
 
-def test_missed_entry_counterfactual_preserves_full_rows_when_top_rows_are_limited(monkeypatch, tmp_path):
+def test_missed_entry_counterfactual_preserves_full_rows_when_top_rows_are_limited(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     target_date = "2026-06-18"
     events = []
@@ -625,26 +702,42 @@ def test_missed_entry_counterfactual_preserves_full_rows_when_top_rows_are_limit
         get_minute_candles_ka10080=lambda _token, code, limit=700: [],
     )
     import src.utils as utils_pkg
+
     monkeypatch.setattr(utils_pkg, "kiwoom_utils", fake_kiwoom, raising=False)
     monkeypatch.setitem(sys.modules, "src.utils.kiwoom_utils", fake_kiwoom)
 
-    report = report_mod.build_missed_entry_counterfactual_report(target_date, top_n=1, token="dummy")
+    report = report_mod.build_missed_entry_counterfactual_report(
+        target_date, top_n=1, token="dummy"
+    )
 
     assert report["summary"]["total_candidates"] == 4
     assert len(report["rows"]) == 3
     assert len(report["full_rows"]) == 4
-    assert report["metrics"]["minute_candle_source_quality_counts"] == {"insufficient_window": 4}
-    assert report["full_rows"][0]["minute_candle_source_quality_gate"] == "source_quality_insufficient"
-    assert report["full_rows"][0]["minute_candle_source_quality_reason"] == "no_ka10080_bars_in_forward_10m_window"
+    assert report["metrics"]["minute_candle_source_quality_counts"] == {
+        "insufficient_window": 4
+    }
+    assert (
+        report["full_rows"][0]["minute_candle_source_quality_gate"]
+        == "source_quality_insufficient"
+    )
+    assert (
+        report["full_rows"][0]["minute_candle_source_quality_reason"]
+        == "no_ka10080_bars_in_forward_10m_window"
+    )
     assert report["full_rows"][0]["minute_candle_forward_15m_bars"] == 0
-    assert report["full_rows"][0]["minute_candle_forward_15m_source_quality_gate"] == "source_quality_insufficient"
+    assert (
+        report["full_rows"][0]["minute_candle_forward_15m_source_quality_gate"]
+        == "source_quality_insufficient"
+    )
     assert (
         report["full_rows"][0]["minute_candle_forward_15m_source_quality_reason"]
         == "no_ka10080_bars_in_forward_15m_window"
     )
 
 
-def test_missed_entry_counterfactual_includes_snapshot_wait_or_skip_paths(monkeypatch, tmp_path):
+def test_missed_entry_counterfactual_includes_snapshot_wait_or_skip_paths(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     target_date = "2026-06-18"
     _write_pipeline_events(
@@ -679,13 +772,18 @@ def test_missed_entry_counterfactual_includes_snapshot_wait_or_skip_paths(monkey
     }
     fake_kiwoom = types.SimpleNamespace(
         get_kiwoom_token=lambda: "dummy",
-        get_minute_candles_ka10080=lambda _token, code, limit=700: candle_map.get(code, []),
+        get_minute_candles_ka10080=lambda _token, code, limit=700: candle_map.get(
+            code, []
+        ),
     )
     import src.utils as utils_pkg
+
     monkeypatch.setattr(utils_pkg, "kiwoom_utils", fake_kiwoom, raising=False)
     monkeypatch.setitem(sys.modules, "src.utils.kiwoom_utils", fake_kiwoom)
 
-    report = report_mod.build_missed_entry_counterfactual_report(target_date, token="dummy")
+    report = report_mod.build_missed_entry_counterfactual_report(
+        target_date, token="dummy"
+    )
 
     assert report["summary"]["total_candidates"] == 1
     assert report["summary"]["evaluated_candidates"] == 1
@@ -782,10 +880,13 @@ def test_collects_all_missed_attempts_not_only_latest_per_stock(monkeypatch, tmp
         ],
     )
     import src.utils as utils_pkg
+
     monkeypatch.setattr(utils_pkg, "kiwoom_utils", fake_kiwoom, raising=False)
     monkeypatch.setitem(sys.modules, "src.utils.kiwoom_utils", fake_kiwoom)
 
-    report = report_mod.build_missed_entry_counterfactual_report(target_date, token="dummy")
+    report = report_mod.build_missed_entry_counterfactual_report(
+        target_date, token="dummy"
+    )
 
     assert report["summary"]["total_candidates"] == 1
     assert report["rows"][0]["stock_code"] == "444444"
@@ -794,7 +895,9 @@ def test_collects_all_missed_attempts_not_only_latest_per_stock(monkeypatch, tmp
     assert report["buy_signal_universe"]["metrics"]["entered_attempts"] == 1
 
 
-def test_recovery_unlock_pre_submit_overbought_block_is_counted_as_missed_candidate(monkeypatch, tmp_path):
+def test_recovery_unlock_pre_submit_overbought_block_is_counted_as_missed_candidate(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     target_date = "2026-06-12"
     _write_pipeline_events(
@@ -884,10 +987,13 @@ def test_recovery_unlock_pre_submit_overbought_block_is_counted_as_missed_candid
         ],
     )
     import src.utils as utils_pkg
+
     monkeypatch.setattr(utils_pkg, "kiwoom_utils", fake_kiwoom, raising=False)
     monkeypatch.setitem(sys.modules, "src.utils.kiwoom_utils", fake_kiwoom)
 
-    report = report_mod.build_missed_entry_counterfactual_report(target_date, token="dummy")
+    report = report_mod.build_missed_entry_counterfactual_report(
+        target_date, token="dummy"
+    )
 
     assert report["summary"]["total_candidates"] == 1
     assert report["summary"]["evaluated_candidates"] == 1
@@ -906,11 +1012,23 @@ def test_recovery_unlock_pre_submit_resume_loop_is_deduped(monkeypatch, tmp_path
     for idx, (stage, emitted_at, target_price) in enumerate(
         [
             ("entry_armed", "2026-06-12T10:35:05", "13220"),
-            ("pre_submit_overbought_pullback_guard_block", "2026-06-12T10:35:06", "13220"),
+            (
+                "pre_submit_overbought_pullback_guard_block",
+                "2026-06-12T10:35:06",
+                "13220",
+            ),
             ("entry_armed_resume", "2026-06-12T10:35:13", "13230"),
-            ("pre_submit_overbought_pullback_guard_block", "2026-06-12T10:35:14", "13230"),
+            (
+                "pre_submit_overbought_pullback_guard_block",
+                "2026-06-12T10:35:14",
+                "13230",
+            ),
             ("entry_armed_resume", "2026-06-12T10:36:18", "13270"),
-            ("pre_submit_overbought_pullback_guard_block", "2026-06-12T10:36:19", "13270"),
+            (
+                "pre_submit_overbought_pullback_guard_block",
+                "2026-06-12T10:36:19",
+                "13270",
+            ),
         ],
         start=1,
     ):
@@ -951,13 +1069,19 @@ def test_recovery_unlock_pre_submit_resume_loop_is_deduped(monkeypatch, tmp_path
         ],
     )
     import src.utils as utils_pkg
+
     monkeypatch.setattr(utils_pkg, "kiwoom_utils", fake_kiwoom, raising=False)
     monkeypatch.setitem(sys.modules, "src.utils.kiwoom_utils", fake_kiwoom)
 
-    report = report_mod.build_missed_entry_counterfactual_report(target_date, token="dummy")
+    report = report_mod.build_missed_entry_counterfactual_report(
+        target_date, token="dummy"
+    )
 
     assert report["summary"]["total_candidates"] == 1
     assert report["summary"]["evaluated_candidates"] == 1
-    assert report["reason_breakdown"][0]["stage"] == "pre_submit_overbought_pullback_guard_block"
+    assert (
+        report["reason_breakdown"][0]["stage"]
+        == "pre_submit_overbought_pullback_guard_block"
+    )
     assert report["reason_breakdown"][0]["candidates"] == 1
     assert report["rows"][0]["buy_intent_source"] == "inferred_entry_armed_path"
