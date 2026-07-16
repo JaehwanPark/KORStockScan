@@ -41,7 +41,11 @@ def test_notify_from_report_sends_fail_and_cooldowns(tmp_path, monkeypatch):
     sent = []
 
     monkeypatch.setattr(notifier, "_load_telegram_config", lambda: ("token", "admin"))
-    monkeypatch.setattr(notifier, "_send_telegram", lambda token, admin_id, message: sent.append(message))
+    monkeypatch.setattr(
+        notifier,
+        "_send_telegram",
+        lambda token, admin_id, message: sent.append(message),
+    )
 
     first = notifier.notify_from_report(
         report,
@@ -85,7 +89,11 @@ def test_notify_from_report_sends_kiwoom_auth_8005_warning(tmp_path, monkeypatch
     sent = []
 
     monkeypatch.setattr(notifier, "_load_telegram_config", lambda: ("token", "admin"))
-    monkeypatch.setattr(notifier, "_send_telegram", lambda token, admin_id, message: sent.append(message))
+    monkeypatch.setattr(
+        notifier,
+        "_send_telegram",
+        lambda token, admin_id, message: sent.append(message),
+    )
 
     status = notifier.notify_from_report(
         report,
