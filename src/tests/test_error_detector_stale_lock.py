@@ -15,7 +15,10 @@ from src.engine.error_detectors.stale_lock import (
 
 class TestStaleLockDetector:
     def test_pass_when_no_lock_dir(self):
-        with patch("src.engine.error_detectors.stale_lock.LOCK_DIR", Path("/nonexistent_lock_dir_xyz")):
+        with patch(
+            "src.engine.error_detectors.stale_lock.LOCK_DIR",
+            Path("/nonexistent_lock_dir_xyz"),
+        ):
             detector = StaleLockDetector()
             result = detector.check()
             assert result.severity == "pass"
@@ -34,6 +37,7 @@ class TestStaleLockDetector:
         stale_lock = lock_dir / "test_stale.lock"
         stale_lock.write_text("stale", encoding="utf-8")
         import os as _os
+
         stale_ts = __import__("time").time() - 7200
         _os.utime(str(stale_lock), (stale_ts, stale_ts))
 
@@ -53,6 +57,7 @@ class TestStaleLockDetector:
         with patch("src.engine.error_detectors.stale_lock.LOCK_DIR", lock_dir):
             with open(fresh_lock, "w") as fp:
                 import fcntl
+
                 fcntl.flock(fp, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 detector = StaleLockDetector()
                 result = detector.check()
@@ -66,6 +71,7 @@ class TestStaleLockDetector:
         stale_lock = lock_dir / "stale_dry.lock"
         stale_lock.write_text("stale", encoding="utf-8")
         import os as _os
+
         stale_ts = __import__("time").time() - 7200
         _os.utime(str(stale_lock), (stale_ts, stale_ts))
 

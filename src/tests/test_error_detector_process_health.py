@@ -20,11 +20,15 @@ from src.engine.error_detectors.process_health import (
 
 @pytest.fixture(autouse=True)
 def _force_trading_day(monkeypatch, tmp_path):
-    monkeypatch.setattr(process_health_module, "is_krx_trading_day", lambda target: True)
+    monkeypatch.setattr(
+        process_health_module, "is_krx_trading_day", lambda target: True
+    )
     heartbeat_path = tmp_path / "error_detector_heartbeat.json"
     isolation_path = tmp_path / "postclose_bot_isolation.json"
     monkeypatch.setattr(process_health_module, "HEARTBEAT_PATH", heartbeat_path)
-    monkeypatch.setattr(process_health_module, "POSTCLOSE_BOT_ISOLATION_PATH", isolation_path)
+    monkeypatch.setattr(
+        process_health_module, "POSTCLOSE_BOT_ISOLATION_PATH", isolation_path
+    )
     monkeypatch.setitem(globals(), "HEARTBEAT_PATH", heartbeat_path)
     monkeypatch.setitem(globals(), "POSTCLOSE_BOT_ISOLATION_PATH", isolation_path)
 
@@ -115,10 +119,14 @@ class TestProcessHealthDetector:
         result = detector.check()
         assert result.severity == "warning"
 
-    def test_detector_pass_when_no_heartbeat_outside_expected_runtime(self, monkeypatch):
+    def test_detector_pass_when_no_heartbeat_outside_expected_runtime(
+        self, monkeypatch
+    ):
         if HEARTBEAT_PATH.exists():
             HEARTBEAT_PATH.unlink()
-        monkeypatch.setattr(process_health_module, "_is_bot_expected_running", lambda: False)
+        monkeypatch.setattr(
+            process_health_module, "_is_bot_expected_running", lambda: False
+        )
 
         result = ProcessHealthDetector().check()
 
@@ -126,7 +134,9 @@ class TestProcessHealthDetector:
         assert result.details["main_loop_status"] == "expected_stopped"
 
     def test_detector_pass_when_pid_dead_outside_expected_runtime(self, monkeypatch):
-        monkeypatch.setattr(process_health_module, "_is_bot_expected_running", lambda: False)
+        monkeypatch.setattr(
+            process_health_module, "_is_bot_expected_running", lambda: False
+        )
         data = {
             "main_loop": {
                 "last_beat": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -141,8 +151,12 @@ class TestProcessHealthDetector:
         assert result.details["main_loop_status"] == "pid_dead"
 
     def test_detector_fail_when_pid_dead_inside_expected_runtime(self, monkeypatch):
-        monkeypatch.setattr(process_health_module, "_is_bot_expected_running", lambda: True)
-        monkeypatch.setattr(process_health_module, "_seconds_since_expected_start", lambda: 600.0)
+        monkeypatch.setattr(
+            process_health_module, "_is_bot_expected_running", lambda: True
+        )
+        monkeypatch.setattr(
+            process_health_module, "_seconds_since_expected_start", lambda: 600.0
+        )
         data = {
             "main_loop": {
                 "last_beat": "2000-01-01T00:00:00+00:00",
@@ -156,9 +170,15 @@ class TestProcessHealthDetector:
         assert result.severity == "fail"
         assert "no longer alive" in result.summary
 
-    def test_detector_passes_when_pid_dead_during_postclose_bot_isolation(self, monkeypatch):
-        monkeypatch.setattr(process_health_module, "_is_bot_expected_running", lambda: True)
-        monkeypatch.setattr(process_health_module, "_seconds_since_expected_start", lambda: 600.0)
+    def test_detector_passes_when_pid_dead_during_postclose_bot_isolation(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(
+            process_health_module, "_is_bot_expected_running", lambda: True
+        )
+        monkeypatch.setattr(
+            process_health_module, "_seconds_since_expected_start", lambda: 600.0
+        )
         data = {
             "main_loop": {
                 "last_beat": "2000-01-01T00:00:00+00:00",
@@ -175,7 +195,9 @@ class TestProcessHealthDetector:
                     "session": "bot",
                     "action": "restart",
                     "reason": "threshold_cycle_postclose_resource_isolation",
-                    "started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+                    "started_at": datetime.now()
+                    .astimezone()
+                    .isoformat(timespec="seconds"),
                 }
             ),
             encoding="utf-8",
@@ -191,9 +213,15 @@ class TestProcessHealthDetector:
         assert "No immediate restart" in result.recommended_action
         assert "stop/isolation" in result.recommended_action
 
-    def test_detector_fail_when_postclose_bot_isolation_marker_is_stale(self, monkeypatch):
-        monkeypatch.setattr(process_health_module, "_is_bot_expected_running", lambda: True)
-        monkeypatch.setattr(process_health_module, "_seconds_since_expected_start", lambda: 600.0)
+    def test_detector_fail_when_postclose_bot_isolation_marker_is_stale(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(
+            process_health_module, "_is_bot_expected_running", lambda: True
+        )
+        monkeypatch.setattr(
+            process_health_module, "_seconds_since_expected_start", lambda: 600.0
+        )
         data = {
             "main_loop": {
                 "last_beat": "2000-01-01T00:00:00+00:00",
@@ -222,8 +250,12 @@ class TestProcessHealthDetector:
         assert "postclose_bot_isolation" not in result.details
 
     def test_detector_warns_for_dead_pid_during_restart_grace(self, monkeypatch):
-        monkeypatch.setattr(process_health_module, "_is_bot_expected_running", lambda: True)
-        monkeypatch.setattr(process_health_module, "_seconds_since_expected_start", lambda: 600.0)
+        monkeypatch.setattr(
+            process_health_module, "_is_bot_expected_running", lambda: True
+        )
+        monkeypatch.setattr(
+            process_health_module, "_seconds_since_expected_start", lambda: 600.0
+        )
         data = {
             "main_loop": {
                 "last_beat": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -239,8 +271,12 @@ class TestProcessHealthDetector:
         assert "restart grace" in result.summary
 
     def test_detector_warns_for_dead_startup_pid_during_grace(self, monkeypatch):
-        monkeypatch.setattr(process_health_module, "_is_bot_expected_running", lambda: True)
-        monkeypatch.setattr(process_health_module, "_seconds_since_expected_start", lambda: 1.0)
+        monkeypatch.setattr(
+            process_health_module, "_is_bot_expected_running", lambda: True
+        )
+        monkeypatch.setattr(
+            process_health_module, "_seconds_since_expected_start", lambda: 1.0
+        )
         data = {
             "main_loop": {
                 "last_beat": "2000-01-01T00:00:00+00:00",
@@ -255,11 +291,17 @@ class TestProcessHealthDetector:
         assert result.details["main_loop_status"] == "pid_dead"
         assert "startup grace" in result.summary
 
-    def test_detector_warns_for_missing_heartbeat_during_startup_grace(self, monkeypatch):
+    def test_detector_warns_for_missing_heartbeat_during_startup_grace(
+        self, monkeypatch
+    ):
         if HEARTBEAT_PATH.exists():
             HEARTBEAT_PATH.unlink()
-        monkeypatch.setattr(process_health_module, "_is_bot_expected_running", lambda: True)
-        monkeypatch.setattr(process_health_module, "_seconds_since_expected_start", lambda: 30.0)
+        monkeypatch.setattr(
+            process_health_module, "_is_bot_expected_running", lambda: True
+        )
+        monkeypatch.setattr(
+            process_health_module, "_seconds_since_expected_start", lambda: 30.0
+        )
 
         result = ProcessHealthDetector().check()
 

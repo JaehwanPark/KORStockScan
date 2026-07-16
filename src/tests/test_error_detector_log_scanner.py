@@ -44,8 +44,12 @@ class TestLogScanner:
     def test_excludes_error_detection_wrapper_logs(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             log_dir = Path(tmpdir)
-            (log_dir / "run_error_detection.log").write_text("[ERROR] detector json\n", encoding="utf-8")
-            (log_dir / "run_error_detection_cron.log").write_text("Permission denied\n", encoding="utf-8")
+            (log_dir / "run_error_detection.log").write_text(
+                "[ERROR] detector json\n", encoding="utf-8"
+            )
+            (log_dir / "run_error_detection_cron.log").write_text(
+                "Permission denied\n", encoding="utf-8"
+            )
             with _mock_logs_dir(log_dir):
                 scanner = LogScanner()
                 result = scanner.check()
@@ -56,7 +60,8 @@ class TestLogScanner:
             log_dir = Path(tmpdir)
             log_file = log_dir / "test_error.log"
             log_file.write_text(
-                "[ERROR] something failed\n[WARN] connection timeout\n", encoding="utf-8"
+                "[ERROR] something failed\n[WARN] connection timeout\n",
+                encoding="utf-8",
             )
             with _mock_logs_dir(log_dir):
                 scanner = LogScanner()
@@ -123,19 +128,21 @@ class TestLogScanner:
         with tempfile.TemporaryDirectory() as tmpdir:
             log_file = Path(tmpdir) / "sniper_state_handlers_error.log"
             log_file.write_text(
-                "\n".join([
-                    "[2026-05-11 18:22:21] 🚨 ERROR in sniper_state_handlers: "
-                    "🚨 [DB 조회 에러] ID 1 수량 조회 실패: 'NoneType' object has no attribute 'get_session'",
-                    "[2026-05-11 18:22:21] 🚨 ERROR in sniper_state_handlers: "
-                    "[ADD_CANCELLED] TEST(123456) pending add missing order number.",
-                    "[2026-05-11 18:22:22] 🚨 ERROR in sniper_scale_in_utils: "
-                    "[ADD_HISTORY] event persist failed: '_DummySession' object has no attribute 'add'",
-                    "[2026-05-11 18:22:22] 🚨 ERROR in telegram_manager: "
-                    "[TRADING_PAUSED] EventBus publish failed after pause: bus fail",
-                    "[2026-05-11 18:22:22] 🚨 ERROR in kiwoom_orders: "
-                    "❌ [취소거절] 123456: 인증에 실패했습니다[8005:Token이 유효하지 않습니다]",
-                    "[2026-05-11 18:22:23] 🚨 ERROR in live_component: real API error",
-                ]),
+                "\n".join(
+                    [
+                        "[2026-05-11 18:22:21] 🚨 ERROR in sniper_state_handlers: "
+                        "🚨 [DB 조회 에러] ID 1 수량 조회 실패: 'NoneType' object has no attribute 'get_session'",
+                        "[2026-05-11 18:22:21] 🚨 ERROR in sniper_state_handlers: "
+                        "[ADD_CANCELLED] TEST(123456) pending add missing order number.",
+                        "[2026-05-11 18:22:22] 🚨 ERROR in sniper_scale_in_utils: "
+                        "[ADD_HISTORY] event persist failed: '_DummySession' object has no attribute 'add'",
+                        "[2026-05-11 18:22:22] 🚨 ERROR in telegram_manager: "
+                        "[TRADING_PAUSED] EventBus publish failed after pause: bus fail",
+                        "[2026-05-11 18:22:22] 🚨 ERROR in kiwoom_orders: "
+                        "❌ [취소거절] 123456: 인증에 실패했습니다[8005:Token이 유효하지 않습니다]",
+                        "[2026-05-11 18:22:23] 🚨 ERROR in live_component: real API error",
+                    ]
+                ),
                 encoding="utf-8",
             )
 
@@ -152,16 +159,18 @@ class TestLogScanner:
         with tempfile.TemporaryDirectory() as tmpdir:
             log_file = Path(tmpdir) / "ai_engine_openai_error.log"
             log_file.write_text(
-                "\n".join([
-                    "[2026-05-15 07:54:35] 🚨 ERROR in ai_engine_openai: "
-                    "🚨 [테스트][SCALPING] OpenAI 실시간 분석 에러 (연속 실패 1회, API키 인덱스 0): ws timeout",
-                    "[2026-05-15 07:54:35] 🚨 ERROR in ai_engine_openai: "
-                    "⚠️ [OpenAI WS fallback] test: ws timeout",
-                    "[2026-05-15 07:54:35] 🚨 ERROR in ai_engine_openai: "
-                    "🚨 [OpenAI WS fail-closed] 테스트(SCALPING:scalping_entry): request_id mismatch",
-                    "[2026-05-15 07:54:36] 🚨 ERROR in ai_engine_openai: "
-                    "🚨 [삼성전자][SCALPING] OpenAI 실시간 분석 에러: request timeout",
-                ]),
+                "\n".join(
+                    [
+                        "[2026-05-15 07:54:35] 🚨 ERROR in ai_engine_openai: "
+                        "🚨 [테스트][SCALPING] OpenAI 실시간 분석 에러 (연속 실패 1회, API키 인덱스 0): ws timeout",
+                        "[2026-05-15 07:54:35] 🚨 ERROR in ai_engine_openai: "
+                        "⚠️ [OpenAI WS fallback] test: ws timeout",
+                        "[2026-05-15 07:54:35] 🚨 ERROR in ai_engine_openai: "
+                        "🚨 [OpenAI WS fail-closed] 테스트(SCALPING:scalping_entry): request_id mismatch",
+                        "[2026-05-15 07:54:36] 🚨 ERROR in ai_engine_openai: "
+                        "🚨 [삼성전자][SCALPING] OpenAI 실시간 분석 에러: request timeout",
+                    ]
+                ),
                 encoding="utf-8",
             )
 
@@ -176,39 +185,41 @@ class TestLogScanner:
         with tempfile.TemporaryDirectory() as tmpdir:
             log_file = Path(tmpdir) / "ai_engine_openai_error.log"
             log_file.write_text(
-                "\n".join([
-                    "[2026-07-03 23:06:13] 🚨 ERROR in ai_engine_openai: "
-                    "🚨 [HOLDING_SCORE] OpenAI score error (LIVE_SMOKE_TEST, failures 1): "
-                    "OpenAI Responses HTTP 응답/파싱 실패: Request timed out.",
-                    "[2026-07-03 23:26:49] 🚨 ERROR in ai_engine_openai: "
-                    "🚨 [HOLDING_SCORE] OpenAI score error (LatencyTest, failures 1): "
-                    "OpenAI Responses HTTP 응답/파싱 실패: Request timed out.",
-                    "[2026-07-03 23:29:01] 🚨 ERROR in ai_engine_openai: "
-                    "🚨 [LatencyLegacyHolding][SCALPING] OpenAI 실시간 분석 에러 "
-                    "(연속 실패 1회, API키 인덱스 0): OpenAI Responses HTTP 응답/파싱 실패: "
-                    "Request timed out.",
-                    "[2026-07-04 13:46:19] 🚨 ERROR in ai_engine_openai: "
-                    "🚨 [LatencyEntry][SCALPING] OpenAI 실시간 분석 에러 "
-                    "(연속 실패 1회, API키 인덱스 0): OpenAI Responses HTTP 응답/파싱 실패: "
-                    "Request timed out.",
-                    "[2026-07-04 13:46:24] 🚨 ERROR in ai_engine_openai: "
-                    "🚨 [ENTRY_PRICE] OpenAI 가격결정 에러 (LatencyEntryPrice, 연속 실패 1회): "
-                    "OpenAI Responses HTTP 응답/파싱 실패: Request timed out.",
-                    "[2026-07-04 14:25:25] 🚨 ERROR in ai_engine_openai: "
-                    "🚨 [LIVE_ENTRY_TIMEOUT_700_TEST][SCALPING] OpenAI 실시간 분석 에러 "
-                    "(연속 실패 1회, API키 인덱스 0): OpenAI Responses HTTP 응답/파싱 실패: "
-                    "Request timed out.",
-                    "[2026-07-04 14:27:05] 🚨 ERROR in ai_engine_openai: "
-                    "🚨 [LIVE_ENTRY_TIMEOUT_700_REVIEW_FIX][SCALPING] OpenAI 실시간 분석 에러 "
-                    "(연속 실패 1회, API키 인덱스 0): OpenAI Responses HTTP 응답/파싱 실패: "
-                    "Request timed out.",
-                    "[2026-07-04 14:36:29] 🚨 ERROR in ai_engine_openai: "
-                    "🚨 [ENTRY_LIVE_REVIEW_TEST][SCALPING] OpenAI 실시간 분석 에러 "
-                    "(연속 실패 1회, API키 인덱스 0): OpenAI Responses HTTP 응답/파싱 실패: "
-                    "Error code: 400 - {'error': {'message': 'Invalid schema for response_format'}}",
-                    "[2026-07-06 09:31:00] 🚨 ERROR in ai_engine_openai: "
-                    "🚨 [삼성전자][SCALPING] OpenAI 실시간 분석 에러: Request timed out.",
-                ]),
+                "\n".join(
+                    [
+                        "[2026-07-03 23:06:13] 🚨 ERROR in ai_engine_openai: "
+                        "🚨 [HOLDING_SCORE] OpenAI score error (LIVE_SMOKE_TEST, failures 1): "
+                        "OpenAI Responses HTTP 응답/파싱 실패: Request timed out.",
+                        "[2026-07-03 23:26:49] 🚨 ERROR in ai_engine_openai: "
+                        "🚨 [HOLDING_SCORE] OpenAI score error (LatencyTest, failures 1): "
+                        "OpenAI Responses HTTP 응답/파싱 실패: Request timed out.",
+                        "[2026-07-03 23:29:01] 🚨 ERROR in ai_engine_openai: "
+                        "🚨 [LatencyLegacyHolding][SCALPING] OpenAI 실시간 분석 에러 "
+                        "(연속 실패 1회, API키 인덱스 0): OpenAI Responses HTTP 응답/파싱 실패: "
+                        "Request timed out.",
+                        "[2026-07-04 13:46:19] 🚨 ERROR in ai_engine_openai: "
+                        "🚨 [LatencyEntry][SCALPING] OpenAI 실시간 분석 에러 "
+                        "(연속 실패 1회, API키 인덱스 0): OpenAI Responses HTTP 응답/파싱 실패: "
+                        "Request timed out.",
+                        "[2026-07-04 13:46:24] 🚨 ERROR in ai_engine_openai: "
+                        "🚨 [ENTRY_PRICE] OpenAI 가격결정 에러 (LatencyEntryPrice, 연속 실패 1회): "
+                        "OpenAI Responses HTTP 응답/파싱 실패: Request timed out.",
+                        "[2026-07-04 14:25:25] 🚨 ERROR in ai_engine_openai: "
+                        "🚨 [LIVE_ENTRY_TIMEOUT_700_TEST][SCALPING] OpenAI 실시간 분석 에러 "
+                        "(연속 실패 1회, API키 인덱스 0): OpenAI Responses HTTP 응답/파싱 실패: "
+                        "Request timed out.",
+                        "[2026-07-04 14:27:05] 🚨 ERROR in ai_engine_openai: "
+                        "🚨 [LIVE_ENTRY_TIMEOUT_700_REVIEW_FIX][SCALPING] OpenAI 실시간 분석 에러 "
+                        "(연속 실패 1회, API키 인덱스 0): OpenAI Responses HTTP 응답/파싱 실패: "
+                        "Request timed out.",
+                        "[2026-07-04 14:36:29] 🚨 ERROR in ai_engine_openai: "
+                        "🚨 [ENTRY_LIVE_REVIEW_TEST][SCALPING] OpenAI 실시간 분석 에러 "
+                        "(연속 실패 1회, API키 인덱스 0): OpenAI Responses HTTP 응답/파싱 실패: "
+                        "Error code: 400 - {'error': {'message': 'Invalid schema for response_format'}}",
+                        "[2026-07-06 09:31:00] 🚨 ERROR in ai_engine_openai: "
+                        "🚨 [삼성전자][SCALPING] OpenAI 실시간 분석 에러: Request timed out.",
+                    ]
+                ),
                 encoding="utf-8",
             )
 
@@ -223,13 +234,15 @@ class TestLogScanner:
         with tempfile.TemporaryDirectory() as tmpdir:
             log_file = Path(tmpdir) / "kiwoom_utils_error.log"
             log_file.write_text(
-                "\n".join([
-                    "[2026-05-27 10:49:41] 🚨 ERROR in kiwoom_utils: "
-                    "❌ [TOKEN CACHE] 캐시 로드 실패: "
-                    "/tmp/pytest-of-ubuntu/pytest-34/test_token/kiwoom_token_cache.json",
-                    "[2026-05-27 10:49:41] 🚨 ERROR in kiwoom_utils: "
-                    "🚨 [kt00008] 8005 token refresh retry 후에도 인증 실패. 조회를 중단합니다.",
-                ]),
+                "\n".join(
+                    [
+                        "[2026-05-27 10:49:41] 🚨 ERROR in kiwoom_utils: "
+                        "❌ [TOKEN CACHE] 캐시 로드 실패: "
+                        "/tmp/pytest-of-ubuntu/pytest-34/test_token/kiwoom_token_cache.json",
+                        "[2026-05-27 10:49:41] 🚨 ERROR in kiwoom_utils: "
+                        "🚨 [kt00008] 8005 token refresh retry 후에도 인증 실패. 조회를 중단합니다.",
+                    ]
+                ),
                 encoding="utf-8",
             )
 
@@ -244,13 +257,15 @@ class TestLogScanner:
         with tempfile.TemporaryDirectory() as tmpdir:
             log_file = Path(tmpdir) / "update_kospi_error.log"
             log_file.write_text(
-                "\n".join([
-                    "2026-05-12 21:27:31,342 - INFO - DB 일괄 삽입 성공! (총 42359행 적재 완료)",
-                    "2026-05-12 21:27:32,461 - INFO - swing daily reports 시작...",
-                    "2026-05-12 21:27:53,598 - INFO - swing daily reports 완료",
-                    "2026-05-12 21:28:06,978 - ERROR - 추천 모델 실행 중 에러 발생: "
-                    "Command returned non-zero exit status 1.",
-                ]),
+                "\n".join(
+                    [
+                        "2026-05-12 21:27:31,342 - INFO - DB 일괄 삽입 성공! (총 42359행 적재 완료)",
+                        "2026-05-12 21:27:32,461 - INFO - swing daily reports 시작...",
+                        "2026-05-12 21:27:53,598 - INFO - swing daily reports 완료",
+                        "2026-05-12 21:28:06,978 - ERROR - 추천 모델 실행 중 에러 발생: "
+                        "Command returned non-zero exit status 1.",
+                    ]
+                ),
                 encoding="utf-8",
             )
 
@@ -265,15 +280,17 @@ class TestLogScanner:
         with tempfile.TemporaryDirectory() as tmpdir:
             log_file = Path(tmpdir) / "kiwoom_orders_error.log"
             log_file.write_text(
-                "\n".join([
-                    "[2026-05-14 11:05:37] 🚨 ERROR in kiwoom_orders: "
-                    "❌ [예수금조회 실패] attempt=1/2 사유: "
-                    "인증에 실패했습니다[8005:Token이 유효하지 않습니다]",
-                    "[2026-05-14 11:05:37] 🚨 ERROR in runtime: "
-                    "MemoryError: failed to allocate buffer",
-                    "[2026-05-14 11:05:38] 🚨 ERROR in runtime: "
-                    "out of memory while building report",
-                ]),
+                "\n".join(
+                    [
+                        "[2026-05-14 11:05:37] 🚨 ERROR in kiwoom_orders: "
+                        "❌ [예수금조회 실패] attempt=1/2 사유: "
+                        "인증에 실패했습니다[8005:Token이 유효하지 않습니다]",
+                        "[2026-05-14 11:05:37] 🚨 ERROR in runtime: "
+                        "MemoryError: failed to allocate buffer",
+                        "[2026-05-14 11:05:38] 🚨 ERROR in runtime: "
+                        "out of memory while building report",
+                    ]
+                ),
                 encoding="utf-8",
             )
 
@@ -288,16 +305,18 @@ class TestLogScanner:
         with tempfile.TemporaryDirectory() as tmpdir:
             log_file = Path(tmpdir) / "kiwoom_orders_error.log"
             log_file.write_text(
-                "\n".join([
-                    "[2026-06-30 15:50:14] 🚨 ERROR in kiwoom_orders: "
-                    "❌ [매수거절] 종목:000500, 사유:[2000](521790:주문 불가능합니다.) (코드:20)",
-                    "[2026-06-30 16:02:05] 🚨 ERROR in kiwoom_orders: "
-                    "❌ [취소거절] 281820: [2000](571412:SOR정정 및 취소주문은 원주문이 SOR주문인 경우 가능합니다.)",
-                    "[2026-06-30 08:42:37] 🚨 ERROR in sniper_state_handlers: "
-                    "❌ [매도거절] 제룡전기: [2000](800033:매도가능수량이 부족합니다. 0주 매도가능)",
-                    "[2026-06-30 16:56:56] 🚨 ERROR in sniper_state_handlers: "
-                    "❌ [에코프로비엠] 추가매수 주문 거절: [2000](521790:주문 불가능합니다.)",
-                ]),
+                "\n".join(
+                    [
+                        "[2026-06-30 15:50:14] 🚨 ERROR in kiwoom_orders: "
+                        "❌ [매수거절] 종목:000500, 사유:[2000](521790:주문 불가능합니다.) (코드:20)",
+                        "[2026-06-30 16:02:05] 🚨 ERROR in kiwoom_orders: "
+                        "❌ [취소거절] 281820: [2000](571412:SOR정정 및 취소주문은 원주문이 SOR주문인 경우 가능합니다.)",
+                        "[2026-06-30 08:42:37] 🚨 ERROR in sniper_state_handlers: "
+                        "❌ [매도거절] 제룡전기: [2000](800033:매도가능수량이 부족합니다. 0주 매도가능)",
+                        "[2026-06-30 16:56:56] 🚨 ERROR in sniper_state_handlers: "
+                        "❌ [에코프로비엠] 추가매수 주문 거절: [2000](521790:주문 불가능합니다.)",
+                    ]
+                ),
                 encoding="utf-8",
             )
 
@@ -364,6 +383,7 @@ class TestLogScanner:
 @contextmanager
 def _mock_logs_dir(tmpdir_path):
     import src.engine.error_detectors.log_scanner as ls
+
     orig = ls.LOGS_DIR
 
     if tmpdir_path is not None:
