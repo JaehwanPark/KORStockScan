@@ -11,7 +11,10 @@ from copy import deepcopy
 from typing import Any, Callable
 
 from src.engine.ai.postclose_review_config import PostcloseAIReviewConfig
-from src.engine.ai_response_contracts import AI_RESPONSE_SCHEMA_REGISTRY, build_openai_response_text_format
+from src.engine.ai_response_contracts import (
+    AI_RESPONSE_SCHEMA_REGISTRY,
+    build_openai_response_text_format,
+)
 from src.engine.bedrock_nova_provider import load_bedrock_api_keys_from_config
 from src.engine.daily_threshold_cycle_report import (
     _extract_openai_response_text,
@@ -59,7 +62,9 @@ def _sanitize_error_message(value: object) -> str:
     return text[:240]
 
 
-def _validator_ok(validator: ContractValidator | None, raw_text: str) -> tuple[bool, str]:
+def _validator_ok(
+    validator: ContractValidator | None, raw_text: str
+) -> tuple[bool, str]:
     if validator is None:
         return True, ""
     try:
@@ -71,7 +76,9 @@ def _validator_ok(validator: ContractValidator | None, raw_text: str) -> tuple[b
     return bool(result), ""
 
 
-def _gemini_status_base(config: PostcloseAIReviewConfig, *, schema_name: str) -> dict[str, Any]:
+def _gemini_status_base(
+    config: PostcloseAIReviewConfig, *, schema_name: str
+) -> dict[str, Any]:
     return {
         **config.provider_status_fields(),
         "provider": "gemini",
@@ -134,9 +141,15 @@ def _gemini_response_schema(schema_name: str) -> dict[str, Any] | None:
                                     "retry_handoff",
                                 ],
                             },
-                            "confidence": {"type": "STRING", "enum": ["low", "medium", "high"]},
+                            "confidence": {
+                                "type": "STRING",
+                                "enum": ["low", "medium", "high"],
+                            },
                             "reason": {"type": "STRING"},
-                            "required_followup": {"type": "ARRAY", "items": {"type": "STRING"}},
+                            "required_followup": {
+                                "type": "ARRAY",
+                                "items": {"type": "STRING"},
+                            },
                         },
                         "required": [
                             "candidate_id",
@@ -151,7 +164,10 @@ def _gemini_response_schema(schema_name: str) -> dict[str, Any] | None:
                 "audit": {
                     "type": "OBJECT",
                     "properties": {
-                        "status": {"type": "STRING", "enum": ["pass", "retry_required", "correction_required"]},
+                        "status": {
+                            "type": "STRING",
+                            "enum": ["pass", "retry_required", "correction_required"],
+                        },
                         "issues": {"type": "ARRAY", "items": {"type": "STRING"}},
                         "reason": {"type": "STRING"},
                     },
@@ -170,10 +186,20 @@ def _gemini_response_schema(schema_name: str) -> dict[str, Any] | None:
                     },
                 },
             },
-            "required": ["schema_version", "reviewer", "candidate_reviews", "audit", "codex_directives"],
+            "required": [
+                "schema_version",
+                "reviewer",
+                "candidate_reviews",
+                "audit",
+                "codex_directives",
+            ],
         }
     if schema_name == "lifecycle_bucket_discovery_review_v1":
-        bucket_relation_enum = ["existing_bucket_refinement", "new_bucket_candidate", "unclear"]
+        bucket_relation_enum = [
+            "existing_bucket_refinement",
+            "new_bucket_candidate",
+            "unclear",
+        ]
         classification_state_enum = [
             "source_only_keep_collecting",
             "sim_auto_approved",
@@ -207,9 +233,18 @@ def _gemini_response_schema(schema_name: str) -> dict[str, Any] | None:
                                 "type": "OBJECT",
                                 "properties": {
                                     "bucket_id": {"type": "STRING"},
-                                    "interpreted_relation": {"type": "STRING", "enum": bucket_relation_enum},
-                                    "interpreted_state": {"type": "STRING", "enum": classification_state_enum},
-                                    "confidence": {"type": "STRING", "enum": ["low", "medium", "high"]},
+                                    "interpreted_relation": {
+                                        "type": "STRING",
+                                        "enum": bucket_relation_enum,
+                                    },
+                                    "interpreted_state": {
+                                        "type": "STRING",
+                                        "enum": classification_state_enum,
+                                    },
+                                    "confidence": {
+                                        "type": "STRING",
+                                        "enum": ["low", "medium", "high"],
+                                    },
                                     "reason": {"type": "STRING"},
                                 },
                                 "required": [
@@ -224,8 +259,14 @@ def _gemini_response_schema(schema_name: str) -> dict[str, Any] | None:
                         "source_contract_review": {
                             "type": "OBJECT",
                             "properties": {
-                                "status": {"type": "STRING", "enum": ["pass", "warning", "fail"]},
-                                "changes": {"type": "ARRAY", "items": {"type": "STRING"}},
+                                "status": {
+                                    "type": "STRING",
+                                    "enum": ["pass", "warning", "fail"],
+                                },
+                                "changes": {
+                                    "type": "ARRAY",
+                                    "items": {"type": "STRING"},
+                                },
                                 "reason": {"type": "STRING"},
                             },
                             "required": ["status", "changes", "reason"],
@@ -236,7 +277,14 @@ def _gemini_response_schema(schema_name: str) -> dict[str, Any] | None:
                 "audit": {
                     "type": "OBJECT",
                     "properties": {
-                        "status": {"type": "STRING", "enum": ["pass", "correction_required", "insufficient_context"]},
+                        "status": {
+                            "type": "STRING",
+                            "enum": [
+                                "pass",
+                                "correction_required",
+                                "insufficient_context",
+                            ],
+                        },
                         "issues": {"type": "ARRAY", "items": {"type": "STRING"}},
                         "reason": {"type": "STRING"},
                     },
@@ -248,13 +296,28 @@ def _gemini_response_schema(schema_name: str) -> dict[str, Any] | None:
                         "type": "OBJECT",
                         "properties": {
                             "bucket_id": {"type": "STRING"},
-                            "proposal_decision": {"type": "STRING", "enum": taxonomy_decision_enum},
+                            "proposal_decision": {
+                                "type": "STRING",
+                                "enum": taxonomy_decision_enum,
+                            },
                             "recommended_canonical_bucket": {"type": "STRING"},
-                            "recommended_metric_or_dimension": {"type": "ARRAY", "items": {"type": "STRING"}},
+                            "recommended_metric_or_dimension": {
+                                "type": "ARRAY",
+                                "items": {"type": "STRING"},
+                            },
                             "reasoning_summary": {"type": "STRING"},
-                            "confidence": {"type": "STRING", "enum": ["low", "medium", "high"]},
-                            "required_source_fields": {"type": "ARRAY", "items": {"type": "STRING"}},
-                            "forbidden_uses": {"type": "ARRAY", "items": {"type": "STRING"}},
+                            "confidence": {
+                                "type": "STRING",
+                                "enum": ["low", "medium", "high"],
+                            },
+                            "required_source_fields": {
+                                "type": "ARRAY",
+                                "items": {"type": "STRING"},
+                            },
+                            "forbidden_uses": {
+                                "type": "ARRAY",
+                                "items": {"type": "STRING"},
+                            },
                         },
                         "required": [
                             "bucket_id",
@@ -274,17 +337,43 @@ def _gemini_response_schema(schema_name: str) -> dict[str, Any] | None:
                         "type": "OBJECT",
                         "properties": {
                             "bucket_id": {"type": "STRING"},
-                            "selected_decision": {"type": "STRING", "enum": taxonomy_decision_enum},
-                            "selected_source": {"type": "STRING", "enum": ["deterministic", "ai_tier2", "hybrid", "reject"]},
+                            "selected_decision": {
+                                "type": "STRING",
+                                "enum": taxonomy_decision_enum,
+                            },
+                            "selected_source": {
+                                "type": "STRING",
+                                "enum": [
+                                    "deterministic",
+                                    "ai_tier2",
+                                    "hybrid",
+                                    "reject",
+                                ],
+                            },
                             "recommended_canonical_bucket": {"type": "STRING"},
-                            "recommended_metric_or_dimension": {"type": "ARRAY", "items": {"type": "STRING"}},
+                            "recommended_metric_or_dimension": {
+                                "type": "ARRAY",
+                                "items": {"type": "STRING"},
+                            },
                             "comparison_summary": {"type": "STRING"},
                             "rejected_alternative_reason": {"type": "STRING"},
-                            "confidence": {"type": "STRING", "enum": ["low", "medium", "high"]},
-                            "required_source_fields": {"type": "ARRAY", "items": {"type": "STRING"}},
-                            "forbidden_uses": {"type": "ARRAY", "items": {"type": "STRING"}},
+                            "confidence": {
+                                "type": "STRING",
+                                "enum": ["low", "medium", "high"],
+                            },
+                            "required_source_fields": {
+                                "type": "ARRAY",
+                                "items": {"type": "STRING"},
+                            },
+                            "forbidden_uses": {
+                                "type": "ARRAY",
+                                "items": {"type": "STRING"},
+                            },
                             "workorder_title": {"type": "STRING"},
-                            "workorder_priority": {"type": "STRING", "enum": ["critical", "high", "medium", "low"]},
+                            "workorder_priority": {
+                                "type": "STRING",
+                                "enum": ["critical", "high", "medium", "low"],
+                            },
                         },
                         "required": [
                             "bucket_id",
@@ -308,9 +397,18 @@ def _gemini_response_schema(schema_name: str) -> dict[str, Any] | None:
                         "type": "OBJECT",
                         "properties": {
                             "bucket_id": {"type": "STRING"},
-                            "final_bucket_relation": {"type": "STRING", "enum": bucket_relation_enum},
-                            "final_classification_state": {"type": "STRING", "enum": classification_state_enum},
-                            "final_decision": {"type": "STRING", "enum": ["keep", "correct", "block"]},
+                            "final_bucket_relation": {
+                                "type": "STRING",
+                                "enum": bucket_relation_enum,
+                            },
+                            "final_classification_state": {
+                                "type": "STRING",
+                                "enum": classification_state_enum,
+                            },
+                            "final_decision": {
+                                "type": "STRING",
+                                "enum": ["keep", "correct", "block"],
+                            },
                             "reason": {"type": "STRING"},
                         },
                         "required": [
@@ -368,7 +466,11 @@ def _extract_gemini_text(payload: dict[str, Any]) -> str:
 
 
 def _gemini_usage(payload: dict[str, Any]) -> dict[str, int]:
-    meta = payload.get("usageMetadata") if isinstance(payload.get("usageMetadata"), dict) else {}
+    meta = (
+        payload.get("usageMetadata")
+        if isinstance(payload.get("usageMetadata"), dict)
+        else {}
+    )
     return {
         "input_tokens": int(meta.get("promptTokenCount") or 0),
         "output_tokens": int(meta.get("candidatesTokenCount") or 0),
@@ -399,7 +501,11 @@ def _call_gemini_3_5_flash(
     else:
         api_keys = api_keys[:1]
     if not api_keys:
-        return None, {**status, "status": "unavailable", "reason": "GEMINI_API_KEY not configured"}
+        return None, {
+            **status,
+            "status": "unavailable",
+            "reason": "GEMINI_API_KEY not configured",
+        }
     request_prompt = _gemini_prompt(instructions, prompt, schema_name)
     errors: list[dict[str, str | int]] = []
     attempted_key_names: list[str] = []
@@ -428,7 +534,9 @@ def _call_gemini_3_5_flash(
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=max(1, int(config.timeout_sec))) as response:
+            with urllib.request.urlopen(
+                req, timeout=max(1, int(config.timeout_sec))
+            ) as response:
                 response_payload = json.loads(response.read().decode("utf-8"))
             raw_text = _extract_gemini_text(response_payload)
             finish_reason = _gemini_finish_reason(response_payload)
@@ -436,7 +544,11 @@ def _call_gemini_3_5_flash(
             contract_ok, contract_reason = _validator_ok(contract_validator, raw_text)
             gemini_status = {
                 **status,
-                "status": "success" if contract_ok and finish_reason != "MAX_TOKENS" else "contract_failed",
+                "status": (
+                    "success"
+                    if contract_ok and finish_reason != "MAX_TOKENS"
+                    else "contract_failed"
+                ),
                 "key_name": key_name,
                 "attempt_index": attempt_index,
                 "attempted_key_count": len(attempted_key_names),
@@ -450,8 +562,14 @@ def _call_gemini_3_5_flash(
                 "prompt_chars": len(request_prompt),
                 "output_chars": len(raw_text),
                 "finish_reason": finish_reason,
-                "gemini_contract_ok": bool(contract_ok and finish_reason != "MAX_TOKENS"),
-                "gemini_contract_reason": "finish_reason_MAX_TOKENS" if finish_reason == "MAX_TOKENS" else contract_reason,
+                "gemini_contract_ok": bool(
+                    contract_ok and finish_reason != "MAX_TOKENS"
+                ),
+                "gemini_contract_reason": (
+                    "finish_reason_MAX_TOKENS"
+                    if finish_reason == "MAX_TOKENS"
+                    else contract_reason
+                ),
                 **usage,
             }
             if gemini_status["gemini_contract_ok"]:
@@ -462,13 +580,29 @@ def _call_gemini_3_5_flash(
                 {
                     "key_name": key_name,
                     "error_type": "contract_failed",
-                    "error": str(gemini_status.get("gemini_contract_reason") or "contract_failed"),
+                    "error": str(
+                        gemini_status.get("gemini_contract_reason") or "contract_failed"
+                    ),
                 }
             )
         except urllib.error.HTTPError as exc:
-            errors.append({"key_name": key_name, "error_type": f"http_{exc.code}", "error": _sanitize_error_message(exc.read().decode("utf-8", errors="replace"))})
+            errors.append(
+                {
+                    "key_name": key_name,
+                    "error_type": f"http_{exc.code}",
+                    "error": _sanitize_error_message(
+                        exc.read().decode("utf-8", errors="replace")
+                    ),
+                }
+            )
         except Exception as exc:
-            errors.append({"key_name": key_name, "error_type": type(exc).__name__, "error": _sanitize_error_message(exc)})
+            errors.append(
+                {
+                    "key_name": key_name,
+                    "error_type": type(exc).__name__,
+                    "error": _sanitize_error_message(exc),
+                }
+            )
     return None, {
         **status,
         "status": "unavailable",
@@ -483,7 +617,9 @@ def _call_gemini_3_5_flash(
     }
 
 
-def _bedrock_status_base(config: PostcloseAIReviewConfig, *, schema_name: str) -> dict[str, Any]:
+def _bedrock_status_base(
+    config: PostcloseAIReviewConfig, *, schema_name: str
+) -> dict[str, Any]:
     return {
         **config.provider_status_fields(),
         "provider": "bedrock_qwen3",
@@ -507,15 +643,27 @@ def _call_bedrock_qwen3(
     status = _bedrock_status_base(config, schema_name=schema_name)
     schema = AI_RESPONSE_SCHEMA_REGISTRY.get(schema_name)
     if not isinstance(schema, dict):
-        return None, {**status, "status": "unavailable", "reason": f"unknown_schema:{schema_name}"}
+        return None, {
+            **status,
+            "status": "unavailable",
+            "reason": f"unknown_schema:{schema_name}",
+        }
     keys = load_bedrock_api_keys_from_config()
     if not keys:
-        return None, {**status, "status": "unavailable", "reason": "AWS_BEARER_TOKEN_BEDROCK not configured"}
+        return None, {
+            **status,
+            "status": "unavailable",
+            "reason": "AWS_BEARER_TOKEN_BEDROCK not configured",
+        }
     try:
         import boto3
         from botocore.config import Config
     except Exception as exc:
-        return None, {**status, "status": "unavailable", "reason": f"bedrock import failed: {exc}"}
+        return None, {
+            **status,
+            "status": "unavailable",
+            "reason": f"bedrock import failed: {exc}",
+        }
 
     errors: list[dict[str, str]] = []
     schema_payload = _normalize_bedrock_schema(schema)
@@ -527,7 +675,11 @@ def _call_bedrock_qwen3(
             client = boto3.client(
                 "bedrock-runtime",
                 region_name=config.bedrock_region,
-                config=Config(connect_timeout=min(timeout_sec, 30), read_timeout=timeout_sec, retries={"max_attempts": 0}),
+                config=Config(
+                    connect_timeout=min(timeout_sec, 30),
+                    read_timeout=timeout_sec,
+                    retries={"max_attempts": 0},
+                ),
             )
             response = client.converse(
                 modelId=config.bedrock_model_id,
@@ -542,7 +694,10 @@ def _call_bedrock_qwen3(
                     }
                 ],
                 messages=[{"role": "user", "content": [{"text": prompt}]}],
-                inferenceConfig={"maxTokens": int(config.bedrock_max_output_tokens), "temperature": 0},
+                inferenceConfig={
+                    "maxTokens": int(config.bedrock_max_output_tokens),
+                    "temperature": 0,
+                },
                 outputConfig={
                     "textFormat": {
                         "type": "json_schema",
@@ -558,7 +713,10 @@ def _call_bedrock_qwen3(
             )
             raw_text = "\n".join(
                 str(part.get("text") or "")
-                for part in (((response.get("output") or {}).get("message") or {}).get("content") or [])
+                for part in (
+                    ((response.get("output") or {}).get("message") or {}).get("content")
+                    or []
+                )
                 if isinstance(part, dict)
             ).strip()
             contract_ok, contract_reason = _validator_ok(contract_validator, raw_text)
@@ -580,7 +738,13 @@ def _call_bedrock_qwen3(
                 return raw_text, bedrock_status
             return None, bedrock_status
         except Exception as exc:
-            errors.append({"attempt_index": str(attempt_index), "error": str(exc), "error_type": type(exc).__name__})
+            errors.append(
+                {
+                    "attempt_index": str(attempt_index),
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                }
+            )
     return None, {
         **status,
         "status": "unavailable",
@@ -605,10 +769,20 @@ def _call_openai(
     try:
         from openai import OpenAI, RateLimitError
     except Exception as exc:
-        return None, {"provider": "openai", "status": "unavailable", "reason": f"openai import failed: {exc}", **config.provider_status_fields()}
+        return None, {
+            "provider": "openai",
+            "status": "unavailable",
+            "reason": f"openai import failed: {exc}",
+            **config.provider_status_fields(),
+        }
     api_keys = _load_threshold_ai_openai_keys()
     if not api_keys:
-        return None, {"provider": "openai", "status": "unavailable", "reason": "OPENAI_API_KEY not configured", **config.provider_status_fields()}
+        return None, {
+            "provider": "openai",
+            "status": "unavailable",
+            "reason": "OPENAI_API_KEY not configured",
+            **config.provider_status_fields(),
+        }
     errors: list[dict[str, str]] = []
     for attempt_index, (key_name, api_key) in enumerate(api_keys, start=1):
         started = time.perf_counter()
@@ -618,7 +792,10 @@ def _call_openai(
                 model=config.model,
                 instructions=instructions,
                 input=prompt,
-                text={"format": build_openai_response_text_format(schema_name), "verbosity": "low"},
+                text={
+                    "format": build_openai_response_text_format(schema_name),
+                    "verbosity": "low",
+                },
                 reasoning={"effort": config.reasoning_effort},
                 store=False,
                 metadata={**metadata, "schema_name": schema_name},
@@ -645,16 +822,24 @@ def _call_openai(
                 "input_context_chars": len(prompt),
                 "output_chars": len(raw_text),
                 "latency_ms": int((time.perf_counter() - started) * 1000),
-                "input_tokens": int(getattr(usage, "input_tokens", 0) or 0) if usage else 0,
-                "output_tokens": int(getattr(usage, "output_tokens", 0) or 0) if usage else 0,
-                "total_tokens": int(getattr(usage, "total_tokens", 0) or 0) if usage else 0,
+                "input_tokens": (
+                    int(getattr(usage, "input_tokens", 0) or 0) if usage else 0
+                ),
+                "output_tokens": (
+                    int(getattr(usage, "output_tokens", 0) or 0) if usage else 0
+                ),
+                "total_tokens": (
+                    int(getattr(usage, "total_tokens", 0) or 0) if usage else 0
+                ),
                 "primary_provider": config.primary_provider,
                 "primary_model": (
                     config.bedrock_model_id
                     if config.primary_provider == "bedrock_qwen3"
-                    else config.gemini_model
-                    if config.primary_provider == "gemini_3_5_flash"
-                    else config.model
+                    else (
+                        config.gemini_model
+                        if config.primary_provider == "gemini_3_5_flash"
+                        else config.model
+                    )
                 ),
                 "failback_provider": config.failback_provider,
                 "failback_used": bool(failback_used),
@@ -716,7 +901,9 @@ def call_postclose_structured_review(
             primary_status["input_context_chars"] = len(prompt)
             return raw_text, primary_status
         if config.failback_provider == "openai":
-            failback_reason = str(primary_status.get("status") or "bedrock_qwen3_failed")
+            failback_reason = str(
+                primary_status.get("status") or "bedrock_qwen3_failed"
+            )
             return _call_openai(
                 schema_name=schema_name,
                 instructions=instructions,
@@ -747,7 +934,9 @@ def call_postclose_structured_review(
                     "primary_provider": "bedrock_qwen3",
                     "failback_provider": "none",
                     "attempt_role": "failback",
-                    "retry_reason": str(primary_status.get("status") or "openai_failed"),
+                    "retry_reason": str(
+                        primary_status.get("status") or "openai_failed"
+                    ),
                 }
             )
             failback_raw, failback_status = _call_bedrock_qwen3(
@@ -786,7 +975,9 @@ def call_postclose_structured_review(
             primary_status["input_context_chars"] = len(prompt)
             return raw_text, primary_status
         if config.failback_provider == "openai":
-            failback_reason = str(primary_status.get("status") or "gemini_3_5_flash_failed")
+            failback_reason = str(
+                primary_status.get("status") or "gemini_3_5_flash_failed"
+            )
             return _call_openai(
                 schema_name=schema_name,
                 instructions=instructions,

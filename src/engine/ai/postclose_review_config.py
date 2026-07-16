@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-
 VALID_REASONING_EFFORTS = {"minimal", "low", "medium", "high"}
 
 
@@ -102,7 +101,9 @@ def resolve_postclose_ai_review_config(
     prefix = env_prefix or f"KORSTOCKSCAN_{artifact.upper()}_AI"
     if attempt_role == "retry":
         model = _env_text(f"{prefix}_RETRY_MODEL", default_model)
-        reasoning = _env_text(f"{prefix}_RETRY_REASONING_EFFORT", default_reasoning_effort)
+        reasoning = _env_text(
+            f"{prefix}_RETRY_REASONING_EFFORT", default_reasoning_effort
+        )
     else:
         model = _env_text(f"{prefix}_MODEL", default_model)
         reasoning = _env_text(f"{prefix}_REASONING_EFFORT", default_reasoning_effort)
@@ -113,19 +114,31 @@ def resolve_postclose_ai_review_config(
         default_primary_provider = "gemini_3_5_flash"
     else:
         default_primary_provider = "openai"
-    primary_provider = _env_text(f"{prefix}_PRIMARY_PROVIDER", default_primary_provider).lower()
+    primary_provider = _env_text(
+        f"{prefix}_PRIMARY_PROVIDER", default_primary_provider
+    ).lower()
     failback_provider = _env_text(f"{prefix}_FAILBACK_PROVIDER", "openai").lower()
-    bedrock_model_id = _env_text(f"{prefix}_BEDROCK_MODEL_ID", "qwen.qwen3-235b-a22b-2507-v1:0")
+    bedrock_model_id = _env_text(
+        f"{prefix}_BEDROCK_MODEL_ID", "qwen.qwen3-235b-a22b-2507-v1:0"
+    )
     bedrock_region = _env_text(f"{prefix}_BEDROCK_REGION", "us-west-2")
-    bedrock_max_output_tokens = max(1, _env_int(f"{prefix}_BEDROCK_MAX_OUTPUT_TOKENS", 8192))
+    bedrock_max_output_tokens = max(
+        1, _env_int(f"{prefix}_BEDROCK_MAX_OUTPUT_TOKENS", 8192)
+    )
     gemini_model = _env_text(f"{prefix}_GEMINI_MODEL", "gemini-3.5-flash")
     gemini_shard_size = max(1, _env_int(f"{prefix}_GEMINI_SHARD_SIZE", 10))
-    gemini_max_output_tokens = max(1, _env_int(f"{prefix}_GEMINI_MAX_OUTPUT_TOKENS", 8192))
-    gemini_key_rotation_enabled = _env_bool(f"{prefix}_GEMINI_KEY_ROTATION_ENABLED", True)
+    gemini_max_output_tokens = max(
+        1, _env_int(f"{prefix}_GEMINI_MAX_OUTPUT_TOKENS", 8192)
+    )
+    gemini_key_rotation_enabled = _env_bool(
+        f"{prefix}_GEMINI_KEY_ROTATION_ENABLED", True
+    )
     return PostcloseAIReviewConfig(
         artifact=artifact,
         model=model,
-        reasoning_effort=normalize_reasoning_effort(reasoning, default_reasoning_effort),
+        reasoning_effort=normalize_reasoning_effort(
+            reasoning, default_reasoning_effort
+        ),
         timeout_sec=timeout_sec,
         attempt_role=attempt_role,
         retry_reason=retry_reason,
