@@ -5,7 +5,9 @@ from datetime import datetime
 from src.engine import lifecycle_decision_matrix_runtime as mod
 
 
-def _write_policy(path, *, promote_ready=True, confidence=0.8, selected_action="BUY_DEFENSIVE"):
+def _write_policy(
+    path, *, promote_ready=True, confidence=0.8, selected_action="BUY_DEFENSIVE"
+):
     path.write_text(
         json.dumps(
             {
@@ -26,7 +28,14 @@ def _write_policy(path, *, promote_ready=True, confidence=0.8, selected_action="
     )
 
 
-def _enable_rules(monkeypatch, *, policy_file, max_promotes=3, min_confidence=0.6, promote_enabled=True):
+def _enable_rules(
+    monkeypatch,
+    *,
+    policy_file,
+    max_promotes=3,
+    min_confidence=0.6,
+    promote_enabled=True
+):
     monkeypatch.setattr(
         mod,
         "TRADING_RULES",
@@ -44,7 +53,9 @@ def _enable_rules(monkeypatch, *, policy_file, max_promotes=3, min_confidence=0.
     mod.reset_lifecycle_decision_matrix_promote_counter()
 
 
-def test_lifecycle_runtime_hard_safety_passthrough_blocks_matrix_action(tmp_path, monkeypatch):
+def test_lifecycle_runtime_hard_safety_passthrough_blocks_matrix_action(
+    tmp_path, monkeypatch
+):
     policy_file = tmp_path / "lifecycle_decision_matrix_2026-05-18.json"
     _write_policy(policy_file)
     _enable_rules(monkeypatch, policy_file=policy_file)
@@ -72,7 +83,9 @@ def test_lifecycle_runtime_promotes_buy_defensive_with_daily_cap(tmp_path, monke
         context={},
         now=datetime.fromisoformat("2026-05-19T09:10:00"),
     )
-    payload = mod.apply_lifecycle_decision_to_payload({"action": "WAIT", "action_v2": "WAIT"}, first)
+    payload = mod.apply_lifecycle_decision_to_payload(
+        {"action": "WAIT", "action_v2": "WAIT"}, first
+    )
 
     assert first["lifecycle_matrix_runtime_effect"] == "promote_buy_defensive"
     assert payload["action"] == "BUY"
@@ -89,7 +102,9 @@ def test_lifecycle_runtime_promotes_buy_defensive_with_daily_cap(tmp_path, monke
     assert second["lifecycle_matrix_runtime_effect"] == "none"
 
 
-def test_lifecycle_runtime_low_confidence_keeps_baseline_prior_as_feature_only(tmp_path, monkeypatch):
+def test_lifecycle_runtime_low_confidence_keeps_baseline_prior_as_feature_only(
+    tmp_path, monkeypatch
+):
     policy_file = tmp_path / "lifecycle_decision_matrix_2026-05-18.json"
     _write_policy(policy_file, confidence=0.2)
     _enable_rules(monkeypatch, policy_file=policy_file, min_confidence=0.6)
@@ -101,11 +116,16 @@ def test_lifecycle_runtime_low_confidence_keeps_baseline_prior_as_feature_only(t
         now=datetime.fromisoformat("2026-05-19T09:10:00"),
     )
 
-    assert decision["lifecycle_matrix_runtime_reason"] == "confidence_below_min_stage_confidence"
+    assert (
+        decision["lifecycle_matrix_runtime_reason"]
+        == "confidence_below_min_stage_confidence"
+    )
     assert decision["lifecycle_matrix_runtime_effect"] == "none"
 
 
-def test_lifecycle_runtime_submit_allow_is_observation_not_guard_override(tmp_path, monkeypatch):
+def test_lifecycle_runtime_submit_allow_is_observation_not_guard_override(
+    tmp_path, monkeypatch
+):
     policy_file = tmp_path / "lifecycle_decision_matrix_2026-05-18.json"
     policy_file.write_text(
         json.dumps(
@@ -144,14 +164,18 @@ def test_lifecycle_runtime_submit_allow_is_observation_not_guard_override(tmp_pa
     assert blocked["lifecycle_matrix_runtime_effect"] == "none"
 
 
-def test_lifecycle_runtime_effect_kill_switch_keeps_policy_as_context_only(tmp_path, monkeypatch):
+def test_lifecycle_runtime_effect_kill_switch_keeps_policy_as_context_only(
+    tmp_path, monkeypatch
+):
     policy_file = tmp_path / "lifecycle_decision_matrix_2026-05-18.json"
     _write_policy(policy_file)
     _enable_rules(monkeypatch, policy_file=policy_file)
     monkeypatch.setattr(
         mod,
         "TRADING_RULES",
-        replace(mod.TRADING_RULES, LIFECYCLE_DECISION_MATRIX_RUNTIME_EFFECT_ENABLED=False),
+        replace(
+            mod.TRADING_RULES, LIFECYCLE_DECISION_MATRIX_RUNTIME_EFFECT_ENABLED=False
+        ),
     )
 
     decision = mod.resolve_lifecycle_decision(
@@ -160,15 +184,22 @@ def test_lifecycle_runtime_effect_kill_switch_keeps_policy_as_context_only(tmp_p
         context={},
         now=datetime.fromisoformat("2026-05-19T09:10:00"),
     )
-    payload = mod.apply_lifecycle_decision_to_payload({"action": "WAIT", "action_v2": "WAIT"}, decision)
+    payload = mod.apply_lifecycle_decision_to_payload(
+        {"action": "WAIT", "action_v2": "WAIT"}, decision
+    )
 
     assert decision["lifecycle_matrix_selected_action"] == "BUY_DEFENSIVE"
     assert decision["lifecycle_matrix_runtime_effect"] == "none"
-    assert decision["lifecycle_matrix_runtime_reason"] == "runtime_effect_disabled_context_only"
+    assert (
+        decision["lifecycle_matrix_runtime_reason"]
+        == "runtime_effect_disabled_context_only"
+    )
     assert payload["action"] == "WAIT"
 
 
-def test_lifecycle_runtime_policy_key_gap_classification_hard_safety_passthrough(tmp_path, monkeypatch):
+def test_lifecycle_runtime_policy_key_gap_classification_hard_safety_passthrough(
+    tmp_path, monkeypatch
+):
     policy_file = tmp_path / "lifecycle_decision_matrix_2026-05-18.json"
     _write_policy(policy_file)
     _enable_rules(monkeypatch, policy_file=policy_file)
@@ -181,10 +212,15 @@ def test_lifecycle_runtime_policy_key_gap_classification_hard_safety_passthrough
     )
 
     assert decision["lifecycle_matrix_policy_key"] == "-"
-    assert decision["lifecycle_matrix_policy_key_gap_classification"] == "policy_key_not_applicable_hard_safety_passthrough"
+    assert (
+        decision["lifecycle_matrix_policy_key_gap_classification"]
+        == "policy_key_not_applicable_hard_safety_passthrough"
+    )
 
 
-def test_lifecycle_runtime_policy_key_gap_classification_provided(tmp_path, monkeypatch):
+def test_lifecycle_runtime_policy_key_gap_classification_provided(
+    tmp_path, monkeypatch
+):
     policy_file = tmp_path / "lifecycle_decision_matrix_2026-05-18.json"
     _write_policy(policy_file)
     _enable_rules(monkeypatch, policy_file=policy_file)
@@ -197,7 +233,10 @@ def test_lifecycle_runtime_policy_key_gap_classification_provided(tmp_path, monk
     )
 
     assert decision["lifecycle_matrix_policy_key"] != "-"
-    assert decision["lifecycle_matrix_policy_key_gap_classification"] == "policy_key_provided"
+    assert (
+        decision["lifecycle_matrix_policy_key_gap_classification"]
+        == "policy_key_provided"
+    )
 
 
 def test_lifecycle_runtime_policy_key_gap_classification_disabled():
@@ -209,10 +248,15 @@ def test_lifecycle_runtime_policy_key_gap_classification_disabled():
     )
 
     assert decision["lifecycle_matrix_policy_key"] == "-"
-    assert decision["lifecycle_matrix_policy_key_gap_classification"] == "policy_key_not_applicable_matrix_disabled"
+    assert (
+        decision["lifecycle_matrix_policy_key_gap_classification"]
+        == "policy_key_not_applicable_matrix_disabled"
+    )
 
 
-def test_lifecycle_runtime_policy_key_gap_classification_stage_missing(tmp_path, monkeypatch):
+def test_lifecycle_runtime_policy_key_gap_classification_stage_missing(
+    tmp_path, monkeypatch
+):
     policy_file = tmp_path / "lifecycle_decision_matrix_2026-05-18.json"
     _write_policy(policy_file)
     _enable_rules(monkeypatch, policy_file=policy_file)
@@ -225,17 +269,24 @@ def test_lifecycle_runtime_policy_key_gap_classification_stage_missing(tmp_path,
     )
 
     assert decision["lifecycle_matrix_policy_key"] == "-"
-    assert decision["lifecycle_matrix_policy_key_gap_classification"] == "policy_key_not_applicable_matrix_missing"
+    assert (
+        decision["lifecycle_matrix_policy_key_gap_classification"]
+        == "policy_key_not_applicable_matrix_missing"
+    )
 
 
-def test_lifecycle_runtime_policy_key_gap_classification_effect_disabled(tmp_path, monkeypatch):
+def test_lifecycle_runtime_policy_key_gap_classification_effect_disabled(
+    tmp_path, monkeypatch
+):
     policy_file = tmp_path / "lifecycle_decision_matrix_2026-05-18.json"
     _write_policy(policy_file)
     _enable_rules(monkeypatch, policy_file=policy_file)
     monkeypatch.setattr(
         mod,
         "TRADING_RULES",
-        replace(mod.TRADING_RULES, LIFECYCLE_DECISION_MATRIX_RUNTIME_EFFECT_ENABLED=False),
+        replace(
+            mod.TRADING_RULES, LIFECYCLE_DECISION_MATRIX_RUNTIME_EFFECT_ENABLED=False
+        ),
     )
 
     decision = mod.resolve_lifecycle_decision(
@@ -246,10 +297,15 @@ def test_lifecycle_runtime_policy_key_gap_classification_effect_disabled(tmp_pat
     )
 
     assert decision["lifecycle_matrix_policy_key"] != "-"
-    assert decision["lifecycle_matrix_policy_key_gap_classification"] == "policy_key_provided"
+    assert (
+        decision["lifecycle_matrix_policy_key_gap_classification"]
+        == "policy_key_provided"
+    )
 
 
-def test_lifecycle_runtime_policy_key_gap_classification_sim_context(tmp_path, monkeypatch):
+def test_lifecycle_runtime_policy_key_gap_classification_sim_context(
+    tmp_path, monkeypatch
+):
     policy_file = tmp_path / "lifecycle_decision_matrix_2026-05-18.json"
     policy_file.write_text(
         json.dumps(
@@ -278,4 +334,7 @@ def test_lifecycle_runtime_policy_key_gap_classification_sim_context(tmp_path, m
     )
 
     assert decision["lifecycle_matrix_policy_key"] != "-"
-    assert decision["lifecycle_matrix_policy_key_gap_classification"] == "policy_key_provided"
+    assert (
+        decision["lifecycle_matrix_policy_key_gap_classification"]
+        == "policy_key_provided"
+    )

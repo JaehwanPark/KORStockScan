@@ -19,7 +19,9 @@ def test_market_regime_continuous_fields_are_runtime_features_not_labels():
 
     assert runtime_features["market_regime_continuous_score"] == 41.5
     assert runtime_features["market_regime_continuous_label"] == "RISK_OFF"
-    assert runtime_features["market_regime_component_scores"]["domestic_breadth"] == 10.0
+    assert (
+        runtime_features["market_regime_component_scores"]["domestic_breadth"] == 10.0
+    )
     assert runtime_features["swing_entry_recovery_gate_score"] == 0
     assert "market_regime_continuous_label" not in labels
     assert labels["profit_rate"] == 1.2

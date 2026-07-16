@@ -11,11 +11,15 @@ def test_scale_in_bucket_v2_sample_floor_excludes_legacy_rows():
                 "scale_in_applicability": "applied",
                 "scale_in_decision_id": f"decision-{idx}",
             },
-            "labels": {
-                "scale_in_ev_label_version": mod.SCALE_IN_EV_LABEL_VERSION,
-                "incremental_notional_ev_pct": 1.2,
-                "runtime_authority_ready": False,
-            } if idx == 0 else {"profit_rate": 0.5},
+            "labels": (
+                {
+                    "scale_in_ev_label_version": mod.SCALE_IN_EV_LABEL_VERSION,
+                    "incremental_notional_ev_pct": 1.2,
+                    "runtime_authority_ready": False,
+                }
+                if idx == 0
+                else {"profit_rate": 0.5}
+            ),
             "stage_ev_composite_pct": 0.5,
         }
         for idx in range(mod.SCALE_IN_BUCKET_SAMPLE_FLOOR + 5)
@@ -28,7 +32,10 @@ def test_scale_in_bucket_v2_sample_floor_excludes_legacy_rows():
     assert bucket["filled_sample"] == 1
     assert bucket["runtime_authority_ready_sample"] == 0
     assert bucket["counterfactual_method"] == "treatment_path_added_tranche_return"
-    assert bucket["runtime_authority_method_required"] == "paired_add_no_add_lifecycle_replay"
+    assert (
+        bucket["runtime_authority_method_required"]
+        == "paired_add_no_add_lifecycle_replay"
+    )
     assert bucket["scale_in_ev_coverage_state"] == "v2_partial"
     assert bucket["source_quality_gate"] == "hold_sample"
     assert bucket["recommended_route"] == "hold_sample"
@@ -61,7 +68,10 @@ def test_scale_in_rolling_aggregation_uses_only_v2_joined_ev_and_authority_sampl
     assert bucket["counterfactual_joined_sample"] == mod.SCALE_IN_BUCKET_SAMPLE_FLOOR
     assert bucket["filled_sample"] == mod.SCALE_IN_BUCKET_SAMPLE_FLOOR
     assert bucket["counterfactual_method"] == "treatment_path_added_tranche_return"
-    assert bucket["runtime_authority_method_required"] == "paired_add_no_add_lifecycle_replay"
+    assert (
+        bucket["runtime_authority_method_required"]
+        == "paired_add_no_add_lifecycle_replay"
+    )
     assert bucket["scale_in_ev_coverage_state"] == "v2_ready"
     assert bucket["runtime_authority_ready"] is True
 
@@ -104,7 +114,10 @@ def test_scale_in_v2_edge_without_runtime_authority_stays_source_only():
     )
     assert blocked["bucket_type"] == "arm"
     assert blocked["bucket_key"] == "PYRAMID"
-    assert blocked["next_route"] == "source_only_keep_collecting_until_paired_add_lifecycle_replay"
+    assert (
+        blocked["next_route"]
+        == "source_only_keep_collecting_until_paired_add_lifecycle_replay"
+    )
     assert blocked["allowed_runtime_apply"] is False
 
 
@@ -135,7 +148,9 @@ def test_bucket_aggregation_keeps_same_key_separate_by_bucket_type():
     }
 
 
-def test_rolling_aggregation_excludes_source_quality_blocked_daily_report(tmp_path, monkeypatch):
+def test_rolling_aggregation_excludes_source_quality_blocked_daily_report(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(mod, "MATRIX_DIR", tmp_path)
     monkeypatch.setattr(
         mod,
@@ -314,14 +329,24 @@ def test_complete_lifecycle_with_unfilled_scale_in_is_considered_not_applied():
     rows = [
         {"stage": "entry", "runtime_features": {}, "labels": {}},
         {"stage": "submit", "runtime_features": {}, "labels": {}},
-        {"stage": "holding", "runtime_features": {}, "labels": {"profit_rate": 0.5}, "stage_ev_composite_pct": 0.5},
+        {
+            "stage": "holding",
+            "runtime_features": {},
+            "labels": {"profit_rate": 0.5},
+            "stage_ev_composite_pct": 0.5,
+        },
         {
             "stage": "scale_in",
             "runtime_features": {"scale_in_applicability": "considered_not_applied"},
             "labels": {"profit_rate": 0.5},
             "stage_ev_composite_pct": 0.5,
         },
-        {"stage": "exit", "runtime_features": {}, "labels": {"profit_rate": 0.5}, "stage_ev_composite_pct": 0.5},
+        {
+            "stage": "exit",
+            "runtime_features": {},
+            "labels": {"profit_rate": 0.5},
+            "stage_ev_composite_pct": 0.5,
+        },
     ]
 
     flow = mod._flow_record("c2", "exact_sim_record_id", rows)
@@ -514,7 +539,11 @@ def test_lifecycle_flow_entry_bucket_uses_submit_guard_dimensions_as_fallback():
             "event_time": "2026-05-20T09:10:02+09:00",
             "stage": "holding",
             "source_stage": "scalp_sim_holding_snapshot",
-            "runtime_features": {"chosen_action": "HOLD", "profit_rate_live": 0.4, "held_sec": 60},
+            "runtime_features": {
+                "chosen_action": "HOLD",
+                "profit_rate_live": 0.4,
+                "held_sec": 60,
+            },
             "labels": {"profit_rate": 0.4},
             "stage_ev_composite_pct": 0.4,
         },
@@ -579,7 +608,9 @@ def test_lifecycle_overnight_decision_marks_missing_action_not_applicable():
     features = mod._holding_bucket_features(row)
     bucket_id = mod._holding_combo_bucket_id(row)
 
-    assert features["holding_action"] == "holding_action_not_applicable_overnight_decision"
+    assert (
+        features["holding_action"] == "holding_action_not_applicable_overnight_decision"
+    )
     assert "holding_action_unknown" not in bucket_id
 
 
@@ -613,7 +644,10 @@ def test_lifecycle_partial_exit_treats_string_none_outcome_as_missing():
         "stage_ev_composite_pct": 0.4,
     }
 
-    assert mod._exit_bucket_features(row)["exit_outcome"] == "outcome_not_applicable_partial_exit"
+    assert (
+        mod._exit_bucket_features(row)["exit_outcome"]
+        == "outcome_not_applicable_partial_exit"
+    )
 
 
 def test_lifecycle_entry_score_bands_keep_score60_floor_granular():
@@ -629,7 +663,9 @@ def test_lifecycle_decision_matrix_reads_gzip_pipeline_events(tmp_path, monkeypa
     monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", pipeline_dir)
     monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
     pipeline_dir.mkdir(parents=True)
-    with gzip.open(pipeline_dir / "pipeline_events_2026-05-20.jsonl.gz", "wt", encoding="utf-8") as handle:
+    with gzip.open(
+        pipeline_dir / "pipeline_events_2026-05-20.jsonl.gz", "wt", encoding="utf-8"
+    ) as handle:
         handle.write(
             json.dumps(
                 {
@@ -709,7 +745,9 @@ def test_lifecycle_decision_matrix_excludes_synthetic_scalp_sim_events_from_auth
             "emitted_at": "2026-06-15T10:03:00+09:00",
         },
     ]
-    with (pipeline_dir / "pipeline_events_2026-06-15.jsonl").open("w", encoding="utf-8") as handle:
+    with (pipeline_dir / "pipeline_events_2026-06-15.jsonl").open(
+        "w", encoding="utf-8"
+    ) as handle:
         for row in rows:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
@@ -770,7 +808,10 @@ def test_lifecycle_submit_bucket_attribution_is_source_only_and_surfaces_gaps():
 
     attribution = mod._submit_bucket_attribution(rows)
 
-    assert attribution["decision_authority"] == "adm_ldm_submit_bucket_attribution_source_only"
+    assert (
+        attribution["decision_authority"]
+        == "adm_ldm_submit_bucket_attribution_source_only"
+    )
     assert attribution["runtime_effect"] is False
     assert attribution["allowed_runtime_apply"] is False
     assert "broker_order_submit" in attribution["forbidden_uses"]
@@ -815,13 +856,31 @@ def test_lifecycle_submit_bucket_attribution_adds_quote_freshness_dimensions():
     attribution = mod._submit_bucket_attribution(rows)
 
     assert attribution["summary"]["quote_freshness_attribution_present"] is True
-    assert attribution["summary"]["quote_freshness_resolution_counts"]["refresh_failed_quote_stale"] == 1
-    assert attribution["summary"]["quote_freshness_resolution_counts"]["sim_submit_path_not_applicable"] == 1
-    bucket_pairs = {(item["bucket_type"], item["bucket_key"]) for item in attribution["buckets"]}
+    assert (
+        attribution["summary"]["quote_freshness_resolution_counts"][
+            "refresh_failed_quote_stale"
+        ]
+        == 1
+    )
+    assert (
+        attribution["summary"]["quote_freshness_resolution_counts"][
+            "sim_submit_path_not_applicable"
+        ]
+        == 1
+    )
+    bucket_pairs = {
+        (item["bucket_type"], item["bucket_key"]) for item in attribution["buckets"]
+    }
     assert ("pre_submit_refresh_source", "ws_manager_latest_data") in bucket_pairs
     assert ("pre_submit_refresh_attempted", "refresh_attempted") in bucket_pairs
-    assert ("pre_submit_refresh_applied", "refresh_attempted_not_applied") in bucket_pairs
-    assert ("quote_freshness_resolution_state", "sim_submit_path_not_applicable") in bucket_pairs
+    assert (
+        "pre_submit_refresh_applied",
+        "refresh_attempted_not_applied",
+    ) in bucket_pairs
+    assert (
+        "quote_freshness_resolution_state",
+        "sim_submit_path_not_applicable",
+    ) in bucket_pairs
 
 
 def test_lifecycle_submit_bucket_attribution_consumes_sentinel_quote_freshness_summary():
@@ -862,8 +921,14 @@ def test_lifecycle_submit_bucket_attribution_consumes_sentinel_quote_freshness_s
         == "submit_drought_quote_freshness_attribution_only"
     )
     assert summary["sentinel_quote_freshness_attribution"]["runtime_effect"] is False
-    assert summary["sentinel_quote_freshness_attribution"]["allowed_runtime_apply"] is False
-    assert "broker_order_submit" in summary["sentinel_quote_freshness_attribution"]["forbidden_uses"]
+    assert (
+        summary["sentinel_quote_freshness_attribution"]["allowed_runtime_apply"]
+        is False
+    )
+    assert (
+        "broker_order_submit"
+        in summary["sentinel_quote_freshness_attribution"]["forbidden_uses"]
+    )
 
 
 def test_submit_runtime_features_backfills_real_submit_refresh_fields_from_row():
@@ -908,7 +973,9 @@ def test_submit_runtime_features_backfills_real_submit_refresh_fields_from_row()
     assert features["pre_submit_quote_refresh_source"] == "orderbook_micro_observer"
     assert features["pre_submit_ws_snapshot_refresh_enabled"] is True
     assert features["pre_submit_ws_snapshot_refresh_applied"] is True
-    assert features["pre_submit_ws_snapshot_refresh_reason"] == "latest_ws_snapshot_fresh"
+    assert (
+        features["pre_submit_ws_snapshot_refresh_reason"] == "latest_ws_snapshot_fresh"
+    )
     assert features["pre_submit_ws_snapshot_refresh_source"] == "ws_manager_latest_data"
 
 
@@ -934,13 +1001,24 @@ def test_lifecycle_submit_bucket_attribution_treats_quote_not_stale_as_noop():
     attribution = mod._submit_bucket_attribution(rows)
 
     assert attribution["summary"]["quote_freshness_attribution_present"] is False
-    assert attribution["summary"]["quote_freshness_resolution_counts"][
-        "refresh_not_attempted_or_not_needed"
-    ] == 1
-    bucket_pairs = {(item["bucket_type"], item["bucket_key"]) for item in attribution["buckets"]}
-    assert ("pre_submit_refresh_attempted", "refresh_not_attempted_or_not_needed") in bucket_pairs
+    assert (
+        attribution["summary"]["quote_freshness_resolution_counts"][
+            "refresh_not_attempted_or_not_needed"
+        ]
+        == 1
+    )
+    bucket_pairs = {
+        (item["bucket_type"], item["bucket_key"]) for item in attribution["buckets"]
+    }
+    assert (
+        "pre_submit_refresh_attempted",
+        "refresh_not_attempted_or_not_needed",
+    ) in bucket_pairs
     assert ("pre_submit_refresh_source", "refresh_source_not_needed") in bucket_pairs
-    assert ("pre_submit_refresh_reason", "refresh_not_attempted_or_not_needed") in bucket_pairs
+    assert (
+        "pre_submit_refresh_reason",
+        "refresh_not_attempted_or_not_needed",
+    ) in bucket_pairs
 
 
 def test_lifecycle_submit_bucket_attribution_treats_fresh_ws_snapshot_as_noop():
@@ -965,13 +1043,24 @@ def test_lifecycle_submit_bucket_attribution_treats_fresh_ws_snapshot_as_noop():
     attribution = mod._submit_bucket_attribution(rows)
 
     assert attribution["summary"]["quote_freshness_attribution_present"] is False
-    assert attribution["summary"]["quote_freshness_resolution_counts"][
-        "refresh_not_attempted_or_not_needed"
-    ] == 1
-    bucket_pairs = {(item["bucket_type"], item["bucket_key"]) for item in attribution["buckets"]}
-    assert ("pre_submit_refresh_attempted", "refresh_not_attempted_or_not_needed") in bucket_pairs
+    assert (
+        attribution["summary"]["quote_freshness_resolution_counts"][
+            "refresh_not_attempted_or_not_needed"
+        ]
+        == 1
+    )
+    bucket_pairs = {
+        (item["bucket_type"], item["bucket_key"]) for item in attribution["buckets"]
+    }
+    assert (
+        "pre_submit_refresh_attempted",
+        "refresh_not_attempted_or_not_needed",
+    ) in bucket_pairs
     assert ("pre_submit_refresh_source", "refresh_source_not_needed") in bucket_pairs
-    assert ("pre_submit_refresh_reason", "refresh_not_attempted_or_not_needed") in bucket_pairs
+    assert (
+        "pre_submit_refresh_reason",
+        "refresh_not_attempted_or_not_needed",
+    ) in bucket_pairs
 
 
 def test_lifecycle_submit_bucket_attribution_keeps_applied_fresh_ws_snapshot_source():
@@ -997,14 +1086,22 @@ def test_lifecycle_submit_bucket_attribution_keeps_applied_fresh_ws_snapshot_sou
     attribution = mod._submit_bucket_attribution(rows)
 
     assert attribution["summary"]["quote_freshness_attribution_present"] is True
-    assert attribution["summary"]["quote_freshness_resolution_counts"][
-        "refresh_resolved_quote_freshness"
-    ] == 1
-    bucket_pairs = {(item["bucket_type"], item["bucket_key"]) for item in attribution["buckets"]}
+    assert (
+        attribution["summary"]["quote_freshness_resolution_counts"][
+            "refresh_resolved_quote_freshness"
+        ]
+        == 1
+    )
+    bucket_pairs = {
+        (item["bucket_type"], item["bucket_key"]) for item in attribution["buckets"]
+    }
     assert ("pre_submit_refresh_attempted", "refresh_attempted") in bucket_pairs
     assert ("pre_submit_refresh_applied", "ws_snapshot_refresh_applied") in bucket_pairs
     assert ("pre_submit_refresh_source", "ws_manager_latest_data") in bucket_pairs
-    assert ("pre_submit_refresh_reason", "ws_snapshot:latest_ws_snapshot_fresh") in bucket_pairs
+    assert (
+        "pre_submit_refresh_reason",
+        "ws_snapshot:latest_ws_snapshot_fresh",
+    ) in bucket_pairs
 
 
 def test_lifecycle_submit_bucket_attribution_prefers_failure_over_noop_refresh_reason():
@@ -1033,13 +1130,21 @@ def test_lifecycle_submit_bucket_attribution_prefers_failure_over_noop_refresh_r
     attribution = mod._submit_bucket_attribution(rows)
 
     assert attribution["summary"]["quote_freshness_attribution_present"] is True
-    assert attribution["summary"]["quote_freshness_resolution_counts"][
-        "refresh_failed_source_unhealthy"
-    ] == 1
-    bucket_pairs = {(item["bucket_type"], item["bucket_key"]) for item in attribution["buckets"]}
+    assert (
+        attribution["summary"]["quote_freshness_resolution_counts"][
+            "refresh_failed_source_unhealthy"
+        ]
+        == 1
+    )
+    bucket_pairs = {
+        (item["bucket_type"], item["bucket_key"]) for item in attribution["buckets"]
+    }
     assert ("pre_submit_refresh_attempted", "refresh_attempted") in bucket_pairs
     assert ("pre_submit_refresh_source", "orderbook_micro_observer") in bucket_pairs
-    assert ("pre_submit_refresh_reason", "observer_quote:observer_quote_missing") in bucket_pairs
+    assert (
+        "pre_submit_refresh_reason",
+        "observer_quote:observer_quote_missing",
+    ) in bucket_pairs
 
 
 def test_lifecycle_submit_bucket_attribution_creates_contract_gap_workorders():
@@ -1057,8 +1162,7 @@ def test_lifecycle_submit_bucket_attribution_creates_contract_gap_workorders():
 
     assert attribution["summary"]["contract_gap_count"] >= 1
     assert {
-        item["workorder_id"]
-        for item in attribution["code_improvement_workorders"]
+        item["workorder_id"] for item in attribution["code_improvement_workorders"]
     } >= {
         "order_entry_post_submit_contract_gap_review",
         "order_entry_broker_receipt_contract_gap_review",
@@ -1092,12 +1196,13 @@ def test_lifecycle_submit_bucket_attribution_surfaces_post_submit_join_gap():
     assert attribution["summary"]["post_submit_provenance_join_gap"] is True
     assert attribution["summary"]["post_submit_provenance_join_gap_raw"] is True
     assert {
-        item["workorder_id"]
-        for item in attribution["code_improvement_workorders"]
+        item["workorder_id"] for item in attribution["code_improvement_workorders"]
     } >= {"order_entry_post_submit_provenance_join_gap"}
 
 
-def test_lifecycle_submit_bucket_attribution_surfaces_bot_history_backfill_candidates(tmp_path, monkeypatch):
+def test_lifecycle_submit_bucket_attribution_surfaces_bot_history_backfill_candidates(
+    tmp_path, monkeypatch
+):
     bot_history = tmp_path / "bot_history.log"
     bot_history.write_text(
         "\n".join(
@@ -1133,14 +1238,19 @@ def test_lifecycle_submit_bucket_attribution_surfaces_bot_history_backfill_candi
     assert summary["bot_history_broker_order_key_backfill_full_coverage"] is True
     assert summary["bot_history_broker_order_key_exact_mapping_count"] == 1
     assert summary["bot_history_broker_order_key_exact_mapping_full_coverage"] is True
-    assert summary["post_submit_provenance_join_resolution"] == "resolved_by_exact_bot_history_submit_time_mapping"
+    assert (
+        summary["post_submit_provenance_join_resolution"]
+        == "resolved_by_exact_bot_history_submit_time_mapping"
+    )
     candidate = summary["bot_history_broker_order_key_backfill_candidates"][0]
     assert candidate["best_candidate"]["broker_order_no"] == "0049916"
     assert candidate["best_candidate"]["delta_sec"] == 1
     assert candidate["exact_submit_time_mapping"] is True
 
 
-def test_lifecycle_submit_bucket_attribution_keeps_ambiguous_bot_history_backfill_open(tmp_path, monkeypatch):
+def test_lifecycle_submit_bucket_attribution_keeps_ambiguous_bot_history_backfill_open(
+    tmp_path, monkeypatch
+):
     bot_history = tmp_path / "bot_history.log"
     bot_history.write_text(
         "\n".join(
@@ -1173,7 +1283,10 @@ def test_lifecycle_submit_bucket_attribution_keeps_ambiguous_bot_history_backfil
     assert summary["bot_history_broker_order_key_backfill_full_coverage"] is True
     assert summary["bot_history_broker_order_key_exact_mapping_count"] == 0
     assert summary["bot_history_broker_order_key_exact_mapping_full_coverage"] is False
-    assert summary["post_submit_provenance_join_resolution"] == "candidate_backfill_available_but_exact_mapping_required"
+    assert (
+        summary["post_submit_provenance_join_resolution"]
+        == "candidate_backfill_available_but_exact_mapping_required"
+    )
     candidate = summary["bot_history_broker_order_key_backfill_candidates"][0]
     assert candidate["candidate_count"] == 2
     assert candidate["exact_submit_time_mapping"] is False
@@ -1204,8 +1317,7 @@ def test_lifecycle_submit_bucket_attribution_does_not_gap_when_broker_key_presen
     assert attribution["summary"]["post_submit_provenance_join_gap_raw"] is False
     assert attribution["summary"]["post_submit_provenance_join_gap"] is False
     assert "order_entry_post_submit_provenance_join_gap" not in {
-        item["workorder_id"]
-        for item in attribution["code_improvement_workorders"]
+        item["workorder_id"] for item in attribution["code_improvement_workorders"]
     }
 
 
@@ -1252,10 +1364,7 @@ def test_lifecycle_submit_bucket_attribution_normalizes_post_submit_contract_fie
     ]
 
     attribution = mod._submit_bucket_attribution(rows)
-    gaps = {
-        item["gap_type"]
-        for item in attribution["post_submit_contract_gaps"]
-    }
+    gaps = {item["gap_type"] for item in attribution["post_submit_contract_gaps"]}
 
     assert attribution["summary"]["contract_gap_count"] == 0
     assert "broker_receipt_contract_gap" not in gaps
@@ -1356,20 +1465,23 @@ def test_lifecycle_submit_bucket_attribution_buckets_sim_pre_submit_guards():
     ]
 
     attribution = mod._submit_bucket_attribution(rows)
-    bucket_keys = {(item["bucket_type"], item["bucket_key"]) for item in attribution["buckets"]}
+    bucket_keys = {
+        (item["bucket_type"], item["bucket_key"]) for item in attribution["buckets"]
+    }
 
     assert ("liquidity_guard_action", "would_block") in bucket_keys
     assert ("overbought_guard_action", "would_pass") in bucket_keys
     assert ("liquidity_bucket", "below_min_liquidity") in bucket_keys
     assert ("liquidity_bucket", "liquidity_ok") in bucket_keys
     assert ("latency_state", "danger") in bucket_keys
-    assert (
-        "order_entry_sim_submit_path_bucket_instrumentation"
-        not in {item["workorder_id"] for item in attribution["code_improvement_workorders"]}
-    )
+    assert "order_entry_sim_submit_path_bucket_instrumentation" not in {
+        item["workorder_id"] for item in attribution["code_improvement_workorders"]
+    }
 
 
-def test_lifecycle_matrix_builder_separates_runtime_features_and_labels(tmp_path, monkeypatch):
+def test_lifecycle_matrix_builder_separates_runtime_features_and_labels(
+    tmp_path, monkeypatch
+):
     matrix_dir = tmp_path / "matrix"
     entry_dir = tmp_path / "entry_adm"
     post_sell_dir = tmp_path / "post_sell"
@@ -1424,12 +1536,17 @@ def test_lifecycle_matrix_builder_separates_runtime_features_and_labels(tmp_path
     assert "mfe_10m_pct" not in report["examples"][0]["runtime_features"]
     assert "mfe_10m_pct" in report["examples"][0]["labels"]
     assert report["fixed_threshold_contract"]["roles"]["baseline_prior"]
-    assert any(item["stage"] == "entry" and item["source_quality_gate"] == "pass" for item in report["policy_entries"])
+    assert any(
+        item["stage"] == "entry" and item["source_quality_gate"] == "pass"
+        for item in report["policy_entries"]
+    )
     assert (matrix_dir / "lifecycle_decision_matrix_2026-05-18.json").exists()
     assert (matrix_dir / "lifecycle_decision_matrix_2026-05-18.md").exists()
 
 
-def test_lifecycle_matrix_excludes_pre_clean_baseline_source_dates(tmp_path, monkeypatch):
+def test_lifecycle_matrix_excludes_pre_clean_baseline_source_dates(
+    tmp_path, monkeypatch
+):
     matrix_dir = tmp_path / "matrix"
     post_sell_dir = tmp_path / "post_sell"
     monitor_dir = tmp_path / "monitor"
@@ -1458,12 +1575,17 @@ def test_lifecycle_matrix_excludes_pre_clean_baseline_source_dates(tmp_path, mon
     )
 
     assert report["summary"]["source_dates"] == ["2026-06-04"]
-    assert report["summary"]["clean_baseline_excluded_source_dates"] == ["2026-06-02", "2026-06-03"]
+    assert report["summary"]["clean_baseline_excluded_source_dates"] == [
+        "2026-06-02",
+        "2026-06-03",
+    ]
     assert "clean_tuning_baseline_excluded_source_dates" in report["warnings"]
     assert report["runtime_effect"] is False
 
 
-def test_lifecycle_matrix_prefers_entry_adm_rows_and_has_no_policy_cap(tmp_path, monkeypatch):
+def test_lifecycle_matrix_prefers_entry_adm_rows_and_has_no_policy_cap(
+    tmp_path, monkeypatch
+):
     matrix_dir = tmp_path / "matrix"
     entry_dir = tmp_path / "entry_adm"
     post_sell_dir = tmp_path / "post_sell"
@@ -1516,7 +1638,9 @@ def test_lifecycle_matrix_prefers_entry_adm_rows_and_has_no_policy_cap(tmp_path,
     assert report["policy_entries"][0]["sample"] == 2101
 
 
-def test_lifecycle_matrix_ingests_scalp_sim_submit_and_holding_rows(tmp_path, monkeypatch):
+def test_lifecycle_matrix_ingests_scalp_sim_submit_and_holding_rows(
+    tmp_path, monkeypatch
+):
     matrix_dir = tmp_path / "matrix"
     entry_dir = tmp_path / "entry_adm"
     post_sell_dir = tmp_path / "post_sell"
@@ -1564,13 +1688,22 @@ def test_lifecycle_matrix_ingests_scalp_sim_submit_and_holding_rows(tmp_path, mo
             "stage": "scalp_sim_buy_order_assumed_filled",
             "stock_code": "000001",
             "emitted_at": "2026-05-20T09:10:05+09:00",
-            "fields": {**common_fields, "best_ask": "1000", "would_limit_fill": True, "qty": "1"},
+            "fields": {
+                **common_fields,
+                "best_ask": "1000",
+                "would_limit_fill": True,
+                "qty": "1",
+            },
         },
         {
             "stage": "scalp_sim_holding_started",
             "stock_code": "000001",
             "emitted_at": "2026-05-20T09:10:06+09:00",
-            "fields": {**common_fields, "assumed_fill_price": "1000", "requested_qty": "1"},
+            "fields": {
+                **common_fields,
+                "assumed_fill_price": "1000",
+                "requested_qty": "1",
+            },
         },
         {
             "stage": "scalp_sim_sell_order_assumed_filled",
@@ -1603,7 +1736,11 @@ def test_lifecycle_matrix_ingests_scalp_sim_submit_and_holding_rows(tmp_path, mo
                         "hard_stop_conflict_runtime_effect": False,
                         "hard_stop_conflict_allowed_runtime_apply": False,
                         "hard_stop_conflict_hard_gate": False,
-                        "metrics_10m": {"mfe_pct": 1.2, "mae_pct": -0.2, "close_ret_pct": 0.8},
+                        "metrics_10m": {
+                            "mfe_pct": 1.2,
+                            "mae_pct": -0.2,
+                            "close_ret_pct": 0.8,
+                        },
                     },
                     ensure_ascii=False,
                 )
@@ -1638,8 +1775,12 @@ def test_lifecycle_matrix_ingests_scalp_sim_submit_and_holding_rows(tmp_path, mo
 
     report = mod.build_lifecycle_decision_matrix_report("2026-05-20")
 
-    submit_entry = next(item for item in report["policy_entries"] if item["stage"] == "submit")
-    holding_entry = next(item for item in report["policy_entries"] if item["stage"] == "holding")
+    submit_entry = next(
+        item for item in report["policy_entries"] if item["stage"] == "submit"
+    )
+    holding_entry = next(
+        item for item in report["policy_entries"] if item["stage"] == "holding"
+    )
     assert submit_entry["sample"] == 1
     assert submit_entry["joined_sample"] == 1
     assert holding_entry["sample"] == 1
@@ -1648,24 +1789,44 @@ def test_lifecycle_matrix_ingests_scalp_sim_submit_and_holding_rows(tmp_path, mo
     assert report["sources"]["scalp_sim_submit"]["joined_rows"] == 1
     assert report["sources"]["scalp_sim_holding"]["rows"] == 1
     assert report["sources"]["scalp_sim_holding"]["joined_rows"] == 1
-    submit_row = next(row for row in report["examples"] if row["source"] == "scalp_sim_entry_submit_pipeline_events")
+    submit_row = next(
+        row
+        for row in report["examples"]
+        if row["source"] == "scalp_sim_entry_submit_pipeline_events"
+    )
     assert submit_row["source_stage"] == "scalp_sim_buy_order_assumed_filled"
     assert submit_row["runtime_features"]["actual_order_submitted"] is False
     assert submit_row["runtime_features"]["broker_order_forbidden"] is True
-    assert submit_row["runtime_features"]["decision_authority"] == "sim_observation_only"
+    assert (
+        submit_row["runtime_features"]["decision_authority"] == "sim_observation_only"
+    )
     assert submit_row["runtime_features"]["bucket_directed_sim_probe"] is True
     assert submit_row["runtime_features"]["lifecycle_bucket_match_status"] == "matched"
     assert report["summary"]["bucket_directed_sim_probe"]["matched_row_count"] >= 2
     assert (
-        report["summary"]["bucket_directed_sim_probe"]["matched_unique_source_bucket_count"]
+        report["summary"]["bucket_directed_sim_probe"][
+            "matched_unique_source_bucket_count"
+        ]
         == 1
     )
-    post_sell_row = next(row for row in report["examples"] if row["source"] == "sim_post_sell_evaluations")
+    post_sell_row = next(
+        row
+        for row in report["examples"]
+        if row["source"] == "sim_post_sell_evaluations"
+    )
     assert post_sell_row["runtime_features"]["high_ai_hard_stop_conflict"] is True
-    assert post_sell_row["runtime_features"]["hard_stop_conflict_dimension"] == "high_ai_hard_stop_conflict"
+    assert (
+        post_sell_row["runtime_features"]["hard_stop_conflict_dimension"]
+        == "high_ai_hard_stop_conflict"
+    )
     assert post_sell_row["runtime_features"]["ai_model"] == "bedrock-nova-lite-v2"
-    assert post_sell_row["labels"]["hard_stop_conflict_dimension"] == "high_ai_hard_stop_conflict"
-    assert "hard_stop_conflict_dimension" not in mod._entry_bucket_features(post_sell_row)
+    assert (
+        post_sell_row["labels"]["hard_stop_conflict_dimension"]
+        == "high_ai_hard_stop_conflict"
+    )
+    assert "hard_stop_conflict_dimension" not in mod._entry_bucket_features(
+        post_sell_row
+    )
     flow_attr = report["lifecycle_flow_bucket_attribution"]
     assert flow_attr["metric_scope"] == "lifecycle_bundle_ev"
     assert flow_attr["summary"]["complete_flow_count"] == 1
@@ -1693,7 +1854,10 @@ def test_lifecycle_matrix_ingests_scalp_sim_submit_and_holding_rows(tmp_path, mo
     assert exit_attr["summary"]["bucket_count"] > 0
     assert holding_attr["runtime_approval_candidates"] == []
     assert exit_attr["runtime_approval_candidates"] == []
-    assert holding_attr["buckets"][0]["ai_inference_proposal"]["reasoning_effort"] == "medium"
+    assert (
+        holding_attr["buckets"][0]["ai_inference_proposal"]["reasoning_effort"]
+        == "medium"
+    )
     assert exit_attr["buckets"][0]["allowed_runtime_apply"] is False
 
 
@@ -1705,7 +1869,12 @@ def test_lifecycle_flow_bucket_fallback_identity_is_not_live_quality():
             "stage": stage,
             "source_stage": stage,
             "runtime_features": {"ai_score": 70},
-            "labels": {"profit_rate": 0.5, "mfe_10m_pct": 0.7, "mae_10m_pct": -0.1, "close_10m_pct": 0.5},
+            "labels": {
+                "profit_rate": 0.5,
+                "mfe_10m_pct": 0.7,
+                "mae_10m_pct": -0.1,
+                "close_10m_pct": 0.5,
+            },
             "stage_ev_composite_pct": 0.5,
         }
         for idx, stage in enumerate(("entry", "submit", "holding", "exit"))
@@ -1717,8 +1886,16 @@ def test_lifecycle_flow_bucket_fallback_identity_is_not_live_quality():
     assert attribution["summary"]["identity_missing_count"] == 4
     assert attribution["summary"]["identity_join_rate"] == 0.0
     assert attribution["summary"]["complete_flow_rate"] == 0.0
-    assert attribution["summary"]["incomplete_flow_reason_counts"]["fallback_identity_incomplete"] == 4
-    assert all(flow["source_quality_gate"] == "fallback_identity_incomplete" for flow in attribution["flows"])
+    assert (
+        attribution["summary"]["incomplete_flow_reason_counts"][
+            "fallback_identity_incomplete"
+        ]
+        == 4
+    )
+    assert all(
+        flow["source_quality_gate"] == "fallback_identity_incomplete"
+        for flow in attribution["flows"]
+    )
     assert attribution["runtime_approval_candidates"] == []
 
 
@@ -1730,7 +1907,10 @@ def test_lifecycle_flow_identity_prefers_entry_adm_candidate_id_before_row_candi
         "event_time": "2026-05-20T09:10:00+09:00",
     }
 
-    assert mod._row_flow_identity(row) == ("entry_adm_candidate_id:ADM-1", "entry_adm_candidate_id")
+    assert mod._row_flow_identity(row) == (
+        "entry_adm_candidate_id:ADM-1",
+        "entry_adm_candidate_id",
+    )
 
 
 def test_lifecycle_flow_adm_bridge_joins_entry_candidate_to_downstream_sim_rows():
@@ -1770,17 +1950,33 @@ def test_lifecycle_flow_adm_bridge_joins_entry_candidate_to_downstream_sim_rows(
     assert attribution["summary"]["complete_flow_count"] == 1
     assert attribution["summary"]["direct_sim_record_complete_flow_count"] == 0
     assert attribution["summary"]["adm_bridge_complete_flow_count"] == 1
-    assert attribution["summary"]["direct_flow_zero_reason"] == "no_direct_complete_but_adm_bridge_complete"
-    assert attribution["summary"]["direct_flow_zero_closure_status"] == "closed_by_adm_bridge_complete"
+    assert (
+        attribution["summary"]["direct_flow_zero_reason"]
+        == "no_direct_complete_but_adm_bridge_complete"
+    )
+    assert (
+        attribution["summary"]["direct_flow_zero_closure_status"]
+        == "closed_by_adm_bridge_complete"
+    )
     assert attribution["summary"]["direct_flow_zero_followup_required"] is False
-    assert attribution["summary"]["direct_flow_zero_diagnostic"]["runtime_effect"] is False
+    assert (
+        attribution["summary"]["direct_flow_zero_diagnostic"]["runtime_effect"] is False
+    )
     assert attribution["summary"]["join_contract_blocked"] is False
-    assert attribution["summary"]["stage_identity"]["entry"]["identity_quality_counts"] == {"entry_adm_bridge_key": 1}
+    assert attribution["summary"]["stage_identity"]["entry"][
+        "identity_quality_counts"
+    ] == {"entry_adm_bridge_key": 1}
     assert attribution["flows"][0]["identity_quality"] == "entry_adm_bridge_key"
-    assert attribution["flows"][0]["identity_closure_type"] == "adm_bridge_reconstructed"
+    assert (
+        attribution["flows"][0]["identity_closure_type"] == "adm_bridge_reconstructed"
+    )
     assert attribution["flows"][0]["reconstructed_flow_closed"] is True
-    assert attribution["flows"][0]["source_sim_record_ids"] == ["SCALPSIM-011500-1779926754335-f7e730"]
-    assert attribution["flows"][0]["source_entry_adm_candidate_ids"] == ["ADM-011500-8403-1779926754334-bea5a3"]
+    assert attribution["flows"][0]["source_sim_record_ids"] == [
+        "SCALPSIM-011500-1779926754335-f7e730"
+    ]
+    assert attribution["flows"][0]["source_entry_adm_candidate_ids"] == [
+        "ADM-011500-8403-1779926754334-bea5a3"
+    ]
     assert attribution["flows"][0]["stage_completion_state"] == "complete"
 
 
@@ -1815,8 +2011,12 @@ def test_lifecycle_flow_adm_bridge_does_not_rekey_non_adm_numeric_entry_sources(
     attribution = mod._lifecycle_flow_bucket_attribution(rows)
 
     assert attribution["summary"]["complete_flow_count"] == 0
-    assert attribution["summary"]["stage_identity"]["entry"]["identity_quality_counts"] == {"candidate_id": 1}
-    assert attribution["summary"]["stage_identity"]["submit"]["identity_quality_counts"] == {"entry_adm_bridge_key": 1}
+    assert attribution["summary"]["stage_identity"]["entry"][
+        "identity_quality_counts"
+    ] == {"candidate_id": 1}
+    assert attribution["summary"]["stage_identity"]["submit"][
+        "identity_quality_counts"
+    ] == {"entry_adm_bridge_key": 1}
 
 
 def test_lifecycle_flow_workorders_sample_incomplete_flows_after_complete_flows():
@@ -1858,8 +2058,7 @@ def test_lifecycle_flow_workorders_sample_incomplete_flows_after_complete_flows(
     assert attribution["summary"]["workorder_count"] == 20
     assert len(attribution["code_improvement_workorders"]) == 20
     assert all(
-        item["reason"] != "pass"
-        for item in attribution["code_improvement_workorders"]
+        item["reason"] != "pass" for item in attribution["code_improvement_workorders"]
     )
 
 
@@ -1881,7 +2080,10 @@ def test_lifecycle_flow_surfaces_identity_namespace_mismatch_when_required_stage
                 "event_time": f"2026-05-20T09:1{idx}:00+09:00",
                 "stage": stage,
                 "source_stage": stage,
-                "runtime_features": {"sim_record_id": "SIM-1", "broker_order_forbidden": True},
+                "runtime_features": {
+                    "sim_record_id": "SIM-1",
+                    "broker_order_forbidden": True,
+                },
                 "labels": {"profit_rate": 0.4},
                 "stage_ev_composite_pct": 0.4,
             }
@@ -1896,7 +2098,12 @@ def test_lifecycle_flow_surfaces_identity_namespace_mismatch_when_required_stage
     assert summary["join_contract_blocked"] is True
     assert summary["bundle_ev_tuning_state"] == "blocked_join_gap"
     assert summary["incomplete_flow_reason_counts"]["identity_namespace_mismatch"] == 1
-    assert summary["incomplete_flow_reason_counts"]["entry_candidate_id_to_sim_record_id_bridge_missing"] == 1
+    assert (
+        summary["incomplete_flow_reason_counts"][
+            "entry_candidate_id_to_sim_record_id_bridge_missing"
+        ]
+        == 1
+    )
     assert attribution["runtime_approval_candidates"] == []
 
 
@@ -1936,11 +2143,15 @@ def test_lifecycle_flow_bridge_key_can_complete_cross_namespace_flow():
     assert attribution["summary"]["adm_bridge_complete_flow_count"] == 1
     assert attribution["summary"]["join_contract_blocked"] is False
     assert attribution["flows"][0]["identity_quality"] == "lifecycle_flow_bridge_key"
-    assert attribution["flows"][0]["identity_closure_type"] == "adm_bridge_reconstructed"
+    assert (
+        attribution["flows"][0]["identity_closure_type"] == "adm_bridge_reconstructed"
+    )
     assert attribution["flows"][0]["stage_completion_state"] == "complete"
 
 
-def test_scalp_sim_panic_exit_rows_preserve_entry_adm_candidate_id(tmp_path, monkeypatch):
+def test_scalp_sim_panic_exit_rows_preserve_entry_adm_candidate_id(
+    tmp_path, monkeypatch
+):
     pipeline_dir = tmp_path / "pipeline_events"
     pipeline_dir.mkdir()
     event = {
@@ -1968,8 +2179,14 @@ def test_scalp_sim_panic_exit_rows_preserve_entry_adm_candidate_id(tmp_path, mon
 
     assert source["rows"] == 1
     assert rows[0]["stage"] == "exit"
-    assert rows[0]["runtime_features"]["entry_adm_candidate_id"] == "ADM-200710-17966-1783990546690-eb6804"
-    assert mod._row_flow_identity(rows[0]) == ("entry_adm_source:200710:17966", "entry_adm_bridge_key")
+    assert (
+        rows[0]["runtime_features"]["entry_adm_candidate_id"]
+        == "ADM-200710-17966-1783990546690-eb6804"
+    )
+    assert mod._row_flow_identity(rows[0]) == (
+        "entry_adm_source:200710:17966",
+        "entry_adm_bridge_key",
+    )
 
 
 def test_lifecycle_matrix_ingests_scalp_sim_scale_in_rows(tmp_path, monkeypatch):
@@ -2064,7 +2281,10 @@ def test_lifecycle_matrix_ingests_scalp_sim_scale_in_rows(tmp_path, monkeypatch)
     assert scale_rows[0]["labels"]["mfe_10m_pct"] == 1.2
     assert scale_rows[0]["labels"]["mae_10m_pct"] == -0.4
     assert report["sources"]["scalp_sim_scale_in"]["filled_events"] == 1
-    assert any(item["stage"] == "scale_in" and item["sample"] == 1 for item in report["policy_entries"])
+    assert any(
+        item["stage"] == "scale_in" and item["sample"] == 1
+        for item in report["policy_entries"]
+    )
 
 
 def test_lifecycle_matrix_joins_institutional_flow_features(tmp_path, monkeypatch):
@@ -2147,7 +2367,9 @@ def test_lifecycle_matrix_joins_institutional_flow_features(tmp_path, monkeypatc
     assert report["sources"]["institutional_flow_context"]["joined_rows"] == 1
 
 
-def test_lifecycle_matrix_keeps_panic_lifecycle_source_contract_and_euphoria_split(tmp_path, monkeypatch):
+def test_lifecycle_matrix_keeps_panic_lifecycle_source_contract_and_euphoria_split(
+    tmp_path, monkeypatch
+):
     matrix_dir = tmp_path / "matrix"
     entry_dir = tmp_path / "entry_adm"
     post_sell_dir = tmp_path / "post_sell"
@@ -2238,9 +2460,15 @@ def test_lifecycle_matrix_keeps_panic_lifecycle_source_contract_and_euphoria_spl
 
     report = mod.build_lifecycle_decision_matrix_report("2026-05-20")
 
-    rows = [row for row in report["examples"] if row["source"] == "scalp_sim_panic_pipeline_events"]
+    rows = [
+        row
+        for row in report["examples"]
+        if row["source"] == "scalp_sim_panic_pipeline_events"
+    ]
     assert len(rows) == 3
-    euphoria_row = next(row for row in rows if row["runtime_features"].get("euphoria_action_type"))
+    euphoria_row = next(
+        row for row in rows if row["runtime_features"].get("euphoria_action_type")
+    )
     features = euphoria_row["runtime_features"]
     assert features["source_family"] == "panic_lifecycle_actuator"
     assert features["family_type"] == "sim_lifecycle_source"
@@ -2248,7 +2476,9 @@ def test_lifecycle_matrix_keeps_panic_lifecycle_source_contract_and_euphoria_spl
     assert features["risk_context_owner"] == "euphoria"
     assert features["action_namespace"] == "euphoria_lifecycle"
     assert features["euphoria_action_type"] == "TAKE_PARTIAL_PROFIT_RUNNER"
-    noop_row = next(row for row in rows if row["runtime_features"].get("exclude_from_ev"))
+    noop_row = next(
+        row for row in rows if row["runtime_features"].get("exclude_from_ev")
+    )
     assert noop_row["stage_ev_composite_pct"] is None
     assert noop_row["outcome_joined"] is False
     assert mod._exit_bucket_features(noop_row) == {
@@ -2257,7 +2487,9 @@ def test_lifecycle_matrix_keeps_panic_lifecycle_source_contract_and_euphoria_spl
         "exit_outcome": "outcome_not_applicable_context_noop",
         "profit_band": "profit_not_applicable_context_noop",
     }
-    panic_noop = next(row for row in rows if row["source_stage"] == "scalp_sim_panic_context_warning")
+    panic_noop = next(
+        row for row in rows if row["source_stage"] == "scalp_sim_panic_context_warning"
+    )
     assert mod._exit_bucket_features(panic_noop) == {
         "exit_source_stage": "scalp_sim_panic_context_warning",
         "exit_rule": "scalp_sim_panic_context_warning_not_applicable",
@@ -2265,10 +2497,14 @@ def test_lifecycle_matrix_keeps_panic_lifecycle_source_contract_and_euphoria_spl
         "profit_band": "profit_not_applicable_context_noop",
     }
     exit_workorders = report["exit_bucket_attribution"]["code_improvement_workorders"]
-    assert all("context_noop" not in str(item.get("bucket_key")) for item in exit_workorders)
+    assert all(
+        "context_noop" not in str(item.get("bucket_key")) for item in exit_workorders
+    )
 
 
-def test_lifecycle_matrix_emits_entry_bucket_attribution_workorders(tmp_path, monkeypatch):
+def test_lifecycle_matrix_emits_entry_bucket_attribution_workorders(
+    tmp_path, monkeypatch
+):
     matrix_dir = tmp_path / "matrix"
     entry_dir = tmp_path / "entry_adm"
     post_sell_dir = tmp_path / "post_sell"
@@ -2342,13 +2578,17 @@ def test_lifecycle_matrix_emits_entry_bucket_attribution_workorders(tmp_path, mo
     report = mod.build_lifecycle_decision_matrix_report("2026-05-21")
 
     attribution = report["entry_bucket_attribution"]
-    assert attribution["decision_authority"] == "adm_ldm_entry_bucket_attribution_source_only"
+    assert (
+        attribution["decision_authority"]
+        == "adm_ldm_entry_bucket_attribution_source_only"
+    )
     assert attribution["summary"]["runtime_candidate_count"] >= 1
     assert attribution["summary"]["workorder_count"] >= 1
     stale_bucket = next(
         item
         for item in attribution["buckets"]
-        if item["bucket_type"] == "stale_bucket" and item["bucket_key"] == "stale_context_or_quote"
+        if item["bucket_type"] == "stale_bucket"
+        and item["bucket_key"] == "stale_context_or_quote"
     )
     assert stale_bucket["recommended_route"] == "candidate_tighten_or_exclude"
     assert stale_bucket["source_quality_adjusted_ev_pct"] < 0
@@ -2361,7 +2601,9 @@ def test_lifecycle_matrix_emits_entry_bucket_attribution_workorders(tmp_path, mo
     assert report["summary"]["entry_bucket_runtime_candidate_count"] >= 1
 
 
-def test_lifecycle_matrix_emits_scale_in_bucket_attribution_workorders(tmp_path, monkeypatch):
+def test_lifecycle_matrix_emits_scale_in_bucket_attribution_workorders(
+    tmp_path, monkeypatch
+):
     matrix_dir = tmp_path / "matrix"
     entry_dir = tmp_path / "entry_adm"
     post_sell_dir = tmp_path / "post_sell"
@@ -2413,18 +2655,25 @@ def test_lifecycle_matrix_emits_scale_in_bucket_attribution_workorders(tmp_path,
     report = mod.build_lifecycle_decision_matrix_report("2026-05-21")
 
     attribution = report["scale_in_bucket_attribution"]
-    assert attribution["decision_authority"] == "adm_ldm_scale_in_bucket_attribution_source_only"
+    assert (
+        attribution["decision_authority"]
+        == "adm_ldm_scale_in_bucket_attribution_source_only"
+    )
     assert attribution["summary"]["arm_counts"]["PYRAMID"] == 11
     assert attribution["summary"]["runtime_candidate_count"] == 0
     assert attribution["summary"]["workorder_count"] == 0
-    arm_bucket = next(item for item in attribution["buckets"] if item["bucket_type"] == "arm")
+    arm_bucket = next(
+        item for item in attribution["buckets"] if item["bucket_type"] == "arm"
+    )
     assert arm_bucket["bucket_key"] == "PYRAMID"
     assert arm_bucket["scale_in_ev_coverage_state"] == "legacy_only"
     assert arm_bucket["recommended_route"] == "hold_sample"
     assert report["summary"]["scale_in_bucket_runtime_candidate_count"] == 0
 
 
-def test_lifecycle_matrix_wait6579_rows_carry_runtime_bucket_fields(tmp_path, monkeypatch):
+def test_lifecycle_matrix_wait6579_rows_carry_runtime_bucket_fields(
+    tmp_path, monkeypatch
+):
     matrix_dir = tmp_path / "matrix"
     entry_dir = tmp_path / "entry_adm"
     post_sell_dir = tmp_path / "post_sell"
@@ -2490,7 +2739,10 @@ def test_lifecycle_matrix_wait6579_rows_carry_runtime_bucket_fields(tmp_path, mo
 
 
 def test_entry_strength_bucket_ignores_buy_pressure_without_aggressor_provenance():
-    assert mod._entry_strength_bucket_from_features({"buy_pressure": 90.0}) == "strength_proxy_unobserved"
+    assert (
+        mod._entry_strength_bucket_from_features({"buy_pressure": 90.0})
+        == "strength_proxy_unobserved"
+    )
     assert (
         mod._entry_strength_bucket_from_features(
             {"buy_pressure": 90.0, "tick_aggressor_trusted_count": 2}
@@ -2503,9 +2755,9 @@ def test_entry_strength_bucket_ignores_buy_pressure_without_aggressor_provenance
         )
         == "weak_strength_momentum"
     )
-    assert mod._entry_strength_bucket_from_features({"buy_pressure": 90.0, "tick_accel": 1.3}) == (
-        "strong_strength_momentum"
-    )
+    assert mod._entry_strength_bucket_from_features(
+        {"buy_pressure": 90.0, "tick_accel": 1.3}
+    ) == ("strong_strength_momentum")
 
 
 def test_lifecycle_matrix_backfills_scale_in_observation_fields(tmp_path, monkeypatch):
@@ -2558,10 +2810,15 @@ def test_lifecycle_matrix_backfills_scale_in_observation_fields(tmp_path, monkey
         assert features["scale_in_arm"] == "PYRAMID"
         assert features["scale_in_blocker_namespace"] == "PYRAMID"
         assert features["ai_score_source"] == "score_field_backfilled"
-        assert features["scale_in_field_provenance"]["arm"] == "backfilled_from_stage_or_action"
+        assert (
+            features["scale_in_field_provenance"]["arm"]
+            == "backfilled_from_stage_or_action"
+        )
 
 
-def test_lifecycle_matrix_emits_overnight_bucket_attribution_workorders(tmp_path, monkeypatch):
+def test_lifecycle_matrix_emits_overnight_bucket_attribution_workorders(
+    tmp_path, monkeypatch
+):
     matrix_dir = tmp_path / "matrix"
     entry_dir = tmp_path / "entry_adm"
     post_sell_dir = tmp_path / "post_sell"
@@ -2613,15 +2870,30 @@ def test_lifecycle_matrix_emits_overnight_bucket_attribution_workorders(tmp_path
     report = mod.build_lifecycle_decision_matrix_report("2026-05-21")
 
     attribution = report["overnight_bucket_attribution"]
-    assert attribution["decision_authority"] == "adm_ldm_overnight_bucket_attribution_source_only"
+    assert (
+        attribution["decision_authority"]
+        == "adm_ldm_overnight_bucket_attribution_source_only"
+    )
     assert attribution["implementation_status"] == "implemented"
     assert attribution["implementation_provenance"]["runtime_effect"] is False
     assert attribution["summary"]["status_counts"]["SELL_TODAY"] == 11
     assert attribution["summary"]["runtime_candidate_count"] >= 1
     assert attribution["summary"]["workorder_count"] >= 1
-    assert attribution["code_improvement_workorders"][0]["implementation_status"] == "implemented"
-    assert attribution["code_improvement_workorders"][0]["implementation_provenance"]["source_field_coverage"] == {}
-    action_bucket = next(item for item in attribution["buckets"] if item["bucket_type"] == "overnight_action")
+    assert (
+        attribution["code_improvement_workorders"][0]["implementation_status"]
+        == "implemented"
+    )
+    assert (
+        attribution["code_improvement_workorders"][0]["implementation_provenance"][
+            "source_field_coverage"
+        ]
+        == {}
+    )
+    action_bucket = next(
+        item
+        for item in attribution["buckets"]
+        if item["bucket_type"] == "overnight_action"
+    )
     assert action_bucket["bucket_key"] == "SELL_TODAY"
     assert action_bucket["recommended_route"] == "candidate_recovery_or_relax"
     assert report["summary"]["overnight_bucket_runtime_candidate_count"] >= 1
@@ -2670,14 +2942,25 @@ def test_lifecycle_flow_denominator_excludes_scale_in_noise_and_incomplete_seeds
     summary = attribution["summary"]
     assert summary["complete_flow_count"] == 0
     assert summary["scale_in_followup_event_count"] == 3
-    assert 0 <= summary["scale_in_unique_flow_count"] <= summary["scale_in_followup_event_count"]
+    assert (
+        0
+        <= summary["scale_in_unique_flow_count"]
+        <= summary["scale_in_followup_event_count"]
+    )
     assert summary["scale_in_noise_flow_count"] == 3
     assert summary.get("active_priority_incomplete_seed_count", 0) >= 0
     assert "denominator_exclusion_counts" in summary
-    assert summary.get("denominator_exclusion_counts", {}).get("scale_in_noise_flow_excluded", 0) == 3
+    assert (
+        summary.get("denominator_exclusion_counts", {}).get(
+            "scale_in_noise_flow_excluded", 0
+        )
+        == 3
+    )
     assert "conversion_blocker_reason_counts" in summary
     assert "observation_seed_reason_counts" in summary
-    assert "scale_in_noise_only" in str(summary.get("observation_seed_reason_counts", {}))
+    assert "scale_in_noise_only" in str(
+        summary.get("observation_seed_reason_counts", {})
+    )
     assert "complete_flow_conversion_denominator" in summary
     assert summary["incomplete_flow_reason_counts"].get("scale_in_noise_only", 0) == 3
 
