@@ -49,14 +49,22 @@ def test_resolver_uses_kiwoom_helpers_and_handles_token_error(monkeypatch):
         called.append(("ka10061", token, code, start_dt, end_dt))
         return {"foreign_net": 4, "inst_net": 6}
 
-    monkeypatch.setattr(mod.kiwoom_utils, "get_investor_flow_summary_ka10059", fake_daily)
-    monkeypatch.setattr(mod.kiwoom_utils, "get_investor_period_total_ka10061", fake_period)
+    monkeypatch.setattr(
+        mod.kiwoom_utils, "get_investor_flow_summary_ka10059", fake_daily
+    )
+    monkeypatch.setattr(
+        mod.kiwoom_utils, "get_investor_period_total_ka10061", fake_period
+    )
 
-    no_token = mod.resolve_institutional_flow_context("005930", token=None, target_date="2026-05-20")
+    no_token = mod.resolve_institutional_flow_context(
+        "005930", token=None, target_date="2026-05-20"
+    )
     assert no_token["institutional_flow_status"] == "TOKEN_ERROR"
     assert called == []
 
-    context = mod.resolve_institutional_flow_context("005930", token="T", target_date="2026-05-20")
+    context = mod.resolve_institutional_flow_context(
+        "005930", token="T", target_date="2026-05-20"
+    )
     assert context["institutional_flow_status"] == "OK"
     assert context["smart_money_net"] == 10
     assert [item[0] for item in called] == ["ka10059", "ka10061"]
@@ -81,13 +89,19 @@ def test_build_report_writes_artifact(tmp_path, monkeypatch):
         },
     )
 
-    report = mod.build_institutional_flow_context_report("2026-05-20", codes=["005930", "005930", "000660"])
+    report = mod.build_institutional_flow_context_report(
+        "2026-05-20", codes=["005930", "005930", "000660"]
+    )
 
     assert report["summary"]["row_count"] == 2
     assert report["summary"]["ok_count"] == 2
     assert report["runtime_effect"] is False
     assert (tmp_path / "institutional_flow_context_2026-05-20.json").exists()
-    payload = json.loads((tmp_path / "institutional_flow_context_2026-05-20.json").read_text(encoding="utf-8"))
+    payload = json.loads(
+        (tmp_path / "institutional_flow_context_2026-05-20.json").read_text(
+            encoding="utf-8"
+        )
+    )
     assert payload["rows"][0]["decision_authority"] == "source_only_lifecycle_feature"
 
 

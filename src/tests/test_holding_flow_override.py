@@ -84,7 +84,9 @@ def _trailing_continuation_micro_fields():
 
 
 def _enable_trailing_continuation_recheck(monkeypatch):
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_ENABLED", "true")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_ENABLED", "true"
+    )
     monkeypatch.setenv(
         "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_ACTIVE_DATE",
         "2026-07-15",
@@ -155,8 +157,12 @@ def test_holding_flow_ofi_prefers_micro_estimator_true_ofi(monkeypatch):
     assert stock["holding_flow_ofi_reason"] == "micro_estimator_true_ofi_primary"
 
 
-def test_holding_flow_ofi_falls_back_to_legacy_observer_without_micro_state(monkeypatch):
-    monkeypatch.setattr(handlers, "_SCALPING_MICRO_ESTIMATOR_STORE", handlers.MicroEstimatorStore())
+def test_holding_flow_ofi_falls_back_to_legacy_observer_without_micro_state(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        handlers, "_SCALPING_MICRO_ESTIMATOR_STORE", handlers.MicroEstimatorStore()
+    )
     monkeypatch.setattr(
         handlers,
         "_ofi_ai_smoothing_config",
@@ -272,7 +278,9 @@ def test_soft_stop_candidate_with_flow_hold_defers_sell(monkeypatch):
 
     assert proceed is False
     assert len(ai.calls) == 1
-    review = next(fields for stage, fields in logs if stage == "holding_flow_override_review")
+    review = next(
+        fields for stage, fields in logs if stage == "holding_flow_override_review"
+    )
     assert review["ai_model"] == "tier2-model"
     assert review["ai_model_tier"] == "tier2"
     assert review["ai_prompt_type"] == "holding_exit_flow"
@@ -316,8 +324,15 @@ def test_flow_exit_is_debounced_by_stable_bullish_ofi(monkeypatch):
         handlers,
         "_evaluate_holding_flow_ofi_state",
         lambda stock, code, *, curr_price, now_ts=None: (
-            {"ready": True, "micro_state": "bullish", "observer_healthy": True, "snapshot_age_ms": 100},
-            handlers.OfiSmoothingState(regime=handlers.OFI_STABLE_BULLISH, micro_score_smooth=0.62),
+            {
+                "ready": True,
+                "micro_state": "bullish",
+                "observer_healthy": True,
+                "snapshot_age_ms": 100,
+            },
+            handlers.OfiSmoothingState(
+                regime=handlers.OFI_STABLE_BULLISH, micro_score_smooth=0.62
+            ),
         ),
     )
     ai = DummyFlowAI("EXIT")
@@ -348,7 +363,8 @@ def test_flow_exit_is_debounced_by_stable_bullish_ofi(monkeypatch):
     assert stock["holding_flow_ofi_debounce_count"] == 1
     assert stock["holding_flow_ofi_debounce_exit_rule"] == "scalp_soft_stop_pct"
     assert any(
-        stage == "holding_flow_ofi_smoothing_applied" and fields.get("smoothing_action") == "DEBOUNCE_EXIT"
+        stage == "holding_flow_ofi_smoothing_applied"
+        and fields.get("smoothing_action") == "DEBOUNCE_EXIT"
         for stage, fields in logs
     )
     assert any(
@@ -365,8 +381,15 @@ def test_flow_exit_bullish_ofi_debounce_count_limit_allows_sell(monkeypatch):
         handlers,
         "_evaluate_holding_flow_ofi_state",
         lambda stock, code, *, curr_price, now_ts=None: (
-            {"ready": True, "micro_state": "bullish", "observer_healthy": True, "snapshot_age_ms": 100},
-            handlers.OfiSmoothingState(regime=handlers.OFI_STABLE_BULLISH, micro_score_smooth=0.62),
+            {
+                "ready": True,
+                "micro_state": "bullish",
+                "observer_healthy": True,
+                "snapshot_age_ms": 100,
+            },
+            handlers.OfiSmoothingState(
+                regime=handlers.OFI_STABLE_BULLISH, micro_score_smooth=0.62
+            ),
         ),
     )
     ai = DummyFlowAI("EXIT")
@@ -404,7 +427,8 @@ def test_flow_exit_bullish_ofi_debounce_count_limit_allows_sell(monkeypatch):
     no_change = next(
         fields
         for stage, fields in logs
-        if stage == "holding_flow_ofi_smoothing_applied" and fields.get("smoothing_action") == "NO_CHANGE"
+        if stage == "holding_flow_ofi_smoothing_applied"
+        and fields.get("smoothing_action") == "NO_CHANGE"
     )
     assert no_change["ofi_debounce_allowed"] is False
     assert no_change["ofi_debounce_reason"] == "count_limit_reached"
@@ -587,13 +611,15 @@ def test_stale_ws_force_exit_is_source_quality_guard_without_debounce(monkeypatc
     assert proceed is True
     assert ai.calls == []
     assert not any(
-        stage == "holding_flow_ofi_smoothing_applied" and fields.get("smoothing_action") == "DEBOUNCE_EXIT"
+        stage == "holding_flow_ofi_smoothing_applied"
+        and fields.get("smoothing_action") == "DEBOUNCE_EXIT"
         for stage, fields in logs
     )
     force_exit = next(
         fields
         for stage, fields in logs
-        if stage == "holding_flow_override_force_exit" and fields.get("force_reason") == "ws_stale"
+        if stage == "holding_flow_override_force_exit"
+        and fields.get("force_reason") == "ws_stale"
     )
     assert force_exit["ofi_force_exit_phase"] == "source_quality_guard"
     assert force_exit["ofi_debounce_prior"] is False
@@ -602,7 +628,11 @@ def test_stale_ws_force_exit_is_source_quality_guard_without_debounce(monkeypatc
 def test_no_recent_ticks_force_exit_is_source_quality_guard(monkeypatch):
     logs = []
     _patch_holding_context(monkeypatch, logs)
-    monkeypatch.setattr(handlers.kiwoom_utils, "get_tick_history_ka10003", lambda token, code, limit=30: [])
+    monkeypatch.setattr(
+        handlers.kiwoom_utils,
+        "get_tick_history_ka10003",
+        lambda token, code, limit=30: [],
+    )
     ai = DummyFlowAI("EXIT")
 
     proceed = handlers._evaluate_holding_flow_override(
@@ -629,7 +659,8 @@ def test_no_recent_ticks_force_exit_is_source_quality_guard(monkeypatch):
     force_exit = next(
         fields
         for stage, fields in logs
-        if stage == "holding_flow_override_force_exit" and fields.get("force_reason") == "no_recent_ticks"
+        if stage == "holding_flow_override_force_exit"
+        and fields.get("force_reason") == "no_recent_ticks"
     )
     assert force_exit["ofi_force_exit_phase"] == "source_quality_guard"
 
@@ -677,7 +708,8 @@ def test_parse_fail_force_exit_is_source_quality_guard(monkeypatch):
     force_exit = next(
         fields
         for stage, fields in logs
-        if stage == "holding_flow_override_force_exit" and fields.get("force_reason") == "parse_fail"
+        if stage == "holding_flow_override_force_exit"
+        and fields.get("force_reason") == "parse_fail"
     )
     assert force_exit["ofi_force_exit_phase"] == "source_quality_guard"
 
@@ -689,8 +721,15 @@ def test_flow_hold_is_confirmed_exit_by_stable_bearish_ofi_after_worsen(monkeypa
         handlers,
         "_evaluate_holding_flow_ofi_state",
         lambda stock, code, *, curr_price, now_ts=None: (
-            {"ready": True, "micro_state": "bearish", "observer_healthy": True, "snapshot_age_ms": 100},
-            handlers.OfiSmoothingState(regime=handlers.OFI_STABLE_BEARISH, micro_score_smooth=-0.62),
+            {
+                "ready": True,
+                "micro_state": "bearish",
+                "observer_healthy": True,
+                "snapshot_age_ms": 100,
+            },
+            handlers.OfiSmoothingState(
+                regime=handlers.OFI_STABLE_BEARISH, micro_score_smooth=-0.62
+            ),
         ),
     )
     ai = DummyFlowAI("HOLD")
@@ -722,11 +761,13 @@ def test_flow_hold_is_confirmed_exit_by_stable_bearish_ofi_after_worsen(monkeypa
 
     assert proceed is True
     assert any(
-        stage == "holding_flow_ofi_smoothing_applied" and fields.get("smoothing_action") == "CONFIRM_EXIT"
+        stage == "holding_flow_ofi_smoothing_applied"
+        and fields.get("smoothing_action") == "CONFIRM_EXIT"
         for stage, fields in logs
     )
     assert any(
-        stage == "holding_flow_override_exit_confirmed" and fields.get("confirm_reason") == "ofi_stable_bearish"
+        stage == "holding_flow_override_exit_confirmed"
+        and fields.get("confirm_reason") == "ofi_stable_bearish"
         for stage, fields in logs
     )
 
@@ -756,7 +797,11 @@ def test_low_score_flow_hold_is_not_cut_by_score_band(monkeypatch):
     )
 
     assert proceed is False
-    assert any(fields.get("flow_score") == 18 for stage, fields in logs if stage == "holding_flow_override_defer_exit")
+    assert any(
+        fields.get("flow_score") == 18
+        for stage, fields in logs
+        if stage == "holding_flow_override_defer_exit"
+    )
 
 
 def test_worsen_floor_stops_defer_and_allows_original_exit(monkeypatch):
@@ -794,14 +839,18 @@ def test_worsen_floor_stops_defer_and_allows_original_exit(monkeypatch):
     force_exit = next(
         fields
         for stage, fields in logs
-        if stage == "holding_flow_override_force_exit" and fields.get("force_reason") == "worsen_floor"
+        if stage == "holding_flow_override_force_exit"
+        and fields.get("force_reason") == "worsen_floor"
     )
     assert force_exit["metric_role"] == "safety_veto"
     assert force_exit["decision_authority"] == "holding_flow_override_safety_exit_guard"
     assert force_exit["window_policy"] == "same_day_intraday_events"
     assert force_exit["sample_floor"] == 1
     assert force_exit["primary_decision_metric"] == "source_quality_gate"
-    assert force_exit["source_quality_gate"] == "holding_flow_override_force_exit_contract_fields_present"
+    assert (
+        force_exit["source_quality_gate"]
+        == "holding_flow_override_force_exit_contract_fields_present"
+    )
     assert force_exit["runtime_effect"] is True
     assert force_exit["allowed_runtime_apply"] is False
     assert force_exit["actual_order_submitted"] is False
@@ -856,7 +905,9 @@ def test_holding_flow_state_change_review_bypasses_interval_once_enabled(monkeyp
 
     assert proceed is False
     assert len(ai.calls) == 1
-    assert any(stage == "holding_flow_state_change_review_triggered" for stage, _ in logs)
+    assert any(
+        stage == "holding_flow_state_change_review_triggered" for stage, _ in logs
+    )
     assert any(stage == "holding_flow_override_review" for stage, _ in logs)
 
 
@@ -907,7 +958,9 @@ def test_holding_flow_state_change_review_is_disabled_by_default(monkeypatch):
     assert proceed is False
     assert ai.calls == []
     assert any(stage == "holding_flow_override_defer_exit" for stage, _ in logs)
-    assert not any(stage == "holding_flow_state_change_review_triggered" for stage, _ in logs)
+    assert not any(
+        stage == "holding_flow_state_change_review_triggered" for stage, _ in logs
+    )
 
 
 def test_review_price_trigger_bypasses_min_interval_reuse(monkeypatch):
@@ -967,7 +1020,9 @@ def test_review_price_trigger_bypasses_min_interval_reuse(monkeypatch):
     )
 
 
-def test_trailing_peak_worsen_floor_allows_original_exit_without_flow_review(monkeypatch):
+def test_trailing_peak_worsen_floor_allows_original_exit_without_flow_review(
+    monkeypatch,
+):
     logs = []
     _patch_holding_context(monkeypatch, logs)
     ai = DummyFlowAI("HOLD")
@@ -1028,7 +1083,9 @@ def test_trailing_continuation_recheck_defers_only_fresh_supportive_shallow_prof
         "_scalping_micro_estimator_log_fields",
         lambda **kwargs: dict(micro_fields),
     )
-    now_ts = datetime(2026, 7, 15, 10, 0, tzinfo=timezone(timedelta(hours=9))).timestamp()
+    now_ts = datetime(
+        2026, 7, 15, 10, 0, tzinfo=timezone(timedelta(hours=9))
+    ).timestamp()
     stock = {
         **_stock(),
         "last_reversal_features": _fresh_reversal_features(),
@@ -1109,7 +1166,9 @@ def test_trailing_continuation_recheck_fails_closed_without_fresh_signed_tape_fe
         "_scalping_micro_estimator_log_fields",
         lambda **kwargs: _trailing_continuation_micro_fields(),
     )
-    now_ts = datetime(2026, 7, 15, 10, 0, tzinfo=timezone(timedelta(hours=9))).timestamp()
+    now_ts = datetime(
+        2026, 7, 15, 10, 0, tzinfo=timezone(timedelta(hours=9))
+    ).timestamp()
     stock = _stock()
     ai = DummyFlowAI("HOLD")
 
@@ -1157,7 +1216,9 @@ def test_trailing_continuation_recheck_rejects_rest_or_feature_only_micro_proven
         "_scalping_micro_estimator_log_fields",
         lambda **kwargs: micro_fields,
     )
-    now_ts = datetime(2026, 7, 15, 10, 0, tzinfo=timezone(timedelta(hours=9))).timestamp()
+    now_ts = datetime(
+        2026, 7, 15, 10, 0, tzinfo=timezone(timedelta(hours=9))
+    ).timestamp()
     stock = {**_stock(), "last_reversal_features": _fresh_reversal_features()}
 
     proceed = handlers._evaluate_holding_flow_override(
@@ -1188,8 +1249,12 @@ def test_trailing_continuation_recheck_clamps_negative_min_profit_to_positive_fl
     monkeypatch,
 ):
     _enable_trailing_continuation_recheck(monkeypatch)
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_MIN_PROFIT_PCT", "-1")
-    now_ts = datetime(2026, 7, 15, 10, 0, tzinfo=timezone(timedelta(hours=9))).timestamp()
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_MIN_PROFIT_PCT", "-1"
+    )
+    now_ts = datetime(
+        2026, 7, 15, 10, 0, tzinfo=timezone(timedelta(hours=9))
+    ).timestamp()
 
     config = handlers._scalp_trailing_continuation_recheck_config(now_ts)
 
@@ -1243,7 +1308,10 @@ def test_trailing_continuation_recheck_is_cleared_when_holding_candidate_changes
 
 
 def test_hard_stop_is_outside_holding_flow_override_scope():
-    assert handlers._holding_flow_override_applicable("SCALPING", "scalp_hard_stop_pct") is False
+    assert (
+        handlers._holding_flow_override_applicable("SCALPING", "scalp_hard_stop_pct")
+        is False
+    )
 
 
 def test_exit_decision_source_marks_holding_flow_override_when_candidate_exists():
@@ -1273,7 +1341,9 @@ def test_overnight_sell_today_flow_hold_flips_to_hold_overnight(monkeypatch):
     monkeypatch.setattr(
         overnight.kiwoom_utils,
         "get_minute_candles_ka10080",
-        lambda token, code, limit=60: [{"close": 10000, "high": 10050, "low": 9950, "volume": 1000}],
+        lambda token, code, limit=60: [
+            {"close": 10000, "high": 10050, "low": 9950, "volume": 1000}
+        ],
     )
     monkeypatch.setattr(
         overnight,
@@ -1316,7 +1386,9 @@ def test_overnight_sell_today_flow_trim_keeps_sell_today(monkeypatch):
     monkeypatch.setattr(
         overnight.kiwoom_utils,
         "get_minute_candles_ka10080",
-        lambda token, code, limit=60: [{"close": 9950, "high": 10050, "low": 9900, "volume": 1000}],
+        lambda token, code, limit=60: [
+            {"close": 9950, "high": 10050, "low": 9900, "volume": 1000}
+        ],
     )
     monkeypatch.setattr(
         overnight,
@@ -1360,6 +1432,21 @@ def test_overnight_flow_hold_reverts_between_1520_and_1530_on_worsen_floor():
         "overnight_flow_override_worsen_pct": 0.80,
     }
 
-    assert handlers._should_revert_overnight_flow_override_hold(stock, -0.70, dt_time(15, 25)) is True
-    assert handlers._should_revert_overnight_flow_override_hold(stock, -0.69, dt_time(15, 25)) is False
-    assert handlers._should_revert_overnight_flow_override_hold(stock, -0.80, dt_time(15, 30)) is False
+    assert (
+        handlers._should_revert_overnight_flow_override_hold(
+            stock, -0.70, dt_time(15, 25)
+        )
+        is True
+    )
+    assert (
+        handlers._should_revert_overnight_flow_override_hold(
+            stock, -0.69, dt_time(15, 25)
+        )
+        is False
+    )
+    assert (
+        handlers._should_revert_overnight_flow_override_hold(
+            stock, -0.80, dt_time(15, 30)
+        )
+        is False
+    )
