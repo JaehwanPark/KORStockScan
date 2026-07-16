@@ -126,7 +126,9 @@ def test_orderbook_micro_bucket_key_uses_explicit_not_available_provenance():
 
 
 def test_orderbook_micro_becomes_ready_after_min_samples_and_prunes_window():
-    observer = OrderbookStabilityObserver(window_sec=10, micro_window_sec=2, micro_z_min_samples=3)
+    observer = OrderbookStabilityObserver(
+        window_sec=10, micro_window_sec=2, micro_z_min_samples=3
+    )
     observer.record_quote(
         "123456",
         best_bid=10_000,
@@ -269,7 +271,10 @@ def test_orderbook_micro_bucket_manifest_can_override_thresholds():
     assert micro["ofi_threshold_source"] == "bucket"
     assert micro["ofi_threshold_manifest_id"] == "test_manifest"
     assert micro["ofi_threshold_manifest_version"] == "v1"
-    assert micro["ofi_threshold_bucket_key"] == "spread=tight|price=mid|depth=normal|sample=normal"
+    assert (
+        micro["ofi_threshold_bucket_key"]
+        == "spread=tight|price=mid|depth=normal|sample=normal"
+    )
     assert micro["ofi_bear_threshold"] == 999.0
     assert micro["micro_state"] == "bearish"
 

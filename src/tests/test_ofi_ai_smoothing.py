@@ -45,26 +45,43 @@ def test_ofi_ewma_persistence_and_hysteresis_release():
     assert second.regime == STABLE_BULLISH
     assert second.bullish_count == 2
 
-    still_bullish = evaluate_ofi_smoothing(_micro(ofi_z=0.3, qi_ewma=0.52, micro_state="neutral"), second, config=cfg)
+    still_bullish = evaluate_ofi_smoothing(
+        _micro(ofi_z=0.3, qi_ewma=0.52, micro_state="neutral"), second, config=cfg
+    )
     assert still_bullish.regime == STABLE_BULLISH
 
-    released = evaluate_ofi_smoothing(_micro(ofi_z=0.0, qi_ewma=0.50, micro_state="neutral"), still_bullish, config=cfg)
+    released = evaluate_ofi_smoothing(
+        _micro(ofi_z=0.0, qi_ewma=0.50, micro_state="neutral"),
+        still_bullish,
+        config=cfg,
+    )
     assert released.regime == NEUTRAL
 
 
 def test_ofi_bearish_persistence_and_entry_skip_demotion_guard():
     cfg = OfiSmoothingConfig(raw_weight=1.0, persistence_required=2)
-    first = evaluate_ofi_smoothing(_micro(ofi_z=-1.8, qi_ewma=0.38, micro_state="bearish"), config=cfg)
-    second = evaluate_ofi_smoothing(_micro(ofi_z=-1.8, qi_ewma=0.38, micro_state="bearish"), first, config=cfg)
+    first = evaluate_ofi_smoothing(
+        _micro(ofi_z=-1.8, qi_ewma=0.38, micro_state="bearish"), config=cfg
+    )
+    second = evaluate_ofi_smoothing(
+        _micro(ofi_z=-1.8, qi_ewma=0.38, micro_state="bearish"), first, config=cfg
+    )
 
     assert second.regime == STABLE_BEARISH
-    assert entry_skip_demotion_allowed(_micro(ofi_z=-1.8, qi_ewma=0.38, micro_state="bearish"), second) is False
+    assert (
+        entry_skip_demotion_allowed(
+            _micro(ofi_z=-1.8, qi_ewma=0.38, micro_state="bearish"), second
+        )
+        is False
+    )
 
 
 def test_ofi_invalid_inputs_are_not_recast_as_neutral_or_bearish():
     stale = evaluate_ofi_smoothing(_micro(snapshot_age_ms=701))
     unhealthy = evaluate_ofi_smoothing(_micro(observer_healthy=False))
-    insufficient = evaluate_ofi_smoothing(_micro(ready=False, reason="insufficient_samples"))
+    insufficient = evaluate_ofi_smoothing(
+        _micro(ready=False, reason="insufficient_samples")
+    )
 
     assert stale.regime == STALE
     assert unhealthy.regime == OBSERVER_UNHEALTHY
