@@ -9,7 +9,6 @@ from typing import Any
 
 from src.utils.constants import DATA_DIR, TRADING_RULES
 
-
 KST = timezone(timedelta(hours=9))
 FAMILY = "rising_missed_first_touch_avgdown_decision_gate"
 STAGE = "scale_in"
@@ -88,8 +87,12 @@ def _load_json(path: Path) -> dict[str, Any]:
 def _current_values() -> dict[str, Any]:
     return {
         "min_ai_support": float(TRADING_RULES.SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_SUPPORT),
-        "min_ai_moderate": float(TRADING_RULES.SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_MODERATE),
-        "min_prior_peak_pct": float(TRADING_RULES.SCALP_FIRST_TOUCH_AVGDOWN_MIN_PRIOR_PEAK_PCT),
+        "min_ai_moderate": float(
+            TRADING_RULES.SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_MODERATE
+        ),
+        "min_prior_peak_pct": float(
+            TRADING_RULES.SCALP_FIRST_TOUCH_AVGDOWN_MIN_PRIOR_PEAK_PCT
+        ),
         "max_repeated_blockers_without_support": int(
             TRADING_RULES.SCALP_FIRST_TOUCH_AVGDOWN_MAX_REPEATED_BLOCKERS_WITHOUT_SUPPORT
         ),
@@ -123,43 +126,71 @@ def _provenance_present(rows: list[dict[str, Any]]) -> bool:
 
 def _row_rates(rows: list[dict[str, Any]]) -> dict[str, Any]:
     sample_count = len(rows)
-    recovered = sum(1 for row in rows if row.get("first_touch_regression_label") == "first_touch_recovered_profit")
-    loss_or_flat = sum(1 for row in rows if row.get("first_touch_regression_label") == "first_touch_loss_or_flat")
-    label_counts = Counter(str(row.get("first_touch_regression_label") or "unknown") for row in rows)
+    recovered = sum(
+        1
+        for row in rows
+        if row.get("first_touch_regression_label") == "first_touch_recovered_profit"
+    )
+    loss_or_flat = sum(
+        1
+        for row in rows
+        if row.get("first_touch_regression_label") == "first_touch_loss_or_flat"
+    )
+    label_counts = Counter(
+        str(row.get("first_touch_regression_label") or "unknown") for row in rows
+    )
     return {
         "sample_count": sample_count,
         "recovered_count": recovered,
         "loss_or_flat_count": loss_or_flat,
         "recovered_rate": recovered / sample_count if sample_count else 0.0,
         "loss_or_flat_rate": loss_or_flat / sample_count if sample_count else 0.0,
-        "label_counts": [{"label": key, "count": value} for key, value in label_counts.most_common()],
+        "label_counts": [
+            {"label": key, "count": value} for key, value in label_counts.most_common()
+        ],
     }
 
 
-def _one_step_candidate_values(current: dict[str, Any], rates: dict[str, Any]) -> tuple[str, dict[str, Any], str]:
+def _one_step_candidate_values(
+    current: dict[str, Any], rates: dict[str, Any]
+) -> tuple[str, dict[str, Any], str]:
     recommended = dict(current)
     loss_rate = _safe_float(rates.get("loss_or_flat_rate"))
     recovered_rate = _safe_float(rates.get("recovered_rate"))
     if loss_rate >= 0.60:
-        recommended["min_ai_moderate"] = min(float(current["min_ai_moderate"]) + 5.0, 70.0)
+        recommended["min_ai_moderate"] = min(
+            float(current["min_ai_moderate"]) + 5.0, 70.0
+        )
         recommended["max_repeated_blockers_without_support"] = max(
             int(current["max_repeated_blockers_without_support"]) - 1,
             5,
         )
-        recommended["min_prior_peak_pct"] = min(float(current["min_prior_peak_pct"]) + 0.10, 0.60)
+        recommended["min_prior_peak_pct"] = min(
+            float(current["min_prior_peak_pct"]) + 0.10, 0.60
+        )
         recommended["low_ai_block"] = min(float(current["low_ai_block"]) + 5.0, 60.0)
-        recommended["max_spread_bps"] = max(float(current["max_spread_bps"]) - 10.0, 40.0)
+        recommended["max_spread_bps"] = max(
+            float(current["max_spread_bps"]) - 10.0, 40.0
+        )
         if loss_rate >= 0.75:
-            recommended["min_ai_support"] = min(float(current["min_ai_support"]) + 5.0, 80.0)
+            recommended["min_ai_support"] = min(
+                float(current["min_ai_support"]) + 5.0, 80.0
+            )
         return "adjust_up", recommended, "loss_cluster_tighten_one_step"
     if recovered_rate >= 0.65:
-        recommended["min_ai_moderate"] = max(float(current["min_ai_moderate"]) - 5.0, 55.0)
+        recommended["min_ai_moderate"] = max(
+            float(current["min_ai_moderate"]) - 5.0, 55.0
+        )
         recommended["max_repeated_blockers_without_support"] = min(
             int(current["max_repeated_blockers_without_support"]) + 1,
             10,
         )
-        recommended["min_prior_peak_pct"] = max(float(current["min_prior_peak_pct"]) - 0.10, 0.10)
-        recommended["max_spread_bps"] = min(float(current["max_spread_bps"]) + 10.0, 100.0)
+        recommended["min_prior_peak_pct"] = max(
+            float(current["min_prior_peak_pct"]) - 0.10, 0.10
+        )
+        recommended["max_spread_bps"] = min(
+            float(current["max_spread_bps"]) + 10.0, 100.0
+        )
         return "adjust_down", recommended, "recovery_cluster_loosen_one_step"
     return "hold", recommended, "mixed_cluster_hold"
 
@@ -173,7 +204,8 @@ def _calibration_candidate(
     rows = _closed_first_touch_rows(reports)
     rates = _row_rates(rows)
     source_quality_pass = bool(reports) and all(
-        ((report.get("source_quality") or {}).get("status") == "pass") for report in reports
+        ((report.get("source_quality") or {}).get("status") == "pass")
+        for report in reports
     )
     provenance_present = _provenance_present(rows)
     source_contract_pass = bool(source_quality_pass and provenance_present)
@@ -208,9 +240,15 @@ def _calibration_candidate(
         "sample_floor": 10,
         "allowed_runtime_apply": allowed,
         "safety_revert_required": False,
-        "source_quality_gate": "pass" if source_contract_pass else "source_quality_blocked",
+        "source_quality_gate": (
+            "pass" if source_contract_pass else "source_quality_blocked"
+        ),
         "source_quality_status": "pass" if source_contract_pass else "blocked",
-        "source_quality_blocked": None if source_contract_pass else ",".join(blockers) or "source_quality_or_provenance_not_pass",
+        "source_quality_blocked": (
+            None
+            if source_contract_pass
+            else ",".join(blockers) or "source_quality_or_provenance_not_pass"
+        ),
         "current_values": current,
         "recommended_values": recommended,
         "target_env_keys": TARGET_ENV_KEYS if allowed else [],
@@ -237,9 +275,15 @@ def build_report(
     generated_at: str | None = None,
 ) -> dict[str, Any]:
     generated_at = generated_at or datetime.now(KST).isoformat(timespec="seconds")
-    paths = input_paths if input_paths is not None else _iter_feedback_report_paths(target_date)
+    paths = (
+        input_paths
+        if input_paths is not None
+        else _iter_feedback_report_paths(target_date)
+    )
     reports = [_load_json(path) for path in paths if path.exists()]
-    candidate = _calibration_candidate(target_date=target_date, reports=reports, source_paths=paths)
+    candidate = _calibration_candidate(
+        target_date=target_date, reports=reports, source_paths=paths
+    )
     return {
         "schema_version": 1,
         "report_type": REPORT_TYPE,
@@ -261,7 +305,11 @@ def build_report(
             "forbidden_uses": FORBIDDEN_USES,
         },
         "source_quality": {
-            "status": "pass" if candidate["source_metrics"]["source_quality_pass"] else "blocked",
+            "status": (
+                "pass"
+                if candidate["source_metrics"]["source_quality_pass"]
+                else "blocked"
+            ),
             "input_report_count": len(reports),
             "input_paths": [str(path) for path in paths],
             "provenance_present": candidate["source_metrics"]["provenance_present"],
@@ -279,12 +327,21 @@ def build_report(
     }
 
 
-def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path) -> None:
+def write_outputs(
+    report: dict[str, Any], *, output_json: Path, output_md: Path
+) -> None:
     output_json.parent.mkdir(parents=True, exist_ok=True)
     output_md.parent.mkdir(parents=True, exist_ok=True)
-    output_json.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    output_json.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
-    candidate = report.get("calibration_candidate") if isinstance(report.get("calibration_candidate"), dict) else {}
+    candidate = (
+        report.get("calibration_candidate")
+        if isinstance(report.get("calibration_candidate"), dict)
+        else {}
+    )
     lines = [
         f"# {report.get('target_date')} Rising Missed First Touch Calibration",
         "",
@@ -314,7 +371,9 @@ def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path)
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build rising missed first-touch calibration candidate.")
+    parser = argparse.ArgumentParser(
+        description="Build rising missed first-touch calibration candidate."
+    )
     parser.add_argument("--target-date", default=datetime.now(KST).strftime("%Y-%m-%d"))
     parser.add_argument("--input-json", action="append", type=Path)
     parser.add_argument("--output-json", type=Path)
@@ -322,7 +381,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--generated-at")
     parser.add_argument("--print-summary", action="store_true")
     args = parser.parse_args(argv)
-    report = build_report(args.target_date, input_paths=args.input_json, generated_at=args.generated_at)
+    report = build_report(
+        args.target_date, input_paths=args.input_json, generated_at=args.generated_at
+    )
     default_json, default_md = _default_output_paths(args.target_date)
     output_json = args.output_json or default_json
     output_md = args.output_md or default_md
@@ -330,7 +391,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.print_summary:
         print(
             json.dumps(
-                {"output_json": str(output_json), "output_md": str(output_md), **report["summary"]},
+                {
+                    "output_json": str(output_json),
+                    "output_md": str(output_md),
+                    **report["summary"],
+                },
                 sort_keys=True,
             )
         )
