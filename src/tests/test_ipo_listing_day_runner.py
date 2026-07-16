@@ -53,7 +53,9 @@ def config(target):
     )
 
 
-def ws_snapshot(price=20_000, ask=20_000, bid=19_950, ask_volume=100, bid_volume=100, ts=1_000.0):
+def ws_snapshot(
+    price=20_000, ask=20_000, bid=19_950, ask_volume=100, bid_volume=100, ts=1_000.0
+):
     return {
         "curr": price,
         "last_ws_update_ts": ts,
@@ -161,7 +163,9 @@ def test_entry_gate_clamps_budget_to_five_million_cap(target):
 
 
 def test_entry_gate_blocks_premium_above_guard(target):
-    decision = ipo.evaluate_entry_gate(target, ws_snapshot(price=26_000, ask=26_000), now_ts=1_000.5)
+    decision = ipo.evaluate_entry_gate(
+        target, ws_snapshot(price=26_000, ask=26_000), now_ts=1_000.5
+    )
 
     assert not decision.allowed
     assert decision.reason == "premium_guard"
@@ -178,14 +182,18 @@ def test_entry_gate_blocks_depth_below_three_times_budget(target):
 
 
 def test_entry_gate_blocks_ai_risk_score(target):
-    decision = ipo.evaluate_entry_gate(target, ws_snapshot(), now_ts=1_000.5, ai_result={"risk_score": 80})
+    decision = ipo.evaluate_entry_gate(
+        target, ws_snapshot(), now_ts=1_000.5, ai_result={"risk_score": 80}
+    )
 
     assert not decision.allowed
     assert decision.reason == "ai_risk_block"
 
 
 def test_entry_gate_allows_fresh_liquid_non_overheated_quote(target):
-    decision = ipo.evaluate_entry_gate(target, ws_snapshot(), now_ts=1_000.5, ai_result={"risk_score": 79})
+    decision = ipo.evaluate_entry_gate(
+        target, ws_snapshot(), now_ts=1_000.5, ai_result={"risk_score": 79}
+    )
 
     assert decision.allowed
     assert decision.reason == "entry_allowed"
@@ -226,7 +234,10 @@ def test_twenty_percent_partial_tp_can_be_deferred_by_strong_ai(target):
         position,
         {"curr": 12_100},
         now_dt=datetime(2026, 5, 11, 9, 5, 0),
-        ai_result={"hold_confidence": 75, "continuation_reasons": ["order_flow", "orderbook"]},
+        ai_result={
+            "hold_confidence": 75,
+            "continuation_reasons": ["order_flow", "orderbook"],
+        },
     )
 
     assert not decision.allowed
@@ -246,7 +257,10 @@ def test_twenty_percent_partial_tp_sells_thirty_percent_without_strong_ai(target
         position,
         {"curr": 12_100},
         now_dt=datetime(2026, 5, 11, 9, 5, 0),
-        ai_result={"hold_confidence": 74, "continuation_reasons": ["order_flow", "orderbook"]},
+        ai_result={
+            "hold_confidence": 74,
+            "continuation_reasons": ["order_flow", "orderbook"],
+        },
     )
 
     assert decision.allowed
@@ -295,12 +309,16 @@ def test_max_hold_time_forces_exit(target):
     assert decision.reason == "max_hold_time"
 
 
-def test_engine_never_orders_outside_entry_window(monkeypatch, config, target, tmp_path):
+def test_engine_never_orders_outside_entry_window(
+    monkeypatch, config, target, tmp_path
+):
     monkeypatch.setattr(ipo, "is_buy_side_paused", lambda: False)
     monkeypatch.setattr(
         ipo.kiwoom_orders,
         "send_buy_order",
-        lambda *args, **kwargs: pytest.fail("real entry order must not be called outside entry window"),
+        lambda *args, **kwargs: pytest.fail(
+            "real entry order must not be called outside entry window"
+        ),
     )
     writer = ipo.IpoArtifactWriter(tmp_path, trade_date=config.trade_date)
     engine = ipo.IpoListingDayEngine(
@@ -312,13 +330,17 @@ def test_engine_never_orders_outside_entry_window(monkeypatch, config, target, t
         stop_file=tmp_path / "STOP",
     )
 
-    decision = engine.maybe_enter(target, ws_snapshot(), now_dt=datetime(2026, 5, 11, 8, 59, 59))
+    decision = engine.maybe_enter(
+        target, ws_snapshot(), now_dt=datetime(2026, 5, 11, 8, 59, 59)
+    )
 
     assert not decision.allowed
     assert decision.reason == "outside_entry_window"
 
 
-def test_engine_allows_one_retry_and_blocks_reentry(monkeypatch, config, target, tmp_path):
+def test_engine_allows_one_retry_and_blocks_reentry(
+    monkeypatch, config, target, tmp_path
+):
     monkeypatch.setattr(ipo, "is_buy_side_paused", lambda: False)
     calls = []
 
@@ -352,7 +374,9 @@ def test_engine_allows_one_retry_and_blocks_reentry(monkeypatch, config, target,
     assert second.reason == "reentry_blocked"
 
 
-def test_engine_kill_switch_blocks_new_order_after_stop_file(monkeypatch, config, target, tmp_path):
+def test_engine_kill_switch_blocks_new_order_after_stop_file(
+    monkeypatch, config, target, tmp_path
+):
     monkeypatch.setattr(ipo, "is_buy_side_paused", lambda: False)
     monkeypatch.setattr(
         ipo.kiwoom_orders,
@@ -370,7 +394,9 @@ def test_engine_kill_switch_blocks_new_order_after_stop_file(monkeypatch, config
         stop_file=stop_file,
     )
 
-    decision = engine.maybe_enter(target, ws_snapshot(), now_dt=datetime(2026, 5, 11, 9, 0, 1))
+    decision = engine.maybe_enter(
+        target, ws_snapshot(), now_dt=datetime(2026, 5, 11, 9, 0, 1)
+    )
 
     assert not decision.allowed
     assert decision.reason == "manual_stop_file"

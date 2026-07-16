@@ -67,8 +67,14 @@ def test_build_report_splits_subscription_stale_from_trade_tick_quiet(tmp_path):
                         "registered_items": ["000101", "000101_AL"],
                         "registered_item_quota_units": 2,
                         "registered_market_suffixes": ["", "_AL"],
-                        "registered_market_routes": ["krx_regular", "krx_nxt_integrated"],
-                        "registered_route_counts": {"krx_regular": 1, "krx_nxt_integrated": 1},
+                        "registered_market_routes": [
+                            "krx_regular",
+                            "krx_nxt_integrated",
+                        ],
+                        "registered_route_counts": {
+                            "krx_regular": 1,
+                            "krx_nxt_integrated": 1,
+                        },
                         "multi_route_registered": True,
                     },
                     {
@@ -118,14 +124,25 @@ def test_build_report_splits_subscription_stale_from_trade_tick_quiet(tmp_path):
         "_NX": 1,
     }
     assert report["snapshot_summary"]["multi_route_registered_count"] == 1
-    assert report["snapshot_summary"]["route_repair_policy"] == "remove_then_reg_required_for_route_transition"
-    assert report["snapshot_summary"]["top_multi_route_symbols"][0]["stock_code"] == "000101"
+    assert (
+        report["snapshot_summary"]["route_repair_policy"]
+        == "remove_then_reg_required_for_route_transition"
+    )
+    assert (
+        report["snapshot_summary"]["top_multi_route_symbols"][0]["stock_code"]
+        == "000101"
+    )
     order_ids = {item["order_id"] for item in report["workorder_directives"]}
     assert "order_ws_subscription_stale_repair_observability" in order_ids
     assert "order_ws_trade_tick_quiet_low_liquidity_classification" in order_ids
     assert "order_ws_total_stale_escalation" in order_ids
-    assert all(item["runtime_effect"] is False for item in report["workorder_directives"])
-    assert all(item["allowed_runtime_apply"] is False for item in report["workorder_directives"])
+    assert all(
+        item["runtime_effect"] is False for item in report["workorder_directives"]
+    )
+    assert all(
+        item["allowed_runtime_apply"] is False
+        for item in report["workorder_directives"]
+    )
 
 
 def test_build_report_surfaces_provider_none_as_separate_incident(tmp_path):
@@ -154,9 +171,9 @@ def test_build_report_surfaces_provider_none_as_separate_incident(tmp_path):
     assert report["pipeline_counts"]["provider_none"] == 1
     assert report["pipeline_counts"].get("both_ws_stale", 0) == 0
     assert report["workorder_summary"]["provider_none_incident_count"] == 1
-    assert {
-        item["order_id"] for item in report["workorder_directives"]
-    } == {"order_ai_provider_none_intraday_incident"}
+    assert {item["order_id"] for item in report["workorder_directives"]} == {
+        "order_ai_provider_none_intraday_incident"
+    }
 
 
 def test_write_report_outputs_monitor_and_workorder_files(tmp_path, monkeypatch):
@@ -181,7 +198,10 @@ def test_write_report_outputs_monitor_and_workorder_files(tmp_path, monkeypatch)
     assert workorder_json.exists()
     assert workorder_md.exists()
     payload = json.loads(workorder_json.read_text(encoding="utf-8"))
-    assert payload["metric_contract"]["decision_authority"] == "ws_freshness_intraday_monitor_source_only"
+    assert (
+        payload["metric_contract"]["decision_authority"]
+        == "ws_freshness_intraday_monitor_source_only"
+    )
     assert payload["summary"]["selected_order_count"] == 0
 
 
@@ -200,7 +220,9 @@ def test_write_report_monitor_only_skips_workorder_files(tmp_path, monkeypatch):
         "workorder_summary": {"selected_order_count": 0},
     }
 
-    monitor_json, monitor_md, workorder_json, workorder_md = mod.write_report(report, monitor_only=True)
+    monitor_json, monitor_md, workorder_json, workorder_md = mod.write_report(
+        report, monitor_only=True
+    )
 
     assert monitor_json.exists()
     assert monitor_md.exists()

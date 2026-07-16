@@ -98,7 +98,9 @@ def test_investor_margin_bd_api_returns_cache_payload(monkeypatch):
         },
     )
 
-    payload = app.test_client().get("/api/investor-margin?mode=bd_fbuy_accum_pre").get_json()
+    payload = (
+        app.test_client().get("/api/investor-margin?mode=bd_fbuy_accum_pre").get_json()
+    )
 
     assert payload["ok"] is True
     assert payload["mode"] == "bd_fbuy_accum_pre"

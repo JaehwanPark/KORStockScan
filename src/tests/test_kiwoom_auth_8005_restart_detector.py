@@ -82,7 +82,10 @@ class TestKiwoomAuth8005RestartDetector:
             log_file = log_dir / "kiwoom_orders_error.log"
             log_file.write_text("old ok\n", encoding="utf-8")
             self._write_state(log_file, restart_count=0, last_restart_ts=0)
-            _append(log_file, "[매수거절] 인증에 실패했습니다[8005:Token이 유효하지 않습니다]\n")
+            _append(
+                log_file,
+                "[매수거절] 인증에 실패했습니다[8005:Token이 유효하지 않습니다]\n",
+            )
 
             with _mock_logs_dir(log_dir):
                 result = KiwoomAuth8005RestartDetector(dry_run=True).check()
@@ -109,7 +112,9 @@ class TestKiwoomAuth8005RestartDetector:
         assert result.severity == "pass"
         assert not self._restart_flag_path.exists()
 
-    def test_cooldown_suppresses_duplicate_restart_but_invalidates_token_cache(self, monkeypatch):
+    def test_cooldown_suppresses_duplicate_restart_but_invalidates_token_cache(
+        self, monkeypatch
+    ):
         import src.engine.error_detectors.kiwoom_auth_8005_restart as detector_module
 
         invalidations = []
@@ -158,7 +163,9 @@ class TestKiwoomAuth8005RestartDetector:
         assert result.details["restart_count"] == 3
         assert result.details["restart_suppressed_by_daily_cap"] is False
 
-    def test_daily_restart_cap_suppresses_additional_restart_but_invalidates_cache(self, monkeypatch):
+    def test_daily_restart_cap_suppresses_additional_restart_but_invalidates_cache(
+        self, monkeypatch
+    ):
         import src.engine.error_detectors.kiwoom_auth_8005_restart as detector_module
 
         invalidations = []
@@ -192,7 +199,9 @@ class TestKiwoomAuth8005RestartDetector:
         def _raise(reason=""):
             raise RuntimeError("cache failure")
 
-        monkeypatch.setattr(detector_module.kiwoom_utils, "invalidate_kiwoom_token_cache", _raise)
+        monkeypatch.setattr(
+            detector_module.kiwoom_utils, "invalidate_kiwoom_token_cache", _raise
+        )
         with tempfile.TemporaryDirectory() as tmpdir:
             log_dir = Path(tmpdir)
             log_file = log_dir / "bot_history.log"
