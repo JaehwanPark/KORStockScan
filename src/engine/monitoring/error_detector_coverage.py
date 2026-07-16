@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-
 REQUIRED_CRON_JOB_IDS: set[str] = {
     "final_ensemble_scanner",
     "threshold_cycle_preopen",
@@ -99,5 +98,7 @@ def validate_detector_coverage(
     return {
         "missing_cron_jobs": sorted(REQUIRED_CRON_JOB_IDS - cron_ids),
         "missing_artifacts": sorted(REQUIRED_ARTIFACT_IDS - artifact_ids),
-        "missing_heartbeat_components": sorted(REQUIRED_HEARTBEAT_COMPONENTS - heartbeat_ids),
+        "missing_heartbeat_components": sorted(
+            REQUIRED_HEARTBEAT_COMPONENTS - heartbeat_ids
+        ),
     }
