@@ -19,7 +19,6 @@ from typing import Any, Callable
 
 from src.engine.log_archive_service import load_monitor_snapshot
 
-
 JsonDict = dict[str, Any]
 
 
@@ -52,13 +51,19 @@ def _trade_review_local_loader(target_date: str, since_time: str | None) -> Json
     )
 
 
-def _performance_tuning_local_loader(target_date: str, since_time: str | None) -> JsonDict:
+def _performance_tuning_local_loader(
+    target_date: str, since_time: str | None
+) -> JsonDict:
     snapshot = load_monitor_snapshot("performance_tuning", target_date)
     if snapshot is not None:
         return snapshot
-    from src.engine.sniper_performance_tuning_report import build_performance_tuning_report
+    from src.engine.sniper_performance_tuning_report import (
+        build_performance_tuning_report,
+    )
 
-    return build_performance_tuning_report(target_date=target_date, since_time=since_time)
+    return build_performance_tuning_report(
+        target_date=target_date, since_time=since_time
+    )
 
 
 def _post_sell_local_loader(target_date: str, since_time: str | None) -> JsonDict:
@@ -73,11 +78,17 @@ def _post_sell_local_loader(target_date: str, since_time: str | None) -> JsonDic
 def _entry_pipeline_local_loader(target_date: str, since_time: str | None) -> JsonDict:
     from src.engine.sniper_entry_pipeline_report import build_entry_pipeline_flow_report
 
-    return build_entry_pipeline_flow_report(target_date, since_time=since_time, top_n=10)
+    return build_entry_pipeline_flow_report(
+        target_date, since_time=since_time, top_n=10
+    )
 
 
-def _strategy_performance_local_loader(target_date: str, since_time: str | None) -> JsonDict:
-    from src.engine.strategy_position_performance_report import build_strategy_position_performance_report
+def _strategy_performance_local_loader(
+    target_date: str, since_time: str | None
+) -> JsonDict:
+    from src.engine.strategy_position_performance_report import (
+        build_strategy_position_performance_report,
+    )
 
     return build_strategy_position_performance_report(target_date)
 
@@ -121,27 +132,68 @@ SECTION_POLICIES: tuple[SectionPolicy, ...] = (
             MetricSpec("holding_reviews", ("metrics", "holding_reviews")),
             MetricSpec("holding_skips", ("metrics", "holding_skips")),
             MetricSpec("holding_skip_ratio", ("metrics", "holding_skip_ratio")),
-            MetricSpec("holding_ai_cache_hit_ratio", ("metrics", "holding_ai_cache_hit_ratio")),
+            MetricSpec(
+                "holding_ai_cache_hit_ratio", ("metrics", "holding_ai_cache_hit_ratio")
+            ),
             MetricSpec("holding_review_ms_avg", ("metrics", "holding_review_ms_avg")),
             MetricSpec("holding_review_ms_p95", ("metrics", "holding_review_ms_p95")),
-            MetricSpec("holding_skip_ws_age_p95", ("metrics", "holding_skip_ws_age_p95")),
+            MetricSpec(
+                "holding_skip_ws_age_p95", ("metrics", "holding_skip_ws_age_p95")
+            ),
             MetricSpec("gatekeeper_decisions", ("metrics", "gatekeeper_decisions")),
-            MetricSpec("gatekeeper_fast_reuse_ratio", ("metrics", "gatekeeper_fast_reuse_ratio")),
-            MetricSpec("gatekeeper_ai_cache_hit_ratio", ("metrics", "gatekeeper_ai_cache_hit_ratio")),
+            MetricSpec(
+                "gatekeeper_fast_reuse_ratio",
+                ("metrics", "gatekeeper_fast_reuse_ratio"),
+            ),
+            MetricSpec(
+                "gatekeeper_ai_cache_hit_ratio",
+                ("metrics", "gatekeeper_ai_cache_hit_ratio"),
+            ),
             MetricSpec("gatekeeper_eval_ms_avg", ("metrics", "gatekeeper_eval_ms_avg")),
             MetricSpec("gatekeeper_eval_ms_p95", ("metrics", "gatekeeper_eval_ms_p95")),
-            MetricSpec("gatekeeper_fast_reuse_ws_age_p95", ("metrics", "gatekeeper_fast_reuse_ws_age_p95")),
-            MetricSpec("gatekeeper_action_age_p95", ("metrics", "gatekeeper_action_age_p95")),
-            MetricSpec("gatekeeper_allow_entry_age_p95", ("metrics", "gatekeeper_allow_entry_age_p95")),
-            MetricSpec("gatekeeper_bypass_evaluation_samples", ("metrics", "gatekeeper_bypass_evaluation_samples")),
+            MetricSpec(
+                "gatekeeper_fast_reuse_ws_age_p95",
+                ("metrics", "gatekeeper_fast_reuse_ws_age_p95"),
+            ),
+            MetricSpec(
+                "gatekeeper_action_age_p95", ("metrics", "gatekeeper_action_age_p95")
+            ),
+            MetricSpec(
+                "gatekeeper_allow_entry_age_p95",
+                ("metrics", "gatekeeper_allow_entry_age_p95"),
+            ),
+            MetricSpec(
+                "gatekeeper_bypass_evaluation_samples",
+                ("metrics", "gatekeeper_bypass_evaluation_samples"),
+            ),
             MetricSpec("exit_signals", ("metrics", "exit_signals")),
-            MetricSpec("dual_persona_shadow_samples", ("metrics", "dual_persona_shadow_samples")),
-            MetricSpec("dual_persona_gatekeeper_samples", ("metrics", "dual_persona_gatekeeper_samples")),
-            MetricSpec("dual_persona_overnight_samples", ("metrics", "dual_persona_overnight_samples")),
-            MetricSpec("dual_persona_conflict_ratio", ("metrics", "dual_persona_conflict_ratio")),
-            MetricSpec("dual_persona_conservative_veto_ratio", ("metrics", "dual_persona_conservative_veto_ratio")),
-            MetricSpec("dual_persona_extra_ms_p95", ("metrics", "dual_persona_extra_ms_p95")),
-            MetricSpec("dual_persona_fused_override_ratio", ("metrics", "dual_persona_fused_override_ratio")),
+            MetricSpec(
+                "dual_persona_shadow_samples",
+                ("metrics", "dual_persona_shadow_samples"),
+            ),
+            MetricSpec(
+                "dual_persona_gatekeeper_samples",
+                ("metrics", "dual_persona_gatekeeper_samples"),
+            ),
+            MetricSpec(
+                "dual_persona_overnight_samples",
+                ("metrics", "dual_persona_overnight_samples"),
+            ),
+            MetricSpec(
+                "dual_persona_conflict_ratio",
+                ("metrics", "dual_persona_conflict_ratio"),
+            ),
+            MetricSpec(
+                "dual_persona_conservative_veto_ratio",
+                ("metrics", "dual_persona_conservative_veto_ratio"),
+            ),
+            MetricSpec(
+                "dual_persona_extra_ms_p95", ("metrics", "dual_persona_extra_ms_p95")
+            ),
+            MetricSpec(
+                "dual_persona_fused_override_ratio",
+                ("metrics", "dual_persona_fused_override_ratio"),
+            ),
         ),
     ),
     SectionPolicy(
@@ -210,7 +262,11 @@ def _safe_get(payload: Any, path: tuple[str, ...]) -> Any:
 
 
 def _is_number(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+    )
 
 
 def _fetch_json(url: str) -> JsonDict:
@@ -226,7 +282,9 @@ def _normalize_base_url(base_url: str) -> str:
     return str(base_url or "").rstrip("/")
 
 
-def _build_remote_url(base_url: str, template: str, *, target_date: str, since_time: str | None) -> str:
+def _build_remote_url(
+    base_url: str, template: str, *, target_date: str, since_time: str | None
+) -> str:
     resolved_since = urllib.parse.quote(since_time or "09:00:00", safe=":")
     return f"{_normalize_base_url(base_url)}{template.format(date=target_date, since=resolved_since)}"
 
@@ -251,7 +309,9 @@ def _summarize_named_counts(rows: Any, *, limit: int = 5) -> list[dict[str, Any]
             continue
         entry = {"name": str(name)}
         if _is_number(count):
-            entry["count"] = int(count) if float(count).is_integer() else round(float(count), 3)
+            entry["count"] = (
+                int(count) if float(count).is_integer() else round(float(count), 3)
+            )
         if _is_number(ratio):
             entry["ratio"] = round(float(ratio), 3)
         summary.append(entry)
@@ -278,7 +338,9 @@ def _summarize_watch_items(rows: Any, *, limit: int = 5) -> list[dict[str, Any]]
     return summary
 
 
-def _compare_metrics(local_payload: JsonDict, remote_payload: JsonDict, policy: SectionPolicy) -> list[dict[str, Any]]:
+def _compare_metrics(
+    local_payload: JsonDict, remote_payload: JsonDict, policy: SectionPolicy
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for spec in policy.safe_metrics:
         local_value = _safe_get(local_payload, spec.path)
@@ -289,7 +351,9 @@ def _compare_metrics(local_payload: JsonDict, remote_payload: JsonDict, policy: 
             "remote": remote_value,
         }
         if _is_number(local_value) and _is_number(remote_value):
-            row["delta_remote_minus_local"] = round(float(remote_value) - float(local_value), 4)
+            row["delta_remote_minus_local"] = round(
+                float(remote_value) - float(local_value), 4
+            )
         rows.append(row)
     return rows
 
@@ -313,7 +377,11 @@ def _build_section_result(
         result["status"] = "local_error"
         result["local_error"] = local_error
     if remote_error:
-        result["status"] = "remote_error" if result["status"] == "ok" else f"{result['status']}+remote_error"
+        result["status"] = (
+            "remote_error"
+            if result["status"] == "ok"
+            else f"{result['status']}+remote_error"
+        )
         result["remote_error"] = remote_error
     if local_payload is None or remote_payload is None:
         return result
@@ -321,13 +389,25 @@ def _build_section_result(
     result["safe_metric_rows"] = _compare_metrics(local_payload, remote_payload, policy)
 
     if policy.key == "entry_pipeline_flow":
-        result["distribution_refs"]["local_blocker_breakdown"] = _summarize_named_counts(local_payload.get("blocker_breakdown"))
-        result["distribution_refs"]["remote_blocker_breakdown"] = _summarize_named_counts(remote_payload.get("blocker_breakdown"))
-        result["distribution_refs"]["local_latest_stage_breakdown"] = _summarize_named_counts(local_payload.get("latest_stage_breakdown"))
-        result["distribution_refs"]["remote_latest_stage_breakdown"] = _summarize_named_counts(remote_payload.get("latest_stage_breakdown"))
+        result["distribution_refs"]["local_blocker_breakdown"] = (
+            _summarize_named_counts(local_payload.get("blocker_breakdown"))
+        )
+        result["distribution_refs"]["remote_blocker_breakdown"] = (
+            _summarize_named_counts(remote_payload.get("blocker_breakdown"))
+        )
+        result["distribution_refs"]["local_latest_stage_breakdown"] = (
+            _summarize_named_counts(local_payload.get("latest_stage_breakdown"))
+        )
+        result["distribution_refs"]["remote_latest_stage_breakdown"] = (
+            _summarize_named_counts(remote_payload.get("latest_stage_breakdown"))
+        )
     elif policy.key == "performance_tuning":
-        result["distribution_refs"]["local_watch_items"] = _summarize_watch_items(local_payload.get("watch_items"))
-        result["distribution_refs"]["remote_watch_items"] = _summarize_watch_items(remote_payload.get("watch_items"))
+        result["distribution_refs"]["local_watch_items"] = _summarize_watch_items(
+            local_payload.get("watch_items")
+        )
+        result["distribution_refs"]["remote_watch_items"] = _summarize_watch_items(
+            remote_payload.get("watch_items")
+        )
 
     return result
 
@@ -339,7 +419,12 @@ def compare_server_reports(
     since_time: str | None = "09:00:00",
     include_sections: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
-    selected = {item for item in (include_sections or tuple(policy.key for policy in SECTION_POLICIES))}
+    selected = {
+        item
+        for item in (
+            include_sections or tuple(policy.key for policy in SECTION_POLICIES)
+        )
+    }
     results: dict[str, Any] = {
         "date": target_date,
         "remote_base_url": _normalize_base_url(remote_base_url),
@@ -441,8 +526,15 @@ def build_snapshot_summary(comparison: dict[str, Any]) -> dict[str, Any]:
     sections = comparison.get("sections") or {}
     for section_key, section in sections.items():
         safe_rows = list(section.get("safe_metric_rows") or [])
-        differing_rows = [row for row in safe_rows if row.get("delta_remote_minus_local") not in (None, 0, 0.0)]
-        differing_rows.sort(key=lambda row: abs(float(row.get("delta_remote_minus_local") or 0.0)), reverse=True)
+        differing_rows = [
+            row
+            for row in safe_rows
+            if row.get("delta_remote_minus_local") not in (None, 0, 0.0)
+        ]
+        differing_rows.sort(
+            key=lambda row: abs(float(row.get("delta_remote_minus_local") or 0.0)),
+            reverse=True,
+        )
         top_diffs = [
             {
                 "label": row.get("label"),
@@ -498,14 +590,18 @@ def render_checklist_append_block(
             )
         else:
             diff_text = "safe 기준 차이 없음"
-        lines.append(f"- `{label}`: status=`{status}`, differing_safe_metrics=`{diff_count}`")
+        lines.append(
+            f"- `{label}`: status=`{status}`, differing_safe_metrics=`{diff_count}`"
+        )
         lines.append(f"  - {diff_text}")
     lines.append("")
     return "\n".join(lines)
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Compare local KORStockScan reports with a remote server.")
+    parser = argparse.ArgumentParser(
+        description="Compare local KORStockScan reports with a remote server."
+    )
     parser.add_argument("--date", required=True, help="Target date in YYYY-MM-DD")
     parser.add_argument(
         "--remote-base-url",

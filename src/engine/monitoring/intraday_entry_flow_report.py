@@ -8,7 +8,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 ENTRY_PIPELINE = "ENTRY_PIPELINE"
 KST = timezone(timedelta(hours=9))
@@ -94,7 +93,14 @@ def _field(fields: dict[str, Any], key: str, default: str = "") -> str:
 
 
 def _reason(fields: dict[str, Any]) -> str:
-    for key in ("reason", "skip_reason", "blocked_reason", "eviction_reason", "terminal_reason", "entry_submit_revalidation_warning"):
+    for key in (
+        "reason",
+        "skip_reason",
+        "blocked_reason",
+        "eviction_reason",
+        "terminal_reason",
+        "entry_submit_revalidation_warning",
+    ):
         value = _field(fields, key)
         if value:
             return value
@@ -107,17 +113,29 @@ def _boolish(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def _is_rising_missed_forced_one_share_entry(stage: str, fields: dict[str, Any]) -> bool:
+def _is_rising_missed_forced_one_share_entry(
+    stage: str, fields: dict[str, Any]
+) -> bool:
     reason = str(fields.get("forced_entry_reason") or "").strip()
     forced = _boolish(fields.get("rising_missed_one_share_entry_forced"))
     qty = _safe_float(fields.get("forced_entry_qty"))
     forced_scout_qty_or_missing = qty is None or qty > 0.0
     stage_forced = stage in RISING_MISSED_FORCED_ENTRY_STAGES
-    return forced_scout_qty_or_missing and (stage_forced or reason == RISING_MISSED_FORCED_ENTRY_REASON or forced)
+    return forced_scout_qty_or_missing and (
+        stage_forced or reason == RISING_MISSED_FORCED_ENTRY_REASON or forced
+    )
 
 
 def _forced_lineage_qty_present(fields: dict[str, Any]) -> bool:
-    for key in ("forced_entry_qty", "order_requested_qty", "order_quantity", "quantity", "qty", "fill_qty", "order_filled_qty"):
+    for key in (
+        "forced_entry_qty",
+        "order_requested_qty",
+        "order_quantity",
+        "quantity",
+        "qty",
+        "fill_qty",
+        "order_filled_qty",
+    ):
         value = _safe_float(fields.get(key))
         if value is not None and value > 0.0:
             return True
@@ -138,8 +156,14 @@ def _is_rising_missed_forced_lineage_row(
         return False
     fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
     stage = str(row.get("stage") or "")
-    actual_submitted = str(fields.get("actual_order_submitted") or "").strip().lower() == "true"
-    return stage in RISING_MISSED_FORCED_LINEAGE_STAGES or actual_submitted or _forced_lineage_qty_present(fields)
+    actual_submitted = (
+        str(fields.get("actual_order_submitted") or "").strip().lower() == "true"
+    )
+    return (
+        stage in RISING_MISSED_FORCED_LINEAGE_STAGES
+        or actual_submitted
+        or _forced_lineage_qty_present(fields)
+    )
 
 
 def _fresh_refresh_age_ms(fields: dict[str, Any]) -> float | None:
@@ -180,7 +204,9 @@ def _fresh_refresh_age_ms(fields: dict[str, Any]) -> float | None:
     return None
 
 
-def _stale_eval_category(stage: str, reason: str, fields: dict[str, Any], quote_age_ms: float | None) -> str:
+def _stale_eval_category(
+    stage: str, reason: str, fields: dict[str, Any], quote_age_ms: float | None
+) -> str:
     refresh_age_ms = _fresh_refresh_age_ms(fields)
     if refresh_age_ms is not None and refresh_age_ms <= STALE_EVAL_QUOTE_AGE_MS:
         return "fresh_refresh_recovered"
@@ -197,7 +223,9 @@ def _stale_eval_category(stage: str, reason: str, fields: dict[str, Any], quote_
 
 
 def _latency_danger_cause(fields: dict[str, Any]) -> str:
-    reason_text = str(fields.get("latency_danger_reasons") or fields.get("latency_reason") or "").lower()
+    reason_text = str(
+        fields.get("latency_danger_reasons") or fields.get("latency_reason") or ""
+    ).lower()
     stale_values = (
         fields.get("pre_submit_effective_quote_stale"),
         fields.get("quote_stale_at_submit"),
@@ -207,11 +235,18 @@ def _latency_danger_cause(fields: dict[str, Any]) -> str:
         return "quote_stale"
     if "spread_too_wide" in reason_text:
         return "spread_too_wide"
-    spread_ratio = _safe_float(fields.get("spread_ratio") or fields.get("pre_submit_quote_refresh_spread_ratio"))
+    spread_ratio = _safe_float(
+        fields.get("spread_ratio")
+        or fields.get("pre_submit_quote_refresh_spread_ratio")
+    )
     if spread_ratio is not None and spread_ratio > LATENCY_DANGER_SPREAD_RATIO_CAP:
         return "spread_too_wide"
     spread_ticks = _safe_float(fields.get("orderbook_micro_spread_ticks"))
-    bucket = str(fields.get("orderbook_micro_ofi_bucket_key") or fields.get("orderbook_micro_calibration_bucket") or "")
+    bucket = str(
+        fields.get("orderbook_micro_ofi_bucket_key")
+        or fields.get("orderbook_micro_calibration_bucket")
+        or ""
+    )
     if (spread_ticks is not None and spread_ticks >= 5.0) or "spread=wide" in bucket:
         return "spread_microstructure_wide"
     ws_age_ms = _safe_float(
@@ -219,23 +254,34 @@ def _latency_danger_cause(fields: dict[str, Any]) -> str:
         or fields.get("pre_submit_effective_quote_age_ms")
         or fields.get("pre_submit_ws_snapshot_refresh_age_ms")
     )
-    if (ws_age_ms is not None and ws_age_ms > LATENCY_DANGER_WS_AGE_MS_CAP) or "ws_age_too_high" in reason_text:
+    if (
+        ws_age_ms is not None and ws_age_ms > LATENCY_DANGER_WS_AGE_MS_CAP
+    ) or "ws_age_too_high" in reason_text:
         return "ws_age_too_high"
     return "other_danger"
 
 
 def _latency_danger_event(fields: dict[str, Any]) -> dict[str, Any]:
-    cause = str(fields.get("latency_root_cause") or "").strip() or _latency_danger_cause(fields)
+    cause = str(
+        fields.get("latency_root_cause") or ""
+    ).strip() or _latency_danger_cause(fields)
     return {
         "cause": cause,
-        "spread_ratio": _safe_float(fields.get("spread_ratio") or fields.get("pre_submit_quote_refresh_spread_ratio")),
+        "spread_ratio": _safe_float(
+            fields.get("spread_ratio")
+            or fields.get("pre_submit_quote_refresh_spread_ratio")
+        ),
         "ws_age_ms": _safe_float(
             fields.get("ws_age_ms")
             or fields.get("pre_submit_effective_quote_age_ms")
             or fields.get("pre_submit_ws_snapshot_refresh_age_ms")
         ),
-        "spread_ticks": _safe_float(fields.get("orderbook_micro_spread_ticks") or fields.get("spread_ticks")),
-        "micro_state": str(fields.get("orderbook_micro_state") or fields.get("micro_state") or ""),
+        "spread_ticks": _safe_float(
+            fields.get("orderbook_micro_spread_ticks") or fields.get("spread_ticks")
+        ),
+        "micro_state": str(
+            fields.get("orderbook_micro_state") or fields.get("micro_state") or ""
+        ),
         "ofi_bucket": str(
             fields.get("orderbook_micro_ofi_bucket_key")
             or fields.get("orderbook_micro_calibration_bucket")
@@ -246,10 +292,17 @@ def _latency_danger_event(fields: dict[str, Any]) -> dict[str, Any]:
 
 
 def _record_id(row: dict[str, Any], fields: dict[str, Any]) -> str:
-    return str(row.get("record_id") or fields.get("record_id") or fields.get("runtime_record_id") or "").strip()
+    return str(
+        row.get("record_id")
+        or fields.get("record_id")
+        or fields.get("runtime_record_id")
+        or ""
+    ).strip()
 
 
-def _is_rising_missed_event_lineage(row: dict[str, Any], fields: dict[str, Any]) -> bool:
+def _is_rising_missed_event_lineage(
+    row: dict[str, Any], fields: dict[str, Any]
+) -> bool:
     stage = str(row.get("stage") or "")
     if _is_rising_missed_forced_one_share_entry(stage, fields):
         return True
@@ -269,13 +322,21 @@ def _is_rising_missed_event_lineage(row: dict[str, Any], fields: dict[str, Any])
 
 
 def _reason_matches(fields: dict[str, Any], reason: str) -> bool:
-    for key in ("reason", "block_reason", "blocked_reason", "policy_reason", "effective_reason"):
+    for key in (
+        "reason",
+        "block_reason",
+        "blocked_reason",
+        "policy_reason",
+        "effective_reason",
+    ):
         if str(fields.get(key) or "").strip() == reason:
             return True
     return False
 
 
-def _bucket(value: float | None, bounds: tuple[float, ...], labels: tuple[str, ...]) -> str:
+def _bucket(
+    value: float | None, bounds: tuple[float, ...], labels: tuple[str, ...]
+) -> str:
     if value is None:
         return "missing"
     for bound, label in zip(bounds, labels, strict=False):
@@ -284,21 +345,42 @@ def _bucket(value: float | None, bounds: tuple[float, ...], labels: tuple[str, .
     return labels[-1] if labels else "present"
 
 
-def _compact_counts(counter: Counter[str], *, limit: int = 12, key_name: str = "key") -> list[dict[str, Any]]:
-    return [{key_name: key or "-", "count": count} for key, count in counter.most_common(limit)]
+def _compact_counts(
+    counter: Counter[str], *, limit: int = 12, key_name: str = "key"
+) -> list[dict[str, Any]]:
+    return [
+        {key_name: key or "-", "count": count}
+        for key, count in counter.most_common(limit)
+    ]
 
 
 def _stale_weak_components(fields: dict[str, Any]) -> dict[str, bool]:
-    quote_age = _safe_float(fields.get("rising_missed_scout_quality_guard_quote_age_ms"))
-    max_quote_age = _safe_float(fields.get("rising_missed_scout_quality_guard_max_quote_age_ms"))
+    quote_age = _safe_float(
+        fields.get("rising_missed_scout_quality_guard_quote_age_ms")
+    )
+    max_quote_age = _safe_float(
+        fields.get("rising_missed_scout_quality_guard_max_quote_age_ms")
+    )
     return {
-        "quote_stale": _boolish(fields.get("rising_missed_scout_quality_guard_quote_stale")),
-        "quote_age_stale": quote_age is not None and max_quote_age is not None and quote_age > max_quote_age,
-        "explicit_quote_stale": _boolish(fields.get("rising_missed_scout_quality_guard_explicit_quote_stale")),
-        "text_quote_stale": _boolish(fields.get("rising_missed_scout_quality_guard_text_quote_stale")),
+        "quote_stale": _boolish(
+            fields.get("rising_missed_scout_quality_guard_quote_stale")
+        ),
+        "quote_age_stale": quote_age is not None
+        and max_quote_age is not None
+        and quote_age > max_quote_age,
+        "explicit_quote_stale": _boolish(
+            fields.get("rising_missed_scout_quality_guard_explicit_quote_stale")
+        ),
+        "text_quote_stale": _boolish(
+            fields.get("rising_missed_scout_quality_guard_text_quote_stale")
+        ),
         "weak_ai": _boolish(fields.get("rising_missed_scout_quality_guard_weak_ai")),
-        "ai_unusable": _boolish(fields.get("rising_missed_scout_quality_guard_ai_unusable")),
-        "weak_strength": _boolish(fields.get("rising_missed_scout_quality_guard_weak_strength")),
+        "ai_unusable": _boolish(
+            fields.get("rising_missed_scout_quality_guard_ai_unusable")
+        ),
+        "weak_strength": _boolish(
+            fields.get("rising_missed_scout_quality_guard_weak_strength")
+        ),
         "recent_weak_ai_micro_block": _boolish(
             fields.get("rising_missed_scout_quality_guard_recent_weak_ai_micro_block")
         ),
@@ -306,7 +388,9 @@ def _stale_weak_components(fields: dict[str, Any]) -> dict[str, bool]:
             fields.get("rising_missed_scout_quality_guard_ai_provenance_missing")
         ),
         "ai_score_defaulted_without_action": _boolish(
-            fields.get("rising_missed_scout_quality_guard_ai_score_defaulted_without_action")
+            fields.get(
+                "rising_missed_scout_quality_guard_ai_score_defaulted_without_action"
+            )
         ),
     }
 
@@ -325,28 +409,44 @@ def _stale_weak_quote_age_bucket(quote_age_ms: float | None) -> str:
     return "severe_20s_plus"
 
 
-def _stale_weak_ai_source_bucket(fields: dict[str, Any], components: dict[str, bool]) -> str:
-    action = str(fields.get("rising_missed_scout_quality_guard_ai_action") or "-").strip().upper()
+def _stale_weak_ai_source_bucket(
+    fields: dict[str, Any], components: dict[str, bool]
+) -> str:
+    action = (
+        str(fields.get("rising_missed_scout_quality_guard_ai_action") or "-")
+        .strip()
+        .upper()
+    )
     ai_score = _safe_float(fields.get("rising_missed_scout_quality_guard_ai_score"))
-    action_source = str(
-        fields.get("rising_missed_entry_ai_action_source")
-        or fields.get("entry_ai_action_source")
-        or fields.get("rising_missed_scout_quality_guard_ai_action_source")
-        or ""
-    ).strip().lower()
+    action_source = (
+        str(
+            fields.get("rising_missed_entry_ai_action_source")
+            or fields.get("entry_ai_action_source")
+            or fields.get("rising_missed_scout_quality_guard_ai_action_source")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
     if action == "DROP":
         return "ai_drop"
     if components.get("ai_unusable"):
         return "ai_unusable"
     if components.get("ai_provenance_missing"):
         return "ai_provenance_missing"
-    if action in {"", "-"} and ai_score is not None and ai_score <= 50.0 and action_source in {
-        "",
-        "-",
-        "missing",
-        "none",
-        "null",
-    }:
+    if (
+        action in {"", "-"}
+        and ai_score is not None
+        and ai_score <= 50.0
+        and action_source
+        in {
+            "",
+            "-",
+            "missing",
+            "none",
+            "null",
+        }
+    ):
         return "ai_missing_default50"
     if components.get("weak_ai"):
         return "ai_weak_score"
@@ -370,17 +470,27 @@ def _summarize_stale_candidate_group(
 ) -> dict[str, Any]:
     return {
         "stock_code": code,
-        "stock_name": group.get("stock_name") or (report_row or {}).get("stock_name") or "",
+        "stock_name": group.get("stock_name")
+        or (report_row or {}).get("stock_name")
+        or "",
         "event_count": int(group.get("event_count") or 0),
         "record_count": len(group.get("records") or set()),
-        "max_delta_since_first_seen_pct": (report_row or {}).get("max_delta_since_first_seen_pct"),
+        "max_delta_since_first_seen_pct": (report_row or {}).get(
+            "max_delta_since_first_seen_pct"
+        ),
         "rise_after_watch": (report_row or {}).get("rise_after_watch") or "unknown",
         "main_blocker": _main_blocker_label(report_row),
         "quote_age_ms": _metric_summary(group.get("quote_ages") or []),
         "quote_age_over_max_ms": _metric_summary(group.get("quote_age_over_max") or []),
-        "quote_age_bucket_counts": _compact_counts(group.get("age_buckets") or Counter(), key_name="bucket"),
-        "ai_source_bucket_counts": _compact_counts(group.get("ai_source_buckets") or Counter(), key_name="bucket"),
-        "ai_action_counts": _compact_counts(group.get("ai_actions") or Counter(), key_name="action"),
+        "quote_age_bucket_counts": _compact_counts(
+            group.get("age_buckets") or Counter(), key_name="bucket"
+        ),
+        "ai_source_bucket_counts": _compact_counts(
+            group.get("ai_source_buckets") or Counter(), key_name="bucket"
+        ),
+        "ai_action_counts": _compact_counts(
+            group.get("ai_actions") or Counter(), key_name="action"
+        ),
         "next_action": next_action,
         "decision_authority": "source_only_recheck_candidate",
         "runtime_effect": False,
@@ -435,7 +545,9 @@ def _summarize_stale_weak_events(
         if code:
             symbols.add(code)
             group = grouped_by_code[code]
-            group["stock_name"] = str(row.get("stock_name") or fields.get("stock_name") or group["stock_name"])
+            group["stock_name"] = str(
+                row.get("stock_name") or fields.get("stock_name") or group["stock_name"]
+            )
             group["event_count"] += 1
         else:
             group = None
@@ -448,20 +560,36 @@ def _summarize_stale_weak_events(
         for key, enabled in components.items():
             if enabled:
                 component_counts[key] += 1
-        combo = "+".join(key for key, enabled in components.items() if enabled) or "no_component_flag"
+        combo = (
+            "+".join(key for key, enabled in components.items() if enabled)
+            or "no_component_flag"
+        )
         combo_counts[combo] += 1
-        ai_action = str(fields.get("rising_missed_scout_quality_guard_ai_action") or "-")
+        ai_action = str(
+            fields.get("rising_missed_scout_quality_guard_ai_action") or "-"
+        )
         ai_action_counts[ai_action] += 1
         ai_source_bucket = _stale_weak_ai_source_bucket(fields, components)
         ai_source_bucket_counts[ai_source_bucket] += 1
-        strength_state_counts[str(fields.get("rising_missed_scout_quality_guard_strength_state") or "-")] += 1
-        prior_micro_state_counts[str(fields.get("rising_missed_scout_quality_guard_prior_weak_micro_state") or "-")] += 1
-        quote_age = _safe_float(fields.get("rising_missed_scout_quality_guard_quote_age_ms"))
+        strength_state_counts[
+            str(fields.get("rising_missed_scout_quality_guard_strength_state") or "-")
+        ] += 1
+        prior_micro_state_counts[
+            str(
+                fields.get("rising_missed_scout_quality_guard_prior_weak_micro_state")
+                or "-"
+            )
+        ] += 1
+        quote_age = _safe_float(
+            fields.get("rising_missed_scout_quality_guard_quote_age_ms")
+        )
         if quote_age is not None:
             quote_ages.append(quote_age)
         quote_age_bucket = _stale_weak_quote_age_bucket(quote_age)
         quote_age_bucket_counts[quote_age_bucket] += 1
-        max_quote_age = _safe_float(fields.get("rising_missed_scout_quality_guard_max_quote_age_ms"))
+        max_quote_age = _safe_float(
+            fields.get("rising_missed_scout_quality_guard_max_quote_age_ms")
+        )
         if quote_age is not None and max_quote_age is not None:
             quote_age_over_max.append(quote_age - max_quote_age)
         if group is not None:
@@ -475,19 +603,31 @@ def _summarize_stale_weak_events(
         ai_score = _safe_float(fields.get("rising_missed_scout_quality_guard_ai_score"))
         if ai_score is not None:
             ai_scores.append(ai_score)
-            ai_score_buckets[_bucket(ai_score, (50.0, 60.0, 65.0), ("<=50", "51-60", "61-65", ">65"))] += 1
-        prior_ai_score = _safe_float(fields.get("rising_missed_scout_quality_guard_prior_weak_ai_score"))
+            ai_score_buckets[
+                _bucket(ai_score, (50.0, 60.0, 65.0), ("<=50", "51-60", "61-65", ">65"))
+            ] += 1
+        prior_ai_score = _safe_float(
+            fields.get("rising_missed_scout_quality_guard_prior_weak_ai_score")
+        )
         if prior_ai_score is not None:
             prior_ai_scores.append(prior_ai_score)
-        weak_micro_age = _safe_float(fields.get("rising_missed_scout_quality_guard_recent_weak_ai_micro_block_age_sec"))
+        weak_micro_age = _safe_float(
+            fields.get(
+                "rising_missed_scout_quality_guard_recent_weak_ai_micro_block_age_sec"
+            )
+        )
         if weak_micro_age is not None:
             weak_micro_ages.append(weak_micro_age)
     immediate_candidates: list[dict[str, Any]] = []
     borderline_candidates: list[dict[str, Any]] = []
     for code, group in grouped_by_code.items():
         report_row = report_rows_by_code.get(code)
-        max_delta = _safe_float((report_row or {}).get("max_delta_since_first_seen_pct"))
-        has_borderline_age = bool((group.get("age_buckets") or Counter()).get("borderline_3_5s", 0) > 0)
+        max_delta = _safe_float(
+            (report_row or {}).get("max_delta_since_first_seen_pct")
+        )
+        has_borderline_age = bool(
+            (group.get("age_buckets") or Counter()).get("borderline_3_5s", 0) > 0
+        )
         if max_delta is not None and max_delta >= STALE_WEAK_RECHECK_DELTA_PCT:
             immediate_candidates.append(
                 _summarize_stale_candidate_group(
@@ -526,11 +666,19 @@ def _summarize_stale_weak_events(
         "component_counts": _compact_counts(component_counts, key_name="component"),
         "component_combo_counts": _compact_counts(combo_counts, key_name="combo"),
         "ai_action_counts": _compact_counts(ai_action_counts, key_name="action"),
-        "ai_source_bucket_counts": _compact_counts(ai_source_bucket_counts, key_name="bucket"),
+        "ai_source_bucket_counts": _compact_counts(
+            ai_source_bucket_counts, key_name="bucket"
+        ),
         "ai_score_bucket_counts": _compact_counts(ai_score_buckets, key_name="bucket"),
-        "quote_age_bucket_counts": _compact_counts(quote_age_bucket_counts, key_name="bucket"),
-        "strength_state_counts": _compact_counts(strength_state_counts, key_name="state"),
-        "prior_micro_state_counts": _compact_counts(prior_micro_state_counts, key_name="state"),
+        "quote_age_bucket_counts": _compact_counts(
+            quote_age_bucket_counts, key_name="bucket"
+        ),
+        "strength_state_counts": _compact_counts(
+            strength_state_counts, key_name="state"
+        ),
+        "prior_micro_state_counts": _compact_counts(
+            prior_micro_state_counts, key_name="state"
+        ),
         "quote_age_ms": _metric_summary(quote_ages),
         "quote_age_over_max_ms": _metric_summary(quote_age_over_max),
         "ai_score": _metric_summary(ai_scores),
@@ -579,16 +727,34 @@ def _summarize_latency_danger_events(events: list[dict[str, Any]]) -> dict[str, 
         stage_counts[str(row.get("stage") or "-")] += 1
         latency_event = _latency_danger_event(fields)
         cause_counts[str(latency_event.get("cause") or "other_danger")] += 1
-        detail_reason_counts[str(fields.get("latency_danger_detail_reason") or "-")] += 1
-        source_quality_counts[str(fields.get("latency_danger_source_quality_state") or "-")] += 1
+        detail_reason_counts[
+            str(fields.get("latency_danger_detail_reason") or "-")
+        ] += 1
+        source_quality_counts[
+            str(fields.get("latency_danger_source_quality_state") or "-")
+        ] += 1
         spread_bucket_counts[str(fields.get("latency_spread_block_bucket") or "-")] += 1
-        price_bucket_counts[str(fields.get("latency_spread_block_price_bucket") or "-")] += 1
-        signal_bucket_counts[str(fields.get("latency_spread_block_signal_context_bucket") or "-")] += 1
-        relief_block_counts[str(fields.get("latency_relief_block_reason") or fields.get("latency_spread_relief_block_reason") or "-")] += 1
+        price_bucket_counts[
+            str(fields.get("latency_spread_block_price_bucket") or "-")
+        ] += 1
+        signal_bucket_counts[
+            str(fields.get("latency_spread_block_signal_context_bucket") or "-")
+        ] += 1
+        relief_block_counts[
+            str(
+                fields.get("latency_relief_block_reason")
+                or fields.get("latency_spread_relief_block_reason")
+                or "-"
+            )
+        ] += 1
         canary_reason_counts[str(fields.get("latency_canary_reason") or "-")] += 1
         if any(
             _boolish(fields.get(key))
-            for key in ("quote_stale", "quote_stale_at_submit", "pre_submit_effective_quote_stale")
+            for key in (
+                "quote_stale",
+                "quote_stale_at_submit",
+                "pre_submit_effective_quote_stale",
+            )
         ):
             quote_stale_count += 1
         elif _safe_float(fields.get("pre_submit_effective_quote_age_ms")) is not None:
@@ -612,13 +778,25 @@ def _summarize_latency_danger_events(events: list[dict[str, Any]]) -> dict[str, 
         "fresh_effective_quote_event_count": fresh_effective_quote_count,
         "stage_counts": _compact_counts(stage_counts, key_name="stage"),
         "cause_counts": _compact_counts(cause_counts, key_name="cause"),
-        "detail_reason_counts": _compact_counts(detail_reason_counts, key_name="detail_reason"),
-        "source_quality_counts": _compact_counts(source_quality_counts, key_name="source_quality"),
-        "spread_bucket_counts": _compact_counts(spread_bucket_counts, key_name="bucket"),
+        "detail_reason_counts": _compact_counts(
+            detail_reason_counts, key_name="detail_reason"
+        ),
+        "source_quality_counts": _compact_counts(
+            source_quality_counts, key_name="source_quality"
+        ),
+        "spread_bucket_counts": _compact_counts(
+            spread_bucket_counts, key_name="bucket"
+        ),
         "price_bucket_counts": _compact_counts(price_bucket_counts, key_name="bucket"),
-        "signal_context_bucket_counts": _compact_counts(signal_bucket_counts, key_name="bucket"),
-        "relief_block_reason_counts": _compact_counts(relief_block_counts, key_name="reason"),
-        "canary_reason_counts": _compact_counts(canary_reason_counts, key_name="reason"),
+        "signal_context_bucket_counts": _compact_counts(
+            signal_bucket_counts, key_name="bucket"
+        ),
+        "relief_block_reason_counts": _compact_counts(
+            relief_block_counts, key_name="reason"
+        ),
+        "canary_reason_counts": _compact_counts(
+            canary_reason_counts, key_name="reason"
+        ),
         "spread_ratio": _metric_summary(spread_ratios),
         "ws_age_ms": _metric_summary(ws_ages),
         "spread_bps": _metric_summary(spread_bps),
@@ -671,7 +849,12 @@ def _is_real_entry_candidate(row: dict[str, Any], promoted_codes: set[str]) -> b
 
 
 def _default_event_cache_path(target_date: str) -> Path:
-    pipeline_path = PROJECT_ROOT / "data" / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
+    pipeline_path = (
+        PROJECT_ROOT
+        / "data"
+        / "pipeline_events"
+        / f"pipeline_events_{target_date}.jsonl"
+    )
     if pipeline_path.exists():
         return pipeline_path
     return (
@@ -685,8 +868,14 @@ def _default_event_cache_path(target_date: str) -> Path:
 
 def _default_diagnostic_path(target_date: str) -> Path:
     report_dir = PROJECT_ROOT / "data" / "report" / "intraday_entry_blocker_diagnostics"
-    candidates = sorted(report_dir.glob(f"intraday_entry_blocker_diagnostics_{target_date}*.json"))
-    return max(candidates, key=lambda path: path.stat().st_mtime) if candidates else report_dir / f"intraday_entry_blocker_diagnostics_{target_date}.json"
+    candidates = sorted(
+        report_dir.glob(f"intraday_entry_blocker_diagnostics_{target_date}*.json")
+    )
+    return (
+        max(candidates, key=lambda path: path.stat().st_mtime)
+        if candidates
+        else report_dir / f"intraday_entry_blocker_diagnostics_{target_date}.json"
+    )
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -717,7 +906,9 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def _freshness_workorders_from_diagnostic(diagnostic: dict[str, Any]) -> list[dict[str, Any]]:
+def _freshness_workorders_from_diagnostic(
+    diagnostic: dict[str, Any],
+) -> list[dict[str, Any]]:
     source_quality = diagnostic.get("source_quality_workorders")
     if not isinstance(source_quality, dict):
         return []
@@ -733,12 +924,18 @@ def _freshness_workorders_from_diagnostic(diagnostic: dict[str, Any]) -> list[di
                 "stock_code": str(item.get("stock_code") or ""),
                 "stock_name": str(item.get("stock_name") or ""),
                 "event_count": int(item.get("event_count") or 0),
-                "diagnostic_quote_age_stale": int(item.get("diagnostic_quote_age_stale") or 0),
-                "pre_ai_stale_or_history_gap": int(item.get("pre_ai_stale_or_history_gap") or 0),
+                "diagnostic_quote_age_stale": int(
+                    item.get("diagnostic_quote_age_stale") or 0
+                ),
+                "pre_ai_stale_or_history_gap": int(
+                    item.get("pre_ai_stale_or_history_gap") or 0
+                ),
                 "latest_stage": str(item.get("latest_stage") or ""),
                 "latest_reason": str(item.get("latest_reason") or ""),
                 "next_action": str(item.get("next_action") or ""),
-                "decision_authority": str(item.get("decision_authority") or "source_quality_only"),
+                "decision_authority": str(
+                    item.get("decision_authority") or "source_quality_only"
+                ),
                 "runtime_effect": _boolish(item.get("runtime_effect")),
                 "allowed_runtime_apply": _boolish(item.get("allowed_runtime_apply")),
             }
@@ -763,21 +960,43 @@ def _flow_summary(events: list[dict[str, Any]], *, limit: int = 8) -> str:
     return " -> ".join(parts[:4] + ["..."] + parts[-3:])
 
 
-def _main_blocker(record: dict[str, Any], promoted: dict[str, dict[str, Any]]) -> tuple[str, str, int]:
+def _main_blocker(
+    record: dict[str, Any], promoted: dict[str, dict[str, Any]]
+) -> tuple[str, str, int]:
     item = promoted.get(record["code"]) or {}
-    actionable = item.get("dominant_actionable_blocker") if isinstance(item.get("dominant_actionable_blocker"), dict) else {}
+    actionable = (
+        item.get("dominant_actionable_blocker")
+        if isinstance(item.get("dominant_actionable_blocker"), dict)
+        else {}
+    )
     if actionable.get("stage"):
-        return str(actionable.get("stage") or ""), str(actionable.get("reason") or ""), int(actionable.get("count") or 0)
-    dominant = item.get("dominant_blocker") if isinstance(item.get("dominant_blocker"), dict) else {}
+        return (
+            str(actionable.get("stage") or ""),
+            str(actionable.get("reason") or ""),
+            int(actionable.get("count") or 0),
+        )
+    dominant = (
+        item.get("dominant_blocker")
+        if isinstance(item.get("dominant_blocker"), dict)
+        else {}
+    )
     if dominant.get("stage"):
-        return str(dominant.get("stage") or ""), str(dominant.get("reason") or ""), int(dominant.get("count") or 0)
+        return (
+            str(dominant.get("stage") or ""),
+            str(dominant.get("reason") or ""),
+            int(dominant.get("count") or 0),
+        )
     stage_counts: Counter[str] = record["stage_counts"]
     if stage_counts:
         stage, count = max(stage_counts.items(), key=lambda kv: kv[1])
         reason_counts: Counter[str] = record["reason_counts"]
         reason = reason_counts.most_common(1)[0][0] if reason_counts else ""
         return stage, reason, count
-    return str(record.get("latest_stage") or ""), str(record.get("latest_reason") or ""), 0
+    return (
+        str(record.get("latest_stage") or ""),
+        str(record.get("latest_reason") or ""),
+        0,
+    )
 
 
 def build_report(
@@ -805,7 +1024,11 @@ def build_report(
         last_event_at = _parse_ts(item.get("last_event_at"))
         active_from = first_promoted_at
         active_until = last_event_at or first_promoted_at
-        if since_ts is not None and active_until is not None and active_until < since_ts:
+        if (
+            since_ts is not None
+            and active_until is not None
+            and active_until < since_ts
+        ):
             continue
         if until_ts is not None and active_from is not None and active_from > until_ts:
             continue
@@ -871,22 +1094,37 @@ def build_report(
         fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
         code = str(row.get("stock_code") or "").strip()
         in_window = ts is not None and not (
-            (since_ts is not None and ts < since_ts) or (until_ts is not None and ts > until_ts)
+            (since_ts is not None and ts < since_ts)
+            or (until_ts is not None and ts > until_ts)
         )
         stage = str(row.get("stage") or "")
-        if in_window and row.get("pipeline") == ENTRY_PIPELINE and _is_rising_missed_event_lineage(row, fields):
-            if _reason_matches(fields, STALE_WEAK_REASON) or _reason_matches(fields, STALE_AI_PROVENANCE_REASON):
+        if (
+            in_window
+            and row.get("pipeline") == ENTRY_PIPELINE
+            and _is_rising_missed_event_lineage(row, fields)
+        ):
+            if _reason_matches(fields, STALE_WEAK_REASON) or _reason_matches(
+                fields, STALE_AI_PROVENANCE_REASON
+            ):
                 stale_weak_events.append({"row": row, "fields": fields})
             if _reason_matches(fields, LATENCY_DANGER_REASON):
                 latency_danger_events.append({"row": row, "fields": fields})
-        if row.get("pipeline") == ENTRY_PIPELINE and code and _is_rising_missed_forced_one_share_entry(stage, fields):
+        if (
+            row.get("pipeline") == ENTRY_PIPELINE
+            and code
+            and _is_rising_missed_forced_one_share_entry(stage, fields)
+        ):
             if ts is not None and (until_ts is None or ts <= until_ts):
                 forced_scout_symbols.add(code)
                 latest_forced_scout_at_by_code[code] = ts
             if in_window:
                 forced_scout_event_count += 1
             continue
-        if ts is None or (since_ts is not None and ts < since_ts) or (until_ts is not None and ts > until_ts):
+        if (
+            ts is None
+            or (since_ts is not None and ts < since_ts)
+            or (until_ts is not None and ts > until_ts)
+        ):
             continue
         if _is_rising_missed_forced_lineage_row(row, latest_forced_scout_at_by_code):
             continue
@@ -895,21 +1133,41 @@ def build_report(
         reason = _reason(fields)
         record = grouped[code]
         record["code"] = code
-        record["name"] = str(row.get("stock_name") or fields.get("stock_name") or record["name"])
-        record["first_ts"] = min([value for value in (record["first_ts"], ts) if value], default=ts)
-        record["last_ts"] = max([value for value in (record["last_ts"], ts) if value], default=ts)
+        record["name"] = str(
+            row.get("stock_name") or fields.get("stock_name") or record["name"]
+        )
+        record["first_ts"] = min(
+            [value for value in (record["first_ts"], ts) if value], default=ts
+        )
+        record["last_ts"] = max(
+            [value for value in (record["last_ts"], ts) if value], default=ts
+        )
         delta = _safe_float(fields.get("price_delta_since_first_seen_pct"))
         if delta is not None:
             record["latest_delta"] = delta
-            record["max_delta"] = delta if record["max_delta"] is None else max(record["max_delta"], delta)
-            record["min_delta"] = delta if record["min_delta"] is None else min(record["min_delta"], delta)
-        ai_score = _safe_float(fields.get("ai_score") or fields.get("ai_score_raw") or fields.get("ai_score_projected"))
+            record["max_delta"] = (
+                delta
+                if record["max_delta"] is None
+                else max(record["max_delta"], delta)
+            )
+            record["min_delta"] = (
+                delta
+                if record["min_delta"] is None
+                else min(record["min_delta"], delta)
+            )
+        ai_score = _safe_float(
+            fields.get("ai_score")
+            or fields.get("ai_score_raw")
+            or fields.get("ai_score_projected")
+        )
         if ai_score is not None:
             record["latest_ai_score"] = ai_score
         action = _field(fields, "action") or _field(fields, "ai_action")
         if action:
             record["latest_ai_action"] = action
-        quote_age_ms = _safe_float(fields.get("quote_age_ms") or fields.get("quote_age_at_submit_ms"))
+        quote_age_ms = _safe_float(
+            fields.get("quote_age_ms") or fields.get("quote_age_at_submit_ms")
+        )
         if quote_age_ms is not None:
             record["max_quote_age_ms"] = (
                 quote_age_ms
@@ -930,7 +1188,9 @@ def build_report(
             record["reason_counts"][reason] += 1
         record["latest_stage"] = stage
         record["latest_reason"] = reason
-        if str(fields.get("actual_order_submitted") or "").strip().lower() == "true" or any(
+        if str(
+            fields.get("actual_order_submitted") or ""
+        ).strip().lower() == "true" or any(
             marker in stage for marker in SUBMIT_STAGE_MARKERS
         ):
             record["actual_submit_count"] += 1
@@ -941,7 +1201,16 @@ def build_report(
         event_key = (stage, reason)
         events = record["events"]
         if not events or events[-1]["key"] != event_key or stage in BUY_SIGNAL_STAGES:
-            events.append({"ts": ts, "stage": stage, "reason": reason, "delta": delta, "ai_score": ai_score, "key": event_key})
+            events.append(
+                {
+                    "ts": ts,
+                    "stage": stage,
+                    "reason": reason,
+                    "delta": delta,
+                    "ai_score": ai_score,
+                    "key": event_key,
+                }
+            )
 
     for code, item in promoted.items():
         record = grouped[code]
@@ -949,12 +1218,20 @@ def build_report(
         record["name"] = item.get("stock_name") or record["name"]
         first_promoted_at = _parse_ts(item.get("first_promoted_at"))
         last_event_at = _parse_ts(item.get("last_event_at"))
-        if first_promoted_at is not None and (since_ts is None or first_promoted_at >= since_ts):
-            record["first_ts"] = first_promoted_at if record["first_ts"] is None else min(record["first_ts"], first_promoted_at)
+        if first_promoted_at is not None and (
+            since_ts is None or first_promoted_at >= since_ts
+        ):
+            record["first_ts"] = (
+                first_promoted_at
+                if record["first_ts"] is None
+                else min(record["first_ts"], first_promoted_at)
+            )
         elif record["first_ts"] is None and since_ts is not None:
             record["first_ts"] = since_ts
         if last_event_at is not None:
-            bounded_last_event_at = min(last_event_at, until_ts) if until_ts is not None else last_event_at
+            bounded_last_event_at = (
+                min(last_event_at, until_ts) if until_ts is not None else last_event_at
+            )
             record["last_ts"] = (
                 bounded_last_event_at
                 if record["last_ts"] is None
@@ -965,16 +1242,32 @@ def build_report(
             record["latest_delta"] = latest_delta
         max_delta = _safe_float(item.get("max_price_delta_since_first_seen_pct"))
         if max_delta is not None:
-            record["max_delta"] = max_delta if record["max_delta"] is None else max(record["max_delta"], max_delta)
+            record["max_delta"] = (
+                max_delta
+                if record["max_delta"] is None
+                else max(record["max_delta"], max_delta)
+            )
         if item.get("latest_ai_score") is not None:
             record["latest_ai_score"] = item.get("latest_ai_score")
-        record["latest_ai_action"] = item.get("latest_ai_action") or record["latest_ai_action"]
-        latest_blocker = item.get("latest_blocker") if isinstance(item.get("latest_blocker"), dict) else {}
+        record["latest_ai_action"] = (
+            item.get("latest_ai_action") or record["latest_ai_action"]
+        )
+        latest_blocker = (
+            item.get("latest_blocker")
+            if isinstance(item.get("latest_blocker"), dict)
+            else {}
+        )
         if latest_blocker:
-            record["latest_stage"] = latest_blocker.get("stage") or record["latest_stage"]
-            record["latest_reason"] = latest_blocker.get("reason") or record["latest_reason"]
+            record["latest_stage"] = (
+                latest_blocker.get("stage") or record["latest_stage"]
+            )
+            record["latest_reason"] = (
+                latest_blocker.get("reason") or record["latest_reason"]
+            )
         if code not in forced_scout_symbols:
-            record["actual_submit_count"] = max(record["actual_submit_count"], int(item.get("real_submit_count") or 0))
+            record["actual_submit_count"] = max(
+                record["actual_submit_count"], int(item.get("real_submit_count") or 0)
+            )
 
     rows: list[dict[str, Any]] = []
     for code, record in grouped.items():
@@ -994,19 +1287,29 @@ def build_report(
                 "stock_code": code,
                 "stock_name": record["name"],
                 "first_observed_at": record["first_ts"].strftime("%H:%M:%S"),
-                "last_observed_at": record["last_ts"].strftime("%H:%M:%S") if record["last_ts"] else "",
+                "last_observed_at": (
+                    record["last_ts"].strftime("%H:%M:%S") if record["last_ts"] else ""
+                ),
                 "rise_after_watch": rise,
                 "max_delta_since_first_seen_pct": max_delta,
                 "latest_delta_since_first_seen_pct": record["latest_delta"],
                 "buy_signal_seen": bool(record["buy_signal_seen"]),
-                "first_buy_signal_at": record["first_buy_signal_ts"].strftime("%H:%M:%S") if record["first_buy_signal_ts"] else "",
+                "first_buy_signal_at": (
+                    record["first_buy_signal_ts"].strftime("%H:%M:%S")
+                    if record["first_buy_signal_ts"]
+                    else ""
+                ),
                 "actual_submit_count": int(record["actual_submit_count"] or 0),
                 "main_blocker_stage": stage,
                 "main_blocker_reason": reason,
                 "main_blocker_count": count,
                 "main_blocker_class": (
-                    (diagnostic_item.get("dominant_actionable_blocker") or {}).get("class")
-                    if isinstance(diagnostic_item.get("dominant_actionable_blocker"), dict)
+                    (diagnostic_item.get("dominant_actionable_blocker") or {}).get(
+                        "class"
+                    )
+                    if isinstance(
+                        diagnostic_item.get("dominant_actionable_blocker"), dict
+                    )
                     else ""
                 ),
                 "latest_stage": record["latest_stage"],
@@ -1014,7 +1317,9 @@ def build_report(
                 "latest_ai_score": record["latest_ai_score"],
                 "latest_ai_action": record["latest_ai_action"],
                 "stale_eval_count": int(record["stale_eval_count"] or 0),
-                "stale_refresh_recovered_count": int(record["stale_refresh_recovered_count"] or 0),
+                "stale_refresh_recovered_count": int(
+                    record["stale_refresh_recovered_count"] or 0
+                ),
                 "max_quote_age_ms": record["max_quote_age_ms"],
                 "dominant_stale_eval_stage": (
                     record["stale_eval_stage_counts"].most_common(1)[0][0]
@@ -1033,18 +1338,26 @@ def build_report(
     rows.sort(
         key=lambda item: (
             item["max_delta_since_first_seen_pct"] is None,
-            -(item["max_delta_since_first_seen_pct"] if item["max_delta_since_first_seen_pct"] is not None else -999.0),
+            -(
+                item["max_delta_since_first_seen_pct"]
+                if item["max_delta_since_first_seen_pct"] is not None
+                else -999.0
+            ),
             item["first_observed_at"],
         )
     )
     blocker_rollup = [
         {"stage": stage or "-", "reason": reason or "-", "count": count}
-        for (stage, reason), count in Counter((row["main_blocker_stage"], row["main_blocker_reason"]) for row in rows).most_common()
+        for (stage, reason), count in Counter(
+            (row["main_blocker_stage"], row["main_blocker_reason"]) for row in rows
+        ).most_common()
     ]
     rising_blocker_rollup = [
         {"stage": stage or "-", "reason": reason or "-", "count": count}
         for (stage, reason), count in Counter(
-            (row["main_blocker_stage"], row["main_blocker_reason"]) for row in rows if row["rise_after_watch"] == "rising"
+            (row["main_blocker_stage"], row["main_blocker_reason"])
+            for row in rows
+            if row["rise_after_watch"] == "rising"
         ).most_common()
     ]
     rising_fresh_only_blocker_rollup = [
@@ -1065,28 +1378,50 @@ def build_report(
     ]
     summary = {
         "symbol_count": len(rows),
-        "rising_symbol_count_by_max_delta": sum(1 for row in rows if row["rise_after_watch"] == "rising"),
+        "rising_symbol_count_by_max_delta": sum(
+            1 for row in rows if row["rise_after_watch"] == "rising"
+        ),
         "rising_missed_buy_count_in_latest_diagnostic": len(rising_missed_codes),
-        "rising_missed_symbol_count_in_report": sum(1 for row in rows if row["rising_missed_in_diagnostic"]),
+        "rising_missed_symbol_count_in_report": sum(
+            1 for row in rows if row["rising_missed_in_diagnostic"]
+        ),
         "rising_missed_residual_excluding_forced_scout_symbol_count": len(
             rising_missed_residual_codes - forced_scout_symbols
         ),
         "rising_missed_forced_scout_event_count": forced_scout_event_count,
         "rising_missed_forced_scout_symbol_count": len(forced_scout_symbols),
-        "rising_missed_forced_scout_residual_symbol_count": len(rising_missed_codes & forced_scout_symbols),
-        "real_submit_symbol_count_in_latest_diagnostic": diagnostic.get("summary", {}).get("real_submit_symbol_count"),
-        "buy_signal_or_pre_submit_pass_seen_symbols": sum(1 for row in rows if row["buy_signal_seen"]),
-        "stale_eval_symbol_count": sum(1 for row in rows if row["stale_eval_count"] > 0),
+        "rising_missed_forced_scout_residual_symbol_count": len(
+            rising_missed_codes & forced_scout_symbols
+        ),
+        "real_submit_symbol_count_in_latest_diagnostic": diagnostic.get(
+            "summary", {}
+        ).get("real_submit_symbol_count"),
+        "buy_signal_or_pre_submit_pass_seen_symbols": sum(
+            1 for row in rows if row["buy_signal_seen"]
+        ),
+        "stale_eval_symbol_count": sum(
+            1 for row in rows if row["stale_eval_count"] > 0
+        ),
         "rising_stale_eval_symbol_count": sum(
-            1 for row in rows if row["rise_after_watch"] == "rising" and row["stale_eval_count"] > 0
+            1
+            for row in rows
+            if row["rise_after_watch"] == "rising" and row["stale_eval_count"] > 0
         ),
         "rising_fresh_only_symbol_count": sum(
-            1 for row in rows if row["rise_after_watch"] == "rising" and row["stale_eval_count"] <= 0
+            1
+            for row in rows
+            if row["rise_after_watch"] == "rising" and row["stale_eval_count"] <= 0
         ),
-        "stale_refresh_recovered_symbol_count": sum(1 for row in rows if row["stale_refresh_recovered_count"] > 0),
+        "stale_refresh_recovered_symbol_count": sum(
+            1 for row in rows if row["stale_refresh_recovered_count"] > 0
+        ),
         "rising_missed_stale_quote_weak_event_count": len(stale_weak_events),
         "rising_missed_stale_quote_weak_symbol_count": len(
-            {str(event["row"].get("stock_code") or "").strip() for event in stale_weak_events if event["row"].get("stock_code")}
+            {
+                str(event["row"].get("stock_code") or "").strip()
+                for event in stale_weak_events
+                if event["row"].get("stock_code")
+            }
         ),
         "rising_missed_latency_danger_event_count": len(latency_danger_events),
         "rising_missed_latency_danger_symbol_count": len(
@@ -1100,13 +1435,17 @@ def build_report(
     stale_eval_rollup = [
         {"stage": stage or "-", "count": count}
         for stage, count in Counter(
-            row["dominant_stale_eval_stage"] for row in rows if row["dominant_stale_eval_stage"]
+            row["dominant_stale_eval_stage"]
+            for row in rows
+            if row["dominant_stale_eval_stage"]
         ).most_common()
     ]
     stale_eval_category_rollup = [
         {"category": category or "-", "count": count}
         for category, count in Counter(
-            row["dominant_stale_eval_category"] for row in rows if row["dominant_stale_eval_category"]
+            row["dominant_stale_eval_category"]
+            for row in rows
+            if row["dominant_stale_eval_category"]
         ).most_common()
     ]
     latency_danger_root_cause = []
@@ -1116,8 +1455,12 @@ def build_report(
         if not events:
             continue
         latency_root_codes.add(code)
-        cause_counts = Counter(str(item.get("cause") or "other_danger") for item in events)
-        micro_state_counts = Counter(str(item.get("micro_state") or "-") for item in events)
+        cause_counts = Counter(
+            str(item.get("cause") or "other_danger") for item in events
+        )
+        micro_state_counts = Counter(
+            str(item.get("micro_state") or "-") for item in events
+        )
         bucket_counts = Counter(str(item.get("ofi_bucket") or "-") for item in events)
         latency_danger_root_cause.append(
             {
@@ -1130,13 +1473,25 @@ def build_report(
                     for cause, count in cause_counts.most_common()
                 ],
                 "spread_ratio": _metric_summary(
-                    [value for item in events if (value := item.get("spread_ratio")) is not None]
+                    [
+                        value
+                        for item in events
+                        if (value := item.get("spread_ratio")) is not None
+                    ]
                 ),
                 "ws_age_ms": _metric_summary(
-                    [value for item in events if (value := item.get("ws_age_ms")) is not None]
+                    [
+                        value
+                        for item in events
+                        if (value := item.get("ws_age_ms")) is not None
+                    ]
                 ),
                 "spread_ticks": _metric_summary(
-                    [value for item in events if (value := item.get("spread_ticks")) is not None]
+                    [
+                        value
+                        for item in events
+                        if (value := item.get("spread_ticks")) is not None
+                    ]
                 ),
                 "top_micro_state": micro_state_counts.most_common(1)[0][0],
                 "top_ofi_bucket": bucket_counts.most_common(1)[0][0],
@@ -1153,8 +1508,16 @@ def build_report(
     for code, item in diagnostic_latency_items.items():
         if code in latency_root_codes:
             continue
-        actionable = item.get("dominant_actionable_blocker") if isinstance(item.get("dominant_actionable_blocker"), dict) else {}
-        dominant = item.get("dominant_blocker") if isinstance(item.get("dominant_blocker"), dict) else {}
+        actionable = (
+            item.get("dominant_actionable_blocker")
+            if isinstance(item.get("dominant_actionable_blocker"), dict)
+            else {}
+        )
+        dominant = (
+            item.get("dominant_blocker")
+            if isinstance(item.get("dominant_blocker"), dict)
+            else {}
+        )
         blocker = actionable if actionable.get("stage") == "latency_block" else dominant
         if blocker.get("stage") != "latency_block":
             continue
@@ -1162,7 +1525,10 @@ def build_report(
         if count <= 0:
             continue
         diagnostic_root = item.get("latency_danger_root_cause")
-        if isinstance(diagnostic_root, dict) and int(diagnostic_root.get("event_count") or 0) > 0:
+        if (
+            isinstance(diagnostic_root, dict)
+            and int(diagnostic_root.get("event_count") or 0) > 0
+        ):
             latency_danger_root_cause.append(
                 {
                     "stock_code": code,
@@ -1170,11 +1536,15 @@ def build_report(
                     "event_count": int(diagnostic_root.get("event_count") or count),
                     "top_cause": diagnostic_root.get("top_cause") or "other_danger",
                     "cause_counts": diagnostic_root.get("cause_counts") or [],
-                    "spread_ratio": diagnostic_root.get("spread_ratio") or _metric_summary([]),
-                    "ws_age_ms": diagnostic_root.get("ws_age_ms") or _metric_summary([]),
-                    "spread_ticks": diagnostic_root.get("spread_ticks") or _metric_summary([]),
+                    "spread_ratio": diagnostic_root.get("spread_ratio")
+                    or _metric_summary([]),
+                    "ws_age_ms": diagnostic_root.get("ws_age_ms")
+                    or _metric_summary([]),
+                    "spread_ticks": diagnostic_root.get("spread_ticks")
+                    or _metric_summary([]),
                     "top_micro_state": diagnostic_root.get("top_micro_state") or "-",
-                    "top_ofi_bucket": diagnostic_root.get("top_ofi_bucket") or "diagnostic_latency_root_cause",
+                    "top_ofi_bucket": diagnostic_root.get("top_ofi_bucket")
+                    or "diagnostic_latency_root_cause",
                 }
             )
             continue
@@ -1182,7 +1552,10 @@ def build_report(
         for recent in item.get("recent_blockers") or []:
             if not isinstance(recent, dict):
                 continue
-            if recent.get("stage") != "latency_block" or recent.get("reason") != "latency_state_danger":
+            if (
+                recent.get("stage") != "latency_block"
+                or recent.get("reason") != "latency_state_danger"
+            ):
                 continue
             if not any(
                 recent.get(key) not in (None, "")
@@ -1201,9 +1574,15 @@ def build_report(
                 continue
             diagnostic_events.append(_latency_danger_event(recent))
         if diagnostic_events:
-            cause_counts = Counter(str(event.get("cause") or "other_danger") for event in diagnostic_events)
-            micro_state_counts = Counter(str(event.get("micro_state") or "-") for event in diagnostic_events)
-            bucket_counts = Counter(str(event.get("ofi_bucket") or "-") for event in diagnostic_events)
+            cause_counts = Counter(
+                str(event.get("cause") or "other_danger") for event in diagnostic_events
+            )
+            micro_state_counts = Counter(
+                str(event.get("micro_state") or "-") for event in diagnostic_events
+            )
+            bucket_counts = Counter(
+                str(event.get("ofi_bucket") or "-") for event in diagnostic_events
+            )
             latency_danger_root_cause.append(
                 {
                     "stock_code": code,
@@ -1215,13 +1594,25 @@ def build_report(
                         for cause, event_count in cause_counts.most_common()
                     ],
                     "spread_ratio": _metric_summary(
-                        [value for event in diagnostic_events if (value := event.get("spread_ratio")) is not None]
+                        [
+                            value
+                            for event in diagnostic_events
+                            if (value := event.get("spread_ratio")) is not None
+                        ]
                     ),
                     "ws_age_ms": _metric_summary(
-                        [value for event in diagnostic_events if (value := event.get("ws_age_ms")) is not None]
+                        [
+                            value
+                            for event in diagnostic_events
+                            if (value := event.get("ws_age_ms")) is not None
+                        ]
                     ),
                     "spread_ticks": _metric_summary(
-                        [value for event in diagnostic_events if (value := event.get("spread_ticks")) is not None]
+                        [
+                            value
+                            for event in diagnostic_events
+                            if (value := event.get("spread_ticks")) is not None
+                        ]
                     ),
                     "top_micro_state": micro_state_counts.most_common(1)[0][0],
                     "top_ofi_bucket": bucket_counts.most_common(1)[0][0],
@@ -1242,8 +1633,12 @@ def build_report(
                 "top_ofi_bucket": "diagnostic_latency_without_source_event_fields",
             }
         )
-    latency_danger_root_cause.sort(key=lambda item: int(item["event_count"]), reverse=True)
-    report_rows_by_code = {str(row.get("stock_code") or ""): row for row in rows if row.get("stock_code")}
+    latency_danger_root_cause.sort(
+        key=lambda item: int(item["event_count"]), reverse=True
+    )
+    report_rows_by_code = {
+        str(row.get("stock_code") or ""): row for row in rows if row.get("stock_code")
+    }
     return {
         "report_type": "intraday_entry_flow_report",
         "schema_version": 1,
@@ -1266,25 +1661,37 @@ def build_report(
             "event_count": forced_scout_event_count,
             "symbol_count": len(forced_scout_symbols),
             "symbols": sorted(forced_scout_symbols),
-            "rising_missed_residual_symbols": sorted(rising_missed_codes & forced_scout_symbols),
+            "rising_missed_residual_symbols": sorted(
+                rising_missed_codes & forced_scout_symbols
+            ),
             "rising_missed_residual_excluding_forced_scout_symbols": sorted(
                 rising_missed_residual_codes - forced_scout_symbols
             ),
             "decision_authority": "source_quality_only",
             "runtime_effect": False,
         },
-        "blocker_taxonomy": diagnostic.get("blocker_taxonomy") if isinstance(diagnostic.get("blocker_taxonomy"), dict) else {},
+        "blocker_taxonomy": (
+            diagnostic.get("blocker_taxonomy")
+            if isinstance(diagnostic.get("blocker_taxonomy"), dict)
+            else {}
+        ),
         "blocker_rollup": blocker_rollup,
         "rising_symbol_blocker_rollup": rising_blocker_rollup,
         "rising_fresh_only_blocker_rollup": rising_fresh_only_blocker_rollup,
         "rising_stale_mixed_blocker_rollup": rising_stale_mixed_blocker_rollup,
         "stale_eval_rollup": stale_eval_rollup,
         "stale_eval_category_rollup": stale_eval_category_rollup,
-        "freshness_recheck_workorders": _freshness_workorders_from_diagnostic(diagnostic),
+        "freshness_recheck_workorders": _freshness_workorders_from_diagnostic(
+            diagnostic
+        ),
         "latency_danger_root_cause": latency_danger_root_cause,
         "rising_missed_submit_safety_decomposition": {
-            STALE_WEAK_REASON: _summarize_stale_weak_events(stale_weak_events, report_rows_by_code),
-            LATENCY_DANGER_REASON: _summarize_latency_danger_events(latency_danger_events),
+            STALE_WEAK_REASON: _summarize_stale_weak_events(
+                stale_weak_events, report_rows_by_code
+            ),
+            LATENCY_DANGER_REASON: _summarize_latency_danger_events(
+                latency_danger_events
+            ),
             "decision_authority": "source_only_submit_safety_decomposition_no_runtime_mutation",
             "runtime_effect": False,
             "allowed_runtime_apply": False,
@@ -1308,7 +1715,10 @@ def _format_pct(value: Any) -> str:
 
 
 def _window_label(report: dict[str, Any]) -> str:
-    since_ts = _parse_ts(report.get("event_window", {}).get("since"), target_date=report.get("target_date"))
+    since_ts = _parse_ts(
+        report.get("event_window", {}).get("since"),
+        target_date=report.get("target_date"),
+    )
     if since_ts is None:
         return "전체"
     return since_ts.strftime("%H:%M")
@@ -1321,11 +1731,18 @@ def _md_cell(value: Any) -> str:
 def _md_stat_pair(stats: dict[str, Any]) -> str:
     median = stats.get("median")
     max_value = stats.get("max")
-    return f"{'-' if median is None else median}/{'-' if max_value is None else max_value}"
+    return (
+        f"{'-' if median is None else median}/{'-' if max_value is None else max_value}"
+    )
 
 
 def _md_counts(items: list[dict[str, Any]], label_key: str, *, limit: int = 8) -> str:
-    return ", ".join(f"{item.get(label_key)}={item.get('count')}" for item in items[:limit]) or "-"
+    return (
+        ", ".join(
+            f"{item.get(label_key)}={item.get('count')}" for item in items[:limit]
+        )
+        or "-"
+    )
 
 
 def _write_stale_recheck_candidate_table(
@@ -1364,7 +1781,9 @@ def _write_stale_recheck_candidate_table(
         )
 
 
-def write_outputs(report: dict[str, Any], *, output_md: Path, output_csv: Path, max_rows: int = 100) -> None:
+def write_outputs(
+    report: dict[str, Any], *, output_md: Path, output_csv: Path, max_rows: int = 100
+) -> None:
     output_md.parent.mkdir(parents=True, exist_ok=True)
     output_csv.parent.mkdir(parents=True, exist_ok=True)
     rows = list(report.get("rows", []))
@@ -1375,20 +1794,32 @@ def write_outputs(report: dict[str, Any], *, output_md: Path, output_csv: Path, 
             writer.writeheader()
             writer.writerows(rows)
     with output_md.open("w", encoding="utf-8") as handle:
-        handle.write(f"# {report['target_date']} {_window_label(report)} 이후 감시대상 BUY 전 흐름\n\n")
+        handle.write(
+            f"# {report['target_date']} {_window_label(report)} 이후 감시대상 BUY 전 흐름\n\n"
+        )
         handle.write(f"- generated_at: {report['generated_at']}\n")
         handle.write(f"- source_events: {report['source_events']}\n")
         handle.write(f"- source_diagnostic: {report['source_diagnostic']}\n")
-        handle.write(f"- event_window_since: {report.get('event_window', {}).get('since')}\n")
-        handle.write(f"- event_window_until: {report.get('event_window', {}).get('until')}\n")
+        handle.write(
+            f"- event_window_since: {report.get('event_window', {}).get('since')}\n"
+        )
+        handle.write(
+            f"- event_window_until: {report.get('event_window', {}).get('until')}\n"
+        )
         for key, value in report["summary"].items():
             handle.write(f"- {key}: {value}\n")
-        forced = report.get("forced_scout_observation") if isinstance(report.get("forced_scout_observation"), dict) else {}
+        forced = (
+            report.get("forced_scout_observation")
+            if isinstance(report.get("forced_scout_observation"), dict)
+            else {}
+        )
         if forced:
             handle.write("\n## forced scout observation\n\n")
             handle.write(f"- event_count: {forced.get('event_count', 0)}\n")
             handle.write(f"- symbol_count: {forced.get('symbol_count', 0)}\n")
-            handle.write(f"- symbols: {', '.join(forced.get('symbols') or []) or '-'}\n")
+            handle.write(
+                f"- symbols: {', '.join(forced.get('symbols') or []) or '-'}\n"
+            )
             handle.write(
                 "- rising_missed_residual_symbols: "
                 f"{', '.join(forced.get('rising_missed_residual_symbols') or []) or '-'}\n"
@@ -1397,17 +1828,25 @@ def write_outputs(report: dict[str, Any], *, output_md: Path, output_csv: Path, 
                 "- rising_missed_residual_excluding_forced_scout_symbols: "
                 f"{', '.join(forced.get('rising_missed_residual_excluding_forced_scout_symbols') or []) or '-'}\n"
             )
-            handle.write(f"- decision_authority: {forced.get('decision_authority', 'source_quality_only')}\n")
+            handle.write(
+                f"- decision_authority: {forced.get('decision_authority', 'source_quality_only')}\n"
+            )
             handle.write(f"- runtime_effect: {forced.get('runtime_effect', False)}\n")
         handle.write("\n## blocker rollup\n\n")
         for item in report["blocker_rollup"][:12]:
             handle.write(f"- {item['count']}: `{item['stage']}` / `{item['reason']}`\n")
-        taxonomy = report.get("blocker_taxonomy") if isinstance(report.get("blocker_taxonomy"), dict) else {}
+        taxonomy = (
+            report.get("blocker_taxonomy")
+            if isinstance(report.get("blocker_taxonomy"), dict)
+            else {}
+        )
         if taxonomy:
             handle.write("\n## blocker taxonomy\n\n")
             for item in taxonomy.get("class_counts", [])[:12]:
                 handle.write(f"- {item['count']}: `{item['class']}`\n")
-            suppressed = taxonomy.get("suppressed_non_major_counts") or taxonomy.get("suppressed_non_actionable_counts", [])
+            suppressed = taxonomy.get("suppressed_non_major_counts") or taxonomy.get(
+                "suppressed_non_actionable_counts", []
+            )
             if suppressed:
                 handle.write("\n## suppressed non-major blocker counts\n\n")
                 for item in suppressed[:12]:
@@ -1434,35 +1873,63 @@ def write_outputs(report: dict[str, Any], *, output_md: Path, output_csv: Path, 
             if isinstance(report.get("rising_missed_submit_safety_decomposition"), dict)
             else {}
         )
-        stale_weak = decomposition.get(STALE_WEAK_REASON) if isinstance(decomposition.get(STALE_WEAK_REASON), dict) else {}
+        stale_weak = (
+            decomposition.get(STALE_WEAK_REASON)
+            if isinstance(decomposition.get(STALE_WEAK_REASON), dict)
+            else {}
+        )
         latency_danger = (
             decomposition.get(LATENCY_DANGER_REASON)
             if isinstance(decomposition.get(LATENCY_DANGER_REASON), dict)
             else {}
         )
-        has_stale_weak = bool(stale_weak and int(stale_weak.get("event_count") or 0) > 0)
-        has_latency_danger = bool(latency_danger and int(latency_danger.get("event_count") or 0) > 0)
+        has_stale_weak = bool(
+            stale_weak and int(stale_weak.get("event_count") or 0) > 0
+        )
+        has_latency_danger = bool(
+            latency_danger and int(latency_danger.get("event_count") or 0) > 0
+        )
         if has_stale_weak or has_latency_danger:
             handle.write("\n## rising missed submit-safety decomposition\n\n")
             handle.write(
                 f"- decision_authority: {decomposition.get('decision_authority', 'source_only_submit_safety_decomposition_no_runtime_mutation')}\n"
             )
-            handle.write(f"- runtime_effect: {decomposition.get('runtime_effect', False)}\n")
-            handle.write(f"- allowed_runtime_apply: {decomposition.get('allowed_runtime_apply', False)}\n")
+            handle.write(
+                f"- runtime_effect: {decomposition.get('runtime_effect', False)}\n"
+            )
+            handle.write(
+                f"- allowed_runtime_apply: {decomposition.get('allowed_runtime_apply', False)}\n"
+            )
         if has_stale_weak:
             handle.write("\n### stale quote with weak AI or strength\n\n")
             handle.write(
                 f"- events/symbols/records: {stale_weak.get('event_count', 0)}/"
                 f"{stale_weak.get('symbol_count', 0)}/{stale_weak.get('record_count', 0)}\n"
             )
-            handle.write(f"- quote_age_ms med/max: {_md_stat_pair(stale_weak.get('quote_age_ms') or {})}\n")
-            handle.write(f"- quote_age_over_max_ms med/max: {_md_stat_pair(stale_weak.get('quote_age_over_max_ms') or {})}\n")
-            handle.write(f"- ai_score med/max: {_md_stat_pair(stale_weak.get('ai_score') or {})}\n")
-            handle.write(f"- quote age buckets: {_md_counts(stale_weak.get('quote_age_bucket_counts', []), 'bucket')}\n")
-            handle.write(f"- AI source buckets: {_md_counts(stale_weak.get('ai_source_bucket_counts', []), 'bucket')}\n")
-            handle.write(f"- components: {_md_counts(stale_weak.get('component_counts', []), 'component')}\n")
-            handle.write(f"- top combos: {_md_counts(stale_weak.get('component_combo_counts', []), 'combo', limit=5)}\n")
-            handle.write(f"- ai actions: {_md_counts(stale_weak.get('ai_action_counts', []), 'action', limit=6)}\n")
+            handle.write(
+                f"- quote_age_ms med/max: {_md_stat_pair(stale_weak.get('quote_age_ms') or {})}\n"
+            )
+            handle.write(
+                f"- quote_age_over_max_ms med/max: {_md_stat_pair(stale_weak.get('quote_age_over_max_ms') or {})}\n"
+            )
+            handle.write(
+                f"- ai_score med/max: {_md_stat_pair(stale_weak.get('ai_score') or {})}\n"
+            )
+            handle.write(
+                f"- quote age buckets: {_md_counts(stale_weak.get('quote_age_bucket_counts', []), 'bucket')}\n"
+            )
+            handle.write(
+                f"- AI source buckets: {_md_counts(stale_weak.get('ai_source_bucket_counts', []), 'bucket')}\n"
+            )
+            handle.write(
+                f"- components: {_md_counts(stale_weak.get('component_counts', []), 'component')}\n"
+            )
+            handle.write(
+                f"- top combos: {_md_counts(stale_weak.get('component_combo_counts', []), 'combo', limit=5)}\n"
+            )
+            handle.write(
+                f"- ai actions: {_md_counts(stale_weak.get('ai_action_counts', []), 'action', limit=6)}\n"
+            )
             handle.write(
                 "- recheck candidates: "
                 f"immediate_quote_refresh_ai_recheck="
@@ -1493,10 +1960,18 @@ def write_outputs(report: dict[str, Any], *, output_md: Path, output_csv: Path, 
                 f"- quote_stale/fresh_effective_quote: {latency_danger.get('quote_stale_event_count', 0)}/"
                 f"{latency_danger.get('fresh_effective_quote_event_count', 0)}\n"
             )
-            handle.write(f"- spread_bps med/max: {_md_stat_pair(latency_danger.get('spread_bps') or {})}\n")
-            handle.write(f"- ws_age_ms med/max: {_md_stat_pair(latency_danger.get('ws_age_ms') or {})}\n")
-            handle.write(f"- causes: {_md_counts(latency_danger.get('cause_counts', []), 'cause', limit=6)}\n")
-            handle.write(f"- spread buckets: {_md_counts(latency_danger.get('spread_bucket_counts', []), 'bucket', limit=5)}\n")
+            handle.write(
+                f"- spread_bps med/max: {_md_stat_pair(latency_danger.get('spread_bps') or {})}\n"
+            )
+            handle.write(
+                f"- ws_age_ms med/max: {_md_stat_pair(latency_danger.get('ws_age_ms') or {})}\n"
+            )
+            handle.write(
+                f"- causes: {_md_counts(latency_danger.get('cause_counts', []), 'cause', limit=6)}\n"
+            )
+            handle.write(
+                f"- spread buckets: {_md_counts(latency_danger.get('spread_bucket_counts', []), 'bucket', limit=5)}\n"
+            )
         freshness_workorders = report.get("freshness_recheck_workorders") or []
         if freshness_workorders:
             handle.write("\n## bounded freshness recheck workorders\n\n")
@@ -1544,8 +2019,12 @@ def write_outputs(report: dict[str, Any], *, output_md: Path, output_csv: Path, 
                     f"{_md_cell(item.get('top_ofi_bucket') or '-')}|\n"
                 )
         handle.write("\n## top rows by max delta\n\n")
-        handle.write("|종목|첫감시|마지막|상승여부|maxΔ|latestΔ|BUY전 주 blocker|class|stale평가|refresh회복|stale유형|max quote age|BUY전 통과신호|AI|실제submit|흐름|\n")
-        handle.write("|---|---:|---:|---|---:|---:|---|---|---:|---:|---|---:|---:|---:|---:|---|\n")
+        handle.write(
+            "|종목|첫감시|마지막|상승여부|maxΔ|latestΔ|BUY전 주 blocker|class|stale평가|refresh회복|stale유형|max quote age|BUY전 통과신호|AI|실제submit|흐름|\n"
+        )
+        handle.write(
+            "|---|---:|---:|---|---:|---:|---|---|---:|---:|---|---:|---:|---:|---:|---|\n"
+        )
         for row in rows[:max_rows]:
             ai = ""
             if row["latest_ai_score"] is not None:
@@ -1572,7 +2051,9 @@ def write_outputs(report: dict[str, Any], *, output_md: Path, output_csv: Path, 
             )
 
 
-def _default_output_paths(target_date: str, since: str | None, generated_at: str) -> tuple[Path, Path]:
+def _default_output_paths(
+    target_date: str, since: str | None, generated_at: str
+) -> tuple[Path, Path]:
     suffix = "all"
     since_ts = _parse_ts(since, target_date=target_date)
     if since_ts is not None:
@@ -1585,12 +2066,17 @@ def _default_output_paths(target_date: str, since: str | None, generated_at: str
         / "intraday_entry_flow"
         / f"intraday_entry_flow_{target_date}_current.md"
     )
-    output_csv = Path("/tmp") / f"intraday_entry_flow_{target_date}_{suffix}_to_{generated_ts.strftime('%H%M')}.csv"
+    output_csv = (
+        Path("/tmp")
+        / f"intraday_entry_flow_{target_date}_{suffix}_to_{generated_ts.strftime('%H%M')}.csv"
+    )
     return output_md, output_csv
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build intraday watched-symbol entry flow report.")
+    parser = argparse.ArgumentParser(
+        description="Build intraday watched-symbol entry flow report."
+    )
     parser.add_argument("--target-date", default=datetime.now().strftime("%Y-%m-%d"))
     parser.add_argument("--event-cache-path", type=Path)
     parser.add_argument("--diagnostic-path", type=Path)
@@ -1612,12 +2098,26 @@ def main(argv: list[str] | None = None) -> int:
         until=args.until,
         generated_at=generated_at,
     )
-    default_md, default_csv = _default_output_paths(args.target_date, args.since, generated_at)
+    default_md, default_csv = _default_output_paths(
+        args.target_date, args.since, generated_at
+    )
     output_md = args.output_md or default_md
     output_csv = args.output_csv or default_csv
-    write_outputs(report, output_md=output_md, output_csv=output_csv, max_rows=args.max_rows)
+    write_outputs(
+        report, output_md=output_md, output_csv=output_csv, max_rows=args.max_rows
+    )
     if args.print_summary:
-        print(json.dumps({"output_md": str(output_md), "output_csv": str(output_csv), **report["summary"]}, ensure_ascii=False, sort_keys=True))
+        print(
+            json.dumps(
+                {
+                    "output_md": str(output_md),
+                    "output_csv": str(output_csv),
+                    **report["summary"],
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
     return 0
 
 
