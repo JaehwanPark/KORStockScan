@@ -80,6 +80,10 @@ def _real_post_sell_path(target_date: str) -> Path:
     return DATA_DIR / "post_sell" / f"post_sell_evaluations_{target_date}.jsonl"
 
 
+def _real_post_sell_candidate_path(target_date: str) -> Path:
+    return DATA_DIR / "post_sell" / f"post_sell_candidates_{target_date}.jsonl"
+
+
 def _threshold_cycle_ev_path(target_date: str) -> Path:
     return DATA_DIR / "report" / "threshold_cycle_ev" / f"threshold_cycle_ev_{target_date}.json"
 
@@ -131,7 +135,7 @@ def _event_fields(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def _event_date(event: dict[str, Any]) -> str:
-    for key in ("date", "target_date", "source_date", "trading_date"):
+    for key in ("date", "target_date", "source_date", "trading_date", "signal_date"):
         value = str(event.get(key) or "").strip()
         if len(value) >= 10:
             return value[:10]
@@ -203,10 +207,112 @@ def _iter_input_events(target_date: str) -> tuple[list[dict[str, Any]], dict[str
             fields["source_date"] = event_date
             events.append(fields)
     return events, {
-        "source_paths": {name: str(path) if path.exists() else None for name, path in source_paths.items()},
+        "source_paths": {name: _existing_jsonl_source(path) for name, path in source_paths.items()},
         "excluded_pre_baseline_count": excluded_pre_baseline,
         "clean_tuning_baseline": clean_policy,
     }
+
+
+def _existing_jsonl_source(path: Path) -> str | None:
+    if path.exists():
+        return str(path)
+    gzip_path = Path(f"{path}.gz")
+    return str(gzip_path) if gzip_path.exists() else None
+
+
+ENTRY_SPLIT_PROVENANCE_KEYS = (
+    "entry_split_order_policy_applied",
+    "entry_split_order_bucket",
+    "entry_split_order_policy_version",
+    "entry_split_order_policy_mode",
+    "entry_split_order_variant_id",
+    "entry_split_order_leg_count",
+    "entry_split_order_price_offsets_ticks",
+    "entry_split_order_qty_weight_min",
+    "entry_split_order_qty_weight_max",
+    "entry_split_order_runtime_default_policy_applied",
+    "entry_split_order_operator_fallback_authorized",
+)
+
+
+def _identifier(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        return str(int(float(text)))
+    except (TypeError, ValueError):
+        return text
+
+
+def _load_real_post_sell_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    candidates = [_event_fields(item) for item in iter_jsonl(_real_post_sell_candidate_path(target_date))]
+    evaluations = [_event_fields(item) for item in iter_jsonl(_real_post_sell_path(target_date))]
+    merged: list[dict[str, Any]] = []
+    by_post_sell_id: dict[str, int] = {}
+    for row in candidates:
+        post_sell_id = str(row.get("post_sell_id") or "").strip()
+        if post_sell_id and post_sell_id in by_post_sell_id:
+            merged[by_post_sell_id[post_sell_id]].update(row)
+            continue
+        if post_sell_id:
+            by_post_sell_id[post_sell_id] = len(merged)
+        merged.append(dict(row))
+    matched_evaluation_count = 0
+    for row in evaluations:
+        post_sell_id = str(row.get("post_sell_id") or "").strip()
+        if post_sell_id and post_sell_id in by_post_sell_id:
+            merged[by_post_sell_id[post_sell_id]].update(row)
+            matched_evaluation_count += 1
+            continue
+        if post_sell_id:
+            by_post_sell_id[post_sell_id] = len(merged)
+        merged.append(dict(row))
+    return merged, {
+        "candidate_count": len(candidates),
+        "evaluation_count": len(evaluations),
+        "matched_evaluation_count": matched_evaluation_count,
+        "pending_evaluation_count": max(0, len(candidates) - matched_evaluation_count),
+        "merged_count": len(merged),
+    }
+
+
+def _enrich_real_post_sell_provenance(
+    rows: list[dict[str, Any]], events: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], int]:
+    provenance_by_recommendation: dict[str, dict[str, Any]] = {}
+    for fields in events:
+        if str(fields.get("stage") or fields.get("event") or "").strip() != "order_bundle_submitted":
+            continue
+        if not (
+            _safe_bool(fields.get("entry_split_order_policy_applied"))
+            or str(fields.get("entry_split_order_variant_id") or "").strip()
+            or str(fields.get("entry_split_order_policy_mode") or "").strip()
+        ):
+            continue
+        provenance = {
+            key: fields.get(key)
+            for key in ENTRY_SPLIT_PROVENANCE_KEYS
+            if fields.get(key) not in (None, "", "-", "None", "none", "null")
+        }
+        if not provenance:
+            continue
+        recommendation_id = _identifier(fields.get("recommendation_id") or fields.get("record_id"))
+        if recommendation_id:
+            provenance_by_recommendation[recommendation_id] = provenance
+
+    enriched: list[dict[str, Any]] = []
+    reconstructed_count = 0
+    for row in rows:
+        next_row = dict(row)
+        if not _split_variant_id_from_fields(next_row):
+            recommendation_id = _identifier(next_row.get("recommendation_id") or next_row.get("record_id"))
+            provenance = provenance_by_recommendation.get(recommendation_id)
+            if provenance:
+                next_row.update(provenance)
+                reconstructed_count += 1
+        enriched.append(next_row)
+    return enriched, reconstructed_count
 
 
 def _load_sim_ev_values(target_date: str) -> dict[str, list[float]]:
@@ -233,13 +339,14 @@ def _load_sim_ev_values(target_date: str) -> dict[str, list[float]]:
     return values
 
 
-def _load_real_ev_values(target_date: str) -> dict[str, list[float]]:
+def _load_real_ev_values(
+    target_date: str, rows: list[dict[str, Any]] | None = None
+) -> dict[str, list[float]]:
     if not is_date_allowed(target_date, clean_baseline_policy()):
         return {}
     values: dict[str, list[float]] = defaultdict(list)
-    path = _real_post_sell_path(target_date)
-    for event in iter_jsonl(path):
-        fields = _event_fields(event)
+    source_rows = rows if rows is not None else _load_real_post_sell_rows(target_date)[0]
+    for fields in source_rows:
         event_date = _event_date(fields) or str(fields.get("entry_date") or fields.get("sell_date") or "")[:10]
         if event_date and event_date != target_date:
             continue
@@ -273,13 +380,14 @@ def _split_variant_id_from_fields(fields: dict[str, Any]) -> str:
     return f"{mode}:legs{leg_count}:offsets{offsets}:w{weight}"
 
 
-def _load_real_split_variant_ev_values(target_date: str) -> dict[tuple[str, str], list[float]]:
+def _load_real_split_variant_ev_values(
+    target_date: str, rows: list[dict[str, Any]] | None = None
+) -> dict[tuple[str, str], list[float]]:
     if not is_date_allowed(target_date, clean_baseline_policy()):
         return {}
     values: dict[tuple[str, str], list[float]] = defaultdict(list)
-    path = _real_post_sell_path(target_date)
-    for event in iter_jsonl(path):
-        fields = _event_fields(event)
+    source_rows = rows if rows is not None else _load_real_post_sell_rows(target_date)[0]
+    for fields in source_rows:
         event_date = _event_date(fields) or str(fields.get("entry_date") or fields.get("sell_date") or "")[:10]
         if event_date and event_date != target_date:
             continue
@@ -301,6 +409,14 @@ def _load_real_split_variant_ev_values(target_date: str) -> dict[tuple[str, str]
 
 
 def _context_bucket(fields: dict[str, Any]) -> str:
+    explicit_bucket = str(fields.get("entry_split_order_bucket") or "").strip()
+    if explicit_bucket in {
+        "guarded_or_stale",
+        "urgent_tight_spread",
+        "passive_wide_or_weak",
+        "balanced_normal",
+    }:
+        return explicit_bucket
     spread_bps = _safe_float(fields.get("spread_bps"), None)
     if spread_bps is None:
         spread_ratio = _safe_float(fields.get("spread_ratio"), None)
@@ -617,6 +733,20 @@ def _build_candidate_grid(
             if template.get("split_variant_id"):
                 split_variant_id = str(template.get("split_variant_id") or BASELINE_SPLIT_VARIANT_ID)
         split_variant_ev_list = real_split_variant_ev_values.get((bucket, split_variant_id)) if split_variant_id else []
+        observed_split_variants = [
+            {
+                "split_variant_id": observed_variant_id,
+                "sample_count": len(observed_values),
+                "equal_weight_avg_profit_pct": round(mean(observed_values), 4),
+            }
+            for (observed_bucket, observed_variant_id), observed_values in sorted(
+                real_split_variant_ev_values.items()
+            )
+            if observed_bucket == bucket and observed_values
+        ]
+        observed_split_outcome_count = sum(
+            _safe_int(item.get("sample_count"), 0) for item in observed_split_variants
+        )
         split_variant_outcome_count = len(split_variant_ev_list or [])
         split_variant_ev = round(mean(split_variant_ev_list), 4) if split_variant_ev_list else None
         primary_ev = split_variant_ev if split_variant_ev is not None else None
@@ -680,6 +810,7 @@ def _build_candidate_grid(
             floor_status = "hold_real_outcome_pending"
             primary_sample_book = "real_outcome_pending"
         passed = ev_passed or execution_shape_seed_passed
+        runtime_apply_scope = "ev_optimized_variant" if ev_passed else "baseline_split_structure"
         grid.append(
             {
                 "context_bucket": bucket,
@@ -691,6 +822,8 @@ def _build_candidate_grid(
                 "real_bucket_outcome_ev_pct": real_bucket_ev,
                 "real_split_variant_outcome_joined_sample": split_variant_outcome_count,
                 "real_split_variant_ev_pct": split_variant_ev,
+                "observed_real_split_outcome_count": observed_split_outcome_count,
+                "observed_real_split_variants": observed_split_variants,
                 "split_variant_id": split_variant_id,
                 "optimization_basis": (
                     "split_variant_outcome"
@@ -719,6 +852,15 @@ def _build_candidate_grid(
                 "policy_mode": policy_mode,
                 "policy_generation_reason": policy_generation_reason,
                 "candidate_passed": passed,
+                "runtime_apply_allowed": passed,
+                "runtime_apply_scope": runtime_apply_scope if passed else "none",
+                "runtime_apply_reason": (
+                    "positive_split_variant_ev_passed"
+                    if ev_passed
+                    else "qty_preserving_execution_shape_seed_passed"
+                    if execution_shape_seed_passed
+                    else floor_status
+                ),
             }
         )
     return grid
@@ -726,6 +868,12 @@ def _build_candidate_grid(
 
 def _policy_payload(target_date: str, report_json: Path, candidate_grid: list[dict[str, Any]]) -> dict[str, Any]:
     passed = [item for item in candidate_grid if item.get("candidate_passed")]
+    explicit_bucket_candidates = [
+        item
+        for item in passed
+        if item.get("runtime_apply_scope") == "ev_optimized_variant"
+        or item.get("policy_mode") == POLICY_MODE_POST_SUBMIT_TICK_BAND
+    ]
     version_seed = json.dumps(passed, sort_keys=True, ensure_ascii=False)
     digest = hashlib.sha1(version_seed.encode("utf-8")).hexdigest()[:10]
     policy_version = f"{RUNTIME_FAMILY}:{target_date}:{digest}"
@@ -734,7 +882,11 @@ def _policy_payload(target_date: str, report_json: Path, candidate_grid: list[di
         "policy_version": policy_version,
         "source_date": target_date,
         "source_report": str(report_json),
-        "runtime_apply_allowed": False,
+        "runtime_apply_allowed": bool(passed),
+        "baseline_runtime_defaults_enabled": any(
+            item.get("runtime_apply_scope") == "baseline_split_structure" for item in passed
+        ),
+        "explicit_bucket_count": len(explicit_bucket_candidates),
         "preopen_guard_required": True,
         "decision_authority": "next_preopen_bounded_entry_split_policy",
         "forbidden_uses": [
@@ -760,14 +912,18 @@ def _policy_payload(target_date: str, report_json: Path, candidate_grid: list[di
                 "real_sample_count": item.get("real_sample_count"),
                 "real_outcome_joined_sample": item.get("real_outcome_joined_sample"),
                 "real_split_variant_outcome_joined_sample": item.get("real_split_variant_outcome_joined_sample"),
+                "observed_real_split_outcome_count": item.get("observed_real_split_outcome_count"),
+                "observed_real_split_variants": item.get("observed_real_split_variants"),
                 "split_variant_id": item.get("split_variant_id"),
                 "optimization_basis": item.get("optimization_basis"),
+                "runtime_apply_scope": item.get("runtime_apply_scope"),
+                "runtime_apply_reason": item.get("runtime_apply_reason"),
                 "post_submit_low_tick_band": item.get("post_submit_low_tick_band"),
                 "source_quality_adjusted_ev_pct": item["source_quality_adjusted_ev_pct"],
                 "notional_weighted_ev_pct": item["notional_weighted_ev_pct"],
                 "downside_p10_profit_rate": item["downside_p10_profit_rate"],
             }
-            for item in passed
+            for item in explicit_bucket_candidates
         },
     }
 
@@ -778,8 +934,12 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
     events, load_summary = _iter_input_events(target_date)
     counts, excluded_source_quality = _quality_counts(events, source_quality)
     sim_ev_values = _load_sim_ev_values(target_date)
-    real_ev_values = _load_real_ev_values(target_date)
-    real_split_variant_ev_values = _load_real_split_variant_ev_values(target_date)
+    real_post_sell_rows, real_post_sell_summary = _load_real_post_sell_rows(target_date)
+    real_post_sell_rows, reconstructed_provenance_count = _enrich_real_post_sell_provenance(
+        real_post_sell_rows, events
+    )
+    real_ev_values = _load_real_ev_values(target_date, real_post_sell_rows)
+    real_split_variant_ev_values = _load_real_split_variant_ev_values(target_date, real_post_sell_rows)
     post_submit_low_tick_bands = _build_post_submit_low_tick_bands(events, source_quality=source_quality)
     candidate_grid = _build_candidate_grid(
         counts,
@@ -793,10 +953,11 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
     source_quality_allowed = source_quality.get("tuning_input_allowed") is True
     policy = _policy_payload(target_date, json_path, candidate_grid if source_quality_allowed else [])
     recommended_candidates = [
-        {**item, "runtime_apply_allowed": False}
+        item
         for item in candidate_grid
         if source_quality_allowed and item.get("candidate_passed")
     ]
+    runtime_apply_allowed = bool(recommended_candidates)
     report = {
         "schema_version": SCHEMA_VERSION,
         "date": target_date,
@@ -834,6 +995,10 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
                 "Post-sell profit_rate is only split-policy primary EV when it is joined to an applied "
                 "entry_split_order_variant_id. Bucket-only sell outcome is diagnostic."
             ),
+            "baseline_apply_contract": (
+                "A qty-preserving execution-shape seed may open at next PREOPEN after real-submit sample and "
+                "execution guards pass. This is structural activation, not an EV-positive variant claim."
+            ),
             "forbidden_uses": [
                 "requested_qty_increase",
                 "real_execution_quality_approval_from_sim",
@@ -848,12 +1013,23 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
             "excluded_source_quality_event_count": excluded_source_quality,
             "sim_post_sell_path": str(_sim_post_sell_path(target_date)) if _sim_post_sell_path(target_date).exists() else None,
             "real_post_sell_path": str(_real_post_sell_path(target_date)) if _real_post_sell_path(target_date).exists() else None,
+            "real_post_sell_candidate_path": (
+                str(_real_post_sell_candidate_path(target_date))
+                if _real_post_sell_candidate_path(target_date).exists()
+                else None
+            ),
+            "real_post_sell_join": {
+                **real_post_sell_summary,
+                "reconstructed_split_provenance_count": reconstructed_provenance_count,
+            },
             "threshold_cycle_ev_path": str(_threshold_cycle_ev_path(target_date)) if _threshold_cycle_ev_path(target_date).exists() else None,
             "post_submit_low_tick_band_bucket_count": len(post_submit_low_tick_bands),
         },
         "candidate_grid": candidate_grid,
         "recommended_policy": {
-            "runtime_apply_allowed": False,
+            "runtime_apply_allowed": runtime_apply_allowed,
+            "baseline_runtime_defaults_enabled": policy.get("baseline_runtime_defaults_enabled") is True,
+            "explicit_bucket_count": _safe_int(policy.get("explicit_bucket_count"), 0),
             "preopen_guard_required": True,
             "policy_file": str(policy_json),
             "policy_version": policy["policy_version"],
@@ -879,6 +1055,8 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- runtime_effect: `{report.get('runtime_effect')}`",
         f"- recommended_policy_candidates: `{rec.get('candidate_count')}`",
         f"- runtime_apply_allowed: `{rec.get('runtime_apply_allowed')}`",
+        f"- baseline_runtime_defaults_enabled: `{rec.get('baseline_runtime_defaults_enabled')}`",
+        f"- explicit_bucket_count: `{rec.get('explicit_bucket_count')}`",
         f"- policy_file: `{rec.get('policy_file') or '-'}`",
         "",
         "## Candidate Grid",
@@ -893,6 +1071,8 @@ def _render_markdown(report: dict[str, Any]) -> str:
             f"real/sim=`{item.get('real_sample_count')}/{item.get('sim_sample_count')}` "
             f"ev=`{item.get('source_quality_adjusted_ev_pct')}` "
             f"bucket_ev=`{item.get('real_bucket_outcome_ev_pct')}` "
+            f"observed_split_outcomes=`{item.get('observed_real_split_outcome_count')}` "
+            f"apply_scope=`{item.get('runtime_apply_scope')}` "
             f"p75_down_ticks=`{((item.get('post_submit_low_tick_band') or {}).get('p75_down_ticks'))}` "
             f"cancel=`{item.get('cancel_rate')}` "
             f"pass=`{item.get('candidate_passed')}`"

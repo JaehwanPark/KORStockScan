@@ -9430,13 +9430,16 @@ def _protect_trailing_break_confirmed(
     last_log = float(stock.get('last_protect_trailing_smooth_hold_log_ts', 0) or 0)
     if float(now_ts or time.time()) - last_log >= 5:
         _mutate_stock_state(stock, set_fields={'last_protect_trailing_smooth_hold_log_ts': float(now_ts or time.time())})
+        observation_contract = {
+            **_build_observation_contract_fields("ops_volume_diagnostic"),
+            "decision_authority": "protect_trailing_smoothing_observation_only",
+            "source_quality_gate": "protect_trailing_smooth_hold_contract_fields_present",
+        }
         _log_holding_pipeline(
             stock,
             code,
             "protect_trailing_smooth_hold",
-            **_build_observation_contract_fields("ops_volume_diagnostic"),
-            decision_authority="protect_trailing_smoothing_observation_only",
-            source_quality_gate="protect_trailing_smooth_hold_contract_fields_present",
+            **observation_contract,
             allowed_runtime_apply=False,
             actual_order_submitted=False,
             broker_order_forbidden=True,
@@ -39065,6 +39068,39 @@ def _merge_pending_entry_orders(existing_orders, entry_orders):
     return merged_orders
 
 
+ENTRY_SPLIT_POSITION_PROVENANCE_KEYS = (
+    "entry_split_order_policy_applied",
+    "entry_split_order_bucket",
+    "entry_split_order_policy_version",
+    "entry_split_order_policy_mode",
+    "entry_split_order_variant_id",
+    "entry_split_order_leg_count",
+    "entry_split_order_price_offsets_ticks",
+    "entry_split_order_qty_weight_min",
+    "entry_split_order_qty_weight_max",
+    "entry_split_order_runtime_default_policy_applied",
+    "entry_split_order_operator_fallback_authorized",
+)
+
+
+def _entry_split_position_provenance(entry_orders) -> dict:
+    for order in entry_orders or []:
+        if not isinstance(order, dict):
+            continue
+        if not (
+            bool(order.get("entry_split_order_policy_applied"))
+            or str(order.get("entry_split_order_variant_id") or "").strip()
+            or str(order.get("entry_split_order_policy_mode") or "").strip()
+        ):
+            continue
+        return {
+            key: order.get(key)
+            for key in ENTRY_SPLIT_POSITION_PROVENANCE_KEYS
+            if order.get(key) not in (None, "", "-", "None", "none", "null")
+        }
+    return {}
+
+
 def _clear_entry_arm(stock):
     _mutate_stock_state(stock, pop_fields=(
         'entry_armed',
@@ -42566,7 +42602,9 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
 
 def _stage_buy_order_submission(stock, code, curr_price, requested_qty, msg, entry_orders):
     holding_notice = None
+    split_provenance = _entry_split_position_provenance(entry_orders)
     with ENTRY_LOCK:
+        previous_status = str(stock.get('status') or '').strip().upper()
         entry_dynamic_reason = str(stock.get('entry_armed_dynamic_reason', '') or '')
         _clear_entry_arm(stock)
         existing_filled_qty = int(stock.get('entry_filled_qty', 0) or 0)
@@ -42597,6 +42635,11 @@ def _stage_buy_order_submission(stock, code, curr_price, requested_qty, msg, ent
             stock.get('pending_entry_orders') or [],
             entry_orders,
         )
+        if split_provenance or previous_status not in {'HOLDING', 'BUY_ORDERED'}:
+            for key in ENTRY_SPLIT_POSITION_PROVENANCE_KEYS:
+                stock.pop(key, None)
+        if split_provenance:
+            stock.update(split_provenance)
         stock.setdefault('entry_bundle_id', f"{code}-{uuid4().hex[:12]}")
         if entry_orders:
             stock.setdefault('entry_submit_notice_pending', True)

@@ -14836,7 +14836,14 @@ def test_protect_trailing_uses_smoothing_not_single_tick(monkeypatch):
     )
 
     assert calls["sell"] == 0
-    assert any(stage == "protect_trailing_smooth_hold" for stage, _ in calls["stages"])
+    hold_fields = next(
+        fields for stage, fields in calls["stages"] if stage == "protect_trailing_smooth_hold"
+    )
+    assert hold_fields["decision_authority"] == "protect_trailing_smoothing_observation_only"
+    assert hold_fields["source_quality_gate"] == "protect_trailing_smooth_hold_contract_fields_present"
+    assert hold_fields["allowed_runtime_apply"] is False
+    assert hold_fields["actual_order_submitted"] is False
+    assert hold_fields["broker_order_forbidden"] is True
 
 
 def test_protect_trailing_loss_floor_holds_near_flat_break(monkeypatch):
@@ -21686,6 +21693,88 @@ def test_stage_buy_order_submission_resets_stale_order_time(monkeypatch):
     assert stock["status"] == "BUY_ORDERED"
     assert stock["order_time"] == new_time
     assert stock["pending_entry_orders"][0]["ord_no"] == "0046858"
+
+
+def test_stage_buy_order_submission_persists_split_provenance_after_pending_clear(monkeypatch):
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 1001.0)
+    stock = {
+        "id": 1,
+        "name": "TEST",
+        "strategy": "SCALPING",
+        "status": "WATCHING",
+    }
+    split_fields = {
+        "entry_split_order_policy_applied": True,
+        "entry_split_order_bucket": "balanced_normal",
+        "entry_split_order_policy_version": "entry_split_order_plan:test",
+        "entry_split_order_policy_mode": "bounded_equal_split_baseline",
+        "entry_split_order_variant_id": "equal_50_50_offset_0pct_0_3pct",
+        "entry_split_order_leg_count": 2,
+        "entry_split_order_price_offsets_ticks": "0,1",
+        "entry_split_order_qty_weight_min": 0.5,
+        "entry_split_order_qty_weight_max": 0.5,
+        "entry_split_order_runtime_default_policy_applied": True,
+    }
+
+    state_handlers._stage_buy_order_submission(
+        stock,
+        "240810",
+        curr_price=123_300,
+        requested_qty=2,
+        msg="submitted",
+        entry_orders=[
+            {
+                "tag": "split_1",
+                "qty": 1,
+                "price": 123_300,
+                "ord_no": "S1",
+                "status": "OPEN",
+                "filled_qty": 0,
+                "sent_at": 1000.0,
+                **split_fields,
+            }
+        ],
+    )
+    state_handlers._clear_pending_entry_meta(stock)
+
+    assert "pending_entry_orders" not in stock
+    assert stock["entry_split_order_policy_applied"] is True
+    assert stock["entry_split_order_variant_id"] == "equal_50_50_offset_0pct_0_3pct"
+    assert stock["entry_split_order_price_offsets_ticks"] == "0,1"
+
+
+def test_stage_buy_order_submission_clears_stale_split_provenance_for_new_single_leg(monkeypatch):
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 1001.0)
+    stock = {
+        "id": 1,
+        "name": "TEST",
+        "strategy": "SCALPING",
+        "status": "WATCHING",
+        "entry_split_order_policy_applied": True,
+        "entry_split_order_variant_id": "stale-variant",
+    }
+
+    state_handlers._stage_buy_order_submission(
+        stock,
+        "240810",
+        curr_price=123_300,
+        requested_qty=1,
+        msg="submitted",
+        entry_orders=[
+            {
+                "tag": "normal",
+                "qty": 1,
+                "price": 123_300,
+                "ord_no": "N1",
+                "status": "OPEN",
+                "filled_qty": 0,
+                "sent_at": 1000.0,
+            }
+        ],
+    )
+
+    assert "entry_split_order_policy_applied" not in stock
+    assert "entry_split_order_variant_id" not in stock
 
 
 def test_entry_ai_price_context_includes_orderbook_micro_when_enabled(monkeypatch):

@@ -5713,6 +5713,16 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
         ]
         or [0]
     )
+    observed_real_split_outcome_sample = sum(
+        _safe_int(item.get("observed_real_split_outcome_count"), 0) or 0
+        for item in candidate_grid
+        if isinstance(item, dict)
+    )
+    real_post_sell_join = (
+        input_summary.get("real_post_sell_join")
+        if isinstance(input_summary.get("real_post_sell_join"), dict)
+        else {}
+    )
     policy_file = str(recommended_policy.get("policy_file") or "")
     policy_version = str(recommended_policy.get("policy_version") or "")
     report_loaded = bool(payload)
@@ -5747,6 +5757,13 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
             "real_sample_count": real_sample,
             "sim_sample_count": sim_sample,
             "real_outcome_joined_sample": real_outcome_sample,
+            "observed_real_split_outcome_joined_sample": observed_real_split_outcome_sample,
+            "reconstructed_split_provenance_count": _safe_int(
+                real_post_sell_join.get("reconstructed_split_provenance_count"), 0
+            ),
+            "pending_post_sell_evaluation_count": _safe_int(
+                real_post_sell_join.get("pending_evaluation_count"), 0
+            ),
             "primary_sample_book": best_candidate.get("primary_sample_book")
             or (
                 "real"
@@ -5761,6 +5778,12 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
             "policy_file": policy_file or None,
             "policy_version": policy_version or None,
             "runtime_apply_allowed": runtime_apply_allowed,
+            "baseline_runtime_defaults_enabled": (
+                recommended_policy.get("baseline_runtime_defaults_enabled") is True
+            ),
+            "explicit_policy_bucket_count": _safe_int(
+                recommended_policy.get("explicit_bucket_count"), 0
+            ),
             "best_context_bucket": best_candidate.get("context_bucket"),
             "best_source_quality_adjusted_ev_pct": best_candidate.get(
                 "source_quality_adjusted_ev_pct"
@@ -8232,6 +8255,18 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
                     family_sample.get("real_outcome_joined_sample"), 0
                 )
                 or 0,
+                "observed_real_split_outcome_joined_sample": _safe_int(
+                    family_sample.get("observed_real_split_outcome_joined_sample"), 0
+                )
+                or 0,
+                "reconstructed_split_provenance_count": _safe_int(
+                    family_sample.get("reconstructed_split_provenance_count"), 0
+                )
+                or 0,
+                "pending_post_sell_evaluation_count": _safe_int(
+                    family_sample.get("pending_post_sell_evaluation_count"), 0
+                )
+                or 0,
                 "primary_sample_book": family_sample.get("primary_sample_book"),
                 "source_quality_blocked": bool(
                     family_sample.get("source_quality_blocked")
@@ -8245,6 +8280,14 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
                 "policy_version": family_sample.get("policy_version"),
                 "runtime_apply_allowed": family_sample.get("runtime_apply_allowed")
                 is True,
+                "baseline_runtime_defaults_enabled": family_sample.get(
+                    "baseline_runtime_defaults_enabled"
+                )
+                is True,
+                "explicit_policy_bucket_count": _safe_int(
+                    family_sample.get("explicit_policy_bucket_count"), 0
+                )
+                or 0,
                 "best_context_bucket": family_sample.get("best_context_bucket"),
                 "source_quality_adjusted_ev_pct": family_sample.get(
                     "best_source_quality_adjusted_ev_pct"

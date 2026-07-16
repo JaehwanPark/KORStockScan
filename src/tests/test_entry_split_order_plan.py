@@ -151,8 +151,17 @@ def test_build_report_excludes_source_quality_hard_block_and_keeps_real_sim_spli
     assert urgent["source_quality_adjusted_ev_pct"] is None
     assert urgent["policy_mode"] == "bounded_equal_split_baseline"
     assert urgent["candidate_passed"] is True
-    assert report["recommended_policy"]["runtime_apply_allowed"] is False
+    assert report["recommended_policy"]["runtime_apply_allowed"] is True
     assert report["recommended_policy"]["candidate_count"] == 1
+    assert report["recommended_policy"]["baseline_runtime_defaults_enabled"] is True
+    assert report["recommended_policy"]["explicit_bucket_count"] == 0
+    assert report["recommended_policy"]["candidates"][0]["runtime_apply_scope"] == "baseline_split_structure"
+    assert report["recommended_policy"]["candidates"][0]["source_quality_adjusted_ev_pct"] is None
+    policy = json.loads(split_plan.policy_path(target_date).read_text(encoding="utf-8"))
+    assert policy["runtime_apply_allowed"] is True
+    assert policy["baseline_runtime_defaults_enabled"] is True
+    assert policy["explicit_bucket_count"] == 0
+    assert policy["buckets"] == {}
     assert split_plan.policy_path(target_date).exists()
 
 
@@ -204,8 +213,119 @@ def test_build_report_suppresses_policy_candidates_when_source_quality_blocked(m
     assert report["source_quality"]["tuning_input_allowed"] is False
     assert any(item["candidate_passed"] for item in report["candidate_grid"])
     assert report["recommended_policy"]["candidate_count"] == 0
+    assert report["recommended_policy"]["runtime_apply_allowed"] is False
+    assert report["recommended_policy"]["baseline_runtime_defaults_enabled"] is False
     policy = json.loads(split_plan.policy_path(target_date).read_text(encoding="utf-8"))
+    assert policy["runtime_apply_allowed"] is False
     assert policy["buckets"] == {}
+
+
+def test_build_report_merges_late_candidate_and_reconstructs_split_provenance(monkeypatch, tmp_path):
+    data_dir = _patch_dirs(monkeypatch, tmp_path)
+    target_date = "2026-07-07"
+    _write_jsonl(
+        data_dir / "pipeline_events" / f"pipeline_events_{target_date}.jsonl",
+        [
+            {
+                "date": target_date,
+                "stage": "order_bundle_submitted",
+                "record_id": 123,
+                "actual_order_submitted": True,
+                "broker_order_submitted": True,
+                "spread_bps": 18,
+                "buy_pressure_10t": 55,
+                "entry_split_order_policy_applied": True,
+                "entry_split_order_policy_mode": "bounded_equal_split_baseline",
+                "entry_split_order_variant_id": "equal_50_50_offset_0pct_0_3pct",
+                "entry_split_order_leg_count": 2,
+            }
+        ],
+    )
+    _write_jsonl(
+        data_dir / "post_sell" / f"post_sell_candidates_{target_date}.jsonl",
+        [
+            {
+                "post_sell_id": "late-candidate",
+                "signal_date": target_date,
+                "recommendation_id": 123,
+                "actual_order_submitted": True,
+                "profit_rate": 1.25,
+                "spread_bps": 18,
+                "buy_pressure_10t": 55,
+            }
+        ],
+    )
+    source_quality_path = (
+        data_dir
+        / "report"
+        / "observation_source_quality_audit"
+        / f"observation_source_quality_audit_{target_date}.json"
+    )
+    source_quality_path.parent.mkdir(parents=True, exist_ok=True)
+    source_quality_path.write_text(
+        json.dumps({"status": "warning", "summary": {"tuning_input_allowed": True}}),
+        encoding="utf-8",
+    )
+
+    report = split_plan.build_report(target_date, write=False)
+
+    balanced = next(item for item in report["candidate_grid"] if item["context_bucket"] == "balanced_normal")
+    assert balanced["real_outcome_joined_sample"] == 1
+    assert balanced["real_split_variant_outcome_joined_sample"] == 1
+    assert balanced["real_split_variant_ev_pct"] == 1.25
+    assert balanced["observed_real_split_outcome_count"] == 1
+    assert balanced["observed_real_split_variants"] == [
+        {
+            "split_variant_id": "equal_50_50_offset_0pct_0_3pct",
+            "sample_count": 1,
+            "equal_weight_avg_profit_pct": 1.25,
+        }
+    ]
+    assert report["input_summary"]["real_post_sell_join"] == {
+        "candidate_count": 1,
+        "evaluation_count": 0,
+        "matched_evaluation_count": 0,
+        "pending_evaluation_count": 1,
+        "merged_count": 1,
+        "reconstructed_split_provenance_count": 1,
+    }
+
+
+def test_provenance_reconstruction_ignores_false_split_flags_and_keeps_explicit_bucket():
+    rows = [
+        {
+            "recommendation_id": 123,
+            "actual_order_submitted": True,
+            "profit_rate": 1.0,
+        },
+        {
+            "recommendation_id": 456,
+            "actual_order_submitted": True,
+            "profit_rate": 2.0,
+        },
+    ]
+    events = [
+        {
+            "stage": "order_bundle_submitted",
+            "record_id": 123,
+            "entry_split_order_policy_applied": False,
+            "entry_split_order_runtime_default_policy_applied": False,
+        },
+        {
+            "stage": "order_bundle_submitted",
+            "record_id": 456,
+            "entry_split_order_policy_applied": True,
+            "entry_split_order_bucket": "balanced_normal",
+            "entry_split_order_policy_mode": "bounded_equal_split_baseline",
+            "entry_split_order_variant_id": "equal_50_50_offset_0pct_0_3pct",
+        },
+    ]
+
+    enriched, reconstructed_count = split_plan._enrich_real_post_sell_provenance(rows, events)
+
+    assert reconstructed_count == 1
+    assert "entry_split_order_policy_applied" not in enriched[0]
+    assert split_plan._context_bucket(enriched[1]) == "balanced_normal"
 
 
 def test_build_report_reads_threshold_cycle_events_from_contract_path(monkeypatch, tmp_path):
@@ -287,12 +407,12 @@ def test_build_report_creates_bounded_equal_baseline_without_real_outcome(monkey
     assert balanced["source_quality_adjusted_ev_pct"] is None
     assert report["recommended_policy"]["candidate_count"] == 1
     policy = json.loads(split_plan.policy_path(target_date).read_text(encoding="utf-8"))
-    assert policy["buckets"]["balanced_normal"]["policy_mode"] == "bounded_equal_split_baseline"
+    assert policy["baseline_runtime_defaults_enabled"] is True
+    assert policy["explicit_bucket_count"] == 0
+    assert policy["buckets"] == {}
 
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED", "true")
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE", str(split_plan.policy_path(target_date)))
-    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_OPERATOR_FALLBACK_ENABLED", "true")
-    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_OPERATOR_FALLBACK_ACTIVE_DATE", target_date)
     orders, fields = split_plan.apply_entry_split_order_policy(
         [{"tag": "normal", "qty": 2, "price": 1000}],
         latency_gate={
@@ -308,8 +428,11 @@ def test_build_report_creates_bounded_equal_baseline_without_real_outcome(monkey
     assert [item["qty"] for item in orders] == [1, 1]
     assert fields["entry_split_order_price_offsets_pct"] == "0.0,0.3"
     assert [item["price"] for item in orders] == [1000, 997]
-    assert fields["entry_split_order_policy_variant_id"] == "equal_50_50_offset_0pct_0_3pct"
-    assert fields["entry_split_order_variant_id"] == "equal_50_50_offset_0pct_0_3pct__runtime_first_weight_40"
+    assert fields["entry_split_order_policy_variant_id"] == split_plan.RUNTIME_FALLBACK_VARIANT_ID
+    assert fields["entry_split_order_variant_id"] == (
+        f"{split_plan.RUNTIME_FALLBACK_VARIANT_ID}__runtime_first_weight_40"
+    )
+    assert fields["entry_split_order_runtime_default_policy_applied"] is True
     assert fields["entry_split_order_runtime_weight_adjustment_applied"] is True
 
 
@@ -429,6 +552,7 @@ def test_build_report_uses_post_submit_low_tick_band_for_price_offsets(monkeypat
     policy = json.loads(split_plan.policy_path(target_date).read_text(encoding="utf-8"))
     assert policy["buckets"]["balanced_normal"]["policy_mode"] == "post_submit_tick_band_seed"
     assert policy["buckets"]["balanced_normal"]["price_offsets_ticks"] == [0, 1, 2]
+    assert policy["explicit_bucket_count"] == 1
 
 
 def test_post_submit_tick_band_excludes_source_quality_hard_blocked_rows(monkeypatch, tmp_path):
@@ -1145,6 +1269,8 @@ def test_daily_report_handoff_accepts_bounded_equal_baseline(monkeypatch, tmp_pa
     assert (
         candidate["source_metrics"]["bounded_equal_split_baseline_candidate_count"] == 1
     )
+    assert candidate["source_metrics"]["baseline_runtime_defaults_enabled"] is False
+    assert candidate["source_metrics"]["explicit_policy_bucket_count"] == 0
     overrides = preopen_apply._env_overrides_for_candidate(candidate)
     assert overrides["KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED"] == "true"
     assert overrides["KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE"] == str(policy_file)
