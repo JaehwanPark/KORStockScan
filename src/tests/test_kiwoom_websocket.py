@@ -94,7 +94,9 @@ def _epoch_at_090010():
     return datetime(2026, 7, 3, 9, 0, 10).timestamp()
 
 
-def test_realtime_0b_stores_signed_trade_volume_primary_with_touch_provenance(monkeypatch):
+def test_realtime_0b_stores_signed_trade_volume_primary_with_touch_provenance(
+    monkeypatch,
+):
     monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: _epoch_at_090010())
     manager = KiwoomWSManager("test-token")
     manager.subscribed_codes = {"005930"}
@@ -302,7 +304,9 @@ def test_realtime_0b_logs_trade_value_fallback_and_volume_mismatch(monkeypatch):
     assert latest["kiwoom_0b_aux_observed_count"] == 1
     assert latest["kiwoom_0b_1313_present_count"] == 0
     assert latest["kiwoom_0b_1313_missing_count"] == 1
-    assert latest["kiwoom_0b_trade_value_source_counts"] == {"calc_price_x_1030_1031_sum": 1}
+    assert latest["kiwoom_0b_trade_value_source_counts"] == {
+        "calc_price_x_1030_1031_sum": 1
+    }
     assert latest["kiwoom_0b_trade_volume_source_counts"] == {"1030_1031_sum": 1}
     assert latest["kiwoom_0b_1030_1031_vs_15_evaluable_count"] == 1
     assert latest["kiwoom_0b_1030_1031_vs_15_mismatch_count"] == 1
@@ -310,7 +314,9 @@ def test_realtime_0b_logs_trade_value_fallback_and_volume_mismatch(monkeypatch):
     assert momentum["tick_value_source"] == "calc_price_x_1030_1031_sum"
 
 
-def test_trade_auxiliary_score_uses_exec_imbalance_cum_volume_and_prev_price(monkeypatch):
+def test_trade_auxiliary_score_uses_exec_imbalance_cum_volume_and_prev_price(
+    monkeypatch,
+):
     now = _epoch_at_090010()
     monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: now)
     manager = KiwoomWSManager("test-token")
@@ -480,7 +486,9 @@ def test_0b_cached_top_of_book_age_is_not_refreshed_by_cache_use():
     now = _epoch_at_090010()
     manager = KiwoomWSManager("test-token")
     cache_ts_ms = int(now * 1000)
-    manager._update_tob_cache("005930", best_ask=10110, best_bid=10100, now_ms=cache_ts_ms)
+    manager._update_tob_cache(
+        "005930", best_ask=10110, best_bid=10100, now_ms=cache_ts_ms
+    )
 
     first = manager._resolve_0b_touch_quote(
         "005930",
@@ -554,7 +562,9 @@ def test_realtime_0b_rejects_stale_or_unsynced_top_of_book_cache(monkeypatch):
     assert tick["aggressor_touch_source"] == "missing_best_quote"
 
 
-def test_realtime_0b_partial_inline_quote_keeps_signed_primary_without_cache(monkeypatch):
+def test_realtime_0b_partial_inline_quote_keeps_signed_primary_without_cache(
+    monkeypatch,
+):
     monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: _epoch_at_090010())
     manager = KiwoomWSManager("test-token")
     manager.subscribed_codes = {"005930"}
@@ -703,7 +713,9 @@ def test_await_login_ack_raises_on_login_failure():
     manager = KiwoomWSManager("test-token")
     fake_ws = _FakeWS(
         [
-            json.dumps({"trnm": "LOGIN", "return_code": 100013, "return_msg": "login pending"}),
+            json.dumps(
+                {"trnm": "LOGIN", "return_code": 100013, "return_msg": "login pending"}
+            ),
         ]
     )
 
@@ -814,8 +826,14 @@ def test_condition_realtime_events_ignored_by_default(monkeypatch):
 
 def test_scalp_condition_init_matches_blocked_outside_buy_window(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_WS_CONDITION_SEARCH_ENABLED", "true")
-    monkeypatch.setattr(kiwoom_websocket, "is_scalping_buy_time_allowed", lambda now=None: False)
-    monkeypatch.setattr(kiwoom_websocket, "scalping_buy_time_block_reason", lambda now=None: "outside_scalping_buy_window")
+    monkeypatch.setattr(
+        kiwoom_websocket, "is_scalping_buy_time_allowed", lambda now=None: False
+    )
+    monkeypatch.setattr(
+        kiwoom_websocket,
+        "scalping_buy_time_block_reason",
+        lambda now=None: "outside_scalping_buy_window",
+    )
     manager = KiwoomWSManager("test-token")
     manager.condition_dict = {"1": "scalp_candid_normal_01"}
 
@@ -836,8 +854,14 @@ def test_scalp_condition_init_matches_blocked_outside_buy_window(monkeypatch):
 
 def test_scalp_condition_realtime_insert_blocked_outside_buy_window(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_WS_CONDITION_SEARCH_ENABLED", "true")
-    monkeypatch.setattr(kiwoom_websocket, "is_scalping_buy_time_allowed", lambda now=None: False)
-    monkeypatch.setattr(kiwoom_websocket, "scalping_buy_time_block_reason", lambda now=None: "outside_scalping_buy_window")
+    monkeypatch.setattr(
+        kiwoom_websocket, "is_scalping_buy_time_allowed", lambda now=None: False
+    )
+    monkeypatch.setattr(
+        kiwoom_websocket,
+        "scalping_buy_time_block_reason",
+        lambda now=None: "outside_scalping_buy_window",
+    )
     manager = KiwoomWSManager("test-token")
     manager.condition_dict = {"1": "scalp_candid_normal_01"}
 
@@ -864,7 +888,11 @@ def test_scalp_condition_realtime_insert_blocked_outside_buy_window(monkeypatch)
 def test_scalp_condition_deferred_insert_flushes_when_buy_window_opens(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_WS_CONDITION_SEARCH_ENABLED", "true")
     buy_window_open = {"value": False}
-    monkeypatch.setattr(kiwoom_websocket, "is_scalping_buy_time_allowed", lambda now=None: buy_window_open["value"])
+    monkeypatch.setattr(
+        kiwoom_websocket,
+        "is_scalping_buy_time_allowed",
+        lambda now=None: buy_window_open["value"],
+    )
     monkeypatch.setattr(
         kiwoom_websocket,
         "scalping_buy_time_block_reason",
@@ -906,7 +934,11 @@ def test_scalp_condition_deferred_insert_flushes_when_buy_window_opens(monkeypat
 def test_scalp_condition_unmatched_drops_deferred_insert(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_WS_CONDITION_SEARCH_ENABLED", "true")
     buy_window_open = {"value": False}
-    monkeypatch.setattr(kiwoom_websocket, "is_scalping_buy_time_allowed", lambda now=None: buy_window_open["value"])
+    monkeypatch.setattr(
+        kiwoom_websocket,
+        "is_scalping_buy_time_allowed",
+        lambda now=None: buy_window_open["value"],
+    )
     monkeypatch.setattr(
         kiwoom_websocket,
         "scalping_buy_time_block_reason",
@@ -959,7 +991,11 @@ def test_scalp_condition_unmatched_drops_deferred_insert(monkeypatch):
 def test_scalp_condition_unmatched_after_window_open_drops_before_flush(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_WS_CONDITION_SEARCH_ENABLED", "true")
     buy_window_open = {"value": False}
-    monkeypatch.setattr(kiwoom_websocket, "is_scalping_buy_time_allowed", lambda now=None: buy_window_open["value"])
+    monkeypatch.setattr(
+        kiwoom_websocket,
+        "is_scalping_buy_time_allowed",
+        lambda now=None: buy_window_open["value"],
+    )
     monkeypatch.setattr(
         kiwoom_websocket,
         "scalping_buy_time_block_reason",
@@ -1012,7 +1048,9 @@ def test_scalp_condition_unmatched_after_window_open_drops_before_flush(monkeypa
 
 def test_scalp_condition_unmatched_still_flows_outside_buy_window(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_WS_CONDITION_SEARCH_ENABLED", "true")
-    monkeypatch.setattr(kiwoom_websocket, "is_scalping_buy_time_allowed", lambda now=None: False)
+    monkeypatch.setattr(
+        kiwoom_websocket, "is_scalping_buy_time_allowed", lambda now=None: False
+    )
     manager = KiwoomWSManager("test-token")
     manager.condition_dict = {"1": "scalp_candid_normal_01"}
 
@@ -1040,7 +1078,9 @@ def test_scalp_condition_unmatched_still_flows_outside_buy_window(monkeypatch):
 
 def test_swing_condition_insert_not_blocked_by_scalping_buy_window(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_WS_CONDITION_SEARCH_ENABLED", "true")
-    monkeypatch.setattr(kiwoom_websocket, "is_scalping_buy_time_allowed", lambda now=None: False)
+    monkeypatch.setattr(
+        kiwoom_websocket, "is_scalping_buy_time_allowed", lambda now=None: False
+    )
     manager = KiwoomWSManager("test-token")
     manager.condition_dict = {"6": "kospi_short_swing_01"}
 
@@ -1184,10 +1224,14 @@ def test_send_reg_respects_registered_item_budget(monkeypatch):
     published = []
     manager.websocket = fake_ws
     manager._session_ready.set()
-    manager.event_bus = SimpleNamespace(publish=lambda name, payload: published.append((name, payload)))
+    manager.event_bus = SimpleNamespace(
+        publish=lambda name, payload: published.append((name, payload))
+    )
 
     monkeypatch.setenv("KORSTOCKSCAN_WS_MAX_REG_ITEMS", "1")
-    monkeypatch.setattr("src.utils.kiwoom_utils.get_effective_kiwoom_code", lambda code: code)
+    monkeypatch.setattr(
+        "src.utils.kiwoom_utils.get_effective_kiwoom_code", lambda code: code
+    )
 
     asyncio.run(manager._send_reg(["000001", "000002"], enforce_item_budget=True))
 
@@ -1214,7 +1258,9 @@ def test_execute_unsubscribe_removes_registered_item_budget_state(monkeypatch):
     manager.websocket = fake_ws
     manager._session_ready.set()
 
-    monkeypatch.setattr("src.utils.kiwoom_utils.get_effective_kiwoom_code", lambda code: code)
+    monkeypatch.setattr(
+        "src.utils.kiwoom_utils.get_effective_kiwoom_code", lambda code: code
+    )
 
     asyncio.run(manager._send_reg(["000001"]))
     manager.execute_unsubscribe(["000001"])
@@ -1230,8 +1276,12 @@ def test_send_reg_preserves_refresh_for_all_batches(monkeypatch):
     manager.websocket = fake_ws
     manager._session_ready.set()
 
-    monkeypatch.setattr(kiwoom_websocket, "TRADING_RULES", SimpleNamespace(WS_REG_BATCH_SIZE=2))
-    monkeypatch.setattr("src.utils.kiwoom_utils.get_effective_kiwoom_code", lambda code: code)
+    monkeypatch.setattr(
+        kiwoom_websocket, "TRADING_RULES", SimpleNamespace(WS_REG_BATCH_SIZE=2)
+    )
+    monkeypatch.setattr(
+        "src.utils.kiwoom_utils.get_effective_kiwoom_code", lambda code: code
+    )
 
     asyncio.run(manager._send_reg(["000001", "000002", "000003", "000004", "000005"]))
 
@@ -1242,7 +1292,13 @@ def test_send_reg_preserves_refresh_for_all_batches(monkeypatch):
         ["000003", "000004"],
         ["000005"],
     ]
-    assert manager.subscribed_codes == {"000001", "000002", "000003", "000004", "000005"}
+    assert manager.subscribed_codes == {
+        "000001",
+        "000002",
+        "000003",
+        "000004",
+        "000005",
+    }
 
 
 def test_send_reg_incremental_mode_does_not_replace_existing_group(monkeypatch):
@@ -1251,8 +1307,12 @@ def test_send_reg_incremental_mode_does_not_replace_existing_group(monkeypatch):
     manager.websocket = fake_ws
     manager._session_ready.set()
 
-    monkeypatch.setattr(kiwoom_websocket, "TRADING_RULES", SimpleNamespace(WS_REG_BATCH_SIZE=2))
-    monkeypatch.setattr("src.utils.kiwoom_utils.get_effective_kiwoom_code", lambda code: code)
+    monkeypatch.setattr(
+        kiwoom_websocket, "TRADING_RULES", SimpleNamespace(WS_REG_BATCH_SIZE=2)
+    )
+    monkeypatch.setattr(
+        "src.utils.kiwoom_utils.get_effective_kiwoom_code", lambda code: code
+    )
 
     asyncio.run(
         manager._send_reg(
@@ -1304,7 +1364,9 @@ def test_command_ws_reg_persistent_repair_passes_repair_cycle(monkeypatch):
         }
     )
 
-    assert calls == [(["240810"], True, "scanner_persistent_ws_gap_recovery", "persistent_ws_gap")]
+    assert calls == [
+        (["240810"], True, "scanner_persistent_ws_gap_recovery", "persistent_ws_gap")
+    ]
 
 
 def test_command_ws_reg_string_false_force_is_not_truthy(monkeypatch):
@@ -1316,7 +1378,9 @@ def test_command_ws_reg_string_false_force_is_not_truthy(monkeypatch):
 
     monkeypatch.setattr(manager, "execute_subscribe", fake_execute)
 
-    manager._handle_reg_event({"codes": ["240810"], "source": "scanner_watch", "force": "false"})
+    manager._handle_reg_event(
+        {"codes": ["240810"], "source": "scanner_watch", "force": "false"}
+    )
 
     assert calls == [(["240810"], False, "scanner_watch", "")]
 
@@ -1333,7 +1397,9 @@ def test_execute_subscribe_string_false_force_does_not_resubscribe(monkeypatch):
         scheduled.append(coro)
         return SimpleNamespace(add_done_callback=lambda callback: None)
 
-    monkeypatch.setattr(kiwoom_websocket.asyncio, "run_coroutine_threadsafe", fake_schedule)
+    monkeypatch.setattr(
+        kiwoom_websocket.asyncio, "run_coroutine_threadsafe", fake_schedule
+    )
 
     manager.execute_subscribe(["039490"], force="false")
 
@@ -1345,11 +1411,15 @@ def test_recent_reg_filter_skips_non_force_duplicates(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_WS_REG_RECENT_TTL_SEC", "20")
     monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: 1000.0)
 
-    allowed, skipped = manager._filter_recent_reg_targets(["240810", "039490"], force=False)
+    allowed, skipped = manager._filter_recent_reg_targets(
+        ["240810", "039490"], force=False
+    )
     assert allowed == ["240810", "039490"]
     assert skipped == []
 
-    allowed, skipped = manager._filter_recent_reg_targets(["240810", "039490"], force=False)
+    allowed, skipped = manager._filter_recent_reg_targets(
+        ["240810", "039490"], force=False
+    )
     assert allowed == []
     assert skipped == ["240810", "039490"]
 
@@ -1374,9 +1444,15 @@ def test_recent_reg_filter_allows_after_ttl(monkeypatch):
     now = {"value": 1000.0}
     monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: now["value"])
 
-    assert manager._filter_recent_reg_targets(["240810"], force=False) == (["240810"], [])
+    assert manager._filter_recent_reg_targets(["240810"], force=False) == (
+        ["240810"],
+        [],
+    )
     now["value"] = 1021.0
-    assert manager._filter_recent_reg_targets(["240810"], force=False) == (["240810"], [])
+    assert manager._filter_recent_reg_targets(["240810"], force=False) == (
+        ["240810"],
+        [],
+    )
 
 
 def test_alternate_route_filter_limits_codes_per_batch(monkeypatch):
@@ -1385,7 +1461,9 @@ def test_alternate_route_filter_limits_codes_per_batch(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_WS_ALTERNATE_ROUTE_TTL_SEC", "180")
     monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: 1000.0)
 
-    allowed, skipped = manager._filter_alternate_route_targets(["000001", "000002", "000003"])
+    allowed, skipped = manager._filter_alternate_route_targets(
+        ["000001", "000002", "000003"]
+    )
 
     assert allowed == ["000001", "000002"]
     assert skipped == ["000003"]
@@ -1398,8 +1476,14 @@ def test_alternate_route_filter_throttles_recent_codes(monkeypatch):
     now = {"value": 1000.0}
     monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: now["value"])
 
-    assert manager._filter_alternate_route_targets(["000001", "000002"]) == (["000001", "000002"], [])
-    assert manager._filter_alternate_route_targets(["000001", "000003"]) == (["000003"], ["000001"])
+    assert manager._filter_alternate_route_targets(["000001", "000002"]) == (
+        ["000001", "000002"],
+        [],
+    )
+    assert manager._filter_alternate_route_targets(["000001", "000003"]) == (
+        ["000003"],
+        ["000001"],
+    )
     now["value"] = 1181.0
     assert manager._filter_alternate_route_targets(["000001"]) == (["000001"], [])
 
@@ -1410,7 +1494,9 @@ def test_send_reg_applies_alternate_only_to_allowed_codes(monkeypatch):
     manager.websocket = fake_ws
     manager._session_ready.set()
 
-    monkeypatch.setattr("src.utils.kiwoom_utils.get_effective_kiwoom_code", lambda code: code)
+    monkeypatch.setattr(
+        "src.utils.kiwoom_utils.get_effective_kiwoom_code", lambda code: code
+    )
 
     asyncio.run(
         manager._send_reg(
@@ -1470,7 +1556,9 @@ def test_persistent_repair_defaults_refresh_stale_scanner_sources_quickly(monkey
     manager = KiwoomWSManager("test-token")
     monkeypatch.delenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_MAX_CODES", raising=False)
     monkeypatch.delenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_TTL_SEC", raising=False)
-    monkeypatch.delenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_REBUILD_GROUP_ENABLED", raising=False)
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_WS_PERSISTENT_REPAIR_REBUILD_GROUP_ENABLED", raising=False
+    )
     now = {"value": 1000.0}
     monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: now["value"])
 
@@ -1487,7 +1575,9 @@ def test_persistent_repair_defaults_refresh_stale_scanner_sources_quickly(monkey
 def test_persistent_repair_rebuild_targets_default_off(monkeypatch):
     manager = KiwoomWSManager("test-token")
     manager.subscribed_codes.update({"000001", "000002"})
-    monkeypatch.delenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_REBUILD_GROUP_ENABLED", raising=False)
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_WS_PERSISTENT_REPAIR_REBUILD_GROUP_ENABLED", raising=False
+    )
 
     rebuild, targets = manager._persistent_repair_rebuild_targets(["000003"])
 
@@ -1499,7 +1589,9 @@ def test_persistent_repair_rebuild_targets_merges_subscribed_when_enabled(monkey
     manager = KiwoomWSManager("test-token")
     manager.subscribed_codes.update({"000001", "000002"})
     monkeypatch.setenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_REBUILD_GROUP_ENABLED", "1")
-    monkeypatch.setenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_REBUILD_GROUP_MIN_INTERVAL_SEC", "30")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_WS_PERSISTENT_REPAIR_REBUILD_GROUP_MIN_INTERVAL_SEC", "30"
+    )
     now = {"value": 1000.0}
     monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: now["value"])
 
@@ -1535,7 +1627,9 @@ def test_alternate_route_hot_override_allows_rebuild_group_coverage(monkeypatch)
 
 def test_ws_repair_budget_hot_reloads_operator_override_file(tmp_path, monkeypatch):
     override_path = tmp_path / "operator_runtime_overrides.env"
-    monkeypatch.setattr(kiwoom_websocket, "_WS_OPERATOR_RUNTIME_OVERRIDE_PATH", override_path)
+    monkeypatch.setattr(
+        kiwoom_websocket, "_WS_OPERATOR_RUNTIME_OVERRIDE_PATH", override_path
+    )
     monkeypatch.setattr(kiwoom_websocket, "_WS_HOT_RUNTIME_OVERRIDE_REFRESH_SEC", 0.0)
     monkeypatch.delenv("KORSTOCKSCAN_WS_ALTERNATE_ROUTE_MAX_CODES", raising=False)
     monkeypatch.delenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_MAX_CODES", raising=False)
@@ -1574,7 +1668,12 @@ def test_ws_repair_budget_hot_reloads_operator_override_file(tmp_path, monkeypat
     assert KiwoomWSManager._persistent_repair_stuck_cooldown_sec() == 120.0
     assert KiwoomWSManager._persistent_repair_stuck_min_attempts() == 4
     assert KiwoomWSManager._persistent_repair_ttl_sec() == 20.0
-    assert kiwoom_websocket._ws_hot_runtime_override_value("KORSTOCKSCAN_BUY_SCORE_THRESHOLD") is None
+    assert (
+        kiwoom_websocket._ws_hot_runtime_override_value(
+            "KORSTOCKSCAN_BUY_SCORE_THRESHOLD"
+        )
+        is None
+    )
 
     override_path.write_text(
         "export KORSTOCKSCAN_WS_ALTERNATE_ROUTE_MAX_CODES=9\n",
@@ -1592,8 +1691,14 @@ def test_persistent_repair_filter_throttles_recent_codes(monkeypatch):
     now = {"value": 1000.0}
     monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: now["value"])
 
-    assert manager._filter_persistent_repair_targets(["000001", "000002"]) == (["000001", "000002"], [])
-    assert manager._filter_persistent_repair_targets(["000001", "000003"]) == (["000003"], ["000001"])
+    assert manager._filter_persistent_repair_targets(["000001", "000002"]) == (
+        ["000001", "000002"],
+        [],
+    )
+    assert manager._filter_persistent_repair_targets(["000001", "000003"]) == (
+        ["000003"],
+        ["000001"],
+    )
     now["value"] = 1091.0
     assert manager._filter_persistent_repair_targets(["000001"]) == (["000001"], [])
 
@@ -1681,14 +1786,20 @@ def test_real_payload_with_exchange_suffix_updates_canonical_snapshot():
     assert manager.realtime_data["039490"]["received_types"] == {"0B"}
     assert manager.realtime_data["039490"]["last_ws_item"] == "039490_AL"
     assert manager.realtime_data["039490"]["last_ws_market_suffix"] == "_AL"
-    assert manager.realtime_data["039490"]["last_ws_market_route"] == "krx_nxt_integrated"
-    assert manager.realtime_data["039490"]["last_realtime_type_item"]["0B"] == "039490_AL"
+    assert (
+        manager.realtime_data["039490"]["last_ws_market_route"] == "krx_nxt_integrated"
+    )
+    assert (
+        manager.realtime_data["039490"]["last_realtime_type_item"]["0B"] == "039490_AL"
+    )
     assert manager.realtime_data["039490"]["last_realtime_type_market_route"]["0B"] == (
         "krx_nxt_integrated"
     )
 
 
-def test_subscription_freshness_snapshot_classifies_no_tick_stale_and_fresh(monkeypatch):
+def test_subscription_freshness_snapshot_classifies_no_tick_stale_and_fresh(
+    monkeypatch,
+):
     manager = KiwoomWSManager("test-token")
     monkeypatch.setenv("KORSTOCKSCAN_WS_FRESHNESS_STALE_SEC", "30")
     manager.subscribed_codes.update({"000001", "000002", "000003", "000004"})
@@ -1729,13 +1840,19 @@ def test_subscription_freshness_snapshot_classifies_no_tick_stale_and_fresh(monk
     assert rows["000003"]["registered_item_count"] == 2
     assert rows["000003"]["registered_item_quota_units"] == 2
     assert rows["000003"]["registered_market_suffixes"] == ["", "_AL"]
-    assert rows["000003"]["registered_market_routes"] == ["krx_regular", "krx_nxt_integrated"]
+    assert rows["000003"]["registered_market_routes"] == [
+        "krx_regular",
+        "krx_nxt_integrated",
+    ]
     assert rows["000003"]["registered_route_counts"] == {
         "krx_nxt_integrated": 1,
         "krx_regular": 1,
     }
     assert rows["000003"]["multi_route_registered"] is True
-    assert rows["000003"]["route_repair_policy"] == "remove_then_reg_required_for_route_transition"
+    assert (
+        rows["000003"]["route_repair_policy"]
+        == "remove_then_reg_required_for_route_transition"
+    )
     assert rows["000003"]["decision_authority"] == "ws_freshness_source_quality_only"
     assert rows["000003"]["broker_order_forbidden"] is True
     assert rows["000004"]["freshness_state"] == "fresh"
@@ -1747,14 +1864,19 @@ def test_subscription_freshness_snapshot_classifies_no_tick_stale_and_fresh(monk
     assert rows["000004"]["repair_reason"] == "none"
     assert rows["000004"]["recommended_repair"] == "none"
     assert rows["000004"]["trade_tick_quiet"] is True
-    assert rows["000004"]["trade_tick_quiet_reason"] == "fresh_non_trade_ws_without_fresh_0b"
+    assert (
+        rows["000004"]["trade_tick_quiet_reason"]
+        == "fresh_non_trade_ws_without_fresh_0b"
+    )
 
     filtered = manager.get_subscription_freshness_snapshot(["999999"], now_ts=1000.0)
     assert filtered["rows"][0]["freshness_state"] == "unsubscribed"
     assert filtered["rows"][0]["repair_recommended"] is False
 
 
-def test_send_reg_remove_before_reg_removes_existing_route_then_registers_new_route(monkeypatch):
+def test_send_reg_remove_before_reg_removes_existing_route_then_registers_new_route(
+    monkeypatch,
+):
     manager = KiwoomWSManager("test-token")
     fake_ws = _FakeWS([])
     manager.websocket = fake_ws
@@ -1762,7 +1884,9 @@ def test_send_reg_remove_before_reg_removes_existing_route_then_registers_new_ro
     manager.subscribed_codes.add("039490")
     manager._registered_items_by_code["039490"] = ("039490_AL",)
 
-    monkeypatch.setattr("src.utils.kiwoom_utils.get_effective_kiwoom_code", lambda code: code)
+    monkeypatch.setattr(
+        "src.utils.kiwoom_utils.get_effective_kiwoom_code", lambda code: code
+    )
 
     asyncio.run(
         manager._send_reg(
@@ -1794,7 +1918,9 @@ def test_send_remove_updates_local_state_when_requested(monkeypatch):
     manager._recent_reg_request_ts["000001"] = 999.0
     manager._persistent_repair_request_ts["000001"] = 999.0
 
-    asyncio.run(manager._send_remove(["000001"], update_local_state=True, source="test"))
+    asyncio.run(
+        manager._send_remove(["000001"], update_local_state=True, source="test")
+    )
 
     remove_payload = json.loads(fake_ws.sent[0])
     assert remove_payload["trnm"] == "REMOVE"
@@ -1814,7 +1940,9 @@ def test_remove_before_reg_string_false_does_not_send_remove(monkeypatch):
     manager.subscribed_codes.add("039490")
     manager._registered_items_by_code["039490"] = ("039490_AL",)
 
-    monkeypatch.setattr("src.utils.kiwoom_utils.get_effective_kiwoom_code", lambda code: code)
+    monkeypatch.setattr(
+        "src.utils.kiwoom_utils.get_effective_kiwoom_code", lambda code: code
+    )
 
     asyncio.run(manager._send_reg(["039490"], remove_before_reg="false"))
 
