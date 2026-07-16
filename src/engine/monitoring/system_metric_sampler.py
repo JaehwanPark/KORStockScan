@@ -10,7 +10,6 @@ from datetime import datetime
 from pathlib import Path
 import fcntl
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 LOG_PATH = PROJECT_ROOT / "logs" / "system_metric_samples.jsonl"
 STATE_PATH = PROJECT_ROOT / "tmp" / "system_metric_sampler_state.json"
@@ -21,7 +20,7 @@ def _read_proc_stat() -> dict[str, int]:
     line = Path("/proc/stat").read_text(encoding="utf-8").splitlines()[0]
     parts = line.split()
     keys = ["user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal"]
-    values = [int(v) for v in parts[1:1 + len(keys)]]
+    values = [int(v) for v in parts[1 : 1 + len(keys)]]
     return dict(zip(keys, values))
 
 
@@ -129,7 +128,11 @@ def sample_once() -> dict:
     sample = {
         "ts": now_iso,
         "epoch": int(now_ts),
-        "loadavg": {"1m": round(load1, 3), "5m": round(load5, 3), "15m": round(load15, 3)},
+        "loadavg": {
+            "1m": round(load1, 3),
+            "5m": round(load5, 3),
+            "15m": round(load15, 3),
+        },
         "cpu": _cpu_pct(cpu, prev_state.get("cpu", {})),
         "memory": {
             "mem_total_mb": round(mem.get("MemTotal", 0) / 1024, 1),
@@ -154,6 +157,7 @@ def sample_once() -> dict:
 def main() -> int:
     sample_once()
     return 0
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

@@ -14,12 +14,13 @@ from typing import Any, Iterable
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
-
 KST = timezone(timedelta(hours=9))
 REPORT_TYPE = "intraday_ws_freshness_monitor"
 REPORT_DIR = DATA_DIR / "report" / REPORT_TYPE
 WORKORDER_REPORT_DIR = DATA_DIR / "report" / "intraday_ws_freshness_workorder"
-WORKORDER_DOC_DIR = Path(__file__).resolve().parents[3] / "docs" / "code-improvement-workorders"
+WORKORDER_DOC_DIR = (
+    Path(__file__).resolve().parents[3] / "docs" / "code-improvement-workorders"
+)
 PIPELINE_EVENTS_DIR = DATA_DIR / "pipeline_events"
 THRESHOLD_EVENTS_DIR = DATA_DIR / "threshold_cycle"
 DEFAULT_STALE_SEC = 30.0
@@ -201,7 +202,9 @@ def _rate_pct(count: int, total: int) -> float:
     return round((float(count) / float(total) * 100.0), 4) if total else 0.0
 
 
-def _counter_rows(counter: Counter, *, limit: int = 20, key_name: str = "key") -> list[dict[str, Any]]:
+def _counter_rows(
+    counter: Counter, *, limit: int = 20, key_name: str = "key"
+) -> list[dict[str, Any]]:
     return [
         {key_name: str(key), "count": int(value)}
         for key, value in counter.most_common(limit)
@@ -244,10 +247,15 @@ def _pipeline_event_class(row: dict[str, Any], *, stale_ms: float) -> dict[str, 
     repair_recommended = _boolish(row.get("repair_recommended"))
     repair_reason = str(row.get("repair_reason") or "").strip() or "none"
     freshness_state = str(row.get("freshness_state") or "").strip()
-    subscription_stale = repair_recommended or repair_reason in {
-        "subscription_no_tick",
-        "subscription_stale",
-    } or freshness_state in {"no_tick", "stale"}
+    subscription_stale = (
+        repair_recommended
+        or repair_reason
+        in {
+            "subscription_no_tick",
+            "subscription_stale",
+        }
+        or freshness_state in {"no_tick", "stale"}
+    )
 
     age_0b = _to_float(row.get("ws_last_0b_age_ms"))
     age_0d = _to_float(row.get("ws_last_0d_age_ms"))
@@ -268,7 +276,9 @@ def _pipeline_event_class(row: dict[str, Any], *, stale_ms: float) -> dict[str, 
         trade_tick_quiet = True
 
     submit_related = "submit" in stage.lower() or "order_bundle" in stage.lower()
-    scout_related = "scout" in stage.lower() or "rising_missed" in json.dumps(row, ensure_ascii=False)
+    scout_related = "scout" in stage.lower() or "rising_missed" in json.dumps(
+        row, ensure_ascii=False
+    )
 
     return {
         "stage": stage,
@@ -282,7 +292,9 @@ def _pipeline_event_class(row: dict[str, Any], *, stale_ms: float) -> dict[str, 
         "provider_none": _row_provider_none(row),
         "submit_related": submit_related,
         "scout_related": scout_related,
-        "ws_age_observed": any(_to_float(row.get(key)) is not None for key in WS_AGE_FIELDS_MS)
+        "ws_age_observed": any(
+            _to_float(row.get(key)) is not None for key in WS_AGE_FIELDS_MS
+        )
         or age_0b is not None
         or age_0d is not None,
         "age_0b_ms": age_0b,
@@ -364,7 +376,9 @@ def _snapshot_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _build_workorders(summary: dict[str, Any], *, target_date: str) -> list[dict[str, Any]]:
+def _build_workorders(
+    summary: dict[str, Any], *, target_date: str
+) -> list[dict[str, Any]]:
     counts = summary["pipeline_counts"]
     snapshot = summary["snapshot_summary"]
     orders: list[dict[str, Any]] = []
@@ -377,7 +391,9 @@ def _build_workorders(summary: dict[str, Any], *, target_date: str) -> list[dict
         "decision_authority": METRIC_CONTRACT["decision_authority"],
         "forbidden_uses": FORBIDDEN_USES,
     }
-    if counts.get("subscription_stale", 0) or snapshot.get("repair_recommended_count", 0):
+    if counts.get("subscription_stale", 0) or snapshot.get(
+        "repair_recommended_count", 0
+    ):
         orders.append(
             {
                 **base,
@@ -476,7 +492,9 @@ def _build_workorders(summary: dict[str, Any], *, target_date: str) -> list[dict
         )
     if not orders:
         return []
-    orders.sort(key=lambda item: (int(item.get("priority", 99)), str(item.get("order_id"))))
+    orders.sort(
+        key=lambda item: (int(item.get("priority", 99)), str(item.get("order_id")))
+    )
     return orders
 
 
@@ -528,7 +546,12 @@ def build_report(
         stage = str(item.get("stage") or "unknown")
         bucket = str(item.get("time_bucket") or "unknown")
         code = str(item.get("stock_code") or "")
-        for key in ("trade_tick_quiet", "subscription_stale", "both_ws_stale", "provider_none"):
+        for key in (
+            "trade_tick_quiet",
+            "subscription_stale",
+            "both_ws_stale",
+            "provider_none",
+        ):
             if item.get(key):
                 stage_counts[key][stage] += 1
                 time_bucket_counts[key][bucket] += 1
@@ -547,15 +570,25 @@ def build_report(
         "metric_contract": METRIC_CONTRACT,
         "source_paths": {name: str(path) for name, path in paths.items()},
         "source_missing": source_missing,
-        "subscription_snapshot_path": str(subscription_snapshot_path) if subscription_snapshot_path else None,
+        "subscription_snapshot_path": (
+            str(subscription_snapshot_path) if subscription_snapshot_path else None
+        ),
         "row_count_by_source": dict(row_count_by_source),
         "pipeline_counts": dict(counts),
         "pipeline_event_count": total_events,
         "pipeline_rates": {
-            "trade_tick_quiet_rate_pct": _rate_pct(int(counts.get("trade_tick_quiet", 0)), total_events),
-            "subscription_stale_rate_pct": _rate_pct(int(counts.get("subscription_stale", 0)), total_events),
-            "both_ws_stale_rate_pct": _rate_pct(int(counts.get("both_ws_stale", 0)), total_events),
-            "provider_none_rate_pct": _rate_pct(int(counts.get("provider_none", 0)), total_events),
+            "trade_tick_quiet_rate_pct": _rate_pct(
+                int(counts.get("trade_tick_quiet", 0)), total_events
+            ),
+            "subscription_stale_rate_pct": _rate_pct(
+                int(counts.get("subscription_stale", 0)), total_events
+            ),
+            "both_ws_stale_rate_pct": _rate_pct(
+                int(counts.get("both_ws_stale", 0)), total_events
+            ),
+            "provider_none_rate_pct": _rate_pct(
+                int(counts.get("provider_none", 0)), total_events
+            ),
         },
         "snapshot_summary": snapshot,
         "by_stage": {
@@ -578,7 +611,8 @@ def build_report(
         "implement_now_runtime_effect_false_count": sum(
             1
             for item in workorders
-            if item.get("decision") == "implement_now" and item.get("runtime_effect") is False
+            if item.get("decision") == "implement_now"
+            and item.get("runtime_effect") is False
         ),
         "provider_none_incident_count": int(counts.get("provider_none", 0)),
         "runtime_effect": False,
@@ -594,7 +628,9 @@ def _render_monitor_markdown(report: dict[str, Any]) -> str:
         "## Decision",
         "",
     ]
-    workorder_count = (report.get("workorder_summary") or {}).get("selected_order_count", 0)
+    workorder_count = (report.get("workorder_summary") or {}).get(
+        "selected_order_count", 0
+    )
     if workorder_count:
         lines.append(
             f"- postclose_workorder_required: `{workorder_count}` source-only directives"
@@ -689,21 +725,30 @@ def _render_workorder_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def write_report(report: dict[str, Any], *, monitor_only: bool = False) -> tuple[Path, Path, Path | None, Path | None]:
+def write_report(
+    report: dict[str, Any], *, monitor_only: bool = False
+) -> tuple[Path, Path, Path | None, Path | None]:
     target_date = str(report.get("target_date") or date.today().isoformat())
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     monitor_json = REPORT_DIR / f"{REPORT_TYPE}_{target_date}.json"
     monitor_md = REPORT_DIR / f"{REPORT_TYPE}_{target_date}.md"
 
-    monitor_json.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    monitor_json.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     monitor_md.write_text(_render_monitor_markdown(report), encoding="utf-8")
     if monitor_only:
         return monitor_json, monitor_md, None, None
 
     WORKORDER_REPORT_DIR.mkdir(parents=True, exist_ok=True)
     WORKORDER_DOC_DIR.mkdir(parents=True, exist_ok=True)
-    workorder_json = WORKORDER_REPORT_DIR / f"intraday_ws_freshness_workorder_{target_date}.json"
-    workorder_md = WORKORDER_DOC_DIR / f"intraday_ws_freshness_workorder_{target_date}.md"
+    workorder_json = (
+        WORKORDER_REPORT_DIR / f"intraday_ws_freshness_workorder_{target_date}.json"
+    )
+    workorder_md = (
+        WORKORDER_DOC_DIR / f"intraday_ws_freshness_workorder_{target_date}.md"
+    )
     workorder_payload = {
         "target_date": target_date,
         "source_report_type": REPORT_TYPE,
@@ -713,7 +758,8 @@ def write_report(report: dict[str, Any], *, monitor_only: bool = False) -> tuple
         "summary": report.get("workorder_summary") or {},
     }
     workorder_json.write_text(
-        json.dumps(workorder_payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        json.dumps(workorder_payload, ensure_ascii=False, indent=2, sort_keys=True)
+        + "\n",
         encoding="utf-8",
     )
     workorder_md.write_text(_render_workorder_markdown(report), encoding="utf-8")
@@ -721,7 +767,9 @@ def write_report(report: dict[str, Any], *, monitor_only: bool = False) -> tuple
 
 
 def _run_once(args: argparse.Namespace) -> dict[str, Any]:
-    snapshot_path = Path(args.subscription_snapshot) if args.subscription_snapshot else None
+    snapshot_path = (
+        Path(args.subscription_snapshot) if args.subscription_snapshot else None
+    )
     report = build_report(
         args.target_date,
         pipeline_path=Path(args.pipeline_path) if args.pipeline_path else None,
