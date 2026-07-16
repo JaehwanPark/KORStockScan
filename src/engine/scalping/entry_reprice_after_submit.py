@@ -7,7 +7,6 @@ from typing import Any
 
 from src.trading.order.tick_utils import clamp_price_to_tick, get_tick_size
 
-
 RUNTIME_FAMILY = "entry_reprice_after_submit_runtime"
 POLICY_VERSION = "entry_reprice_after_submit_v1"
 
@@ -123,41 +122,88 @@ def evaluate_entry_reprice_after_submit(
 
     strategy_key = str(strategy or "").strip().upper()
     status = str(order.get("status", "OPEN") or "OPEN").strip().upper()
-    order_type = str(order.get("order_type", order.get("order_type_code", "")) or "").strip()
+    order_type = str(
+        order.get("order_type", order.get("order_type_code", "")) or ""
+    ).strip()
     original_price = _safe_int(order.get("price"))
     qty = _safe_int(order.get("qty"))
     filled_qty = _safe_int(order.get("filled_qty"))
-    attempt_count = _safe_int(order.get("entry_reprice_attempt_count", order.get("reprice_attempt_count")), 0)
+    attempt_count = _safe_int(
+        order.get("entry_reprice_attempt_count", order.get("reprice_attempt_count")), 0
+    )
     order_no = str(order.get("ord_no") or order.get("order_no") or "").strip()
     quote_age = None if quote_age_ms is None else _safe_float(quote_age_ms, -1.0)
     bid = _safe_int(best_bid)
     ask = _safe_int(best_ask)
     tick_size = int(get_tick_size(max(bid, ask, current_price, original_price, 1)) or 1)
-    spread_bps = round(((ask - bid) / ask) * 10000.0, 3) if ask > 0 and bid > 0 and ask >= bid else 0.0
+    spread_bps = (
+        round(((ask - bid) / ask) * 10000.0, 3)
+        if ask > 0 and bid > 0 and ask >= bid
+        else 0.0
+    )
     spread_ticks = _tick_count(bid, ask)
     score = _safe_float(ai_score, _safe_float(order.get("ai_score"), 0.0))
-    action = str(chosen_action or order.get("entry_reprice_action") or "").strip().upper()
-    adm_action = str(entry_adm_recommended_action or order.get("entry_adm_recommended_action") or "").strip().upper()
-    adm_ev = _safe_float(entry_adm_ev_pct, _safe_float(order.get("entry_adm_ev_pct"), 0.0))
-    ldm_action = str(lifecycle_matrix_selected_action or order.get("lifecycle_matrix_selected_action") or "").strip().upper()
-    buy_pressure = _safe_float(buy_pressure_10t, _safe_float(order.get("buy_pressure_10t"), 50.0))
+    action = (
+        str(chosen_action or order.get("entry_reprice_action") or "").strip().upper()
+    )
+    adm_action = (
+        str(
+            entry_adm_recommended_action
+            or order.get("entry_adm_recommended_action")
+            or ""
+        )
+        .strip()
+        .upper()
+    )
+    adm_ev = _safe_float(
+        entry_adm_ev_pct, _safe_float(order.get("entry_adm_ev_pct"), 0.0)
+    )
+    ldm_action = (
+        str(
+            lifecycle_matrix_selected_action
+            or order.get("lifecycle_matrix_selected_action")
+            or ""
+        )
+        .strip()
+        .upper()
+    )
+    buy_pressure = _safe_float(
+        buy_pressure_10t, _safe_float(order.get("buy_pressure_10t"), 50.0)
+    )
     pressure_usable = bool(
         _safe_bool(
-            tick_aggressor_pressure_usable
-            if tick_aggressor_pressure_usable is not None
-            else order.get("tick_aggressor_pressure_usable"),
+            (
+                tick_aggressor_pressure_usable
+                if tick_aggressor_pressure_usable is not None
+                else order.get("tick_aggressor_pressure_usable")
+            ),
             False,
         )
         or _safe_int(
-            tick_aggressor_trusted_count
-            if tick_aggressor_trusted_count is not None
-            else order.get("tick_aggressor_trusted_count"),
+            (
+                tick_aggressor_trusted_count
+                if tick_aggressor_trusted_count is not None
+                else order.get("tick_aggressor_trusted_count")
+            ),
             0,
         )
         > 0
     )
-    micro_state = str(orderbook_micro_state or order.get("orderbook_micro_state") or "").strip().lower()
-    latency = str(latency_state or order.get("latency_state") or order.get("latency_entry_state") or "").strip().upper()
+    micro_state = (
+        str(orderbook_micro_state or order.get("orderbook_micro_state") or "")
+        .strip()
+        .lower()
+    )
+    latency = (
+        str(
+            latency_state
+            or order.get("latency_state")
+            or order.get("latency_entry_state")
+            or ""
+        )
+        .strip()
+        .upper()
+    )
     mark_price = _safe_int(
         order.get("mark_price_at_submit")
         or order.get("submitted_mark_price")
@@ -190,9 +236,11 @@ def evaluate_entry_reprice_after_submit(
         "buy_pressure_10t": f"{buy_pressure:.2f}",
         "tick_aggressor_pressure_usable": bool(pressure_usable),
         "tick_aggressor_trusted_count": _safe_int(
-            tick_aggressor_trusted_count
-            if tick_aggressor_trusted_count is not None
-            else order.get("tick_aggressor_trusted_count"),
+            (
+                tick_aggressor_trusted_count
+                if tick_aggressor_trusted_count is not None
+                else order.get("tick_aggressor_trusted_count")
+            ),
             0,
         ),
         "orderbook_micro_state": micro_state or "-",
@@ -243,9 +291,15 @@ def evaluate_entry_reprice_after_submit(
     )
     if adm_action == "NO_BUY_AI" and adm_ev < 0:
         fields["reprice_candidate"] = (
-            "continuation_override_candidate" if strong_continuation else "adm_negative_prior"
+            "continuation_override_candidate"
+            if strong_continuation
+            else "adm_negative_prior"
         )
-        reason = "continuation_override_candidate_report_only" if strong_continuation else "adm_negative_prior"
+        reason = (
+            "continuation_override_candidate_report_only"
+            if strong_continuation
+            else "adm_negative_prior"
+        )
         return _block(reason, fields)
 
     target = bid
@@ -260,7 +314,9 @@ def evaluate_entry_reprice_after_submit(
         return _block("price_not_improved", fields)
 
     cap_base = max(mark_price, original_price, 1)
-    cap_price = clamp_price_to_tick(cap_base * (1.0 + (float(max_upward_bps) / 10000.0)))
+    cap_price = clamp_price_to_tick(
+        cap_base * (1.0 + (float(max_upward_bps) / 10000.0))
+    )
     fields["max_upward_cap_price"] = cap_price
     if target > cap_price:
         target = clamp_price_to_tick(cap_price)

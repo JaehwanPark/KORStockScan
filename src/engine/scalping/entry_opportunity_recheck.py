@@ -9,7 +9,6 @@ from typing import Any, Mapping
 
 from src.engine.scalping.entry_ai_gate import evaluate_ai_score_prior
 
-
 RUNTIME_FAMILY = "entry_opportunity_recheck_runtime"
 POLICY_VERSION = "entry_opportunity_recheck_runtime_v1"
 DECISION_AUTHORITY = RUNTIME_FAMILY
@@ -93,7 +92,9 @@ class EntryOpportunityRecheckState:
         return int(self.effective_max_daily_recheck or config.max_daily_recheck)
 
     def daily_buy_recovery_limit(self, config: EntryOpportunityRecheckConfig) -> int:
-        return int(self.effective_max_daily_buy_recovery or config.max_daily_buy_recovery)
+        return int(
+            self.effective_max_daily_buy_recovery or config.max_daily_buy_recovery
+        )
 
     def record_recheck(self, code: Any) -> None:
         key = str(code or "")
@@ -127,7 +128,9 @@ class EntryOpportunityRecheckState:
             "updated_at": _safe_float(now_ts, 0.0),
         }
 
-    def escalation_snapshot(self, config: EntryOpportunityRecheckConfig) -> dict[str, Any]:
+    def escalation_snapshot(
+        self, config: EntryOpportunityRecheckConfig
+    ) -> dict[str, Any]:
         marks = list(self.recovery_marks.values())
         profits = [_safe_float(mark.get("profit_rate"), 0.0) for mark in marks]
         avg_profit = sum(profits) / len(profits) if profits else 0.0
@@ -208,20 +211,27 @@ class EntryOpportunityRecheckState:
         current_recheck_limit = self.daily_recheck_limit(config)
         current_recovery_limit = self.daily_buy_recovery_limit(config)
         recheck_exhausted = (
-            current_recheck_limit <= 0 or self.daily_recheck_count >= current_recheck_limit
+            current_recheck_limit <= 0
+            or self.daily_recheck_count >= current_recheck_limit
         )
         recovery_exhausted = (
-            current_recovery_limit <= 0 or self.daily_buy_recovery_count >= current_recovery_limit
+            current_recovery_limit <= 0
+            or self.daily_buy_recovery_count >= current_recovery_limit
         )
         if not recheck_exhausted and not recovery_exhausted:
             return "cap_not_exhausted"
 
-        max_recheck = max(int(config.max_daily_recheck), int(config.escalation_max_daily_recheck))
+        max_recheck = max(
+            int(config.max_daily_recheck), int(config.escalation_max_daily_recheck)
+        )
         max_recovery = max(
             int(config.max_daily_buy_recovery),
             int(config.escalation_max_daily_buy_recovery),
         )
-        if current_recheck_limit >= max_recheck and current_recovery_limit >= max_recovery:
+        if (
+            current_recheck_limit >= max_recheck
+            and current_recovery_limit >= max_recovery
+        ):
             return "max_cap_reached"
 
         snapshot = self.escalation_snapshot(config)
@@ -238,7 +248,9 @@ class EntryOpportunityRecheckState:
         ):
             return "worst_profit_guard_block"
         if (
-            _safe_float(snapshot["entry_opportunity_recheck_recovery_avg_profit_pct"], 0.0)
+            _safe_float(
+                snapshot["entry_opportunity_recheck_recovery_avg_profit_pct"], 0.0
+            )
             < config.escalation_min_avg_profit_pct
         ):
             return "avg_profit_floor_not_met"
@@ -312,11 +324,21 @@ def config_from_env() -> EntryOpportunityRecheckConfig:
         max_ws_age_ms=max(0, _env_int(f"{prefix}MAX_WS_AGE_MS", 1500)),
         forbid_danger=_env_bool(f"{prefix}FORBID_DANGER", True),
         require_fresh_quote=_env_bool(f"{prefix}REQUIRE_FRESH_QUOTE", True),
-        require_explicit_buy_action=_env_bool(f"{prefix}REQUIRE_EXPLICIT_BUY_ACTION", True),
-        intraday_escalation_enabled=_env_bool(f"{prefix}INTRADAY_ESCALATION_ENABLED", False),
-        escalation_step_recheck=max(0, _env_int(f"{prefix}ESCALATION_STEP_RECHECK", 10)),
-        escalation_step_buy_recovery=max(0, _env_int(f"{prefix}ESCALATION_STEP_BUY_RECOVERY", 2)),
-        escalation_max_daily_recheck=max(0, _env_int(f"{prefix}ESCALATION_MAX_DAILY_RECHECK", 30)),
+        require_explicit_buy_action=_env_bool(
+            f"{prefix}REQUIRE_EXPLICIT_BUY_ACTION", True
+        ),
+        intraday_escalation_enabled=_env_bool(
+            f"{prefix}INTRADAY_ESCALATION_ENABLED", False
+        ),
+        escalation_step_recheck=max(
+            0, _env_int(f"{prefix}ESCALATION_STEP_RECHECK", 10)
+        ),
+        escalation_step_buy_recovery=max(
+            0, _env_int(f"{prefix}ESCALATION_STEP_BUY_RECOVERY", 2)
+        ),
+        escalation_max_daily_recheck=max(
+            0, _env_int(f"{prefix}ESCALATION_MAX_DAILY_RECHECK", 30)
+        ),
         escalation_max_daily_buy_recovery=max(
             0,
             _env_int(f"{prefix}ESCALATION_MAX_DAILY_BUY_RECOVERY", 7),
@@ -325,8 +347,12 @@ def config_from_env() -> EntryOpportunityRecheckConfig:
             0,
             _env_int(f"{prefix}ESCALATION_MIN_SUCCESSFUL_RECOVERIES", 2),
         ),
-        escalation_min_avg_profit_pct=_env_float(f"{prefix}ESCALATION_MIN_AVG_PROFIT_PCT", 0.0),
-        escalation_min_peak_profit_pct=_env_float(f"{prefix}ESCALATION_MIN_PEAK_PROFIT_PCT", 0.3),
+        escalation_min_avg_profit_pct=_env_float(
+            f"{prefix}ESCALATION_MIN_AVG_PROFIT_PCT", 0.0
+        ),
+        escalation_min_peak_profit_pct=_env_float(
+            f"{prefix}ESCALATION_MIN_PEAK_PROFIT_PCT", 0.3
+        ),
         escalation_max_worst_profit_pct=_env_float(
             f"{prefix}ESCALATION_MAX_WORST_PROFIT_PCT",
             -0.6,
@@ -367,12 +393,18 @@ def _base_fields(config: EntryOpportunityRecheckConfig) -> dict[str, Any]:
         "entry_opportunity_recheck_enabled": bool(config.enabled),
         "entry_opportunity_recheck_min_ai_score": float(config.min_ai_score),
         "entry_opportunity_recheck_max_ai_score": float(config.max_ai_score),
-        "entry_opportunity_recheck_max_recheck_per_symbol": int(config.max_recheck_per_symbol),
+        "entry_opportunity_recheck_max_recheck_per_symbol": int(
+            config.max_recheck_per_symbol
+        ),
         "entry_opportunity_recheck_max_daily_recheck": int(config.max_daily_recheck),
-        "entry_opportunity_recheck_max_daily_buy_recovery": int(config.max_daily_buy_recovery),
+        "entry_opportunity_recheck_max_daily_buy_recovery": int(
+            config.max_daily_buy_recovery
+        ),
         "entry_opportunity_recheck_max_ws_age_ms": int(config.max_ws_age_ms),
         "entry_opportunity_recheck_forbid_danger": bool(config.forbid_danger),
-        "entry_opportunity_recheck_require_fresh_quote": bool(config.require_fresh_quote),
+        "entry_opportunity_recheck_require_fresh_quote": bool(
+            config.require_fresh_quote
+        ),
         "entry_opportunity_recheck_require_explicit_buy_action": bool(
             config.require_explicit_buy_action
         ),
@@ -464,14 +496,22 @@ def evaluate_blocked_ai_score_recheck(
         "entry_opportunity_recheck_ai_action": action or "-",
         "entry_opportunity_recheck_score_gate_converted_to_prior": True,
         "entry_opportunity_recheck_score_in_prior_band": score_in_prior_band,
-        "entry_opportunity_recheck_score_prior_band": score_prior.get("score_prior_band"),
-        "entry_opportunity_recheck_ai_score_prior_weight": score_prior.get("ai_score_prior_weight"),
-        "entry_opportunity_recheck_score_prior_reason": score_prior.get("score_prior_reason"),
+        "entry_opportunity_recheck_score_prior_band": score_prior.get(
+            "score_prior_band"
+        ),
+        "entry_opportunity_recheck_ai_score_prior_weight": score_prior.get(
+            "ai_score_prior_weight"
+        ),
+        "entry_opportunity_recheck_score_prior_reason": score_prior.get(
+            "score_prior_reason"
+        ),
         "entry_opportunity_recheck_hard_gate_veto": False,
         "entry_opportunity_recheck_latency_state": latency or "-",
         "entry_opportunity_recheck_ws_age_ms": ws_age if ws_age >= 0 else "-",
         "entry_opportunity_recheck_daily_count": int(state.daily_recheck_count),
-        "entry_opportunity_recheck_daily_buy_recovery_count": int(state.daily_buy_recovery_count),
+        "entry_opportunity_recheck_daily_buy_recovery_count": int(
+            state.daily_buy_recovery_count
+        ),
         "entry_opportunity_recheck_symbol_count": int(state.symbol_count(code)),
     }
     base.update(state.escalation_fields(config))
@@ -540,7 +580,9 @@ def evaluate_blocked_ai_score_recheck(
             fields=base,
         )
     escalation_attempt_reason = state.maybe_escalate_intraday(config)
-    base.update(state.escalation_fields(config, attempt_reason=escalation_attempt_reason))
+    base.update(
+        state.escalation_fields(config, attempt_reason=escalation_attempt_reason)
+    )
     daily_recheck_limit = state.daily_recheck_limit(config)
     daily_buy_recovery_limit = state.daily_buy_recovery_limit(config)
 
@@ -565,7 +607,10 @@ def evaluate_blocked_ai_score_recheck(
             config=config,
             fields=base,
         )
-    if daily_buy_recovery_limit <= 0 or state.daily_buy_recovery_count >= daily_buy_recovery_limit:
+    if (
+        daily_buy_recovery_limit <= 0
+        or state.daily_buy_recovery_count >= daily_buy_recovery_limit
+    ):
         return _decision(
             allowed=False,
             reason="daily_buy_recovery_cap_exhausted",
