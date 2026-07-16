@@ -11,7 +11,11 @@ def _ai_keep_response():
         "schema_version": 1,
         "interpretation": {
             "bucket_reviews": [],
-            "source_contract_review": {"status": "pass", "changes": [], "reason": "contract stable"},
+            "source_contract_review": {
+                "status": "pass",
+                "changes": [],
+                "reason": "contract stable",
+            },
         },
         "audit": {"status": "pass", "issues": [], "reason": "two-pass review accepted"},
         "ai_tier2_proposals": [],
@@ -28,9 +32,17 @@ def _ai_block_response(reason, *, bucket_id=None):
         "schema_version": 1,
         "interpretation": {
             "bucket_reviews": [],
-            "source_contract_review": {"status": "pass", "changes": [], "reason": "contract stable"},
+            "source_contract_review": {
+                "status": "pass",
+                "changes": [],
+                "reason": "contract stable",
+            },
         },
-        "audit": {"status": "correction_required", "issues": [reason], "reason": reason},
+        "audit": {
+            "status": "correction_required",
+            "issues": [reason],
+            "reason": reason,
+        },
         "ai_tier2_proposals": [],
         "comparative_reviews": [],
         "final_conclusions": [
@@ -50,15 +62,26 @@ def _ai_hybrid_taxonomy_response(bucket_id):
         "schema_version": 1,
         "interpretation": {
             "bucket_reviews": [],
-            "source_contract_review": {"status": "pass", "changes": [], "reason": "contract stable"},
+            "source_contract_review": {
+                "status": "pass",
+                "changes": [],
+                "reason": "contract stable",
+            },
         },
-        "audit": {"status": "pass", "issues": [], "reason": "dual proposal comparison accepted"},
+        "audit": {
+            "status": "pass",
+            "issues": [],
+            "reason": "dual proposal comparison accepted",
+        },
         "ai_tier2_proposals": [
             {
                 "bucket_id": bucket_id,
                 "proposal_decision": "create_new_dimension",
                 "recommended_canonical_bucket": "scale_in:blocker_reason:pnl_out_of_range",
-                "recommended_metric_or_dimension": ["pnl_delta_pct", "pnl_delta_pct_bucket"],
+                "recommended_metric_or_dimension": [
+                    "pnl_delta_pct",
+                    "pnl_delta_pct_bucket",
+                ],
                 "reasoning_summary": "Use a shared PnL dimension rather than a separate bucket per numeric value.",
                 "confidence": "high",
                 "required_source_fields": [
@@ -79,7 +102,10 @@ def _ai_hybrid_taxonomy_response(bucket_id):
                 "selected_decision": "absorb_as_dimension",
                 "selected_source": "hybrid",
                 "recommended_canonical_bucket": "scale_in:blocker_reason:pnl_out_of_range",
-                "recommended_metric_or_dimension": ["pnl_delta_pct", "pnl_delta_pct_bucket"],
+                "recommended_metric_or_dimension": [
+                    "pnl_delta_pct",
+                    "pnl_delta_pct_bucket",
+                ],
                 "comparison_summary": "Deterministic numeric extraction and AI dimension proposal agree.",
                 "rejected_alternative_reason": "Creating a distinct numeric bucket would overfit.",
                 "confidence": "high",
@@ -112,7 +138,11 @@ def _legacy_ai_response_without_dual_taxonomy_fields():
         "schema_version": 1,
         "interpretation": {
             "bucket_reviews": [],
-            "source_contract_review": {"status": "pass", "changes": [], "reason": "legacy schema"},
+            "source_contract_review": {
+                "status": "pass",
+                "changes": [],
+                "reason": "legacy schema",
+            },
         },
         "audit": {"status": "pass", "issues": [], "reason": "legacy response"},
         "final_conclusions": [],
@@ -155,7 +185,9 @@ def test_active_sim_priority_seed_uses_observable_prefix_only(tmp_path, monkeypa
 
     seeds = mod._build_active_sim_priority_seeds(report)
 
-    active = next(seed for seed in seeds if seed["source_parent_bucket_id"] == "parent_positive")
+    active = next(
+        seed for seed in seeds if seed["source_parent_bucket_id"] == "parent_positive"
+    )
     assert active["status"] == "active"
     assert active["active_seed_id"].startswith("active_seed_")
     assert active["observable_prefix"] == {
@@ -181,15 +213,24 @@ def test_active_sim_priority_seed_uses_observable_prefix_only(tmp_path, monkeypa
     }
     assert plan["actual_order_submitted"] is False
     assert plan["broker_order_forbidden"] is True
-    assert active["stage_counterfactual_variant_plan"]["schema_version"] == "stage_counterfactual_variant_plan_v1"
+    assert (
+        active["stage_counterfactual_variant_plan"]["schema_version"]
+        == "stage_counterfactual_variant_plan_v1"
+    )
     assert len(active["stage_counterfactual_variant_plan"]["variants"]) == 5
     assert active["actual_order_submitted"] is False
     assert active["broker_order_forbidden"] is True
-    cooldown = next(seed for seed in seeds if seed["source_parent_bucket_id"] == "parent_nonpositive")
+    cooldown = next(
+        seed
+        for seed in seeds
+        if seed["source_parent_bucket_id"] == "parent_nonpositive"
+    )
     assert cooldown["status"] == "cooldown"
 
 
-def test_active_sim_priority_dedupes_duplicate_active_observable_prefix(tmp_path, monkeypatch):
+def test_active_sim_priority_dedupes_duplicate_active_observable_prefix(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
     shared_dimensions = {
         "entry_score_parent": "score_watch_recovery",
@@ -230,20 +271,31 @@ def test_active_sim_priority_dedupes_duplicate_active_observable_prefix(tmp_path
     assert active[0]["active_observable_prefix_dedup_state"] == "winner"
     assert active[0]["active_observable_prefix_duplicate_count"] == 2
     assert cooldown[0]["active_observable_prefix_dedup_state"] == "suppressed_duplicate"
-    assert cooldown[0]["active_collection_reason"] == "duplicate_observable_prefix_suppressed"
-    assert cooldown[0]["source_quality_status"] == "observable_prefix_duplicate_suppressed"
+    assert (
+        cooldown[0]["active_collection_reason"]
+        == "duplicate_observable_prefix_suppressed"
+    )
+    assert (
+        cooldown[0]["source_quality_status"] == "observable_prefix_duplicate_suppressed"
+    )
     assert cooldown[0]["targeted_sim_quota"]["needs_revisit_sample"] is False
     assert cooldown[0]["runtime_effect"] is False
     assert cooldown[0]["allowed_runtime_apply"] is False
 
 
-def test_ldm_refinement_pressure_is_consumed_without_hypothesis_seed_fragmentation(tmp_path, monkeypatch):
+def test_ldm_refinement_pressure_is_consumed_without_hypothesis_seed_fragmentation(
+    tmp_path, monkeypatch
+):
     refinement_dir = tmp_path / "ldm_refinement"
     refinement_dir.mkdir()
     monkeypatch.setattr(mod, "LDM_REFINEMENT_REPORT_DIR", refinement_dir)
     monkeypatch.setattr(mod, "CATALOG_DIR", tmp_path / "catalog")
-    monkeypatch.setattr(mod, "_load_previous_active_sim_priority_seeds", lambda target_date: {})
-    refinement_dir.joinpath("ldm_hypothesis_parent_refinement_2026-06-01.json").write_text(
+    monkeypatch.setattr(
+        mod, "_load_previous_active_sim_priority_seeds", lambda target_date: {}
+    )
+    refinement_dir.joinpath(
+        "ldm_hypothesis_parent_refinement_2026-06-01.json"
+    ).write_text(
         json.dumps(
             {
                 "schema_version": "ldm_hypothesis_parent_refinement_v1",
@@ -297,21 +349,27 @@ def test_ldm_refinement_pressure_is_consumed_without_hypothesis_seed_fragmentati
     assert ledger["status"] == "pass"
     assert ledger["input_count"] == 1
     assert ledger["consumed_count"] == 1
-    assert ledger["entries"][0]["closure_status"] == "parent_refinement_candidate_created"
-    assert report["parent_bucket_summaries"][0]["ldm_refinement_pressure"][0]["soft_hypothesis_id"] == (
-        "ldm_hypothesis_direct_seed_forbidden"
+    assert (
+        ledger["entries"][0]["closure_status"] == "parent_refinement_candidate_created"
     )
+    assert report["parent_bucket_summaries"][0]["ldm_refinement_pressure"][0][
+        "soft_hypothesis_id"
+    ] == ("ldm_hypothesis_direct_seed_forbidden")
     assert seeds[0]["active_seed_id"].startswith("active_seed_")
     assert seeds[0]["active_seed_id"] != "ldm_hypothesis_direct_seed_forbidden"
     assert seeds[0]["source_parent_bucket_id"] == "parent_positive"
     assert seeds[0]["ldm_refinement_pressure_summary"]["input_count"] == 1
 
 
-def test_ldm_refinement_pressure_preserves_derived_contract_drift_provenance(tmp_path, monkeypatch):
+def test_ldm_refinement_pressure_preserves_derived_contract_drift_provenance(
+    tmp_path, monkeypatch
+):
     refinement_dir = tmp_path / "ldm_refinement"
     refinement_dir.mkdir()
     monkeypatch.setattr(mod, "LDM_REFINEMENT_REPORT_DIR", refinement_dir)
-    refinement_dir.joinpath("ldm_hypothesis_parent_refinement_2026-06-01.json").write_text(
+    refinement_dir.joinpath(
+        "ldm_hypothesis_parent_refinement_2026-06-01.json"
+    ).write_text(
         json.dumps(
             {
                 "schema_version": "ldm_hypothesis_parent_refinement_v1",
@@ -379,11 +437,15 @@ def test_ldm_refinement_pressure_preserves_derived_contract_drift_provenance(tmp
     assert parent_pressure["allowed_runtime_apply"] is False
 
 
-def test_ldm_refinement_pressure_uses_target_date_for_rolling_output_key(tmp_path, monkeypatch):
+def test_ldm_refinement_pressure_uses_target_date_for_rolling_output_key(
+    tmp_path, monkeypatch
+):
     refinement_dir = tmp_path / "ldm_refinement"
     refinement_dir.mkdir()
     monkeypatch.setattr(mod, "LDM_REFINEMENT_REPORT_DIR", refinement_dir)
-    refinement_dir.joinpath("ldm_hypothesis_parent_refinement_2026-06-01.json").write_text(
+    refinement_dir.joinpath(
+        "ldm_hypothesis_parent_refinement_2026-06-01.json"
+    ).write_text(
         json.dumps(
             {
                 "schema_version": "ldm_hypothesis_parent_refinement_v1",
@@ -423,17 +485,23 @@ def test_ldm_refinement_pressure_uses_target_date_for_rolling_output_key(tmp_pat
 
     ledger = report["ldm_refinement_pressure_consumption"]
     assert ledger["status"] == "pass"
-    assert ledger["source_artifact"].endswith("ldm_hypothesis_parent_refinement_2026-06-01.json")
+    assert ledger["source_artifact"].endswith(
+        "ldm_hypothesis_parent_refinement_2026-06-01.json"
+    )
     assert ledger["input_count"] == 1
     assert ledger["consumed_count"] == 1
     assert summary["ldm_refinement_pressure_input_count"] == 1
 
 
-def test_ldm_refinement_pressure_rejects_invalid_artifact_contract(tmp_path, monkeypatch):
+def test_ldm_refinement_pressure_rejects_invalid_artifact_contract(
+    tmp_path, monkeypatch
+):
     refinement_dir = tmp_path / "ldm_refinement"
     refinement_dir.mkdir()
     monkeypatch.setattr(mod, "LDM_REFINEMENT_REPORT_DIR", refinement_dir)
-    refinement_dir.joinpath("ldm_hypothesis_parent_refinement_2026-06-01.json").write_text(
+    refinement_dir.joinpath(
+        "ldm_hypothesis_parent_refinement_2026-06-01.json"
+    ).write_text(
         json.dumps(
             {
                 "schema_version": "wrong_schema",
@@ -458,7 +526,10 @@ def test_ldm_refinement_pressure_rejects_invalid_artifact_contract(tmp_path, mon
         ),
         encoding="utf-8",
     )
-    report = {"date": "2026-06-01", "parent_bucket_summaries": [{"source_parent_bucket_id": "parent_positive"}]}
+    report = {
+        "date": "2026-06-01",
+        "parent_bucket_summaries": [{"source_parent_bucket_id": "parent_positive"}],
+    }
     summary = {}
 
     mod._apply_ldm_refinement_pressure(report, summary)
@@ -473,11 +544,15 @@ def test_ldm_refinement_pressure_rejects_invalid_artifact_contract(tmp_path, mon
     assert "ldm_refinement_runtime_effect_contract_invalid" in ledger["contract_issues"]
 
 
-def test_ldm_refinement_parent_match_requires_more_than_single_feature(tmp_path, monkeypatch):
+def test_ldm_refinement_parent_match_requires_more_than_single_feature(
+    tmp_path, monkeypatch
+):
     refinement_dir = tmp_path / "ldm_refinement"
     refinement_dir.mkdir()
     monkeypatch.setattr(mod, "LDM_REFINEMENT_REPORT_DIR", refinement_dir)
-    refinement_dir.joinpath("ldm_hypothesis_parent_refinement_2026-06-01.json").write_text(
+    refinement_dir.joinpath(
+        "ldm_hypothesis_parent_refinement_2026-06-01.json"
+    ).write_text(
         json.dumps(
             {
                 "schema_version": "ldm_hypothesis_parent_refinement_v1",
@@ -493,7 +568,9 @@ def test_ldm_refinement_parent_match_requires_more_than_single_feature(tmp_path,
                         "soft_hypothesis_id": "ldm_hypothesis_single_feature",
                         "classification": "taxonomy_gap_candidate",
                         "gap_reason": "parent_not_found",
-                        "runtime_observable_features": {"entry_score_parent": "score_watch_recovery"},
+                        "runtime_observable_features": {
+                            "entry_score_parent": "score_watch_recovery"
+                        },
                         "match_count": 5,
                         "runtime_effect": False,
                         "allowed_runtime_apply": False,
@@ -527,12 +604,16 @@ def test_ldm_refinement_parent_match_requires_more_than_single_feature(tmp_path,
     assert entry["closure_status"] == "new_parent_candidate_created"
 
 
-def test_ldm_refinement_repeated_diagnosis_forces_budget_cap_without_seed_fragmentation(tmp_path, monkeypatch):
+def test_ldm_refinement_repeated_diagnosis_forces_budget_cap_without_seed_fragmentation(
+    tmp_path, monkeypatch
+):
     refinement_dir = tmp_path / "ldm_refinement"
     refinement_dir.mkdir()
     monkeypatch.setattr(mod, "LDM_REFINEMENT_REPORT_DIR", refinement_dir)
     monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
-    refinement_dir.joinpath("ldm_hypothesis_parent_refinement_2026-06-01.json").write_text(
+    refinement_dir.joinpath(
+        "ldm_hypothesis_parent_refinement_2026-06-01.json"
+    ).write_text(
         json.dumps(
             {
                 "schema_version": "ldm_hypothesis_parent_refinement_v1",
@@ -571,12 +652,16 @@ def test_ldm_refinement_repeated_diagnosis_forces_budget_cap_without_seed_fragme
     seeds = mod._build_active_sim_priority_seeds(report)
 
     ledger = report["ldm_refinement_pressure_consumption"]
-    assert ledger["entries"][0]["closure_status"] == "rare_observation_only_budget_capped"
+    assert (
+        ledger["entries"][0]["closure_status"] == "rare_observation_only_budget_capped"
+    )
     assert ledger["entries"][0]["diagnosed_status"] == "runtime_match_zero_or_low"
     assert seeds == []
 
 
-def test_active_sim_priority_seed_status_uses_two_day_cooldown_and_five_day_retire(tmp_path, monkeypatch):
+def test_active_sim_priority_seed_status_uses_two_day_cooldown_and_five_day_retire(
+    tmp_path, monkeypatch
+):
     previous_seed = {
         "active_seed_id": "active_seed_previous",
         "source_parent_bucket_id": "parent_was_positive",
@@ -617,7 +702,9 @@ def test_active_sim_priority_seed_status_uses_two_day_cooldown_and_five_day_reti
     )[0]
 
     assert first_fail["status"] == "cooldown"
-    assert first_fail["source_quality_status"] == "source_quality_or_granularity_blocked"
+    assert (
+        first_fail["source_quality_status"] == "source_quality_or_granularity_blocked"
+    )
     assert first_fail["active_grace_blocked_reason"] == "nonpositive_ev"
     assert first_fail["consecutive_fail_count"] == 1
 
@@ -651,7 +738,9 @@ def test_active_sim_priority_seed_status_uses_two_day_cooldown_and_five_day_reti
         json.dumps({"active_sim_priority_seeds": [previous_seed]}),
         encoding="utf-8",
     )
-    missing = mod._build_active_sim_priority_seeds({"date": "2026-06-01", "parent_bucket_summaries": []})[0]
+    missing = mod._build_active_sim_priority_seeds(
+        {"date": "2026-06-01", "parent_bucket_summaries": []}
+    )[0]
     assert missing["status"] == "retired"
     assert missing["retired_reason"] == "consecutive_missing"
 
@@ -713,12 +802,16 @@ def test_active_sim_priority_seed_status_uses_two_day_cooldown_and_five_day_reti
         json.dumps({"active_sim_priority_seeds": [recovered]}),
         encoding="utf-8",
     )
-    cooldown_missing = mod._build_active_sim_priority_seeds({"date": "2026-06-01", "parent_bucket_summaries": []})[0]
+    cooldown_missing = mod._build_active_sim_priority_seeds(
+        {"date": "2026-06-01", "parent_bucket_summaries": []}
+    )[0]
     assert cooldown_missing["status"] == "cooldown"
     assert cooldown_missing["consecutive_missing_count"] == 1
 
 
-def test_active_sim_priority_first_fail_grace_requires_positive_ev(tmp_path, monkeypatch):
+def test_active_sim_priority_first_fail_grace_requires_positive_ev(
+    tmp_path, monkeypatch
+):
     previous_seed = {
         "active_seed_id": "active_seed_previous",
         "source_parent_bucket_id": "parent_was_positive",
@@ -763,7 +856,9 @@ def test_active_sim_priority_first_fail_grace_requires_positive_ev(tmp_path, mon
     assert floor_gap["active_collection_reason"] == "previous_active_first_fail_grace"
 
 
-def test_active_sim_priority_allows_incomplete_positive_parent_for_collection(monkeypatch, tmp_path):
+def test_active_sim_priority_allows_incomplete_positive_parent_for_collection(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
 
     seeds = mod._build_active_sim_priority_seeds(
@@ -835,12 +930,16 @@ def test_lifecycle_parent_dimensions_preserve_pending_taxonomy_metadata():
     )
 
     assert dimensions["entry_source_parent"] == "entry_source_observed_other"
-    assert dimensions["entry_source_parent_contract_state"] == "new_axis_pending_taxonomy"
+    assert (
+        dimensions["entry_source_parent_contract_state"] == "new_axis_pending_taxonomy"
+    )
     assert dimensions["entry_source_parent_consume_data"] == "True"
     assert dimensions["entry_source_parent_runtime_effect_allowed"] == "False"
 
 
-def test_active_sim_priority_summary_exposes_collection_and_live_blockers(monkeypatch, tmp_path):
+def test_active_sim_priority_summary_exposes_collection_and_live_blockers(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
     monkeypatch.setattr(mod, "LIFECYCLE_FLOW_PARENT_TARGET_MIN", 1)
     candidates = [
@@ -871,7 +970,12 @@ def test_active_sim_priority_summary_exposes_collection_and_live_blockers(monkey
 
     assert report["summary"]["active_sim_priority_eligible_count"] == 1
     assert report["summary"]["active_sim_priority_active_seed_count"] == 1
-    assert report["summary"]["active_sim_priority_live_conversion_blocked_incomplete_flow_count"] == 1
+    assert (
+        report["summary"][
+            "active_sim_priority_live_conversion_blocked_incomplete_flow_count"
+        ]
+        == 1
+    )
     assert report["summary"]["active_sim_priority_targeted_quota_count"] == 1
     assert report["summary"]["active_sim_priority_revisit_sample_need_count"] == 1
     assert report["summary"]["active_sim_priority_targeted_total_share_pct"] == 35
@@ -879,27 +983,39 @@ def test_active_sim_priority_summary_exposes_collection_and_live_blockers(monkey
     assert report["summary"]["active_sim_priority_sample_goal_per_bucket"] == 10
     assert report["summary"]["active_sim_priority_complete_flow_goal_per_bucket"] == 5
     assert report["summary"]["active_sim_priority_complete_flow_need_count"] == 1
-    assert report["summary"]["active_sim_priority_stage_counterfactual_variant_count"] == 5
+    assert (
+        report["summary"]["active_sim_priority_stage_counterfactual_variant_count"] == 5
+    )
     assert report["summary"]["positive_parent_count"] == 1
     assert report["summary"]["positive_parent_sample_ready_count"] == 0
     assert report["summary"]["top_positive_parent_buckets"][0]["parent_ev_pct"] == 1.2
     assert report["summary"]["parent_live_auto_apply_ready_count"] == 0
     seed = report["active_sim_priority_seeds"][0]
     assert seed["live_conversion_blocked_reason"] == "incomplete_lifecycle_flow"
-    assert seed["targeted_sim_quota"]["quota_policy_version"] == "active_parent_seed_targeted_quota_v1"
+    assert (
+        seed["targeted_sim_quota"]["quota_policy_version"]
+        == "active_parent_seed_targeted_quota_v1"
+    )
     assert seed["targeted_sim_quota"]["daily_total_share_pct"] == 35
     assert seed["targeted_sim_quota"]["per_seed_daily_limit"] == 20
     assert seed["targeted_sim_quota"]["sample_goal_per_bucket"] == 10
     assert seed["targeted_sim_quota"]["needs_revisit_sample"] is True
-    assert seed["positive_ev_stage_sampling_plan"]["additional_complete_flow_needed"] == 5
-    assert seed["positive_ev_stage_sampling_plan"]["runtime_match_fields"] == seed["observable_prefix"]
+    assert (
+        seed["positive_ev_stage_sampling_plan"]["additional_complete_flow_needed"] == 5
+    )
+    assert (
+        seed["positive_ev_stage_sampling_plan"]["runtime_match_fields"]
+        == seed["observable_prefix"]
+    )
     assert seed["positive_ev_stage_sampling_plan"]["runtime_effect"] is False
     assert seed["stage_counterfactual_variant_plan"]["actual_order_submitted"] is False
     assert seed["targeted_sim_quota"]["actual_order_submitted"] is False
     assert seed["targeted_sim_quota"]["broker_order_forbidden"] is True
 
 
-def test_active_sim_priority_preserves_conflict_child_stratified_targets(monkeypatch, tmp_path):
+def test_active_sim_priority_preserves_conflict_child_stratified_targets(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
     report = {
         "date": "2026-06-01",
@@ -984,7 +1100,9 @@ def test_sim_auto_approval_separates_positive_and_nonpositive_ev(monkeypatch, tm
     assert summary["sim_auto_nonpositive_ev_top"][0]["bucket_id"] == "entry:avoid"
 
     mod._write_sim_auto_approval(report)
-    payload = json.loads((tmp_path / "lifecycle_bucket_sim_auto_approval_2026-06-01.json").read_text())
+    payload = json.loads(
+        (tmp_path / "lifecycle_bucket_sim_auto_approval_2026-06-01.json").read_text()
+    )
 
     assert payload["approved_bucket_count"] == 2
     assert payload["positive_ev_approved_bucket_count"] == 1
@@ -1131,7 +1249,7 @@ def _write_ldm(path):
                             },
                             "attribution_key": "sim_record_id:SIM-PROBE",
                             "rollback_guard": "hard_safety_priority_plus_source_quality_and_post_apply_attribution",
-                        }
+                        },
                     ]
                 },
                 "entry_bucket_attribution": {
@@ -1327,7 +1445,9 @@ def test_lifecycle_flow_source_dimensions_use_explicit_stage_bucket_ids():
 
     candidate = mod._candidate_from_bucket("lifecycle_flow", bucket)
 
-    assert candidate["source_dimensions"]["entry"] == "entry:combo_entry_spot:score_66_69"
+    assert (
+        candidate["source_dimensions"]["entry"] == "entry:combo_entry_spot:score_66_69"
+    )
     assert candidate["source_dimensions"]["submit"] == "submit:submit_quality:submitted"
     assert candidate["missing_dimension_keys"] == []
     assert candidate["source_dimension_gap"] == ""
@@ -1364,7 +1484,9 @@ def test_lifecycle_source_dimension_explicit_unknown_and_flow_tokens_are_not_act
 
     assert exit_candidate["source_dimension_gap"] == ""
     assert exit_candidate["missing_dimension_keys"] == []
-    assert flow_candidate["source_dimensions"]["entry"].startswith("entry_source_token:")
+    assert flow_candidate["source_dimensions"]["entry"].startswith(
+        "entry_source_token:"
+    )
     assert flow_candidate["missing_dimension_keys"] == []
     assert flow_candidate["missing_lifecycle_flow_stage_keys"] == []
     assert flow_candidate["source_dimension_gap"] == ""
@@ -1396,7 +1518,10 @@ def test_scale_in_ai_score_unknown_keeps_source_quality_blocker_provenance():
     )
 
     assert candidate["source_dimension_gap"] == mod.SCALE_IN_AI_SCORE_SOURCE_MISSING_GAP
-    assert candidate["recommended_resolution"] == mod.SCALE_IN_AI_SCORE_SOURCE_MISSING_RESOLUTION
+    assert (
+        candidate["recommended_resolution"]
+        == mod.SCALE_IN_AI_SCORE_SOURCE_MISSING_RESOLUTION
+    )
     assert candidate["source_dimension_gap_provenance"] == {
         "gap": mod.SCALE_IN_AI_SCORE_SOURCE_MISSING_GAP,
         "resolution": mod.SCALE_IN_AI_SCORE_SOURCE_MISSING_RESOLUTION,
@@ -1415,8 +1540,16 @@ def test_scale_in_ai_score_unknown_keeps_source_quality_blocker_provenance():
     summary = mod._source_dimension_gap_summary([candidate])
     assert summary["actionable_unknown_gap_count"] == 0
     assert summary["rollup_only_gap_count"] == 1
-    assert summary["source_dimension_gap_counts"][mod.SCALE_IN_AI_SCORE_SOURCE_MISSING_GAP] == 1
-    assert summary["rollup_candidates"][0]["source_dimension_gap_provenance"]["sample_count"] == 167
+    assert (
+        summary["source_dimension_gap_counts"][mod.SCALE_IN_AI_SCORE_SOURCE_MISSING_GAP]
+        == 1
+    )
+    assert (
+        summary["rollup_candidates"][0]["source_dimension_gap_provenance"][
+            "sample_count"
+        ]
+        == 167
+    )
 
 
 def test_scale_in_held_unknown_is_source_only_observation_rollup():
@@ -1436,7 +1569,10 @@ def test_scale_in_held_unknown_is_source_only_observation_rollup():
 
     assert candidate["source_dimension_gap"] == ""
     assert candidate["missing_dimension_keys"] == []
-    assert candidate["recommended_resolution"] == mod.SCALE_IN_HELD_BUCKET_OBSERVATION_RESOLUTION
+    assert (
+        candidate["recommended_resolution"]
+        == mod.SCALE_IN_HELD_BUCKET_OBSERVATION_RESOLUTION
+    )
     assert candidate["runtime_effect"] is False
     assert candidate["allowed_runtime_apply"] is False
 
@@ -1460,7 +1596,9 @@ def test_scale_in_source_dimension_unknowns_are_observation_rollups():
                 "unknown_reason_counts": {"missing_source_field": 1},
             },
         )
-        for bucket_type, bucket_key in sorted(mod.SCALE_IN_SOURCE_DIMENSION_ROLLUP_BUCKETS)
+        for bucket_type, bucket_key in sorted(
+            mod.SCALE_IN_SOURCE_DIMENSION_ROLLUP_BUCKETS
+        )
     ]
 
     assert {item["source_dimension_gap"] for item in candidates} == {""}
@@ -1474,7 +1612,9 @@ def test_scale_in_source_dimension_unknowns_are_observation_rollups():
     assert summary["actionable_unknown_gap_count"] == 0
 
 
-def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path, monkeypatch):
+def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(
+    tmp_path, monkeypatch
+):
     ldm_dir = tmp_path / "ldm"
     report_dir = tmp_path / "report"
     catalog_dir = tmp_path / "catalog"
@@ -1492,13 +1632,27 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
     )
 
     states = {item["bucket_id"]: item for item in report["candidates"]}
-    live = [item for item in states.values() if item["classification_state"] == "live_auto_apply_ready"]
-    sim = [item for item in states.values() if item["classification_state"] == "sim_auto_approved"]
-    entry_only_sources = [
-        item for item in report["candidates"] if item.get("source_bucket_kind") == "entry_only_source_candidate"
+    live = [
+        item
+        for item in states.values()
+        if item["classification_state"] == "live_auto_apply_ready"
     ]
-    assert {item["live_auto_apply_family"] for item in live} == {mod.SCALE_IN_LIVE_AUTO_FAMILY}
-    wait6579 = states["entry:combo_entry_spot:score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liquidity_unknown"]
+    sim = [
+        item
+        for item in states.values()
+        if item["classification_state"] == "sim_auto_approved"
+    ]
+    entry_only_sources = [
+        item
+        for item in report["candidates"]
+        if item.get("source_bucket_kind") == "entry_only_source_candidate"
+    ]
+    assert {item["live_auto_apply_family"] for item in live} == {
+        mod.SCALE_IN_LIVE_AUTO_FAMILY
+    }
+    wait6579 = states[
+        "entry:combo_entry_spot:score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liquidity_unknown"
+    ]
     assert wait6579["classification_state"] == mod.ENTRY_ONLY_BRIDGE_METADATA_STATE
     assert wait6579["review_category"] == "source_only_keep_collecting"
     assert wait6579["review_sub_state"] == "entry_only_bridge_metadata"
@@ -1508,12 +1662,15 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
     assert wait6579["live_auto_apply_family"] is None
     assert wait6579["legacy_contract_known_unknown"] is False
     assert wait6579["source_dimension_gap"] == "unknown_source_dimensions"
-    assert (wait6579["auto_promotion_contract"] or {})["deterministic_contract_required"] is False
+    assert (wait6579["auto_promotion_contract"] or {})[
+        "deterministic_contract_required"
+    ] is False
     assert wait6579["bounded_live_canary_allowed"] is False
     flow_parent = next(
         item
         for item in states.values()
-        if item["stage"] == "lifecycle_flow" and item.get("entry_bucket_id") == "entry:combo_entry_spot:score_66_69"
+        if item["stage"] == "lifecycle_flow"
+        and item.get("entry_bucket_id") == "entry:combo_entry_spot:score_66_69"
     )
     assert flow_parent["classification_state"] == "source_only_keep_collecting"
     assert flow_parent["live_auto_apply_family"] is None
@@ -1530,7 +1687,8 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
     flow_probe = next(
         item
         for item in states.values()
-        if item["stage"] == "lifecycle_flow" and item["classification_state"] == mod.LIFECYCLE_FLOW_SIM_PROBE_STATE
+        if item["stage"] == "lifecycle_flow"
+        and item["classification_state"] == mod.LIFECYCLE_FLOW_SIM_PROBE_STATE
     )
     assert flow_probe["classification_state"] == mod.LIFECYCLE_FLOW_SIM_PROBE_STATE
     assert flow_probe["review_category"] == "sim_auto_approved"
@@ -1540,7 +1698,10 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
     assert flow_probe["allowed_runtime_apply"] is False
     assert flow_probe["runtime_effect"] is False
     assert flow_probe["broker_order_forbidden"] is True
-    assert flow_probe["decision_authority"] == "lifecycle_bucket_discovery_lifecycle_flow_sim_probe"
+    assert (
+        flow_probe["decision_authority"]
+        == "lifecycle_bucket_discovery_lifecycle_flow_sim_probe"
+    )
     assert flow_probe["complete_flow_count"] == 1
     assert flow_probe["incomplete_flow_count"] == 0
     candidates_by_id = {item["bucket_id"]: item for item in report["candidates"]}
@@ -1558,11 +1719,21 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
     scale_blocker = states["scale_in:blocker_reason:pnl_out_of_range_0_32"]
     assert scale_blocker["recommended_action"] == "keep_or_tighten_blocker_candidate"
     assert scale_blocker["legacy_raw_bucket_key"] == "pnl_out_of_range(0.32)"
-    assert scale_blocker["canonical_bucket"] == "scale_in:blocker_reason:pnl_out_of_range"
+    assert (
+        scale_blocker["canonical_bucket"] == "scale_in:blocker_reason:pnl_out_of_range"
+    )
     assert scale_blocker["normalized_metrics"]["pnl_delta_pct"] == 0.32
-    assert scale_blocker["deterministic_proposal"]["proposal_decision"] == "absorb_as_dimension"
-    assert scale_blocker["ai_tier2_comparative_review"]["selected_decision"] == "absorb_as_dimension"
-    assert report["summary"]["deterministic_proposal_count"] == len(report["candidates"])
+    assert (
+        scale_blocker["deterministic_proposal"]["proposal_decision"]
+        == "absorb_as_dimension"
+    )
+    assert (
+        scale_blocker["ai_tier2_comparative_review"]["selected_decision"]
+        == "absorb_as_dimension"
+    )
+    assert report["summary"]["deterministic_proposal_count"] == len(
+        report["candidates"]
+    )
     assert report["summary"]["absorbed_bucket_count"] >= 1
     assert "canonical_bucket_count" in report["summary"]
     assert report["summary"]["parent_live_auto_apply_ready_count"] == 0
@@ -1570,14 +1741,21 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
     assert sim
     assert entry_only_sources
     assert entry_only_sources[0]["bucket_relation"] == "new_bucket_candidate"
-    assert entry_only_sources[0]["classification_state"] == "entry_only_source_candidate"
+    assert (
+        entry_only_sources[0]["classification_state"] == "entry_only_source_candidate"
+    )
     assert entry_only_sources[0]["review_category"] == "source_only_keep_collecting"
     assert entry_only_sources[0]["review_sub_state"] == "entry_only_source_candidate"
     assert entry_only_sources[0]["source_bucket_id"]
     assert "recommended_resolution" in entry_only_sources[0]
     assert "source_bucket_kind_counts" in report["summary"]
     assert report["summary"]["review_category_counts"]["sim_auto_approved"] >= len(sim)
-    assert report["summary"]["review_sub_state_counts"]["lifecycle_flow_sim_probe_candidate"] == 1
+    assert (
+        report["summary"]["review_sub_state_counts"][
+            "lifecycle_flow_sim_probe_candidate"
+        ]
+        == 1
+    )
     assert report["summary"]["human_intervention_required"] is False
     assert report["summary"]["lifecycle_flow_sim_probe_candidate_count"] == 1
     assert report["ai_two_pass_review"]["sharded"] is True
@@ -1591,15 +1769,25 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
     assert report["summary"]["ai_two_pass_review_shard_count"] == 5
     assert (report_dir / "lifecycle_bucket_discovery_2026-05-22.json").exists()
     assert (catalog_dir / "lifecycle_bucket_catalog_2026-05-22.json").exists()
-    catalog = json.loads((catalog_dir / "lifecycle_bucket_catalog_2026-05-22.json").read_text())
-    assert catalog["targeted_sim_collection"]["policy_version"] == "active_parent_seed_targeted_quota_v1"
+    catalog = json.loads(
+        (catalog_dir / "lifecycle_bucket_catalog_2026-05-22.json").read_text()
+    )
+    assert (
+        catalog["targeted_sim_collection"]["policy_version"]
+        == "active_parent_seed_targeted_quota_v1"
+    )
     assert catalog["targeted_sim_collection"]["daily_total_share_pct"] == 35
     assert catalog["targeted_sim_collection"]["per_seed_daily_limit"] == 20
     assert catalog["targeted_sim_collection"]["complete_flow_goal_per_bucket"] == 5
     assert catalog["targeted_sim_collection"]["conflict_child_sample_goal"] == 5
-    assert catalog["targeted_sim_collection"]["runtime_match_policy"] == "observable_prefix_only"
+    assert (
+        catalog["targeted_sim_collection"]["runtime_match_policy"]
+        == "observable_prefix_only"
+    )
     assert "active_sim_priority_seeds" in catalog
-    auto = json.loads((sim_dir / "lifecycle_bucket_sim_auto_approval_2026-05-22.json").read_text())
+    auto = json.loads(
+        (sim_dir / "lifecycle_bucket_sim_auto_approval_2026-05-22.json").read_text()
+    )
     assert auto["approved"] is True
     assert auto["broker_order_forbidden"] is True
     assert auto["actual_order_submitted"] is False
@@ -1611,21 +1799,35 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
     assert auto["approved_lifecycle_flow_sim_probe_count"] == 1
     assert auto["approved_state_counts"][mod.LIFECYCLE_FLOW_SIM_PROBE_STATE] == 1
     assert flow_probe["bucket_id"] in auto["approved_bucket_ids"]
-    assert auto["targeted_sim_collection"]["policy_version"] == "active_parent_seed_targeted_quota_v1"
+    assert (
+        auto["targeted_sim_collection"]["policy_version"]
+        == "active_parent_seed_targeted_quota_v1"
+    )
     assert auto["targeted_sim_collection"]["daily_total_share_pct"] == 35
     assert auto["targeted_sim_collection"]["per_seed_daily_limit"] == 20
-    assert auto["targeted_sim_collection"]["stage_counterfactual_variant_plan_version"] == (
-        "stage_counterfactual_variant_plan_v1"
+    assert auto["targeted_sim_collection"][
+        "stage_counterfactual_variant_plan_version"
+    ] == ("stage_counterfactual_variant_plan_v1")
+    flow_probe_row = next(
+        row
+        for row in auto["approved_bucket_rows"]
+        if row["bucket_id"] == flow_probe["bucket_id"]
     )
-    flow_probe_row = next(row for row in auto["approved_bucket_rows"] if row["bucket_id"] == flow_probe["bucket_id"])
     assert flow_probe_row["source_bucket_id"] == flow_probe["source_bucket_id"]
     assert flow_probe_row["complete_flow_count"] == 1
     assert flow_probe_row["incomplete_flow_count"] == 0
-    assert auto["approved_evidence_grade_counts"].get(mod.EVIDENCE_GRADE_2_COUNTERFACTUAL, 0) == 0
+    assert (
+        auto["approved_evidence_grade_counts"].get(
+            mod.EVIDENCE_GRADE_2_COUNTERFACTUAL, 0
+        )
+        == 0
+    )
     assert auto["source_quality_status"] == "pass"
 
 
-def test_lifecycle_bucket_discovery_assigns_live_family_to_avg_down_arm(tmp_path, monkeypatch):
+def test_lifecycle_bucket_discovery_assigns_live_family_to_avg_down_arm(
+    tmp_path, monkeypatch
+):
     ldm_dir = tmp_path / "ldm"
     report_dir = tmp_path / "report"
     catalog_dir = tmp_path / "catalog"
@@ -1669,7 +1871,9 @@ def test_lifecycle_bucket_discovery_assigns_live_family_to_avg_down_arm(tmp_path
     assert avg_down["bucket_key"] == "AVG_DOWN"
 
 
-def test_lifecycle_bucket_discovery_blocks_scale_in_arm_without_v2_coverage(tmp_path, monkeypatch):
+def test_lifecycle_bucket_discovery_blocks_scale_in_arm_without_v2_coverage(
+    tmp_path, monkeypatch
+):
     ldm_dir = tmp_path / "ldm"
     report_dir = tmp_path / "report"
     catalog_dir = tmp_path / "catalog"
@@ -1709,7 +1913,9 @@ def test_lifecycle_bucket_discovery_blocks_scale_in_arm_without_v2_coverage(tmp_
     assert avg_down["grade_reason"] == "scale_in_incremental_v2_coverage_not_ready"
 
 
-def test_lifecycle_flow_parent_absorbs_thin_children_for_live_policy(tmp_path, monkeypatch):
+def test_lifecycle_flow_parent_absorbs_thin_children_for_live_policy(
+    tmp_path, monkeypatch
+):
     ldm_dir = tmp_path / "ldm"
     report_dir = tmp_path / "report"
     catalog_dir = tmp_path / "catalog"
@@ -1719,6 +1925,7 @@ def test_lifecycle_flow_parent_absorbs_thin_children_for_live_policy(tmp_path, m
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CATALOG_DIR", catalog_dir)
     monkeypatch.setattr(mod, "SIM_AUTO_APPROVAL_DIR", sim_dir)
+
     def _flow_bucket(score, submit, holding, exit_bucket, *, sample, ev, route, sim_id):
         return {
             "lifecycle_flow_bucket_id": f"lifecycle_flow:combo_lifecycle_flow:{sim_id}",
@@ -1765,7 +1972,10 @@ def test_lifecycle_flow_parent_absorbs_thin_children_for_live_policy(tmp_path, m
     parent_submit = "submit:combo_submit_quality:revalidation_ok"
     parent_holding = "holding:combo_holding_flow:baseline_hold"
     parent_exit = "exit:combo_exit_result:take_profit"
-    for score, ev, sim_id in (("score_66_69", 1.4, "SIM-A"), ("score_70_74", 1.2, "SIM-B")):
+    for score, ev, sim_id in (
+        ("score_66_69", 1.4, "SIM-A"),
+        ("score_70_74", 1.2, "SIM-B"),
+    ):
         flow_buckets.append(
             _flow_bucket(
                 score,
@@ -1833,9 +2043,14 @@ def test_lifecycle_flow_parent_absorbs_thin_children_for_live_policy(tmp_path, m
     flow_candidates = [
         item
         for item in report["candidates"]
-        if item["stage"] == "lifecycle_flow" and item["bucket_type"] == "combo_lifecycle_flow"
+        if item["stage"] == "lifecycle_flow"
+        and item["bucket_type"] == "combo_lifecycle_flow"
     ]
-    live = [item for item in flow_candidates if item["classification_state"] == "live_auto_apply_ready"]
+    live = [
+        item
+        for item in flow_candidates
+        if item["classification_state"] == "live_auto_apply_ready"
+    ]
     absorbed = [
         item
         for item in flow_candidates
@@ -1867,7 +2082,9 @@ def test_lifecycle_flow_parent_absorbs_thin_children_for_live_policy(tmp_path, m
     assert report["summary"]["parent_granularity_status"] == "target_pass"
     assert 30 <= report["summary"]["parent_bucket_count"] <= 60
     assert report["summary"]["absorbed_child_count"] == len(flow_buckets)
-    assert report["summary"]["absorbed_sample_count"] == sum(item["sample"] for item in flow_buckets)
+    assert report["summary"]["absorbed_sample_count"] == sum(
+        item["sample"] for item in flow_buckets
+    )
 
 
 def test_score_family_without_separator_rolls_up_to_parent_group():
@@ -1880,8 +2097,14 @@ def test_score_family_without_separator_rolls_up_to_parent_group():
 
     assert normalized["canonical_bucket"] == "entry:score_band:score_mid_recovery"
     assert normalized["normalized_dimensions"]["score_parent"] == "score_mid_recovery"
-    assert normalized["normalized_dimensions"]["bucket_detail"] == "score65_74_recovery_probe"
-    assert normalized["deterministic_proposal"]["proposal_decision"] == "absorb_as_dimension"
+    assert (
+        normalized["normalized_dimensions"]["bucket_detail"]
+        == "score65_74_recovery_probe"
+    )
+    assert (
+        normalized["deterministic_proposal"]["proposal_decision"]
+        == "absorb_as_dimension"
+    )
 
 
 def test_score_variants_roll_up_to_expected_parent_groups():
@@ -1956,17 +2179,27 @@ def test_lifecycle_flow_parent_rebuild_keeps_synthetic_102_children_in_target_ra
     assert report["summary"]["selected_parent_level"] == "L1_broad"
     assert report["summary"]["absorbed_child_count"] == 102
     assert report["summary"]["absorbed_sample_count"] == 102
-    assert len(report["parent_bucket_summaries"]) == report["summary"]["parent_bucket_count"]
+    assert (
+        len(report["parent_bucket_summaries"])
+        == report["summary"]["parent_bucket_count"]
+    )
     first_parent = report["parent_bucket_summaries"][0]
     assert first_parent["parent_bucket_id"] == first_parent["policy_bucket_id"]
-    assert first_parent["parent_ev"] == first_parent["parent_source_quality_adjusted_ev_pct"]
+    assert (
+        first_parent["parent_ev"]
+        == first_parent["parent_source_quality_adjusted_ev_pct"]
+    )
 
 
 def test_ai_parent_granularity_review_accepts_only_deterministic_levels():
     valid = {
         **_ai_keep_response(),
         "parent_granularity_reviews": [
-            {"decision": "prefer_level", "preferred_level": "L2_default", "reason": "Better parent spread."}
+            {
+                "decision": "prefer_level",
+                "preferred_level": "L2_default",
+                "reason": "Better parent spread.",
+            }
         ],
     }
     status, payload, warnings = mod._parse_ai_review_response(valid)
@@ -1977,7 +2210,11 @@ def test_ai_parent_granularity_review_accepts_only_deterministic_levels():
     invalid = {
         **_ai_keep_response(),
         "parent_granularity_reviews": [
-            {"decision": "prefer_level", "preferred_level": "custom_ai_parent", "reason": "Invented."}
+            {
+                "decision": "prefer_level",
+                "preferred_level": "custom_ai_parent",
+                "reason": "Invented.",
+            }
         ],
     }
     status, _, warnings = mod._parse_ai_review_response(invalid)
@@ -2006,7 +2243,11 @@ def test_ai_parent_granularity_review_accepts_only_deterministic_levels():
         {
             "ai_two_pass_review": {
                 "parent_granularity_reviews": [
-                    {"decision": "prefer_level", "preferred_level": "L3_detailed", "reason": "Too narrow."}
+                    {
+                        "decision": "prefer_level",
+                        "preferred_level": "L3_detailed",
+                        "reason": "Too narrow.",
+                    }
                 ]
             }
         },
@@ -2128,16 +2369,31 @@ def test_lifecycle_flow_incomplete_stage_contract_is_explicit_source_only_blocke
             "submit_bucket_id": "submit:missing",
             "holding_bucket_id": "holding:missing",
             "exit_bucket_id": "exit:missing",
-            "stage_contract": {"entry": "present", "submit": "missing", "holding": "missing", "exit": "missing"},
+            "stage_contract": {
+                "entry": "present",
+                "submit": "missing",
+                "holding": "missing",
+                "exit": "missing",
+            },
         },
     )
 
     assert candidate["source_bucket_kind"] == "taxonomy_provenance_gap"
     assert candidate["explicit_runtime_exclusion"] is True
     assert candidate["source_only_explicit_exclusion"] is True
-    assert candidate["runtime_exclusion_reason"] == "lifecycle_flow_incomplete_stage_contract"
-    assert candidate["lifecycle_flow_contract_status"] == "source_only_blocked_incomplete_stage_contract"
-    assert candidate["missing_lifecycle_flow_stage_keys"] == ["submit", "holding", "exit"]
+    assert (
+        candidate["runtime_exclusion_reason"]
+        == "lifecycle_flow_incomplete_stage_contract"
+    )
+    assert (
+        candidate["lifecycle_flow_contract_status"]
+        == "source_only_blocked_incomplete_stage_contract"
+    )
+    assert candidate["missing_lifecycle_flow_stage_keys"] == [
+        "submit",
+        "holding",
+        "exit",
+    ]
     assert candidate["allowed_runtime_apply"] is False
     assert candidate["runtime_effect"] is False
 
@@ -2176,7 +2432,9 @@ def test_lifecycle_flow_source_only_blocker_overrides_live_runtime_metadata():
     assert item["auto_promotion_contract"]["deterministic_contract_components"] == []
 
 
-def test_lifecycle_bucket_discovery_quarantines_contaminated_live_candidates(tmp_path, monkeypatch):
+def test_lifecycle_bucket_discovery_quarantines_contaminated_live_candidates(
+    tmp_path, monkeypatch
+):
     ldm_dir = tmp_path / "ldm"
     report_dir = tmp_path / "report"
     catalog_dir = tmp_path / "catalog"
@@ -2208,7 +2466,11 @@ def test_lifecycle_bucket_discovery_quarantines_contaminated_live_candidates(tmp
     )
 
     by_id = {item["bucket_id"]: item for item in report["candidates"]}
-    scale_in = next(item for item in by_id.values() if item.get("live_auto_apply_family") == mod.SCALE_IN_LIVE_AUTO_FAMILY)
+    scale_in = next(
+        item
+        for item in by_id.values()
+        if item.get("live_auto_apply_family") == mod.SCALE_IN_LIVE_AUTO_FAMILY
+    )
     assert scale_in["classification_state"] == "runtime_blocked_contract_gap"
     assert scale_in["allowed_runtime_apply"] is False
     assert scale_in["promotion_ev_excluded_reason"] == "contaminated_scale_in_policy"
@@ -2221,7 +2483,9 @@ def test_lifecycle_bucket_discovery_quarantines_contaminated_live_candidates(tmp
     assert "contamination_quarantine_live_auto_blocked:1" in report["warnings"]
 
 
-def test_lifecycle_bucket_discovery_blocks_deterministic_live_when_ai_review_disabled(tmp_path, monkeypatch):
+def test_lifecycle_bucket_discovery_blocks_deterministic_live_when_ai_review_disabled(
+    tmp_path, monkeypatch
+):
     ldm_dir = tmp_path / "ldm"
     report_dir = tmp_path / "report"
     catalog_dir = tmp_path / "catalog"
@@ -2233,18 +2497,36 @@ def test_lifecycle_bucket_discovery_blocks_deterministic_live_when_ai_review_dis
     monkeypatch.setattr(mod, "SIM_AUTO_APPROVAL_DIR", sim_dir)
     _write_ldm(ldm_dir / "lifecycle_decision_matrix_2026-05-22.json")
 
-    report = mod.write_lifecycle_bucket_discovery_report("2026-05-22", ai_review_provider="none")
+    report = mod.write_lifecycle_bucket_discovery_report(
+        "2026-05-22", ai_review_provider="none"
+    )
 
-    blocked = [item for item in report["surfaced_candidates"] if item["classification_state"] == "runtime_blocked_contract_gap"]
-    assert {item["live_auto_apply_family"] for item in blocked if item.get("live_auto_apply_family")} == {
+    blocked = [
+        item
+        for item in report["surfaced_candidates"]
+        if item["classification_state"] == "runtime_blocked_contract_gap"
+    ]
+    assert {
+        item["live_auto_apply_family"]
+        for item in blocked
+        if item.get("live_auto_apply_family")
+    } == {
         mod.SCALE_IN_LIVE_AUTO_FAMILY,
     }
-    assert all(item.get("ai_tier2_blocked_reason") == "ai_tier2_validation_not_parsed:disabled" for item in blocked)
+    assert all(
+        item.get("ai_tier2_blocked_reason") == "ai_tier2_validation_not_parsed:disabled"
+        for item in blocked
+    )
     assert report["summary"]["ai_two_pass_review_status"] == "disabled"
-    assert "ai_two_pass_review_disabled_fail_closed_live_auto_blocked" in report["warnings"]
+    assert (
+        "ai_two_pass_review_disabled_fail_closed_live_auto_blocked"
+        in report["warnings"]
+    )
 
 
-def test_lifecycle_bucket_discovery_ignores_ambiguous_ai_block_for_live_candidate(tmp_path, monkeypatch):
+def test_lifecycle_bucket_discovery_ignores_ambiguous_ai_block_for_live_candidate(
+    tmp_path, monkeypatch
+):
     ldm_dir = tmp_path / "ldm"
     report_dir = tmp_path / "report"
     catalog_dir = tmp_path / "catalog"
@@ -2264,15 +2546,26 @@ def test_lifecycle_bucket_discovery_ignores_ambiguous_ai_block_for_live_candidat
         ),
     )
 
-    live = [item for item in report["surfaced_candidates"] if item["classification_state"] == "live_auto_apply_ready"]
+    live = [
+        item
+        for item in report["surfaced_candidates"]
+        if item["classification_state"] == "live_auto_apply_ready"
+    ]
     ignored = [item for item in live if item.get("ai_review_block_ignored_reason")]
-    assert all((item.get("auto_promotion_contract") or {}).get("tier2_status") == "parsed" for item in live)
+    assert all(
+        (item.get("auto_promotion_contract") or {}).get("tier2_status") == "parsed"
+        for item in live
+    )
     assert report["summary"]["live_auto_apply_ready_count"] == 1
     assert len(ignored) == 1
-    assert "ai_review_ambiguous_live_candidate_kept_for_post_apply" in report["warnings"]
+    assert (
+        "ai_review_ambiguous_live_candidate_kept_for_post_apply" in report["warnings"]
+    )
 
 
-def test_lifecycle_bucket_discovery_compares_deterministic_and_ai_taxonomy_proposals(tmp_path, monkeypatch):
+def test_lifecycle_bucket_discovery_compares_deterministic_and_ai_taxonomy_proposals(
+    tmp_path, monkeypatch
+):
     ldm_dir = tmp_path / "ldm"
     report_dir = tmp_path / "report"
     catalog_dir = tmp_path / "catalog"
@@ -2290,19 +2583,31 @@ def test_lifecycle_bucket_discovery_compares_deterministic_and_ai_taxonomy_propo
         ai_raw_response=_ai_hybrid_taxonomy_response(bucket_id),
     )
 
-    item = next(candidate for candidate in report["candidates"] if candidate["bucket_id"] == bucket_id)
+    item = next(
+        candidate
+        for candidate in report["candidates"]
+        if candidate["bucket_id"] == bucket_id
+    )
     assert item["ai_tier2_proposal"]["proposal_status"] == "provided"
     assert item["ai_tier2_proposal"]["proposal_decision"] == "create_new_dimension"
     assert item["ai_tier2_comparative_review"]["selected_source"] == "hybrid"
-    assert item["ai_tier2_comparative_review"]["selected_decision"] == "absorb_as_dimension"
+    assert (
+        item["ai_tier2_comparative_review"]["selected_decision"]
+        == "absorb_as_dimension"
+    )
     assert item["ai_tier2_taxonomy_decision"] == "absorb_as_dimension"
     assert item["ai_tier2_confidence"] == "high"
     assert report["summary"]["ai_tier2_proposal_count"] == 1
     assert report["summary"]["reviewer_selected_hybrid_count"] == 1
-    assert report["summary"]["taxonomy_selected_decision_counts"]["absorb_as_dimension"] >= 1
+    assert (
+        report["summary"]["taxonomy_selected_decision_counts"]["absorb_as_dimension"]
+        >= 1
+    )
 
 
-def test_lifecycle_bucket_discovery_fails_closed_when_ai_proposal_lacks_comparison(tmp_path, monkeypatch):
+def test_lifecycle_bucket_discovery_fails_closed_when_ai_proposal_lacks_comparison(
+    tmp_path, monkeypatch
+):
     ldm_dir = tmp_path / "ldm"
     report_dir = tmp_path / "report"
     catalog_dir = tmp_path / "catalog"
@@ -2316,12 +2621,21 @@ def test_lifecycle_bucket_discovery_fails_closed_when_ai_proposal_lacks_comparis
 
     report = mod.write_lifecycle_bucket_discovery_report(
         "2026-05-22",
-        ai_raw_response=_ai_proposal_without_comparison_response("scale_in:blocker_reason:pnl_out_of_range_0_32"),
+        ai_raw_response=_ai_proposal_without_comparison_response(
+            "scale_in:blocker_reason:pnl_out_of_range_0_32"
+        ),
     )
 
     assert report["summary"]["ai_two_pass_review_status"] == "parse_rejected"
-    assert "ai_review_comparative_review_missing:scale_in:blocker_reason:pnl_out_of_range_0_32" in report["warnings"]
-    blocked = [item for item in report["surfaced_candidates"] if item["classification_state"] == "runtime_blocked_contract_gap"]
+    assert (
+        "ai_review_comparative_review_missing:scale_in:blocker_reason:pnl_out_of_range_0_32"
+        in report["warnings"]
+    )
+    blocked = [
+        item
+        for item in report["surfaced_candidates"]
+        if item["classification_state"] == "runtime_blocked_contract_gap"
+    ]
     assert blocked
 
 
@@ -2338,7 +2652,9 @@ def test_lifecycle_bucket_discovery_rejects_real_preapply_primary_ev_claim():
     assert f"ai_review_selected_evidence_authority_violation:{bucket_id}" in warnings
 
 
-def test_lifecycle_bucket_discovery_rejects_legacy_ai_response_without_dual_taxonomy_fields(tmp_path, monkeypatch):
+def test_lifecycle_bucket_discovery_rejects_legacy_ai_response_without_dual_taxonomy_fields(
+    tmp_path, monkeypatch
+):
     ldm_dir = tmp_path / "ldm"
     report_dir = tmp_path / "report"
     catalog_dir = tmp_path / "catalog"
@@ -2361,7 +2677,9 @@ def test_lifecycle_bucket_discovery_rejects_legacy_ai_response_without_dual_taxo
     assert report["summary"]["live_auto_apply_ready_count"] == 0
 
 
-def test_lifecycle_bucket_discovery_applies_explicit_contract_ai_block_for_live_candidate(tmp_path, monkeypatch):
+def test_lifecycle_bucket_discovery_applies_explicit_contract_ai_block_for_live_candidate(
+    tmp_path, monkeypatch
+):
     ldm_dir = tmp_path / "ldm"
     report_dir = tmp_path / "report"
     catalog_dir = tmp_path / "catalog"
@@ -2391,7 +2709,9 @@ def test_lifecycle_bucket_discovery_applies_explicit_contract_ai_block_for_live_
     assert report["summary"]["live_auto_apply_ready_count"] == 0
 
 
-def test_lifecycle_bucket_discovery_surfaces_source_contract_drift(tmp_path, monkeypatch):
+def test_lifecycle_bucket_discovery_surfaces_source_contract_drift(
+    tmp_path, monkeypatch
+):
     ldm_dir = tmp_path / "ldm"
     report_dir = tmp_path / "report"
     catalog_dir = tmp_path / "catalog"
@@ -2411,7 +2731,11 @@ def test_lifecycle_bucket_discovery_surfaces_source_contract_drift(tmp_path, mon
                     "source_keys": ["removed_source"],
                     "sections": {
                         "entry_bucket_attribution": {
-                            "bucket_fields": ["bucket_type", "bucket_key", "removed_field"],
+                            "bucket_fields": [
+                                "bucket_type",
+                                "bucket_key",
+                                "removed_field",
+                            ],
                             "bucket_types": ["combo_entry_spot"],
                             "dimension_keys": ["score"],
                         }
@@ -2434,12 +2758,15 @@ def test_lifecycle_bucket_discovery_surfaces_source_contract_drift(tmp_path, mon
     drift = [
         item
         for item in report["surfaced_candidates"]
-        if item["stage"] == "source_contract" and item["classification_state"] == "code_patch_required"
+        if item["stage"] == "source_contract"
+        and item["classification_state"] == "code_patch_required"
     ]
     assert drift
 
 
-def test_lifecycle_bucket_discovery_does_not_treat_empty_declared_section_as_contract_removal(tmp_path, monkeypatch):
+def test_lifecycle_bucket_discovery_does_not_treat_empty_declared_section_as_contract_removal(
+    tmp_path, monkeypatch
+):
     ldm_dir = tmp_path / "ldm"
     report_dir = tmp_path / "report"
     catalog_dir = tmp_path / "catalog"
@@ -2461,7 +2788,11 @@ def test_lifecycle_bucket_discovery_does_not_treat_empty_declared_section_as_con
                         "overnight_bucket_attribution": {
                             "present": True,
                             "bucket_count": 21,
-                            "bucket_fields": ["bucket_type", "bucket_key", "next_day_mfe_pct"],
+                            "bucket_fields": [
+                                "bucket_type",
+                                "bucket_key",
+                                "next_day_mfe_pct",
+                            ],
                             "bucket_types": ["combo_overnight_decision"],
                             "dimension_keys": ["action"],
                         }
@@ -2546,14 +2877,21 @@ def test_submit_bucket_rows_emit_ev_and_diagnostic_fields():
     assert "diagnostic_win_rate" in report["buckets"][0]
 
 
-def test_lifecycle_bucket_discovery_openai_review_uses_tier2_schema_and_english_prompt(monkeypatch):
+def test_lifecycle_bucket_discovery_openai_review_uses_tier2_schema_and_english_prompt(
+    monkeypatch,
+):
     captured = {}
-    monkeypatch.setenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_SOURCE_ONLY_AI_PRIMARY_PROVIDER", "openai")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_SOURCE_ONLY_AI_PRIMARY_PROVIDER",
+        "openai",
+    )
 
     class _FakeResponses:
         def create(self, **kwargs):
             captured.update(kwargs)
-            return SimpleNamespace(output_text=json.dumps(_ai_keep_response()), usage=SimpleNamespace())
+            return SimpleNamespace(
+                output_text=json.dumps(_ai_keep_response()), usage=SimpleNamespace()
+            )
 
     class _FakeOpenAI:
         def __init__(self, api_key, timeout=None):
@@ -2562,7 +2900,10 @@ def test_lifecycle_bucket_discovery_openai_review_uses_tier2_schema_and_english_
             self.timeout = timeout
             self.responses = _FakeResponses()
 
-    monkeypatch.setattr("src.engine.daily_threshold_cycle_report._load_threshold_ai_openai_keys", lambda: [("OPENAI_API_KEY", "key")])
+    monkeypatch.setattr(
+        "src.engine.daily_threshold_cycle_report._load_threshold_ai_openai_keys",
+        lambda: [("OPENAI_API_KEY", "key")],
+    )
     monkeypatch.setattr("openai.OpenAI", _FakeOpenAI)
 
     raw, status = mod._call_openai_ai_review(
@@ -2649,7 +2990,10 @@ def test_lifecycle_bucket_discovery_ai_shards_prioritize_and_dedupe():
     assert by_id["sim_policy_review"]["candidate_ids"] == ["sim-1"]
     assert by_id["gap_workorder_review"]["candidate_ids"] == ["gap-1"]
     assert by_id["taxonomy_discovery_review"]["candidate_ids"] == ["new-1"]
-    assert all(item["context_chars"] <= mod.AI_REVIEW_SHARD_CONTEXT_BUDGET_CHARS for item in shards)
+    assert all(
+        item["context_chars"] <= mod.AI_REVIEW_SHARD_CONTEXT_BUDGET_CHARS
+        for item in shards
+    )
 
 
 def test_lifecycle_bucket_discovery_shard_failures_only_block_live_targets():
@@ -2697,7 +3041,10 @@ def test_lifecycle_bucket_discovery_shard_failures_only_block_live_targets():
     )
     by_id = {item["bucket_id"]: item for item in after_live_timeout}
     assert by_id["live-1"]["classification_state"] == "runtime_blocked_contract_gap"
-    assert by_id["live-1"]["ai_tier2_blocked_reason"] == "ai_tier2_validation_not_parsed:timeout"
+    assert (
+        by_id["live-1"]["ai_tier2_blocked_reason"]
+        == "ai_tier2_validation_not_parsed:timeout"
+    )
     assert by_id["sim-1"]["classification_state"] == "sim_auto_approved"
 
 
@@ -2744,7 +3091,10 @@ def test_parent_conflict_resolution_classifies_source_quality_gap_children():
     assert r["parent_bucket_id"] == "lifecycle_flow:parent_1"
     assert r["source_quality_gap_child_count"] == 1
     assert r["child_same_direction_absorbed_count"] >= 0
-    assert r["conflict_resolution_state"] in {"resolution_blocked_source_quality", "resolution_complete"}
+    assert r["conflict_resolution_state"] in {
+        "resolution_blocked_source_quality",
+        "resolution_complete",
+    }
     assert r["runtime_effect"] is False
     assert r["allowed_runtime_apply"] is False
     items = r["child_resolution_items"]
@@ -2773,7 +3123,9 @@ def test_parent_conflict_resolution_treats_blank_quality_as_gap_but_hold_sample_
     assert blank_state == "source_quality_gap"
     assert blank_details["source_quality_gate"] == ""
     assert hold_state == "positive_thin_child"
-    assert hold_details["floor"] == mod.LIFECYCLE_FLOW_CHILD_STANDALONE_MIN_JOINED_SAMPLE
+    assert (
+        hold_details["floor"] == mod.LIFECYCLE_FLOW_CHILD_STANDALONE_MIN_JOINED_SAMPLE
+    )
 
 
 def test_parent_conflict_resolution_detects_strategy_reversal_and_exclude():
@@ -2787,7 +3139,11 @@ def test_parent_conflict_resolution_detects_strategy_reversal_and_exclude():
                 "child_ev_dispersion_pct": 4.0,
                 "absorbed_child_bucket_ids": ["child_a", "child_b"],
                 "conflicting_child_patterns": [
-                    {"bucket_id": "child_a", "joined_sample": 15, "source_quality_adjusted_ev_pct": -2.0},
+                    {
+                        "bucket_id": "child_a",
+                        "joined_sample": 15,
+                        "source_quality_adjusted_ev_pct": -2.0,
+                    },
                 ],
             }
         ]
@@ -2822,7 +3178,10 @@ def test_parent_conflict_resolution_detects_strategy_reversal_and_exclude():
     assert r["parent_ev_after_exclusion_estimate"] is not None
     items = r["child_resolution_items"]
     child_a = next(i for i in items if i["child_bucket_id"] == "child_a")
-    assert child_a["child_resolution_state"] in {"strategy_reversal", "exclude_child_candidate"}
+    assert child_a["child_resolution_state"] in {
+        "strategy_reversal",
+        "exclude_child_candidate",
+    }
     assert r["runtime_effect"] is False
 
 
@@ -2858,7 +3217,11 @@ def test_parent_conflict_resolution_classifies_positive_thin_as_keep_collecting(
     r = resolutions[0]
     items = r["child_resolution_items"]
     child = items[0]
-    assert child["child_resolution_state"] in {"keep_collecting", "child_same_direction_absorbed", "positive_thin_child"}
+    assert child["child_resolution_state"] in {
+        "keep_collecting",
+        "child_same_direction_absorbed",
+        "positive_thin_child",
+    }
 
 
 def test_parent_conflict_resolution_empty_when_no_conflict_parents():
@@ -2925,7 +3288,10 @@ def test_parent_conflict_resolution_children_same_direction_absorbed():
 
 
 def test_policy_stage_candidates_missing_policy_key_generates_source_dimension_gap():
-    from src.engine.lifecycle_bucket_discovery import _policy_stage_candidates, _source_dimension_gap_summary
+    from src.engine.lifecycle_bucket_discovery import (
+        _policy_stage_candidates,
+        _source_dimension_gap_summary,
+    )
 
     payload = {
         "policy_entries": [
@@ -2960,7 +3326,10 @@ def test_policy_stage_candidates_missing_policy_key_generates_source_dimension_g
     assert entry_candidate["bucket_key"] == "-"
     assert entry_candidate["source_dimension_gap"] == "unknown_source_dimensions"
     assert "policy_key" in entry_candidate["missing_dimension_keys"]
-    assert entry_candidate["policy_key_gap_classification"] == "policy_key_required_missing"
+    assert (
+        entry_candidate["policy_key_gap_classification"]
+        == "policy_key_required_missing"
+    )
     assert entry_candidate["classification_state"] == "source_only_keep_collecting"
     assert entry_candidate["sim_lifecycle_handoff_allowed"] is False
     assert entry_candidate["source_bucket_kind"] == "source_only_observation"
@@ -2976,9 +3345,16 @@ def test_policy_stage_candidates_missing_policy_key_generates_source_dimension_g
     assert exit_candidate["bucket_key"] == "-"
     assert exit_candidate["source_dimension_gap"] == "unknown_source_dimensions"
     assert "policy_key" in exit_candidate["missing_dimension_keys"]
-    assert exit_candidate["policy_key_gap_classification"] == "policy_key_required_missing"
+    assert (
+        exit_candidate["policy_key_gap_classification"] == "policy_key_required_missing"
+    )
     assert exit_candidate["classification_state"] == "source_only_keep_collecting"
 
     summary = _source_dimension_gap_summary(candidates)
     assert summary["missing_dimension_key_counts"].get("policy_key", 0) == 2
-    assert summary["policy_key_gap_classification_counts"].get("policy_key_required_missing", 0) == 2
+    assert (
+        summary["policy_key_gap_classification_counts"].get(
+            "policy_key_required_missing", 0
+        )
+        == 2
+    )
