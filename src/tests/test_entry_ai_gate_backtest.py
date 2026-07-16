@@ -29,7 +29,10 @@ def _write_json(path, payload):
 
 def _write_jsonl(path, rows):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n", encoding="utf-8")
+    path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _realized_row(score, *, action="WAIT", profit=1.0, stale=False, hard_blocked=False):
@@ -73,9 +76,11 @@ def _counterfactual_row(
         "minute_candle_source_quality_reason": (
             "no_ka10080_bars_in_forward_10m_window"
             if minute_candle_source_quality_gate == "source_quality_insufficient"
-            else "ka10080_truncated_window"
-            if minute_candle_source_quality_gate == "source_quality_warning"
-            else "ka10080_forward_window_available"
+            else (
+                "ka10080_truncated_window"
+                if minute_candle_source_quality_gate == "source_quality_warning"
+                else "ka10080_forward_window_available"
+            )
         ),
     }
 
@@ -97,7 +102,9 @@ def test_entry_ai_gate_micro_context_rejects_not_evaluated_quality():
     )
 
 
-def test_entry_ai_gate_backtest_excludes_pre_baseline_and_separates_metrics(tmp_path, monkeypatch):
+def test_entry_ai_gate_backtest_excludes_pre_baseline_and_separates_metrics(
+    tmp_path, monkeypatch
+):
     adm_dir = tmp_path / "adm"
     missed_dir = tmp_path / "missed"
     out_dir = tmp_path / "out"
@@ -115,7 +122,10 @@ def test_entry_ai_gate_backtest_excludes_pre_baseline_and_separates_metrics(tmp_
     monkeypatch.setattr(
         mod,
         "filter_allowed_dates",
-        lambda dates, policy: ([d for d in dates if d >= "2026-06-04"], [d for d in dates if d < "2026-06-04"]),
+        lambda dates, policy: (
+            [d for d in dates if d >= "2026-06-04"],
+            [d for d in dates if d < "2026-06-04"],
+        ),
     )
     monkeypatch.setattr(mod, "is_krx_trading_day", lambda day: True)
 
@@ -127,7 +137,9 @@ def test_entry_ai_gate_backtest_excludes_pre_baseline_and_separates_metrics(tmp_
         missed_dir / "missed_entry_counterfactual_2026-06-03.json",
         {"full_rows": [_counterfactual_row(66, close_10m=99.0)]},
     )
-    realized_rows = [_realized_row(66, profit=1.2) for _ in range(mod.REALIZED_SAMPLE_FLOOR)]
+    realized_rows = [
+        _realized_row(66, profit=1.2) for _ in range(mod.REALIZED_SAMPLE_FLOOR)
+    ]
     realized_rows.extend(
         [
             _realized_row(66, profit=10.0, stale=True),
@@ -138,7 +150,8 @@ def test_entry_ai_gate_backtest_excludes_pre_baseline_and_separates_metrics(tmp_
         ]
     )
     counterfactual_rows = [
-        _counterfactual_row(66, close_10m=1.5) for _ in range(mod.COUNTERFACTUAL_SAMPLE_FLOOR)
+        _counterfactual_row(66, close_10m=1.5)
+        for _ in range(mod.COUNTERFACTUAL_SAMPLE_FLOOR)
     ]
     counterfactual_rows.extend(
         [
@@ -159,10 +172,18 @@ def test_entry_ai_gate_backtest_excludes_pre_baseline_and_separates_metrics(tmp_
             _counterfactual_row(80, action="BUY", close_10m=20.0, hard_blocked=True),
         ]
     )
-    _write_json(adm_dir / "scalp_entry_action_decision_matrix_2026-06-05.json", {"rows": realized_rows})
-    _write_json(missed_dir / "missed_entry_counterfactual_2026-06-05.json", {"full_rows": counterfactual_rows})
+    _write_json(
+        adm_dir / "scalp_entry_action_decision_matrix_2026-06-05.json",
+        {"rows": realized_rows},
+    )
+    _write_json(
+        missed_dir / "missed_entry_counterfactual_2026-06-05.json",
+        {"full_rows": counterfactual_rows},
+    )
 
-    report = mod.build_report("2026-06-05", start_date="2026-06-03", end_date="2026-06-05")
+    report = mod.build_report(
+        "2026-06-05", start_date="2026-06-03", end_date="2026-06-05"
+    )
 
     assert report["source_dates"] == ["2026-06-04", "2026-06-05"]
     assert "2026-06-03" in report["excluded_dates"]
@@ -173,8 +194,13 @@ def test_entry_ai_gate_backtest_excludes_pre_baseline_and_separates_metrics(tmp_
     assert report["summary"]["best_apply_policy"] == "supported_wait_recovery"
     assert report["summary"]["best_apply_threshold"] <= 66
     assert report["best_candidate"]["realized"]["sample"] == mod.REALIZED_SAMPLE_FLOOR
-    assert report["best_candidate"]["counterfactual"]["sample"] == mod.COUNTERFACTUAL_SAMPLE_FLOOR
-    assert report["best_candidate"]["counterfactual"]["missed_upside_close_10m_pct"] == 1.5
+    assert (
+        report["best_candidate"]["counterfactual"]["sample"]
+        == mod.COUNTERFACTUAL_SAMPLE_FLOOR
+    )
+    assert (
+        report["best_candidate"]["counterfactual"]["missed_upside_close_10m_pct"] == 1.5
+    )
     assert report["best_apply_candidate"]["policy"] == "supported_wait_recovery"
 
     diagnostic = next(
@@ -182,12 +208,24 @@ def test_entry_ai_gate_backtest_excludes_pre_baseline_and_separates_metrics(tmp_
         for item in report["policy_results"]
         if item["policy"] == "diagnostic_score_only" and item["threshold"] == 66
     )
-    strict = next(item for item in report["policy_results"] if item["policy"] == "strict_buy" and item["threshold"] == 80)
+    strict = next(
+        item
+        for item in report["policy_results"]
+        if item["policy"] == "strict_buy" and item["threshold"] == 80
+    )
     assert diagnostic["allowed_runtime_apply"] is False
-    assert diagnostic["counterfactual"]["sample"] > report["best_candidate"]["counterfactual"]["sample"]
-    assert report["best_diagnostic_score_only_candidate"]["allowed_runtime_apply"] is False
+    assert (
+        diagnostic["counterfactual"]["sample"]
+        > report["best_candidate"]["counterfactual"]["sample"]
+    )
+    assert (
+        report["best_diagnostic_score_only_candidate"]["allowed_runtime_apply"] is False
+    )
     assert report["summary"]["best_diagnostic_score_only_threshold"] <= 66
-    assert report["best_positive_realized_diagnostic_candidate"]["allowed_runtime_apply"] is False
+    assert (
+        report["best_positive_realized_diagnostic_candidate"]["allowed_runtime_apply"]
+        is False
+    )
     assert report["summary"]["best_positive_realized_diagnostic_threshold"] >= 66
     assert report["summary"]["best_positive_realized_diagnostic_ev_pct"] > 0
     assert strict["realized"]["sample"] == 1
@@ -216,31 +254,57 @@ def test_entry_ai_gate_role_gate_and_threshold_helper(monkeypatch):
     assert usable["entry_score_usable_for_recheck"] is True
 
     stale = gate.evaluate_entry_score_role_gate(
-        {"action": "WAIT", "score": 68, "ai_result_source": "live", "ai_parse_ok": True},
+        {
+            "action": "WAIT",
+            "score": 68,
+            "ai_result_source": "live",
+            "ai_parse_ok": True,
+        },
         ws_data={"quote_stale": True},
     )
     assert stale["entry_score_usable_for_entry_submit"] is False
     assert stale["entry_score_excluded_reason"] == "stale_quote_or_context"
 
     fallback = gate.evaluate_entry_score_role_gate(
-        {"action": "WAIT", "score": 50, "ai_result_source": "fallback_score_50", "ai_fallback_score_50": True}
+        {
+            "action": "WAIT",
+            "score": 50,
+            "ai_result_source": "fallback_score_50",
+            "ai_fallback_score_50": True,
+        }
     )
     assert fallback["entry_score_usable_for_recheck"] is False
     assert fallback["entry_score_excluded_reason"] == "fallback_score_50"
 
     lock_contention = gate.evaluate_entry_score_role_gate(
-        {"action": "WAIT", "score": 68, "ai_result_source": "live_lock_contention_rejected"}
+        {
+            "action": "WAIT",
+            "score": 68,
+            "ai_result_source": "live_lock_contention_rejected",
+        }
     )
     assert lock_contention["entry_score_usable_for_entry_submit"] is False
-    assert lock_contention["entry_score_excluded_reason"] == "unusable_source:live_lock_contention_rejected"
+    assert (
+        lock_contention["entry_score_excluded_reason"]
+        == "unusable_source:live_lock_contention_rejected"
+    )
 
     insufficient = gate.evaluate_entry_score_role_gate(
-        {"action": "WAIT", "score": 68, "ai_result_source": "source_quality_insufficient"}
+        {
+            "action": "WAIT",
+            "score": 68,
+            "ai_result_source": "source_quality_insufficient",
+        }
     )
     assert insufficient["entry_score_usable_for_recheck"] is False
 
     stale_parse_token = gate.evaluate_entry_score_role_gate(
-        {"action": "BUY", "score": 72, "ai_result_source": "live", "ai_parse_ok": "stale"},
+        {
+            "action": "BUY",
+            "score": 72,
+            "ai_result_source": "live",
+            "ai_parse_ok": "stale",
+        },
         ws_data={"quote_stale": False},
     )
     assert stale_parse_token["entry_score_usable_for_entry_submit"] is False
@@ -349,7 +413,9 @@ def test_entry_ai_gate_backtest_blocks_non_positive_primary_ev_apply_candidate()
     assert result["apply_block_reason"] == "non_positive_primary_ev"
 
 
-def test_entry_ai_gate_backtest_realized_join_uses_real_post_sell_once(tmp_path, monkeypatch):
+def test_entry_ai_gate_backtest_realized_join_uses_real_post_sell_once(
+    tmp_path, monkeypatch
+):
     adm_dir = tmp_path / "adm"
     missed_dir = tmp_path / "missed"
     post_sell_dir = tmp_path / "post_sell"
@@ -403,7 +469,9 @@ def test_entry_ai_gate_backtest_realized_join_uses_real_post_sell_once(tmp_path,
             ]
         },
     )
-    _write_json(missed_dir / "missed_entry_counterfactual_2026-06-05.json", {"full_rows": []})
+    _write_json(
+        missed_dir / "missed_entry_counterfactual_2026-06-05.json", {"full_rows": []}
+    )
     _write_jsonl(
         post_sell_dir / "post_sell_evaluations_2026-06-05.jsonl",
         [
@@ -419,14 +487,20 @@ def test_entry_ai_gate_backtest_realized_join_uses_real_post_sell_once(tmp_path,
     )
 
     report = mod.build_report("2026-06-05")
-    strict = next(item for item in report["policy_results"] if item["policy"] == "strict_buy" and item["threshold"] == 75)
+    strict = next(
+        item
+        for item in report["policy_results"]
+        if item["policy"] == "strict_buy" and item["threshold"] == 75
+    )
 
     assert report["summary"]["realized_joined_rows"] == 1
     assert strict["realized"]["sample"] == 1
     assert strict["realized"]["equal_weight_avg_profit_pct"] == 2.5
 
 
-def test_entry_ai_gate_backtest_source_quality_preflight_blocks_apply(tmp_path, monkeypatch):
+def test_entry_ai_gate_backtest_source_quality_preflight_blocks_apply(
+    tmp_path, monkeypatch
+):
     adm_dir = tmp_path / "adm"
     missed_dir = tmp_path / "missed"
     monkeypatch.setattr(mod, "SCALP_ENTRY_ADM_DIR", adm_dir)
@@ -448,11 +522,20 @@ def test_entry_ai_gate_backtest_source_quality_preflight_blocks_apply(tmp_path, 
     )
     _write_json(
         adm_dir / "scalp_entry_action_decision_matrix_2026-06-05.json",
-        {"rows": [_realized_row(66, profit=1.0) for _ in range(mod.REALIZED_SAMPLE_FLOOR)]},
+        {
+            "rows": [
+                _realized_row(66, profit=1.0) for _ in range(mod.REALIZED_SAMPLE_FLOOR)
+            ]
+        },
     )
     _write_json(
         missed_dir / "missed_entry_counterfactual_2026-06-05.json",
-        {"full_rows": [_counterfactual_row(66, close_10m=1.0) for _ in range(mod.COUNTERFACTUAL_SAMPLE_FLOOR)]},
+        {
+            "full_rows": [
+                _counterfactual_row(66, close_10m=1.0)
+                for _ in range(mod.COUNTERFACTUAL_SAMPLE_FLOOR)
+            ]
+        },
     )
 
     report = mod.build_report("2026-06-05")

@@ -303,7 +303,9 @@ def test_use_defensive_no_stale_stays_at_60():
 def test_integration_compute_and_resolve_consistency(monkeypatch):
     from dataclasses import replace
     from src.engine import sniper_state_handlers
-    from src.engine.scalping.entry_cancel_wait_attribution import compute_entry_cancel_wait_attribution
+    from src.engine.scalping.entry_cancel_wait_attribution import (
+        compute_entry_cancel_wait_attribution,
+    )
     from src.utils.constants import TRADING_RULES as CONFIG
 
     rules = replace(
@@ -317,7 +319,9 @@ def test_integration_compute_and_resolve_consistency(monkeypatch):
         SCALPING_RESERVE_ENTRY_TIMEOUT_SEC=1200,
     )
     monkeypatch.setattr(sniper_state_handlers, "TRADING_RULES", rules)
-    monkeypatch.setattr(sniper_state_handlers, "_log_entry_pipeline", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        sniper_state_handlers, "_log_entry_pipeline", lambda *args, **kwargs: None
+    )
 
     stock: dict = {
         "id": 1,
@@ -330,7 +334,10 @@ def test_integration_compute_and_resolve_consistency(monkeypatch):
     code = "123456"
 
     sniper_state_handlers._compute_and_emit_entry_cancel_wait_attribution(
-        stock, code, latency_gate={"order_price": 10000}, curr_price=10000,
+        stock,
+        code,
+        latency_gate={"order_price": 10000},
+        curr_price=10000,
     )
 
     stored = stock.get("entry_cancel_wait_attribution_result")
@@ -339,7 +346,9 @@ def test_integration_compute_and_resolve_consistency(monkeypatch):
     assert stored.get("is_report_only") is False
     assert stored.get("cancel_wait_sec") >= 60
 
-    actual_timeout = sniper_state_handlers._resolve_buy_order_timeout_sec(stock, "SCALPING")
+    actual_timeout = sniper_state_handlers._resolve_buy_order_timeout_sec(
+        stock, "SCALPING"
+    )
     assert actual_timeout == stored.get("cancel_wait_sec"), (
         f"_resolve_buy_order_timeout_sec returned {actual_timeout}, "
         f"but stored cancel_wait_sec is {stored.get('cancel_wait_sec')}"
@@ -363,7 +372,9 @@ def test_integration_disabled_stores_provenance_only(monkeypatch):
         SCALPING_ENTRY_TIMEOUT_SEC=90,
     )
     monkeypatch.setattr(sniper_state_handlers, "TRADING_RULES", rules)
-    monkeypatch.setattr(sniper_state_handlers, "_log_entry_pipeline", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        sniper_state_handlers, "_log_entry_pipeline", lambda *args, **kwargs: None
+    )
 
     stock: dict = {
         "id": 1,
@@ -375,27 +386,39 @@ def test_integration_disabled_stores_provenance_only(monkeypatch):
     code = "123456"
 
     sniper_state_handlers._compute_and_emit_entry_cancel_wait_attribution(
-        stock, code, latency_gate={}, curr_price=10000,
+        stock,
+        code,
+        latency_gate={},
+        curr_price=10000,
     )
 
     stored = stock.get("entry_cancel_wait_attribution_result")
-    assert isinstance(stored, dict), "Attribution result should be stored for provenance"
+    assert isinstance(
+        stored, dict
+    ), "Attribution result should be stored for provenance"
     assert stored.get("wait_policy_applied") is False
     assert stored.get("is_report_only") is True
 
-    actual_timeout = sniper_state_handlers._resolve_buy_order_timeout_sec(stock, "SCALPING")
-    assert actual_timeout == 90, (
-        f"disabled: legacy entry_timeout_sec_override must not control runtime, got {actual_timeout}"
+    actual_timeout = sniper_state_handlers._resolve_buy_order_timeout_sec(
+        stock, "SCALPING"
     )
-    assert stored.get("actual_timeout_sec") == 90, (
-        f"disabled: stored actual_timeout_sec should be 90, got {stored.get('actual_timeout_sec')}"
-    )
+    assert (
+        actual_timeout == 90
+    ), f"disabled: legacy entry_timeout_sec_override must not control runtime, got {actual_timeout}"
+    assert (
+        stored.get("actual_timeout_sec") == 90
+    ), f"disabled: stored actual_timeout_sec should be 90, got {stored.get('actual_timeout_sec')}"
     assert stored.get("cancel_wait_sec") == stored.get("actual_timeout_sec")
     assert stored.get("projected_cancel_wait_sec") >= 60
 
 
 def test_profile_thresholds_are_not_collapsed_by_ai_suggestion():
-    for mode, expected in (("STANDARD", 60), ("BREAKOUT", 120), ("PULLBACK", 600), ("RESERVE", 1200)):
+    for mode, expected in (
+        ("STANDARD", 60),
+        ("BREAKOUT", 120),
+        ("PULLBACK", 600),
+        ("RESERVE", 1200),
+    ):
         r = compute_entry_cancel_wait_attribution(
             entry_mode=mode,
             suggested_wait_sec=30,
