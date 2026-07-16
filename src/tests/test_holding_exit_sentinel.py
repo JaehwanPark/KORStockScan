@@ -28,7 +28,9 @@ def _event(
 def _write_events(tmp_path, target_date: str, rows: list[dict]) -> None:
     event_dir = tmp_path / "pipeline_events"
     event_dir.mkdir(parents=True, exist_ok=True)
-    with (event_dir / f"pipeline_events_{target_date}.jsonl").open("w", encoding="utf-8") as handle:
+    with (event_dir / f"pipeline_events_{target_date}.jsonl").open(
+        "w", encoding="utf-8"
+    ) as handle:
         for row in rows:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
@@ -91,12 +93,17 @@ def test_hold_defer_danger_is_classified(monkeypatch, tmp_path):
 
 def test_observation_flags_soft_stop_and_trailing(monkeypatch, tmp_path):
     monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
-    _write_events(tmp_path, "2026-05-06", [_event("2026-05-06", "10:00:00", "holding_started")])
+    _write_events(
+        tmp_path, "2026-05-06", [_event("2026-05-06", "10:00:00", "holding_started")]
+    )
     _write_observation(
         tmp_path,
         "2026-05-06",
         {
-            "soft_stop_rebound": {"total_soft_stop": 5, "rebound_above_sell_10m_rate": 80.0},
+            "soft_stop_rebound": {
+                "total_soft_stop": 5,
+                "rebound_above_sell_10m_rate": 80.0,
+            },
             "exit_rule_quality": [
                 {
                     "exit_rule": "scalp_trailing_take_profit",
@@ -123,7 +130,13 @@ def test_stale_after_all_positions_completed_is_not_runtime_ops(monkeypatch, tmp
         "2026-05-06",
         [
             _event("2026-05-06", "10:00:00", "holding_started", record_id=1),
-            _event("2026-05-06", "10:01:00", "ai_holding_review", record_id=1, fields={"ai_cache": "miss"}),
+            _event(
+                "2026-05-06",
+                "10:01:00",
+                "ai_holding_review",
+                record_id=1,
+                fields={"ai_cache": "miss"},
+            ),
             _event("2026-05-06", "10:02:00", "sell_completed", record_id=1),
         ],
     )
@@ -144,7 +157,13 @@ def test_stale_with_active_holding_is_runtime_ops(monkeypatch, tmp_path):
         "2026-05-06",
         [
             _event("2026-05-06", "10:00:00", "holding_started", record_id=1),
-            _event("2026-05-06", "10:01:00", "ai_holding_review", record_id=1, fields={"ai_cache": "miss"}),
+            _event(
+                "2026-05-06",
+                "10:01:00",
+                "ai_holding_review",
+                record_id=1,
+                fields={"ai_cache": "miss"},
+            ),
         ],
     )
 
@@ -216,17 +235,25 @@ def test_score50_origin_counts_split_preflight_and_neutralized(monkeypatch, tmp_
 
 def test_policy_excludes_telegram_alert(monkeypatch, tmp_path):
     monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
-    _write_events(tmp_path, "2026-05-06", [_event("2026-05-06", "10:00:00", "holding_started")])
+    _write_events(
+        tmp_path, "2026-05-06", [_event("2026-05-06", "10:00:00", "holding_started")]
+    )
 
     report = sentinel.build_holding_exit_sentinel_report(
         "2026-05-06",
         as_of=sentinel._parse_as_of("2026-05-06", "10:05:00"),
     )
 
-    assert report["policy"]["allowed_automations"] == ["json_report", "markdown_report", "action_recommendation"]
+    assert report["policy"]["allowed_automations"] == [
+        "json_report",
+        "markdown_report",
+        "action_recommendation",
+    ]
 
 
-def test_non_real_exit_signal_is_split_from_sell_execution_drought(monkeypatch, tmp_path):
+def test_non_real_exit_signal_is_split_from_sell_execution_drought(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
@@ -272,7 +299,12 @@ def test_non_real_exit_signal_is_split_from_sell_execution_drought(monkeypatch, 
         "non_real_sell_order_sent": 0,
     }
     assert report["current"]["session"]["stage_unique"]["non_real_exit_signal"] == 2
-    assert report["current"]["session"]["ratios"]["non_real_sell_sent_to_exit_signal_unique_pct"] == 0.0
+    assert (
+        report["current"]["session"]["ratios"][
+            "non_real_sell_sent_to_exit_signal_unique_pct"
+        ]
+        == 0.0
+    )
 
 
 def test_probe_sibling_marks_sparse_exit_signal_as_non_real(monkeypatch, tmp_path):
@@ -359,7 +391,12 @@ def test_use_cache_reads_only_appended_holding_raw_bytes(monkeypatch, tmp_path):
         use_cache=True,
     )
     assert second["current"]["session"]["stage_unique"]["exit_signal"] == 2
-    meta_path = tmp_path / "runtime" / "sentinel_event_cache" / "holding_exit_sentinel_events_2026-05-06.meta.json"
+    meta_path = (
+        tmp_path
+        / "runtime"
+        / "sentinel_event_cache"
+        / "holding_exit_sentinel_events_2026-05-06.meta.json"
+    )
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     assert meta["cache_event_count"] == 3
     assert meta["appended_raw_lines"] == 1

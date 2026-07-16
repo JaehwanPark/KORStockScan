@@ -89,7 +89,15 @@ def _trade(
     }
 
 
-def _post_sell_row(post_sell_id, recommendation_id, *, exit_rule, outcome, profit_rate=0.6, rebound_buy=False):
+def _post_sell_row(
+    post_sell_id,
+    recommendation_id,
+    *,
+    exit_rule,
+    outcome,
+    profit_rate=0.6,
+    rebound_buy=False,
+):
     candidate = {
         "post_sell_id": post_sell_id,
         "signal_date": "2026-04-24",
@@ -172,15 +180,30 @@ def test_holding_exit_observation_report_splits_required_cohorts(monkeypatch, tm
     soft_trade["timeline"][1:1] = [
         {
             "stage": "ai_holding_review",
-            "fields": {"profit_rate": "-0.80", "ai_score": "34", "held_sec": "190", "low_score_hits": "0/3"},
+            "fields": {
+                "profit_rate": "-0.80",
+                "ai_score": "34",
+                "held_sec": "190",
+                "low_score_hits": "0/3",
+            },
         },
         {
             "stage": "ai_holding_review",
-            "fields": {"profit_rate": "-0.90", "ai_score": "32", "held_sec": "205", "low_score_hits": "1/3"},
+            "fields": {
+                "profit_rate": "-0.90",
+                "ai_score": "32",
+                "held_sec": "205",
+                "low_score_hits": "1/3",
+            },
         },
         {
             "stage": "ai_holding_review",
-            "fields": {"profit_rate": "-1.00", "ai_score": "31", "held_sec": "220", "low_score_hits": "3/3"},
+            "fields": {
+                "profit_rate": "-1.00",
+                "ai_score": "31",
+                "held_sec": "220",
+                "low_score_hits": "3/3",
+            },
         },
     ]
     _write_json(
@@ -206,8 +229,13 @@ def test_holding_exit_observation_report_splits_required_cohorts(monkeypatch, tm
         snapshot_dir / "missed_entry_counterfactual_2026-04-24.json",
         {
             "date": "2026-04-24",
-            "summary": {"outcome_counts": {"MISSED_WINNER": 3, "AVOIDED_LOSER": 1, "NEUTRAL": 1}},
-            "metrics": {"evaluated_candidates": 5, "estimated_counterfactual_pnl_10m_krw_sum": 12345},
+            "summary": {
+                "outcome_counts": {"MISSED_WINNER": 3, "AVOIDED_LOSER": 1, "NEUTRAL": 1}
+            },
+            "metrics": {
+                "evaluated_candidates": 5,
+                "estimated_counterfactual_pnl_10m_krw_sum": 12345,
+            },
             "rows": [
                 {"terminal_stage": "latency_block"},
                 {"terminal_stage": "latency_block"},
@@ -248,8 +276,12 @@ def test_holding_exit_observation_report_splits_required_cohorts(monkeypatch, tm
     )
     candidates.append(candidate)
     evaluations.append(evaluation)
-    _write_jsonl(tmp_path / "post_sell" / "post_sell_candidates_2026-04-24.jsonl", candidates)
-    _write_jsonl(tmp_path / "post_sell" / "post_sell_evaluations_2026-04-24.jsonl", evaluations)
+    _write_jsonl(
+        tmp_path / "post_sell" / "post_sell_candidates_2026-04-24.jsonl", candidates
+    )
+    _write_jsonl(
+        tmp_path / "post_sell" / "post_sell_evaluations_2026-04-24.jsonl", evaluations
+    )
     _write_jsonl(
         tmp_path / "pipeline_events" / "pipeline_events_2026-04-24.jsonl",
         [{"stage": "order_bundle_submitted", "fields": {}} for _ in range(20)],
@@ -287,11 +319,19 @@ def test_holding_exit_observation_report_splits_required_cohorts(monkeypatch, tm
     assert report["soft_stop_rebound"]["whipsaw_windows"][3]["window"] == "10m"
     assert report["soft_stop_rebound"]["whipsaw_windows"][3]["mfe_ge_1_0_rate"] == 100.0
     assert report["soft_stop_rebound"]["cooldown_live_allowed"] is False
-    assert report["soft_stop_rebound"]["hard_stop_auxiliary"]["evaluated_post_sell"] == 1
-    assert report["soft_stop_rebound"]["hard_stop_auxiliary"]["completed_valid_trades"] == 1
+    assert (
+        report["soft_stop_rebound"]["hard_stop_auxiliary"]["evaluated_post_sell"] == 1
+    )
+    assert (
+        report["soft_stop_rebound"]["hard_stop_auxiliary"]["completed_valid_trades"]
+        == 1
+    )
     assert report["same_symbol_reentry"]["after_soft_stop_next_loss_count"] == 1
     assert report["opportunity_cost"]["outcome_counts"]["MISSED_WINNER"] == 3
-    assert report["opportunity_cost"]["terminal_stage_top"][0] == {"label": "latency_block", "count": 2}
+    assert report["opportunity_cost"]["terminal_stage_top"][0] == {
+        "label": "latency_block",
+        "count": 2,
+    }
 
 
 def test_holding_exit_observation_reads_gzip_post_sell_rows(monkeypatch, tmp_path):
@@ -304,8 +344,13 @@ def test_holding_exit_observation_reads_gzip_post_sell_rows(monkeypatch, tmp_pat
         profit_rate=-1.6,
         rebound_buy=True,
     )
-    _write_gzip_jsonl(tmp_path / "post_sell" / "post_sell_candidates_2026-04-24.jsonl.gz", [candidate])
-    _write_gzip_jsonl(tmp_path / "post_sell" / "post_sell_evaluations_2026-04-24.jsonl.gz", [evaluation])
+    _write_gzip_jsonl(
+        tmp_path / "post_sell" / "post_sell_candidates_2026-04-24.jsonl.gz", [candidate]
+    )
+    _write_gzip_jsonl(
+        tmp_path / "post_sell" / "post_sell_evaluations_2026-04-24.jsonl.gz",
+        [evaluation],
+    )
 
     rows, paths = report_mod._load_post_sell_rows(["2026-04-24"])
 
