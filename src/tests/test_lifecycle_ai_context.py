@@ -6,11 +6,15 @@ from datetime import datetime
 from src.engine import lifecycle_ai_context as mod
 
 
-def test_lifecycle_ai_context_builds_stage_contexts_with_forbidden_uses(tmp_path, monkeypatch):
+def test_lifecycle_ai_context_builds_stage_contexts_with_forbidden_uses(
+    tmp_path, monkeypatch
+):
     report_dir = tmp_path / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CONTEXT_DIR", report_dir / "lifecycle_ai_context")
-    monkeypatch.setattr(mod, "ATTRIBUTION_DIR", report_dir / "lifecycle_ai_context_attribution")
+    monkeypatch.setattr(
+        mod, "ATTRIBUTION_DIR", report_dir / "lifecycle_ai_context_attribution"
+    )
 
     ldm_dir = report_dir / "lifecycle_decision_matrix"
     attr_dir = report_dir / "lifecycle_ai_context_attribution"
@@ -60,10 +64,14 @@ def test_lifecycle_ai_context_builds_stage_contexts_with_forbidden_uses(tmp_path
     assert report["provider_status"]["status"] == "deterministic_fallback"
 
 
-def test_lifecycle_ai_context_attribution_counts_runtime_provenance(tmp_path, monkeypatch):
+def test_lifecycle_ai_context_attribution_counts_runtime_provenance(
+    tmp_path, monkeypatch
+):
     pipeline_dir = tmp_path / "pipeline_events"
     monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", pipeline_dir)
-    monkeypatch.setattr(mod, "ATTRIBUTION_DIR", tmp_path / "report" / "lifecycle_ai_context_attribution")
+    monkeypatch.setattr(
+        mod, "ATTRIBUTION_DIR", tmp_path / "report" / "lifecycle_ai_context_attribution"
+    )
     pipeline_dir.mkdir(parents=True)
     (pipeline_dir / "pipeline_events_2026-05-20.jsonl").write_text(
         "\n".join(
@@ -100,7 +108,9 @@ def test_lifecycle_ai_context_attribution_counts_runtime_provenance(tmp_path, mo
         encoding="utf-8",
     )
 
-    report = mod.build_lifecycle_ai_context_attribution_report("2026-05-20", replay_budget=30)
+    report = mod.build_lifecycle_ai_context_attribution_report(
+        "2026-05-20", replay_budget=30
+    )
 
     entry = report["stage_attribution"]["entry"]
     assert report["runtime_effect"] is False
@@ -113,12 +123,18 @@ def test_lifecycle_ai_context_attribution_counts_runtime_provenance(tmp_path, mo
     assert entry["broker_order_forbidden"] is True
 
 
-def test_lifecycle_ai_context_attribution_reads_gzip_pipeline_events(tmp_path, monkeypatch):
+def test_lifecycle_ai_context_attribution_reads_gzip_pipeline_events(
+    tmp_path, monkeypatch
+):
     pipeline_dir = tmp_path / "pipeline_events"
     monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", pipeline_dir)
-    monkeypatch.setattr(mod, "ATTRIBUTION_DIR", tmp_path / "report" / "lifecycle_ai_context_attribution")
+    monkeypatch.setattr(
+        mod, "ATTRIBUTION_DIR", tmp_path / "report" / "lifecycle_ai_context_attribution"
+    )
     pipeline_dir.mkdir(parents=True)
-    with gzip.open(pipeline_dir / "pipeline_events_2026-05-20.jsonl.gz", "wt", encoding="utf-8") as handle:
+    with gzip.open(
+        pipeline_dir / "pipeline_events_2026-05-20.jsonl.gz", "wt", encoding="utf-8"
+    ) as handle:
         handle.write(
             json.dumps(
                 {
@@ -135,7 +151,9 @@ def test_lifecycle_ai_context_attribution_reads_gzip_pipeline_events(tmp_path, m
             + "\n"
         )
 
-    report = mod.build_lifecycle_ai_context_attribution_report("2026-05-20", replay_budget=30)
+    report = mod.build_lifecycle_ai_context_attribution_report(
+        "2026-05-20", replay_budget=30
+    )
 
     assert report["stage_attribution"]["entry"]["context_eligible_count"] == 1
     assert report["implementation_status"] == "implemented"
@@ -143,7 +161,9 @@ def test_lifecycle_ai_context_attribution_reads_gzip_pipeline_events(tmp_path, m
     assert report["implementation_checks"][0]["status"] == "pass"
 
 
-def test_runtime_context_applies_prompt_fields_without_action_mutation(tmp_path, monkeypatch):
+def test_runtime_context_applies_prompt_fields_without_action_mutation(
+    tmp_path, monkeypatch
+):
     context_file = tmp_path / "lifecycle_ai_context_2026-05-20.json"
     context_file.write_text(
         json.dumps(
@@ -179,10 +199,15 @@ def test_runtime_context_applies_prompt_fields_without_action_mutation(tmp_path,
         prompt_profile="entry",
         now=datetime.fromisoformat("2026-05-21T09:00:00"),
     )
-    merged = mod.merge_lifecycle_ai_context_fields({"action": "BUY", "score": 70}, context)
+    merged = mod.merge_lifecycle_ai_context_fields(
+        {"action": "BUY", "score": 70}, context
+    )
 
     assert context["applied"] is True
     assert "stage: entry" in context["prompt_context"]
     assert merged["action"] == "BUY"
     assert merged["lifecycle_ai_context_applied"] is True
-    assert merged["lifecycle_ai_context_decision_authority"] == "ai_advisory_prompt_context_only"
+    assert (
+        merged["lifecycle_ai_context_decision_authority"]
+        == "ai_advisory_prompt_context_only"
+    )
