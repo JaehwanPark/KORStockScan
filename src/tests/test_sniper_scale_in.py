@@ -1484,6 +1484,82 @@ def test_rising_missed_tp1_support_reversal_lane_requires_two_independent_suppor
     assert one_support.reason == "rising_missed_tp1_lane_not_eligible"
 
 
+def test_rising_missed_tp1_nxt_price_jump_recovery_is_nxt_only():
+    stock = {
+        "source_signature": "LOW_REBOUND_RISING_MISSED,PRICE_JUMP_START",
+        "low_rebound_pct": 3.39,
+    }
+    decision_input = {
+        "rising_missed_tp1_input_ready": True,
+        "rising_missed_tp1_actual_watch_delta_pct": 0.05,
+        "rising_missed_tp1_effective_quote_age_ms": 0.0,
+        "rising_missed_tp1_spread_ratio": 0.001025,
+        "rising_missed_tp1_micro_confidence": 0.85,
+        "rising_missed_tp1_true_ofi_ewma": 0.089,
+        "rising_missed_tp1_pressure_ewma": 76.35,
+        "rising_missed_tp1_depth_imbalance_ewma": 0.527,
+        "rising_missed_tp1_top_depth_ratio": 0.785,
+        "rising_missed_tp1_tick_acceleration_fresh": False,
+        "rising_missed_tp1_micro_vwap_fresh": False,
+        "market_data_signed_tape_state": "insufficient",
+        "rising_missed_effective_venue": "NXT",
+        "rising_missed_market_session_bucket": "nxt_entry_window",
+        "rising_missed_nxt_eligible": True,
+    }
+
+    enabled = evaluate_rising_missed_tp1_candidate(
+        stock,
+        decision_input,
+        selector_enabled=True,
+        active_date="2026-07-16",
+        current_date="2026-07-16",
+        current_ai_action="WAIT",
+        nxt_price_jump_recovery_enabled=True,
+        nxt_price_jump_recovery_active_date="2026-07-16",
+    )
+    disabled = evaluate_rising_missed_tp1_candidate(
+        stock,
+        decision_input,
+        selector_enabled=True,
+        active_date="2026-07-16",
+        current_date="2026-07-16",
+        current_ai_action="WAIT",
+        nxt_price_jump_recovery_enabled=False,
+    )
+    krx = evaluate_rising_missed_tp1_candidate(
+        stock,
+        {
+            **decision_input,
+            "rising_missed_effective_venue": "KRX",
+            "rising_missed_market_session_bucket": "krx_regular",
+        },
+        selector_enabled=True,
+        active_date="2026-07-16",
+        current_date="2026-07-16",
+        current_ai_action="WAIT",
+        nxt_price_jump_recovery_enabled=True,
+    )
+
+    assert enabled.allowed is True
+    assert enabled.lane == "nxt_price_jump_recovery"
+    assert enabled.log_fields["rising_missed_tp1_positive_support_min"] == 1
+    assert enabled.log_fields["rising_missed_tp1_nxt_price_jump_recovery_lane"] is True
+    assert enabled.log_fields["threshold_family"] == (
+        "rising_missed_nxt_price_jump_recovery"
+    )
+    assert enabled.log_fields[
+        "rising_missed_tp1_nxt_price_jump_recovery_runtime_effect"
+    ] is True
+    assert enabled.log_fields[
+        "rising_missed_tp1_nxt_price_jump_recovery_allowed_runtime_apply"
+    ] is True
+    assert enabled.log_fields["rising_missed_tp1_nxt_price_jump_recovery_active_date"] == (
+        "2026-07-16"
+    )
+    assert disabled.reason == "rising_missed_tp1_lane_not_eligible"
+    assert krx.reason == "rising_missed_tp1_lane_not_eligible"
+
+
 def test_rising_missed_tp1_probability_gate_passes_wide_spread_chase_for_submit_recheck():
     decision = evaluate_rising_missed_tp1_candidate(
         {
@@ -5935,6 +6011,33 @@ def test_rising_missed_nxt_context_recovers_by_symbol_and_promotion(monkeypatch)
         )
         == {}
     )
+
+
+def test_rising_missed_nxt_submit_context_is_restored_for_latency(monkeypatch):
+    stock = state_handlers._rising_missed_tp1_submit_context_fields(
+        {
+            "rising_missed_tp1_candidate_allowed": True,
+            "rising_missed_tp1_evaluation_id": "nxt-latency-eval",
+            "rising_missed_market_session_bucket": "nxt_entry_window",
+            "rising_missed_effective_venue": "NXT",
+            "rising_missed_nxt_eligible": True,
+            "rising_missed_ws_0b_route": "krx_nxt_integrated",
+            "rising_missed_ws_0d_route": "krx_nxt_integrated",
+        },
+        now_ts=1000.0,
+    )
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 1010.0)
+
+    latency_stock = state_handlers._rising_missed_tp1_latency_context_stock(stock)
+
+    assert latency_stock is not stock
+    assert latency_stock["rising_missed_tp1_submit_context_fresh"] is True
+    assert latency_stock["rising_missed_market_session_bucket"] == "nxt_entry_window"
+    assert latency_stock["rising_missed_effective_venue"] == "NXT"
+    assert latency_stock["rising_missed_nxt_eligible"] is True
+    assert latency_stock["rising_missed_ws_0b_route"] == "krx_nxt_integrated"
+    assert latency_stock["rising_missed_ws_0d_route"] == "krx_nxt_integrated"
+    assert "rising_missed_effective_venue" not in stock
 
 
 def test_rising_missed_decision_input_recovers_anchor_and_derives_ws_momentum(
@@ -10977,7 +11080,6 @@ def test_scale_in_signal_refreshes_stale_features_before_pyramid(monkeypatch):
         "_log_holding_pipeline",
         lambda stock, code, stage, **fields: logs.append((stage, fields)),
     )
-
     stock = {
         "id": 1,
         "name": "REFRESH",
@@ -15330,6 +15432,16 @@ def test_execute_scalping_pyramid_blocks_score_50_before_real_submit(monkeypatch
         state_handlers,
         "_log_holding_pipeline",
         lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_pre_submit_refresh_real_ws_snapshot",
+        lambda code, ws_data, strategy: (ws_data, {}),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_pre_submit_input_snapshot_needs_rest_orderbook_recheck",
+        lambda ws_data: False,
     )
 
     stock = {
@@ -29836,7 +29948,11 @@ def test_nxt_rising_missed_tp1_submits_half_and_keeps_runner(monkeypatch):
     submitted = state_handlers._maybe_submit_nxt_rising_missed_tp1_partial_runner(
         stock,
         "123456",
-        {"curr": 10150, "executable_sell_price": 10140},
+        {
+            "curr": 10150,
+            "executable_sell_price": 10140,
+            "orderbook": {"bids": [{"price": 10140, "volume": 20}]},
+        },
         strategy="SCALPING",
         curr_price=10150,
         buy_price=10000,
@@ -29858,6 +29974,66 @@ def test_nxt_rising_missed_tp1_submits_half_and_keeps_runner(monkeypatch):
         if stage == "nxt_rising_missed_tp1_partial_order_sent"
     ]
     assert sent[-1]["runner_qty"] == 5
+
+
+def test_nxt_rising_missed_tp1_defers_without_fresh_bid_depth(monkeypatch):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_NXT_RISING_MISSED_TP1_PARTIAL_RUNNER_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_NXT_RISING_MISSED_TP1_PARTIAL_RUNNER_ACTIVE_DATE",
+        "2026-07-15",
+    )
+    state_handlers.DB = _DummyDB()
+    pipeline_logs = []
+    sell_calls = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: pipeline_logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_smart_sell_order",
+        lambda *args, **kwargs: sell_calls.append(kwargs)
+        or {"return_code": "0", "ord_no": "UNEXPECTED"},
+    )
+    now_dt = datetime(2026, 7, 15, 17, 0, 0)
+    stock = {
+        "id": 142,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 10000,
+        "buy_qty": 10,
+        "rising_missed_class": "acceleration",
+        "is_nxt": True,
+    }
+
+    submitted = state_handlers._maybe_submit_nxt_rising_missed_tp1_partial_runner(
+        stock,
+        "123456",
+        {"curr": 10150, "executable_sell_price": 10140, "orderbook": {"bids": []}},
+        strategy="SCALPING",
+        curr_price=10150,
+        buy_price=10000,
+        now_ts=now_dt.replace(tzinfo=state_handlers._KST).timestamp(),
+        now_dt=now_dt,
+        admin_id=1,
+        quote_fields={"quote_consistency_reason": "freshest_age"},
+    )
+
+    assert submitted is False
+    assert sell_calls == []
+    assert stock["status"] == "HOLDING"
+    deferred = [
+        fields
+        for stage, fields in pipeline_logs
+        if stage == "nxt_rising_missed_tp1_partial_deferred"
+    ]
+    assert deferred[-1]["reason"] == "fresh_bid_orderbook_unavailable"
+    assert deferred[-1]["actual_order_submitted"] is False
 
 
 def test_nxt_rising_missed_tp1_partial_receipts_restore_holding_runner(monkeypatch):

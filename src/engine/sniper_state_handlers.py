@@ -36003,7 +36003,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         if strategy == 'SCALPING':
             final_price = int(float(stock.get('target_buy_price', curr_price) or curr_price))
     latency_gate = evaluate_live_buy_entry(
-        stock=stock, code=code, ws_data=ws_data, strategy_id=strategy, planned_qty=real_buy_qty,
+        stock=_rising_missed_tp1_latency_context_stock(stock),
+        code=code, ws_data=ws_data, strategy_id=strategy, planned_qty=real_buy_qty,
         signal_price=curr_price, signal_strength=latency_signal_strength,
         target_buy_price=final_price if strategy == 'SCALPING' else 0,
     )
@@ -39254,6 +39255,22 @@ def _rising_missed_tp1_selector_current_date(runtime: dict | None) -> str:
     return datetime.fromtimestamp(float(now_ts), tz=_KST).strftime("%Y-%m-%d")
 
 
+def _rising_missed_nxt_price_jump_recovery_enabled(runtime: dict | None) -> bool:
+    if not _env_bool(
+        "KORSTOCKSCAN_RISING_MISSED_NXT_PRICE_JUMP_RECOVERY_ENABLED", False
+    ):
+        return False
+    active_date = str(
+        os.getenv(
+            "KORSTOCKSCAN_RISING_MISSED_NXT_PRICE_JUMP_RECOVERY_ACTIVE_DATE", ""
+        )
+    ).strip()
+    return bool(
+        active_date
+        and active_date == _rising_missed_tp1_selector_current_date(runtime)
+    )
+
+
 def _rising_missed_nxt_session_bucket(now_ts: float) -> str:
     now_t = datetime.fromtimestamp(float(now_ts), tz=_KST).time()
     if datetime_time(hour=9) <= now_t < TIME_15_30:
@@ -39543,6 +39560,14 @@ def _rising_missed_tp1_observation_context_log_fields(stock: dict | None) -> dic
     return fields
 
 
+def _rising_missed_tp1_latency_context_stock(stock: dict | None) -> dict[str, Any]:
+    stock = stock if isinstance(stock, dict) else {}
+    observation_fields = _rising_missed_tp1_observation_context_log_fields(stock)
+    if not observation_fields:
+        return stock
+    return {**stock, **observation_fields}
+
+
 def _evaluate_rising_missed_tp1_source_gap_relief(
     stock: dict | None,
     *,
@@ -39807,6 +39832,15 @@ def _evaluate_rising_missed_normal_buy_bridge(
             active_date=_rising_missed_tp1_selector_active_date(),
             current_date=_rising_missed_tp1_selector_current_date(runtime),
             current_ai_action=current_ai_action,
+            nxt_price_jump_recovery_enabled=(
+                _rising_missed_nxt_price_jump_recovery_enabled(runtime)
+            ),
+            nxt_price_jump_recovery_active_date=str(
+                os.getenv(
+                    "KORSTOCKSCAN_RISING_MISSED_NXT_PRICE_JUMP_RECOVERY_ACTIVE_DATE",
+                    "",
+                )
+            ).strip(),
         )
         _log_rising_missed_tp1_counterfactual_submit_safety(
             stock,
@@ -40907,6 +40941,15 @@ def _maybe_submit_rising_missed_one_share_entry(
             or stock.get("last_watching_ai_action")
             or "WAIT"
         ),
+        nxt_price_jump_recovery_enabled=(
+            _rising_missed_nxt_price_jump_recovery_enabled(runtime)
+        ),
+        nxt_price_jump_recovery_active_date=str(
+            os.getenv(
+                "KORSTOCKSCAN_RISING_MISSED_NXT_PRICE_JUMP_RECOVERY_ACTIVE_DATE",
+                "",
+            )
+        ).strip(),
     )
     _log_rising_missed_tp1_counterfactual_submit_safety(
         stock,
@@ -41317,6 +41360,58 @@ def _maybe_submit_nxt_rising_missed_tp1_partial_runner(
         0,
     )
     if executable_sell_price <= 0:
+        return False
+
+    orderbook = ws_data.get("orderbook") if isinstance(ws_data, dict) else None
+    bids = orderbook.get("bids") if isinstance(orderbook, dict) else None
+    best_bid_row = bids[0] if isinstance(bids, list) and bids else {}
+    best_bid_price = _safe_int(
+        best_bid_row.get("price") if isinstance(best_bid_row, dict) else 0,
+        0,
+    )
+    best_bid_qty = _safe_int(
+        best_bid_row.get("volume") if isinstance(best_bid_row, dict) else 0,
+        0,
+    )
+    max_bid_gap_bps = max(
+        0,
+        _env_int("KORSTOCKSCAN_NXT_RISING_MISSED_TP1_PARTIAL_MAX_BID_GAP_BPS", 120),
+    )
+    bid_gap_bps = _price_gap_bps(
+        best_bid_price,
+        executable_sell_price,
+        basis_price=executable_sell_price,
+    )
+    required_bid_qty = partial_qty * 2
+    if (
+        best_bid_price <= 0
+        or best_bid_qty < required_bid_qty
+        or bid_gap_bps > max_bid_gap_bps
+    ):
+        if best_bid_price <= 0:
+            defer_reason = "fresh_bid_orderbook_unavailable"
+        elif best_bid_qty < required_bid_qty:
+            defer_reason = "best_bid_depth_below_limit_order_floor"
+        else:
+            defer_reason = "best_bid_gap_above_cap"
+        _log_holding_pipeline(
+            stock,
+            code,
+            "nxt_rising_missed_tp1_partial_deferred",
+            reason=defer_reason,
+            qty=partial_qty,
+            original_qty=total_qty,
+            executable_sell_price=executable_sell_price,
+            best_bid_price=best_bid_price,
+            best_bid_qty=best_bid_qty,
+            required_bid_qty=required_bid_qty,
+            bid_gap_bps=bid_gap_bps,
+            max_bid_gap_bps=max_bid_gap_bps,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            runtime_effect=True,
+            decision_authority="nxt_rising_missed_tp1_partial_runner_canary",
+        )
         return False
 
     pending_msg = (

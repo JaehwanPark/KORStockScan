@@ -157,6 +157,8 @@ def evaluate_rising_missed_tp1_candidate(
     active_date: str,
     current_date: str,
     current_ai_action: Any = None,
+    nxt_price_jump_recovery_enabled: bool = False,
+    nxt_price_jump_recovery_active_date: str = "",
 ) -> RisingMissedTP1CandidateDecision:
     """Return candidate eligibility only; broker submit safety remains downstream."""
     stock = stock if isinstance(stock, dict) else {}
@@ -242,6 +244,30 @@ def evaluate_rising_missed_tp1_candidate(
     positive_supports = sorted(
         name for name, supported in support_families.items() if supported
     )
+    nxt_price_jump_recovery_lane = bool(
+        nxt_price_jump_recovery_enabled
+        and lane == "none"
+        and str(decision_input.get("rising_missed_effective_venue") or "").upper()
+        == "NXT"
+        and str(
+            decision_input.get("rising_missed_market_session_bucket") or ""
+        ).lower()
+        == "nxt_entry_window"
+        and _field_present(decision_input.get("rising_missed_nxt_eligible"))
+        and _has_signature(stock, "LOW_REBOUND_RISING_MISSED")
+        and _has_signature(stock, "PRICE_JUMP_START")
+        and low_rebound_pct >= 3.0
+        and source_count >= 2
+        and input_ready
+        and effective_quote_age_ms <= 1000.0
+        and spread_ratio <= TP1_SELECTOR_SPREAD_CAUTION_RATIO
+        and micro_confidence >= 0.80
+        and true_ofi_ewma > 0.0
+        and pressure_ewma >= 70.0
+        and support_families["order_flow"]
+    )
+    if nxt_price_jump_recovery_lane:
+        lane = "nxt_price_jump_recovery"
     support_reversal_lane = bool(
         lane == "none"
         and len(positive_supports) >= TP1_SELECTOR_MIN_POSITIVE_SUPPORT_FAMILIES
@@ -294,8 +320,21 @@ def evaluate_rising_missed_tp1_candidate(
         "rising_missed_tp1_bid_imbalance_surge": bid_imbalance_surge,
         "rising_missed_tp1_selector_policy": "probability_support_v3",
         "rising_missed_tp1_support_reversal_lane": support_reversal_lane,
+        "rising_missed_tp1_nxt_price_jump_recovery_enabled": bool(
+            nxt_price_jump_recovery_enabled
+        ),
+        "rising_missed_tp1_nxt_price_jump_recovery_active_date": (
+            nxt_price_jump_recovery_active_date or "-"
+        ),
+        "rising_missed_tp1_nxt_price_jump_recovery_lane": (
+            nxt_price_jump_recovery_lane
+        ),
         "rising_missed_tp1_positive_support_count": len(positive_supports),
-        "rising_missed_tp1_positive_support_min": TP1_SELECTOR_MIN_POSITIVE_SUPPORT_FAMILIES,
+        "rising_missed_tp1_positive_support_min": (
+            1
+            if nxt_price_jump_recovery_lane
+            else TP1_SELECTOR_MIN_POSITIVE_SUPPORT_FAMILIES
+        ),
         "rising_missed_tp1_positive_support_families": ",".join(positive_supports) or "-",
         "rising_missed_tp1_support_bid_imbalance": support_families["bid_imbalance"],
         "rising_missed_tp1_support_order_flow": support_families["order_flow"],
@@ -333,11 +372,30 @@ def evaluate_rising_missed_tp1_candidate(
         "rising_missed_tp1_horizon_sec": TP1_SELECTOR_HORIZON_SEC,
         "rising_missed_tp1_actual_fee_tax_required_for_net_label": True,
         "metric_role": "bounded_tunable_candidate_gate",
-        "decision_authority": "operator_runtime_override_rising_missed_tp1_candidate_selector",
+        "decision_authority": (
+            "operator_runtime_override_rising_missed_nxt_price_jump_recovery"
+            if nxt_price_jump_recovery_lane
+            else "operator_runtime_override_rising_missed_tp1_candidate_selector"
+        ),
         "window_policy": "same_day_intraday_candidate_then_postclose_20m_label",
-        "sample_floor": "identity_lane_or_two_independent_positive_support_families",
+        "sample_floor": (
+            "nxt_low_rebound_price_jump_one_positive_order_flow_support"
+            if nxt_price_jump_recovery_lane
+            else "identity_lane_or_two_independent_positive_support_families"
+        ),
         "primary_decision_metric": "gross_1_30_before_adverse_0_70_within_20m",
         "source_quality_gate": "freshness_envelope_and_trusted_ws_micro_required",
+        "threshold_family": (
+            "rising_missed_nxt_price_jump_recovery"
+            if nxt_price_jump_recovery_lane
+            else "rising_missed_tp1_selector"
+        ),
+        "rising_missed_tp1_nxt_price_jump_recovery_runtime_effect": (
+            nxt_price_jump_recovery_lane
+        ),
+        "rising_missed_tp1_nxt_price_jump_recovery_allowed_runtime_apply": (
+            nxt_price_jump_recovery_lane
+        ),
         "forbidden_uses": (
             "broker_guard_bypass,submit_safety_bypass,quantity_or_cap_change,provider_route_change,"
             "tp_or_exit_change,hard_or_protect_or_emergency_guard_relaxation,profit_guarantee"
@@ -428,7 +486,10 @@ def evaluate_rising_missed_tp1_candidate(
                 reason=TP1_SELECTOR_BLOCK_HARD_NEGATIVE,
             ),
         )
-    if len(positive_supports) < TP1_SELECTOR_MIN_POSITIVE_SUPPORT_FAMILIES:
+    required_positive_supports = 1 if nxt_price_jump_recovery_lane else (
+        TP1_SELECTOR_MIN_POSITIVE_SUPPORT_FAMILIES
+    )
+    if len(positive_supports) < required_positive_supports:
         return RisingMissedTP1CandidateDecision(
             allowed=False,
             deferred=False,

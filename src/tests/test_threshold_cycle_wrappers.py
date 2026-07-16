@@ -841,6 +841,25 @@ def test_stage2_ops_cron_installs_pyramid_intraday_feedback_5min():
     assert "!/SCALPING_PYRAMID_INTRADAY_FEEDBACK_5MIN/" in script
 
 
+def test_stage2_ops_cron_extends_ws_freshness_monitor_into_nxt_open():
+    script = Path("deploy/install_stage2_ops_cron.sh").read_text(encoding="utf-8")
+
+    assert (
+        "*/5 16-18 * * 1-5 "
+        "INTRADAY_WS_FRESHNESS_MONITOR_COOLDOWN_SEC=240 "
+        "$PROJECT_DIR/deploy/run_intraday_ws_freshness_monitor.sh"
+        in script
+    )
+    assert (
+        "0,5,10,15,20 19 * * 1-5 "
+        "INTRADAY_WS_FRESHNESS_MONITOR_COOLDOWN_SEC=240 "
+        "$PROJECT_DIR/deploy/run_intraday_ws_freshness_monitor.sh"
+        in script
+    )
+    assert "!/INTRADAY_WS_FRESHNESS_MONITOR_5MIN/" in script
+    assert "!/INTRADAY_WS_FRESHNESS_MONITOR_NXT_5MIN/" in script
+
+
 def test_postclose_wrapper_marks_availability_guard_pause_as_fail():
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 
@@ -1080,6 +1099,12 @@ def test_run_bot_waits_for_threshold_runtime_env_before_launching_bot():
     )
     assert (
         "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED:KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE:"
+        in script
+    )
+    assert (
+        "KORSTOCKSCAN_RISING_MISSED_NXT_PRICE_JUMP_RECOVERY_ENABLED:"
+        "KORSTOCKSCAN_RISING_MISSED_NXT_PRICE_JUMP_RECOVERY_ACTIVE_DATE:"
+        "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED"
         in script
     )
     assert (

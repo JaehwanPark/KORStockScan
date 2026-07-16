@@ -3392,6 +3392,14 @@ DATED_RUNTIME_OVERRIDE_SPECS: tuple[dict[str, str], ...] = (
         "active_date_key": "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ACTIVE_DATE",
     },
     {
+        "family": "rising_missed_nxt_price_jump_recovery",
+        "enabled_key": "KORSTOCKSCAN_RISING_MISSED_NXT_PRICE_JUMP_RECOVERY_ENABLED",
+        "active_date_key": (
+            "KORSTOCKSCAN_RISING_MISSED_NXT_PRICE_JUMP_RECOVERY_ACTIVE_DATE"
+        ),
+        "dependency_enabled_key": "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED",
+    },
+    {
         "family": "nxt_rising_missed_tp1_partial_runner",
         "enabled_key": "KORSTOCKSCAN_NXT_RISING_MISSED_TP1_PARTIAL_RUNNER_ENABLED",
         "active_date_key": (
