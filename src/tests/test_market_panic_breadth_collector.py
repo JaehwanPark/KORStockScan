@@ -6,9 +6,24 @@ from src.engine import market_panic_breadth_collector as collector
 def test_parse_kiwoom_industry_rows_from_nested_response():
     payload = {
         "all_inds_index": [
-            {"inds_cd": "001", "inds_nm": "종합(KOSPI)", "cur_prc": "2,700.10", "flu_rt": "-1.45"},
-            {"inds_cd": "101", "inds_nm": "코스닥", "cur_prc": "850.00", "flu_rt": "-2.10"},
-            {"inds_cd": "201", "inds_nm": "반도체", "cur_prc": "1,000", "flu_rt": "-2.40"},
+            {
+                "inds_cd": "001",
+                "inds_nm": "종합(KOSPI)",
+                "cur_prc": "2,700.10",
+                "flu_rt": "-1.45",
+            },
+            {
+                "inds_cd": "101",
+                "inds_nm": "코스닥",
+                "cur_prc": "850.00",
+                "flu_rt": "-2.10",
+            },
+            {
+                "inds_cd": "201",
+                "inds_nm": "반도체",
+                "cur_prc": "1,000",
+                "flu_rt": "-2.40",
+            },
         ]
     }
 
@@ -83,8 +98,22 @@ def test_summarize_breadth_splits_single_market_risk_off_from_composite():
 
 def test_summarize_breadth_sets_report_only_risk_on_advisory():
     rows = [
-        {"code": "001", "name": "종합(KOSPI)", "change_pct": 1.5, "rising_count": 760, "fall_count": 120, "listed_count": 900},
-        {"code": "101", "name": "코스닥", "change_pct": 2.1, "rising_count": 820, "fall_count": 130, "listed_count": 1000},
+        {
+            "code": "001",
+            "name": "종합(KOSPI)",
+            "change_pct": 1.5,
+            "rising_count": 760,
+            "fall_count": 120,
+            "listed_count": 900,
+        },
+        {
+            "code": "101",
+            "name": "코스닥",
+            "change_pct": 2.1,
+            "rising_count": 820,
+            "fall_count": 130,
+            "listed_count": 1000,
+        },
         {"code": "201", "name": "반도체", "change_pct": 2.4},
         {"code": "202", "name": "IT", "change_pct": 1.2},
         {"code": "203", "name": "바이오", "change_pct": 2.2},

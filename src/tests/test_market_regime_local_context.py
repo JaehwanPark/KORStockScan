@@ -47,7 +47,9 @@ def test_local_breadth_overlay_can_open_swing_gate(monkeypatch, tmp_path):
     assert any("국내 breadth 상승장" in reason for reason in snap.reasons)
 
 
-def test_local_breadth_overlay_does_not_override_unresolved_extreme_vix(monkeypatch, tmp_path):
+def test_local_breadth_overlay_does_not_override_unresolved_extreme_vix(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(service_mod, "DATA_DIR", tmp_path)
     service = service_mod.MarketRegimeService(refresh_minutes=0)
     snap = _snapshot()
@@ -72,7 +74,9 @@ def test_local_breadth_overlay_does_not_override_unresolved_extreme_vix(monkeypa
     assert snap.debug["component_scores"]["local_breadth"] == 0
 
 
-def test_load_local_market_context_prefers_daily_report_and_adds_diagnostics(monkeypatch, tmp_path):
+def test_load_local_market_context_prefers_daily_report_and_adds_diagnostics(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(service_mod, "DATA_DIR", tmp_path)
     report_dir = tmp_path / "report"
     report_dir.mkdir(parents=True)
@@ -121,7 +125,9 @@ def test_load_local_market_context_prefers_daily_report_and_adds_diagnostics(mon
     assert context["safe_pool_count"] == 61
 
 
-def test_continuous_score_counts_partial_breadth_even_when_gate_score_is_zero(monkeypatch, tmp_path):
+def test_continuous_score_counts_partial_breadth_even_when_gate_score_is_zero(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(service_mod, "DATA_DIR", tmp_path)
     service = service_mod.MarketRegimeService(refresh_minutes=0)
     snap = _snapshot(score=0)

@@ -9,6 +9,7 @@ Checks:
 4. fear_and_greed import and response payload
 5. optional cache/fallback check mode
 """
+
 import argparse
 import json
 import sys
@@ -134,7 +135,9 @@ def test_cache_fallback_mode():
         snapshot = service.refresh_if_needed(force=True)
         session_date = service._resolve_session_date()
         cache_exists = cache_path.exists()
-        print(f"   first_refresh risk={snapshot.risk_state}, score={snapshot.swing_score}")
+        print(
+            f"   first_refresh risk={snapshot.risk_state}, score={snapshot.swing_score}"
+        )
         print(f"   cache_exists={cache_exists}, session_date={session_date}")
 
         if cache_exists:
@@ -160,8 +163,12 @@ def test_cache_fallback_mode():
             service.provider.fetch_vix_daily = original_fetch_vix
             service.provider.fetch_wti_daily = original_fetch_wti
 
-        used_fallback = any("refresh 실패 폴백 사용" in reason for reason in fallback_snapshot.reasons)
-        print(f"   fallback_risk={fallback_snapshot.risk_state}, score={fallback_snapshot.swing_score}")
+        used_fallback = any(
+            "refresh 실패 폴백 사용" in reason for reason in fallback_snapshot.reasons
+        )
+        print(
+            f"   fallback_risk={fallback_snapshot.risk_state}, score={fallback_snapshot.swing_score}"
+        )
         print(f"   fallback_used={used_fallback}")
         print(f"   fallback_reasons={fallback_snapshot.reasons}")
 

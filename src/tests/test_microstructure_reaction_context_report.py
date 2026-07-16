@@ -3,7 +3,9 @@ import json
 from src.engine.scalping import microstructure_reaction_context as mod
 
 
-def test_microstructure_reaction_context_report_preserves_contract_and_keys(tmp_path, monkeypatch):
+def test_microstructure_reaction_context_report_preserves_contract_and_keys(
+    tmp_path, monkeypatch
+):
     event_dir = tmp_path / "pipeline_events"
     report_dir = tmp_path / "report" / "microstructure_reaction_context"
     event_dir.mkdir(parents=True)
@@ -50,8 +52,14 @@ def test_microstructure_reaction_context_report_preserves_contract_and_keys(tmp_
                             "kiwoom_0b_1030_1031_vs_15_evaluable_count": 10,
                             "kiwoom_0b_1030_1031_vs_15_mismatch_count": 2,
                             "ka10003_buy_dominance_observation": {
-                                "source_counts": {"1030_1031_split": 2, "signed_volume": 1},
-                                "trade_value_source_counts": {"1313": 2, "calc_price_x_volume": 1},
+                                "source_counts": {
+                                    "1030_1031_split": 2,
+                                    "signed_volume": 1,
+                                },
+                                "trade_value_source_counts": {
+                                    "1313": 2,
+                                    "calc_price_x_volume": 1,
+                                },
                                 "inside_spread_count": 1,
                                 "split_vs_15_evaluable_count": 2,
                                 "split_vs_15_mismatch_count": 1,
@@ -74,8 +82,14 @@ def test_microstructure_reaction_context_report_preserves_contract_and_keys(tmp_
                             "market_data_signed_tape_buy_ratio_pct": 22.222,
                             "market_data_rest_signed_tape_pressure_usable": False,
                             "rest_signed_trade_ticks": [
-                                {"signed_trade_volume": "-200", "rest_signed_tape_source": "ka10084"},
-                                {"signed_trade_volume": "+100", "rest_signed_tape_source": "ka10084"},
+                                {
+                                    "signed_trade_volume": "-200",
+                                    "rest_signed_tape_source": "ka10084",
+                                },
+                                {
+                                    "signed_trade_volume": "+100",
+                                    "rest_signed_tape_source": "ka10084",
+                                },
                             ],
                             "latency_true_ofi_direct_canary_signed_tape_sample_count": 3,
                             "latency_true_ofi_direct_canary_signed_tape_buy_count": 1,
@@ -209,7 +223,9 @@ def test_microstructure_reaction_context_report_preserves_contract_and_keys(tmp_
     assert report["summary"]["v_pw_ws_0b_count"] == 1
     assert report["summary"]["v_pw_rest_fallback_rate_pct"] == 50.0
     assert report["summary"]["v_pw_runtime_support_unusable_count"] == 1
-    assert report["summary"]["ka10046_rest_fallback_quote_freshness_counts"] == {"stale": 1}
+    assert report["summary"]["ka10046_rest_fallback_quote_freshness_counts"] == {
+        "stale": 1
+    }
     assert report["summary"]["ka10046_rest_fallback_with_stale_quote_count"] == 1
     assert report["summary"]["ka10046_strength_runtime_effect_true_count"] == 0
     assert report["summary"]["ka10046_strength_missing_received_ts_count"] == 0
@@ -226,20 +242,53 @@ def test_microstructure_reaction_context_report_preserves_contract_and_keys(tmp_
     assert report["summary"]["market_data_signed_tape_sell_count_total"] == 3
     assert report["summary"]["market_data_signed_tape_buy_volume_total"] == 190
     assert report["summary"]["market_data_signed_tape_sell_volume_total"] == 430
-    assert report["summary"]["market_data_rest_signed_tape_pressure_usable_true_count"] == 0
+    assert (
+        report["summary"]["market_data_rest_signed_tape_pressure_usable_true_count"]
+        == 0
+    )
     assert report["summary"]["rest_signed_trade_ticks_row_count"] == 3
     assert report["summary"]["rest_signed_trade_ticks_source_counts"] == {"ka10084": 3}
-    assert report["summary"]["latency_true_ofi_direct_canary_signed_tape_sample_count_total"] == 5
-    assert report["summary"]["latency_true_ofi_direct_canary_signed_tape_buy_count_total"] == 2
-    assert report["summary"]["latency_true_ofi_direct_canary_signed_tape_sell_count_total"] == 3
-    assert report["summary"]["latency_true_ofi_direct_canary_signed_tape_net_buy_volume_sum"] == -240
-    assert report["summary"]["latency_true_ofi_direct_canary_signed_tape_latest_side_counts"] == {
+    assert (
+        report["summary"][
+            "latency_true_ofi_direct_canary_signed_tape_sample_count_total"
+        ]
+        == 5
+    )
+    assert (
+        report["summary"]["latency_true_ofi_direct_canary_signed_tape_buy_count_total"]
+        == 2
+    )
+    assert (
+        report["summary"]["latency_true_ofi_direct_canary_signed_tape_sell_count_total"]
+        == 3
+    )
+    assert (
+        report["summary"][
+            "latency_true_ofi_direct_canary_signed_tape_net_buy_volume_sum"
+        ]
+        == -240
+    )
+    assert report["summary"][
+        "latency_true_ofi_direct_canary_signed_tape_latest_side_counts"
+    ] == {
         "BUY": 1,
         "SELL": 1,
     }
-    assert report["summary"]["latency_true_ofi_direct_canary_signed_tape_sell_dominated_count"] == 1
-    assert report["summary"]["latency_true_ofi_direct_canary_signed_tape_latest_single_sell_dominated_count"] == 1
-    assert report["summary"]["latency_true_ofi_direct_canary_tape_block_reason_counts"] == {
+    assert (
+        report["summary"][
+            "latency_true_ofi_direct_canary_signed_tape_sell_dominated_count"
+        ]
+        == 1
+    )
+    assert (
+        report["summary"][
+            "latency_true_ofi_direct_canary_signed_tape_latest_single_sell_dominated_count"
+        ]
+        == 1
+    )
+    assert report["summary"][
+        "latency_true_ofi_direct_canary_tape_block_reason_counts"
+    ] == {
         "missing": 1,
         "signed_tape_sell_dominated": 1,
     }
@@ -269,33 +318,65 @@ def test_microstructure_reaction_context_report_preserves_contract_and_keys(tmp_
         "inside_excluded": 3,
         "signed_volume": 1,
     }
-    assert report["summary"]["ka10003_buy_dominance_observation_trade_value_source_counts"] == {
+    assert report["summary"][
+        "ka10003_buy_dominance_observation_trade_value_source_counts"
+    ] == {
         "1313": 2,
         "calc_price_x_volume": 4,
     }
-    assert report["summary"]["ka10003_buy_dominance_observation_inside_spread_count"] == 4
-    assert report["summary"]["ka10003_buy_dominance_observation_split_vs_15_mismatch_count"] == 1
-    assert report["summary"]["ka10003_buy_dominance_observation_split_vs_15_mismatch_rate_pct"] == 50.0
+    assert (
+        report["summary"]["ka10003_buy_dominance_observation_inside_spread_count"] == 4
+    )
+    assert (
+        report["summary"][
+            "ka10003_buy_dominance_observation_split_vs_15_mismatch_count"
+        ]
+        == 1
+    )
+    assert (
+        report["summary"][
+            "ka10003_buy_dominance_observation_split_vs_15_mismatch_rate_pct"
+        ]
+        == 50.0
+    )
     assert report["summary"]["code_improvement_order_count"] == 2
-    assert [item["order_id"] for item in report["summary"]["top_code_improvement_orders"]] == [
+    assert [
+        item["order_id"] for item in report["summary"]["top_code_improvement_orders"]
+    ] == [
         "order_microstructure_signed_tape_runtime_candidate_review",
         "order_microstructure_ka10003_split_vs_15_observation_review",
     ]
-    order_by_id = {order["order_id"]: order for order in report["code_improvement_orders"]}
-    signed_tape_order = order_by_id["order_microstructure_signed_tape_runtime_candidate_review"]
+    order_by_id = {
+        order["order_id"]: order for order in report["code_improvement_orders"]
+    }
+    signed_tape_order = order_by_id[
+        "order_microstructure_signed_tape_runtime_candidate_review"
+    ]
     assert signed_tape_order["route"] == "auto_family_candidate"
     assert "mapped_family" not in signed_tape_order
-    assert signed_tape_order["candidate_family"] == "microstructure_signed_tape_runtime_candidate"
+    assert (
+        signed_tape_order["candidate_family"]
+        == "microstructure_signed_tape_runtime_candidate"
+    )
     assert signed_tape_order["runtime_effect"] is False
     assert signed_tape_order["allowed_runtime_apply"] is False
     assert signed_tape_order["actual_order_submitted"] is False
     assert signed_tape_order["broker_order_forbidden"] is True
-    assert signed_tape_order["implementation_provenance"]["requires_separate_runtime_apply_candidate"] is True
-    ka10003_order = order_by_id["order_microstructure_ka10003_split_vs_15_observation_review"]
+    assert (
+        signed_tape_order["implementation_provenance"][
+            "requires_separate_runtime_apply_candidate"
+        ]
+        is True
+    )
+    ka10003_order = order_by_id[
+        "order_microstructure_ka10003_split_vs_15_observation_review"
+    ]
     assert ka10003_order["route"] == "instrumentation_order"
     assert ka10003_order["runtime_effect"] is False
     assert ka10003_order["allowed_runtime_apply"] is False
-    markdown = (report_dir / "microstructure_reaction_context_2026-05-31.md").read_text(encoding="utf-8")
+    markdown = (report_dir / "microstructure_reaction_context_2026-05-31.md").read_text(
+        encoding="utf-8"
+    )
     assert "code_improvement_order_count" in markdown
     assert "order_microstructure_signed_tape_runtime_candidate_review" in markdown
     assert (report_dir / "microstructure_reaction_context_2026-05-31.json").exists()

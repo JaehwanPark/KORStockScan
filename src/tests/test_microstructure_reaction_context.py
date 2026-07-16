@@ -31,12 +31,48 @@ def _ws_data(**overrides):
 
 def _ticks():
     return [
-        {"time": "09:00:10", "price": 10120, "volume": 500, "dir": "BUY", "aggressor_source": "trusted_declared_side"},
-        {"time": "09:00:09", "price": 10120, "volume": 420, "dir": "BUY", "aggressor_source": "trusted_declared_side"},
-        {"time": "09:00:08", "price": 10110, "volume": 360, "dir": "BUY", "aggressor_source": "trusted_declared_side"},
-        {"time": "09:00:07", "price": 10110, "volume": 180, "dir": "SELL", "aggressor_source": "trusted_declared_side"},
-        {"time": "09:00:06", "price": 10100, "volume": 220, "dir": "BUY", "aggressor_source": "trusted_declared_side"},
-        {"time": "09:00:05", "price": 10090, "volume": 140, "dir": "SELL", "aggressor_source": "trusted_declared_side"},
+        {
+            "time": "09:00:10",
+            "price": 10120,
+            "volume": 500,
+            "dir": "BUY",
+            "aggressor_source": "trusted_declared_side",
+        },
+        {
+            "time": "09:00:09",
+            "price": 10120,
+            "volume": 420,
+            "dir": "BUY",
+            "aggressor_source": "trusted_declared_side",
+        },
+        {
+            "time": "09:00:08",
+            "price": 10110,
+            "volume": 360,
+            "dir": "BUY",
+            "aggressor_source": "trusted_declared_side",
+        },
+        {
+            "time": "09:00:07",
+            "price": 10110,
+            "volume": 180,
+            "dir": "SELL",
+            "aggressor_source": "trusted_declared_side",
+        },
+        {
+            "time": "09:00:06",
+            "price": 10100,
+            "volume": 220,
+            "dir": "BUY",
+            "aggressor_source": "trusted_declared_side",
+        },
+        {
+            "time": "09:00:05",
+            "price": 10090,
+            "volume": 140,
+            "dir": "SELL",
+            "aggressor_source": "trusted_declared_side",
+        },
     ]
 
 
@@ -52,7 +88,10 @@ def test_ask_sweep_and_price_hold_surface_favorable_reaction():
     assert context["microstructure_reaction_ask_sweep_score"] >= 60
     assert context["microstructure_reaction_post_sweep_hold_score"] >= 60
     assert context["microstructure_reaction_bid_replenishment_score"] >= 55
-    assert context["microstructure_reaction_entry_reaction_quality"] == "favorable_reaction"
+    assert (
+        context["microstructure_reaction_entry_reaction_quality"]
+        == "favorable_reaction"
+    )
 
 
 def test_wall_replenishment_overrides_to_risk_context_only():
@@ -78,16 +117,48 @@ def test_wall_replenishment_overrides_to_risk_context_only():
 
     assert context["microstructure_reaction_context_status"] == "ok"
     assert context["microstructure_reaction_wall_replenishment_risk_score"] >= 70
-    assert context["microstructure_reaction_entry_reaction_quality"] == "risk_context_only"
+    assert (
+        context["microstructure_reaction_entry_reaction_quality"] == "risk_context_only"
+    )
 
 
 def test_bid_replenishment_score_reflects_bid_depth_after_sell_prints():
     ticks = [
-        {"time": "09:00:10", "price": 10100, "volume": 220, "dir": "SELL", "aggressor_source": "trusted_declared_side"},
-        {"time": "09:00:09", "price": 10110, "volume": 500, "dir": "BUY", "aggressor_source": "trusted_declared_side"},
-        {"time": "09:00:08", "price": 10100, "volume": 180, "dir": "SELL", "aggressor_source": "trusted_declared_side"},
-        {"time": "09:00:07", "price": 10100, "volume": 300, "dir": "BUY", "aggressor_source": "trusted_declared_side"},
-        {"time": "09:00:06", "price": 10100, "volume": 140, "dir": "SELL", "aggressor_source": "trusted_declared_side"},
+        {
+            "time": "09:00:10",
+            "price": 10100,
+            "volume": 220,
+            "dir": "SELL",
+            "aggressor_source": "trusted_declared_side",
+        },
+        {
+            "time": "09:00:09",
+            "price": 10110,
+            "volume": 500,
+            "dir": "BUY",
+            "aggressor_source": "trusted_declared_side",
+        },
+        {
+            "time": "09:00:08",
+            "price": 10100,
+            "volume": 180,
+            "dir": "SELL",
+            "aggressor_source": "trusted_declared_side",
+        },
+        {
+            "time": "09:00:07",
+            "price": 10100,
+            "volume": 300,
+            "dir": "BUY",
+            "aggressor_source": "trusted_declared_side",
+        },
+        {
+            "time": "09:00:06",
+            "price": 10100,
+            "volume": 140,
+            "dir": "SELL",
+            "aggressor_source": "trusted_declared_side",
+        },
     ]
 
     context = build_microstructure_reaction_context(
@@ -115,7 +186,9 @@ def test_stale_and_insufficient_windows_return_neutral_context():
 
     assert stale["microstructure_reaction_context_status"] == "stale"
     assert stale["microstructure_reaction_ask_sweep_score"] == 50
-    assert insufficient["microstructure_reaction_context_status"] == "insufficient_window"
+    assert (
+        insufficient["microstructure_reaction_context_status"] == "insufficient_window"
+    )
     assert insufficient["microstructure_reaction_post_sweep_hold_score"] == 50
 
 
@@ -128,7 +201,9 @@ def test_vi_proximity_is_risk_provenance_not_buy_trigger():
     )
 
     assert context["microstructure_reaction_vi_proximity_risk"] >= 70
-    assert context["microstructure_reaction_entry_reaction_quality"] == "risk_context_only"
+    assert (
+        context["microstructure_reaction_entry_reaction_quality"] == "risk_context_only"
+    )
 
 
 def test_precomputed_snapshot_preserves_context_result():
@@ -174,8 +249,13 @@ def test_context_with_only_untrusted_declared_side_is_neutral_partial():
     )
 
     assert context["microstructure_reaction_context_status"] == "source_quality_partial"
-    assert context["microstructure_reaction_source_quality"] == "tick_aggressor_pressure_unusable"
-    assert context["microstructure_reaction_entry_reaction_quality"] == "neutral_unusable"
+    assert (
+        context["microstructure_reaction_source_quality"]
+        == "tick_aggressor_pressure_unusable"
+    )
+    assert (
+        context["microstructure_reaction_entry_reaction_quality"] == "neutral_unusable"
+    )
     assert context["microstructure_reaction_ask_sweep_score"] == 50
     assert context["microstructure_reaction_wall_replenishment_risk_score"] == 50
     assert context["microstructure_reaction_tick_aggressor_pressure_usable"] is False
