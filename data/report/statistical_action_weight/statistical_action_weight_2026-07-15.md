@@ -10,8 +10,8 @@
 
 | metric | value |
 | --- | ---: |
-| completed_valid | 35 |
-| exit_only | 28 |
+| completed_valid | 37 |
+| exit_only | 30 |
 | avg_down_wait | 3 |
 | pyramid_wait | 4 |
 | compact_exit_signal | 62 |
@@ -23,9 +23,9 @@
 
 | field | known |
 | --- | ---: |
-| price_known | 35 |
-| volume_known | 34 |
-| time_known | 35 |
+| price_known | 37 |
+| volume_known | 36 |
+| time_known | 37 |
 
 ## Policy Counts
 
@@ -39,18 +39,18 @@
 
 | bucket | best_action | score | edge | sample | avg_profit | loss_rate | policy |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| price_10k_30k | exit_only | -1.4588 | - | 10 | -0.708 | 0.5 | candidate_weight_source |
+| price_10k_30k | exit_only | -1.3517 | - | 11 | -0.6645 | 0.5455 | candidate_weight_source |
 | price_30k_70k | insufficient_sample | - | - | - | - | - | insufficient_sample |
-| price_gte_70k | exit_only | -0.9797 | - | 10 | -0.379 | 0.5 | candidate_weight_source |
-| price_lt_10k | exit_only | -1.2143 | - | 7 | -0.6614 | 0.7143 | defensive_only_high_loss_rate |
+| price_gte_70k | exit_only | -0.9721 | - | 10 | -0.379 | 0.5 | candidate_weight_source |
+| price_lt_10k | exit_only | -1.1006 | - | 8 | -0.6075 | 0.75 | defensive_only_high_loss_rate |
 
 ## Volume Bucket
 
 | bucket | best_action | score | edge | sample | avg_profit | loss_rate | policy |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| volume_2m_10m | exit_only | -1.7293 | - | 10 | -1.572 | 0.8 | defensive_only_high_loss_rate |
-| volume_500k_2m | exit_only | -0.549 | - | 9 | 0.3233 | 0.2222 | candidate_weight_source |
-| volume_gte_10m | exit_only | -1.2887 | - | 7 | -0.04 | 0.5714 | candidate_weight_source |
+| volume_2m_10m | exit_only | -1.6285 | - | 11 | -1.45 | 0.8182 | defensive_only_high_loss_rate |
+| volume_500k_2m | exit_only | -0.5411 | - | 9 | 0.3233 | 0.2222 | candidate_weight_source |
+| volume_gte_10m | exit_only | -1.142 | - | 8 | -0.0637 | 0.625 | candidate_weight_source |
 | volume_lt_500k | insufficient_sample | - | - | - | - | - | insufficient_sample |
 | volume_unknown | insufficient_sample | - | - | - | - | - | insufficient_sample |
 
@@ -59,9 +59,9 @@
 | bucket | best_action | score | edge | sample | avg_profit | loss_rate | policy |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
 | time_0930_1030 | insufficient_sample | - | - | - | - | - | insufficient_sample |
-| time_1030_1400 | exit_only | -1.429 | - | 14 | -0.8586 | 0.4286 | candidate_weight_source |
-| time_1400_1530 | exit_only | -1.3771 | - | 5 | -0.782 | 0.8 | defensive_only_high_loss_rate |
-| time_outside_regular | exit_only | -0.5864 | - | 5 | -0.284 | 0.8 | defensive_only_high_loss_rate |
+| time_1030_1400 | exit_only | -1.4229 | - | 14 | -0.8586 | 0.4286 | candidate_weight_source |
+| time_1400_1530 | exit_only | -1.0871 | - | 7 | -0.6243 | 0.8571 | defensive_only_high_loss_rate |
+| time_outside_regular | exit_only | -0.576 | - | 5 | -0.284 | 0.8 | defensive_only_high_loss_rate |
 
 ## Eligible But Not Chosen
 
