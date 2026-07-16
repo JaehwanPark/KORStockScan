@@ -22,7 +22,9 @@ from src.engine.sniper_entry_pipeline_report import build_entry_pipeline_flow_re
 def main():
     parser = argparse.ArgumentParser(description="종목별 ENTRY_PIPELINE 흐름 집계")
     parser.add_argument("--date", help="집계 대상 날짜 (YYYY-MM-DD). 기본값은 오늘")
-    parser.add_argument("--since", help="이 시각 이후 로그만 집계 (HH:MM 또는 HH:MM:SS)")
+    parser.add_argument(
+        "--since", help="이 시각 이후 로그만 집계 (HH:MM 또는 HH:MM:SS)"
+    )
     parser.add_argument("--top", type=int, default=10, help="상위 사례 표시 개수")
     args = parser.parse_args()
 
@@ -50,8 +52,12 @@ def main():
     if report["sections"]["recent_stocks"]:
         print("1. 최근 종목 흐름")
         for idx, row in enumerate(report["sections"]["recent_stocks"], start=1):
-            passed_flow = " -> ".join(item["label"] for item in row.get("pass_flow", []))
-            precheck_flow = " -> ".join(item["label"] for item in row.get("precheck_passes", []))
+            passed_flow = " -> ".join(
+                item["label"] for item in row.get("pass_flow", [])
+            )
+            precheck_flow = " -> ".join(
+                item["label"] for item in row.get("precheck_passes", [])
+            )
             latest = row.get("latest_status") or {}
             print(
                 f"{idx}. {row['name']}({row['code']}) "

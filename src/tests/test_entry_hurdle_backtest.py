@@ -40,8 +40,9 @@ def test_entry_hurdle_micro_context_rejects_not_evaluated_quality():
     )
 
 
-
-def test_entry_hurdle_backtest_classifies_overblocking_from_existing_artifacts(tmp_path, monkeypatch):
+def test_entry_hurdle_backtest_classifies_overblocking_from_existing_artifacts(
+    tmp_path, monkeypatch
+):
     buy_dir = tmp_path / "buy_funnel_sentinel"
     missed_dir = tmp_path / "monitor_snapshots"
     pipeline_dir = tmp_path / "pipeline_events"
@@ -96,7 +97,11 @@ def test_entry_hurdle_backtest_classifies_overblocking_from_existing_artifacts(t
         ),
         encoding="utf-8",
     )
-    with gzip.open(missed_dir / "missed_entry_counterfactual_2026-06-05.json.gz", "wt", encoding="utf-8") as handle:
+    with gzip.open(
+        missed_dir / "missed_entry_counterfactual_2026-06-05.json.gz",
+        "wt",
+        encoding="utf-8",
+    ) as handle:
         handle.write(
             json.dumps(
                 {
@@ -234,7 +239,9 @@ def test_entry_hurdle_backtest_classifies_overblocking_from_existing_artifacts(t
         encoding="utf-8",
     )
 
-    report = mod.build_report("2026-06-05", start_date="2026-06-05", end_date="2026-06-07")
+    report = mod.build_report(
+        "2026-06-05", start_date="2026-06-05", end_date="2026-06-07"
+    )
 
     assert report["runtime_effect"] is False
     assert report["source_dates"] == ["2026-06-05"]
@@ -245,7 +252,10 @@ def test_entry_hurdle_backtest_classifies_overblocking_from_existing_artifacts(t
     diagnostics = report["summary"]["next_action_diagnostics"]
     assert diagnostics["metric_role"] == "next_action_diagnostic"
     assert diagnostics["window_policy"] == "2026-06-05_to_2026-06-07"
-    assert diagnostics["primary_decision_metric"] == "missed_winner_vs_avoided_loser_tradeoff"
+    assert (
+        diagnostics["primary_decision_metric"]
+        == "missed_winner_vs_avoided_loser_tradeoff"
+    )
     assert diagnostics["runtime_effect"] is False
     assert diagnostics["actual_order_submitted_provenance_preserved"] is True
     assert "entry price reprice" in diagnostics["forbidden_uses"]
@@ -253,7 +263,12 @@ def test_entry_hurdle_backtest_classifies_overblocking_from_existing_artifacts(t
     assert "broker guard bypass" in diagnostics["forbidden_uses"]
     assert "stale quote guard bypass" in diagnostics["forbidden_uses"]
     assert diagnostics["quote_freshness_totals"]["latency_pass_recovered_count"] == 2
-    assert diagnostics["quote_freshness_totals"]["order_bundle_submitted_after_refresh_count"] == 1
+    assert (
+        diagnostics["quote_freshness_totals"][
+            "order_bundle_submitted_after_refresh_count"
+        ]
+        == 1
+    )
     action_ids = [item["action_id"] for item in diagnostics["recommended_next_actions"]]
     assert action_ids == [
         "trace_latency_refresh_recovered_downstream_blocker",
@@ -262,15 +277,28 @@ def test_entry_hurdle_backtest_classifies_overblocking_from_existing_artifacts(t
         "review_ai_wait_score_recheck_scope",
         "audit_late_entry_price_drift_guard_context",
     ]
-    assert all(item["runtime_effect"] is False for item in diagnostics["recommended_next_actions"])
+    assert all(
+        item["runtime_effect"] is False
+        for item in diagnostics["recommended_next_actions"]
+    )
     policy_backtest = report["summary"]["implemented_policy_backtest"]
     assert policy_backtest["runtime_effect"] is False
     assert "entry price reprice" in policy_backtest["forbidden_uses"]
-    assert policy_backtest["liquidity_signature_micro_pressure_relief"]["eligible_attempts"] == 1
-    assert policy_backtest["ai_score_60_74_strong_bundle_recheck"]["eligible_recheck_attempts"] == 2
-    assert policy_backtest["ai_score_60_74_strong_bundle_recheck"]["excluded_reasons"] == {
-        "stale_quote_or_tick_context": 1
-    }
+    assert (
+        policy_backtest["liquidity_signature_micro_pressure_relief"][
+            "eligible_attempts"
+        ]
+        == 1
+    )
+    assert (
+        policy_backtest["ai_score_60_74_strong_bundle_recheck"][
+            "eligible_recheck_attempts"
+        ]
+        == 2
+    )
+    assert policy_backtest["ai_score_60_74_strong_bundle_recheck"][
+        "excluded_reasons"
+    ] == {"stale_quote_or_tick_context": 1}
     assert policy_backtest["total"]["eligible_attempts"] == 3
     assert policy_backtest["total"]["conservative_estimated_order_submit_success"] == 0
     overbought = report["summary"]["overbought_gate_counterfactual"]
@@ -281,7 +309,10 @@ def test_entry_hurdle_backtest_classifies_overblocking_from_existing_artifacts(t
     assert overbought["runtime_effect"] is False
     assert overbought["broker_order_forbidden"] is True
     assert report["summary"]["code_improvement_order_count"] == 1
-    assert report["code_improvement_orders"][0]["order_id"] == "order_overbought_gate_miss_ev_recovery"
+    assert (
+        report["code_improvement_orders"][0]["order_id"]
+        == "order_overbought_gate_miss_ev_recovery"
+    )
     assert report["code_improvement_orders"][0]["implementation_status"] == (
         "implemented_source_quality_contract_available"
     )
@@ -318,21 +349,57 @@ def test_entry_hurdle_micro_pressure_relief_requires_trusted_tick_pressure():
     }
 
     assert mod._signature_micro_pressure_path(base) is False
-    assert mod._signature_micro_pressure_path({**base, "tick_aggressor_pressure_usable": "True"}) is False
-    assert mod._signature_micro_pressure_path({**fresh, "tick_aggressor_pressure_usable": "True"}) is False
-    assert mod._signature_micro_pressure_path({**missing_quality_micro_vwap, "tick_aggressor_pressure_usable": "True"}) is False
-    assert mod._signature_micro_pressure_path({**fresh_micro_vwap, "tick_aggressor_pressure_usable": "True"}) is True
-    assert mod._signature_micro_pressure_path({**fresh_micro_vwap, "tick_aggressor_trusted_count": "2"}) is True
-    assert mod._signature_micro_pressure_path({**stale_micro_vwap, "tick_aggressor_trusted_count": "2"}) is False
     assert (
         mod._signature_micro_pressure_path(
-            {**fresh_micro_vwap, "tick_aggressor_trusted_count": "2", "quote_stale": "stale"}
+            {**base, "tick_aggressor_pressure_usable": "True"}
+        )
+        is False
+    )
+    assert (
+        mod._signature_micro_pressure_path(
+            {**fresh, "tick_aggressor_pressure_usable": "True"}
+        )
+        is False
+    )
+    assert (
+        mod._signature_micro_pressure_path(
+            {**missing_quality_micro_vwap, "tick_aggressor_pressure_usable": "True"}
+        )
+        is False
+    )
+    assert (
+        mod._signature_micro_pressure_path(
+            {**fresh_micro_vwap, "tick_aggressor_pressure_usable": "True"}
+        )
+        is True
+    )
+    assert (
+        mod._signature_micro_pressure_path(
+            {**fresh_micro_vwap, "tick_aggressor_trusted_count": "2"}
+        )
+        is True
+    )
+    assert (
+        mod._signature_micro_pressure_path(
+            {**stale_micro_vwap, "tick_aggressor_trusted_count": "2"}
+        )
+        is False
+    )
+    assert (
+        mod._signature_micro_pressure_path(
+            {
+                **fresh_micro_vwap,
+                "tick_aggressor_trusted_count": "2",
+                "quote_stale": "stale",
+            }
         )
         is False
     )
 
 
-def test_entry_hurdle_backtest_source_quality_preflight_blocks_strategy_workorders(tmp_path, monkeypatch):
+def test_entry_hurdle_backtest_source_quality_preflight_blocks_strategy_workorders(
+    tmp_path, monkeypatch
+):
     buy_dir = tmp_path / "buy_funnel_sentinel"
     missed_dir = tmp_path / "monitor_snapshots"
     pipeline_dir = tmp_path / "pipeline_events"
@@ -358,7 +425,13 @@ def test_entry_hurdle_backtest_source_quality_preflight_blocks_strategy_workorde
         },
     )
     (buy_dir / "buy_funnel_sentinel_2026-06-05.json").write_text(
-        json.dumps({"current": {"session": {"stage_unique": {"ai_confirmed": 10, "budget_pass": 5}}}}),
+        json.dumps(
+            {
+                "current": {
+                    "session": {"stage_unique": {"ai_confirmed": 10, "budget_pass": 5}}
+                }
+            }
+        ),
         encoding="utf-8",
     )
     (missed_dir / "missed_entry_counterfactual_2026-06-05.json").write_text(
@@ -379,7 +452,9 @@ def test_entry_hurdle_backtest_source_quality_preflight_blocks_strategy_workorde
         encoding="utf-8",
     )
 
-    report = mod.build_report("2026-06-05", start_date="2026-06-05", end_date="2026-06-05")
+    report = mod.build_report(
+        "2026-06-05", start_date="2026-06-05", end_date="2026-06-05"
+    )
 
     assert report["status"] == "source_quality_blocked"
     assert report["allowed_runtime_apply"] is False

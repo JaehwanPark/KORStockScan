@@ -20,12 +20,20 @@ def _write_jsonl(path, rows):
 def _patch_dirs(monkeypatch, tmp_path):
     data_dir = tmp_path / "data"
     monkeypatch.setattr(split_plan, "DATA_DIR", data_dir)
-    monkeypatch.setattr(split_plan, "REPORT_DIR", data_dir / "report" / "entry_split_order_plan")
-    monkeypatch.setattr(split_plan, "POLICY_DIR", data_dir / "threshold_cycle" / "entry_split_order_policy")
+    monkeypatch.setattr(
+        split_plan, "REPORT_DIR", data_dir / "report" / "entry_split_order_plan"
+    )
+    monkeypatch.setattr(
+        split_plan,
+        "POLICY_DIR",
+        data_dir / "threshold_cycle" / "entry_split_order_policy",
+    )
     return data_dir
 
 
-def test_build_report_excludes_source_quality_hard_block_and_keeps_real_sim_split(monkeypatch, tmp_path):
+def test_build_report_excludes_source_quality_hard_block_and_keeps_real_sim_split(
+    monkeypatch, tmp_path
+):
     data_dir = _patch_dirs(monkeypatch, tmp_path)
     target_date = "2026-07-07"
     events = []
@@ -80,7 +88,9 @@ def test_build_report_excludes_source_quality_hard_block_and_keeps_real_sim_spli
             "buy_pressure_10t": 72,
         }
     )
-    _write_jsonl(data_dir / "pipeline_events" / f"pipeline_events_{target_date}.jsonl", events)
+    _write_jsonl(
+        data_dir / "pipeline_events" / f"pipeline_events_{target_date}.jsonl", events
+    )
     source_quality_path = (
         data_dir
         / "report"
@@ -140,7 +150,11 @@ def test_build_report_excludes_source_quality_hard_block_and_keeps_real_sim_spli
 
     assert report["schema_version"] == "entry_split_order_plan_v1"
     assert report["input_summary"]["excluded_source_quality_event_count"] == 1
-    urgent = next(item for item in report["candidate_grid"] if item["context_bucket"] == "urgent_tight_spread")
+    urgent = next(
+        item
+        for item in report["candidate_grid"]
+        if item["context_bucket"] == "urgent_tight_spread"
+    )
     assert urgent["real_sample_count"] == 20
     assert urgent["sim_sample_count"] == 10
     assert urgent["real_outcome_joined_sample"] == 20
@@ -155,8 +169,14 @@ def test_build_report_excludes_source_quality_hard_block_and_keeps_real_sim_spli
     assert report["recommended_policy"]["candidate_count"] == 1
     assert report["recommended_policy"]["baseline_runtime_defaults_enabled"] is True
     assert report["recommended_policy"]["explicit_bucket_count"] == 0
-    assert report["recommended_policy"]["candidates"][0]["runtime_apply_scope"] == "baseline_split_structure"
-    assert report["recommended_policy"]["candidates"][0]["source_quality_adjusted_ev_pct"] is None
+    assert (
+        report["recommended_policy"]["candidates"][0]["runtime_apply_scope"]
+        == "baseline_split_structure"
+    )
+    assert (
+        report["recommended_policy"]["candidates"][0]["source_quality_adjusted_ev_pct"]
+        is None
+    )
     policy = json.loads(split_plan.policy_path(target_date).read_text(encoding="utf-8"))
     assert policy["runtime_apply_allowed"] is True
     assert policy["baseline_runtime_defaults_enabled"] is True
@@ -165,20 +185,26 @@ def test_build_report_excludes_source_quality_hard_block_and_keeps_real_sim_spli
     assert split_plan.policy_path(target_date).exists()
 
 
-def test_build_report_suppresses_policy_candidates_when_source_quality_blocked(monkeypatch, tmp_path):
+def test_build_report_suppresses_policy_candidates_when_source_quality_blocked(
+    monkeypatch, tmp_path
+):
     data_dir = _patch_dirs(monkeypatch, tmp_path)
     target_date = "2026-07-07"
     events = [
         {
             "date": target_date,
-            "stage": "order_leg_sent" if idx < 20 else "scalp_sim_buy_order_assumed_filled",
+            "stage": (
+                "order_leg_sent" if idx < 20 else "scalp_sim_buy_order_assumed_filled"
+            ),
             "actual_order_submitted": idx < 20,
             "spread_bps": 5,
             "buy_pressure_10t": 72,
         }
         for idx in range(70)
     ]
-    _write_jsonl(data_dir / "pipeline_events" / f"pipeline_events_{target_date}.jsonl", events)
+    _write_jsonl(
+        data_dir / "pipeline_events" / f"pipeline_events_{target_date}.jsonl", events
+    )
     source_quality_path = (
         data_dir
         / "report"
@@ -192,7 +218,15 @@ def test_build_report_suppresses_policy_candidates_when_source_quality_blocked(m
     )
     _write_jsonl(
         data_dir / "post_sell" / f"sim_post_sell_evaluations_{target_date}.jsonl",
-        [{"date": target_date, "profit_rate": 1.2, "spread_bps": 5, "buy_pressure_10t": 72} for _ in range(50)],
+        [
+            {
+                "date": target_date,
+                "profit_rate": 1.2,
+                "spread_bps": 5,
+                "buy_pressure_10t": 72,
+            }
+            for _ in range(50)
+        ],
     )
     _write_jsonl(
         data_dir / "post_sell" / f"post_sell_evaluations_{target_date}.jsonl",
@@ -220,7 +254,9 @@ def test_build_report_suppresses_policy_candidates_when_source_quality_blocked(m
     assert policy["buckets"] == {}
 
 
-def test_build_report_merges_late_candidate_and_reconstructs_split_provenance(monkeypatch, tmp_path):
+def test_build_report_merges_late_candidate_and_reconstructs_split_provenance(
+    monkeypatch, tmp_path
+):
     data_dir = _patch_dirs(monkeypatch, tmp_path)
     target_date = "2026-07-07"
     _write_jsonl(
@@ -269,7 +305,11 @@ def test_build_report_merges_late_candidate_and_reconstructs_split_provenance(mo
 
     report = split_plan.build_report(target_date, write=False)
 
-    balanced = next(item for item in report["candidate_grid"] if item["context_bucket"] == "balanced_normal")
+    balanced = next(
+        item
+        for item in report["candidate_grid"]
+        if item["context_bucket"] == "balanced_normal"
+    )
     assert balanced["real_outcome_joined_sample"] == 1
     assert balanced["real_split_variant_outcome_joined_sample"] == 1
     assert balanced["real_split_variant_ev_pct"] == 1.25
@@ -321,14 +361,18 @@ def test_provenance_reconstruction_ignores_false_split_flags_and_keeps_explicit_
         },
     ]
 
-    enriched, reconstructed_count = split_plan._enrich_real_post_sell_provenance(rows, events)
+    enriched, reconstructed_count = split_plan._enrich_real_post_sell_provenance(
+        rows, events
+    )
 
     assert reconstructed_count == 1
     assert "entry_split_order_policy_applied" not in enriched[0]
     assert split_plan._context_bucket(enriched[1]) == "balanced_normal"
 
 
-def test_build_report_reads_threshold_cycle_events_from_contract_path(monkeypatch, tmp_path):
+def test_build_report_reads_threshold_cycle_events_from_contract_path(
+    monkeypatch, tmp_path
+):
     data_dir = _patch_dirs(monkeypatch, tmp_path)
     target_date = "2026-07-07"
     _write_jsonl(
@@ -364,7 +408,9 @@ def test_build_report_reads_threshold_cycle_events_from_contract_path(monkeypatc
     assert report["candidate_grid"][0]["real_sample_count"] == 1
 
 
-def test_build_report_creates_bounded_equal_baseline_without_real_outcome(monkeypatch, tmp_path):
+def test_build_report_creates_bounded_equal_baseline_without_real_outcome(
+    monkeypatch, tmp_path
+):
     data_dir = _patch_dirs(monkeypatch, tmp_path)
     target_date = datetime.now(timezone(timedelta(hours=9))).date().isoformat()
     _write_jsonl(
@@ -395,7 +441,11 @@ def test_build_report_creates_bounded_equal_baseline_without_real_outcome(monkey
 
     report = split_plan.build_report(target_date, write=True)
 
-    balanced = next(item for item in report["candidate_grid"] if item["context_bucket"] == "balanced_normal")
+    balanced = next(
+        item
+        for item in report["candidate_grid"]
+        if item["context_bucket"] == "balanced_normal"
+    )
     assert balanced["real_sample_count"] == 20
     assert balanced["real_outcome_joined_sample"] == 0
     assert balanced["candidate_passed"] is True
@@ -412,7 +462,10 @@ def test_build_report_creates_bounded_equal_baseline_without_real_outcome(monkey
     assert policy["buckets"] == {}
 
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED", "true")
-    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE", str(split_plan.policy_path(target_date)))
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE",
+        str(split_plan.policy_path(target_date)),
+    )
     orders, fields = split_plan.apply_entry_split_order_policy(
         [{"tag": "normal", "qty": 2, "price": 1000}],
         latency_gate={
@@ -428,7 +481,10 @@ def test_build_report_creates_bounded_equal_baseline_without_real_outcome(monkey
     assert [item["qty"] for item in orders] == [1, 1]
     assert fields["entry_split_order_price_offsets_pct"] == "0.0,0.3"
     assert [item["price"] for item in orders] == [1000, 997]
-    assert fields["entry_split_order_policy_variant_id"] == split_plan.RUNTIME_FALLBACK_VARIANT_ID
+    assert (
+        fields["entry_split_order_policy_variant_id"]
+        == split_plan.RUNTIME_FALLBACK_VARIANT_ID
+    )
     assert fields["entry_split_order_variant_id"] == (
         f"{split_plan.RUNTIME_FALLBACK_VARIANT_ID}__runtime_first_weight_40"
     )
@@ -486,7 +542,11 @@ def test_build_report_uses_split_variant_outcome_as_primary_ev(monkeypatch, tmp_
 
     report = split_plan.build_report(target_date, write=True)
 
-    balanced = next(item for item in report["candidate_grid"] if item["context_bucket"] == "balanced_normal")
+    balanced = next(
+        item
+        for item in report["candidate_grid"]
+        if item["context_bucket"] == "balanced_normal"
+    )
     assert balanced["primary_sample_book"] == "real_split_variant"
     assert balanced["real_split_variant_outcome_joined_sample"] == 20
     assert balanced["source_quality_adjusted_ev_pct"] == 1.4
@@ -494,7 +554,9 @@ def test_build_report_uses_split_variant_outcome_as_primary_ev(monkeypatch, tmp_
     assert balanced["candidate_passed"] is True
 
 
-def test_build_report_uses_post_submit_low_tick_band_for_price_offsets(monkeypatch, tmp_path):
+def test_build_report_uses_post_submit_low_tick_band_for_price_offsets(
+    monkeypatch, tmp_path
+):
     data_dir = _patch_dirs(monkeypatch, tmp_path)
     target_date = "2026-07-07"
     rows = []
@@ -526,7 +588,9 @@ def test_build_report_uses_post_submit_low_tick_band_for_price_offsets(monkeypat
                 "buy_pressure_10t": 55,
             }
         )
-    _write_jsonl(data_dir / "pipeline_events" / f"pipeline_events_{target_date}.jsonl", rows)
+    _write_jsonl(
+        data_dir / "pipeline_events" / f"pipeline_events_{target_date}.jsonl", rows
+    )
     source_quality_path = (
         data_dir
         / "report"
@@ -541,7 +605,11 @@ def test_build_report_uses_post_submit_low_tick_band_for_price_offsets(monkeypat
 
     report = split_plan.build_report(target_date, write=True)
 
-    balanced = next(item for item in report["candidate_grid"] if item["context_bucket"] == "balanced_normal")
+    balanced = next(
+        item
+        for item in report["candidate_grid"]
+        if item["context_bucket"] == "balanced_normal"
+    )
     assert balanced["policy_mode"] == "post_submit_tick_band_seed"
     assert balanced["optimization_basis"] == "post_submit_observed_low_tick_band"
     assert balanced["leg_count"] == 3
@@ -550,12 +618,17 @@ def test_build_report_uses_post_submit_low_tick_band_for_price_offsets(monkeypat
     assert balanced["post_submit_low_tick_band"]["sample_count"] == 20
     assert balanced["post_submit_low_tick_band"]["p75_down_ticks"] == 2.0
     policy = json.loads(split_plan.policy_path(target_date).read_text(encoding="utf-8"))
-    assert policy["buckets"]["balanced_normal"]["policy_mode"] == "post_submit_tick_band_seed"
+    assert (
+        policy["buckets"]["balanced_normal"]["policy_mode"]
+        == "post_submit_tick_band_seed"
+    )
     assert policy["buckets"]["balanced_normal"]["price_offsets_ticks"] == [0, 1, 2]
     assert policy["explicit_bucket_count"] == 1
 
 
-def test_post_submit_tick_band_excludes_source_quality_hard_blocked_rows(monkeypatch, tmp_path):
+def test_post_submit_tick_band_excludes_source_quality_hard_blocked_rows(
+    monkeypatch, tmp_path
+):
     data_dir = _patch_dirs(monkeypatch, tmp_path)
     target_date = "2026-07-07"
     rows = []
@@ -586,7 +659,9 @@ def test_post_submit_tick_band_excludes_source_quality_hard_blocked_rows(monkeyp
                 "buy_pressure_10t": 55,
             }
         )
-    _write_jsonl(data_dir / "pipeline_events" / f"pipeline_events_{target_date}.jsonl", rows)
+    _write_jsonl(
+        data_dir / "pipeline_events" / f"pipeline_events_{target_date}.jsonl", rows
+    )
     source_quality_path = (
         data_dir
         / "report"
@@ -610,13 +685,19 @@ def test_post_submit_tick_band_excludes_source_quality_hard_blocked_rows(monkeyp
 
     report = split_plan.build_report(target_date, write=True)
 
-    balanced = next(item for item in report["candidate_grid"] if item["context_bucket"] == "balanced_normal")
+    balanced = next(
+        item
+        for item in report["candidate_grid"]
+        if item["context_bucket"] == "balanced_normal"
+    )
     assert balanced["post_submit_low_tick_band"] == {}
     assert balanced["policy_mode"] == "bounded_equal_split_baseline"
     assert balanced["price_offsets_ticks"] == [0, 1]
 
 
-def test_post_sell_candidate_preserves_entry_split_variant_metadata(monkeypatch, tmp_path):
+def test_post_sell_candidate_preserves_entry_split_variant_metadata(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(post_sell_feedback, "DATA_DIR", tmp_path / "data")
     post_sell_feedback._RECORDED_KEYS.clear()
     stock = {
@@ -686,9 +767,22 @@ def test_allocator_preserves_qty_and_respects_leg_limits(monkeypatch, tmp_path):
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE", str(policy_file))
 
     orders, fields = split_plan.apply_entry_split_order_policy(
-        [{"tag": "normal", "qty": 5, "price": 1000, "order_type_code": "00", "tif": "DAY"}],
+        [
+            {
+                "tag": "normal",
+                "qty": 5,
+                "price": 1000,
+                "order_type_code": "00",
+                "tif": "DAY",
+            }
+        ],
         stock={"buy_pressure_10t": 75},
-        latency_gate={"spread_bps": 5, "latency_state": "SAFE", "quote_stale": False, "order_price": 1000},
+        latency_gate={
+            "spread_bps": 5,
+            "latency_state": "SAFE",
+            "quote_stale": False,
+            "order_price": 1000,
+        },
     )
 
     assert fields["entry_split_order_policy_applied"] is True
@@ -698,7 +792,9 @@ def test_allocator_preserves_qty_and_respects_leg_limits(monkeypatch, tmp_path):
     assert orders[0]["price"] >= orders[1]["price"]
 
 
-def test_allocator_uses_runtime_default_for_missing_bucket_policy(monkeypatch, tmp_path):
+def test_allocator_uses_runtime_default_for_missing_bucket_policy(
+    monkeypatch, tmp_path
+):
     _patch_dirs(monkeypatch, tmp_path)
     target_date = datetime.now(timezone(timedelta(hours=9))).date().isoformat()
     policy_file = split_plan.policy_path(target_date)
@@ -718,7 +814,15 @@ def test_allocator_uses_runtime_default_for_missing_bucket_policy(monkeypatch, t
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE", str(policy_file))
 
     orders, fields = split_plan.apply_entry_split_order_policy(
-        [{"tag": "normal", "qty": 7, "price": 1000, "order_type_code": "00", "tif": "DAY"}],
+        [
+            {
+                "tag": "normal",
+                "qty": 7,
+                "price": 1000,
+                "order_type_code": "00",
+                "tif": "DAY",
+            }
+        ],
         latency_gate={
             "spread_bps": 18,
             "buy_pressure_10t": 55,
@@ -729,8 +833,14 @@ def test_allocator_uses_runtime_default_for_missing_bucket_policy(monkeypatch, t
 
     assert fields["entry_split_order_policy_applied"] is True
     assert fields["entry_split_order_runtime_default_policy_applied"] is True
-    assert fields["entry_split_order_policy_mode"] == "runtime_default_passive_center_40_60_0_3pct"
-    assert fields["entry_split_order_policy_variant_id"] == "runtime_default_passive_center_40_60_offset_0pct_0_3pct"
+    assert (
+        fields["entry_split_order_policy_mode"]
+        == "runtime_default_passive_center_40_60_0_3pct"
+    )
+    assert (
+        fields["entry_split_order_policy_variant_id"]
+        == "runtime_default_passive_center_40_60_offset_0pct_0_3pct"
+    )
     assert (
         fields["entry_split_order_variant_id"]
         == "runtime_default_passive_center_40_60_offset_0pct_0_3pct__runtime_first_weight_40"
@@ -741,7 +851,10 @@ def test_allocator_uses_runtime_default_for_missing_bucket_policy(monkeypatch, t
     assert fields["entry_split_order_qty_weight_min"] == 0.4
     assert fields["entry_split_order_qty_weight_max"] == 0.4
     assert fields["entry_split_order_runtime_weight_adjustment_applied"] is True
-    assert fields["entry_split_order_passive_bias_reason"] == "passive_center_first_leg_cap"
+    assert (
+        fields["entry_split_order_passive_bias_reason"]
+        == "passive_center_first_leg_cap"
+    )
     assert [item["qty"] for item in orders] == [3, 4]
     assert [item["price"] for item in orders] == [1000, 997]
 
@@ -767,10 +880,20 @@ def test_allocator_uses_three_leg_runtime_default_for_missing_passive_bucket(
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED", "true")
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE", str(policy_file))
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_MARKET_FIRST_LEG_ENABLED", "true")
-    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_MARKET_FIRST_LEG_ACTIVE_DATE", target_date)
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_SPLIT_MARKET_FIRST_LEG_ACTIVE_DATE", target_date
+    )
 
     orders, fields = split_plan.apply_entry_split_order_policy(
-        [{"tag": "normal", "qty": 10, "price": 1000, "order_type_code": "00", "tif": "DAY"}],
+        [
+            {
+                "tag": "normal",
+                "qty": 10,
+                "price": 1000,
+                "order_type_code": "00",
+                "tif": "DAY",
+            }
+        ],
         latency_gate={
             "spread_bps": 45,
             "buy_pressure_10t": 40,
@@ -795,7 +918,9 @@ def test_allocator_uses_three_leg_runtime_default_for_missing_passive_bucket(
     assert sum(item["qty"] for item in orders) == 10
 
 
-def test_allocator_records_qty_clipping_for_three_leg_entry_policy(monkeypatch, tmp_path):
+def test_allocator_records_qty_clipping_for_three_leg_entry_policy(
+    monkeypatch, tmp_path
+):
     _patch_dirs(monkeypatch, tmp_path)
     target_date = datetime.now(timezone(timedelta(hours=9))).date().isoformat()
     policy_file = split_plan.policy_path(target_date)
@@ -815,7 +940,15 @@ def test_allocator_records_qty_clipping_for_three_leg_entry_policy(monkeypatch, 
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE", str(policy_file))
 
     orders, fields = split_plan.apply_entry_split_order_policy(
-        [{"tag": "normal", "qty": 4, "price": 1000, "order_type_code": "00", "tif": "DAY"}],
+        [
+            {
+                "tag": "normal",
+                "qty": 4,
+                "price": 1000,
+                "order_type_code": "00",
+                "tif": "DAY",
+            }
+        ],
         latency_gate={
             "spread_bps": 45,
             "buy_pressure_10t": 40,
@@ -828,7 +961,9 @@ def test_allocator_records_qty_clipping_for_three_leg_entry_policy(monkeypatch, 
     assert fields["entry_split_order_policy_requested_leg_count"] == 3
     assert fields["entry_split_order_max_leg_count_for_qty"] == 2
     assert fields["entry_split_order_leg_count_clipped"] is True
-    assert fields["entry_split_order_variant_id"].endswith("__qty_clipped_legs2__runtime_first_weight_40")
+    assert fields["entry_split_order_variant_id"].endswith(
+        "__qty_clipped_legs2__runtime_first_weight_40"
+    )
     assert sum(item["qty"] for item in orders) == 4
 
 
@@ -862,7 +997,15 @@ def test_allocator_biases_ai_wait_high_spread_to_passive_leg(monkeypatch, tmp_pa
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE", str(policy_file))
 
     orders, fields = split_plan.apply_entry_split_order_policy(
-        [{"tag": "normal", "qty": 5, "price": 1000, "order_type_code": "00", "tif": "DAY"}],
+        [
+            {
+                "tag": "normal",
+                "qty": 5,
+                "price": 1000,
+                "order_type_code": "00",
+                "tif": "DAY",
+            }
+        ],
         latency_gate={
             "spread_bps": 45,
             "buy_pressure_10t": 50,
@@ -877,8 +1020,14 @@ def test_allocator_biases_ai_wait_high_spread_to_passive_leg(monkeypatch, tmp_pa
 
     assert fields["entry_split_order_policy_applied"] is True
     assert fields["entry_split_order_passive_bias_applied"] is True
-    assert fields["entry_split_order_policy_variant_id"] == "equal_50_50_offset_0pct_0_3pct"
-    assert fields["entry_split_order_variant_id"] == "equal_50_50_offset_0pct_0_3pct__runtime_first_weight_20"
+    assert (
+        fields["entry_split_order_policy_variant_id"]
+        == "equal_50_50_offset_0pct_0_3pct"
+    )
+    assert (
+        fields["entry_split_order_variant_id"]
+        == "equal_50_50_offset_0pct_0_3pct__runtime_first_weight_20"
+    )
     assert fields["entry_split_order_policy_original_qty_weight_min"] == 0.5
     assert fields["entry_split_order_qty_weight_min"] == 0.2
     assert fields["entry_split_order_qty_weight_max"] == 0.2
@@ -889,7 +1038,9 @@ def test_allocator_biases_ai_wait_high_spread_to_passive_leg(monkeypatch, tmp_pa
     assert sum(item["qty"] for item in orders) == 5
 
 
-def test_allocator_passive_centers_buy_action_without_wait_warning(monkeypatch, tmp_path):
+def test_allocator_passive_centers_buy_action_without_wait_warning(
+    monkeypatch, tmp_path
+):
     _patch_dirs(monkeypatch, tmp_path)
     target_date = datetime.now(timezone(timedelta(hours=9))).date().isoformat()
     policy_file = split_plan.policy_path(target_date)
@@ -917,7 +1068,15 @@ def test_allocator_passive_centers_buy_action_without_wait_warning(monkeypatch, 
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE", str(policy_file))
 
     orders, fields = split_plan.apply_entry_split_order_policy(
-        [{"tag": "normal", "qty": 5, "price": 1000, "order_type_code": "00", "tif": "DAY"}],
+        [
+            {
+                "tag": "normal",
+                "qty": 5,
+                "price": 1000,
+                "order_type_code": "00",
+                "tif": "DAY",
+            }
+        ],
         latency_gate={
             "spread_bps": 45,
             "buy_pressure_10t": 50,
@@ -930,7 +1089,10 @@ def test_allocator_passive_centers_buy_action_without_wait_warning(monkeypatch, 
 
     assert fields["entry_split_order_policy_applied"] is True
     assert fields["entry_split_order_passive_bias_applied"] is True
-    assert fields["entry_split_order_passive_bias_reason"] == "passive_center_first_leg_cap"
+    assert (
+        fields["entry_split_order_passive_bias_reason"]
+        == "passive_center_first_leg_cap"
+    )
     assert fields["entry_split_order_policy_original_qty_weight_min"] == 0.5
     assert fields["entry_split_order_qty_weight_min"] == 0.4
     assert fields["entry_split_order_qty_weight_max"] == 0.4
@@ -938,7 +1100,9 @@ def test_allocator_passive_centers_buy_action_without_wait_warning(monkeypatch, 
     assert [item["qty"] for item in orders] == [2, 3]
 
 
-def test_allocator_market_first_uses_policy_weight_and_keeps_residual_at_resolver(monkeypatch, tmp_path):
+def test_allocator_market_first_uses_policy_weight_and_keeps_residual_at_resolver(
+    monkeypatch, tmp_path
+):
     _patch_dirs(monkeypatch, tmp_path)
     target_date = "2026-07-14"
     policy_file = split_plan.policy_path(target_date)
@@ -958,10 +1122,20 @@ def test_allocator_market_first_uses_policy_weight_and_keeps_residual_at_resolve
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE", target_date)
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE", str(policy_file))
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_MARKET_FIRST_LEG_ENABLED", "true")
-    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_MARKET_FIRST_LEG_ACTIVE_DATE", target_date)
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_SPLIT_MARKET_FIRST_LEG_ACTIVE_DATE", target_date
+    )
 
     orders, fields = split_plan.apply_entry_split_order_policy(
-        [{"tag": "normal", "qty": 32, "price": 12160, "order_type_code": "00", "tif": "DAY"}],
+        [
+            {
+                "tag": "normal",
+                "qty": 32,
+                "price": 12160,
+                "order_type_code": "00",
+                "tif": "DAY",
+            }
+        ],
         latency_gate={
             "spread_bps": 41.017,
             "buy_pressure_10t": 50,
@@ -1006,7 +1180,9 @@ def test_allocator_date_bounded_policy_becomes_inactive(monkeypatch, tmp_path):
         encoding="utf-8",
     )
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED", "true")
-    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE", "2026-07-14")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE", "2026-07-14"
+    )
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE", str(policy_file))
 
     orders, fields = split_plan.apply_entry_split_order_policy(
@@ -1020,7 +1196,9 @@ def test_allocator_date_bounded_policy_becomes_inactive(monkeypatch, tmp_path):
     assert orders[0]["qty"] == 4
 
 
-def test_allocator_requires_date_bounded_operator_fallback_for_denied_policy(monkeypatch, tmp_path):
+def test_allocator_requires_date_bounded_operator_fallback_for_denied_policy(
+    monkeypatch, tmp_path
+):
     policy_file = tmp_path / "entry-policy-denied.json"
     policy_file.write_text(
         json.dumps(
@@ -1043,10 +1221,15 @@ def test_allocator_requires_date_bounded_operator_fallback_for_denied_policy(mon
         latency_gate={"spread_bps": 5, "latency_state": "SAFE"},
         now=now,
     )
-    assert blocked_fields["entry_split_order_skip_reason"] == "policy_runtime_apply_not_allowed"
+    assert (
+        blocked_fields["entry_split_order_skip_reason"]
+        == "policy_runtime_apply_not_allowed"
+    )
 
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_OPERATOR_FALLBACK_ENABLED", "true")
-    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_OPERATOR_FALLBACK_ACTIVE_DATE", "2026-07-14")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_SPLIT_OPERATOR_FALLBACK_ACTIVE_DATE", "2026-07-14"
+    )
     orders, fields = split_plan.apply_entry_split_order_policy(
         [{"tag": "normal", "qty": 4, "price": 1000}],
         latency_gate={"spread_bps": 5, "latency_state": "SAFE"},
@@ -1055,10 +1238,15 @@ def test_allocator_requires_date_bounded_operator_fallback_for_denied_policy(mon
 
     assert fields["entry_split_order_policy_applied"] is True
     assert fields["entry_split_order_operator_fallback_authorized"] is True
-    assert all(item["entry_split_order_operator_fallback_authorized"] is True for item in orders)
+    assert all(
+        item["entry_split_order_operator_fallback_authorized"] is True
+        for item in orders
+    )
 
 
-def test_allocator_allows_split_when_source_quote_stale_recovered_before_submit(monkeypatch, tmp_path):
+def test_allocator_allows_split_when_source_quote_stale_recovered_before_submit(
+    monkeypatch, tmp_path
+):
     _patch_dirs(monkeypatch, tmp_path)
     target_date = datetime.now(timezone(timedelta(hours=9))).date().isoformat()
     policy_file = split_plan.policy_path(target_date)
@@ -1107,7 +1295,9 @@ def test_allocator_allows_split_when_source_quote_stale_recovered_before_submit(
     assert blocked[0]["qty"] == 2
 
 
-def test_allocator_fail_closed_for_qty_one_missing_invalid_and_stale_policy(monkeypatch, tmp_path):
+def test_allocator_fail_closed_for_qty_one_missing_invalid_and_stale_policy(
+    monkeypatch, tmp_path
+):
     _patch_dirs(monkeypatch, tmp_path)
     one, one_fields = split_plan.apply_entry_split_order_policy(
         [{"tag": "normal", "qty": 1, "price": 1000}],
@@ -1117,7 +1307,9 @@ def test_allocator_fail_closed_for_qty_one_missing_invalid_and_stale_policy(monk
     assert one[0]["qty"] == 1
 
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED", "true")
-    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE", str(tmp_path / "missing.json"))
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE", str(tmp_path / "missing.json")
+    )
     _, missing_fields = split_plan.apply_entry_split_order_policy(
         [{"tag": "normal", "qty": 2, "price": 1000}],
         latency_gate={"spread_bps": 5, "latency_state": "SAFE"},
@@ -1128,7 +1320,10 @@ def test_allocator_fail_closed_for_qty_one_missing_invalid_and_stale_policy(monk
         [{"tag": "a", "qty": 1, "price": 1000}, {"tag": "b", "qty": 1, "price": 995}],
         latency_gate={"spread_bps": 5, "latency_state": "SAFE"},
     )
-    assert multi_fields["entry_split_order_skip_reason"] == "multi_order_input_not_supported_v1"
+    assert (
+        multi_fields["entry_split_order_skip_reason"]
+        == "multi_order_input_not_supported_v1"
+    )
     assert [item["tag"] for item in multi] == ["a", "b"]
 
     stale_file = tmp_path / "stale.json"
@@ -1155,7 +1350,12 @@ def test_allocator_fail_closed_for_qty_one_missing_invalid_and_stale_policy(monk
 def test_daily_report_candidate_and_preopen_env_handoff(monkeypatch, tmp_path):
     target_date = "2026-07-07"
     report_dir = tmp_path / "report" / "entry_split_order_plan"
-    policy_file = tmp_path / "threshold_cycle" / "entry_split_order_policy" / f"entry_split_order_policy_{target_date}.json"
+    policy_file = (
+        tmp_path
+        / "threshold_cycle"
+        / "entry_split_order_policy"
+        / f"entry_split_order_policy_{target_date}.json"
+    )
     report_dir.mkdir(parents=True, exist_ok=True)
     policy_file.parent.mkdir(parents=True, exist_ok=True)
     policy_file.write_text("{}", encoding="utf-8")

@@ -112,7 +112,11 @@ def test_probe_report_reads_existing_adm_and_summarizes_context(tmp_path, monkey
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod.adm_mod, "report_paths", lambda target_date: (report_path, tmp_path / "adm.md"))
+    monkeypatch.setattr(
+        mod.adm_mod,
+        "report_paths",
+        lambda target_date: (report_path, tmp_path / "adm.md"),
+    )
     monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", pipeline_dir)
 
     report = mod.build_probe_report("2026-07-13", sample_limit=10)
@@ -123,7 +127,9 @@ def test_probe_report_reads_existing_adm_and_summarizes_context(tmp_path, monkey
     assert report["coverage"]["row_count"] == 2
     assert report["coverage"]["complete_or_partial_count"] == 2
     assert report["coverage"]["required_field_counts"]["entry_liquidity_score"] == 2
-    assert report["coverage"]["entry_context_missing_feature_counts"]["signed_tape"] == 1
+    assert (
+        report["coverage"]["entry_context_missing_feature_counts"]["signed_tape"] == 1
+    )
     assert report["sample_rows"][0]["candidate_id"] == "ADM2"
     assert report["sample_rows"][0]["features"]["entry_liquidity_score"] == 72
     decision_probe = report["ai_decision_contract_probe"]
@@ -192,7 +198,10 @@ def test_live_openai_restores_temporary_rules_override(monkeypatch):
 
         def _call_openai_safe(self, *args, **kwargs):
             assert openai_module.TRADING_RULES is not original_rules
-            assert getattr(openai_module.TRADING_RULES, "OPENAI_REASONING_EFFORT") == "minimal"
+            assert (
+                getattr(openai_module.TRADING_RULES, "OPENAI_REASONING_EFFORT")
+                == "minimal"
+            )
             return {
                 "action": "WAIT",
                 "score": 55,
@@ -213,7 +222,9 @@ def test_live_openai_restores_temporary_rules_override(monkeypatch):
     assert results[0]["action_score_mismatch"] is False
 
 
-def test_provider_endpoint_compare_runs_bedrock_primary_and_openai_then_restores_env(monkeypatch):
+def test_provider_endpoint_compare_runs_bedrock_primary_and_openai_then_restores_env(
+    monkeypatch,
+):
     from src.engine import ai_engine_openai as openai_module
 
     original_rules = object()
@@ -224,12 +235,32 @@ def test_provider_endpoint_compare_runs_bedrock_primary_and_openai_then_restores
         def __init__(self, keys, announce_startup=False):
             assert keys == ["test-key"]
             assert announce_startup is False
-            assert getattr(openai_module.TRADING_RULES, "GPT_REPORT_MODEL") == "gpt-5.4-mini"
-            assert getattr(openai_module.TRADING_RULES, "OPENAI_REASONING_EFFORT") == "low"
+            assert (
+                getattr(openai_module.TRADING_RULES, "GPT_REPORT_MODEL")
+                == "gpt-5.4-mini"
+            )
+            assert (
+                getattr(openai_module.TRADING_RULES, "OPENAI_REASONING_EFFORT") == "low"
+            )
 
-        def evaluate_scalping_entry_price(self, stock_name, stock_code, ws_data, recent_ticks, recent_candles, price_ctx, metadata_extra=None):
-            assert metadata_extra["source_event_stage"] == "entry_context_intraday_probe_provider_compare"
-            bedrock_route = mod.os.environ["KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_ROUTE_MODE"] == "primary"
+        def evaluate_scalping_entry_price(
+            self,
+            stock_name,
+            stock_code,
+            ws_data,
+            recent_ticks,
+            recent_candles,
+            price_ctx,
+            metadata_extra=None,
+        ):
+            assert (
+                metadata_extra["source_event_stage"]
+                == "entry_context_intraday_probe_provider_compare"
+            )
+            bedrock_route = (
+                mod.os.environ["KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_ROUTE_MODE"]
+                == "primary"
+            )
             return {
                 "action": "USE_DEFENSIVE",
                 "order_price": 10005 if bedrock_route else 10010,
@@ -253,13 +284,17 @@ def test_provider_endpoint_compare_runs_bedrock_primary_and_openai_then_restores
             metadata_extra=None,
         ):
             assert decision_kind == "intraday_probe_compare"
-            bedrock_route = mod.os.environ["KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE"] == "primary"
+            bedrock_route = (
+                mod.os.environ["KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE"] == "primary"
+            )
             return {
                 "action": "HOLD" if bedrock_route else "EXIT",
                 "score": 72,
                 "flow_state": "absorption" if bedrock_route else "breakdown",
                 "next_review_sec": 30,
-                "reason": "bedrock flow compare" if bedrock_route else "openai flow compare",
+                "reason": (
+                    "bedrock flow compare" if bedrock_route else "openai flow compare"
+                ),
                 "openai_transport_mode": "bedrock_primary" if bedrock_route else "http",
                 "bedrock_primary_used": bedrock_route,
                 "bedrock_failback_used": False,
@@ -386,9 +421,20 @@ def test_probe_report_includes_endpoint_compare_when_requested(monkeypatch):
     assert compare["enabled"] is True
     assert compare["model"] == "gpt-5.4-mini"
     assert compare["effort"] == "low"
-    assert compare["provider_override"]["KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_ROUTE_MODE"] == "off"
+    assert (
+        compare["provider_override"]["KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_ROUTE_MODE"]
+        == "off"
+    )
     assert compare["decision_points"]["entry_price"]["summary"]["row_count"] == 1
     provider_compare = report["provider_endpoint_compare"]
     assert provider_compare["enabled"] is True
-    assert provider_compare["result"]["bedrock_primary"]["decision_points"]["entry_price"]["summary"]["row_count"] == 1
-    assert provider_compare["result"]["pairwise"]["entry_price"]["summary"]["pair_count"] == 0
+    assert (
+        provider_compare["result"]["bedrock_primary"]["decision_points"]["entry_price"][
+            "summary"
+        ]["row_count"]
+        == 1
+    )
+    assert (
+        provider_compare["result"]["pairwise"]["entry_price"]["summary"]["pair_count"]
+        == 0
+    )

@@ -1,7 +1,9 @@
 from src.engine import sniper_entry_pipeline_report as report_mod
 
 
-def test_build_entry_pipeline_flow_report_prefers_jsonl_when_text_log_empty(tmp_path, monkeypatch):
+def test_build_entry_pipeline_flow_report_prefers_jsonl_when_text_log_empty(
+    tmp_path, monkeypatch
+):
     jsonl_path = tmp_path / "pipeline_events_2026-04-10.jsonl"
     jsonl_path.write_text(
         "\n".join(
@@ -16,16 +18,25 @@ def test_build_entry_pipeline_flow_report_prefers_jsonl_when_text_log_empty(tmp_
         encoding="utf-8",
     )
     monkeypatch.setattr(report_mod, "_jsonl_path", lambda target_date: jsonl_path)
-    monkeypatch.setattr(report_mod, "_iter_target_lines", lambda log_path, *, target_date: [])
+    monkeypatch.setattr(
+        report_mod, "_iter_target_lines", lambda log_path, *, target_date: []
+    )
 
-    report = report_mod.build_entry_pipeline_flow_report("2026-04-10", since_time="09:41:30")
+    report = report_mod.build_entry_pipeline_flow_report(
+        "2026-04-10", since_time="09:41:30"
+    )
 
     assert report["has_data"] is True
     row = report["sections"]["recent_stocks"][0]
     assert row["record_id"] == "1001"
     assert row["latest_status"]["stage"] == "latency_block"
     assert row["stage_class"] == "blocked"
-    assert [item["stage"] for item in row["pass_flow"]] == ["watching", "ai_confirmed", "entry_armed", "budget_pass"]
+    assert [item["stage"] for item in row["pass_flow"]] == [
+        "watching",
+        "ai_confirmed",
+        "entry_armed",
+        "budget_pass",
+    ]
 
 
 def test_latest_attempt_events_excludes_previous_submitted_attempt(monkeypatch):
@@ -40,7 +51,9 @@ def test_latest_attempt_events_excludes_previous_submitted_attempt(monkeypatch):
         "[2026-04-07 10:00:02] INFO [ENTRY_PIPELINE] 엘지전자(066570) stage=budget_pass id=11",
         "[2026-04-07 10:00:03] INFO [ENTRY_PIPELINE] 엘지전자(066570) stage=latency_block id=11 reason=latency_state_danger",
     ]
-    monkeypatch.setattr(report_mod, "_iter_target_lines", lambda log_path, *, target_date: lines)
+    monkeypatch.setattr(
+        report_mod, "_iter_target_lines", lambda log_path, *, target_date: lines
+    )
 
     report = report_mod.build_entry_pipeline_flow_report("2026-04-07")
 
@@ -71,7 +84,9 @@ def test_latest_attempt_prefers_new_record_id_for_same_stock(monkeypatch):
         "[2026-04-07 10:00:01] INFO [ENTRY_PIPELINE] 엘지전자(066570) stage=entry_armed id=12",
         "[2026-04-07 10:00:02] INFO [ENTRY_PIPELINE] 엘지전자(066570) stage=blocked_zero_qty id=12 qty=0",
     ]
-    monkeypatch.setattr(report_mod, "_iter_target_lines", lambda log_path, *, target_date: lines)
+    monkeypatch.setattr(
+        report_mod, "_iter_target_lines", lambda log_path, *, target_date: lines
+    )
 
     report = report_mod.build_entry_pipeline_flow_report("2026-04-07")
 
@@ -95,7 +110,9 @@ def test_entry_armed_expired_is_classified_as_waiting(monkeypatch, tmp_path):
     jsonl_path = tmp_path / "pipeline_events_2026-04-10.jsonl"
     jsonl_path.write_text("", encoding="utf-8")
     monkeypatch.setattr(report_mod, "_jsonl_path", lambda target_date: jsonl_path)
-    monkeypatch.setattr(report_mod, "_iter_target_lines", lambda log_path, *, target_date: lines)
+    monkeypatch.setattr(
+        report_mod, "_iter_target_lines", lambda log_path, *, target_date: lines
+    )
 
     report = report_mod.build_entry_pipeline_flow_report("2026-04-10")
 
