@@ -14,7 +14,6 @@ from src.engine.error_detectors.artifact_freshness import (
     ARTIFACT_REGISTRY,
 )
 
-
 _TRADING_MOCK = "src.engine.error_detectors.artifact_freshness.is_krx_trading_day"
 
 
@@ -45,7 +44,10 @@ class TestArtifactFreshnessDetector:
         }
         with (
             patch(_TRADING_MOCK, return_value=True),
-            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY",
+                [artifact],
+            ),
         ):
             detector = ArtifactFreshnessDetector()
             result = detector.check()
@@ -60,7 +62,10 @@ class TestArtifactFreshnessDetector:
         }
         with (
             patch(_TRADING_MOCK, return_value=True),
-            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY",
+                [artifact],
+            ),
         ):
             detector = ArtifactFreshnessDetector()
             result = detector.check()
@@ -77,7 +82,10 @@ class TestArtifactFreshnessDetector:
         }
         with (
             patch(_TRADING_MOCK, return_value=True),
-            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY",
+                [artifact],
+            ),
         ):
             detector = ArtifactFreshnessDetector()
             result = detector.check()
@@ -97,7 +105,10 @@ class TestArtifactFreshnessDetector:
         }
         with (
             patch(_TRADING_MOCK, return_value=True),
-            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY",
+                [artifact],
+            ),
         ):
             detector = ArtifactFreshnessDetector()
             result = detector.check()
@@ -114,7 +125,10 @@ class TestArtifactFreshnessDetector:
         }
         with (
             patch(_TRADING_MOCK, return_value=True),
-            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY",
+                [artifact],
+            ),
         ):
             detector = ArtifactFreshnessDetector()
             result = detector.check()
@@ -135,7 +149,10 @@ class TestArtifactFreshnessDetector:
         }
         with (
             patch(_TRADING_MOCK, return_value=True),
-            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY",
+                [artifact],
+            ),
         ):
             detector = ArtifactFreshnessDetector()
             result = detector.check()
@@ -159,19 +176,31 @@ class TestArtifactFreshnessDetector:
         }
         with (
             patch(_TRADING_MOCK, return_value=True),
-            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY",
+                [artifact],
+            ),
         ):
             detector = ArtifactFreshnessDetector()
             result = detector.check()
             assert result.severity == "pass"
-            assert result.details.get("test_startup_stale_grace_status") == "startup_grace"
-            assert result.details.get("test_startup_stale_grace_startup_stale_suppressed") is True
+            assert (
+                result.details.get("test_startup_stale_grace_status") == "startup_grace"
+            )
+            assert (
+                result.details.get("test_startup_stale_grace_startup_stale_suppressed")
+                is True
+            )
 
-    def test_missing_critical_artifact_warns_when_upstream_cron_in_progress(self, tmp_path):
+    def test_missing_critical_artifact_warns_when_upstream_cron_in_progress(
+        self, tmp_path
+    ):
         now = datetime.now()
         today = now.strftime("%Y-%m-%d")
         cron_log = tmp_path / "postclose.log"
-        cron_log.write_text(f"[START] threshold-cycle postclose target_date={today}\n", encoding="utf-8")
+        cron_log.write_text(
+            f"[START] threshold-cycle postclose target_date={today}\n", encoding="utf-8"
+        )
         artifact = {
             "id": "threshold_postclose_report",
             "path_template": str(tmp_path / "missing_threshold_ev.json"),
@@ -186,15 +215,23 @@ class TestArtifactFreshnessDetector:
         }
         with (
             patch(_TRADING_MOCK, return_value=True),
-            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY",
+                [artifact],
+            ),
         ):
             detector = ArtifactFreshnessDetector()
             result = detector.check()
             assert result.severity == "warning"
             assert result.details.get("threshold_postclose_report_status") == "warning"
-            assert result.details.get("threshold_postclose_report_upstream_status") == "in_progress"
+            assert (
+                result.details.get("threshold_postclose_report_upstream_status")
+                == "in_progress"
+            )
 
-    def test_missing_critical_artifact_warns_when_upstream_process_in_progress(self, tmp_path):
+    def test_missing_critical_artifact_warns_when_upstream_process_in_progress(
+        self, tmp_path
+    ):
         now = datetime.now()
         artifact = {
             "id": "threshold_postclose_report",
@@ -211,7 +248,10 @@ class TestArtifactFreshnessDetector:
         }
         with (
             patch(_TRADING_MOCK, return_value=True),
-            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY",
+                [artifact],
+            ),
             patch(
                 "src.engine.error_detectors.artifact_freshness."
                 "ArtifactFreshnessDetector._has_matching_live_process",
@@ -222,9 +262,14 @@ class TestArtifactFreshnessDetector:
             result = detector.check()
             assert result.severity == "warning"
             assert result.details.get("threshold_postclose_report_status") == "warning"
-            assert result.details.get("threshold_postclose_report_upstream_status") == "in_progress"
+            assert (
+                result.details.get("threshold_postclose_report_upstream_status")
+                == "in_progress"
+            )
 
-    def test_postclose_done_controller_report_uses_controller_cron_for_in_progress_suppression(self, tmp_path):
+    def test_postclose_done_controller_report_uses_controller_cron_for_in_progress_suppression(
+        self, tmp_path
+    ):
         now = datetime.now()
         today = now.strftime("%Y-%m-%d")
         controller_log = tmp_path / "postclose_done_controller_cron.log"
@@ -247,18 +292,31 @@ class TestArtifactFreshnessDetector:
         }
         with (
             patch(_TRADING_MOCK, return_value=True),
-            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY",
+                [artifact],
+            ),
         ):
             detector = ArtifactFreshnessDetector()
             result = detector.check()
             assert result.severity == "warning"
-            assert result.details.get("postclose_done_controller_report_status") == "warning"
-            assert result.details.get("postclose_done_controller_report_upstream_status") == "in_progress"
+            assert (
+                result.details.get("postclose_done_controller_report_status")
+                == "warning"
+            )
+            assert (
+                result.details.get("postclose_done_controller_report_upstream_status")
+                == "in_progress"
+            )
 
-    def test_missing_critical_artifact_warns_after_window_when_upstream_cron_still_in_progress(self, tmp_path):
+    def test_missing_critical_artifact_warns_after_window_when_upstream_cron_still_in_progress(
+        self, tmp_path
+    ):
         today = datetime.now().strftime("%Y-%m-%d")
         cron_log = tmp_path / "postclose.log"
-        cron_log.write_text(f"[START] threshold-cycle postclose target_date={today}\n", encoding="utf-8")
+        cron_log.write_text(
+            f"[START] threshold-cycle postclose target_date={today}\n", encoding="utf-8"
+        )
         artifact = {
             "id": "threshold_postclose_report",
             "path_template": str(tmp_path / "missing_threshold_ev.json"),
@@ -274,13 +332,19 @@ class TestArtifactFreshnessDetector:
         }
         with (
             patch(_TRADING_MOCK, return_value=True),
-            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY",
+                [artifact],
+            ),
         ):
             detector = ArtifactFreshnessDetector()
             result = detector.check()
             assert result.severity == "warning"
             assert result.details.get("threshold_postclose_report_status") == "warning"
-            assert result.details.get("threshold_postclose_report_upstream_status") == "in_progress_after_window"
+            assert (
+                result.details.get("threshold_postclose_report_upstream_status")
+                == "in_progress_after_window"
+            )
 
     def test_non_trading_day_skips(self):
         artifact = {
@@ -292,7 +356,10 @@ class TestArtifactFreshnessDetector:
         }
         with (
             patch(_TRADING_MOCK, return_value=False),
-            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY",
+                [artifact],
+            ),
         ):
             detector = ArtifactFreshnessDetector()
             result = detector.check()
@@ -312,7 +379,10 @@ class TestArtifactFreshnessDetector:
         }
         with (
             patch(_TRADING_MOCK, return_value=True),
-            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY",
+                [artifact],
+            ),
         ):
             detector = ArtifactFreshnessDetector()
             result = detector.check()
@@ -334,14 +404,22 @@ class TestArtifactFreshnessDetector:
         }
         with (
             patch(_TRADING_MOCK, return_value=True),
-            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY",
+                [artifact],
+            ),
         ):
             detector = ArtifactFreshnessDetector()
             result = detector.check()
             assert result.severity == "pass"
-            assert result.details.get("test_window_end_boundary_status") == "pass_after_window"
+            assert (
+                result.details.get("test_window_end_boundary_status")
+                == "pass_after_window"
+            )
 
-    def test_one_shot_artifact_exists_passes_even_when_stale_inside_window(self, tmp_path):
+    def test_one_shot_artifact_exists_passes_even_when_stale_inside_window(
+        self, tmp_path
+    ):
         report_file = tmp_path / "threshold_cycle_ev.json"
         report_file.write_text("{}", encoding="utf-8")
         stale_ts = time.time() - 7200
@@ -358,17 +436,27 @@ class TestArtifactFreshnessDetector:
         }
         with (
             patch(_TRADING_MOCK, return_value=True),
-            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY",
+                [artifact],
+            ),
         ):
             detector = ArtifactFreshnessDetector()
             result = detector.check()
             assert result.severity == "pass"
-            assert result.details.get("threshold_postclose_report_status") == "pass_one_shot"
+            assert (
+                result.details.get("threshold_postclose_report_status")
+                == "pass_one_shot"
+            )
             assert result.details.get("threshold_postclose_report_age_sec", 0) > 1800
 
-    def test_threshold_postclose_status_succeeded_is_one_shot_completion(self, tmp_path):
+    def test_threshold_postclose_status_succeeded_is_one_shot_completion(
+        self, tmp_path
+    ):
         status_file = tmp_path / "threshold_cycle_postclose.status.json"
-        status_file.write_text('{"status":"succeeded","target_date":"2026-07-02"}', encoding="utf-8")
+        status_file.write_text(
+            '{"status":"succeeded","target_date":"2026-07-02"}', encoding="utf-8"
+        )
         stale_ts = time.time() - 7200
         os.utime(status_file, (stale_ts, stale_ts))
         now = datetime.now()
@@ -385,16 +473,27 @@ class TestArtifactFreshnessDetector:
         }
         with (
             patch(_TRADING_MOCK, return_value=True),
-            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY",
+                [artifact],
+            ),
         ):
             detector = ArtifactFreshnessDetector()
             result = detector.check()
             assert result.severity == "pass"
-            assert result.details.get("threshold_postclose_status_content_status") == "succeeded"
-            assert result.details.get("threshold_postclose_status_status") == "pass_one_shot"
+            assert (
+                result.details.get("threshold_postclose_status_content_status")
+                == "succeeded"
+            )
+            assert (
+                result.details.get("threshold_postclose_status_status")
+                == "pass_one_shot"
+            )
             assert result.details.get("threshold_postclose_status_age_sec", 0) > 3600
 
-    def test_daily_recommendations_csv_content_date_suppresses_mtime_stale_inside_window(self, tmp_path):
+    def test_daily_recommendations_csv_content_date_suppresses_mtime_stale_inside_window(
+        self, tmp_path
+    ):
         reco_file = tmp_path / "daily_recommendations_v2.csv"
         content_date = (datetime.now() - timedelta(days=1)).date().isoformat()
         reco_file.write_text(
@@ -421,16 +520,26 @@ class TestArtifactFreshnessDetector:
         }
         with (
             patch(_TRADING_MOCK, return_value=True),
-            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY",
+                [artifact],
+            ),
         ):
             detector = ArtifactFreshnessDetector()
             result = detector.check()
             assert result.severity == "pass"
-            assert result.details.get("daily_recommendations_csv_status") == "pass_content_date"
-            assert result.details.get("daily_recommendations_csv_content_status") == "pass"
+            assert (
+                result.details.get("daily_recommendations_csv_status")
+                == "pass_content_date"
+            )
+            assert (
+                result.details.get("daily_recommendations_csv_content_status") == "pass"
+            )
             assert result.details.get("daily_recommendations_csv_content_age_days") == 1
 
-    def test_daily_recommendations_diag_content_date_suppresses_mtime_stale_inside_window(self, tmp_path):
+    def test_daily_recommendations_diag_content_date_suppresses_mtime_stale_inside_window(
+        self, tmp_path
+    ):
         diag_file = tmp_path / "daily_recommendations_v2_diagnostics.json"
         content_date = (datetime.now() - timedelta(days=1)).date().isoformat()
         diag_file.write_text(
@@ -457,16 +566,27 @@ class TestArtifactFreshnessDetector:
         }
         with (
             patch(_TRADING_MOCK, return_value=True),
-            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY",
+                [artifact],
+            ),
         ):
             detector = ArtifactFreshnessDetector()
             result = detector.check()
             assert result.severity == "pass"
-            assert result.details.get("daily_recommendations_diag_status") == "pass_content_date"
-            assert result.details.get("daily_recommendations_diag_content_status") == "pass"
+            assert (
+                result.details.get("daily_recommendations_diag_status")
+                == "pass_content_date"
+            )
+            assert (
+                result.details.get("daily_recommendations_diag_content_status")
+                == "pass"
+            )
             assert result.details.get("daily_recommendations_diag_selected_count") == 3
 
-    def test_daily_recommendations_diag_content_date_stale_warns_inside_window(self, tmp_path):
+    def test_daily_recommendations_diag_content_date_stale_warns_inside_window(
+        self, tmp_path
+    ):
         diag_file = tmp_path / "daily_recommendations_v2_diagnostics.json"
         content_date = (datetime.now() - timedelta(days=9)).date().isoformat()
         diag_file.write_text(
@@ -493,13 +613,19 @@ class TestArtifactFreshnessDetector:
         }
         with (
             patch(_TRADING_MOCK, return_value=True),
-            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY",
+                [artifact],
+            ),
         ):
             detector = ArtifactFreshnessDetector()
             result = detector.check()
             assert result.severity == "warning"
             assert result.details.get("daily_recommendations_diag_status") == "warning"
-            assert result.details.get("daily_recommendations_diag_content_status") == "stale_date"
+            assert (
+                result.details.get("daily_recommendations_diag_content_status")
+                == "stale_date"
+            )
 
     def test_past_window_end_missing_fails(self):
         artifact = {
@@ -512,7 +638,10 @@ class TestArtifactFreshnessDetector:
         }
         with (
             patch(_TRADING_MOCK, return_value=True),
-            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY",
+                [artifact],
+            ),
         ):
             detector = ArtifactFreshnessDetector()
             result = detector.check()
@@ -531,7 +660,10 @@ class TestArtifactFreshnessDetector:
         }
         with (
             patch(_TRADING_MOCK, return_value=True),
-            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY",
+                [artifact],
+            ),
         ):
             detector = ArtifactFreshnessDetector()
             result = detector.check()
@@ -551,7 +683,10 @@ class TestArtifactFreshnessDetector:
         }
         with (
             patch(_TRADING_MOCK, return_value=True),
-            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY",
+                [artifact],
+            ),
         ):
             detector = ArtifactFreshnessDetector()
             result = detector.check()
@@ -566,22 +701,39 @@ class TestArtifactFreshnessDetector:
         assert registry["swing_live_dry_run_status"]["window_start"] == (20, 15)
         assert registry["swing_lifecycle_audit_report"]["window_start"] == (20, 10)
         assert registry["swing_runtime_approval_report"]["window_start"] == (20, 10)
-        assert registry["swing_daily_simulation_status"]["json_status_field"] == "status"
+        assert (
+            registry["swing_daily_simulation_status"]["json_status_field"] == "status"
+        )
         assert registry["swing_daily_simulation_status"]["one_shot"] is True
-        assert "swing_daily_simulation_{date}.json" in registry["swing_daily_simulation_report"]["path_template"]
+        assert (
+            "swing_daily_simulation_{date}.json"
+            in registry["swing_daily_simulation_report"]["path_template"]
+        )
         assert registry["swing_daily_simulation_report"]["one_shot"] is True
-        assert "swing_pattern_lab_automation_{date}.json" in registry["swing_pattern_lab_automation_report"]["path_template"]
-        assert "current.json" in registry["swing_model_registry_current"]["path_template"]
+        assert (
+            "swing_pattern_lab_automation_{date}.json"
+            in registry["swing_pattern_lab_automation_report"]["path_template"]
+        )
+        assert (
+            "current.json" in registry["swing_model_registry_current"]["path_template"]
+        )
         assert registry["pipeline_events"]["window_grace_sec"] == 300
         assert registry["threshold_events"]["critical"] is False
         assert registry["threshold_events"]["window_grace_sec"] == 300
         assert "partitioned_compact" in registry["threshold_events"]
         assert registry["threshold_postclose_report"]["one_shot"] is True
 
-    def test_partitioned_threshold_events_checkpoint_passes_when_legacy_file_missing(self, tmp_path):
+    def test_partitioned_threshold_events_checkpoint_passes_when_legacy_file_missing(
+        self, tmp_path
+    ):
         today = datetime.now().strftime("%Y-%m-%d")
         checkpoint = tmp_path / "checkpoints" / f"{today}.json"
-        part = tmp_path / f"date={today}" / "family=soft_stop_whipsaw_confirmation" / "part-000001.jsonl"
+        part = (
+            tmp_path
+            / f"date={today}"
+            / "family=soft_stop_whipsaw_confirmation"
+            / "part-000001.jsonl"
+        )
         checkpoint.parent.mkdir(parents=True)
         part.parent.mkdir(parents=True)
         checkpoint.write_text(
@@ -596,17 +748,25 @@ class TestArtifactFreshnessDetector:
             "critical": False,
             "partitioned_compact": {
                 "checkpoint_template": str(checkpoint),
-                "partition_glob_template": str(tmp_path / f"date={today}" / "family=*" / "part-*.jsonl"),
+                "partition_glob_template": str(
+                    tmp_path / f"date={today}" / "family=*" / "part-*.jsonl"
+                ),
             },
         }
         with (
             patch(_TRADING_MOCK, return_value=True),
-            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY",
+                [artifact],
+            ),
         ):
             detector = ArtifactFreshnessDetector()
             result = detector.check()
             assert result.severity == "pass"
-            assert result.details["threshold_events_status"] == "pass_partitioned_checkpoint"
+            assert (
+                result.details["threshold_events_status"]
+                == "pass_partitioned_checkpoint"
+            )
             assert result.details["threshold_events_legacy_path_missing"] is True
             assert result.details["threshold_events_partitioned_completed"] is True
             assert result.details["threshold_events_partitioned_part_count"] == 1
@@ -614,7 +774,12 @@ class TestArtifactFreshnessDetector:
     def test_partitioned_threshold_events_incomplete_checkpoint_warns(self, tmp_path):
         today = datetime.now().strftime("%Y-%m-%d")
         checkpoint = tmp_path / "checkpoints" / f"{today}.json"
-        part = tmp_path / f"date={today}" / "family=soft_stop_whipsaw_confirmation" / "part-000001.jsonl"
+        part = (
+            tmp_path
+            / f"date={today}"
+            / "family=soft_stop_whipsaw_confirmation"
+            / "part-000001.jsonl"
+        )
         checkpoint.parent.mkdir(parents=True)
         part.parent.mkdir(parents=True)
         checkpoint.write_text(
@@ -629,16 +794,24 @@ class TestArtifactFreshnessDetector:
             "critical": False,
             "partitioned_compact": {
                 "checkpoint_template": str(checkpoint),
-                "partition_glob_template": str(tmp_path / f"date={today}" / "family=*" / "part-*.jsonl"),
+                "partition_glob_template": str(
+                    tmp_path / f"date={today}" / "family=*" / "part-*.jsonl"
+                ),
             },
         }
         with (
             patch(_TRADING_MOCK, return_value=True),
-            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY",
+                [artifact],
+            ),
         ):
             detector = ArtifactFreshnessDetector()
             result = detector.check()
             assert result.severity == "warning"
             assert result.details["threshold_events_status"] == "warning"
             assert result.details["threshold_events_partitioned_completed"] is False
-            assert result.details["threshold_events_partitioned_paused_reason"] == "cpu_busy_pct>=95"
+            assert (
+                result.details["threshold_events_partitioned_paused_reason"]
+                == "cpu_busy_pct>=95"
+            )

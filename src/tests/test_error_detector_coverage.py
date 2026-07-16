@@ -52,16 +52,25 @@ def test_new_operational_feature_must_declare_detector_coverage():
 
 
 def test_threshold_postclose_report_has_startup_grace_for_long_postclose_chain():
-    artifact = next(item for item in ARTIFACT_REGISTRY if item["id"] == "threshold_postclose_report")
+    artifact = next(
+        item for item in ARTIFACT_REGISTRY if item["id"] == "threshold_postclose_report"
+    )
 
     assert artifact["one_shot"] is True
     assert artifact["critical"] is True
     assert artifact["window_start"] == (20, 10)
     assert artifact["window_grace_sec"] >= 1200
-    assert artifact["suppress_missing_while_cron_in_progress"]["id"] == "threshold_cycle_postclose"
+    assert (
+        artifact["suppress_missing_while_cron_in_progress"]["id"]
+        == "threshold_cycle_postclose"
+    )
 
 
 def test_codex_workorder_runner_artifact_requires_completed_status():
-    artifact = next(item for item in ARTIFACT_REGISTRY if item["id"] == "codex_workorder_runner_report")
+    artifact = next(
+        item
+        for item in ARTIFACT_REGISTRY
+        if item["id"] == "codex_workorder_runner_report"
+    )
 
     assert artifact["json_ok_values"] == ["completed", "dry_run_planned"]

@@ -73,31 +73,45 @@ class TestErrorDetectionEngine:
     def test_summary_severity_pass(self):
         engine = ErrorDetectionEngine(dry_run=True)
         results = [
-            DetectionResult(detector_id="a", category="test", severity="pass", summary="ok"),
-            DetectionResult(detector_id="b", category="test", severity="pass", summary="ok"),
+            DetectionResult(
+                detector_id="a", category="test", severity="pass", summary="ok"
+            ),
+            DetectionResult(
+                detector_id="b", category="test", severity="pass", summary="ok"
+            ),
         ]
         assert engine.get_summary_severity(results) == "pass"
 
     def test_summary_severity_warning(self):
         engine = ErrorDetectionEngine(dry_run=True)
         results = [
-            DetectionResult(detector_id="a", category="test", severity="pass", summary="ok"),
-            DetectionResult(detector_id="b", category="test", severity="warning", summary="warn"),
+            DetectionResult(
+                detector_id="a", category="test", severity="pass", summary="ok"
+            ),
+            DetectionResult(
+                detector_id="b", category="test", severity="warning", summary="warn"
+            ),
         ]
         assert engine.get_summary_severity(results) == "warning"
 
     def test_summary_severity_fail(self):
         engine = ErrorDetectionEngine(dry_run=True)
         results = [
-            DetectionResult(detector_id="a", category="test", severity="warning", summary="warn"),
-            DetectionResult(detector_id="b", category="test", severity="fail", summary="fail"),
+            DetectionResult(
+                detector_id="a", category="test", severity="warning", summary="warn"
+            ),
+            DetectionResult(
+                detector_id="b", category="test", severity="fail", summary="fail"
+            ),
         ]
         assert engine.get_summary_severity(results) == "fail"
 
     def test_build_report_structure(self):
         engine = ErrorDetectionEngine(dry_run=True)
         results = [
-            DetectionResult(detector_id="a", category="test", severity="pass", summary="ok"),
+            DetectionResult(
+                detector_id="a", category="test", severity="pass", summary="ok"
+            ),
         ]
         report = engine.build_report(results)
         assert "timestamp" in report
@@ -108,7 +122,9 @@ class TestErrorDetectionEngine:
     def test_write_report_dry_run(self, tmp_path):
         engine = ErrorDetectionEngine(dry_run=True)
         results = [
-            DetectionResult(detector_id="a", category="test", severity="pass", summary="ok"),
+            DetectionResult(
+                detector_id="a", category="test", severity="pass", summary="ok"
+            ),
         ]
         report = engine.build_report(results)
         engine.write_report(report)
@@ -118,11 +134,16 @@ class TestErrorDetectionEngine:
         with patch("src.engine.error_detector.REPORT_DIR", alt_report_dir):
             engine = ErrorDetectionEngine(dry_run=False)
             results = [
-                DetectionResult(detector_id="a", category="test", severity="pass", summary="ok"),
+                DetectionResult(
+                    detector_id="a", category="test", severity="pass", summary="ok"
+                ),
             ]
             report = engine.build_report(results)
             engine.write_report(report)
-            report_file = alt_report_dir / f"error_detection_{__import__('datetime').datetime.now().strftime('%Y-%m-%d')}.json"
+            report_file = (
+                alt_report_dir
+                / f"error_detection_{__import__('datetime').datetime.now().strftime('%Y-%m-%d')}.json"
+            )
             assert report_file.exists()
             data = json.loads(report_file.read_text(encoding="utf-8"))
             assert data["summary_severity"] == "pass"

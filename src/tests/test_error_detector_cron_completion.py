@@ -99,7 +99,9 @@ class TestCronCompletionDetector:
         assert "[FAIL]" in filtered
         assert filtered.count("[DONE]") == 1
 
-    def test_update_kospi_start_only_before_extended_window_end_is_not_fail(self, monkeypatch, tmp_path):
+    def test_update_kospi_start_only_before_extended_window_end_is_not_fail(
+        self, monkeypatch, tmp_path
+    ):
         import src.engine.error_detectors.cron_completion as cc
 
         logs_dir = tmp_path / "logs"
@@ -114,14 +116,21 @@ class TestCronCompletionDetector:
         with _mock_time(20, 16):
             result = CronCompletionDetector().check()
 
-        assert "update_kospi: no completion marker after window end" not in result.summary
+        assert (
+            "update_kospi: no completion marker after window end" not in result.summary
+        )
 
-    def test_long_verbose_log_keeps_once_job_done_marker_visible(self, monkeypatch, tmp_path):
+    def test_long_verbose_log_keeps_once_job_done_marker_visible(
+        self, monkeypatch, tmp_path
+    ):
         import src.engine.error_detectors.cron_completion as cc
 
         logs_dir = tmp_path / "logs"
         logs_dir.mkdir(parents=True)
-        noise = "\n".join(f'{{"row": {idx}, "payload": "verbose report output"}}' for idx in range(300))
+        noise = "\n".join(
+            f'{{"row": {idx}, "payload": "verbose report output"}}'
+            for idx in range(300)
+        )
         (logs_dir / "threshold_cycle_postclose_cron.log").write_text(
             "\n".join(
                 [
@@ -156,7 +165,9 @@ class TestCronCompletionDetector:
         assert result.severity == "pass"
         assert result.details["threshold_cycle_postclose_status"] == "pass"
 
-    def test_rotated_once_job_done_marker_keeps_cron_status_pass(self, monkeypatch, tmp_path):
+    def test_rotated_once_job_done_marker_keeps_cron_status_pass(
+        self, monkeypatch, tmp_path
+    ):
         import src.engine.error_detectors.cron_completion as cc
 
         logs_dir = tmp_path / "logs"
@@ -166,7 +177,9 @@ class TestCronCompletionDetector:
             "[DONE] threshold-cycle postclose target_date=2026-05-22 finished_at=2026-05-22T21:22:41+0900\n",
             encoding="utf-8",
         )
-        (logs_dir / "threshold_cycle_postclose_cron.log").write_text("", encoding="utf-8")
+        (logs_dir / "threshold_cycle_postclose_cron.log").write_text(
+            "", encoding="utf-8"
+        )
         monkeypatch.setattr(cc, "PROJECT_ROOT", tmp_path)
         monkeypatch.setattr(cc, "_today_kst", lambda: "2026-05-22")
         monkeypatch.setattr(
@@ -190,7 +203,9 @@ class TestCronCompletionDetector:
         assert result.severity == "pass"
         assert result.details["threshold_cycle_postclose_status"] == "pass"
 
-    def test_threshold_postclose_status_artifact_can_complete_pending_done_marker(self, monkeypatch, tmp_path):
+    def test_threshold_postclose_status_artifact_can_complete_pending_done_marker(
+        self, monkeypatch, tmp_path
+    ):
         import json
         import src.engine.error_detectors.cron_completion as cc
 
@@ -238,9 +253,14 @@ class TestCronCompletionDetector:
 
         assert result.severity == "pass"
         assert result.details["threshold_cycle_postclose_status"] == "pass"
-        assert result.details["threshold_cycle_postclose_status_artifact_terminal"] == "done"
+        assert (
+            result.details["threshold_cycle_postclose_status_artifact_terminal"]
+            == "done"
+        )
 
-    def test_once_job_status_artifact_success_overrides_older_failed_log(self, monkeypatch, tmp_path):
+    def test_once_job_status_artifact_success_overrides_older_failed_log(
+        self, monkeypatch, tmp_path
+    ):
         import json
         import src.engine.error_detectors.cron_completion as cc
 
@@ -259,7 +279,9 @@ class TestCronCompletionDetector:
             encoding="utf-8",
         )
         (status_dir / "tuning_monitoring_postclose_2026-05-26.json").write_text(
-            json.dumps({"target_date": "2026-05-26", "status": "success", "exit_code": 0}),
+            json.dumps(
+                {"target_date": "2026-05-26", "status": "success", "exit_code": 0}
+            ),
             encoding="utf-8",
         )
         monkeypatch.setattr(cc, "PROJECT_ROOT", tmp_path)
@@ -285,9 +307,14 @@ class TestCronCompletionDetector:
 
         assert result.severity == "pass"
         assert result.details["tuning_monitoring_postclose_status"] == "pass"
-        assert result.details["tuning_monitoring_postclose_status_artifact_terminal"] == "done"
+        assert (
+            result.details["tuning_monitoring_postclose_status_artifact_terminal"]
+            == "done"
+        )
 
-    def test_once_job_date_status_done_artifact_completes_missing_wrapper_marker(self, monkeypatch, tmp_path):
+    def test_once_job_date_status_done_artifact_completes_missing_wrapper_marker(
+        self, monkeypatch, tmp_path
+    ):
         import json
         import src.engine.error_detectors.cron_completion as cc
 
@@ -331,9 +358,14 @@ class TestCronCompletionDetector:
 
         assert result.severity == "pass"
         assert result.details["postclose_done_controller_status"] == "pass"
-        assert result.details["postclose_done_controller_status_artifact_terminal"] == "done"
+        assert (
+            result.details["postclose_done_controller_status_artifact_terminal"]
+            == "done"
+        )
 
-    def test_once_job_failed_status_artifact_overrides_older_done_log(self, monkeypatch, tmp_path):
+    def test_once_job_failed_status_artifact_overrides_older_done_log(
+        self, monkeypatch, tmp_path
+    ):
         import json
         import src.engine.error_detectors.cron_completion as cc
 
@@ -346,7 +378,9 @@ class TestCronCompletionDetector:
             encoding="utf-8",
         )
         (status_dir / "tuning_monitoring_postclose_2026-05-26.json").write_text(
-            json.dumps({"target_date": "2026-05-26", "status": "failed", "exit_code": 1}),
+            json.dumps(
+                {"target_date": "2026-05-26", "status": "failed", "exit_code": 1}
+            ),
             encoding="utf-8",
         )
         monkeypatch.setattr(cc, "PROJECT_ROOT", tmp_path)
@@ -372,7 +406,10 @@ class TestCronCompletionDetector:
 
         assert result.severity == "fail"
         assert result.details["tuning_monitoring_postclose_status"] == "fail"
-        assert result.details["tuning_monitoring_postclose_status_artifact_terminal"] == "failed"
+        assert (
+            result.details["tuning_monitoring_postclose_status_artifact_terminal"]
+            == "failed"
+        )
 
     def test_trading_day_only_jobs_skip_on_non_trading_day(self, monkeypatch, tmp_path):
         import src.engine.error_detectors.cron_completion as cc
@@ -399,7 +436,9 @@ class TestCronCompletionDetector:
             result = CronCompletionDetector().check()
 
         assert result.severity == "pass"
-        assert result.details["threshold_cycle_preopen_status"] == "skip_non_trading_day"
+        assert (
+            result.details["threshold_cycle_preopen_status"] == "skip_non_trading_day"
+        )
 
     def test_disabled_job_ids_skip_configured_cron_job(self, monkeypatch, tmp_path):
         import src.engine.error_detectors.cron_completion as cc
@@ -429,7 +468,9 @@ class TestCronCompletionDetector:
         assert result.severity == "pass"
         assert result.details["final_ensemble_scanner_status"] == "disabled_by_env"
 
-    def test_once_job_can_pass_with_terminal_status_artifact_without_log_file(self, monkeypatch, tmp_path):
+    def test_once_job_can_pass_with_terminal_status_artifact_without_log_file(
+        self, monkeypatch, tmp_path
+    ):
         import src.engine.error_detectors.cron_completion as cc
 
         monkeypatch.setattr(cc, "PROJECT_ROOT", tmp_path)
@@ -463,7 +504,9 @@ class TestCronCompletionDetector:
 
         assert result.severity == "pass"
         assert result.details["threshold_cycle_preopen_status"] == "pass"
-        assert result.details["threshold_cycle_preopen_status_artifact_terminal"] == "done"
+        assert (
+            result.details["threshold_cycle_preopen_status_artifact_terminal"] == "done"
+        )
 
 
 @contextmanager
