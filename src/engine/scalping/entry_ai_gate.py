@@ -6,7 +6,6 @@ from typing import Any
 
 from src.utils.constants import TRADING_RULES
 
-
 UNUSABLE_RESULT_SOURCES = {
     "engine_disabled",
     "exception",
@@ -78,7 +77,9 @@ def evaluate_ai_score_prior(
     threshold = (
         _safe_float(config.get(threshold_key), default_threshold)
         if isinstance(config, dict) and config.get(threshold_key) not in (None, "")
-        else _safe_float(getattr(TRADING_RULES, threshold_key, default_threshold), default_threshold)
+        else _safe_float(
+            getattr(TRADING_RULES, threshold_key, default_threshold), default_threshold
+        )
     )
     score_value = _safe_float(score, 0.0)
     action_value = str(action or "").strip().upper() or "-"
@@ -126,7 +127,9 @@ def evaluate_ai_score_prior(
     }
 
 
-def entry_buy_decision_allowed(action: Any, score: Any, config: dict[str, Any] | None = None) -> bool:
+def entry_buy_decision_allowed(
+    action: Any, score: Any, config: dict[str, Any] | None = None
+) -> bool:
     return str(action or "").strip().upper() == "BUY"
 
 
@@ -140,7 +143,10 @@ def evaluate_entry_score_role_gate(
 ) -> dict[str, Any]:
     result = ai_result if isinstance(ai_result, dict) else {}
     ws = ws_data if isinstance(ws_data, dict) else {}
-    source = str(result.get("ai_result_source") or result.get("result_source") or "").strip() or "unknown"
+    source = (
+        str(result.get("ai_result_source") or result.get("result_source") or "").strip()
+        or "unknown"
+    )
     source_l = source.lower()
     parse_fail = _truthy(result.get("ai_parse_fail"))
     parse_ok_value = result.get("ai_parse_ok")
@@ -194,15 +200,25 @@ def entry_score_role_log_fields(role_gate: dict[str, Any] | None) -> dict[str, A
         "entry_score_role_gate": gate.get("entry_score_role_gate", "unknown"),
         "entry_score_source": gate.get("entry_score_source", "unknown"),
         "entry_score_source_stage": gate.get("entry_score_source_stage", ""),
-        "entry_score_usable_for_entry_submit": bool(gate.get("entry_score_usable_for_entry_submit", False)),
-        "entry_score_usable_for_recheck": bool(gate.get("entry_score_usable_for_recheck", False)),
-        "entry_score_usable_for_state_history": bool(gate.get("entry_score_usable_for_state_history", False)),
+        "entry_score_usable_for_entry_submit": bool(
+            gate.get("entry_score_usable_for_entry_submit", False)
+        ),
+        "entry_score_usable_for_recheck": bool(
+            gate.get("entry_score_usable_for_recheck", False)
+        ),
+        "entry_score_usable_for_state_history": bool(
+            gate.get("entry_score_usable_for_state_history", False)
+        ),
         "entry_score_excluded_reason": gate.get("entry_score_excluded_reason", "-"),
-        "score_gate_converted_to_prior": bool(gate.get("score_gate_converted_to_prior", True)),
+        "score_gate_converted_to_prior": bool(
+            gate.get("score_gate_converted_to_prior", True)
+        ),
         "hard_gate_veto": bool(gate.get("hard_gate_veto", False)),
         "score_prior_band": gate.get("score_prior_band", "neutral_or_unknown"),
         "ai_score_prior_weight": gate.get("ai_score_prior_weight", 0.0),
         "score_prior_confidence": gate.get("score_prior_confidence", "unknown"),
         "score_prior_reason": gate.get("score_prior_reason", "score_prior_unavailable"),
-        "score_prior_threshold": gate.get("score_prior_threshold", get_entry_buy_score_threshold()),
+        "score_prior_threshold": gate.get(
+            "score_prior_threshold", get_entry_buy_score_threshold()
+        ),
     }

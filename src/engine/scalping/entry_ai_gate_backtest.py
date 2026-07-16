@@ -21,7 +21,6 @@ from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto
 from src.utils.market_day import is_krx_trading_day
 
-
 REPORT_TYPE = "entry_ai_gate_backtest"
 SCHEMA_VERSION = 1
 REPORT_DIR = DATA_DIR / "report" / REPORT_TYPE
@@ -107,10 +106,15 @@ def _tick_aggressor_pressure_usable(row: dict[str, Any]) -> bool:
     if isinstance(raw_flag, bool):
         pressure_flag = raw_flag
     else:
-        pressure_flag = str(raw_flag or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+        pressure_flag = str(raw_flag or "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "y",
+            "on",
+        }
     return bool(
-        pressure_flag
-        or _safe_float(row.get("tick_aggressor_trusted_count"), 0.0) > 0
+        pressure_flag or _safe_float(row.get("tick_aggressor_trusted_count"), 0.0) > 0
     )
 
 
@@ -160,10 +164,14 @@ def _load_jsonl(path: Path) -> list[dict[str, Any]]:
 
 def _missed_entry_path(target_date: str) -> Path:
     for base in MISSED_ENTRY_DIRS:
-        path = existing_or_gzip_path(base / f"missed_entry_counterfactual_{target_date}.json")
+        path = existing_or_gzip_path(
+            base / f"missed_entry_counterfactual_{target_date}.json"
+        )
         if path.exists():
             return path
-    return existing_or_gzip_path(MISSED_ENTRY_DIRS[0] / f"missed_entry_counterfactual_{target_date}.json")
+    return existing_or_gzip_path(
+        MISSED_ENTRY_DIRS[0] / f"missed_entry_counterfactual_{target_date}.json"
+    )
 
 
 def _real_post_sell_outcomes(source_date: str) -> dict[str, dict[str, Any]]:
@@ -210,7 +218,9 @@ def _source_quality_blocked(row: dict[str, Any]) -> bool:
 
 
 def _hard_blocked(row: dict[str, Any]) -> bool:
-    stage = str(row.get("stage") or row.get("terminal_stage") or row.get("source_stage") or "").lower()
+    stage = str(
+        row.get("stage") or row.get("terminal_stage") or row.get("source_stage") or ""
+    ).lower()
     reason = " ".join(
         str(row.get(key) or "").lower()
         for key in (
@@ -224,7 +234,10 @@ def _hard_blocked(row: dict[str, Any]) -> bool:
 
 
 def _stale(row: dict[str, Any]) -> bool:
-    if any(_stale_flag(row.get(key)) for key in ("quote_stale", "tick_context_stale", "context_stale")):
+    if any(
+        _stale_flag(row.get(key))
+        for key in ("quote_stale", "tick_context_stale", "context_stale")
+    ):
         return True
     submit_block = str(row.get("entry_submit_revalidation_block") or "").strip().lower()
     if submit_block and submit_block not in {"0", "false", "no", "n", "off", "-"}:
@@ -285,7 +298,10 @@ def _micro_vwap_usable(row: dict[str, Any]) -> bool:
     minute_quality_ok = bool(
         minute_quality
         and minute_quality != "-"
-        and not any(token in minute_quality for token in ("unknown", "missing", "stale", "unavailable"))
+        and not any(
+            token in minute_quality
+            for token in ("unknown", "missing", "stale", "unavailable")
+        )
     )
     return bool(
         _safe_bool(row.get("micro_vwap_available"))
@@ -297,8 +313,12 @@ def _micro_vwap_usable(row: dict[str, Any]) -> bool:
 def _micro_support(row: dict[str, Any]) -> bool:
     buy_pressure = _safe_float(row.get("buy_pressure_10t"), None)
     net_delta = _safe_float(row.get("net_aggressive_delta_10t"), None)
-    tick_accel = _safe_float(row.get("tick_acceleration_ratio") or row.get("tick_accel"), None)
-    micro_vwap = _safe_float(row.get("curr_vs_micro_vwap_bp") or row.get("micro_vwap_bp"), None)
+    tick_accel = _safe_float(
+        row.get("tick_acceleration_ratio") or row.get("tick_accel"), None
+    )
+    micro_vwap = _safe_float(
+        row.get("curr_vs_micro_vwap_bp") or row.get("micro_vwap_bp"), None
+    )
     large_sell = _safe_bool(row.get("large_sell_print_detected"))
     pressure_usable = _tick_aggressor_pressure_usable(row)
     micro_context_usable = _micro_context_usable(row)
@@ -327,13 +347,24 @@ def _score(row: dict[str, Any]) -> float | None:
     return None
 
 
-def _realized_rows(source_dates: list[str], missing: list[dict[str, str]]) -> list[dict[str, Any]]:
+def _realized_rows(
+    source_dates: list[str], missing: list[dict[str, str]]
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for source_date in source_dates:
-        path = existing_or_gzip_path(SCALP_ENTRY_ADM_DIR / f"scalp_entry_action_decision_matrix_{source_date}.json")
+        path = existing_or_gzip_path(
+            SCALP_ENTRY_ADM_DIR
+            / f"scalp_entry_action_decision_matrix_{source_date}.json"
+        )
         report = _load_json(path)
         if not report:
-            missing.append({"date": source_date, "artifact": "scalp_entry_action_decision_matrix", "path": str(path)})
+            missing.append(
+                {
+                    "date": source_date,
+                    "artifact": "scalp_entry_action_decision_matrix",
+                    "path": str(path),
+                }
+            )
             continue
         real_outcomes = _real_post_sell_outcomes(source_date)
         real_joined_by_record: dict[str, tuple[int, dict[str, Any]]] = {}
@@ -347,7 +378,9 @@ def _realized_rows(source_dates: list[str], missing: list[dict[str, str]]) -> li
             outcome = real_outcomes.get(record_id)
             profit = _safe_float((outcome or {}).get("_profit_rate"), None)
             outcome_source = (outcome or {}).get("_outcome_source")
-            if profit is None and _safe_bool(raw.get("actual_order_submitted") or raw.get("broker_order_submitted")):
+            if profit is None and _safe_bool(
+                raw.get("actual_order_submitted") or raw.get("broker_order_submitted")
+            ):
                 profit = _safe_float(raw.get("profit_rate"), None)
                 outcome_source = "scalp_entry_action_decision_matrix"
             if profit is None:
@@ -368,7 +401,9 @@ def _realized_rows(source_dates: list[str], missing: list[dict[str, str]]) -> li
             row["_realized_profit_pct"] = profit
             row["_realized_outcome_source"] = outcome_source or "unknown"
             if outcome and record_id:
-                stage_text = f"{row.get('stage') or ''} {row.get('source_stage') or ''}".lower()
+                stage_text = (
+                    f"{row.get('stage') or ''} {row.get('source_stage') or ''}".lower()
+                )
                 if "ai_confirmed" in stage_text:
                     priority = 0
                 elif "blocked_ai_score" in stage_text:
@@ -386,13 +421,21 @@ def _realized_rows(source_dates: list[str], missing: list[dict[str, str]]) -> li
     return rows
 
 
-def _counterfactual_rows(source_dates: list[str], missing: list[dict[str, str]]) -> list[dict[str, Any]]:
+def _counterfactual_rows(
+    source_dates: list[str], missing: list[dict[str, str]]
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for source_date in source_dates:
         path = _missed_entry_path(source_date)
         report = _load_json(path)
         if not report:
-            missing.append({"date": source_date, "artifact": "missed_entry_counterfactual", "path": str(path)})
+            missing.append(
+                {
+                    "date": source_date,
+                    "artifact": "missed_entry_counterfactual",
+                    "path": str(path),
+                }
+            )
             continue
         for raw in report.get("full_rows") or []:
             if not isinstance(raw, dict):
@@ -412,7 +455,9 @@ def _counterfactual_rows(source_dates: list[str], missing: list[dict[str, str]])
 
 
 def _notional(row: dict[str, Any]) -> float:
-    value = _safe_float(row.get("counterfactual_notional_krw") or row.get("notional_krw"), None)
+    value = _safe_float(
+        row.get("counterfactual_notional_krw") or row.get("notional_krw"), None
+    )
     return value if value and value > 0 else 1.0
 
 
@@ -428,14 +473,22 @@ def _metrics(rows: list[dict[str, Any]], value_key: str) -> dict[str, Any]:
             "source_quality_adjusted_ev_pct": 0.0,
             "simple_sum_profit_pct": 0.0,
         }
-    notionals = [_notional(row) for row in rows if _safe_float(row.get(value_key), None) is not None]
-    weighted = sum(value * notional for value, notional in zip(values, notionals)) / max(sum(notionals), 1.0)
+    notionals = [
+        _notional(row)
+        for row in rows
+        if _safe_float(row.get(value_key), None) is not None
+    ]
+    weighted = sum(
+        value * notional for value, notional in zip(values, notionals)
+    ) / max(sum(notionals), 1.0)
     source_quality_pass = sum(1 for row in rows if not _source_quality_blocked(row))
     quality_ratio = source_quality_pass / len(rows) if rows else 0.0
     avg = sum(values) / len(values)
     return {
         "sample": len(values),
-        "diagnostic_win_rate": round(sum(1 for value in values if value > 0) * 100.0 / len(values), 2),
+        "diagnostic_win_rate": round(
+            sum(1 for value in values if value > 0) * 100.0 / len(values), 2
+        ),
         "equal_weight_avg_profit_pct": round(avg, 6),
         "notional_weighted_ev_pct": round(weighted, 6),
         "source_quality_adjusted_ev_pct": round(avg * quality_ratio, 6),
@@ -479,7 +532,9 @@ def _policy_result(
     counterfactual_rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
     realized = [row for row in realized_rows if _matches_policy(row, policy, threshold)]
-    counterfactual = [row for row in counterfactual_rows if _matches_policy(row, policy, threshold)]
+    counterfactual = [
+        row for row in counterfactual_rows if _matches_policy(row, policy, threshold)
+    ]
     realized_metrics = _metrics(realized, "_realized_profit_pct")
     opportunity_metrics = _metrics(counterfactual, "_close_10m_pct")
     mae_values = [_safe_float(row.get("_mae_10m_pct"), None) for row in counterfactual]
@@ -492,7 +547,11 @@ def _policy_result(
         and opportunity_metrics["sample"] >= COUNTERFACTUAL_SAMPLE_FLOOR
     )
     primary_ev_positive = primary_ev > 0.0
-    allowed = bool(policy != "diagnostic_score_only" and sample_floor_passed and primary_ev_positive)
+    allowed = bool(
+        policy != "diagnostic_score_only"
+        and sample_floor_passed
+        and primary_ev_positive
+    )
     if policy == "diagnostic_score_only":
         apply_block_reason = "diagnostic_score_only"
     elif not sample_floor_passed:
@@ -507,9 +566,15 @@ def _policy_result(
         "realized": realized_metrics,
         "counterfactual": {
             **opportunity_metrics,
-            "missed_upside_close_10m_pct": opportunity_metrics["equal_weight_avg_profit_pct"],
-            "mfe_10m_pct": round(sum(mfe_values) / len(mfe_values), 6) if mfe_values else 0.0,
-            "mae_10m_pct": round(sum(mae_values) / len(mae_values), 6) if mae_values else 0.0,
+            "missed_upside_close_10m_pct": opportunity_metrics[
+                "equal_weight_avg_profit_pct"
+            ],
+            "mfe_10m_pct": (
+                round(sum(mfe_values) / len(mfe_values), 6) if mfe_values else 0.0
+            ),
+            "mae_10m_pct": (
+                round(sum(mae_values) / len(mae_values), 6) if mae_values else 0.0
+            ),
         },
         "sample_floor_passed": sample_floor_passed,
         "primary_ev_positive": primary_ev_positive,
@@ -547,14 +612,19 @@ def _best_candidate(results: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _best_allowed_candidate(results: list[dict[str, Any]]) -> dict[str, Any]:
-    return _best_candidate([item for item in results if item.get("allowed_runtime_apply")])
+    return _best_candidate(
+        [item for item in results if item.get("allowed_runtime_apply")]
+    )
 
 
 def _best_by_realized_ev(results: list[dict[str, Any]]) -> dict[str, Any]:
     ranked = sorted(
         results,
         key=lambda item: (
-            float((item.get("realized") or {}).get("source_quality_adjusted_ev_pct") or 0.0),
+            float(
+                (item.get("realized") or {}).get("source_quality_adjusted_ev_pct")
+                or 0.0
+            ),
             int((item.get("realized") or {}).get("sample") or 0),
             int((item.get("counterfactual") or {}).get("sample") or 0),
             -int(item.get("threshold") or 0),
@@ -564,7 +634,9 @@ def _best_by_realized_ev(results: list[dict[str, Any]]) -> dict[str, Any]:
     return ranked[0] if ranked else {}
 
 
-def build_report(target_date: str, *, start_date: str | None = None, end_date: str | None = None) -> dict[str, Any]:
+def build_report(
+    target_date: str, *, start_date: str | None = None, end_date: str | None = None
+) -> dict[str, Any]:
     target_date = str(target_date).strip()
     start = str(start_date or target_date).strip()
     end = str(end_date or target_date).strip()
@@ -574,19 +646,38 @@ def build_report(target_date: str, *, start_date: str | None = None, end_date: s
     realized = _realized_rows(source_dates, missing_artifacts)
     counterfactual = _counterfactual_rows(source_dates, missing_artifacts)
     results = [
-        _policy_result(policy=policy_name, threshold=threshold, realized_rows=realized, counterfactual_rows=counterfactual)
-        for policy_name in ("strict_buy", "supported_wait_recovery", "diagnostic_score_only")
+        _policy_result(
+            policy=policy_name,
+            threshold=threshold,
+            realized_rows=realized,
+            counterfactual_rows=counterfactual,
+        )
+        for policy_name in (
+            "strict_buy",
+            "supported_wait_recovery",
+            "diagnostic_score_only",
+        )
         for threshold in THRESHOLD_RANGE
     ]
-    best = _best_candidate([item for item in results if item["policy"] != "diagnostic_score_only"])
-    best_allowed = _best_allowed_candidate([item for item in results if item["policy"] != "diagnostic_score_only"])
-    diagnostic_results = [item for item in results if item["policy"] == "diagnostic_score_only"]
+    best = _best_candidate(
+        [item for item in results if item["policy"] != "diagnostic_score_only"]
+    )
+    best_allowed = _best_allowed_candidate(
+        [item for item in results if item["policy"] != "diagnostic_score_only"]
+    )
+    diagnostic_results = [
+        item for item in results if item["policy"] == "diagnostic_score_only"
+    ]
     best_diagnostic = _best_candidate(diagnostic_results)
     best_positive_diagnostic = _best_by_realized_ev(
         [
             item
             for item in diagnostic_results
-            if float((item.get("realized") or {}).get("source_quality_adjusted_ev_pct") or 0.0) > 0.0
+            if float(
+                (item.get("realized") or {}).get("source_quality_adjusted_ev_pct")
+                or 0.0
+            )
+            > 0.0
         ]
     )
     score_band_counts: Counter[str] = Counter()
@@ -644,21 +735,21 @@ def build_report(target_date: str, *, start_date: str | None = None, end_date: s
             "score_band_counterfactual_counts": dict(score_band_counts),
             "best_policy": best.get("policy"),
             "best_threshold": best.get("threshold"),
-            "best_realized_source_quality_adjusted_ev_pct": (best.get("realized") or {}).get(
-                "source_quality_adjusted_ev_pct"
-            ),
+            "best_realized_source_quality_adjusted_ev_pct": (
+                best.get("realized") or {}
+            ).get("source_quality_adjusted_ev_pct"),
             "best_counterfactual_close_10m_pct": (best.get("counterfactual") or {}).get(
                 "missed_upside_close_10m_pct"
             ),
             "sample_floor_passed": bool(best.get("sample_floor_passed", False)),
             "best_apply_policy": best_allowed.get("policy"),
             "best_apply_threshold": best_allowed.get("threshold"),
-            "best_apply_realized_source_quality_adjusted_ev_pct": (best_allowed.get("realized") or {}).get(
-                "source_quality_adjusted_ev_pct"
-            ),
-            "best_apply_counterfactual_close_10m_pct": (best_allowed.get("counterfactual") or {}).get(
-                "missed_upside_close_10m_pct"
-            ),
+            "best_apply_realized_source_quality_adjusted_ev_pct": (
+                best_allowed.get("realized") or {}
+            ).get("source_quality_adjusted_ev_pct"),
+            "best_apply_counterfactual_close_10m_pct": (
+                best_allowed.get("counterfactual") or {}
+            ).get("missed_upside_close_10m_pct"),
             "best_diagnostic_score_only_threshold": best_diagnostic.get("threshold"),
             "best_diagnostic_score_only_realized_source_quality_adjusted_ev_pct": (
                 best_diagnostic.get("realized") or {}
@@ -666,20 +757,24 @@ def build_report(target_date: str, *, start_date: str | None = None, end_date: s
             "best_diagnostic_score_only_counterfactual_close_10m_pct": (
                 best_diagnostic.get("counterfactual") or {}
             ).get("missed_upside_close_10m_pct"),
-            "best_diagnostic_score_only_realized_sample": (best_diagnostic.get("realized") or {}).get("sample"),
+            "best_diagnostic_score_only_realized_sample": (
+                best_diagnostic.get("realized") or {}
+            ).get("sample"),
             "best_diagnostic_score_only_counterfactual_sample": (
                 best_diagnostic.get("counterfactual") or {}
             ).get("sample"),
-            "best_positive_realized_diagnostic_threshold": best_positive_diagnostic.get("threshold"),
-            "best_positive_realized_diagnostic_ev_pct": (best_positive_diagnostic.get("realized") or {}).get(
-                "source_quality_adjusted_ev_pct"
+            "best_positive_realized_diagnostic_threshold": best_positive_diagnostic.get(
+                "threshold"
             ),
+            "best_positive_realized_diagnostic_ev_pct": (
+                best_positive_diagnostic.get("realized") or {}
+            ).get("source_quality_adjusted_ev_pct"),
             "best_positive_realized_diagnostic_sample_floor_passed": bool(
                 best_positive_diagnostic.get("sample_floor_passed", False)
             ),
-            "best_positive_realized_diagnostic_realized_sample": (best_positive_diagnostic.get("realized") or {}).get(
-                "sample"
-            ),
+            "best_positive_realized_diagnostic_realized_sample": (
+                best_positive_diagnostic.get("realized") or {}
+            ).get("sample"),
             "best_positive_realized_diagnostic_counterfactual_sample": (
                 best_positive_diagnostic.get("counterfactual") or {}
             ).get("sample"),
@@ -698,7 +793,11 @@ def build_report(target_date: str, *, start_date: str | None = None, end_date: s
 
 def render_markdown(report: dict[str, Any]) -> str:
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
-    best = report.get("best_candidate") if isinstance(report.get("best_candidate"), dict) else {}
+    best = (
+        report.get("best_candidate")
+        if isinstance(report.get("best_candidate"), dict)
+        else {}
+    )
     lines = [
         f"# Entry AI Gate Backtest - {report.get('target_date')}",
         "",
@@ -736,7 +835,10 @@ def render_markdown(report: dict[str, Any]) -> str:
 def write_report(report: dict[str, Any]) -> tuple[Path, Path]:
     json_path, md_path = report_paths(str(report.get("target_date") or "unknown"))
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True, default=str),
+        encoding="utf-8",
+    )
     md_path.write_text(render_markdown(report), encoding="utf-8")
     return json_path, md_path
 
@@ -748,12 +850,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--end-date")
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args(argv)
-    report = build_report(args.target_date, start_date=args.start_date, end_date=args.end_date)
+    report = build_report(
+        args.target_date, start_date=args.start_date, end_date=args.end_date
+    )
     if args.write:
         json_path, md_path = write_report(report)
-        print(json.dumps({"json": str(json_path), "md": str(md_path)}, ensure_ascii=False))
+        print(
+            json.dumps({"json": str(json_path), "md": str(md_path)}, ensure_ascii=False)
+        )
     else:
-        print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True, default=str))
+        print(
+            json.dumps(
+                report, ensure_ascii=False, indent=2, sort_keys=True, default=str
+            )
+        )
     return 0
 
 
