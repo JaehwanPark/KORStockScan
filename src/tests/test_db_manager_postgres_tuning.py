@@ -68,15 +68,18 @@ def test_save_recommendation_skips_swing_watching_by_default(monkeypatch):
 
     db.get_session = fail_get_session
 
-    assert db.save_recommendation(
-        date="2026-06-23",
-        code="005930",
-        name="Samsung",
-        price=70000,
-        pick_type="MAIN",
-        position="META_V2",
-        strategy="KOSPI_ML",
-    ) is None
+    assert (
+        db.save_recommendation(
+            date="2026-06-23",
+            code="005930",
+            name="Samsung",
+            price=70000,
+            pick_type="MAIN",
+            position="META_V2",
+            strategy="KOSPI_ML",
+        )
+        is None
+    )
 
 
 class _FakeSessionContext:

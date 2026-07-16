@@ -266,7 +266,9 @@ class TestPrepareDataset:
         fact = build_swing_ofi_qi_fact(["2099-01-01"])
         assert isinstance(fact, pd.DataFrame)
 
-    def test_sim_probe_events_include_broker_forbidden_provenance(self, tmp_path, monkeypatch):
+    def test_sim_probe_events_include_broker_forbidden_provenance(
+        self, tmp_path, monkeypatch
+    ):
         events_dir = tmp_path / "pipeline_events"
         events_dir.mkdir()
         target_date = "2026-05-08"
@@ -291,7 +293,10 @@ class TestPrepareDataset:
                             "stock_code": "000002",
                             "stock_name": "B",
                             "strategy": "KOSPI_ML",
-                            "fields": {"orderbook_micro_ready": False, "swing_micro_advice": "MISSING"},
+                            "fields": {
+                                "orderbook_micro_ready": False,
+                                "swing_micro_advice": "MISSING",
+                            },
                             "emitted_at": "2026-05-08T10:01:00+09:00",
                         }
                     ),
@@ -303,16 +308,31 @@ class TestPrepareDataset:
 
         sequence = prepare_mod.build_swing_sequence_fact([target_date])
         ofi_qi = prepare_mod.build_swing_ofi_qi_fact([target_date])
-        report = prepare_mod.build_data_quality_report(pd.DataFrame(), pd.DataFrame({"date": [target_date]}), sequence, ofi_qi, [target_date])
+        report = prepare_mod.build_data_quality_report(
+            pd.DataFrame(),
+            pd.DataFrame({"date": [target_date]}),
+            sequence,
+            ofi_qi,
+            [target_date],
+        )
 
         assert set(sequence["actual_order_submitted"]) == {False}
         assert set(sequence["broker_order_forbidden"]) == {True}
-        assert set(sequence["decision_authority"]) == {"sim_equal_weight", "probe_observe_only"}
+        assert set(sequence["decision_authority"]) == {
+            "sim_equal_weight",
+            "probe_observe_only",
+        }
         assert bool(ofi_qi.iloc[0]["actual_order_submitted"]) is False
         assert bool(ofi_qi.iloc[0]["broker_order_forbidden"]) is True
         assert ofi_qi.iloc[0]["decision_authority"] == "probe_observe_only"
-        assert report["sim_probe_provenance"]["sequence_fact_actual_order_submitted_false"] == 2
-        assert report["sim_probe_provenance"]["ofi_qi_fact_broker_order_forbidden_true"] == 1
+        assert (
+            report["sim_probe_provenance"]["sequence_fact_actual_order_submitted_false"]
+            == 2
+        )
+        assert (
+            report["sim_probe_provenance"]["ofi_qi_fact_broker_order_forbidden_true"]
+            == 1
+        )
 
     def test_build_data_quality_report(self):
         trade = _sample_trade_fact()
@@ -336,16 +356,22 @@ class TestPrepareDataset:
             "micro_missing+observer_unhealthy+micro_not_ready+state_insufficient": 1
         }
         assert report["ofi_qi_quality"]["stale_missing_group_counts"] == {"exit": 1}
-        assert report["ofi_qi_quality"]["stale_missing_group_unique_record_counts"] == {"exit": 1}
+        assert report["ofi_qi_quality"]["stale_missing_group_unique_record_counts"] == {
+            "exit": 1
+        }
         assert report["ofi_qi_quality"]["observer_unhealthy_overlap"] == {
             "observer_unhealthy_total": 1,
             "observer_unhealthy_with_other_reason": 1,
             "observer_unhealthy_only": 0,
         }
         assert report["ofi_qi_quality"]["examples"][0]["record_id"] == "2"
-        assert not any("funnel fact has only" in warning for warning in report["warnings"])
+        assert not any(
+            "funnel fact has only" in warning for warning in report["warnings"]
+        )
 
-    def test_ofi_qi_ready_neutral_without_advice_is_not_missing(self, tmp_path, monkeypatch):
+    def test_ofi_qi_ready_neutral_without_advice_is_not_missing(
+        self, tmp_path, monkeypatch
+    ):
         target_date = "2026-05-08"
         event_dir = tmp_path / "pipeline_events"
         event_dir.mkdir()
@@ -376,21 +402,37 @@ class TestPrepareDataset:
         assert len(ofi_qi) == 1
         assert bool(ofi_qi.iloc[0]["micro_missing_flag"]) is False
         assert bool(ofi_qi.iloc[0]["stale_missing_flag"]) is False
-        report = build_data_quality_report(pd.DataFrame(), pd.DataFrame({"date": [target_date]}), pd.DataFrame(), ofi_qi, [target_date])
-        assert not any(str(warning).startswith("OFI/QI stale/missing ratio:") for warning in report["warnings"])
+        report = build_data_quality_report(
+            pd.DataFrame(),
+            pd.DataFrame({"date": [target_date]}),
+            pd.DataFrame(),
+            ofi_qi,
+            [target_date],
+        )
+        assert not any(
+            str(warning).startswith("OFI/QI stale/missing ratio:")
+            for warning in report["warnings"]
+        )
 
     def test_build_data_quality_report_warns_when_funnel_rows_below_window_floor(self):
         trade = _sample_trade_fact()
         funnel = _sample_funnel_fact().iloc[:1].copy()
         seq = _sample_sequence_fact()
         ofi = _sample_ofi_qi_fact()
-        report = build_data_quality_report(trade, funnel, seq, ofi, ["2026-05-08", "2026-05-09"])
+        report = build_data_quality_report(
+            trade, funnel, seq, ofi, ["2026-05-08", "2026-05-09"]
+        )
         assert "funnel fact has only 1 rows (min 2)" in report["warnings"]
 
     def test_generate_data_quality_markdown(self):
         report = {
             "analysis_window": {"start": "2026-05-08", "end": "2026-05-08"},
-            "fact_counts": {"swing_trade_fact_rows": 2, "swing_lifecycle_funnel_fact_rows": 1, "swing_sequence_fact_rows": 1, "swing_ofi_qi_fact_rows": 2},
+            "fact_counts": {
+                "swing_trade_fact_rows": 2,
+                "swing_lifecycle_funnel_fact_rows": 1,
+                "swing_sequence_fact_rows": 1,
+                "swing_ofi_qi_fact_rows": 2,
+            },
             "completed_trades": 2,
             "valid_profit_trades": 2,
             "ofi_qi_quality": {
@@ -454,16 +496,26 @@ class TestAnalyzeSwingPatterns:
         assert len(findings) >= 1
         for f in findings:
             assert f["runtime_effect"] is False
-        stale_finding = next(f for f in findings if f["finding_id"].endswith("_ofi_qi_stale_missing"))
-        assert stale_finding["evidence"]["stale_missing_reason_counts"]["micro_missing"] == 1
+        stale_finding = next(
+            f for f in findings if f["finding_id"].endswith("_ofi_qi_stale_missing")
+        )
+        assert (
+            stale_finding["evidence"]["stale_missing_reason_counts"]["micro_missing"]
+            == 1
+        )
         assert stale_finding["evidence"]["stale_missing_reason_combination_counts"] == {
             "micro_missing+observer_unhealthy+micro_not_ready+state_insufficient": 1
         }
         assert stale_finding["evidence"]["stale_missing_unique_record_count"] == 1
-        assert stale_finding["evidence"]["stale_missing_reason_combination_unique_record_counts"] == {
-            "micro_missing+observer_unhealthy+micro_not_ready+state_insufficient": 1
-        }
-        assert stale_finding["evidence"]["observer_unhealthy_overlap"]["observer_unhealthy_with_other_reason"] == 1
+        assert stale_finding["evidence"][
+            "stale_missing_reason_combination_unique_record_counts"
+        ] == {"micro_missing+observer_unhealthy+micro_not_ready+state_insufficient": 1}
+        assert (
+            stale_finding["evidence"]["observer_unhealthy_overlap"][
+                "observer_unhealthy_with_other_reason"
+            ]
+            == 1
+        )
 
     def test_build_code_improvement_orders_are_safe(self):
         findings = [
@@ -518,17 +570,29 @@ class TestBuildDeepSeekPayload:
         summary = build_payload_summary(trade, funnel, seq, ofi, analysis)
         assert summary["payload_type"] == "deepseek_swing_pattern_lab_summary"
         assert summary["counts"]["trade_rows"] == 2
-        assert summary["case_counts"] == {"selected_trades": 2, "findings_brief": 0, "ofi_qi_samples": 2}
+        assert summary["case_counts"] == {
+            "selected_trades": 2,
+            "findings_brief": 0,
+            "ofi_qi_samples": 2,
+        }
         assert summary["total_cases"] == 4
-        assert summary["ofi_qi_summary"]["stale_missing_reason_counts"]["micro_missing"] == 1
+        assert (
+            summary["ofi_qi_summary"]["stale_missing_reason_counts"]["micro_missing"]
+            == 1
+        )
         assert summary["ofi_qi_summary"]["stale_missing_reason_combination_counts"] == {
             "micro_missing+observer_unhealthy+micro_not_ready+state_insufficient": 1
         }
         assert summary["ofi_qi_summary"]["stale_missing_unique_record_count"] == 1
-        assert summary["ofi_qi_summary"]["stale_missing_reason_combination_unique_record_counts"] == {
-            "micro_missing+observer_unhealthy+micro_not_ready+state_insufficient": 1
-        }
-        assert summary["ofi_qi_summary"]["observer_unhealthy_overlap"]["observer_unhealthy_only"] == 0
+        assert summary["ofi_qi_summary"][
+            "stale_missing_reason_combination_unique_record_counts"
+        ] == {"micro_missing+observer_unhealthy+micro_not_ready+state_insufficient": 1}
+        assert (
+            summary["ofi_qi_summary"]["observer_unhealthy_overlap"][
+                "observer_unhealthy_only"
+            ]
+            == 0
+        )
         assert summary["feedback_sources"]["runtime_effect"] is False
 
     def test_build_payload_cases(self):
@@ -548,7 +612,13 @@ class TestBuildDeepSeekPayload:
             "analysis_start": "2026-05-08",
             "analysis_end": "2026-05-08",
             "runtime_change": False,
-            "data_quality": {"trade_rows": 2, "lifecycle_event_rows": 1, "completed_valid_profit_rows": 2, "ofi_qi_rows": 2, "warnings": []},
+            "data_quality": {
+                "trade_rows": 2,
+                "lifecycle_event_rows": 1,
+                "completed_valid_profit_rows": 2,
+                "ofi_qi_rows": 2,
+                "warnings": [],
+            },
             "stage_findings": [
                 {
                     "finding_id": "test_finding",
@@ -626,7 +696,9 @@ class TestEdgeCases:
         )
         trade = pd.DataFrame()
         findings = analyze_selection_bottleneck(funnel, trade)
-        zero_finding = next((f for f in findings if "zero" in f.get("finding_id", "")), None)
+        zero_finding = next(
+            (f for f in findings if "zero" in f.get("finding_id", "")), None
+        )
         assert zero_finding is not None
 
     def test_gatekeeper_all_reject(self):
@@ -667,7 +739,9 @@ class TestEdgeCases:
             ]
         )
         findings = analyze_entry_bottleneck(funnel)
-        gatekeeper_finding = next((f for f in findings if "gatekeeper" in f.get("finding_id", "")), None)
+        gatekeeper_finding = next(
+            (f for f in findings if "gatekeeper" in f.get("finding_id", "")), None
+        )
         assert gatekeeper_finding is not None
         assert gatekeeper_finding["runtime_effect"] is False
         assert gatekeeper_finding["evidence"]["blocked_selection_unique"] == 3
@@ -690,18 +764,42 @@ class TestEdgeCases:
     def test_ofi_qi_stale_missing_high_ratio(self):
         ofi = pd.DataFrame(
             [
-                {"stale_missing_flag": True, "swing_micro_advice": "MISSING", "orderbook_micro_state": "missing",
-                 "swing_micro_runtime_effect": False, "smoothing_action": "", "group": "entry",
-                 "stage": "test", "record_id": "1", "stock_code": "000001", "stock_name": "A", "date": "2026-05-08",
-                 "orderbook_micro_ready": False, "orderbook_micro_observer_healthy": False},
-                {"stale_missing_flag": False, "swing_micro_advice": "SUPPORT_ENTRY", "orderbook_micro_state": "bullish",
-                 "swing_micro_runtime_effect": False, "smoothing_action": "", "group": "entry",
-                 "stage": "test", "record_id": "2", "stock_code": "000002", "stock_name": "B", "date": "2026-05-08",
-                 "orderbook_micro_ready": True, "orderbook_micro_observer_healthy": True},
+                {
+                    "stale_missing_flag": True,
+                    "swing_micro_advice": "MISSING",
+                    "orderbook_micro_state": "missing",
+                    "swing_micro_runtime_effect": False,
+                    "smoothing_action": "",
+                    "group": "entry",
+                    "stage": "test",
+                    "record_id": "1",
+                    "stock_code": "000001",
+                    "stock_name": "A",
+                    "date": "2026-05-08",
+                    "orderbook_micro_ready": False,
+                    "orderbook_micro_observer_healthy": False,
+                },
+                {
+                    "stale_missing_flag": False,
+                    "swing_micro_advice": "SUPPORT_ENTRY",
+                    "orderbook_micro_state": "bullish",
+                    "swing_micro_runtime_effect": False,
+                    "smoothing_action": "",
+                    "group": "entry",
+                    "stage": "test",
+                    "record_id": "2",
+                    "stock_code": "000002",
+                    "stock_name": "B",
+                    "date": "2026-05-08",
+                    "orderbook_micro_ready": True,
+                    "orderbook_micro_observer_healthy": True,
+                },
             ]
         )
         findings = analyze_ofi_qi_quality(ofi)
-        stale_finding = next((f for f in findings if "stale" in f.get("finding_id", "")), None)
+        stale_finding = next(
+            (f for f in findings if "stale" in f.get("finding_id", "")), None
+        )
         assert stale_finding is not None
         assert stale_finding["route"] == "implement_now"
 
@@ -765,8 +863,13 @@ class TestEdgeCases:
             ]
         )
         findings = analyze_entry_bottleneck(funnel)
-        gap_finding = next((f for f in findings if "gap_block" in f.get("finding_id", "")), None)
-        gatekeeper_finding = next((f for f in findings if "gatekeeper_reject" in f.get("finding_id", "")), None)
+        gap_finding = next(
+            (f for f in findings if "gap_block" in f.get("finding_id", "")), None
+        )
+        gatekeeper_finding = next(
+            (f for f in findings if "gatekeeper_reject" in f.get("finding_id", "")),
+            None,
+        )
 
         assert gap_finding is not None
         assert gap_finding["evidence"]["blocked_selection_unique"] == 2
@@ -814,7 +917,9 @@ class TestEdgeCases:
             ]
         )
         findings = analyze_entry_bottleneck(funnel)
-        gap_finding = next((f for f in findings if "gap_block" in f.get("finding_id", "")), None)
+        gap_finding = next(
+            (f for f in findings if "gap_block" in f.get("finding_id", "")), None
+        )
         assert gap_finding is not None
         assert gap_finding["route"] == "design_family_candidate"
         assert gap_finding["mapped_family"] is None
@@ -864,13 +969,18 @@ class TestEdgeCases:
             ]
         )
         findings = analyze_entry_bottleneck(funnel)
-        gatekeeper_finding = next((f for f in findings if "gatekeeper_reject" in f.get("finding_id", "")), None)
+        gatekeeper_finding = next(
+            (f for f in findings if "gatekeeper_reject" in f.get("finding_id", "")),
+            None,
+        )
         assert gatekeeper_finding is not None
         assert gatekeeper_finding["evidence"]["blocked_selection_unique"] == 4
         assert gatekeeper_finding["evidence"]["blocked_carryover_unique"] == 8
         assert gatekeeper_finding["evidence"]["selected_count"] == 5
 
-        gap_finding = next((f for f in findings if "gap_block" in f.get("finding_id", "")), None)
+        gap_finding = next(
+            (f for f in findings if "gap_block" in f.get("finding_id", "")), None
+        )
         assert gap_finding is not None
         assert gap_finding["evidence"]["blocked_selection_unique"] == 3
         assert gap_finding["evidence"]["blocked_carryover_unique"] == 7
@@ -878,12 +988,17 @@ class TestEdgeCases:
 
 def test_swing_pattern_lab_automation_blocks_stale_output(tmp_path, monkeypatch):
     from src.engine import swing_pattern_lab_automation as mod
+
     lab_dir = tmp_path / "analysis" / "deepseek_swing_pattern_lab"
     outputs_dir = lab_dir / "outputs"
     outputs_dir.mkdir(parents=True)
     report_dir = tmp_path / "data" / "report"
     monkeypatch.setattr(mod, "DEEPSEEK_SWING_LAB_DIR", lab_dir)
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", report_dir / "swing_pattern_lab_automation")
+    monkeypatch.setattr(
+        mod,
+        "SWING_PATTERN_LAB_AUTOMATION_DIR",
+        report_dir / "swing_pattern_lab_automation",
+    )
 
     (outputs_dir / "run_manifest.json").write_text(
         json.dumps({"analysis_window": {"start": "2026-05-06", "end": "2026-05-09"}}),
@@ -897,16 +1012,29 @@ def test_swing_pattern_lab_automation_blocks_stale_output(tmp_path, monkeypatch)
                         "finding_id": "stale_test",
                         "title": "stale",
                         "route": "design_family_candidate",
-                        "evidence": {"blocked_carryover_unique": 5, "blocked_selection_unique": 0},
+                        "evidence": {
+                            "blocked_carryover_unique": 5,
+                            "blocked_selection_unique": 0,
+                        },
                     },
                     {
                         "finding_id": "stale_test_2",
                         "title": "stale 2",
                         "route": "defer_evidence",
-                        "evidence": {"blocked_carryover_unique": 3, "blocked_selection_unique": 1},
+                        "evidence": {
+                            "blocked_carryover_unique": 3,
+                            "blocked_selection_unique": 1,
+                        },
                     },
                 ],
-                "code_improvement_orders": [{"order_id": "stale_order", "title": "stale order", "route": "implement_now", "runtime_effect": False}],
+                "code_improvement_orders": [
+                    {
+                        "order_id": "stale_order",
+                        "title": "stale order",
+                        "route": "implement_now",
+                        "runtime_effect": False,
+                    }
+                ],
             }
         ),
         encoding="utf-8",
@@ -928,14 +1056,21 @@ def test_swing_pattern_lab_automation_blocks_stale_output(tmp_path, monkeypatch)
     assert "stale_test" in carryover_raw[0]
 
 
-def test_swing_pattern_lab_automation_blocks_malformed_json_output(tmp_path, monkeypatch):
+def test_swing_pattern_lab_automation_blocks_malformed_json_output(
+    tmp_path, monkeypatch
+):
     from src.engine import swing_pattern_lab_automation as mod
+
     lab_dir = tmp_path / "analysis" / "deepseek_swing_pattern_lab"
     outputs_dir = lab_dir / "outputs"
     outputs_dir.mkdir(parents=True)
     report_dir = tmp_path / "data" / "report"
     monkeypatch.setattr(mod, "DEEPSEEK_SWING_LAB_DIR", lab_dir)
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", report_dir / "swing_pattern_lab_automation")
+    monkeypatch.setattr(
+        mod,
+        "SWING_PATTERN_LAB_AUTOMATION_DIR",
+        report_dir / "swing_pattern_lab_automation",
+    )
 
     (outputs_dir / "run_manifest.json").write_text(
         json.dumps({"analysis_window": {"start": "2026-05-08", "end": "2026-05-08"}}),
@@ -944,8 +1079,21 @@ def test_swing_pattern_lab_automation_blocks_malformed_json_output(tmp_path, mon
     (outputs_dir / "swing_pattern_analysis_result.json").write_text(
         json.dumps(
             {
-                "stage_findings": [{"finding_id": "valid", "title": "valid", "route": "design_family_candidate"}],
-                "code_improvement_orders": [{"order_id": "order_valid", "title": "valid", "route": "design_family_candidate", "runtime_effect": False}],
+                "stage_findings": [
+                    {
+                        "finding_id": "valid",
+                        "title": "valid",
+                        "route": "design_family_candidate",
+                    }
+                ],
+                "code_improvement_orders": [
+                    {
+                        "order_id": "order_valid",
+                        "title": "valid",
+                        "route": "design_family_candidate",
+                        "runtime_effect": False,
+                    }
+                ],
             }
         ),
         encoding="utf-8",
@@ -965,14 +1113,21 @@ def test_swing_pattern_lab_automation_blocks_malformed_json_output(tmp_path, mon
     assert len(report["code_improvement_orders"]) == 0
 
 
-def test_swing_pattern_lab_automation_blocks_missing_required_output(tmp_path, monkeypatch):
+def test_swing_pattern_lab_automation_blocks_missing_required_output(
+    tmp_path, monkeypatch
+):
     from src.engine import swing_pattern_lab_automation as mod
+
     lab_dir = tmp_path / "analysis" / "deepseek_swing_pattern_lab"
     outputs_dir = lab_dir / "outputs"
     outputs_dir.mkdir(parents=True)
     report_dir = tmp_path / "data" / "report"
     monkeypatch.setattr(mod, "DEEPSEEK_SWING_LAB_DIR", lab_dir)
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", report_dir / "swing_pattern_lab_automation")
+    monkeypatch.setattr(
+        mod,
+        "SWING_PATTERN_LAB_AUTOMATION_DIR",
+        report_dir / "swing_pattern_lab_automation",
+    )
 
     (outputs_dir / "run_manifest.json").write_text(
         json.dumps({"analysis_window": {"start": "2026-05-08", "end": "2026-05-08"}}),
@@ -987,14 +1142,21 @@ def test_swing_pattern_lab_automation_blocks_missing_required_output(tmp_path, m
     assert report["ev_report_summary"]["population_split_available"] is False
 
 
-def test_swing_pattern_lab_automation_orders_have_allowed_runtime_apply_false(tmp_path, monkeypatch):
+def test_swing_pattern_lab_automation_orders_have_allowed_runtime_apply_false(
+    tmp_path, monkeypatch
+):
     from src.engine import swing_pattern_lab_automation as mod
+
     lab_dir = tmp_path / "analysis" / "deepseek_swing_pattern_lab"
     outputs_dir = lab_dir / "outputs"
     outputs_dir.mkdir(parents=True)
     report_dir = tmp_path / "data" / "report"
     monkeypatch.setattr(mod, "DEEPSEEK_SWING_LAB_DIR", lab_dir)
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", report_dir / "swing_pattern_lab_automation")
+    monkeypatch.setattr(
+        mod,
+        "SWING_PATTERN_LAB_AUTOMATION_DIR",
+        report_dir / "swing_pattern_lab_automation",
+    )
 
     (outputs_dir / "run_manifest.json").write_text(
         json.dumps({"analysis_window": {"start": "2026-05-08", "end": "2026-05-08"}}),
@@ -1003,9 +1165,21 @@ def test_swing_pattern_lab_automation_orders_have_allowed_runtime_apply_false(tm
     (outputs_dir / "swing_pattern_analysis_result.json").write_text(
         json.dumps(
             {
-                "stage_findings": [{"finding_id": "valid_test", "title": "valid", "route": "design_family_candidate", "lifecycle_stage": "selection"}],
+                "stage_findings": [
+                    {
+                        "finding_id": "valid_test",
+                        "title": "valid",
+                        "route": "design_family_candidate",
+                        "lifecycle_stage": "selection",
+                    }
+                ],
                 "code_improvement_orders": [
-                    {"order_id": "order_valid", "title": "valid order", "route": "design_family_candidate", "runtime_effect": False}
+                    {
+                        "order_id": "order_valid",
+                        "title": "valid order",
+                        "route": "design_family_candidate",
+                        "runtime_effect": False,
+                    }
                 ],
             }
         ),
@@ -1021,19 +1195,32 @@ def test_swing_pattern_lab_automation_orders_have_allowed_runtime_apply_false(tm
     report = mod.build_swing_pattern_lab_automation_report("2026-05-08")
     assert report["runtime_effect"] is False
     assert report["runtime_mutation_allowed"] is False
-    assert report["decision_authority"] == "swing_pattern_lab_analysis_workorder_source_only"
+    assert (
+        report["decision_authority"]
+        == "swing_pattern_lab_analysis_workorder_source_only"
+    )
     for order in report["code_improvement_orders"]:
         assert order.get("runtime_effect") is False
-        assert order.get("allowed_runtime_apply") is False, f"order {order.get('order_id')} missing allowed_runtime_apply=false"
-        assert order.get("decision_authority") == "swing_pattern_lab_analysis_workorder_source_only"
+        assert (
+            order.get("allowed_runtime_apply") is False
+        ), f"order {order.get('order_id')} missing allowed_runtime_apply=false"
+        assert (
+            order.get("decision_authority")
+            == "swing_pattern_lab_analysis_workorder_source_only"
+        )
         assert "swing_real_order_enable" in order.get("forbidden_uses", [])
     for family in report["auto_family_candidates"]:
         assert family.get("runtime_effect") is False
         assert family.get("allowed_runtime_apply") is False
-        assert family.get("decision_authority") == "swing_pattern_lab_analysis_workorder_source_only"
+        assert (
+            family.get("decision_authority")
+            == "swing_pattern_lab_analysis_workorder_source_only"
+        )
 
 
-def test_swing_pattern_lab_automation_marks_ofi_qi_instrumentation_implemented(tmp_path, monkeypatch):
+def test_swing_pattern_lab_automation_marks_ofi_qi_instrumentation_implemented(
+    tmp_path, monkeypatch
+):
     from src.engine import swing_pattern_lab_automation as mod
 
     lab_dir = tmp_path / "analysis" / "deepseek_swing_pattern_lab"
@@ -1041,7 +1228,11 @@ def test_swing_pattern_lab_automation_marks_ofi_qi_instrumentation_implemented(t
     outputs_dir.mkdir(parents=True)
     report_dir = tmp_path / "data" / "report"
     monkeypatch.setattr(mod, "DEEPSEEK_SWING_LAB_DIR", lab_dir)
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", report_dir / "swing_pattern_lab_automation")
+    monkeypatch.setattr(
+        mod,
+        "SWING_PATTERN_LAB_AUTOMATION_DIR",
+        report_dir / "swing_pattern_lab_automation",
+    )
 
     (outputs_dir / "run_manifest.json").write_text(
         json.dumps({"analysis_window": {"start": "2026-05-08", "end": "2026-05-08"}}),
@@ -1096,20 +1287,30 @@ def test_swing_pattern_lab_automation_marks_ofi_qi_instrumentation_implemented(t
     order = report["code_improvement_orders"][0]
 
     assert order["implementation_status"] == "implemented"
-    assert order["implementation_provenance"]["decision_authority"] == "swing_pattern_lab_analysis_workorder_source_only"
+    assert (
+        order["implementation_provenance"]["decision_authority"]
+        == "swing_pattern_lab_analysis_workorder_source_only"
+    )
     assert order["implementation_provenance"]["runtime_effect"] is False
     assert order["implementation_checks"][0]["status"] == "pass"
-    contract = report["ev_report_summary"]["source_quality_contracts"]["swing_micro_context"]
+    contract = report["ev_report_summary"]["source_quality_contracts"][
+        "swing_micro_context"
+    ]
     assert contract["source_contract_status"] == "implemented"
     assert contract["metric_role"] == "source_quality_gate"
     assert contract["runtime_effect"] is False
     assert contract["allowed_runtime_apply"] is False
     blocked = report["data_quality"]["source_quality_blocked_families"][0]
     assert blocked["source_contract_version"] == "swing_micro_context_source_quality_v1"
-    assert blocked["decision_authority"] == "swing_pattern_lab_analysis_workorder_source_only"
+    assert (
+        blocked["decision_authority"]
+        == "swing_pattern_lab_analysis_workorder_source_only"
+    )
 
 
-def test_swing_pattern_lab_automation_marks_scale_in_events_observed_implemented(tmp_path, monkeypatch):
+def test_swing_pattern_lab_automation_marks_scale_in_events_observed_implemented(
+    tmp_path, monkeypatch
+):
     from src.engine import swing_pattern_lab_automation as mod
 
     lab_dir = tmp_path / "analysis" / "deepseek_swing_pattern_lab"
@@ -1117,7 +1318,11 @@ def test_swing_pattern_lab_automation_marks_scale_in_events_observed_implemented
     outputs_dir.mkdir(parents=True)
     report_dir = tmp_path / "data" / "report"
     monkeypatch.setattr(mod, "DEEPSEEK_SWING_LAB_DIR", lab_dir)
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", report_dir / "swing_pattern_lab_automation")
+    monkeypatch.setattr(
+        mod,
+        "SWING_PATTERN_LAB_AUTOMATION_DIR",
+        report_dir / "swing_pattern_lab_automation",
+    )
 
     (outputs_dir / "run_manifest.json").write_text(
         json.dumps({"analysis_window": {"start": "2026-05-08", "end": "2026-05-08"}}),
@@ -1162,14 +1367,19 @@ def test_swing_pattern_lab_automation_marks_scale_in_events_observed_implemented
         order["implementation_provenance"]["implemented_scope"]
         == "swing_scale_in_events_observed_source_metric_provenance"
     )
-    assert order["implementation_provenance"]["source_metric_snapshot"]["scale_in_events"] == 7
+    assert (
+        order["implementation_provenance"]["source_metric_snapshot"]["scale_in_events"]
+        == 7
+    )
     assert order["implementation_provenance"]["runtime_effect"] is False
     assert order["implementation_provenance"]["allowed_runtime_apply"] is False
     assert order["implementation_provenance"]["actual_order_submitted"] is False
     assert order["implementation_checks"][0]["status"] == "pass"
 
 
-def test_swing_pattern_lab_automation_marks_low_candidate_count_source_only(tmp_path, monkeypatch):
+def test_swing_pattern_lab_automation_marks_low_candidate_count_source_only(
+    tmp_path, monkeypatch
+):
     from src.engine import swing_pattern_lab_automation as mod
 
     lab_dir = tmp_path / "analysis" / "deepseek_swing_pattern_lab"
@@ -1177,7 +1387,11 @@ def test_swing_pattern_lab_automation_marks_low_candidate_count_source_only(tmp_
     outputs_dir.mkdir(parents=True)
     report_dir = tmp_path / "data" / "report"
     monkeypatch.setattr(mod, "DEEPSEEK_SWING_LAB_DIR", lab_dir)
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", report_dir / "swing_pattern_lab_automation")
+    monkeypatch.setattr(
+        mod,
+        "SWING_PATTERN_LAB_AUTOMATION_DIR",
+        report_dir / "swing_pattern_lab_automation",
+    )
 
     (outputs_dir / "run_manifest.json").write_text(
         json.dumps({"analysis_window": {"start": "2026-05-08", "end": "2026-05-08"}}),
@@ -1213,18 +1427,28 @@ def test_swing_pattern_lab_automation_marks_low_candidate_count_source_only(tmp_
     report = mod.build_swing_pattern_lab_automation_report("2026-05-08")
     order = report["code_improvement_orders"][0]
 
-    assert order["implementation_status"] == "implemented_source_quality_contract_available"
+    assert (
+        order["implementation_status"]
+        == "implemented_source_quality_contract_available"
+    )
     assert order["implementation_checks"][0]["status"] == "pass"
     assert order["implementation_provenance"]["source_contract"] == (
         "swing_pattern_lab_selection_low_candidate_source_metric_v1"
     )
-    assert order["implementation_provenance"]["source_metric_snapshot"]["low_selected_rate"] == 0.5
+    assert (
+        order["implementation_provenance"]["source_metric_snapshot"][
+            "low_selected_rate"
+        ]
+        == 0.5
+    )
     assert order["implementation_provenance"]["runtime_effect"] is False
     assert order["implementation_provenance"]["allowed_runtime_apply"] is False
     assert order["implementation_provenance"]["actual_order_submitted"] is False
 
 
-def test_swing_pattern_lab_automation_marks_entry_submission_gap_implemented(tmp_path, monkeypatch):
+def test_swing_pattern_lab_automation_marks_entry_submission_gap_implemented(
+    tmp_path, monkeypatch
+):
     from src.engine import swing_pattern_lab_automation as mod
 
     lab_dir = tmp_path / "analysis" / "deepseek_swing_pattern_lab"
@@ -1232,7 +1456,11 @@ def test_swing_pattern_lab_automation_marks_entry_submission_gap_implemented(tmp
     outputs_dir.mkdir(parents=True)
     report_dir = tmp_path / "data" / "report"
     monkeypatch.setattr(mod, "DEEPSEEK_SWING_LAB_DIR", lab_dir)
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", report_dir / "swing_pattern_lab_automation")
+    monkeypatch.setattr(
+        mod,
+        "SWING_PATTERN_LAB_AUTOMATION_DIR",
+        report_dir / "swing_pattern_lab_automation",
+    )
 
     (outputs_dir / "run_manifest.json").write_text(
         json.dumps({"analysis_window": {"start": "2026-05-08", "end": "2026-05-08"}}),
@@ -1285,11 +1513,16 @@ def test_swing_pattern_lab_automation_marks_entry_submission_gap_implemented(tmp
         order["implementation_provenance"]["implemented_scope"]
         == "swing_entry_submission_gap_source_metric_provenance"
     )
-    assert order["implementation_provenance"]["source_metric_snapshot"]["selected_count"] == 3
+    assert (
+        order["implementation_provenance"]["source_metric_snapshot"]["selected_count"]
+        == 3
+    )
     assert order["implementation_provenance"]["runtime_effect"] is False
 
 
-def test_swing_pattern_lab_automation_marks_ofi_qi_smoothing_review_implemented(tmp_path, monkeypatch):
+def test_swing_pattern_lab_automation_marks_ofi_qi_smoothing_review_implemented(
+    tmp_path, monkeypatch
+):
     from src.engine import swing_pattern_lab_automation as mod
 
     lab_dir = tmp_path / "analysis" / "deepseek_swing_pattern_lab"
@@ -1297,7 +1530,11 @@ def test_swing_pattern_lab_automation_marks_ofi_qi_smoothing_review_implemented(
     outputs_dir.mkdir(parents=True)
     report_dir = tmp_path / "data" / "report"
     monkeypatch.setattr(mod, "DEEPSEEK_SWING_LAB_DIR", lab_dir)
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", report_dir / "swing_pattern_lab_automation")
+    monkeypatch.setattr(
+        mod,
+        "SWING_PATTERN_LAB_AUTOMATION_DIR",
+        report_dir / "swing_pattern_lab_automation",
+    )
 
     (outputs_dir / "run_manifest.json").write_text(
         json.dumps({"analysis_window": {"start": "2026-05-08", "end": "2026-05-08"}}),
@@ -1314,7 +1551,9 @@ def test_swing_pattern_lab_automation_marks_ofi_qi_smoothing_review_implemented(
                         "route": "attach_existing_family",
                         "mapped_family": "swing_exit_ofi_qi_smoothing",
                         "runtime_effect": False,
-                        "evidence": [{"smoothing_actions": {"NO_CHANGE": 9, "CONFIRM_EXIT": 2}}],
+                        "evidence": [
+                            {"smoothing_actions": {"NO_CHANGE": 9, "CONFIRM_EXIT": 2}}
+                        ],
                         "next_postclose_metric": "swing_ofi_qi_quality_score",
                     }
                 ],
@@ -1339,17 +1578,30 @@ def test_swing_pattern_lab_automation_marks_ofi_qi_smoothing_review_implemented(
         order["implementation_provenance"]["source_contract"]
         == "swing_pattern_lab_ofi_qi_smoothing_distribution_source_metric_v1"
     )
-    assert order["implementation_provenance"]["source_metric_snapshot"]["smoothing_actions"]["CONFIRM_EXIT"] == 2
+    assert (
+        order["implementation_provenance"]["source_metric_snapshot"][
+            "smoothing_actions"
+        ]["CONFIRM_EXIT"]
+        == 2
+    )
     assert order["implementation_provenance"]["runtime_effect"] is False
 
 
-def test_deepseek_payload_feedback_selector_uses_daily_clean_baseline_artifacts(monkeypatch, tmp_path):
+def test_deepseek_payload_feedback_selector_uses_daily_clean_baseline_artifacts(
+    monkeypatch, tmp_path
+):
     report_dir = tmp_path / "data" / "report"
     ldm_dir = report_dir / "swing_lifecycle_decision_matrix"
     ldm_dir.mkdir(parents=True)
-    (ldm_dir / "swing_lifecycle_decision_matrix_2026-06-05_mtd.json").write_text("{}", encoding="utf-8")
-    (ldm_dir / "swing_lifecycle_decision_matrix_2026-06-03.json").write_text("{}", encoding="utf-8")
-    (ldm_dir / "swing_lifecycle_decision_matrix_2026-06-04.json").write_text("{}", encoding="utf-8")
+    (ldm_dir / "swing_lifecycle_decision_matrix_2026-06-05_mtd.json").write_text(
+        "{}", encoding="utf-8"
+    )
+    (ldm_dir / "swing_lifecycle_decision_matrix_2026-06-03.json").write_text(
+        "{}", encoding="utf-8"
+    )
+    (ldm_dir / "swing_lifecycle_decision_matrix_2026-06-04.json").write_text(
+        "{}", encoding="utf-8"
+    )
     monkeypatch.setattr(payload_mod, "REPORT_DIR", report_dir)
 
     path, source_date = payload_mod._latest_feedback_artifact_path(

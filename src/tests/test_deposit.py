@@ -2,6 +2,7 @@
 """
 Test script to verify Kiwoom deposit API (orderable amount).
 """
+
 import sys
 from pathlib import Path
 
@@ -15,17 +16,23 @@ from src.utils import kiwoom_utils
 from src.utils.logger import log_error, log_info
 from src.engine.kiwoom_orders import get_deposit
 
+
 def get_token():
     """Load config and get Kiwoom token."""
-    target = Path('data/config_prod.json') if Path('data/config_prod.json').exists() else Path('data/config_sample.json')
+    target = (
+        Path("data/config_prod.json")
+        if Path("data/config_prod.json").exists()
+        else Path("data/config_sample.json")
+    )
     try:
-        with open(target, 'r', encoding='utf-8') as f:
+        with open(target, "r", encoding="utf-8") as f:
             config = json.load(f)
     except Exception as e:
         log_error(f"Config load failed: {e}")
         return None
     token = kiwoom_utils.get_kiwoom_token(config)
     return token
+
 
 def test_deposit(token):
     """Test deposit API and print orderable amount."""
@@ -42,6 +49,7 @@ def test_deposit(token):
         return False
     return True
 
+
 def main():
     print("🚀 Starting deposit API test")
     token = get_token()
@@ -49,10 +57,11 @@ def main():
         print("❌ Failed to obtain Kiwoom token. Exiting.")
         sys.exit(1)
     print(f"✅ Token obtained (first 10 chars): {token[:10]}...")
-    
+
     test_deposit(token)
-    
+
     print("\n✅ Test completed.")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()
