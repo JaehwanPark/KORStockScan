@@ -74,7 +74,9 @@ def test_build_report_summarizes_flow_and_rising_blocker(tmp_path):
             emitted_at="2026-06-29T09:55:00",
         ),
     ]
-    event_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+    event_path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8"
+    )
 
     report = build_report(
         target_date="2026-06-29",
@@ -160,7 +162,9 @@ def test_write_outputs_surfaces_freshness_recheck_workorders(tmp_path):
             emitted_at="2026-06-29T09:55:00",
         )
     ]
-    event_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+    event_path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8"
+    )
 
     report = build_report(
         target_date="2026-06-29",
@@ -178,13 +182,19 @@ def test_write_outputs_surfaces_freshness_recheck_workorders(tmp_path):
     rendered = output_md.read_text(encoding="utf-8")
     assert "## bounded freshness recheck workorders" in rendered
     assert "effect=False,apply=False" in rendered
-    assert "add_or_tune_bounded_fresh_recheck_enqueue_after_stale_or_history_gap" in rendered
+    assert (
+        "add_or_tune_bounded_fresh_recheck_enqueue_after_stale_or_history_gap"
+        in rendered
+    )
 
 
 def test_build_report_excludes_before_since_and_sim_rows(tmp_path):
     event_path = tmp_path / "events.jsonl"
     diagnostic_path = tmp_path / "diag.json"
-    diagnostic_path.write_text(json.dumps({"summary": {}, "promoted_symbols": [], "rising_missed_buy": []}), encoding="utf-8")
+    diagnostic_path.write_text(
+        json.dumps({"summary": {}, "promoted_symbols": [], "rising_missed_buy": []}),
+        encoding="utf-8",
+    )
     rows = [
         _event(
             "000001",
@@ -197,7 +207,11 @@ def test_build_report_excludes_before_since_and_sim_rows(tmp_path):
             "000002",
             "sim",
             "scalp_sim_buy_order_assumed_filled",
-            {"scanner_promotion_id": "sim", "simulated_order": "True", "price_delta_since_first_seen_pct": "5"},
+            {
+                "scanner_promotion_id": "sim",
+                "simulated_order": "True",
+                "price_delta_since_first_seen_pct": "5",
+            },
         ),
         _event(
             "000003",
@@ -206,7 +220,9 @@ def test_build_report_excludes_before_since_and_sim_rows(tmp_path):
             {"scanner_promotion_id": "new", "price_delta_since_first_seen_pct": "0"},
         ),
     ]
-    event_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+    event_path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8"
+    )
 
     report = build_report(
         target_date="2026-06-29",
@@ -242,7 +258,10 @@ def test_build_report_filters_diagnostic_promotions_before_since(tmp_path):
                         "max_price_delta_since_first_seen_pct": 1,
                     },
                 ],
-                "rising_missed_buy": [{"stock_code": "000001"}, {"stock_code": "000002"}],
+                "rising_missed_buy": [
+                    {"stock_code": "000001"},
+                    {"stock_code": "000002"},
+                ],
             }
         ),
         encoding="utf-8",
@@ -284,7 +303,10 @@ def test_build_report_keeps_promotions_active_after_since(tmp_path):
                         "max_price_delta_since_first_seen_pct": 1,
                     },
                 ],
-                "rising_missed_buy": [{"stock_code": "000001"}, {"stock_code": "000002"}],
+                "rising_missed_buy": [
+                    {"stock_code": "000001"},
+                    {"stock_code": "000002"},
+                ],
             }
         ),
         encoding="utf-8",
@@ -305,8 +327,12 @@ def test_build_report_keeps_promotions_active_after_since(tmp_path):
 
 
 def test_default_event_cache_path_prefers_live_pipeline_events(tmp_path, monkeypatch):
-    monkeypatch.setattr("src.engine.monitoring.intraday_entry_flow_report.PROJECT_ROOT", tmp_path)
-    pipeline_path = tmp_path / "data" / "pipeline_events" / "pipeline_events_2026-06-29.jsonl"
+    monkeypatch.setattr(
+        "src.engine.monitoring.intraday_entry_flow_report.PROJECT_ROOT", tmp_path
+    )
+    pipeline_path = (
+        tmp_path / "data" / "pipeline_events" / "pipeline_events_2026-06-29.jsonl"
+    )
     sentinel_path = (
         tmp_path
         / "data"
@@ -343,7 +369,10 @@ def test_build_report_accepts_offset_aware_since_for_target_date(tmp_path):
                         "max_price_delta_since_first_seen_pct": 1,
                     },
                 ],
-                "rising_missed_buy": [{"stock_code": "000001"}, {"stock_code": "000002"}],
+                "rising_missed_buy": [
+                    {"stock_code": "000001"},
+                    {"stock_code": "000002"},
+                ],
             }
         ),
         encoding="utf-8",
@@ -364,7 +393,9 @@ def test_build_report_accepts_offset_aware_since_for_target_date(tmp_path):
             emitted_at="2026-06-29T15:00:00+09:00",
         ),
     ]
-    event_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+    event_path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8"
+    )
 
     report = build_report(
         target_date="2026-06-29",
@@ -399,7 +430,10 @@ def test_build_report_accepts_time_only_since_for_target_date(tmp_path):
                         "max_price_delta_since_first_seen_pct": 1,
                     },
                 ],
-                "rising_missed_buy": [{"stock_code": "000001"}, {"stock_code": "000002"}],
+                "rising_missed_buy": [
+                    {"stock_code": "000001"},
+                    {"stock_code": "000002"},
+                ],
             }
         ),
         encoding="utf-8",
@@ -420,7 +454,9 @@ def test_build_report_accepts_time_only_since_for_target_date(tmp_path):
             emitted_at="2026-06-29T11:30:00",
         ),
     ]
-    event_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+    event_path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8"
+    )
 
     report = build_report(
         target_date="2026-06-29",
@@ -466,7 +502,10 @@ def test_write_outputs_uses_since_window_in_title(tmp_path):
     output_csv = tmp_path / "flow.csv"
     write_outputs(report, output_md=output_md, output_csv=output_csv)
 
-    assert output_md.read_text(encoding="utf-8").splitlines()[0] == "# 2026-06-29 08:00 이후 감시대상 BUY 전 흐름"
+    assert (
+        output_md.read_text(encoding="utf-8").splitlines()[0]
+        == "# 2026-06-29 08:00 이후 감시대상 BUY 전 흐름"
+    )
 
 
 def test_write_outputs_uses_time_only_since_window_in_title(tmp_path):
@@ -500,7 +539,10 @@ def test_write_outputs_uses_time_only_since_window_in_title(tmp_path):
     output_csv = tmp_path / "flow.csv"
     write_outputs(report, output_md=output_md, output_csv=output_csv)
 
-    assert output_md.read_text(encoding="utf-8").splitlines()[0] == "# 2026-06-29 11:30 이후 감시대상 BUY 전 흐름"
+    assert (
+        output_md.read_text(encoding="utf-8").splitlines()[0]
+        == "# 2026-06-29 11:30 이후 감시대상 BUY 전 흐름"
+    )
 
 
 def test_default_output_paths_accept_time_only_since_and_generated_at():
@@ -533,7 +575,10 @@ def test_build_report_separates_refresh_recovered_stale_from_hard_stale(tmp_path
                         "max_price_delta_since_first_seen_pct": 1.0,
                     },
                 ],
-                "rising_missed_buy": [{"stock_code": "000001"}, {"stock_code": "000002"}],
+                "rising_missed_buy": [
+                    {"stock_code": "000001"},
+                    {"stock_code": "000002"},
+                ],
             }
         ),
         encoding="utf-8",
@@ -580,7 +625,9 @@ def test_build_report_separates_refresh_recovered_stale_from_hard_stale(tmp_path
             emitted_at="2026-06-29T11:32:00",
         ),
     ]
-    event_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+    event_path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8"
+    )
 
     report = build_report(
         target_date="2026-06-29",
@@ -594,7 +641,10 @@ def test_build_report_separates_refresh_recovered_stale_from_hard_stale(tmp_path
     assert by_code["000001"]["stale_eval_count"] == 0
     assert by_code["000001"]["stale_refresh_recovered_count"] == 2
     assert by_code["000002"]["stale_eval_count"] == 1
-    assert by_code["000002"]["dominant_stale_eval_category"] == "pre_submit_stale_context_or_quote"
+    assert (
+        by_code["000002"]["dominant_stale_eval_category"]
+        == "pre_submit_stale_context_or_quote"
+    )
     assert report["summary"]["stale_eval_symbol_count"] == 1
     assert report["summary"]["rising_fresh_only_symbol_count"] == 1
     assert report["summary"]["stale_refresh_recovered_symbol_count"] == 1
@@ -614,7 +664,9 @@ def test_build_report_separates_refresh_recovered_stale_from_hard_stale(tmp_path
     }
 
 
-def test_build_report_excludes_rising_missed_one_share_forced_submit_from_flow_submit_count(tmp_path):
+def test_build_report_excludes_rising_missed_one_share_forced_submit_from_flow_submit_count(
+    tmp_path,
+):
     event_path = tmp_path / "events.jsonl"
     diagnostic_path = tmp_path / "diag.json"
     diagnostic_path.write_text(
@@ -653,7 +705,9 @@ def test_build_report_excludes_rising_missed_one_share_forced_submit_from_flow_s
             emitted_at="2026-06-30T09:11:00",
         )
     ]
-    event_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+    event_path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8"
+    )
 
     report = build_report(
         target_date="2026-06-30",
@@ -671,7 +725,10 @@ def test_build_report_excludes_rising_missed_one_share_forced_submit_from_flow_s
     assert report["summary"]["rising_missed_forced_scout_event_count"] == 1
     assert report["summary"]["rising_missed_forced_scout_symbol_count"] == 1
     assert report["summary"]["rising_missed_forced_scout_residual_symbol_count"] == 1
-    assert report["summary"]["rising_missed_residual_excluding_forced_scout_symbol_count"] == 0
+    assert (
+        report["summary"]["rising_missed_residual_excluding_forced_scout_symbol_count"]
+        == 0
+    )
     assert report["forced_scout_observation"] == {
         "event_count": 1,
         "symbol_count": 1,
@@ -683,7 +740,9 @@ def test_build_report_excludes_rising_missed_one_share_forced_submit_from_flow_s
     }
 
 
-def test_build_report_excludes_non_actionable_rising_missed_class_from_residual(tmp_path):
+def test_build_report_excludes_non_actionable_rising_missed_class_from_residual(
+    tmp_path,
+):
     event_path = tmp_path / "events.jsonl"
     diagnostic_path = tmp_path / "diag.json"
     diagnostic_path.write_text(
@@ -721,7 +780,9 @@ def test_build_report_excludes_non_actionable_rising_missed_class_from_residual(
             emitted_at="2026-06-30T12:11:42",
         )
     ]
-    event_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+    event_path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8"
+    )
 
     report = build_report(
         target_date="2026-06-30",
@@ -733,8 +794,16 @@ def test_build_report_excludes_non_actionable_rising_missed_class_from_residual(
 
     assert report["summary"]["rising_missed_buy_count_in_latest_diagnostic"] == 1
     assert report["summary"]["rising_missed_symbol_count_in_report"] == 1
-    assert report["summary"]["rising_missed_residual_excluding_forced_scout_symbol_count"] == 0
-    assert report["forced_scout_observation"]["rising_missed_residual_excluding_forced_scout_symbols"] == []
+    assert (
+        report["summary"]["rising_missed_residual_excluding_forced_scout_symbol_count"]
+        == 0
+    )
+    assert (
+        report["forced_scout_observation"][
+            "rising_missed_residual_excluding_forced_scout_symbols"
+        ]
+        == []
+    )
 
 
 def test_build_report_excludes_prior_forced_scout_symbol_from_window_residual(tmp_path):
@@ -787,7 +856,9 @@ def test_build_report_excludes_prior_forced_scout_symbol_from_window_residual(tm
             emitted_at="2026-06-30T12:19:39",
         ),
     ]
-    event_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+    event_path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8"
+    )
 
     report = build_report(
         target_date="2026-06-30",
@@ -800,13 +871,25 @@ def test_build_report_excludes_prior_forced_scout_symbol_from_window_residual(tm
     assert report["summary"]["rising_missed_forced_scout_event_count"] == 0
     assert report["summary"]["rising_missed_forced_scout_symbol_count"] == 1
     assert report["summary"]["rising_missed_forced_scout_residual_symbol_count"] == 1
-    assert report["summary"]["rising_missed_residual_excluding_forced_scout_symbol_count"] == 0
+    assert (
+        report["summary"]["rising_missed_residual_excluding_forced_scout_symbol_count"]
+        == 0
+    )
     assert report["forced_scout_observation"]["symbols"] == ["001260"]
-    assert report["forced_scout_observation"]["rising_missed_residual_symbols"] == ["001260"]
-    assert report["forced_scout_observation"]["rising_missed_residual_excluding_forced_scout_symbols"] == []
+    assert report["forced_scout_observation"]["rising_missed_residual_symbols"] == [
+        "001260"
+    ]
+    assert (
+        report["forced_scout_observation"][
+            "rising_missed_residual_excluding_forced_scout_symbols"
+        ]
+        == []
+    )
 
 
-def test_build_report_excludes_unflagged_submit_after_forced_scout_from_flow_submit_count(tmp_path):
+def test_build_report_excludes_unflagged_submit_after_forced_scout_from_flow_submit_count(
+    tmp_path,
+):
     event_path = tmp_path / "events.jsonl"
     diagnostic_path = tmp_path / "diag.json"
     diagnostic_path.write_text(
@@ -878,7 +961,9 @@ def test_build_report_excludes_unflagged_submit_after_forced_scout_from_flow_sub
             emitted_at="2026-06-30T11:06:00",
         ),
     ]
-    event_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+    event_path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8"
+    )
 
     report = build_report(
         target_date="2026-06-30",
@@ -968,7 +1053,9 @@ def test_build_report_counts_stage_only_forced_scout_without_diagnostic(tmp_path
             emitted_at="2026-07-07T09:07:00",
         ),
     ]
-    event_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+    event_path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8"
+    )
 
     report = build_report(
         target_date="2026-07-07",
@@ -991,7 +1078,9 @@ def test_build_report_counts_stage_only_forced_scout_without_diagnostic(tmp_path
     assert "entry_cancel_wait_attribution" not in row["flow"]
 
 
-def test_build_report_does_not_restore_forced_scout_submit_from_diagnostic_count(tmp_path):
+def test_build_report_does_not_restore_forced_scout_submit_from_diagnostic_count(
+    tmp_path,
+):
     event_path = tmp_path / "events.jsonl"
     diagnostic_path = tmp_path / "diag.json"
     diagnostic_path.write_text(
@@ -1039,7 +1128,9 @@ def test_build_report_does_not_restore_forced_scout_submit_from_diagnostic_count
             emitted_at="2026-07-07T09:08:00",
         ),
     ]
-    event_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+    event_path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8"
+    )
 
     report = build_report(
         target_date="2026-07-07",
@@ -1118,7 +1209,9 @@ def test_build_report_summarizes_latency_danger_root_cause(tmp_path):
             emitted_at="2026-06-30T11:18:58",
         ),
     ]
-    event_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+    event_path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8"
+    )
 
     report = build_report(
         target_date="2026-06-30",
@@ -1175,7 +1268,9 @@ def test_build_report_marks_wide_microstructure_latency_cause_below_ratio_cap(tm
             emitted_at="2026-06-30T11:21:09",
         ),
     ]
-    event_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+    event_path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8"
+    )
 
     report = build_report(
         target_date="2026-06-30",
@@ -1271,7 +1366,9 @@ def test_build_report_decomposes_rising_missed_submit_safety_reasons(tmp_path):
             emitted_at="2026-07-09T12:02:00",
         ),
     ]
-    event_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+    event_path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8"
+    )
 
     report = build_report(
         target_date="2026-07-09",
@@ -1290,17 +1387,43 @@ def test_build_report_decomposes_rising_missed_submit_safety_reasons(tmp_path):
     assert stale["record_count"] == 1
     assert {"component": "quote_stale", "count": 1} in stale["component_counts"]
     assert {"component": "weak_ai", "count": 1} in stale["component_counts"]
-    assert {"component": "recent_weak_ai_micro_block", "count": 1} in stale["component_counts"]
+    assert {"component": "recent_weak_ai_micro_block", "count": 1} in stale[
+        "component_counts"
+    ]
     assert stale["quote_age_ms"] == {"min": 3732.0, "median": 3732.0, "max": 3732.0}
-    assert stale["quote_age_over_max_ms"] == {"min": 732.0, "median": 732.0, "max": 732.0}
-    assert stale["quote_age_bucket_counts"] == [{"bucket": "borderline_3_5s", "count": 1}]
-    assert stale["ai_source_bucket_counts"] == [{"bucket": "ai_missing_default50", "count": 1}]
+    assert stale["quote_age_over_max_ms"] == {
+        "min": 732.0,
+        "median": 732.0,
+        "max": 732.0,
+    }
+    assert stale["quote_age_bucket_counts"] == [
+        {"bucket": "borderline_3_5s", "count": 1}
+    ]
+    assert stale["ai_source_bucket_counts"] == [
+        {"bucket": "ai_missing_default50", "count": 1}
+    ]
     assert stale["immediate_quote_refresh_ai_recheck_candidate_count"] == 1
     assert stale["borderline_quote_recheck_candidate_count"] == 1
-    assert stale["immediate_quote_refresh_ai_recheck_candidates"][0]["stock_code"] == "352820"
-    assert stale["immediate_quote_refresh_ai_recheck_candidates"][0]["max_delta_since_first_seen_pct"] == 4.2
-    assert stale["immediate_quote_refresh_ai_recheck_candidates"][0]["runtime_effect"] is False
-    assert stale["immediate_quote_refresh_ai_recheck_candidates"][0]["allowed_runtime_apply"] is False
+    assert (
+        stale["immediate_quote_refresh_ai_recheck_candidates"][0]["stock_code"]
+        == "352820"
+    )
+    assert (
+        stale["immediate_quote_refresh_ai_recheck_candidates"][0][
+            "max_delta_since_first_seen_pct"
+        ]
+        == 4.2
+    )
+    assert (
+        stale["immediate_quote_refresh_ai_recheck_candidates"][0]["runtime_effect"]
+        is False
+    )
+    assert (
+        stale["immediate_quote_refresh_ai_recheck_candidates"][0][
+            "allowed_runtime_apply"
+        ]
+        is False
+    )
     latency = decomposition["latency_state_danger"]
     assert latency["event_count"] == 1
     assert latency["symbol_count"] == 1
@@ -1337,7 +1460,9 @@ def test_write_outputs_surfaces_rising_missed_submit_safety_decomposition(tmp_pa
                 "quote_age_bucket_counts": [{"bucket": "borderline_3_5s", "count": 2}],
                 "ai_source_bucket_counts": [{"bucket": "ai_drop", "count": 2}],
                 "component_counts": [{"component": "quote_stale", "count": 2}],
-                "component_combo_counts": [{"combo": "quote_stale+weak_ai", "count": 2}],
+                "component_combo_counts": [
+                    {"combo": "quote_stale+weak_ai", "count": 2}
+                ],
                 "ai_action_counts": [{"action": "DROP", "count": 2}],
                 "recheck_candidate_delta_threshold_pct": 3.0,
                 "immediate_quote_refresh_ai_recheck_candidate_count": 1,
@@ -1354,9 +1479,19 @@ def test_write_outputs_surfaces_rising_missed_submit_safety_decomposition(tmp_pa
                         "max_delta_since_first_seen_pct": 4.2,
                         "rise_after_watch": "rising",
                         "main_blocker": "rising_missed_scout_quality_guard_blocked:stale_quote_with_weak_ai_or_strength",
-                        "quote_age_ms": {"min": 3100.0, "median": 3200.0, "max": 3300.0},
-                        "quote_age_over_max_ms": {"min": 100.0, "median": 200.0, "max": 300.0},
-                        "quote_age_bucket_counts": [{"bucket": "borderline_3_5s", "count": 2}],
+                        "quote_age_ms": {
+                            "min": 3100.0,
+                            "median": 3200.0,
+                            "max": 3300.0,
+                        },
+                        "quote_age_over_max_ms": {
+                            "min": 100.0,
+                            "median": 200.0,
+                            "max": 300.0,
+                        },
+                        "quote_age_bucket_counts": [
+                            {"bucket": "borderline_3_5s", "count": 2}
+                        ],
                         "ai_source_bucket_counts": [{"bucket": "ai_drop", "count": 2}],
                         "next_action": "source_only_immediate_quote_refresh_and_ai_recheck_candidate",
                         "runtime_effect": False,
@@ -1372,9 +1507,19 @@ def test_write_outputs_surfaces_rising_missed_submit_safety_decomposition(tmp_pa
                         "max_delta_since_first_seen_pct": 4.2,
                         "rise_after_watch": "rising",
                         "main_blocker": "rising_missed_scout_quality_guard_blocked:stale_quote_with_weak_ai_or_strength",
-                        "quote_age_ms": {"min": 3100.0, "median": 3200.0, "max": 3300.0},
-                        "quote_age_over_max_ms": {"min": 100.0, "median": 200.0, "max": 300.0},
-                        "quote_age_bucket_counts": [{"bucket": "borderline_3_5s", "count": 2}],
+                        "quote_age_ms": {
+                            "min": 3100.0,
+                            "median": 3200.0,
+                            "max": 3300.0,
+                        },
+                        "quote_age_over_max_ms": {
+                            "min": 100.0,
+                            "median": 200.0,
+                            "max": 300.0,
+                        },
+                        "quote_age_bucket_counts": [
+                            {"bucket": "borderline_3_5s", "count": 2}
+                        ],
                         "ai_source_bucket_counts": [{"bucket": "ai_drop", "count": 2}],
                         "next_action": "source_only_borderline_stale_quote_recheck_candidate",
                         "runtime_effect": False,
@@ -1391,7 +1536,9 @@ def test_write_outputs_surfaces_rising_missed_submit_safety_decomposition(tmp_pa
                 "spread_bps": {"min": 132.0, "median": 132.0, "max": 132.0},
                 "ws_age_ms": {"min": 140.0, "median": 140.0, "max": 140.0},
                 "cause_counts": [{"cause": "spread_too_wide", "count": 1}],
-                "spread_bucket_counts": [{"bucket": "true_wide_spread|signal_missing", "count": 1}],
+                "spread_bucket_counts": [
+                    {"bucket": "true_wide_spread|signal_missing", "count": 1}
+                ],
             },
         },
     }
@@ -1412,7 +1559,9 @@ def test_write_outputs_surfaces_rising_missed_submit_safety_decomposition(tmp_pa
     assert "spread_too_wide=1" in text
 
 
-def test_build_report_uses_diagnostic_latency_root_cause_when_event_cache_missing(tmp_path):
+def test_build_report_uses_diagnostic_latency_root_cause_when_event_cache_missing(
+    tmp_path,
+):
     event_path = tmp_path / "events.jsonl"
     diagnostic_path = tmp_path / "diag.json"
     event_path.write_text("", encoding="utf-8")
@@ -1435,8 +1584,15 @@ def test_build_report_uses_diagnostic_latency_root_cause_when_event_cache_missin
                         "latency_danger_root_cause": {
                             "event_count": 3,
                             "top_cause": "quote_stale",
-                            "cause_counts": [{"cause": "quote_stale", "count": 2}, {"cause": "spread_too_wide", "count": 1}],
-                            "spread_ratio": {"min": 0.001, "median": 0.007, "max": 0.012},
+                            "cause_counts": [
+                                {"cause": "quote_stale", "count": 2},
+                                {"cause": "spread_too_wide", "count": 1},
+                            ],
+                            "spread_ratio": {
+                                "min": 0.001,
+                                "median": 0.007,
+                                "max": 0.012,
+                            },
                             "ws_age_ms": {"min": 121.0, "median": 764.0, "max": 1085.0},
                             "spread_ticks": {"min": 1.0, "median": 6.0, "max": 7.0},
                             "top_micro_state": "neutral",
@@ -1542,7 +1698,9 @@ def test_build_report_until_excludes_later_event_cache_submit(tmp_path):
             emitted_at="2026-06-30T10:00:01",
         )
     ]
-    event_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+    event_path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8"
+    )
 
     report = build_report(
         target_date="2026-06-30",
