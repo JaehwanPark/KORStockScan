@@ -106,7 +106,8 @@ class _SyncSession:
     def all(self):
         if self._stock_code is not None:
             return [
-                record for record in self._history_records
+                record
+                for record in self._history_records
                 if getattr(record, "stock_code", None) == self._stock_code
             ]
         if self._mode == "BUY_ORDERED":
@@ -124,7 +125,9 @@ class _SyncSession:
 
 class _SyncDB:
     def __init__(self, active_records, pending_records=None, history_records=None):
-        self._session = _SyncSession(active_records, pending_records or [], history_records or [])
+        self._session = _SyncSession(
+            active_records, pending_records or [], history_records or []
+        )
 
     def get_session(self):
         return self._session
@@ -240,7 +243,13 @@ def test_sell_receipt_persists_net_profit_rate(monkeypatch):
     record = type(
         "Record",
         (),
-        {"buy_price": 100000.0, "status": "SELL_ORDERED", "sell_price": 0, "sell_time": None, "profit_rate": 0.0},
+        {
+            "buy_price": 100000.0,
+            "status": "SELL_ORDERED",
+            "sell_price": 0,
+            "sell_time": None,
+            "profit_rate": 0.0,
+        },
     )()
 
     receipts.DB = _ReceiptDB(record)
@@ -314,31 +323,39 @@ def test_sell_receipt_propagates_scale_in_counterfactual_diagnostics(monkeypatch
         False,
     )
 
-    assert receipt_snapshot["no_scale_in_counterfactual_profit_pct"] == calculate_net_profit_rate(97000.0, 100100)
+    assert receipt_snapshot[
+        "no_scale_in_counterfactual_profit_pct"
+    ] == calculate_net_profit_rate(97000.0, 100100)
     assert receipt_snapshot["scale_in_incremental_realized_delta_pct"] == round(
         record.profit_rate - receipt_snapshot["no_scale_in_counterfactual_profit_pct"],
         4,
     )
-    assert logged["kwargs"]["no_scale_in_counterfactual_profit_pct"] == receipt_snapshot[
-        "no_scale_in_counterfactual_profit_pct"
-    ]
-    assert logged["kwargs"]["scale_in_incremental_realized_delta_pct"] == receipt_snapshot[
-        "scale_in_incremental_realized_delta_pct"
-    ]
+    assert (
+        logged["kwargs"]["no_scale_in_counterfactual_profit_pct"]
+        == receipt_snapshot["no_scale_in_counterfactual_profit_pct"]
+    )
+    assert (
+        logged["kwargs"]["scale_in_incremental_realized_delta_pct"]
+        == receipt_snapshot["scale_in_incremental_realized_delta_pct"]
+    )
     assert logged["kwargs"]["pre_add_avg_price"] == 97000.0
     assert logged["kwargs"]["post_add_avg_price"] == 100000.0
     assert logged["kwargs"]["pre_add_qty"] == 10
     assert logged["kwargs"]["post_add_qty"] == 20
     assert len(post_sell_calls) == 1
-    assert post_sell_calls[0]["stock"]["no_scale_in_counterfactual_profit_pct"] == receipt_snapshot[
-        "no_scale_in_counterfactual_profit_pct"
-    ]
-    assert post_sell_calls[0]["stock"]["scale_in_incremental_realized_delta_pct"] == receipt_snapshot[
-        "scale_in_incremental_realized_delta_pct"
-    ]
+    assert (
+        post_sell_calls[0]["stock"]["no_scale_in_counterfactual_profit_pct"]
+        == receipt_snapshot["no_scale_in_counterfactual_profit_pct"]
+    )
+    assert (
+        post_sell_calls[0]["stock"]["scale_in_incremental_realized_delta_pct"]
+        == receipt_snapshot["scale_in_incremental_realized_delta_pct"]
+    )
 
 
-def test_periodic_account_sync_uses_net_profit_rate_for_missing_sell_receipt(monkeypatch):
+def test_periodic_account_sync_uses_net_profit_rate_for_missing_sell_receipt(
+    monkeypatch,
+):
     record = type(
         "Record",
         (),
@@ -357,10 +374,16 @@ def test_periodic_account_sync_uses_net_profit_rate_for_missing_sell_receipt(mon
 
     sniper_sync.KIWOOM_TOKEN = "token"
     sniper_sync.DB = _SyncDB([record], [])
-    sniper_sync.ACTIVE_TARGETS = [{"code": "123456", "status": "SELL_ORDERED", "sell_target_price": 100100}]
+    sniper_sync.ACTIVE_TARGETS = [
+        {"code": "123456", "status": "SELL_ORDERED", "sell_target_price": 100100}
+    ]
     sniper_sync.HIGHEST_PRICES = {"123456": 100500}
     sniper_sync.STATE_LOCK = _DummyLock()
-    monkeypatch.setattr(sniper_sync.kiwoom_utils, "get_account_balance_kt00005", lambda token: ([], {"KRX"}))
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_utils,
+        "get_account_balance_kt00005",
+        lambda token: ([], {"KRX"}),
+    )
     removals = []
 
     def fake_remove_manual_control_exclusion_code(code, *, reason):
@@ -397,7 +420,9 @@ def test_periodic_account_sync_uses_net_profit_rate_for_missing_sell_receipt(mon
     ]
 
 
-def test_periodic_account_sync_does_not_remove_manual_control_exclusion_on_db_error(monkeypatch):
+def test_periodic_account_sync_does_not_remove_manual_control_exclusion_on_db_error(
+    monkeypatch,
+):
     record = type(
         "Record",
         (),
@@ -416,10 +441,16 @@ def test_periodic_account_sync_does_not_remove_manual_control_exclusion_on_db_er
 
     sniper_sync.KIWOOM_TOKEN = "token"
     sniper_sync.DB = _FailingSyncDB([record], [])
-    sniper_sync.ACTIVE_TARGETS = [{"code": "123456", "status": "SELL_ORDERED", "sell_target_price": 100100}]
+    sniper_sync.ACTIVE_TARGETS = [
+        {"code": "123456", "status": "SELL_ORDERED", "sell_target_price": 100100}
+    ]
     sniper_sync.HIGHEST_PRICES = {"123456": 100500}
     sniper_sync.STATE_LOCK = _DummyLock()
-    monkeypatch.setattr(sniper_sync.kiwoom_utils, "get_account_balance_kt00005", lambda token: ([], {"KRX"}))
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_utils,
+        "get_account_balance_kt00005",
+        lambda token: ([], {"KRX"}),
+    )
     removals = []
     monkeypatch.setattr(
         sniper_sync,
@@ -432,7 +463,9 @@ def test_periodic_account_sync_does_not_remove_manual_control_exclusion_on_db_er
     assert removals == []
 
 
-def test_periodic_account_sync_recovers_broker_only_holding_from_watching_record(monkeypatch):
+def test_periodic_account_sync_recovers_broker_only_holding_from_watching_record(
+    monkeypatch,
+):
     watch_record = type(
         "Record",
         (),
@@ -468,7 +501,10 @@ def test_periodic_account_sync_recovers_broker_only_holding_from_watching_record
     monkeypatch.setattr(
         sniper_sync.kiwoom_utils,
         "get_account_balance_kt00005",
-        lambda token: ([{"code": "189300", "name": "인텔리안테크", "qty": 7, "buy_price": 133610}], {"KRX"}),
+        lambda token: (
+            [{"code": "189300", "name": "인텔리안테크", "qty": 7, "buy_price": 133610}],
+            {"KRX"},
+        ),
     )
 
     sniper_sync.periodic_account_sync()
@@ -485,7 +521,9 @@ def test_periodic_account_sync_recovers_broker_only_holding_from_watching_record
         for topic, payload in sniper_sync.EVENT_BUS.events
         if topic == "TELEGRAM_BROADCAST"
     ]
-    assert any("매수 체결 확인 (브로커 복구)" in event["message"] for event in telegram_events)
+    assert any(
+        "매수 체결 확인 (브로커 복구)" in event["message"] for event in telegram_events
+    )
     assert any("잔고조회 확인" in event["message"] for event in telegram_events)
 
 
@@ -532,7 +570,10 @@ def test_periodic_account_sync_marks_legacy_broker_recovered_holding(monkeypatch
     monkeypatch.setattr(
         sniper_sync.kiwoom_utils,
         "get_account_balance_kt00005",
-        lambda token: ([{"code": "016360", "name": "삼성증권", "qty": 1, "buy_price": 111400}], {"KRX"}),
+        lambda token: (
+            [{"code": "016360", "name": "삼성증권", "qty": 1, "buy_price": 111400}],
+            {"KRX"},
+        ),
     )
 
     sniper_sync.periodic_account_sync()
@@ -573,7 +614,9 @@ def test_periodic_account_sync_recovers_order_ref_when_kt00008_empty(monkeypatch
     sniper_sync.HIGHEST_PRICES = {}
     sniper_sync.STATE_LOCK = _DummyLock()
     sniper_sync.EVENT_BUS = _Bus()
-    sniper_sync.KIWOOM_TOKEN = "very_long_real_token_for_test_enable_2nd_pass_0123456789"
+    sniper_sync.KIWOOM_TOKEN = (
+        "very_long_real_token_for_test_enable_2nd_pass_0123456789"
+    )
     sniper_sync.CONF = {
         "ENABLE_ORDER_REF_2ND_PASS": True,
         "BROKER_ORDER_REF_QRY_TP": "0",
@@ -602,7 +645,10 @@ def test_periodic_account_sync_recovers_order_ref_when_kt00008_empty(monkeypatch
     monkeypatch.setattr(
         sniper_sync.kiwoom_utils,
         "get_account_balance_kt00005",
-        lambda token: ([{"code": "189300", "name": "인텔리안테크", "qty": 7, "buy_price": 133610}], {"KRX"}),
+        lambda token: (
+            [{"code": "189300", "name": "인텔리안테크", "qty": 7, "buy_price": 133610}],
+            {"KRX"},
+        ),
     )
 
     sniper_sync.periodic_account_sync()
@@ -712,7 +758,9 @@ def test_ensure_runtime_target_recovers_order_refs_from_logs(monkeypatch):
 
 
 def test_ensure_runtime_target_recovers_order_refs_from_pipeline_logs(monkeypatch):
-    monkeypatch.setattr(sniper_sync, "_iter_recovery_log_paths", lambda: ["pipeline.log"])
+    monkeypatch.setattr(
+        sniper_sync, "_iter_recovery_log_paths", lambda: ["pipeline.log"]
+    )
     monkeypatch.setattr(
         sniper_sync,
         "_tail_text",
@@ -751,7 +799,9 @@ def test_ensure_runtime_target_recovers_order_refs_from_pipeline_logs(monkeypatc
 
 
 def test_ensure_runtime_target_ignores_trailing_unified_disabled_stage(monkeypatch):
-    monkeypatch.setattr(sniper_sync, "_iter_recovery_log_paths", lambda: ["pipeline.log"])
+    monkeypatch.setattr(
+        sniper_sync, "_iter_recovery_log_paths", lambda: ["pipeline.log"]
+    )
     monkeypatch.setattr(
         sniper_sync,
         "_tail_text",
@@ -824,7 +874,8 @@ def test_holding_state_uses_net_profit_rate_for_sell_decision(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_smart_sell_order",
-        lambda **kwargs: sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "S1"},
+        lambda **kwargs: sell_calls.append(kwargs)
+        or {"return_code": "0", "ord_no": "S1"},
     )
 
     stock = {
@@ -852,7 +903,9 @@ def test_holding_state_uses_net_profit_rate_for_sell_decision(monkeypatch):
     assert "-0.13%" in stock["pending_sell_msg"]
 
 
-def test_holding_state_skips_scalping_loss_exit_for_legacy_broker_recovered(monkeypatch):
+def test_holding_state_skips_scalping_loss_exit_for_legacy_broker_recovered(
+    monkeypatch,
+):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
         SCALE_IN_REQUIRE_HISTORY_TABLE=False,
@@ -874,7 +927,8 @@ def test_holding_state_skips_scalping_loss_exit_for_legacy_broker_recovered(monk
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_smart_sell_order",
-        lambda **kwargs: sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "S1"},
+        lambda **kwargs: sell_calls.append(kwargs)
+        or {"return_code": "0", "ord_no": "S1"},
     )
 
     stock = {

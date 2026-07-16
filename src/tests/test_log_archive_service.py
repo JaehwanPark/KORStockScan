@@ -32,7 +32,9 @@ def test_load_monitor_snapshot_reads_gzip_file(tmp_path, monkeypatch):
     monkeypatch.setattr(service, "MONITOR_SNAPSHOT_DIR", snapshot_dir)
 
     payload = {"date": "2026-04-06", "value": 456}
-    with gzip.open(snapshot_dir / "trade_review_2026-04-06.json.gz", "wt", encoding="utf-8") as handle:
+    with gzip.open(
+        snapshot_dir / "trade_review_2026-04-06.json.gz", "wt", encoding="utf-8"
+    ) as handle:
         json.dump(payload, handle)
 
     loaded = service.load_monitor_snapshot("trade_review", "2026-04-06")
@@ -66,9 +68,7 @@ def test_notify_monitor_snapshot_admin_builds_cutoff_message(tmp_path):
 def test_monitor_snapshot_runtime_load_json_line_reads_tail(tmp_path):
     result_file = tmp_path / "snapshot.out"
     result_file.write_text(
-        '{"status":"old","value":1}\n'
-        "noise\n"
-        '{"status":"latest","value":2}\n',
+        '{"status":"old","value":1}\n' "noise\n" '{"status":"latest","value":2}\n',
         encoding="utf-8",
     )
 
@@ -104,10 +104,15 @@ def test_normalize_result_payload_detects_cooldown_skip():
 
     assert payload["status"] == "skipped"
     assert payload["reason"] == "cooldown_active"
-    assert "중복 실행" in payload["next_prompt_hint"] or "기존 결과" in payload["next_prompt_hint"]
+    assert (
+        "중복 실행" in payload["next_prompt_hint"]
+        or "기존 결과" in payload["next_prompt_hint"]
+    )
 
 
-def test_dispatch_monitor_snapshot_job_disables_admin_notice_by_default(tmp_path, monkeypatch):
+def test_dispatch_monitor_snapshot_job_disables_admin_notice_by_default(
+    tmp_path, monkeypatch
+):
     captured = {}
 
     def fake_run(cmd, cwd, env, text, capture_output, check):
@@ -123,10 +128,16 @@ def test_dispatch_monitor_snapshot_job_disables_admin_notice_by_default(tmp_path
         )
 
     monkeypatch.setattr(runtime.subprocess, "run", fake_run)
-    monkeypatch.setattr(runtime, "completion_artifact_path", lambda *args: tmp_path / "completion.json")
-    monkeypatch.setattr(runtime, "write_completion_artifact", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        runtime, "completion_artifact_path", lambda *args: tmp_path / "completion.json"
+    )
+    monkeypatch.setattr(
+        runtime, "write_completion_artifact", lambda *args, **kwargs: None
+    )
 
-    result = runtime.dispatch_monitor_snapshot_job(target_date="2026-04-24", profile="full")
+    result = runtime.dispatch_monitor_snapshot_job(
+        target_date="2026-04-24", profile="full"
+    )
 
     assert captured["env"]["MONITOR_SNAPSHOT_NOTIFY_ADMIN"] == "0"
     assert result["status"] == "dispatched"
@@ -189,7 +200,9 @@ def test_archive_and_replay_daily_log_slice(tmp_path, monkeypatch):
     ]
 
 
-def test_save_monitor_snapshots_for_date_includes_missed_entry_counterfactual(tmp_path, monkeypatch):
+def test_save_monitor_snapshots_for_date_includes_missed_entry_counterfactual(
+    tmp_path, monkeypatch
+):
     snapshot_dir = tmp_path / "monitor_snapshots"
     snapshot_dir.mkdir(parents=True, exist_ok=True)
     manifest_dir = snapshot_dir / "manifests"
@@ -213,37 +226,69 @@ def test_save_monitor_snapshots_for_date_includes_missed_entry_counterfactual(tm
     monkeypatch.setitem(
         sys.modules,
         "src.engine.sniper_trade_review_report",
-        types.SimpleNamespace(build_trade_review_report=lambda **kwargs: {"date": kwargs["target_date"], "meta": {}}),
+        types.SimpleNamespace(
+            build_trade_review_report=lambda **kwargs: {
+                "date": kwargs["target_date"],
+                "meta": {},
+            }
+        ),
     )
     monkeypatch.setitem(
         sys.modules,
         "src.engine.sniper_performance_tuning_report",
-        types.SimpleNamespace(build_performance_tuning_report=lambda **kwargs: {"date": kwargs["target_date"], "meta": {}}),
+        types.SimpleNamespace(
+            build_performance_tuning_report=lambda **kwargs: {
+                "date": kwargs["target_date"],
+                "meta": {},
+            }
+        ),
     )
     monkeypatch.setitem(
         sys.modules,
         "src.engine.sniper_post_sell_feedback",
-        types.SimpleNamespace(build_post_sell_feedback_report=lambda **kwargs: {"date": kwargs["target_date"], "meta": {}}),
+        types.SimpleNamespace(
+            build_post_sell_feedback_report=lambda **kwargs: {
+                "date": kwargs["target_date"],
+                "meta": {},
+            }
+        ),
     )
     monkeypatch.setitem(
         sys.modules,
         "src.engine.sniper_missed_entry_counterfactual",
-        types.SimpleNamespace(build_missed_entry_counterfactual_report=lambda **kwargs: {"date": kwargs["target_date"], "meta": {}}),
+        types.SimpleNamespace(
+            build_missed_entry_counterfactual_report=lambda **kwargs: {
+                "date": kwargs["target_date"],
+                "meta": {},
+            }
+        ),
     )
     monkeypatch.setitem(
         sys.modules,
         "src.engine.holding_exit_observation_report",
-        types.SimpleNamespace(build_holding_exit_observation_report=lambda **kwargs: {"date": kwargs["target_date"], "meta": {}}),
+        types.SimpleNamespace(
+            build_holding_exit_observation_report=lambda **kwargs: {
+                "date": kwargs["target_date"],
+                "meta": {},
+            }
+        ),
     )
     monkeypatch.setitem(
         sys.modules,
         "src.engine.wait6579_ev_cohort_report",
-        types.SimpleNamespace(build_wait6579_ev_cohort_report=lambda **kwargs: {"date": kwargs["target_date"], "meta": {}}),
+        types.SimpleNamespace(
+            build_wait6579_ev_cohort_report=lambda **kwargs: {
+                "date": kwargs["target_date"],
+                "meta": {},
+            }
+        ),
     )
     monkeypatch.setitem(
         sys.modules,
         "src.engine.buy_pause_guard",
-        types.SimpleNamespace(evaluate_buy_pause_guard=lambda *args, **kwargs: {"status": "ok"}),
+        types.SimpleNamespace(
+            evaluate_buy_pause_guard=lambda *args, **kwargs: {"status": "ok"}
+        ),
     )
     monkeypatch.setitem(
         sys.modules,
@@ -272,7 +317,21 @@ def test_save_monitor_snapshots_for_date_includes_missed_entry_counterfactual(tm
             },
             build_snapshot_summary=lambda comparison: {
                 "generated_at": comparison["generated_at"],
-                "sections": [{"label": "Trade Review", "status": "ok", "differing_metric_count": 1, "top_diffs": [{"label": "completed_trades", "local": 1, "remote": 2, "delta_remote_minus_local": 1.0}]}],
+                "sections": [
+                    {
+                        "label": "Trade Review",
+                        "status": "ok",
+                        "differing_metric_count": 1,
+                        "top_diffs": [
+                            {
+                                "label": "completed_trades",
+                                "local": 1,
+                                "remote": 2,
+                                "delta_remote_minus_local": 1.0,
+                            }
+                        ],
+                    }
+                ],
             },
             render_markdown_report=lambda comparison: "# mock report\n",
             render_checklist_append_block=lambda comparison, report_relpath: "### 본서버 vs songstockscan 자동 비교\n\n- 상세 리포트: `data/report/server_comparison/server_comparison_2026-04-09.md`\n",
@@ -292,7 +351,9 @@ def test_save_monitor_snapshots_for_date_includes_missed_entry_counterfactual(tm
     assert saved is not None
     assert saved["meta"]["snapshot_kind"] == "missed_entry_counterfactual"
     assert saved["meta"]["buy_pause_guard"] == {"status": "ok"}
-    holding_exit_saved = service.load_monitor_snapshot("holding_exit_observation", "2026-04-09")
+    holding_exit_saved = service.load_monitor_snapshot(
+        "holding_exit_observation", "2026-04-09"
+    )
     assert holding_exit_saved is not None
     assert holding_exit_saved["meta"]["snapshot_kind"] == "holding_exit_observation"
     assert holding_exit_saved["meta"]["buy_pause_guard"] == {"status": "ok"}
@@ -303,7 +364,9 @@ def test_save_monitor_snapshots_for_date_includes_missed_entry_counterfactual(tm
     comparison_saved = service.load_monitor_snapshot("server_comparison", "2026-04-09")
     assert comparison_saved is not None
     assert comparison_saved["date"] == "2026-04-09"
-    manifest_payload = json.loads(Path(result["snapshot_manifest"]).read_text(encoding="utf-8"))
+    manifest_payload = json.loads(
+        Path(result["snapshot_manifest"]).read_text(encoding="utf-8")
+    )
     assert manifest_payload["target_date"] == "2026-04-09"
     assert "trade_review" in manifest_payload["snapshot_paths"]
     assert "add_blocked_lock" not in manifest_payload["snapshot_paths"]

@@ -36,7 +36,9 @@ def test_log_rotation_cleanup_rotates_active_cron_log(tmp_path):
 
     assert "active_rotated=1" in result.stdout
     assert active_log.read_text(encoding="utf-8") == ""
-    assert (log_dir / "threshold_cycle_postclose_cron.log.1").read_text(encoding="utf-8") == "x" * 128
+    assert (log_dir / "threshold_cycle_postclose_cron.log.1").read_text(
+        encoding="utf-8"
+    ) == "x" * 128
 
 
 def test_log_rotation_cleanup_shifts_numeric_backups(tmp_path):
@@ -67,19 +69,27 @@ def test_log_rotation_cleanup_shifts_numeric_backups(tmp_path):
     )
 
     assert active_log.read_text(encoding="utf-8") == ""
-    assert (log_dir / "run_error_detection_cron.log.1").read_text(encoding="utf-8") == "new" * 64
+    assert (log_dir / "run_error_detection_cron.log.1").read_text(
+        encoding="utf-8"
+    ) == "new" * 64
     assert not (log_dir / "run_error_detection_cron.log.2").exists()
-    with gzip.open(log_dir / "run_error_detection_cron.log.2.gz", "rt", encoding="utf-8") as handle:
+    with gzip.open(
+        log_dir / "run_error_detection_cron.log.2.gz", "rt", encoding="utf-8"
+    ) as handle:
         assert handle.read() == "old1"
 
 
-def test_log_rotation_cleanup_compresses_older_rotated_logs_and_shifts_gzip_slots(tmp_path):
+def test_log_rotation_cleanup_compresses_older_rotated_logs_and_shifts_gzip_slots(
+    tmp_path,
+):
     project_root = tmp_path / "project"
     log_dir = project_root / "logs"
     log_dir.mkdir(parents=True)
     active_log = log_dir / "threshold_cycle_postclose_cron.log"
     active_log.write_text("new" * 64, encoding="utf-8")
-    (log_dir / "threshold_cycle_postclose_cron.log.1").write_text("old1", encoding="utf-8")
+    (log_dir / "threshold_cycle_postclose_cron.log.1").write_text(
+        "old1", encoding="utf-8"
+    )
     (log_dir / "threshold_cycle_postclose_cron.log.2.gz").write_bytes(b"old2-gz")
 
     env = os.environ.copy()
@@ -103,10 +113,14 @@ def test_log_rotation_cleanup_compresses_older_rotated_logs_and_shifts_gzip_slot
     )
 
     assert active_log.read_text(encoding="utf-8") == ""
-    assert (log_dir / "threshold_cycle_postclose_cron.log.1").read_text(encoding="utf-8") == "new" * 64
+    assert (log_dir / "threshold_cycle_postclose_cron.log.1").read_text(
+        encoding="utf-8"
+    ) == "new" * 64
     assert not (log_dir / "threshold_cycle_postclose_cron.log.2").exists()
     assert (log_dir / "threshold_cycle_postclose_cron.log.2.gz").exists()
-    assert (log_dir / "threshold_cycle_postclose_cron.log.3.gz").read_bytes() == b"old2-gz"
+    assert (
+        log_dir / "threshold_cycle_postclose_cron.log.3.gz"
+    ).read_bytes() == b"old2-gz"
     assert "archive_compressed=1" in result.stdout
 
 
@@ -139,7 +153,9 @@ def test_log_rotation_cleanup_prunes_rotated_logs_beyond_backup_limit(tmp_path):
         check=True,
     )
 
-    assert (log_dir / "run_error_detection_cron.log.1").read_text(encoding="utf-8") == "new" * 64
+    assert (log_dir / "run_error_detection_cron.log.1").read_text(
+        encoding="utf-8"
+    ) == "new" * 64
     assert (log_dir / "run_error_detection_cron.log.2.gz").exists()
     assert not (log_dir / "run_error_detection_cron.log.3.gz").exists()
     assert "archive_pruned_to_backup_limit=1" in result.stdout
@@ -184,7 +200,13 @@ def test_log_rotation_cleanup_prunes_archived_and_stale_active_logs(tmp_path):
     old_archive = log_dir / "bot_history.log.2026-05-01"
     old_archive_gz = log_dir / "threshold_cycle_postclose_cron.log.1.gz"
     fresh_archive = log_dir / "bot_history.log.2026-05-31"
-    for path in (stale_active, fresh_active, old_archive, old_archive_gz, fresh_archive):
+    for path in (
+        stale_active,
+        fresh_active,
+        old_archive,
+        old_archive_gz,
+        fresh_archive,
+    ):
         path.write_text("log", encoding="utf-8")
 
     now = time.time()
@@ -221,10 +243,16 @@ def test_log_rotation_cleanup_prunes_archived_and_stale_active_logs(tmp_path):
     assert "archive_deleted=2" in result.stdout
 
 
-def test_log_rotation_cleanup_prunes_old_raw_row_exclusion_backups_after_seven_days(tmp_path):
+def test_log_rotation_cleanup_prunes_old_raw_row_exclusion_backups_after_seven_days(
+    tmp_path,
+):
     project_root = tmp_path / "project"
     exclusion_dir = (
-        project_root / "data" / "source_quality" / "raw_row_exclusion" / "2026-05-22_20260522T101010000000+0900"
+        project_root
+        / "data"
+        / "source_quality"
+        / "raw_row_exclusion"
+        / "2026-05-22_20260522T101010000000+0900"
     )
     exclusion_dir.mkdir(parents=True)
     backup_path = exclusion_dir / "pipeline_events_2026-05-22.jsonl.gz"
