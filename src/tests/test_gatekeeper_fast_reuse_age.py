@@ -38,9 +38,17 @@ class _CountingAIEngine(_DummyAIEngine):
 
 
 def test_watching_state_debug_log_is_disabled_by_default(monkeypatch):
-    monkeypatch.setattr(state_handlers, "TRADING_RULES", SimpleNamespace(WATCHING_STATE_DEBUG_LOG_ENABLED=False))
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        SimpleNamespace(WATCHING_STATE_DEBUG_LOG_ENABLED=False),
+    )
     messages = []
-    monkeypatch.setattr(state_handlers, "log_info", lambda msg, send_telegram=False: messages.append(msg))
+    monkeypatch.setattr(
+        state_handlers,
+        "log_info",
+        lambda msg, send_telegram=False: messages.append(msg),
+    )
 
     state_handlers._log_watching_state_debug(
         {"name": "테스트", "strategy": "SCALPING", "position_tag": "SCANNER"},
@@ -53,9 +61,17 @@ def test_watching_state_debug_log_is_disabled_by_default(monkeypatch):
 
 
 def test_watching_state_debug_log_can_be_enabled(monkeypatch):
-    monkeypatch.setattr(state_handlers, "TRADING_RULES", SimpleNamespace(WATCHING_STATE_DEBUG_LOG_ENABLED=True))
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        SimpleNamespace(WATCHING_STATE_DEBUG_LOG_ENABLED=True),
+    )
     messages = []
-    monkeypatch.setattr(state_handlers, "log_info", lambda msg, send_telegram=False: messages.append(msg))
+    monkeypatch.setattr(
+        state_handlers,
+        "log_info",
+        lambda msg, send_telegram=False: messages.append(msg),
+    )
 
     state_handlers._log_watching_state_debug(
         {"name": "테스트", "strategy": "SCALPING", "position_tag": "SCANNER"},
@@ -68,7 +84,9 @@ def test_watching_state_debug_log_can_be_enabled(monkeypatch):
     assert "[DEBUG] handle_watching_state 시작: 테스트 (123456)" in messages[0]
 
 
-def test_gatekeeper_fast_reuse_bypass_logs_sentinel_when_fast_timestamp_missing(monkeypatch):
+def test_gatekeeper_fast_reuse_bypass_logs_sentinel_when_fast_timestamp_missing(
+    monkeypatch,
+):
     state_handlers.COOLDOWNS = {}
     state_handlers.ALERTED_STOCKS = set()
     state_handlers.HIGHEST_PRICES = {}
@@ -95,19 +113,28 @@ def test_gatekeeper_fast_reuse_bypass_logs_sentinel_when_fast_timestamp_missing(
 
     monkeypatch.setattr(state_handlers, "datetime", _FakeDateTime)
     monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
-    monkeypatch.setattr(state_handlers, "estimate_turnover_hint", lambda *args, **kwargs: 0)
+    monkeypatch.setattr(
+        state_handlers, "estimate_turnover_hint", lambda *args, **kwargs: 0
+    )
     monkeypatch.setattr(
         state_handlers,
         "get_dynamic_swing_gap_threshold",
-        lambda strategy, marcap, turnover_hint=0: {"threshold": 3.2, "bucket_label": "중소형주"},
+        lambda strategy, marcap, turnover_hint=0: {
+            "threshold": 3.2,
+            "bucket_label": "중소형주",
+        },
     )
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "build_realtime_analysis_context",
         lambda **kwargs: {"code": kwargs.get("code"), "score": kwargs.get("score")},
     )
-    monkeypatch.setattr(state_handlers, "record_gatekeeper_snapshot", lambda **kwargs: None)
-    monkeypatch.setattr(state_handlers, "_submit_gatekeeper_dual_persona_shadow", lambda **kwargs: None)
+    monkeypatch.setattr(
+        state_handlers, "record_gatekeeper_snapshot", lambda **kwargs: None
+    )
+    monkeypatch.setattr(
+        state_handlers, "_submit_gatekeeper_dual_persona_shadow", lambda **kwargs: None
+    )
     monkeypatch.setattr(
         state_handlers,
         "_log_entry_pipeline",
@@ -149,7 +176,11 @@ def test_gatekeeper_fast_reuse_bypass_logs_sentinel_when_fast_timestamp_missing(
         ai_engine=_DummyAIEngine(),
     )
 
-    bypass_log = next(fields for stage, fields in captured_logs if stage == "gatekeeper_fast_reuse_bypass")
+    bypass_log = next(
+        fields
+        for stage, fields in captured_logs
+        if stage == "gatekeeper_fast_reuse_bypass"
+    )
 
     assert bypass_log["age_sec"] == "-"
     assert bypass_log["action_age_sec"] == "-"
@@ -187,20 +218,33 @@ def test_gatekeeper_recent_reject_cache_reuses_without_model_call(monkeypatch):
     monkeypatch.setattr(state_handlers.time, "time", lambda: fixed_now)
     monkeypatch.setattr(state_handlers, "datetime", _FakeDateTime)
     monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
-    monkeypatch.setattr(state_handlers, "estimate_turnover_hint", lambda *args, **kwargs: 0)
+    monkeypatch.setattr(
+        state_handlers, "estimate_turnover_hint", lambda *args, **kwargs: 0
+    )
     monkeypatch.setattr(
         state_handlers,
         "get_dynamic_swing_gap_threshold",
-        lambda strategy, marcap, turnover_hint=0: {"threshold": 3.2, "bucket_label": "중소형주"},
+        lambda strategy, marcap, turnover_hint=0: {
+            "threshold": 3.2,
+            "bucket_label": "중소형주",
+        },
     )
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "build_realtime_analysis_context",
-        lambda **kwargs: (_ for _ in ()).throw(AssertionError("model context should not be built")),
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("model context should not be built")
+        ),
     )
-    monkeypatch.setattr(state_handlers, "record_gatekeeper_snapshot", lambda **kwargs: None)
-    monkeypatch.setattr(state_handlers, "_submit_gatekeeper_dual_persona_shadow", lambda **kwargs: None)
-    monkeypatch.setattr(state_handlers, "_publish_gatekeeper_report_proxy", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        state_handlers, "record_gatekeeper_snapshot", lambda **kwargs: None
+    )
+    monkeypatch.setattr(
+        state_handlers, "_submit_gatekeeper_dual_persona_shadow", lambda **kwargs: None
+    )
+    monkeypatch.setattr(
+        state_handlers, "_publish_gatekeeper_report_proxy", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr(
         state_handlers,
         "_log_entry_pipeline",
@@ -249,9 +293,17 @@ def test_gatekeeper_recent_reject_cache_reuses_without_model_call(monkeypatch):
     )
 
     assert engine.calls == 0
-    reuse_log = next(fields for stage, fields in captured_logs if stage == "gatekeeper_reject_cache_reuse")
+    reuse_log = next(
+        fields
+        for stage, fields in captured_logs
+        if stage == "gatekeeper_reject_cache_reuse"
+    )
     assert reuse_log["cache_authority"] == "baseline_prior_feature_only"
-    reject_log = next(fields for stage, fields in captured_logs if stage == "blocked_gatekeeper_reject")
+    reject_log = next(
+        fields
+        for stage, fields in captured_logs
+        if stage == "blocked_gatekeeper_reject"
+    )
     assert reject_log["gatekeeper_cache"] == "reject_cache"
 
 

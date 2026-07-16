@@ -47,11 +47,11 @@ def test_build_remote_tar_command():
     assert "set -euo pipefail" in cmd
     assert "tmpdir=$(mktemp -d)" in cmd
     assert "cp -p" in cmd
-    assert 'tar -czf - .' in cmd
+    assert "tar -czf - ." in cmd
     # Ensure each path is quoted and appears in the array
     for path in paths:
         assert path in cmd
-    assert '$source.gz' in cmd
+    assert "$source.gz" in cmd
 
 
 def test_build_remote_tar_command_with_optional_snapshots():
@@ -61,8 +61,8 @@ def test_build_remote_tar_command_with_optional_snapshots():
     assert "set -euo pipefail" in cmd
     assert "tmpdir=$(mktemp -d)" in cmd
     assert "cp -p" in cmd
-    assert 'tar -czf - .' in cmd
-    assert '$source.gz' in cmd
+    assert "tar -czf - ." in cmd
+    assert "$source.gz" in cmd
 
 
 @patch("src.engine.fetch_remote_scalping_logs.subprocess.run")
@@ -80,36 +80,7 @@ def test_fetch_remote_scalping_logs_success(mock_run):
         include_snapshots_if_exist=False,
         snapshot_only_on_live_failure=False,
     )
-    
-    @patch("src.engine.fetch_remote_scalping_logs.subprocess.run")
-    def test_fetch_remote_scalping_logs_live_failure_no_fallback_exit1_no_message(mock_run):
-        from subprocess import CalledProcessError
-        mock_run.side_effect = CalledProcessError(1, "ssh", stderr=b"some other error")
-        with pytest.raises(CalledProcessError):
-            fetch_remote_scalping_logs(
-                target_date="2026-04-10",
-                host="example.com",
-                user="user",
-                remote_root="/remote",
-                local_root=Path("/tmp/test_fetch_no_fallback"),
-                include_snapshots_if_exist=False,
-                snapshot_only_on_live_failure=True,
-            )
-    
-    @patch("src.engine.fetch_remote_scalping_logs.subprocess.run")
-    def test_fetch_remote_scalping_logs_live_failure_no_fallback_exit2(mock_run):
-        from subprocess import CalledProcessError
-        mock_run.side_effect = CalledProcessError(2, "ssh")
-        with pytest.raises(CalledProcessError):
-            fetch_remote_scalping_logs(
-                target_date="2026-04-10",
-                host="example.com",
-                user="user",
-                remote_root="/remote",
-                local_root=Path("/tmp/test_fetch_no_fallback"),
-                include_snapshots_if_exist=False,
-                snapshot_only_on_live_failure=True,
-            )
+
     assert result["date"] == "2026-04-10"
     assert "archive_path" in result
     assert "output_dir" in result
@@ -117,9 +88,46 @@ def test_fetch_remote_scalping_logs_success(mock_run):
 
 
 @patch("src.engine.fetch_remote_scalping_logs.subprocess.run")
+def test_fetch_remote_scalping_logs_live_failure_no_fallback_exit1_no_message(
+    mock_run,
+):
+    from subprocess import CalledProcessError
+
+    mock_run.side_effect = CalledProcessError(1, "ssh", stderr=b"some other error")
+    with pytest.raises(CalledProcessError):
+        fetch_remote_scalping_logs(
+            target_date="2026-04-10",
+            host="example.com",
+            user="user",
+            remote_root="/remote",
+            local_root=Path("/tmp/test_fetch_no_fallback"),
+            include_snapshots_if_exist=False,
+            snapshot_only_on_live_failure=True,
+        )
+
+
+@patch("src.engine.fetch_remote_scalping_logs.subprocess.run")
+def test_fetch_remote_scalping_logs_live_failure_no_fallback_exit2(mock_run):
+    from subprocess import CalledProcessError
+
+    mock_run.side_effect = CalledProcessError(2, "ssh")
+    with pytest.raises(CalledProcessError):
+        fetch_remote_scalping_logs(
+            target_date="2026-04-10",
+            host="example.com",
+            user="user",
+            remote_root="/remote",
+            local_root=Path("/tmp/test_fetch_no_fallback"),
+            include_snapshots_if_exist=False,
+            snapshot_only_on_live_failure=True,
+        )
+
+
+@patch("src.engine.fetch_remote_scalping_logs.subprocess.run")
 def test_fetch_remote_scalping_logs_live_failure_fallback(mock_run):
     # First ssh call raises CalledProcessError with exit 1 and race message, second succeeds
     from subprocess import CalledProcessError
+
     mock_run.side_effect = [
         CalledProcessError(1, "ssh", stderr=b"tar: file changed as we read it"),
         MagicMock(),  # fallback snapshot-only ssh
@@ -142,6 +150,7 @@ def test_fetch_remote_scalping_logs_live_failure_fallback(mock_run):
 @patch("src.engine.fetch_remote_scalping_logs.subprocess.run")
 def test_fetch_remote_scalping_logs_live_failure_no_fallback(mock_run):
     from subprocess import CalledProcessError
+
     mock_run.side_effect = CalledProcessError(1, "ssh")
     with pytest.raises(CalledProcessError):
         fetch_remote_scalping_logs(

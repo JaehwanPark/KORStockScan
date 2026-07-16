@@ -69,8 +69,14 @@ def test_load_gatekeeper_snapshots_reads_gzip(monkeypatch, tmp_path):
     data_dir = tmp_path / "data"
     snapshot_dir = data_dir / "gatekeeper"
     snapshot_dir.mkdir(parents=True)
-    with gzip.open(snapshot_dir / "gatekeeper_snapshots_2026-06-12.jsonl.gz", "wt", encoding="utf-8") as handle:
-        handle.write(json.dumps({"stock_code": "005930", "signal_time": "09:10:00"}) + "\n")
+    with gzip.open(
+        snapshot_dir / "gatekeeper_snapshots_2026-06-12.jsonl.gz",
+        "wt",
+        encoding="utf-8",
+    ) as handle:
+        handle.write(
+            json.dumps({"stock_code": "005930", "signal_time": "09:10:00"}) + "\n"
+        )
     monkeypatch.setattr(replay_mod, "DATA_DIR", data_dir)
 
     rows = load_gatekeeper_snapshots("2026-06-12")
@@ -83,8 +89,14 @@ def main():
     parser.add_argument("--date", help="대상 날짜 (YYYY-MM-DD). 기본값은 오늘")
     parser.add_argument("--code", help="종목코드 6자리")
     parser.add_argument("--time", help="목표 시각 (HH:MM 또는 HH:MM:SS)")
-    parser.add_argument("--show-report", action="store_true", help="원본 리포트 전문 표시")
-    parser.add_argument("--rerun", action="store_true", help="저장된 realtime_ctx로 현재 프롬프트 재실행")
+    parser.add_argument(
+        "--show-report", action="store_true", help="원본 리포트 전문 표시"
+    )
+    parser.add_argument(
+        "--rerun",
+        action="store_true",
+        help="저장된 realtime_ctx로 현재 프롬프트 재실행",
+    )
     parser.add_argument("--top", type=int, default=10, help="목록 출력 개수")
     args = parser.parse_args()
 
@@ -110,7 +122,7 @@ def main():
     if not rows:
         print("- 저장된 스냅샷이 없습니다.")
         return
-    for idx, item in enumerate(rows[-max(1, args.top):], start=1):
+    for idx, item in enumerate(rows[-max(1, args.top) :], start=1):
         print(
             f"{idx}. {item.get('signal_time')} "
             f"{item.get('stock_name')}({item.get('stock_code')}) "

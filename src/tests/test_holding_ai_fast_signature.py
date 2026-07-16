@@ -43,7 +43,9 @@ def test_holding_fast_signature_tolerates_small_micro_moves():
         },
     }
 
-    assert _build_holding_ai_fast_signature(base) == _build_holding_ai_fast_signature(micro_shift)
+    assert _build_holding_ai_fast_signature(base) == _build_holding_ai_fast_signature(
+        micro_shift
+    )
 
 
 def test_holding_fast_signature_changes_on_meaningful_move():
@@ -83,7 +85,9 @@ def test_holding_fast_signature_changes_on_meaningful_move():
         },
     }
 
-    assert _build_holding_ai_fast_signature(base) != _build_holding_ai_fast_signature(larger_move)
+    assert _build_holding_ai_fast_signature(base) != _build_holding_ai_fast_signature(
+        larger_move
+    )
 
 
 def test_holding_fast_snapshot_reports_changed_axes():

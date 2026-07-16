@@ -31,7 +31,9 @@ def _strong_micro_context(**overrides):
     return ctx
 
 
-def test_holding_exit_matrix_runtime_bias_forces_hold_for_avg_down_wait(tmp_path, monkeypatch):
+def test_holding_exit_matrix_runtime_bias_forces_hold_for_avg_down_wait(
+    tmp_path, monkeypatch
+):
     report_dir = tmp_path / "report" / "holding_exit_decision_matrix"
     report_dir.mkdir(parents=True)
     monkeypatch.setattr(mod, "MATRIX_DIR", report_dir)
@@ -84,7 +86,9 @@ def test_holding_exit_matrix_runtime_bias_forces_hold_for_avg_down_wait(tmp_path
     assert merged["holding_exit_matrix_scale_in_bias"] == "AVG_DOWN"
 
 
-def test_holding_exit_matrix_runtime_bias_treats_unusable_ai_as_neutral_prior(tmp_path, monkeypatch):
+def test_holding_exit_matrix_runtime_bias_treats_unusable_ai_as_neutral_prior(
+    tmp_path, monkeypatch
+):
     report_dir = tmp_path / "report" / "holding_exit_decision_matrix"
     report_dir.mkdir(parents=True)
     monkeypatch.setattr(mod, "MATRIX_DIR", report_dir)
@@ -140,7 +144,9 @@ def test_holding_exit_matrix_runtime_bias_treats_unusable_ai_as_neutral_prior(tm
     assert merged["holding_exit_matrix_current_micro_support"] is True
 
 
-def test_holding_exit_matrix_runtime_bias_keeps_missing_ai_as_neutral_prior_without_opening_hold(tmp_path, monkeypatch):
+def test_holding_exit_matrix_runtime_bias_keeps_missing_ai_as_neutral_prior_without_opening_hold(
+    tmp_path, monkeypatch
+):
     report_dir = tmp_path / "report" / "holding_exit_decision_matrix"
     report_dir.mkdir(parents=True)
     monkeypatch.setattr(mod, "MATRIX_DIR", report_dir)
@@ -179,14 +185,21 @@ def test_holding_exit_matrix_runtime_bias_keeps_missing_ai_as_neutral_prior_with
 
     assert merged["action"] == "EXIT"
     assert merged["holding_exit_matrix_runtime_bias_applied"] is False
-    assert merged["holding_exit_matrix_runtime_reason"] == "current_micro_support_missing"
+    assert (
+        merged["holding_exit_matrix_runtime_reason"] == "current_micro_support_missing"
+    )
     assert merged["holding_exit_matrix_ai_score_usable"] is False
-    assert merged["holding_exit_matrix_ai_score_excluded_reason"] == "holding_score_data_quality_insufficient"
+    assert (
+        merged["holding_exit_matrix_ai_score_excluded_reason"]
+        == "holding_score_data_quality_insufficient"
+    )
     assert merged["holding_exit_matrix_score_prior_band"] == "neutral_or_unknown"
     assert merged["holding_exit_matrix_current_micro_support"] is False
 
 
-def test_holding_exit_matrix_runtime_bias_does_not_hard_block_timeout_ai_source_with_micro_support(tmp_path, monkeypatch):
+def test_holding_exit_matrix_runtime_bias_does_not_hard_block_timeout_ai_source_with_micro_support(
+    tmp_path, monkeypatch
+):
     report_dir = tmp_path / "report" / "holding_exit_decision_matrix"
     report_dir.mkdir(parents=True)
     monkeypatch.setattr(mod, "MATRIX_DIR", report_dir)
@@ -230,12 +243,17 @@ def test_holding_exit_matrix_runtime_bias_does_not_hard_block_timeout_ai_source_
     assert merged["action"] == "HOLD"
     assert merged["holding_exit_matrix_runtime_bias_applied"] is True
     assert merged["holding_exit_matrix_ai_score_usable"] is False
-    assert merged["holding_exit_matrix_ai_score_excluded_reason"] == "holding_score_source_timeout"
+    assert (
+        merged["holding_exit_matrix_ai_score_excluded_reason"]
+        == "holding_score_source_timeout"
+    )
     assert merged["holding_exit_matrix_score_prior_band"] == "neutral_or_unknown"
     assert merged["holding_exit_matrix_current_micro_support"] is True
 
 
-def test_holding_exit_matrix_runtime_bias_records_partial_score_prior_without_hard_block(tmp_path, monkeypatch):
+def test_holding_exit_matrix_runtime_bias_records_partial_score_prior_without_hard_block(
+    tmp_path, monkeypatch
+):
     report_dir = tmp_path / "report" / "holding_exit_decision_matrix"
     report_dir.mkdir(parents=True)
     monkeypatch.setattr(mod, "MATRIX_DIR", report_dir)
@@ -292,7 +310,10 @@ def test_holding_exit_matrix_runtime_bias_records_partial_score_prior_without_ha
     assert blocked["action"] == "EXIT"
     assert blocked["holding_exit_matrix_runtime_bias_applied"] is False
     assert blocked["holding_exit_matrix_ai_score_usable"] is False
-    assert blocked["holding_exit_matrix_ai_score_excluded_reason"] == "holding_score_partial_requires_microstructure"
+    assert (
+        blocked["holding_exit_matrix_ai_score_excluded_reason"]
+        == "holding_score_partial_requires_microstructure"
+    )
     assert blocked["holding_exit_matrix_score_prior_band"] == "neutral_or_unknown"
     assert allowed["action"] == "EXIT"
     assert allowed["holding_exit_matrix_ai_score_usable"] is True
@@ -300,7 +321,9 @@ def test_holding_exit_matrix_runtime_bias_records_partial_score_prior_without_ha
     assert allowed["holding_exit_matrix_current_micro_support"] is False
 
 
-def test_holding_exit_matrix_runtime_bias_forces_exit_for_prefer_exit(tmp_path, monkeypatch):
+def test_holding_exit_matrix_runtime_bias_forces_exit_for_prefer_exit(
+    tmp_path, monkeypatch
+):
     report_dir = tmp_path / "report" / "holding_exit_decision_matrix"
     report_dir.mkdir(parents=True)
     monkeypatch.setattr(mod, "MATRIX_DIR", report_dir)
@@ -333,7 +356,9 @@ def test_holding_exit_matrix_runtime_bias_forces_exit_for_prefer_exit(tmp_path, 
         now=datetime(2026, 5, 18, 16, 30),
     )
 
-    merged = mod.merge_holding_exit_matrix_result_fields({"action": "HOLD", "score": 55}, context)
+    merged = mod.merge_holding_exit_matrix_result_fields(
+        {"action": "HOLD", "score": 55}, context
+    )
 
     assert merged["action"] == "EXIT"
     assert merged["holding_exit_matrix_runtime_reason"] == "matrix_prefer_exit"
@@ -341,7 +366,9 @@ def test_holding_exit_matrix_runtime_bias_forces_exit_for_prefer_exit(tmp_path, 
 
 def test_holding_exit_matrix_scale_in_bias_returns_avg_down_action():
     original_rules = mod.TRADING_RULES
-    mod.TRADING_RULES = replace(original_rules, HOLDING_EXIT_MATRIX_SCALE_IN_BIAS_ENABLED=True)
+    mod.TRADING_RULES = replace(
+        original_rules, HOLDING_EXIT_MATRIX_SCALE_IN_BIAS_ENABLED=True
+    )
     try:
         action = mod.resolve_holding_exit_matrix_scale_in_bias(
             strategy="SCALPING",
@@ -364,7 +391,9 @@ def test_holding_exit_matrix_scale_in_bias_returns_avg_down_action():
     assert action["reason"] == "holding_exit_matrix_avg_down_bias"
 
 
-def test_holding_exit_matrix_scale_in_bias_keeps_missing_ai_as_neutral_prior_without_opening_add(monkeypatch):
+def test_holding_exit_matrix_scale_in_bias_keeps_missing_ai_as_neutral_prior_without_opening_add(
+    monkeypatch,
+):
     monkeypatch.setattr(
         mod,
         "TRADING_RULES",
@@ -382,7 +411,9 @@ def test_holding_exit_matrix_scale_in_bias_keeps_missing_ai_as_neutral_prior_wit
     assert action["should_add"] is False
     assert action["reason"] == "holding_exit_matrix_current_micro_support_missing"
     assert action["ai_score_usable"] is False
-    assert action["ai_score_excluded_reason"] == "holding_score_data_quality_insufficient"
+    assert (
+        action["ai_score_excluded_reason"] == "holding_score_data_quality_insufficient"
+    )
     assert action["score_gate_converted_to_prior"] is True
     assert action["score_prior_band"] == "neutral_or_unknown"
     assert action["ai_score_prior_weight"] == 0.0
@@ -391,7 +422,9 @@ def test_holding_exit_matrix_scale_in_bias_keeps_missing_ai_as_neutral_prior_wit
 
 def test_holding_exit_matrix_scale_in_bias_does_not_hard_block_unusable_ai_score_with_micro_support():
     original_rules = mod.TRADING_RULES
-    mod.TRADING_RULES = replace(original_rules, HOLDING_EXIT_MATRIX_SCALE_IN_BIAS_ENABLED=True)
+    mod.TRADING_RULES = replace(
+        original_rules, HOLDING_EXIT_MATRIX_SCALE_IN_BIAS_ENABLED=True
+    )
     try:
         action = mod.resolve_holding_exit_matrix_scale_in_bias(
             strategy="SCALPING",
@@ -485,7 +518,9 @@ def test_holding_exit_matrix_trim_to_hold_requires_explicit_flag(tmp_path, monke
         now=datetime(2026, 5, 18, 16, 30),
     )
 
-    merged = mod.merge_holding_exit_matrix_result_fields({"action": "TRIM", "score": 70}, context)
+    merged = mod.merge_holding_exit_matrix_result_fields(
+        {"action": "TRIM", "score": 70}, context
+    )
 
     assert merged["action"] == "TRIM"
     assert merged["holding_exit_matrix_runtime_bias_applied"] is False
@@ -519,7 +554,9 @@ def test_holding_exit_matrix_scale_in_flag_blocks_lifecycle_scale_in(monkeypatch
     assert action["lifecycle_matrix_runtime_effect"] == "avg_down_bias"
 
 
-def test_holding_exit_matrix_lifecycle_scale_in_bias_keeps_unusable_ai_as_neutral_prior_with_micro_support(monkeypatch):
+def test_holding_exit_matrix_lifecycle_scale_in_bias_keeps_unusable_ai_as_neutral_prior_with_micro_support(
+    monkeypatch,
+):
     monkeypatch.setattr(
         mod,
         "TRADING_RULES",

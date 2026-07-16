@@ -79,7 +79,9 @@ def test_greenfield_authority_allows_promoted_bucket(tmp_path, monkeypatch):
     assert decision.matched_bucket_id == "entry:score_66_69"
 
 
-def test_greenfield_authority_blocks_entry_when_observed_bucket_missing(tmp_path, monkeypatch):
+def test_greenfield_authority_blocks_entry_when_observed_bucket_missing(
+    tmp_path, monkeypatch
+):
     policy = tmp_path / "policy.json"
     _write_policy(
         policy,
@@ -99,14 +101,18 @@ def test_greenfield_authority_blocks_entry_when_observed_bucket_missing(tmp_path
     monkeypatch.setenv(mod.SCOPE_ENV, mod.FULL_LIFECYCLE_SCOPE)
     monkeypatch.setenv(mod.POLICY_FILE_ENV, str(policy))
 
-    decision = mod.evaluate_greenfield_authority(stage="entry", action="BUY", strategy="SCALPING")
+    decision = mod.evaluate_greenfield_authority(
+        stage="entry", action="BUY", strategy="SCALPING"
+    )
 
     assert decision.active is True
     assert decision.allowed is False
     assert decision.reason == "observed_bucket_missing"
 
 
-def test_greenfield_authority_blocks_incomplete_full_lifecycle_bundle(tmp_path, monkeypatch):
+def test_greenfield_authority_blocks_incomplete_full_lifecycle_bundle(
+    tmp_path, monkeypatch
+):
     policy = tmp_path / "policy.json"
     policy.write_text(
         json.dumps(
@@ -149,7 +155,9 @@ def test_greenfield_authority_blocks_incomplete_full_lifecycle_bundle(tmp_path, 
     monkeypatch.setenv(mod.SCOPE_ENV, mod.FULL_LIFECYCLE_SCOPE)
     monkeypatch.setenv(mod.POLICY_FILE_ENV, str(policy))
 
-    decision = mod.evaluate_greenfield_authority(stage="entry", action="BUY", strategy="SCALPING")
+    decision = mod.evaluate_greenfield_authority(
+        stage="entry", action="BUY", strategy="SCALPING"
+    )
 
     assert decision.active is True
     assert decision.allowed is False
@@ -163,7 +171,9 @@ def test_greenfield_authority_blocks_unpromoted_bucket(tmp_path, monkeypatch):
     monkeypatch.setenv(mod.SCOPE_ENV, mod.FULL_LIFECYCLE_SCOPE)
     monkeypatch.setenv(mod.POLICY_FILE_ENV, str(policy))
 
-    decision = mod.evaluate_greenfield_authority(stage="submit", action="ALLOW_SUBMIT", strategy="SCALPING")
+    decision = mod.evaluate_greenfield_authority(
+        stage="submit", action="ALLOW_SUBMIT", strategy="SCALPING"
+    )
 
     assert decision.active is True
     assert decision.allowed is False
@@ -258,9 +268,13 @@ def test_format_greenfield_bucket_notice_line_keeps_raw_provenance():
 def test_greenfield_authority_enabled_with_missing_policy_fails_closed(monkeypatch):
     monkeypatch.setenv(mod.ENABLED_ENV, "true")
     monkeypatch.setenv(mod.SCOPE_ENV, mod.FULL_LIFECYCLE_SCOPE)
-    monkeypatch.setenv(mod.POLICY_FILE_ENV, "/tmp/does-not-exist-greenfield-policy.json")
+    monkeypatch.setenv(
+        mod.POLICY_FILE_ENV, "/tmp/does-not-exist-greenfield-policy.json"
+    )
 
-    decision = mod.evaluate_greenfield_authority(stage="submit", action="ALLOW_SUBMIT", strategy="SCALPING")
+    decision = mod.evaluate_greenfield_authority(
+        stage="submit", action="ALLOW_SUBMIT", strategy="SCALPING"
+    )
 
     assert mod.greenfield_authority_active() is True
     assert decision.active is True

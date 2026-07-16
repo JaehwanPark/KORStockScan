@@ -8,8 +8,18 @@ def test_gemini_pattern_lab_excludes_good_exit_from_profit_sample():
     trade_facts = []
     build_dataset._process_post_sell_rows(
         [
-            {"post_sell_id": "good", "recommendation_id": 1, "outcome": "GOOD_EXIT", "profit_rate": 1.2},
-            {"post_sell_id": "completed", "recommendation_id": 2, "outcome": "COMPLETED", "profit_rate": 0.8},
+            {
+                "post_sell_id": "good",
+                "recommendation_id": 1,
+                "outcome": "GOOD_EXIT",
+                "profit_rate": 1.2,
+            },
+            {
+                "post_sell_id": "completed",
+                "recommendation_id": 2,
+                "outcome": "COMPLETED",
+                "profit_rate": 0.8,
+            },
         ],
         "local",
         {},
