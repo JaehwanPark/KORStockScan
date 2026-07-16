@@ -11,7 +11,6 @@ import time
 from datetime import datetime
 from typing import Any
 
-
 FRESH_WS = "fresh_ws"
 REST_ENRICHED = "rest_enriched"
 MISSING = "missing"
@@ -66,7 +65,9 @@ def _epoch_ms_to_age_ms(value: Any, now_ts: float) -> float | None:
     return max(0.0, (float(now_ts) - float(parsed)) * 1000.0)
 
 
-def _age_ms_from_keys(source: dict[str, Any], now_ts: float, keys: tuple[str, ...]) -> float | None:
+def _age_ms_from_keys(
+    source: dict[str, Any], now_ts: float, keys: tuple[str, ...]
+) -> float | None:
     for key in keys:
         if key not in source:
             continue
@@ -105,7 +106,10 @@ def _age_details(
                 continue
             elapsed = _epoch_ms_to_age_ms(source.get(snapshot_key), now_ts)
             if elapsed is not None:
-                return float(reported_age) + elapsed, f"reported_age_plus_elapsed:{key}:{snapshot_key}"
+                return (
+                    float(reported_age) + elapsed,
+                    f"reported_age_plus_elapsed:{key}:{snapshot_key}",
+                )
         return float(reported_age), f"reported_age_no_time_basis:{key}"
     return None, "missing"
 
@@ -140,10 +144,14 @@ def _ws_age_ms(ws_data: dict[str, Any], now_ts: float) -> float | None:
     return _ws_age_details(ws_data, now_ts)[0]
 
 
-def _rest_age_details(rest_orderbook: dict[str, Any], now_ts: float) -> tuple[float | None, str]:
+def _rest_age_details(
+    rest_orderbook: dict[str, Any], now_ts: float
+) -> tuple[float | None, str]:
     if not isinstance(rest_orderbook, dict) or not rest_orderbook:
         return None, "missing"
-    is_ka10004_snapshot = str(rest_orderbook.get("source") or "").strip() == "ka10004_rest_orderbook"
+    is_ka10004_snapshot = (
+        str(rest_orderbook.get("source") or "").strip() == "ka10004_rest_orderbook"
+    )
     absolute_keys = (
         "rest_received_ts_ms",
         "received_at_ms",
@@ -243,8 +251,16 @@ def _quote_usable(levels: dict[str, int]) -> bool:
 
 
 def _gap_bps(ws_levels: dict[str, int], rest_levels: dict[str, int]) -> float | None:
-    ws_price = ws_levels.get("curr", 0) or ws_levels.get("best_ask", 0) or ws_levels.get("best_bid", 0)
-    rest_price = rest_levels.get("curr", 0) or rest_levels.get("best_ask", 0) or rest_levels.get("best_bid", 0)
+    ws_price = (
+        ws_levels.get("curr", 0)
+        or ws_levels.get("best_ask", 0)
+        or ws_levels.get("best_bid", 0)
+    )
+    rest_price = (
+        rest_levels.get("curr", 0)
+        or rest_levels.get("best_ask", 0)
+        or rest_levels.get("best_bid", 0)
+    )
     if ws_price <= 0 or rest_price <= 0:
         return None
     basis = max(ws_price, rest_price)
@@ -257,7 +273,11 @@ def _signed_tick_side_and_qty(tick: dict[str, Any]) -> tuple[str, int]:
     side = str(tick.get("aggressor_side") or tick.get("side") or "").strip().upper()
     raw = tick.get("aggressor_aux_raw_15")
     if raw in (None, "", "-"):
-        raw = tick.get("signed_trade_volume") or tick.get("signed_volume") or tick.get("체결량")
+        raw = (
+            tick.get("signed_trade_volume")
+            or tick.get("signed_volume")
+            or tick.get("체결량")
+        )
     text = str(raw or "").strip().replace(",", "")
     qty = abs(_safe_int(text, 0))
     if side not in {"BUY", "SELL"}:
@@ -383,7 +403,9 @@ def _signed_tape_fields(
         if sample >= max(1, int(signed_tape_window)):
             break
     total_volume = buy_volume + sell_volume
-    buy_ratio = (float(buy_volume) / float(total_volume) * 100.0) if total_volume > 0 else None
+    buy_ratio = (
+        (float(buy_volume) / float(total_volume) * 100.0) if total_volume > 0 else None
+    )
     if sample == 0 and stale_or_unknown_count > 0:
         state = SIGNED_TAPE_STALE
     elif sample < max(1, int(signed_tape_min_samples)):
@@ -454,7 +476,11 @@ def refresh_rest_signed_tape_fields(
 
 def market_data_enrichment_log_fields(source: dict[str, Any] | None) -> dict[str, Any]:
     source = source if isinstance(source, dict) else {}
-    return {key: value for key, value in source.items() if str(key).startswith("market_data_")}
+    return {
+        key: value
+        for key, value in source.items()
+        if str(key).startswith("market_data_")
+    }
 
 
 def build_market_data_enrichment(
@@ -493,12 +519,26 @@ def build_market_data_enrichment(
     rest_age, rest_age_basis = _rest_age_details(rest_orderbook, now_value)
     ws_explicit_stale = any(
         _boolish(base.get(key))
-        for key in ("quote_stale", "stale_quote", "context_stale", "diagnostic_quote_age_stale")
+        for key in (
+            "quote_stale",
+            "stale_quote",
+            "context_stale",
+            "diagnostic_quote_age_stale",
+        )
     )
-    ws_fresh = bool(ws_usable and not ws_explicit_stale and ws_age is not None and ws_age <= max_ws_age_ms)
-    rest_fresh = bool(rest_usable and rest_age is not None and rest_age <= max_rest_age_ms)
+    ws_fresh = bool(
+        ws_usable
+        and not ws_explicit_stale
+        and ws_age is not None
+        and ws_age <= max_ws_age_ms
+    )
+    rest_fresh = bool(
+        rest_usable and rest_age is not None and rest_age <= max_rest_age_ms
+    )
     gap = _gap_bps(ws_levels, rest_levels)
-    conflicted = bool(ws_fresh and rest_fresh and gap is not None and gap > max_ws_rest_gap_bps)
+    conflicted = bool(
+        ws_fresh and rest_fresh and gap is not None and gap > max_ws_rest_gap_bps
+    )
     sources = []
     if ws_usable:
         sources.append("ws")
@@ -513,13 +553,17 @@ def build_market_data_enrichment(
         and rest_age is not None
         and rest_age < ws_age
     )
-    use_rest_quote = bool(rest_fresh and (not ws_fresh or (prefer_freshest_source and rest_is_fresher)))
+    use_rest_quote = bool(
+        rest_fresh and (not ws_fresh or (prefer_freshest_source and rest_is_fresher))
+    )
     if conflicted:
         freshness_state = CONFLICTED
         orderbook_state = CONFLICTED
-        effective_age = min(value for value in (ws_age, rest_age) if value is not None) if any(
-            value is not None for value in (ws_age, rest_age)
-        ) else None
+        effective_age = (
+            min(value for value in (ws_age, rest_age) if value is not None)
+            if any(value is not None for value in (ws_age, rest_age))
+            else None
+        )
         effective_source = "ws_rest_conflicted"
     elif use_rest_quote:
         freshness_state = REST_ENRICHED
@@ -533,14 +577,19 @@ def build_market_data_enrichment(
                 "best_bid": rest_levels["best_bid"],
                 "best_ask_qty": rest_levels["best_ask_qty"],
                 "best_bid_qty": rest_levels["best_bid_qty"],
-                "ask_tot": _safe_int(rest_orderbook.get("ask_tot"), _safe_int(base.get("ask_tot"), 0)),
-                "bid_tot": _safe_int(rest_orderbook.get("bid_tot"), _safe_int(base.get("bid_tot"), 0)),
+                "ask_tot": _safe_int(
+                    rest_orderbook.get("ask_tot"), _safe_int(base.get("ask_tot"), 0)
+                ),
+                "bid_tot": _safe_int(
+                    rest_orderbook.get("bid_tot"), _safe_int(base.get("bid_tot"), 0)
+                ),
                 "orderbook": rest_orderbook.get("orderbook") or base.get("orderbook"),
                 "quote_stale": False,
                 "stale_quote": False,
                 "quote_refresh_source": "ka10004_rest_orderbook",
                 "ws_snapshot_recovery_source": (
-                    base.get("ws_snapshot_recovery_source") or "ka10004_rest_orderbook_enrichment"
+                    base.get("ws_snapshot_recovery_source")
+                    or "ka10004_rest_orderbook_enrichment"
                 ),
                 "quote_age_ms": float(rest_age),
             }
@@ -599,19 +648,27 @@ def build_market_data_enrichment(
         "market_data_effective_best_bid": effective_levels.get("best_bid", 0) or "-",
         "market_data_effective_quote_level_basis": effective_level_basis,
         "market_data_effective_age_basis": (
-            rest_age_basis if effective_source == "ka10004_rest_orderbook" else ws_age_basis
+            rest_age_basis
+            if effective_source == "ka10004_rest_orderbook"
+            else ws_age_basis
         ),
         "market_data_ws_rest_gap_bps": round(float(gap), 3) if gap is not None else "-",
-        "market_data_ws_quote_age_ms": round(float(ws_age), 3) if ws_age is not None else "-",
+        "market_data_ws_quote_age_ms": (
+            round(float(ws_age), 3) if ws_age is not None else "-"
+        ),
         "market_data_ws_age_basis": ws_age_basis,
-        "market_data_rest_quote_age_ms": round(float(rest_age), 3) if rest_age is not None else "-",
+        "market_data_rest_quote_age_ms": (
+            round(float(rest_age), 3) if rest_age is not None else "-"
+        ),
         "market_data_rest_age_basis": rest_age_basis,
         "market_data_source_selection_policy": (
             "freshest_age" if prefer_freshest_source else "ws_primary_then_rest"
         ),
         "market_data_orderbook_state": orderbook_state,
         "market_data_tick_context_state": tick_state,
-        "market_data_candidate_source": metadata.get("source_signature") or metadata.get("source") or "-",
+        "market_data_candidate_source": metadata.get("source_signature")
+        or metadata.get("source")
+        or "-",
         "market_data_forbidden_uses": MARKET_DATA_FORBIDDEN_USES,
         **signed_fields,
     }

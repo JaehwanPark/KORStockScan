@@ -8,7 +8,6 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-
 POLICY_VERSION = "micro_estimator_state_v1"
 DEFAULT_HOT_TTL_SEC = 600.0
 DEFAULT_WARM_TTL_SEC = 180.0
@@ -96,17 +95,51 @@ class MicroEstimatorConfig:
     @classmethod
     def from_env(cls) -> "MicroEstimatorConfig":
         return cls(
-            max_hot_symbols=max(1, _env_int("KORSTOCKSCAN_MICRO_ESTIMATOR_MAX_HOT_SYMBOLS", DEFAULT_MAX_HOT_SYMBOLS)),
+            max_hot_symbols=max(
+                1,
+                _env_int(
+                    "KORSTOCKSCAN_MICRO_ESTIMATOR_MAX_HOT_SYMBOLS",
+                    DEFAULT_MAX_HOT_SYMBOLS,
+                ),
+            ),
             max_warm_symbols=max(
                 0,
-                _env_int("KORSTOCKSCAN_MICRO_ESTIMATOR_MAX_WARM_SYMBOLS", DEFAULT_MAX_WARM_SYMBOLS),
+                _env_int(
+                    "KORSTOCKSCAN_MICRO_ESTIMATOR_MAX_WARM_SYMBOLS",
+                    DEFAULT_MAX_WARM_SYMBOLS,
+                ),
             ),
-            hot_ttl_sec=max(1.0, _env_float("KORSTOCKSCAN_MICRO_ESTIMATOR_HOT_TTL_SEC", DEFAULT_HOT_TTL_SEC)),
-            warm_ttl_sec=max(1.0, _env_float("KORSTOCKSCAN_MICRO_ESTIMATOR_WARM_TTL_SEC", DEFAULT_WARM_TTL_SEC)),
-            half_life_sec=max(1.0, _env_float("KORSTOCKSCAN_MICRO_ESTIMATOR_HALF_LIFE_SEC", DEFAULT_HALF_LIFE_SEC)),
-            min_confidence=max(0.0, _env_float("KORSTOCKSCAN_MICRO_ESTIMATOR_MIN_CONFIDENCE", DEFAULT_MIN_CONFIDENCE)),
-            min_ofi_norm=_env_float("KORSTOCKSCAN_MICRO_ESTIMATOR_MIN_OFI_NORM", DEFAULT_MIN_OFI_NORM),
-            min_pressure=_env_float("KORSTOCKSCAN_MICRO_ESTIMATOR_MIN_PRESSURE", DEFAULT_MIN_PRESSURE),
+            hot_ttl_sec=max(
+                1.0,
+                _env_float(
+                    "KORSTOCKSCAN_MICRO_ESTIMATOR_HOT_TTL_SEC", DEFAULT_HOT_TTL_SEC
+                ),
+            ),
+            warm_ttl_sec=max(
+                1.0,
+                _env_float(
+                    "KORSTOCKSCAN_MICRO_ESTIMATOR_WARM_TTL_SEC", DEFAULT_WARM_TTL_SEC
+                ),
+            ),
+            half_life_sec=max(
+                1.0,
+                _env_float(
+                    "KORSTOCKSCAN_MICRO_ESTIMATOR_HALF_LIFE_SEC", DEFAULT_HALF_LIFE_SEC
+                ),
+            ),
+            min_confidence=max(
+                0.0,
+                _env_float(
+                    "KORSTOCKSCAN_MICRO_ESTIMATOR_MIN_CONFIDENCE",
+                    DEFAULT_MIN_CONFIDENCE,
+                ),
+            ),
+            min_ofi_norm=_env_float(
+                "KORSTOCKSCAN_MICRO_ESTIMATOR_MIN_OFI_NORM", DEFAULT_MIN_OFI_NORM
+            ),
+            min_pressure=_env_float(
+                "KORSTOCKSCAN_MICRO_ESTIMATOR_MIN_PRESSURE", DEFAULT_MIN_PRESSURE
+            ),
         )
 
 
@@ -137,8 +170,12 @@ class SymbolMicroEstimatorState:
 
 def estimate_orderbook_pressure(orderbook: Mapping[str, Any] | None) -> dict[str, Any]:
     data = orderbook if isinstance(orderbook, Mapping) else {}
-    best_bid_qty = _read_first_number(data, "best_bid_qty", "bid_qty_1", "bid1_qty", "bid_qty")
-    best_ask_qty = _read_first_number(data, "best_ask_qty", "ask_qty_1", "ask1_qty", "ask_qty")
+    best_bid_qty = _read_first_number(
+        data, "best_bid_qty", "bid_qty_1", "bid1_qty", "bid_qty"
+    )
+    best_ask_qty = _read_first_number(
+        data, "best_ask_qty", "ask_qty_1", "ask1_qty", "ask_qty"
+    )
     bid_total = _read_first_number(data, "bid_tot", "bid_total", "total_bid_qty")
     ask_total = _read_first_number(data, "ask_tot", "ask_total", "total_ask_qty")
     bid_depth = bid_total if bid_total > 0 else best_bid_qty
@@ -146,7 +183,9 @@ def estimate_orderbook_pressure(orderbook: Mapping[str, Any] | None) -> dict[str
     total_depth = max(0.0, bid_depth + ask_depth)
     ofi_norm = ((bid_depth - ask_depth) / total_depth) if total_depth > 0 else 0.0
     pressure = _clamp(50.0 + (50.0 * ofi_norm), 0.0, 100.0)
-    top_depth_ratio = (bid_depth / max(ask_depth, 1.0)) if bid_depth > 0 and ask_depth > 0 else 0.0
+    top_depth_ratio = (
+        (bid_depth / max(ask_depth, 1.0)) if bid_depth > 0 and ask_depth > 0 else 0.0
+    )
     return {
         "bid_depth": bid_depth,
         "ask_depth": ask_depth,
@@ -154,17 +193,29 @@ def estimate_orderbook_pressure(orderbook: Mapping[str, Any] | None) -> dict[str
         "ofi_norm": ofi_norm,
         "pressure": pressure,
         "top_depth_ratio": top_depth_ratio,
-        "depth_source": "rest_total_depth" if bid_total > 0 and ask_total > 0 else "rest_best_level_qty",
+        "depth_source": (
+            "rest_total_depth"
+            if bid_total > 0 and ask_total > 0
+            else "rest_best_level_qty"
+        ),
     }
 
 
 def _best_level_snapshot(orderbook: Mapping[str, Any] | None) -> dict[str, float]:
     data = orderbook if isinstance(orderbook, Mapping) else {}
     return {
-        "bid_price": _read_first_number(data, "best_bid", "bid_price_1", "bid1_price", "bid_price"),
-        "bid_size": _read_first_number(data, "best_bid_qty", "bid_qty_1", "bid1_qty", "bid_qty"),
-        "ask_price": _read_first_number(data, "best_ask", "ask_price_1", "ask1_price", "ask_price"),
-        "ask_size": _read_first_number(data, "best_ask_qty", "ask_qty_1", "ask1_qty", "ask_qty"),
+        "bid_price": _read_first_number(
+            data, "best_bid", "bid_price_1", "bid1_price", "bid_price"
+        ),
+        "bid_size": _read_first_number(
+            data, "best_bid_qty", "bid_qty_1", "bid1_qty", "bid_qty"
+        ),
+        "ask_price": _read_first_number(
+            data, "best_ask", "ask_price_1", "ask1_price", "ask_price"
+        ),
+        "ask_size": _read_first_number(
+            data, "best_ask_qty", "ask_qty_1", "ask1_qty", "ask_qty"
+        ),
     }
 
 
@@ -218,14 +269,26 @@ def feature_only_fields_from_snapshot(
         f"{prefix}_source_state": snap.get("source_state") or "default_prior",
         f"{prefix}_ofi_source": snap.get("ofi_source") or "default_prior",
         f"{prefix}_ofi_ewma": round(_safe_float(snap.get("ofi_ewma"), 0.0), 4),
-        f"{prefix}_true_ofi_ewma": round(_safe_float(snap.get("true_ofi_ewma"), 0.0), 4),
-        f"{prefix}_depth_imbalance_ewma": round(_safe_float(snap.get("depth_imbalance_ewma"), 0.0), 4),
-        f"{prefix}_last_ofi_event": round(_safe_float(snap.get("last_ofi_event"), 0.0), 4),
-        f"{prefix}_pressure_ewma": round(_safe_float(snap.get("pressure_ewma"), 50.0), 3),
-        f"{prefix}_top_depth_ratio": round(_safe_float(snap.get("top_depth_ratio"), 0.0), 4),
+        f"{prefix}_true_ofi_ewma": round(
+            _safe_float(snap.get("true_ofi_ewma"), 0.0), 4
+        ),
+        f"{prefix}_depth_imbalance_ewma": round(
+            _safe_float(snap.get("depth_imbalance_ewma"), 0.0), 4
+        ),
+        f"{prefix}_last_ofi_event": round(
+            _safe_float(snap.get("last_ofi_event"), 0.0), 4
+        ),
+        f"{prefix}_pressure_ewma": round(
+            _safe_float(snap.get("pressure_ewma"), 50.0), 3
+        ),
+        f"{prefix}_top_depth_ratio": round(
+            _safe_float(snap.get("top_depth_ratio"), 0.0), 4
+        ),
         f"{prefix}_confidence": round(_safe_float(snap.get("confidence"), 0.0), 4),
         f"{prefix}_sample_count": _safe_int(snap.get("sample_count"), 0),
-        f"{prefix}_true_ofi_sample_count": _safe_int(snap.get("true_ofi_sample_count"), 0),
+        f"{prefix}_true_ofi_sample_count": _safe_int(
+            snap.get("true_ofi_sample_count"), 0
+        ),
         f"{prefix}_age_sec": round(_safe_float(snap.get("age_sec"), 0.0), 3),
         f"{prefix}_consumer_stage": consumer_stage or "unspecified",
         f"{prefix}_metric_role": "diagnostic",
@@ -295,7 +358,9 @@ class MicroEstimatorStore:
         tier: str = "hot",
     ) -> SymbolMicroEstimatorState:
         with self._lock:
-            state = self.mark_candidate(symbol, tier=tier, now_ts=now_ts, reason="rest_orderbook")
+            state = self.mark_candidate(
+                symbol, tier=tier, now_ts=now_ts, reason="rest_orderbook"
+            )
             depth = estimate_orderbook_pressure(orderbook)
             if depth["total_depth"] <= 0:
                 return state
@@ -305,15 +370,27 @@ class MicroEstimatorStore:
             self._apply_observation(
                 state,
                 now_ts=now_ts,
-                ofi_norm=true_ofi_norm if true_ofi_norm is not None else float(depth["ofi_norm"]),
+                ofi_norm=(
+                    true_ofi_norm
+                    if true_ofi_norm is not None
+                    else float(depth["ofi_norm"])
+                ),
                 depth_imbalance=float(depth["ofi_norm"]),
                 true_ofi_norm=true_ofi_norm,
                 raw_ofi_event=raw_ofi_event,
                 pressure=float(depth["pressure"]),
                 top_depth_ratio=float(depth["top_depth_ratio"]),
                 confidence=confidence,
-                source_state="rest_orderbook_delta_estimate" if true_ofi_norm is not None else "rest_anchored_estimate",
-                ofi_source="rest_orderbook_delta" if true_ofi_norm is not None else "depth_imbalance_proxy",
+                source_state=(
+                    "rest_orderbook_delta_estimate"
+                    if true_ofi_norm is not None
+                    else "rest_anchored_estimate"
+                ),
+                ofi_source=(
+                    "rest_orderbook_delta"
+                    if true_ofi_norm is not None
+                    else "depth_imbalance_proxy"
+                ),
                 current_best=current_best,
             )
             if confidence > 0:
@@ -329,7 +406,9 @@ class MicroEstimatorStore:
         tier: str = "warm",
     ) -> SymbolMicroEstimatorState:
         with self._lock:
-            state = self.mark_candidate(symbol, tier=tier, now_ts=now_ts, reason="ws_quote")
+            state = self.mark_candidate(
+                symbol, tier=tier, now_ts=now_ts, reason="ws_quote"
+            )
             data = ws_quote if isinstance(ws_quote, Mapping) else {}
             depth = estimate_orderbook_pressure(data)
             if depth["total_depth"] <= 0:
@@ -337,14 +416,28 @@ class MicroEstimatorStore:
             current_best = _best_level_snapshot(data)
             true_ofi_norm, raw_ofi_event = self._calculate_true_ofi(state, current_best)
             quote_age_ms = _safe_float(data.get("quote_age_ms"), 0.0)
-            stale = str(data.get("source_quality_state") or "").lower().find("stale") >= 0
-            stale = stale or str(data.get("quote_stale") or "").strip().lower() in {"1", "true", "stale"}
-            fresh = bool(depth["total_depth"] > 0 and (quote_age_ms <= 3000.0 or quote_age_ms <= 0) and not stale)
+            stale = (
+                str(data.get("source_quality_state") or "").lower().find("stale") >= 0
+            )
+            stale = stale or str(data.get("quote_stale") or "").strip().lower() in {
+                "1",
+                "true",
+                "stale",
+            }
+            fresh = bool(
+                depth["total_depth"] > 0
+                and (quote_age_ms <= 3000.0 or quote_age_ms <= 0)
+                and not stale
+            )
             confidence = 0.85 if fresh else 0.15 if depth["total_depth"] > 0 else 0.0
             self._apply_observation(
                 state,
                 now_ts=now_ts,
-                ofi_norm=true_ofi_norm if true_ofi_norm is not None else float(depth["ofi_norm"]),
+                ofi_norm=(
+                    true_ofi_norm
+                    if true_ofi_norm is not None
+                    else float(depth["ofi_norm"])
+                ),
                 depth_imbalance=float(depth["ofi_norm"]),
                 true_ofi_norm=true_ofi_norm,
                 raw_ofi_event=raw_ofi_event,
@@ -354,13 +447,21 @@ class MicroEstimatorStore:
                 source_state=(
                     "fresh_ws_order_flow_delta"
                     if fresh and true_ofi_norm is not None
-                    else "fresh_ws_estimate"
-                    if fresh
-                    else "decayed_ws_order_flow_delta"
-                    if true_ofi_norm is not None
-                    else "decayed_ws_estimate"
+                    else (
+                        "fresh_ws_estimate"
+                        if fresh
+                        else (
+                            "decayed_ws_order_flow_delta"
+                            if true_ofi_norm is not None
+                            else "decayed_ws_estimate"
+                        )
+                    )
                 ),
-                ofi_source="ws_order_flow_delta" if true_ofi_norm is not None else "depth_imbalance_proxy",
+                ofi_source=(
+                    "ws_order_flow_delta"
+                    if true_ofi_norm is not None
+                    else "depth_imbalance_proxy"
+                ),
                 current_best=current_best,
             )
             if confidence > 0:
@@ -379,7 +480,9 @@ class MicroEstimatorStore:
         tier: str = "hot",
     ) -> SymbolMicroEstimatorState:
         with self._lock:
-            state = self.mark_candidate(symbol, tier=tier, now_ts=now_ts, reason="feature_probe")
+            state = self.mark_candidate(
+                symbol, tier=tier, now_ts=now_ts, reason="feature_probe"
+            )
             probe_data = probe if isinstance(probe, Mapping) else {}
             quality_data = source_quality if isinstance(source_quality, Mapping) else {}
             pressure = _safe_float(
@@ -390,14 +493,21 @@ class MicroEstimatorStore:
                 50.0,
             )
             delta = _safe_float(
-                probe_data.get("net_aggressive_delta_10t") or quality_data.get("net_aggressive_delta_10t"),
+                probe_data.get("net_aggressive_delta_10t")
+                or quality_data.get("net_aggressive_delta_10t"),
                 0.0,
             )
             observed = _safe_float(observed_ts, 0.0)
-            age_sec = max(0.0, float(now_ts) - observed) if observed > 0 else max_age_sec
+            age_sec = (
+                max(0.0, float(now_ts) - observed) if observed > 0 else max_age_sec
+            )
             age_confidence = _clamp(1.0 - (age_sec / max(1.0, max_age_sec)), 0.0, 1.0)
-            decayed_pressure = 50.0 + ((_clamp(pressure, 0.0, 100.0) - 50.0) * age_confidence)
-            ofi_hint = _clamp(delta / max(abs(delta), 1000.0), -1.0, 1.0) if delta else 0.0
+            decayed_pressure = 50.0 + (
+                (_clamp(pressure, 0.0, 100.0) - 50.0) * age_confidence
+            )
+            ofi_hint = (
+                _clamp(delta / max(abs(delta), 1000.0), -1.0, 1.0) if delta else 0.0
+            )
             confidence = 0.40 * age_confidence if observed > 0 else 0.0
             self._apply_observation(
                 state,
@@ -409,7 +519,9 @@ class MicroEstimatorStore:
                 pressure=decayed_pressure,
                 top_depth_ratio=state.top_depth_ratio,
                 confidence=confidence,
-                source_state="smoothed_probe_estimate" if confidence > 0 else "default_prior",
+                source_state=(
+                    "smoothed_probe_estimate" if confidence > 0 else "default_prior"
+                ),
                 ofi_source="feature_probe_delta_hint",
                 current_best=None,
             )
@@ -424,7 +536,11 @@ class MicroEstimatorStore:
             if state is None:
                 return self._default_snapshot(symbol_key, now_ts=now_ts)
             age_sec = max(0.0, float(now_ts) - float(state.last_update_ts or now_ts))
-            ttl_sec = self.config.hot_ttl_sec if state.tier == "hot" else self.config.warm_ttl_sec
+            ttl_sec = (
+                self.config.hot_ttl_sec
+                if state.tier == "hot"
+                else self.config.warm_ttl_sec
+            )
             decay = _decay_weight(age_sec, self.config.half_life_sec)
             confidence = _clamp(state.confidence * decay, 0.0, 1.0)
             source_state = state.source_state
@@ -436,40 +552,46 @@ class MicroEstimatorStore:
             elif age_sec > self.config.half_life_sec:
                 source_state = "decayed_estimate"
             return {
-            "policy_version": POLICY_VERSION,
-            "symbol": symbol_key,
-            "tier": state.tier,
-            "source_state": source_state,
-            "ofi_source": state.ofi_source,
-            "ofi_ewma": state.ofi_ewma,
-            "true_ofi_ewma": state.true_ofi_ewma,
-            "depth_imbalance_ewma": state.depth_imbalance_ewma,
-            "last_ofi_event": state.last_ofi_event,
-            "pressure_ewma": state.pressure_ewma,
-            "top_depth_ratio": state.top_depth_ratio,
-            "confidence": confidence,
-            "sample_count": state.sample_count,
-            "true_ofi_sample_count": state.true_ofi_sample_count,
-            "age_sec": age_sec,
-            "last_update_ts": state.last_update_ts,
-            "last_rest_ts": state.last_rest_ts,
-            "last_ws_ts": state.last_ws_ts,
-            "last_probe_ts": state.last_probe_ts,
-            "prev_best_bid_price": state.prev_best_bid_price,
-            "prev_best_bid_size": state.prev_best_bid_size,
-            "prev_best_ask_price": state.prev_best_ask_price,
-            "prev_best_ask_size": state.prev_best_ask_size,
-            "min_confidence": self.config.min_confidence,
-            "min_ofi_norm": self.config.min_ofi_norm,
-            "min_pressure": self.config.min_pressure,
+                "policy_version": POLICY_VERSION,
+                "symbol": symbol_key,
+                "tier": state.tier,
+                "source_state": source_state,
+                "ofi_source": state.ofi_source,
+                "ofi_ewma": state.ofi_ewma,
+                "true_ofi_ewma": state.true_ofi_ewma,
+                "depth_imbalance_ewma": state.depth_imbalance_ewma,
+                "last_ofi_event": state.last_ofi_event,
+                "pressure_ewma": state.pressure_ewma,
+                "top_depth_ratio": state.top_depth_ratio,
+                "confidence": confidence,
+                "sample_count": state.sample_count,
+                "true_ofi_sample_count": state.true_ofi_sample_count,
+                "age_sec": age_sec,
+                "last_update_ts": state.last_update_ts,
+                "last_rest_ts": state.last_rest_ts,
+                "last_ws_ts": state.last_ws_ts,
+                "last_probe_ts": state.last_probe_ts,
+                "prev_best_bid_price": state.prev_best_bid_price,
+                "prev_best_bid_size": state.prev_best_bid_size,
+                "prev_best_ask_price": state.prev_best_ask_price,
+                "prev_best_ask_size": state.prev_best_ask_size,
+                "min_confidence": self.config.min_confidence,
+                "min_ofi_norm": self.config.min_ofi_norm,
+                "min_pressure": self.config.min_pressure,
             }
 
     def prune(self, now_ts: float) -> int:
         with self._lock:
             remove: list[str] = []
             for symbol, state in self._states.items():
-                ttl_sec = self.config.hot_ttl_sec if state.tier == "hot" else self.config.warm_ttl_sec
-                age_sec = max(0.0, float(now_ts) - float(state.last_update_ts or now_ts))
+                ttl_sec = (
+                    self.config.hot_ttl_sec
+                    if state.tier == "hot"
+                    else self.config.warm_ttl_sec
+                )
+                age_sec = max(
+                    0.0, float(now_ts) - float(state.last_update_ts or now_ts)
+                )
                 if age_sec > ttl_sec:
                     remove.append(symbol)
             for symbol in remove:
@@ -507,7 +629,13 @@ class MicroEstimatorStore:
     ) -> None:
         prev_ts = state.last_update_ts or now_ts
         elapsed = max(0.0, float(now_ts) - float(prev_ts))
-        alpha = 1.0 if state.sample_count <= 0 else _clamp(1.0 - _decay_weight(elapsed, self.config.half_life_sec), 0.20, 0.80)
+        alpha = (
+            1.0
+            if state.sample_count <= 0
+            else _clamp(
+                1.0 - _decay_weight(elapsed, self.config.half_life_sec), 0.20, 0.80
+            )
+        )
         state.depth_imbalance_ewma = ((1.0 - alpha) * state.depth_imbalance_ewma) + (
             alpha * _clamp(depth_imbalance, -1.0, 1.0)
         )
@@ -523,11 +651,18 @@ class MicroEstimatorStore:
             state.ofi_ewma = state.true_ofi_ewma
             effective_ofi_source = "previous_true_ofi"
         elif state.true_ofi_sample_count <= 0:
-            state.ofi_ewma = ((1.0 - alpha) * state.ofi_ewma) + (alpha * _clamp(ofi_norm, -1.0, 1.0))
+            state.ofi_ewma = ((1.0 - alpha) * state.ofi_ewma) + (
+                alpha * _clamp(ofi_norm, -1.0, 1.0)
+            )
             effective_ofi_source = ofi_source
-        state.pressure_ewma = ((1.0 - alpha) * state.pressure_ewma) + (alpha * _clamp(pressure, 0.0, 100.0))
+        state.pressure_ewma = ((1.0 - alpha) * state.pressure_ewma) + (
+            alpha * _clamp(pressure, 0.0, 100.0)
+        )
         state.top_depth_ratio = max(0.0, top_depth_ratio)
-        state.confidence = max(state.confidence * _decay_weight(elapsed, self.config.half_life_sec), _clamp(confidence, 0.0, 1.0))
+        state.confidence = max(
+            state.confidence * _decay_weight(elapsed, self.config.half_life_sec),
+            _clamp(confidence, 0.0, 1.0),
+        )
         state.sample_count += 1
         state.last_update_ts = float(now_ts)
         state.ofi_source = effective_ofi_source
@@ -588,16 +723,34 @@ class MicroEstimatorStore:
 DEFAULT_STORE = MicroEstimatorStore()
 
 
-def mark_candidate(symbol: str, *, tier: str = "warm", now_ts: float, reason: str = "candidate"):
+def mark_candidate(
+    symbol: str, *, tier: str = "warm", now_ts: float, reason: str = "candidate"
+):
     return DEFAULT_STORE.mark_candidate(symbol, tier=tier, now_ts=now_ts, reason=reason)
 
 
-def update_from_ws_quote(symbol: str, ws_quote: Mapping[str, Any] | None, *, now_ts: float, tier: str = "warm"):
-    return DEFAULT_STORE.update_from_ws_quote(symbol, ws_quote, now_ts=now_ts, tier=tier)
+def update_from_ws_quote(
+    symbol: str,
+    ws_quote: Mapping[str, Any] | None,
+    *,
+    now_ts: float,
+    tier: str = "warm",
+):
+    return DEFAULT_STORE.update_from_ws_quote(
+        symbol, ws_quote, now_ts=now_ts, tier=tier
+    )
 
 
-def update_from_rest_orderbook(symbol: str, orderbook: Mapping[str, Any] | None, *, now_ts: float, tier: str = "hot"):
-    return DEFAULT_STORE.update_from_rest_orderbook(symbol, orderbook, now_ts=now_ts, tier=tier)
+def update_from_rest_orderbook(
+    symbol: str,
+    orderbook: Mapping[str, Any] | None,
+    *,
+    now_ts: float,
+    tier: str = "hot",
+):
+    return DEFAULT_STORE.update_from_rest_orderbook(
+        symbol, orderbook, now_ts=now_ts, tier=tier
+    )
 
 
 def update_from_feature_probe(
