@@ -7,7 +7,6 @@ from typing import Any
 
 from src.utils.constants import DATA_DIR
 
-
 WINDOWS_ARTIFACT_DIR = "source_quality/market_halt_windows/windows"
 SESSION_EVENTS_ARTIFACT_DIR = "source_quality/market_halt_windows/session_events"
 
@@ -22,7 +21,9 @@ def session_events_path(target_date: str, *, data_dir: Path | None = None) -> Pa
     return base / SESSION_EVENTS_ARTIFACT_DIR / f"{target_date}.json"
 
 
-def load_market_halt_windows(target_date: str, *, data_dir: Path | None = None) -> list[dict[str, Any]]:
+def load_market_halt_windows(
+    target_date: str, *, data_dir: Path | None = None
+) -> list[dict[str, Any]]:
     path = artifact_path(target_date, data_dir=data_dir)
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
