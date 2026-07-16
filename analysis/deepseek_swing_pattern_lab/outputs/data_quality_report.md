@@ -1,13 +1,13 @@
 # DeepSeek Swing Pattern Lab - Data Quality Report
 
-## Analysis Window: 2026-07-15 ~ 2026-07-15
+## Analysis Window: 2026-07-16 ~ 2026-07-16
 
 ## Fact Table Row Counts
 
 - swing_trade_fact: `0`
 - swing_lifecycle_funnel_fact: `1`
-- swing_sequence_fact: `11`
-- swing_ofi_qi_fact: `14`
+- swing_sequence_fact: `3`
+- swing_ofi_qi_fact: `2`
 - completed_trades: `0`
 - valid_profit_trades: `0`
 
@@ -27,13 +27,13 @@
 
 - trade_fact_actual_order_submitted_false: `0`
 - trade_fact_broker_order_forbidden_true: `0`
-- sequence_fact_actual_order_submitted_false: `1`
-- sequence_fact_broker_order_forbidden_true: `1`
-- ofi_qi_fact_actual_order_submitted_false: `14`
-- ofi_qi_fact_broker_order_forbidden_true: `14`
+- sequence_fact_actual_order_submitted_false: `2`
+- sequence_fact_broker_order_forbidden_true: `2`
+- ofi_qi_fact_actual_order_submitted_false: `2`
+- ofi_qi_fact_broker_order_forbidden_true: `2`
 - trade_fact_decision_authority_counts: `{}`
-- sequence_fact_decision_authority_counts: `{'real_order_event': 10, 'source_quality_only': 1}`
-- ofi_qi_fact_decision_authority_counts: `{'source_quality_only': 14}`
+- sequence_fact_decision_authority_counts: `{'source_quality_only': 2, 'real_order_event': 1}`
+- ofi_qi_fact_decision_authority_counts: `{'source_quality_only': 2}`
 
 ## Warnings
 

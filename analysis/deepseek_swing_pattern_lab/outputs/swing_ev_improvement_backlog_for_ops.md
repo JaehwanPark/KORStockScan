@@ -45,7 +45,7 @@
 - route: `defer_evidence`
 - priority: `LOW`
 - mapped_family: `swing_entry_ofi_qi_execution_quality`
-- confidence: `consensus`
+- confidence: `solo`
 - expected_ev_effect: If stale ratio > 0.3, consider instrumentation/observer enhancement.
 
 ### 5. OFI/QI exit smoothing action distribution

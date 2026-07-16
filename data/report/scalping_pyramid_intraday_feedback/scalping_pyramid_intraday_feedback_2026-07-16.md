@@ -1,6 +1,6 @@
 # 2026-07-16 Scalping Pyramid Intraday Feedback
 
-- generated_at: 2026-07-16T08:45:01+09:00
+- generated_at: 2026-07-16T20:12:13+09:00
 - decision_authority: source_only_pyramid_intraday_feedback_no_runtime_mutation
 - runtime_effect: false
 - allowed_runtime_apply: false
@@ -8,81 +8,329 @@
 
 ## Summary
 
-- pyramid_feedback_row_count: 0
-- closed_pyramid_row_count: 0
+- pyramid_feedback_row_count: 4
+- closed_pyramid_row_count: 1
 - pyramid_would_have_helped_count: 0
 - pyramid_correctly_blocked_count: 0
-- pyramid_overheat_or_reversal_risk_count: 0
-- pyramid_open_unresolved_count: 0
-- one_share_event_count: 57
-- one_share_closed_count: 0
-- one_share_pyramid_opportunity_count: 0
+- pyramid_overheat_or_reversal_risk_count: 1
+- pyramid_open_unresolved_count: 3
+- one_share_event_count: 297
+- one_share_closed_count: 1
+- one_share_pyramid_opportunity_count: 1
 - one_share_pyramid_missed_upside_count: 0
 - one_share_pyramid_missed_upside_rate: 0.00
 - one_share_pyramid_avg_opportunity_cost_pct: 0.00
 
 ## Blocker Metrics
 
+- blocker=profit_not_enough sample=1 recovered_rate=0.00 reversal_rate=0.00 blocked_then_recovered_rate=0.00
+- blocker=pyramid_quality_blocked:ai_score_below_min,tick_aggressor_pressure_unusable,tick_accel_stale,micro_context_stale sample=1 recovered_rate=0.00 reversal_rate=1.00 blocked_then_recovered_rate=0.00
+- blocker=pyramid_quality_blocked:ai_score_unavailable,tick_aggressor_pressure_unusable,tick_accel_stale,micro_context_stale sample=1 recovered_rate=0.00 reversal_rate=0.00 blocked_then_recovered_rate=0.00
+- blocker=trend_not_strong sample=1 recovered_rate=0.00 reversal_rate=0.00 blocked_then_recovered_rate=0.00
 
 ## Rows
 
+- record_id= code=119850 name=지엔씨에너지 label=pyramid_open_unresolved blocker=pyramid_quality_blocked:ai_score_unavailable,tick_aggressor_pressure_unusable,tick_accel_stale,micro_context_stale profit=4.75 final=None ai=50.0 tick=1.0 micro_vwap=0.0
+- record_id= code=035720 name=카카오 label=pyramid_open_unresolved blocker=trend_not_strong profit=1.45 final=None ai=57.0 tick=3.0 micro_vwap=-57.92
+- record_id= code=078930 name=GS label=pyramid_open_unresolved blocker=profit_not_enough profit=0.48 final=None ai=61.0 tick=0.667 micro_vwap=-26.97
+- record_id=19466 code=028300 name=HLB label=pyramid_overheat_or_reversal_risk blocker=pyramid_quality_blocked:ai_score_below_min,tick_aggressor_pressure_unusable,tick_accel_stale,micro_context_stale profit=4.2 final=-0.23 ai=58.0 tick=0.733 micro_vwap=13.61
 
 ## One Share Opportunity Rows
 
 - record_id=19462 code=237880 name=클리오 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
-- record_id=19461 code=214450 name=파마리서치 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
-- record_id=19460 code=298380 name=에이비엘바이오 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
-- record_id=19455 code=075580 name=세진중공업 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=19463 code=108490 name=로보티즈 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=19475 code=067080 name=대화제약 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
-- record_id=19476 code=226950 name=올릭스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=19459 code=476830 name=알지노믹스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
-- record_id=19457 code=078520 name=에이블씨엔씨 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=19487 code=000670 name=영풍 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=19484 code=023160 name=태광 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
-- record_id=19481 code=096770 name=SK이노베이션 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
-- record_id=19491 code=009540 name=HD한국조선해양 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
-- record_id=19490 code=476060 name=온코닉테라퓨틱스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=19506 code=035760 name=CJ ENM label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=19507 code=196170 name=알테오젠 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
-- record_id=19500 code=439260 name=대한조선 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=19480 code=082740 name=한화엔진 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=19512 code=137400 name=피엔티 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=19515 code=247540 name=에코프로비엠 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=19501 code=336260 name=두산퓨얼셀 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
-- record_id=19517 code=017670 name=SK텔레콤 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=19516 code=011070 name=LG이노텍 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=19497 code=066570 name=LG전자 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
-- record_id=19524 code=281820 name=케이씨텍 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=19472 code=356860 name=티엘비 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=19479 code=272210 name=한화시스템 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
-- record_id=19499 code=373220 name=LG에너지솔루션 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=19470 code=376900 name=로킷헬스케어 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=19467 code=323280 name=태성 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
-- record_id=19454 code=047920 name=HLB제약 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
-- record_id=19526 code=032350 name=롯데관광개발 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
-- record_id=19489 code=042700 name=한미반도체 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=19504 code=251970 name=펌텍코리아 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
-- record_id=19538 code=131290 name=티에스이 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=19518 code=077970 name=STX엔진 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
-- record_id=19471 code=394800 name=쓰리빌리언 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
-- record_id=19458 code=382900 name=범한퓨얼셀 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=19465 code=089970 name=브이엠 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
-- record_id=19468 code=348370 name=엔켐 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
-- record_id=19456 code=161890 name=한국콜마 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=19508 code=006400 name=삼성SDI label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=19546 code=004990 name=롯데지주 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=19510 code=078600 name=대주전자재료 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
-- record_id=19473 code=460930 name=현대힘스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
-- record_id=19469 code=439090 name=마녀공장 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
-- record_id=19514 code=017960 name=한국카본 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
-- record_id=19474 code=042660 name=한화오션 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=19553 code=051910 name=LG화학 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=19548 code=018290 name=브이티 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=19498 code=086520 name=에코프로 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
-- record_id=19565 code=079550 name=LIG디펜스앤에어로스페이스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=19464 code=087010 name=펩트론 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
-- record_id=19482 code=086450 name=동국제약 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
-- record_id=19486 code=010950 name=S-Oil label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19585 code=452260 name=한화갤러리아 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19584 code=050110 name=캠시스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19592 code=053610 name=프로텍 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19598 code=080220 name=제주반도체 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19579 code=054940 name=엑사이엔씨 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19603 code=420770 name=기가비스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19602 code=387690 name=레메디 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19611 code=006340 name=대원전선 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19631 code=009830 name=한화솔루션 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19629 code=389650 name=넥스트바이오메디컬 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19630 code=475040 name=스트라드비젼 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19628 code=950160 name=코오롱티슈진 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19626 code=010060 name=OCI홀딩스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19627 code=322000 name=HD현대에너지솔루션 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19635 code=452280 name=한선엔지니어링 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19492 code=161390 name=한국타이어앤테크놀로지 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19661 code=205500 name=넥써쓰 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19670 code=092790 name=넥스틸 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19616 code=001040 name=CJ label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19671 code=008040 name=사조동아원 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19673 code=178320 name=서진시스템 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19643 code=079650 name=서산 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19644 code=260970 name=에스앤디 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19690 code=001450 name=현대해상 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19693 code=228760 name=지노믹트리 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19505 code=058970 name=엠로 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19706 code=102460 name=이연제약 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19650 code=007540 name=샘표 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19725 code=084870 name=TBH글로벌 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19720 code=006370 name=대구백화점 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19722 code=388610 name=지에프씨생명과학 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19727 code=005860 name=한일사료 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19736 code=025870 name=신라에스지 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19746 code=258610 name=케일럼 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19742 code=019680 name=대교 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19705 code=084680 name=이월드 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19612 code=015260 name=에이엔피 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19758 code=206640 name=바디텍메드 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19759 code=000440 name=중앙에너비스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19682 code=089860 name=롯데렌탈 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19696 code=051980 name=중앙첨단소재 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19781 code=079160 name=CJ CGV label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19531 code=365340 name=성일하이텍 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19796 code=091580 name=상신이디피 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19797 code=003580 name=HLB글로벌 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19782 code=024950 name=삼천리자전거 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19809 code=456040 name=OCI label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19589 code=119850 name=지엔씨에너지 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19658 code=115450 name=HLB테라퓨틱스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19819 code=003620 name=KG모빌리티 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19821 code=123750 name=알톤 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19830 code=106190 name=하이텍팜 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19730 code=146060 name=율촌 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19654 code=006220 name=제주은행 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19832 code=368600 name=아이씨에이치 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19839 code=036560 name=KZ정밀 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19601 code=290690 name=소룩스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19728 code=473980 name=노머스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19701 code=003490 name=대한항공 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19842 code=035250 name=강원랜드 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19847 code=019210 name=와이지-원 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19750 code=035720 name=카카오 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19707 code=011200 name=HMM label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19859 code=084650 name=랩지노믹스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19740 code=002760 name=보락 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19857 code=011090 name=에넥스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19489 code=042700 name=한미반도체 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19875 code=260660 name=알리코제약 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19810 code=090410 name=덕신이피씨 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19877 code=002800 name=신신제약 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19880 code=006840 name=AK홀딩스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19597 code=248170 name=샘표식품 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19723 code=006050 name=국영지앤엠 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19618 code=465770 name=STX그린로지스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19790 code=204840 name=지엘팜텍 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19606 code=012690 name=모나리자 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19888 code=004090 name=한국석유 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19540 code=306200 name=세아제강 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19825 code=317240 name=TS트릴리온 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19898 code=002140 name=고려산업 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19533 code=000240 name=한국앤컴퍼니 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19699 code=419050 name=삼기에너지솔루션즈 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19672 code=179290 name=엠아이텍 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19907 code=036930 name=주성엔지니어링 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19924 code=093050 name=LF label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19623 code=072770 name=멤레이비티 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19927 code=056090 name=시지메드텍 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19581 code=218150 name=미래생명자원 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19915 code=004710 name=한솔테크닉스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19760 code=076610 name=해성옵틱스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19800 code=330350 name=위더스제약 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19600 code=014950 name=삼익제약 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19649 code=044340 name=위닉스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19587 code=069540 name=빛과전자 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19620 code=033340 name=좋은사람들 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19918 code=035720 name=카카오 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19763 code=192410 name=오늘이엔엠 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19502 code=199800 name=툴젠 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19604 code=217590 name=티엠씨 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19578 code=067290 name=JW신약 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19973 code=040910 name=아이씨디 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19981 code=001790 name=대한제당 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19851 code=340440 name=세림B&G label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19580 code=033250 name=체시스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19791 code=071950 name=코아스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19824 code=014990 name=인디에프 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19596 code=002680 name=한탑 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19731 code=900300 name=오가닉티코스메틱 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20006 code=035720 name=카카오 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19613 code=285800 name=진영 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19565 code=079550 name=LIG디펜스앤에어로스페이스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19686 code=453450 name=그리드위즈 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19967 code=196700 name=웹스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19645 code=003280 name=흥아해운 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19987 code=100090 name=SK오션플랜트 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19646 code=008350 name=남선알미늄 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19959 code=089150 name=케이씨티 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20026 code=067170 name=오텍 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20027 code=065770 name=CS label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19775 code=009620 name=삼보산업 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20041 code=008770 name=호텔신라 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19798 code=294870 name=IPARK현대산업개발 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19499 code=373220 name=LG에너지솔루션 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19872 code=066910 name=손오공 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20019 code=317400 name=자이에스앤디 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19657 code=067630 name=HLB생명과학 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19639 code=024060 name=흥구석유 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19984 code=081660 name=미스토홀딩스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19757 code=035620 name=바른손이앤에이 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19617 code=065170 name=비엘팜텍 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20050 code=020150 name=롯데에너지머티리얼즈 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19543 code=241710 name=코스메카코리아 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19676 code=030960 name=양지사 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20055 code=192650 name=드림텍 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19741 code=026910 name=광진실업 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20056 code=012630 name=HDC label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20057 code=332570 name=PS일렉트로닉스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19595 code=406820 name=뷰티스킨 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19935 code=028260 name=삼성물산 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19876 code=175330 name=JB금융지주 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19679 code=018880 name=한온시스템 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20075 code=252990 name=샘씨엔에스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20074 code=034020 name=두산에너빌리티 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19538 code=131290 name=티에스이 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19559 code=181710 name=NHN label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19843 code=088350 name=한화생명 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19607 code=017180 name=명문제약 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19702 code=034230 name=파라다이스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19605 code=217730 name=강스템바이오텍 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19588 code=122350 name=삼기 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19576 code=004310 name=현대약품 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20081 code=298000 name=효성화학 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20082 code=033100 name=제룡전기 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19577 code=023790 name=동일스틸럭스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20086 code=441800 name=TIME Korea플러스배당액티브 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20087 code=098460 name=고영 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19524 code=281820 name=케이씨텍 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19993 code=060980 name=HL홀딩스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19947 code=357880 name=SKAI label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20061 code=271980 name=제일약품 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19526 code=032350 name=롯데관광개발 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19666 code=001000 name=신라섬유 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19594 code=000020 name=동화약품 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19483 code=005710 name=대원산업 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19574 code=065950 name=웰크론 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19624 code=487580 name=폴레드 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20097 code=270520 name=앱튼 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19656 code=047770 name=코데즈컴바인 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19732 code=002700 name=신일전자 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19582 code=475150 name=SK이터닉스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19659 code=123330 name=제닉 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20108 code=005950 name=이수화학 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19583 code=291810 name=핀텔 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19575 code=413630 name=씨피시스템 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19634 code=320000 name=한울반도체 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19772 code=353200 name=대덕전자 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19655 code=083470 name=이엠앤아이 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19738 code=006660 name=삼성공조 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19700 code=088980 name=맥쿼리인프라 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19614 code=279570 name=케이뱅크 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19637 code=034940 name=조아제약 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20033 code=078130 name=국일제지 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19733 code=042110 name=에스씨디 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19586 code=255220 name=SG label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19820 code=240810 name=원익IPS label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20119 code=162300 name=신스틸 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19651 code=037070 name=파세코 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19573 code=049080 name=기가레인 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19636 code=004540 name=깨끗한나라 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20070 code=035720 name=카카오 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20058 code=139130 name=iM금융지주 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20128 code=053800 name=안랩 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19963 code=131400 name=이브이첨단소재 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20109 code=138930 name=BNK금융지주 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19994 code=089030 name=테크윙 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19632 code=005360 name=모나미 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20003 code=212560 name=네오오토 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19556 code=319660 name=피에스케이 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19674 code=005380 name=현대차 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20139 code=000100 name=유한양행 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19568 code=237690 name=에스티팜 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19609 code=065660 name=안트로젠 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20148 code=097950 name=CJ제일제당 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20155 code=082920 name=비츠로셀 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20157 code=000810 name=삼성화재 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19456 code=161890 name=한국콜마 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19471 code=394800 name=쓰리빌리언 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20167 code=377300 name=카카오페이 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19522 code=488280 name=에스투더블유 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20076 code=005610 name=삼립 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20183 code=021240 name=코웨이 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20079 code=055550 name=신한지주 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19500 code=439260 name=대한조선 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19511 code=483650 name=달바글로벌 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19786 code=000270 name=기아 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20173 code=267270 name=HD건설기계 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20005 code=032640 name=LG유플러스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19461 code=214450 name=파마리서치 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19491 code=009540 name=HD한국조선해양 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20215 code=425420 name=티에프이 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19837 code=003240 name=태광산업 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19521 code=005440 name=현대지에프홀딩스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19945 code=002810 name=삼영무역 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19476 code=226950 name=올릭스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19457 code=078520 name=에이블씨엔씨 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20172 code=180640 name=한진칼 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20110 code=323410 name=카카오뱅크 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19996 code=499790 name=GS피앤엘 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20162 code=030200 name=KT label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19535 code=298040 name=효성중공업 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19458 code=382900 name=범한퓨얼셀 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20234 code=011790 name=SKC label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19517 code=017670 name=SK텔레콤 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19455 code=075580 name=세진중공업 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19848 code=015760 name=한국전력 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20212 code=007070 name=GS리테일 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19542 code=086790 name=하나금융지주 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20188 code=033780 name=KT&G label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19460 code=298380 name=에이비엘바이오 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20042 code=119850 name=지엔씨에너지 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20237 code=372320 name=큐로셀 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19468 code=348370 name=엔켐 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19509 code=006110 name=삼아알미늄 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20238 code=018260 name=삼성에스디에스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19678 code=067080 name=대화제약 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20115 code=316140 name=우리금융지주 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20178 code=047810 name=한국항공우주 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20169 code=267250 name=HD현대 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20072 code=213420 name=덕산네오룩스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20065 code=061090 name=세나테크놀로지 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19514 code=017960 name=한국카본 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=19557 code=329180 name=HD현대중공업 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
-- record_id=19466 code=028300 name=HLB label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20165 code=278470 name=에이피알 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19474 code=042660 name=한화오션 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20067 code=035420 name=NAVER label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19481 code=096770 name=SK이노베이션 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19838 code=024110 name=기업은행 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19482 code=086450 name=동국제약 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20247 code=018310 name=삼목에스폼 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19642 code=010140 name=삼성중공업 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20248 code=200710 name=에이디테크놀로지 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19486 code=010950 name=S-Oil label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20192 code=069620 name=대웅제약 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19490 code=476060 name=온코닉테라퓨틱스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19454 code=047920 name=HLB제약 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19473 code=460930 name=현대힘스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19469 code=439090 name=마녀공장 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=20145 code=012450 name=한화에어로스페이스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=19466 code=028300 name=HLB label=pyramid_overheat_or_reversal_risk opportunity_seen=True opportunity_profit=4.2 max_profit=4.2 opportunity_cost=0.0 final=-0.23
