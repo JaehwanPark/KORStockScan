@@ -14,7 +14,6 @@ from typing import Any, Iterable
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
-
 KST = timezone(timedelta(hours=9))
 REPORT_TYPE = "quote_stale_frequency"
 REPORT_DIR = DATA_DIR / "report" / REPORT_TYPE
@@ -235,7 +234,11 @@ def _row_class(stage: str, pipeline: str, row: dict[str, Any]) -> str:
     pipeline_l = pipeline.lower()
     if _boolish(row.get("actual_order_submitted")):
         return "actual_submit"
-    if "sell_order" in stage_l or stage_l.startswith("sell_") or "sell_order" in pipeline_l:
+    if (
+        "sell_order" in stage_l
+        or stage_l.startswith("sell_")
+        or "sell_order" in pipeline_l
+    ):
         return "sell_execution_or_exit"
     if stage in SCANNER_STAGES:
         return "scanner_watch"
@@ -285,8 +288,12 @@ def _rate_pct(count: int, total: int) -> float:
     return round((float(count) / float(total) * 100.0), 4) if total else 0.0
 
 
-def _group_summary(records: list[dict[str, Any]], key: str, *, limit: int | None = None) -> list[dict[str, Any]]:
-    groups: dict[str, dict[str, Any]] = defaultdict(lambda: {"total": 0, "stale": 0, "ages": []})
+def _group_summary(
+    records: list[dict[str, Any]], key: str, *, limit: int | None = None
+) -> list[dict[str, Any]]:
+    groups: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {"total": 0, "stale": 0, "ages": []}
+    )
     for record in records:
         group_key = str(record.get(key) or "-")
         groups[group_key]["total"] += 1
@@ -309,15 +316,28 @@ def _group_summary(records: list[dict[str, Any]], key: str, *, limit: int | None
     return rows[:limit] if limit else rows
 
 
-def _counter_rows(counter: Counter, *, limit: int | None = None) -> list[dict[str, Any]]:
-    rows = [{"key": str(key), "count": int(value)} for key, value in counter.most_common(limit)]
+def _counter_rows(
+    counter: Counter, *, limit: int | None = None
+) -> list[dict[str, Any]]:
+    rows = [
+        {"key": str(key), "count": int(value)}
+        for key, value in counter.most_common(limit)
+    ]
     return rows
 
 
-def _top_streaks(records: list[dict[str, Any]], *, limit: int = 30) -> list[dict[str, Any]]:
-    grouped: dict[tuple[str, str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
+def _top_streaks(
+    records: list[dict[str, Any]], *, limit: int = 30
+) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str, str, str, str], list[dict[str, Any]]] = defaultdict(
+        list
+    )
     for record in records:
-        if record["class"] not in {"scanner_watch", "holding_scale_input", "entry_submit_input"}:
+        if record["class"] not in {
+            "scanner_watch",
+            "holding_scale_input",
+            "entry_submit_input",
+        }:
             continue
         grouped[
             (
@@ -333,7 +353,12 @@ def _top_streaks(records: list[dict[str, Any]], *, limit: int = 30) -> list[dict
     for (source, row_class, stage, stock_code, stock_name), items in grouped.items():
         if len(items) < 2:
             continue
-        items.sort(key=lambda item: (item.get("emitted_at") or "", int(item.get("row_index") or 0)))
+        items.sort(
+            key=lambda item: (
+                item.get("emitted_at") or "",
+                int(item.get("row_index") or 0),
+            )
+        )
         run = 0
         max_run = 0
         stale_count = 0
@@ -389,7 +414,9 @@ def _scale_in_refresh_summary(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
         attempted = str(row.get("scale_in_feature_refresh_attempted") or "-")
         applied = str(row.get("scale_in_feature_refresh_applied") or "-")
         reason = str(row.get("scale_in_feature_refresh_reason") or "-")
-        existing_quality = str(row.get("scale_in_feature_refresh_existing_quality") or "-")
+        existing_quality = str(
+            row.get("scale_in_feature_refresh_existing_quality") or "-"
+        )
         new_quality = str(row.get("scale_in_feature_refresh_new_quality") or "-")
         counts[f"attempted_{attempted}"] += 1
         counts[f"applied_{applied}"] += 1
@@ -418,7 +445,9 @@ def _scale_in_refresh_summary(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _repair_log_summary(target_date: str, *, path: Path | None = None) -> dict[str, Any]:
+def _repair_log_summary(
+    target_date: str, *, path: Path | None = None
+) -> dict[str, Any]:
     log_path = path or BOT_HISTORY_LOG
     actual_path = log_path if log_path.is_absolute() else Path.cwd() / log_path
     patterns = {
@@ -476,7 +505,9 @@ def _repair_log_summary(target_date: str, *, path: Path | None = None) -> dict[s
             code_match = re.search(r"code=([0-9]{6})", line)
             if code_match:
                 codes.append(code_match.group(1))
-            for group in re.findall(r"(?:skipped|allowed|repair_targets)=\[([^\]]+)\]", line):
+            for group in re.findall(
+                r"(?:skipped|allowed|repair_targets)=\[([^\]]+)\]", line
+            ):
                 codes.extend(re.findall(r"[0-9]{6}", group))
             for code in codes:
                 code_counts[matched_key][code] += 1
@@ -486,7 +517,10 @@ def _repair_log_summary(target_date: str, *, path: Path | None = None) -> dict[s
         "counts": dict(counts),
         "labels": patterns,
         "top_codes": {
-            key: [{"stock_code": code, "count": count} for code, count in counter.most_common(10)]
+            key: [
+                {"stock_code": code, "count": count}
+                for code, count in counter.most_common(10)
+            ]
             for key, counter in sorted(code_counts.items())
         },
     }
@@ -512,7 +546,12 @@ def build_quote_stale_frequency_report(
             age_source, age_ms = _quote_age(row)
             if age_ms is None:
                 continue
-            stage = str(raw.get("stage") or row.get("stage") or row.get("event_type") or "unknown")
+            stage = str(
+                raw.get("stage")
+                or row.get("stage")
+                or row.get("event_type")
+                or "unknown"
+            )
             pipeline = str(raw.get("pipeline") or row.get("pipeline") or "")
             emitted_at = str(raw.get("emitted_at") or row.get("emitted_at") or "")
             ts = _parse_ts(emitted_at)
@@ -525,9 +564,15 @@ def build_quote_stale_frequency_report(
                     "stage": stage,
                     "pipeline": pipeline,
                     "class": _row_class(stage, pipeline, row),
-                    "stock_code": str(raw.get("stock_code") or row.get("stock_code") or ""),
-                    "stock_name": str(raw.get("stock_name") or row.get("stock_name") or ""),
-                    "record_id": str(raw.get("record_id") or row.get("record_id") or ""),
+                    "stock_code": str(
+                        raw.get("stock_code") or row.get("stock_code") or ""
+                    ),
+                    "stock_name": str(
+                        raw.get("stock_name") or row.get("stock_name") or ""
+                    ),
+                    "record_id": str(
+                        raw.get("record_id") or row.get("record_id") or ""
+                    ),
                     "emitted_at": emitted_at,
                     "time_bucket": _time_bucket(ts),
                     "age_source": age_source,
@@ -541,7 +586,9 @@ def build_quote_stale_frequency_report(
         primary_source = "pipeline_events"
     else:
         primary_source = str(records[0]["source"]) if records else "pipeline_events"
-    primary_records = [record for record in records if record["source"] == primary_source]
+    primary_records = [
+        record for record in records if record["source"] == primary_source
+    ]
     stale_count = sum(1 for record in primary_records if record["stale"])
     ages = [float(record["quote_age_ms"]) for record in primary_records]
     scale_rows = list(raw_rows_by_source.get(primary_source) or [])
@@ -551,10 +598,9 @@ def build_quote_stale_frequency_report(
 
     quote_age_source_missing_by_stage: Counter = Counter()
     for record in primary_records:
-        if (
-            record["age_source"] == "quote_age_ms"
-            and str(record.get("quote_age_source") or "") in {"", "-", "missing", "None", "none"}
-        ):
+        if record["age_source"] == "quote_age_ms" and str(
+            record.get("quote_age_source") or ""
+        ) in {"", "-", "missing", "None", "none"}:
             quote_age_source_missing_by_stage[str(record["stage"])] += 1
 
     by_class = _group_summary(primary_records, "class")
@@ -564,7 +610,9 @@ def build_quote_stale_frequency_report(
     by_source = _group_summary(records, "source")
     class_by_time: list[dict[str, Any]] = []
     for row_class in sorted({record["class"] for record in primary_records}):
-        class_records = [record for record in primary_records if record["class"] == row_class]
+        class_records = [
+            record for record in primary_records if record["class"] == row_class
+        ]
         for item in _group_summary(class_records, "time_bucket"):
             item["class"] = row_class
             if int(item["total"]) >= 20:
@@ -572,12 +620,16 @@ def build_quote_stale_frequency_report(
     class_by_time.sort(key=lambda item: (str(item["class"]), str(item["time_bucket"])))
 
     scale_in_refresh = _scale_in_refresh_summary(scale_rows)
-    repair_log_summary = _repair_log_summary(target_date) if include_repair_log else {
-        "path": None,
-        "counts": {},
-        "labels": {},
-        "top_codes": {},
-    }
+    repair_log_summary = (
+        _repair_log_summary(target_date)
+        if include_repair_log
+        else {
+            "path": None,
+            "counts": {},
+            "labels": {},
+            "top_codes": {},
+        }
+    )
 
     findings: list[dict[str, Any]] = []
     if source_missing:
@@ -597,8 +649,12 @@ def build_quote_stale_frequency_report(
             }
         )
     class_lookup = {str(item["class"]): item for item in by_class}
-    scanner_rate = float((class_lookup.get("scanner_watch") or {}).get("stale_rate_pct") or 0.0)
-    scale_rate = float((class_lookup.get("holding_scale_input") or {}).get("stale_rate_pct") or 0.0)
+    scanner_rate = float(
+        (class_lookup.get("scanner_watch") or {}).get("stale_rate_pct") or 0.0
+    )
+    scale_rate = float(
+        (class_lookup.get("holding_scale_input") or {}).get("stale_rate_pct") or 0.0
+    )
     if scanner_rate >= 50.0:
         findings.append(
             {
@@ -616,7 +672,10 @@ def build_quote_stale_frequency_report(
             }
         )
     refresh_counts = scale_in_refresh.get("counts") or {}
-    if int(refresh_counts.get("total", 0) or 0) and float(scale_in_refresh.get("applied_true_rate_pct") or 0.0) < 25.0:
+    if (
+        int(refresh_counts.get("total", 0) or 0)
+        and float(scale_in_refresh.get("applied_true_rate_pct") or 0.0) < 25.0
+    ):
         findings.append(
             {
                 "severity": "warning",
@@ -652,14 +711,18 @@ def build_quote_stale_frequency_report(
         "forbidden_uses": FORBIDDEN_USES,
         "stale_threshold_ms": float(stale_threshold_ms),
         "primary_source": primary_source,
-        "sources": {name: str(path) if path.exists() else None for name, path in paths.items()},
+        "sources": {
+            name: str(path) if path.exists() else None for name, path in paths.items()
+        },
         "summary": {
             "rows_with_quote_age": len(primary_records),
             "stale_count": stale_count,
             "stale_rate_pct": _rate_pct(stale_count, len(primary_records)),
             "quote_age_ms": _percentiles(ages),
             "source_quote_age_row_counts": dict(row_count_by_source),
-            "quote_age_source_missing_count": sum(quote_age_source_missing_by_stage.values()),
+            "quote_age_source_missing_count": sum(
+                quote_age_source_missing_by_stage.values()
+            ),
         },
         "by_source": by_source,
         "by_class": by_class,
@@ -668,7 +731,9 @@ def build_quote_stale_frequency_report(
         "by_age_source": by_age_source,
         "class_by_time_bucket": class_by_time,
         "top_stale_streaks": _top_streaks(primary_records),
-        "quote_age_source_missing_by_stage": _counter_rows(quote_age_source_missing_by_stage),
+        "quote_age_source_missing_by_stage": _counter_rows(
+            quote_age_source_missing_by_stage
+        ),
         "scale_in_feature_context_refresh": scale_in_refresh,
         "ws_repair_log_summary": repair_log_summary,
         "kiwoom_freshness_operating_assumptions": KIWOOM_FRESHNESS_OPERATING_ASSUMPTIONS,
@@ -686,7 +751,9 @@ def write_quote_stale_frequency_report(
     target_date = str(report.get("target_date"))
     json_path = output_dir / f"{REPORT_TYPE}_{target_date}.json"
     md_path = output_dir / f"{REPORT_TYPE}_{target_date}.md"
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
 
     summary = report.get("summary") or {}
     lines = [
@@ -715,7 +782,9 @@ def write_quote_stale_frequency_report(
     ]
     findings = report.get("verifier_findings") or []
     if findings:
-        lines.extend(f"- `{item.get('severity')}` `{item.get('code')}`" for item in findings)
+        lines.extend(
+            f"- `{item.get('severity')}` `{item.get('code')}`" for item in findings
+        )
     else:
         lines.append("- `ok` `none`")
 
@@ -737,7 +806,9 @@ def write_quote_stale_frequency_report(
     for question in questions:
         lines.append(f"- {question}")
 
-    def append_group(title: str, rows: list[dict[str, Any]], key: str, *, limit: int = 12) -> None:
+    def append_group(
+        title: str, rows: list[dict[str, Any]], key: str, *, limit: int = 12
+    ) -> None:
         lines.extend(["", f"## {title}", ""])
         if not rows:
             lines.append("- none")
@@ -793,7 +864,9 @@ def write_quote_stale_frequency_report(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target-date", default=date.today().isoformat())
-    parser.add_argument("--stale-threshold-ms", type=float, default=DEFAULT_STALE_THRESHOLD_MS)
+    parser.add_argument(
+        "--stale-threshold-ms", type=float, default=DEFAULT_STALE_THRESHOLD_MS
+    )
     parser.add_argument("--skip-repair-log", action="store_true")
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args(argv)
@@ -804,7 +877,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     if args.write:
         json_path, md_path = write_quote_stale_frequency_report(report)
-        print(json.dumps({"json": str(json_path), "md": str(md_path)}, ensure_ascii=False))
+        print(
+            json.dumps({"json": str(json_path), "md": str(md_path)}, ensure_ascii=False)
+        )
     else:
         print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
