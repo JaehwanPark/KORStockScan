@@ -41,7 +41,8 @@ class ManualControlExclusionDecision:
     def as_log_fields(self) -> dict[str, object]:
         return {
             "manual_control_exclusion_applied": self.excluded,
-            "manual_control_exclusion_code": self.code or "not_applicable_manual_control_exclusion_code",
+            "manual_control_exclusion_code": self.code
+            or "not_applicable_manual_control_exclusion_code",
             "manual_control_exclusion_reason": self.reason
             or "not_applicable_manual_control_exclusion_reason",
             "manual_control_exclusion_source": self.source
@@ -187,7 +188,9 @@ def add_manual_control_exclusion_code(
 ) -> ManualControlExclusionDecision:
     norm_code = normalize_manual_control_exclusion_code(code)
     if not norm_code:
-        return ManualControlExclusionDecision(False, "", "invalid_manual_control_exclusion_code", "")
+        return ManualControlExclusionDecision(
+            False, "", "invalid_manual_control_exclusion_code", ""
+        )
 
     existing = evaluate_manual_control_exclusion(norm_code)
     if existing.excluded:
