@@ -5,7 +5,9 @@ def test_get_tick_history_ka10003_marks_price_change_heuristic(monkeypatch):
     with kiwoom_utils._MARKET_DATA_CACHE_LOCK:
         kiwoom_utils._MARKET_DATA_CACHE.clear()
     monkeypatch.setattr(kiwoom_utils, "get_effective_kiwoom_code", lambda code: code)
-    monkeypatch.setattr(kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+    monkeypatch.setattr(
+        kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}"
+    )
     monkeypatch.setattr(
         kiwoom_utils,
         "fetch_kiwoom_api_continuous",
@@ -111,7 +113,9 @@ def test_compute_buy_dominance_from_ka10003_entries_can_split_inside_spread():
     assert stats["source_counts"] == {"inside_split": 1}
 
 
-def test_summarize_ticks_for_realtime_ka10003_excludes_price_change_heuristic(monkeypatch):
+def test_summarize_ticks_for_realtime_ka10003_excludes_price_change_heuristic(
+    monkeypatch,
+):
     monkeypatch.setattr(
         kiwoom_utils,
         "get_tick_history_ka10003",
@@ -135,7 +139,9 @@ def test_summarize_ticks_for_realtime_ka10003_excludes_price_change_heuristic(mo
         ],
     )
 
-    summary = kiwoom_utils.summarize_ticks_for_realtime_ka10003("token", "005930", limit=2)
+    summary = kiwoom_utils.summarize_ticks_for_realtime_ka10003(
+        "token", "005930", limit=2
+    )
 
     assert summary["buy_exec_qty"] == 0
     assert summary["sell_exec_qty"] == 0
@@ -145,7 +151,9 @@ def test_summarize_ticks_for_realtime_ka10003_excludes_price_change_heuristic(mo
     assert summary["aggressor_source_counts"] == {"price_change_heuristic": 2}
 
 
-def test_summarize_ticks_for_realtime_ka10003_attaches_source_only_raw_observation(monkeypatch):
+def test_summarize_ticks_for_realtime_ka10003_attaches_source_only_raw_observation(
+    monkeypatch,
+):
     monkeypatch.setattr(
         kiwoom_utils,
         "get_tick_history_ka10003",
@@ -169,7 +177,9 @@ def test_summarize_ticks_for_realtime_ka10003_attaches_source_only_raw_observati
         ],
     )
 
-    summary = kiwoom_utils.summarize_ticks_for_realtime_ka10003("token", "005930", limit=1)
+    summary = kiwoom_utils.summarize_ticks_for_realtime_ka10003(
+        "token", "005930", limit=1
+    )
 
     assert summary["buy_exec_qty"] == 0
     observation = summary["ka10003_buy_dominance_observation"]
@@ -192,7 +202,9 @@ def test_get_recent_signed_trades_ka10084_preserves_signed_quantities(monkeypatc
     with kiwoom_utils._MARKET_DATA_CACHE_LOCK:
         kiwoom_utils._MARKET_DATA_CACHE.clear()
     monkeypatch.setattr(kiwoom_utils, "get_effective_kiwoom_code", lambda code: code)
-    monkeypatch.setattr(kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+    monkeypatch.setattr(
+        kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}"
+    )
 
     captured = {}
 
@@ -221,7 +233,9 @@ def test_get_recent_signed_trades_ka10084_preserves_signed_quantities(monkeypatc
 
     monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", _fetch)
 
-    ticks = kiwoom_utils.get_recent_signed_trades_ka10084("token", "005930", limit=2, tm="1512")
+    ticks = kiwoom_utils.get_recent_signed_trades_ka10084(
+        "token", "005930", limit=2, tm="1512"
+    )
 
     assert captured["api_id"] == "ka10084"
     assert captured["payload"]["tdy_pred"] == "1"

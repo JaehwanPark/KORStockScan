@@ -18,7 +18,9 @@ class _FakeResponse:
 
 
 class _FakeApiResponse:
-    def __init__(self, payload: dict, *, status_code: int = 200, headers: dict | None = None):
+    def __init__(
+        self, payload: dict, *, status_code: int = 200, headers: dict | None = None
+    ):
         self.status_code = status_code
         self.text = json.dumps(payload, ensure_ascii=False)
         self._payload = dict(payload)
@@ -37,8 +39,12 @@ def _config():
 
 
 def _patch_cache_paths(monkeypatch, tmp_path):
-    monkeypatch.setenv("KIWOOM_TOKEN_CACHE_PATH", str(tmp_path / "kiwoom_token_cache.json"))
-    monkeypatch.setenv("KIWOOM_TOKEN_LOCK_PATH", str(tmp_path / "kiwoom_token_cache.lock"))
+    monkeypatch.setenv(
+        "KIWOOM_TOKEN_CACHE_PATH", str(tmp_path / "kiwoom_token_cache.json")
+    )
+    monkeypatch.setenv(
+        "KIWOOM_TOKEN_LOCK_PATH", str(tmp_path / "kiwoom_token_cache.lock")
+    )
 
 
 def test_get_kiwoom_token_reuses_shared_cache(monkeypatch, tmp_path):
@@ -50,7 +56,9 @@ def test_get_kiwoom_token_reuses_shared_cache(monkeypatch, tmp_path):
         return _FakeResponse("TOKEN_A")
 
     monkeypatch.setattr(kiwoom_utils.requests, "post", fake_post)
-    monkeypatch.setattr(kiwoom_utils, "get_api_url", lambda endpoint: f"https://example.test{endpoint}")
+    monkeypatch.setattr(
+        kiwoom_utils, "get_api_url", lambda endpoint: f"https://example.test{endpoint}"
+    )
 
     assert kiwoom_utils.get_kiwoom_token(_config()) == "TOKEN_A"
     assert kiwoom_utils.get_kiwoom_token(_config()) == "TOKEN_A"
@@ -79,7 +87,9 @@ def test_get_kiwoom_token_refreshes_expired_cache(monkeypatch, tmp_path):
         return _FakeResponse("TOKEN_B")
 
     monkeypatch.setattr(kiwoom_utils.requests, "post", fake_post)
-    monkeypatch.setattr(kiwoom_utils, "get_api_url", lambda endpoint: f"https://example.test{endpoint}")
+    monkeypatch.setattr(
+        kiwoom_utils, "get_api_url", lambda endpoint: f"https://example.test{endpoint}"
+    )
 
     assert kiwoom_utils.get_kiwoom_token(_config()) == "TOKEN_B"
     assert len(calls) == 1
@@ -94,7 +104,9 @@ def test_get_kiwoom_token_force_refresh_bypasses_valid_cache(monkeypatch, tmp_pa
         return _FakeResponse(f"TOKEN_{len(calls)}")
 
     monkeypatch.setattr(kiwoom_utils.requests, "post", fake_post)
-    monkeypatch.setattr(kiwoom_utils, "get_api_url", lambda endpoint: f"https://example.test{endpoint}")
+    monkeypatch.setattr(
+        kiwoom_utils, "get_api_url", lambda endpoint: f"https://example.test{endpoint}"
+    )
 
     assert kiwoom_utils.get_kiwoom_token(_config()) == "TOKEN_1"
     assert kiwoom_utils.get_kiwoom_token(_config(), force_refresh=True) == "TOKEN_2"
@@ -116,7 +128,9 @@ def test_ws_token_refresh_uses_force_refresh(monkeypatch):
     assert calls == [{"force_refresh": True}]
 
 
-def test_fetch_kiwoom_api_continuous_refreshes_and_retries_once_on_8005(monkeypatch, tmp_path):
+def test_fetch_kiwoom_api_continuous_refreshes_and_retries_once_on_8005(
+    monkeypatch, tmp_path
+):
     _patch_cache_paths(monkeypatch, tmp_path)
     posts = []
     invalidations = []
@@ -132,7 +146,14 @@ def test_fetch_kiwoom_api_continuous_refreshes_and_retries_once_on_8005(monkeypa
     ]
 
     def fake_post(url, headers=None, json=None, timeout=None):
-        posts.append({"url": url, "headers": dict(headers or {}), "payload": json, "timeout": timeout})
+        posts.append(
+            {
+                "url": url,
+                "headers": dict(headers or {}),
+                "payload": json,
+                "timeout": timeout,
+            }
+        )
         return responses.pop(0)
 
     def fake_get_token(*args, **kwargs):
@@ -174,11 +195,20 @@ def test_fetch_kiwoom_api_continuous_retries_transient_5xx(monkeypatch, tmp_path
     ]
 
     def fake_post(url, headers=None, json=None, timeout=None):
-        posts.append({"url": url, "headers": dict(headers or {}), "payload": json, "timeout": timeout})
+        posts.append(
+            {
+                "url": url,
+                "headers": dict(headers or {}),
+                "payload": json,
+                "timeout": timeout,
+            }
+        )
         return responses.pop(0)
 
     monkeypatch.setattr(kiwoom_utils.requests, "post", fake_post)
-    monkeypatch.setattr(kiwoom_utils.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(
+        kiwoom_utils.time, "sleep", lambda seconds: sleeps.append(seconds)
+    )
     monkeypatch.setattr(kiwoom_utils, "log_info", lambda *args, **kwargs: None)
     monkeypatch.setattr(kiwoom_utils, "log_error", lambda *args, **kwargs: None)
 
@@ -197,7 +227,9 @@ def test_fetch_kiwoom_api_continuous_retries_transient_5xx(monkeypatch, tmp_path
     assert sleeps == [2]
 
 
-def test_fetch_kiwoom_api_continuous_stops_after_single_8005_refresh_retry(monkeypatch, tmp_path):
+def test_fetch_kiwoom_api_continuous_stops_after_single_8005_refresh_retry(
+    monkeypatch, tmp_path
+):
     _patch_cache_paths(monkeypatch, tmp_path)
     posts = []
 
@@ -211,10 +243,14 @@ def test_fetch_kiwoom_api_continuous_stops_after_single_8005_refresh_retry(monke
         )
 
     monkeypatch.setattr(kiwoom_utils.requests, "post", fake_post)
-    monkeypatch.setattr(kiwoom_utils, "get_kiwoom_token", lambda *args, **kwargs: "FRESH_TOKEN")
+    monkeypatch.setattr(
+        kiwoom_utils, "get_kiwoom_token", lambda *args, **kwargs: "FRESH_TOKEN"
+    )
     monkeypatch.setattr(kiwoom_utils, "log_info", lambda *args, **kwargs: None)
     monkeypatch.setattr(kiwoom_utils, "log_error", lambda *args, **kwargs: None)
-    monkeypatch.setattr(kiwoom_utils, "invalidate_kiwoom_token_cache", lambda reason="": True)
+    monkeypatch.setattr(
+        kiwoom_utils, "invalidate_kiwoom_token_cache", lambda reason="": True
+    )
 
     result = kiwoom_utils.fetch_kiwoom_api_continuous(
         url="https://example.test/api",
@@ -253,10 +289,14 @@ def test_fetch_kiwoom_api_continuous_recognizes_rt_cd_8005(monkeypatch, tmp_path
         return responses.pop(0)
 
     monkeypatch.setattr(kiwoom_utils.requests, "post", fake_post)
-    monkeypatch.setattr(kiwoom_utils, "get_kiwoom_token", lambda *args, **kwargs: "FRESH_TOKEN")
+    monkeypatch.setattr(
+        kiwoom_utils, "get_kiwoom_token", lambda *args, **kwargs: "FRESH_TOKEN"
+    )
     monkeypatch.setattr(kiwoom_utils, "log_info", lambda *args, **kwargs: None)
     monkeypatch.setattr(kiwoom_utils, "log_error", lambda *args, **kwargs: None)
-    monkeypatch.setattr(kiwoom_utils, "invalidate_kiwoom_token_cache", lambda reason="": True)
+    monkeypatch.setattr(
+        kiwoom_utils, "invalidate_kiwoom_token_cache", lambda reason="": True
+    )
 
     result = kiwoom_utils.fetch_kiwoom_api_continuous(
         url="https://example.test/api",
@@ -271,7 +311,9 @@ def test_fetch_kiwoom_api_continuous_recognizes_rt_cd_8005(monkeypatch, tmp_path
     assert posts[1]["authorization"] == "Bearer FRESH_TOKEN"
 
 
-def test_fetch_kiwoom_api_continuous_returns_8005_when_refresh_raises(monkeypatch, tmp_path):
+def test_fetch_kiwoom_api_continuous_returns_8005_when_refresh_raises(
+    monkeypatch, tmp_path
+):
     _patch_cache_paths(monkeypatch, tmp_path)
     posts = []
 
@@ -291,7 +333,9 @@ def test_fetch_kiwoom_api_continuous_returns_8005_when_refresh_raises(monkeypatc
     monkeypatch.setattr(kiwoom_utils, "get_kiwoom_token", _raise_refresh)
     monkeypatch.setattr(kiwoom_utils, "log_info", lambda *args, **kwargs: None)
     monkeypatch.setattr(kiwoom_utils, "log_error", lambda *args, **kwargs: None)
-    monkeypatch.setattr(kiwoom_utils, "invalidate_kiwoom_token_cache", lambda reason="": True)
+    monkeypatch.setattr(
+        kiwoom_utils, "invalidate_kiwoom_token_cache", lambda reason="": True
+    )
 
     result = kiwoom_utils.fetch_kiwoom_api_continuous(
         url="https://example.test/api",
@@ -310,7 +354,9 @@ def test_fetch_kiwoom_api_continuous_returns_8005_when_refresh_raises(monkeypatc
     ]
 
 
-def test_8005_refresh_reuses_newer_cached_token_without_invalidating(monkeypatch, tmp_path):
+def test_8005_refresh_reuses_newer_cached_token_without_invalidating(
+    monkeypatch, tmp_path
+):
     _patch_cache_paths(monkeypatch, tmp_path)
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps(_config()), encoding="utf-8")
@@ -331,11 +377,17 @@ def test_8005_refresh_reuses_newer_cached_token_without_invalidating(monkeypatch
     )
     invalidations = []
 
-    monkeypatch.setattr(kiwoom_utils, "invalidate_kiwoom_token_cache", lambda reason="": invalidations.append(reason) or True)
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "invalidate_kiwoom_token_cache",
+        lambda reason="": invalidations.append(reason) or True,
+    )
     monkeypatch.setattr(
         kiwoom_utils,
         "get_kiwoom_token",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("refresh should not be called")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("refresh should not be called")
+        ),
     )
     monkeypatch.setattr(kiwoom_utils, "log_info", lambda *args, **kwargs: None)
 
