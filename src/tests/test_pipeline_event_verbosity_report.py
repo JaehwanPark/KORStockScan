@@ -5,7 +5,14 @@ from src.engine import pipeline_event_verbosity_report as report_mod
 from src.engine.pipeline_event_summary import ProducerSummaryCompactor
 
 
-def _event(target_date: str, hhmmss: str, stage: str, *, record_id: int, fields: dict | None = None) -> dict:
+def _event(
+    target_date: str,
+    hhmmss: str,
+    stage: str,
+    *,
+    record_id: int,
+    fields: dict | None = None,
+) -> dict:
     return {
         "schema_version": 1,
         "event_type": "pipeline_event",
@@ -24,7 +31,9 @@ def _event(target_date: str, hhmmss: str, stage: str, *, record_id: int, fields:
 def _write_raw(tmp_path, target_date: str, rows: list[dict]) -> None:
     raw_dir = tmp_path / "pipeline_events"
     raw_dir.mkdir(parents=True, exist_ok=True)
-    with (raw_dir / f"pipeline_events_{target_date}.jsonl").open("w", encoding="utf-8") as handle:
+    with (raw_dir / f"pipeline_events_{target_date}.jsonl").open(
+        "w", encoding="utf-8"
+    ) as handle:
         for row in rows:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
@@ -101,7 +110,9 @@ def test_pipeline_event_verbosity_report_parity_pass(monkeypatch, tmp_path):
     assert report["producer_summary"]["manifest_mode"] == "shadow"
 
 
-def test_pipeline_event_verbosity_report_parity_pass_with_gzip_sources(monkeypatch, tmp_path):
+def test_pipeline_event_verbosity_report_parity_pass_with_gzip_sources(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     rows = [
         _event(
@@ -115,21 +126,30 @@ def test_pipeline_event_verbosity_report_parity_pass_with_gzip_sources(monkeypat
     _write_raw(tmp_path, "2026-05-06", rows)
     _write_producer_summary(tmp_path, "2026-05-06", rows)
     _gzip_replace(tmp_path / "pipeline_events" / "pipeline_events_2026-05-06.jsonl")
-    _gzip_replace(tmp_path / "pipeline_event_summaries" / "pipeline_event_producer_summary_2026-05-06.jsonl")
+    _gzip_replace(
+        tmp_path
+        / "pipeline_event_summaries"
+        / "pipeline_event_producer_summary_2026-05-06.jsonl"
+    )
 
     report = report_mod.build_pipeline_event_verbosity_report("2026-05-06")
 
     assert report["state"] == "v2_shadow_parity_pass"
     assert report["producer_summary"]["exists"] is True
     assert report["producer_summary"]["path"].endswith(".jsonl.gz")
-    assert report["raw_stream"]["raw_storage_size_bytes"] == (
-        tmp_path / "pipeline_events" / "pipeline_events_2026-05-06.jsonl.gz"
-    ).stat().st_size
+    assert (
+        report["raw_stream"]["raw_storage_size_bytes"]
+        == (tmp_path / "pipeline_events" / "pipeline_events_2026-05-06.jsonl.gz")
+        .stat()
+        .st_size
+    )
     assert report["raw_stream"]["raw_size_bytes"] > 0
     assert report["raw_stream"]["high_volume_byte_share_pct"] <= 100.0
 
 
-def test_pipeline_event_verbosity_raw_size_includes_non_json_lines(monkeypatch, tmp_path):
+def test_pipeline_event_verbosity_raw_size_includes_non_json_lines(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     raw_dir = tmp_path / "pipeline_events"
     raw_dir.mkdir(parents=True, exist_ok=True)
@@ -190,7 +210,9 @@ def test_pipeline_event_verbosity_report_parity_fail(monkeypatch, tmp_path):
     assert "blocked_strength_momentum" in report["parity"]["stage_diff"]
 
 
-def test_pipeline_event_verbosity_report_marks_pending_flush_when_raw_tail_is_newer(monkeypatch, tmp_path):
+def test_pipeline_event_verbosity_report_marks_pending_flush_when_raw_tail_is_newer(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     raw_rows = [
         _event(

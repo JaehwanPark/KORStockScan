@@ -3,7 +3,14 @@ import json
 from src.engine.pipeline_event_summary import update_and_load_pipeline_event_summaries
 
 
-def _event(target_date: str, hhmmss: str, stage: str, *, record_id: int, fields: dict | None = None) -> dict:
+def _event(
+    target_date: str,
+    hhmmss: str,
+    stage: str,
+    *,
+    record_id: int,
+    fields: dict | None = None,
+) -> dict:
     return {
         "schema_version": 1,
         "event_type": "pipeline_event",
