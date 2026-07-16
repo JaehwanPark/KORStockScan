@@ -10,9 +10,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
-from src.engine.scalping.entry_cancel_wait_runtime import DEFAULT_THRESHOLDS, POLICY_VERSION, RUNTIME_FAMILY
+from src.engine.scalping.entry_cancel_wait_runtime import (
+    DEFAULT_THRESHOLDS,
+    POLICY_VERSION,
+    RUNTIME_FAMILY,
+)
 from src.utils.constants import DATA_DIR
-
 
 REPORT_DIR = DATA_DIR / "report" / "entry_cancel_wait_tuning"
 SAMPLE_FLOOR = 5
@@ -45,7 +48,9 @@ def _iter_events(target_date: str) -> Iterable[dict[str, Any]]:
 
 def _latest_previous_thresholds(target_date: str) -> dict[str, int]:
     thresholds = dict(DEFAULT_THRESHOLDS)
-    for path in sorted(REPORT_DIR.glob("entry_cancel_wait_tuning_*.json"), reverse=True):
+    for path in sorted(
+        REPORT_DIR.glob("entry_cancel_wait_tuning_*.json"), reverse=True
+    ):
         report_date = path.stem.removeprefix("entry_cancel_wait_tuning_")
         if report_date >= target_date:
             continue
@@ -73,7 +78,9 @@ def _bounded_next(profile: str, previous: int, proposed: int) -> int:
 def build_report(target_date: str) -> dict[str, Any]:
     previous = _latest_previous_thresholds(target_date)
     source_path = _event_path(target_date)
-    completed: dict[str, dict[int, list[float]]] = defaultdict(lambda: defaultdict(list))
+    completed: dict[str, dict[int, list[float]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
     registered = defaultdict(int)
     invalid_rows = 0
     for event in _iter_events(target_date) or []:
@@ -91,7 +98,9 @@ def build_report(target_date: str) -> dict[str, Any]:
                 actual_timeout = int(float(fields.get("actual_timeout_sec") or 0))
                 candidates = [
                     int(token)
-                    for token in str(fields.get("candidate_timeout_secs") or "").split("|")
+                    for token in str(fields.get("candidate_timeout_secs") or "").split(
+                        "|"
+                    )
                     if token.strip()
                 ]
             except Exception:
@@ -114,28 +123,48 @@ def build_report(target_date: str) -> dict[str, Any]:
     for profile in DEFAULT_THRESHOLDS:
         candidates = []
         for timeout, values in sorted(completed[profile].items()):
-            candidates.append({
-                "timeout_sec": timeout,
-                "sample_count": len(values),
-                "equal_weight_avg_profit_pct": round(sum(values) / len(values), 6),
-            })
+            candidates.append(
+                {
+                    "timeout_sec": timeout,
+                    "sample_count": len(values),
+                    "equal_weight_avg_profit_pct": round(sum(values) / len(values), 6),
+                }
+            )
         eligible = [item for item in candidates if item["sample_count"] >= SAMPLE_FLOOR]
         if eligible:
-            best = max(eligible, key=lambda item: (item["equal_weight_avg_profit_pct"], -abs(item["timeout_sec"] - previous[profile])))
-            recommended[profile] = _bounded_next(profile, previous[profile], int(best["timeout_sec"]))
-            state = "adjust" if recommended[profile] != previous[profile] else "hold_best_unchanged"
+            best = max(
+                eligible,
+                key=lambda item: (
+                    item["equal_weight_avg_profit_pct"],
+                    -abs(item["timeout_sec"] - previous[profile]),
+                ),
+            )
+            recommended[profile] = _bounded_next(
+                profile, previous[profile], int(best["timeout_sec"])
+            )
+            state = (
+                "adjust"
+                if recommended[profile] != previous[profile]
+                else "hold_best_unchanged"
+            )
         else:
             state = "hold_sample"
         profiles[profile] = {
             "previous_threshold_sec": previous[profile],
             "recommended_threshold_sec": recommended[profile],
             "registered_count": registered[profile],
-            "completed_candidate_count": sum(len(v) for v in completed[profile].values()),
+            "completed_candidate_count": sum(
+                len(v) for v in completed[profile].values()
+            ),
             "sample_floor": SAMPLE_FLOOR,
             "calibration_state": state,
             "candidate_ev": candidates,
         }
-    source_quality_status = "missing_source_hold" if not source_path.exists() else "warning" if invalid_rows else "pass"
+    source_quality_status = (
+        "missing_source_hold"
+        if not source_path.exists()
+        else "warning" if invalid_rows else "pass"
+    )
     return {
         "schema_version": 1,
         "report_type": "entry_cancel_wait_tuning",
@@ -147,7 +176,13 @@ def build_report(target_date: str) -> dict[str, Any]:
         "runtime_effect": False,
         "allowed_runtime_apply": True,
         "standalone_operational_family": True,
-        "excluded_consumers": ["ADM", "LDM", "lifecycle_bucket", "threshold_cycle_ev", "runtime_apply_bridge"],
+        "excluded_consumers": [
+            "ADM",
+            "LDM",
+            "lifecycle_bucket",
+            "threshold_cycle_ev",
+            "runtime_apply_bridge",
+        ],
         "source_quality_status": source_quality_status,
         "invalid_row_count": invalid_rows,
         "enabled": True,
@@ -162,7 +197,9 @@ def write_report(target_date: str) -> dict[str, Any]:
     payload = build_report(target_date)
     json_path, md_path = report_paths(target_date)
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     lines = [
         f"# Entry Cancel Wait Tuning {target_date}",
         "",
@@ -175,7 +212,9 @@ def write_report(target_date: str) -> dict[str, Any]:
         "|---|---:|---:|---|---:|",
     ]
     for profile, item in payload["profiles"].items():
-        lines.append(f"| {profile} | {item['previous_threshold_sec']} | {item['recommended_threshold_sec']} | {item['calibration_state']} | {item['completed_candidate_count']} |")
+        lines.append(
+            f"| {profile} | {item['previous_threshold_sec']} | {item['recommended_threshold_sec']} | {item['calibration_state']} | {item['completed_candidate_count']} |"
+        )
     md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return payload
 

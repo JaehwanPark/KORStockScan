@@ -19,7 +19,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-
 WAIT_POLICY_VERSION = "entry_cancel_wait_attribution_v1"
 
 DEFAULT_BASE_SCALPING = 90
@@ -82,14 +81,22 @@ class EntryCancelWaitAttributionResult:
             "base_wait_sec": str(self.base_wait_sec),
             "min_wait_sec": str(self.min_wait_sec),
             "max_wait_sec": str(self.max_wait_sec),
-            "suggested_wait_sec": str(self.suggested_wait_sec) if self.suggested_wait_sec is not None else "-",
+            "suggested_wait_sec": (
+                str(self.suggested_wait_sec)
+                if self.suggested_wait_sec is not None
+                else "-"
+            ),
             "wait_policy_version": str(self.wait_policy_version),
-            "wait_adjustment_reasons": "|".join(self.adjustment_reasons) if self.adjustment_reasons else "-",
+            "wait_adjustment_reasons": (
+                "|".join(self.adjustment_reasons) if self.adjustment_reasons else "-"
+            ),
             "wait_decision_authority": str(self.decision_authority),
             "wait_forbidden_uses": str(self.forbidden_uses),
         }
 
-    def as_cancel_log_fields(self, wait_elapsed_overrun_sec: float = 0.0) -> dict[str, str]:
+    def as_cancel_log_fields(
+        self, wait_elapsed_overrun_sec: float = 0.0
+    ) -> dict[str, str]:
         fields = self.as_log_fields()
         fields["wait_elapsed_overrun_sec"] = f"{wait_elapsed_overrun_sec:.1f}"
         return fields
@@ -206,24 +213,46 @@ def compute_entry_cancel_wait_attribution(
     reasons: list[str] = []
 
     if has_stale_or_passive:
-        if entry_passive_probe_applied or _nonempty_str(entry_order_lifecycle).upper() == "PASSIVE_PROBE":
-            adjustments.append(("passive_probe_lifecycle", ADJUSTMENT_WEIGHTS["passive_probe_lifecycle"]))
+        if (
+            entry_passive_probe_applied
+            or _nonempty_str(entry_order_lifecycle).upper() == "PASSIVE_PROBE"
+        ):
+            adjustments.append(
+                (
+                    "passive_probe_lifecycle",
+                    ADJUSTMENT_WEIGHTS["passive_probe_lifecycle"],
+                )
+            )
         if quote_stale_at_submit:
-            adjustments.append(("stale_quote_detect", ADJUSTMENT_WEIGHTS["stale_quote_detect"]))
+            adjustments.append(
+                ("stale_quote_detect", ADJUSTMENT_WEIGHTS["stale_quote_detect"])
+            )
         if context_stale_at_submit:
-            adjustments.append(("stale_context_high", ADJUSTMENT_WEIGHTS["stale_context_high"]))
+            adjustments.append(
+                ("stale_context_high", ADJUSTMENT_WEIGHTS["stale_context_high"])
+            )
         if quote_age_ms > 2000 and not quote_stale_at_submit:
-            adjustments.append(("stale_quote_detect", ADJUSTMENT_WEIGHTS["stale_quote_detect"]))
+            adjustments.append(
+                ("stale_quote_detect", ADJUSTMENT_WEIGHTS["stale_quote_detect"])
+            )
         if context_age_ms > 5000 and not context_stale_at_submit:
-            adjustments.append(("stale_context_high", ADJUSTMENT_WEIGHTS["stale_context_high"]))
+            adjustments.append(
+                ("stale_context_high", ADJUSTMENT_WEIGHTS["stale_context_high"])
+            )
 
     if ai_action == "USE_DEFENSIVE":
-        adjustments.append(("USE_DEFENSIVE_ACTION", ADJUSTMENT_WEIGHTS["USE_DEFENSIVE_ACTION"]))
+        adjustments.append(
+            ("USE_DEFENSIVE_ACTION", ADJUSTMENT_WEIGHTS["USE_DEFENSIVE_ACTION"])
+        )
 
     if ai_confidence > 0 and ai_confidence < 40:
-        adjustments.append(("low_confidence_ai", ADJUSTMENT_WEIGHTS["low_confidence_ai"]))
+        adjustments.append(
+            ("low_confidence_ai", ADJUSTMENT_WEIGHTS["low_confidence_ai"])
+        )
     elif ai_confidence >= 80:
-        adjustments.append(("high_ai_confidence", ADJUSTMENT_WEIGHTS["high_ai_confidence"]))
+        adjustments.append(
+            ("high_ai_confidence", ADJUSTMENT_WEIGHTS["high_ai_confidence"])
+        )
 
     if spread_ratio > 0.005:
         adjustments.append(("high_spread_bps", ADJUSTMENT_WEIGHTS["high_spread_bps"]))
@@ -232,25 +261,40 @@ def compute_entry_cancel_wait_attribution(
 
     liquidity_upper = _nonempty_str(liquidity_verdict).upper()
     if liquidity_upper in ("LOW", "WEAK", "INSUFFICIENT"):
-        adjustments.append(("low_liquidity_verdict", ADJUSTMENT_WEIGHTS["low_liquidity_verdict"]))
+        adjustments.append(
+            ("low_liquidity_verdict", ADJUSTMENT_WEIGHTS["low_liquidity_verdict"])
+        )
 
     ofi_upper = _nonempty_str(ofi_direction_label).upper()
     if ofi_upper in ("STABLE_BULLISH",):
-        adjustments.append(("favorable_ofi_score", ADJUSTMENT_WEIGHTS["favorable_ofi_score"]))
+        adjustments.append(
+            ("favorable_ofi_score", ADJUSTMENT_WEIGHTS["favorable_ofi_score"])
+        )
 
     if best_bid > 0 and best_ask > 0 and order_price > 0:
         if order_price < best_bid:
-            adjustments.append(("price_below_bid_positive", ADJUSTMENT_WEIGHTS["price_below_bid_positive"]))
+            adjustments.append(
+                (
+                    "price_below_bid_positive",
+                    ADJUSTMENT_WEIGHTS["price_below_bid_positive"],
+                )
+            )
         elif order_price < best_ask:
             pass
 
     if active_priority_matched:
-        adjustments.append(("active_priority_match", ADJUSTMENT_WEIGHTS["active_priority_match"]))
+        adjustments.append(
+            ("active_priority_match", ADJUSTMENT_WEIGHTS["active_priority_match"])
+        )
 
     if cancelled_or_partial_filled_qty > 0 and requested_qty > 0:
-        fill_ratio = min(1.0, float(cancelled_or_partial_filled_qty) / float(requested_qty))
+        fill_ratio = min(
+            1.0, float(cancelled_or_partial_filled_qty) / float(requested_qty)
+        )
         if fill_ratio < 0.5:
-            adjustments.append(("partial_fill_progress", ADJUSTMENT_WEIGHTS["partial_fill_progress"]))
+            adjustments.append(
+                ("partial_fill_progress", ADJUSTMENT_WEIGHTS["partial_fill_progress"])
+            )
 
     net_adjustment = sum(weight for _, weight in adjustments)
     for reason_key, _weight in adjustments:
@@ -268,11 +312,17 @@ def compute_entry_cancel_wait_attribution(
         else base_wait_sec
     )
     raw_wait_sec = resolve_from + net_adjustment
-    effective_min_sec = min_wait_sec if has_stale_or_passive else max(min_wait_sec, base_wait_sec)
+    effective_min_sec = (
+        min_wait_sec if has_stale_or_passive else max(min_wait_sec, base_wait_sec)
+    )
     cancel_wait_sec = max(effective_min_sec, min(max_wait_sec, raw_wait_sec))
 
     attributes = {
-        "base_wait_source": "position_tag" if position_tag else "entry_mode" if entry_mode else "strategy_default",
+        "base_wait_source": (
+            "position_tag"
+            if position_tag
+            else "entry_mode" if entry_mode else "strategy_default"
+        ),
         "lifecycle_used": _nonempty_str(entry_order_lifecycle) or "standard",
         "passive_probe_used": str(entry_passive_probe_applied).lower(),
         "ai_action_used": _nonempty_str(ai_action) or "USE_DEFENSIVE",
