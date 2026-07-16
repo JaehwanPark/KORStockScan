@@ -12,17 +12,97 @@ def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
         "2026-04-28": [],
         "2026-04-29": [],
         "2026-04-30": [
-            {"stage": "budget_pass", "fields": {"signal_score": "72", "latest_strength": "111", "buy_pressure_10t": "53", "ws_age_ms": "900", "ws_jitter_ms": "410", "spread_ratio": "0.0078"}},
-            {"stage": "budget_pass", "fields": {"signal_score": "74", "latest_strength": "114", "buy_pressure_10t": "56", "ws_age_ms": "980", "ws_jitter_ms": "430", "spread_ratio": "0.0080"}},
-            {"stage": "budget_pass", "fields": {"signal_score": "76", "latest_strength": "118", "buy_pressure_10t": "58", "ws_age_ms": "1030", "ws_jitter_ms": "450", "spread_ratio": "0.0081"}},
-            {"stage": "order_bundle_submitted", "fields": {"price_below_bid_bps": "71", "late_fill": "false"}},
-            {"stage": "order_bundle_submitted", "fields": {"price_below_bid_bps": "77"}},
-            {"stage": "bad_entry_block_observed", "fields": {"held_sec": "65", "profit_rate": "-0.88", "peak_profit": "0.12", "ai_score": "41"}},
-            {"stage": "bad_entry_block_observed", "fields": {"held_sec": "72", "profit_rate": "-0.94", "peak_profit": "0.18", "ai_score": "43"}},
-            {"stage": "bad_entry_refined_candidate", "fields": {"exclusion_reason": "soft_stop_zone", "should_exit": "False"}},
-            {"stage": "bad_entry_refined_candidate", "fields": {"exclusion_reason": "loss_too_shallow", "should_exit": "False"}},
-            {"stage": "reversal_add_candidate", "fields": {"profit_rate": "-0.62", "held_sec": "88", "ai_score": "63", "ai_recovery_delta": "17"}},
-            {"stage": "reversal_add_candidate", "fields": {"profit_rate": "-0.55", "held_sec": "94", "ai_score": "66", "ai_recovery_delta": "18"}},
+            {
+                "stage": "budget_pass",
+                "fields": {
+                    "signal_score": "72",
+                    "latest_strength": "111",
+                    "buy_pressure_10t": "53",
+                    "ws_age_ms": "900",
+                    "ws_jitter_ms": "410",
+                    "spread_ratio": "0.0078",
+                },
+            },
+            {
+                "stage": "budget_pass",
+                "fields": {
+                    "signal_score": "74",
+                    "latest_strength": "114",
+                    "buy_pressure_10t": "56",
+                    "ws_age_ms": "980",
+                    "ws_jitter_ms": "430",
+                    "spread_ratio": "0.0080",
+                },
+            },
+            {
+                "stage": "budget_pass",
+                "fields": {
+                    "signal_score": "76",
+                    "latest_strength": "118",
+                    "buy_pressure_10t": "58",
+                    "ws_age_ms": "1030",
+                    "ws_jitter_ms": "450",
+                    "spread_ratio": "0.0081",
+                },
+            },
+            {
+                "stage": "order_bundle_submitted",
+                "fields": {"price_below_bid_bps": "71", "late_fill": "false"},
+            },
+            {
+                "stage": "order_bundle_submitted",
+                "fields": {"price_below_bid_bps": "77"},
+            },
+            {
+                "stage": "bad_entry_block_observed",
+                "fields": {
+                    "held_sec": "65",
+                    "profit_rate": "-0.88",
+                    "peak_profit": "0.12",
+                    "ai_score": "41",
+                },
+            },
+            {
+                "stage": "bad_entry_block_observed",
+                "fields": {
+                    "held_sec": "72",
+                    "profit_rate": "-0.94",
+                    "peak_profit": "0.18",
+                    "ai_score": "43",
+                },
+            },
+            {
+                "stage": "bad_entry_refined_candidate",
+                "fields": {
+                    "exclusion_reason": "soft_stop_zone",
+                    "should_exit": "False",
+                },
+            },
+            {
+                "stage": "bad_entry_refined_candidate",
+                "fields": {
+                    "exclusion_reason": "loss_too_shallow",
+                    "should_exit": "False",
+                },
+            },
+            {
+                "stage": "reversal_add_candidate",
+                "fields": {
+                    "profit_rate": "-0.62",
+                    "held_sec": "88",
+                    "ai_score": "63",
+                    "ai_recovery_delta": "17",
+                },
+            },
+            {
+                "stage": "reversal_add_candidate",
+                "fields": {
+                    "profit_rate": "-0.55",
+                    "held_sec": "94",
+                    "ai_score": "66",
+                    "ai_recovery_delta": "18",
+                },
+            },
             {
                 "stage": "reversal_add_blocked_reason",
                 "fields": {
@@ -43,12 +123,21 @@ def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
                     "micro_vwap_ok": "True",
                 },
             },
-            {"stage": "soft_stop_micro_grace", "fields": {"profit_rate": "-1.74", "held_sec": "37"}},
-            {"stage": "soft_stop_micro_grace", "fields": {"profit_rate": "-1.95", "held_sec": "42"}},
+            {
+                "stage": "soft_stop_micro_grace",
+                "fields": {"profit_rate": "-1.74", "held_sec": "37"},
+            },
+            {
+                "stage": "soft_stop_micro_grace",
+                "fields": {"profit_rate": "-1.95", "held_sec": "42"},
+            },
             {
                 "stage": "stat_action_decision_snapshot",
                 "record_id": 1001,
-                "fields": {"chosen_action": "pyramid_wait", "scale_in_action_type": "PYRAMID"},
+                "fields": {
+                    "chosen_action": "pyramid_wait",
+                    "scale_in_action_type": "PYRAMID",
+                },
             },
             {
                 "stage": "exit_signal",
@@ -56,13 +145,28 @@ def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
                 "stock_code": "456040",
                 "stock_name": "OCI",
                 "emitted_at": "2026-04-30T09:47:37",
-                "fields": {"exit_rule": "scalp_trailing_take_profit", "profit_rate": "0.59", "peak_profit": "1.00", "current_ai_score": "62"},
+                "fields": {
+                    "exit_rule": "scalp_trailing_take_profit",
+                    "profit_rate": "0.59",
+                    "peak_profit": "1.00",
+                    "current_ai_score": "62",
+                },
             },
-            {"stage": "sell_completed", "record_id": 1001, "fields": {"exit_rule": "scalp_trailing_take_profit", "profit_rate": "0.59"}},
+            {
+                "stage": "sell_completed",
+                "record_id": 1001,
+                "fields": {
+                    "exit_rule": "scalp_trailing_take_profit",
+                    "profit_rate": "0.59",
+                },
+            },
             {
                 "stage": "stat_action_decision_snapshot",
                 "record_id": 1002,
-                "fields": {"chosen_action": "pyramid_wait", "scale_in_action_type": "PYRAMID"},
+                "fields": {
+                    "chosen_action": "pyramid_wait",
+                    "scale_in_action_type": "PYRAMID",
+                },
             },
             {
                 "stage": "exit_signal",
@@ -70,18 +174,71 @@ def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
                 "stock_code": "042370",
                 "stock_name": "비츠로테크",
                 "emitted_at": "2026-04-30T09:56:09",
-                "fields": {"exit_rule": "scalp_trailing_take_profit", "profit_rate": "2.79", "peak_profit": "3.48", "current_ai_score": "74"},
+                "fields": {
+                    "exit_rule": "scalp_trailing_take_profit",
+                    "profit_rate": "2.79",
+                    "peak_profit": "3.48",
+                    "current_ai_score": "74",
+                },
             },
-            {"stage": "sell_completed", "record_id": 1002, "fields": {"exit_rule": "scalp_trailing_take_profit", "profit_rate": "3.58"}},
+            {
+                "stage": "sell_completed",
+                "record_id": 1002,
+                "fields": {
+                    "exit_rule": "scalp_trailing_take_profit",
+                    "profit_rate": "3.58",
+                },
+            },
         ]
         + [
-            {"stage": "budget_pass", "fields": {"signal_score": "73", "latest_strength": "116", "buy_pressure_10t": "57", "ws_age_ms": "970", "ws_jitter_ms": "420", "spread_ratio": "0.0079"}}
+            {
+                "stage": "budget_pass",
+                "fields": {
+                    "signal_score": "73",
+                    "latest_strength": "116",
+                    "buy_pressure_10t": "57",
+                    "ws_age_ms": "970",
+                    "ws_jitter_ms": "420",
+                    "spread_ratio": "0.0079",
+                },
+            }
             for _ in range(600)
         ]
-        + [{"stage": "order_bundle_submitted", "fields": {"price_below_bid_bps": "75"}} for _ in range(25)]
-        + [{"stage": "bad_entry_block_observed", "fields": {"held_sec": "70", "profit_rate": "-0.90", "peak_profit": "0.15", "ai_score": "42"}} for _ in range(30)]
-        + [{"stage": "reversal_add_candidate", "fields": {"profit_rate": "-0.58", "held_sec": "92", "ai_score": "65", "ai_recovery_delta": "16"}} for _ in range(22)]
-        + [{"stage": "soft_stop_micro_grace", "fields": {"profit_rate": "-1.82", "held_sec": "40"}} for _ in range(30)]
+        + [
+            {"stage": "order_bundle_submitted", "fields": {"price_below_bid_bps": "75"}}
+            for _ in range(25)
+        ]
+        + [
+            {
+                "stage": "bad_entry_block_observed",
+                "fields": {
+                    "held_sec": "70",
+                    "profit_rate": "-0.90",
+                    "peak_profit": "0.15",
+                    "ai_score": "42",
+                },
+            }
+            for _ in range(30)
+        ]
+        + [
+            {
+                "stage": "reversal_add_candidate",
+                "fields": {
+                    "profit_rate": "-0.58",
+                    "held_sec": "92",
+                    "ai_score": "65",
+                    "ai_recovery_delta": "16",
+                },
+            }
+            for _ in range(22)
+        ]
+        + [
+            {
+                "stage": "soft_stop_micro_grace",
+                "fields": {"profit_rate": "-1.82", "held_sec": "40"},
+            }
+            for _ in range(30)
+        ]
         + [
             {
                 "stage": "protect_trailing_smooth_hold",
@@ -111,16 +268,36 @@ def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
         + [
             {
                 "stage": "sell_completed",
-                "fields": {"exit_rule": "protect_trailing_stop", "profit_rate": "-0.20"},
+                "fields": {
+                    "exit_rule": "protect_trailing_stop",
+                    "profit_rate": "-0.20",
+                },
             }
             for _ in range(2)
         ],
     }
 
     completed_rows = [
-        {"profit_rate": -0.5, "buy_price": 8500, "buy_time": "2026-04-30 09:10:00", "daily_volume": 1_200_000},
-        {"profit_rate": 0.3, "buy_price": 22000, "buy_time": "2026-04-30 10:05:00", "daily_volume": 3_000_000, "pyramid_count": 1},
-        {"profit_rate": -1.1, "buy_price": 76000, "buy_time": "2026-04-30 14:20:00", "daily_volume": 8_000_000, "avg_down_count": 1},
+        {
+            "profit_rate": -0.5,
+            "buy_price": 8500,
+            "buy_time": "2026-04-30 09:10:00",
+            "daily_volume": 1_200_000,
+        },
+        {
+            "profit_rate": 0.3,
+            "buy_price": 22000,
+            "buy_time": "2026-04-30 10:05:00",
+            "daily_volume": 3_000_000,
+            "pyramid_count": 1,
+        },
+        {
+            "profit_rate": -1.1,
+            "buy_price": 76000,
+            "buy_time": "2026-04-30 14:20:00",
+            "daily_volume": 8_000_000,
+            "avg_down_count": 1,
+        },
     ]
 
     report = report_mod.build_daily_threshold_cycle_report(
@@ -174,10 +351,16 @@ def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
     whipsaw = report["threshold_snapshot"]["soft_stop_whipsaw_confirmation"]
     assert whipsaw["apply_ready"] is True
     whipsaw_candidate = next(
-        item for item in report["calibration_candidates"] if item["family"] == "soft_stop_whipsaw_confirmation"
+        item
+        for item in report["calibration_candidates"]
+        if item["family"] == "soft_stop_whipsaw_confirmation"
     )
     assert whipsaw_candidate["apply_mode"] == "calibrated_apply_candidate"
-    assert whipsaw_candidate["calibration_state"] in {"adjust_up", "adjust_down", "hold"}
+    assert whipsaw_candidate["calibration_state"] in {
+        "adjust_up",
+        "adjust_down",
+        "hold",
+    }
     assert whipsaw_candidate["safety_revert_required"] is False
     assert whipsaw_candidate["target_env_keys"]
     assert whipsaw_candidate["max_step_per_day"] is not None
@@ -192,8 +375,14 @@ def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
     assert scalp_trailing["sample"]["would_hold_if_weak_limit_plus_10bp"] == 1
     assert scalp_trailing["sample"]["would_hold_if_strong_ai_score_relaxed_5pt"] == 1
     assert scalp_trailing["sample"]["pyramid_signaled_not_executed"] == 2
-    assert scalp_trailing["sample"]["borderline_examples"][0]["pyramid_state"] == "pyramid_signaled_not_executed"
-    assert scalp_trailing["sample"]["strong_ai_boundary_examples"][0]["stock_code"] == "042370"
+    assert (
+        scalp_trailing["sample"]["borderline_examples"][0]["pyramid_state"]
+        == "pyramid_signaled_not_executed"
+    )
+    assert (
+        scalp_trailing["sample"]["strong_ai_boundary_examples"][0]["stock_code"]
+        == "042370"
+    )
     action_weight = report["threshold_snapshot"]["statistical_action_weight"]
     assert action_weight["apply_ready"] is False
     assert action_weight["recommended"]["data_completeness"]["price_known"] == 3
@@ -208,39 +397,80 @@ def test_threshold_cycle_report_marks_calibration_sample_and_live_risk_states():
     report = report_mod.build_daily_threshold_cycle_report(
         "2026-04-30",
         pipeline_loader=lambda target_date: [],
-        report_source_loader=lambda target_date: {"sources": {}, "source_metrics": {}, "new_observation_axis_created": False},
+        report_source_loader=lambda target_date: {
+            "sources": {},
+            "source_metrics": {},
+            "new_observation_axis_created": False,
+        },
         completed_rows_loader=lambda start_date, end_date: [],
     )
 
     candidates = {item["family"]: item for item in report["calibration_candidates"]}
-    assert candidates["soft_stop_whipsaw_confirmation"]["calibration_state"] == "hold_sample"
-    assert candidates["soft_stop_whipsaw_confirmation"]["sample_floor_status"] == "hold_sample"
-    assert candidates["soft_stop_whipsaw_confirmation"]["safety_revert_required"] is False
+    assert (
+        candidates["soft_stop_whipsaw_confirmation"]["calibration_state"]
+        == "hold_sample"
+    )
+    assert (
+        candidates["soft_stop_whipsaw_confirmation"]["sample_floor_status"]
+        == "hold_sample"
+    )
+    assert (
+        candidates["soft_stop_whipsaw_confirmation"]["safety_revert_required"] is False
+    )
     assert candidates["trailing_continuation"]["calibration_state"] == "freeze"
     assert candidates["trailing_continuation"]["allowed_runtime_apply"] is False
     assert candidates["scale_in_price_guard"]["calibration_state"] == "hold_sample"
     assert candidates["scale_in_price_guard"]["allowed_runtime_apply"] is False
     assert candidates["scale_in_price_guard"]["apply_mode"] == "report_only_calibration"
-    assert candidates["scale_in_price_guard"]["sample_window"] == "rolling_10d_or_cumulative_sparse"
+    assert (
+        candidates["scale_in_price_guard"]["sample_window"]
+        == "rolling_10d_or_cumulative_sparse"
+    )
     assert candidates["pre_submit_price_guard"]["calibration_state"] == "hold"
     assert candidates["pre_submit_price_guard"]["allowed_runtime_apply"] is False
-    assert candidates["dynamic_entry_price_resolver"]["calibration_state"] == "hold_sample"
+    assert (
+        candidates["dynamic_entry_price_resolver"]["calibration_state"] == "hold_sample"
+    )
     assert candidates["dynamic_entry_price_resolver"]["allowed_runtime_apply"] is True
     assert candidates["entry_price_execution_quality"]["allowed_runtime_apply"] is False
     assert "liquidity_gate_refined_candidate" not in candidates
     assert "overbought_gate_refined_candidate" not in candidates
     assert candidates["liquidity_pre_submit_guard_p1"]["allowed_runtime_apply"] is False
-    assert candidates["liquidity_pre_submit_guard_p1"]["apply_mode"] == "report_only_calibration"
-    assert candidates["liquidity_pre_submit_guard_p1"]["supersedes"] == ["liquidity_gate_refined_candidate"]
+    assert (
+        candidates["liquidity_pre_submit_guard_p1"]["apply_mode"]
+        == "report_only_calibration"
+    )
+    assert candidates["liquidity_pre_submit_guard_p1"]["supersedes"] == [
+        "liquidity_gate_refined_candidate"
+    ]
     assert candidates["overbought_pullback_guard_p1"]["allowed_runtime_apply"] is False
-    assert candidates["overbought_pullback_guard_p1"]["supersedes"] == ["overbought_gate_refined_candidate"]
+    assert candidates["overbought_pullback_guard_p1"]["supersedes"] == [
+        "overbought_gate_refined_candidate"
+    ]
     assert candidates["holding_flow_ofi_smoothing"]["sample_window"] == "daily_intraday"
-    assert candidates["market_regime_continuous_thresholds"]["allowed_runtime_apply"] is False
+    assert (
+        candidates["market_regime_continuous_thresholds"]["allowed_runtime_apply"]
+        is False
+    )
     assert candidates["market_regime_continuous_thresholds"]["runtime_change"] is False
-    assert candidates["market_regime_continuous_thresholds"]["calibration_state"] == "hold_sample"
-    assert candidates["market_regime_continuous_thresholds"]["apply_mode"] == "manifest_only"
-    assert candidates["market_regime_continuous_thresholds"]["sample_window"] == "rolling_10d_with_valid_market_cache_and_daily_report"
-    assert report["post_apply_attribution"]["soft_stop_balanced_policy"]["perfect_win_rate_required"] is False
+    assert (
+        candidates["market_regime_continuous_thresholds"]["calibration_state"]
+        == "hold_sample"
+    )
+    assert (
+        candidates["market_regime_continuous_thresholds"]["apply_mode"]
+        == "manifest_only"
+    )
+    assert (
+        candidates["market_regime_continuous_thresholds"]["sample_window"]
+        == "rolling_10d_with_valid_market_cache_and_daily_report"
+    )
+    assert (
+        report["post_apply_attribution"]["soft_stop_balanced_policy"][
+            "perfect_win_rate_required"
+        ]
+        is False
+    )
 
 
 def test_score65_74_recovery_probe_reports_effective_score60_aliases():
@@ -327,12 +557,16 @@ def test_scalp_simulator_summary_excludes_synthetic_and_tracks_duplicate_dominan
     assert summary["duplicate_buy_signal"] == 10
     assert summary["duplicate_buy_signal_by_symbol_top"] == {"011070": 10}
     assert summary["duplicate_dominance_symbol_count"] == 1
-    assert summary["duplicate_buy_signal_by_symbol_time_bucket_top"] == {"011070|time_1030_1400": 10}
+    assert summary["duplicate_buy_signal_by_symbol_time_bucket_top"] == {
+        "011070|time_1030_1400": 10
+    }
     assert summary["duplicate_dominance_symbol_time_bucket_count"] == 1
     assert summary["completed_profit_summary"]["sample"] == 1
 
 
-def test_market_regime_continuous_threshold_family_metadata_and_source_bundle(tmp_path, monkeypatch):
+def test_market_regime_continuous_threshold_family_metadata_and_source_bundle(
+    tmp_path, monkeypatch
+):
     report_dir = tmp_path / "report"
     report_dir.mkdir(parents=True)
     monkeypatch.setattr(report_mod, "REPORT_DIR", report_dir)
@@ -375,7 +609,9 @@ def test_market_regime_continuous_threshold_family_metadata_and_source_bundle(tm
         )
 
     metrics = report_mod._summarize_market_regime_continuous_sources("2026-05-10")
-    metadata = report_mod.CALIBRATION_FAMILY_METADATA["market_regime_continuous_thresholds"]
+    metadata = report_mod.CALIBRATION_FAMILY_METADATA[
+        "market_regime_continuous_thresholds"
+    ]
 
     assert metadata["allowed_runtime_apply"] is False
     assert metadata["runtime_effect"] is False
@@ -438,7 +674,9 @@ def test_threshold_cycle_report_counts_scalp_sim_entry_price_and_revalidation_sc
     ]
     report = report_mod.build_daily_threshold_cycle_report(
         "2026-05-15",
-        pipeline_loader=lambda target_date: events if target_date == "2026-05-15" else [],
+        pipeline_loader=lambda target_date: (
+            events if target_date == "2026-05-15" else []
+        ),
         report_source_loader=lambda target_date: {
             "sources": {},
             "source_metrics": {},
@@ -447,7 +685,9 @@ def test_threshold_cycle_report_counts_scalp_sim_entry_price_and_revalidation_sc
         completed_rows_loader=lambda start_date, end_date: [],
     )
 
-    dynamic_entry = report["threshold_snapshot"]["dynamic_entry_price_resolver"]["sample"]
+    dynamic_entry = report["threshold_snapshot"]["dynamic_entry_price_resolver"][
+        "sample"
+    ]
     assert dynamic_entry["sim_entry_ai_price_applied"] == 1
     assert dynamic_entry["sim_entry_ai_price_skip_order"] == 1
     assert dynamic_entry["sim_submit_revalidation_block"] == 1
@@ -509,10 +749,19 @@ def test_threshold_cycle_report_routes_entry_filter_ev_sources_to_calibration_fa
         },
     }
     pipeline_rows = (
-        [{"stage": "pre_submit_price_guard_block", "fields": {"price_below_bid_bps": "85"}} for _ in range(5)]
+        [
+            {
+                "stage": "pre_submit_price_guard_block",
+                "fields": {"price_below_bid_bps": "85"},
+            }
+            for _ in range(5)
+        ]
         + [{"stage": "blocked_liquidity", "fields": {}} for _ in range(5)]
         + [{"stage": "blocked_overbought", "fields": {}} for _ in range(5)]
-        + [{"stage": "blocked_ai_score", "fields": {"ai_score": "70"}} for _ in range(5)]
+        + [
+            {"stage": "blocked_ai_score", "fields": {"ai_score": "70"}}
+            for _ in range(5)
+        ]
     )
 
     report = report_mod.build_daily_threshold_cycle_report(
@@ -525,17 +774,39 @@ def test_threshold_cycle_report_routes_entry_filter_ev_sources_to_calibration_fa
     candidates = {item["family"]: item for item in report["calibration_candidates"]}
     assert candidates["pre_submit_price_guard"]["calibration_state"] == "hold"
     assert candidates["pre_submit_price_guard"]["allowed_runtime_apply"] is False
-    assert candidates["dynamic_entry_price_resolver"]["calibration_state"] == "hold_sample"
-    assert candidates["dynamic_entry_price_resolver"]["source_metrics"]["missed_winner_rate"] == 70.0
-    assert candidates["score65_74_recovery_probe"]["source_metrics"]["blocked_ai_score_evaluated"] == 22
+    assert (
+        candidates["dynamic_entry_price_resolver"]["calibration_state"] == "hold_sample"
+    )
+    assert (
+        candidates["dynamic_entry_price_resolver"]["source_metrics"][
+            "missed_winner_rate"
+        ]
+        == 70.0
+    )
+    assert (
+        candidates["score65_74_recovery_probe"]["source_metrics"][
+            "blocked_ai_score_evaluated"
+        ]
+        == 22
+    )
     assert "liquidity_gate_refined_candidate" not in candidates
     assert "overbought_gate_refined_candidate" not in candidates
     assert candidates["liquidity_pre_submit_guard_p1"]["calibration_state"] == "hold"
     assert candidates["liquidity_pre_submit_guard_p1"]["allowed_runtime_apply"] is False
-    assert candidates["liquidity_pre_submit_guard_p1"]["source_metrics"]["missed_winner_rate"] == 45.0
+    assert (
+        candidates["liquidity_pre_submit_guard_p1"]["source_metrics"][
+            "missed_winner_rate"
+        ]
+        == 45.0
+    )
     assert candidates["liquidity_pre_submit_guard_p1"]["sample_count"] == 21
     assert candidates["overbought_pullback_guard_p1"]["calibration_state"] == "hold"
-    assert candidates["overbought_pullback_guard_p1"]["source_metrics"]["avoided_loser_rate"] == 45.0
+    assert (
+        candidates["overbought_pullback_guard_p1"]["source_metrics"][
+            "avoided_loser_rate"
+        ]
+        == 45.0
+    )
     assert candidates["overbought_pullback_guard_p1"]["sample_count"] == 21
 
 
@@ -594,8 +865,18 @@ def test_dynamic_entry_price_resolver_opens_when_source_candidate_metrics_are_co
     assert dynamic["recommended_values"]["normal_defensive_ticks"] == 2
     assert dynamic["recommended_values"]["max_below_bid_bps"] == 70
     assert dynamic["recommended_values"]["conditional_1tick_real_enabled"] is False
-    assert dynamic["source_metrics"]["recommended_values_audit"]["accepted"]["normal_defensive_ticks"] == 2
-    assert dynamic["source_metrics"]["recommended_values_audit"]["accepted"]["max_below_bid_bps"] == 70
+    assert (
+        dynamic["source_metrics"]["recommended_values_audit"]["accepted"][
+            "normal_defensive_ticks"
+        ]
+        == 2
+    )
+    assert (
+        dynamic["source_metrics"]["recommended_values_audit"]["accepted"][
+            "max_below_bid_bps"
+        ]
+        == 70
+    )
     assert dynamic["source_metrics"]["recommended_values_audit"]["clamped"] == {}
     assert dynamic["source_metrics"]["candidate_metrics_ready"] is True
     assert dynamic["source_metrics"]["candidate_metrics_missing"] == {}
@@ -764,7 +1045,10 @@ def test_dynamic_entry_price_resolver_separates_sim_unpriced_stale_and_ai_candid
                     "orderbook_micro_observer_missing_reason": "missing_snapshot",
                 },
             },
-            {"stage": "entry_ai_price_canary_applied", "fields": {"submitted_order_price": "10000"}},
+            {
+                "stage": "entry_ai_price_canary_applied",
+                "fields": {"submitted_order_price": "10000"},
+            },
         ],
         completed_rows_loader=lambda start_date, end_date: [],
     )
@@ -785,7 +1069,9 @@ def test_dynamic_entry_price_resolver_separates_sim_unpriced_stale_and_ai_candid
     assert sim_metrics["limit_fill_price_missing_but_assumed_present_count"] == 0
     assert sim_metrics["real_execution_quality_sample_count"] == 0
     assert dynamic["unpriced_or_stale_warning_count"] == 2
-    assert dynamic["sim_submit_path_quality"]["scalp_sim_buy_order_virtual_pending"] == {
+    assert dynamic["sim_submit_path_quality"][
+        "scalp_sim_buy_order_virtual_pending"
+    ] == {
         "sample_count": 2,
         "priced_sample_count": 1,
         "unpriced_sample_count": 1,
@@ -847,7 +1133,9 @@ def test_dynamic_entry_price_resolver_clamps_invalid_source_recommended_values()
         completed_rows_loader=lambda start_date, end_date: [],
     )
 
-    dynamic = {item["family"]: item for item in report["calibration_candidates"]}["dynamic_entry_price_resolver"]
+    dynamic = {item["family"]: item for item in report["calibration_candidates"]}[
+        "dynamic_entry_price_resolver"
+    ]
     assert dynamic["recommended_values"]["normal_defensive_ticks"] == 2
     assert dynamic["recommended_values"]["max_below_bid_bps"] == 90
     assert dynamic["recommended_values"]["conditional_1tick_real_enabled"] is True
@@ -855,7 +1143,9 @@ def test_dynamic_entry_price_resolver_clamps_invalid_source_recommended_values()
     assert audit["clamped"]["normal_defensive_ticks"] == {"requested": 10, "applied": 2}
     assert audit["clamped"]["max_below_bid_bps"] == {"requested": 200, "applied": 90}
     assert audit["rejected"]["enabled"]["reason"] == "invalid_bool"
-    assert audit["rejected"]["conditional_1tick_real_enabled"]["reason"] == "invalid_bool"
+    assert (
+        audit["rejected"]["conditional_1tick_real_enabled"]["reason"] == "invalid_bool"
+    )
 
 
 def test_dynamic_entry_price_resolver_holds_without_runtime_recommendation_change():
@@ -893,7 +1183,9 @@ def test_dynamic_entry_price_resolver_holds_without_runtime_recommendation_chang
         completed_rows_loader=lambda start_date, end_date: [],
     )
 
-    dynamic = {item["family"]: item for item in report["calibration_candidates"]}["dynamic_entry_price_resolver"]
+    dynamic = {item["family"]: item for item in report["calibration_candidates"]}[
+        "dynamic_entry_price_resolver"
+    ]
     assert dynamic["calibration_state"] == "hold_sample"
     assert dynamic["apply_mode"] == "report_only_calibration"
     assert dynamic["source_metrics"]["candidate_metrics_ready"] is True
@@ -902,7 +1194,9 @@ def test_dynamic_entry_price_resolver_holds_without_runtime_recommendation_chang
     assert "recommended_values_audit" not in dynamic["source_metrics"]
 
 
-def test_dynamic_entry_price_resolver_holds_when_conditional_1tick_recommendation_matches_current(monkeypatch):
+def test_dynamic_entry_price_resolver_holds_when_conditional_1tick_recommendation_matches_current(
+    monkeypatch,
+):
     monkeypatch.setattr(
         report_mod,
         "TRADING_RULES",
@@ -951,7 +1245,9 @@ def test_dynamic_entry_price_resolver_holds_when_conditional_1tick_recommendatio
         completed_rows_loader=lambda start_date, end_date: [],
     )
 
-    dynamic = {item["family"]: item for item in report["calibration_candidates"]}["dynamic_entry_price_resolver"]
+    dynamic = {item["family"]: item for item in report["calibration_candidates"]}[
+        "dynamic_entry_price_resolver"
+    ]
     assert dynamic["current_values"]["conditional_1tick_real_enabled"] is False
     assert dynamic["recommended_values"]["conditional_1tick_real_enabled"] is False
     assert dynamic["calibration_state"] == "hold_sample"
@@ -989,7 +1285,10 @@ def test_dynamic_entry_price_resolver_rejects_recommendation_without_sim_scope()
     report = report_mod.build_daily_threshold_cycle_report(
         "2026-05-08",
         pipeline_loader=lambda target_date: [
-            {"stage": "order_bundle_submitted", "fields": {"price_below_bid_bps": "120"}}
+            {
+                "stage": "order_bundle_submitted",
+                "fields": {"price_below_bid_bps": "120"},
+            }
             for _ in range(25)
         ],
         report_source_loader=lambda target_date: report_sources,
@@ -1000,8 +1299,14 @@ def test_dynamic_entry_price_resolver_rejects_recommendation_without_sim_scope()
         "dynamic_entry_price_resolver"
     ]
     assert dynamic["calibration_state"] == "hold_sample"
-    assert dynamic["recommended_values"]["normal_defensive_ticks"] == dynamic["current_values"]["normal_defensive_ticks"]
-    assert dynamic["recommended_values"]["max_below_bid_bps"] == dynamic["current_values"]["max_below_bid_bps"]
+    assert (
+        dynamic["recommended_values"]["normal_defensive_ticks"]
+        == dynamic["current_values"]["normal_defensive_ticks"]
+    )
+    assert (
+        dynamic["recommended_values"]["max_below_bid_bps"]
+        == dynamic["current_values"]["max_below_bid_bps"]
+    )
     assert dynamic["source_metrics"]["recommended_values_valid"] is False
     assert dynamic["source_metrics"]["recommended_values_runtime_change_ready"] is False
     audit = dynamic["source_metrics"]["recommended_values_audit"]
@@ -1041,7 +1346,10 @@ def test_dynamic_entry_price_resolver_partial_sim_recommendation_keeps_unspecifi
     report = report_mod.build_daily_threshold_cycle_report(
         "2026-05-08",
         pipeline_loader=lambda target_date: [
-            {"stage": "order_bundle_submitted", "fields": {"price_below_bid_bps": "120"}}
+            {
+                "stage": "order_bundle_submitted",
+                "fields": {"price_below_bid_bps": "120"},
+            }
             for _ in range(25)
         ],
         report_source_loader=lambda target_date: report_sources,
@@ -1053,10 +1361,14 @@ def test_dynamic_entry_price_resolver_partial_sim_recommendation_keeps_unspecifi
     ]
     assert dynamic["calibration_state"] == "adjust_up"
     assert dynamic["recommended_values"]["normal_defensive_ticks"] == 2
-    assert dynamic["recommended_values"]["max_below_bid_bps"] == dynamic["current_values"]["max_below_bid_bps"]
-    assert dynamic["recommended_values"]["conditional_1tick_real_enabled"] == dynamic["current_values"][
-        "conditional_1tick_real_enabled"
-    ]
+    assert (
+        dynamic["recommended_values"]["max_below_bid_bps"]
+        == dynamic["current_values"]["max_below_bid_bps"]
+    )
+    assert (
+        dynamic["recommended_values"]["conditional_1tick_real_enabled"]
+        == dynamic["current_values"]["conditional_1tick_real_enabled"]
+    )
     assert dynamic["source_metrics"]["recommended_values_valid"] is True
     assert dynamic["source_metrics"]["recommended_values_runtime_change_ready"] is True
 
@@ -1113,7 +1425,9 @@ def test_window_policy_registry_demotes_score65_daily_trigger_without_rolling_de
     assert candidate["window_policy_resolution"]["primary"] == "rolling_5d"
     assert candidate["window_policy_resolution"]["primary_sample_count"] == 0
     assert candidate["apply_mode"] == "report_only_calibration"
-    assert report["window_policy_audit"]["issue_counts"] == {"daily_only_leak_blocked": 1}
+    assert report["window_policy_audit"]["issue_counts"] == {
+        "daily_only_leak_blocked": 1
+    }
 
 
 def test_threshold_cycle_calibration_uses_holding_exit_report_sources():
@@ -1121,8 +1435,14 @@ def test_threshold_cycle_calibration_uses_holding_exit_report_sources():
         "schema_version": 1,
         "target_date": "2026-04-30",
         "sources": {
-            "holding_exit_observation": {"path": "data/report/monitor_snapshots/holding_exit_observation_2026-04-30.json", "exists": True},
-            "holding_exit_sentinel": {"path": "data/report/holding_exit_sentinel/holding_exit_sentinel_2026-04-30.json", "exists": True},
+            "holding_exit_observation": {
+                "path": "data/report/monitor_snapshots/holding_exit_observation_2026-04-30.json",
+                "exists": True,
+            },
+            "holding_exit_sentinel": {
+                "path": "data/report/holding_exit_sentinel/holding_exit_sentinel_2026-04-30.json",
+                "exists": True,
+            },
         },
         "source_metrics": {
             "soft_stop": {
@@ -1153,20 +1473,40 @@ def test_threshold_cycle_calibration_uses_holding_exit_report_sources():
     )
 
     assert report["meta"]["calibration_run_phase"] == "intraday"
-    assert report["meta"]["calibration_cadence"] == "scheduled_postclose_manual_intraday"
+    assert (
+        report["meta"]["calibration_cadence"] == "scheduled_postclose_manual_intraday"
+    )
     assert report["calibration_source_bundle"]["new_observation_axis_created"] is False
     candidates = {item["family"]: item for item in report["calibration_candidates"]}
     assert candidates["soft_stop_whipsaw_confirmation"]["source_sample_count"] == 20
-    assert candidates["soft_stop_whipsaw_confirmation"]["sample_floor_status"] == "ready"
-    assert candidates["soft_stop_whipsaw_confirmation"]["window_policy"]["primary"] == "rolling_10d"
-    assert candidates["soft_stop_whipsaw_confirmation"]["source_metrics"]["holding_exit_observation_whipsaw_signal"] is True
+    assert (
+        candidates["soft_stop_whipsaw_confirmation"]["sample_floor_status"] == "ready"
+    )
+    assert (
+        candidates["soft_stop_whipsaw_confirmation"]["window_policy"]["primary"]
+        == "rolling_10d"
+    )
+    assert (
+        candidates["soft_stop_whipsaw_confirmation"]["source_metrics"][
+            "holding_exit_observation_whipsaw_signal"
+        ]
+        is True
+    )
     assert candidates["holding_flow_ofi_smoothing"]["source_sample_count"] == 67
-    assert candidates["holding_flow_ofi_smoothing"]["source_metrics"]["sentinel_primary"] == "HOLD_DEFER_DANGER"
+    assert (
+        candidates["holding_flow_ofi_smoothing"]["source_metrics"]["sentinel_primary"]
+        == "HOLD_DEFER_DANGER"
+    )
 
 
 def test_calibration_source_bundle_includes_panic_sell_defense(monkeypatch, tmp_path):
     monkeypatch.setattr(report_mod, "REPORT_DIR", tmp_path / "report")
-    panic_path = tmp_path / "report" / "panic_sell_defense" / "panic_sell_defense_2026-05-12.json"
+    panic_path = (
+        tmp_path
+        / "report"
+        / "panic_sell_defense"
+        / "panic_sell_defense_2026-05-12.json"
+    )
     panic_path.parent.mkdir(parents=True, exist_ok=True)
     panic_path.write_text(
         json.dumps(
@@ -1204,8 +1544,14 @@ def test_calibration_source_bundle_includes_panic_sell_defense(monkeypatch, tmp_
                     },
                 },
                 "canary_candidates": [
-                    {"family": "panic_entry_freeze_guard", "status": "report_only_candidate"},
-                    {"family": "panic_rebound_probe", "status": "hold_until_recovery_confirmed"},
+                    {
+                        "family": "panic_entry_freeze_guard",
+                        "status": "report_only_candidate",
+                    },
+                    {
+                        "family": "panic_rebound_probe",
+                        "status": "hold_until_recovery_confirmed",
+                    },
                 ],
                 "microstructure_detector": {
                     "evaluated_symbol_count": 3,
@@ -1246,12 +1592,17 @@ def test_calibration_source_bundle_includes_panic_sell_defense(monkeypatch, tmp_
     assert metrics["panic_regime_mode"] == "STABILIZING"
     assert metrics["panic_regime_decision_authority"] == "source_quality_only"
     assert metrics["panic_regime_runtime_effect"] == "report_only_no_mutation"
-    assert "sim_probe_only_recovery_candidate" in metrics["panic_regime_allowed_actions"]
+    assert (
+        "sim_probe_only_recovery_candidate" in metrics["panic_regime_allowed_actions"]
+    )
     assert "auto_sell" in metrics["panic_regime_forbidden_uses"]
     assert metrics["runtime_effect"] == "report_only_no_mutation"
     assert metrics["max_rolling_30m_stop_loss_exit_count"] == 17
     assert metrics["active_sim_probe_provenance_passed"] is True
-    assert metrics["candidate_status"]["panic_entry_freeze_guard"] == "report_only_candidate"
+    assert (
+        metrics["candidate_status"]["panic_entry_freeze_guard"]
+        == "report_only_candidate"
+    )
     assert metrics["microstructure_evaluated_symbol_count"] == 3
     assert metrics["microstructure_risk_off_advisory_count"] == 1
     assert metrics["microstructure_degraded_orderbook_count"] == 1
@@ -1260,12 +1611,17 @@ def test_calibration_source_bundle_includes_panic_sell_defense(monkeypatch, tmp_
     assert metrics["microstructure_confirmed_risk_off_advisory"] is False
     assert metrics["microstructure_portfolio_local_risk_off_only"] is True
     assert metrics["market_breadth_followup_candidate"] is True
-    assert metrics["market_breadth_next_action"] == "review_index_breadth_before_panic_runtime_candidate"
+    assert (
+        metrics["market_breadth_next_action"]
+        == "review_index_breadth_before_panic_runtime_candidate"
+    )
     assert "market_regime_not_risk_off" in metrics["source_quality_blockers"]
     assert metrics["allowed_runtime_apply"] is False
 
 
-def test_calibration_source_bundle_includes_panic_buying_read_only(monkeypatch, tmp_path):
+def test_calibration_source_bundle_includes_panic_buying_read_only(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(report_mod, "REPORT_DIR", tmp_path / "report")
     panic_path = tmp_path / "report" / "panic_buying" / "panic_buying_2026-05-13.json"
     panic_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1286,7 +1642,9 @@ def test_calibration_source_bundle_includes_panic_buying_read_only(monkeypatch, 
                 "risk_regime_threshold_mode": "dynamic_quantile",
                 "risk_regime_gate": {
                     "confirmed_evidence_count": 2,
-                    "source_quality_blockers": ["panic_buy_local_unconfirmed_by_market_breadth"],
+                    "source_quality_blockers": [
+                        "panic_buy_local_unconfirmed_by_market_breadth"
+                    ],
                 },
                 "policy": {"runtime_effect": "report_only_no_mutation"},
                 "panic_buy_metrics": {
@@ -1319,7 +1677,10 @@ def test_calibration_source_bundle_includes_panic_buying_read_only(monkeypatch, 
                     "market_wide_panic_buy_confirmed": False,
                 },
                 "canary_candidates": [
-                    {"family": "panic_buy_runner_tp_canary", "status": "report_only_candidate"}
+                    {
+                        "family": "panic_buy_runner_tp_canary",
+                        "status": "report_only_candidate",
+                    }
                 ],
             },
             ensure_ascii=False,
@@ -1345,23 +1706,38 @@ def test_calibration_source_bundle_includes_panic_buying_read_only(monkeypatch, 
     assert metrics["panic_buy_active_count"] == 2
     assert metrics["max_panic_buy_score"] == 0.88
     assert metrics["tp_counterfactual_count"] == 3
-    assert metrics["candidate_status"]["panic_buy_runner_tp_canary"] == "report_only_candidate"
+    assert (
+        metrics["candidate_status"]["panic_buy_runner_tp_canary"]
+        == "report_only_candidate"
+    )
     assert metrics["allowed_runtime_apply"] is False
     assert metrics["market_breadth_risk_on_advisory"] is False
     assert metrics["market_breadth_risk_off_advisory"] is True
     assert metrics["market_wide_panic_buy_confirmed"] is False
     assert metrics["missing_orderbook_count"] == 2
-    assert "panic_buy_local_unconfirmed_by_market_breadth" in metrics["source_quality_blockers"]
-    assert "panic_buy_orderbook_collector_coverage_gap" in metrics["source_quality_blockers"]
+    assert (
+        "panic_buy_local_unconfirmed_by_market_breadth"
+        in metrics["source_quality_blockers"]
+    )
+    assert (
+        "panic_buy_orderbook_collector_coverage_gap"
+        in metrics["source_quality_blockers"]
+    )
 
 
-def test_calibration_source_bundle_audits_report_only_cleanup_candidates(monkeypatch, tmp_path):
+def test_calibration_source_bundle_audits_report_only_cleanup_candidates(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(report_mod, "REPORT_DIR", tmp_path / "report")
     sentinel_path = tmp_path / "report" / "sentinel_followup_2026-05-13.md"
-    add_blocked_path = tmp_path / "report" / "monitor_snapshots" / "add_blocked_lock_2026-05-13.json"
+    add_blocked_path = (
+        tmp_path / "report" / "monitor_snapshots" / "add_blocked_lock_2026-05-13.json"
+    )
     add_blocked_path.parent.mkdir(parents=True, exist_ok=True)
     sentinel_path.write_text("# legacy follow-up\n", encoding="utf-8")
-    add_blocked_path.write_text(json.dumps({"total_blocked_events": 3}), encoding="utf-8")
+    add_blocked_path.write_text(
+        json.dumps({"total_blocked_events": 3}), encoding="utf-8"
+    )
 
     bundle = report_mod._summarize_calibration_report_sources("2026-05-13")
     audit = bundle["report_only_cleanup_audit"]
@@ -1375,15 +1751,23 @@ def test_calibration_source_bundle_audits_report_only_cleanup_candidates(monkeyp
     assert "sentinel_followup" in candidates
     assert candidates["sentinel_followup"]["runtime_effect"] is False
     assert candidates["sentinel_followup"]["in_current_source_bundle"] is False
-    assert candidates["add_blocked_lock"]["current_owner"] == "monitor_snapshot_reference_only"
-    assert any("report-only cleanup candidate: sentinel_followup" in warning for warning in bundle["warnings"])
+    assert (
+        candidates["add_blocked_lock"]["current_owner"]
+        == "monitor_snapshot_reference_only"
+    )
+    assert any(
+        "report-only cleanup candidate: sentinel_followup" in warning
+        for warning in bundle["warnings"]
+    )
 
 
 def test_calibration_source_bundle_reads_gzip_monitor_snapshot(monkeypatch, tmp_path):
     monkeypatch.setattr(report_mod, "REPORT_DIR", tmp_path / "report")
     snapshot_dir = tmp_path / "report" / "monitor_snapshots"
     snapshot_dir.mkdir(parents=True, exist_ok=True)
-    with gzip.open(snapshot_dir / "post_sell_feedback_2026-05-13.json.gz", "wt", encoding="utf-8") as handle:
+    with gzip.open(
+        snapshot_dir / "post_sell_feedback_2026-05-13.json.gz", "wt", encoding="utf-8"
+    ) as handle:
         json.dump(
             {
                 "soft_stop": {
@@ -1402,7 +1786,9 @@ def test_calibration_source_bundle_reads_gzip_monitor_snapshot(monkeypatch, tmp_
     assert "soft_stop" in bundle["sources"]["post_sell_feedback"]["top_keys"]
 
 
-def test_calibration_source_bundle_surfaces_rising_missed_refinement_action_plan(monkeypatch, tmp_path):
+def test_calibration_source_bundle_surfaces_rising_missed_refinement_action_plan(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(report_mod, "REPORT_DIR", tmp_path / "report")
     snapshot_dir = tmp_path / "report" / "monitor_snapshots"
     snapshot_dir.mkdir(parents=True, exist_ok=True)
@@ -1449,7 +1835,10 @@ def test_calibration_source_bundle_surfaces_rising_missed_refinement_action_plan
                         "next_actions": [
                             "surface_positive_prior_candidates_in_daily_calibration_source_bundle"
                         ],
-                        "forbidden_uses": ["intraday_threshold_mutation", "broker_order_submit"],
+                        "forbidden_uses": [
+                            "intraday_threshold_mutation",
+                            "broker_order_submit",
+                        ],
                     },
                 }
             },
@@ -1467,12 +1856,17 @@ def test_calibration_source_bundle_surfaces_rising_missed_refinement_action_plan
     assert plan["window_policy"] == "same_day_missed_entry_counterfactual_rows"
     assert plan["sample_floor"] == 3
     assert plan["primary_decision_metric"] == "diagnostic_win_rate"
-    assert plan["source_quality_gate"] == "pipeline_stage_flow_and_counterfactual_outcome_present"
+    assert (
+        plan["source_quality_gate"]
+        == "pipeline_stage_flow_and_counterfactual_outcome_present"
+    )
     assert plan["runtime_effect"] is False
     assert plan["allowed_runtime_apply"] is False
     assert plan["rising_missed_candidate_count"] == 6
     assert plan["positive_prior_candidates"][0]["key"] == "OPEN_TOP,PRICE_JUMP_START"
-    assert plan["next_actions"] == ["surface_positive_prior_candidates_in_daily_calibration_source_bundle"]
+    assert plan["next_actions"] == [
+        "surface_positive_prior_candidates_in_daily_calibration_source_bundle"
+    ]
 
 
 def test_soft_stop_calibration_holds_on_single_post_sell_source_sample():
@@ -1480,7 +1874,10 @@ def test_soft_stop_calibration_holds_on_single_post_sell_source_sample():
         "schema_version": 1,
         "target_date": "2026-05-08",
         "sources": {
-            "post_sell_feedback": {"path": "data/report/monitor_snapshots/post_sell_feedback_2026-05-08.json", "exists": True},
+            "post_sell_feedback": {
+                "path": "data/report/monitor_snapshots/post_sell_feedback_2026-05-08.json",
+                "exists": True,
+            },
         },
         "source_metrics": {
             "soft_stop": {
@@ -1496,7 +1893,10 @@ def test_soft_stop_calibration_holds_on_single_post_sell_source_sample():
         "new_observation_axis_created": False,
     }
     pipeline_rows = [
-        {"stage": "soft_stop_micro_grace", "fields": {"profit_rate": "-1.82", "held_sec": "40"}}
+        {
+            "stage": "soft_stop_micro_grace",
+            "fields": {"profit_rate": "-1.82", "held_sec": "40"},
+        }
         for _ in range(13)
     ]
 
@@ -1509,7 +1909,9 @@ def test_soft_stop_calibration_holds_on_single_post_sell_source_sample():
     )
 
     candidate = next(
-        item for item in report["calibration_candidates"] if item["family"] == "soft_stop_whipsaw_confirmation"
+        item
+        for item in report["calibration_candidates"]
+        if item["family"] == "soft_stop_whipsaw_confirmation"
     )
     assert candidate["source_sample_count"] == 1
     assert candidate["calibration_state"] == "hold_sample"
@@ -1535,7 +1937,11 @@ def test_ai_correction_clamps_out_of_bounds_value_without_runtime_change():
                 "sample_count": 30,
                 "source_sample_count": 30,
                 "calibration_state": "hold",
-                "window_policy": {"primary": "daily_intraday", "secondary": ["rolling_5d"], "daily_only_allowed": True},
+                "window_policy": {
+                    "primary": "daily_intraday",
+                    "secondary": ["rolling_5d"],
+                    "daily_only_allowed": True,
+                },
                 "allowed_runtime_apply": True,
             }
         ],
@@ -1560,7 +1966,9 @@ def test_ai_correction_clamps_out_of_bounds_value_without_runtime_change():
         ],
     }
 
-    review = report_mod.build_threshold_cycle_ai_correction_report(calibration_report, ai_raw_response=ai_response)
+    review = report_mod.build_threshold_cycle_ai_correction_report(
+        calibration_report, ai_raw_response=ai_response
+    )
 
     item = review["items"][0]
     assert review["ai_status"] == "parsed"
@@ -1575,7 +1983,12 @@ def test_ai_correction_keeps_soft_stop_single_sample_as_hold_sample():
     report_sources = {
         "schema_version": 1,
         "target_date": "2026-05-08",
-        "sources": {"post_sell_feedback": {"path": "post_sell_feedback_2026-05-08.json", "exists": True}},
+        "sources": {
+            "post_sell_feedback": {
+                "path": "post_sell_feedback_2026-05-08.json",
+                "exists": True,
+            }
+        },
         "source_metrics": {
             "soft_stop": {
                 "post_sell_soft_stop_total": 1,
@@ -1588,7 +2001,10 @@ def test_ai_correction_keeps_soft_stop_single_sample_as_hold_sample():
     report = report_mod.build_daily_threshold_cycle_report(
         "2026-05-08",
         pipeline_loader=lambda target_date: [
-            {"stage": "soft_stop_micro_grace", "fields": {"profit_rate": "-1.82", "held_sec": "40"}}
+            {
+                "stage": "soft_stop_micro_grace",
+                "fields": {"profit_rate": "-1.82", "held_sec": "40"},
+            }
             for _ in range(13)
         ],
         report_source_loader=lambda target_date: report_sources,
@@ -1615,14 +2031,24 @@ def test_ai_correction_keeps_soft_stop_single_sample_as_hold_sample():
         ],
     }
 
-    review = report_mod.build_threshold_cycle_ai_correction_report(report, ai_raw_response=ai_response)
-    item = next(item for item in review["items"] if item["family"] == "soft_stop_whipsaw_confirmation")
+    review = report_mod.build_threshold_cycle_ai_correction_report(
+        report, ai_raw_response=ai_response
+    )
+    item = next(
+        item
+        for item in review["items"]
+        if item["family"] == "soft_stop_whipsaw_confirmation"
+    )
 
     assert item["guard_accepted"] is False
     assert item["guard_decision"]["effective_state"] == "hold_sample"
-    assert "window_policy_blocks_single_case_live_candidate" in item["guard_reject_reason"]
+    assert (
+        "window_policy_blocks_single_case_live_candidate" in item["guard_reject_reason"]
+    )
     deterministic = next(
-        candidate for candidate in report["calibration_candidates"] if candidate["family"] == "soft_stop_whipsaw_confirmation"
+        candidate
+        for candidate in report["calibration_candidates"]
+        if candidate["family"] == "soft_stop_whipsaw_confirmation"
     )
     assert deterministic["calibration_state"] == "hold_sample"
 
@@ -1644,7 +2070,11 @@ def test_ai_correction_instrumentation_gap_excludes_threshold_candidate_review()
                 "sample_count": 50,
                 "source_sample_count": 50,
                 "calibration_state": "adjust_up",
-                "window_policy": {"primary": "daily_intraday", "secondary": ["rolling_5d"], "daily_only_allowed": True},
+                "window_policy": {
+                    "primary": "daily_intraday",
+                    "secondary": ["rolling_5d"],
+                    "daily_only_allowed": True,
+                },
                 "allowed_runtime_apply": True,
             }
         ],
@@ -1668,7 +2098,9 @@ def test_ai_correction_instrumentation_gap_excludes_threshold_candidate_review()
         ],
     }
 
-    review = report_mod.build_threshold_cycle_ai_correction_report(calibration_report, ai_raw_response=ai_response)
+    review = report_mod.build_threshold_cycle_ai_correction_report(
+        calibration_report, ai_raw_response=ai_response
+    )
     decision = review["items"][0]["guard_decision"]
 
     assert decision["guard_accepted"] is True
@@ -1711,7 +2143,9 @@ def test_openai_threshold_ai_correction_uses_strict_schema_and_deep_model(monkey
             captured.update(kwargs)
             return SimpleNamespace(
                 output_text=json.dumps({"schema_version": 1, "corrections": []}),
-                usage=SimpleNamespace(input_tokens=123, output_tokens=45, total_tokens=168),
+                usage=SimpleNamespace(
+                    input_tokens=123, output_tokens=45, total_tokens=168
+                ),
             )
 
     class _FakeOpenAI:
@@ -1719,7 +2153,11 @@ def test_openai_threshold_ai_correction_uses_strict_schema_and_deep_model(monkey
             self.api_key = api_key
             self.responses = _FakeResponses()
 
-    monkeypatch.setattr(report_mod, "_load_threshold_ai_openai_keys", lambda: [("OPENAI_API_KEY", "test-key")])
+    monkeypatch.setattr(
+        report_mod,
+        "_load_threshold_ai_openai_keys",
+        lambda: [("OPENAI_API_KEY", "test-key")],
+    )
     monkeypatch.setattr("openai.OpenAI", _FakeOpenAI)
 
     raw_response, status = report_mod._call_openai_threshold_ai_correction(
@@ -1763,7 +2201,10 @@ def test_threshold_ai_correction_fallback_prompt_is_english_ascii():
 
 
 def test_ai_correction_input_context_is_compact_and_hash_referenced():
-    huge_metrics = {f"metric_{idx:03d}": {"values": list(range(100)), "note": "x" * 200} for idx in range(80)}
+    huge_metrics = {
+        f"metric_{idx:03d}": {"values": list(range(100)), "note": "x" * 200}
+        for idx in range(80)
+    }
     calibration_report = {
         "date": "2026-05-20",
         "generated_at": "2026-05-21 08:00:00",
@@ -1779,7 +2220,10 @@ def test_ai_correction_input_context_is_compact_and_hash_referenced():
             }
         ],
         "calibration_source_bundle": {
-            "sources": {f"source_{idx}": {"exists": True, "path": f"artifact_{idx}.json"} for idx in range(50)},
+            "sources": {
+                f"source_{idx}": {"exists": True, "path": f"artifact_{idx}.json"}
+                for idx in range(50)
+            },
             "source_metrics": huge_metrics,
             "warnings": ["warn"] * 30,
         },
@@ -1795,11 +2239,18 @@ def test_ai_correction_input_context_is_compact_and_hash_referenced():
         "summary": {"completed_valid_cumulative": 10},
         "threshold_snapshot_by_window": {
             "rolling_10d": {
-                "soft_stop_whipsaw_confirmation": {"sample": huge_metrics, "recommended": {"confirm_sec": 70}},
+                "soft_stop_whipsaw_confirmation": {
+                    "sample": huge_metrics,
+                    "recommended": {"confirm_sec": 70},
+                },
             }
         },
         "calibration_source_bundle_by_window": {
-            "rolling_10d": {"sources": {}, "source_metrics": huge_metrics, "warnings": []},
+            "rolling_10d": {
+                "sources": {},
+                "source_metrics": huge_metrics,
+                "warnings": [],
+            },
         },
         "completed_by_source": huge_metrics,
         "source_flags": huge_metrics,
@@ -1811,8 +2262,13 @@ def test_ai_correction_input_context_is_compact_and_hash_referenced():
         source_calibration_report_path="data/report/threshold_cycle_calibration/example.json",
     )
 
-    assert report_mod._json_chars(context) <= report_mod.AI_CORRECTION_CONTEXT_TOTAL_CHAR_LIMIT
-    assert context["_context_budget"]["full_blob_policy"] == "hash_and_path_reference_only"
+    assert (
+        report_mod._json_chars(context)
+        <= report_mod.AI_CORRECTION_CONTEXT_TOTAL_CHAR_LIMIT
+    )
+    assert (
+        context["_context_budget"]["full_blob_policy"] == "hash_and_path_reference_only"
+    )
     candidate = context["calibration_candidates"][0]
     assert "source_metrics_summary" in candidate
     assert "source_metrics_full_hash" in candidate
@@ -1844,15 +2300,24 @@ def test_reuse_ai_review_requires_matching_input_hash(tmp_path):
         encoding="utf-8",
     )
 
-    reused = report_mod._load_reusable_threshold_ai_review(path, input_context_hash=input_hash)
+    reused = report_mod._load_reusable_threshold_ai_review(
+        path, input_context_hash=input_hash
+    )
     assert reused is not None
     assert reused["ai_provider_status"]["status"] == "reused_valid_artifact"
     assert reused["ai_provider_status"]["new_provider_call"] is False
     assert reused["reuse_guard"]["status"] == "reused"
-    assert report_mod._load_reusable_threshold_ai_review(path, input_context_hash="different") is None
+    assert (
+        report_mod._load_reusable_threshold_ai_review(
+            path, input_context_hash="different"
+        )
+        is None
+    )
 
 
-def test_calibration_report_sources_preserve_buy_funnel_latency_microstructure_counts(tmp_path, monkeypatch):
+def test_calibration_report_sources_preserve_buy_funnel_latency_microstructure_counts(
+    tmp_path, monkeypatch
+):
     report_dir = tmp_path / "report"
     buy_dir = report_dir / "buy_funnel_sentinel"
     buy_dir.mkdir(parents=True)
@@ -1894,10 +2359,22 @@ def test_efficient_tradeoff_calibration_adds_entry_bad_entry_and_adm_candidates(
         "schema_version": 1,
         "target_date": "2026-05-07",
         "sources": {
-            "buy_funnel_sentinel": {"path": "data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-05-07.json", "exists": True},
-            "wait6579_ev_cohort": {"path": "data/report/monitor_snapshots/wait6579_ev_cohort_2026-05-07.json", "exists": True},
-            "holding_exit_decision_matrix": {"path": "data/report/holding_exit_decision_matrix/holding_exit_decision_matrix_2026-05-07.json", "exists": True},
-            "statistical_action_weight": {"path": "data/report/statistical_action_weight/statistical_action_weight_2026-05-07.json", "exists": True},
+            "buy_funnel_sentinel": {
+                "path": "data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-05-07.json",
+                "exists": True,
+            },
+            "wait6579_ev_cohort": {
+                "path": "data/report/monitor_snapshots/wait6579_ev_cohort_2026-05-07.json",
+                "exists": True,
+            },
+            "holding_exit_decision_matrix": {
+                "path": "data/report/holding_exit_decision_matrix/holding_exit_decision_matrix_2026-05-07.json",
+                "exists": True,
+            },
+            "statistical_action_weight": {
+                "path": "data/report/statistical_action_weight/statistical_action_weight_2026-05-07.json",
+                "exists": True,
+            },
         },
         "source_metrics": {
             "buy_score65_74": {
@@ -1951,19 +2428,47 @@ def test_efficient_tradeoff_calibration_adds_entry_bad_entry_and_adm_candidates(
     )
 
     candidates = {item["family"]: item for item in report["calibration_candidates"]}
-    assert candidates["score65_74_recovery_probe"]["apply_mode"] == "efficient_tradeoff_canary_candidate"
+    assert (
+        candidates["score65_74_recovery_probe"]["apply_mode"]
+        == "efficient_tradeoff_canary_candidate"
+    )
     assert candidates["score65_74_recovery_probe"]["calibration_state"] == "adjust_up"
-    assert candidates["score65_74_recovery_probe"]["source_metrics"]["partial_samples"] == 0
-    assert candidates["dynamic_entry_price_resolver"]["source_metrics"]["events_without_counterfactual"] == 0
+    assert (
+        candidates["score65_74_recovery_probe"]["source_metrics"]["partial_samples"]
+        == 0
+    )
+    assert (
+        candidates["dynamic_entry_price_resolver"]["source_metrics"][
+            "events_without_counterfactual"
+        ]
+        == 0
+    )
     assert (
         candidates["dynamic_entry_price_resolver"]["source_metrics"]["next_action"]
         == "use_latency_block_ev_for_refined_guard_review"
     )
-    assert candidates["bad_entry_refined_canary"]["apply_mode"] == "efficient_tradeoff_canary_candidate"
-    assert candidates["bad_entry_refined_canary"]["source_metrics"]["holding_flow_override_defer_exit"] == 67
-    assert candidates["holding_exit_decision_matrix_advisory"]["calibration_state"] == "hold_no_edge"
-    assert candidates["holding_exit_decision_matrix_advisory"]["apply_mode"] == "report_only_calibration"
-    assert candidates["holding_exit_decision_matrix_advisory"]["sample_floor_status"] == "minimum_edge_missing"
+    assert (
+        candidates["bad_entry_refined_canary"]["apply_mode"]
+        == "efficient_tradeoff_canary_candidate"
+    )
+    assert (
+        candidates["bad_entry_refined_canary"]["source_metrics"][
+            "holding_flow_override_defer_exit"
+        ]
+        == 67
+    )
+    assert (
+        candidates["holding_exit_decision_matrix_advisory"]["calibration_state"]
+        == "hold_no_edge"
+    )
+    assert (
+        candidates["holding_exit_decision_matrix_advisory"]["apply_mode"]
+        == "report_only_calibration"
+    )
+    assert (
+        candidates["holding_exit_decision_matrix_advisory"]["sample_floor_status"]
+        == "minimum_edge_missing"
+    )
 
 
 def test_score65_74_recovery_probe_does_not_use_raw_panic_adjusted_floor():
@@ -1971,9 +2476,18 @@ def test_score65_74_recovery_probe_does_not_use_raw_panic_adjusted_floor():
         "schema_version": 1,
         "target_date": "2026-05-12",
         "sources": {
-            "buy_funnel_sentinel": {"path": "data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-05-12.json", "exists": True},
-            "wait6579_ev_cohort": {"path": "data/report/monitor_snapshots/wait6579_ev_cohort_2026-05-12.json", "exists": True},
-            "panic_sell_defense": {"path": "data/report/panic_sell_defense/panic_sell_defense_2026-05-12.json", "exists": True},
+            "buy_funnel_sentinel": {
+                "path": "data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-05-12.json",
+                "exists": True,
+            },
+            "wait6579_ev_cohort": {
+                "path": "data/report/monitor_snapshots/wait6579_ev_cohort_2026-05-12.json",
+                "exists": True,
+            },
+            "panic_sell_defense": {
+                "path": "data/report/panic_sell_defense/panic_sell_defense_2026-05-12.json",
+                "exists": True,
+            },
         },
         "source_metrics": {
             "buy_score65_74": {
@@ -2007,7 +2521,9 @@ def test_score65_74_recovery_probe_does_not_use_raw_panic_adjusted_floor():
         completed_rows_loader=lambda start_date, end_date: [],
     )
 
-    candidate = {item["family"]: item for item in report["calibration_candidates"]}["score65_74_recovery_probe"]
+    candidate = {item["family"]: item for item in report["calibration_candidates"]}[
+        "score65_74_recovery_probe"
+    ]
     assert candidate["calibration_state"] == "hold_sample"
     assert candidate["sample_count"] == 14
     assert candidate["sample_floor"] == 20
@@ -2021,9 +2537,18 @@ def test_score65_74_recovery_probe_opens_existing_entry_unlock_when_rolling_prim
         "schema_version": 1,
         "target_date": "2026-05-18",
         "sources": {
-            "buy_funnel_sentinel": {"path": "data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-05-18.json", "exists": True},
-            "wait6579_ev_cohort": {"path": "data/report/monitor_snapshots/wait6579_ev_cohort_2026-05-18.json", "exists": True},
-            "panic_sell_defense": {"path": "data/report/panic_sell_defense/panic_sell_defense_2026-05-18.json", "exists": True},
+            "buy_funnel_sentinel": {
+                "path": "data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-05-18.json",
+                "exists": True,
+            },
+            "wait6579_ev_cohort": {
+                "path": "data/report/monitor_snapshots/wait6579_ev_cohort_2026-05-18.json",
+                "exists": True,
+            },
+            "panic_sell_defense": {
+                "path": "data/report/panic_sell_defense/panic_sell_defense_2026-05-18.json",
+                "exists": True,
+            },
         },
         "source_metrics": {
             "buy_score65_74": {
@@ -2057,7 +2582,9 @@ def test_score65_74_recovery_probe_opens_existing_entry_unlock_when_rolling_prim
         completed_rows_loader=lambda start_date, end_date: [],
     )
 
-    candidate = {item["family"]: item for item in report["calibration_candidates"]}["score65_74_recovery_probe"]
+    candidate = {item["family"]: item for item in report["calibration_candidates"]}[
+        "score65_74_recovery_probe"
+    ]
     assert candidate["calibration_state"] == "adjust_up"
     assert candidate["sample_count"] == 50
     assert candidate["sample_floor_status"] == "ready"
@@ -2104,7 +2631,9 @@ def test_score65_74_recovery_probe_reads_score60_74_alias_metrics():
         completed_rows_loader=lambda start_date, end_date: [],
     )
 
-    candidate = {item["family"]: item for item in report["calibration_candidates"]}["score65_74_recovery_probe"]
+    candidate = {item["family"]: item for item in report["calibration_candidates"]}[
+        "score65_74_recovery_probe"
+    ]
     assert candidate["sample_count"] == 41
     assert candidate["sample_floor_status"] == "ready"
     assert candidate["calibration_state"] == "adjust_up"
@@ -2112,7 +2641,9 @@ def test_score65_74_recovery_probe_reads_score60_74_alias_metrics():
     assert candidate["source_metrics"]["score60_74_avg_expected_ev_pct"] == 3.2
 
 
-def test_scale_in_split_order_plan_counterfactual_candidates_are_apply_ready(tmp_path, monkeypatch):
+def test_scale_in_split_order_plan_counterfactual_candidates_are_apply_ready(
+    tmp_path, monkeypatch
+):
     target_date = "2026-07-07"
     report_dir = tmp_path / "scale_in_split_order_plan"
     policy_file = tmp_path / "scale_in_split_order_policy_2026-07-07.json"
@@ -2167,13 +2698,18 @@ def test_scale_in_split_order_plan_counterfactual_candidates_are_apply_ready(tmp
 
     assert candidate["calibration_state"] == "adjust_up"
     assert candidate["recommended_values"]["enabled"] is True
-    assert candidate["recommended_values"]["policy_version"] == "scale_in_split_order_plan:test-counterfactual"
+    assert (
+        candidate["recommended_values"]["policy_version"]
+        == "scale_in_split_order_plan:test-counterfactual"
+    )
     assert candidate["source_metrics"]["counterfactual_selected_count"] == 2
     assert candidate["source_metrics"]["runtime_three_leg_candidate_count"] == 1
     assert "counterfactual" in candidate["calibration_reason"]
 
 
-def test_bad_entry_refined_candidate_waits_for_postclose_lifecycle_attribution(tmp_path, monkeypatch):
+def test_bad_entry_refined_candidate_waits_for_postclose_lifecycle_attribution(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(report_mod, "POST_SELL_DIR", tmp_path)
     (tmp_path / "post_sell_evaluations_2026-05-08.jsonl").write_text(
         json.dumps(
@@ -2204,7 +2740,11 @@ def test_bad_entry_refined_candidate_waits_for_postclose_lifecycle_attribution(t
             }
             for _ in range(10)
         ],
-        report_source_loader=lambda target_date: {"sources": {}, "source_metrics": {}, "new_observation_axis_created": False},
+        report_source_loader=lambda target_date: {
+            "sources": {},
+            "source_metrics": {},
+            "new_observation_axis_created": False,
+        },
         completed_rows_loader=lambda start_date, end_date: [],
     )
 
@@ -2213,14 +2753,20 @@ def test_bad_entry_refined_candidate_waits_for_postclose_lifecycle_attribution(t
     assert lifecycle["post_sell_joined_records"] == 1
     assert lifecycle["final_type_counts"]["late_detected_soft_stop_zone"] == 1
 
-    candidate = next(item for item in report["calibration_candidates"] if item["family"] == "bad_entry_refined_canary")
+    candidate = next(
+        item
+        for item in report["calibration_candidates"]
+        if item["family"] == "bad_entry_refined_canary"
+    )
     assert candidate["calibration_state"] == "hold"
     assert candidate["source_metrics"]["post_sell_joined_candidate_records"] == 1
     assert candidate["source_metrics"]["late_detected_soft_stop_zone_records"] == 1
     assert candidate["runtime_change"] is False
 
 
-def test_trade_lifecycle_attribution_splits_entry_holding_exit_and_post_sell_types(tmp_path, monkeypatch):
+def test_trade_lifecycle_attribution_splits_entry_holding_exit_and_post_sell_types(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(report_mod, "POST_SELL_DIR", tmp_path)
     (tmp_path / "post_sell_candidates_2026-05-08.jsonl").write_text(
         "\n".join(
@@ -2284,7 +2830,10 @@ def test_trade_lifecycle_attribution_splits_entry_holding_exit_and_post_sell_typ
                 "stock_code": "298830",
                 "stock_name": "슈어소프트테크",
                 "emitted_at": "2026-05-08T12:53:39",
-                "fields": {"entry_order_lifecycle": "normal", "entry_price_guard": "latency_danger_override_defensive"},
+                "fields": {
+                    "entry_order_lifecycle": "normal",
+                    "entry_price_guard": "latency_danger_override_defensive",
+                },
             },
             {
                 "stage": "bad_entry_refined_candidate",
@@ -2333,7 +2882,10 @@ def test_trade_lifecycle_attribution_splits_entry_holding_exit_and_post_sell_typ
                 "stage": "sell_completed",
                 "record_id": 6001,
                 "emitted_at": "2026-05-08T10:05:01",
-                "fields": {"exit_rule": "scalp_trailing_take_profit", "profit_rate": "0.5"},
+                "fields": {
+                    "exit_rule": "scalp_trailing_take_profit",
+                    "profit_rate": "0.5",
+                },
             },
             {
                 "stage": "order_bundle_submitted",
@@ -2350,7 +2902,11 @@ def test_trade_lifecycle_attribution_splits_entry_holding_exit_and_post_sell_typ
                 "fields": {"entry_order_lifecycle": "passive_probe"},
             },
         ],
-        report_source_loader=lambda target_date: {"sources": {}, "source_metrics": {}, "new_observation_axis_created": False},
+        report_source_loader=lambda target_date: {
+            "sources": {},
+            "source_metrics": {},
+            "new_observation_axis_created": False,
+        },
         completed_rows_loader=lambda start_date, end_date: [],
     )
 
@@ -2358,7 +2914,10 @@ def test_trade_lifecycle_attribution_splits_entry_holding_exit_and_post_sell_typ
     assert lifecycle["primary_type_counts"]["soft_stop_good_exit"] == 1
     assert lifecycle["primary_type_counts"]["trailing_early_exit"] == 1
     assert lifecycle["primary_type_counts"]["entry_unfilled_cancelled"] == 1
-    assert lifecycle["family_views"]["bad_entry_refined"]["late_detected_soft_stop_zone"] == 1
+    assert (
+        lifecycle["family_views"]["bad_entry_refined"]["late_detected_soft_stop_zone"]
+        == 1
+    )
     assert lifecycle["family_views"]["entry_price"]["entry_unfilled_cancelled"] == 1
     assert lifecycle["family_views"]["trailing"]["early_exit"] == 1
 
@@ -2408,7 +2967,11 @@ def test_scale_in_price_guard_calibration_uses_existing_sources_without_live_app
         completed_rows_loader=lambda start_date, end_date: [],
     )
 
-    candidate = next(item for item in report["calibration_candidates"] if item["family"] == "scale_in_price_guard")
+    candidate = next(
+        item
+        for item in report["calibration_candidates"]
+        if item["family"] == "scale_in_price_guard"
+    )
     assert candidate["apply_mode"] == "report_only_calibration"
     assert candidate["allowed_runtime_apply"] is False
     assert candidate["runtime_change"] is False
@@ -2459,7 +3022,10 @@ def test_statistical_action_weight_report_buckets_completed_rows():
         "2026-04-30",
         pipeline_loader=lambda target_date: [
             {"stage": "scale_in_executed", "fields": {"add_type": "PYRAMID"}},
-            {"stage": "stat_action_decision_snapshot", "fields": {"chosen_action": "pyramid_wait"}},
+            {
+                "stage": "stat_action_decision_snapshot",
+                "fields": {"chosen_action": "pyramid_wait"},
+            },
             {"stage": "sell_completed", "fields": {"profit_rate": "0.8"}},
         ],
         completed_rows_loader=lambda start_date, end_date: completed_rows,
@@ -2471,7 +3037,10 @@ def test_statistical_action_weight_report_buckets_completed_rows():
     assert family["sample"]["avg_down_wait"] == 1
     assert family["sample"]["compact_scale_in_executed"] == 1
     assert family["sample"]["compact_decision_snapshot"] == 1
-    assert family["recommended"]["action_summary"]["pyramid_wait"]["avg_profit_rate"] == 0.7
+    assert (
+        family["recommended"]["action_summary"]["pyramid_wait"]["avg_profit_rate"]
+        == 0.7
+    )
     assert family["current"]["score_method"] == "empirical_bayes_lower_confidence_bound"
     first_price_bucket = family["recommended"]["by_price_bucket"][0]
     assert "best_confidence_adjusted_score" in first_price_bucket
@@ -2511,7 +3080,9 @@ def test_daily_threshold_cycle_keeps_sim_completed_out_of_family_candidate_input
 
     report = report_mod.build_daily_threshold_cycle_report(
         "2026-05-14",
-        pipeline_loader=lambda target_date: [sim_event] if target_date == "2026-05-14" else [],
+        pipeline_loader=lambda target_date: (
+            [sim_event] if target_date == "2026-05-14" else []
+        ),
         completed_rows_loader=lambda start_date, end_date: real_rows,
     )
 
@@ -2545,7 +3116,11 @@ def test_daily_threshold_cycle_joins_sim_post_sell_mfe_mae(monkeypatch, tmp_path
                 "profit_rate": -2.54,
                 "runtime_effect": False,
                 "actual_order_submitted": False,
-                "metrics_10m": {"mfe_pct": 4.45, "mae_pct": -0.47, "close_ret_pct": 3.9},
+                "metrics_10m": {
+                    "mfe_pct": 4.45,
+                    "mae_pct": -0.47,
+                    "close_ret_pct": 3.9,
+                },
             },
             ensure_ascii=False,
         )
@@ -2574,7 +3149,9 @@ def test_daily_threshold_cycle_joins_sim_post_sell_mfe_mae(monkeypatch, tmp_path
 
     report = report_mod.build_daily_threshold_cycle_report(
         "2026-05-18",
-        pipeline_loader=lambda target_date: [sim_event] if target_date == "2026-05-18" else [],
+        pipeline_loader=lambda target_date: (
+            [sim_event] if target_date == "2026-05-18" else []
+        ),
         completed_rows_loader=lambda start_date, end_date: [],
     )
 
@@ -2587,7 +3164,9 @@ def test_daily_threshold_cycle_joins_sim_post_sell_mfe_mae(monkeypatch, tmp_path
     assert join["decision_authority"] == "sim_equal_weight_observation_only"
 
 
-def test_statistical_action_weight_reports_eligible_but_not_chosen(tmp_path, monkeypatch):
+def test_statistical_action_weight_reports_eligible_but_not_chosen(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(report_mod, "POST_SELL_DIR", tmp_path)
     (tmp_path / "post_sell_evaluations_2026-04-30.jsonl").write_text(
         json.dumps(
@@ -2625,14 +3204,24 @@ def test_statistical_action_weight_reports_eligible_but_not_chosen(tmp_path, mon
         completed_rows_loader=lambda start_date, end_date: [],
     )
 
-    eligible = report["threshold_snapshot"]["statistical_action_weight"]["recommended"]["eligible_but_not_chosen"]
+    eligible = report["threshold_snapshot"]["statistical_action_weight"]["recommended"][
+        "eligible_but_not_chosen"
+    ]
     assert eligible["status"] == "report_only"
     assert eligible["sample_snapshots"] == 1
     assert eligible["sample_candidates"] == 2
     assert eligible["post_sell_joined_candidates"] == 2
-    chosen_row = next(row for row in eligible["chosen_action_summary"] if row["chosen_action"] == "hold_defer")
+    chosen_row = next(
+        row
+        for row in eligible["chosen_action_summary"]
+        if row["chosen_action"] == "hold_defer"
+    )
     assert chosen_row["sample"] == 1
-    exit_row = next(row for row in eligible["action_summary"] if row["candidate_action"] == "exit_only")
+    exit_row = next(
+        row
+        for row in eligible["action_summary"]
+        if row["candidate_action"] == "exit_only"
+    )
     assert exit_row["avg_post_decision_mfe_10m_proxy"] == 1.4
 
     artifact = report_mod.build_statistical_action_weight_artifact(report)
@@ -2671,10 +3260,18 @@ def test_holding_exit_matrix_uses_implicit_exit_snapshot_proxy_when_exit_not_lis
         completed_rows_loader=lambda start_date, end_date: [],
     )
 
-    eligible = report["threshold_snapshot"]["statistical_action_weight"]["recommended"]["eligible_but_not_chosen"]
-    exit_row = next(row for row in eligible["action_summary"] if row["candidate_action"] == "exit_only")
+    eligible = report["threshold_snapshot"]["statistical_action_weight"]["recommended"][
+        "eligible_but_not_chosen"
+    ]
+    exit_row = next(
+        row
+        for row in eligible["action_summary"]
+        if row["candidate_action"] == "exit_only"
+    )
     assert exit_row["sample"] == 1
-    assert exit_row["top_not_chosen_reasons"] == {"implicit_exit_at_snapshot_profit_proxy": 1}
+    assert exit_row["top_not_chosen_reasons"] == {
+        "implicit_exit_at_snapshot_profit_proxy": 1
+    }
 
     matrix = report_mod.build_holding_exit_decision_matrix(report)
     proxy_summary = matrix["counterfactual_proxy_summary"]
@@ -2702,8 +3299,12 @@ def test_holding_exit_matrix_does_not_create_implicit_exit_proxy_without_profit_
         completed_rows_loader=lambda start_date, end_date: [],
     )
 
-    eligible = report["threshold_snapshot"]["statistical_action_weight"]["recommended"]["eligible_but_not_chosen"]
-    assert all(row["candidate_action"] != "exit_only" for row in eligible["action_summary"])
+    eligible = report["threshold_snapshot"]["statistical_action_weight"]["recommended"][
+        "eligible_but_not_chosen"
+    ]
+    assert all(
+        row["candidate_action"] != "exit_only" for row in eligible["action_summary"]
+    )
 
     matrix = report_mod.build_holding_exit_decision_matrix(report)
     proxy_summary = matrix["counterfactual_proxy_summary"]
@@ -2724,8 +3325,16 @@ def test_ofi_ai_smoothing_families_generate_manifest_only_candidates():
                 },
             }
         )
-        pipeline_rows.append({"stage": "order_bundle_submitted", "record_id": record_id, "fields": {}})
-        pipeline_rows.append({"stage": "sell_completed", "record_id": record_id, "fields": {"profit_rate": "0.20"}})
+        pipeline_rows.append(
+            {"stage": "order_bundle_submitted", "record_id": record_id, "fields": {}}
+        )
+        pipeline_rows.append(
+            {
+                "stage": "sell_completed",
+                "record_id": record_id,
+                "fields": {"profit_rate": "0.20"},
+            }
+        )
     pipeline_rows.extend(
         {
             "stage": "entry_ai_price_canary_skip_order",
@@ -2756,7 +3365,13 @@ def test_ofi_ai_smoothing_families_generate_manifest_only_candidates():
                 },
             }
         )
-        pipeline_rows.append({"stage": "sell_completed", "record_id": record_id, "fields": {"profit_rate": "0.30"}})
+        pipeline_rows.append(
+            {
+                "stage": "sell_completed",
+                "record_id": record_id,
+                "fields": {"profit_rate": "0.30"},
+            }
+        )
     for record_id in range(201, 216):
         pipeline_rows.append(
             {
@@ -2782,7 +3397,12 @@ def test_ofi_ai_smoothing_families_generate_manifest_only_candidates():
             },
         }
     )
-    pipeline_rows.append({"stage": "holding_flow_override_force_exit", "fields": {"force_reason": "worsen_floor"}})
+    pipeline_rows.append(
+        {
+            "stage": "holding_flow_override_force_exit",
+            "fields": {"force_reason": "worsen_floor"},
+        }
+    )
     pipeline_rows.append(
         {
             "stage": "holding_flow_override_force_exit",
@@ -2865,7 +3485,13 @@ def test_scale_in_price_guard_family_generates_manifest_only_candidate():
                 },
             }
         )
-        pipeline_rows.append({"stage": "scale_in_executed", "record_id": record_id, "fields": {"add_type": "PYRAMID"}})
+        pipeline_rows.append(
+            {
+                "stage": "scale_in_executed",
+                "record_id": record_id,
+                "fields": {"add_type": "PYRAMID"},
+            }
+        )
     for record_id in range(101, 111):
         pipeline_rows.append(
             {
@@ -2910,7 +3536,11 @@ def test_scale_in_price_guard_family_generates_manifest_only_candidate():
         if item["owner_rule"] == "manifest_only_no_runtime_mutation"
     }
     assert "scale_in_price_guard" in manifest_families
-    candidate = next(item for item in report["calibration_candidates"] if item["family"] == "scale_in_price_guard")
+    candidate = next(
+        item
+        for item in report["calibration_candidates"]
+        if item["family"] == "scale_in_price_guard"
+    )
     assert candidate["apply_mode"] == "report_only_calibration"
     assert candidate["calibration_state"] == "hold"
     assert candidate["allowed_runtime_apply"] is False
@@ -2940,8 +3570,24 @@ def test_position_sizing_dynamic_formula_generates_candidate_grid():
         }
         pipeline_rows.append(event)
 
-    completed_rows = [{"profit_rate": 0.5, "strategy": "SCALPING", "stock_code": f"{100000 + i:06d}", "buy_price": 10000, "buy_qty": 5} for i in range(1, 21)] + [
-        {"profit_rate": -0.2, "strategy": "SCALPING", "stock_code": f"{100000 + (i + 20):06d}", "buy_price": 8000, "buy_qty": 4} for i in range(1, 16)
+    completed_rows = [
+        {
+            "profit_rate": 0.5,
+            "strategy": "SCALPING",
+            "stock_code": f"{100000 + i:06d}",
+            "buy_price": 10000,
+            "buy_qty": 5,
+        }
+        for i in range(1, 21)
+    ] + [
+        {
+            "profit_rate": -0.2,
+            "strategy": "SCALPING",
+            "stock_code": f"{100000 + (i + 20):06d}",
+            "buy_price": 8000,
+            "buy_qty": 4,
+        }
+        for i in range(1, 16)
     ]
 
     report = report_mod.build_daily_threshold_cycle_report(
@@ -2967,7 +3613,11 @@ def test_position_sizing_dynamic_formula_generates_candidate_grid():
     assert baseline["source_quality_blocked"] is False
     assert baseline["real_actual_order_submitted_count"] > 0
 
-    candidate = next(item for item in report["calibration_candidates"] if item["family"] == "position_sizing_dynamic_formula")
+    candidate = next(
+        item
+        for item in report["calibration_candidates"]
+        if item["family"] == "position_sizing_dynamic_formula"
+    )
     assert candidate["calibration_state"] == "hold"
     assert candidate["allowed_runtime_apply"] is False
     assert candidate["human_approval_required"] is False
@@ -3035,7 +3685,9 @@ def test_position_sizing_dynamic_formula_enters_candidate_grid_chain():
     assert baseline["source_quality_blocked"] is False
 
     candidate = next(
-        item for item in report["calibration_candidates"] if item["family"] == "position_sizing_dynamic_formula"
+        item
+        for item in report["calibration_candidates"]
+        if item["family"] == "position_sizing_dynamic_formula"
     )
     assert candidate["calibration_state"] == "hold"
     assert candidate["allowed_runtime_apply"] is False
@@ -3082,7 +3734,9 @@ def test_position_sizing_dynamic_formula_does_not_use_sim_as_real_floor():
         assert candidate_entry["sim_probe_actual_order_submitted_false_count"] >= 0
 
     candidate = next(
-        item for item in report["calibration_candidates"] if item["family"] == "position_sizing_dynamic_formula"
+        item
+        for item in report["calibration_candidates"]
+        if item["family"] == "position_sizing_dynamic_formula"
     )
     assert candidate["calibration_state"] == "hold_sample"
     assert candidate["allowed_runtime_apply"] is False
@@ -3111,8 +3765,12 @@ def test_position_sizing_dynamic_formula_candidate_grid_excludes_source_quality_
             }
         )
 
-    completed_rows = [{"profit_rate": 0.7, "strategy": "SCALPING", "buy_price": 8000, "buy_qty": 5} for _ in range(16)] + [
-        {"profit_rate": -0.1, "strategy": "SCALPING", "buy_price": 8000, "buy_qty": 4} for _ in range(16)
+    completed_rows = [
+        {"profit_rate": 0.7, "strategy": "SCALPING", "buy_price": 8000, "buy_qty": 5}
+        for _ in range(16)
+    ] + [
+        {"profit_rate": -0.1, "strategy": "SCALPING", "buy_price": 8000, "buy_qty": 4}
+        for _ in range(16)
     ]
 
     report = report_mod.build_daily_threshold_cycle_report(
@@ -3162,7 +3820,12 @@ def test_default_pipeline_loader_prefers_compact_threshold_file(tmp_path, monkey
             {
                 "event_type": "threshold_cycle_event",
                 "stage": "bad_entry_block_observed",
-                "fields": {"held_sec": "70", "profit_rate": "-0.8", "peak_profit": "0.1", "ai_score": "40"},
+                "fields": {
+                    "held_sec": "70",
+                    "profit_rate": "-0.8",
+                    "peak_profit": "0.1",
+                    "ai_score": "40",
+                },
             },
             ensure_ascii=False,
         )
@@ -3175,10 +3838,14 @@ def test_default_pipeline_loader_prefers_compact_threshold_file(tmp_path, monkey
     assert rows[0]["stage"] == "bad_entry_block_observed"
 
 
-def test_default_pipeline_loader_prefers_partitioned_compact_over_legacy(tmp_path, monkeypatch):
+def test_default_pipeline_loader_prefers_partitioned_compact_over_legacy(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     monkeypatch.setattr(report_mod, "THRESHOLD_CYCLE_DIR", tmp_path / "threshold_cycle")
-    partition_dir = report_mod.THRESHOLD_CYCLE_DIR / "date=2026-04-30" / "family=bad_entry_block"
+    partition_dir = (
+        report_mod.THRESHOLD_CYCLE_DIR / "date=2026-04-30" / "family=bad_entry_block"
+    )
     partition_dir.mkdir(parents=True, exist_ok=True)
     (partition_dir / "part-000001.jsonl").write_text(
         json.dumps(
@@ -3194,7 +3861,14 @@ def test_default_pipeline_loader_prefers_partitioned_compact_over_legacy(tmp_pat
     )
     report_mod.THRESHOLD_CYCLE_DIR.mkdir(parents=True, exist_ok=True)
     (report_mod.THRESHOLD_CYCLE_DIR / "threshold_events_2026-04-30.jsonl").write_text(
-        json.dumps({"event_type": "threshold_cycle_event", "stage": "budget_pass", "fields": {}}, ensure_ascii=False)
+        json.dumps(
+            {
+                "event_type": "threshold_cycle_event",
+                "stage": "budget_pass",
+                "fields": {},
+            },
+            ensure_ascii=False,
+        )
         + "\n",
         encoding="utf-8",
     )
@@ -3274,13 +3948,24 @@ def test_daily_threshold_cycle_report_does_not_reload_same_day_for_rolling_sim_r
     assert report["scalp_simulator"]["completed_profit_summary"]["sample"] == 1
 
 
-def test_daily_threshold_cycle_report_includes_pipeline_load_meta(tmp_path, monkeypatch):
+def test_daily_threshold_cycle_report_includes_pipeline_load_meta(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     monkeypatch.setattr(report_mod, "THRESHOLD_CYCLE_DIR", tmp_path / "threshold_cycle")
-    partition_dir = report_mod.THRESHOLD_CYCLE_DIR / "date=2026-04-30" / "family=bad_entry_block"
+    partition_dir = (
+        report_mod.THRESHOLD_CYCLE_DIR / "date=2026-04-30" / "family=bad_entry_block"
+    )
     partition_dir.mkdir(parents=True, exist_ok=True)
     (partition_dir / "part-000001.jsonl").write_text(
-        json.dumps({"event_type": "threshold_cycle_event", "stage": "bad_entry_block_observed", "fields": {}}, ensure_ascii=False)
+        json.dumps(
+            {
+                "event_type": "threshold_cycle_event",
+                "stage": "bad_entry_block_observed",
+                "fields": {},
+            },
+            ensure_ascii=False,
+        )
         + "\n",
         encoding="utf-8",
     )
@@ -3291,7 +3976,10 @@ def test_daily_threshold_cycle_report_includes_pipeline_load_meta(tmp_path, monk
         skip_completed_rows=True,
     )
 
-    assert report["meta"]["pipeline_load"]["2026-04-30"]["data_source"] == "partitioned_compact"
+    assert (
+        report["meta"]["pipeline_load"]["2026-04-30"]["data_source"]
+        == "partitioned_compact"
+    )
     assert report["summary"]["event_count_same_day"] == 1
 
 
@@ -3299,7 +3987,9 @@ def test_default_pipeline_load_result_reads_legacy_compact_gzip(tmp_path, monkey
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     monkeypatch.setattr(report_mod, "THRESHOLD_CYCLE_DIR", tmp_path / "threshold_cycle")
     report_mod.THRESHOLD_CYCLE_DIR.mkdir(parents=True, exist_ok=True)
-    compact_path = report_mod.THRESHOLD_CYCLE_DIR / "threshold_events_2026-04-30.jsonl.gz"
+    compact_path = (
+        report_mod.THRESHOLD_CYCLE_DIR / "threshold_events_2026-04-30.jsonl.gz"
+    )
     with gzip.open(compact_path, "wt", encoding="utf-8") as handle:
         handle.write(
             json.dumps(
@@ -3321,12 +4011,19 @@ def test_default_pipeline_load_result_reads_legacy_compact_gzip(tmp_path, monkey
 
 
 def test_statistical_action_weight_artifacts_render_markdown(tmp_path, monkeypatch):
-    monkeypatch.setattr(report_mod, "STAT_ACTION_REPORT_DIR", tmp_path / "statistical_action_weight")
-    monkeypatch.setattr(report_mod, "AI_DECISION_MATRIX_DIR", tmp_path / "holding_exit_decision_matrix")
+    monkeypatch.setattr(
+        report_mod, "STAT_ACTION_REPORT_DIR", tmp_path / "statistical_action_weight"
+    )
+    monkeypatch.setattr(
+        report_mod, "AI_DECISION_MATRIX_DIR", tmp_path / "holding_exit_decision_matrix"
+    )
     report = report_mod.build_daily_threshold_cycle_report(
         "2026-04-30",
         pipeline_loader=lambda target_date: [
-            {"stage": "stat_action_decision_snapshot", "fields": {"chosen_action": "exit_now"}},
+            {
+                "stage": "stat_action_decision_snapshot",
+                "fields": {"chosen_action": "exit_now"},
+            },
             {"stage": "sell_completed", "fields": {"profit_rate": "0.4"}},
         ],
         completed_rows_loader=lambda start_date, end_date: [
@@ -3357,8 +4054,12 @@ def test_statistical_action_weight_artifacts_render_markdown(tmp_path, monkeypat
     assert "compact_decision_snapshot" in markdown
 
 
-def test_holding_exit_decision_matrix_artifact_contains_prompt_hints(tmp_path, monkeypatch):
-    monkeypatch.setattr(report_mod, "AI_DECISION_MATRIX_DIR", tmp_path / "holding_exit_decision_matrix")
+def test_holding_exit_decision_matrix_artifact_contains_prompt_hints(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        report_mod, "AI_DECISION_MATRIX_DIR", tmp_path / "holding_exit_decision_matrix"
+    )
     report = report_mod.build_daily_threshold_cycle_report(
         "2026-04-30",
         pipeline_loader=lambda target_date: [],
@@ -3392,11 +4093,20 @@ def test_holding_exit_decision_matrix_artifact_contains_prompt_hints(tmp_path, m
     assert "prompt_hint" in payload["entries"][0]
     assert payload["instrumentation_status"] == "implemented"
     assert payload["instrumentation_contract_version"] == 1
-    assert "counterfactual_proxy_summary.per_action_samples" in payload["provenance_contract"]
+    assert (
+        "counterfactual_proxy_summary.per_action_samples"
+        in payload["provenance_contract"]
+    )
     assert "counterfactual_coverage" in payload["entries"][0]
-    assert payload["counterfactual_coverage_summary"]["entry_count"] == len(payload["entries"])
-    assert "exit_only" in payload["counterfactual_coverage_summary"]["per_action_samples"]
-    assert payload["counterfactual_proxy_summary"]["required_actions"][0] == "hold_defer"
+    assert payload["counterfactual_coverage_summary"]["entry_count"] == len(
+        payload["entries"]
+    )
+    assert (
+        "exit_only" in payload["counterfactual_coverage_summary"]["per_action_samples"]
+    )
+    assert (
+        payload["counterfactual_proxy_summary"]["required_actions"][0] == "hold_defer"
+    )
     assert "Holding/Exit Decision Matrix" in markdown
     assert "Counterfactual Coverage" in markdown
     assert "non_no_clear_edge_count" in markdown
@@ -3409,15 +4119,48 @@ def test_cumulative_threshold_cycle_report_splits_windows_and_cohorts():
     pipeline_rows = {
         "2026-04-29": [{"stage": "budget_pass", "fields": {"signal_score": "72"}}],
         "2026-04-30": [
-            {"stage": "bad_entry_block_observed", "fields": {"held_sec": "70", "profit_rate": "-0.8"}},
-            {"stage": "exit_signal", "fields": {"exit_rule": "scalp_trailing_take_profit", "profit_rate": "0.6", "peak_profit": "1.0", "current_ai_score": "62"}},
+            {
+                "stage": "bad_entry_block_observed",
+                "fields": {"held_sec": "70", "profit_rate": "-0.8"},
+            },
+            {
+                "stage": "exit_signal",
+                "fields": {
+                    "exit_rule": "scalp_trailing_take_profit",
+                    "profit_rate": "0.6",
+                    "peak_profit": "1.0",
+                    "current_ai_score": "62",
+                },
+            },
         ],
     }
     completed_rows = [
-        {"rec_date": "2026-04-28", "profit_rate": 0.4, "strategy": "SCALPING", "buy_price": 9000},
-        {"rec_date": "2026-04-29", "profit_rate": -0.6, "strategy": "fallback_single", "buy_price": 9000},
-        {"rec_date": "2026-04-30", "profit_rate": 1.2, "strategy": "SCALPING", "pyramid_count": 1, "last_add_type": "PYRAMID"},
-        {"rec_date": "2026-04-30", "profit_rate": -0.9, "strategy": "SCALPING", "avg_down_count": 1, "last_add_type": "REVERSAL_ADD"},
+        {
+            "rec_date": "2026-04-28",
+            "profit_rate": 0.4,
+            "strategy": "SCALPING",
+            "buy_price": 9000,
+        },
+        {
+            "rec_date": "2026-04-29",
+            "profit_rate": -0.6,
+            "strategy": "fallback_single",
+            "buy_price": 9000,
+        },
+        {
+            "rec_date": "2026-04-30",
+            "profit_rate": 1.2,
+            "strategy": "SCALPING",
+            "pyramid_count": 1,
+            "last_add_type": "PYRAMID",
+        },
+        {
+            "rec_date": "2026-04-30",
+            "profit_rate": -0.9,
+            "strategy": "SCALPING",
+            "avg_down_count": 1,
+            "last_add_type": "REVERSAL_ADD",
+        },
         {"rec_date": "2026-04-30", "profit_rate": None, "strategy": "SCALPING"},
     ]
 
@@ -3434,23 +4177,49 @@ def test_cumulative_threshold_cycle_report_splits_windows_and_cohorts():
     assert report["summary"]["completed_valid_cumulative"] == 4
     assert report["completed_cohorts"]["cumulative"]["normal_only"]["sample"] == 3
     assert report["completed_cohorts"]["cumulative"]["pyramid_activated"]["sample"] == 1
-    assert report["completed_cohorts"]["cumulative"]["reversal_add_activated"]["sample"] == 1
-    assert report["completed_cohorts"]["rolling_2d"]["all_completed_valid"]["sample"] == 3
+    assert (
+        report["completed_cohorts"]["cumulative"]["reversal_add_activated"]["sample"]
+        == 1
+    )
+    assert (
+        report["completed_cohorts"]["rolling_2d"]["all_completed_valid"]["sample"] == 3
+    )
     assert report["summary"]["event_count_by_window"]["cumulative"] == 3
-    assert "scalp_trailing_take_profit" in report["threshold_snapshot_by_window"]["rolling_2d"]
+    assert (
+        "scalp_trailing_take_profit"
+        in report["threshold_snapshot_by_window"]["rolling_2d"]
+    )
     assert report["apply_candidate_list_by_window"]["cumulative"] == []
-    assert report["threshold_snapshot_by_window"]["cumulative"]["bad_entry_block"]["apply_mode"] == "report_only_reference"
+    assert (
+        report["threshold_snapshot_by_window"]["cumulative"]["bad_entry_block"][
+            "apply_mode"
+        ]
+        == "report_only_reference"
+    )
 
 
-def test_cumulative_threshold_cycle_report_artifacts_render_markdown(tmp_path, monkeypatch):
-    monkeypatch.setattr(report_mod, "CUMULATIVE_THRESHOLD_REPORT_DIR", tmp_path / "threshold_cycle_cumulative")
+def test_cumulative_threshold_cycle_report_artifacts_render_markdown(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        report_mod,
+        "CUMULATIVE_THRESHOLD_REPORT_DIR",
+        tmp_path / "threshold_cycle_cumulative",
+    )
     report = report_mod.build_cumulative_threshold_cycle_report(
         "2026-04-30",
         start_date="2026-04-30",
         rolling_days=(1,),
-        pipeline_loader=lambda target_date: [{"stage": "budget_pass", "fields": {"signal_score": "72"}}],
+        pipeline_loader=lambda target_date: [
+            {"stage": "budget_pass", "fields": {"signal_score": "72"}}
+        ],
         completed_rows_loader=lambda start_date, end_date: [
-            {"rec_date": "2026-04-30", "profit_rate": 0.5, "strategy": "SCALPING", "buy_price": 9000},
+            {
+                "rec_date": "2026-04-30",
+                "profit_rate": 0.5,
+                "strategy": "SCALPING",
+                "buy_price": 9000,
+            },
         ],
     )
 
@@ -3458,7 +4227,10 @@ def test_cumulative_threshold_cycle_report_artifacts_render_markdown(tmp_path, m
     payload = json.loads(json_path.read_text(encoding="utf-8"))
     markdown = md_path.read_text(encoding="utf-8")
 
-    assert payload["source_flags"]["application_mode"] == "report_only_cumulative_threshold_input"
+    assert (
+        payload["source_flags"]["application_mode"]
+        == "report_only_cumulative_threshold_input"
+    )
     assert payload["source_flags"]["live_threshold_mutation"] is False
     assert "Cumulative Threshold Cycle Report" in markdown
     assert "Cohort Summary" in markdown
@@ -3470,13 +4242,18 @@ def test_cumulative_threshold_cycle_report_renders_family_specific_denominator()
         "2026-04-30",
         start_date="2026-04-30",
         rolling_days=(1,),
-        pipeline_loader=lambda target_date: [{"stage": "budget_pass", "fields": {"signal_score": "72"}}],
+        pipeline_loader=lambda target_date: [
+            {"stage": "budget_pass", "fields": {"signal_score": "72"}}
+        ],
         completed_rows_loader=lambda start_date, end_date: [],
     )
 
     markdown = report_mod.render_cumulative_threshold_cycle_markdown(report)
 
-    assert "| cumulative | score65_74_recovery_probe | entry | 0 | False | report_only_reference |" in markdown
+    assert (
+        "| cumulative | score65_74_recovery_probe | entry | 0 | False | report_only_reference |"
+        in markdown
+    )
 
 
 def test_window_policy_audit_uses_registered_denominators_for_position_sizing():
@@ -3656,7 +4433,9 @@ def test_classify_fill_price_defect_limit_missing_not_unpriced():
         "limit_fill_price": "0",
         "submitted_order_price": "9990",
     }
-    classification = target._classify_sim_fill_price_defect(fields, "scalp_sim_buy_order_assumed_filled")
+    classification = target._classify_sim_fill_price_defect(
+        fields, "scalp_sim_buy_order_assumed_filled"
+    )
     assert classification == "limit_fill_price_missing_but_assumed_present"
 
     canonical = target._canonical_sim_fill_price(fields)
@@ -3671,7 +4450,9 @@ def test_classify_fill_price_defect_unpriced_no_canonical():
         "actual_order_submitted": True,
         "broker_order_forbidden": False,
     }
-    classification = target._classify_sim_fill_price_defect(fields, "scalp_sim_buy_order_virtual_pending")
+    classification = target._classify_sim_fill_price_defect(
+        fields, "scalp_sim_buy_order_virtual_pending"
+    )
     assert classification == "unpriced_no_canonical"
 
 
@@ -3683,11 +4464,15 @@ def test_classify_fill_price_defect_forbidden_zero_price():
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
     }
-    classification = target._classify_sim_fill_price_defect(fields, "scalp_sim_buy_order_virtual_pending")
+    classification = target._classify_sim_fill_price_defect(
+        fields, "scalp_sim_buy_order_virtual_pending"
+    )
     assert classification == "forbidden_zero_price_observation"
 
 
-def test_dynamic_entry_price_counterfactual_join_diagnostics_breaks_down_reasons(monkeypatch, tmp_path):
+def test_dynamic_entry_price_counterfactual_join_diagnostics_breaks_down_reasons(
+    monkeypatch, tmp_path
+):
     from src.engine import daily_threshold_cycle_report as target
 
     report_dir = tmp_path / "report"
@@ -3725,13 +4510,59 @@ def test_active_seed_matched_string_boolean_separation():
     from src.engine import daily_threshold_cycle_report as target
 
     events = [
-        {"stage": "scalp_sim_entry_armed", "fields": {"active_seed_matched": False, "ldm_hypothesis_matched": True, "lifecycle_bucket_match_status": "no_match"}},
-        {"stage": "scalp_sim_entry_armed", "fields": {"active_seed_matched": "false", "ldm_hypothesis_matched": True, "lifecycle_bucket_match_status": "no_match"}},
-        {"stage": "scalp_sim_entry_armed", "fields": {"active_seed_matched": "0", "ldm_hypothesis_matched": True, "lifecycle_bucket_match_status": "no_match"}},
-        {"stage": "scalp_sim_entry_armed", "fields": {"active_seed_matched": "no", "ldm_hypothesis_matched": True, "lifecycle_bucket_match_status": "no_match"}},
-        {"stage": "scalp_sim_entry_armed", "fields": {"ldm_hypothesis_matched": True, "lifecycle_bucket_match_status": "no_match"}},
-        {"stage": "scalp_sim_entry_armed", "fields": {"active_seed_matched": True, "lifecycle_bucket_match_status": "matched"}},
-        {"stage": "scalp_sim_entry_armed", "fields": {"active_seed_matched": "true", "lifecycle_bucket_match_status": "matched"}},
+        {
+            "stage": "scalp_sim_entry_armed",
+            "fields": {
+                "active_seed_matched": False,
+                "ldm_hypothesis_matched": True,
+                "lifecycle_bucket_match_status": "no_match",
+            },
+        },
+        {
+            "stage": "scalp_sim_entry_armed",
+            "fields": {
+                "active_seed_matched": "false",
+                "ldm_hypothesis_matched": True,
+                "lifecycle_bucket_match_status": "no_match",
+            },
+        },
+        {
+            "stage": "scalp_sim_entry_armed",
+            "fields": {
+                "active_seed_matched": "0",
+                "ldm_hypothesis_matched": True,
+                "lifecycle_bucket_match_status": "no_match",
+            },
+        },
+        {
+            "stage": "scalp_sim_entry_armed",
+            "fields": {
+                "active_seed_matched": "no",
+                "ldm_hypothesis_matched": True,
+                "lifecycle_bucket_match_status": "no_match",
+            },
+        },
+        {
+            "stage": "scalp_sim_entry_armed",
+            "fields": {
+                "ldm_hypothesis_matched": True,
+                "lifecycle_bucket_match_status": "no_match",
+            },
+        },
+        {
+            "stage": "scalp_sim_entry_armed",
+            "fields": {
+                "active_seed_matched": True,
+                "lifecycle_bucket_match_status": "matched",
+            },
+        },
+        {
+            "stage": "scalp_sim_entry_armed",
+            "fields": {
+                "active_seed_matched": "true",
+                "lifecycle_bucket_match_status": "matched",
+            },
+        },
     ]
 
     result = target._sim_lifecycle_bucket_match_aggregation(events)
@@ -3753,9 +4584,27 @@ def test_panic_scale_in_not_counted_in_lifecycle_match():
     from src.engine import daily_threshold_cycle_report as target
 
     events = [
-        {"stage": "scalp_sim_panic_scale_in_blocked", "fields": {"lifecycle_bucket_match_status": "no_match", "active_seed_matched": True}},
-        {"stage": "scalp_sim_panic_scale_in_blocked", "fields": {"lifecycle_bucket_match_status": "no_match", "active_seed_matched": False}},
-        {"stage": "scalp_sim_entry_armed", "fields": {"lifecycle_bucket_match_status": "no_match", "active_seed_matched": False}},
+        {
+            "stage": "scalp_sim_panic_scale_in_blocked",
+            "fields": {
+                "lifecycle_bucket_match_status": "no_match",
+                "active_seed_matched": True,
+            },
+        },
+        {
+            "stage": "scalp_sim_panic_scale_in_blocked",
+            "fields": {
+                "lifecycle_bucket_match_status": "no_match",
+                "active_seed_matched": False,
+            },
+        },
+        {
+            "stage": "scalp_sim_entry_armed",
+            "fields": {
+                "lifecycle_bucket_match_status": "no_match",
+                "active_seed_matched": False,
+            },
+        },
     ]
 
     result = target._sim_lifecycle_bucket_match_aggregation(events)
@@ -3770,11 +4619,38 @@ def test_active_seed_alias_from_priority_field():
     from src.engine import daily_threshold_cycle_report as target
 
     events = [
-        {"stage": "scalp_sim_entry_armed", "fields": {"scalp_sim_active_priority_seed_matched": True, "lifecycle_bucket_match_status": "matched"}},
-        {"stage": "scalp_sim_entry_armed", "fields": {"scalp_sim_active_priority_seed_matched": False, "lifecycle_bucket_match_status": "no_match"}},
-        {"stage": "scalp_sim_entry_armed", "fields": {"scalp_sim_active_priority_seed_matched": "true", "lifecycle_bucket_match_status": "matched"}},
-        {"stage": "scalp_sim_entry_armed", "fields": {"scalp_sim_active_priority_seed_matched": "false", "lifecycle_bucket_match_status": "no_match"}},
-        {"stage": "scalp_sim_entry_armed", "fields": {"lifecycle_bucket_match_status": "no_match"}},
+        {
+            "stage": "scalp_sim_entry_armed",
+            "fields": {
+                "scalp_sim_active_priority_seed_matched": True,
+                "lifecycle_bucket_match_status": "matched",
+            },
+        },
+        {
+            "stage": "scalp_sim_entry_armed",
+            "fields": {
+                "scalp_sim_active_priority_seed_matched": False,
+                "lifecycle_bucket_match_status": "no_match",
+            },
+        },
+        {
+            "stage": "scalp_sim_entry_armed",
+            "fields": {
+                "scalp_sim_active_priority_seed_matched": "true",
+                "lifecycle_bucket_match_status": "matched",
+            },
+        },
+        {
+            "stage": "scalp_sim_entry_armed",
+            "fields": {
+                "scalp_sim_active_priority_seed_matched": "false",
+                "lifecycle_bucket_match_status": "no_match",
+            },
+        },
+        {
+            "stage": "scalp_sim_entry_armed",
+            "fields": {"lifecycle_bucket_match_status": "no_match"},
+        },
     ]
 
     result = target._sim_lifecycle_bucket_match_aggregation(events)
@@ -3862,9 +4738,29 @@ def test_hypothesis_count_includes_prefix_matched_parent_missing():
     from src.engine import daily_threshold_cycle_report as target
 
     events = [
-        {"stage": "scalp_sim_entry_armed", "fields": {"lifecycle_bucket_match_status": "no_match", "active_seed_matched": True, "ldm_hypothesis_matched": True}},
-        {"stage": "scalp_sim_entry_armed", "fields": {"lifecycle_bucket_match_status": "no_match", "active_seed_matched": False, "ldm_hypothesis_matched": True}},
-        {"stage": "scalp_sim_entry_armed", "fields": {"lifecycle_bucket_match_status": "no_match", "active_seed_matched": False}},
+        {
+            "stage": "scalp_sim_entry_armed",
+            "fields": {
+                "lifecycle_bucket_match_status": "no_match",
+                "active_seed_matched": True,
+                "ldm_hypothesis_matched": True,
+            },
+        },
+        {
+            "stage": "scalp_sim_entry_armed",
+            "fields": {
+                "lifecycle_bucket_match_status": "no_match",
+                "active_seed_matched": False,
+                "ldm_hypothesis_matched": True,
+            },
+        },
+        {
+            "stage": "scalp_sim_entry_armed",
+            "fields": {
+                "lifecycle_bucket_match_status": "no_match",
+                "active_seed_matched": False,
+            },
+        },
     ]
 
     result = target._sim_lifecycle_bucket_match_aggregation(events)
@@ -3952,9 +4848,13 @@ def test_sim_submit_path_lifecycle_context_missing_status_backfilled_as_context_
 def test_duplicate_not_in_lifecycle_eligible_stages():
     from src.engine import daily_threshold_cycle_report as target
 
-    assert not target._is_lifecycle_match_eligible_stage("scalp_sim_duplicate_buy_signal")
+    assert not target._is_lifecycle_match_eligible_stage(
+        "scalp_sim_duplicate_buy_signal"
+    )
     assert target._is_lifecycle_match_eligible_stage("scalp_sim_entry_armed")
-    assert target._is_lifecycle_match_eligible_stage("scalp_sim_buy_order_assumed_filled")
+    assert target._is_lifecycle_match_eligible_stage(
+        "scalp_sim_buy_order_assumed_filled"
+    )
     assert target._is_lifecycle_match_eligible_stage("scalp_sim_holding_started")
 
 
@@ -3995,12 +4895,17 @@ def test_lifecycle_match_aggregation_separates_raw_missing_from_decision_gap():
     result = target._sim_lifecycle_bucket_match_aggregation(events)
 
     assert result["missing_count"] == 3
-    assert result["raw_missing_count_scope"] == "all_scalp_sim_events_compatibility_counter"
+    assert (
+        result["raw_missing_count_scope"]
+        == "all_scalp_sim_events_compatibility_counter"
+    )
     assert result["eligible_lifecycle_match_event_count"] == 3
     assert result["eligible_lifecycle_match_observed_count"] == 1
     assert result["eligible_lifecycle_match_gap_count"] == 1
     assert result["decision_missing_count"] == 1
-    assert result["decision_missing_count_scope"] == "eligible_lifecycle_match_events_only"
+    assert (
+        result["decision_missing_count_scope"] == "eligible_lifecycle_match_events_only"
+    )
     assert result["candidate_context_only_count"] == 1
     assert result["not_instrumented_count"] == 1
     assert result["eligible_active_seed_matched_none_count"] == 1
@@ -4031,23 +4936,32 @@ def test_producer_parent_catalog_missing_reason_flow():
     from src.engine import daily_threshold_cycle_report as target
 
     events = [
-        {"stage": "scalp_sim_entry_armed", "fields": {
-            "lifecycle_bucket_match_status": "no_match",
-            "lifecycle_bucket_match_reason": "parent_catalog_missing",
-            "lifecycle_bucket_bucket_id": "entry:combo_entry_spot:score66-69:stale_low",
-            "active_seed_matched": True,
-        }},
-        {"stage": "scalp_sim_entry_armed", "fields": {
-            "lifecycle_bucket_match_status": "no_match",
-            "lifecycle_bucket_bucket_id": "entry:combo_entry_spot:score60-65",
-            "active_seed_matched": False,
-        }},
-        {"stage": "scalp_sim_entry_armed", "fields": {
-            "lifecycle_bucket_match_status": "matched",
-            "lifecycle_bucket_bucket_id": "entry:combo_entry_spot:score60-65",
-            "lifecycle_bucket_source_bucket_id": "parent_bucket_abc123",
-            "active_seed_matched": True,
-        }},
+        {
+            "stage": "scalp_sim_entry_armed",
+            "fields": {
+                "lifecycle_bucket_match_status": "no_match",
+                "lifecycle_bucket_match_reason": "parent_catalog_missing",
+                "lifecycle_bucket_bucket_id": "entry:combo_entry_spot:score66-69:stale_low",
+                "active_seed_matched": True,
+            },
+        },
+        {
+            "stage": "scalp_sim_entry_armed",
+            "fields": {
+                "lifecycle_bucket_match_status": "no_match",
+                "lifecycle_bucket_bucket_id": "entry:combo_entry_spot:score60-65",
+                "active_seed_matched": False,
+            },
+        },
+        {
+            "stage": "scalp_sim_entry_armed",
+            "fields": {
+                "lifecycle_bucket_match_status": "matched",
+                "lifecycle_bucket_bucket_id": "entry:combo_entry_spot:score60-65",
+                "lifecycle_bucket_source_bucket_id": "parent_bucket_abc123",
+                "active_seed_matched": True,
+            },
+        },
     ]
 
     result = target._sim_lifecycle_bucket_match_aggregation(events)
@@ -4111,7 +5025,9 @@ def test_bridge_still_works_without_parent_catalog_missing():
     assert result == "matched_entry_child_bridge"
 
 
-def test_enrich_entry_price_sim_metrics_with_post_sell_joins_and_populates_metrics(tmp_path, monkeypatch):
+def test_enrich_entry_price_sim_metrics_with_post_sell_joins_and_populates_metrics(
+    tmp_path, monkeypatch
+):
     from src.engine import daily_threshold_cycle_report as mod
 
     post_sell_dir = tmp_path / "post_sell"
@@ -4141,15 +5057,35 @@ def test_enrich_entry_price_sim_metrics_with_post_sell_joins_and_populates_metri
             "metrics_10m": {"mfe_pct": 0.1, "mae_pct": -0.1, "close_ret_pct": 0.0},
         },
     ]
-    eval_path.write_text("\n".join(json.dumps(row) for row in evaluations), encoding="utf-8")
+    eval_path.write_text(
+        "\n".join(json.dumps(row) for row in evaluations), encoding="utf-8"
+    )
 
     sim_events = [
-        {"stage": "scalp_sim_buy_order_virtual_pending", "fields": {"sim_record_id": "sim-1", "submitted_order_price": "10000"}},
-        {"stage": "scalp_sim_buy_order_assumed_filled", "fields": {"sim_record_id": "sim-1"}},
-        {"stage": "scalp_sim_buy_order_virtual_pending", "fields": {"sim_record_id": "sim-2", "submitted_order_price": "10000"}},
-        {"stage": "scalp_sim_buy_order_assumed_filled", "fields": {"sim_record_id": "sim-2"}},
-        {"stage": "scalp_sim_buy_order_virtual_pending", "fields": {"sim_record_id": "sim-3", "submitted_order_price": "10000"}},
-        {"stage": "scalp_sim_buy_order_virtual_pending", "fields": {"sim_record_id": "sim-noeval", "submitted_order_price": "10000"}},
+        {
+            "stage": "scalp_sim_buy_order_virtual_pending",
+            "fields": {"sim_record_id": "sim-1", "submitted_order_price": "10000"},
+        },
+        {
+            "stage": "scalp_sim_buy_order_assumed_filled",
+            "fields": {"sim_record_id": "sim-1"},
+        },
+        {
+            "stage": "scalp_sim_buy_order_virtual_pending",
+            "fields": {"sim_record_id": "sim-2", "submitted_order_price": "10000"},
+        },
+        {
+            "stage": "scalp_sim_buy_order_assumed_filled",
+            "fields": {"sim_record_id": "sim-2"},
+        },
+        {
+            "stage": "scalp_sim_buy_order_virtual_pending",
+            "fields": {"sim_record_id": "sim-3", "submitted_order_price": "10000"},
+        },
+        {
+            "stage": "scalp_sim_buy_order_virtual_pending",
+            "fields": {"sim_record_id": "sim-noeval", "submitted_order_price": "10000"},
+        },
     ]
 
     monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
@@ -4172,13 +5108,21 @@ def test_enrich_entry_price_sim_metrics_with_post_sell_joins_and_populates_metri
     assert enriched["post_sell_join_status"] == "evaluated"
     assert enriched["missed_upside"] == round(1 / 3 * 100, 2)
     assert enriched["missed_upside_source"] == "sim_post_sell_evaluations_10m"
-    assert enriched["source_quality_adjusted_ev_pct"] == round((0.85 - 0.42 + 0.10) / 3, 4)
+    assert enriched["source_quality_adjusted_ev_pct"] == round(
+        (0.85 - 0.42 + 0.10) / 3, 4
+    )
     assert enriched["ev_source"] == "joined_sim_post_sell_profit_rate"
-    assert enriched["post_sell_outcome_counts"] == {"MISSED_UPSIDE": 1, "GOOD_EXIT": 1, "NEUTRAL": 1}
+    assert enriched["post_sell_outcome_counts"] == {
+        "MISSED_UPSIDE": 1,
+        "GOOD_EXIT": 1,
+        "NEUTRAL": 1,
+    }
     assert enriched["fill_rate"] is not None
 
 
-def test_enrich_entry_price_sim_metrics_without_post_sell_artifact_keeps_metrics_none(monkeypatch):
+def test_enrich_entry_price_sim_metrics_without_post_sell_artifact_keeps_metrics_none(
+    monkeypatch,
+):
     from src.engine import daily_threshold_cycle_report as mod
     import tempfile
 
@@ -4187,7 +5131,10 @@ def test_enrich_entry_price_sim_metrics_without_post_sell_artifact_keeps_metrics
     monkeypatch.setattr(mod, "POST_SELL_DIR", empty_dir)
 
     sim_events = [
-        {"stage": "scalp_sim_buy_order_virtual_pending", "fields": {"submitted_order_price": "10000"}},
+        {
+            "stage": "scalp_sim_buy_order_virtual_pending",
+            "fields": {"submitted_order_price": "10000"},
+        },
     ]
     sim_metrics = mod._candidate_metric_pack(
         sim_events,
@@ -4197,7 +5144,9 @@ def test_enrich_entry_price_sim_metrics_without_post_sell_artifact_keeps_metrics
     )
 
     enriched = mod._enrich_entry_price_sim_metrics_with_post_sell(
-        sim_metrics, sim_events, target_date="2026-06-11",
+        sim_metrics,
+        sim_events,
+        target_date="2026-06-11",
     )
 
     assert enriched["post_sell_join_status"] == "missing_or_empty_artifact"
@@ -4214,7 +5163,14 @@ def test_enrich_sim_parent_record_id_fallback_joins(tmp_path, monkeypatch):
     post_sell_dir.mkdir()
     eval_path = post_sell_dir / "sim_post_sell_evaluations_2026-06-11.jsonl"
     eval_path.write_text(
-        json.dumps({"sim_parent_record_id": "parent-1", "post_sell_id": "ps-1", "profit_rate": 0.55, "outcome": "GOOD_EXIT"})
+        json.dumps(
+            {
+                "sim_parent_record_id": "parent-1",
+                "post_sell_id": "ps-1",
+                "profit_rate": 0.55,
+                "outcome": "GOOD_EXIT",
+            }
+        )
         + "\n",
         encoding="utf-8",
     )
@@ -4222,8 +5178,13 @@ def test_enrich_sim_parent_record_id_fallback_joins(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
 
     sim_events = [
-        {"stage": "scalp_sim_buy_order_virtual_pending",
-         "fields": {"sim_parent_record_id": "parent-1", "submitted_order_price": "10000"}},
+        {
+            "stage": "scalp_sim_buy_order_virtual_pending",
+            "fields": {
+                "sim_parent_record_id": "parent-1",
+                "submitted_order_price": "10000",
+            },
+        },
     ]
     sim_metrics = mod._candidate_metric_pack(
         sim_events,
@@ -4232,7 +5193,9 @@ def test_enrich_sim_parent_record_id_fallback_joins(tmp_path, monkeypatch):
         cancel_stages={"scalp_sim_entry_expired", "scalp_sim_entry_unpriced"},
     )
     enriched = mod._enrich_entry_price_sim_metrics_with_post_sell(
-        sim_metrics, sim_events, target_date="2026-06-11",
+        sim_metrics,
+        sim_events,
+        target_date="2026-06-11",
     )
     assert enriched["post_sell_join_status"] == "evaluated"
     assert enriched["post_sell_joined_count"] == 1
@@ -4246,7 +5209,14 @@ def test_enrich_sim_candidate_id_fallback_joins(tmp_path, monkeypatch):
     post_sell_dir.mkdir()
     eval_path = post_sell_dir / "sim_post_sell_evaluations_2026-06-11.jsonl"
     eval_path.write_text(
-        json.dumps({"candidate_id": "cid-99", "post_sell_id": "ps-2", "profit_rate": -0.33, "outcome": "NEUTRAL"})
+        json.dumps(
+            {
+                "candidate_id": "cid-99",
+                "post_sell_id": "ps-2",
+                "profit_rate": -0.33,
+                "outcome": "NEUTRAL",
+            }
+        )
         + "\n",
         encoding="utf-8",
     )
@@ -4254,8 +5224,10 @@ def test_enrich_sim_candidate_id_fallback_joins(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
 
     sim_events = [
-        {"stage": "scalp_sim_buy_order_virtual_pending",
-         "fields": {"candidate_id": "cid-99", "submitted_order_price": "10000"}},
+        {
+            "stage": "scalp_sim_buy_order_virtual_pending",
+            "fields": {"candidate_id": "cid-99", "submitted_order_price": "10000"},
+        },
     ]
     sim_metrics = mod._candidate_metric_pack(
         sim_events,
@@ -4264,32 +5236,58 @@ def test_enrich_sim_candidate_id_fallback_joins(tmp_path, monkeypatch):
         cancel_stages={"scalp_sim_entry_expired", "scalp_sim_entry_unpriced"},
     )
     enriched = mod._enrich_entry_price_sim_metrics_with_post_sell(
-        sim_metrics, sim_events, target_date="2026-06-11",
+        sim_metrics,
+        sim_events,
+        target_date="2026-06-11",
     )
     assert enriched["post_sell_join_status"] == "evaluated"
     assert enriched["post_sell_joined_count"] == 1
     assert enriched["post_sell_join_pending_count"] == 0
 
 
-def test_enrich_sim_parent_priority_over_candidate_when_both_exist(tmp_path, monkeypatch):
+def test_enrich_sim_parent_priority_over_candidate_when_both_exist(
+    tmp_path, monkeypatch
+):
     from src.engine import daily_threshold_cycle_report as mod
 
     post_sell_dir = tmp_path / "post_sell"
     post_sell_dir.mkdir()
     eval_path = post_sell_dir / "sim_post_sell_evaluations_2026-06-11.jsonl"
     eval_path.write_text(
-        "\n".join([
-            json.dumps({"sim_parent_record_id": "parent-x", "post_sell_id": "ps-parent", "profit_rate": 0.60, "outcome": "GOOD_EXIT"}),
-            json.dumps({"candidate_id": "cid-x", "post_sell_id": "ps-cid", "profit_rate": 0.30, "outcome": "GOOD_EXIT"}),
-        ]),
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "sim_parent_record_id": "parent-x",
+                        "post_sell_id": "ps-parent",
+                        "profit_rate": 0.60,
+                        "outcome": "GOOD_EXIT",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "candidate_id": "cid-x",
+                        "post_sell_id": "ps-cid",
+                        "profit_rate": 0.30,
+                        "outcome": "GOOD_EXIT",
+                    }
+                ),
+            ]
+        ),
         encoding="utf-8",
     )
 
     monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
 
     sim_events = [
-        {"stage": "scalp_sim_buy_order_virtual_pending",
-         "fields": {"sim_parent_record_id": "parent-x", "candidate_id": "cid-x", "submitted_order_price": "10000"}},
+        {
+            "stage": "scalp_sim_buy_order_virtual_pending",
+            "fields": {
+                "sim_parent_record_id": "parent-x",
+                "candidate_id": "cid-x",
+                "submitted_order_price": "10000",
+            },
+        },
     ]
     sim_metrics = mod._candidate_metric_pack(
         sim_events,
@@ -4298,21 +5296,33 @@ def test_enrich_sim_parent_priority_over_candidate_when_both_exist(tmp_path, mon
         cancel_stages={"scalp_sim_entry_expired", "scalp_sim_entry_unpriced"},
     )
     enriched = mod._enrich_entry_price_sim_metrics_with_post_sell(
-        sim_metrics, sim_events, target_date="2026-06-11",
+        sim_metrics,
+        sim_events,
+        target_date="2026-06-11",
     )
     assert enriched["post_sell_joined_count"] == 1
     assert enriched["post_sell_join_pending_count"] == 0
     assert enriched["source_quality_adjusted_ev_pct"] == 0.60
 
 
-def test_enrich_sim_separate_events_same_eval_via_different_keys_pending_zero(tmp_path, monkeypatch):
+def test_enrich_sim_separate_events_same_eval_via_different_keys_pending_zero(
+    tmp_path, monkeypatch
+):
     from src.engine import daily_threshold_cycle_report as mod
 
     post_sell_dir = tmp_path / "post_sell"
     post_sell_dir.mkdir()
     eval_path = post_sell_dir / "sim_post_sell_evaluations_2026-06-11.jsonl"
     eval_path.write_text(
-        json.dumps({"sim_record_id": "sim-x", "candidate_id": "cid-x", "post_sell_id": "ps-x", "profit_rate": 0.77, "outcome": "MISSED_UPSIDE"})
+        json.dumps(
+            {
+                "sim_record_id": "sim-x",
+                "candidate_id": "cid-x",
+                "post_sell_id": "ps-x",
+                "profit_rate": 0.77,
+                "outcome": "MISSED_UPSIDE",
+            }
+        )
         + "\n",
         encoding="utf-8",
     )
@@ -4320,10 +5330,14 @@ def test_enrich_sim_separate_events_same_eval_via_different_keys_pending_zero(tm
     monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
 
     sim_events = [
-        {"stage": "scalp_sim_buy_order_virtual_pending",
-         "fields": {"sim_record_id": "sim-x", "submitted_order_price": "10000"}},
-        {"stage": "scalp_sim_buy_order_assumed_filled",
-         "fields": {"candidate_id": "cid-x"}},
+        {
+            "stage": "scalp_sim_buy_order_virtual_pending",
+            "fields": {"sim_record_id": "sim-x", "submitted_order_price": "10000"},
+        },
+        {
+            "stage": "scalp_sim_buy_order_assumed_filled",
+            "fields": {"candidate_id": "cid-x"},
+        },
     ]
     sim_metrics = mod._candidate_metric_pack(
         sim_events,
@@ -4332,21 +5346,33 @@ def test_enrich_sim_separate_events_same_eval_via_different_keys_pending_zero(tm
         cancel_stages={"scalp_sim_entry_expired", "scalp_sim_entry_unpriced"},
     )
     enriched = mod._enrich_entry_price_sim_metrics_with_post_sell(
-        sim_metrics, sim_events, target_date="2026-06-11",
+        sim_metrics,
+        sim_events,
+        target_date="2026-06-11",
     )
     assert enriched["post_sell_joined_count"] == 1
     assert enriched["post_sell_join_pending_count"] == 0
     assert enriched["missed_upside"] == 100.0
 
 
-def test_enrich_sim_same_eval_via_both_record_id_and_candidate_id_not_duplicated(tmp_path, monkeypatch):
+def test_enrich_sim_same_eval_via_both_record_id_and_candidate_id_not_duplicated(
+    tmp_path, monkeypatch
+):
     from src.engine import daily_threshold_cycle_report as mod
 
     post_sell_dir = tmp_path / "post_sell"
     post_sell_dir.mkdir()
     eval_path = post_sell_dir / "sim_post_sell_evaluations_2026-06-11.jsonl"
     eval_path.write_text(
-        json.dumps({"sim_record_id": "sim-x", "candidate_id": "cid-x", "post_sell_id": "ps-x", "profit_rate": 0.77, "outcome": "MISSED_UPSIDE"})
+        json.dumps(
+            {
+                "sim_record_id": "sim-x",
+                "candidate_id": "cid-x",
+                "post_sell_id": "ps-x",
+                "profit_rate": 0.77,
+                "outcome": "MISSED_UPSIDE",
+            }
+        )
         + "\n",
         encoding="utf-8",
     )
@@ -4354,8 +5380,14 @@ def test_enrich_sim_same_eval_via_both_record_id_and_candidate_id_not_duplicated
     monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
 
     sim_events = [
-        {"stage": "scalp_sim_buy_order_virtual_pending",
-         "fields": {"sim_record_id": "sim-x", "candidate_id": "cid-x", "submitted_order_price": "10000"}},
+        {
+            "stage": "scalp_sim_buy_order_virtual_pending",
+            "fields": {
+                "sim_record_id": "sim-x",
+                "candidate_id": "cid-x",
+                "submitted_order_price": "10000",
+            },
+        },
     ]
     sim_metrics = mod._candidate_metric_pack(
         sim_events,
@@ -4364,7 +5396,9 @@ def test_enrich_sim_same_eval_via_both_record_id_and_candidate_id_not_duplicated
         cancel_stages={"scalp_sim_entry_expired", "scalp_sim_entry_unpriced"},
     )
     enriched = mod._enrich_entry_price_sim_metrics_with_post_sell(
-        sim_metrics, sim_events, target_date="2026-06-11",
+        sim_metrics,
+        sim_events,
+        target_date="2026-06-11",
     )
     assert enriched["post_sell_joined_count"] == 1
     assert enriched["post_sell_join_pending_count"] == 0
