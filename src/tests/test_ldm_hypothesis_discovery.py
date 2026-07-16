@@ -16,11 +16,44 @@ def _row(source_date, features, profit, quality="pass", weight=1):
 
 def test_deterministic_hypothesis_generation_excludes_future_identity_and_pnl_fields():
     rows = [
-        _row("2026-05-18", {"alpha": "A", "entry_score_parent": "S1", "beta": "B", "record_id": "1", "profit_rate": 3.0}, 2.0),
-        _row("2026-05-19", {"alpha": "A", "entry_score_parent": "S1", "beta": "B", "stock_code": "000001", "future_label": "x"}, 1.0),
-        _row("2026-05-20", {"alpha": "A", "entry_score_parent": "S1", "beta": "C", "raw_score": 10}, -1.0),
-        _row("2026-05-21", {"alpha": "D", "entry_score_parent": "S2", "beta": "B", "raw_score": 20}, -3.0),
-        _row("2026-05-22", {"alpha": "A", "entry_score_parent": "S1", "beta": "B", "raw_score": 30}, None, "source_quality_blocked"),
+        _row(
+            "2026-05-18",
+            {
+                "alpha": "A",
+                "entry_score_parent": "S1",
+                "beta": "B",
+                "record_id": "1",
+                "profit_rate": 3.0,
+            },
+            2.0,
+        ),
+        _row(
+            "2026-05-19",
+            {
+                "alpha": "A",
+                "entry_score_parent": "S1",
+                "beta": "B",
+                "stock_code": "000001",
+                "future_label": "x",
+            },
+            1.0,
+        ),
+        _row(
+            "2026-05-20",
+            {"alpha": "A", "entry_score_parent": "S1", "beta": "C", "raw_score": 10},
+            -1.0,
+        ),
+        _row(
+            "2026-05-21",
+            {"alpha": "D", "entry_score_parent": "S2", "beta": "B", "raw_score": 20},
+            -3.0,
+        ),
+        _row(
+            "2026-05-22",
+            {"alpha": "A", "entry_score_parent": "S1", "beta": "B", "raw_score": 30},
+            None,
+            "source_quality_blocked",
+        ),
     ]
 
     hypotheses, diagnostics = mod.build_hypotheses(rows)
@@ -32,21 +65,39 @@ def test_deterministic_hypothesis_generation_excludes_future_identity_and_pnl_fi
         for hypothesis in hypotheses
         for requirement in hypothesis["observable_requirements"]
     ]
-    forbidden_fields = {item["field"] for item in all_requirements if item["field"] in {"record_id", "stock_code", "profit_rate", "future_label"}}
+    forbidden_fields = {
+        item["field"]
+        for item in all_requirements
+        if item["field"] in {"record_id", "stock_code", "profit_rate", "future_label"}
+    }
     assert forbidden_fields == set()
     itemsets, feature_diagnostics = mod._feature_items(rows)
     assert feature_diagnostics["raw_score"]["numeric"] is True
     assert any("raw_score#bin=" in item for itemset in itemsets for item in itemset)
     assert all(hypothesis["runtime_effect"] is False for hypothesis in hypotheses)
-    assert all(hypothesis["allowed_runtime_apply"] is False for hypothesis in hypotheses)
-    assert all(hypothesis["broker_order_forbidden"] is True for hypothesis in hypotheses)
+    assert all(
+        hypothesis["allowed_runtime_apply"] is False for hypothesis in hypotheses
+    )
+    assert all(
+        hypothesis["broker_order_forbidden"] is True for hypothesis in hypotheses
+    )
 
 
 def test_missing_source_quality_is_preserved_as_contrast_group():
     rows = [
-        _row("2026-05-18", {"alpha": "A", "entry_source_parent": "SRC1"}, 1.0, "pass", 3),
-        _row("2026-05-19", {"alpha": "A", "entry_source_parent": "SRC1"}, None, "source_quality_blocked", 3),
-        _row("2026-05-20", {"alpha": "B", "entry_source_parent": "SRC2"}, -1.0, "pass", 3),
+        _row(
+            "2026-05-18", {"alpha": "A", "entry_source_parent": "SRC1"}, 1.0, "pass", 3
+        ),
+        _row(
+            "2026-05-19",
+            {"alpha": "A", "entry_source_parent": "SRC1"},
+            None,
+            "source_quality_blocked",
+            3,
+        ),
+        _row(
+            "2026-05-20", {"alpha": "B", "entry_source_parent": "SRC2"}, -1.0, "pass", 3
+        ),
     ]
 
     hypotheses, _ = mod.build_hypotheses(rows)
@@ -60,9 +111,27 @@ def test_missing_source_quality_is_preserved_as_contrast_group():
 
 def test_runtime_observable_single_contrast_group_collects_opposite_sample():
     rows = [
-        _row("2026-05-18", {"entry_score_parent": "S1", "entry_source_parent": "SRC1"}, 1.0, "pass", 3),
-        _row("2026-05-19", {"entry_score_parent": "S1", "entry_source_parent": "SRC1"}, 0.8, "pass", 3),
-        _row("2026-05-20", {"entry_score_parent": "S2", "entry_source_parent": "SRC2"}, -1.0, "pass", 3),
+        _row(
+            "2026-05-18",
+            {"entry_score_parent": "S1", "entry_source_parent": "SRC1"},
+            1.0,
+            "pass",
+            3,
+        ),
+        _row(
+            "2026-05-19",
+            {"entry_score_parent": "S1", "entry_source_parent": "SRC1"},
+            0.8,
+            "pass",
+            3,
+        ),
+        _row(
+            "2026-05-20",
+            {"entry_score_parent": "S2", "entry_source_parent": "SRC2"},
+            -1.0,
+            "pass",
+            3,
+        ),
     ]
 
     hypotheses, _ = mod.build_hypotheses(rows)
@@ -70,7 +139,8 @@ def test_runtime_observable_single_contrast_group_collects_opposite_sample():
     single_group = [
         hypothesis
         for hypothesis in hypotheses
-        if hypothesis["contrast_summary"]["contrast_coverage_status"] == "needs_opposite_sample"
+        if hypothesis["contrast_summary"]["contrast_coverage_status"]
+        == "needs_opposite_sample"
     ]
     assert single_group
     assert all(
@@ -137,7 +207,9 @@ def test_missing_rate_cap_excludes_sparse_feature():
         features = {"entry_score_parent": "S1"}
         if idx < 3:
             features["sparse_alpha"] = "A"
-        rows.append(_row(f"2026-05-{18 + idx:02d}", features, 1.0 if idx % 2 else -1.0, "pass"))
+        rows.append(
+            _row(f"2026-05-{18 + idx:02d}", features, 1.0 if idx % 2 else -1.0, "pass")
+        )
 
     _, diagnostics = mod._feature_items(rows)
 
@@ -180,7 +252,9 @@ def test_catalog_merge_preserves_existing_policy_sections(tmp_path, monkeypatch)
         "hypotheses": [
             {
                 "soft_hypothesis_id": "h1",
-                "observable_requirements": [{"field": "entry_score_parent", "op": "eq", "value": "S1"}],
+                "observable_requirements": [
+                    {"field": "entry_score_parent", "op": "eq", "value": "S1"}
+                ],
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
                 "actual_order_submitted": False,
@@ -195,11 +269,18 @@ def test_catalog_merge_preserves_existing_policy_sections(tmp_path, monkeypatch)
 
     assert result["scalp"]["merged"] is True
     assert result["swing"]["merged"] is True
-    scalp = json.loads((catalog_dir / "scalp_sim_policy_catalog_2026-06-01.json").read_text())
-    swing = json.loads((swing_dir / "swing_sim_policy_catalog_2026-06-01.json").read_text())
+    scalp = json.loads(
+        (catalog_dir / "scalp_sim_policy_catalog_2026-06-01.json").read_text()
+    )
+    swing = json.loads(
+        (swing_dir / "swing_sim_policy_catalog_2026-06-01.json").read_text()
+    )
     assert scalp["policies"] == [{"policy_id": "keep"}]
     assert scalp["active_sim_priority_seeds"] == [{"active_seed_id": "seed"}]
-    assert scalp["hypothesis_observation_plan"]["schema_version"] == mod.OBSERVATION_PLAN_SCHEMA_VERSION
+    assert (
+        scalp["hypothesis_observation_plan"]["schema_version"]
+        == mod.OBSERVATION_PLAN_SCHEMA_VERSION
+    )
     assert swing["active_arm_priority_policies"] == [{"priority_policy_id": "arm"}]
 
 
@@ -236,7 +317,9 @@ def test_catalog_merge_rejects_invalid_plan_without_writing(tmp_path, monkeypatc
             "not_a_hypothesis",
             {
                 "soft_hypothesis_id": "bad",
-                "observable_requirements": [{"field": "submit_quality_parent", "op": "eq", "value": "SQ"}],
+                "observable_requirements": [
+                    {"field": "submit_quality_parent", "op": "eq", "value": "SQ"}
+                ],
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
                 "actual_order_submitted": False,
@@ -251,5 +334,7 @@ def test_catalog_merge_rejects_invalid_plan_without_writing(tmp_path, monkeypatc
 
     assert result["scalp"]["merged"] is False
     assert result["swing"]["merged"] is False
-    scalp = json.loads((catalog_dir / "scalp_sim_policy_catalog_2026-06-01.json").read_text())
+    scalp = json.loads(
+        (catalog_dir / "scalp_sim_policy_catalog_2026-06-01.json").read_text()
+    )
     assert scalp == original

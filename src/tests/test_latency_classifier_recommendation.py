@@ -27,7 +27,9 @@ def _event(
             "spread_ratio": str(spread),
             "quote_stale": str(quote_stale),
             "decision": "REJECT_MARKET_CONDITION",
-            "latency": "CAUTION" if reason == "latency_fallback_deprecated" else "DANGER",
+            "latency": (
+                "CAUTION" if reason == "latency_fallback_deprecated" else "DANGER"
+            ),
             "reason": reason,
             "ai_score": str(ai_score),
             "actual_order_submitted": "false",
@@ -37,7 +39,15 @@ def _event(
     }
 
 
-def _counterfactual_row(code, record_id, *, outcome="MISSED_WINNER", close_10m_pct=2.5, pnl=2500, notional=100000):
+def _counterfactual_row(
+    code,
+    record_id,
+    *,
+    outcome="MISSED_WINNER",
+    close_10m_pct=2.5,
+    pnl=2500,
+    notional=100000,
+):
     return {
         "candidate_id": f"{code}:{record_id}",
         "stock_code": code,
@@ -97,7 +107,9 @@ def test_counterfactual_labels_fallback_to_rows(tmp_path, monkeypatch):
     assert meta["latency_block_label_count"] == 1
 
 
-def test_latency_classifier_recommendation_holds_after_runtime_simplification(tmp_path, monkeypatch):
+def test_latency_classifier_recommendation_holds_after_runtime_simplification(
+    tmp_path, monkeypatch
+):
     event_dir = tmp_path / "pipeline_events"
     report_dir = tmp_path / "report"
     monitor_dir = tmp_path / "monitor_snapshots"
@@ -109,8 +121,12 @@ def test_latency_classifier_recommendation_holds_after_runtime_simplification(tm
 
     rows = []
     for idx in range(24):
-        rows.append(_event(f"10{idx:04d}", record_id=idx + 1, age=800, jitter=900, spread=0.008))
-    rows.append(_event("123456", name="TEST", record_id=999, age=800, jitter=900, spread=0.008))
+        rows.append(
+            _event(f"10{idx:04d}", record_id=idx + 1, age=800, jitter=900, spread=0.008)
+        )
+    rows.append(
+        _event("123456", name="TEST", record_id=999, age=800, jitter=900, spread=0.008)
+    )
     (event_dir / "pipeline_events_2026-05-18.jsonl").write_text(
         "\n".join(json.dumps(row) for row in rows) + "\n",
         encoding="utf-8",
@@ -161,7 +177,9 @@ def test_latency_classifier_recommendation_holds_after_runtime_simplification(tm
     assert (report_dir / "latency_classifier_recommendation_2026-05-18.md").exists()
 
 
-def test_latency_classifier_recommendation_holds_when_sample_short(tmp_path, monkeypatch):
+def test_latency_classifier_recommendation_holds_when_sample_short(
+    tmp_path, monkeypatch
+):
     event_dir = tmp_path / "pipeline_events"
     monitor_dir = tmp_path / "monitor_snapshots"
     event_dir.mkdir()
@@ -169,19 +187,29 @@ def test_latency_classifier_recommendation_holds_when_sample_short(tmp_path, mon
     monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", event_dir)
     monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "report")
     monkeypatch.setattr(mod, "MONITOR_SNAPSHOT_DIR", monitor_dir)
-    rows = [_event("005950", record_id=idx + 1, age=800, jitter=900, spread=0.008) for idx in range(3)]
+    rows = [
+        _event("005950", record_id=idx + 1, age=800, jitter=900, spread=0.008)
+        for idx in range(3)
+    ]
     (event_dir / "pipeline_events_2026-05-18.jsonl").write_text(
         "\n".join(json.dumps(row) for row in rows) + "\n",
         encoding="utf-8",
     )
     (monitor_dir / "missed_entry_counterfactual_2026-05-18.json").write_text(
-        json.dumps({"rows": [_counterfactual_row("005950", idx + 1) for idx in range(3)]}),
+        json.dumps(
+            {"rows": [_counterfactual_row("005950", idx + 1) for idx in range(3)]}
+        ),
         encoding="utf-8",
     )
 
     payload = mod.build_report("2026-05-18")
 
     assert payload["latency_block_count"] == 3
-    assert payload["calibration_candidate"]["source_metrics"]["selected_profile"]["recommended_action"] == "reject"
+    assert (
+        payload["calibration_candidate"]["source_metrics"]["selected_profile"][
+            "recommended_action"
+        ]
+        == "reject"
+    )
     assert payload["calibration_candidate"]["calibration_state"] == "hold"
     assert payload["calibration_candidate"]["allowed_runtime_apply"] is False
