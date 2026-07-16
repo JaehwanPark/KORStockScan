@@ -20,7 +20,6 @@ from src.trading.market.quote_consistency import (
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
-
 REPORT_DIR = DATA_DIR / "report" / "quote_consistency_backtest"
 PIPELINE_EVENTS_DIR = DATA_DIR / "pipeline_events"
 THRESHOLD_EVENTS_DIR = DATA_DIR / "threshold_cycle"
@@ -126,7 +125,10 @@ def _first_float(row: dict[str, Any], *keys: str) -> float | None:
 
 
 def _has_any(row: dict[str, Any], keys: Iterable[str]) -> bool:
-    return any(str(row.get(key) or "").strip() not in {"", "0", "None", "none", "null", "-"} for key in keys)
+    return any(
+        str(row.get(key) or "").strip() not in {"", "0", "None", "none", "null", "-"}
+        for key in keys
+    )
 
 
 def _stage_bucket(row: dict[str, Any]) -> str:
@@ -220,7 +222,11 @@ def _extract_rest_row(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "best_bid": best_bid,
         "best_ask": best_ask,
-        "rest_mid_price": int(round((best_bid + best_ask) / 2.0)) if best_bid > 0 and best_ask > 0 else 0,
+        "rest_mid_price": (
+            int(round((best_bid + best_ask) / 2.0))
+            if best_bid > 0 and best_ask > 0
+            else 0
+        ),
         "age_ms": _first_float(
             row,
             "pre_submit_rest_orderbook_refresh_age_ms",
@@ -303,7 +309,11 @@ def build_quote_consistency_backtest(
                 summary["observed_quote_rows"] += 1
                 ws_input = quote_input_from_ws(_extract_ws_row(row), now_ts=0)
                 rest_raw = _extract_rest_row(row)
-                rest_input = quote_input_from_rest_orderbook(rest_raw, now_ts=0) if _has_any(rest_raw, ("best_bid", "best_ask", "rest_mid_price")) else None
+                rest_input = (
+                    quote_input_from_rest_orderbook(rest_raw, now_ts=0)
+                    if _has_any(rest_raw, ("best_bid", "best_ask", "rest_mid_price"))
+                    else None
+                )
                 if ws_input.has_price:
                     summary["ws_input_rows"] += 1
                 if rest_input and rest_input.has_price:
@@ -334,8 +344,16 @@ def build_quote_consistency_backtest(
                     "signal_price",
                 )
                 if original > 0 and snapshot.canonical_mark_price > 0:
-                    price_delta_bps.append(abs(snapshot.canonical_mark_price - original) / original * 10000.0)
-                if snapshot.entry_blocked and stage_bucket in {"entry_submit", "scanner", "scale_in"}:
+                    price_delta_bps.append(
+                        abs(snapshot.canonical_mark_price - original)
+                        / original
+                        * 10000.0
+                    )
+                if snapshot.entry_blocked and stage_bucket in {
+                    "entry_submit",
+                    "scanner",
+                    "scale_in",
+                }:
                     summary["would_block_entry_reprice_scale_in"] += 1
                 if snapshot.safety_exit_allowed:
                     summary["safety_exit_unblocked"] += 1
@@ -364,12 +382,16 @@ def build_quote_consistency_backtest(
                         )
                 profit_rate = _to_float(row.get("profit_rate"))
                 if profit_rate is not None:
-                    diagnostic_profit_rates_by_state[snapshot.quality_state].append(float(profit_rate))
+                    diagnostic_profit_rates_by_state[snapshot.quality_state].append(
+                        float(profit_rate)
+                    )
 
     diagnostic_profit = {
         state: {
             "sample_count": len(values),
-            "diagnostic_avg_profit_rate_pct": round(float(mean(values)), 4) if values else None,
+            "diagnostic_avg_profit_rate_pct": (
+                round(float(mean(values)), 4) if values else None
+            ),
         }
         for state, values in sorted(diagnostic_profit_rates_by_state.items())
     }
@@ -401,8 +423,12 @@ def build_quote_consistency_backtest(
             "gap_bps": _percentiles(gap_values),
             "canonical_vs_original_abs_delta_bps": _percentiles(price_delta_bps),
         },
-        "stage_state_counts": {stage: dict(counts) for stage, counts in sorted(stage_counts.items())},
-        "date_state_counts": {day: dict(counts) for day, counts in sorted(date_counts.items())},
+        "stage_state_counts": {
+            stage: dict(counts) for stage, counts in sorted(stage_counts.items())
+        },
+        "date_state_counts": {
+            day: dict(counts) for day, counts in sorted(date_counts.items())
+        },
         "diagnostic_profit_rate_by_state": diagnostic_profit,
         "defective_row_candidates": defective_rows,
         "verifier_findings": findings,
@@ -415,14 +441,18 @@ def build_quote_consistency_backtest(
     }
 
 
-def write_quote_consistency_backtest(report: dict[str, Any], *, output_dir: Path = REPORT_DIR) -> tuple[Path, Path]:
+def write_quote_consistency_backtest(
+    report: dict[str, Any], *, output_dir: Path = REPORT_DIR
+) -> tuple[Path, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     start_date = str(report.get("start_date"))
     end_date = str(report.get("end_date"))
     stem = f"quote_consistency_backtest_{start_date}_to_{end_date}"
     json_path = output_dir / f"{stem}.json"
     md_path = output_dir / f"{stem}.md"
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
     summary = report.get("summary") or {}
     lines = [
         f"# Quote Consistency Backtest {start_date} to {end_date}",
@@ -442,13 +472,17 @@ def write_quote_consistency_backtest(report: dict[str, Any], *, output_dir: Path
     lines.append("")
     lines.append("## Stage State Counts")
     for stage, counts in (report.get("stage_state_counts") or {}).items():
-        count_text = ", ".join(f"{key}={value}" for key, value in sorted(counts.items()))
+        count_text = ", ".join(
+            f"{key}={value}" for key, value in sorted(counts.items())
+        )
         lines.append(f"- `{stage}`: {count_text}")
     lines.append("")
     lines.append("## Verifier Findings")
     findings = report.get("verifier_findings") or []
     if findings:
-        lines.extend(f"- `{item.get('severity')}` `{item.get('code')}`" for item in findings)
+        lines.extend(
+            f"- `{item.get('severity')}` `{item.get('code')}`" for item in findings
+        )
     else:
         lines.append("- `ok` `none`")
     md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -461,10 +495,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--end-date", required=True)
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args(argv)
-    report = build_quote_consistency_backtest(start_date=args.start_date, end_date=args.end_date)
+    report = build_quote_consistency_backtest(
+        start_date=args.start_date, end_date=args.end_date
+    )
     if args.write:
         json_path, md_path = write_quote_consistency_backtest(report)
-        print(json.dumps({"json": str(json_path), "md": str(md_path)}, ensure_ascii=False))
+        print(
+            json.dumps({"json": str(json_path), "md": str(md_path)}, ensure_ascii=False)
+        )
     else:
         print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
