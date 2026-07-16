@@ -14,7 +14,6 @@ from src.trading.market.quote_consistency import RUNTIME_FAMILY
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
-
 REPORT_DIR = DATA_DIR / "report" / "quote_consistency"
 PIPELINE_EVENTS_DIR = DATA_DIR / "pipeline_events"
 THRESHOLD_EVENTS_DIR = DATA_DIR / "threshold_cycle"
@@ -38,8 +37,12 @@ def _to_bool(value: Any) -> bool:
 
 def _source_paths(target_date: str) -> dict[str, Path]:
     return {
-        "pipeline_events": existing_or_gzip_path(PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl"),
-        "threshold_events": existing_or_gzip_path(THRESHOLD_EVENTS_DIR / f"threshold_events_{target_date}.jsonl"),
+        "pipeline_events": existing_or_gzip_path(
+            PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl"
+        ),
+        "threshold_events": existing_or_gzip_path(
+            THRESHOLD_EVENTS_DIR / f"threshold_events_{target_date}.jsonl"
+        ),
     }
 
 
@@ -123,7 +126,11 @@ def build_quote_consistency_report(target_date: str | None = None) -> dict[str, 
     ev_input_blocked_count = 0
 
     for source_name, path in paths.items():
-        if source_name == "threshold_events" and not path.exists() and threshold_partition_paths:
+        if (
+            source_name == "threshold_events"
+            and not path.exists()
+            and threshold_partition_paths
+        ):
             row_iter = (
                 row
                 for partition_path in threshold_partition_paths
@@ -134,14 +141,18 @@ def build_quote_consistency_report(target_date: str | None = None) -> dict[str, 
         for raw in row_iter:
             row = _flatten_event(raw)
             state = str(row.get("quote_consistency_state") or "").strip()
-            has_family = str(row.get("quote_consistency_family") or "") == RUNTIME_FAMILY
+            has_family = (
+                str(row.get("quote_consistency_family") or "") == RUNTIME_FAMILY
+            )
             if not state and not has_family:
                 continue
             observed_count += 1
             stage = str(row.get("stage") or row.get("event_type") or "unknown")
             stage_counts[stage][state or "missing_state"] += 1
             source_counts[str(row.get("price_source") or "unknown")] += 1
-            action_counts[str(row.get("quote_consistency_runtime_action") or "unknown")] += 1
+            action_counts[
+                str(row.get("quote_consistency_runtime_action") or "unknown")
+            ] += 1
             gap = _to_float(row.get("ws_rest_gap_bps"))
             if gap is not None:
                 gap_values.append(float(gap))
@@ -167,7 +178,9 @@ def build_quote_consistency_report(target_date: str | None = None) -> dict[str, 
             if required_missing:
                 missing_required_fields += 1
             state_lower = state.lower()
-            ev_ineligible = state_lower in {"diverged", "missing", "stale"} or bool(required_missing)
+            ev_ineligible = state_lower in {"diverged", "missing", "stale"} or bool(
+                required_missing
+            )
             if ev_ineligible:
                 ev_input_blocked_count += 1
                 if required_missing:
@@ -180,7 +193,9 @@ def build_quote_consistency_report(target_date: str | None = None) -> dict[str, 
                             "stock_code": row.get("stock_code"),
                             "stock_name": row.get("stock_name"),
                             "quote_consistency_state": state,
-                            "quote_consistency_reason": row.get("quote_consistency_reason"),
+                            "quote_consistency_reason": row.get(
+                                "quote_consistency_reason"
+                            ),
                             "missing_fields": required_missing,
                             "ws_rest_gap_bps": gap,
                             "emitted_at": row.get("emitted_at"),
@@ -190,7 +205,8 @@ def build_quote_consistency_report(target_date: str | None = None) -> dict[str, 
     source_missing = [
         name
         for name, path in paths.items()
-        if not path.exists() and not (name == "threshold_events" and threshold_partition_paths)
+        if not path.exists()
+        and not (name == "threshold_events" and threshold_partition_paths)
     ]
     verifier_findings = []
     if source_missing:
@@ -209,14 +225,18 @@ def build_quote_consistency_report(target_date: str | None = None) -> dict[str, 
                 "message": "No quote_consistency_normalization rows were found for the target date.",
             }
         )
-    if missing_required_fields and missing_required_fields_ev_blocked_count < missing_required_fields:
+    if (
+        missing_required_fields
+        and missing_required_fields_ev_blocked_count < missing_required_fields
+    ):
         verifier_findings.append(
             {
                 "severity": "fail",
                 "code": "quote_consistency_required_fields_missing",
                 "count": missing_required_fields,
                 "ev_blocked_count": missing_required_fields_ev_blocked_count,
-                "unblocked_count": missing_required_fields - missing_required_fields_ev_blocked_count,
+                "unblocked_count": missing_required_fields
+                - missing_required_fields_ev_blocked_count,
             }
         )
     elif missing_required_fields:
@@ -229,7 +249,10 @@ def build_quote_consistency_report(target_date: str | None = None) -> dict[str, 
                 "message": "Rows with missing quote consistency required fields were excluded from EV input.",
             }
         )
-    if any(counts.get("diverged", 0) for counts in stage_counts.values()) and safety_exit_count <= 0:
+    if (
+        any(counts.get("diverged", 0) for counts in stage_counts.values())
+        and safety_exit_count <= 0
+    ):
         verifier_findings.append(
             {
                 "severity": "warning",
@@ -242,8 +265,13 @@ def build_quote_consistency_report(target_date: str | None = None) -> dict[str, 
         "runtime_family": RUNTIME_FAMILY,
         "target_date": target_date,
         "sources": {
-            **{name: str(path) if path.exists() else None for name, path in paths.items()},
-            "threshold_events_partitioned": [str(path) for path in threshold_partition_paths],
+            **{
+                name: str(path) if path.exists() else None
+                for name, path in paths.items()
+            },
+            "threshold_events_partitioned": [
+                str(path) for path in threshold_partition_paths
+            ],
         },
         "summary": {
             "observed_count": observed_count,
@@ -254,7 +282,9 @@ def build_quote_consistency_report(target_date: str | None = None) -> dict[str, 
             "ev_input_blocked_count": ev_input_blocked_count,
             "gap_bps": _percentiles(gap_values),
         },
-        "stage_state_counts": {stage: dict(counts) for stage, counts in sorted(stage_counts.items())},
+        "stage_state_counts": {
+            stage: dict(counts) for stage, counts in sorted(stage_counts.items())
+        },
         "source_counts": dict(source_counts),
         "runtime_action_counts": dict(action_counts),
         "defective_row_candidates": defective_rows,
@@ -262,12 +292,16 @@ def build_quote_consistency_report(target_date: str | None = None) -> dict[str, 
     }
 
 
-def write_quote_consistency_report(report: dict[str, Any], *, output_dir: Path = REPORT_DIR) -> tuple[Path, Path]:
+def write_quote_consistency_report(
+    report: dict[str, Any], *, output_dir: Path = REPORT_DIR
+) -> tuple[Path, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     target_date = str(report.get("target_date"))
     json_path = output_dir / f"quote_consistency_{target_date}.json"
     md_path = output_dir / f"quote_consistency_{target_date}.md"
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
     summary = report.get("summary") or {}
     lines = [
         f"# Quote Consistency Report {target_date}",
@@ -283,13 +317,17 @@ def write_quote_consistency_report(report: dict[str, Any], *, output_dir: Path =
     ]
     findings = report.get("verifier_findings") or []
     if findings:
-        lines.extend(f"- `{item.get('severity')}` `{item.get('code')}`" for item in findings)
+        lines.extend(
+            f"- `{item.get('severity')}` `{item.get('code')}`" for item in findings
+        )
     else:
         lines.append("- `ok` `none`")
     lines.append("")
     lines.append("## Stage State Counts")
     for stage, counts in (report.get("stage_state_counts") or {}).items():
-        count_text = ", ".join(f"{key}={value}" for key, value in sorted(counts.items()))
+        count_text = ", ".join(
+            f"{key}={value}" for key, value in sorted(counts.items())
+        )
         lines.append(f"- `{stage}`: {count_text}")
     md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return json_path, md_path
@@ -303,7 +341,9 @@ def main(argv: list[str] | None = None) -> int:
     report = build_quote_consistency_report(args.target_date)
     if args.write:
         json_path, md_path = write_quote_consistency_report(report)
-        print(json.dumps({"json": str(json_path), "md": str(md_path)}, ensure_ascii=False))
+        print(
+            json.dumps({"json": str(json_path), "md": str(md_path)}, ensure_ascii=False)
+        )
     else:
         print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
