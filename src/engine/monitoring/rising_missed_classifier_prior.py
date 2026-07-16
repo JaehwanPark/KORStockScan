@@ -10,7 +10,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 REPORT_DIR = PROJECT_ROOT / "data" / "report"
 OUTPUT_DIR = REPORT_DIR / "rising_missed_classifier_prior"
@@ -95,9 +94,16 @@ def _norm(value: Any) -> str:
 
 
 def _default_source_paths(target_date: str) -> dict[str, Path]:
-    counterfactual_path = MISSED_ENTRY_COUNTERFACTUAL_DIR / f"missed_entry_counterfactual_{target_date}.json"
+    counterfactual_path = (
+        MISSED_ENTRY_COUNTERFACTUAL_DIR
+        / f"missed_entry_counterfactual_{target_date}.json"
+    )
     if not counterfactual_path.exists():
-        gzip_path = REPORT_DIR / "monitor_snapshots" / f"missed_entry_counterfactual_{target_date}.json.gz"
+        gzip_path = (
+            REPORT_DIR
+            / "monitor_snapshots"
+            / f"missed_entry_counterfactual_{target_date}.json.gz"
+        )
         if gzip_path.exists():
             counterfactual_path = gzip_path
     return {
@@ -111,7 +117,8 @@ def _default_source_paths(target_date: str) -> dict[str, Path]:
         / f"lifecycle_bucket_discovery_{target_date}_mtd.json",
         "lifecycle_decision_matrix": LIFECYCLE_DECISION_MATRIX_DIR
         / f"lifecycle_decision_matrix_{target_date}.json",
-        "key_lineage_ledger": KEY_LINEAGE_LEDGER_DIR / f"key_lineage_ledger_{target_date}.json",
+        "key_lineage_ledger": KEY_LINEAGE_LEDGER_DIR
+        / f"key_lineage_ledger_{target_date}.json",
         "conversion_lane": CONVERSION_LANE_DIR / f"conversion_lane_{target_date}.json",
         "rising_missed_scout_workorder": RISING_MISSED_SCOUT_WORKORDER_DIR
         / f"rising_missed_scout_workorder_{target_date}.json",
@@ -162,8 +169,12 @@ def _candidate_prefix(item: dict[str, Any]) -> dict[str, str]:
                 prefix[key] = _norm(source.get(key))
 
     bucket_id = str(item.get("bucket_id") or item.get("parent_bucket_id") or "").lower()
-    source_stage = str(item.get("source_stage") or item.get("bucket_type") or "").lower()
-    action = str(item.get("chosen_action") or item.get("action") or item.get("decision") or "").lower()
+    source_stage = str(
+        item.get("source_stage") or item.get("bucket_type") or ""
+    ).lower()
+    action = str(
+        item.get("chosen_action") or item.get("action") or item.get("decision") or ""
+    ).lower()
     if "wait6579" in bucket_id or "wait6579" in source_stage:
         prefix["entry_source_parent"] = "entry_source_wait6579"
     if "liquidity_high" in bucket_id:
@@ -208,19 +219,31 @@ def _bucket_metric(item: dict[str, Any]) -> dict[str, Any]:
         or item.get("joined_sample")
         or item.get("parent_joined_sample")
     )
-    joined_sample = _safe_int(item.get("joined_sample") or item.get("parent_joined_sample") or sample)
+    joined_sample = _safe_int(
+        item.get("joined_sample") or item.get("parent_joined_sample") or sample
+    )
     return {
         "sample": sample,
         "joined_sample": joined_sample,
         "ev_pct": ev_pct,
-        "ev_metric": "source_quality_adjusted_ev_pct"
-        if _safe_float(item.get("source_quality_adjusted_ev_pct"), None) is not None
-        else "equal_weight_avg_profit_pct_fallback",
-        "complete_flow_count": _safe_int(item.get("complete_flow_count") or item.get("parent_complete_flow_count")),
+        "ev_metric": (
+            "source_quality_adjusted_ev_pct"
+            if _safe_float(item.get("source_quality_adjusted_ev_pct"), None) is not None
+            else "equal_weight_avg_profit_pct_fallback"
+        ),
+        "complete_flow_count": _safe_int(
+            item.get("complete_flow_count") or item.get("parent_complete_flow_count")
+        ),
         "bucket_id": _norm(item.get("bucket_id") or item.get("parent_bucket_id")),
-        "source_quality_gate": _norm(item.get("source_quality_gate") or item.get("source_quality_status")),
-        "child_conflict_warning": bool(item.get("child_conflict_warning") or item.get("child_conflict")),
-        "exclusion_dimension_candidate": bool(item.get("exclusion_dimension_candidate")),
+        "source_quality_gate": _norm(
+            item.get("source_quality_gate") or item.get("source_quality_status")
+        ),
+        "child_conflict_warning": bool(
+            item.get("child_conflict_warning") or item.get("child_conflict")
+        ),
+        "exclusion_dimension_candidate": bool(
+            item.get("exclusion_dimension_candidate")
+        ),
         "source_dimension_gap": bool(item.get("source_dimension_gap")),
     }
 
@@ -235,8 +258,12 @@ def _iter_bucket_candidates(report: dict[str, Any]) -> list[dict[str, Any]]:
         "bucket_summaries",
         "source_only_blockers",
     ):
-        candidates.extend(item for item in _as_list(report.get(field)) if isinstance(item, dict))
-        candidates.extend(item for item in _as_list(summary.get(field)) if isinstance(item, dict))
+        candidates.extend(
+            item for item in _as_list(report.get(field)) if isinstance(item, dict)
+        )
+        candidates.extend(
+            item for item in _as_list(summary.get(field)) if isinstance(item, dict)
+        )
     return candidates
 
 
@@ -272,25 +299,41 @@ def _new_prior(prefix: dict[str, str]) -> dict[str, Any]:
     }
 
 
-def _merge_window_metric(prior: dict[str, Any], window: str, metric: dict[str, Any]) -> None:
+def _merge_window_metric(
+    prior: dict[str, Any], window: str, metric: dict[str, Any]
+) -> None:
     current = prior["window_metrics"].get(window)
     if current:
-        current_rank = (_safe_int(current.get("joined_sample")), _safe_float(current.get("ev_pct"), -9999.0) or -9999.0)
-        next_rank = (_safe_int(metric.get("joined_sample")), _safe_float(metric.get("ev_pct"), -9999.0) or -9999.0)
+        current_rank = (
+            _safe_int(current.get("joined_sample")),
+            _safe_float(current.get("ev_pct"), -9999.0) or -9999.0,
+        )
+        next_rank = (
+            _safe_int(metric.get("joined_sample")),
+            _safe_float(metric.get("ev_pct"), -9999.0) or -9999.0,
+        )
         if current_rank >= next_rank:
             return
     prior["window_metrics"][window] = metric
     conflicts = prior["conflict_status"]
-    conflicts["child_conflict"] = conflicts["child_conflict"] or bool(metric.get("child_conflict_warning"))
-    conflicts["exclusion_dimension_candidate"] = conflicts["exclusion_dimension_candidate"] or bool(
-        metric.get("exclusion_dimension_candidate")
+    conflicts["child_conflict"] = conflicts["child_conflict"] or bool(
+        metric.get("child_conflict_warning")
     )
-    conflicts["source_dimension_gap"] = conflicts["source_dimension_gap"] or bool(metric.get("source_dimension_gap"))
+    conflicts["exclusion_dimension_candidate"] = conflicts[
+        "exclusion_dimension_candidate"
+    ] or bool(metric.get("exclusion_dimension_candidate"))
+    conflicts["source_dimension_gap"] = conflicts["source_dimension_gap"] or bool(
+        metric.get("source_dimension_gap")
+    )
     gate = str(metric.get("source_quality_gate") or "").lower()
-    conflicts["source_quality_blocked"] = conflicts["source_quality_blocked"] or "block" in gate or "fail" in gate
+    conflicts["source_quality_blocked"] = (
+        conflicts["source_quality_blocked"] or "block" in gate or "fail" in gate
+    )
 
 
-def _merge_lifecycle_windows(priors: dict[str, dict[str, Any]], source_payloads: dict[str, dict[str, Any]]) -> None:
+def _merge_lifecycle_windows(
+    priors: dict[str, dict[str, Any]], source_payloads: dict[str, dict[str, Any]]
+) -> None:
     label_to_window = {
         "lifecycle_bucket_discovery_daily": "daily",
         "lifecycle_bucket_discovery_rolling5d": "rolling5d",
@@ -320,7 +363,9 @@ def _add_profit(metrics: dict[str, Any], profit: float | None) -> None:
         metrics["avg_profit_rate"] = round(sum(profits) / len(profits), 4)
 
 
-def _merge_scout_metrics(priors: dict[str, dict[str, Any]], report: dict[str, Any]) -> None:
+def _merge_scout_metrics(
+    priors: dict[str, dict[str, Any]], report: dict[str, Any]
+) -> None:
     for field, outcome in (
         ("profitable_forced_scout_examples", "winner"),
         ("loss_or_flat_forced_scout_examples", "loser"),
@@ -329,37 +374,58 @@ def _merge_scout_metrics(priors: dict[str, dict[str, Any]], report: dict[str, An
         for item in _as_list(report.get(field)):
             if not isinstance(item, dict):
                 continue
-            signature = item.get("source_signature") or item.get("scanner_promotion_reason") or "unknown_source_signature"
+            signature = (
+                item.get("source_signature")
+                or item.get("scanner_promotion_reason")
+                or "unknown_source_signature"
+            )
             prefix = _source_signature_prefix(signature)
             prior = priors.setdefault(_prefix_key(prefix), _new_prior(prefix))
             metrics = prior["rising_missed_metrics"]
             metrics["forced_scout_count"] += 1
-            profit = _safe_float(item.get("profit_rate") or item.get("profit_pct"), None)
-            if outcome == "winner" or (outcome == "outcome" and profit is not None and profit > 0):
+            profit = _safe_float(
+                item.get("profit_rate") or item.get("profit_pct"), None
+            )
+            if outcome == "winner" or (
+                outcome == "outcome" and profit is not None and profit > 0
+            ):
                 metrics["winner_count"] += 1
-            elif outcome == "loser" or (outcome == "outcome" and profit is not None and profit <= 0):
+            elif outcome == "loser" or (
+                outcome == "outcome" and profit is not None and profit <= 0
+            ):
                 metrics["loser_count"] += 1
             _add_profit(metrics, profit)
 
 
-def _merge_intraday_feedback(priors: dict[str, dict[str, Any]], report: dict[str, Any]) -> None:
+def _merge_intraday_feedback(
+    priors: dict[str, dict[str, Any]], report: dict[str, Any]
+) -> None:
     records = _as_list(report.get("records"))
     for item in records:
         if not isinstance(item, dict):
             continue
-        signature = item.get("source_signature") or item.get("scanner_promotion_reason") or "unknown_source_signature"
+        signature = (
+            item.get("source_signature")
+            or item.get("scanner_promotion_reason")
+            or "unknown_source_signature"
+        )
         prefix = _source_signature_prefix(signature)
         prior = priors.setdefault(_prefix_key(prefix), _new_prior(prefix))
         metrics = prior["rising_missed_metrics"]
         label = str(item.get("feedback_label") or "").lower()
         if "initial_quality_fail" in label or bool(item.get("initial_quality_fail")):
             metrics["initial_quality_fail_count"] += 1
-        if bool(item.get("avg_down_ge2_seen")) or _safe_int(item.get("avg_down_ge2_count")) > 0:
+        if (
+            bool(item.get("avg_down_ge2_seen"))
+            or _safe_int(item.get("avg_down_ge2_count")) > 0
+        ):
             metrics["avg_down_ge2_count"] += 1
     summary = _as_dict(report.get("summary"))
     if records or not summary:
         return
-    if _safe_int(summary.get("initial_quality_fail_count")) or _safe_int(summary.get("rising_missed_avg_down_ge2_count")):
+    if _safe_int(summary.get("initial_quality_fail_count")) or _safe_int(
+        summary.get("rising_missed_avg_down_ge2_count")
+    ):
         prefix = _source_signature_prefix("summary_only_feedback")
         prior = priors.setdefault(_prefix_key(prefix), _new_prior(prefix))
         prior["rising_missed_metrics"]["initial_quality_fail_count"] += _safe_int(
@@ -377,7 +443,9 @@ def _counterfactual_rows(report: dict[str, Any]) -> list[dict[str, Any]]:
         rows.extend(item for item in primary_rows if isinstance(item, dict))
     else:
         for field in ("top_missed_winners", "top_avoided_losers"):
-            rows.extend(item for item in _as_list(report.get(field)) if isinstance(item, dict))
+            rows.extend(
+                item for item in _as_list(report.get(field)) if isinstance(item, dict)
+            )
     metrics = _as_dict(report.get("metrics"))
     refinement = _as_dict(metrics.get("rising_missed_refinement"))
     for field in ("by_source_signature", "by_scanner_promotion_reason"):
@@ -387,7 +455,9 @@ def _counterfactual_rows(report: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
-def _merge_counterfactual_metrics(priors: dict[str, dict[str, Any]], report: dict[str, Any]) -> dict[str, Any]:
+def _merge_counterfactual_metrics(
+    priors: dict[str, dict[str, Any]], report: dict[str, Any]
+) -> dict[str, Any]:
     rows = _counterfactual_rows(report)
     summary_counts = Counter()
     keyed_rows = 0
@@ -404,7 +474,11 @@ def _merge_counterfactual_metrics(priors: dict[str, dict[str, Any]], report: dic
         summary_counts["missed_winner"] += missed_count
         summary_counts["avoided_loser"] += avoided_count
         summary_counts["neutral"] += neutral_count
-        signature = item.get("source_signature") or item.get("key") or item.get("scanner_promotion_reason")
+        signature = (
+            item.get("source_signature")
+            or item.get("key")
+            or item.get("scanner_promotion_reason")
+        )
         if not signature:
             continue
         prefix = _source_signature_prefix(signature)
@@ -429,17 +503,26 @@ def _lineage_status(source_payloads: dict[str, dict[str, Any]]) -> dict[str, Any
     lineage_summary = _as_dict(key_lineage.get("summary"))
     conversion_summary = _as_dict(conversion.get("summary"))
     blockers = _as_list(conversion.get("conversion_blocker_rank"))
-    blocker_counts = Counter(str(item.get("blocker_class") or "unknown") for item in blockers if isinstance(item, dict))
+    blocker_counts = Counter(
+        str(item.get("blocker_class") or "unknown")
+        for item in blockers
+        if isinstance(item, dict)
+    )
     lineage_blockers = {
         "preopen_missing": _safe_int(lineage_summary.get("preopen_missing_count")),
         "catalog_missing": _safe_int(lineage_summary.get("catalog_missing_count")),
         "natural_match_0": _safe_int(lineage_summary.get("natural_match_0_count")),
-        "followup_missing_parent_seed_id": _safe_int(lineage_summary.get("followup_missing_parent_seed_id_count")),
+        "followup_missing_parent_seed_id": _safe_int(
+            lineage_summary.get("followup_missing_parent_seed_id_count")
+        ),
     }
     return {
         "catalog_connected": lineage_blockers["catalog_missing"] == 0,
         "preopen_connected": lineage_blockers["preopen_missing"] == 0,
-        "runtime_connected": _safe_int(conversion_summary.get("runtime_candidate_count")) > 0,
+        "runtime_connected": _safe_int(
+            conversion_summary.get("runtime_candidate_count")
+        )
+        > 0,
         "postclose_connected": bool(key_lineage or conversion),
         "lineage_blockers": lineage_blockers,
         "conversion_blocker_counts": dict(sorted(blocker_counts.items())),
@@ -449,7 +532,10 @@ def _lineage_status(source_payloads: dict[str, dict[str, Any]]) -> dict[str, Any
 def _select_window(prior: dict[str, Any]) -> tuple[str | None, dict[str, Any] | None]:
     for window in WINDOW_PRIORITY:
         metric = prior["window_metrics"].get(window)
-        if isinstance(metric, dict) and _safe_int(metric.get("joined_sample") or metric.get("sample")) > 0:
+        if (
+            isinstance(metric, dict)
+            and _safe_int(metric.get("joined_sample") or metric.get("sample")) > 0
+        ):
             return window, metric
     return None, None
 
@@ -459,11 +545,22 @@ def _classify_prior(prior: dict[str, Any]) -> None:
     conflicts = prior["conflict_status"]
     metrics = prior["rising_missed_metrics"]
     ev_pct = _safe_float((metric or {}).get("ev_pct"), None)
-    rolling_positive = selected_window in {"rolling10d", "rolling5d"} and ev_pct is not None and ev_pct > 0
-    daily_only_positive = selected_window == "daily" and ev_pct is not None and ev_pct > 0
-    lineage_blocked = any(_safe_int(value) > 0 for value in prior["lineage_status"].get("lineage_blockers", {}).values())
+    rolling_positive = (
+        selected_window in {"rolling10d", "rolling5d"}
+        and ev_pct is not None
+        and ev_pct > 0
+    )
+    daily_only_positive = (
+        selected_window == "daily" and ev_pct is not None and ev_pct > 0
+    )
+    lineage_blocked = any(
+        _safe_int(value) > 0
+        for value in prior["lineage_status"].get("lineage_blockers", {}).values()
+    )
     counterfactual_missed = _safe_int(metrics.get("counterfactual_missed_winner_count"))
-    counterfactual_avoided = _safe_int(metrics.get("counterfactual_avoided_loser_count"))
+    counterfactual_avoided = _safe_int(
+        metrics.get("counterfactual_avoided_loser_count")
+    )
 
     if any(conflicts.values()):
         recommendation = "source_quality_blocked"
@@ -473,7 +570,10 @@ def _classify_prior(prior: dict[str, Any]) -> None:
         recommendation = "loss_filter"
         reason = "counterfactual_avoided_loser_exceeds_missed_winner"
         confidence = "medium"
-    elif _safe_int(metrics.get("loser_count")) > 0 and _safe_int(metrics.get("winner_count")) == 0:
+    elif (
+        _safe_int(metrics.get("loser_count")) > 0
+        and _safe_int(metrics.get("winner_count")) == 0
+    ):
         recommendation = "loss_filter"
         reason = "rising_missed_forced_scout_loser_without_winner"
         confidence = "medium"
@@ -485,7 +585,10 @@ def _classify_prior(prior: dict[str, Any]) -> None:
         recommendation = "hold_sample"
         reason = "daily_positive_without_rolling_confirmation"
         confidence = "low"
-    elif rolling_positive and prior["observable_prefix"].get("chosen_action") == "wait_requote":
+    elif (
+        rolling_positive
+        and prior["observable_prefix"].get("chosen_action") == "wait_requote"
+    ):
         recommendation = "recheck_prior"
         reason = f"{selected_window}_positive_wait_requote_prior"
         confidence = "medium" if lineage_blocked else "high"
@@ -562,7 +665,9 @@ def build_report(
     priors: dict[str, dict[str, Any]] = {}
     _merge_lifecycle_windows(priors, payloads)
     _merge_scout_metrics(priors, payloads.get("rising_missed_scout_workorder", {}))
-    _merge_intraday_feedback(priors, payloads.get("rising_missed_intraday_feedback", {}))
+    _merge_intraday_feedback(
+        priors, payloads.get("rising_missed_intraday_feedback", {})
+    )
     counterfactual_metrics = _merge_counterfactual_metrics(
         priors,
         payloads.get("missed_entry_counterfactual", {}),
@@ -572,10 +677,17 @@ def build_report(
         prior["lineage_status"] = dict(lineage)
         _classify_prior(prior)
 
-    prior_rows = sorted((_strip_private_metrics(prior) for prior in priors.values()), key=lambda row: row["prior_key"])
+    prior_rows = sorted(
+        (_strip_private_metrics(prior) for prior in priors.values()),
+        key=lambda row: row["prior_key"],
+    )
     recommendation_counts = Counter(row["recommendation"] for row in prior_rows)
     counterfactual_path = paths.get("missed_entry_counterfactual")
-    counterfactual_status = "available" if counterfactual_path and counterfactual_path.exists() else "counterfactual_source_unavailable"
+    counterfactual_status = (
+        "available"
+        if counterfactual_path and counterfactual_path.exists()
+        else "counterfactual_source_unavailable"
+    )
     source_quality = {
         "clean_tuning_baseline_ts_kst": CLEAN_BASELINE_TS_KST,
         "tuning_input_allowed": True,
@@ -583,7 +695,9 @@ def build_report(
         "allowed_runtime_apply": False,
         "counterfactual_status": counterfactual_status,
         "missing_required_sources": [
-            label for label, path in paths.items() if label != "missed_entry_counterfactual" and not path.exists()
+            label
+            for label, path in paths.items()
+            if label != "missed_entry_counterfactual" and not path.exists()
         ],
     }
     summary = {
@@ -594,11 +708,15 @@ def build_report(
         "quality_risk_count": recommendation_counts.get("quality_risk", 0),
         "loss_filter_count": recommendation_counts.get("loss_filter", 0),
         "hold_sample_count": recommendation_counts.get("hold_sample", 0),
-        "source_quality_blocked_count": recommendation_counts.get("source_quality_blocked", 0),
+        "source_quality_blocked_count": recommendation_counts.get(
+            "source_quality_blocked", 0
+        ),
         "window_priority": list(WINDOW_PRIORITY),
         "counterfactual_status": counterfactual_status,
         "lifecycle_source_count": sum(
-            1 for label in paths if label.startswith("lifecycle_bucket_discovery") and paths[label].exists()
+            1
+            for label in paths
+            if label.startswith("lifecycle_bucket_discovery") and paths[label].exists()
         ),
         "rising_missed_feedback_record_count": sum(
             _safe_int(row["rising_missed_metrics"].get("initial_quality_fail_count"))
@@ -606,7 +724,9 @@ def build_report(
             for row in prior_rows
         ),
         **counterfactual_metrics,
-        "lineage_blocker_count": sum(_safe_int(value) for value in lineage.get("lineage_blockers", {}).values()),
+        "lineage_blocker_count": sum(
+            _safe_int(value) for value in lineage.get("lineage_blockers", {}).values()
+        ),
         "runtime_effect": False,
         "allowed_runtime_apply": False,
     }
@@ -631,7 +751,9 @@ def build_report(
                 "forbidden_uses": list(FORBIDDEN_USES),
             }
         },
-        "source_paths": {label: _source_ref(path) for label, path in sorted(paths.items())},
+        "source_paths": {
+            label: _source_ref(path) for label, path in sorted(paths.items())
+        },
         "source_quality": source_quality,
         "summary": summary,
         "priors": prior_rows,
@@ -643,10 +765,15 @@ def build_report(
     }
 
 
-def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path) -> None:
+def write_outputs(
+    report: dict[str, Any], *, output_json: Path, output_md: Path
+) -> None:
     output_json.parent.mkdir(parents=True, exist_ok=True)
     output_md.parent.mkdir(parents=True, exist_ok=True)
-    output_json.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    output_json.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     lines = [
         f"# Rising Missed Classifier Prior - {report.get('target_date')}",
         "",
@@ -673,7 +800,9 @@ def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path)
         lines.append("- no prior rows")
     lines.extend(["", "## Code Improvement Orders", ""])
     for order in _as_list(report.get("code_improvement_orders")):
-        lines.append(f"- {order.get('order_id')} | runtime_effect: false | allowed_runtime_apply: false")
+        lines.append(
+            f"- {order.get('order_id')} | runtime_effect: false | allowed_runtime_apply: false"
+        )
     if not _as_list(report.get("code_improvement_orders")):
         lines.append("- none")
     output_md.write_text("\n".join(lines) + "\n", encoding="utf-8")

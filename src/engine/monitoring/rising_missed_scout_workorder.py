@@ -9,7 +9,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 KST = timezone(timedelta(hours=9))
 FORCED_REASON = "rising_missed_one_share_entry"
@@ -91,14 +90,24 @@ def _load_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def _default_pipeline_path(target_date: str) -> Path:
-    plain = PROJECT_ROOT / "data" / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
+    plain = (
+        PROJECT_ROOT
+        / "data"
+        / "pipeline_events"
+        / f"pipeline_events_{target_date}.jsonl"
+    )
     if plain.exists():
         return plain
     return plain.with_suffix(plain.suffix + ".gz")
 
 
 def _default_post_sell_path(target_date: str) -> Path:
-    plain = PROJECT_ROOT / "data" / "post_sell" / f"post_sell_candidates_{target_date}.jsonl"
+    plain = (
+        PROJECT_ROOT
+        / "data"
+        / "post_sell"
+        / f"post_sell_candidates_{target_date}.jsonl"
+    )
     if plain.exists():
         return plain
     return plain.with_suffix(plain.suffix + ".gz")
@@ -178,22 +187,40 @@ def _event_features(row: dict[str, Any]) -> dict[str, Any]:
         "scanner_promotion_id": fields.get("scanner_promotion_id"),
         "scanner_promotion_reason": fields.get("scanner_promotion_reason"),
         "source_signature": fields.get("source_signature"),
-        "rising_missed_selection_prior_key": fields.get("rising_missed_selection_prior_key"),
-        "rising_missed_selection_recommendation": fields.get("rising_missed_selection_recommendation"),
-        "rising_missed_selection_confidence": fields.get("rising_missed_selection_confidence"),
+        "rising_missed_selection_prior_key": fields.get(
+            "rising_missed_selection_prior_key"
+        ),
+        "rising_missed_selection_recommendation": fields.get(
+            "rising_missed_selection_recommendation"
+        ),
+        "rising_missed_selection_confidence": fields.get(
+            "rising_missed_selection_confidence"
+        ),
         "rising_missed_selection_score_delta": _safe_float(
             fields.get("rising_missed_selection_score_delta")
         ),
-        "rising_missed_selection_rank_reason": fields.get("rising_missed_selection_rank_reason"),
-        "price_delta_since_first_seen_pct": _safe_float(fields.get("price_delta_since_first_seen_pct")),
+        "rising_missed_selection_rank_reason": fields.get(
+            "rising_missed_selection_rank_reason"
+        ),
+        "price_delta_since_first_seen_pct": _safe_float(
+            fields.get("price_delta_since_first_seen_pct")
+        ),
         "entry_price": entry_price,
         "forced_entry_qty": forced_qty,
         "forced_entry_notional_krw": forced_notional,
-        "forced_entry_budget_cap_krw": _safe_float(fields.get("rising_missed_scout_budget_cap_krw")),
-        "forced_entry_budget_qty": _safe_int(fields.get("rising_missed_scout_budget_qty")),
+        "forced_entry_budget_cap_krw": _safe_float(
+            fields.get("rising_missed_scout_budget_cap_krw")
+        ),
+        "forced_entry_budget_qty": _safe_int(
+            fields.get("rising_missed_scout_budget_qty")
+        ),
         "forced_entry_sizing_mode": fields.get("rising_missed_scout_sizing_mode"),
-        "forced_entry_min_one_share_applied": _boolish(fields.get("rising_missed_scout_min_one_share_applied")),
-        "forced_entry_min_one_share_over_cap": _boolish(fields.get("rising_missed_scout_min_one_share_over_cap")),
+        "forced_entry_min_one_share_applied": _boolish(
+            fields.get("rising_missed_scout_min_one_share_applied")
+        ),
+        "forced_entry_min_one_share_over_cap": _boolish(
+            fields.get("rising_missed_scout_min_one_share_over_cap")
+        ),
     }
 
 
@@ -297,12 +324,24 @@ def _joined_scout_outcomes(
                 "exit_rule": sell.get("exit_rule"),
                 "scanner_promotion_reason": entry.get("scanner_promotion_reason"),
                 "source_signature": entry.get("source_signature"),
-                "rising_missed_selection_prior_key": entry.get("rising_missed_selection_prior_key"),
-                "rising_missed_selection_recommendation": entry.get("rising_missed_selection_recommendation"),
-                "rising_missed_selection_confidence": entry.get("rising_missed_selection_confidence"),
-                "rising_missed_selection_score_delta": entry.get("rising_missed_selection_score_delta"),
-                "rising_missed_selection_rank_reason": entry.get("rising_missed_selection_rank_reason"),
-                "price_delta_since_first_seen_pct": entry.get("price_delta_since_first_seen_pct"),
+                "rising_missed_selection_prior_key": entry.get(
+                    "rising_missed_selection_prior_key"
+                ),
+                "rising_missed_selection_recommendation": entry.get(
+                    "rising_missed_selection_recommendation"
+                ),
+                "rising_missed_selection_confidence": entry.get(
+                    "rising_missed_selection_confidence"
+                ),
+                "rising_missed_selection_score_delta": entry.get(
+                    "rising_missed_selection_score_delta"
+                ),
+                "rising_missed_selection_rank_reason": entry.get(
+                    "rising_missed_selection_rank_reason"
+                ),
+                "price_delta_since_first_seen_pct": entry.get(
+                    "price_delta_since_first_seen_pct"
+                ),
                 "forced_initial_entry": {
                     "qty": quantity_summary.get("forced_initial_entry_qty"),
                     "price": quantity_summary.get("forced_initial_entry_price"),
@@ -310,14 +349,20 @@ def _joined_scout_outcomes(
                     "budget_cap_krw": entry.get("forced_entry_budget_cap_krw"),
                     "budget_qty": entry.get("forced_entry_budget_qty"),
                     "sizing_mode": entry.get("forced_entry_sizing_mode"),
-                    "min_one_share_applied": entry.get("forced_entry_min_one_share_applied"),
-                    "min_one_share_over_cap": entry.get("forced_entry_min_one_share_over_cap"),
+                    "min_one_share_applied": entry.get(
+                        "forced_entry_min_one_share_applied"
+                    ),
+                    "min_one_share_over_cap": entry.get(
+                        "forced_entry_min_one_share_over_cap"
+                    ),
                 },
                 "post_sell_position": {
                     "buy_qty": quantity_summary.get("post_sell_buy_qty"),
                     "buy_price": quantity_summary.get("post_sell_buy_price"),
                     "sell_price": quantity_summary.get("post_sell_sell_price"),
-                    "buy_notional_krw": quantity_summary.get("post_sell_buy_notional_krw"),
+                    "buy_notional_krw": quantity_summary.get(
+                        "post_sell_buy_notional_krw"
+                    ),
                     "scale_in_qty_delta_after_initial_entry": quantity_summary.get(
                         "scale_in_qty_delta_after_initial_entry"
                     ),
@@ -329,11 +374,15 @@ def _joined_scout_outcomes(
                     "total_position_estimated_gross_pnl_krw": quantity_summary.get(
                         "total_position_estimated_gross_pnl_krw"
                     ),
-                    "initial_entry_fee_tax_krw": quantity_summary.get("initial_entry_fee_tax_krw"),
+                    "initial_entry_fee_tax_krw": quantity_summary.get(
+                        "initial_entry_fee_tax_krw"
+                    ),
                     "initial_entry_estimated_net_pnl_krw": quantity_summary.get(
                         "initial_entry_estimated_net_pnl_krw"
                     ),
-                    "net_pnl_unavailable_reason": quantity_summary.get("net_pnl_unavailable_reason"),
+                    "net_pnl_unavailable_reason": quantity_summary.get(
+                        "net_pnl_unavailable_reason"
+                    ),
                 },
                 "forced_event_count": forced[record_id].get("forced_event_count", 0),
                 "latency_pass_count": counts.get("latency_pass", 0),
@@ -355,28 +404,50 @@ def _current_row_selection_field(row: dict[str, Any], key: str) -> Any:
 
 
 def _current_row_selection_recommendation(row: dict[str, Any]) -> str:
-    return str(_current_row_selection_field(row, "rising_missed_selection_recommendation") or "unavailable")
+    return str(
+        _current_row_selection_field(row, "rising_missed_selection_recommendation")
+        or "unavailable"
+    )
 
 
-def _selection_recommendation_counts(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    counts = Counter(str(row.get("rising_missed_selection_recommendation") or "unavailable") for row in rows)
-    return [{"recommendation": key, "count": value} for key, value in counts.most_common()]
+def _selection_recommendation_counts(
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    counts = Counter(
+        str(row.get("rising_missed_selection_recommendation") or "unavailable")
+        for row in rows
+    )
+    return [
+        {"recommendation": key, "count": value} for key, value in counts.most_common()
+    ]
 
 
 def _current_missed_summary(diagnostic: dict[str, Any]) -> dict[str, Any]:
-    rows = [row for row in diagnostic.get("rising_missed_buy") or [] if isinstance(row, dict)]
-    class_counts = Counter(str(row.get("rising_missed_class") or "unknown") for row in rows)
+    rows = [
+        row
+        for row in diagnostic.get("rising_missed_buy") or []
+        if isinstance(row, dict)
+    ]
+    class_counts = Counter(
+        str(row.get("rising_missed_class") or "unknown") for row in rows
+    )
     prior_counts = Counter(_current_row_selection_recommendation(row) for row in rows)
     top_rows = []
     for row in rows[:10]:
-        latest = row.get("latest_blocker") if isinstance(row.get("latest_blocker"), dict) else {}
+        latest = (
+            row.get("latest_blocker")
+            if isinstance(row.get("latest_blocker"), dict)
+            else {}
+        )
         recommendation = _current_row_selection_recommendation(row)
         top_rows.append(
             {
                 "stock_code": row.get("stock_code"),
                 "stock_name": row.get("stock_name"),
                 "rising_missed_class": row.get("rising_missed_class"),
-                "rising_missed_one_share_eligible": bool(row.get("rising_missed_one_share_eligible")),
+                "rising_missed_one_share_eligible": bool(
+                    row.get("rising_missed_one_share_eligible")
+                ),
                 "rising_missed_selection_recommendation": recommendation,
                 "rising_missed_selection_prior_key": _current_row_selection_field(
                     row,
@@ -386,19 +457,29 @@ def _current_missed_summary(diagnostic: dict[str, Any]) -> dict[str, Any]:
                     row,
                     "rising_missed_selection_score_delta",
                 ),
-                "max_price_delta_since_first_seen_pct": row.get("max_price_delta_since_first_seen_pct"),
+                "max_price_delta_since_first_seen_pct": row.get(
+                    "max_price_delta_since_first_seen_pct"
+                ),
                 "latest_stage": latest.get("stage"),
                 "latest_reason": latest.get("reason"),
-                "stale_or_delayed_eval_category_counts": row.get("stale_or_delayed_eval_category_counts") or {},
+                "stale_or_delayed_eval_category_counts": row.get(
+                    "stale_or_delayed_eval_category_counts"
+                )
+                or {},
             }
         )
     return {
         "count": len(rows),
-        "class_counts": [{"class": key, "count": value} for key, value in class_counts.most_common()],
-        "selection_prior_recommendation_counts": [
-            {"recommendation": key, "count": value} for key, value in prior_counts.most_common()
+        "class_counts": [
+            {"class": key, "count": value} for key, value in class_counts.most_common()
         ],
-        "eligible_count": sum(1 for row in rows if row.get("rising_missed_one_share_eligible")),
+        "selection_prior_recommendation_counts": [
+            {"recommendation": key, "count": value}
+            for key, value in prior_counts.most_common()
+        ],
+        "eligible_count": sum(
+            1 for row in rows if row.get("rising_missed_one_share_eligible")
+        ),
         "top_rows": top_rows,
     }
 
@@ -411,24 +492,46 @@ def _profit_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     scale_in_delta_rows = 0
     for row in rows:
         profit_rate = row.get("profit_rate")
-        forced_initial = row.get("forced_initial_entry") if isinstance(row.get("forced_initial_entry"), dict) else {}
+        forced_initial = (
+            row.get("forced_initial_entry")
+            if isinstance(row.get("forced_initial_entry"), dict)
+            else {}
+        )
         notional = _safe_float(forced_initial.get("notional_krw"))
         if profit_rate is not None and notional is not None and notional > 0:
             weighted_terms.append((float(profit_rate), notional))
-        cashflow = row.get("cashflow_estimate") if isinstance(row.get("cashflow_estimate"), dict) else {}
-        initial_gross = _safe_float(cashflow.get("initial_entry_estimated_gross_pnl_krw"))
-        total_gross = _safe_float(cashflow.get("total_position_estimated_gross_pnl_krw"))
+        cashflow = (
+            row.get("cashflow_estimate")
+            if isinstance(row.get("cashflow_estimate"), dict)
+            else {}
+        )
+        initial_gross = _safe_float(
+            cashflow.get("initial_entry_estimated_gross_pnl_krw")
+        )
+        total_gross = _safe_float(
+            cashflow.get("total_position_estimated_gross_pnl_krw")
+        )
         if initial_gross is not None:
             initial_gross_pnls.append(initial_gross)
         if total_gross is not None:
             total_gross_pnls.append(total_gross)
-        post_sell_position = row.get("post_sell_position") if isinstance(row.get("post_sell_position"), dict) else {}
-        scale_in_delta = _safe_int(post_sell_position.get("scale_in_qty_delta_after_initial_entry"))
+        post_sell_position = (
+            row.get("post_sell_position")
+            if isinstance(row.get("post_sell_position"), dict)
+            else {}
+        )
+        scale_in_delta = _safe_int(
+            post_sell_position.get("scale_in_qty_delta_after_initial_entry")
+        )
         if scale_in_delta is not None and scale_in_delta > 0:
             scale_in_delta_rows += 1
     notional_sum = sum(notional for _profit, notional in weighted_terms)
     notional_ev = (
-        round(sum(profit * notional for profit, notional in weighted_terms) / notional_sum, 6)
+        round(
+            sum(profit * notional for profit, notional in weighted_terms)
+            / notional_sum,
+            6,
+        )
         if notional_sum > 0
         else None
     )
@@ -442,16 +545,20 @@ def _profit_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "min_profit_rate": min(values) if values else None,
         "max_profit_rate": max(values) if values else None,
         "simple_sum_profit_pct": round(sum(values), 6) if values else None,
-        "diagnostic_win_rate": round(
-            sum(1 for value in values if value > 0) / len(values),
-            6,
-        ) if values else None,
-        "initial_entry_estimated_gross_pnl_krw": round(sum(initial_gross_pnls), 3)
-        if initial_gross_pnls
-        else None,
-        "total_position_estimated_gross_pnl_krw": round(sum(total_gross_pnls), 3)
-        if total_gross_pnls
-        else None,
+        "diagnostic_win_rate": (
+            round(
+                sum(1 for value in values if value > 0) / len(values),
+                6,
+            )
+            if values
+            else None
+        ),
+        "initial_entry_estimated_gross_pnl_krw": (
+            round(sum(initial_gross_pnls), 3) if initial_gross_pnls else None
+        ),
+        "total_position_estimated_gross_pnl_krw": (
+            round(sum(total_gross_pnls), 3) if total_gross_pnls else None
+        ),
         "net_pnl_unavailable_reason": "fee_tax_fields_missing" if values else None,
         "scale_in_delta_after_initial_entry_row_count": scale_in_delta_rows,
     }
@@ -463,7 +570,10 @@ def _avg(values: list[float]) -> float | None:
 
 def _signature_counts(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     counts = Counter(str(row.get("source_signature") or "-") for row in rows)
-    return [{"source_signature": key, "count": value} for key, value in counts.most_common(10)]
+    return [
+        {"source_signature": key, "count": value}
+        for key, value in counts.most_common(10)
+    ]
 
 
 def _exit_rule_counts(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -492,7 +602,11 @@ def _entry_quality_split_summary(
     winners: list[dict[str, Any]],
     losers: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    loser_peaks = [float(row["peak_profit"]) for row in losers if row.get("peak_profit") is not None]
+    loser_peaks = [
+        float(row["peak_profit"])
+        for row in losers
+        if row.get("peak_profit") is not None
+    ]
     return {
         "decision_authority": "source_only_entry_quality_split",
         "runtime_effect": False,
@@ -537,7 +651,9 @@ def _take_profit_capture_summary(winners: list[dict[str, Any]]) -> dict[str, Any
         peak_value = float(peak_profit)
         profit_value = float(profit_rate)
         giveback = round(peak_value - profit_value, 4)
-        capture_pct = round((profit_value / peak_value) * 100.0, 4) if peak_value > 0 else None
+        capture_pct = (
+            round((profit_value / peak_value) * 100.0, 4) if peak_value > 0 else None
+        )
         capture_rows.append(
             {
                 "record_id": row.get("record_id"),
@@ -574,7 +690,9 @@ def _take_profit_capture_summary(winners: list[dict[str, Any]]) -> dict[str, Any
         "evaluated_capture_count": len(capture_rows),
         "avg_peak_profit": _avg([row["peak_profit"] for row in capture_rows]),
         "avg_profit_rate": _avg([row["profit_rate"] for row in capture_rows]),
-        "equal_weight_avg_profit_pct": _avg([row["profit_rate"] for row in capture_rows]),
+        "equal_weight_avg_profit_pct": _avg(
+            [row["profit_rate"] for row in capture_rows]
+        ),
         "avg_giveback_pct": _avg(givebacks),
         "max_giveback_pct": max(givebacks) if givebacks else None,
         "avg_peak_capture_ratio_pct": _avg(captures),
@@ -594,12 +712,21 @@ def _take_profit_capture_summary(winners: list[dict[str, Any]]) -> dict[str, Any
     }
 
 
-def _counter_rows(counter: Counter[str], *, key_name: str = "reason", limit: int = 10) -> list[dict[str, Any]]:
-    return [{key_name: key, "count": value} for key, value in counter.most_common(limit)]
+def _counter_rows(
+    counter: Counter[str], *, key_name: str = "reason", limit: int = 10
+) -> list[dict[str, Any]]:
+    return [
+        {key_name: key, "count": value} for key, value in counter.most_common(limit)
+    ]
 
 
-def _counter_text(counter_rows: list[dict[str, Any]], *, key_name: str = "reason") -> str:
-    return ",".join(f"{item.get(key_name)}={item.get('count')}" for item in counter_rows) or "-"
+def _counter_text(
+    counter_rows: list[dict[str, Any]], *, key_name: str = "reason"
+) -> str:
+    return (
+        ",".join(f"{item.get(key_name)}={item.get('count')}" for item in counter_rows)
+        or "-"
+    )
 
 
 def _scale_in_reason(row: dict[str, Any]) -> str:
@@ -622,7 +749,9 @@ def _scale_in_action(row: dict[str, Any]) -> str:
     )
 
 
-def _scale_in_event_summary(row: dict[str, Any], outcome_by_record: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _scale_in_event_summary(
+    row: dict[str, Any], outcome_by_record: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
     fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
     record_id = str(row.get("record_id") or "")
     outcome = outcome_by_record.get(record_id) or {}
@@ -634,7 +763,9 @@ def _scale_in_event_summary(row: dict[str, Any], outcome_by_record: dict[str, di
         "stage": row.get("stage"),
         "profit_rate": _safe_float(fields.get("profit_rate")),
         "peak_profit": _safe_float(fields.get("peak_profit")),
-        "current_ai_score": _safe_float(fields.get("current_ai_score") or fields.get("ai_score")),
+        "current_ai_score": _safe_float(
+            fields.get("current_ai_score") or fields.get("ai_score")
+        ),
         "scale_in_action_type": _scale_in_action(row),
         "scale_in_gate_allowed": fields.get("scale_in_gate_allowed"),
         "scale_in_reason": _scale_in_reason(row),
@@ -666,7 +797,9 @@ def _new_scale_in_accumulator(winners: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _update_scale_in_accumulator(accumulator: dict[str, Any], row: dict[str, Any]) -> None:
+def _update_scale_in_accumulator(
+    accumulator: dict[str, Any], row: dict[str, Any]
+) -> None:
     if row.get("pipeline") != "HOLDING_PIPELINE":
         return
     record_id = str(row.get("record_id") or "")
@@ -675,7 +808,9 @@ def _update_scale_in_accumulator(accumulator: dict[str, Any], row: dict[str, Any
     stage = str(row.get("stage") or "")
     action = _scale_in_action(row)
     reason = _scale_in_reason(row)
-    is_pyramid_snapshot = stage == "stat_action_decision_snapshot" and action == "PYRAMID"
+    is_pyramid_snapshot = (
+        stage == "stat_action_decision_snapshot" and action == "PYRAMID"
+    )
     is_scale_event = is_pyramid_snapshot or stage in {
         "scale_in_price_guard_block",
         "scale_in_qty_block",
@@ -687,7 +822,9 @@ def _update_scale_in_accumulator(accumulator: dict[str, Any], row: dict[str, Any
     if not is_scale_event:
         return
     accumulator["scale_event_record_ids"].add(record_id)
-    accumulator["latest_by_record"][record_id] = _scale_in_event_summary(row, accumulator["outcome_by_record"])
+    accumulator["latest_by_record"][record_id] = _scale_in_event_summary(
+        row, accumulator["outcome_by_record"]
+    )
     if is_pyramid_snapshot:
         accumulator["pyramid_candidate_record_ids"].add(record_id)
         accumulator["pyramid_reason_counts"][reason or "no_reason"] += 1
@@ -716,26 +853,36 @@ def _update_scale_in_accumulator(accumulator: dict[str, Any], row: dict[str, Any
             )
 
 
-def _finish_scale_in_accumulator(accumulator: dict[str, Any], winners: list[dict[str, Any]]) -> dict[str, Any]:
+def _finish_scale_in_accumulator(
+    accumulator: dict[str, Any], winners: list[dict[str, Any]]
+) -> dict[str, Any]:
     return {
         "decision_authority": "source_only_scale_in_bottleneck_analysis",
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "profitable_forced_scout_record_count": len(winners),
         "record_with_scale_in_event_count": len(accumulator["scale_event_record_ids"]),
-        "pyramid_candidate_record_count": len(accumulator["pyramid_candidate_record_ids"]),
+        "pyramid_candidate_record_count": len(
+            accumulator["pyramid_candidate_record_ids"]
+        ),
         "pyramid_ok_record_count": len(accumulator["pyramid_ok_record_ids"]),
         "scale_in_executed_record_count": len(accumulator["executed_record_ids"]),
         "scale_in_executed_event_count": accumulator["executed_event_count"],
         "price_guard_block_record_count": len(accumulator["price_guard_record_ids"]),
         "qty_block_record_count": len(accumulator["qty_block_record_ids"]),
         "pyramid_reason_counts": _counter_rows(accumulator["pyramid_reason_counts"]),
-        "price_guard_reason_counts": _counter_rows(accumulator["price_guard_reason_counts"]),
-        "qty_block_reason_counts": _counter_rows(accumulator["qty_block_reason_counts"]),
+        "price_guard_reason_counts": _counter_rows(
+            accumulator["price_guard_reason_counts"]
+        ),
+        "qty_block_reason_counts": _counter_rows(
+            accumulator["qty_block_reason_counts"]
+        ),
         "price_guard_examples": accumulator["price_guard_examples"],
         "qty_block_examples": accumulator["qty_block_examples"],
         "executed_examples": accumulator["executed_examples"],
-        "latest_scale_in_event_by_record": list(accumulator["latest_by_record"].values())[:20],
+        "latest_scale_in_event_by_record": list(
+            accumulator["latest_by_record"].values()
+        )[:20],
         "forbidden_uses": SCALE_IN_FORBIDDEN_USES,
     }
 
@@ -796,7 +943,10 @@ def _build_operational_workorders(
                     "implementation_type": "rising_missed_classifier_prior_feedback_bridge",
                     "decision_authority": "source_only_classifier_prior_no_runtime_mutation",
                     "prior_count": prior_count,
-                    "recommendation_counts": classifier_prior_summary.get("recommendation_counts") or {},
+                    "recommendation_counts": classifier_prior_summary.get(
+                        "recommendation_counts"
+                    )
+                    or {},
                     "runtime_effect": False,
                     "allowed_runtime_apply": False,
                     "root_cause_closure_status_hint": "implementation_done",
@@ -834,7 +984,9 @@ def _build_operational_workorders(
         else {}
     )
     feedback_count = int(feedback_summary.get("rising_missed_avg_down_ge2_count") or 0)
-    initial_quality_fail_count = int(feedback_summary.get("initial_quality_fail_count") or 0)
+    initial_quality_fail_count = int(
+        feedback_summary.get("initial_quality_fail_count") or 0
+    )
     if feedback_count > 0:
         orders.append(
             {
@@ -869,7 +1021,10 @@ def _build_operational_workorders(
                     f"rising_missed_avg_down_ge2_count={feedback_count}",
                     f"initial_quality_fail_count={initial_quality_fail_count}",
                     "feedback_label_counts="
-                    + _counter_text(feedback_summary.get("feedback_label_counts") or [], key_name="feedback_label"),
+                    + _counter_text(
+                        feedback_summary.get("feedback_label_counts") or [],
+                        key_name="feedback_label",
+                    ),
                     "runtime_effect=false",
                 ],
                 "source_paths": list(source_paths.values()),
@@ -920,15 +1075,27 @@ def _build_operational_workorders(
                     f"loser_count={len(losers)}",
                     f"winner_avg_profit_rate={_profit_summary(winners).get('avg_profit_rate')}",
                     "shared_source_signature_count="
-                    + str(len(entry_quality_split.get("shared_source_signature_counts") or [])),
+                    + str(
+                        len(
+                            entry_quality_split.get("shared_source_signature_counts")
+                            or []
+                        )
+                    ),
                     "runner_review_candidate_count="
                     + str(take_profit_capture.get("runner_review_candidate_count")),
                     f"current_missed_count={current_missed.get('count')}",
                     f"current_missed_eligible_count={current_missed.get('eligible_count')}",
                     "all_winner_rows_had_latency_pass="
-                    + str(all((row.get("latency_pass_count") or 0) > 0 for row in winners)),
+                    + str(
+                        all((row.get("latency_pass_count") or 0) > 0 for row in winners)
+                    ),
                     "all_winner_rows_had_order_bundle_submitted="
-                    + str(all((row.get("order_bundle_submitted_count") or 0) > 0 for row in winners)),
+                    + str(
+                        all(
+                            (row.get("order_bundle_submitted_count") or 0) > 0
+                            for row in winners
+                        )
+                    ),
                 ],
                 "source_paths": list(source_paths.values()),
                 "files_likely_touched": [
@@ -980,9 +1147,12 @@ def _build_operational_workorders(
                         f"winner_count={len(winners)}",
                         "evaluated_capture_count="
                         + str(take_profit_capture.get("evaluated_capture_count")),
-                        "avg_peak_profit=" + str(take_profit_capture.get("avg_peak_profit")),
-                        "avg_profit_rate=" + str(take_profit_capture.get("avg_profit_rate")),
-                        "avg_giveback_pct=" + str(take_profit_capture.get("avg_giveback_pct")),
+                        "avg_peak_profit="
+                        + str(take_profit_capture.get("avg_peak_profit")),
+                        "avg_profit_rate="
+                        + str(take_profit_capture.get("avg_profit_rate")),
+                        "avg_giveback_pct="
+                        + str(take_profit_capture.get("avg_giveback_pct")),
                         "runner_review_candidate_count="
                         + str(take_profit_capture.get("runner_review_candidate_count")),
                         "runtime_effect=false",
@@ -1023,7 +1193,9 @@ def _build_operational_workorders(
                     "price_guard_block_record_count": scale_in_bottleneck.get(
                         "price_guard_block_record_count"
                     ),
-                    "pyramid_ok_record_count": scale_in_bottleneck.get("pyramid_ok_record_count"),
+                    "pyramid_ok_record_count": scale_in_bottleneck.get(
+                        "pyramid_ok_record_count"
+                    ),
                     "runtime_effect": False,
                     "allowed_runtime_apply": False,
                     "root_cause_closure_status_hint": "implementation_done",
@@ -1036,15 +1208,20 @@ def _build_operational_workorders(
                     f"profitable_forced_scout_count={len(winners)}",
                     "record_with_scale_in_event_count="
                     + str(scale_in_bottleneck.get("record_with_scale_in_event_count")),
-                    "pyramid_ok_record_count=" + str(scale_in_bottleneck.get("pyramid_ok_record_count")),
+                    "pyramid_ok_record_count="
+                    + str(scale_in_bottleneck.get("pyramid_ok_record_count")),
                     "price_guard_block_record_count="
                     + str(scale_in_bottleneck.get("price_guard_block_record_count")),
                     "scale_in_executed_record_count="
                     + str(scale_in_bottleneck.get("scale_in_executed_record_count")),
                     "price_guard_reason_counts="
-                    + _counter_text(scale_in_bottleneck.get("price_guard_reason_counts") or []),
+                    + _counter_text(
+                        scale_in_bottleneck.get("price_guard_reason_counts") or []
+                    ),
                     "pyramid_reason_counts="
-                    + _counter_text(scale_in_bottleneck.get("pyramid_reason_counts") or []),
+                    + _counter_text(
+                        scale_in_bottleneck.get("pyramid_reason_counts") or []
+                    ),
                 ],
                 "source_paths": list(source_paths.values()),
                 "files_likely_touched": [
@@ -1078,7 +1255,9 @@ def _build_operational_workorders(
                 "implementation_provenance": {
                     "implementation_type": "forced_scout_scale_in_qty_evidence_source_split",
                     "decision_authority": "source_only_scale_in_bottleneck_analysis",
-                    "qty_block_record_count": scale_in_bottleneck.get("qty_block_record_count"),
+                    "qty_block_record_count": scale_in_bottleneck.get(
+                        "qty_block_record_count"
+                    ),
                     "scale_in_executed_record_count": scale_in_bottleneck.get(
                         "scale_in_executed_record_count"
                     ),
@@ -1092,11 +1271,14 @@ def _build_operational_workorders(
                 ),
                 "evidence": [
                     f"profitable_forced_scout_count={len(winners)}",
-                    "qty_block_record_count=" + str(scale_in_bottleneck.get("qty_block_record_count")),
+                    "qty_block_record_count="
+                    + str(scale_in_bottleneck.get("qty_block_record_count")),
                     "scale_in_executed_record_count="
                     + str(scale_in_bottleneck.get("scale_in_executed_record_count")),
                     "qty_block_reason_counts="
-                    + _counter_text(scale_in_bottleneck.get("qty_block_reason_counts") or []),
+                    + _counter_text(
+                        scale_in_bottleneck.get("qty_block_reason_counts") or []
+                    ),
                     "price_guard_block_record_count="
                     + str(scale_in_bottleneck.get("price_guard_block_record_count")),
                 ],
@@ -1145,13 +1327,29 @@ def _build_operational_workorders(
                     f"loser_count={len(losers)}",
                     f"loser_avg_profit_rate={_profit_summary(losers).get('avg_profit_rate')}",
                     "loser_avg_peak_profit="
-                    + str((entry_quality_split.get("loser_peak_profit") or {}).get("avg_peak_profit")),
+                    + str(
+                        (entry_quality_split.get("loser_peak_profit") or {}).get(
+                            "avg_peak_profit"
+                        )
+                    ),
                     "shared_source_signature_count="
-                    + str(len(entry_quality_split.get("shared_source_signature_counts") or [])),
+                    + str(
+                        len(
+                            entry_quality_split.get("shared_source_signature_counts")
+                            or []
+                        )
+                    ),
                     "losers_also_had_latency_pass="
-                    + str(all((row.get("latency_pass_count") or 0) > 0 for row in losers)),
+                    + str(
+                        all((row.get("latency_pass_count") or 0) > 0 for row in losers)
+                    ),
                     "losers_also_had_order_bundle_submitted="
-                    + str(all((row.get("order_bundle_submitted_count") or 0) > 0 for row in losers)),
+                    + str(
+                        all(
+                            (row.get("order_bundle_submitted_count") or 0) > 0
+                            for row in losers
+                        )
+                    ),
                 ],
                 "source_paths": list(source_paths.values()),
                 "files_likely_touched": [
@@ -1181,8 +1379,12 @@ def build_report(
     pipeline_path = pipeline_path or _default_pipeline_path(target_date)
     post_sell_path = post_sell_path or _default_post_sell_path(target_date)
     diagnostic_path = diagnostic_path or _default_diagnostic_path(target_date)
-    intraday_feedback_path = intraday_feedback_path or _default_intraday_feedback_path(target_date)
-    classifier_prior_path = classifier_prior_path or _default_classifier_prior_path(target_date)
+    intraday_feedback_path = intraday_feedback_path or _default_intraday_feedback_path(
+        target_date
+    )
+    classifier_prior_path = classifier_prior_path or _default_classifier_prior_path(
+        target_date
+    )
     generated_at = generated_at or datetime.now(KST).isoformat(timespec="seconds")
 
     post_sell_rows = _load_jsonl(post_sell_path)
@@ -1196,16 +1398,28 @@ def build_report(
         post_sell_rows=post_sell_rows,
     )
     preliminary_winners = [
-        row for row in preliminary_outcomes if (row.get("profit_rate") is not None and row["profit_rate"] > 0)
+        row
+        for row in preliminary_outcomes
+        if (row.get("profit_rate") is not None and row["profit_rate"] > 0)
     ]
     stage_counts, scale_in_bottleneck = _pipeline_stage_counts_and_scale_in_summary(
         pipeline_path,
         forced_record_ids=set(forced),
         winners=preliminary_winners,
     )
-    outcomes = _joined_scout_outcomes(forced=forced, stage_counts=stage_counts, post_sell_rows=post_sell_rows)
-    winners = [row for row in outcomes if (row.get("profit_rate") is not None and row["profit_rate"] > 0)]
-    losers = [row for row in outcomes if (row.get("profit_rate") is not None and row["profit_rate"] <= 0)]
+    outcomes = _joined_scout_outcomes(
+        forced=forced, stage_counts=stage_counts, post_sell_rows=post_sell_rows
+    )
+    winners = [
+        row
+        for row in outcomes
+        if (row.get("profit_rate") is not None and row["profit_rate"] > 0)
+    ]
+    losers = [
+        row
+        for row in outcomes
+        if (row.get("profit_rate") is not None and row["profit_rate"] <= 0)
+    ]
     forced_initial_entry_ev_summary = _profit_summary(outcomes)
     entry_quality_split = _entry_quality_split_summary(winners, losers)
     take_profit_capture = _take_profit_capture_summary(winners)
@@ -1281,7 +1495,7 @@ def build_report(
                 "primary_decision_metric": "notional_weighted_ev_pct",
                 "source_quality_gate": "record_id_joined_forced_scout_event_to_post_sell_outcome_with_initial_qty_notional",
                 "forbidden_uses": FORBIDDEN_USES,
-            }
+            },
         },
         "source_paths": source_paths,
         "summary": {
@@ -1300,8 +1514,12 @@ def build_report(
                 "runner_review_candidate_count"
             ),
             "take_profit_avg_giveback_pct": take_profit_capture.get("avg_giveback_pct"),
-            "forced_scout_selection_prior_winner_counts": _selection_recommendation_counts(winners),
-            "forced_scout_selection_prior_loser_counts": _selection_recommendation_counts(losers),
+            "forced_scout_selection_prior_winner_counts": _selection_recommendation_counts(
+                winners
+            ),
+            "forced_scout_selection_prior_loser_counts": _selection_recommendation_counts(
+                losers
+            ),
             "forced_initial_entry_equal_weight_avg_profit_pct": forced_initial_entry_ev_summary.get(
                 "equal_weight_avg_profit_pct"
             ),
@@ -1328,8 +1546,12 @@ def build_report(
             "scale_in_price_guard_block_record_count": scale_in_bottleneck.get(
                 "price_guard_block_record_count"
             ),
-            "scale_in_qty_block_record_count": scale_in_bottleneck.get("qty_block_record_count"),
-            "scale_in_executed_record_count": scale_in_bottleneck.get("scale_in_executed_record_count"),
+            "scale_in_qty_block_record_count": scale_in_bottleneck.get(
+                "qty_block_record_count"
+            ),
+            "scale_in_executed_record_count": scale_in_bottleneck.get(
+                "scale_in_executed_record_count"
+            ),
             "intraday_feedback_avg_down_ge2_count": intraday_feedback_summary.get(
                 "rising_missed_avg_down_ge2_count", 0
             ),
@@ -1356,10 +1578,15 @@ def build_report(
     }
 
 
-def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path) -> None:
+def write_outputs(
+    report: dict[str, Any], *, output_json: Path, output_md: Path
+) -> None:
     output_json.parent.mkdir(parents=True, exist_ok=True)
     output_md.parent.mkdir(parents=True, exist_ok=True)
-    output_json.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    output_json.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
     lines = [
         f"# {report.get('target_date')} Rising Missed Scout Workorder",
@@ -1415,7 +1642,9 @@ def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path)
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build rising missed scout operational workorders.")
+    parser = argparse.ArgumentParser(
+        description="Build rising missed scout operational workorders."
+    )
     parser.add_argument("--target-date", default=datetime.now(KST).strftime("%Y-%m-%d"))
     parser.add_argument("--pipeline-path", type=Path)
     parser.add_argument("--post-sell-path", type=Path)
@@ -1441,7 +1670,17 @@ def main(argv: list[str] | None = None) -> int:
     output_md = args.output_md or default_md
     write_outputs(report, output_json=output_json, output_md=output_md)
     if args.print_summary:
-        print(json.dumps({"output_json": str(output_json), "output_md": str(output_md), **report["summary"]}, ensure_ascii=False, sort_keys=True))
+        print(
+            json.dumps(
+                {
+                    "output_json": str(output_json),
+                    "output_md": str(output_md),
+                    **report["summary"],
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
     return 0
 
 
