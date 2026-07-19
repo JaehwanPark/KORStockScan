@@ -240,6 +240,8 @@ _PYRAMID_RUNTIME_PRIOR_MAX_AGE_SEC = 600
 _PYRAMID_RUNTIME_PRIOR_CACHE: dict[tuple[str, int, int], dict[str, Any]] = {}
 _KST = timezone(timedelta(hours=9))
 _MAX_SCALE_IN_EXECUTIONS_PER_TYPE = 1
+_SCALE_IN_INITIAL_QTY_CAP_NUMERATOR = 3
+_SCALE_IN_INITIAL_QTY_CAP_DENOMINATOR = 2
 
 
 def _mark_entry_opportunity_recheck_outcome(
@@ -330,12 +332,88 @@ def _scale_in_execution_limit_decision(
     }
 
 
+def _scale_in_quantity_limit_decision(
+    stock: dict | None,
+    requested_qty: int = 0,
+    *,
+    initialize: bool = False,
+) -> dict[str, object]:
+    """Keep aggregate filled scale-in quantity within 1.5x initial quantity."""
+    if not isinstance(stock, dict):
+        return {
+            "allowed": False,
+            "reason": "scale_in_initial_qty_missing",
+            "initial_buy_qty": 0,
+            "max_scale_in_qty": 0,
+            "scale_in_filled_qty": 0,
+            "remaining_scale_in_qty": 0,
+            "allowed_qty": 0,
+        }
+
+    current_qty = max(0, _safe_int(stock.get("buy_qty"), 0))
+    initial_qty = max(0, _safe_int(stock.get("initial_buy_qty"), 0))
+    filled_value = stock.get("scale_in_filled_qty")
+    has_filled_value = filled_value not in (None, "", "-", "None", "none", "null")
+    scale_in_filled_qty = max(0, _safe_int(filled_value, 0)) if has_filled_value else 0
+    prior_bundle_count = max(
+        _safe_int(stock.get("add_count"), 0),
+        _safe_int(stock.get("avg_down_count"), 0),
+        _safe_int(stock.get("pyramid_count"), 0),
+        int(bool(str(stock.get("last_add_type") or "").strip())),
+    )
+
+    if initial_qty <= 0:
+        if prior_bundle_count > 0:
+            return {
+                "allowed": False,
+                "reason": "scale_in_initial_qty_missing",
+                "initial_buy_qty": 0,
+                "max_scale_in_qty": 0,
+                "scale_in_filled_qty": 0,
+                "remaining_scale_in_qty": 0,
+                "allowed_qty": 0,
+            }
+        initial_qty = current_qty
+        if initialize and initial_qty > 0:
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "initial_buy_qty": initial_qty,
+                    "scale_in_filled_qty": scale_in_filled_qty,
+                },
+            )
+
+    if not has_filled_value:
+        # Conservative legacy fallback. This also accounts for fills that
+        # happened before the durable counter was introduced.
+        scale_in_filled_qty = max(scale_in_filled_qty, current_qty - initial_qty, 0)
+
+    max_scale_in_qty = (
+        initial_qty * _SCALE_IN_INITIAL_QTY_CAP_NUMERATOR
+    ) // _SCALE_IN_INITIAL_QTY_CAP_DENOMINATOR
+    remaining_qty = max(0, max_scale_in_qty - scale_in_filled_qty)
+    requested = max(0, _safe_int(requested_qty, 0))
+    allowed_qty = min(requested, remaining_qty) if requested > 0 else remaining_qty
+    return {
+        "allowed": remaining_qty > 0,
+        "reason": (
+            "ok" if remaining_qty > 0 else "scale_in_initial_qty_1_5x_cap_reached"
+        ),
+        "initial_buy_qty": initial_qty,
+        "max_scale_in_qty": max_scale_in_qty,
+        "scale_in_filled_qty": scale_in_filled_qty,
+        "remaining_scale_in_qty": remaining_qty,
+        "allowed_qty": allowed_qty,
+    }
+
+
 def _simulated_scale_in_execution_fields(
     stock: dict,
     add_type: str,
     *,
     add_reason: str,
     executed_at: float,
+    executed_qty: int = 0,
 ) -> dict[str, object]:
     normalized_type = str(add_type or "").strip().upper()
     fields: dict[str, object] = {
@@ -58509,6 +58587,47 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                 quote_fields=scale_in_quote_refresh_fields,
             )
         )
+    # Re-trim the final multi-leg plan after policy rounding/flooring.
+    final_remaining_qty = _scale_in_quantity_limit_decision(
+        stock,
+        requested_qty=0,
+    )
+    allowed_plan_qty = int(final_remaining_qty["remaining_scale_in_qty"] or 0)
+    capped_split_orders = []
+    for order in scale_in_split_orders:
+        leg_qty = min(max(0, _safe_int(order.get("qty"), 0)), allowed_plan_qty)
+        if leg_qty <= 0:
+            continue
+        capped_split_orders.append({**order, "qty": leg_qty})
+        allowed_plan_qty -= leg_qty
+    scale_in_split_orders = capped_split_orders
+    if not scale_in_split_orders:
+        _log_holding_pipeline(
+            stock,
+            code,
+            "scale_in_quantity_limit_block",
+            add_type=add_type,
+            scale_in_type=add_type,
+            scale_in_blocker_reason=final_remaining_qty["reason"],
+            reason=final_remaining_qty["reason"],
+            initial_buy_qty=final_remaining_qty["initial_buy_qty"],
+            max_scale_in_qty=final_remaining_qty["max_scale_in_qty"],
+            scale_in_filled_qty=final_remaining_qty["scale_in_filled_qty"],
+            remaining_scale_in_qty=final_remaining_qty["remaining_scale_in_qty"],
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            metric_role="safety_veto",
+            decision_authority="initial_buy_qty_scale_in_cap",
+            window_policy="position_lifecycle",
+            sample_floor="not_applicable_operator_limit",
+            primary_decision_metric="remaining_scale_in_qty",
+            source_quality_gate="initial_buy_qty_and_scale_in_filled_qty_present_or_hydrated",
+            runtime_effect=True,
+            allowed_runtime_apply=True,
+            forbidden_uses="quantity_cap_release|broker_guard_bypass|counter_reset_without_position_close",
+        )
+        return None
+    if add_type == "AVG_DOWN":
         _log_holding_pipeline(
             stock,
             code,
@@ -58517,7 +58636,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             scale_in_type=add_type,
             add_trigger=action.get("reason"),
             scale_in_trigger=action.get("reason"),
-            qty=qty,
+            qty=sum(_safe_int(order.get("qty"), 0) for order in scale_in_split_orders),
             final_price=final_price,
             resolved_price=resolved_price,
             actual_order_submitted=False,
@@ -58769,6 +58888,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                     add_type,
                     add_reason=action.get("reason"),
                     executed_at=now_ts,
+                    executed_qty=qty,
                 ),
             },
         )
@@ -58874,6 +58994,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                     add_type,
                     add_reason=action.get("reason"),
                     executed_at=now_ts,
+                    executed_qty=qty,
                 ),
             },
         )
@@ -59052,6 +59173,54 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         for leg_order in scale_in_split_orders
         if isinstance(leg_order, dict)
     )
+    pre_submit_limit = _scale_in_quantity_limit_decision(
+        stock,
+        requested_qty=planned_submit_qty,
+    )
+    if not pre_submit_limit["allowed"]:
+        _log_holding_pipeline(
+            stock,
+            code,
+            "scale_in_quantity_limit_block",
+            add_type=add_type,
+            scale_in_type=add_type,
+            scale_in_blocker_reason=pre_submit_limit["reason"],
+            reason=pre_submit_limit["reason"],
+            initial_buy_qty=pre_submit_limit["initial_buy_qty"],
+            max_scale_in_qty=pre_submit_limit["max_scale_in_qty"],
+            scale_in_filled_qty=pre_submit_limit["scale_in_filled_qty"],
+            remaining_scale_in_qty=pre_submit_limit["remaining_scale_in_qty"],
+            requested_qty=planned_submit_qty,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            metric_role="safety_veto",
+            decision_authority="initial_buy_qty_scale_in_cap",
+            window_policy="position_lifecycle_pre_broker",
+            sample_floor="not_applicable_operator_limit",
+            primary_decision_metric="remaining_scale_in_qty",
+            source_quality_gate="initial_buy_qty_and_scale_in_filled_qty_present_or_hydrated",
+            runtime_effect=True,
+            allowed_runtime_apply=True,
+            forbidden_uses="quantity_cap_release|broker_guard_bypass|counter_reset_without_position_close",
+        )
+        return None
+    if pre_submit_limit["allowed_qty"] < planned_submit_qty:
+        remaining = int(pre_submit_limit["allowed_qty"] or 0)
+        trimmed_orders = []
+        for leg_order in scale_in_split_orders:
+            leg_qty = min(max(0, _safe_int(leg_order.get("qty"), 0)), remaining)
+            if leg_qty <= 0:
+                continue
+            trimmed_orders.append({**leg_order, "qty": leg_qty})
+            remaining -= leg_qty
+        scale_in_split_orders = trimmed_orders
+        planned_submit_qty = sum(
+            max(0, _safe_int((leg_order or {}).get("qty"), 0))
+            for leg_order in scale_in_split_orders
+        )
+        total_leg_count = len(scale_in_split_orders)
+        if planned_submit_qty <= 0:
+            return None
     pending_registered_at = time.time()
     _mutate_stock_state(
         stock,

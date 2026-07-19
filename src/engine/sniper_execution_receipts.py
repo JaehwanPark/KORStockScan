@@ -69,6 +69,8 @@ _BUY_RECEIPT_SNAPSHOT_KEYS = (
     "buy_execution_notified",
     "buy_price",
     "buy_qty",
+    "initial_buy_qty",
+    "scale_in_filled_qty",
     "code",
     "actual_order_submitted",
     "msg_audience",
@@ -110,6 +112,8 @@ _ADD_RECEIPT_SNAPSHOT_KEYS = (
     "avg_down_count",
     "buy_price",
     "buy_qty",
+    "initial_buy_qty",
+    "scale_in_filled_qty",
     "code",
     "hard_stop_price",
     "msg_audience",
@@ -174,6 +178,8 @@ _SELL_REVIVE_RESET_KEYS = (
     "holding_entry_ai_score",
     "holding_ai_score_seeded_from_entry",
     "requested_buy_qty",
+    "initial_buy_qty",
+    "scale_in_filled_qty",
     "_entry_receipt_filled_by_order_no",
     "_entry_receipt_requested_by_order_no",
     "entry_partial_fill_notified_qty",
@@ -197,6 +203,8 @@ _SELL_COMPLETE_RESET_KEYS = (
     "holding_entry_ai_score",
     "holding_ai_score_seeded_from_entry",
     "requested_buy_qty",
+    "initial_buy_qty",
+    "scale_in_filled_qty",
     "_entry_receipt_filled_by_order_no",
     "_entry_receipt_requested_by_order_no",
     "entry_partial_fill_notified_qty",
@@ -1408,12 +1416,16 @@ def _update_db_for_buy(target_id, exec_price, now, receipt_snapshot):
         buy_qty = int(receipt_snapshot.get('buy_qty') or 0)
         avg_buy_price = float(receipt_snapshot.get('buy_price') or exec_price or 0)
         with DB.get_session() as session:
-            session.query(RecommendationHistory).filter_by(id=target_id).update({
+            update_fields = {
                 "buy_price": avg_buy_price,
                 "buy_qty": buy_qty,
                 "status": "HOLDING",
-                "buy_time": now
-            })
+                "buy_time": now,
+            }
+            initial_buy_qty = _safe_int(receipt_snapshot.get("initial_buy_qty"), 0)
+            if initial_buy_qty > 0:
+                update_fields["initial_buy_qty"] = initial_buy_qty
+            session.query(RecommendationHistory).filter_by(id=target_id).update(update_fields)
 
         log_info(
             f"✅ [영수증: ID {target_id}] {receipt_snapshot.get('code')} "
@@ -1621,6 +1633,16 @@ def _update_db_for_add(
             record.add_count = int(receipt_snapshot.get('add_count', record.add_count or 0) or 0)
             record.avg_down_count = int(receipt_snapshot.get('avg_down_count', record.avg_down_count or 0) or 0)
             record.pyramid_count = int(receipt_snapshot.get('pyramid_count', record.pyramid_count or 0) or 0)
+            initial_buy_qty = _safe_int(
+                receipt_snapshot.get("initial_buy_qty"),
+                _safe_int(getattr(record, "initial_buy_qty", 0), 0),
+            )
+            if initial_buy_qty > 0:
+                record.initial_buy_qty = initial_buy_qty
+            record.scale_in_filled_qty = _safe_int(
+                receipt_snapshot.get("scale_in_filled_qty"),
+                _safe_int(getattr(record, "scale_in_filled_qty", 0), 0) + int(exec_qty or 0),
+            )
             record.last_add_type = add_type
             record.last_add_reason = str(receipt_snapshot.get('last_add_reason') or '').strip()
             record.last_add_at = now
@@ -1792,6 +1814,15 @@ def _handle_add_buy_execution(
         target_stock['pending_add_initial_buy_price'] = old_price
     if 'pending_add_initial_buy_qty' not in target_stock:
         target_stock['pending_add_initial_buy_qty'] = old_qty
+    if _safe_int(target_stock.get('initial_buy_qty'), 0) <= 0:
+        target_stock['initial_buy_qty'] = max(
+            0,
+            _safe_int(target_stock.get('pending_add_initial_buy_qty'), old_qty),
+        )
+    target_stock['scale_in_filled_qty'] = max(
+        0,
+        _safe_int(target_stock.get('scale_in_filled_qty'), 0) + int(exec_qty or 0),
+    )
     request_qty = int(requested_qty or target_stock.get('pending_add_qty', 0) or 0)
     pending_ord_no = str(target_stock.get('pending_add_ord_no', '') or '').strip()
     pending_ord_nos = {part.strip() for part in pending_ord_no.split(',') if part.strip()}
@@ -2027,6 +2058,19 @@ def _handle_entry_buy_execution(
         else ("PARTIAL_FILL" if requested_entry_qty > 0 else "UNKNOWN")
     )
     target_stock['entry_fill_quality'] = fill_quality
+    if max(
+        _safe_int(target_stock.get('add_count'), 0),
+        _safe_int(target_stock.get('avg_down_count'), 0),
+        _safe_int(target_stock.get('pyramid_count'), 0),
+        _safe_int(target_stock.get('scale_in_filled_qty'), 0),
+    ) <= 0:
+        # Persist the cumulative initial bundle as fills arrive. A restart
+        # between partial fills must not freeze the baseline at zero or at the
+        # first partial quantity.
+        target_stock['initial_buy_qty'] = max(
+            _safe_int(target_stock.get('initial_buy_qty'), 0),
+            max(0, new_qty),
+        )
 
     preset_tp_price = int(target_stock.get('preset_tp_price') or 0)
     preset_tp_ord_no_before = str(target_stock.get('preset_tp_ord_no', '') or '').strip()

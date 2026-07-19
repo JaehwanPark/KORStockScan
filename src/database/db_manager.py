@@ -80,6 +80,8 @@ class DBManager:
                 conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS add_count INTEGER DEFAULT 0;"))
                 conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS avg_down_count INTEGER DEFAULT 0;"))
                 conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS pyramid_count INTEGER DEFAULT 0;"))
+                conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS initial_buy_qty INTEGER DEFAULT 0;"))
+                conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS scale_in_filled_qty INTEGER DEFAULT 0;"))
                 conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS last_add_type TEXT;"))
                 conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS last_add_reason TEXT;"))
                 conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS last_add_at TIMESTAMP;"))

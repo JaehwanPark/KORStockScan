@@ -100,6 +100,8 @@ class RecommendationHistory(Base):
     add_count = Column(Integer, nullable=True, server_default=text("0"))
     avg_down_count = Column(Integer, nullable=True, server_default=text("0"))
     pyramid_count = Column(Integer, nullable=True, server_default=text("0"))
+    initial_buy_qty = Column(Integer, nullable=True, server_default=text("0"))
+    scale_in_filled_qty = Column(Integer, nullable=True, server_default=text("0"))
     last_add_type = Column(Text, nullable=True)
     last_add_reason = Column(Text, nullable=True)
     last_add_at = Column(DateTime, nullable=True)

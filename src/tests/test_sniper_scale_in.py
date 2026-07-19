@@ -10002,6 +10002,7 @@ def test_rising_missed_scout_upgrade_receipt_keeps_partial_entry_pending(monkeyp
     assert stock["buy_qty"] == 5
     assert stock["entry_filled_qty"] == 4
     assert stock["entry_fill_quality"] == "PARTIAL_FILL"
+    assert stock["initial_buy_qty"] == 5
     assert stock["pending_entry_orders"][0]["ord_no"] == "UP1"
     assert stock["rising_missed_scout_upgrade_order_pending"] is True
     position_events = [
@@ -10020,6 +10021,7 @@ def test_rising_missed_scout_upgrade_receipt_keeps_partial_entry_pending(monkeyp
     )
 
     assert stock["buy_qty"] == 6
+    assert stock["initial_buy_qty"] == 6
     assert stock["entry_fill_quality"] == "FULL_FILL"
     assert "pending_entry_orders" not in stock
     assert "rising_missed_scout_upgrade_order_pending" not in stock
@@ -12478,10 +12480,12 @@ def test_add_count_increment_once_on_partial_fills(monkeypatch):
     assert target_stock["avg_down_count"] == 1
 
     receipts.handle_real_execution(
-        {"code": "123456", "type": "BUY", "order_no": "123", "price": 9400, "qty": 3}
+        {"code": "123456", "type": "BUY", "order_no": "123", "price": 9400, "qty": 7}
     )
     assert target_stock["add_count"] == 1
     assert target_stock["avg_down_count"] == 1
+    assert target_stock["initial_buy_qty"] == 10
+    assert target_stock["scale_in_filled_qty"] == 7
 
 
 @pytest.mark.parametrize(
@@ -13052,13 +13056,13 @@ def test_execute_scalping_pyramid_sends_resolved_best_bid_with_dynamic_budget_qt
         admin_id=1,
     )
 
-    assert sent_orders == [("123456", 237, 9_990, "00")]
+    assert sent_orders == [("123456", 15, 9_990, "00")]
     assert history[0]["request_price"] == 9_990
     resolved = [fields for stage, fields in logs if stage == "scale_in_price_resolved"][
         0
     ]
     assert resolved["would_qty"] == 237
-    assert resolved["effective_qty"] == 237
+    assert resolved["effective_qty"] == 15
     assert resolved["pyramid_sizing_mode"] == "dynamic_budget"
     assert resolved["pyramid_position_ratio_cap_applied"] is False
     assert any(stage == "scale_in_price_p2_observe" for stage, _ in logs)
@@ -13155,7 +13159,7 @@ def test_execute_scalping_pyramid_uses_dynamic_budget_for_one_share_position(
 
     assert len(sent_orders) == 1
     assert sent_orders[0][0] == "240810"
-    assert sent_orders[0][1] == 13
+    assert sent_orders[0][1] == 1
     assert sent_orders[0][3] == "00"
     resolved = [fields for stage, fields in logs if stage == "scale_in_price_resolved"][
         0
@@ -13163,7 +13167,7 @@ def test_execute_scalping_pyramid_uses_dynamic_budget_for_one_share_position(
     assert sent_orders[0][2] == resolved["resolved_price"]
     assert resolved["scale_in_budget_qty"] == 13
     assert resolved["would_qty"] == 13
-    assert resolved["effective_qty"] == 13
+    assert resolved["effective_qty"] == 1
     assert resolved["pyramid_sizing_mode"] == "dynamic_budget"
     assert resolved["pyramid_position_ratio_cap_applied"] is False
     assert stock.get("pending_add_order") is not None
@@ -13898,13 +13902,13 @@ def test_execute_scalping_pyramid_refreshes_rest_orderbook_when_quote_missing(
         admin_id=1,
     )
 
-    assert sent_orders == [("123456", 237, 9_990, "00")]
+    assert sent_orders == [("123456", 15, 9_990, "00")]
     assert history[0]["request_price"] == 9_990
     resolved = [fields for stage, fields in logs if stage == "scale_in_price_resolved"][
         0
     ]
     assert resolved["would_qty"] == 237
-    assert resolved["effective_qty"] == 237
+    assert resolved["effective_qty"] == 15
     assert resolved["pre_submit_ws_snapshot_refresh_reason"] == "ws_manager_missing"
     assert resolved["pre_submit_rest_orderbook_refresh_applied"] is True
     assert (
@@ -14016,7 +14020,7 @@ def test_execute_scalping_pyramid_refreshes_rest_orderbook_when_ws_quote_stale(
     )
 
     assert result["ord_no"] == "P-REST-STALE"
-    assert sent_orders == [("001260", 201, 11_780, "00")]
+    assert sent_orders == [("001260", 15, 11_780, "00")]
     assert history[0]["request_price"] == 11_780
     resolved = [fields for stage, fields in logs if stage == "scale_in_price_resolved"][
         0
@@ -14889,7 +14893,7 @@ def test_execute_scalping_reversal_add_uses_resolved_price_not_curr(monkeypatch)
         admin_id=1,
     )
 
-    assert sent_orders == [("123456", 95, 9_970, "00")]
+    assert sent_orders == [("123456", 4, 9_970, "00")]
     resolved = [fields for stage, fields in logs if stage == "scale_in_price_resolved"][
         0
     ]
@@ -14948,7 +14952,7 @@ def test_execute_scalping_avg_down_stop_touch_uses_market_order(monkeypatch):
         admin_id=1,
     )
 
-    assert sent_orders == [("123456", 95, 0, "3")]
+    assert sent_orders == [("123456", 4, 0, "3")]
     resolved = [fields for stage, fields in logs if stage == "scale_in_price_resolved"][
         0
     ]
@@ -15712,7 +15716,7 @@ def test_p2_observe_skip_does_not_change_live_order(monkeypatch):
         admin_id=1,
     )
 
-    assert sent_orders == [("123456", 232, 9_990, "00")]
+    assert sent_orders == [("123456", 15, 9_990, "00")]
     p2_logs = [fields for stage, fields in logs if stage == "scale_in_price_p2_observe"]
     assert p2_logs
     assert p2_logs[0]["live_runtime_effect"] is False
@@ -16744,6 +16748,57 @@ def test_simulated_scale_in_execution_fields_count_one_bundle_by_type(
     assert fields["last_add_type"] == add_type
     assert fields["last_add_reason"] == "scale_in_test"
     assert fields["last_add_time"] == 1000.0
+
+
+@pytest.mark.parametrize(
+    ("stock", "requested_qty", "expected_allowed", "expected_remaining"),
+    [
+        (
+            {"buy_qty": 10, "initial_buy_qty": 10, "scale_in_filled_qty": 0},
+            100,
+            True,
+            15,
+        ),
+        (
+            {"buy_qty": 24, "initial_buy_qty": 10, "scale_in_filled_qty": 14},
+            5,
+            True,
+            1,
+        ),
+        (
+            {"buy_qty": 25, "initial_buy_qty": 10, "scale_in_filled_qty": 15},
+            1,
+            False,
+            0,
+        ),
+    ],
+)
+def test_scale_in_quantity_limit_is_aggregate_1_5x_initial_qty(
+    stock, requested_qty, expected_allowed, expected_remaining
+):
+    decision = state_handlers._scale_in_quantity_limit_decision(
+        stock,
+        requested_qty=requested_qty,
+    )
+
+    assert decision["allowed"] is expected_allowed
+    assert decision["remaining_scale_in_qty"] == expected_remaining
+    assert decision["max_scale_in_qty"] == 15
+    assert decision["allowed_qty"] == min(requested_qty, expected_remaining)
+
+
+def test_scale_in_quantity_limit_initializes_new_position_baseline():
+    stock = {"buy_qty": 7}
+
+    decision = state_handlers._scale_in_quantity_limit_decision(
+        stock,
+        requested_qty=20,
+        initialize=True,
+    )
+
+    assert stock["initial_buy_qty"] == 7
+    assert stock["scale_in_filled_qty"] == 0
+    assert decision["allowed_qty"] == 10
 
 
 def test_timeout_pending_add_attempts_cancel_before_clear(monkeypatch):

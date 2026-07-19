@@ -6,7 +6,7 @@ from math import isclose
 from pathlib import Path
 import re
 
-from src.database.models import RecommendationHistory
+from src.database.models import HoldingAddHistory, RecommendationHistory
 from src.engine.sniper_position_tags import (
     normalize_position_tag,
     normalize_strategy,
@@ -234,6 +234,46 @@ def _ensure_runtime_target(record, *, buy_qty=None, buy_price=None):
     )
     resolved_qty = _to_int(buy_qty if buy_qty is not None else getattr(record, "buy_qty", 0))
     resolved_price = _to_float(buy_price if buy_price is not None else getattr(record, "buy_price", 0))
+    initial_buy_qty = _to_int(getattr(record, "initial_buy_qty", 0))
+    scale_in_filled_qty = _to_int(getattr(record, "scale_in_filled_qty", 0))
+    prior_bundle_count = max(
+        _to_int(getattr(record, "add_count", 0)),
+        _to_int(getattr(record, "avg_down_count", 0)),
+        _to_int(getattr(record, "pyramid_count", 0)),
+        int(bool(str(getattr(record, "last_add_type", "") or "").strip())),
+    )
+    if (
+        prior_bundle_count > 0
+        and (initial_buy_qty <= 0 or scale_in_filled_qty <= 0)
+        and DB is not None
+        and getattr(record, "id", None)
+    ):
+        try:
+            with DB.get_session() as history_session:
+                add_rows = (
+                    history_session.query(HoldingAddHistory)
+                    .filter(
+                        HoldingAddHistory.recommendation_id == int(record.id),
+                        HoldingAddHistory.event_type == "EXECUTED",
+                    )
+                    .order_by(HoldingAddHistory.event_time.asc(), HoldingAddHistory.id.asc())
+                    .all()
+                )
+            if add_rows:
+                if initial_buy_qty <= 0:
+                    initial_buy_qty = _to_int(getattr(add_rows[0], "prev_buy_qty", 0))
+                if scale_in_filled_qty <= 0:
+                    scale_in_filled_qty = sum(
+                        max(0, _to_int(getattr(row, "executed_qty", 0)))
+                        for row in add_rows
+                    )
+        except Exception as exc:
+            log_info(
+                f"[SCALE_IN_BASELINE] history hydration skipped "
+                f"({code}, record_id={getattr(record, 'id', None)}): {exc}"
+            )
+    if initial_buy_qty <= 0 and prior_bundle_count <= 0:
+        initial_buy_qty = max(0, resolved_qty)
     buy_time = getattr(record, "buy_time", None)
     position_tag = normalize_position_tag(strategy, getattr(record, "position_tag", None))
     order_refs = _recover_order_refs_from_logs(code)
@@ -260,6 +300,8 @@ def _ensure_runtime_target(record, *, buy_qty=None, buy_price=None):
             "position_tag": position_tag,
             "buy_qty": resolved_qty,
             "buy_price": resolved_price,
+            "initial_buy_qty": initial_buy_qty,
+            "scale_in_filled_qty": max(0, scale_in_filled_qty),
             "buy_time": buy_time,
             "holding_started_at": buy_time or datetime.now(),
             "added_time": time.time(),
@@ -290,6 +332,8 @@ def _ensure_runtime_target(record, *, buy_qty=None, buy_price=None):
     target["position_tag"] = position_tag
     target["buy_qty"] = resolved_qty
     target["buy_price"] = resolved_price
+    target["initial_buy_qty"] = initial_buy_qty
+    target["scale_in_filled_qty"] = max(0, scale_in_filled_qty)
     target["buy_time"] = buy_time or target.get("buy_time")
     if buy_time and not target.get("holding_started_at"):
         target["holding_started_at"] = buy_time

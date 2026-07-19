@@ -31,6 +31,12 @@
   - 금지: 유형별 카운터를 포지션 종료 전에 초기화하거나 다른 scale-in reason으로 동일 유형 제한을 우회하지 않는다. broker/order/quantity/stale quote guard는 변경하지 않는다.
   - 다음 액션: `process_reflected_and_cap_active`, `process_not_restarted`, `counter_provenance_missing`, `same_type_second_execution_detected` 중 하나로 닫는다.
 
+- [ ] `[ScaleInInitialQtyCapPreopen0720] 최초매수 기준 scale-in 누적 체결수량 1.5배 상한 반영 확인` (`Due: 2026-07-20`, `Slot: PREOPEN`, `TimeWindow: 07:55~08:10`, `Track: ScalpingLogic`)
+  - Source: [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [sniper_execution_receipts.py](/home/ubuntu/KORStockScan/src/engine/sniper_execution_receipts.py), [sniper_sync.py](/home/ubuntu/KORStockScan/src/engine/sniper_sync.py), [models.py](/home/ubuntu/KORStockScan/src/database/models.py)
+  - 판정 기준: 최초매수수량 `initial_buy_qty`와 실제 scale-in 체결 누적 `scale_in_filled_qty`를 확인하고 `floor(initial_buy_qty*1.5)`를 초과하는 신규 scale-in 계획/분할 leg/브로커 호출이 없는지 확인한다. 부분체결은 실제 체결분만 누적하고, 미체결/취소/거절은 누적하지 않는다.
+  - 금지: 유형별 실행횟수 제한을 우회하거나 최초수량/누적수량을 포지션 종료 전에 초기화하지 않는다. 상한 완화, broker/order/stale quote guard 우회, sim/probe의 실주문 권한 전환을 하지 않는다.
+  - 다음 액션: `process_reflected_and_qty_cap_active`, `legacy_initial_qty_hydrated_from_history`, `initial_qty_missing_fail_closed`, `scale_in_qty_cap_breach_detected` 중 하나로 닫는다.
+
 - [ ] `[ThresholdEnvAutoApplyPreopen0720] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-07-20`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-07-16.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-07-16.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)
   - 판정 기준: 전일 postclose EV와 당일 apply plan/runtime env를 확인하고 `auto_bounded_live` guard 통과분만 runtime env로 인정한다.

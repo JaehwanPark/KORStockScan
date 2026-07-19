@@ -5255,6 +5255,18 @@ def _restore_holding_runtime_state(targets):
         stock["strategy"] = strategy
         stock["position_tag"] = position_tag
         stock["buy_qty"] = _safe_int(stock.get("buy_qty"))
+        stock["initial_buy_qty"] = _safe_int(stock.get("initial_buy_qty"))
+        if (
+            stock["initial_buy_qty"] <= 0
+            and max(
+                _safe_int(stock.get("add_count")),
+                _safe_int(stock.get("avg_down_count")),
+                _safe_int(stock.get("pyramid_count")),
+                int(bool(str(stock.get("last_add_type") or "").strip())),
+            ) <= 0
+        ):
+            stock["initial_buy_qty"] = _safe_int(stock.get("buy_qty"))
+        stock["scale_in_filled_qty"] = _safe_int(stock.get("scale_in_filled_qty"))
         stock["add_count"] = _safe_int(stock.get("add_count"))
         stock["avg_down_count"] = _safe_int(stock.get("avg_down_count"))
         stock["pyramid_count"] = _safe_int(stock.get("pyramid_count"))
