@@ -23,7 +23,13 @@
 - `codex_daily_workorder_*.md`는 downstream 전달물이라 입력 source로 사용하지 않는다.
 - RunbookOps 반복 확인은 `build_codex_daily_workorder`와 Project/Calendar 동기화 경로가 별도로 소유한다.
 
-## 장전 체크리스트 (08:45~09:00)
+## 장전 체크리스트 (07:55~09:00)
+
+- [ ] `[ScaleInPerTypeExecutionCapPreopen0720] scale-in 유형별 최대 1회 실행 제한 프로세스 반영 확인` (`Due: 2026-07-20`, `Slot: PREOPEN`, `TimeWindow: 07:55~08:10`, `Track: ScalpingLogic`)
+  - Source: [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [sniper_execution_receipts.py](/home/ubuntu/KORStockScan/src/engine/sniper_execution_receipts.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)
+  - 판정 기준: 신규 프로세스가 변경 코드를 적재했는지 확인하고 동일 포지션 lifecycle에서 `AVG_DOWN` 최대 1회, `PYRAMID` 최대 1회가 각각 독립 적용되는지 확인한다. multi-leg 주문은 하나의 scale-in bundle로 계산하고 미체결/거절/취소 주문은 실행횟수로 계산하지 않는다.
+  - 금지: 유형별 카운터를 포지션 종료 전에 초기화하거나 다른 scale-in reason으로 동일 유형 제한을 우회하지 않는다. broker/order/quantity/stale quote guard는 변경하지 않는다.
+  - 다음 액션: `process_reflected_and_cap_active`, `process_not_restarted`, `counter_provenance_missing`, `same_type_second_execution_detected` 중 하나로 닫는다.
 
 - [ ] `[ThresholdEnvAutoApplyPreopen0720] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-07-20`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-07-16.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-07-16.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)

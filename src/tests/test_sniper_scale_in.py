@@ -1547,15 +1547,19 @@ def test_rising_missed_tp1_nxt_price_jump_recovery_is_nxt_only():
     assert enabled.log_fields["threshold_family"] == (
         "rising_missed_nxt_price_jump_recovery"
     )
-    assert enabled.log_fields[
-        "rising_missed_tp1_nxt_price_jump_recovery_runtime_effect"
-    ] is True
-    assert enabled.log_fields[
-        "rising_missed_tp1_nxt_price_jump_recovery_allowed_runtime_apply"
-    ] is True
-    assert enabled.log_fields["rising_missed_tp1_nxt_price_jump_recovery_active_date"] == (
-        "2026-07-16"
+    assert (
+        enabled.log_fields["rising_missed_tp1_nxt_price_jump_recovery_runtime_effect"]
+        is True
     )
+    assert (
+        enabled.log_fields[
+            "rising_missed_tp1_nxt_price_jump_recovery_allowed_runtime_apply"
+        ]
+        is True
+    )
+    assert enabled.log_fields[
+        "rising_missed_tp1_nxt_price_jump_recovery_active_date"
+    ] == ("2026-07-16")
     assert disabled.reason == "rising_missed_tp1_lane_not_eligible"
     assert krx.reason == "rising_missed_tp1_lane_not_eligible"
 
@@ -14656,6 +14660,9 @@ def test_execute_swing_sim_scale_in_logs_automation_fields(monkeypatch):
 
     assert sent_orders == []
     assert result["actual_order_submitted"] is False
+    assert stock["add_count"] == 1
+    assert stock["pyramid_count"] == 1
+    assert stock["last_add_type"] == "PYRAMID"
     sim_log = [
         fields
         for stage, fields in logs
@@ -16611,6 +16618,132 @@ def test_holding_flow_override_candidate_clears_when_exit_candidate_resolves(
         stage == "holding_flow_override_candidate_cleared"
         for stage, _ in calls["stages"]
     )
+
+
+@pytest.mark.parametrize(
+    ("executed_type", "requested_type"),
+    [
+        ("AVG_DOWN", "AVG_DOWN"),
+        ("PYRAMID", "PYRAMID"),
+    ],
+)
+def test_execute_scale_in_order_blocks_second_execution_of_same_type_before_broker(
+    monkeypatch,
+    executed_type,
+    requested_type,
+):
+    logs = []
+    broker_calls = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: broker_calls.append((args, kwargs)),
+    )
+    stock = {
+        "name": "TEST",
+        "code": "123456",
+        "strategy": "SCALPING",
+        "avg_down_count": int(executed_type == "AVG_DOWN"),
+        "pyramid_count": int(executed_type == "PYRAMID"),
+        "last_add_type": executed_type,
+    }
+
+    result = state_handlers.execute_scale_in_order(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 10000},
+        action={"add_type": requested_type, "reason": "scale_in_test"},
+        admin_id=1,
+    )
+
+    assert result is None
+    assert broker_calls == []
+    assert logs[0][0] == "scale_in_execution_limit_block"
+    assert logs[0][1]["scale_in_type"] == requested_type
+    assert logs[0][1]["scale_in_type_execution_count"] == 1
+    assert logs[0][1]["scale_in_max_executions_per_type"] == 1
+    assert logs[0][1]["actual_order_submitted"] is False
+    assert logs[0][1]["broker_order_forbidden"] is True
+
+
+@pytest.mark.parametrize(
+    ("executed_type", "requested_type"),
+    [
+        ("AVG_DOWN", "PYRAMID"),
+        ("PYRAMID", "AVG_DOWN"),
+    ],
+)
+def test_scale_in_type_limit_keeps_other_type_available(
+    executed_type,
+    requested_type,
+):
+    stock = {
+        "avg_down_count": int(executed_type == "AVG_DOWN"),
+        "pyramid_count": int(executed_type == "PYRAMID"),
+        "last_add_type": executed_type,
+    }
+
+    assert state_handlers._scale_in_execution_limit_decision(
+        stock,
+        requested_type,
+    ) == {
+        "allowed": True,
+        "reason": "ok",
+        "scale_in_type": requested_type,
+        "scale_in_type_execution_count": 0,
+        "scale_in_max_executions_per_type": 1,
+    }
+
+
+@pytest.mark.parametrize(
+    "reservation_fields",
+    [
+        {"stop_line_touch_avg_down_count": 1},
+        {"late_loss_avg_down_retry_count": 1},
+        {"stop_line_touch_avg_down_used": True},
+        {"late_loss_avg_down_retry_used": True},
+    ],
+)
+def test_scale_in_type_limit_does_not_count_unfilled_defensive_reservation(
+    reservation_fields,
+):
+    decision = state_handlers._scale_in_execution_limit_decision(
+        reservation_fields,
+        "AVG_DOWN",
+    )
+
+    assert decision["allowed"] is True
+    assert decision["scale_in_type_execution_count"] == 0
+
+
+@pytest.mark.parametrize(
+    ("add_type", "expected_counter"),
+    [
+        ("AVG_DOWN", "avg_down_count"),
+        ("PYRAMID", "pyramid_count"),
+    ],
+)
+def test_simulated_scale_in_execution_fields_count_one_bundle_by_type(
+    add_type,
+    expected_counter,
+):
+    fields = state_handlers._simulated_scale_in_execution_fields(
+        {"add_count": 0, expected_counter: 0},
+        add_type,
+        add_reason="scale_in_test",
+        executed_at=1000.0,
+    )
+
+    assert fields["add_count"] == 1
+    assert fields[expected_counter] == 1
+    assert fields["last_add_type"] == add_type
+    assert fields["last_add_reason"] == "scale_in_test"
+    assert fields["last_add_time"] == 1000.0
 
 
 def test_timeout_pending_add_attempts_cancel_before_clear(monkeypatch):
