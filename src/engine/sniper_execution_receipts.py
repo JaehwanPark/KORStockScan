@@ -6,6 +6,9 @@ from datetime import datetime
 from typing import Any
 
 from src.database.models import RecommendationHistory
+from src.engine.scalping.opening_rotation import (
+    POSITION_TAG as OPENING_ROTATION_POSITION_TAG,
+)
 from src.engine.sniper_entry_state import (
     ENTRY_LOCK,
     get_terminal_entry_order,
@@ -18,7 +21,7 @@ from src.engine.sniper_position_tags import (
     normalize_position_tag,
     normalize_strategy,
 )
-from src.engine.trade_profit import calculate_net_profit_rate
+from src.engine.trade_profit import calculate_net_profit_rate, calculate_net_realized_pnl
 from src.utils.constants import TRADING_RULES
 from src.utils import kiwoom_utils
 from src.utils.logger import log_error, log_info
@@ -83,6 +86,8 @@ _BUY_RECEIPT_SNAPSHOT_KEYS = (
 )
 _SELL_RECEIPT_SNAPSHOT_KEYS = (
     "actual_order_submitted",
+    "broker_order_forbidden",
+    "buy_price",
     "buy_qty",
     "code",
     "last_exit_current_ai_score",
@@ -98,12 +103,14 @@ _SELL_RECEIPT_SNAPSHOT_KEYS = (
     "pending_sell_msg",
     "post_add_avg_price",
     "post_add_qty",
+    "position_tag",
     "pre_add_avg_price",
     "pre_add_qty",
     "scalp_live_simulator",
     "scale_in_incremental_realized_delta_pct",
     "simulation_book",
     "simulation_owner",
+    "strategy",
     "swing_live_order_dry_run",
 )
 _ADD_RECEIPT_SNAPSHOT_KEYS = (
@@ -284,8 +291,42 @@ def _receipt_snapshot(target_stock: dict[str, Any], keys: tuple[str, ...]) -> di
     return {key: target_stock.get(key) for key in keys}
 
 
+def _sell_completion_contract_fields(position_tag: str) -> dict[str, Any]:
+    if position_tag == OPENING_ROTATION_POSITION_TAG:
+        return {
+            "trade_status": "COMPLETED",
+            "metric_role": "exact_real_trade_performance_source",
+            "decision_authority": "real_execution_observation_only",
+            "window_policy": "clean_baseline_completed_trade_event_time",
+            "sample_floor": "consumer_owned_no_direct_runtime_authority",
+            "primary_decision_metric": "net_profit_rate_and_realized_pnl_krw",
+            "source_quality_gate": (
+                "completed_db_status_valid_net_profit_real_broker_receipt"
+            ),
+            "allowed_runtime_apply": False,
+            "forbidden_uses": (
+                "live_auto_promotion|runtime_apply_bridge|threshold_mutation|"
+                "provider_change|order_price_change|quantity_cap_change|"
+                "broker_guard_bypass"
+            ),
+        }
+    return {
+        "trade_status": "COMPLETED",
+        "allowed_runtime_apply": False,
+        "forbidden_uses": (
+            "EV|rolling|MTD|live_auto_promotion|runtime_apply_bridge|"
+            "threshold_mutation|provider_change|order_price_change|"
+            "quantity_cap_change|broker_guard_bypass"
+        ),
+    }
+
+
 def _resolve_entry_submit_ai_score(target_stock: dict[str, Any], order_no: str = "") -> float | None:
     """Return the BUY submit score that should seed first holding review state."""
+    strategy = normalize_strategy(target_stock.get("strategy"))
+    position_tag = normalize_position_tag(strategy, target_stock.get("position_tag"))
+    if strategy == "SCALPING" and position_tag == OPENING_ROTATION_POSITION_TAG:
+        return None
     pending_orders = target_stock.get("pending_entry_orders") or []
     if isinstance(pending_orders, list):
         for order in pending_orders:
@@ -696,7 +737,16 @@ def _resolve_sell_execution_context(target_id: int, target_stock: dict[str, Any]
                 profit_rate = 0.0
                 log_error(f"⚠️ [수익률 계산 불가] ID {target_id}의 매수가(buy_price)가 누락되어 수익률을 0%로 처리합니다.")
             strategy = normalize_strategy(record.strategy or target_stock.get('strategy') or 'KOSPI_ML')
-            is_scalp_revive = (strategy == 'SCALPING') and (now_t < TIME_15_30)
+            position_tag = normalize_position_tag(
+                strategy,
+                getattr(record, "position_tag", None)
+                or target_stock.get("position_tag"),
+            )
+            is_scalp_revive = (
+                strategy == 'SCALPING'
+                and now_t < TIME_15_30
+                and position_tag != OPENING_ROTATION_POSITION_TAG
+            )
             return record, safe_buy_price, profit_rate, strategy, is_scalp_revive
     except Exception as e:
         log_error(f"🚨 [DB 조회 에러] ID {target_id} SELL 처리 중 에러: {e}")
@@ -1715,6 +1765,30 @@ def _update_db_for_sell(target_id, exec_price, now, receipt_snapshot, strategy, 
             record.sell_price = exec_price
             record.sell_time = now
             record.profit_rate = profit_rate
+            completed_buy_qty = _safe_int(getattr(record, "buy_qty", 0), 0)
+            if completed_buy_qty <= 0:
+                completed_buy_qty = _safe_int(receipt_snapshot.get("buy_qty"), 0)
+            completed_position_tag = normalize_position_tag(
+                strategy,
+                getattr(record, "position_tag", None)
+                or receipt_snapshot.get("position_tag"),
+            )
+            realized_pnl_krw = calculate_net_realized_pnl(
+                safe_buy_price,
+                exec_price,
+                completed_buy_qty,
+            )
+            receipt_snapshot.update(
+                {
+                    "buy_price": safe_buy_price,
+                    "buy_qty": completed_buy_qty,
+                    "position_tag": completed_position_tag,
+                    "strategy": strategy,
+                    "realized_pnl_krw": realized_pnl_krw,
+                    "actual_order_submitted": True,
+                    "broker_order_forbidden": False,
+                }
+            )
 
             log_info(
                 f"🎉 [매매 완료: ID {target_id}] {receipt_snapshot.get('code')} "
@@ -1739,17 +1813,19 @@ def _update_db_for_sell(target_id, exec_price, now, receipt_snapshot, strategy, 
                 exit_decision_source=receipt_snapshot.get('last_exit_decision_source') or 'MANUAL',
                 revive=bool(is_scalp_revive),
                 strategy=strategy,
+                position_tag=completed_position_tag,
+                buy_price=f"{safe_buy_price:.2f}",
+                buy_qty=completed_buy_qty,
+                realized_pnl_krw=realized_pnl_krw,
+                actual_order_submitted=True,
+                broker_order_forbidden=False,
                 no_scale_in_counterfactual_profit_pct=receipt_snapshot.get("no_scale_in_counterfactual_profit_pct", "-"),
                 scale_in_incremental_realized_delta_pct=receipt_snapshot.get("scale_in_incremental_realized_delta_pct", "-"),
                 pre_add_avg_price=receipt_snapshot.get("pre_add_avg_price", "-"),
                 post_add_avg_price=receipt_snapshot.get("post_add_avg_price", "-"),
                 pre_add_qty=receipt_snapshot.get("pre_add_qty", "-"),
                 post_add_qty=receipt_snapshot.get("post_add_qty", "-"),
-                allowed_runtime_apply=False,
-                forbidden_uses=(
-                    "EV|rolling|MTD|live_auto_promotion|runtime_apply_bridge|threshold_mutation|"
-                    "provider_change|order_price_change|quantity_cap_change|broker_guard_bypass"
-                ),
+                **_sell_completion_contract_fields(completed_position_tag),
             )
             try:
                 record_post_sell_candidate(

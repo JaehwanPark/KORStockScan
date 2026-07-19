@@ -353,6 +353,89 @@ def test_sell_receipt_propagates_scale_in_counterfactual_diagnostics(monkeypatch
     )
 
 
+def test_opening_rotation_sell_receipt_keeps_tag_and_realized_pnl(monkeypatch):
+    record = type(
+        "Record",
+        (),
+        {
+            "buy_price": 10_000.0,
+            "buy_qty": 400,
+            "position_tag": "OPENING_ROTATION_1PCT",
+            "status": "SELL_ORDERED",
+            "sell_price": 0,
+            "sell_time": None,
+            "profit_rate": 0.0,
+        },
+    )()
+    receipts.DB = _ReceiptDB(record)
+    receipts.event_bus = _Bus()
+    logged = {}
+    post_sell_calls = []
+    monkeypatch.setattr(
+        receipts,
+        "_log_holding_pipeline",
+        lambda *args, **kwargs: logged.update(kwargs),
+    )
+    monkeypatch.setattr(
+        receipts,
+        "record_post_sell_candidate",
+        lambda **kwargs: post_sell_calls.append(kwargs) or {"post_sell_id": "TEST"},
+    )
+    snapshot = {
+        "code": "123456",
+        "name": "TEST",
+        "msg_audience": "ADMIN_ONLY",
+        "position_tag": "OPENING_ROTATION_1PCT",
+        "strategy": "SCALPING",
+    }
+
+    receipts._update_db_for_sell(
+        7,
+        10_150,
+        datetime(2026, 7, 20, 9, 11, 0),
+        snapshot,
+        "SCALPING",
+        False,
+    )
+
+    assert logged["position_tag"] == "OPENING_ROTATION_1PCT"
+    assert logged["realized_pnl_krw"] > 30_000
+    assert logged["actual_order_submitted"] is True
+    assert logged["trade_status"] == "COMPLETED"
+    assert logged["metric_role"] == "exact_real_trade_performance_source"
+    assert "EV" not in logged["forbidden_uses"].split("|")
+    assert logged["allowed_runtime_apply"] is False
+    assert post_sell_calls[0]["stock"]["position_tag"] == "OPENING_ROTATION_1PCT"
+    assert post_sell_calls[0]["stock"]["actual_order_submitted"] is True
+    assert post_sell_calls[0]["stock"]["broker_order_forbidden"] is False
+
+
+def test_opening_rotation_intraday_sell_does_not_revive_same_symbol():
+    record = type(
+        "Record",
+        (),
+        {
+            "buy_price": 10_000.0,
+            "strategy": "SCALPING",
+            "position_tag": "OPENING_ROTATION_1PCT",
+        },
+    )()
+    receipts.DB = _ReceiptDB(record)
+
+    context = receipts._resolve_sell_execution_context(
+        7,
+        {
+            "strategy": "SCALPING",
+            "position_tag": "OPENING_ROTATION_1PCT",
+        },
+        10_150,
+        datetime(2026, 7, 20, 9, 30).time(),
+    )
+
+    assert context is not None
+    assert context[-1] is False
+
+
 def test_periodic_account_sync_uses_net_profit_rate_for_missing_sell_receipt(
     monkeypatch,
 ):

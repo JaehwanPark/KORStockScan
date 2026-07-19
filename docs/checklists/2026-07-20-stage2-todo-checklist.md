@@ -49,6 +49,12 @@
   - 금지: `rising_missed_scout_workorder`/bridge discovery 생성 또는 forced 1-share scout 손익만으로 runtime threshold mutation, stale submit bypass, broker/order guard 완화, provider/bot/cap 변경, real execution quality approval을 열지 않는다.
   - 다음 액션: `runtime_env_reflected_and_verified`, `implemented_but_runtime_not_selected`, `source_only_no_runtime_authority`, `blocked_by_apply_guard`, `report_missing_or_stale`, `verify_missing_or_failed` 중 하나로 닫는다.
 
+- [ ] `[OpeningRotationFreshnessEnvelopePreopen0720] OPENING_ROTATION_1PCT freshness envelope 프로세스 반영 및 provenance 확인` (`Due: 2026-07-20`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: ScalpingLogic`)
+  - Source: [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [opening_rotation.py](/home/ubuntu/KORStockScan/src/engine/scalping/opening_rotation.py), [market_data_enrichment.py](/home/ubuntu/KORStockScan/src/engine/scalping/market_data_enrichment.py), [test_opening_rotation.py](/home/ubuntu/KORStockScan/src/tests/test_opening_rotation.py)
+  - 판정 기준: 신규 프로세스가 변경 코드를 적재했는지 확인하고 `opening_rotation_freshness_envelope_ready`, `market_data_freshness_state`, `market_data_effective_price_source`, effective/WS/REST quote age와 tick context provenance가 `opening_rotation_1pct_observed|qualified` 이벤트에 기록되는지 확인한다. 유효한 `fresh_ws` 또는 1.5초 이내 `rest_enriched`는 진입 평가를 계속하고 `conflicted`, 시간 기준 불명, 양쪽 stale, stale tick context는 패턴 상태를 갱신하지 않고 차단해야 한다.
+  - 금지: AI 점수를 하드게이트로 사용하거나 REST signed tape/호가를 단독 BUY 근거로 사용하지 않는다. stale quote, broker/account/order/quantity/cooldown guard를 우회하거나 threshold/provider/cap/bot 상태를 장중 변경하지 않는다.
+  - 다음 액션: `process_reflected_and_envelope_active`, `process_not_restarted`, `freshness_provenance_missing`, `valid_envelope_overblocked`, `stale_or_conflicted_envelope_bypassed` 중 하나로 닫는다.
+
 ## 장중 체크리스트 (09:05~15:20)
 
 - [ ] `[RuntimeEnvIntradayObserve0720] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-07-20`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)

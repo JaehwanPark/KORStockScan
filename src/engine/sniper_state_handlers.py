@@ -60,6 +60,16 @@ from src.engine.scalping.microstructure_reaction_context import (
     infer_tick_aggressor_side,
     neutral_microstructure_reaction_context,
 )
+from src.engine.scalping.opening_rotation import (
+    EntryConfig as OpeningRotationEntryConfig,
+    ExitConfig as OpeningRotationExitConfig,
+    POSITION_TAG as OPENING_ROTATION_POSITION_TAG,
+    STATE_KEY as OPENING_ROTATION_STATE_KEY,
+    evaluate_entry as evaluate_opening_rotation_entry,
+    evaluate_exit as evaluate_opening_rotation_exit,
+    is_strategy_position as is_opening_rotation_position,
+    is_watch_candidate as is_opening_rotation_watch_candidate,
+)
 from src.engine.scalping.watching_score_smoothing import (
     evaluate_watching_score,
     normalize_mode as normalize_watching_score_smoothing_mode,
@@ -422,6 +432,19 @@ def _simulated_scale_in_execution_fields(
         "last_add_reason": str(add_reason or "").strip(),
         "last_add_time": float(executed_at),
     }
+    initial_qty = max(
+        0,
+        _safe_int(
+            stock.get("initial_buy_qty"),
+            _safe_int(stock.get("buy_qty"), 0),
+        ),
+    )
+    fields["initial_buy_qty"] = initial_qty
+    fields["scale_in_filled_qty"] = max(
+        0,
+        _safe_int(stock.get("scale_in_filled_qty"), 0)
+        + max(0, _safe_int(executed_qty, 0)),
+    )
     if normalized_type == "AVG_DOWN":
         fields["avg_down_count"] = max(0, _safe_int(stock.get("avg_down_count"), 0)) + 1
     elif normalized_type == "PYRAMID":
@@ -37987,6 +38010,733 @@ def _bucket_int_with_deadband(value, bucket, *, zero_band=1.0):
         return 0
 
 
+def _opening_rotation_time(name: str, default: datetime_time) -> datetime_time:
+    raw = str(
+        os.getenv(
+            f"KORSTOCKSCAN_{name}",
+            _rule(name, default.strftime("%H:%M")),
+        )
+        or ""
+    ).strip()
+    try:
+        hour_text, minute_text = raw.split(":", 1)
+        return datetime_time(int(hour_text), int(minute_text))
+    except (TypeError, ValueError):
+        return default
+
+
+def _opening_rotation_float(name: str, default: float) -> float:
+    raw = os.getenv(f"KORSTOCKSCAN_{name}")
+    if raw is not None:
+        return _safe_float(raw, _rule_float(name, default))
+    return _rule_float(name, default)
+
+
+def _opening_rotation_entry_config() -> OpeningRotationEntryConfig:
+    min_ratio = _rule_float("INVEST_RATIO_SCALPING_MIN", 0.10)
+    max_ratio = _rule_float("INVEST_RATIO_SCALPING_MAX", 0.30)
+    requested_ratio = _opening_rotation_float(
+        "OPENING_ROTATION_1PCT_BUDGET_RATIO", 0.10
+    )
+    return OpeningRotationEntryConfig(
+        enabled=_env_or_rule_bool("OPENING_ROTATION_1PCT_ENABLED", True),
+        observe_start=_opening_rotation_time(
+            "OPENING_ROTATION_1PCT_OBSERVE_START", datetime_time(9, 1)
+        ),
+        entry_start=_opening_rotation_time(
+            "OPENING_ROTATION_1PCT_ENTRY_START", datetime_time(9, 10)
+        ),
+        entry_end=_opening_rotation_time(
+            "OPENING_ROTATION_1PCT_ENTRY_END", datetime_time(10, 30)
+        ),
+        min_day_change_pct=_opening_rotation_float(
+            "OPENING_ROTATION_1PCT_MIN_DAY_CHANGE_PCT", 1.5
+        ),
+        max_day_change_pct=_opening_rotation_float(
+            "OPENING_ROTATION_1PCT_MAX_DAY_CHANGE_PCT", 8.0
+        ),
+        min_pullback_pct=_opening_rotation_float(
+            "OPENING_ROTATION_1PCT_MIN_PULLBACK_PCT", 0.25
+        ),
+        max_pullback_pct=_opening_rotation_float(
+            "OPENING_ROTATION_1PCT_MAX_PULLBACK_PCT", 1.0
+        ),
+        max_spread_bp=_opening_rotation_float(
+            "OPENING_ROTATION_1PCT_MAX_SPREAD_BP", 15.0
+        ),
+        min_buy_pressure_pct=_opening_rotation_float(
+            "OPENING_ROTATION_1PCT_MIN_BUY_PRESSURE_PCT", 58.0
+        ),
+        min_trusted_ticks=_env_or_rule_int(
+            "OPENING_ROTATION_1PCT_MIN_TRUSTED_TICKS", 5
+        ),
+        min_tick_acceleration=_opening_rotation_float(
+            "OPENING_ROTATION_1PCT_MIN_TICK_ACCELERATION", 1.15
+        ),
+        min_tick_price_change_pct=_opening_rotation_float(
+            "OPENING_ROTATION_1PCT_MIN_TICK_PRICE_CHANGE_PCT", 0.03
+        ),
+        min_volume_ratio_pct=_opening_rotation_float(
+            "OPENING_ROTATION_1PCT_MIN_VOLUME_RATIO_PCT", 80.0
+        ),
+        min_vwap_distance_bp=_opening_rotation_float(
+            "OPENING_ROTATION_1PCT_MIN_VWAP_DISTANCE_BP", -5.0
+        ),
+        max_vwap_distance_bp=_opening_rotation_float(
+            "OPENING_ROTATION_1PCT_MAX_VWAP_DISTANCE_BP", 60.0
+        ),
+        min_ask_sweep_score=_opening_rotation_float(
+            "OPENING_ROTATION_1PCT_MIN_ASK_SWEEP_SCORE", 65.0
+        ),
+        min_post_sweep_hold_score=_opening_rotation_float(
+            "OPENING_ROTATION_1PCT_MIN_POST_SWEEP_HOLD_SCORE", 60.0
+        ),
+        min_bid_replenishment_score=_opening_rotation_float(
+            "OPENING_ROTATION_1PCT_MIN_BID_REPLENISHMENT_SCORE", 55.0
+        ),
+        max_wall_risk_score=_opening_rotation_float(
+            "OPENING_ROTATION_1PCT_MAX_WALL_RISK_SCORE", 69.0
+        ),
+        max_vi_risk_score=_opening_rotation_float(
+            "OPENING_ROTATION_1PCT_MAX_VI_RISK_SCORE", 69.0
+        ),
+        budget_ratio=max(min_ratio, min(max_ratio, requested_ratio)),
+        mechanical_signal_strength=max(
+            0.0,
+            min(
+                1.0,
+                _opening_rotation_float(
+                    "OPENING_ROTATION_1PCT_MECHANICAL_SIGNAL_STRENGTH", 0.80
+                ),
+            ),
+        ),
+    )
+
+
+def _opening_rotation_exit_config() -> OpeningRotationExitConfig:
+    return OpeningRotationExitConfig(
+        take_profit_pct=_opening_rotation_float(
+            "OPENING_ROTATION_1PCT_TAKE_PROFIT_PCT", 1.0
+        ),
+        stop_loss_pct=_opening_rotation_float(
+            "OPENING_ROTATION_1PCT_STOP_LOSS_PCT", -0.5
+        ),
+        stagnation_sec=max(
+            1, _env_or_rule_int("OPENING_ROTATION_1PCT_STAGNATION_SEC", 300)
+        ),
+        stagnation_max_profit_pct=_opening_rotation_float(
+            "OPENING_ROTATION_1PCT_STAGNATION_MAX_PROFIT_PCT", 0.20
+        ),
+        max_hold_sec=max(
+            1, _env_or_rule_int("OPENING_ROTATION_1PCT_MAX_HOLD_SEC", 600)
+        ),
+    )
+
+
+def _opening_rotation_contract_fields(*, runtime_effect: bool) -> dict:
+    return {
+        "metric_role": "bounded_tunable_live_strategy",
+        "decision_authority": "operator_requested_real_opening_rotation_1pct",
+        "window_policy": "same_day_preopen_configured_observation_and_entry_window_kst",
+        "sample_floor": "not_applicable_operator_requested_live_runtime",
+        "primary_decision_metric": "cost_aware_net_profit_rate_and_realized_pnl_krw",
+        "source_quality_gate": "fresh_quote_trusted_ticks_orderbook_and_minute_candles",
+        "runtime_effect": bool(runtime_effect),
+        "allowed_runtime_apply": True,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": not bool(runtime_effect),
+        "ai_score_hard_gate": False,
+        "ai_score_decision_authority": "feature_only_not_evaluated",
+        "forbidden_uses": (
+            "ai_score_submit_permission,ai_score_sizing,ai_score_exit_permission,"
+            "broker_guard_bypass,stale_quote_bypass,account_guard_bypass,"
+            "quantity_guard_bypass,hard_safety_relaxation"
+        ),
+    }
+
+
+_OPENING_ROTATION_CONTEXT_CACHE: dict[str, dict] = {}
+_OPENING_ROTATION_FRESHNESS_RATE_LOCK = threading.Lock()
+_OPENING_ROTATION_FRESHNESS_RATE_EPOCHS: list[float] = []
+
+
+def _opening_rotation_freshness_cache_ttl_sec() -> float:
+    return max(
+        0.2,
+        min(
+            _opening_rotation_float(
+                "OPENING_ROTATION_1PCT_FRESHNESS_CACHE_TTL_SEC", 3.0
+            ),
+            5.0,
+        ),
+    )
+
+
+def _opening_rotation_freshness_rest_timeout_ms() -> int:
+    return max(
+        50,
+        min(
+            _env_or_rule_int("OPENING_ROTATION_1PCT_FRESHNESS_REST_TIMEOUT_MS", 400),
+            1500,
+        ),
+    )
+
+
+def _reserve_opening_rotation_freshness_rest_packet(
+    now_ts: float,
+) -> tuple[bool, str]:
+    window_sec = max(
+        1.0,
+        min(
+            _opening_rotation_float(
+                "OPENING_ROTATION_1PCT_FRESHNESS_REST_RATE_WINDOW_SEC", 30.0
+            ),
+            120.0,
+        ),
+    )
+    max_packets = max(
+        1,
+        min(
+            _env_or_rule_int(
+                "OPENING_ROTATION_1PCT_FRESHNESS_REST_MAX_PACKETS_PER_WINDOW",
+                12,
+            ),
+            40,
+        ),
+    )
+    window_start = float(now_ts) - window_sec
+    with _OPENING_ROTATION_FRESHNESS_RATE_LOCK:
+        active_epochs = [
+            epoch
+            for epoch in _OPENING_ROTATION_FRESHNESS_RATE_EPOCHS
+            if epoch >= window_start
+        ]
+        _OPENING_ROTATION_FRESHNESS_RATE_EPOCHS[:] = active_epochs
+        if len(active_epochs) >= max_packets:
+            return False, "rest_rate_budget_deferred"
+        _OPENING_ROTATION_FRESHNESS_RATE_EPOCHS.append(float(now_ts))
+    return True, "rest_rate_budget_allowed"
+
+
+def _opening_rotation_freshness_envelope_ready(source: dict | None) -> bool:
+    source = source if isinstance(source, dict) else {}
+    state = str(source.get("market_data_freshness_state") or "").strip().lower()
+    orderbook_state = (
+        str(source.get("market_data_orderbook_state") or "").strip().lower()
+    )
+    effective_source = (
+        str(source.get("market_data_effective_price_source") or "").strip().lower()
+    )
+    age_basis = str(source.get("market_data_effective_age_basis") or "missing")
+    effective_age_ms = _safe_float(
+        source.get("market_data_effective_quote_age_ms"), None
+    )
+    max_effective_age_ms = (
+        1500.0 if effective_source == "ka10004_rest_orderbook" else 3000.0
+    )
+    time_basis_known = bool(
+        age_basis != "missing"
+        and not age_basis.startswith("reported_age_no_time_basis")
+    )
+    return bool(
+        state in {"fresh_ws", "rest_enriched"}
+        and orderbook_state == state
+        and effective_source in {"ws", "ka10004_rest_orderbook"}
+        and effective_age_ms is not None
+        and effective_age_ms <= max_effective_age_ms
+        and time_basis_known
+    )
+
+
+def _opening_rotation_cached_freshness_envelope(
+    source_ws: dict | None,
+    source_fields: dict | None,
+    *,
+    stored_at: Any,
+    now_ts: float,
+) -> dict:
+    source_ws = source_ws if isinstance(source_ws, dict) else {}
+    source_fields = source_fields if isinstance(source_fields, dict) else {}
+    stored_at_value = _safe_float(stored_at, None)
+    if not source_ws and not source_fields:
+        return {}
+    if stored_at_value is None:
+        return {}
+    age_sec = max(0.0, float(now_ts) - stored_at_value)
+    if age_sec > _opening_rotation_freshness_cache_ttl_sec():
+        return {}
+    cached = {**source_ws, **source_fields}
+    age_increment_ms = age_sec * 1000.0
+    for key in (
+        "quote_age_ms",
+        "ws_age_ms",
+        "market_data_effective_quote_age_ms",
+        "market_data_ws_quote_age_ms",
+        "market_data_rest_quote_age_ms",
+    ):
+        value = _safe_float(cached.get(key), None)
+        if value is not None:
+            cached[key] = round(max(0.0, value + age_increment_ms), 3)
+    cached["opening_rotation_freshness_cache_age_sec"] = round(age_sec, 3)
+    return cached
+
+
+def _resolve_opening_rotation_freshness_envelope(
+    stock: dict | None,
+    code: str,
+    ws_data: dict | None,
+    *,
+    now_ts: float,
+) -> tuple[dict, dict[str, Any]]:
+    """Resolve quote freshness without treating REST tape as positive BUY support."""
+
+    stock = stock if isinstance(stock, dict) else {}
+    raw_ws = dict(ws_data or {})
+    normalized_ws, normalized_fields = build_market_data_enrichment(
+        ws_data=raw_ws,
+        candidate_metadata={
+            "source_signature": stock.get("source_signature")
+            or stock.get("scanner_source_signature")
+            or "opening_rotation_1pct",
+        },
+        now_ts=now_ts,
+    )
+    normalized_ws.update(normalized_fields)
+    selected = normalized_ws
+    selected_source = "current_ws"
+    rest_attempted = False
+    rest_fetch_state = "not_needed"
+    rest_fetch_elapsed_ms = 0.0
+    budget_reason = "not_needed"
+
+    opening_cached = _opening_rotation_cached_freshness_envelope(
+        stock.get("_opening_rotation_freshness_envelope_ws_data"),
+        stock.get("_opening_rotation_freshness_envelope_fields"),
+        stored_at=stock.get("_opening_rotation_freshness_envelope_stored_at"),
+        now_ts=now_ts,
+    )
+    scanner_cached = _opening_rotation_cached_freshness_envelope(
+        stock.get("_scanner_market_data_enrichment_ws_data"),
+        stock.get("_scanner_market_data_enrichment_fields"),
+        stored_at=stock.get("_scanner_market_data_enrichment_stored_at"),
+        now_ts=now_ts,
+    )
+    cached_candidates = [
+        (name, value)
+        for name, value in (
+            ("opening_rotation_cache", opening_cached),
+            ("scanner_envelope_cache", scanner_cached),
+        )
+        if value
+    ]
+    cached_conflict = next(
+        (
+            (name, value)
+            for name, value in cached_candidates
+            if str(value.get("market_data_freshness_state") or "").lower()
+            == "conflicted"
+            and _safe_float(value.get("market_data_effective_quote_age_ms"), 999999.0)
+            <= 3000.0
+        ),
+        None,
+    )
+    if cached_conflict is not None:
+        selected_source, selected = cached_conflict
+    elif _opening_rotation_freshness_envelope_ready(normalized_ws):
+        selected = normalized_ws
+        selected_source = "current_ws"
+    else:
+        cached_ready = [
+            (name, value)
+            for name, value in cached_candidates
+            if _opening_rotation_freshness_envelope_ready(value)
+        ]
+        if cached_ready:
+            selected_source, selected = min(
+                cached_ready,
+                key=lambda item: _safe_float(
+                    item[1].get("market_data_effective_quote_age_ms"),
+                    999999.0,
+                ),
+            )
+        else:
+            min_interval_sec = max(
+                0.2,
+                _opening_rotation_float(
+                    "OPENING_ROTATION_1PCT_FRESHNESS_REST_MIN_INTERVAL_SEC",
+                    2.0,
+                ),
+            )
+            last_fetch_at = _safe_float(
+                stock.get("_opening_rotation_freshness_rest_last_fetch_at"), 0.0
+            )
+            if last_fetch_at > 0 and now_ts - last_fetch_at < min_interval_sec:
+                budget_reason = "rest_min_interval_deferred"
+            elif not KIWOOM_TOKEN:
+                budget_reason = "kiwoom_token_missing"
+            else:
+                reserve_allowed, budget_reason = (
+                    _reserve_opening_rotation_freshness_rest_packet(now_ts)
+                )
+                if reserve_allowed:
+                    rest_attempted = True
+                    stock["_opening_rotation_freshness_rest_last_fetch_at"] = now_ts
+                    timeout_ms = _opening_rotation_freshness_rest_timeout_ms()
+                    rest_orderbook, rest_fetch_state, rest_fetch_elapsed_ms = (
+                        _fetch_rest_orderbook_snapshot_bounded(code, timeout_ms)
+                    )
+                    if rest_orderbook:
+                        selected, selected_fields = build_market_data_enrichment(
+                            ws_data=raw_ws,
+                            rest_orderbook=rest_orderbook,
+                            candidate_metadata={
+                                "source_signature": stock.get("source_signature")
+                                or stock.get("scanner_source_signature")
+                                or "opening_rotation_1pct",
+                            },
+                            now_ts=now_ts,
+                            prefer_freshest_source=True,
+                        )
+                        selected.update(selected_fields)
+                        selected_source = "bounded_ka10004_envelope"
+                        stock["_opening_rotation_freshness_envelope_ws_data"] = dict(
+                            selected
+                        )
+                        stock["_opening_rotation_freshness_envelope_fields"] = dict(
+                            selected_fields
+                        )
+                        stock["_opening_rotation_freshness_envelope_stored_at"] = now_ts
+
+    ready = _opening_rotation_freshness_envelope_ready(selected)
+    effective_age_ms = _safe_float(
+        selected.get("market_data_effective_quote_age_ms"), None
+    )
+    if ready and effective_age_ms is not None:
+        selected["quote_age_ms"] = round(effective_age_ms, 3)
+        selected["quote_stale"] = False
+        selected["stale_quote"] = False
+    else:
+        selected["quote_stale"] = True
+        selected["stale_quote"] = True
+
+    fields = {
+        **market_data_enrichment_log_fields(selected),
+        "opening_rotation_freshness_envelope_ready": ready,
+        "opening_rotation_freshness_envelope_result": (
+            "ready" if ready else "blocked_source_quality"
+        ),
+        "opening_rotation_freshness_envelope_selected_source": selected_source,
+        "opening_rotation_freshness_envelope_rest_attempted": rest_attempted,
+        "opening_rotation_freshness_envelope_rest_fetch_state": rest_fetch_state,
+        "opening_rotation_freshness_envelope_rest_fetch_elapsed_ms": round(
+            rest_fetch_elapsed_ms, 3
+        ),
+        "opening_rotation_freshness_envelope_rest_budget_reason": budget_reason,
+        "opening_rotation_freshness_envelope_metric_role": "source_quality_gate",
+        "opening_rotation_freshness_envelope_decision_authority": (
+            "quote_freshness_only_no_standalone_buy_support"
+        ),
+        "opening_rotation_freshness_envelope_window_policy": (
+            "same_day_intraday_runtime_snapshot"
+        ),
+        "opening_rotation_freshness_envelope_sample_floor": (
+            "not_applicable_source_quality_gate"
+        ),
+        "opening_rotation_freshness_envelope_primary_decision_metric": (
+            "effective_quote_age_ms"
+        ),
+        "opening_rotation_freshness_envelope_source_quality_gate": (
+            "fresh_ws_or_rest_enriched_known_time_basis_non_conflicted"
+        ),
+        "opening_rotation_freshness_envelope_runtime_effect": True,
+        "opening_rotation_freshness_envelope_allowed_runtime_apply": True,
+        "opening_rotation_freshness_envelope_actual_order_submitted": False,
+        "opening_rotation_freshness_envelope_broker_order_forbidden": True,
+        "opening_rotation_freshness_envelope_forbidden_uses": (
+            "standalone_buy,pressure_math,ai_score_gate,broker_guard_bypass,"
+            "stale_quote_bypass,quantity_or_cap_change,provider_route_change"
+        ),
+    }
+    selected.update(fields)
+    return selected, fields
+
+
+def _opening_rotation_feature_packet(stock, code, ws_data, *, now_ts, now_dt):
+    effective_ws, freshness_fields = _resolve_opening_rotation_freshness_envelope(
+        stock,
+        code,
+        ws_data,
+        now_ts=now_ts,
+    )
+    with ENTRY_LOCK:
+        cached = dict(_OPENING_ROTATION_CONTEXT_CACHE.get(code) or {})
+    cache_at = _safe_float(cached.get("cached_at"), 0.0)
+    # ka10003 exposes only a price-change heuristic, not trusted aggressor
+    # direction. Passing it here would let REST tape influence acceleration
+    # even though the opening strategy requires trusted WS trade ticks.
+    recent_ticks = []
+    recent_candles = cached.get("recent_candles") or []
+    cache_ttl_sec = max(
+        0.5,
+        _opening_rotation_float("OPENING_ROTATION_1PCT_CONTEXT_CACHE_SEC", 2.0),
+    )
+    if cache_at <= 0 or (now_ts - cache_at) >= cache_ttl_sec:
+        recent_candles = (
+            kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=20) or []
+        )
+        with ENTRY_LOCK:
+            _OPENING_ROTATION_CONTEXT_CACHE[code] = {
+                "cached_at": now_ts,
+                "recent_candles": recent_candles,
+            }
+    packet = extract_scalping_feature_packet(
+        effective_ws, recent_ticks, recent_candles, now=now_dt
+    )
+    packet.update(freshness_fields)
+    effective_age_ms = _safe_float(
+        freshness_fields.get("market_data_effective_quote_age_ms"), None
+    )
+    envelope_ready = bool(
+        freshness_fields.get("opening_rotation_freshness_envelope_ready")
+    )
+    packet.update(
+        {
+            "quote_age_ms": (
+                round(effective_age_ms, 3) if effective_age_ms is not None else "-"
+            ),
+            "quote_age_source": "opening_rotation_freshness_envelope",
+            "quote_stale": not envelope_ready,
+        }
+    )
+    return packet
+
+
+def _activate_opening_rotation_after_broker_submit(stock, code) -> None:
+    """Commit the live strategy tag only after a broker accepted a BUY leg."""
+
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "position_tag": OPENING_ROTATION_POSITION_TAG,
+            "scale_in_locked": True,
+            "opening_rotation_1pct_live": True,
+        },
+    )
+    with ENTRY_LOCK:
+        _OPENING_ROTATION_CONTEXT_CACHE.pop(code, None)
+
+
+def _opening_rotation_yields_to_rising_missed_owner(stock, runtime=None) -> bool:
+    """Keep rising-missed candidates and scout upgrades out of rotation entry."""
+
+    stock = stock if isinstance(stock, dict) else {}
+    runtime = runtime if isinstance(runtime, dict) else {}
+    pos_tag = runtime.get("pos_tag") or stock.get("position_tag")
+    if is_opening_rotation_position(pos_tag):
+        return False
+    return bool(
+        runtime.get("scout_upgrade_entry")
+        or _has_rising_missed_entry_lineage(stock, runtime)
+        or _has_rising_missed_watch_source_marker(stock)
+    )
+
+
+def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> bool:
+    now_ts = runtime["now_ts"]
+    now_dt = runtime.get("now_dt") or datetime.fromtimestamp(now_ts)
+    pos_tag = runtime["pos_tag"]
+    entry_config = _opening_rotation_entry_config()
+    source_signature = stock.get("source_signature") or stock.get(
+        "scanner_source_signature"
+    )
+    day_change_pct = _safe_float(
+        ws_data.get("fluctuation", ws_data.get("fluctuation_rate")),
+        runtime.get("fluctuation", 0.0),
+    )
+    direct_position = is_opening_rotation_position(pos_tag)
+    if _opening_rotation_yields_to_rising_missed_owner(stock, runtime):
+        with ENTRY_LOCK:
+            _OPENING_ROTATION_CONTEXT_CACHE.pop(code, None)
+        _mutate_stock_state(
+            stock,
+            pop_fields=[
+                OPENING_ROTATION_STATE_KEY,
+                "opening_rotation_1pct_last_reason",
+                "opening_rotation_mechanical_signal_strength",
+                "opening_rotation_ai_score_hard_gate",
+                "opening_rotation_ai_score_decision_authority",
+            ],
+        )
+        last_owner_log_at = _safe_float(
+            stock.get("opening_rotation_1pct_owner_exclusion_last_log_at"), 0.0
+        )
+        if now_ts - last_owner_log_at >= 30.0:
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "opening_rotation_1pct_owner_exclusion_last_log_at": now_ts,
+                    "opening_rotation_1pct_entry_owner": "rising_missed_scout",
+                },
+            )
+            _log_entry_pipeline(
+                stock,
+                code,
+                "opening_rotation_1pct_entry_owner_excluded",
+                opening_rotation_entry_owner="rising_missed_scout",
+                source_signature=source_signature or "-",
+                scout_upgrade_entry=bool(runtime.get("scout_upgrade_entry")),
+                rising_missed_entry_lineage=_has_rising_missed_entry_lineage(
+                    stock, runtime
+                ),
+                metric_role="funnel_count",
+                decision_authority="entry_owner_routing_only",
+                window_policy="same_day_intraday_runtime_state",
+                sample_floor="not_applicable_entry_owner_routing",
+                primary_decision_metric="opening_rotation_entry_owner",
+                source_quality_gate="rising_missed_marker_or_lineage_present",
+                runtime_effect=False,
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                allowed_runtime_apply=False,
+                forbidden_uses=(
+                    "threshold_mutation,provider_change,order_price_change,"
+                    "quantity_or_cap_change,broker_guard_bypass,stale_quote_bypass"
+                ),
+            )
+        return False
+    if stock.get("opening_rotation_1pct_entry_owner") == "rising_missed_scout":
+        _mutate_stock_state(
+            stock,
+            pop_fields=["opening_rotation_1pct_entry_owner"],
+        )
+    candidate = is_opening_rotation_watch_candidate(
+        position_tag=pos_tag,
+        source_signature=source_signature,
+        day_change_pct=day_change_pct,
+        now_dt=now_dt,
+        config=entry_config,
+    )
+    if not candidate:
+        if not entry_config.enabled or now_dt.time() > entry_config.entry_end:
+            with ENTRY_LOCK:
+                _OPENING_ROTATION_CONTEXT_CACHE.pop(code, None)
+        return bool(direct_position)
+
+    try:
+        feature_packet = _opening_rotation_feature_packet(
+            stock, code, ws_data, now_ts=now_ts, now_dt=now_dt
+        )
+    except Exception as exc:
+        decision = {
+            "qualified": False,
+            "reason": "feature_context_fetch_failed",
+            "error": str(exc)[:160],
+            "state": stock.get(OPENING_ROTATION_STATE_KEY) or {},
+        }
+    else:
+        decision = evaluate_opening_rotation_entry(
+            previous_state=stock.get(OPENING_ROTATION_STATE_KEY),
+            feature_packet=feature_packet,
+            source_signature=source_signature,
+            day_change_pct=day_change_pct,
+            intraday_high_price=stock.get("intraday_high_price"),
+            now_dt=now_dt,
+            config=entry_config,
+        )
+
+    decision_state = decision.get("state") if isinstance(decision, dict) else {}
+    reason = str(decision.get("reason") or "not_evaluated")
+    previous_reason = str(stock.get("opening_rotation_1pct_last_reason") or "")
+    should_log = bool(
+        decision.get("qualified")
+        or reason != previous_reason
+        or (now_ts - _safe_float(stock.get("opening_rotation_1pct_last_log_at"), 0.0))
+        >= 10.0
+    )
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            OPENING_ROTATION_STATE_KEY: decision_state or {},
+            "opening_rotation_1pct_last_reason": reason,
+            "opening_rotation_1pct_last_log_at": (
+                now_ts
+                if should_log
+                else stock.get("opening_rotation_1pct_last_log_at", 0.0)
+            ),
+        },
+    )
+    if should_log:
+        _log_entry_pipeline(
+            stock,
+            code,
+            (
+                "opening_rotation_1pct_qualified"
+                if decision.get("qualified")
+                else "opening_rotation_1pct_observed"
+            ),
+            reason=reason,
+            position_tag_candidate=OPENING_ROTATION_POSITION_TAG,
+            entry_window_start=entry_config.entry_start.isoformat(),
+            entry_window_end=entry_config.entry_end.isoformat(),
+            **{
+                key: value
+                for key, value in decision.items()
+                if key
+                not in {
+                    "state",
+                    "reason",
+                    "qualified",
+                    "in_scope",
+                    "ai_score_hard_gate",
+                    "ai_score_decision_authority",
+                }
+            },
+            **_opening_rotation_contract_fields(
+                runtime_effect=bool(decision.get("qualified"))
+            ),
+        )
+    if not decision.get("qualified"):
+        return True
+
+    current_price = _safe_int(decision.get("curr_price"), runtime["curr_price"])
+    ask_tot = _safe_int(ws_data.get("ask_tot"), 0)
+    bid_tot = _safe_int(ws_data.get("bid_tot"), 0)
+    liquidity_value = (ask_tot + bid_tot) * current_price
+    runtime.update(
+        {
+            "pos_tag": OPENING_ROTATION_POSITION_TAG,
+            "curr_price": current_price,
+            "ratio": float(decision.get("budget_ratio", entry_config.budget_ratio)),
+            "liquidity_value": liquidity_value,
+            "scalp_liquidity_value": liquidity_value,
+            "scalp_min_liquidity": int(config.get("MIN_SCALP_LIQUIDITY", 500_000_000)),
+            "is_trigger": True,
+            "opening_rotation_1pct_live": True,
+            "opening_rotation_mechanical_signal_strength": float(
+                decision.get(
+                    "mechanical_signal_strength",
+                    entry_config.mechanical_signal_strength,
+                )
+            ),
+            "current_ai_score": 0.0,
+        }
+    )
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "target_buy_price": current_price,
+            "opening_rotation_mechanical_signal_strength": runtime[
+                "opening_rotation_mechanical_signal_strength"
+            ],
+            "opening_rotation_ai_score_hard_gate": False,
+            "opening_rotation_ai_score_decision_authority": (
+                "feature_only_not_evaluated"
+            ),
+        },
+    )
+    return True
+
+
 def _handle_watching_strategy_branch(
     stock, code, ws_data, radar, ai_engine, runtime, config
 ):
@@ -38015,6 +38765,12 @@ def _handle_watching_strategy_branch(
     if strategy == "SCALPING":
         if pos_tag == "VCP_CANDID":
             return False
+
+        opening_rotation_handled = _handle_watching_opening_rotation(
+            stock, code, ws_data, runtime, config
+        )
+        if opening_rotation_handled:
+            return True
 
         current_ai_score = float(stock.get("rt_ai_prob", 0.5) or 0.5) * 100
         min_ratio = config["INVEST_RATIO_SCALPING_MIN"]
@@ -41618,6 +42374,12 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     cooldowns = runtime["cooldowns"]
     alerted_stocks = runtime["alerted_stocks"]
     ai_engine = runtime.get("ai_engine")
+    opening_rotation_active = bool(
+        runtime.get("opening_rotation_1pct_live")
+        or is_opening_rotation_position(
+            runtime.get("pos_tag") or stock.get("position_tag")
+        )
+    )
     scout_upgrade_entry = bool(
         runtime.get("scout_upgrade_entry")
     ) and _is_rising_missed_one_share_scout_holding(
@@ -42123,8 +42885,19 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         order_type_code = "6"
         final_price = 0
 
-    latency_signal_strength = float(
-        stock.get("rt_ai_prob", stock.get("prob", 0.0)) or 0.0
+    latency_signal_strength = (
+        max(
+            0.0,
+            min(
+                1.0,
+                _safe_float(
+                    runtime.get("opening_rotation_mechanical_signal_strength"),
+                    stock.get("opening_rotation_mechanical_signal_strength", 0.80),
+                ),
+            ),
+        )
+        if opening_rotation_active
+        else float(stock.get("rt_ai_prob", stock.get("prob", 0.0)) or 0.0)
     )
     latency_signal_score = latency_signal_strength * 100.0
     latency_false_negative_report_fields = (
@@ -42638,6 +43411,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     )
     if (
         strategy == "SCALPING"
+        and not opening_rotation_active
         and wait6579_cap_enabled
         and bool(stock.get("wait6579_probe_canary_armed"))
     ):
@@ -42692,20 +43466,22 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         and not _is_swing_live_order_dry_run(strategy)
     )
 
-    planned_orders, ai_price_canary_touched = _apply_entry_ai_price_canary(
-        stock=stock,
-        code=code,
-        strategy=strategy,
-        ws_data=ws_data,
-        ai_engine=ai_engine,
-        latency_gate=latency_gate,
-        planned_orders=planned_orders,
-        curr_price=curr_price,
-        best_bid=best_bid_at_submit,
-        best_ask=best_ask_at_submit,
-        requested_qty=requested_qty,
-        real_order_subject=real_entry_panic_gap_subject,
-    )
+    ai_price_canary_touched = False
+    if not opening_rotation_active:
+        planned_orders, ai_price_canary_touched = _apply_entry_ai_price_canary(
+            stock=stock,
+            code=code,
+            strategy=strategy,
+            ws_data=ws_data,
+            ai_engine=ai_engine,
+            latency_gate=latency_gate,
+            planned_orders=planned_orders,
+            curr_price=curr_price,
+            best_bid=best_bid_at_submit,
+            best_ask=best_ask_at_submit,
+            requested_qty=requested_qty,
+            real_order_subject=real_entry_panic_gap_subject,
+        )
     if ai_price_canary_touched:
         latency_gate["orders"] = planned_orders
         latency_price_snapshot = _build_entry_price_snapshot_fields(
@@ -42918,14 +43694,24 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             extra_fields=pre_submit_micro_unavailable_guard,
         )
         return False
-    weak_ai_micro_entry_block = _evaluate_real_weak_ai_micro_entry_block(
-        strategy=strategy,
-        stock=stock,
-        latency_gate=latency_gate,
-        latency_signal_score=latency_signal_score,
-        orderbook_fields=entry_orderbook_micro_fields,
-        microstructure_fields=microstructure_submit_log_fields,
-        now_ts=now_ts,
+    weak_ai_micro_entry_block = (
+        {
+            "blocked": False,
+            "reason": "opening_rotation_ai_score_gate_prohibited",
+            "weak_ai_micro_entry_block_enabled": False,
+            "ai_score_hard_gate": False,
+            "ai_score_decision_authority": "feature_only_not_evaluated",
+        }
+        if opening_rotation_active
+        else _evaluate_real_weak_ai_micro_entry_block(
+            strategy=strategy,
+            stock=stock,
+            latency_gate=latency_gate,
+            latency_signal_score=latency_signal_score,
+            orderbook_fields=entry_orderbook_micro_fields,
+            microstructure_fields=microstructure_submit_log_fields,
+            now_ts=now_ts,
+        )
     )
     if weak_ai_micro_entry_block.get("rising_missed_tp1_source_gap_relief_applied"):
         log_info(
@@ -44018,13 +44804,27 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             }
         )
 
-    entry_ai_submit_authority = _entry_ai_submit_authority_fields(
-        strategy=strategy,
-        stock=stock,
-        latency_gate=latency_gate,
-        latency_signal_score=latency_signal_score,
-        submit_fields=submit_revalidation_fields,
-        pre_ai_fields=pre_ai_gate_submit_log_fields,
+    entry_ai_submit_authority = (
+        {
+            "blocked": False,
+            "reason": "opening_rotation_ai_authority_not_applicable",
+            "entry_ai_submit_authority_guard_enabled": False,
+            "entry_ai_submit_authority_blocked": False,
+            "entry_ai_submit_authority_reason": (
+                "opening_rotation_ai_score_gate_prohibited"
+            ),
+            "ai_score_hard_gate": False,
+            "ai_score_decision_authority": "feature_only_not_evaluated",
+        }
+        if opening_rotation_active
+        else _entry_ai_submit_authority_fields(
+            strategy=strategy,
+            stock=stock,
+            latency_gate=latency_gate,
+            latency_signal_score=latency_signal_score,
+            submit_fields=submit_revalidation_fields,
+            pre_ai_fields=pre_ai_gate_submit_log_fields,
+        )
     )
     if entry_ai_submit_authority.get("blocked"):
         retry_fields = _retry_entry_ai_submit_authority_before_block(
@@ -45014,6 +45814,10 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             )
             continue
         ord_no = _extract_broker_order_no(res)
+        if opening_rotation_active and not is_opening_rotation_position(
+            stock.get("position_tag")
+        ):
+            _activate_opening_rotation_after_broker_submit(stock, code)
         if (
             strategy == "SCALPING"
             and isinstance(loss_reentry_rebound_bypass, dict)
@@ -45077,7 +45881,16 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 "quote_age_at_submit_ms": submit_revalidation_fields.get(
                     "quote_age_at_submit_ms"
                 ),
-                "ai_score": latency_signal_score,
+                **(
+                    {
+                        "ai_score": 0.0,
+                        "mechanical_signal_strength": latency_signal_strength,
+                        "ai_score_hard_gate": False,
+                        "ai_score_decision_authority": "feature_only_not_evaluated",
+                    }
+                    if opening_rotation_active
+                    else {"ai_score": latency_signal_score}
+                ),
                 "entry_reprice_action": (
                     "BUY_DEFENSIVE"
                     if strategy == "SCALPING"
@@ -45439,12 +46252,20 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             _safe_int(stock.get("buy_price"), 0) if scout_upgrade_entry else curr_price
         )
         with DB.get_session() as session:
+            buy_order_update = {
+                "status": db_status,
+                "buy_price": db_buy_price,
+                "buy_qty": db_buy_qty,
+            }
+            if opening_rotation_active:
+                buy_order_update.update(
+                    {
+                        "position_tag": OPENING_ROTATION_POSITION_TAG,
+                        "scale_in_locked": True,
+                    }
+                )
             session.query(RecommendationHistory).filter_by(id=stock.get("id")).update(
-                {
-                    "status": db_status,
-                    "buy_price": db_buy_price,
-                    "buy_qty": db_buy_qty,
-                }
+                buy_order_update
             )
     except Exception as e:
         log_error(f"🚨 [DB 에러] {stock['name']} BUY_ORDERED 장부 업데이트 실패: {e}")
@@ -46511,6 +47332,9 @@ def _rising_missed_source_value_present(value) -> bool:
 
 def _has_rising_missed_watch_source_marker(stock: dict | None) -> bool:
     stock = stock if isinstance(stock, dict) else {}
+    source_tokens = set()
+    for key in ("source_signature", "scanner_source_signature"):
+        source_tokens.update(_scanner_rising_source_signature_set(stock.get(key)))
     return bool(
         _rising_missed_source_value_present(
             stock.get("_scanner_rising_entry_relief_reason")
@@ -46522,8 +47346,7 @@ def _has_rising_missed_watch_source_marker(stock: dict | None) -> bool:
         or _rising_missed_source_value_present(stock.get("rising_missed_lineage"))
         or _rising_missed_source_value_present(stock.get("low_rebound_pct"))
         or _rising_missed_source_value_present(stock.get("LowReboundPct"))
-        or "LOW_REBOUND_RISING_MISSED"
-        in str(stock.get("source_signature") or "").upper()
+        or "LOW_REBOUND_RISING_MISSED" in source_tokens
         or str(stock.get("rising_missed_class") or "").strip()
         == RISING_MISSED_CLASS_NOT_RISING
     )
@@ -51381,15 +52204,44 @@ def handle_watching_state(
         "BIG_BITE_HARD_GATE_TAGS_KOSPI": BIG_BITE_HARD_GATE_TAGS_KOSPI,
     }
 
-    if not skip_rising_missed_hook and _maybe_submit_rising_missed_one_share_entry(
-        stock,
-        code,
-        ws_data,
-        admin_id,
-        runtime,
-        strategy=strategy,
-        pos_tag=pos_tag,
-        curr_price=curr_price,
+    opening_rotation_owner_conflict = _opening_rotation_yields_to_rising_missed_owner(
+        stock, runtime
+    )
+    opening_rotation_watch_scope = bool(
+        strategy == "SCALPING"
+        and (
+            is_opening_rotation_position(pos_tag)
+            or (
+                not opening_rotation_owner_conflict
+                and is_opening_rotation_watch_candidate(
+                    position_tag=pos_tag,
+                    source_signature=stock.get("source_signature")
+                    or stock.get("scanner_source_signature"),
+                    day_change_pct=fluctuation,
+                    now_dt=now_dt,
+                    config=_opening_rotation_entry_config(),
+                )
+            )
+        )
+    )
+    runtime["opening_rotation_watch_scope"] = opening_rotation_watch_scope
+    runtime["opening_rotation_entry_owner_conflict"] = bool(
+        opening_rotation_owner_conflict
+    )
+
+    if (
+        not skip_rising_missed_hook
+        and not opening_rotation_watch_scope
+        and _maybe_submit_rising_missed_one_share_entry(
+            stock,
+            code,
+            ws_data,
+            admin_id,
+            runtime,
+            strategy=strategy,
+            pos_tag=pos_tag,
+            curr_price=curr_price,
+        )
     ):
         return
 
@@ -51399,9 +52251,10 @@ def handle_watching_state(
         return
 
     if runtime["is_trigger"]:
-        maybe_arm_scalp_live_simulator_from_buy_signal(
-            stock, code, ws_data, runtime, ai_engine=ai_engine
-        )
+        if not runtime.get("opening_rotation_1pct_live"):
+            maybe_arm_scalp_live_simulator_from_buy_signal(
+                stock, code, ws_data, runtime, ai_engine=ai_engine
+            )
         _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime)
         return
 
@@ -51907,12 +52760,60 @@ def handle_holding_state(
     time_elapsed = now_ts - last_ai_time
     held_sec = _resolve_holding_elapsed_sec(stock)
     held_time_min = held_sec / 60.0
+    opening_rotation_active = bool(
+        strategy == "SCALPING" and is_opening_rotation_position(pos_tag)
+    )
 
     if daily_limit_up_triggered:
         is_sell_signal = True
         sell_reason_type = "LIMIT_UP"
         reason = "🚀 당일 상한가 도달 즉시매도"
         exit_rule = "daily_limit_up_immediate_exit"
+
+    opening_rotation_exit = {}
+    if opening_rotation_active and not is_sell_signal:
+        opening_rotation_exit = evaluate_opening_rotation_exit(
+            profit_rate=profit_rate,
+            held_sec=held_sec,
+            config=_opening_rotation_exit_config(),
+        )
+        if opening_rotation_exit.get("should_exit"):
+            is_sell_signal = True
+            sell_reason_type = str(
+                opening_rotation_exit.get("sell_reason_type") or "TIMEOUT"
+            )
+            exit_rule = str(opening_rotation_exit.get("exit_rule") or "")
+            if exit_rule == "opening_rotation_1pct_take_profit":
+                reason = f"🎯 장초반 순환전략 순수익 +1% 도달 ({profit_rate:+.2f}%)"
+            elif exit_rule == "opening_rotation_tight_stop":
+                reason = f"🛑 장초반 순환전략 타이트 손절 ({profit_rate:+.2f}%)"
+            else:
+                reason = (
+                    f"⏱️ 장초반 순환전략 회전 시간청산 "
+                    f"({held_sec}s, {profit_rate:+.2f}%)"
+                )
+            _log_holding_pipeline(
+                stock,
+                code,
+                "opening_rotation_1pct_exit_signal",
+                reason=opening_rotation_exit.get("reason"),
+                exit_rule=exit_rule,
+                sell_reason_type=sell_reason_type,
+                **{
+                    key: value
+                    for key, value in opening_rotation_exit.items()
+                    if key
+                    not in {
+                        "reason",
+                        "exit_rule",
+                        "sell_reason_type",
+                        "should_exit",
+                        "ai_score_hard_gate",
+                        "ai_score_decision_authority",
+                    }
+                },
+                **_opening_rotation_contract_fields(runtime_effect=True),
+            )
 
     if strategy == "SCALPING":
         _emit_scalp_hard_time_stop_shadow(
@@ -51933,7 +52834,7 @@ def handle_holding_state(
             current_ai_score=current_ai_score,
         )
 
-    if strategy == "SCALPING" and ai_engine and radar:
+    if strategy == "SCALPING" and ai_engine and radar and not opening_rotation_active:
         safe_profit_pct = _rule_float("SCALP_SAFE_PROFIT", 0.5)
         near_safe_profit_zone = abs(profit_rate - safe_profit_pct) <= 0.20
         is_critical_zone = (
@@ -53212,7 +54113,7 @@ def handle_holding_state(
             reason = f"🔥 보호 트레일링 이탈 ({trailing_stop_price:,.0f}원)"
             exit_rule = "protect_trailing_stop"
 
-    elif strategy == "SCALPING":
+    elif strategy == "SCALPING" and not opening_rotation_active:
         base_stop_pct = _rule_float("SCALP_STOP", -1.5)
         hard_stop_pct = _rule_float("SCALP_HARD_STOP", -2.5)
         safe_profit_pct = _rule_float("SCALP_SAFE_PROFIT", 0.5)
@@ -54773,25 +55674,26 @@ def handle_holding_state(
         )
 
     if is_sell_signal:
-        if not _evaluate_holding_flow_override(
-            stock=stock,
-            code=code,
-            strategy=strategy,
-            ws_data=ws_data,
-            ai_engine=ai_engine,
-            exit_rule=exit_rule,
-            sell_reason_type=sell_reason_type,
-            reason=reason,
-            profit_rate=profit_rate,
-            peak_profit=peak_profit,
-            drawdown=_safe_float(locals().get("drawdown"), 0.0),
-            current_ai_score=current_ai_score,
-            held_sec=held_sec,
-            curr_price=curr_p,
-            buy_price=buy_p,
-            now_ts=now_ts,
-        ):
-            return
+        if not opening_rotation_active:
+            if not _evaluate_holding_flow_override(
+                stock=stock,
+                code=code,
+                strategy=strategy,
+                ws_data=ws_data,
+                ai_engine=ai_engine,
+                exit_rule=exit_rule,
+                sell_reason_type=sell_reason_type,
+                reason=reason,
+                profit_rate=profit_rate,
+                peak_profit=peak_profit,
+                drawdown=_safe_float(locals().get("drawdown"), 0.0),
+                current_ai_score=current_ai_score,
+                held_sec=held_sec,
+                curr_price=curr_p,
+                buy_price=buy_p,
+                now_ts=now_ts,
+            ):
+                return
 
         hard_stop_revalidation_already_passed = False
         if str(exit_rule or "").strip() == "scalp_hard_stop_pct":
@@ -54828,29 +55730,33 @@ def handle_holding_state(
         ):
             return
 
-        stop_touch_avg_down_result = _attempt_stop_line_touch_mandatory_avg_down(
-            stock=stock,
-            code=code,
-            ws_data=ws_data,
-            strategy=strategy,
-            market_regime=market_regime,
-            admin_id=admin_id,
-            sell_reason_type=sell_reason_type,
-            exit_rule=exit_rule,
-            profit_rate=profit_rate,
-            peak_profit=peak_profit,
-            current_ai_score=current_ai_score,
-            held_sec=held_sec,
-            dynamic_stop_pct=(
-                _safe_float(locals().get("hard_stop_pct"), profit_rate)
-                if str(exit_rule or "").strip() == "scalp_hard_stop_pct"
-                else _safe_float(locals().get("dynamic_stop_pct"), profit_rate)
-            ),
-            now_ts=now_ts,
-            context_fields={
-                "sell_intercept_context": "final_loss_sell_before_fallback"
-            },
-            ai_engine=ai_engine,
+        stop_touch_avg_down_result = (
+            {"submitted": False, "deferred": False}
+            if opening_rotation_active
+            else _attempt_stop_line_touch_mandatory_avg_down(
+                stock=stock,
+                code=code,
+                ws_data=ws_data,
+                strategy=strategy,
+                market_regime=market_regime,
+                admin_id=admin_id,
+                sell_reason_type=sell_reason_type,
+                exit_rule=exit_rule,
+                profit_rate=profit_rate,
+                peak_profit=peak_profit,
+                current_ai_score=current_ai_score,
+                held_sec=held_sec,
+                dynamic_stop_pct=(
+                    _safe_float(locals().get("hard_stop_pct"), profit_rate)
+                    if str(exit_rule or "").strip() == "scalp_hard_stop_pct"
+                    else _safe_float(locals().get("dynamic_stop_pct"), profit_rate)
+                ),
+                now_ts=now_ts,
+                context_fields={
+                    "sell_intercept_context": "final_loss_sell_before_fallback"
+                },
+                ai_engine=ai_engine,
+            )
         )
         if stop_touch_avg_down_result.get(
             "submitted"
@@ -54862,7 +55768,11 @@ def handle_holding_state(
         fallback_action = None
         fallback_probe_detail = None
         fallback_candidate = False
-        if sell_reason_type == "LOSS" and strategy == "SCALPING":
+        if (
+            sell_reason_type == "LOSS"
+            and strategy == "SCALPING"
+            and not opening_rotation_active
+        ):
             fallback_gate = can_consider_scale_in(
                 stock=stock,
                 code=code,
@@ -56111,6 +57021,28 @@ def handle_holding_state(
     # --------------------------------------------------------
     # [추가매수 레이어] SELL 신호가 없을 때만 진입
     # --------------------------------------------------------
+    if opening_rotation_active:
+        if (
+            now_ts
+            - _safe_float(stock.get("opening_rotation_1pct_last_hold_log_at"), 0.0)
+            >= 30.0
+        ):
+            _mutate_stock_state(
+                stock,
+                set_fields={"opening_rotation_1pct_last_hold_log_at": now_ts},
+            )
+            _log_holding_pipeline(
+                stock,
+                code,
+                "opening_rotation_1pct_hold",
+                profit_rate=f"{profit_rate:+.2f}",
+                peak_profit=f"{peak_profit:+.2f}",
+                held_sec=held_sec,
+                scale_in_locked=True,
+                **_opening_rotation_contract_fields(runtime_effect=True),
+            )
+        return
+
     # A source-gap recheck is an observation before the generic add gate. It
     # cannot submit or consume the candidate here; the normal gate and submit
     # path still own all order authority.
@@ -57930,6 +58862,43 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             f"max={execution_limit['scale_in_max_executions_per_type']}"
         )
         return None
+    initial_qty_limit = _scale_in_quantity_limit_decision(
+        stock,
+        initialize=True,
+    )
+    if not initial_qty_limit["allowed"]:
+        _log_holding_pipeline(
+            stock,
+            code,
+            "scale_in_quantity_limit_block",
+            add_type=add_type,
+            scale_in_type=add_type,
+            scale_in_blocker_reason=initial_qty_limit["reason"],
+            reason=initial_qty_limit["reason"],
+            initial_buy_qty=initial_qty_limit["initial_buy_qty"],
+            max_scale_in_qty=initial_qty_limit["max_scale_in_qty"],
+            scale_in_filled_qty=initial_qty_limit["scale_in_filled_qty"],
+            remaining_scale_in_qty=initial_qty_limit["remaining_scale_in_qty"],
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            metric_role="safety_veto",
+            decision_authority="initial_buy_qty_scale_in_cap",
+            window_policy="position_lifecycle",
+            sample_floor="not_applicable_operator_limit",
+            primary_decision_metric="remaining_scale_in_qty",
+            source_quality_gate="initial_buy_qty_and_scale_in_filled_qty_present_or_hydrated",
+            runtime_effect=True,
+            allowed_runtime_apply=True,
+            forbidden_uses="quantity_cap_release|broker_guard_bypass|counter_reset_without_position_close",
+        )
+        log_info(
+            f"[ADD_BLOCKED] {stock.get('name')}({code}) "
+            f"reason={initial_qty_limit['reason']} "
+            f"initial={initial_qty_limit['initial_buy_qty']} "
+            f"used={initial_qty_limit['scale_in_filled_qty']} "
+            f"remaining={initial_qty_limit['remaining_scale_in_qty']}"
+        )
+        return None
     add_reason = str(action.get("reason") or "").strip()
     buy_time_block_override_reason = (
         add_reason
@@ -58384,6 +59353,33 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
     would_qty = int(qty_details.get("would_qty", template_qty) or 0)
     effective_qty = int(qty_details.get("effective_qty", qty) or 0)
     qty_reason = qty_details.get("qty_reason", "")
+    planned_qty_before_initial_cap = qty
+    initial_qty_limit = _scale_in_quantity_limit_decision(
+        stock,
+        requested_qty=qty,
+    )
+    if planned_qty_before_initial_cap <= 0:
+        qty = 0
+    elif not initial_qty_limit["allowed"]:
+        qty = 0
+        qty_reason = str(initial_qty_limit["reason"])
+    else:
+        qty = int(initial_qty_limit["allowed_qty"] or 0)
+        if qty < planned_qty_before_initial_cap:
+            qty_reason = "initial_buy_qty_1_5x_cap"
+    cap_qty = min(cap_qty, int(initial_qty_limit["remaining_scale_in_qty"] or 0))
+    effective_qty = min(effective_qty, qty)
+    qty_details.update(
+        {
+            "qty": qty,
+            "effective_qty": effective_qty,
+            "initial_buy_qty": initial_qty_limit["initial_buy_qty"],
+            "max_scale_in_qty": initial_qty_limit["max_scale_in_qty"],
+            "scale_in_filled_qty": initial_qty_limit["scale_in_filled_qty"],
+            "remaining_scale_in_qty": initial_qty_limit["remaining_scale_in_qty"],
+            "initial_qty_cap_applied": qty < planned_qty_before_initial_cap,
+        }
+    )
     scale_in_qty_budget_fields = {
         key: qty_details.get(key)
         for key in (
@@ -58421,6 +59417,11 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             "scale_in_account_deposit",
             "scale_in_cash_orderable_amount",
             "scale_in_cash_orderable_qty_cap",
+            "initial_buy_qty",
+            "max_scale_in_qty",
+            "scale_in_filled_qty",
+            "remaining_scale_in_qty",
+            "initial_qty_cap_applied",
         )
         if key in qty_details
     }

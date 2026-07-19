@@ -7,6 +7,9 @@ from pathlib import Path
 import re
 
 from src.database.models import HoldingAddHistory, RecommendationHistory
+from src.engine.scalping.opening_rotation import (
+    POSITION_TAG as OPENING_ROTATION_POSITION_TAG,
+)
 from src.engine.sniper_position_tags import (
     normalize_position_tag,
     normalize_strategy,
@@ -318,7 +321,7 @@ def _ensure_runtime_target(record, *, buy_qty=None, buy_price=None):
             target["preset_tp_ord_no"] = order_refs["preset_tp_ord_no"]
         if recovered_orig_ord_no:
             target["broker_recovered_orig_ord_no"] = recovered_orig_ord_no
-        if strategy == "SCALPING":
+        if strategy == "SCALPING" and position_tag != OPENING_ROTATION_POSITION_TAG:
             target.setdefault("exit_mode", "SCALP_PRESET_TP")
         ACTIVE_TARGETS.append(target)
         if EVENT_BUS is not None and code:
@@ -351,8 +354,10 @@ def _ensure_runtime_target(record, *, buy_qty=None, buy_price=None):
     )
     if broker_recovered:
         target["broker_recovered_at"] = broker_recovered_at
-    if strategy == "SCALPING":
+    if strategy == "SCALPING" and position_tag != OPENING_ROTATION_POSITION_TAG:
         target.setdefault("exit_mode", "SCALP_PRESET_TP")
+    elif strategy == "SCALPING" and position_tag == OPENING_ROTATION_POSITION_TAG:
+        target.pop("exit_mode", None)
     return target
 
 
