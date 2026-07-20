@@ -13,7 +13,10 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from src.engine.auto_promotion_contracts import primary_ev_uplift_passes, tier2_validation_passed
+from src.engine.auto_promotion_contracts import (
+    primary_ev_uplift_passes,
+    tier2_validation_passed,
+)
 from src.engine.automation.source_quality_clean_baseline import (
     clean_baseline_policy,
     is_date_allowed,
@@ -27,8 +30,9 @@ from src.engine.lifecycle_bucket_discovery import (
     SCALE_IN_LIVE_AUTO_FAMILY,
     discovery_report_path,
 )
-from src.engine.lifecycle.greenfield_authority import validate_greenfield_policy_contract
-
+from src.engine.lifecycle.greenfield_authority import (
+    validate_greenfield_policy_contract,
+)
 
 REPORT_DIR = DATA_DIR / "report" / "runtime_apply_bridge"
 LDM_REPORT_DIR = DATA_DIR / "report" / "lifecycle_decision_matrix"
@@ -44,7 +48,9 @@ SCALE_IN_PYRAMID_BUCKET_TYPE = "arm"
 SCALE_IN_PYRAMID_BUCKET_KEY = "PYRAMID"
 SCALE_IN_AVG_DOWN_BUCKET_TYPE = "arm"
 SCALE_IN_AVG_DOWN_BUCKET_KEY = "AVG_DOWN"
-SCALE_IN_SOURCE_ONLY_EXCLUSION_REASON = "paired_add_lifecycle_replay_or_final_label_missing"
+SCALE_IN_SOURCE_ONLY_EXCLUSION_REASON = (
+    "paired_add_lifecycle_replay_or_final_label_missing"
+)
 SCALE_IN_REOPEN_CONDITIONS = [
     "paired_add_lifecycle_replay_implemented",
     "final_scale_in_labels_available",
@@ -87,22 +93,30 @@ def _load_json(path: Path) -> dict[str, Any]:
         return {}
 
 
-def validate_greenfield_policy_payload(policy: dict[str, Any], *, expected_version: str | None = None) -> str:
+def validate_greenfield_policy_payload(
+    policy: dict[str, Any], *, expected_version: str | None = None
+) -> str:
     if not policy:
         return "greenfield_policy_file_invalid"
     if str(policy.get("policy_id") or "") != GREENFIELD_REAL_ENV_FAMILY:
         return "greenfield_policy_id_mismatch"
-    return validate_greenfield_policy_contract(policy, expected_version=expected_version)
+    return validate_greenfield_policy_contract(
+        policy, expected_version=expected_version
+    )
 
 
-def validate_greenfield_policy_file(policy_file: str, *, expected_version: str | None = None) -> str:
+def validate_greenfield_policy_file(
+    policy_file: str, *, expected_version: str | None = None
+) -> str:
     policy_file = str(policy_file or "").strip()
     if not policy_file:
         return "greenfield_policy_file_missing"
     policy_path = Path(policy_file)
     if not policy_path.exists():
         return "greenfield_policy_file_missing"
-    return validate_greenfield_policy_payload(_load_json(policy_path), expected_version=expected_version)
+    return validate_greenfield_policy_payload(
+        _load_json(policy_path), expected_version=expected_version
+    )
 
 
 def _safe_float(value: Any, default: float | None = None) -> float | None:
@@ -127,7 +141,11 @@ def _safe_slug(value: Any) -> str:
 
 
 def _missing_source_fields(bucket: dict[str, Any]) -> list[str]:
-    coverage = bucket.get("source_field_coverage") if isinstance(bucket.get("source_field_coverage"), dict) else {}
+    coverage = (
+        bucket.get("source_field_coverage")
+        if isinstance(bucket.get("source_field_coverage"), dict)
+        else {}
+    )
     missing: list[str] = []
     for field, meta in coverage.items():
         if not isinstance(meta, dict):
@@ -148,7 +166,10 @@ def _discovery_report_path(target_date: str, *, suffix: str | None = None) -> Pa
     if not suffix:
         return discovery_report_path(target_date)
     base = discovery_report_path(target_date)
-    return base.parent / f"lifecycle_bucket_discovery_{target_date}_{_safe_slug(suffix)}.json"
+    return (
+        base.parent
+        / f"lifecycle_bucket_discovery_{target_date}_{_safe_slug(suffix)}.json"
+    )
 
 
 def _history_reports(target_date: str) -> list[dict[str, Any]]:
@@ -177,7 +198,9 @@ def _scale_confirmation_reports(target_date: str) -> list[dict[str, Any]]:
         return []
     candidates: list[tuple[str, Path]] = []
     for path in LDM_REPORT_DIR.glob("lifecycle_decision_matrix_*_mtd.json"):
-        report_date = path.stem.removeprefix("lifecycle_decision_matrix_").removesuffix("_mtd")
+        report_date = path.stem.removeprefix("lifecycle_decision_matrix_").removesuffix(
+            "_mtd"
+        )
         if report_date < target_date and is_date_allowed(report_date, policy):
             candidates.append((report_date, path))
     if not candidates:
@@ -198,10 +221,14 @@ def _scale_confirmation_reports(target_date: str) -> list[dict[str, Any]]:
     if str(attribution.get("window_policy") or "") != "mtd":
         return []
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-    source_dates = [str(item) for item in (summary.get("source_dates") or []) if str(item)]
+    source_dates = [
+        str(item) for item in (summary.get("source_dates") or []) if str(item)
+    ]
     if len(source_dates) < 2:
         return []
-    if source_dates[-1] != report_date or any(item >= target_date for item in source_dates):
+    if source_dates[-1] != report_date or any(
+        item >= target_date for item in source_dates
+    ):
         return []
     if any(not is_date_allowed(item, policy) for item in source_dates):
         return []
@@ -209,7 +236,11 @@ def _scale_confirmation_reports(target_date: str) -> list[dict[str, Any]]:
         return []
     if summary.get("excluded_daily_report_dates") not in (None, {}):
         return []
-    unavailable = [str(item) for item in (summary.get("unavailable_daily_report_dates") or []) if str(item)]
+    unavailable = [
+        str(item)
+        for item in (summary.get("unavailable_daily_report_dates") or [])
+        if str(item)
+    ]
     try:
         if any(date.fromisoformat(item).weekday() < 5 for item in unavailable):
             return []
@@ -218,7 +249,9 @@ def _scale_confirmation_reports(target_date: str) -> list[dict[str, Any]]:
     return [payload]
 
 
-def _find_bucket(payload: dict[str, Any], section: str, bucket_type: str, bucket_key: str) -> dict[str, Any]:
+def _find_bucket(
+    payload: dict[str, Any], section: str, bucket_type: str, bucket_key: str
+) -> dict[str, Any]:
     buckets = (
         payload.get(section, {}).get("buckets", [])
         if isinstance(payload.get(section), dict)
@@ -227,7 +260,10 @@ def _find_bucket(payload: dict[str, Any], section: str, bucket_type: str, bucket
     for item in buckets:
         if not isinstance(item, dict):
             continue
-        if str(item.get("bucket_type") or "") == bucket_type and str(item.get("bucket_key") or "") == bucket_key:
+        if (
+            str(item.get("bucket_type") or "") == bucket_type
+            and str(item.get("bucket_key") or "") == bucket_key
+        ):
             return item
     return {}
 
@@ -244,7 +280,11 @@ def _state_for_bucket(
     if not current or str(current.get("source_quality_gate") or "") != "pass":
         return "blocked_source_quality", {"confirmation_count": 0, "conflict_count": 0}
     route = str(current.get("recommended_route") or "")
-    expected_route = "candidate_recovery_or_relax" if positive_edge else "candidate_tighten_or_exclude"
+    expected_route = (
+        "candidate_recovery_or_relax"
+        if positive_edge
+        else "candidate_tighten_or_exclude"
+    )
     if route != expected_route:
         return "blocked_source_quality", {
             "confirmation_count": 0,
@@ -272,11 +312,15 @@ def _state_for_bucket(
         bucket = _find_bucket(payload, section, bucket_type, bucket_key)
         if not bucket or str(bucket.get("source_quality_gate") or "") != "pass":
             continue
-        if section == "scale_in_bucket_attribution" and str(
-            bucket.get("scale_in_ev_coverage_state") or ""
-        ) != "v2_ready":
+        if (
+            section == "scale_in_bucket_attribution"
+            and str(bucket.get("scale_in_ev_coverage_state") or "") != "v2_ready"
+        ):
             continue
-        if section == "scale_in_bucket_attribution" and bucket.get("runtime_authority_ready") is not True:
+        if (
+            section == "scale_in_bucket_attribution"
+            and bucket.get("runtime_authority_ready") is not True
+        ):
             continue
         ev = _safe_float(bucket.get("source_quality_adjusted_ev_pct"), None)
         if ev is None:
@@ -322,13 +366,20 @@ def _discovery_scale_bucket_ready(
             continue
         if str(item.get("stage") or "") != "scale_in":
             continue
-        if str(item.get("bucket_type") or "") == bucket_type and str(item.get("bucket_key") or "") == bucket_key:
+        if (
+            str(item.get("bucket_type") or "") == bucket_type
+            and str(item.get("bucket_key") or "") == bucket_key
+        ):
             return True
     return False
 
 
 def _discovery_candidate_tier2_passed(item: dict[str, Any]) -> bool:
-    contract = item.get("auto_promotion_contract") if isinstance(item.get("auto_promotion_contract"), dict) else {}
+    contract = (
+        item.get("auto_promotion_contract")
+        if isinstance(item.get("auto_promotion_contract"), dict)
+        else {}
+    )
     status = (
         item.get("ai_review_status")
         or item.get("lifecycle_bucket_discovery_ai_review_status")
@@ -352,8 +403,15 @@ def _discovery_live_candidate_contract_passed(item: Any) -> bool:
     if str(item.get("source_quality_gate") or "pass") != "pass":
         return False
     if str(item.get("stage") or "") == "lifecycle_flow":
-        primary_book = str(item.get("primary_sample_book") or item.get("parent_primary_sample_book") or "")
-        real_joined = max(_safe_int(item.get("real_joined_sample"), 0), _safe_int(item.get("parent_real_joined_sample"), 0))
+        primary_book = str(
+            item.get("primary_sample_book")
+            or item.get("parent_primary_sample_book")
+            or ""
+        )
+        real_joined = max(
+            _safe_int(item.get("real_joined_sample"), 0),
+            _safe_int(item.get("parent_real_joined_sample"), 0),
+        )
         if primary_book != "real" or real_joined < 10:
             return False
     return _discovery_candidate_tier2_passed(item)
@@ -370,14 +428,23 @@ def _greenfield_parent_policy_contract_passed(item: Any) -> bool:
         return False
     if str(item.get("bucket_type") or "") != "combo_lifecycle_flow":
         return False
-    policy_bucket_id = str(item.get("policy_bucket_id") or item.get("canonical_parent_bucket") or "")
+    policy_bucket_id = str(
+        item.get("policy_bucket_id") or item.get("canonical_parent_bucket") or ""
+    )
     if not policy_bucket_id:
         return False
     if item.get("parent_live_floor_passed") is not True:
         return False
     if _safe_int(item.get("parent_joined_sample")) < 10:
         return False
-    if str(item.get("parent_primary_sample_book") or item.get("primary_sample_book") or "") != "real":
+    if (
+        str(
+            item.get("parent_primary_sample_book")
+            or item.get("primary_sample_book")
+            or ""
+        )
+        != "real"
+    ):
         return False
     if _safe_int(item.get("parent_real_joined_sample"), 0) < 10:
         return False
@@ -387,7 +454,13 @@ def _greenfield_parent_policy_contract_passed(item: Any) -> bool:
 
 
 def _candidate_policy_bucket_id(item: dict[str, Any]) -> str:
-    return str(item.get("policy_bucket_id") or item.get("canonical_parent_bucket") or item.get("parent_bucket_id") or item.get("bucket_id") or "")
+    return str(
+        item.get("policy_bucket_id")
+        or item.get("canonical_parent_bucket")
+        or item.get("parent_bucket_id")
+        or item.get("bucket_id")
+        or ""
+    )
 
 
 def _greenfield_parent_confirmation(
@@ -405,7 +478,11 @@ def _greenfield_parent_confirmation(
     windows: dict[str, dict[str, Any]] = {}
     passed = False
     for suffix, discovery in confirmation_discoveries.items():
-        summary = discovery.get("summary") if isinstance(discovery.get("summary"), dict) else {}
+        summary = (
+            discovery.get("summary")
+            if isinstance(discovery.get("summary"), dict)
+            else {}
+        )
         item_status = {
             "available": bool(discovery),
             "source_contract_status": summary.get("source_contract_status"),
@@ -425,7 +502,9 @@ def _greenfield_parent_confirmation(
             windows[suffix] = item_status
             continue
         for candidate in discovery.get("live_auto_apply_candidates") or []:
-            if not isinstance(candidate, dict) or not _greenfield_parent_policy_contract_passed(candidate):
+            if not isinstance(
+                candidate, dict
+            ) or not _greenfield_parent_policy_contract_passed(candidate):
                 continue
             if _candidate_policy_bucket_id(candidate) == policy_bucket_id:
                 item_status["same_parent_found"] = True
@@ -440,11 +519,14 @@ def _greenfield_parent_confirmation(
                     continue
                 item_status["same_parent_found"] = True
                 ev = _safe_float(
-                    parent.get("parent_source_quality_adjusted_ev_pct") or parent.get("parent_ev"),
+                    parent.get("parent_source_quality_adjusted_ev_pct")
+                    or parent.get("parent_ev"),
                     None,
                 )
                 item_status["matched_parent_ev"] = ev
-                same_direction = ev is not None and ((ev >= 0) if expected_positive else (ev <= 0))
+                same_direction = ev is not None and (
+                    (ev >= 0) if expected_positive else (ev <= 0)
+                )
                 item_status["same_direction"] = same_direction
                 if same_direction:
                     passed = True
@@ -459,7 +541,9 @@ def _greenfield_parent_confirmation(
     }
 
 
-def _discovery_live_candidate_by_family(discovery: dict[str, Any]) -> dict[str, dict[str, Any]]:
+def _discovery_live_candidate_by_family(
+    discovery: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
     candidates = (
         discovery.get("live_auto_apply_candidates")
         if isinstance(discovery.get("live_auto_apply_candidates"), list)
@@ -483,10 +567,14 @@ def _discovery_window_context(target_date: str) -> dict[str, Any]:
     )
     configured_windows = [
         item.strip()
-        for item in os.getenv("THRESHOLD_CYCLE_LIFECYCLE_BUCKET_WINDOWS", "rolling5d,rolling10d,mtd").split(",")
+        for item in os.getenv(
+            "THRESHOLD_CYCLE_LIFECYCLE_BUCKET_WINDOWS", "rolling5d,rolling10d,mtd"
+        ).split(",")
         if item.strip()
     ]
-    confirmation_suffixes = [item for item in configured_windows if item != promotion_suffix]
+    confirmation_suffixes = [
+        item for item in configured_windows if item != promotion_suffix
+    ]
     if not confirmation_suffixes:
         confirmation_suffixes = ["rolling5d", "rolling10d"]
     promotion_path = _discovery_report_path(target_date, suffix=promotion_suffix)
@@ -516,7 +604,9 @@ def _discovery_window_context(target_date: str) -> dict[str, Any]:
 
 
 def _summary_contract_passed(discovery: dict[str, Any]) -> bool:
-    summary = discovery.get("summary") if isinstance(discovery.get("summary"), dict) else {}
+    summary = (
+        discovery.get("summary") if isinstance(discovery.get("summary"), dict) else {}
+    )
     return (
         str(summary.get("source_contract_status") or "") == "pass"
         and str(summary.get("parent_granularity_status") or "") == "target_pass"
@@ -525,10 +615,16 @@ def _summary_contract_passed(discovery: dict[str, Any]) -> bool:
 
 
 def _discovery_summary_meta(discovery: dict[str, Any]) -> dict[str, Any]:
-    summary = discovery.get("summary") if isinstance(discovery.get("summary"), dict) else {}
+    summary = (
+        discovery.get("summary") if isinstance(discovery.get("summary"), dict) else {}
+    )
     return {
-        "lifecycle_bucket_discovery_source_contract_status": summary.get("source_contract_status"),
-        "lifecycle_bucket_discovery_ai_review_status": summary.get("ai_two_pass_review_status"),
+        "lifecycle_bucket_discovery_source_contract_status": summary.get(
+            "source_contract_status"
+        ),
+        "lifecycle_bucket_discovery_ai_review_status": summary.get(
+            "ai_two_pass_review_status"
+        ),
     }
 
 
@@ -544,12 +640,24 @@ def _discovery_candidate_meta(
         meta.update(
             {
                 "lifecycle_bucket_discovery_bucket_id": item.get("bucket_id"),
-                "lifecycle_bucket_discovery_classification_state": item.get("classification_state"),
-                "lifecycle_bucket_discovery_bucket_relation": item.get("bucket_relation"),
-                "lifecycle_bucket_discovery_ai_final_decision": item.get("ai_final_decision"),
-                "lifecycle_bucket_discovery_ai_final_reason": item.get("ai_final_reason"),
-                "lifecycle_bucket_discovery_ai_followup_required": item.get("ai_review_followup_required"),
-                "lifecycle_bucket_discovery_ai_block_ignored_reason": item.get("ai_review_block_ignored_reason"),
+                "lifecycle_bucket_discovery_classification_state": item.get(
+                    "classification_state"
+                ),
+                "lifecycle_bucket_discovery_bucket_relation": item.get(
+                    "bucket_relation"
+                ),
+                "lifecycle_bucket_discovery_ai_final_decision": item.get(
+                    "ai_final_decision"
+                ),
+                "lifecycle_bucket_discovery_ai_final_reason": item.get(
+                    "ai_final_reason"
+                ),
+                "lifecycle_bucket_discovery_ai_followup_required": item.get(
+                    "ai_review_followup_required"
+                ),
+                "lifecycle_bucket_discovery_ai_block_ignored_reason": item.get(
+                    "ai_review_block_ignored_reason"
+                ),
             }
         )
     return {key: value for key, value in meta.items() if value not in (None, "", [])}
@@ -583,7 +691,9 @@ def _action_for_greenfield_row(item: dict[str, Any]) -> str:
     return "*"
 
 
-def _build_greenfield_policy(target_date: str, discovery: dict[str, Any]) -> dict[str, Any]:
+def _build_greenfield_policy(
+    target_date: str, discovery: dict[str, Any]
+) -> dict[str, Any]:
     live_candidates = (
         discovery.get("live_auto_apply_candidates")
         if isinstance(discovery.get("live_auto_apply_candidates"), list)
@@ -656,12 +766,15 @@ def _build_greenfield_policy(target_date: str, discovery: dict[str, Any]) -> dic
                     "action": action,
                     "strategy_scope": "all",
                     "authority_source": "lifecycle_bucket_discovery_lifecycle_flow_live_auto_apply",
-                    "source_quality_gate": selected_flow.get("source_quality_gate") or "pass",
+                    "source_quality_gate": selected_flow.get("source_quality_gate")
+                    or "pass",
                     "ai_tier2_status": tier2_status,
                     "runtime_apply_version": f"{GREENFIELD_REAL_ENV_FAMILY}:{target_date}",
                     "post_apply_attribution_key": selected_flow.get("attribution_key")
                     or selected_flow.get("bucket_id"),
-                    "lifecycle_flow_bucket_id": selected_flow.get("lifecycle_flow_bucket_id")
+                    "lifecycle_flow_bucket_id": selected_flow.get(
+                        "lifecycle_flow_bucket_id"
+                    )
                     or selected_flow.get("bucket_id"),
                     "greenfield_policy_bucket_id": selected_flow.get("bucket_id"),
                     "policy_bucket_id": policy_bucket_id,
@@ -683,12 +796,15 @@ def _build_greenfield_policy(target_date: str, discovery: dict[str, Any]) -> dic
                     "action": "*",
                     "strategy_scope": "all",
                     "authority_source": "lifecycle_bucket_discovery_lifecycle_flow_live_auto_apply",
-                    "source_quality_gate": selected_flow.get("source_quality_gate") or "pass",
+                    "source_quality_gate": selected_flow.get("source_quality_gate")
+                    or "pass",
                     "ai_tier2_status": tier2_status,
                     "runtime_apply_version": f"{GREENFIELD_REAL_ENV_FAMILY}:{target_date}",
                     "post_apply_attribution_key": selected_flow.get("attribution_key")
                     or selected_flow.get("bucket_id"),
-                    "lifecycle_flow_bucket_id": selected_flow.get("lifecycle_flow_bucket_id")
+                    "lifecycle_flow_bucket_id": selected_flow.get(
+                        "lifecycle_flow_bucket_id"
+                    )
                     or selected_flow.get("bucket_id"),
                     "greenfield_policy_bucket_id": selected_flow.get("bucket_id"),
                     "policy_bucket_id": policy_bucket_id,
@@ -707,13 +823,17 @@ def _build_greenfield_policy(target_date: str, discovery: dict[str, Any]) -> dic
         stages[str(row["stage"])].append(row)
     selected_policy_bucket_id = None
     if selected_flow:
-        selected_policy_bucket_id = selected_flow.get("policy_bucket_id") or selected_flow.get("canonical_parent_bucket")
+        selected_policy_bucket_id = selected_flow.get(
+            "policy_bucket_id"
+        ) or selected_flow.get("canonical_parent_bucket")
     stage_contract = {
         stage: {
             "stage": stage,
             "row_count": len(stages[stage]),
             "baseline_passthrough_allowed": False,
-            "contract_state": "promoted_policy_present" if stages[stage] else "missing_policy",
+            "contract_state": (
+                "promoted_policy_present" if stages[stage] else "missing_policy"
+            ),
         }
         for stage in ("entry", "submit", "holding", "scale_in", "exit")
     }
@@ -726,17 +846,37 @@ def _build_greenfield_policy(target_date: str, discovery: dict[str, Any]) -> dic
         "bundle_id": selected_flow.get("lifecycle_flow_bucket_id")
         or selected_flow.get("bucket_id")
         or f"greenfield_lifecycle_bundle_policy_v1:{target_date}",
-        "source_lifecycle_flow_candidate": selected_flow.get("bucket_id") if selected_flow else None,
+        "source_lifecycle_flow_candidate": (
+            selected_flow.get("bucket_id") if selected_flow else None
+        ),
         "policy_bucket_id": selected_policy_bucket_id,
-        "selected_parent_level": selected_flow.get("selected_parent_level") if selected_flow else None,
-        "parent_granularity_status": selected_flow.get("parent_granularity_status") if selected_flow else None,
-        "absorbed_child_bucket_ids": selected_flow.get("absorbed_child_bucket_ids") if selected_flow else [],
-        "dimension_filters": selected_flow.get("dimension_filters") if selected_flow else {},
-        "dominant_child_patterns": selected_flow.get("dominant_child_patterns") if selected_flow else [],
-        "conflicting_child_patterns": selected_flow.get("conflicting_child_patterns") if selected_flow else [],
-        "attribution_key": selected_flow.get("attribution_key") if selected_flow else None,
-        "child_bucket_ids": selected_flow.get("child_bucket_ids") if selected_flow else {},
-        "rollback_guard": selected_flow.get("rollback_guard") if selected_flow else None,
+        "selected_parent_level": (
+            selected_flow.get("selected_parent_level") if selected_flow else None
+        ),
+        "parent_granularity_status": (
+            selected_flow.get("parent_granularity_status") if selected_flow else None
+        ),
+        "absorbed_child_bucket_ids": (
+            selected_flow.get("absorbed_child_bucket_ids") if selected_flow else []
+        ),
+        "dimension_filters": (
+            selected_flow.get("dimension_filters") if selected_flow else {}
+        ),
+        "dominant_child_patterns": (
+            selected_flow.get("dominant_child_patterns") if selected_flow else []
+        ),
+        "conflicting_child_patterns": (
+            selected_flow.get("conflicting_child_patterns") if selected_flow else []
+        ),
+        "attribution_key": (
+            selected_flow.get("attribution_key") if selected_flow else None
+        ),
+        "child_bucket_ids": (
+            selected_flow.get("child_bucket_ids") if selected_flow else {}
+        ),
+        "rollback_guard": (
+            selected_flow.get("rollback_guard") if selected_flow else None
+        ),
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "stages": stages,
         "stage_contract": stage_contract,
@@ -768,14 +908,21 @@ def _greenfield_candidate(
     selected_policy_bucket_id = str(policy.get("policy_bucket_id") or "")
     selected_flow = {}
     for item in discovery.get("live_auto_apply_candidates") or []:
-        if isinstance(item, dict) and _candidate_policy_bucket_id(item) == selected_policy_bucket_id:
+        if (
+            isinstance(item, dict)
+            and _candidate_policy_bucket_id(item) == selected_policy_bucket_id
+        ):
             selected_flow = item
             break
-    confirmation = _greenfield_parent_confirmation(selected_flow, confirmation_discoveries or {}) if selected_flow else {
-        "passed": False,
-        "policy_bucket_id": selected_policy_bucket_id,
-        "windows": {},
-    }
+    confirmation = (
+        _greenfield_parent_confirmation(selected_flow, confirmation_discoveries or {})
+        if selected_flow
+        else {
+            "passed": False,
+            "policy_bucket_id": selected_policy_bucket_id,
+            "windows": {},
+        }
+    )
     if not confirmation.get("passed"):
         return {
             "candidate_id": f"{GREENFIELD_REAL_ENV_FAMILY}:{target_date}",
@@ -810,7 +957,9 @@ def _greenfield_candidate(
             },
             "greenfield_policy_contract_state": "blocked_cumulative_confirmation_missing",
             "greenfield_parent_confirmation": confirmation,
-            "source_bucket_keys": [str(row.get("bucket_id") or "") for row in policy.get("allowlist") or []],
+            "source_bucket_keys": [
+                str(row.get("bucket_id") or "") for row in policy.get("allowlist") or []
+            ],
             "primary_decision_metric": "lifecycle_bundle_ev",
             "decision_authority": "runtime_apply_bridge_cumulative_confirmation_gate",
             "forbidden_uses": [
@@ -821,7 +970,9 @@ def _greenfield_candidate(
                 "bot_restart_trigger",
             ],
         }
-    bundle_issue = validate_greenfield_policy_payload(policy, expected_version=str(policy.get("policy_version") or ""))
+    bundle_issue = validate_greenfield_policy_payload(
+        policy, expected_version=str(policy.get("policy_version") or "")
+    )
     if bundle_issue:
         return {
             "candidate_id": f"{GREENFIELD_REAL_ENV_FAMILY}:{target_date}",
@@ -856,7 +1007,9 @@ def _greenfield_candidate(
             },
             "greenfield_policy_contract_state": bundle_issue,
             "greenfield_policy_stage_contract": policy.get("stage_contract"),
-            "source_bucket_keys": [str(row.get("bucket_id") or "") for row in policy.get("allowlist") or []],
+            "source_bucket_keys": [
+                str(row.get("bucket_id") or "") for row in policy.get("allowlist") or []
+            ],
             "primary_decision_metric": "lifecycle_bundle_ev",
             "decision_authority": "runtime_apply_bridge_lifecycle_bundle_contract",
             "forbidden_uses": [
@@ -906,10 +1059,12 @@ def _greenfield_candidate(
             "policy_version": "runtime_default",
             "telegram_enabled": False,
         },
-            "greenfield_policy": policy,
-            "greenfield_policy_file": str(policy_path),
-            "greenfield_parent_confirmation": confirmation,
-            "source_bucket_keys": [str(row.get("bucket_id") or "") for row in policy.get("allowlist") or []],
+        "greenfield_policy": policy,
+        "greenfield_policy_file": str(policy_path),
+        "greenfield_parent_confirmation": confirmation,
+        "source_bucket_keys": [
+            str(row.get("bucket_id") or "") for row in policy.get("allowlist") or []
+        ],
         "primary_decision_metric": "lifecycle_bundle_ev",
         "entry_bucket_ev_metric_role": "diagnostic_entry_bucket_ev",
         "decision_authority": "greenfield_lifecycle_bundle_policy_v1",
@@ -924,8 +1079,16 @@ def _greenfield_candidate(
 
 
 def _greenfield_flow_discovery_counts(discovery: dict[str, Any]) -> dict[str, int]:
-    candidates = discovery.get("candidates") if isinstance(discovery.get("candidates"), list) else []
-    surfaced = discovery.get("surfaced_candidates") if isinstance(discovery.get("surfaced_candidates"), list) else []
+    candidates = (
+        discovery.get("candidates")
+        if isinstance(discovery.get("candidates"), list)
+        else []
+    )
+    surfaced = (
+        discovery.get("surfaced_candidates")
+        if isinstance(discovery.get("surfaced_candidates"), list)
+        else []
+    )
     live_candidates = (
         discovery.get("live_auto_apply_candidates")
         if isinstance(discovery.get("live_auto_apply_candidates"), list)
@@ -942,7 +1105,9 @@ def _greenfield_flow_discovery_counts(discovery: dict[str, Any]) -> dict[str, in
     return {
         "candidate_count": sum(1 for item in candidates if is_flow(item)),
         "surfaced_candidate_count": sum(1 for item in surfaced if is_flow(item)),
-        "live_auto_apply_candidate_count": sum(1 for item in live_candidates if is_flow(item)),
+        "live_auto_apply_candidate_count": sum(
+            1 for item in live_candidates if is_flow(item)
+        ),
     }
 
 
@@ -975,7 +1140,9 @@ def _entry_candidate(
     discovery: dict[str, Any],
     discovery_available: bool,
 ) -> dict[str, Any]:
-    bucket = _find_bucket(payload, "entry_bucket_attribution", "combo_entry_spot", ENTRY_TARGET_BUCKET_KEY)
+    bucket = _find_bucket(
+        payload, "entry_bucket_attribution", "combo_entry_spot", ENTRY_TARGET_BUCKET_KEY
+    )
     source_state, rolling = _state_for_bucket(
         bucket,
         history,
@@ -1016,9 +1183,11 @@ def _entry_candidate(
         "live_auto_apply": state == "live_auto_apply_ready",
         "allowed_runtime_apply": state == "live_auto_apply_ready",
         "runtime_effect": False,
-        "runtime_effect_after_approval": "bounded_entry_probe_recovery_live_auto"
-        if state == "live_auto_apply_ready"
-        else "none",
+        "runtime_effect_after_approval": (
+            "bounded_entry_probe_recovery_live_auto"
+            if state == "live_auto_apply_ready"
+            else "none"
+        ),
         "target_env_keys": target_env_keys,
         "recommended_values": {
             "enabled": state == "live_auto_apply_ready",
@@ -1093,8 +1262,12 @@ def _scale_source(bucket: dict[str, Any], *, role: str) -> dict[str, Any]:
     }
 
 
-def _scale_source_link(target_date: str, source_buckets: list[dict[str, Any]]) -> dict[str, Any]:
-    source_bucket_keys = [str(item.get("bucket_key") or "").strip() for item in source_buckets]
+def _scale_source_link(
+    target_date: str, source_buckets: list[dict[str, Any]]
+) -> dict[str, Any]:
+    source_bucket_keys = [
+        str(item.get("bucket_key") or "").strip() for item in source_buckets
+    ]
     return {
         "source_artifact": "lifecycle_decision_matrix",
         "source_section": "scale_in_bucket_attribution",
@@ -1109,7 +1282,9 @@ def _scale_source_link(target_date: str, source_buckets: list[dict[str, Any]]) -
                 "role": item.get("role"),
                 "scale_in_ev_coverage_state": item.get("scale_in_ev_coverage_state"),
                 "runtime_authority_ready": item.get("runtime_authority_ready"),
-                "runtime_authority_block_reason": item.get("runtime_authority_block_reason"),
+                "runtime_authority_block_reason": item.get(
+                    "runtime_authority_block_reason"
+                ),
             }
             for item in source_buckets
         ],
@@ -1147,7 +1322,9 @@ def _scale_candidate_legacy_blocked(
         if has_v2_observation
         else "blocked_legacy_v1_label_missing_incremental_ev"
     )
-    source_bucket_keys = [str(item.get("bucket_key") or "").strip() for item in source_buckets]
+    source_bucket_keys = [
+        str(item.get("bucket_key") or "").strip() for item in source_buckets
+    ]
     return {
         "candidate_id": f"{SCALE_IN_BRIDGE_FAMILY}:{target_date}",
         "family": SCALE_IN_BRIDGE_FAMILY,
@@ -1234,7 +1411,11 @@ def _scale_candidate(
     discovery: dict[str, Any],
     discovery_available: bool,
 ) -> dict[str, Any]:
-    scale_attribution = payload.get("scale_in_bucket_attribution") if isinstance(payload.get("scale_in_bucket_attribution"), dict) else {}
+    scale_attribution = (
+        payload.get("scale_in_bucket_attribution")
+        if isinstance(payload.get("scale_in_bucket_attribution"), dict)
+        else {}
+    )
     ev_label_version = str(scale_attribution.get("scale_in_ev_label_version") or "")
 
     pyramid = _find_bucket(
@@ -1281,7 +1462,13 @@ def _scale_candidate(
             positive_edge=bool(pyramid_ev is not None and pyramid_ev > 0),
         )
         if pyramid_ready
-        else ("blocked_source_quality", {"scale_in_ev_coverage_state": pyramid.get("scale_in_ev_coverage_state") or "missing"})
+        else (
+            "blocked_source_quality",
+            {
+                "scale_in_ev_coverage_state": pyramid.get("scale_in_ev_coverage_state")
+                or "missing"
+            },
+        )
     )
     avg_state, avg_roll = (
         _state_for_bucket(
@@ -1293,7 +1480,13 @@ def _scale_candidate(
             positive_edge=bool(avg_ev is not None and avg_ev > 0),
         )
         if avg_down_ready
-        else ("blocked_source_quality", {"scale_in_ev_coverage_state": avg_down.get("scale_in_ev_coverage_state") or "missing"})
+        else (
+            "blocked_source_quality",
+            {
+                "scale_in_ev_coverage_state": avg_down.get("scale_in_ev_coverage_state")
+                or "missing"
+            },
+        )
     )
     pyramid_discovery_ready = _discovery_scale_bucket_ready(
         discovery,
@@ -1307,13 +1500,27 @@ def _scale_candidate(
     )
     if pyramid_state == "live_auto_apply_ready" and not pyramid_discovery_ready:
         pyramid_state = "runtime_blocked_contract_gap"
-        pyramid_roll = {**pyramid_roll, "lifecycle_bucket_discovery_gate": "blocked_exact_bucket_missing"}
+        pyramid_roll = {
+            **pyramid_roll,
+            "lifecycle_bucket_discovery_gate": "blocked_exact_bucket_missing",
+        }
     if avg_state == "live_auto_apply_ready" and not avg_down_discovery_ready:
         avg_state = "runtime_blocked_contract_gap"
-        avg_roll = {**avg_roll, "lifecycle_bucket_discovery_gate": "blocked_exact_bucket_missing"}
-    ready = pyramid_state == "live_auto_apply_ready" or avg_state == "live_auto_apply_ready"
-    blocked_conflict = pyramid_state == "blocked_rolling_conflict" or avg_state == "blocked_rolling_conflict"
-    blocked_source = pyramid_state == "blocked_source_quality" and avg_state == "blocked_source_quality"
+        avg_roll = {
+            **avg_roll,
+            "lifecycle_bucket_discovery_gate": "blocked_exact_bucket_missing",
+        }
+    ready = (
+        pyramid_state == "live_auto_apply_ready" or avg_state == "live_auto_apply_ready"
+    )
+    blocked_conflict = (
+        pyramid_state == "blocked_rolling_conflict"
+        or avg_state == "blocked_rolling_conflict"
+    )
+    blocked_source = (
+        pyramid_state == "blocked_source_quality"
+        and avg_state == "blocked_source_quality"
+    )
     blocked_discovery = (
         pyramid_state == "runtime_blocked_contract_gap"
         or avg_state == "runtime_blocked_contract_gap"
@@ -1425,7 +1632,9 @@ def _scale_candidate(
         "target_env_keys": list(dict.fromkeys(target_env_keys)),
         "recommended_values": recommended_values,
         "current_values": current_values,
-        "source_bucket_keys": [str(item.get("bucket_key") or "") for item in source_buckets],
+        "source_bucket_keys": [
+            str(item.get("bucket_key") or "") for item in source_buckets
+        ],
         "source_buckets": source_buckets,
         "observe_only_reference_buckets": positive_refs[:5],
         "rolling_confirmation": {
@@ -1456,27 +1665,59 @@ def build_runtime_apply_bridge_report(target_date: str) -> dict[str, Any]:
     promotion_discovery_path = discovery_context["promotion_path"]
     promotion_discovery = discovery_context["promotion"]
     confirmation_discoveries = discovery_context["confirmation"]
-    discovery_path = promotion_discovery_path if promotion_discovery else daily_discovery_path
-    discovery = promotion_discovery if promotion_discovery else daily_discovery
-    promotion_contract_passed = _summary_contract_passed(promotion_discovery) if promotion_discovery else False
-    discovery_live_families = _discovery_live_families(promotion_discovery) if promotion_contract_passed else set()
-    discovery_live_by_family = (
-        _discovery_live_candidate_by_family(promotion_discovery) if promotion_contract_passed else {}
+    discovery_path = (
+        promotion_discovery_path if promotion_discovery else daily_discovery_path
     )
-    discovery_summary = discovery.get("summary") if isinstance(discovery.get("summary"), dict) else {}
-    daily_summary = daily_discovery.get("summary") if isinstance(daily_discovery.get("summary"), dict) else {}
-    discovery_warnings = [str(item) for item in (discovery.get("warnings") or []) if str(item)]
-    discovery_source_contract_status = str(discovery_summary.get("source_contract_status") or "")
-    discovery_ai_review_status = str(discovery_summary.get("ai_two_pass_review_status") or "")
-    greenfield_flow_counts = _greenfield_flow_discovery_counts(discovery) if discovery else {
-        "candidate_count": 0,
-        "surfaced_candidate_count": 0,
-        "live_auto_apply_candidate_count": 0,
-    }
+    discovery = promotion_discovery if promotion_discovery else daily_discovery
+    promotion_contract_passed = (
+        _summary_contract_passed(promotion_discovery) if promotion_discovery else False
+    )
+    discovery_live_families = (
+        _discovery_live_families(promotion_discovery)
+        if promotion_contract_passed
+        else set()
+    )
+    discovery_live_by_family = (
+        _discovery_live_candidate_by_family(promotion_discovery)
+        if promotion_contract_passed
+        else {}
+    )
+    discovery_summary = (
+        discovery.get("summary") if isinstance(discovery.get("summary"), dict) else {}
+    )
+    daily_summary = (
+        daily_discovery.get("summary")
+        if isinstance(daily_discovery.get("summary"), dict)
+        else {}
+    )
+    discovery_warnings = [
+        str(item) for item in (discovery.get("warnings") or []) if str(item)
+    ]
+    discovery_source_contract_status = str(
+        discovery_summary.get("source_contract_status") or ""
+    )
+    discovery_ai_review_status = str(
+        discovery_summary.get("ai_two_pass_review_status") or ""
+    )
+    greenfield_flow_counts = (
+        _greenfield_flow_discovery_counts(discovery)
+        if discovery
+        else {
+            "candidate_count": 0,
+            "surfaced_candidate_count": 0,
+            "live_auto_apply_candidate_count": 0,
+        }
+    )
     warnings: list[str] = []
     candidates: list[dict[str, Any]] = []
-    if daily_discovery and _safe_int(daily_summary.get("live_auto_apply_ready_count"), 0) > 0 and not promotion_contract_passed:
-        warnings.append("daily_only_live_candidate_blocked_cumulative_confirmation_missing")
+    if (
+        daily_discovery
+        and _safe_int(daily_summary.get("live_auto_apply_ready_count"), 0) > 0
+        and not promotion_contract_passed
+    ):
+        warnings.append(
+            "daily_only_live_candidate_blocked_cumulative_confirmation_missing"
+        )
     if promotion_discovery and not promotion_contract_passed:
         warnings.append("promotion_lifecycle_bucket_discovery_contract_not_passed")
     if not promotion_discovery:
@@ -1519,15 +1760,35 @@ def build_runtime_apply_bridge_report(target_date: str) -> dict[str, Any]:
             if greenfield.get("greenfield_policy_contract_state"):
                 warnings.append(str(greenfield.get("greenfield_policy_contract_state")))
             candidates.append(greenfield)
-        elif discovery and greenfield_flow_counts["live_auto_apply_candidate_count"] <= 0:
-            if greenfield_flow_counts["candidate_count"] > 0 or greenfield_flow_counts["surfaced_candidate_count"] > 0:
-                warnings.append("greenfield_policy_not_emitted_no_live_auto_ready_lifecycle_flow")
+        elif (
+            discovery and greenfield_flow_counts["live_auto_apply_candidate_count"] <= 0
+        ):
+            if (
+                greenfield_flow_counts["candidate_count"] > 0
+                or greenfield_flow_counts["surfaced_candidate_count"] > 0
+            ):
+                warnings.append(
+                    "greenfield_policy_not_emitted_no_live_auto_ready_lifecycle_flow"
+                )
             else:
-                warnings.append("greenfield_policy_not_emitted_no_complete_lifecycle_flow")
-    if discovery and discovery_source_contract_status and discovery_source_contract_status != "pass":
-        warnings.append(f"lifecycle_bucket_discovery_source_contract_{discovery_source_contract_status}")
-    if discovery and any(item.get("lifecycle_bucket_discovery_ai_followup_required") for item in candidates):
-        warnings.append("lifecycle_bucket_discovery_live_auto_post_apply_followup_required")
+                warnings.append(
+                    "greenfield_policy_not_emitted_no_complete_lifecycle_flow"
+                )
+    if (
+        discovery
+        and discovery_source_contract_status
+        and discovery_source_contract_status != "pass"
+    ):
+        warnings.append(
+            f"lifecycle_bucket_discovery_source_contract_{discovery_source_contract_status}"
+        )
+    if discovery and any(
+        item.get("lifecycle_bucket_discovery_ai_followup_required")
+        for item in candidates
+    ):
+        warnings.append(
+            "lifecycle_bucket_discovery_live_auto_post_apply_followup_required"
+        )
     warnings.extend(
         item
         for item in discovery_warnings
@@ -1535,14 +1796,20 @@ def build_runtime_apply_bridge_report(target_date: str) -> dict[str, Any]:
     )
     warnings = list(dict.fromkeys(warnings))
     status = "pass" if candidates else "fail"
-    live_ready_count = sum(1 for item in candidates if item.get("bridge_candidate_state") == "live_auto_apply_ready")
+    live_ready_count = sum(
+        1
+        for item in candidates
+        if item.get("bridge_candidate_state") == "live_auto_apply_ready"
+    )
     greenfield_ready_count = sum(
         1
         for item in candidates
         if item.get("family") == GREENFIELD_REAL_ENV_FAMILY
         and item.get("bridge_candidate_state") == "live_auto_apply_ready"
     )
-    greenfield_live_ready_flow_count = greenfield_flow_counts["live_auto_apply_candidate_count"]
+    greenfield_live_ready_flow_count = greenfield_flow_counts[
+        "live_auto_apply_candidate_count"
+    ]
     greenfield_contract_gap = next(
         (
             item
@@ -1553,7 +1820,8 @@ def build_runtime_apply_bridge_report(target_date: str) -> dict[str, Any]:
         None,
     )
     cumulative_confirmation_blocked = any(
-        item.get("bridge_candidate_state") == "blocked_cumulative_confirmation_missing" for item in candidates
+        item.get("bridge_candidate_state") == "blocked_cumulative_confirmation_missing"
+        for item in candidates
     )
     greenfield_flow_exists = (
         greenfield_flow_counts["candidate_count"] > 0
@@ -1562,41 +1830,70 @@ def build_runtime_apply_bridge_report(target_date: str) -> dict[str, Any]:
     greenfield_policy_emit_state = (
         "ready"
         if greenfield_ready_count > 0
-        else "not_emitted_greenfield_policy_contract_gap"
-        if greenfield_contract_gap
-        else "not_emitted_cumulative_confirmation_missing"
-        if cumulative_confirmation_blocked
-        else "not_emitted_no_live_auto_ready_lifecycle_flow"
-        if discovery and greenfield_flow_exists and greenfield_live_ready_flow_count <= 0
-        else "not_emitted_no_complete_lifecycle_flow"
-        if discovery
-        else "not_emitted_discovery_missing"
+        else (
+            "not_emitted_greenfield_policy_contract_gap"
+            if greenfield_contract_gap
+            else (
+                "not_emitted_cumulative_confirmation_missing"
+                if cumulative_confirmation_blocked
+                else (
+                    "not_emitted_no_live_auto_ready_lifecycle_flow"
+                    if discovery
+                    and greenfield_flow_exists
+                    and greenfield_live_ready_flow_count <= 0
+                    else (
+                        "not_emitted_no_complete_lifecycle_flow"
+                        if discovery
+                        else "not_emitted_discovery_missing"
+                    )
+                )
+            )
+        )
     )
     greenfield_policy_emit_blocker = (
         None
         if greenfield_ready_count > 0
-        else "greenfield_policy_contract_gap"
-        if greenfield_contract_gap
-        else "cumulative_confirmation_missing"
-        if cumulative_confirmation_blocked
-        else "no_live_auto_ready_lifecycle_flow"
-        if discovery and greenfield_flow_exists
-        else "no_complete_lifecycle_flow"
-        if discovery
-        else "discovery_missing"
+        else (
+            "greenfield_policy_contract_gap"
+            if greenfield_contract_gap
+            else (
+                "cumulative_confirmation_missing"
+                if cumulative_confirmation_blocked
+                else (
+                    "no_live_auto_ready_lifecycle_flow"
+                    if discovery and greenfield_flow_exists
+                    else (
+                        "no_complete_lifecycle_flow"
+                        if discovery
+                        else "discovery_missing"
+                    )
+                )
+            )
+        )
     )
     greenfield_policy_emit_blocker_detail = (
         "greenfield policy ready"
         if greenfield_ready_count > 0
-        else str(greenfield_contract_gap.get("greenfield_policy_contract_state") or "greenfield policy contract gap")
-        if greenfield_contract_gap
-        else "promotion window confirmation is missing for a live-auto lifecycle flow"
-        if cumulative_confirmation_blocked
-        else "lifecycle flow exists, but no lifecycle flow is live_auto_apply_ready for greenfield policy emission"
-        if discovery and greenfield_flow_exists
-        else "no lifecycle flow candidate is available for greenfield policy emission"
-        if discovery
-        else "lifecycle bucket discovery artifact is missing"
+        else (
+            str(
+                greenfield_contract_gap.get("greenfield_policy_contract_state")
+                or "greenfield policy contract gap"
+            )
+            if greenfield_contract_gap
+            else (
+                "promotion window confirmation is missing for a live-auto lifecycle flow"
+                if cumulative_confirmation_blocked
+                else (
+                    "lifecycle flow exists, but no lifecycle flow is live_auto_apply_ready for greenfield policy emission"
+                    if discovery and greenfield_flow_exists
+                    else (
+                        "no lifecycle flow candidate is available for greenfield policy emission"
+                        if discovery
+                        else "lifecycle bucket discovery artifact is missing"
+                    )
+                )
+            )
+        )
     )
     live_followup_count = sum(
         1
@@ -1609,16 +1906,27 @@ def build_runtime_apply_bridge_report(target_date: str) -> dict[str, Any]:
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "source": {
-            "lifecycle_decision_matrix": str(source_path) if source_path.exists() else None,
-            "lifecycle_bucket_discovery": str(daily_discovery_path) if daily_discovery_path.exists() else None,
-            "promotion_lifecycle_bucket_discovery": str(promotion_discovery_path) if promotion_discovery_path.exists() else None,
+            "lifecycle_decision_matrix": (
+                str(source_path) if source_path.exists() else None
+            ),
+            "lifecycle_bucket_discovery": (
+                str(daily_discovery_path) if daily_discovery_path.exists() else None
+            ),
+            "promotion_lifecycle_bucket_discovery": (
+                str(promotion_discovery_path)
+                if promotion_discovery_path.exists()
+                else None
+            ),
             "confirmation_lifecycle_bucket_discovery": {
                 suffix: str(path) if path.exists() else None
                 for suffix, path in discovery_context["paths"].items()
                 if suffix not in {"daily", discovery_context["promotion_window"]}
             },
             "runtime_approval_summary": str(
-                DATA_DIR / "report" / "runtime_approval_summary" / f"runtime_approval_summary_{target_date}.json"
+                DATA_DIR
+                / "report"
+                / "runtime_approval_summary"
+                / f"runtime_approval_summary_{target_date}.json"
             ),
         },
         "status": status,
@@ -1627,8 +1935,12 @@ def build_runtime_apply_bridge_report(target_date: str) -> dict[str, Any]:
             "ready_for_approval_count": 0,
             "live_auto_apply_ready_count": live_ready_count,
             "greenfield_real_env_ready_count": greenfield_ready_count,
-            "greenfield_lifecycle_flow_candidate_count": greenfield_flow_counts["candidate_count"],
-            "greenfield_lifecycle_flow_surfaced_candidate_count": greenfield_flow_counts["surfaced_candidate_count"],
+            "greenfield_lifecycle_flow_candidate_count": greenfield_flow_counts[
+                "candidate_count"
+            ],
+            "greenfield_lifecycle_flow_surfaced_candidate_count": greenfield_flow_counts[
+                "surfaced_candidate_count"
+            ],
             "greenfield_lifecycle_flow_live_auto_apply_candidate_count": greenfield_flow_counts[
                 "live_auto_apply_candidate_count"
             ],
@@ -1636,14 +1948,20 @@ def build_runtime_apply_bridge_report(target_date: str) -> dict[str, Any]:
             "greenfield_policy_emit_state": greenfield_policy_emit_state,
             "greenfield_policy_emit_blocker": greenfield_policy_emit_blocker,
             "greenfield_policy_emit_blocker_detail": greenfield_policy_emit_blocker_detail,
-            "stage_local_live_auto_apply_ready_count": max(live_ready_count - greenfield_ready_count, 0),
+            "stage_local_live_auto_apply_ready_count": max(
+                live_ready_count - greenfield_ready_count, 0
+            ),
             "lifecycle_bucket_discovery_status": "present" if discovery else "missing",
             "lifecycle_bucket_promotion_window": discovery_context["promotion_window"],
             "lifecycle_bucket_promotion_contract_passed": promotion_contract_passed,
-            "lifecycle_bucket_discovery_source_contract_status": discovery_source_contract_status or None,
-            "lifecycle_bucket_discovery_ai_review_status": discovery_ai_review_status or None,
+            "lifecycle_bucket_discovery_source_contract_status": discovery_source_contract_status
+            or None,
+            "lifecycle_bucket_discovery_ai_review_status": discovery_ai_review_status
+            or None,
             "lifecycle_bucket_discovery_live_followup_count": live_followup_count,
-            "approval_required_count": sum(1 for item in candidates if item.get("approval_required")),
+            "approval_required_count": sum(
+                1 for item in candidates if item.get("approval_required")
+            ),
             "human_approval_required": False,
             "runtime_mutation_performed": False,
         },
@@ -1704,21 +2022,32 @@ def _write_markdown(report: dict[str, Any]) -> None:
             "- `blocked_*` 후보는 source-quality/rolling conflict가 해소될 때까지 env로 소비하지 않는다.",
         ]
     )
-    runtime_apply_bridge_markdown_path(target_date).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    runtime_apply_bridge_markdown_path(target_date).write_text(
+        "\n".join(lines) + "\n", encoding="utf-8"
+    )
 
 
 def write_runtime_apply_bridge_report(target_date: str) -> dict[str, Any]:
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     report = build_runtime_apply_bridge_report(target_date)
     for item in report.get("candidates") or []:
-        if not isinstance(item, dict) or item.get("family") != GREENFIELD_REAL_ENV_FAMILY:
+        if (
+            not isinstance(item, dict)
+            or item.get("family") != GREENFIELD_REAL_ENV_FAMILY
+        ):
             continue
-        policy = item.get("greenfield_policy") if isinstance(item.get("greenfield_policy"), dict) else {}
+        policy = (
+            item.get("greenfield_policy")
+            if isinstance(item.get("greenfield_policy"), dict)
+            else {}
+        )
         policy_file = str(item.get("greenfield_policy_file") or "")
         if policy and policy_file:
             path = Path(policy_file)
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(policy, ensure_ascii=False, indent=2), encoding="utf-8")
+            path.write_text(
+                json.dumps(policy, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
     runtime_apply_bridge_report_path(target_date).write_text(
         json.dumps(report, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -1728,7 +2057,9 @@ def write_runtime_apply_bridge_report(target_date: str) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build LDM runtime apply bridge report.")
+    parser = argparse.ArgumentParser(
+        description="Build LDM runtime apply bridge report."
+    )
     parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
     args = parser.parse_args(argv)
     report = write_runtime_apply_bridge_report(args.target_date)

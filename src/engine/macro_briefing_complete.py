@@ -16,7 +16,6 @@ from google.genai import types
 from src.utils.constants import CONFIG_PATH, DEV_PATH, TRADING_RULES
 from src.utils.logger import log_error, log_info
 
-
 DEFAULT_TIMEOUT = 10
 DEFAULT_USER_AGENT = "Mozilla/5.0 (MacroBriefingBot/2.0)"
 GEMINI_MARKET_KEYS = ["sp500", "nasdaq", "vix", "us10y", "brent"]
@@ -281,7 +280,9 @@ def _is_stale(as_of: str, max_age_hours: int) -> bool:
 
 
 class BaseHttpClient:
-    def __init__(self, session: Optional[requests.Session] = None, timeout: int = DEFAULT_TIMEOUT):
+    def __init__(
+        self, session: Optional[requests.Session] = None, timeout: int = DEFAULT_TIMEOUT
+    ):
         self.session = session or requests.Session()
         self.session.headers.update({"User-Agent": DEFAULT_USER_AGENT})
         self.timeout = timeout
@@ -290,7 +291,12 @@ class BaseHttpClient:
 class EcosClient(BaseHttpClient):
     BASE_URL = "https://ecos.bok.or.kr/api/StatisticSearch"
 
-    def __init__(self, api_key: str, session: Optional[requests.Session] = None, timeout: int = DEFAULT_TIMEOUT):
+    def __init__(
+        self,
+        api_key: str,
+        session: Optional[requests.Session] = None,
+        timeout: int = DEFAULT_TIMEOUT,
+    ):
         super().__init__(session=session, timeout=timeout)
         self.api_key = api_key
 
@@ -340,7 +346,9 @@ class EcosClient(BaseHttpClient):
         )
 
     @staticmethod
-    def _format_date_range(cycle: str, start_dt: datetime, end_dt: datetime) -> Tuple[str, str]:
+    def _format_date_range(
+        cycle: str, start_dt: datetime, end_dt: datetime
+    ) -> Tuple[str, str]:
         if cycle == "D":
             return start_dt.strftime("%Y%m%d"), end_dt.strftime("%Y%m%d")
         if cycle == "M":
@@ -403,7 +411,15 @@ class MacroSignalEngine:
                 score += 1
                 notes.append("유가 안정")
 
-        geo_risk_words = ["iran", "israel", "war", "strike", "sanction", "tariff", "middle east"]
+        geo_risk_words = [
+            "iran",
+            "israel",
+            "war",
+            "strike",
+            "sanction",
+            "tariff",
+            "middle east",
+        ]
         for h in snap.headlines[:5]:
             title_lower = h.title.lower()
             if any(word in title_lower for word in geo_risk_words):
@@ -423,16 +439,26 @@ class MacroSignalEngine:
 
 
 class MacroBriefingBuilder:
-    def __init__(self, config: Optional[Dict[str, Any]] = None, session: Optional[requests.Session] = None):
+    def __init__(
+        self,
+        config: Optional[Dict[str, Any]] = None,
+        session: Optional[requests.Session] = None,
+    ):
         self.config = config or _load_system_config()
         self.session = session or requests.Session()
         self.signal_engine = MacroSignalEngine()
 
         ecos_key = self.config.get("ECOS_API_KEY", "")
-        self.ecos: Optional[EcosClient] = EcosClient(ecos_key, session=self.session) if ecos_key else None
+        self.ecos: Optional[EcosClient] = (
+            EcosClient(ecos_key, session=self.session) if ecos_key else None
+        )
 
-        self.market_max_age_hours = int(self.config.get("MACRO_GEMINI_MARKET_MAX_AGE_HOURS", 96) or 96)
-        self.headline_max_age_hours = int(self.config.get("MACRO_GEMINI_HEADLINE_MAX_AGE_HOURS", 36) or 36)
+        self.market_max_age_hours = int(
+            self.config.get("MACRO_GEMINI_MARKET_MAX_AGE_HOURS", 96) or 96
+        )
+        self.headline_max_age_hours = int(
+            self.config.get("MACRO_GEMINI_HEADLINE_MAX_AGE_HOURS", 36) or 36
+        )
         self.cache_path = self._resolve_cache_path()
         self.current_model_name = str("gemini-pro-latest")
 
@@ -451,13 +477,17 @@ class MacroBriefingBuilder:
         self.min_interval = getattr(TRADING_RULES, "GEMINI_ENGINE_MIN_INTERVAL", 0.5)
         self.consecutive_failures = 0
         self.ai_disabled = False
-        self.max_consecutive_failures = getattr(TRADING_RULES, "AI_MAX_CONSECUTIVE_FAILURES", 5)
+        self.max_consecutive_failures = getattr(
+            TRADING_RULES, "AI_MAX_CONSECUTIVE_FAILURES", 5
+        )
 
         if self.api_keys:
             self._rotate_client()
 
     def _resolve_cache_path(self) -> Path:
-        base_dir = CONFIG_PATH.parent if CONFIG_PATH.parent.exists() else DEV_PATH.parent
+        base_dir = (
+            CONFIG_PATH.parent if CONFIG_PATH.parent.exists() else DEV_PATH.parent
+        )
         return base_dir / "macro_gemini_cache.json"
 
     def _rotate_client(self):
@@ -533,7 +563,9 @@ class MacroBriefingBuilder:
                         if isinstance(parsed, dict):
                             return parsed
 
-                    raise ValueError(f"Could not find JSON content: {raw_text[:500]}...")
+                    raise ValueError(
+                        f"Could not find JSON content: {raw_text[:500]}..."
+                    )
 
                 return raw_text
 
@@ -541,10 +573,21 @@ class MacroBriefingBuilder:
                 last_error = str(e).lower()
 
                 retriable_tokens = [
-                    "429", "quota", "503", "500", "502", "504",
-                    "unavailable", "high demand", "too_many_requests",
-                    "read timed out", "timed out", "timeout",
-                    "deadline exceeded", "connection aborted", "connection reset",
+                    "429",
+                    "quota",
+                    "503",
+                    "500",
+                    "502",
+                    "504",
+                    "unavailable",
+                    "high demand",
+                    "too_many_requests",
+                    "read timed out",
+                    "timed out",
+                    "timeout",
+                    "deadline exceeded",
+                    "connection aborted",
+                    "connection reset",
                 ]
 
                 if any(token in last_error for token in retriable_tokens):
@@ -563,10 +606,12 @@ class MacroBriefingBuilder:
 
                 raise RuntimeError(f"API response or parsing failed: {e}")
 
-        fatal_msg = f"[MACRO GEMINI EXHAUSTED] All API keys failed. Last error: {last_error}"
+        fatal_msg = (
+            f"[MACRO GEMINI EXHAUSTED] All API keys failed. Last error: {last_error}"
+        )
         log_error(fatal_msg)
         raise RuntimeError(fatal_msg)
-    
+
     @staticmethod
     def _extract_response_text(response: Any) -> str:
         """
@@ -658,13 +703,14 @@ Return exactly one JSON object.
                 )
                 return payload
 
-            log_error(f"[MACRO CACHE LOAD] invalid payload type: {type(payload).__name__}")
+            log_error(
+                f"[MACRO CACHE LOAD] invalid payload type: {type(payload).__name__}"
+            )
             return None
 
         except Exception as e:
             log_error(f"macro cache load failed: {e}")
             return None
-
 
     def _save_cached_bundle(self, bundle: Dict[str, Any]) -> None:
         try:
@@ -686,20 +732,16 @@ Return exactly one JSON object.
             require_json=True,
             context_name="macro_briefing",
             model_override=self.current_model_name,
-            extra_config={
-                "tools": [
-                    types.Tool(
-                        google_search=types.GoogleSearch()
-                    )
-                ]
-            },
+            extra_config={"tools": [types.Tool(google_search=types.GoogleSearch())]},
         )
 
     def _is_bundle_stale(self, bundle: Dict[str, Any]) -> bool:
         if not isinstance(bundle, dict):
             return True
 
-        bundle_as_of = str(bundle.get("bundle_as_of", "") or bundle.get("as_of", "") or "").strip()
+        bundle_as_of = str(
+            bundle.get("bundle_as_of", "") or bundle.get("as_of", "") or ""
+        ).strip()
         if not bundle_as_of:
             return True
 
@@ -716,7 +758,9 @@ Return exactly one JSON object.
         if not isinstance(raw, dict):
             return None
 
-        as_of = str(raw.get("as_of", "") or "").strip() or str(bundle_as_of or "").strip()
+        as_of = (
+            str(raw.get("as_of", "") or "").strip() or str(bundle_as_of or "").strip()
+        )
         if not as_of or _is_stale(as_of, self.market_max_age_hours):
             return None
 
@@ -742,7 +786,10 @@ Return exactly one JSON object.
         }
 
         return MarketSeriesPoint(
-            name=str(raw.get("name", name_map.get(key, key.upper())) or name_map.get(key, key.upper())),
+            name=str(
+                raw.get("name", name_map.get(key, key.upper()))
+                or name_map.get(key, key.upper())
+            ),
             value=value,
             prev_value=prev_value,
             change=change,
@@ -751,7 +798,13 @@ Return exactly one JSON object.
             source=str(raw.get("source", source_label) or source_label),
         )
 
-    def _to_headlines(self, raw_headlines: Any, *, bundle_as_of: str = "", source_label: str = "GEMINI") -> List[NewsHeadline]:
+    def _to_headlines(
+        self,
+        raw_headlines: Any,
+        *,
+        bundle_as_of: str = "",
+        source_label: str = "GEMINI",
+    ) -> List[NewsHeadline]:
         results: List[NewsHeadline] = []
         if not isinstance(raw_headlines, list):
             return results
@@ -763,7 +816,10 @@ Return exactly one JSON object.
             if not title:
                 continue
 
-            published_at = str(row.get("published_at", "") or "").strip() or str(bundle_as_of or "").strip()
+            published_at = (
+                str(row.get("published_at", "") or "").strip()
+                or str(bundle_as_of or "").strip()
+            )
             if published_at and _is_stale(published_at, self.headline_max_age_hours):
                 continue
 
@@ -780,8 +836,12 @@ Return exactly one JSON object.
 
         return self._dedupe_headlines(results)
 
-    def _apply_gemini_bundle(self, snap: MacroSnapshot, bundle: Dict[str, Any], *, source_label: str) -> None:
-        bundle_as_of = str(bundle.get("bundle_as_of", "") or bundle.get("as_of", "") or "").strip()
+    def _apply_gemini_bundle(
+        self, snap: MacroSnapshot, bundle: Dict[str, Any], *, source_label: str
+    ) -> None:
+        bundle_as_of = str(
+            bundle.get("bundle_as_of", "") or bundle.get("as_of", "") or ""
+        ).strip()
 
         for key in GEMINI_MARKET_KEYS:
             point = self._to_market_series_point(
@@ -843,28 +903,42 @@ Return exactly one JSON object.
         if self.api_keys:
             try:
                 live_bundle = self._fetch_live_bundle()
-                log_info(f"[MACRO] live_bundle fetched: type={type(live_bundle).__name__}")
+                log_info(
+                    f"[MACRO] live_bundle fetched: type={type(live_bundle).__name__}"
+                )
 
                 if isinstance(live_bundle, dict):
-                    bundle_as_of = live_bundle.get('bundle_as_of')
+                    bundle_as_of = live_bundle.get("bundle_as_of")
                     log_info(
                         f"[MACRO] LIVE bundle_as_of={bundle_as_of} "
                         f"path={self.cache_path}"
                     )
 
                     if self._is_bundle_stale(live_bundle):
-                        snap.missing_sources.append(f"GEMINI:bundle:stale:{bundle_as_of}")
-                        snap.notes.append(f"Gemini live bundle stale 폐기: {bundle_as_of}")
-                        log_error(f"[MACRO] LIVE bundle rejected as stale: {bundle_as_of}")
+                        snap.missing_sources.append(
+                            f"GEMINI:bundle:stale:{bundle_as_of}"
+                        )
+                        snap.notes.append(
+                            f"Gemini live bundle stale 폐기: {bundle_as_of}"
+                        )
+                        log_error(
+                            f"[MACRO] LIVE bundle rejected as stale: {bundle_as_of}"
+                        )
                     else:
                         self._save_cached_bundle(live_bundle)
-                        log_info("[MACRO] applying LIVE bundle with source_label=GEMINI")
-                        self._apply_gemini_bundle(snap, live_bundle, source_label="GEMINI")
+                        log_info(
+                            "[MACRO] applying LIVE bundle with source_label=GEMINI"
+                        )
+                        self._apply_gemini_bundle(
+                            snap, live_bundle, source_label="GEMINI"
+                        )
                         self.consecutive_failures = 0
                 else:
                     snap.missing_sources.append("GEMINI:live:not_dict")
                     snap.notes.append("live Gemini 응답이 dict 아님")
-                    log_error("[MACRO] live_bundle is not dict, cache fallback not used")
+                    log_error(
+                        "[MACRO] live_bundle is not dict, cache fallback not used"
+                    )
             except Exception as e:
                 self.consecutive_failures += 1
                 snap.missing_sources.append(f"GEMINI:live:{e}")
@@ -876,12 +950,16 @@ Return exactly one JSON object.
                     f"exists={isinstance(cached_bundle, dict)}"
                 )
 
-                if isinstance(cached_bundle, dict) and not self._is_bundle_stale(cached_bundle):
+                if isinstance(cached_bundle, dict) and not self._is_bundle_stale(
+                    cached_bundle
+                ):
                     log_info(
                         f"[MACRO] applying CACHE bundle bundle_as_of={cached_bundle.get('bundle_as_of')} "
                         f"with source_label=GEMINI_CACHE"
                     )
-                    self._apply_gemini_bundle(snap, cached_bundle, source_label="GEMINI_CACHE")
+                    self._apply_gemini_bundle(
+                        snap, cached_bundle, source_label="GEMINI_CACHE"
+                    )
                     snap.notes.append("live Gemini 실패로 cache fallback 사용")
                 else:
                     snap.notes.append("live Gemini 실패 및 사용 가능한 cache 없음")
@@ -891,7 +969,9 @@ Return exactly one JSON object.
             snap.missing_sources.append("GEMINI_API_KEY 없음")
             log_error("GEMINI_API_KEY missing")
 
-        snap.regime_tag, snap.confidence, scored_notes = self.signal_engine.score_snapshot(snap)
+        snap.regime_tag, snap.confidence, scored_notes = (
+            self.signal_engine.score_snapshot(snap)
+        )
         if scored_notes:
             snap.notes.extend(scored_notes)
 
@@ -914,7 +994,9 @@ Return exactly one JSON object.
 
         rv_parts: List[str] = []
         if snap.us10y and snap.us10y.change is not None:
-            rv_parts.append(f"미 10년물 {_fmt_signed(snap.us10y.change, unit='', digits=2)}")
+            rv_parts.append(
+                f"미 10년물 {_fmt_signed(snap.us10y.change, unit='', digits=2)}"
+            )
         if snap.vix and snap.vix.change_pct is not None:
             rv_parts.append(f"VIX {_fmt_signed(snap.vix.change_pct)}")
         if rv_parts:
@@ -940,22 +1022,26 @@ Return exactly one JSON object.
             titles = [h.title for h in snap.headlines[:2]]
             lines.append("- 이벤트: " + " / ".join(titles))
 
-        has_any_macro = any([
-            snap.sp500 is not None,
-            snap.nasdaq is not None,
-            snap.vix is not None,
-            snap.us10y is not None,
-            snap.usdkrw is not None,
-            snap.kr3y is not None,
-            snap.kr10y is not None,
-            snap.brent is not None,
-            bool(snap.headlines),
-        ])
+        has_any_macro = any(
+            [
+                snap.sp500 is not None,
+                snap.nasdaq is not None,
+                snap.vix is not None,
+                snap.us10y is not None,
+                snap.usdkrw is not None,
+                snap.kr3y is not None,
+                snap.kr10y is not None,
+                snap.brent is not None,
+                bool(snap.headlines),
+            ]
+        )
 
         if has_any_macro:
             lines.append(f"- 해석: {self._make_kospi_interpretation(snap)}")
         else:
-            lines.append("- 해석: 유효한 오버나이트 매크로 수집값이 없어 보수적으로 중립 처리")
+            lines.append(
+                "- 해석: 유효한 오버나이트 매크로 수집값이 없어 보수적으로 중립 처리"
+            )
 
         if snap.notes:
             note_preview = [n for n in snap.notes if n][:3]
@@ -970,7 +1056,9 @@ Return exactly one JSON object.
             return "- 해석: 오버나이트 매크로 수집 결과가 비어 있음"
         return text
 
-    def build_macro_context(self, include_debug: bool = False) -> Tuple[MacroSnapshot, str]:
+    def build_macro_context(
+        self, include_debug: bool = False
+    ) -> Tuple[MacroSnapshot, str]:
         snap = self.collect_snapshot()
         return snap, self.build_macro_text(snap, include_debug=include_debug)
 
@@ -995,9 +1083,15 @@ Return exactly one JSON object.
         return "방향성은 중립. 강한 업종만 압축 대응하는 편이 유리"
 
 
-def build_scanner_data_input(total_count: int, survived_count: int, stats_text: str, macro_text: str = "") -> str:
+def build_scanner_data_input(
+    total_count: int, survived_count: int, stats_text: str, macro_text: str = ""
+) -> str:
     cleaned_macro = str(macro_text or "").strip()
-    macro_block = cleaned_macro if cleaned_macro else "- 오버나이트 매크로 데이터 수집 실패 또는 빈 결과"
+    macro_block = (
+        cleaned_macro
+        if cleaned_macro
+        else "- 오버나이트 매크로 데이터 수집 실패 또는 빈 결과"
+    )
 
     return (
         f"[오버나이트 매크로]\n{macro_block}\n\n"

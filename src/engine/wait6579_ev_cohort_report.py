@@ -13,7 +13,6 @@ from src.utils.constants import DATA_DIR, TRADING_RULES
 from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto, read_jsonl
 from src.utils.logger import log_error
 
-
 WAIT6579_EV_COHORT_SCHEMA_VERSION = 2
 _WAIT6579_STAGE = "wait65_79_ev_candidate"
 _SCORE65_74_PROBE_STAGE = "score65_74_recovery_probe"
@@ -94,7 +93,9 @@ def _safe_float(value, default: float = 0.0) -> float:
         return default
 
 
-def _minute_candle_meta(candles: list[dict], meta: dict | None = None, *, requested_limit: int | None = None) -> dict:
+def _minute_candle_meta(
+    candles: list[dict], meta: dict | None = None, *, requested_limit: int | None = None
+) -> dict:
     source_meta = dict(meta or {})
     source_meta.setdefault("api_id", "ka10080")
     source_meta.setdefault("requested_limit", requested_limit)
@@ -107,13 +108,19 @@ def _minute_candle_meta(candles: list[dict], meta: dict | None = None, *, reques
     source_meta.setdefault("continuous_page_limit_reached", False)
     source_meta.setdefault("rest_received_ts_ms", None)
     source_meta.setdefault("latest_source_timestamp", None)
-    source_meta.setdefault("source_time_basis", "response_received_epoch_ms_and_chart_bar_timestamp")
+    source_meta.setdefault(
+        "source_time_basis", "response_received_epoch_ms_and_chart_bar_timestamp"
+    )
     return source_meta
 
 
-def _fetch_minute_candles_with_meta(kiwoom_utils, token: str, code: str, *, limit: int) -> tuple[list[dict], dict]:
+def _fetch_minute_candles_with_meta(
+    kiwoom_utils, token: str, code: str, *, limit: int
+) -> tuple[list[dict], dict]:
     if hasattr(kiwoom_utils, "get_minute_candles_ka10080_with_meta"):
-        candles, meta = kiwoom_utils.get_minute_candles_ka10080_with_meta(token, code, limit=limit)
+        candles, meta = kiwoom_utils.get_minute_candles_ka10080_with_meta(
+            token, code, limit=limit
+        )
         candles = candles or []
         return candles, _minute_candle_meta(candles, meta, requested_limit=limit)
     candles = kiwoom_utils.get_minute_candles_ka10080(token, code, limit=limit) or []
@@ -151,7 +158,9 @@ def _minute_forward_source_quality(metrics_10m: dict, candle_meta: dict) -> dict
 
 
 def _sim_virtual_budget_krw() -> int:
-    return max(0, int(getattr(TRADING_RULES, "SIM_VIRTUAL_BUDGET_KRW", 10_000_000) or 0))
+    return max(
+        0, int(getattr(TRADING_RULES, "SIM_VIRTUAL_BUDGET_KRW", 10_000_000) or 0)
+    )
 
 
 def _scalp_ratio_from_score(ai_score: float) -> float:
@@ -197,7 +206,11 @@ def _avg(values: list[float]) -> float:
 
 
 def _ratio(numerator: int, denominator: int) -> float:
-    return round((float(numerator) / float(denominator)) * 100.0, 1) if denominator > 0 else 0.0
+    return (
+        round((float(numerator) / float(denominator)) * 100.0, 1)
+        if denominator > 0
+        else 0.0
+    )
 
 
 def _parse_event_dt(value) -> datetime | None:
@@ -232,9 +245,18 @@ def _parse_minute_time(value: str, signal_date: str) -> datetime | None:
 def _classify_stage(stage: str) -> str:
     if stage == "order_bundle_submitted":
         return "submitted"
-    if stage.startswith("blocked_") or stage.endswith("_block") or stage.endswith("_failed"):
+    if (
+        stage.startswith("blocked_")
+        or stage.endswith("_block")
+        or stage.endswith("_failed")
+    ):
         return "blocked"
-    if stage in {"first_ai_wait", "entry_armed_expired", "entry_armed_expired_after_wait", "entry_arm_expired"}:
+    if stage in {
+        "first_ai_wait",
+        "entry_armed_expired",
+        "entry_armed_expired_after_wait",
+        "entry_arm_expired",
+    }:
         return "waiting"
     return "progress"
 
@@ -244,7 +266,8 @@ def _is_early_accel_recheck_retry(fields: dict[str, str]) -> bool:
         str(fields.get("ai_call_trigger_reason") or "") == "early_accel_recheck"
         or str(fields.get("tuning_authority_excluded_reason") or "")
         == "early_accel_recheck_operator_retry"
-        or str(fields.get("ai_call_trigger_reason") or "") == "ai_numeric_consistency_recheck"
+        or str(fields.get("ai_call_trigger_reason") or "")
+        == "ai_numeric_consistency_recheck"
         or str(fields.get("tuning_authority_excluded_reason") or "")
         == "ai_numeric_consistency_recheck_operator_retry"
     )
@@ -297,10 +320,16 @@ def _liquidity_bucket_from_fields(fields: dict[str, str]) -> tuple[str, str]:
         return "liquidity_would_block", "guard_action"
     if action == "WOULD_PASS":
         return "liquidity_ok", "guard_action"
-    terminal = _nonempty(fields.get("terminal_blocker") or fields.get("blocked_reason") or fields.get("reason")).lower()
+    terminal = _nonempty(
+        fields.get("terminal_blocker")
+        or fields.get("blocked_reason")
+        or fields.get("reason")
+    ).lower()
     if "liquidity" in terminal:
         return "liquidity_blocked", "terminal_blocker"
-    buy_pressure = _safe_float(fields.get("buy_pressure") or fields.get("buy_pressure_10t"), 0.0)
+    buy_pressure = _safe_float(
+        fields.get("buy_pressure") or fields.get("buy_pressure_10t"), 0.0
+    )
     tick_accel = _safe_float(fields.get("tick_accel"), 0.0)
     if buy_pressure >= 70.0 or tick_accel >= 1.25:
         return "liquidity_proxy_strong", "deterministic_proxy"
@@ -324,11 +353,17 @@ def _overbought_bucket_from_fields(fields: dict[str, str]) -> tuple[str, str]:
         return "overbought_would_block", "guard_action"
     if action == "WOULD_PASS":
         return "overbought_normal", "guard_action"
-    terminal = _nonempty(fields.get("terminal_blocker") or fields.get("blocked_reason") or fields.get("reason")).lower()
+    terminal = _nonempty(
+        fields.get("terminal_blocker")
+        or fields.get("blocked_reason")
+        or fields.get("reason")
+    ).lower()
     if "overbought" in terminal:
         return "overbought_blocked", "terminal_blocker"
     micro_vwap = _safe_float(fields.get("micro_vwap_bp"), 0.0)
-    buy_pressure = _safe_float(fields.get("buy_pressure") or fields.get("buy_pressure_10t"), 0.0)
+    buy_pressure = _safe_float(
+        fields.get("buy_pressure") or fields.get("buy_pressure_10t"), 0.0
+    )
     if micro_vwap >= 80.0 and buy_pressure >= 75.0:
         return "overbought_proxy_chase_risk", "deterministic_proxy"
     if micro_vwap >= 30.0:
@@ -350,7 +385,9 @@ def _load_entry_events(target_date: str) -> list[EntryEvent]:
     for row in rows:
         if str(row.get("pipeline") or "").strip() != "ENTRY_PIPELINE":
             continue
-        fields = {str(key): str(value) for key, value in dict(row.get("fields") or {}).items()}
+        fields = {
+            str(key): str(value) for key, value in dict(row.get("fields") or {}).items()
+        }
         if _is_early_accel_recheck_retry(fields):
             continue
         code = str(row.get("stock_code") or "").strip()[:6]
@@ -367,7 +404,13 @@ def _load_entry_events(target_date: str) -> list[EntryEvent]:
                 fields=fields,
             )
         )
-    events.sort(key=lambda item: (_parse_event_dt(item.emitted_at) or datetime.min, item.code, item.stage))
+    events.sort(
+        key=lambda item: (
+            _parse_event_dt(item.emitted_at) or datetime.min,
+            item.code,
+            item.stage,
+        )
+    )
     return events
 
 
@@ -380,7 +423,12 @@ def _split_attempt_segments(item_events: list[EntryEvent]) -> list[list[EntryEve
     segment_terminated = False
 
     for event in item_events:
-        record_changed = bool(current and event.record_id and current_record_id and event.record_id != current_record_id)
+        record_changed = bool(
+            current
+            and event.record_id
+            and current_record_id
+            and event.record_id != current_record_id
+        )
         should_rollover = record_changed or (
             segment_terminated and event.stage not in _ATTEMPT_AUXILIARY_STAGES
         )
@@ -413,7 +461,10 @@ def _build_wait6579_candidates(target_date: str) -> list[dict]:
             if not attempt_events:
                 continue
 
-            candidate_event = next((event for event in attempt_events if event.stage == _WAIT6579_STAGE), None)
+            candidate_event = next(
+                (event for event in attempt_events if event.stage == _WAIT6579_STAGE),
+                None,
+            )
             if candidate_event is None:
                 continue
 
@@ -421,17 +472,32 @@ def _build_wait6579_candidates(target_date: str) -> list[dict]:
             if anchor_dt is None:
                 continue
 
-            terminal_event = next(
+            terminal_event = (
+                next(
+                    (
+                        event
+                        for event in reversed(attempt_events)
+                        if _classify_stage(event.stage)
+                        in {"blocked", "waiting", "submitted"}
+                    ),
+                    None,
+                )
+                or attempt_events[-1]
+            )
+            budget_event = next(
                 (
                     event
                     for event in reversed(attempt_events)
-                    if _classify_stage(event.stage) in {"blocked", "waiting", "submitted"}
+                    if event.stage == "budget_pass"
                 ),
                 None,
-            ) or attempt_events[-1]
-            budget_event = next((event for event in reversed(attempt_events) if event.stage == "budget_pass"), None)
+            )
             entry_event = next(
-                (event for event in reversed(attempt_events) if event.stage in _ENTRY_ARMED_STAGES),
+                (
+                    event
+                    for event in reversed(attempt_events)
+                    if event.stage in _ENTRY_ARMED_STAGES
+                ),
                 None,
             )
 
@@ -440,28 +506,62 @@ def _build_wait6579_candidates(target_date: str) -> list[dict]:
                 or candidate_event.fields.get("target_buy_price"),
                 0,
             )
-            has_submitted = any(event.stage == "order_bundle_submitted" for event in attempt_events)
-            has_recovery_check = any(event.stage == "watching_buy_recovery_canary" for event in attempt_events)
-            recovery_promoted = any(
-                event.stage == "watching_buy_recovery_canary" and _truthy(event.fields.get("promoted"))
+            has_submitted = any(
+                event.stage == "order_bundle_submitted" for event in attempt_events
+            )
+            has_recovery_check = any(
+                event.stage == "watching_buy_recovery_canary"
                 for event in attempt_events
             )
-            has_probe_applied = any(event.stage == "wait6579_probe_canary_applied" for event in attempt_events)
-            has_score65_74_probe = any(event.stage == _SCORE65_74_PROBE_STAGE for event in attempt_events)
-            has_budget_pass = any(event.stage == "budget_pass" for event in attempt_events)
-            has_latency_pass = any(event.stage == "latency_pass" for event in attempt_events)
-            has_latency_block = any(event.stage == "latency_block" for event in attempt_events)
-            has_order_fail = any(event.stage in _ORDER_FAIL_STAGES for event in attempt_events)
-            latency_block_event = next((event for event in reversed(attempt_events) if event.stage == "latency_block"), None)
+            recovery_promoted = any(
+                event.stage == "watching_buy_recovery_canary"
+                and _truthy(event.fields.get("promoted"))
+                for event in attempt_events
+            )
+            has_probe_applied = any(
+                event.stage == "wait6579_probe_canary_applied"
+                for event in attempt_events
+            )
+            has_score65_74_probe = any(
+                event.stage == _SCORE65_74_PROBE_STAGE for event in attempt_events
+            )
+            has_budget_pass = any(
+                event.stage == "budget_pass" for event in attempt_events
+            )
+            has_latency_pass = any(
+                event.stage == "latency_pass" for event in attempt_events
+            )
+            has_latency_block = any(
+                event.stage == "latency_block" for event in attempt_events
+            )
+            has_order_fail = any(
+                event.stage in _ORDER_FAIL_STAGES for event in attempt_events
+            )
+            latency_block_event = next(
+                (
+                    event
+                    for event in reversed(attempt_events)
+                    if event.stage == "latency_block"
+                ),
+                None,
+            )
             merged_fields: dict[str, str] = {}
             for event in attempt_events:
                 merged_fields.update(event.fields)
                 merged_fields.setdefault("source_stage", event.stage)
             merged_fields.update(candidate_event.fields)
             merged_fields["terminal_blocker"] = terminal_event.stage
-            liquidity_bucket, liquidity_provenance = _liquidity_bucket_from_fields(merged_fields)
-            overbought_bucket, overbought_provenance = _overbought_bucket_from_fields(merged_fields)
-            time_bucket = _time_bucket(candidate_event.emitted_at or candidate_event.fields.get("tick_latest_time"), target_date)
+            liquidity_bucket, liquidity_provenance = _liquidity_bucket_from_fields(
+                merged_fields
+            )
+            overbought_bucket, overbought_provenance = _overbought_bucket_from_fields(
+                merged_fields
+            )
+            time_bucket = _time_bucket(
+                candidate_event.emitted_at
+                or candidate_event.fields.get("tick_latest_time"),
+                target_date,
+            )
 
             if has_submitted:
                 submission_blocker = "submitted"
@@ -481,7 +581,9 @@ def _build_wait6579_candidates(target_date: str) -> list[dict]:
                 submission_blocker = "unknown"
 
             blocker_counts = Counter(
-                event.stage for event in attempt_events if _classify_stage(event.stage) in {"blocked", "waiting"}
+                event.stage
+                for event in attempt_events
+                if _classify_stage(event.stage) in {"blocked", "waiting"}
             )
 
             candidates.append(
@@ -493,28 +595,56 @@ def _build_wait6579_candidates(target_date: str) -> list[dict]:
                     "stock_name": candidate_event.name,
                     "record_id": candidate_event.record_id or None,
                     "attempt_status": "ENTERED" if has_submitted else "MISSED",
-                    "ai_score": round(_safe_float(candidate_event.fields.get("ai_score"), 0.0), 1),
-                    "action": str(candidate_event.fields.get("action") or "WAIT").upper(),
+                    "ai_score": round(
+                        _safe_float(candidate_event.fields.get("ai_score"), 0.0), 1
+                    ),
+                    "action": str(
+                        candidate_event.fields.get("action") or "WAIT"
+                    ).upper(),
                     "buy_pressure": round(
                         _safe_float(
                             candidate_event.fields.get("buy_pressure"),
-                            _safe_float(candidate_event.fields.get("buy_pressure_10t"), 0.0),
+                            _safe_float(
+                                candidate_event.fields.get("buy_pressure_10t"), 0.0
+                            ),
                         ),
                         3,
                     ),
-                    "tick_accel": round(_safe_float(candidate_event.fields.get("tick_accel"), 0.0), 4),
-                    "micro_vwap_bp": round(_safe_float(candidate_event.fields.get("micro_vwap_bp"), 0.0), 3),
+                    "tick_accel": round(
+                        _safe_float(candidate_event.fields.get("tick_accel"), 0.0), 4
+                    ),
+                    "micro_vwap_bp": round(
+                        _safe_float(candidate_event.fields.get("micro_vwap_bp"), 0.0), 3
+                    ),
                     "liquidity_bucket": liquidity_bucket,
                     "liquidity_bucket_provenance": liquidity_provenance,
                     "overbought_bucket": overbought_bucket,
                     "overbought_bucket_provenance": overbought_provenance,
                     "time_bucket": time_bucket,
-                    "time_bucket_provenance": "emitted_at" if _parse_event_dt(candidate_event.emitted_at) else "tick_latest_time",
-                    "latency_state": str(candidate_event.fields.get("latency_state") or "-").upper(),
-                    "parse_ok": str(candidate_event.fields.get("parse_ok") or "false").strip().lower() == "true",
-                    "ai_response_ms": _safe_int(candidate_event.fields.get("ai_response_ms"), 0),
-                    "target_qty": _safe_int((budget_event.fields if budget_event else {}).get("qty"), 0),
-                    "safe_budget": _safe_int((budget_event.fields if budget_event else {}).get("safe_budget"), 0),
+                    "time_bucket_provenance": (
+                        "emitted_at"
+                        if _parse_event_dt(candidate_event.emitted_at)
+                        else "tick_latest_time"
+                    ),
+                    "latency_state": str(
+                        candidate_event.fields.get("latency_state") or "-"
+                    ).upper(),
+                    "parse_ok": str(candidate_event.fields.get("parse_ok") or "false")
+                    .strip()
+                    .lower()
+                    == "true",
+                    "ai_response_ms": _safe_int(
+                        candidate_event.fields.get("ai_response_ms"), 0
+                    ),
+                    "target_qty": _safe_int(
+                        (budget_event.fields if budget_event else {}).get("qty"), 0
+                    ),
+                    "safe_budget": _safe_int(
+                        (budget_event.fields if budget_event else {}).get(
+                            "safe_budget"
+                        ),
+                        0,
+                    ),
                     "signal_price": signal_price,
                     "terminal_blocker": terminal_event.stage,
                     "has_recovery_check": has_recovery_check,
@@ -526,7 +656,12 @@ def _build_wait6579_candidates(target_date: str) -> list[dict]:
                     "has_latency_block": has_latency_block,
                     "has_order_fail": has_order_fail,
                     "submission_blocker": submission_blocker,
-                    "latency_block_reason": str((latency_block_event.fields if latency_block_event else {}).get("reason") or "-"),
+                    "latency_block_reason": str(
+                        (latency_block_event.fields if latency_block_event else {}).get(
+                            "reason"
+                        )
+                        or "-"
+                    ),
                     "terminal_fields": dict(terminal_event.fields),
                     "stage_flow": [event.stage for event in attempt_events],
                     "blocker_counts": dict(blocker_counts),
@@ -542,7 +677,9 @@ def _build_wait6579_candidates(target_date: str) -> list[dict]:
     return candidates
 
 
-def _resolve_anchor_price(signal_price: float, relevant: list[tuple[datetime, dict]]) -> float:
+def _resolve_anchor_price(
+    signal_price: float, relevant: list[tuple[datetime, dict]]
+) -> float:
     if signal_price > 0:
         return signal_price
     if not relevant:
@@ -555,7 +692,9 @@ def _resolve_anchor_price(signal_price: float, relevant: list[tuple[datetime, di
     return 0.0
 
 
-def _compute_window_metrics(candidate: dict, candles: list[dict], window_minutes: int) -> dict:
+def _compute_window_metrics(
+    candidate: dict, candles: list[dict], window_minutes: int
+) -> dict:
     signal_dt = datetime.strptime(
         f"{candidate['signal_date']} {candidate['signal_time']}",
         "%Y-%m-%d %H:%M:%S",
@@ -565,7 +704,9 @@ def _compute_window_metrics(candidate: dict, candles: list[dict], window_minutes
 
     relevant: list[tuple[datetime, dict]] = []
     for candle in candles:
-        candle_dt = _parse_minute_time(str(candle.get("체결시간", "") or ""), candidate["signal_date"])
+        candle_dt = _parse_minute_time(
+            str(candle.get("체결시간", "") or ""), candidate["signal_date"]
+        )
         if candle_dt is None:
             continue
         if candle_dt < start_dt or candle_dt >= end_dt:
@@ -573,7 +714,9 @@ def _compute_window_metrics(candidate: dict, candles: list[dict], window_minutes
         relevant.append((candle_dt, candle))
     relevant.sort(key=lambda item: item[0])
 
-    anchor_price = _resolve_anchor_price(float(candidate.get("signal_price", 0) or 0), relevant)
+    anchor_price = _resolve_anchor_price(
+        float(candidate.get("signal_price", 0) or 0), relevant
+    )
     if anchor_price <= 0 or not relevant:
         return {
             "entry_price_used": int(round(anchor_price)),
@@ -628,16 +771,22 @@ def _simulate_paper_fill(candidate: dict, metrics_10m: dict) -> dict:
     low_price = _safe_float(metrics_10m.get("window_low_price"), 0.0)
     close_ret_pct = _safe_float(metrics_10m.get("close_ret_pct"), 0.0)
     target_qty = _safe_int(candidate.get("target_qty"), 0)
-    capacity = _sim_virtual_qty(entry_price, _safe_float(candidate.get("ai_score"), 0.0))
+    capacity = _sim_virtual_qty(
+        entry_price, _safe_float(candidate.get("ai_score"), 0.0)
+    )
     qty = _safe_int(capacity.get("qty"), 0)
     qty_source = "sim_virtual_budget_dynamic_formula" if qty > 0 else "unpriced"
     virtual_budget_override = True
 
     partial_tolerance_bp = float(
-        getattr(TRADING_RULES, "AI_WAIT6579_PAPER_FILL_PARTIAL_TOLERANCE_BP", 15.0) or 15.0
+        getattr(TRADING_RULES, "AI_WAIT6579_PAPER_FILL_PARTIAL_TOLERANCE_BP", 15.0)
+        or 15.0
     )
     partial_weight = _clamp(
-        float(getattr(TRADING_RULES, "AI_WAIT6579_PAPER_FILL_PARTIAL_WEIGHT", 0.40) or 0.40),
+        float(
+            getattr(TRADING_RULES, "AI_WAIT6579_PAPER_FILL_PARTIAL_WEIGHT", 0.40)
+            or 0.40
+        ),
         0.0,
         1.0,
     )
@@ -705,7 +854,9 @@ def _simulate_paper_fill(candidate: dict, metrics_10m: dict) -> dict:
     expected_fill_prob = full_prob + partial_prob
     effective_fill_prob = full_prob + (partial_prob * partial_weight)
     expected_ev_pct = close_ret_pct * effective_fill_prob
-    expected_ev_krw = int(round(entry_price * qty * (expected_ev_pct / 100.0))) if qty > 0 else 0
+    expected_ev_krw = (
+        int(round(entry_price * qty * (expected_ev_pct / 100.0))) if qty > 0 else 0
+    )
 
     if full_touch and full_prob >= 0.50:
         expected_fill_class = "FULL"
@@ -729,7 +880,9 @@ def _simulate_paper_fill(candidate: dict, metrics_10m: dict) -> dict:
         "counterfactual_ratio": round(float(capacity.get("ratio") or 0.0), 4),
         "counterfactual_target_budget": int(capacity.get("target_budget") or 0),
         "counterfactual_safe_budget": int(capacity.get("safe_budget") or 0),
-        "counterfactual_safety_ratio": round(float(capacity.get("safety_ratio") or 0.0), 4),
+        "counterfactual_safety_ratio": round(
+            float(capacity.get("safety_ratio") or 0.0), 4
+        ),
         "counterfactual_max_budget": int(capacity.get("max_budget") or 0),
         "real_target_qty_observed": int(target_qty),
         "counterfactual_notional_krw": int(round(entry_price * qty)) if qty > 0 else 0,
@@ -755,13 +908,20 @@ def _fill_split_rows(rows: list[dict]) -> list[dict]:
                 "fill_type": key,
                 "samples": len(items),
                 "avg_expected_fill_rate_pct": _avg(
-                    [_safe_float(item.get("expected_fill_rate_pct"), 0.0) for item in items]
+                    [
+                        _safe_float(item.get("expected_fill_rate_pct"), 0.0)
+                        for item in items
+                    ]
                 ),
-                "avg_expected_ev_pct": _avg([_safe_float(item.get("expected_ev_pct"), 0.0) for item in items]),
+                "avg_expected_ev_pct": _avg(
+                    [_safe_float(item.get("expected_ev_pct"), 0.0) for item in items]
+                ),
                 "expected_ev_krw_sum": int(
                     sum(_safe_int(item.get("expected_ev_krw"), 0) for item in items)
                 ),
-                "avg_close_10m_pct": _avg([_safe_float(item.get("close_10m_pct"), 0.0) for item in items]),
+                "avg_close_10m_pct": _avg(
+                    [_safe_float(item.get("close_10m_pct"), 0.0) for item in items]
+                ),
             }
         )
     return out
@@ -769,22 +929,30 @@ def _fill_split_rows(rows: list[dict]) -> list[dict]:
 
 def _counterfactual_summary(rows: list[dict]) -> dict:
     score65_rows = [row for row in rows if bool(row.get("has_score65_74_probe"))]
-    full_rows = [row for row in rows if str(row.get("expected_fill_class") or "") == "FULL"]
-    partial_rows = [row for row in rows if str(row.get("expected_fill_class") or "") == "PARTIAL"]
+    full_rows = [
+        row for row in rows if str(row.get("expected_fill_class") or "") == "FULL"
+    ]
+    partial_rows = [
+        row for row in rows if str(row.get("expected_fill_class") or "") == "PARTIAL"
+    ]
     return {
         **_COUNTERFACTUAL_POLICY,
         "total_candidates": len(rows),
         "score65_74_probe_candidates": len(score65_rows),
         "full_samples": len(full_rows),
         "partial_samples": len(partial_rows),
-        "avg_expected_ev_pct": _avg([_safe_float(row.get("expected_ev_pct"), 0.0) for row in rows]),
+        "avg_expected_ev_pct": _avg(
+            [_safe_float(row.get("expected_ev_pct"), 0.0) for row in rows]
+        ),
         "score65_74_avg_expected_ev_pct": _avg(
             [_safe_float(row.get("expected_ev_pct"), 0.0) for row in score65_rows]
         ),
         "score65_74_avg_close_10m_pct": _avg(
             [_safe_float(row.get("close_10m_pct"), 0.0) for row in score65_rows]
         ),
-        "expected_ev_krw_sum": int(sum(_safe_int(row.get("expected_ev_krw"), 0) for row in rows)),
+        "expected_ev_krw_sum": int(
+            sum(_safe_int(row.get("expected_ev_krw"), 0) for row in rows)
+        ),
         "source_authority": "observe_only_threshold_relaxation_input",
         "real_execution_quality_source": "none",
     }
@@ -796,16 +964,23 @@ def _terminal_breakdown(rows: list[dict]) -> list[dict]:
         buckets[str(row.get("terminal_blocker") or "-")].append(row)
 
     out: list[dict] = []
-    for stage, items in sorted(buckets.items(), key=lambda pair: len(pair[1]), reverse=True):
+    for stage, items in sorted(
+        buckets.items(), key=lambda pair: len(pair[1]), reverse=True
+    ):
         out.append(
             {
                 "terminal_blocker": stage,
                 "samples": len(items),
                 "share_pct": _ratio(len(items), len(rows)),
                 "avg_expected_fill_rate_pct": _avg(
-                    [_safe_float(item.get("expected_fill_rate_pct"), 0.0) for item in items]
+                    [
+                        _safe_float(item.get("expected_fill_rate_pct"), 0.0)
+                        for item in items
+                    ]
                 ),
-                "avg_expected_ev_pct": _avg([_safe_float(item.get("expected_ev_pct"), 0.0) for item in items]),
+                "avg_expected_ev_pct": _avg(
+                    [_safe_float(item.get("expected_ev_pct"), 0.0) for item in items]
+                ),
                 "expected_ev_krw_sum": int(
                     sum(_safe_int(item.get("expected_ev_krw"), 0) for item in items)
                 ),
@@ -816,7 +991,9 @@ def _terminal_breakdown(rows: list[dict]) -> list[dict]:
 
 def _preflight_summary(rows: list[dict]) -> dict:
     total = len(rows)
-    submission_blockers = Counter(str(row.get("submission_blocker") or "-") for row in rows)
+    submission_blockers = Counter(
+        str(row.get("submission_blocker") or "-") for row in rows
+    )
     latency_reasons = Counter(
         str(row.get("latency_block_reason") or "-")
         for row in rows
@@ -824,14 +1001,30 @@ def _preflight_summary(rows: list[dict]) -> dict:
     )
     return {
         "total_candidates": total,
-        "recovery_check_candidates": int(sum(1 for row in rows if bool(row.get("has_recovery_check")))),
-        "recovery_promoted_candidates": int(sum(1 for row in rows if bool(row.get("recovery_promoted")))),
-        "probe_applied_candidates": int(sum(1 for row in rows if bool(row.get("has_probe_applied")))),
-        "budget_pass_candidates": int(sum(1 for row in rows if bool(row.get("has_budget_pass")))),
-        "latency_pass_candidates": int(sum(1 for row in rows if bool(row.get("has_latency_pass")))),
-        "latency_block_candidates": int(sum(1 for row in rows if bool(row.get("has_latency_block")))),
-        "submitted_candidates": int(sum(1 for row in rows if str(row.get("attempt_status") or "") == "ENTERED")),
-        "order_fail_candidates": int(sum(1 for row in rows if bool(row.get("has_order_fail")))),
+        "recovery_check_candidates": int(
+            sum(1 for row in rows if bool(row.get("has_recovery_check")))
+        ),
+        "recovery_promoted_candidates": int(
+            sum(1 for row in rows if bool(row.get("recovery_promoted")))
+        ),
+        "probe_applied_candidates": int(
+            sum(1 for row in rows if bool(row.get("has_probe_applied")))
+        ),
+        "budget_pass_candidates": int(
+            sum(1 for row in rows if bool(row.get("has_budget_pass")))
+        ),
+        "latency_pass_candidates": int(
+            sum(1 for row in rows if bool(row.get("has_latency_pass")))
+        ),
+        "latency_block_candidates": int(
+            sum(1 for row in rows if bool(row.get("has_latency_block")))
+        ),
+        "submitted_candidates": int(
+            sum(1 for row in rows if str(row.get("attempt_status") or "") == "ENTERED")
+        ),
+        "order_fail_candidates": int(
+            sum(1 for row in rows if bool(row.get("has_order_fail")))
+        ),
         "recovery_check_rate_pct": _ratio(
             sum(1 for row in rows if bool(row.get("has_recovery_check"))),
             total,
@@ -849,10 +1042,15 @@ def _preflight_summary(rows: list[dict]) -> dict:
             for label, count in submission_blockers.most_common()
         ],
         "latency_block_reason_breakdown": [
-            {"label": label, "samples": count, "share_pct": _ratio(count, sum(latency_reasons.values()))}
+            {
+                "label": label,
+                "samples": count,
+                "share_pct": _ratio(count, sum(latency_reasons.values())),
+            }
             for label, count in latency_reasons.most_common()
         ],
-        "observability_passed": total == 0 or all("submission_blocker" in row for row in rows),
+        "observability_passed": total == 0
+        or all("submission_blocker" in row for row in rows),
         "behavior_change": "none",
     }
 
@@ -877,7 +1075,10 @@ def build_wait6579_preflight_report(target_date: str) -> dict:
                 stage = str(payload.get("stage") or "")
                 if stage not in _PREFLIGHT_STAGES:
                     continue
-                fields = {str(field_key): str(value) for field_key, value in dict(payload.get("fields") or {}).items()}
+                fields = {
+                    str(field_key): str(value)
+                    for field_key, value in dict(payload.get("fields") or {}).items()
+                }
                 if _is_early_accel_recheck_retry(fields):
                     continue
                 code = str(payload.get("stock_code") or "").strip()[:6]
@@ -905,20 +1106,38 @@ def build_wait6579_preflight_report(target_date: str) -> dict:
             events_by_key.get((candidate.code, candidate.record_id), [candidate]),
             key=lambda item: _parse_event_dt(item.emitted_at) or datetime.min,
         )
-        has_submitted = any(event.stage == "order_bundle_submitted" for event in item_events)
-        has_recovery_check = any(event.stage == "watching_buy_recovery_canary" for event in item_events)
+        has_submitted = any(
+            event.stage == "order_bundle_submitted" for event in item_events
+        )
+        has_recovery_check = any(
+            event.stage == "watching_buy_recovery_canary" for event in item_events
+        )
         recovery_promoted = any(
-            event.stage == "watching_buy_recovery_canary" and _truthy(event.fields.get("promoted"))
+            event.stage == "watching_buy_recovery_canary"
+            and _truthy(event.fields.get("promoted"))
             for event in item_events
         )
-        has_probe_applied = any(event.stage == "wait6579_probe_canary_applied" for event in item_events)
+        has_probe_applied = any(
+            event.stage == "wait6579_probe_canary_applied" for event in item_events
+        )
         has_budget_pass = any(event.stage == "budget_pass" for event in item_events)
         has_latency_pass = any(event.stage == "latency_pass" for event in item_events)
         has_latency_block = any(event.stage == "latency_block" for event in item_events)
         has_order_fail = any(event.stage in _ORDER_FAIL_STAGES for event in item_events)
-        latency_block_event = next((event for event in reversed(item_events) if event.stage == "latency_block"), None)
+        latency_block_event = next(
+            (
+                event
+                for event in reversed(item_events)
+                if event.stage == "latency_block"
+            ),
+            None,
+        )
         terminal_event = next(
-            (event for event in reversed(item_events) if _classify_stage(event.stage) in {"blocked", "waiting", "submitted"}),
+            (
+                event
+                for event in reversed(item_events)
+                if _classify_stage(event.stage) in {"blocked", "waiting", "submitted"}
+            ),
             item_events[-1],
         )
 
@@ -948,7 +1167,9 @@ def build_wait6579_preflight_report(target_date: str) -> dict:
                 "stock_name": candidate.name,
                 "record_id": candidate.record_id or None,
                 "attempt_status": "ENTERED" if has_submitted else "MISSED",
-                "ai_score": round(_safe_float(candidate.fields.get("ai_score"), 0.0), 1),
+                "ai_score": round(
+                    _safe_float(candidate.fields.get("ai_score"), 0.0), 1
+                ),
                 "terminal_blocker": terminal_event.stage,
                 "has_recovery_check": has_recovery_check,
                 "recovery_promoted": recovery_promoted,
@@ -958,13 +1179,24 @@ def build_wait6579_preflight_report(target_date: str) -> dict:
                 "has_latency_block": has_latency_block,
                 "has_order_fail": has_order_fail,
                 "submission_blocker": submission_blocker,
-                "latency_block_reason": str((latency_block_event.fields if latency_block_event else {}).get("reason") or "-"),
+                "latency_block_reason": str(
+                    (latency_block_event.fields if latency_block_event else {}).get(
+                        "reason"
+                    )
+                    or "-"
+                ),
                 "liquidity_bucket": candidate.fields.get("liquidity_bucket"),
-                "liquidity_bucket_provenance": candidate.fields.get("liquidity_bucket_provenance"),
+                "liquidity_bucket_provenance": candidate.fields.get(
+                    "liquidity_bucket_provenance"
+                ),
                 "overbought_bucket": candidate.fields.get("overbought_bucket"),
-                "overbought_bucket_provenance": candidate.fields.get("overbought_bucket_provenance"),
+                "overbought_bucket_provenance": candidate.fields.get(
+                    "overbought_bucket_provenance"
+                ),
                 "time_bucket": candidate.fields.get("time_bucket"),
-                "time_bucket_provenance": candidate.fields.get("time_bucket_provenance"),
+                "time_bucket_provenance": candidate.fields.get(
+                    "time_bucket_provenance"
+                ),
                 "stage_flow": [event.stage for event in item_events],
             }
         )
@@ -1062,12 +1294,21 @@ def build_wait6579_ev_cohort_report(
                 candle_cache[code] = ([], _minute_candle_meta([], requested_limit=700))
             else:
                 try:
-                    candle_cache[code] = _fetch_minute_candles_with_meta(kiwoom_utils, token, code, limit=700)
+                    candle_cache[code] = _fetch_minute_candles_with_meta(
+                        kiwoom_utils, token, code, limit=700
+                    )
                 except Exception as exc:
-                    log_error(f"[WAIT6579_EV] {code} minute candles fetch failed: {exc}")
-                    candle_cache[code] = ([], _minute_candle_meta([], requested_limit=700))
+                    log_error(
+                        f"[WAIT6579_EV] {code} minute candles fetch failed: {exc}"
+                    )
+                    candle_cache[code] = (
+                        [],
+                        _minute_candle_meta([], requested_limit=700),
+                    )
 
-        candles, candle_meta = candle_cache.get(code, ([], _minute_candle_meta([], requested_limit=700)))
+        candles, candle_meta = candle_cache.get(
+            code, ([], _minute_candle_meta([], requested_limit=700))
+        )
         metrics_10m = _compute_window_metrics(candidate, candles, 10)
         source_quality = _minute_forward_source_quality(metrics_10m, candle_meta)
         paper_fill = _simulate_paper_fill(candidate, metrics_10m)
@@ -1082,9 +1323,13 @@ def build_wait6579_ev_cohort_report(
                 "attempt_status": str(candidate.get("attempt_status") or ""),
                 "action": str(candidate.get("action") or "WAIT"),
                 "ai_score": round(_safe_float(candidate.get("ai_score"), 0.0), 1),
-                "buy_pressure": round(_safe_float(candidate.get("buy_pressure"), 0.0), 3),
+                "buy_pressure": round(
+                    _safe_float(candidate.get("buy_pressure"), 0.0), 3
+                ),
                 "tick_accel": round(_safe_float(candidate.get("tick_accel"), 0.0), 4),
-                "micro_vwap_bp": round(_safe_float(candidate.get("micro_vwap_bp"), 0.0), 3),
+                "micro_vwap_bp": round(
+                    _safe_float(candidate.get("micro_vwap_bp"), 0.0), 3
+                ),
                 "minute_candle_source_meta": candle_meta,
                 **source_quality,
                 "latency_state": str(candidate.get("latency_state") or "-"),
@@ -1100,18 +1345,32 @@ def build_wait6579_ev_cohort_report(
                 "has_latency_block": bool(candidate.get("has_latency_block")),
                 "has_order_fail": bool(candidate.get("has_order_fail")),
                 "submission_blocker": str(candidate.get("submission_blocker") or "-"),
-                "latency_block_reason": str(candidate.get("latency_block_reason") or "-"),
-                "liquidity_bucket": str(candidate.get("liquidity_bucket") or "liquidity_unknown"),
-                "liquidity_bucket_provenance": str(candidate.get("liquidity_bucket_provenance") or "unavailable"),
-                "overbought_bucket": str(candidate.get("overbought_bucket") or "overbought_unknown"),
-                "overbought_bucket_provenance": str(candidate.get("overbought_bucket_provenance") or "unavailable"),
+                "latency_block_reason": str(
+                    candidate.get("latency_block_reason") or "-"
+                ),
+                "liquidity_bucket": str(
+                    candidate.get("liquidity_bucket") or "liquidity_unknown"
+                ),
+                "liquidity_bucket_provenance": str(
+                    candidate.get("liquidity_bucket_provenance") or "unavailable"
+                ),
+                "overbought_bucket": str(
+                    candidate.get("overbought_bucket") or "overbought_unknown"
+                ),
+                "overbought_bucket_provenance": str(
+                    candidate.get("overbought_bucket_provenance") or "unavailable"
+                ),
                 "time_bucket": str(candidate.get("time_bucket") or "time_unknown"),
-                "time_bucket_provenance": str(candidate.get("time_bucket_provenance") or "unavailable"),
+                "time_bucket_provenance": str(
+                    candidate.get("time_bucket_provenance") or "unavailable"
+                ),
                 "target_qty": _safe_int(candidate.get("target_qty"), 0),
                 "safe_budget": _safe_int(candidate.get("safe_budget"), 0),
                 "signal_price": _safe_int(candidate.get("signal_price"), 0),
                 "entry_price_used": _safe_int(metrics_10m.get("entry_price_used"), 0),
-                "close_10m_pct": round(_safe_float(metrics_10m.get("close_ret_pct"), 0.0), 4),
+                "close_10m_pct": round(
+                    _safe_float(metrics_10m.get("close_ret_pct"), 0.0), 4
+                ),
                 "mfe_10m_pct": round(_safe_float(metrics_10m.get("mfe_pct"), 0.0), 4),
                 "mae_10m_pct": round(_safe_float(metrics_10m.get("mae_pct"), 0.0), 4),
                 "bars_10m": _safe_int(metrics_10m.get("bars"), 0),
@@ -1120,7 +1379,9 @@ def build_wait6579_ev_cohort_report(
                 "actual_order_submitted": False,
                 "broker_order_forbidden": True,
                 "runtime_effect": _COUNTERFACTUAL_POLICY["runtime_effect"],
-                "calibration_authority": _COUNTERFACTUAL_POLICY["calibration_authority"],
+                "calibration_authority": _COUNTERFACTUAL_POLICY[
+                    "calibration_authority"
+                ],
                 **paper_fill,
             }
         )
@@ -1136,21 +1397,33 @@ def build_wait6579_ev_cohort_report(
     capped_rows = rows[: max(1, int(top_n or 200))]
 
     total = len(rows)
-    entered_attempts = sum(1 for row in rows if str(row.get("attempt_status") or "") == "ENTERED")
-    missed_attempts = sum(1 for row in rows if str(row.get("attempt_status") or "") == "MISSED")
-    score65_74_probe_candidates = sum(1 for row in rows if bool(row.get("has_score65_74_probe")))
+    entered_attempts = sum(
+        1 for row in rows if str(row.get("attempt_status") or "") == "ENTERED"
+    )
+    missed_attempts = sum(
+        1 for row in rows if str(row.get("attempt_status") or "") == "MISSED"
+    )
+    score65_74_probe_candidates = sum(
+        1 for row in rows if bool(row.get("has_score65_74_probe"))
+    )
     fill_split = _fill_split_rows(rows)
     terminal_breakdown = _terminal_breakdown(rows)
     minute_candle_source_quality_counts = dict(
-        Counter(str(row.get("minute_candle_source_quality") or "unknown") for row in rows)
+        Counter(
+            str(row.get("minute_candle_source_quality") or "unknown") for row in rows
+        )
     )
 
     split_map = {str(item.get("fill_type") or ""): item for item in fill_split}
     full_samples = _safe_int((split_map.get("FULL") or {}).get("samples"), 0)
     partial_samples = _safe_int((split_map.get("PARTIAL") or {}).get("samples"), 0)
     full_ev = _safe_float((split_map.get("FULL") or {}).get("avg_expected_ev_pct"), 0.0)
-    partial_ev = _safe_float((split_map.get("PARTIAL") or {}).get("avg_expected_ev_pct"), 0.0)
-    min_sample_gate_passed = full_samples >= min_full_samples and partial_samples >= min_partial_samples
+    partial_ev = _safe_float(
+        (split_map.get("PARTIAL") or {}).get("avg_expected_ev_pct"), 0.0
+    )
+    min_sample_gate_passed = (
+        full_samples >= min_full_samples and partial_samples >= min_partial_samples
+    )
     ev_directional_check_passed = full_ev >= 0.0 and partial_ev >= 0.0
 
     return {
@@ -1165,10 +1438,18 @@ def build_wait6579_ev_cohort_report(
             "expected_fill_rate_pct": _avg(
                 [_safe_float(row.get("expected_fill_rate_pct"), 0.0) for row in rows]
             ),
-            "avg_expected_ev_pct": _avg([_safe_float(row.get("expected_ev_pct"), 0.0) for row in rows]),
-            "expected_ev_krw_sum": int(sum(_safe_int(row.get("expected_ev_krw"), 0) for row in rows)),
-            "avg_close_10m_pct": _avg([_safe_float(row.get("close_10m_pct"), 0.0) for row in rows]),
-            "avg_ai_response_ms": _avg([float(_safe_int(row.get("ai_response_ms"), 0)) for row in rows]),
+            "avg_expected_ev_pct": _avg(
+                [_safe_float(row.get("expected_ev_pct"), 0.0) for row in rows]
+            ),
+            "expected_ev_krw_sum": int(
+                sum(_safe_int(row.get("expected_ev_krw"), 0) for row in rows)
+            ),
+            "avg_close_10m_pct": _avg(
+                [_safe_float(row.get("close_10m_pct"), 0.0) for row in rows]
+            ),
+            "avg_ai_response_ms": _avg(
+                [float(_safe_int(row.get("ai_response_ms"), 0)) for row in rows]
+            ),
             "minute_candle_source_quality_counts": minute_candle_source_quality_counts,
         },
         "fill_split": fill_split,
@@ -1182,7 +1463,9 @@ def build_wait6579_ev_cohort_report(
             "partial_samples": int(partial_samples),
             "min_sample_gate_passed": bool(min_sample_gate_passed),
             "ev_directional_check_passed": bool(ev_directional_check_passed),
-            "threshold_relaxation_approved": bool(min_sample_gate_passed and ev_directional_check_passed),
+            "threshold_relaxation_approved": bool(
+                min_sample_gate_passed and ev_directional_check_passed
+            ),
             "full_avg_expected_ev_pct": float(full_ev),
             "partial_avg_expected_ev_pct": float(partial_ev),
         },

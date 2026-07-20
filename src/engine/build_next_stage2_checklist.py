@@ -15,18 +15,30 @@ from zoneinfo import ZoneInfo
 from src.utils.constants import PROJECT_ROOT
 from src.utils.market_day import get_krx_trading_day_status
 
-
 DOCS_DIR = PROJECT_ROOT / "docs"
 CHECKLIST_DIR = DOCS_DIR / "checklists"
 EV_REPORT_DIR = PROJECT_ROOT / "data" / "report" / "threshold_cycle_ev"
 SWING_RUNTIME_APPROVAL_DIR = PROJECT_ROOT / "data" / "report" / "swing_runtime_approval"
-CODE_IMPROVEMENT_REPORT_DIR = PROJECT_ROOT / "data" / "report" / "code_improvement_workorder"
-RUNTIME_APPLY_GAP_REPORT_DIR = PROJECT_ROOT / "data" / "report" / "runtime_apply_gap_audit"
-TUNING_PERFORMANCE_REPORT_DIR = PROJECT_ROOT / "data" / "report" / "tuning_performance_control_tower"
-AUTOMATION_TRIGGER_DECISION_REPORT_DIR = PROJECT_ROOT / "data" / "report" / "automation_chain_trigger_decision"
-RISING_MISSED_SCOUT_WORKORDER_REPORT_DIR = PROJECT_ROOT / "data" / "report" / "rising_missed_scout_workorder"
+CODE_IMPROVEMENT_REPORT_DIR = (
+    PROJECT_ROOT / "data" / "report" / "code_improvement_workorder"
+)
+RUNTIME_APPLY_GAP_REPORT_DIR = (
+    PROJECT_ROOT / "data" / "report" / "runtime_apply_gap_audit"
+)
+TUNING_PERFORMANCE_REPORT_DIR = (
+    PROJECT_ROOT / "data" / "report" / "tuning_performance_control_tower"
+)
+AUTOMATION_TRIGGER_DECISION_REPORT_DIR = (
+    PROJECT_ROOT / "data" / "report" / "automation_chain_trigger_decision"
+)
+RISING_MISSED_SCOUT_WORKORDER_REPORT_DIR = (
+    PROJECT_ROOT / "data" / "report" / "rising_missed_scout_workorder"
+)
 RISING_MISSED_NORMAL_BUY_BRIDGE_CANDIDATE_REPORT_DIR = (
-    PROJECT_ROOT / "data" / "report" / "rising_missed_normal_buy_bridge_candidate_discovery"
+    PROJECT_ROOT
+    / "data"
+    / "report"
+    / "rising_missed_normal_buy_bridge_candidate_discovery"
 )
 
 AUTO_START = "<!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->"
@@ -95,7 +107,11 @@ def stage2_checklist_path(target_date: str) -> Path:
 
 
 def _list_selected_families(ev_report: dict[str, Any]) -> list[str]:
-    runtime_apply = ev_report.get("runtime_apply") if isinstance(ev_report.get("runtime_apply"), dict) else {}
+    runtime_apply = (
+        ev_report.get("runtime_apply")
+        if isinstance(ev_report.get("runtime_apply"), dict)
+        else {}
+    )
     raw = runtime_apply.get("selected_families")
     if not isinstance(raw, list):
         return []
@@ -103,20 +119,40 @@ def _list_selected_families(ev_report: dict[str, Any]) -> list[str]:
 
 
 def _has_runtime_change(ev_report: dict[str, Any]) -> bool:
-    runtime_apply = ev_report.get("runtime_apply") if isinstance(ev_report.get("runtime_apply"), dict) else {}
-    return bool(runtime_apply.get("runtime_change")) or bool(_list_selected_families(ev_report))
+    runtime_apply = (
+        ev_report.get("runtime_apply")
+        if isinstance(ev_report.get("runtime_apply"), dict)
+        else {}
+    )
+    return bool(runtime_apply.get("runtime_change")) or bool(
+        _list_selected_families(ev_report)
+    )
 
 
-def _has_approval_request(ev_report: dict[str, Any], swing_report: dict[str, Any]) -> bool:
-    if isinstance(ev_report.get("approval_requests"), list) and ev_report["approval_requests"]:
+def _has_approval_request(
+    ev_report: dict[str, Any], swing_report: dict[str, Any]
+) -> bool:
+    if (
+        isinstance(ev_report.get("approval_requests"), list)
+        and ev_report["approval_requests"]
+    ):
         return True
-    swing_ev = ev_report.get("swing_runtime_approval") if isinstance(ev_report.get("swing_runtime_approval"), dict) else {}
+    swing_ev = (
+        ev_report.get("swing_runtime_approval")
+        if isinstance(ev_report.get("swing_runtime_approval"), dict)
+        else {}
+    )
     for payload in (swing_ev, swing_report):
-        if isinstance(payload.get("approval_requests"), list) and payload["approval_requests"]:
+        if (
+            isinstance(payload.get("approval_requests"), list)
+            and payload["approval_requests"]
+        ):
             return True
         if isinstance(payload.get("requests"), list) and payload["requests"]:
             return True
-        summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+        summary = (
+            payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+        )
         requested = payload.get("requested", summary.get("requested", 0))
         try:
             if int(requested or 0) > 0:
@@ -127,16 +163,28 @@ def _has_approval_request(ev_report: dict[str, Any], swing_report: dict[str, Any
 
 
 def _has_sim_probe_activity(ev_report: dict[str, Any]) -> bool:
-    simulator = ev_report.get("scalp_simulator") if isinstance(ev_report.get("scalp_simulator"), dict) else {}
+    simulator = (
+        ev_report.get("scalp_simulator")
+        if isinstance(ev_report.get("scalp_simulator"), dict)
+        else {}
+    )
     try:
         if int(simulator.get("event_count") or 0) > 0:
             return True
     except (TypeError, ValueError):
         pass
-    daily = ev_report.get("daily_ev_summary") if isinstance(ev_report.get("daily_ev_summary"), dict) else {}
-    source_split = daily.get("source_split") if isinstance(daily.get("source_split"), dict) else {}
+    daily = (
+        ev_report.get("daily_ev_summary")
+        if isinstance(ev_report.get("daily_ev_summary"), dict)
+        else {}
+    )
+    source_split = (
+        daily.get("source_split") if isinstance(daily.get("source_split"), dict) else {}
+    )
     for key in ("sim", "probe"):
-        payload = source_split.get(key) if isinstance(source_split.get(key), dict) else {}
+        payload = (
+            source_split.get(key) if isinstance(source_split.get(key), dict) else {}
+        )
         try:
             if int(payload.get("sample") or 0) > 0:
                 return True
@@ -145,9 +193,22 @@ def _has_sim_probe_activity(ev_report: dict[str, Any]) -> bool:
     return False
 
 
-def _code_workorder_count(ev_report: dict[str, Any], code_report: dict[str, Any]) -> int:
-    code_ev = ev_report.get("code_improvement_workorder") if isinstance(ev_report.get("code_improvement_workorder"), dict) else {}
-    for payload in (code_report.get("summary") if isinstance(code_report.get("summary"), dict) else {}, code_ev):
+def _code_workorder_count(
+    ev_report: dict[str, Any], code_report: dict[str, Any]
+) -> int:
+    code_ev = (
+        ev_report.get("code_improvement_workorder")
+        if isinstance(ev_report.get("code_improvement_workorder"), dict)
+        else {}
+    )
+    for payload in (
+        (
+            code_report.get("summary")
+            if isinstance(code_report.get("summary"), dict)
+            else {}
+        ),
+        code_ev,
+    ):
         try:
             count = int(payload.get("selected_order_count") or 0)
         except (TypeError, ValueError):
@@ -157,7 +218,9 @@ def _code_workorder_count(ev_report: dict[str, Any], code_report: dict[str, Any]
     return 0
 
 
-def _runtime_gap_preopen_pending_items(runtime_gap_report: dict[str, Any]) -> list[dict[str, Any]]:
+def _runtime_gap_preopen_pending_items(
+    runtime_gap_report: dict[str, Any],
+) -> list[dict[str, Any]]:
     if not runtime_gap_report:
         return []
     by_id: dict[str, dict[str, Any]] = {}
@@ -166,12 +229,16 @@ def _runtime_gap_preopen_pending_items(runtime_gap_report: dict[str, Any]) -> li
         for item in ledger:
             if not isinstance(item, dict):
                 continue
-            candidate_id = str(item.get("candidate_id") or item.get("family") or "").strip()
+            candidate_id = str(
+                item.get("candidate_id") or item.get("family") or ""
+            ).strip()
             if not candidate_id:
                 continue
             final_disposition = str(item.get("final_disposition") or "").strip()
             failure_state = str(item.get("failure_state") or "").strip()
-            next_stage = str(item.get("next_retry_stage") or item.get("preopen_apply_state") or "").strip()
+            next_stage = str(
+                item.get("next_retry_stage") or item.get("preopen_apply_state") or ""
+            ).strip()
             if (
                 final_disposition == "post_apply_attribution_pending"
                 or failure_state == "retry_pending"
@@ -189,7 +256,10 @@ def _runtime_gap_preopen_pending_items(runtime_gap_report: dict[str, Any]) -> li
             current = dict(by_id.get(candidate_id) or {})
             current.update(item)
             by_id[candidate_id] = current
-    return sorted(by_id.values(), key=lambda item: str(item.get("candidate_id") or item.get("family") or ""))
+    return sorted(
+        by_id.values(),
+        key=lambda item: str(item.get("candidate_id") or item.get("family") or ""),
+    )
 
 
 def _runtime_gap_preopen_pending_summary(runtime_gap_report: dict[str, Any]) -> str:
@@ -201,7 +271,12 @@ def _runtime_gap_preopen_pending_summary(runtime_gap_report: dict[str, Any]) -> 
         candidate_id = str(item.get("candidate_id") or item.get("family") or "-")
         family = str(item.get("family") or "").strip()
         state = str(item.get("failure_state") or item.get("final_disposition") or "-")
-        reason = str(item.get("failure_reason") or item.get("failure_code") or item.get("retry_reason") or "-")
+        reason = str(
+            item.get("failure_reason")
+            or item.get("failure_code")
+            or item.get("retry_reason")
+            or "-"
+        )
         if family and family not in candidate_id:
             candidate_id = f"{candidate_id} / family={family}"
         rendered.append(f"`{candidate_id}`({state}, reason={reason})")
@@ -219,7 +294,9 @@ def _runtime_gap_codex_directive_summary(runtime_gap_report: dict[str, Any]) -> 
             continue
         directive_type = str(item.get("directive_type") or "-")
         candidate_id = str(item.get("candidate_id") or "-")
-        blocking_contract = str(item.get("blocking_contract") or item.get("ai_reasoning_summary") or "-")
+        blocking_contract = str(
+            item.get("blocking_contract") or item.get("ai_reasoning_summary") or "-"
+        )
         rendered.append(f"`{directive_type}`:{candidate_id}(block={blocking_contract})")
     if not rendered:
         return ""
@@ -237,8 +314,16 @@ def _source_dimension_gap_summary(runtime_gap_report: dict[str, Any]) -> str:
     if actionable <= 0:
         return ""
     gap_count = int(summary.get("gap_count") or actionable)
-    resolutions = summary.get("recommended_resolution_counts") if isinstance(summary.get("recommended_resolution_counts"), dict) else {}
-    missing_keys = summary.get("missing_dimension_key_counts") if isinstance(summary.get("missing_dimension_key_counts"), dict) else {}
+    resolutions = (
+        summary.get("recommended_resolution_counts")
+        if isinstance(summary.get("recommended_resolution_counts"), dict)
+        else {}
+    )
+    missing_keys = (
+        summary.get("missing_dimension_key_counts")
+        if isinstance(summary.get("missing_dimension_key_counts"), dict)
+        else {}
+    )
     return (
         f"actionable_unknown_gap_count=`{actionable}`, source_dimension_gap_count=`{gap_count}`, "
         f"recommended_resolution_counts=`{resolutions}`, missing_dimension_key_counts=`{missing_keys}`"
@@ -254,7 +339,11 @@ def _quiet_gap_summary(runtime_gap_report: dict[str, Any]) -> str:
     quiet_count = int(summary.get("quiet_gap_count") or 0)
     if quiet_count <= 0:
         return ""
-    type_counts = summary.get("quiet_gap_type_counts") if isinstance(summary.get("quiet_gap_type_counts"), dict) else {}
+    type_counts = (
+        summary.get("quiet_gap_type_counts")
+        if isinstance(summary.get("quiet_gap_type_counts"), dict)
+        else {}
+    )
     return (
         f"quiet_gap_count=`{quiet_count}`, rollup_required_count=`{summary.get('rollup_required_count') or 0}`, "
         f"sim_live_connected_quiet_gap_count=`{summary.get('sim_live_connected_quiet_gap_count') or 0}`, "
@@ -287,7 +376,11 @@ def _rising_missed_scout_summary(rising_missed_report: dict[str, Any]) -> str:
 def _rising_missed_normal_buy_bridge_summary(bridge_report: dict[str, Any]) -> str:
     if not bridge_report:
         return "report_missing_or_unreadable"
-    summary = bridge_report.get("summary") if isinstance(bridge_report.get("summary"), dict) else {}
+    summary = (
+        bridge_report.get("summary")
+        if isinstance(bridge_report.get("summary"), dict)
+        else {}
+    )
     return (
         f"status=`{summary.get('status') or 'unknown'}`, "
         f"bridge_candidate_count=`{summary.get('bridge_candidate_count') or 0}`, "
@@ -300,8 +393,16 @@ def _automation_trigger_decision_summary(trigger_report: dict[str, Any]) -> str:
     if not trigger_report:
         return "trigger_report_missing=`true`, required_action=`run_required_or_report_generation_check`"
 
-    summary = trigger_report.get("summary") if isinstance(trigger_report.get("summary"), dict) else {}
-    decisions = trigger_report.get("decisions") if isinstance(trigger_report.get("decisions"), list) else []
+    summary = (
+        trigger_report.get("summary")
+        if isinstance(trigger_report.get("summary"), dict)
+        else {}
+    )
+    decisions = (
+        trigger_report.get("decisions")
+        if isinstance(trigger_report.get("decisions"), list)
+        else []
+    )
     reason_counts: dict[str, int] = {}
     run_steps: list[str] = []
     skip_steps: list[str] = []
@@ -325,7 +426,10 @@ def _automation_trigger_decision_summary(trigger_report: dict[str, Any]) -> str:
                     reason_counts[key] = reason_counts.get(key, 0) + 1
 
     top_reasons = ", ".join(
-        f"{reason}:{count}" for reason, count in sorted(reason_counts.items(), key=lambda item: (-item[1], item[0]))[:5]
+        f"{reason}:{count}"
+        for reason, count in sorted(
+            reason_counts.items(), key=lambda item: (-item[1], item[0])
+        )[:5]
     )
     return (
         f"total_steps=`{summary.get('total_steps') or len(decisions)}`, "
@@ -372,18 +476,29 @@ def _build_tasks(
 ) -> list[GeneratedTask]:
     mmdd = _compact_mmdd(target_date)
     ev_path = EV_REPORT_DIR / f"threshold_cycle_ev_{source_date}.json"
-    tuning_performance_path = TUNING_PERFORMANCE_REPORT_DIR / f"tuning_performance_control_tower_{source_date}.json"
-    code_md_path = DOCS_DIR / "code-improvement-workorders" / f"code_improvement_workorder_{source_date}.md"
-    runtime_gap_path = RUNTIME_APPLY_GAP_REPORT_DIR / f"runtime_apply_gap_audit_{source_date}.json"
+    tuning_performance_path = (
+        TUNING_PERFORMANCE_REPORT_DIR
+        / f"tuning_performance_control_tower_{source_date}.json"
+    )
+    code_md_path = (
+        DOCS_DIR
+        / "code-improvement-workorders"
+        / f"code_improvement_workorder_{source_date}.md"
+    )
+    runtime_gap_path = (
+        RUNTIME_APPLY_GAP_REPORT_DIR / f"runtime_apply_gap_audit_{source_date}.json"
+    )
     runtime_gap_pending = _runtime_gap_preopen_pending_summary(runtime_gap_report)
     runtime_gap_directives = _runtime_gap_codex_directive_summary(runtime_gap_report)
     source_dimension_gap_summary = _source_dimension_gap_summary(runtime_gap_report)
     quiet_gap_summary = _quiet_gap_summary(runtime_gap_report)
     trigger_decision_path = (
-        AUTOMATION_TRIGGER_DECISION_REPORT_DIR / f"automation_chain_trigger_decision_{source_date}.json"
+        AUTOMATION_TRIGGER_DECISION_REPORT_DIR
+        / f"automation_chain_trigger_decision_{source_date}.json"
     )
     rising_missed_path = (
-        RISING_MISSED_SCOUT_WORKORDER_REPORT_DIR / f"rising_missed_scout_workorder_{source_date}.json"
+        RISING_MISSED_SCOUT_WORKORDER_REPORT_DIR
+        / f"rising_missed_scout_workorder_{source_date}.json"
     )
     rising_missed_normal_buy_bridge_path = (
         RISING_MISSED_NORMAL_BUY_BRIDGE_CANDIDATE_REPORT_DIR
@@ -394,20 +509,14 @@ def _build_tasks(
     rising_missed_normal_buy_bridge_summary = _rising_missed_normal_buy_bridge_summary(
         rising_missed_normal_buy_bridge_report
     )
-    tuning_sources = (
-        f"[threshold_cycle_ev_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(ev_path)})"
-    )
-    tuning_decision_line = (
-        "판정 기준: threshold cycle EV를 보고 `live_auto_apply_ready`, `sim_auto_approved`, post-apply attribution, EV authority를 분리해 확인한다."
-    )
+    tuning_sources = f"[threshold_cycle_ev_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(ev_path)})"
+    tuning_decision_line = "판정 기준: threshold cycle EV를 보고 `live_auto_apply_ready`, `sim_auto_approved`, post-apply attribution, EV authority를 분리해 확인한다."
     if tuning_performance_path.exists():
         tuning_sources = (
             f"[tuning_performance_control_tower_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(tuning_performance_path)}), "
             f"{tuning_sources}"
         )
-        tuning_decision_line = (
-            "판정 기준: tuning performance control tower를 먼저 보고 `live_auto_apply_ready`, `sim_auto_approved`, post-apply attribution, EV authority를 분리해 확인한다."
-        )
+        tuning_decision_line = "판정 기준: tuning performance control tower를 먼저 보고 `live_auto_apply_ready`, `sim_auto_approved`, post-apply attribution, EV authority를 분리해 확인한다."
     threshold_source = (
         f"[threshold_cycle_ev_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(ev_path)}), "
         "[threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), "
@@ -807,7 +916,14 @@ def _upsert_auto_block(existing: str, auto_block: str) -> str:
     sync_heading = "\n## Project/Calendar 동기화"
     if sync_heading in existing:
         prefix, suffix = existing.split(sync_heading, 1)
-        return prefix.rstrip() + "\n\n" + auto_block.rstrip() + "\n" + sync_heading + suffix
+        return (
+            prefix.rstrip()
+            + "\n\n"
+            + auto_block.rstrip()
+            + "\n"
+            + sync_heading
+            + suffix
+        )
 
     suffix = "" if existing.endswith("\n") else "\n"
     return existing + suffix + "\n" + auto_block
@@ -835,7 +951,12 @@ def _existing_manual_task_ids(existing: str) -> set[str]:
 
 
 def _task_ids_from_text(text: str) -> set[str]:
-    return {match.group(1) for match in re.finditer(r"^- \[[ xX]\] `\[([A-Za-z0-9_:-]+)\]", text, re.MULTILINE)}
+    return {
+        match.group(1)
+        for match in re.finditer(
+            r"^- \[[ xX]\] `\[([A-Za-z0-9_:-]+)\]", text, re.MULTILINE
+        )
+    }
 
 
 def _task_slot_from_block(block: str, fallback_slot: str) -> str:
@@ -845,7 +966,9 @@ def _task_slot_from_block(block: str, fallback_slot: str) -> str:
     return fallback_slot
 
 
-def _preserved_auto_task_blocks(existing: str, generated_task_ids: set[str]) -> dict[str, list[str]]:
+def _preserved_auto_task_blocks(
+    existing: str, generated_task_ids: set[str]
+) -> dict[str, list[str]]:
     text = _auto_block_text(existing)
     if not text:
         return {}
@@ -863,7 +986,9 @@ def _preserved_auto_task_blocks(existing: str, generated_task_ids: set[str]) -> 
         if re.match(r"^- \[[ xX]\] `\[[A-Za-z0-9_:-]+]", line):
             if current:
                 block = "\n".join(current).rstrip()
-                task_id_match = re.match(r"^- \[[ xX]\] `\[([A-Za-z0-9_:-]+)]", current[0])
+                task_id_match = re.match(
+                    r"^- \[[ xX]\] `\[([A-Za-z0-9_:-]+)]", current[0]
+                )
                 task_id = task_id_match.group(1) if task_id_match else ""
                 if task_id and task_id not in generated_task_ids:
                     slot = _task_slot_from_block(block, current_slot or "POSTCLOSE")
@@ -874,7 +999,9 @@ def _preserved_auto_task_blocks(existing: str, generated_task_ids: set[str]) -> 
         if current:
             if line.startswith("## ") or line == AUTO_END:
                 block = "\n".join(current).rstrip()
-                task_id_match = re.match(r"^- \[[ xX]\] `\[([A-Za-z0-9_:-]+)]", current[0])
+                task_id_match = re.match(
+                    r"^- \[[ xX]\] `\[([A-Za-z0-9_:-]+)]", current[0]
+                )
                 task_id = task_id_match.group(1) if task_id_match else ""
                 if task_id and task_id not in generated_task_ids:
                     slot = _task_slot_from_block(block, current_slot or "POSTCLOSE")
@@ -898,6 +1025,7 @@ def _merge_preserved_auto_tasks(existing: str, auto_block: str) -> str:
         return auto_block
     lines: list[str] = []
     current_slot = ""
+
     def flush_slot(slot: str) -> None:
         if not slot:
             return
@@ -944,16 +1072,26 @@ def build_next_stage2_checklist(source_date: str) -> dict[str, Any]:
     missing_required = _missing_required_postclose_artifacts(source_date)
     if missing_required:
         missing = ", ".join(_rel(path) for path in missing_required)
-        raise RuntimeError(f"required postclose artifacts are missing for {source_date}: {missing}")
+        raise RuntimeError(
+            f"required postclose artifacts are missing for {source_date}: {missing}"
+        )
     ev_report = _load_json(EV_REPORT_DIR / f"threshold_cycle_ev_{source_date}.json")
-    swing_report = _load_json(SWING_RUNTIME_APPROVAL_DIR / f"swing_runtime_approval_{source_date}.json")
-    code_report = _load_json(CODE_IMPROVEMENT_REPORT_DIR / f"code_improvement_workorder_{source_date}.json")
-    runtime_gap_report = _load_json(RUNTIME_APPLY_GAP_REPORT_DIR / f"runtime_apply_gap_audit_{source_date}.json")
+    swing_report = _load_json(
+        SWING_RUNTIME_APPROVAL_DIR / f"swing_runtime_approval_{source_date}.json"
+    )
+    code_report = _load_json(
+        CODE_IMPROVEMENT_REPORT_DIR / f"code_improvement_workorder_{source_date}.json"
+    )
+    runtime_gap_report = _load_json(
+        RUNTIME_APPLY_GAP_REPORT_DIR / f"runtime_apply_gap_audit_{source_date}.json"
+    )
     trigger_report = _load_json(
-        AUTOMATION_TRIGGER_DECISION_REPORT_DIR / f"automation_chain_trigger_decision_{source_date}.json"
+        AUTOMATION_TRIGGER_DECISION_REPORT_DIR
+        / f"automation_chain_trigger_decision_{source_date}.json"
     )
     rising_missed_report = _load_json(
-        RISING_MISSED_SCOUT_WORKORDER_REPORT_DIR / f"rising_missed_scout_workorder_{source_date}.json"
+        RISING_MISSED_SCOUT_WORKORDER_REPORT_DIR
+        / f"rising_missed_scout_workorder_{source_date}.json"
     )
     rising_missed_normal_buy_bridge_report = _load_json(
         RISING_MISSED_NORMAL_BUY_BRIDGE_CANDIDATE_REPORT_DIR
@@ -1010,10 +1148,19 @@ def build_next_stage2_checklist(source_date: str) -> dict[str, Any]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Build next trading day's stage2 checklist from postclose outputs.")
-    parser.add_argument("--source-date", default="", help="Postclose source date in YYYY-MM-DD. Defaults to KST today.")
+    parser = argparse.ArgumentParser(
+        description="Build next trading day's stage2 checklist from postclose outputs."
+    )
+    parser.add_argument(
+        "--source-date",
+        default="",
+        help="Postclose source date in YYYY-MM-DD. Defaults to KST today.",
+    )
     args = parser.parse_args()
-    source_date = args.source_date.strip() or datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
+    source_date = (
+        args.source_date.strip()
+        or datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
+    )
     summary = build_next_stage2_checklist(source_date)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0

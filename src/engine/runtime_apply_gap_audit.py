@@ -13,11 +13,22 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from src.engine.ai.postclose_review_config import PostcloseAIReviewConfig, resolve_postclose_ai_review_config
-from src.engine.ai.postclose_structured_review_provider import call_postclose_structured_review
+from src.engine.ai.postclose_review_config import (
+    PostcloseAIReviewConfig,
+    resolve_postclose_ai_review_config,
+)
+from src.engine.ai.postclose_structured_review_provider import (
+    call_postclose_structured_review,
+)
 from src.engine.daily_threshold_cycle_report import REPORT_DIR as BASE_REPORT_DIR
-from src.engine.daily_threshold_cycle_report import _extract_openai_response_text, _load_threshold_ai_openai_keys
-from src.engine.runtime_apply_bridge import GREENFIELD_REAL_ENV_FAMILY, validate_greenfield_policy_file
+from src.engine.daily_threshold_cycle_report import (
+    _extract_openai_response_text,
+    _load_threshold_ai_openai_keys,
+)
+from src.engine.runtime_apply_bridge import (
+    GREENFIELD_REAL_ENV_FAMILY,
+    validate_greenfield_policy_file,
+)
 from src.utils.constants import DATA_DIR
 
 REPORT_SCHEMA_VERSION = 1
@@ -59,7 +70,10 @@ CORE_ARTIFACT_LABELS = (
     "runtime_approval_summary",
     "code_improvement_workorder",
 )
-SOURCE_DIMENSION_ACTIONABLE_RESOLUTIONS = {"emit_or_backfill_source_field", "resolve_unknown_source_dimensions"}
+SOURCE_DIMENSION_ACTIONABLE_RESOLUTIONS = {
+    "emit_or_backfill_source_field",
+    "resolve_unknown_source_dimensions",
+}
 SCALE_IN_POLICY_FAMILY = "scale_in_bucket_runtime_policy_v1"
 SCALE_IN_POLICY_EXCLUSION_REASON = "paired_add_lifecycle_replay_or_final_label_missing"
 
@@ -124,7 +138,9 @@ def _artifact_path(label: str, target_date: str) -> Path:
         "swing_lifecycle_bucket_discovery": BASE_REPORT_DIR
         / "swing_lifecycle_bucket_discovery"
         / f"swing_lifecycle_bucket_discovery_{target_date}.json",
-        "runtime_apply_bridge": BASE_REPORT_DIR / "runtime_apply_bridge" / f"runtime_apply_bridge_{target_date}.json",
+        "runtime_apply_bridge": BASE_REPORT_DIR
+        / "runtime_apply_bridge"
+        / f"runtime_apply_bridge_{target_date}.json",
         "runtime_approval_summary": BASE_REPORT_DIR
         / "runtime_approval_summary"
         / f"runtime_approval_summary_{target_date}.json",
@@ -134,7 +150,9 @@ def _artifact_path(label: str, target_date: str) -> Path:
         "observation_source_quality_audit": BASE_REPORT_DIR
         / "observation_source_quality_audit"
         / f"observation_source_quality_audit_{target_date}.json",
-        "threshold_cycle_ev": BASE_REPORT_DIR / "threshold_cycle_ev" / f"threshold_cycle_ev_{target_date}.json",
+        "threshold_cycle_ev": BASE_REPORT_DIR
+        / "threshold_cycle_ev"
+        / f"threshold_cycle_ev_{target_date}.json",
         "lifecycle_decision_matrix": BASE_REPORT_DIR
         / "lifecycle_decision_matrix"
         / f"lifecycle_decision_matrix_{target_date}.json",
@@ -146,7 +164,9 @@ def _artifact_path(label: str, target_date: str) -> Path:
     return file_map[label]
 
 
-def _artifact_status(target_date: str) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+def _artifact_status(
+    target_date: str,
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
     labels = (
         "lifecycle_bucket_discovery",
         "swing_lifecycle_bucket_discovery",
@@ -179,23 +199,45 @@ def _artifact_status(target_date: str) -> tuple[dict[str, dict[str, Any]], dict[
     return status, payloads
 
 
-def _preopen_apply_consumed_candidate(apply_plan: dict[str, Any], candidate_id: str, family: str) -> bool:
+def _preopen_apply_consumed_candidate(
+    apply_plan: dict[str, Any], candidate_id: str, family: str
+) -> bool:
     if not apply_plan:
         return False
-    bridge = apply_plan.get("runtime_apply_bridge") if isinstance(apply_plan.get("runtime_apply_bridge"), dict) else {}
-    approved = bridge.get("approved_requests") if isinstance(bridge.get("approved_requests"), list) else []
+    bridge = (
+        apply_plan.get("runtime_apply_bridge")
+        if isinstance(apply_plan.get("runtime_apply_bridge"), dict)
+        else {}
+    )
+    approved = (
+        bridge.get("approved_requests")
+        if isinstance(bridge.get("approved_requests"), list)
+        else []
+    )
     for item in approved:
         if not isinstance(item, dict):
             continue
-        if candidate_id and str(item.get("candidate_id") or item.get("bridge_candidate_id") or "") == candidate_id:
+        if (
+            candidate_id
+            and str(item.get("candidate_id") or item.get("bridge_candidate_id") or "")
+            == candidate_id
+        ):
             return True
         if family and str(item.get("family") or item.get("policy_id") or "") == family:
             return True
-    selected = apply_plan.get("auto_apply_selected") if isinstance(apply_plan.get("auto_apply_selected"), list) else []
+    selected = (
+        apply_plan.get("auto_apply_selected")
+        if isinstance(apply_plan.get("auto_apply_selected"), list)
+        else []
+    )
     for item in selected:
         if not isinstance(item, dict):
             continue
-        if candidate_id and str(item.get("candidate_id") or item.get("bridge_candidate_id") or "") == candidate_id:
+        if (
+            candidate_id
+            and str(item.get("candidate_id") or item.get("bridge_candidate_id") or "")
+            == candidate_id
+        ):
             return True
         if family and str(item.get("family") or item.get("policy_id") or "") == family:
             return True
@@ -212,7 +254,13 @@ def _model_at_least_gpt54(model: str) -> bool:
 
 
 def _candidate_id(item: dict[str, Any], fallback_prefix: str) -> str:
-    for key in ("candidate_id", "bucket_id", "live_auto_apply_family", "family", "order_id"):
+    for key in (
+        "candidate_id",
+        "bucket_id",
+        "live_auto_apply_family",
+        "family",
+        "order_id",
+    ):
         value = str(item.get(key) or "").strip()
         if value:
             return value
@@ -235,7 +283,9 @@ def _source_quality_gate(item: dict[str, Any]) -> str:
     gate = str(item.get("source_quality_gate") or "").strip()
     if gate:
         return gate
-    source_bucket = item.get("source_bucket") if isinstance(item.get("source_bucket"), dict) else {}
+    source_bucket = (
+        item.get("source_bucket") if isinstance(item.get("source_bucket"), dict) else {}
+    )
     return str(source_bucket.get("source_quality_gate") or "").strip() or "unknown"
 
 
@@ -249,8 +299,14 @@ def _primary_ev(item: dict[str, Any]) -> float | None:
         value = _safe_float(item.get(key), None)
         if value is not None:
             return value
-    source_bucket = item.get("source_bucket") if isinstance(item.get("source_bucket"), dict) else {}
-    for key in ("source_quality_adjusted_ev_pct", "notional_weighted_ev_pct", "equal_weight_avg_profit_pct"):
+    source_bucket = (
+        item.get("source_bucket") if isinstance(item.get("source_bucket"), dict) else {}
+    )
+    for key in (
+        "source_quality_adjusted_ev_pct",
+        "notional_weighted_ev_pct",
+        "equal_weight_avg_profit_pct",
+    ):
         value = _safe_float(source_bucket.get(key), None)
         if value is not None:
             return value
@@ -258,7 +314,9 @@ def _primary_ev(item: dict[str, Any]) -> float | None:
 
 
 def _sample(item: dict[str, Any]) -> int:
-    source_bucket = item.get("source_bucket") if isinstance(item.get("source_bucket"), dict) else {}
+    source_bucket = (
+        item.get("source_bucket") if isinstance(item.get("source_bucket"), dict) else {}
+    )
     return max(
         _safe_int(item.get("sample"), 0),
         _safe_int(item.get("joined_sample"), 0),
@@ -273,8 +331,16 @@ def _source_state_to_disposition(state: str, gate: str) -> str:
     if state == "entry_only_bridge_metadata":
         return "source_only_explicit_exclusion"
     if state == "source_only_keep_collecting":
-        return "source_quality_blocker" if gate != "pass" else "post_apply_attribution_pending"
-    if state in {"automation_handoff_gap", "code_review_failed", "new_bucket_candidate"}:
+        return (
+            "source_quality_blocker"
+            if gate != "pass"
+            else "post_apply_attribution_pending"
+        )
+    if state in {
+        "automation_handoff_gap",
+        "code_review_failed",
+        "new_bucket_candidate",
+    }:
         return "code_patch_required"
     if state in {"blocked_source_quality", "source_quality_gap"}:
         return "source_quality_blocker"
@@ -302,10 +368,15 @@ def _explicit_runtime_exclusion_reason(item: dict[str, Any]) -> str:
         value = str(item.get(key) or "").strip()
         if value:
             return value
-    if item.get("explicit_runtime_exclusion") is True or item.get("source_only_explicit_exclusion") is True:
+    if (
+        item.get("explicit_runtime_exclusion") is True
+        or item.get("source_only_explicit_exclusion") is True
+    ):
         return "source_only_explicit_exclusion"
     stage = str(item.get("stage") or item.get("lifecycle_stage") or "").strip()
-    state = str(item.get("classification_state") or item.get("final_disposition") or "").strip()
+    state = str(
+        item.get("classification_state") or item.get("final_disposition") or ""
+    ).strip()
     source_kind = str(item.get("source_bucket_kind") or "").strip()
     if (
         stage == "lifecycle_flow"
@@ -326,11 +397,21 @@ def _scale_in_policy_exclusion_contract_state(item: dict[str, Any]) -> str:
     reason = _explicit_runtime_exclusion_reason(item)
     if reason != SCALE_IN_POLICY_EXCLUSION_REASON:
         return "missing_exclusion_reason"
-    source_link = item.get("source_link") if isinstance(item.get("source_link"), dict) else {}
-    reopen_conditions = item.get("reopen_conditions") if isinstance(item.get("reopen_conditions"), list) else []
+    source_link = (
+        item.get("source_link") if isinstance(item.get("source_link"), dict) else {}
+    )
+    reopen_conditions = (
+        item.get("reopen_conditions")
+        if isinstance(item.get("reopen_conditions"), list)
+        else []
+    )
     source_bucket_keys = [
         str(value).strip()
-        for value in (source_link.get("source_bucket_keys") if isinstance(source_link.get("source_bucket_keys"), list) else [])
+        for value in (
+            source_link.get("source_bucket_keys")
+            if isinstance(source_link.get("source_bucket_keys"), list)
+            else []
+        )
         if str(value).strip()
     ]
     if str(source_link.get("source_section") or "") != "scale_in_bucket_attribution":
@@ -339,7 +420,10 @@ def _scale_in_policy_exclusion_contract_state(item: dict[str, Any]) -> str:
         return "missing_source_bucket_link"
     if not reopen_conditions:
         return "missing_reopen_conditions"
-    if item.get("allowed_runtime_apply") is not False or item.get("runtime_effect") is not False:
+    if (
+        item.get("allowed_runtime_apply") is not False
+        or item.get("runtime_effect") is not False
+    ):
         return "runtime_authority_not_blocked"
     if item.get("target_env_keys"):
         return "env_mapping_present_on_source_only_block"
@@ -356,7 +440,11 @@ def _swing_source_only_handoff(item: dict[str, Any]) -> tuple[str, str]:
         return "", ""
     if item.get("broker_order_forbidden") is not True:
         return "", ""
-    forbidden = item.get("forbidden_uses") if isinstance(item.get("forbidden_uses"), list) else []
+    forbidden = (
+        item.get("forbidden_uses")
+        if isinstance(item.get("forbidden_uses"), list)
+        else []
+    )
     forbidden_values = {str(value) for value in forbidden}
     if not forbidden_values.intersection(
         {
@@ -369,24 +457,42 @@ def _swing_source_only_handoff(item: dict[str, Any]) -> tuple[str, str]:
     ):
         return "", ""
     ai_status = str(item.get("ai_review_status") or "").strip().lower()
-    proposal = item.get("ai_tier2_proposal") if isinstance(item.get("ai_tier2_proposal"), dict) else {}
+    proposal = (
+        item.get("ai_tier2_proposal")
+        if isinstance(item.get("ai_tier2_proposal"), dict)
+        else {}
+    )
     proposal_status = str(proposal.get("proposal_status") or "").strip().lower()
     proposal_decision = str(proposal.get("proposal_decision") or "").strip().lower()
-    if ai_status in {"missing", "unavailable", "parse_rejected", "fail_closed"} or proposal_status in {
+    if ai_status in {
+        "missing",
+        "unavailable",
+        "parse_rejected",
+        "fail_closed",
+    } or proposal_status in {
         "not_provided",
         "missing",
     }:
         return "tier2_fail_closed", "swing_tier2_missing_fail_closed_source_only"
     if proposal_decision in {"reject", "source_only", "keep_collecting"}:
-        return "source_only_explicit_exclusion", "swing_source_only_no_full_live_authority"
-    return "sim_auto_or_approval_handoff", "swing_source_only_handoff_no_full_live_authority"
+        return (
+            "source_only_explicit_exclusion",
+            "swing_source_only_no_full_live_authority",
+        )
+    return (
+        "sim_auto_or_approval_handoff",
+        "swing_source_only_handoff_no_full_live_authority",
+    )
 
 
 def _derived_review_labels(row: dict[str, Any]) -> tuple[str, str]:
     disposition = str(row.get("final_disposition") or "").strip()
     exclusion_reason = str(row.get("runtime_exclusion_reason") or "").strip()
     if exclusion_reason == "lifecycle_flow_incomplete_stage_contract":
-        return "runtime_blocked_contract_gap", "lifecycle_flow_incomplete_stage_contract"
+        return (
+            "runtime_blocked_contract_gap",
+            "lifecycle_flow_incomplete_stage_contract",
+        )
     if exclusion_reason in {
         "greenfield_policy_not_emitted_no_complete_lifecycle_flow",
         "greenfield_policy_not_emitted_no_live_auto_ready_lifecycle_flow",
@@ -395,7 +501,10 @@ def _derived_review_labels(row: dict[str, Any]) -> tuple[str, str]:
     }:
         return "source_only_keep_collecting", "greenfield_policy_not_emitted"
     if disposition == "tier2_fail_closed":
-        return "tier2_fail_closed_source_only", "swing_tier2_missing_fail_closed_source_only"
+        return (
+            "tier2_fail_closed_source_only",
+            "swing_tier2_missing_fail_closed_source_only",
+        )
     return disposition or "unknown", ""
 
 
@@ -422,10 +531,20 @@ def _comparative_selected_decision(item: dict[str, Any]) -> str:
 def _greenfield_policy_issue(item: dict[str, Any]) -> str:
     if _candidate_family(item) != GREENFIELD_REAL_ENV_FAMILY:
         return ""
-    recommended = item.get("recommended_values") if isinstance(item.get("recommended_values"), dict) else {}
-    policy_file = str(recommended.get("policy_file") or item.get("greenfield_policy_file") or "").strip()
-    recommended_version = str(recommended.get("policy_version") or item.get("candidate_id") or "")
-    return validate_greenfield_policy_file(policy_file, expected_version=recommended_version or None)
+    recommended = (
+        item.get("recommended_values")
+        if isinstance(item.get("recommended_values"), dict)
+        else {}
+    )
+    policy_file = str(
+        recommended.get("policy_file") or item.get("greenfield_policy_file") or ""
+    ).strip()
+    recommended_version = str(
+        recommended.get("policy_version") or item.get("candidate_id") or ""
+    )
+    return validate_greenfield_policy_file(
+        policy_file, expected_version=recommended_version or None
+    )
 
 
 def _ledger_from_discovery(
@@ -438,22 +557,36 @@ def _ledger_from_discovery(
     ledger: list[dict[str, Any]] = []
     candidates = discovery.get("surfaced_candidates")
     if not isinstance(candidates, list):
-        candidates = discovery.get("candidates") if isinstance(discovery.get("candidates"), list) else []
+        candidates = (
+            discovery.get("candidates")
+            if isinstance(discovery.get("candidates"), list)
+            else []
+        )
     for item in candidates:
         if not isinstance(item, dict):
             continue
         candidate_id = _candidate_id(item, f"{domain}_discovery")
         family = _candidate_family({**item, "source_artifact": source_artifact})
         gate = _source_quality_gate(item)
-        state = str(item.get("classification_state") or item.get("final_disposition") or "").strip()
+        state = str(
+            item.get("classification_state") or item.get("final_disposition") or ""
+        ).strip()
         ev = _primary_ev(item)
         disposition = _source_state_to_disposition(state, gate)
         failure_state = "pass"
         failure_reason = ""
         exclusion_reason = _explicit_runtime_exclusion_reason(item)
         explicit_disposition = ""
-        if domain == "swing" and state == "source_only_keep_collecting" and gate == "pass" and ev is not None and ev > 0:
-            explicit_disposition, swing_exclusion_reason = _swing_source_only_handoff(item)
+        if (
+            domain == "swing"
+            and state == "source_only_keep_collecting"
+            and gate == "pass"
+            and ev is not None
+            and ev > 0
+        ):
+            explicit_disposition, swing_exclusion_reason = _swing_source_only_handoff(
+                item
+            )
             if swing_exclusion_reason and not exclusion_reason:
                 exclusion_reason = swing_exclusion_reason
         recommended_route = str(item.get("recommended_route") or "").strip()
@@ -462,7 +595,12 @@ def _ledger_from_discovery(
             failure_state = "blocked_source_quality"
             failure_reason = "ai_tier2_source_quality_blocker"
             disposition = "source_quality_blocker"
-        elif state == "source_only_keep_collecting" and gate == "pass" and ev is not None and ev > 0:
+        elif (
+            state == "source_only_keep_collecting"
+            and gate == "pass"
+            and ev is not None
+            and ev > 0
+        ):
             if exclusion_reason:
                 failure_state = "pass"
                 failure_reason = ""
@@ -480,10 +618,16 @@ def _ledger_from_discovery(
                 "candidate_id": candidate_id,
                 "family": family,
                 "domain": domain,
-                "stage": str(item.get("stage") or item.get("lifecycle_stage") or "unknown"),
+                "stage": str(
+                    item.get("stage") or item.get("lifecycle_stage") or "unknown"
+                ),
                 "source_artifact": source_artifact,
                 "producer_state": state or "unknown",
-                "consumer_state": "pending_bridge_join" if disposition == "live_auto_apply_ready" else "source_only",
+                "consumer_state": (
+                    "pending_bridge_join"
+                    if disposition == "live_auto_apply_ready"
+                    else "source_only"
+                ),
                 "sample": _sample(item),
                 "primary_ev": ev,
                 "source_quality_gate": gate,
@@ -506,7 +650,10 @@ def _ledger_from_discovery(
                 "source_dimension_gap": item.get("source_dimension_gap") or "",
                 "recommended_resolution": item.get("recommended_resolution") or "",
                 "missing_dimension_keys": item.get("missing_dimension_keys") or [],
-                "missing_lifecycle_flow_stage_keys": item.get("missing_lifecycle_flow_stage_keys") or [],
+                "missing_lifecycle_flow_stage_keys": item.get(
+                    "missing_lifecycle_flow_stage_keys"
+                )
+                or [],
                 "unknown_reason_counts": item.get("unknown_reason_counts") or {},
                 "ai_selected_decision": selected_decision,
                 "explicit_runtime_exclusion": bool(exclusion_reason),
@@ -521,10 +668,17 @@ def _swing_ldm_stage_from_section(section_name: str) -> str:
         return "lifecycle_flow"
     if section_name == "holding_exit_bucket_attribution":
         return "holding_exit"
-    return section_name.removesuffix("_bucket_attribution").removesuffix("_arm_attribution") or "swing"
+    return (
+        section_name.removesuffix("_bucket_attribution").removesuffix(
+            "_arm_attribution"
+        )
+        or "swing"
+    )
 
 
-def _ledger_from_swing_ldm(matrix: dict[str, Any], *, target_date: str) -> list[dict[str, Any]]:
+def _ledger_from_swing_ldm(
+    matrix: dict[str, Any], *, target_date: str
+) -> list[dict[str, Any]]:
     surfaced: list[dict[str, Any]] = []
     for section_name in (
         "swing_lifecycle_flow_bucket_attribution",
@@ -533,10 +687,17 @@ def _ledger_from_swing_ldm(matrix: dict[str, Any], *, target_date: str) -> list[
         "scale_in_bucket_attribution",
         "discovery_arm_attribution",
     ):
-        section = matrix.get(section_name) if isinstance(matrix.get(section_name), dict) else {}
+        section = (
+            matrix.get(section_name)
+            if isinstance(matrix.get(section_name), dict)
+            else {}
+        )
         stage = _swing_ldm_stage_from_section(section_name)
         seen: set[str] = set()
-        for candidate_key in ("sim_auto_approval_candidates", "runtime_approval_candidates"):
+        for candidate_key in (
+            "sim_auto_approval_candidates",
+            "runtime_approval_candidates",
+        ):
             for item in section.get(candidate_key) or []:
                 if not isinstance(item, dict):
                     continue
@@ -549,13 +710,20 @@ def _ledger_from_swing_ldm(matrix: dict[str, Any], *, target_date: str) -> list[
                         **item,
                         "candidate_id": candidate_id,
                         "bucket_id": item.get("bucket_id") or candidate_id,
-                        "stage": item.get("stage") or item.get("lifecycle_stage") or stage,
-                        "lifecycle_stage": item.get("lifecycle_stage") or item.get("stage") or stage,
+                        "stage": item.get("stage")
+                        or item.get("lifecycle_stage")
+                        or stage,
+                        "lifecycle_stage": item.get("lifecycle_stage")
+                        or item.get("stage")
+                        or stage,
                         "classification_state": item.get("classification_state")
                         or item.get("classification_hint")
                         or "sim_auto_approved",
-                        "source_quality_gate": item.get("source_quality_gate") or "pass",
-                        "recommended_route": item.get("recommended_route") or item.get("next_route") or "",
+                        "source_quality_gate": item.get("source_quality_gate")
+                        or "pass",
+                        "recommended_route": item.get("recommended_route")
+                        or item.get("next_route")
+                        or "",
                     }
                 )
         for item in section.get("code_improvement_workorders") or []:
@@ -566,12 +734,19 @@ def _ledger_from_swing_ldm(matrix: dict[str, Any], *, target_date: str) -> list[
                 {
                     **item,
                     "candidate_id": candidate_id,
-                    "bucket_id": item.get("bucket_id") or item.get("workorder_id") or candidate_id,
+                    "bucket_id": item.get("bucket_id")
+                    or item.get("workorder_id")
+                    or candidate_id,
                     "stage": item.get("stage") or item.get("lifecycle_stage") or stage,
-                    "lifecycle_stage": item.get("lifecycle_stage") or item.get("stage") or stage,
-                    "classification_state": item.get("classification_state") or "code_patch_required",
-                    "source_quality_gate": item.get("source_quality_gate") or "instrumentation_gap",
-                    "recommended_route": item.get("recommended_route") or "code_improvement_workorder",
+                    "lifecycle_stage": item.get("lifecycle_stage")
+                    or item.get("stage")
+                    or stage,
+                    "classification_state": item.get("classification_state")
+                    or "code_patch_required",
+                    "source_quality_gate": item.get("source_quality_gate")
+                    or "instrumentation_gap",
+                    "recommended_route": item.get("recommended_route")
+                    or "code_improvement_workorder",
                 }
             )
     return _ledger_from_discovery(
@@ -582,8 +757,14 @@ def _ledger_from_swing_ldm(matrix: dict[str, Any], *, target_date: str) -> list[
     )
 
 
-def _source_dimension_gap_summary_from_payloads(payloads: dict[str, Any]) -> dict[str, Any]:
-    discovery = payloads.get("lifecycle_bucket_discovery") if isinstance(payloads.get("lifecycle_bucket_discovery"), dict) else {}
+def _source_dimension_gap_summary_from_payloads(
+    payloads: dict[str, Any],
+) -> dict[str, Any]:
+    discovery = (
+        payloads.get("lifecycle_bucket_discovery")
+        if isinstance(payloads.get("lifecycle_bucket_discovery"), dict)
+        else {}
+    )
     summary = (
         discovery.get("source_dimension_gap_summary")
         if isinstance(discovery.get("source_dimension_gap_summary"), dict)
@@ -591,7 +772,11 @@ def _source_dimension_gap_summary_from_payloads(payloads: dict[str, Any]) -> dic
     )
     if summary:
         return summary
-    candidates = discovery.get("surfaced_candidates") if isinstance(discovery.get("surfaced_candidates"), list) else []
+    candidates = (
+        discovery.get("surfaced_candidates")
+        if isinstance(discovery.get("surfaced_candidates"), list)
+        else []
+    )
     gap_counts: Counter[str] = Counter()
     resolution_counts: Counter[str] = Counter()
     actionable: list[dict[str, Any]] = []
@@ -600,12 +785,19 @@ def _source_dimension_gap_summary_from_payloads(payloads: dict[str, Any]) -> dic
             continue
         gap = str(item.get("source_dimension_gap") or "")
         resolution = str(item.get("recommended_resolution") or "")
-        if not gap and not item.get("unknown_dimension_counts") and "unknown" not in str(item.get("bucket_key") or ""):
+        if (
+            not gap
+            and not item.get("unknown_dimension_counts")
+            and "unknown" not in str(item.get("bucket_key") or "")
+        ):
             continue
         gap = gap or "unknown_source_dimensions"
         gap_counts[gap] += 1
         resolution_counts[resolution or "none"] += 1
-        if gap == "unknown_source_dimensions" and resolution in SOURCE_DIMENSION_ACTIONABLE_RESOLUTIONS:
+        if (
+            gap == "unknown_source_dimensions"
+            and resolution in SOURCE_DIMENSION_ACTIONABLE_RESOLUTIONS
+        ):
             actionable.append(
                 {
                     "candidate_id": _candidate_id(item, "lifecycle_bucket_discovery"),
@@ -631,7 +823,11 @@ def _source_dimension_gap_directives(summary: dict[str, Any]) -> list[dict[str, 
     actionable_count = int(summary.get("actionable_unknown_gap_count") or 0)
     if actionable_count <= 0:
         return []
-    candidates = summary.get("actionable_candidates") if isinstance(summary.get("actionable_candidates"), list) else []
+    candidates = (
+        summary.get("actionable_candidates")
+        if isinstance(summary.get("actionable_candidates"), list)
+        else []
+    )
     if not candidates:
         candidates = [
             {
@@ -655,16 +851,25 @@ def _source_dimension_gap_directives(summary: dict[str, Any]) -> list[dict[str, 
             _directive(
                 "RESOLVE_SOURCE_DIMENSION_GAP",
                 {
-                    "candidate_id": item.get("candidate_id") or item.get("bucket_id") or item.get("source_bucket_id"),
+                    "candidate_id": item.get("candidate_id")
+                    or item.get("bucket_id")
+                    or item.get("source_bucket_id"),
                     "family": "lifecycle_bucket_discovery",
-                    "stage": item.get("stage") or item.get("lifecycle_stage") or "unknown",
+                    "stage": item.get("stage")
+                    or item.get("lifecycle_stage")
+                    or "unknown",
                     "source_artifact": "lifecycle_bucket_discovery",
-                    "producer_state": item.get("classification_state") or "source_dimension_gap_summary",
+                    "producer_state": item.get("classification_state")
+                    or "source_dimension_gap_summary",
                     "final_disposition": "code_patch_required",
                     "failure_state": "fail",
-                    "failure_reason": item.get("recommended_resolution") or "source_dimension_gap_summary_actionable",
+                    "failure_reason": item.get("recommended_resolution")
+                    or "source_dimension_gap_summary_actionable",
                 },
-                reason=str(item.get("recommended_resolution") or "source_dimension_gap_summary_actionable"),
+                reason=str(
+                    item.get("recommended_resolution")
+                    or "source_dimension_gap_summary_actionable"
+                ),
                 blocking_contract="source_dimension_gap_contract",
             )
         )
@@ -677,12 +882,20 @@ def _workorder_order_ids(payloads: dict[str, Any]) -> set[str]:
         if isinstance(payloads.get("code_improvement_workorder"), dict)
         else {}
     )
-    orders = workorder.get("orders") if isinstance(workorder.get("orders"), list) else []
-    return {str(item.get("order_id") or "") for item in orders if isinstance(item, dict)}
+    orders = (
+        workorder.get("orders") if isinstance(workorder.get("orders"), list) else []
+    )
+    return {
+        str(item.get("order_id") or "") for item in orders if isinstance(item, dict)
+    }
 
 
 def _quiet_gap_summary_from_payloads(payloads: dict[str, Any]) -> dict[str, Any]:
-    discovery = payloads.get("lifecycle_bucket_discovery") if isinstance(payloads.get("lifecycle_bucket_discovery"), dict) else {}
+    discovery = (
+        payloads.get("lifecycle_bucket_discovery")
+        if isinstance(payloads.get("lifecycle_bucket_discovery"), dict)
+        else {}
+    )
     discovery_summary = (
         discovery.get("quiet_gap_summary")
         if isinstance(discovery.get("quiet_gap_summary"), dict)
@@ -693,7 +906,11 @@ def _quiet_gap_summary_from_payloads(payloads: dict[str, Any]) -> dict[str, Any]
         if isinstance(payloads.get("observation_source_quality_audit"), dict)
         else {}
     )
-    observation_summary = observation.get("summary") if isinstance(observation.get("summary"), dict) else {}
+    observation_summary = (
+        observation.get("summary")
+        if isinstance(observation.get("summary"), dict)
+        else {}
+    )
     observation_warning_count = (
         _safe_int(observation_summary.get("warning_stage_count"))
         if str(observation.get("status") or "") in {"warning", "fail"}
@@ -708,20 +925,35 @@ def _quiet_gap_summary_from_payloads(payloads: dict[str, Any]) -> dict[str, Any]
         "quiet_gap_count": quiet_gap_count,
         "lifecycle_quiet_gap_count": lifecycle_quiet_count,
         "observation_source_quality_warning_count": observation_warning_count,
-        "rollup_required_count": _safe_int(discovery_summary.get("rollup_required_count")) + observation_warning_count,
+        "rollup_required_count": _safe_int(
+            discovery_summary.get("rollup_required_count")
+        )
+        + observation_warning_count,
         "sim_live_connected_quiet_gap_count": _safe_int(
             discovery_summary.get("sim_live_connected_quiet_gap_count")
         ),
         "quiet_gap_type_counts": discovery_summary.get("quiet_gap_type_counts") or {},
         "ai_review_coverage": discovery_summary.get("ai_review_coverage") or {},
-        "items": discovery_summary.get("items") if isinstance(discovery_summary.get("items"), list) else [],
+        "items": (
+            discovery_summary.get("items")
+            if isinstance(discovery_summary.get("items"), list)
+            else []
+        ),
     }
 
 
 def _required_lifecycle_quiet_gap_order_ids(summary: dict[str, Any]) -> set[str]:
-    type_counts = summary.get("quiet_gap_type_counts") if isinstance(summary.get("quiet_gap_type_counts"), dict) else {}
+    type_counts = (
+        summary.get("quiet_gap_type_counts")
+        if isinstance(summary.get("quiet_gap_type_counts"), dict)
+        else {}
+    )
     required: set[str] = set()
-    if _safe_int(type_counts.get("parent_conflict_child")) + _safe_int(type_counts.get("exclusion_dimension_candidate")) > 0:
+    if (
+        _safe_int(type_counts.get("parent_conflict_child"))
+        + _safe_int(type_counts.get("exclusion_dimension_candidate"))
+        > 0
+    ):
         required.add("order_lifecycle_quiet_gap_parent_conflict_rollup")
     if (
         _safe_int(type_counts.get("positive_source_only_keep_collecting"))
@@ -736,7 +968,9 @@ def _required_lifecycle_quiet_gap_order_ids(summary: dict[str, Any]) -> set[str]
     return required
 
 
-def _quiet_gap_directives(summary: dict[str, Any], payloads: dict[str, Any]) -> list[dict[str, Any]]:
+def _quiet_gap_directives(
+    summary: dict[str, Any], payloads: dict[str, Any]
+) -> list[dict[str, Any]]:
     if _safe_int(summary.get("quiet_gap_count")) <= 0:
         return []
     order_ids = _workorder_order_ids(payloads)
@@ -748,10 +982,16 @@ def _quiet_gap_directives(summary: dict[str, Any], payloads: dict[str, Any]) -> 
         if (
             order_id not in order_ids
             if order_id != "order_lifecycle_quiet_gap_rollup"
-            else not any(existing.startswith("order_lifecycle_quiet_gap_") for existing in order_ids)
+            else not any(
+                existing.startswith("order_lifecycle_quiet_gap_")
+                for existing in order_ids
+            )
         )
     )
-    if _safe_int(summary.get("lifecycle_quiet_gap_count")) > 0 and missing_quiet_order_ids:
+    if (
+        _safe_int(summary.get("lifecycle_quiet_gap_count")) > 0
+        and missing_quiet_order_ids
+    ):
         directives.append(
             _directive(
                 "REVIEW_LIFECYCLE_QUIET_GAP",
@@ -762,9 +1002,12 @@ def _quiet_gap_directives(summary: dict[str, Any], payloads: dict[str, Any]) -> 
                     "source_artifact": "lifecycle_bucket_discovery",
                     "producer_state": "quiet_gap_summary",
                     "final_disposition": "source_quality_gap_review",
-                    "failure_state": "blocked_contract"
-                    if _safe_int(summary.get("sim_live_connected_quiet_gap_count")) > 0
-                    else "pass",
+                    "failure_state": (
+                        "blocked_contract"
+                        if _safe_int(summary.get("sim_live_connected_quiet_gap_count"))
+                        > 0
+                        else "pass"
+                    ),
                     "failure_reason": "quiet_gap_summary_not_handed_off",
                     "missing_workorder_order_ids": missing_quiet_order_ids,
                     "runtime_effect": False,
@@ -806,7 +1049,9 @@ def _ledger_from_bridge(
     preopen_apply: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     ledger: list[dict[str, Any]] = []
-    candidates = bridge.get("candidates") if isinstance(bridge.get("candidates"), list) else []
+    candidates = (
+        bridge.get("candidates") if isinstance(bridge.get("candidates"), list) else []
+    )
     for item in candidates:
         if not isinstance(item, dict):
             continue
@@ -814,13 +1059,17 @@ def _ledger_from_bridge(
         gate = _source_quality_gate(item)
         family = _candidate_family(item)
         candidate_id = _candidate_id(item, "runtime_apply_bridge")
-        preopen_consumed = _preopen_apply_consumed_candidate(preopen_apply or {}, candidate_id, family)
+        preopen_consumed = _preopen_apply_consumed_candidate(
+            preopen_apply or {}, candidate_id, family
+        )
         disposition = _source_state_to_disposition(state, gate)
         failure_state = "pass"
         failure_reason = ""
         exclusion_reason = _explicit_runtime_exclusion_reason(item)
         scale_in_policy_contract_state = _scale_in_policy_exclusion_contract_state(item)
-        if family == SCALE_IN_POLICY_FAMILY and not _valid_scale_in_policy_exclusion(item):
+        if family == SCALE_IN_POLICY_FAMILY and not _valid_scale_in_policy_exclusion(
+            item
+        ):
             exclusion_reason = ""
         retryable = False
         retry_reason = ""
@@ -836,7 +1085,9 @@ def _ledger_from_bridge(
                 failure_state = "retry_pending"
                 failure_reason = "ready_but_not_applied"
                 retryable = True
-                retry_reason = "candidate must be consumed by the next PREOPEN bounded apply pass"
+                retry_reason = (
+                    "candidate must be consumed by the next PREOPEN bounded apply pass"
+                )
                 retry_owner = "preopen_apply_candidate"
                 next_retry_stage = "preopen_apply_candidate"
                 retry_deadline = _next_day(target_date)
@@ -894,18 +1145,24 @@ def _ledger_from_bridge(
                 "preopen_apply_state": (
                     "consumed_by_next_preopen"
                     if preopen_consumed
-                    else "pending_next_preopen"
-                    if state == "live_auto_apply_ready"
-                    else "not_ready"
+                    else (
+                        "pending_next_preopen"
+                        if state == "live_auto_apply_ready"
+                        else "not_ready"
+                    )
                 ),
                 "runtime_hook_state": (
                     "mapped"
                     if item.get("target_env_keys")
-                    else "not_applicable_source_only"
-                    if exclusion_reason
-                    else "env_mapping_missing"
+                    else (
+                        "not_applicable_source_only"
+                        if exclusion_reason
+                        else "env_mapping_missing"
+                    )
                 ),
-                "post_apply_attribution_state": "pending" if state == "live_auto_apply_ready" else "not_applicable",
+                "post_apply_attribution_state": (
+                    "pending" if state == "live_auto_apply_ready" else "not_applicable"
+                ),
                 "greenfield_policy_state": greenfield_policy_state,
                 "final_disposition": disposition,
                 "failure_state": failure_state,
@@ -916,17 +1173,31 @@ def _ledger_from_bridge(
                 "next_retry_stage": next_retry_stage,
                 "retry_deadline": retry_deadline,
                 "surface_channel": "runtime_apply_gap_audit + postclose_verifier",
-                "target_env_keys": item.get("target_env_keys") if isinstance(item.get("target_env_keys"), list) else [],
+                "target_env_keys": (
+                    item.get("target_env_keys")
+                    if isinstance(item.get("target_env_keys"), list)
+                    else []
+                ),
                 "explicit_runtime_exclusion": bool(exclusion_reason),
                 "runtime_exclusion_reason": exclusion_reason,
-                "source_link": item.get("source_link") if isinstance(item.get("source_link"), dict) else {},
-                "reopen_conditions": item.get("reopen_conditions") if isinstance(item.get("reopen_conditions"), list) else [],
+                "source_link": (
+                    item.get("source_link")
+                    if isinstance(item.get("source_link"), dict)
+                    else {}
+                ),
+                "reopen_conditions": (
+                    item.get("reopen_conditions")
+                    if isinstance(item.get("reopen_conditions"), list)
+                    else []
+                ),
                 "scale_in_policy_contract_state": scale_in_policy_contract_state,
                 "evidence_grade": item.get("evidence_grade"),
                 "transition_target": item.get("transition_target"),
-                "missing_runtime_source_fields": item.get("missing_runtime_source_fields")
-                if isinstance(item.get("missing_runtime_source_fields"), list)
-                else [],
+                "missing_runtime_source_fields": (
+                    item.get("missing_runtime_source_fields")
+                    if isinstance(item.get("missing_runtime_source_fields"), list)
+                    else []
+                ),
             }
         )
     return ledger
@@ -962,12 +1233,20 @@ def _merge_ledger_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             merged[key] = dict(row)
             continue
         current_sources = current.setdefault("related_source_artifacts", [])
-        if row.get("source_artifact") and row.get("source_artifact") not in current_sources:
+        if (
+            row.get("source_artifact")
+            and row.get("source_artifact") not in current_sources
+        ):
             current_sources.append(row.get("source_artifact"))
-        if rank.get(str(row.get("failure_state")), 0) >= rank.get(str(current.get("failure_state")), 0):
+        if rank.get(str(row.get("failure_state")), 0) >= rank.get(
+            str(current.get("failure_state")), 0
+        ):
             replacement = dict(row)
             replacement["related_source_artifacts"] = current_sources
-            if current.get("source_artifact") and current.get("source_artifact") not in current_sources:
+            if (
+                current.get("source_artifact")
+                and current.get("source_artifact") not in current_sources
+            ):
                 current_sources.append(current.get("source_artifact"))
             merged[key] = replacement
     return list(merged.values())
@@ -978,14 +1257,20 @@ def _producer_consumer_contract_drift(
     payloads: dict[str, dict[str, Any]],
 ) -> list[dict[str, Any]]:
     bridge = payloads.get("runtime_apply_bridge", {})
-    bridge_summary = bridge.get("summary") if isinstance(bridge.get("summary"), dict) else {}
+    bridge_summary = (
+        bridge.get("summary") if isinstance(bridge.get("summary"), dict) else {}
+    )
     bridge_families = {
         str(item.get("family") or "")
         for item in bridge.get("candidates", [])
         if isinstance(item, dict)
     }
-    greenfield_policy_emit_state = str(bridge_summary.get("greenfield_policy_emit_state") or "").strip()
-    greenfield_policy_emit_blocker = str(bridge_summary.get("greenfield_policy_emit_blocker") or "").strip()
+    greenfield_policy_emit_state = str(
+        bridge_summary.get("greenfield_policy_emit_state") or ""
+    ).strip()
+    greenfield_policy_emit_blocker = str(
+        bridge_summary.get("greenfield_policy_emit_blocker") or ""
+    ).strip()
     greenfield_policy_emit_blocker_detail = str(
         bridge_summary.get("greenfield_policy_emit_blocker_detail") or ""
     ).strip()
@@ -1004,8 +1289,12 @@ def _producer_consumer_contract_drift(
             row["consumer_state"] = "explicit_bridge_exclusion"
             row["bridge_state"] = greenfield_policy_emit_state
             row["runtime_exclusion_reason"] = greenfield_policy_emit_state
-            row["greenfield_policy_emit_blocker"] = greenfield_policy_emit_blocker or None
-            row["greenfield_policy_emit_blocker_detail"] = greenfield_policy_emit_blocker_detail or None
+            row["greenfield_policy_emit_blocker"] = (
+                greenfield_policy_emit_blocker or None
+            )
+            row["greenfield_policy_emit_blocker_detail"] = (
+                greenfield_policy_emit_blocker_detail or None
+            )
             row["explicit_runtime_exclusion"] = True
             row["retryable"] = False
             row["retry_reason"] = ""
@@ -1016,7 +1305,8 @@ def _producer_consumer_contract_drift(
             continue
         if (
             row.get("producer_state") == "live_auto_apply_ready"
-            and row.get("source_artifact") in {"lifecycle_bucket_discovery", "swing_lifecycle_bucket_discovery"}
+            and row.get("source_artifact")
+            in {"lifecycle_bucket_discovery", "swing_lifecycle_bucket_discovery"}
             and family
             and family not in bridge_families
         ):
@@ -1024,7 +1314,9 @@ def _producer_consumer_contract_drift(
             row["failure_reason"] = "producer_consumer_handoff_missing"
             row["final_disposition"] = "code_patch_required"
             row["retryable"] = True
-            row["retry_reason"] = "runtime_apply_bridge must consume the live candidate or write an explicit exclusion"
+            row["retry_reason"] = (
+                "runtime_apply_bridge must consume the live candidate or write an explicit exclusion"
+            )
             row["retry_owner"] = "runtime_apply_bridge"
             row["next_retry_stage"] = "runtime_apply_bridge"
             row["retry_deadline"] = "immediate_same_date_postclose_rerun"
@@ -1066,7 +1358,9 @@ def _failure_item(
     }
 
 
-def _retry_queue_from_failures(ledger: list[dict[str, Any]], artifact_status: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+def _retry_queue_from_failures(
+    ledger: list[dict[str, Any]], artifact_status: dict[str, dict[str, Any]]
+) -> list[dict[str, Any]]:
     queue: list[dict[str, Any]] = []
     for label in CORE_ARTIFACT_LABELS:
         status = artifact_status.get(label, {})
@@ -1083,11 +1377,15 @@ def _retry_queue_from_failures(ledger: list[dict[str, Any]], artifact_status: di
                 )
             )
     for row in ledger:
-        if row.get("retryable") is True and row.get("failure_state") in {"fail", "retry_pending"}:
+        if row.get("retryable") is True and row.get("failure_state") in {
+            "fail",
+            "retry_pending",
+        }:
             queue.append(
                 {
                     "candidate_id": row.get("candidate_id"),
-                    "failure_code": row.get("failure_reason") or row.get("failure_state"),
+                    "failure_code": row.get("failure_reason")
+                    or row.get("failure_state"),
                     "failure_state": row.get("failure_state"),
                     "retryable": True,
                     "retry_reason": row.get("retry_reason"),
@@ -1118,9 +1416,11 @@ def _directive(
             "primary_ev": candidate.get("primary_ev"),
             "source_quality_gate": candidate.get("source_quality_gate"),
             "failure_reason": candidate.get("failure_reason"),
-            "missing_workorder_order_ids": candidate.get("missing_workorder_order_ids") or [],
+            "missing_workorder_order_ids": candidate.get("missing_workorder_order_ids")
+            or [],
         },
-        "missing_workorder_order_ids": candidate.get("missing_workorder_order_ids") or [],
+        "missing_workorder_order_ids": candidate.get("missing_workorder_order_ids")
+        or [],
         "ai_reasoning_summary": candidate.get("ai_reason_en") or reason,
         "blocking_contract": blocking_contract,
         "required_code_changes": [
@@ -1144,14 +1444,17 @@ def _directive(
         ],
         "retry_policy": {
             "retryable": bool(candidate.get("retryable")),
-            "next_retry_stage": candidate.get("next_retry_stage") or "code_patch_then_postclose_rerun",
+            "next_retry_stage": candidate.get("next_retry_stage")
+            or "code_patch_then_postclose_rerun",
             "retry_deadline": candidate.get("retry_deadline") or "next_postclose",
         },
         "body_ko": _directive_body_ko(directive_type, candidate, reason),
     }
 
 
-def _directive_body_ko(directive_type: str, candidate: dict[str, Any], reason: str) -> str:
+def _directive_body_ko(
+    directive_type: str, candidate: dict[str, Any], reason: str
+) -> str:
     return (
         f"{directive_type}: {candidate.get('candidate_id')} 후보가 {reason} 상태입니다. "
         "생산 artifact에서 소비 artifact까지 source link 또는 명시적 제외 사유를 남기고, "
@@ -1159,7 +1462,9 @@ def _directive_body_ko(directive_type: str, candidate: dict[str, Any], reason: s
     )
 
 
-def _build_codex_directives(ledger: list[dict[str, Any]], retry_queue: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _build_codex_directives(
+    ledger: list[dict[str, Any]], retry_queue: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     directives: list[dict[str, Any]] = []
     for row in ledger:
         if row.get("explicit_runtime_exclusion") is True:
@@ -1264,7 +1569,9 @@ def _build_ai_review_prompt_en(context: dict[str, Any]) -> str:
     )
 
 
-def _render_ai_input_context_en(ledger: list[dict[str, Any]], drift: list[dict[str, Any]]) -> dict[str, Any]:
+def _render_ai_input_context_en(
+    ledger: list[dict[str, Any]], drift: list[dict[str, Any]]
+) -> dict[str, Any]:
     review_candidates = [
         {
             "candidate_id": row.get("candidate_id"),
@@ -1281,11 +1588,11 @@ def _render_ai_input_context_en(ledger: list[dict[str, Any]], drift: list[dict[s
         if row.get("explicit_runtime_exclusion") is not True
         and (
             row.get("failure_state") != "pass"
-        or (
-            row.get("primary_ev") is not None
-            and float(row.get("primary_ev") or 0.0) > 0
-            and row.get("final_disposition") != "live_auto_apply_ready"
-        )
+            or (
+                row.get("primary_ev") is not None
+                and float(row.get("primary_ev") or 0.0) > 0
+                and row.get("final_disposition") != "live_auto_apply_ready"
+            )
         )
     ][:40]
     return {
@@ -1298,7 +1605,9 @@ def _render_ai_input_context_en(ledger: list[dict[str, Any]], drift: list[dict[s
     }
 
 
-def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, dict[str, Any], list[str]]:
+def _parse_ai_review_response(
+    raw_response: Any | None,
+) -> tuple[str, dict[str, Any], list[str]]:
     if raw_response is None:
         return "unavailable", {}, ["ai_review_response_missing"]
     payload: Any = raw_response
@@ -1342,9 +1651,15 @@ def _legacy_runtime_apply_gap_timeout_default() -> int:
 
 
 def _ai_review_config(*, model_override: str | None = None) -> PostcloseAIReviewConfig:
-    legacy_model = str(os.getenv("RUNTIME_APPLY_GAP_AI_REVIEW_MODEL") or AI_REVIEW_MODEL).strip() or AI_REVIEW_MODEL
+    legacy_model = (
+        str(os.getenv("RUNTIME_APPLY_GAP_AI_REVIEW_MODEL") or AI_REVIEW_MODEL).strip()
+        or AI_REVIEW_MODEL
+    )
     legacy_reasoning = (
-        str(os.getenv("RUNTIME_APPLY_GAP_AI_REVIEW_REASONING_EFFORT") or AI_REVIEW_REASONING_EFFORT).strip()
+        str(
+            os.getenv("RUNTIME_APPLY_GAP_AI_REVIEW_REASONING_EFFORT")
+            or AI_REVIEW_REASONING_EFFORT
+        ).strip()
         or AI_REVIEW_REASONING_EFFORT
     )
     config = resolve_postclose_ai_review_config(
@@ -1353,7 +1668,9 @@ def _ai_review_config(*, model_override: str | None = None) -> PostcloseAIReview
         default_reasoning_effort=legacy_reasoning,
         default_timeout_sec=_legacy_runtime_apply_gap_timeout_default(),
     )
-    config = replace(config, primary_provider="openai", failback_provider="bedrock_qwen3")
+    config = replace(
+        config, primary_provider="openai", failback_provider="bedrock_qwen3"
+    )
     if model_override:
         return replace(config, model=str(model_override).strip() or config.model)
     return config
@@ -1368,10 +1685,20 @@ def _call_openai_ai_review(
         from openai import OpenAI, RateLimitError
         from src.engine.ai_response_contracts import build_openai_response_text_format
     except Exception as exc:
-        return None, {"provider": "openai", "status": "unavailable", "reason": f"openai import failed: {exc}", **config.provider_status_fields()}
+        return None, {
+            "provider": "openai",
+            "status": "unavailable",
+            "reason": f"openai import failed: {exc}",
+            **config.provider_status_fields(),
+        }
     api_keys = _load_threshold_ai_openai_keys()
     if not api_keys:
-        return None, {"provider": "openai", "status": "unavailable", "reason": "OPENAI_API_KEY not configured", **config.provider_status_fields()}
+        return None, {
+            "provider": "openai",
+            "status": "unavailable",
+            "reason": "OPENAI_API_KEY not configured",
+            **config.provider_status_fields(),
+        }
     prompt = _build_ai_review_prompt_en(input_context)
     errors: list[dict[str, str]] = []
     for attempt_index, (key_name, api_key) in enumerate(api_keys, start=1):
@@ -1381,7 +1708,10 @@ def _call_openai_ai_review(
                 model=config.model,
                 instructions="Return only strict JSON for runtime_apply_gap_ai_review_v1.",
                 input=prompt,
-                text={"format": build_openai_response_text_format(AI_REVIEW_SCHEMA_NAME), "verbosity": "low"},
+                text={
+                    "format": build_openai_response_text_format(AI_REVIEW_SCHEMA_NAME),
+                    "verbosity": "low",
+                },
                 reasoning={"effort": config.reasoning_effort},
                 store=False,
                 metadata={
@@ -1404,9 +1734,15 @@ def _call_openai_ai_review(
                 "input_context_hash": _text_hash(input_context),
                 "input_context_chars": len(prompt),
                 "output_chars": len(raw_text),
-                "input_tokens": int(getattr(usage, "input_tokens", 0) or 0) if usage else 0,
-                "output_tokens": int(getattr(usage, "output_tokens", 0) or 0) if usage else 0,
-                "total_tokens": int(getattr(usage, "total_tokens", 0) or 0) if usage else 0,
+                "input_tokens": (
+                    int(getattr(usage, "input_tokens", 0) or 0) if usage else 0
+                ),
+                "output_tokens": (
+                    int(getattr(usage, "output_tokens", 0) or 0) if usage else 0
+                ),
+                "total_tokens": (
+                    int(getattr(usage, "total_tokens", 0) or 0) if usage else 0
+                ),
             }
         except RateLimitError as exc:
             errors.append({"key_name": key_name, "error": f"rate_limit:{exc}"})
@@ -1470,7 +1806,9 @@ def _call_bedrock_qwen3_ai_review(
     raw_response, status = call_postclose_structured_review(
         input_context,
         schema_name=AI_REVIEW_SCHEMA_NAME,
-        instructions=_build_ai_review_prompt_en({k: v for k, v in input_context.items() if k != "review_candidates"}),
+        instructions=_build_ai_review_prompt_en(
+            {k: v for k, v in input_context.items() if k != "review_candidates"}
+        ),
         config=failback_config,
         metadata={
             "endpoint_name": "runtime_apply_gap_ai_review",
@@ -1499,8 +1837,14 @@ def _call_bedrock_qwen3_ai_review(
     }
 
 
-def _runtime_ai_review_shards(context: dict[str, Any], *, shard_size: int) -> list[dict[str, Any]]:
-    candidates = context.get("review_candidates") if isinstance(context.get("review_candidates"), list) else []
+def _runtime_ai_review_shards(
+    context: dict[str, Any], *, shard_size: int
+) -> list[dict[str, Any]]:
+    candidates = (
+        context.get("review_candidates")
+        if isinstance(context.get("review_candidates"), list)
+        else []
+    )
     if not candidates:
         return [context]
     size = max(1, int(shard_size or 10))
@@ -1524,11 +1868,19 @@ def _merge_runtime_ai_review_payloads(payloads: list[dict[str, Any]]) -> dict[st
     statuses: list[str] = []
     directives: list[dict[str, Any]] = []
     for payload in payloads:
-        reviews.extend(item for item in (payload.get("candidate_reviews") or []) if isinstance(item, dict))
+        reviews.extend(
+            item
+            for item in (payload.get("candidate_reviews") or [])
+            if isinstance(item, dict)
+        )
         audit = payload.get("audit") if isinstance(payload.get("audit"), dict) else {}
         statuses.append(str(audit.get("status") or "pass"))
         issues.extend(str(item) for item in (audit.get("issues") or []))
-        directives.extend(item for item in (payload.get("codex_directives") or []) if isinstance(item, dict))
+        directives.extend(
+            item
+            for item in (payload.get("codex_directives") or [])
+            if isinstance(item, dict)
+        )
     audit_status = "pass"
     if any(status == "correction_required" for status in statuses):
         audit_status = "correction_required"
@@ -1557,9 +1909,13 @@ def _call_sharded_openai_bedrock_runtime_review(
     payloads: list[dict[str, Any]] = []
     failed_shard_ids: list[int] = []
     failback_used = False
-    openai_config = replace(config, primary_provider="openai", failback_provider="bedrock_qwen3")
+    openai_config = replace(
+        config, primary_provider="openai", failback_provider="bedrock_qwen3"
+    )
     for shard in shards:
-        raw_response, provider_status = _call_openai_ai_review(shard, config=openai_config)
+        raw_response, provider_status = _call_openai_ai_review(
+            shard, config=openai_config
+        )
         parse_status, payload, warnings = _parse_ai_review_response(raw_response)
         contract_ok, contract_reason = (
             _runtime_review_payload_contract_ok(shard, payload)
@@ -1571,7 +1927,9 @@ def _call_sharded_openai_bedrock_runtime_review(
             warnings = [contract_reason]
         if parse_status != "parsed" and config.failback_provider == "bedrock_qwen3":
             failback_used = True
-            failed_shard_ids.append(int((shard.get("review_shard") or {}).get("shard_index") or 0))
+            failed_shard_ids.append(
+                int((shard.get("review_shard") or {}).get("shard_index") or 0)
+            )
             raw_response, provider_status = _call_bedrock_qwen3_ai_review(
                 shard,
                 config=openai_config,
@@ -1640,6 +1998,7 @@ def _call_sharded_openai_bedrock_runtime_review(
         "review_shards": shard_records,
     }
 
+
 def _run_ai_review(
     ledger: list[dict[str, Any]],
     drift: list[dict[str, Any]],
@@ -1685,13 +2044,21 @@ def _run_ai_review(
         )
         return review, retry_items, directives
     if not context.get("review_candidates"):
-        return {
-            **base,
-            "status": "not_required",
-            "failure_state": "pass",
-            "ai_review_retry_pending": False,
-            "review_payload": {"schema_version": 1, "reviewer": AI_REVIEWER_NAME, "candidate_reviews": []},
-        }, retry_items, directives
+        return (
+            {
+                **base,
+                "status": "not_required",
+                "failure_state": "pass",
+                "ai_review_retry_pending": False,
+                "review_payload": {
+                    "schema_version": 1,
+                    "reviewer": AI_REVIEWER_NAME,
+                    "candidate_reviews": [],
+                },
+            },
+            retry_items,
+            directives,
+        )
     if provider == "none":
         review = {
             **base,
@@ -1722,15 +2089,17 @@ def _run_ai_review(
             )
         )
         return review, retry_items, directives
-    raw_response, provider_status = _call_sharded_openai_bedrock_runtime_review(context, config=config)
+    raw_response, provider_status = _call_sharded_openai_bedrock_runtime_review(
+        context, config=config
+    )
     parse_status, payload, warnings = _parse_ai_review_response(raw_response)
     if parse_status != "parsed":
         failure_code = (
             "ai_review_partial_failure"
             if str(provider_status.get("status") or "") == "partial_failure"
-            else "ai_parse_fail"
-            if raw_response is not None
-            else "ai_review_unavailable"
+            else (
+                "ai_parse_fail" if raw_response is not None else "ai_review_unavailable"
+            )
         )
         review = {
             **base,
@@ -1763,15 +2132,19 @@ def _run_ai_review(
             )
         )
         return review, retry_items, directives
-    return {
-        **base,
-        "status": "parsed",
-        "failure_state": "pass",
-        "retryable": False,
-        "ai_review_retry_pending": False,
-        "provider_status": provider_status,
-        "review_payload": payload,
-    }, retry_items, directives
+    return (
+        {
+            **base,
+            "status": "parsed",
+            "failure_state": "pass",
+            "retryable": False,
+            "ai_review_retry_pending": False,
+            "provider_status": provider_status,
+            "review_payload": payload,
+        },
+        retry_items,
+        directives,
+    )
 
 
 def _reason_ko_from_ai_route(route_decision: str, disposition: str) -> str:
@@ -1792,9 +2165,19 @@ def _reason_ko_from_ai_route(route_decision: str, disposition: str) -> str:
     return f"AI reviewer 권고 disposition은 {disposition_text or 'unknown'}입니다."
 
 
-def _apply_ai_review_to_ledger(ledger: list[dict[str, Any]], ai_review: dict[str, Any]) -> None:
-    payload = ai_review.get("review_payload") if isinstance(ai_review.get("review_payload"), dict) else {}
-    reviews = payload.get("candidate_reviews") if isinstance(payload.get("candidate_reviews"), list) else []
+def _apply_ai_review_to_ledger(
+    ledger: list[dict[str, Any]], ai_review: dict[str, Any]
+) -> None:
+    payload = (
+        ai_review.get("review_payload")
+        if isinstance(ai_review.get("review_payload"), dict)
+        else {}
+    )
+    reviews = (
+        payload.get("candidate_reviews")
+        if isinstance(payload.get("candidate_reviews"), list)
+        else []
+    )
     by_id = {str(row.get("candidate_id")): row for row in ledger}
     for item in reviews:
         if not isinstance(item, dict):
@@ -1821,7 +2204,9 @@ def _runtime_uptake_kpi(ledger: list[dict[str, Any]]) -> dict[str, Any]:
         and float(row.get("primary_ev") or 0.0) > 0
         and row.get("source_quality_gate") == "pass"
     ]
-    ready = [row for row in ledger if row.get("final_disposition") == "live_auto_apply_ready"]
+    ready = [
+        row for row in ledger if row.get("final_disposition") == "live_auto_apply_ready"
+    ]
     fail = [row for row in ledger if row.get("failure_state") == "fail"]
     retry = [row for row in ledger if row.get("failure_state") == "retry_pending"]
     return {
@@ -1830,7 +2215,9 @@ def _runtime_uptake_kpi(ledger: list[dict[str, Any]]) -> dict[str, Any]:
         "live_auto_apply_ready_count": len(ready),
         "fail_count": len(fail),
         "retry_pending_count": len(retry),
-        "runtime_uptake_rate_pct": round((len(ready) / len(positive) * 100.0), 2) if positive else 0.0,
+        "runtime_uptake_rate_pct": (
+            round((len(ready) / len(positive) * 100.0), 2) if positive else 0.0
+        ),
     }
 
 
@@ -1838,7 +2225,11 @@ def _aggressive_push_targets(ledger: list[dict[str, Any]]) -> list[dict[str, Any
     targets: list[dict[str, Any]] = []
     for row in ledger:
         ev = row.get("primary_ev")
-        if ev is None or float(ev or 0.0) <= 0 or row.get("source_quality_gate") != "pass":
+        if (
+            ev is None
+            or float(ev or 0.0) <= 0
+            or row.get("source_quality_gate") != "pass"
+        ):
             continue
         if row.get("final_disposition") in {"source_quality_blocker", "safety_veto"}:
             continue
@@ -1877,7 +2268,11 @@ def _conversion_blocker_class(row: dict[str, Any]) -> str:
     ).lower()
     if "key" in text or "catalog" in text or "lineage" in text:
         return "key_lineage"
-    if "submit_drought" in text or "latency_pre_submit" in text or "budget_pass" in text:
+    if (
+        "submit_drought" in text
+        or "latency_pre_submit" in text
+        or "budget_pass" in text
+    ):
         return "submit_drought"
     if "bridge" in text:
         return "bridge_contract"
@@ -1889,7 +2284,13 @@ def _conversion_blocker_class(row: dict[str, Any]) -> str:
         return "post_apply_attribution"
     if "ai" in text or "tier2" in text:
         return "AI_review"
-    if "safety" in text or "broker" in text or "stale" in text or "quantity" in text or "cooldown" in text:
+    if (
+        "safety" in text
+        or "broker" in text
+        or "stale" in text
+        or "quantity" in text
+        or "cooldown" in text
+    ):
         return "safety_or_broker_guard"
     if "authority" in text or "approval" in text or "user" in text:
         return "user_authority"
@@ -1903,7 +2304,9 @@ def _conversion_blocker_class(row: dict[str, Any]) -> str:
     return "sample_floor"
 
 
-def _conversion_blocker_rank(ledger: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _conversion_blocker_rank(
+    ledger: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     blockers: list[dict[str, Any]] = []
     bridge_ledger: list[dict[str, Any]] = []
     for row in ledger:
@@ -1912,24 +2315,42 @@ def _conversion_blocker_rank(ledger: list[dict[str, Any]]) -> tuple[list[dict[st
             continue
         blocker_class = _conversion_blocker_class(row)
         bridge_state = str(row.get("bridge_state") or "")
-        if bridge_state and bridge_state not in {"joined", "ready", "live_auto_apply_ready"}:
+        if bridge_state and bridge_state not in {
+            "joined",
+            "ready",
+            "live_auto_apply_ready",
+        }:
             bridge_ledger.append(
                 {
                     "candidate_id": candidate_id,
                     "bridge_state": bridge_state,
-                    "bridge_blocker_class": blocker_class if blocker_class == "bridge_contract" else "bridge_contract",
-                    "next_repair_action": row.get("recommended_resolution") or row.get("failure_reason") or "close_bridge_contract",
+                    "bridge_blocker_class": (
+                        blocker_class
+                        if blocker_class == "bridge_contract"
+                        else "bridge_contract"
+                    ),
+                    "next_repair_action": row.get("recommended_resolution")
+                    or row.get("failure_reason")
+                    or "close_bridge_contract",
                     "acceptance_test": "runtime_apply_bridge emits explicit live-auto bridge contract or candidate remains source-only with blocker evidence",
                 }
             )
-        if str(row.get("final_disposition") or "") in {"live_auto_apply_ready", "sim_auto_approved"}:
+        if str(row.get("final_disposition") or "") in {
+            "live_auto_apply_ready",
+            "sim_auto_approved",
+        }:
             continue
         blockers.append(
             {
                 "conversion_candidate_id": candidate_id,
                 "blocker_class": blocker_class,
                 "conversion_impact_rank": 0,
-                "ev_potential_rank": 1 if _safe_float(row.get("primary_ev"), 0.0) and _safe_float(row.get("primary_ev"), 0.0) > 0 else 5,
+                "ev_potential_rank": (
+                    1
+                    if _safe_float(row.get("primary_ev"), 0.0)
+                    and _safe_float(row.get("primary_ev"), 0.0) > 0
+                    else 5
+                ),
                 "sample_readiness_rank": 2,
                 "fix_difficulty_rank": {
                     "env_mapping": 1,
@@ -1941,8 +2362,15 @@ def _conversion_blocker_rank(ledger: list[dict[str, Any]]) -> tuple[list[dict[st
                     "safety_or_broker_guard": 5,
                     "user_authority": 5,
                 }.get(blocker_class, 3),
-                "remaining_gap_count": 2 if blocker_class in {"source_quality", "bridge_contract", "submit_drought"} else 1,
-                "next_repair_action": row.get("recommended_resolution") or row.get("failure_reason") or f"close_{blocker_class}",
+                "remaining_gap_count": (
+                    2
+                    if blocker_class
+                    in {"source_quality", "bridge_contract", "submit_drought"}
+                    else 1
+                ),
+                "next_repair_action": row.get("recommended_resolution")
+                or row.get("failure_reason")
+                or f"close_{blocker_class}",
                 "acceptance_test": "candidate exits runtime gap ledger or is explicitly closed with source-only/non-runtime authority",
             }
         )
@@ -1964,7 +2392,11 @@ def build_runtime_apply_gap_audit(
     ai_review_provider: str | None = None,
     ai_review_model: str | None = None,
 ) -> dict[str, Any]:
-    provider = str(ai_review_provider or os.environ.get("RUNTIME_APPLY_GAP_AI_REVIEW_PROVIDER") or "openai").strip()
+    provider = str(
+        ai_review_provider
+        or os.environ.get("RUNTIME_APPLY_GAP_AI_REVIEW_PROVIDER")
+        or "openai"
+    ).strip()
     config = _ai_review_config(model_override=ai_review_model)
     artifact_status, payloads = _artifact_status(target_date)
     source_dimension_gap_summary = _source_dimension_gap_summary_from_payloads(payloads)
@@ -1982,7 +2414,9 @@ def build_runtime_apply_gap_audit(
         )
     swing_matrix = payloads.get("swing_lifecycle_decision_matrix") or {}
     if swing_matrix:
-        ledger_rows.extend(_ledger_from_swing_ldm(swing_matrix, target_date=target_date))
+        ledger_rows.extend(
+            _ledger_from_swing_ldm(swing_matrix, target_date=target_date)
+        )
     swing_discovery = payloads.get("swing_lifecycle_bucket_discovery") or {}
     if swing_discovery:
         ledger_rows.extend(
@@ -2005,13 +2439,20 @@ def build_runtime_apply_gap_audit(
     ledger = _merge_ledger_rows(ledger_rows)
     drift = _producer_consumer_contract_drift(ledger, payloads)
     retry_queue = _retry_queue_from_failures(ledger, artifact_status)
-    ai_review, ai_retry, ai_directives = _run_ai_review(ledger, drift, provider=provider, config=config)
+    ai_review, ai_retry, ai_directives = _run_ai_review(
+        ledger, drift, provider=provider, config=config
+    )
     _apply_ai_review_to_ledger(ledger, ai_review)
     derived_review_category_counts = _apply_derived_review_labels(ledger)
     retry_queue.extend(ai_retry)
     codex_directives = _build_codex_directives(ledger, retry_queue)
-    if not any(item.get("directive_type") == "RESOLVE_SOURCE_DIMENSION_GAP" for item in codex_directives):
-        codex_directives.extend(_source_dimension_gap_directives(source_dimension_gap_summary))
+    if not any(
+        item.get("directive_type") == "RESOLVE_SOURCE_DIMENSION_GAP"
+        for item in codex_directives
+    ):
+        codex_directives.extend(
+            _source_dimension_gap_directives(source_dimension_gap_summary)
+        )
     quiet_gap_directives = _quiet_gap_directives(quiet_gap_summary, payloads)
     codex_directives.extend(quiet_gap_directives)
     codex_directives.extend(ai_directives)
@@ -2039,7 +2480,9 @@ def build_runtime_apply_gap_audit(
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "decision_authority": "runtime_apply_gap_aggressive_watcher_source_only",
-        "sources": {label: status_item["path"] for label, status_item in artifact_status.items()},
+        "sources": {
+            label: status_item["path"] for label, status_item in artifact_status.items()
+        },
         "artifact_status": artifact_status,
         "runtime_uptake_kpi": kpi,
         "candidate_route_ledger": ledger,
@@ -2055,13 +2498,19 @@ def build_runtime_apply_gap_audit(
         "summary": {
             "status": status,
             "candidate_count": kpi["candidate_count"],
-            "positive_edge_source_quality_pass_count": kpi["positive_edge_source_quality_pass_count"],
+            "positive_edge_source_quality_pass_count": kpi[
+                "positive_edge_source_quality_pass_count"
+            ],
             "runtime_uptake_rate_pct": kpi["runtime_uptake_rate_pct"],
             "critical_failure_count": len(critical_failures),
             "retry_queue_count": len(retry_queue),
             "codex_directive_count": len(codex_directives),
-            "source_dimension_gap_count": source_dimension_gap_summary.get("gap_count", 0),
-            "actionable_unknown_gap_count": source_dimension_gap_summary.get("actionable_unknown_gap_count", 0),
+            "source_dimension_gap_count": source_dimension_gap_summary.get(
+                "gap_count", 0
+            ),
+            "actionable_unknown_gap_count": source_dimension_gap_summary.get(
+                "actionable_unknown_gap_count", 0
+            ),
             "quiet_gap_count": quiet_gap_summary.get("quiet_gap_count", 0),
             "quiet_gap_rollup_count": quiet_gap_summary.get("rollup_required_count", 0),
             "quiet_gap_codex_directive_count": len(quiet_gap_directives),
@@ -2076,10 +2525,24 @@ def build_runtime_apply_gap_audit(
 
 def _render_markdown_ko(report: dict[str, Any]) -> str:
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
-    kpi = report.get("runtime_uptake_kpi") if isinstance(report.get("runtime_uptake_kpi"), dict) else {}
-    retry_queue = report.get("retry_queue") if isinstance(report.get("retry_queue"), list) else []
-    directives = report.get("codex_workorder_directives") if isinstance(report.get("codex_workorder_directives"), list) else []
-    push_targets = report.get("aggressive_push_targets") if isinstance(report.get("aggressive_push_targets"), list) else []
+    kpi = (
+        report.get("runtime_uptake_kpi")
+        if isinstance(report.get("runtime_uptake_kpi"), dict)
+        else {}
+    )
+    retry_queue = (
+        report.get("retry_queue") if isinstance(report.get("retry_queue"), list) else []
+    )
+    directives = (
+        report.get("codex_workorder_directives")
+        if isinstance(report.get("codex_workorder_directives"), list)
+        else []
+    )
+    push_targets = (
+        report.get("aggressive_push_targets")
+        if isinstance(report.get("aggressive_push_targets"), list)
+        else []
+    )
     lines = [
         f"# Runtime Apply Gap Audit - {report.get('date')}",
         "",
@@ -2134,7 +2597,10 @@ def write_runtime_apply_gap_audit(report: dict[str, Any]) -> tuple[Path, Path]:
     json_path = runtime_apply_gap_audit_report_path(target_date)
     md_path = runtime_apply_gap_audit_markdown_path(target_date)
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
     md_path.write_text(_render_markdown_ko(report), encoding="utf-8")
     return json_path, md_path
 

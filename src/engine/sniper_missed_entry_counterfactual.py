@@ -13,10 +13,11 @@ from src.utils.constants import DATA_DIR, TRADING_RULES
 from src.utils.jsonl_io import read_jsonl
 from src.utils.logger import log_error
 
-
 MISSED_ENTRY_COUNTERFACTUAL_SCHEMA_VERSION = 3
 _ENTRY_ARMED_STAGES = {"entry_armed", "entry_armed_resume"}
-_INFERRED_BUY_INTENT_STAGES = _ENTRY_ARMED_STAGES | {"score65_74_recovery_probe_entry_unlocked"}
+_INFERRED_BUY_INTENT_STAGES = _ENTRY_ARMED_STAGES | {
+    "score65_74_recovery_probe_entry_unlocked"
+}
 _INFERRED_BUY_INTENT_DEDUP_TERMINAL_STAGES = {
     "pre_submit_liquidity_guard_block",
     "pre_submit_entry_ai_authority_guard_block",
@@ -96,7 +97,9 @@ def _safe_float(value, default: float = 0.0) -> float:
         return default
 
 
-def _minute_candle_meta(candles: list[dict], meta: dict | None = None, *, requested_limit: int | None = None) -> dict:
+def _minute_candle_meta(
+    candles: list[dict], meta: dict | None = None, *, requested_limit: int | None = None
+) -> dict:
     source_meta = dict(meta or {})
     source_meta.setdefault("api_id", "ka10080")
     source_meta.setdefault("requested_limit", requested_limit)
@@ -109,20 +112,28 @@ def _minute_candle_meta(candles: list[dict], meta: dict | None = None, *, reques
     source_meta.setdefault("continuous_page_limit_reached", False)
     source_meta.setdefault("rest_received_ts_ms", None)
     source_meta.setdefault("latest_source_timestamp", None)
-    source_meta.setdefault("source_time_basis", "response_received_epoch_ms_and_chart_bar_timestamp")
+    source_meta.setdefault(
+        "source_time_basis", "response_received_epoch_ms_and_chart_bar_timestamp"
+    )
     return source_meta
 
 
-def _fetch_minute_candles_with_meta(kiwoom_utils, token: str, code: str, *, limit: int) -> tuple[list[dict], dict]:
+def _fetch_minute_candles_with_meta(
+    kiwoom_utils, token: str, code: str, *, limit: int
+) -> tuple[list[dict], dict]:
     if hasattr(kiwoom_utils, "get_minute_candles_ka10080_with_meta"):
-        candles, meta = kiwoom_utils.get_minute_candles_ka10080_with_meta(token, code, limit=limit)
+        candles, meta = kiwoom_utils.get_minute_candles_ka10080_with_meta(
+            token, code, limit=limit
+        )
         candles = candles or []
         return candles, _minute_candle_meta(candles, meta, requested_limit=limit)
     candles = kiwoom_utils.get_minute_candles_ka10080(token, code, limit=limit) or []
     return candles, _minute_candle_meta(candles, requested_limit=limit)
 
 
-def _minute_forward_source_quality(metrics: dict, candle_meta: dict, *, window_minutes: int = 10) -> dict:
+def _minute_forward_source_quality(
+    metrics: dict, candle_meta: dict, *, window_minutes: int = 10
+) -> dict:
     bars = _safe_int((metrics or {}).get("bars"), 0)
     if bars <= 0:
         status = "insufficient_window"
@@ -147,7 +158,11 @@ def _minute_forward_source_quality(metrics: dict, candle_meta: dict, *, window_m
     else:
         status = "pass"
         gate = "pass"
-        reason = "ka10080_forward_window_available" if window_minutes == 10 else f"ka10080_forward_{window_minutes}m_window_available"
+        reason = (
+            "ka10080_forward_window_available"
+            if window_minutes == 10
+            else f"ka10080_forward_{window_minutes}m_window_available"
+        )
     if window_minutes == 10:
         return {
             "minute_candle_source_quality": status,
@@ -164,7 +179,9 @@ def _minute_forward_source_quality(metrics: dict, candle_meta: dict, *, window_m
 
 
 def _sim_virtual_budget_krw() -> int:
-    return max(0, int(getattr(TRADING_RULES, "SIM_VIRTUAL_BUDGET_KRW", 10_000_000) or 0))
+    return max(
+        0, int(getattr(TRADING_RULES, "SIM_VIRTUAL_BUDGET_KRW", 10_000_000) or 0)
+    )
 
 
 def _scalp_ratio_from_score(ai_score: float) -> float:
@@ -210,7 +227,11 @@ def _avg(values: list[float]) -> float:
 
 
 def _ratio(numerator: int, denominator: int) -> float:
-    return round((float(numerator) / float(denominator)) * 100.0, 1) if denominator > 0 else 0.0
+    return (
+        round((float(numerator) / float(denominator)) * 100.0, 1)
+        if denominator > 0
+        else 0.0
+    )
 
 
 def _parse_event_dt(value) -> datetime | None:
@@ -235,12 +256,16 @@ def _parse_event_dt(value) -> datetime | None:
         return None
 
 
-def _parse_minute_time(value: str, signal_date: str, source_timestamp: str | None = None) -> datetime | None:
+def _parse_minute_time(
+    value: str, signal_date: str, source_timestamp: str | None = None
+) -> datetime | None:
     source_text = str(source_timestamp or "").strip()
     if source_text:
         for fmt in ("%Y%m%d%H%M%S", "%Y-%m-%d %H:%M:%S"):
             try:
-                return datetime.strptime(source_text[:14 if fmt == "%Y%m%d%H%M%S" else 19], fmt)
+                return datetime.strptime(
+                    source_text[: 14 if fmt == "%Y%m%d%H%M%S" else 19], fmt
+                )
             except Exception:
                 continue
         try:
@@ -256,9 +281,18 @@ def _parse_minute_time(value: str, signal_date: str, source_timestamp: str | Non
 def _classify_stage(stage: str) -> str:
     if stage == "order_bundle_submitted":
         return "submitted"
-    if stage.startswith("blocked_") or stage.endswith("_block") or stage.endswith("_failed"):
+    if (
+        stage.startswith("blocked_")
+        or stage.endswith("_block")
+        or stage.endswith("_failed")
+    ):
         return "blocked"
-    if stage in {"first_ai_wait", "entry_armed_expired", "entry_armed_expired_after_wait", "entry_arm_expired"}:
+    if stage in {
+        "first_ai_wait",
+        "entry_armed_expired",
+        "entry_armed_expired_after_wait",
+        "entry_arm_expired",
+    }:
         return "waiting"
     return "progress"
 
@@ -310,10 +344,19 @@ def _load_entry_events(target_date: str) -> list[EntryEvent]:
                 code=code,
                 stage=str(row.get("stage") or ""),
                 record_id=str(row.get("record_id") or row.get("id") or ""),
-                fields={str(key): str(value) for key, value in dict(row.get("fields") or {}).items()},
+                fields={
+                    str(key): str(value)
+                    for key, value in dict(row.get("fields") or {}).items()
+                },
             )
         )
-    events.sort(key=lambda item: (_parse_event_dt(item.emitted_at) or datetime.min, item.code, item.stage))
+    events.sort(
+        key=lambda item: (
+            _parse_event_dt(item.emitted_at) or datetime.min,
+            item.code,
+            item.stage,
+        )
+    )
     return events
 
 
@@ -326,7 +369,12 @@ def _split_attempt_segments(item_events: list[EntryEvent]) -> list[list[EntryEve
     segment_terminated = False
 
     for event in item_events:
-        record_changed = bool(current and event.record_id and current_record_id and event.record_id != current_record_id)
+        record_changed = bool(
+            current
+            and event.record_id
+            and current_record_id
+            and event.record_id != current_record_id
+        )
         should_rollover = record_changed or (
             segment_terminated and event.stage not in _ATTEMPT_AUXILIARY_STAGES
         )
@@ -352,10 +400,14 @@ def _build_candidates(target_date: str) -> list[dict]:
     return _build_buy_attempts(target_date, include_submitted=False)
 
 
-def _buy_intent_events(attempt_events: list[EntryEvent]) -> tuple[list[EntryEvent], str]:
+def _buy_intent_events(
+    attempt_events: list[EntryEvent],
+) -> tuple[list[EntryEvent], str]:
     explicit_buy_events = [
-        event for event in attempt_events
-        if event.stage == "ai_confirmed" and str(event.fields.get("action") or "").upper() == "BUY"
+        event
+        for event in attempt_events
+        if event.stage == "ai_confirmed"
+        and str(event.fields.get("action") or "").upper() == "BUY"
     ]
     if explicit_buy_events:
         return explicit_buy_events, "explicit_ai_buy"
@@ -370,7 +422,13 @@ def _buy_intent_events(attempt_events: list[EntryEvent]) -> tuple[list[EntryEven
         for event in attempt_events
         if event.stage == "scalp_entry_action_decision_snapshot"
         and str(event.fields.get("chosen_action") or "").upper()
-        in {"NO_BUY_AI", "WAIT_REQUOTE", "SKIP_STALE", "SKIP_PRE_SUBMIT_SAFETY", "SKIP_SOURCE_QUALITY"}
+        in {
+            "NO_BUY_AI",
+            "WAIT_REQUOTE",
+            "SKIP_STALE",
+            "SKIP_PRE_SUBMIT_SAFETY",
+            "SKIP_SOURCE_QUALITY",
+        }
     ]
     if snapshot_decision_events:
         return snapshot_decision_events, "snapshot_decision_path"
@@ -383,7 +441,12 @@ def _snapshot_terminal_class(event: EntryEvent) -> str | None:
     chosen_action = str(event.fields.get("chosen_action") or "").upper()
     if chosen_action == "NO_BUY_AI":
         return "blocked"
-    if chosen_action in {"WAIT_REQUOTE", "SKIP_STALE", "SKIP_PRE_SUBMIT_SAFETY", "SKIP_SOURCE_QUALITY"}:
+    if chosen_action in {
+        "WAIT_REQUOTE",
+        "SKIP_STALE",
+        "SKIP_PRE_SUBMIT_SAFETY",
+        "SKIP_SOURCE_QUALITY",
+    }:
         return "waiting"
     return None
 
@@ -392,13 +455,19 @@ def _infer_buy_like_no_submit_reason(attempt_events: list[EntryEvent]) -> str:
     stages = {event.stage for event in attempt_events}
     if "latency_block" in stages:
         return "latency_block"
-    if any(stage.startswith("pre_submit_") and stage.endswith("_block") for stage in stages):
+    if any(
+        stage.startswith("pre_submit_") and stage.endswith("_block") for stage in stages
+    ):
         return "pre_submit_guard_block"
     if "blocked_zero_qty" in stages:
         return "quantity_zero"
     if "auth_zero_qty" in stages:
         return "budget_blocked"
-    if {"entry_armed_expired", "entry_armed_expired_after_wait", "entry_arm_expired"} & stages:
+    if {
+        "entry_armed_expired",
+        "entry_armed_expired_after_wait",
+        "entry_arm_expired",
+    } & stages:
         return "entry_armed_expired"
     if any(stage in {"blocked_cooldown", "ai_cooldown_blocked"} for stage in stages):
         return "cooldown_blocked"
@@ -409,7 +478,11 @@ def _infer_buy_like_no_submit_reason(attempt_events: list[EntryEvent]) -> str:
 
 def _missed_submit_cohort(candidate: dict) -> str:
     terminal_stage = str(candidate.get("terminal_stage") or "")
-    terminal_fields = candidate.get("terminal_fields") if isinstance(candidate.get("terminal_fields"), dict) else {}
+    terminal_fields = (
+        candidate.get("terminal_fields")
+        if isinstance(candidate.get("terminal_fields"), dict)
+        else {}
+    )
     stage_flow = {
         str(stage).strip()
         for stage in (candidate.get("stage_flow") or [])
@@ -420,14 +493,22 @@ def _missed_submit_cohort(candidate: dict) -> str:
         return "early_accel_strong_bundle_recheck_failed"
     if terminal_stage == "ai_numeric_consistency_recheck_failed":
         return "ai_numeric_consistency_recheck_failed"
-    if terminal_stage == "scalp_entry_action_decision_snapshot" and chosen_action == "NO_BUY_AI":
+    if (
+        terminal_stage == "scalp_entry_action_decision_snapshot"
+        and chosen_action == "NO_BUY_AI"
+    ):
         if "early_accel_strong_bundle_recheck_corrected" in stage_flow:
             return "early_accel_strong_bundle_recheck_corrected"
         if "early_accel_strong_bundle_recheck_failed" in stage_flow:
             return "early_accel_strong_bundle_recheck_failed"
         if "early_accel_strong_bundle_recheck_skipped" in stage_flow:
             return "early_accel_strong_bundle_recheck_skipped"
-        if terminal_fields.get("ai_reason_numeric_inconsistency") in {True, "true", "True", "1"}:
+        if terminal_fields.get("ai_reason_numeric_inconsistency") in {
+            True,
+            "true",
+            "True",
+            "1",
+        }:
             return "ai_numeric_inconsistency_no_buy"
         return "ai_no_buy_clean_reason"
     if terminal_stage == "pre_submit_liquidity_guard_block":
@@ -443,7 +524,12 @@ def _missed_submit_cohort(candidate: dict) -> str:
         "real_weak_pullback_entry_block",
     }:
         return "entry_armed_latency_or_safety_block"
-    if chosen_action in {"WAIT_REQUOTE", "SKIP_STALE", "SKIP_PRE_SUBMIT_SAFETY", "SKIP_SOURCE_QUALITY"}:
+    if chosen_action in {
+        "WAIT_REQUOTE",
+        "SKIP_STALE",
+        "SKIP_PRE_SUBMIT_SAFETY",
+        "SKIP_SOURCE_QUALITY",
+    }:
         return "entry_armed_latency_or_safety_block"
     return terminal_stage or "uncategorized"
 
@@ -484,7 +570,9 @@ def _dedupe_inferred_pre_submit_attempts(candidates: list[dict]) -> list[dict]:
     return deduped
 
 
-def _build_buy_attempts(target_date: str, *, include_submitted: bool = True) -> list[dict]:
+def _build_buy_attempts(
+    target_date: str, *, include_submitted: bool = True
+) -> list[dict]:
     events = _load_entry_events(target_date)
     by_stock: dict[tuple[str, str], list[EntryEvent]] = defaultdict(list)
     for event in events:
@@ -495,7 +583,9 @@ def _build_buy_attempts(target_date: str, *, include_submitted: bool = True) -> 
         for attempt_events in _split_attempt_segments(item_events):
             if not attempt_events:
                 continue
-            has_submitted = any(event.stage == "order_bundle_submitted" for event in attempt_events)
+            has_submitted = any(
+                event.stage == "order_bundle_submitted" for event in attempt_events
+            )
             if has_submitted and not include_submitted:
                 continue
 
@@ -507,7 +597,12 @@ def _build_buy_attempts(target_date: str, *, include_submitted: bool = True) -> 
                 (
                     event
                     for event in reversed(attempt_events)
-                    if _classify_stage(event.stage) in ({"blocked", "waiting", "submitted"} if include_submitted else {"blocked", "waiting"})
+                    if _classify_stage(event.stage)
+                    in (
+                        {"blocked", "waiting", "submitted"}
+                        if include_submitted
+                        else {"blocked", "waiting"}
+                    )
                 ),
                 None,
             )
@@ -516,7 +611,12 @@ def _build_buy_attempts(target_date: str, *, include_submitted: bool = True) -> 
                     (
                         event
                         for event in reversed(attempt_events)
-                        if _snapshot_terminal_class(event) in ({"blocked", "waiting", "submitted"} if include_submitted else {"blocked", "waiting"})
+                        if _snapshot_terminal_class(event)
+                        in (
+                            {"blocked", "waiting", "submitted"}
+                            if include_submitted
+                            else {"blocked", "waiting"}
+                        )
                     ),
                     None,
                 )
@@ -538,26 +638,46 @@ def _build_buy_attempts(target_date: str, *, include_submitted: bool = True) -> 
                     },
                 )
 
-            anchor_event = next(
-                (event for event in reversed(attempt_events) if event.stage in _ENTRY_ARMED_STAGES),
-                None,
-            ) or buy_events[-1]
+            anchor_event = (
+                next(
+                    (
+                        event
+                        for event in reversed(attempt_events)
+                        if event.stage in _ENTRY_ARMED_STAGES
+                    ),
+                    None,
+                )
+                or buy_events[-1]
+            )
 
             anchor_dt = _parse_event_dt(anchor_event.emitted_at)
             if anchor_dt is None:
                 continue
 
             budget_event = next(
-                (event for event in reversed(attempt_events) if event.stage == "budget_pass"),
+                (
+                    event
+                    for event in reversed(attempt_events)
+                    if event.stage == "budget_pass"
+                ),
                 None,
             )
             signal_price = _safe_int(anchor_event.fields.get("target_buy_price"), 0)
-            ai_score = _safe_float(anchor_event.fields.get("ai_score"), _safe_float(buy_events[-1].fields.get("ai_score"), 0.0))
+            ai_score = _safe_float(
+                anchor_event.fields.get("ai_score"),
+                _safe_float(buy_events[-1].fields.get("ai_score"), 0.0),
+            )
             blocker_counts = Counter(
-                event.stage for event in attempt_events if _classify_stage(event.stage) in {"blocked", "waiting"}
+                event.stage
+                for event in attempt_events
+                if _classify_stage(event.stage) in {"blocked", "waiting"}
             )
             rising_missed_event = next(
-                (event for event in reversed(attempt_events) if event.stage == _RISING_MISSED_STAGE),
+                (
+                    event
+                    for event in reversed(attempt_events)
+                    if event.stage == _RISING_MISSED_STAGE
+                ),
                 None,
             )
 
@@ -576,16 +696,27 @@ def _build_buy_attempts(target_date: str, *, include_submitted: bool = True) -> 
                     "terminal_stage_label": _stage_label(terminal_event.stage),
                     "signal_price": signal_price,
                     "ai_score": round(ai_score, 1),
-                    "target_qty": _safe_int((budget_event.fields if budget_event else {}).get("qty"), 0),
-                    "safe_budget": _safe_int((budget_event.fields if budget_event else {}).get("safe_budget"), 0),
+                    "target_qty": _safe_int(
+                        (budget_event.fields if budget_event else {}).get("qty"), 0
+                    ),
+                    "safe_budget": _safe_int(
+                        (budget_event.fields if budget_event else {}).get(
+                            "safe_budget"
+                        ),
+                        0,
+                    ),
                     "budget_passed": bool(budget_event is not None),
-                    "entry_armed": any(event.stage in _ENTRY_ARMED_STAGES for event in attempt_events),
+                    "entry_armed": any(
+                        event.stage in _ENTRY_ARMED_STAGES for event in attempt_events
+                    ),
                     "buy_signal_count": len(buy_events),
                     "buy_intent_source": buy_intent_source,
                     "stage_flow": [event.stage for event in attempt_events],
                     "blocker_counts": dict(blocker_counts),
                     "terminal_fields": dict(terminal_event.fields),
-                    "rising_missed_fields": dict(rising_missed_event.fields) if rising_missed_event else {},
+                    "rising_missed_fields": (
+                        dict(rising_missed_event.fields) if rising_missed_event else {}
+                    ),
                     "no_submit_reason": terminal_event.fields.get("no_submit_reason"),
                     "missed_submit_cohort": _missed_submit_cohort(
                         {
@@ -599,7 +730,9 @@ def _build_buy_attempts(target_date: str, *, include_submitted: bool = True) -> 
     return _dedupe_inferred_pre_submit_attempts(candidates)
 
 
-def _resolve_anchor_price(signal_price: float, relevant: list[tuple[datetime, dict]]) -> float:
+def _resolve_anchor_price(
+    signal_price: float, relevant: list[tuple[datetime, dict]]
+) -> float:
     if signal_price > 0:
         return signal_price
     if not relevant:
@@ -612,7 +745,9 @@ def _resolve_anchor_price(signal_price: float, relevant: list[tuple[datetime, di
     return 0.0
 
 
-def _compute_window_metrics(candidate: dict, candles: list[dict], window_minutes: int) -> dict:
+def _compute_window_metrics(
+    candidate: dict, candles: list[dict], window_minutes: int
+) -> dict:
     signal_dt = datetime.strptime(
         f"{candidate['signal_date']} {candidate['signal_time']}",
         "%Y-%m-%d %H:%M:%S",
@@ -634,7 +769,9 @@ def _compute_window_metrics(candidate: dict, candles: list[dict], window_minutes
         relevant.append((candle_dt, candle))
     relevant.sort(key=lambda item: item[0])
 
-    anchor_price = _resolve_anchor_price(float(candidate.get("signal_price", 0) or 0), relevant)
+    anchor_price = _resolve_anchor_price(
+        float(candidate.get("signal_price", 0) or 0), relevant
+    )
     if anchor_price <= 0 or not relevant:
         return {
             "entry_price_used": int(round(anchor_price)),
@@ -679,7 +816,10 @@ def _compute_window_metrics(candidate: dict, candles: list[dict], window_minutes
         "mae_pct": round(mae_pct, 3),
         "hit_tp_05": mfe_pct >= _BUY_TP_PCT,
         "hit_sl_05": mae_pct <= _BUY_SL_PCT,
-        "tp05_before_sl05": bool(first_tp_dt is not None and (first_sl_dt is None or first_tp_dt <= first_sl_dt)),
+        "tp05_before_sl05": bool(
+            first_tp_dt is not None
+            and (first_sl_dt is None or first_tp_dt <= first_sl_dt)
+        ),
         "bars": len(relevant),
     }
 
@@ -720,10 +860,19 @@ def _build_blocker_outcome_metrics(items: list[dict]) -> dict:
     metrics: dict[str, dict] = {}
     for stage, rows in sorted(buckets.items()):
         total = len(rows)
-        missed = sum(1 for row in rows if str(row.get("outcome") or "") == "MISSED_WINNER")
-        avoided = sum(1 for row in rows if str(row.get("outcome") or "") == "AVOIDED_LOSER")
+        missed = sum(
+            1 for row in rows if str(row.get("outcome") or "") == "MISSED_WINNER"
+        )
+        avoided = sum(
+            1 for row in rows if str(row.get("outcome") or "") == "AVOIDED_LOSER"
+        )
         neutral = sum(1 for row in rows if str(row.get("outcome") or "") == "NEUTRAL")
-        estimated_pnl = int(sum(_safe_int(row.get("estimated_counterfactual_pnl_10m_krw"), 0) for row in rows))
+        estimated_pnl = int(
+            sum(
+                _safe_int(row.get("estimated_counterfactual_pnl_10m_krw"), 0)
+                for row in rows
+            )
+        )
         metrics[stage] = {
             "stage": stage,
             "stage_label": _stage_label(stage),
@@ -734,25 +883,50 @@ def _build_blocker_outcome_metrics(items: list[dict]) -> dict:
             "missed_winner_rate": _ratio(missed, total),
             "avoided_loser_rate": _ratio(avoided, total),
             "avg_close_5m_pct": _avg(
-                [_safe_float((row.get("metrics_5m") or {}).get("close_ret_pct"), 0.0) for row in rows]
+                [
+                    _safe_float((row.get("metrics_5m") or {}).get("close_ret_pct"), 0.0)
+                    for row in rows
+                ]
             ),
             "avg_close_10m_pct": _avg(
-                [_safe_float((row.get("metrics_10m") or {}).get("close_ret_pct"), 0.0) for row in rows]
+                [
+                    _safe_float(
+                        (row.get("metrics_10m") or {}).get("close_ret_pct"), 0.0
+                    )
+                    for row in rows
+                ]
             ),
             "avg_mfe_10m_pct": _avg(
-                [_safe_float((row.get("metrics_10m") or {}).get("mfe_pct"), 0.0) for row in rows]
+                [
+                    _safe_float((row.get("metrics_10m") or {}).get("mfe_pct"), 0.0)
+                    for row in rows
+                ]
             ),
             "avg_mae_10m_pct": _avg(
-                [_safe_float((row.get("metrics_10m") or {}).get("mae_pct"), 0.0) for row in rows]
+                [
+                    _safe_float((row.get("metrics_10m") or {}).get("mae_pct"), 0.0)
+                    for row in rows
+                ]
             ),
             "avg_close_15m_pct": _avg(
-                [_safe_float((row.get("metrics_15m") or {}).get("close_ret_pct"), 0.0) for row in rows]
+                [
+                    _safe_float(
+                        (row.get("metrics_15m") or {}).get("close_ret_pct"), 0.0
+                    )
+                    for row in rows
+                ]
             ),
             "avg_mfe_15m_pct": _avg(
-                [_safe_float((row.get("metrics_15m") or {}).get("mfe_pct"), 0.0) for row in rows]
+                [
+                    _safe_float((row.get("metrics_15m") or {}).get("mfe_pct"), 0.0)
+                    for row in rows
+                ]
             ),
             "avg_mae_15m_pct": _avg(
-                [_safe_float((row.get("metrics_15m") or {}).get("mae_pct"), 0.0) for row in rows]
+                [
+                    _safe_float((row.get("metrics_15m") or {}).get("mae_pct"), 0.0)
+                    for row in rows
+                ]
             ),
             "estimated_counterfactual_pnl_10m_krw_sum": estimated_pnl,
             "candidate_ids": [str(row.get("candidate_id") or "") for row in rows[:20]],
@@ -768,41 +942,74 @@ def _build_cohort_outcome_metrics(items: list[dict]) -> dict:
     metrics: dict[str, dict] = {}
     for cohort, rows in sorted(buckets.items()):
         total = len(rows)
-        missed = sum(1 for row in rows if str(row.get("outcome") or "") == "MISSED_WINNER")
-        avoided = sum(1 for row in rows if str(row.get("outcome") or "") == "AVOIDED_LOSER")
+        missed = sum(
+            1 for row in rows if str(row.get("outcome") or "") == "MISSED_WINNER"
+        )
+        avoided = sum(
+            1 for row in rows if str(row.get("outcome") or "") == "AVOIDED_LOSER"
+        )
         metrics[cohort] = {
             "cohort": cohort,
             "evaluated_candidates": total,
             "missed_winner_rate": _ratio(missed, total),
             "avoided_loser_rate": _ratio(avoided, total),
             "avg_close_10m_pct": _avg(
-                [_safe_float((row.get("metrics_10m") or {}).get("close_ret_pct"), 0.0) for row in rows]
+                [
+                    _safe_float(
+                        (row.get("metrics_10m") or {}).get("close_ret_pct"), 0.0
+                    )
+                    for row in rows
+                ]
             ),
             "avg_mfe_10m_pct": _avg(
-                [_safe_float((row.get("metrics_10m") or {}).get("mfe_pct"), 0.0) for row in rows]
+                [
+                    _safe_float((row.get("metrics_10m") or {}).get("mfe_pct"), 0.0)
+                    for row in rows
+                ]
             ),
             "avg_mae_10m_pct": _avg(
-                [_safe_float((row.get("metrics_10m") or {}).get("mae_pct"), 0.0) for row in rows]
+                [
+                    _safe_float((row.get("metrics_10m") or {}).get("mae_pct"), 0.0)
+                    for row in rows
+                ]
             ),
             "avg_close_15m_pct": _avg(
-                [_safe_float((row.get("metrics_15m") or {}).get("close_ret_pct"), 0.0) for row in rows]
+                [
+                    _safe_float(
+                        (row.get("metrics_15m") or {}).get("close_ret_pct"), 0.0
+                    )
+                    for row in rows
+                ]
             ),
             "avg_mfe_15m_pct": _avg(
-                [_safe_float((row.get("metrics_15m") or {}).get("mfe_pct"), 0.0) for row in rows]
+                [
+                    _safe_float((row.get("metrics_15m") or {}).get("mfe_pct"), 0.0)
+                    for row in rows
+                ]
             ),
             "avg_mae_15m_pct": _avg(
-                [_safe_float((row.get("metrics_15m") or {}).get("mae_pct"), 0.0) for row in rows]
+                [
+                    _safe_float((row.get("metrics_15m") or {}).get("mae_pct"), 0.0)
+                    for row in rows
+                ]
             ),
         }
     return metrics
 
 
 def _rising_missed_seen(item: dict) -> bool:
-    return any(str(stage or "") == _RISING_MISSED_STAGE for stage in (item.get("stage_flow") or []))
+    return any(
+        str(stage or "") == _RISING_MISSED_STAGE
+        for stage in (item.get("stage_flow") or [])
+    )
 
 
 def _rising_missed_stage_count(item: dict) -> int:
-    return sum(1 for stage in (item.get("stage_flow") or []) if str(stage or "") == _RISING_MISSED_STAGE)
+    return sum(
+        1
+        for stage in (item.get("stage_flow") or [])
+        if str(stage or "") == _RISING_MISSED_STAGE
+    )
 
 
 def _rising_missed_source_field(item: dict, key: str) -> str:
@@ -830,10 +1037,18 @@ def _build_rising_missed_refinement_metrics(items: list[dict]) -> dict:
     rising_rows = [item for item in items if _rising_missed_seen(item)]
     total = len(items)
     rising_total = len(rising_rows)
-    total_missed_winners = sum(1 for item in items if str(item.get("outcome") or "") == "MISSED_WINNER")
-    positive = sum(1 for item in rising_rows if str(item.get("outcome") or "") == "MISSED_WINNER")
-    negative = sum(1 for item in rising_rows if str(item.get("outcome") or "") == "AVOIDED_LOSER")
-    neutral = sum(1 for item in rising_rows if str(item.get("outcome") or "") == "NEUTRAL")
+    total_missed_winners = sum(
+        1 for item in items if str(item.get("outcome") or "") == "MISSED_WINNER"
+    )
+    positive = sum(
+        1 for item in rising_rows if str(item.get("outcome") or "") == "MISSED_WINNER"
+    )
+    negative = sum(
+        1 for item in rising_rows if str(item.get("outcome") or "") == "AVOIDED_LOSER"
+    )
+    neutral = sum(
+        1 for item in rising_rows if str(item.get("outcome") or "") == "NEUTRAL"
+    )
 
     def _bucket_metrics(key_fn) -> list[dict]:
         buckets: dict[str, list[dict]] = defaultdict(list)
@@ -841,10 +1056,20 @@ def _build_rising_missed_refinement_metrics(items: list[dict]) -> dict:
             key = str(key_fn(item) or "-")
             buckets[key].append(item)
         rows: list[dict] = []
-        for key, bucket_rows in sorted(buckets.items(), key=lambda pair: (-len(pair[1]), pair[0])):
+        for key, bucket_rows in sorted(
+            buckets.items(), key=lambda pair: (-len(pair[1]), pair[0])
+        ):
             bucket_total = len(bucket_rows)
-            bucket_positive = sum(1 for row in bucket_rows if str(row.get("outcome") or "") == "MISSED_WINNER")
-            bucket_negative = sum(1 for row in bucket_rows if str(row.get("outcome") or "") == "AVOIDED_LOSER")
+            bucket_positive = sum(
+                1
+                for row in bucket_rows
+                if str(row.get("outcome") or "") == "MISSED_WINNER"
+            )
+            bucket_negative = sum(
+                1
+                for row in bucket_rows
+                if str(row.get("outcome") or "") == "AVOIDED_LOSER"
+            )
             rows.append(
                 {
                     "key": key,
@@ -855,19 +1080,44 @@ def _build_rising_missed_refinement_metrics(items: list[dict]) -> dict:
                     "missed_winner_rate": _ratio(bucket_positive, bucket_total),
                     "avoided_loser_rate": _ratio(bucket_negative, bucket_total),
                     "avg_mfe_10m_pct": _avg(
-                        [_safe_float((row.get("metrics_10m") or {}).get("mfe_pct"), 0.0) for row in bucket_rows]
+                        [
+                            _safe_float(
+                                (row.get("metrics_10m") or {}).get("mfe_pct"), 0.0
+                            )
+                            for row in bucket_rows
+                        ]
                     ),
                     "avg_mae_10m_pct": _avg(
-                        [_safe_float((row.get("metrics_10m") or {}).get("mae_pct"), 0.0) for row in bucket_rows]
+                        [
+                            _safe_float(
+                                (row.get("metrics_10m") or {}).get("mae_pct"), 0.0
+                            )
+                            for row in bucket_rows
+                        ]
                     ),
                     "avg_close_15m_pct": _avg(
-                        [_safe_float((row.get("metrics_15m") or {}).get("close_ret_pct"), 0.0) for row in bucket_rows]
+                        [
+                            _safe_float(
+                                (row.get("metrics_15m") or {}).get("close_ret_pct"), 0.0
+                            )
+                            for row in bucket_rows
+                        ]
                     ),
                     "avg_mfe_15m_pct": _avg(
-                        [_safe_float((row.get("metrics_15m") or {}).get("mfe_pct"), 0.0) for row in bucket_rows]
+                        [
+                            _safe_float(
+                                (row.get("metrics_15m") or {}).get("mfe_pct"), 0.0
+                            )
+                            for row in bucket_rows
+                        ]
                     ),
                     "avg_mae_15m_pct": _avg(
-                        [_safe_float((row.get("metrics_15m") or {}).get("mae_pct"), 0.0) for row in bucket_rows]
+                        [
+                            _safe_float(
+                                (row.get("metrics_15m") or {}).get("mae_pct"), 0.0
+                            )
+                            for row in bucket_rows
+                        ]
                     ),
                 }
             )
@@ -898,13 +1148,16 @@ def _build_rising_missed_refinement_metrics(items: list[dict]) -> dict:
         "rising_missed_neutral_count": neutral,
         "rising_missed_missed_winner_rate": _ratio(positive, rising_total),
         "rising_missed_avoided_loser_rate": _ratio(negative, rising_total),
-        "rising_missed_share_of_all_missed_winners": _ratio(positive, total_missed_winners),
+        "rising_missed_share_of_all_missed_winners": _ratio(
+            positive, total_missed_winners
+        ),
         "by_terminal_stage": _bucket_metrics(lambda item: item.get("terminal_stage")),
         "by_source_signature": _bucket_metrics(
             lambda item: _rising_missed_source_field(item, "source_signature") or "-"
         ),
         "by_scanner_promotion_reason": _bucket_metrics(
-            lambda item: _rising_missed_source_field(item, "scanner_promotion_reason") or "-"
+            lambda item: _rising_missed_source_field(item, "scanner_promotion_reason")
+            or "-"
         ),
     }
 
@@ -915,19 +1168,29 @@ def _build_rising_missed_refinement_action_plan(metrics: dict) -> dict:
     hold_sample_candidates: list[dict] = []
     min_sample = 3
 
-    def _candidate(axis: str, row: dict, disposition: str, next_route: str, recommended_use: str) -> dict:
+    def _candidate(
+        axis: str, row: dict, disposition: str, next_route: str, recommended_use: str
+    ) -> dict:
         return {
             "axis": axis,
             "key": str(row.get("key") or "-"),
             "disposition": disposition,
             "next_route": next_route,
             "recommended_use": recommended_use,
-            "evaluated_candidates": int(_safe_int(row.get("evaluated_candidates"), 0) or 0),
-            "missed_winner_count": int(_safe_int(row.get("missed_winner_count"), 0) or 0),
-            "avoided_loser_count": int(_safe_int(row.get("avoided_loser_count"), 0) or 0),
+            "evaluated_candidates": int(
+                _safe_int(row.get("evaluated_candidates"), 0) or 0
+            ),
+            "missed_winner_count": int(
+                _safe_int(row.get("missed_winner_count"), 0) or 0
+            ),
+            "avoided_loser_count": int(
+                _safe_int(row.get("avoided_loser_count"), 0) or 0
+            ),
             "neutral_count": int(_safe_int(row.get("neutral_count"), 0) or 0),
-            "missed_winner_rate": _safe_float(row.get("missed_winner_rate"), 0.0) or 0.0,
-            "avoided_loser_rate": _safe_float(row.get("avoided_loser_rate"), 0.0) or 0.0,
+            "missed_winner_rate": _safe_float(row.get("missed_winner_rate"), 0.0)
+            or 0.0,
+            "avoided_loser_rate": _safe_float(row.get("avoided_loser_rate"), 0.0)
+            or 0.0,
             "avg_mfe_10m_pct": _safe_float(row.get("avg_mfe_10m_pct"), None),
             "avg_mae_10m_pct": _safe_float(row.get("avg_mae_10m_pct"), None),
             "avg_close_15m_pct": _safe_float(row.get("avg_close_15m_pct"), None),
@@ -942,14 +1205,20 @@ def _build_rising_missed_refinement_action_plan(metrics: dict) -> dict:
         ("scanner_promotion_reason", "by_scanner_promotion_reason"),
         ("terminal_stage", "by_terminal_stage"),
     ):
-        rows = metrics.get(metric_key) if isinstance(metrics.get(metric_key), list) else []
+        rows = (
+            metrics.get(metric_key) if isinstance(metrics.get(metric_key), list) else []
+        )
         for row in rows:
             if not isinstance(row, dict):
                 continue
             sample = _safe_int(row.get("evaluated_candidates"), 0) or 0
             missed_rate = _safe_float(row.get("missed_winner_rate"), 0.0) or 0.0
             avoided_rate = _safe_float(row.get("avoided_loser_rate"), 0.0) or 0.0
-            if sample >= min_sample and missed_rate >= 60.0 and missed_rate >= avoided_rate + 20.0:
+            if (
+                sample >= min_sample
+                and missed_rate >= 60.0
+                and missed_rate >= avoided_rate + 20.0
+            ):
                 positive_candidates.append(
                     _candidate(
                         axis,
@@ -959,7 +1228,11 @@ def _build_rising_missed_refinement_action_plan(metrics: dict) -> dict:
                         "raise_source_only_watch_priority_for_matching_rising_missed_rows",
                     )
                 )
-            elif sample >= min_sample and avoided_rate >= 50.0 and avoided_rate >= missed_rate + 20.0:
+            elif (
+                sample >= min_sample
+                and avoided_rate >= 50.0
+                and avoided_rate >= missed_rate + 20.0
+            ):
                 exclusion_candidates.append(
                     _candidate(
                         axis,
@@ -1018,9 +1291,11 @@ def _build_rising_missed_refinement_action_plan(metrics: dict) -> dict:
         "plan_type": "rising_missed_classifier_refinement_source_only",
         "decision": decision,
         "operator_manual_query_required": False,
-        "window_policy": metrics.get("window_policy") or "same_day_missed_entry_counterfactual_rows",
+        "window_policy": metrics.get("window_policy")
+        or "same_day_missed_entry_counterfactual_rows",
         "sample_floor": min_sample,
-        "primary_decision_metric": metrics.get("primary_decision_metric") or "diagnostic_win_rate",
+        "primary_decision_metric": metrics.get("primary_decision_metric")
+        or "diagnostic_win_rate",
         "source_quality_gate": metrics.get("source_quality_gate")
         or "pipeline_stage_flow_and_counterfactual_outcome_present",
         "runtime_effect": False,
@@ -1068,17 +1343,34 @@ def _build_quick_profit_source_only_metrics(items: list[dict]) -> dict:
 
     buckets: dict[str, list[dict]] = defaultdict(list)
     for item in target_rows:
-        terminal_fields = item.get("terminal_fields") if isinstance(item.get("terminal_fields"), dict) else {}
+        terminal_fields = (
+            item.get("terminal_fields")
+            if isinstance(item.get("terminal_fields"), dict)
+            else {}
+        )
         raw_spread = terminal_fields.get("spread_ratio")
-        spread_ratio = _safe_float(raw_spread, None) if raw_spread not in (None, "", "None") else None
+        spread_ratio = (
+            _safe_float(raw_spread, None)
+            if raw_spread not in (None, "", "None")
+            else None
+        )
         buckets[_spread_ratio_bucket(spread_ratio)].append(item)
 
     bucket_rows: list[dict] = []
-    for bucket, rows in sorted(buckets.items(), key=lambda pair: (-len(pair[1]), pair[0])):
+    for bucket, rows in sorted(
+        buckets.items(), key=lambda pair: (-len(pair[1]), pair[0])
+    ):
         sample = len(rows)
-        mfe_touch = sum(1 for row in rows if _safe_float((row.get("metrics_15m") or {}).get("mfe_pct"), 0.0) >= 1.0)
+        mfe_touch = sum(
+            1
+            for row in rows
+            if _safe_float((row.get("metrics_15m") or {}).get("mfe_pct"), 0.0) >= 1.0
+        )
         close_hold = sum(
-            1 for row in rows if _safe_float((row.get("metrics_15m") or {}).get("close_ret_pct"), 0.0) >= 1.0
+            1
+            for row in rows
+            if _safe_float((row.get("metrics_15m") or {}).get("close_ret_pct"), 0.0)
+            >= 1.0
         )
         bucket_rows.append(
             {
@@ -1089,15 +1381,28 @@ def _build_quick_profit_source_only_metrics(items: list[dict]) -> dict:
                 "close_15m_ge_1_count": close_hold,
                 "close_15m_ge_1_rate": _ratio(close_hold, sample),
                 "avg_close_15m_pct": _avg(
-                    [_safe_float((row.get("metrics_15m") or {}).get("close_ret_pct"), 0.0) for row in rows]
+                    [
+                        _safe_float(
+                            (row.get("metrics_15m") or {}).get("close_ret_pct"), 0.0
+                        )
+                        for row in rows
+                    ]
                 ),
                 "avg_mfe_15m_pct": _avg(
-                    [_safe_float((row.get("metrics_15m") or {}).get("mfe_pct"), 0.0) for row in rows]
+                    [
+                        _safe_float((row.get("metrics_15m") or {}).get("mfe_pct"), 0.0)
+                        for row in rows
+                    ]
                 ),
                 "avg_mae_15m_pct": _avg(
-                    [_safe_float((row.get("metrics_15m") or {}).get("mae_pct"), 0.0) for row in rows]
+                    [
+                        _safe_float((row.get("metrics_15m") or {}).get("mae_pct"), 0.0)
+                        for row in rows
+                    ]
                 ),
-                "candidate_ids": [str(row.get("candidate_id") or "") for row in rows[:20]],
+                "candidate_ids": [
+                    str(row.get("candidate_id") or "") for row in rows[:20]
+                ],
             }
         )
 
@@ -1128,7 +1433,9 @@ def _build_quick_profit_source_only_metrics(items: list[dict]) -> dict:
     }
 
 
-def missed_entry_counterfactual_summary_to_dict(summary: MissedEntryCounterfactualSummary) -> dict:
+def missed_entry_counterfactual_summary_to_dict(
+    summary: MissedEntryCounterfactualSummary,
+) -> dict:
     return {
         "date": summary.date,
         "total_candidates": int(summary.total_candidates),
@@ -1153,7 +1460,11 @@ def build_missed_entry_counterfactual_report(
 
     safe_date = str(target_date or datetime.now().strftime("%Y-%m-%d")).strip()
     all_buy_attempts = _build_buy_attempts(safe_date, include_submitted=True)
-    candidates = [item for item in all_buy_attempts if str(item.get("attempt_status") or "") == "MISSED"]
+    candidates = [
+        item
+        for item in all_buy_attempts
+        if str(item.get("attempt_status") or "") == "MISSED"
+    ]
     summary = MissedEntryCounterfactualSummary(date=safe_date)
     summary.total_candidates = len(candidates)
 
@@ -1181,13 +1492,27 @@ def build_missed_entry_counterfactual_report(
                 "rising_missed_refinement_action_plan": _build_rising_missed_refinement_action_plan(
                     empty_rising_metrics
                 ),
-                "quick_profit_5k_10k_rising_missed_latency_source_only": _build_quick_profit_source_only_metrics([]),
+                "quick_profit_5k_10k_rising_missed_latency_source_only": _build_quick_profit_source_only_metrics(
+                    []
+                ),
             },
             "buy_signal_universe": {
                 "metrics": {
                     "total_buy_judged_attempts": int(len(all_buy_attempts)),
-                    "entered_attempts": int(sum(1 for item in all_buy_attempts if str(item.get("attempt_status") or "") == "ENTERED")),
-                    "missed_attempts": int(sum(1 for item in all_buy_attempts if str(item.get("attempt_status") or "") == "MISSED")),
+                    "entered_attempts": int(
+                        sum(
+                            1
+                            for item in all_buy_attempts
+                            if str(item.get("attempt_status") or "") == "ENTERED"
+                        )
+                    ),
+                    "missed_attempts": int(
+                        sum(
+                            1
+                            for item in all_buy_attempts
+                            if str(item.get("attempt_status") or "") == "MISSED"
+                        )
+                    ),
                 },
                 "confidence_breakdown": [],
                 "rows": [],
@@ -1231,22 +1556,42 @@ def build_missed_entry_counterfactual_report(
             continue
         if code not in candle_cache:
             try:
-                candle_cache[code] = _fetch_minute_candles_with_meta(kiwoom_utils, token, code, limit=700)
+                candle_cache[code] = _fetch_minute_candles_with_meta(
+                    kiwoom_utils, token, code, limit=700
+                )
             except Exception as exc:
-                log_error(f"[MISSED_ENTRY_CF] {code} minute candles fetch failed: {exc}")
+                log_error(
+                    f"[MISSED_ENTRY_CF] {code} minute candles fetch failed: {exc}"
+                )
                 candle_cache[code] = ([], _minute_candle_meta([], requested_limit=700))
 
-        candles, candle_meta = candle_cache.get(code, ([], _minute_candle_meta([], requested_limit=700)))
+        candles, candle_meta = candle_cache.get(
+            code, ([], _minute_candle_meta([], requested_limit=700))
+        )
         metrics_5m = _compute_window_metrics(candidate, candles, 5)
         metrics_10m = _compute_window_metrics(candidate, candles, 10)
         metrics_15m = _compute_window_metrics(candidate, candles, 15)
         outcome = _classify_candidate(metrics_5m, metrics_10m)
         source_quality = _minute_forward_source_quality(metrics_10m, candle_meta)
-        source_quality_15m = _minute_forward_source_quality(metrics_15m, candle_meta, window_minutes=15)
+        source_quality_15m = _minute_forward_source_quality(
+            metrics_15m, candle_meta, window_minutes=15
+        )
         entry_price_used = _safe_int(metrics_10m.get("entry_price_used"), 0)
-        capacity = _sim_virtual_qty(entry_price_used, _safe_float(candidate.get("ai_score"), 0.0))
+        capacity = _sim_virtual_qty(
+            entry_price_used, _safe_float(candidate.get("ai_score"), 0.0)
+        )
         qty = _safe_int(capacity.get("qty"), 0)
-        est_pnl_10m = int(round(entry_price_used * qty * (_safe_float(metrics_10m.get("close_ret_pct"), 0.0) / 100.0))) if entry_price_used > 0 and qty > 0 else 0
+        est_pnl_10m = (
+            int(
+                round(
+                    entry_price_used
+                    * qty
+                    * (_safe_float(metrics_10m.get("close_ret_pct"), 0.0) / 100.0)
+                )
+            )
+            if entry_price_used > 0 and qty > 0
+            else 0
+        )
         evaluations.append(
             {
                 **candidate,
@@ -1255,20 +1600,32 @@ def build_missed_entry_counterfactual_report(
                 "metrics_10m": metrics_10m,
                 "metrics_15m": metrics_15m,
                 "entry_price_used": entry_price_used,
-                "price_source": "explicit_target_buy_price" if _safe_int(candidate.get("signal_price"), 0) > 0 else "minute_candle_proxy",
+                "price_source": (
+                    "explicit_target_buy_price"
+                    if _safe_int(candidate.get("signal_price"), 0) > 0
+                    else "minute_candle_proxy"
+                ),
                 "minute_candle_source_meta": candle_meta,
                 **source_quality,
                 **source_quality_15m,
                 "counterfactual_qty": int(qty),
-                "counterfactual_qty_source": "sim_virtual_budget_dynamic_formula" if qty > 0 else "unpriced",
+                "counterfactual_qty_source": (
+                    "sim_virtual_budget_dynamic_formula" if qty > 0 else "unpriced"
+                ),
                 "virtual_budget_override": True,
                 "virtual_budget_krw": int(capacity.get("virtual_budget_krw") or 0),
                 "counterfactual_ratio": round(float(capacity.get("ratio") or 0.0), 4),
                 "counterfactual_target_budget": int(capacity.get("target_budget") or 0),
                 "counterfactual_safe_budget": int(capacity.get("safe_budget") or 0),
-                "counterfactual_safety_ratio": round(float(capacity.get("safety_ratio") or 0.0), 4),
+                "counterfactual_safety_ratio": round(
+                    float(capacity.get("safety_ratio") or 0.0), 4
+                ),
                 "counterfactual_max_budget": int(capacity.get("max_budget") or 0),
-                "counterfactual_notional_krw": int(entry_price_used * qty) if entry_price_used > 0 and qty > 0 else 0,
+                "counterfactual_notional_krw": (
+                    int(entry_price_used * qty)
+                    if entry_price_used > 0 and qty > 0
+                    else 0
+                ),
                 "real_target_qty_observed": _safe_int(candidate.get("target_qty"), 0),
                 "estimated_counterfactual_pnl_10m_krw": est_pnl_10m,
             }
@@ -1279,10 +1636,18 @@ def build_missed_entry_counterfactual_report(
             all_buy_evaluations.append(evaluations[-1])
 
     # Keep missed-only evaluation slice for the main summary.
-    evaluations = [item for item in all_buy_evaluations if str(item.get("attempt_status") or "") == "MISSED"]
+    evaluations = [
+        item
+        for item in all_buy_evaluations
+        if str(item.get("attempt_status") or "") == "MISSED"
+    ]
 
     summary.evaluated_candidates = len(evaluations)
-    outcome_counts: dict[str, int] = {"MISSED_WINNER": 0, "AVOIDED_LOSER": 0, "NEUTRAL": 0}
+    outcome_counts: dict[str, int] = {
+        "MISSED_WINNER": 0,
+        "AVOIDED_LOSER": 0,
+        "NEUTRAL": 0,
+    }
     for item in evaluations:
         outcome = str(item.get("outcome") or "NEUTRAL").upper()
         outcome_counts[outcome] = outcome_counts.get(outcome, 0) + 1
@@ -1303,12 +1668,20 @@ def build_missed_entry_counterfactual_report(
         )
 
     summary.top_missed_winners = sorted(
-        [item for item in evaluations if str(item.get("outcome") or "") == "MISSED_WINNER"],
+        [
+            item
+            for item in evaluations
+            if str(item.get("outcome") or "") == "MISSED_WINNER"
+        ],
         key=_winner_score,
         reverse=True,
     )[: max(1, int(top_n or 10))]
     summary.top_avoided_losers = sorted(
-        [item for item in evaluations if str(item.get("outcome") or "") == "AVOIDED_LOSER"],
+        [
+            item
+            for item in evaluations
+            if str(item.get("outcome") or "") == "AVOIDED_LOSER"
+        ],
         key=_loser_score,
         reverse=True,
     )[: max(1, int(top_n or 10))]
@@ -1316,26 +1689,81 @@ def build_missed_entry_counterfactual_report(
     evaluated_count = len(evaluations)
     missed_winner_rate = _ratio(outcome_counts.get("MISSED_WINNER", 0), evaluated_count)
     avoided_loser_rate = _ratio(outcome_counts.get("AVOIDED_LOSER", 0), evaluated_count)
-    explicit_rows = [item for item in evaluations if str(item.get("price_source") or "") == "explicit_target_buy_price"]
+    explicit_rows = [
+        item
+        for item in evaluations
+        if str(item.get("price_source") or "") == "explicit_target_buy_price"
+    ]
     explicit_count = len(explicit_rows)
     explicit_missed_rate = _ratio(
-        sum(1 for item in explicit_rows if str(item.get("outcome") or "") == "MISSED_WINNER"),
+        sum(
+            1
+            for item in explicit_rows
+            if str(item.get("outcome") or "") == "MISSED_WINNER"
+        ),
         explicit_count,
     )
     explicit_avoided_rate = _ratio(
-        sum(1 for item in explicit_rows if str(item.get("outcome") or "") == "AVOIDED_LOSER"),
+        sum(
+            1
+            for item in explicit_rows
+            if str(item.get("outcome") or "") == "AVOIDED_LOSER"
+        ),
         explicit_count,
     )
-    avg_close_5m = _avg([_safe_float((item.get("metrics_5m") or {}).get("close_ret_pct"), 0.0) for item in evaluations])
-    avg_close_10m = _avg([_safe_float((item.get("metrics_10m") or {}).get("close_ret_pct"), 0.0) for item in evaluations])
-    avg_mfe_10m = _avg([_safe_float((item.get("metrics_10m") or {}).get("mfe_pct"), 0.0) for item in evaluations])
-    avg_mae_10m = _avg([_safe_float((item.get("metrics_10m") or {}).get("mae_pct"), 0.0) for item in evaluations])
-    avg_close_15m = _avg([_safe_float((item.get("metrics_15m") or {}).get("close_ret_pct"), 0.0) for item in evaluations])
-    avg_mfe_15m = _avg([_safe_float((item.get("metrics_15m") or {}).get("mfe_pct"), 0.0) for item in evaluations])
-    avg_mae_15m = _avg([_safe_float((item.get("metrics_15m") or {}).get("mae_pct"), 0.0) for item in evaluations])
-    estimated_pnl_sum = int(sum(_safe_int(item.get("estimated_counterfactual_pnl_10m_krw"), 0) for item in evaluations))
+    avg_close_5m = _avg(
+        [
+            _safe_float((item.get("metrics_5m") or {}).get("close_ret_pct"), 0.0)
+            for item in evaluations
+        ]
+    )
+    avg_close_10m = _avg(
+        [
+            _safe_float((item.get("metrics_10m") or {}).get("close_ret_pct"), 0.0)
+            for item in evaluations
+        ]
+    )
+    avg_mfe_10m = _avg(
+        [
+            _safe_float((item.get("metrics_10m") or {}).get("mfe_pct"), 0.0)
+            for item in evaluations
+        ]
+    )
+    avg_mae_10m = _avg(
+        [
+            _safe_float((item.get("metrics_10m") or {}).get("mae_pct"), 0.0)
+            for item in evaluations
+        ]
+    )
+    avg_close_15m = _avg(
+        [
+            _safe_float((item.get("metrics_15m") or {}).get("close_ret_pct"), 0.0)
+            for item in evaluations
+        ]
+    )
+    avg_mfe_15m = _avg(
+        [
+            _safe_float((item.get("metrics_15m") or {}).get("mfe_pct"), 0.0)
+            for item in evaluations
+        ]
+    )
+    avg_mae_15m = _avg(
+        [
+            _safe_float((item.get("metrics_15m") or {}).get("mae_pct"), 0.0)
+            for item in evaluations
+        ]
+    )
+    estimated_pnl_sum = int(
+        sum(
+            _safe_int(item.get("estimated_counterfactual_pnl_10m_krw"), 0)
+            for item in evaluations
+        )
+    )
     minute_candle_source_quality_counts = dict(
-        Counter(str(item.get("minute_candle_source_quality") or "unknown") for item in evaluations)
+        Counter(
+            str(item.get("minute_candle_source_quality") or "unknown")
+            for item in evaluations
+        )
     )
 
     if missed_winner_rate >= avoided_loser_rate + 20.0:
@@ -1350,16 +1778,26 @@ def build_missed_entry_counterfactual_report(
         reason_buckets[str(item.get("terminal_stage") or "-")].append(item)
     blocker_outcome_metrics = _build_blocker_outcome_metrics(evaluations)
     cohort_outcome_metrics = _build_cohort_outcome_metrics(evaluations)
-    rising_missed_refinement_metrics = _build_rising_missed_refinement_metrics(evaluations)
+    rising_missed_refinement_metrics = _build_rising_missed_refinement_metrics(
+        evaluations
+    )
     rising_missed_refinement_action_plan = _build_rising_missed_refinement_action_plan(
         rising_missed_refinement_metrics
     )
-    quick_profit_source_only_metrics = _build_quick_profit_source_only_metrics(evaluations)
+    quick_profit_source_only_metrics = _build_quick_profit_source_only_metrics(
+        evaluations
+    )
     reason_breakdown = []
-    for stage, items in sorted(reason_buckets.items(), key=lambda pair: len(pair[1]), reverse=True):
+    for stage, items in sorted(
+        reason_buckets.items(), key=lambda pair: len(pair[1]), reverse=True
+    ):
         trades = len(items)
-        missed_count = sum(1 for item in items if str(item.get("outcome") or "") == "MISSED_WINNER")
-        avoided_count = sum(1 for item in items if str(item.get("outcome") or "") == "AVOIDED_LOSER")
+        missed_count = sum(
+            1 for item in items if str(item.get("outcome") or "") == "MISSED_WINNER"
+        )
+        avoided_count = sum(
+            1 for item in items if str(item.get("outcome") or "") == "AVOIDED_LOSER"
+        )
         reason_breakdown.append(
             {
                 "stage": stage,
@@ -1367,12 +1805,46 @@ def build_missed_entry_counterfactual_report(
                 "candidates": trades,
                 "missed_winner_rate": _ratio(missed_count, trades),
                 "avoided_loser_rate": _ratio(avoided_count, trades),
-                "avg_close_10m_pct": _avg([_safe_float((item.get("metrics_10m") or {}).get("close_ret_pct"), 0.0) for item in items]),
-                "avg_mfe_10m_pct": _avg([_safe_float((item.get("metrics_10m") or {}).get("mfe_pct"), 0.0) for item in items]),
-                "avg_mae_10m_pct": _avg([_safe_float((item.get("metrics_10m") or {}).get("mae_pct"), 0.0) for item in items]),
-                "avg_close_15m_pct": _avg([_safe_float((item.get("metrics_15m") or {}).get("close_ret_pct"), 0.0) for item in items]),
-                "avg_mfe_15m_pct": _avg([_safe_float((item.get("metrics_15m") or {}).get("mfe_pct"), 0.0) for item in items]),
-                "avg_mae_15m_pct": _avg([_safe_float((item.get("metrics_15m") or {}).get("mae_pct"), 0.0) for item in items]),
+                "avg_close_10m_pct": _avg(
+                    [
+                        _safe_float(
+                            (item.get("metrics_10m") or {}).get("close_ret_pct"), 0.0
+                        )
+                        for item in items
+                    ]
+                ),
+                "avg_mfe_10m_pct": _avg(
+                    [
+                        _safe_float((item.get("metrics_10m") or {}).get("mfe_pct"), 0.0)
+                        for item in items
+                    ]
+                ),
+                "avg_mae_10m_pct": _avg(
+                    [
+                        _safe_float((item.get("metrics_10m") or {}).get("mae_pct"), 0.0)
+                        for item in items
+                    ]
+                ),
+                "avg_close_15m_pct": _avg(
+                    [
+                        _safe_float(
+                            (item.get("metrics_15m") or {}).get("close_ret_pct"), 0.0
+                        )
+                        for item in items
+                    ]
+                ),
+                "avg_mfe_15m_pct": _avg(
+                    [
+                        _safe_float((item.get("metrics_15m") or {}).get("mfe_pct"), 0.0)
+                        for item in items
+                    ]
+                ),
+                "avg_mae_15m_pct": _avg(
+                    [
+                        _safe_float((item.get("metrics_15m") or {}).get("mae_pct"), 0.0)
+                        for item in items
+                    ]
+                ),
             }
         )
 
@@ -1401,18 +1873,36 @@ def build_missed_entry_counterfactual_report(
             "entry_price_used": int(_safe_int(item.get("entry_price_used"), 0)),
             "target_qty": int(_safe_int(item.get("target_qty"), 0)),
             "counterfactual_qty": int(_safe_int(item.get("counterfactual_qty"), 0)),
-            "counterfactual_qty_source": str(item.get("counterfactual_qty_source") or ""),
+            "counterfactual_qty_source": str(
+                item.get("counterfactual_qty_source") or ""
+            ),
             "virtual_budget_krw": int(_safe_int(item.get("virtual_budget_krw"), 0)),
-            "counterfactual_ratio": round(_safe_float(item.get("counterfactual_ratio"), 0.0), 4),
-            "counterfactual_safe_budget": int(_safe_int(item.get("counterfactual_safe_budget"), 0)),
-            "counterfactual_notional_krw": int(_safe_int(item.get("counterfactual_notional_krw"), 0)),
+            "counterfactual_ratio": round(
+                _safe_float(item.get("counterfactual_ratio"), 0.0), 4
+            ),
+            "counterfactual_safe_budget": int(
+                _safe_int(item.get("counterfactual_safe_budget"), 0)
+            ),
+            "counterfactual_notional_krw": int(
+                _safe_int(item.get("counterfactual_notional_krw"), 0)
+            ),
             "ai_score": round(_safe_float(item.get("ai_score"), 0.0), 1),
             "price_source": str(item.get("price_source") or "minute_candle_proxy"),
-            "minute_candle_source_quality": str(item.get("minute_candle_source_quality") or "unknown"),
-            "minute_candle_source_quality_gate": str(item.get("minute_candle_source_quality_gate") or "unknown"),
-            "minute_candle_source_quality_reason": str(item.get("minute_candle_source_quality_reason") or ""),
-            "minute_candle_forward_10m_bars": _safe_int(item.get("minute_candle_forward_10m_bars"), 0),
-            "minute_candle_forward_15m_bars": _safe_int(item.get("minute_candle_forward_15m_bars"), 0),
+            "minute_candle_source_quality": str(
+                item.get("minute_candle_source_quality") or "unknown"
+            ),
+            "minute_candle_source_quality_gate": str(
+                item.get("minute_candle_source_quality_gate") or "unknown"
+            ),
+            "minute_candle_source_quality_reason": str(
+                item.get("minute_candle_source_quality_reason") or ""
+            ),
+            "minute_candle_forward_10m_bars": _safe_int(
+                item.get("minute_candle_forward_10m_bars"), 0
+            ),
+            "minute_candle_forward_15m_bars": _safe_int(
+                item.get("minute_candle_forward_15m_bars"), 0
+            ),
             "minute_candle_forward_15m_source_quality": str(
                 item.get("minute_candle_forward_15m_source_quality") or "unknown"
             ),
@@ -1426,25 +1916,37 @@ def build_missed_entry_counterfactual_report(
             "confidence_tier": _confidence_tier(item),
             "outcome": str(item.get("outcome") or "NEUTRAL"),
             "close_5m_pct": round(_safe_float(metrics_5m.get("close_ret_pct"), 0.0), 3),
-            "close_10m_pct": round(_safe_float(metrics_10m.get("close_ret_pct"), 0.0), 3),
+            "close_10m_pct": round(
+                _safe_float(metrics_10m.get("close_ret_pct"), 0.0), 3
+            ),
             "mfe_10m_pct": round(_safe_float(metrics_10m.get("mfe_pct"), 0.0), 3),
             "mae_10m_pct": round(_safe_float(metrics_10m.get("mae_pct"), 0.0), 3),
-            "close_15m_pct": round(_safe_float(metrics_15m.get("close_ret_pct"), 0.0), 3),
+            "close_15m_pct": round(
+                _safe_float(metrics_15m.get("close_ret_pct"), 0.0), 3
+            ),
             "mfe_15m_pct": round(_safe_float(metrics_15m.get("mfe_pct"), 0.0), 3),
             "mae_15m_pct": round(_safe_float(metrics_15m.get("mae_pct"), 0.0), 3),
-            "estimated_counterfactual_pnl_10m_krw": int(_safe_int(item.get("estimated_counterfactual_pnl_10m_krw"), 0)),
+            "estimated_counterfactual_pnl_10m_krw": int(
+                _safe_int(item.get("estimated_counterfactual_pnl_10m_krw"), 0)
+            ),
             "missed_submit_cohort": str(item.get("missed_submit_cohort") or ""),
             "stage_flow": [str(stage) for stage in (item.get("stage_flow") or [])],
             "source_signature": _rising_missed_source_field(item, "source_signature"),
-            "scanner_promotion_reason": _rising_missed_source_field(item, "scanner_promotion_reason"),
+            "scanner_promotion_reason": _rising_missed_source_field(
+                item, "scanner_promotion_reason"
+            ),
             "price_delta_since_first_seen_pct": round(
                 _safe_float(
-                    _rising_missed_source_field(item, "price_delta_since_first_seen_pct"),
+                    _rising_missed_source_field(
+                        item, "price_delta_since_first_seen_pct"
+                    ),
                     0.0,
                 ),
                 3,
             ),
-            "rising_missed_class": _rising_missed_source_field(item, "rising_missed_class"),
+            "rising_missed_class": _rising_missed_source_field(
+                item, "rising_missed_class"
+            ),
             "rising_missed_one_share_entry_seen": _rising_missed_seen(item),
             "rising_missed_stage_count": _rising_missed_stage_count(item),
             "rising_missed_postclose_label": _rising_missed_postclose_label(item),
@@ -1480,10 +1982,26 @@ def build_missed_entry_counterfactual_report(
         "buy_signal_universe": {
             "metrics": {
                 "total_buy_judged_attempts": int(len(all_buy_attempts)),
-                "entered_attempts": int(sum(1 for item in all_buy_attempts if str(item.get("attempt_status") or "") == "ENTERED")),
-                "missed_attempts": int(sum(1 for item in all_buy_attempts if str(item.get("attempt_status") or "") == "MISSED")),
+                "entered_attempts": int(
+                    sum(
+                        1
+                        for item in all_buy_attempts
+                        if str(item.get("attempt_status") or "") == "ENTERED"
+                    )
+                ),
+                "missed_attempts": int(
+                    sum(
+                        1
+                        for item in all_buy_attempts
+                        if str(item.get("attempt_status") or "") == "MISSED"
+                    )
+                ),
                 "entered_rate": _ratio(
-                    sum(1 for item in all_buy_attempts if str(item.get("attempt_status") or "") == "ENTERED"),
+                    sum(
+                        1
+                        for item in all_buy_attempts
+                        if str(item.get("attempt_status") or "") == "ENTERED"
+                    ),
                     len(all_buy_attempts),
                 ),
             },
@@ -1491,14 +2009,29 @@ def build_missed_entry_counterfactual_report(
                 {
                     "tier": tier,
                     "attempts": len(items),
-                    "entered_attempts": sum(1 for item in items if str(item.get("attempt_status") or "") == "ENTERED"),
-                    "missed_attempts": sum(1 for item in items if str(item.get("attempt_status") or "") == "MISSED"),
+                    "entered_attempts": sum(
+                        1
+                        for item in items
+                        if str(item.get("attempt_status") or "") == "ENTERED"
+                    ),
+                    "missed_attempts": sum(
+                        1
+                        for item in items
+                        if str(item.get("attempt_status") or "") == "MISSED"
+                    ),
                 }
                 for tier, items in sorted(
-                    defaultdict(list, {
-                        tier: [item for item in all_buy_evaluations if _confidence_tier(item) == tier]
-                        for tier in ("A", "B", "C")
-                    }).items()
+                    defaultdict(
+                        list,
+                        {
+                            tier: [
+                                item
+                                for item in all_buy_evaluations
+                                if _confidence_tier(item) == tier
+                            ]
+                            for tier in ("A", "B", "C")
+                        },
+                    ).items()
                 )
                 if items
             ],
@@ -1526,7 +2059,9 @@ def build_missed_entry_counterfactual_report(
         "reason_breakdown": reason_breakdown,
         "top_missed_winners": [_row_view(item) for item in summary.top_missed_winners],
         "top_avoided_losers": [_row_view(item) for item in summary.top_avoided_losers],
-        "rows": [_row_view(item) for item in evaluations[: max(1, int(top_n or 10) * 3)]],
+        "rows": [
+            _row_view(item) for item in evaluations[: max(1, int(top_n or 10) * 3)]
+        ],
         "full_rows": [_row_view(item) for item in evaluations],
         "meta": {
             "schema_version": MISSED_ENTRY_COUNTERFACTUAL_SCHEMA_VERSION,

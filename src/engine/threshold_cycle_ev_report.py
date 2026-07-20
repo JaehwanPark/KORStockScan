@@ -20,20 +20,41 @@ from src.engine.automation.source_quality_hard_gate import (
 )
 from src.engine.build_code_improvement_workorder import code_improvement_workorder_paths
 from src.engine.approval_contracts import annotate_approval_request
-from src.engine.institutional_flow_context import report_paths as institutional_flow_report_paths
-from src.engine.lifecycle_ai_context import attribution_report_paths as lifecycle_ai_context_attribution_paths
-from src.engine.lifecycle_ai_context import context_report_paths as lifecycle_ai_context_report_paths
-from src.engine.lifecycle_bucket_discovery import discovery_report_path as lifecycle_bucket_discovery_report_path
-from src.engine.lifecycle_decision_matrix import report_paths as lifecycle_matrix_report_paths
-from src.engine.scalping.microstructure_reaction_context import report_paths as microstructure_reaction_report_paths
+from src.engine.institutional_flow_context import (
+    report_paths as institutional_flow_report_paths,
+)
+from src.engine.lifecycle_ai_context import (
+    attribution_report_paths as lifecycle_ai_context_attribution_paths,
+)
+from src.engine.lifecycle_ai_context import (
+    context_report_paths as lifecycle_ai_context_report_paths,
+)
+from src.engine.lifecycle_bucket_discovery import (
+    discovery_report_path as lifecycle_bucket_discovery_report_path,
+)
+from src.engine.lifecycle_decision_matrix import (
+    report_paths as lifecycle_matrix_report_paths,
+)
+from src.engine.scalping.microstructure_reaction_context import (
+    report_paths as microstructure_reaction_report_paths,
+)
 from src.engine.scalping_pattern_lab_automation import automation_report_paths
-from src.engine.scalp_entry_action_decision_matrix import report_paths as scalp_entry_adm_report_paths
-from src.engine.swing_lifecycle_bucket_discovery import report_paths as swing_lifecycle_bucket_discovery_paths
-from src.engine.swing_lifecycle_decision_matrix import report_paths as swing_lifecycle_matrix_paths
-from src.engine.swing_strategy_discovery_ev_report import report_paths as swing_strategy_discovery_ev_paths
-from src.engine.swing_pattern_lab_automation import swing_pattern_lab_automation_report_paths
+from src.engine.scalp_entry_action_decision_matrix import (
+    report_paths as scalp_entry_adm_report_paths,
+)
+from src.engine.swing_lifecycle_bucket_discovery import (
+    report_paths as swing_lifecycle_bucket_discovery_paths,
+)
+from src.engine.swing_lifecycle_decision_matrix import (
+    report_paths as swing_lifecycle_matrix_paths,
+)
+from src.engine.swing_strategy_discovery_ev_report import (
+    report_paths as swing_strategy_discovery_ev_paths,
+)
+from src.engine.swing_pattern_lab_automation import (
+    swing_pattern_lab_automation_report_paths,
+)
 from src.engine.threshold_cycle_preopen_apply import apply_manifest_path
-
 
 MONITOR_SNAPSHOT_DIR = REPORT_DIR / "monitor_snapshots"
 CALIBRATION_REPORT_DIR = REPORT_DIR / "threshold_cycle_calibration"
@@ -103,14 +124,24 @@ def _is_real_primary_sample_book(value: Any) -> bool:
 
 
 def _top_level_summary(report: dict[str, Any]) -> dict[str, Any]:
-    warnings = report.get("warnings") if isinstance(report.get("warnings"), list) else []
+    warnings = (
+        report.get("warnings") if isinstance(report.get("warnings"), list) else []
+    )
     source_quality = (
         report.get("source_quality_preflight_gate")
         if isinstance(report.get("source_quality_preflight_gate"), dict)
         else {}
     )
-    daily_ev = report.get("daily_ev_summary") if isinstance(report.get("daily_ev_summary"), dict) else {}
-    scalp_sim = report.get("scalp_simulator") if isinstance(report.get("scalp_simulator"), dict) else {}
+    daily_ev = (
+        report.get("daily_ev_summary")
+        if isinstance(report.get("daily_ev_summary"), dict)
+        else {}
+    )
+    scalp_sim = (
+        report.get("scalp_simulator")
+        if isinstance(report.get("scalp_simulator"), dict)
+        else {}
+    )
     lifecycle_discovery = (
         report.get("lifecycle_bucket_discovery")
         if isinstance(report.get("lifecycle_bucket_discovery"), dict)
@@ -121,24 +152,44 @@ def _top_level_summary(report: dict[str, Any]) -> dict[str, Any]:
         if isinstance(report.get("calibration_outcome"), dict)
         else []
     )
-    live_auto_ready = _safe_int(lifecycle_discovery.get("live_auto_apply_ready_count"), 0)
-    source_split = daily_ev.get("source_split") if isinstance(daily_ev.get("source_split"), dict) else {}
-    real_split = source_split.get("real") if isinstance(source_split.get("real"), dict) else {}
-    sim_split = source_split.get("sim") if isinstance(source_split.get("sim"), dict) else {}
-    real_sample = _safe_int(daily_ev.get("completed_trades"), 0) or _safe_int(real_split.get("sample"), 0)
+    live_auto_ready = _safe_int(
+        lifecycle_discovery.get("live_auto_apply_ready_count"), 0
+    )
+    source_split = (
+        daily_ev.get("source_split")
+        if isinstance(daily_ev.get("source_split"), dict)
+        else {}
+    )
+    real_split = (
+        source_split.get("real") if isinstance(source_split.get("real"), dict) else {}
+    )
+    sim_split = (
+        source_split.get("sim") if isinstance(source_split.get("sim"), dict) else {}
+    )
+    real_sample = _safe_int(daily_ev.get("completed_trades"), 0) or _safe_int(
+        real_split.get("sample"), 0
+    )
     sim_sample = _safe_int(
-        scalp_sim.get("completed_count")
-        if scalp_sim.get("completed_count") is not None
-        else scalp_sim.get("completed"),
+        (
+            scalp_sim.get("completed_count")
+            if scalp_sim.get("completed_count") is not None
+            else scalp_sim.get("completed")
+        ),
         0,
     ) or _safe_int(sim_split.get("sample"), 0)
     real_outcome_joined_sample = real_sample
     sim_diagnostic_sample = sim_sample
-    primary_sample_book = "real" if real_sample >= 20 else "sim" if sim_sample > 0 else "none"
+    primary_sample_book = (
+        "real" if real_sample >= 20 else "sim" if sim_sample > 0 else "none"
+    )
     for item in (decisions if isinstance(decisions, list) else []):
         if not isinstance(item, dict):
             continue
-        metrics = item.get("source_metrics") if isinstance(item.get("source_metrics"), dict) else {}
+        metrics = (
+            item.get("source_metrics")
+            if isinstance(item.get("source_metrics"), dict)
+            else {}
+        )
         if str(item.get("family") or "") == "dynamic_entry_price_resolver":
             real_outcome_joined_sample = max(
                 real_outcome_joined_sample,
@@ -188,7 +239,9 @@ def _top_level_summary(report: dict[str, Any]) -> dict[str, Any]:
         "status": status,
         "warning_count": len(warnings),
         "source_quality_status": source_quality.get("status"),
-        "source_quality_tuning_input_allowed": source_quality.get("tuning_input_allowed"),
+        "source_quality_tuning_input_allowed": source_quality.get(
+            "tuning_input_allowed"
+        ),
         "real_sample": real_sample,
         "sim_sample": sim_sample,
         "real_sample_ready": real_sample_ready,
@@ -208,7 +261,10 @@ def ev_report_paths(target_date: str) -> tuple[Path, Path]:
 
 
 def _latency_classifier_recommendation_path(target_date: str) -> Path:
-    return LATENCY_CLASSIFIER_RECOMMENDATION_DIR / f"latency_classifier_recommendation_{target_date}.json"
+    return (
+        LATENCY_CLASSIFIER_RECOMMENDATION_DIR
+        / f"latency_classifier_recommendation_{target_date}.json"
+    )
 
 
 def _latency_classifier_source_metrics(
@@ -216,23 +272,39 @@ def _latency_classifier_source_metrics(
     calibration: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     recommendation = _load_json(_latency_classifier_recommendation_path(target_date))
-    candidate = recommendation.get("calibration_candidate") if isinstance(recommendation, dict) else {}
+    candidate = (
+        recommendation.get("calibration_candidate")
+        if isinstance(recommendation, dict)
+        else {}
+    )
     if isinstance(candidate, dict):
         metrics = candidate.get("source_metrics")
         if isinstance(metrics, dict):
             merged = dict(metrics)
-            for key in ("allowed_runtime_apply", "calibration_state", "calibration_reason"):
+            for key in (
+                "allowed_runtime_apply",
+                "calibration_state",
+                "calibration_reason",
+            ):
                 if key in candidate and key not in merged:
                     merged[key] = candidate.get(key)
             return merged, recommendation
 
-    for family in ("latency_classifier_runtime_profile", "dynamic_entry_price_resolver", "pre_submit_price_guard"):
+    for family in (
+        "latency_classifier_runtime_profile",
+        "dynamic_entry_price_resolver",
+        "pre_submit_price_guard",
+    ):
         for item in calibration.get("calibration_candidates") or []:
             if isinstance(item, dict) and item.get("family") == family:
                 metrics = item.get("source_metrics")
                 if isinstance(metrics, dict):
                     merged = dict(metrics)
-                    for key in ("allowed_runtime_apply", "calibration_state", "calibration_reason"):
+                    for key in (
+                        "allowed_runtime_apply",
+                        "calibration_state",
+                        "calibration_reason",
+                    ):
                         if key in item and key not in merged:
                             merged[key] = item.get(key)
                     return merged, recommendation
@@ -240,15 +312,28 @@ def _latency_classifier_source_metrics(
 
 
 def _calibration_path(target_date: str) -> Path:
-    return CALIBRATION_REPORT_DIR / f"threshold_cycle_calibration_{target_date}_postclose.json"
+    return (
+        CALIBRATION_REPORT_DIR
+        / f"threshold_cycle_calibration_{target_date}_postclose.json"
+    )
 
 
-def _wait6579_counterfactual_summary(target_date: str) -> tuple[dict[str, Any], str | None]:
+def _wait6579_counterfactual_summary(
+    target_date: str,
+) -> tuple[dict[str, Any], str | None]:
     path = MONITOR_SNAPSHOT_DIR / f"wait6579_ev_cohort_{target_date}.json"
     payload = _load_json(path)
-    summary = payload.get("counterfactual_summary") if isinstance(payload.get("counterfactual_summary"), dict) else {}
+    summary = (
+        payload.get("counterfactual_summary")
+        if isinstance(payload.get("counterfactual_summary"), dict)
+        else {}
+    )
     metrics = payload.get("metrics") if isinstance(payload.get("metrics"), dict) else {}
-    approval = payload.get("approval_gate") if isinstance(payload.get("approval_gate"), dict) else {}
+    approval = (
+        payload.get("approval_gate")
+        if isinstance(payload.get("approval_gate"), dict)
+        else {}
+    )
     if not payload:
         return {}, None
     if not summary:
@@ -260,8 +345,12 @@ def _wait6579_counterfactual_summary(target_date: str) -> tuple[dict[str, Any], 
             "runtime_effect": "counterfactual_report_only",
             "calibration_authority": "missed_probe_ev_only_not_broker_execution",
             "total_candidates": _safe_int(metrics.get("total_candidates"), 0),
-            "score65_74_probe_candidates": _safe_int(metrics.get("score65_74_probe_candidates"), 0),
-            "avg_expected_ev_pct": round(_safe_float(metrics.get("avg_expected_ev_pct"), 0.0), 4),
+            "score65_74_probe_candidates": _safe_int(
+                metrics.get("score65_74_probe_candidates"), 0
+            ),
+            "avg_expected_ev_pct": round(
+                _safe_float(metrics.get("avg_expected_ev_pct"), 0.0), 4
+            ),
             "expected_ev_krw_sum": _safe_int(metrics.get("expected_ev_krw_sum"), 0),
             "source_authority": "observe_only_threshold_relaxation_input",
             "real_execution_quality_source": "none",
@@ -269,7 +358,9 @@ def _wait6579_counterfactual_summary(target_date: str) -> tuple[dict[str, Any], 
     summary = dict(summary)
     summary["approval_gate"] = {
         "min_sample_gate_passed": bool(approval.get("min_sample_gate_passed")),
-        "threshold_relaxation_approved": bool(approval.get("threshold_relaxation_approved")),
+        "threshold_relaxation_approved": bool(
+            approval.get("threshold_relaxation_approved")
+        ),
         "full_samples": _safe_int(approval.get("full_samples"), 0),
         "partial_samples": _safe_int(approval.get("partial_samples"), 0),
     }
@@ -296,28 +387,52 @@ def _selected_families(apply_manifest: dict[str, Any]) -> list[str]:
             if str(value or "").strip()
         ]
     selected = apply_manifest.get("auto_apply_selected")
-    bridge_selected = ((apply_manifest.get("runtime_apply_bridge") or {}).get("selected") or [])
+    bridge_selected = (apply_manifest.get("runtime_apply_bridge") or {}).get(
+        "selected"
+    ) or []
     if isinstance(selected, list) and selected:
-        families = [str(item.get("family") or "") for item in selected if isinstance(item, dict) and item.get("family")]
-        swing_selected = ((apply_manifest.get("swing_runtime_approval") or {}).get("selected") or [])
+        families = [
+            str(item.get("family") or "")
+            for item in selected
+            if isinstance(item, dict) and item.get("family")
+        ]
+        swing_selected = (apply_manifest.get("swing_runtime_approval") or {}).get(
+            "selected"
+        ) or []
         families.extend(
-            str(item.get("family") or "") for item in swing_selected if isinstance(item, dict) and item.get("family")
+            str(item.get("family") or "")
+            for item in swing_selected
+            if isinstance(item, dict) and item.get("family")
         )
         families.extend(
-            str(item.get("family") or "") for item in bridge_selected if isinstance(item, dict) and item.get("family")
+            str(item.get("family") or "")
+            for item in bridge_selected
+            if isinstance(item, dict) and item.get("family")
         )
         families.extend(preserved)
         return _dedupe(families)
-    swing_selected = ((apply_manifest.get("swing_runtime_approval") or {}).get("selected") or [])
+    swing_selected = (apply_manifest.get("swing_runtime_approval") or {}).get(
+        "selected"
+    ) or []
     if isinstance(swing_selected, list) and swing_selected:
-        families = [str(item.get("family") or "") for item in swing_selected if isinstance(item, dict) and item.get("family")]
+        families = [
+            str(item.get("family") or "")
+            for item in swing_selected
+            if isinstance(item, dict) and item.get("family")
+        ]
         families.extend(
-            str(item.get("family") or "") for item in bridge_selected if isinstance(item, dict) and item.get("family")
+            str(item.get("family") or "")
+            for item in bridge_selected
+            if isinstance(item, dict) and item.get("family")
         )
         families.extend(preserved)
         return _dedupe(families)
     if isinstance(bridge_selected, list) and bridge_selected:
-        families = [str(item.get("family") or "") for item in bridge_selected if isinstance(item, dict) and item.get("family")]
+        families = [
+            str(item.get("family") or "")
+            for item in bridge_selected
+            if isinstance(item, dict) and item.get("family")
+        ]
         families.extend(preserved)
         return _dedupe(families)
     if preserved:
@@ -329,15 +444,27 @@ def _selected_families(apply_manifest: dict[str, Any]) -> list[str]:
 
 
 def _swing_runtime_approval_summary(apply_manifest: dict[str, Any]) -> dict[str, Any]:
-    swing = apply_manifest.get("swing_runtime_approval") if isinstance(apply_manifest.get("swing_runtime_approval"), dict) else {}
+    swing = (
+        apply_manifest.get("swing_runtime_approval")
+        if isinstance(apply_manifest.get("swing_runtime_approval"), dict)
+        else {}
+    )
     requests = swing.get("requests") if isinstance(swing.get("requests"), list) else []
-    approved = swing.get("approved_requests") if isinstance(swing.get("approved_requests"), list) else []
+    approved = (
+        swing.get("approved_requests")
+        if isinstance(swing.get("approved_requests"), list)
+        else []
+    )
     selected = swing.get("selected") if isinstance(swing.get("selected"), list) else []
-    decisions = swing.get("decisions") if isinstance(swing.get("decisions"), list) else []
+    decisions = (
+        swing.get("decisions") if isinstance(swing.get("decisions"), list) else []
+    )
     return {
         "request_report": swing.get("request_report"),
         "approval_artifact": swing.get("approval_artifact"),
-        "legacy_phase0_real_canary_ignored": bool(swing.get("legacy_phase0_real_canary_ignored")),
+        "legacy_phase0_real_canary_ignored": bool(
+            swing.get("legacy_phase0_real_canary_ignored")
+        ),
         "requested": _safe_int(swing.get("requested"), len(requests)),
         "approved": _safe_int(swing.get("approved"), len(approved)),
         "selected_live_dry_run": len(selected),
@@ -365,14 +492,26 @@ def _swing_runtime_approval_summary(apply_manifest: dict[str, Any]) -> dict[str,
 
 
 def _runtime_apply_bridge_summary(apply_manifest: dict[str, Any]) -> dict[str, Any]:
-    bridge = apply_manifest.get("runtime_apply_bridge") if isinstance(apply_manifest.get("runtime_apply_bridge"), dict) else {}
-    selected = bridge.get("selected") if isinstance(bridge.get("selected"), list) else []
-    decisions = bridge.get("decisions") if isinstance(bridge.get("decisions"), list) else []
+    bridge = (
+        apply_manifest.get("runtime_apply_bridge")
+        if isinstance(apply_manifest.get("runtime_apply_bridge"), dict)
+        else {}
+    )
+    selected = (
+        bridge.get("selected") if isinstance(bridge.get("selected"), list) else []
+    )
+    decisions = (
+        bridge.get("decisions") if isinstance(bridge.get("decisions"), list) else []
+    )
     return {
         "request_report": bridge.get("request_report"),
         "artifacts": bridge.get("artifacts") or {},
-        "candidate_count": _safe_int(bridge.get("candidate_count"), len(bridge.get("candidates") or [])),
-        "approved": _safe_int(bridge.get("approved"), len(bridge.get("approved_requests") or [])),
+        "candidate_count": _safe_int(
+            bridge.get("candidate_count"), len(bridge.get("candidates") or [])
+        ),
+        "approved": _safe_int(
+            bridge.get("approved"), len(bridge.get("approved_requests") or [])
+        ),
         "selected_count": len(selected),
         "blocked": bridge.get("blocked") or [],
         "selected": [
@@ -404,8 +543,14 @@ def _runtime_apply_bridge_summary(apply_manifest: dict[str, Any]) -> dict[str, A
     }
 
 
-def _enrich_swing_micro_source_quality_blockers(blocked: list[Any], ofi_qi_quality: dict[str, Any]) -> list[dict[str, Any]]:
-    reason_counts = ofi_qi_quality.get("reason_counts") if isinstance(ofi_qi_quality.get("reason_counts"), dict) else {}
+def _enrich_swing_micro_source_quality_blockers(
+    blocked: list[Any], ofi_qi_quality: dict[str, Any]
+) -> list[dict[str, Any]]:
+    reason_counts = (
+        ofi_qi_quality.get("reason_counts")
+        if isinstance(ofi_qi_quality.get("reason_counts"), dict)
+        else {}
+    )
     readiness_counts = {
         "micro_ready_count": _safe_int(ofi_qi_quality.get("micro_ready_count"), 0),
         "micro_insufficient_samples_count": _safe_int(
@@ -413,7 +558,9 @@ def _enrich_swing_micro_source_quality_blockers(blocked: list[Any], ofi_qi_quali
             _safe_int(reason_counts.get("micro_not_ready"), 0),
         ),
         "micro_not_ready_count": _safe_int(reason_counts.get("micro_not_ready"), 0),
-        "state_insufficient_count": _safe_int(reason_counts.get("state_insufficient"), 0),
+        "state_insufficient_count": _safe_int(
+            reason_counts.get("state_insufficient"), 0
+        ),
     }
     provenance_gap_count = _safe_int(
         ofi_qi_quality.get("provenance_gap_count"),
@@ -428,7 +575,9 @@ def _enrich_swing_micro_source_quality_blockers(blocked: list[Any], ofi_qi_quali
     spread_quality = {
         "wide_spread_threshold_ticks": 10,
         "wide_spread_count": wide_spread_count,
-        "wide_spread_rate": round(wide_spread_count * 100.0 / total, 4) if total else 0.0,
+        "wide_spread_rate": (
+            round(wide_spread_count * 100.0 / total, 4) if total else 0.0
+        ),
         "max_spread_ticks": _safe_float(ofi_qi_quality.get("max_spread_ticks"), None),
         "hard_block": False,
         "decision_use": "source_quality_adjusted_ev_penalty_or_filter_candidate",
@@ -445,9 +594,15 @@ def _enrich_swing_micro_source_quality_blockers(blocked: list[Any], ofi_qi_quali
                 "spread_quality": spread_quality,
                 "source_quality_reason_stage_split": {
                     "micro_missing": _safe_int(reason_counts.get("micro_missing"), 0),
-                    "micro_not_ready": _safe_int(reason_counts.get("micro_not_ready"), 0),
-                    "state_insufficient": _safe_int(reason_counts.get("state_insufficient"), 0),
-                    "observer_unhealthy": _safe_int(reason_counts.get("observer_unhealthy"), 0),
+                    "micro_not_ready": _safe_int(
+                        reason_counts.get("micro_not_ready"), 0
+                    ),
+                    "state_insufficient": _safe_int(
+                        reason_counts.get("state_insufficient"), 0
+                    ),
+                    "observer_unhealthy": _safe_int(
+                        reason_counts.get("observer_unhealthy"), 0
+                    ),
                     "provenance_gap": provenance_gap_count,
                 },
             }
@@ -455,14 +610,20 @@ def _enrich_swing_micro_source_quality_blockers(blocked: list[Any], ofi_qi_quali
     return enriched
 
 
-def _lifecycle_bucket_discovery_apply_summary(apply_manifest: dict[str, Any]) -> dict[str, Any]:
+def _lifecycle_bucket_discovery_apply_summary(
+    apply_manifest: dict[str, Any],
+) -> dict[str, Any]:
     payload = (
         apply_manifest.get("lifecycle_bucket_discovery")
         if isinstance(apply_manifest.get("lifecycle_bucket_discovery"), dict)
         else {}
     )
-    selected = payload.get("selected") if isinstance(payload.get("selected"), list) else []
-    decisions = payload.get("decisions") if isinstance(payload.get("decisions"), list) else []
+    selected = (
+        payload.get("selected") if isinstance(payload.get("selected"), list) else []
+    )
+    decisions = (
+        payload.get("decisions") if isinstance(payload.get("decisions"), list) else []
+    )
     return {
         "artifact": payload.get("artifact"),
         "discovery_report": payload.get("discovery_report"),
@@ -497,9 +658,15 @@ def _cohort_decisions(calibration_report: dict[str, Any]) -> list[dict[str, Any]
     attribution = calibration_report.get("post_apply_attribution")
     attribution = attribution if isinstance(attribution, dict) else {}
     candidates = calibration_report.get("calibration_candidates")
-    candidate_by_family = {
-        str(item.get("family") or ""): item for item in candidates if isinstance(item, dict) and item.get("family")
-    } if isinstance(candidates, list) else {}
+    candidate_by_family = (
+        {
+            str(item.get("family") or ""): item
+            for item in candidates
+            if isinstance(item, dict) and item.get("family")
+        }
+        if isinstance(candidates, list)
+        else {}
+    )
 
     def _prefer_source_count(item_value: Any, source_value: Any) -> Any:
         item_count = _safe_int(item_value, None)
@@ -521,19 +688,26 @@ def _cohort_decisions(calibration_report: dict[str, Any]) -> list[dict[str, Any]
             merged.append(
                 {
                     **item,
-                    "sample_count": _prefer_source_count(item.get("sample_count"), source.get("sample_count")),
+                    "sample_count": _prefer_source_count(
+                        item.get("sample_count"), source.get("sample_count")
+                    ),
                     "source_sample_count": _prefer_source_count(
                         item.get("source_sample_count"),
                         source.get("source_sample_count"),
                     ),
-                    "sample_floor": _prefer_source_count(item.get("sample_floor"), source.get("sample_floor")),
-                    "sample_floor_status": item.get("sample_floor_status") or source.get("sample_floor_status"),
+                    "sample_floor": _prefer_source_count(
+                        item.get("sample_floor"), source.get("sample_floor")
+                    ),
+                    "sample_floor_status": item.get("sample_floor_status")
+                    or source.get("sample_floor_status"),
                     "source_metrics": (
                         item.get("source_metrics")
                         if isinstance(item.get("source_metrics"), dict)
-                        else source.get("source_metrics")
-                        if isinstance(source.get("source_metrics"), dict)
-                        else {}
+                        else (
+                            source.get("source_metrics")
+                            if isinstance(source.get("source_metrics"), dict)
+                            else {}
+                        )
                     ),
                 }
             )
@@ -583,7 +757,9 @@ def _approval_requests(calibration_report: dict[str, Any]) -> list[dict[str, Any
     return requests
 
 
-def _pattern_lab_automation_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
+def _pattern_lab_automation_summary(
+    target_date: str,
+) -> tuple[dict[str, Any], str | None, list[str]]:
     json_path, _ = automation_report_paths(target_date)
     payload = _load_json(json_path)
     if not payload:
@@ -602,7 +778,11 @@ def _pattern_lab_automation_summary(target_date: str) -> tuple[dict[str, Any], s
             None,
             ["pattern_lab_automation_missing"],
         )
-    summary = payload.get("ev_report_summary") if isinstance(payload.get("ev_report_summary"), dict) else {}
+    summary = (
+        payload.get("ev_report_summary")
+        if isinstance(payload.get("ev_report_summary"), dict)
+        else {}
+    )
     warnings: list[str] = []
     gemini_enabled = bool(summary.get("gemini_enabled", True))
     if gemini_enabled and not bool(summary.get("gemini_fresh")):
@@ -618,17 +798,27 @@ def _pattern_lab_automation_summary(target_date: str) -> tuple[dict[str, Any], s
             "gemini_retired_reason": summary.get("gemini_retired_reason"),
             "claude_fresh": bool(summary.get("claude_fresh")),
             "consensus_count": _safe_int(summary.get("consensus_count"), 0),
-            "auto_family_candidate_count": _safe_int(summary.get("auto_family_candidate_count"), 0),
-            "code_improvement_order_count": _safe_int(summary.get("code_improvement_order_count"), 0),
-            "top_consensus_findings": list(summary.get("top_consensus_findings") or [])[:3],
-            "top_code_improvement_orders": list(summary.get("top_code_improvement_orders") or [])[:3],
+            "auto_family_candidate_count": _safe_int(
+                summary.get("auto_family_candidate_count"), 0
+            ),
+            "code_improvement_order_count": _safe_int(
+                summary.get("code_improvement_order_count"), 0
+            ),
+            "top_consensus_findings": list(summary.get("top_consensus_findings") or [])[
+                :3
+            ],
+            "top_code_improvement_orders": list(
+                summary.get("top_code_improvement_orders") or []
+            )[:3],
         },
         str(json_path),
         warnings,
     )
 
 
-def _swing_pattern_lab_automation_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
+def _swing_pattern_lab_automation_summary(
+    target_date: str,
+) -> tuple[dict[str, Any], str | None, list[str]]:
     json_path, _ = swing_pattern_lab_automation_report_paths(target_date)
     payload = _load_json(json_path)
     if not payload:
@@ -647,16 +837,30 @@ def _swing_pattern_lab_automation_summary(target_date: str) -> tuple[dict[str, A
             None,
             ["swing_pattern_lab_automation_missing"],
         )
-    summary = payload.get("ev_report_summary") if isinstance(payload.get("ev_report_summary"), dict) else {}
-    data_quality = payload.get("data_quality") if isinstance(payload.get("data_quality"), dict) else {}
+    summary = (
+        payload.get("ev_report_summary")
+        if isinstance(payload.get("ev_report_summary"), dict)
+        else {}
+    )
+    data_quality = (
+        payload.get("data_quality")
+        if isinstance(payload.get("data_quality"), dict)
+        else {}
+    )
     source_quality_blocked_families = (
         summary.get("source_quality_blocked_families")
         if isinstance(summary.get("source_quality_blocked_families"), list)
-        else data_quality.get("source_quality_blocked_families")
-        if isinstance(data_quality.get("source_quality_blocked_families"), list)
-        else []
+        else (
+            data_quality.get("source_quality_blocked_families")
+            if isinstance(data_quality.get("source_quality_blocked_families"), list)
+            else []
+        )
     )
-    ofi_qi_quality = data_quality.get("ofi_qi_quality") if isinstance(data_quality.get("ofi_qi_quality"), dict) else {}
+    ofi_qi_quality = (
+        data_quality.get("ofi_qi_quality")
+        if isinstance(data_quality.get("ofi_qi_quality"), dict)
+        else {}
+    )
     source_quality_blocked_families = _enrich_swing_micro_source_quality_blockers(
         source_quality_blocked_families,
         ofi_qi_quality,
@@ -667,7 +871,10 @@ def _swing_pattern_lab_automation_summary(target_date: str) -> tuple[dict[str, A
     if dq_warnings:
         for warning in dq_warnings if isinstance(dq_warnings, list) else []:
             warning_text = str(warning)
-            if warning_text.startswith("OFI/QI stale/missing ratio:") and source_quality_blocked_families:
+            if (
+                warning_text.startswith("OFI/QI stale/missing ratio:")
+                and source_quality_blocked_families
+            ):
                 resolved_dq_warnings.append(warning_text)
                 continue
             warnings.append(f"swing_lab_dq:{warning_text}")
@@ -682,15 +889,21 @@ def _swing_pattern_lab_automation_summary(target_date: str) -> tuple[dict[str, A
             "artifact": str(json_path),
             "deepseek_lab_available": bool(summary.get("deepseek_lab_available")),
             "findings_count": _safe_int(summary.get("findings_count"), 0),
-            "code_improvement_order_count": _safe_int(summary.get("code_improvement_order_count"), 0),
-            "data_quality_warning_count": _safe_int(summary.get("data_quality_warning_count"), 0),
+            "code_improvement_order_count": _safe_int(
+                summary.get("code_improvement_order_count"), 0
+            ),
+            "data_quality_warning_count": _safe_int(
+                summary.get("data_quality_warning_count"), 0
+            ),
             "top_level_data_quality_warning_count": len(warnings),
             "resolved_data_quality_warnings": resolved_dq_warnings,
             "resolved_data_quality_warning_count": len(resolved_dq_warnings),
             "ofi_qi_quality": ofi_qi_quality,
             "source_quality_blocked_families": source_quality_blocked_families,
             "carryover_warning_count": carryover_count,
-            "population_split_available": bool(summary.get("population_split_available")),
+            "population_split_available": bool(
+                summary.get("population_split_available")
+            ),
             "top_findings": [
                 {
                     "finding_id": item.get("finding_id"),
@@ -715,7 +928,9 @@ def _swing_pattern_lab_automation_summary(target_date: str) -> tuple[dict[str, A
     )
 
 
-def _code_improvement_workorder_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
+def _code_improvement_workorder_summary(
+    target_date: str,
+) -> tuple[dict[str, Any], str | None, list[str]]:
     json_path, md_path = code_improvement_workorder_paths(target_date)
     payload = _load_json(json_path)
     if not payload:
@@ -739,9 +954,17 @@ def _code_improvement_workorder_summary(target_date: str) -> tuple[dict[str, Any
             "artifact": str(json_path),
             "markdown": str(md_path) if md_path.exists() else None,
             "selected_order_count": _safe_int(summary.get("selected_order_count"), 0),
-            "decision_counts": summary.get("decision_counts") if isinstance(summary.get("decision_counts"), dict) else {},
-            "entry_submit_drought_selected": bool(summary.get("entry_submit_drought_selected")),
-            "entry_submit_drought_handoff_missing": bool(summary.get("entry_submit_drought_handoff_missing")),
+            "decision_counts": (
+                summary.get("decision_counts")
+                if isinstance(summary.get("decision_counts"), dict)
+                else {}
+            ),
+            "entry_submit_drought_selected": bool(
+                summary.get("entry_submit_drought_selected")
+            ),
+            "entry_submit_drought_handoff_missing": bool(
+                summary.get("entry_submit_drought_handoff_missing")
+            ),
             "orders": [
                 {"order_id": item.get("order_id"), "decision": item.get("decision")}
                 for item in orders
@@ -762,7 +985,9 @@ def _code_improvement_workorder_summary(target_date: str) -> tuple[dict[str, Any
     )
 
 
-def _scalp_entry_adm_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
+def _scalp_entry_adm_summary(
+    target_date: str,
+) -> tuple[dict[str, Any], str | None, list[str]]:
     json_path, _ = scalp_entry_adm_report_paths(target_date)
     payload = _load_json(json_path)
     if not payload:
@@ -791,7 +1016,11 @@ def _scalp_entry_adm_summary(target_date: str) -> tuple[dict[str, Any], str | No
             ["scalp_entry_action_decision_matrix_missing"],
         )
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-    action_summary = payload.get("action_summary") if isinstance(payload.get("action_summary"), list) else []
+    action_summary = (
+        payload.get("action_summary")
+        if isinstance(payload.get("action_summary"), list)
+        else []
+    )
     unknown_bucket_summary = (
         summary.get("unknown_bucket_summary")
         if isinstance(summary.get("unknown_bucket_summary"), dict)
@@ -802,7 +1031,11 @@ def _scalp_entry_adm_summary(target_date: str) -> tuple[dict[str, Any], str | No
         if isinstance(summary.get("outcome_join_diagnostic"), dict)
         else {}
     )
-    warnings = [f"scalp_entry_adm:{item}" for item in (payload.get("warnings") or []) if str(item)]
+    warnings = [
+        f"scalp_entry_adm:{item}"
+        for item in (payload.get("warnings") or [])
+        if str(item)
+    ]
     return (
         {
             "available": True,
@@ -815,25 +1048,43 @@ def _scalp_entry_adm_summary(target_date: str) -> tuple[dict[str, Any], str | No
             "total_candidates": _safe_int(summary.get("total_candidates"), 0),
             "joined_sample": _safe_int(summary.get("joined_sample"), 0),
             "sample_floor": _safe_int(summary.get("sample_floor"), 20),
-            "missing_actions": summary.get("missing_actions") if isinstance(summary.get("missing_actions"), list) else [],
-            "zero_sample_actions": summary.get("zero_sample_actions")
-            if isinstance(summary.get("zero_sample_actions"), list)
-            else [],
+            "missing_actions": (
+                summary.get("missing_actions")
+                if isinstance(summary.get("missing_actions"), list)
+                else []
+            ),
+            "zero_sample_actions": (
+                summary.get("zero_sample_actions")
+                if isinstance(summary.get("zero_sample_actions"), list)
+                else []
+            ),
             "prompt_applied_count": _safe_int(summary.get("prompt_applied_count"), 0),
-            "runtime_bias_applied_count": _safe_int(summary.get("runtime_bias_applied_count"), 0),
-            "runtime_effect_counts": summary.get("runtime_effect_counts")
-            if isinstance(summary.get("runtime_effect_counts"), dict)
-            else {},
-            "forced_action_counts": summary.get("forced_action_counts")
-            if isinstance(summary.get("forced_action_counts"), dict)
-            else {},
-            "raw_action_counts": summary.get("raw_action_counts")
-            if isinstance(summary.get("raw_action_counts"), dict)
-            else {},
-            "action_normalized_count": _safe_int(summary.get("action_normalized_count"), 0),
-            "action_normalization_counts": summary.get("action_normalization_counts")
-            if isinstance(summary.get("action_normalization_counts"), dict)
-            else {},
+            "runtime_bias_applied_count": _safe_int(
+                summary.get("runtime_bias_applied_count"), 0
+            ),
+            "runtime_effect_counts": (
+                summary.get("runtime_effect_counts")
+                if isinstance(summary.get("runtime_effect_counts"), dict)
+                else {}
+            ),
+            "forced_action_counts": (
+                summary.get("forced_action_counts")
+                if isinstance(summary.get("forced_action_counts"), dict)
+                else {}
+            ),
+            "raw_action_counts": (
+                summary.get("raw_action_counts")
+                if isinstance(summary.get("raw_action_counts"), dict)
+                else {}
+            ),
+            "action_normalized_count": _safe_int(
+                summary.get("action_normalized_count"), 0
+            ),
+            "action_normalization_counts": (
+                summary.get("action_normalization_counts")
+                if isinstance(summary.get("action_normalization_counts"), dict)
+                else {}
+            ),
             "unknown_bucket_summary": unknown_bucket_summary,
             "outcome_join_diagnostic": outcome_join_diagnostic,
             "top_actions": [
@@ -841,7 +1092,9 @@ def _scalp_entry_adm_summary(target_date: str) -> tuple[dict[str, Any], str | No
                     "action": item.get("action"),
                     "sample_count": item.get("sample_count"),
                     "joined_sample": item.get("joined_sample"),
-                    "source_quality_adjusted_ev_pct": item.get("source_quality_adjusted_ev_pct"),
+                    "source_quality_adjusted_ev_pct": item.get(
+                        "source_quality_adjusted_ev_pct"
+                    ),
                 }
                 for item in action_summary
                 if isinstance(item, dict) and _safe_int(item.get("sample_count"), 0) > 0
@@ -852,7 +1105,9 @@ def _scalp_entry_adm_summary(target_date: str) -> tuple[dict[str, Any], str | No
     )
 
 
-def _lifecycle_decision_matrix_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
+def _lifecycle_decision_matrix_summary(
+    target_date: str,
+) -> tuple[dict[str, Any], str | None, list[str]]:
     json_path, _ = lifecycle_matrix_report_paths(target_date)
     payload = _load_json(json_path)
     if not payload:
@@ -872,7 +1127,11 @@ def _lifecycle_decision_matrix_summary(target_date: str) -> tuple[dict[str, Any]
             ["lifecycle_decision_matrix_missing"],
         )
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-    contract = payload.get("fixed_threshold_contract") if isinstance(payload.get("fixed_threshold_contract"), dict) else {}
+    contract = (
+        payload.get("fixed_threshold_contract")
+        if isinstance(payload.get("fixed_threshold_contract"), dict)
+        else {}
+    )
     entry_bucket = (
         payload.get("entry_bucket_attribution")
         if isinstance(payload.get("entry_bucket_attribution"), dict)
@@ -903,17 +1162,41 @@ def _lifecycle_decision_matrix_summary(target_date: str) -> tuple[dict[str, Any]
         if isinstance(payload.get("scale_in_bucket_attribution"), dict)
         else {}
     )
-    entry_summary = entry_bucket.get("summary") if isinstance(entry_bucket.get("summary"), dict) else {}
-    submit_summary = submit_bucket.get("summary") if isinstance(submit_bucket.get("summary"), dict) else {}
-    holding_summary = holding_bucket.get("summary") if isinstance(holding_bucket.get("summary"), dict) else {}
-    exit_summary = exit_bucket.get("summary") if isinstance(exit_bucket.get("summary"), dict) else {}
+    entry_summary = (
+        entry_bucket.get("summary")
+        if isinstance(entry_bucket.get("summary"), dict)
+        else {}
+    )
+    submit_summary = (
+        submit_bucket.get("summary")
+        if isinstance(submit_bucket.get("summary"), dict)
+        else {}
+    )
+    holding_summary = (
+        holding_bucket.get("summary")
+        if isinstance(holding_bucket.get("summary"), dict)
+        else {}
+    )
+    exit_summary = (
+        exit_bucket.get("summary")
+        if isinstance(exit_bucket.get("summary"), dict)
+        else {}
+    )
     lifecycle_flow_summary = (
         lifecycle_flow_bucket.get("summary")
         if isinstance(lifecycle_flow_bucket.get("summary"), dict)
         else {}
     )
-    scale_in_summary = scale_in_bucket.get("summary") if isinstance(scale_in_bucket.get("summary"), dict) else {}
-    warnings = [f"lifecycle_decision_matrix:{item}" for item in (payload.get("warnings") or []) if str(item)]
+    scale_in_summary = (
+        scale_in_bucket.get("summary")
+        if isinstance(scale_in_bucket.get("summary"), dict)
+        else {}
+    )
+    warnings = [
+        f"lifecycle_decision_matrix:{item}"
+        for item in (payload.get("warnings") or [])
+        if str(item)
+    ]
     return (
         {
             "available": True,
@@ -953,12 +1236,16 @@ def _lifecycle_decision_matrix_summary(target_date: str) -> tuple[dict[str, Any]
             ),
             "lifecycle_flow_runtime_approval_candidates": (
                 lifecycle_flow_bucket.get("runtime_approval_candidates")
-                if isinstance(lifecycle_flow_bucket.get("runtime_approval_candidates"), list)
+                if isinstance(
+                    lifecycle_flow_bucket.get("runtime_approval_candidates"), list
+                )
                 else []
             ),
             "lifecycle_flow_code_improvement_workorders": (
                 lifecycle_flow_bucket.get("code_improvement_workorders")
-                if isinstance(lifecycle_flow_bucket.get("code_improvement_workorders"), list)
+                if isinstance(
+                    lifecycle_flow_bucket.get("code_improvement_workorders"), list
+                )
                 else []
             ),
             "submit_bucket_attribution_summary": submit_summary,
@@ -996,8 +1283,12 @@ def _lifecycle_decision_matrix_summary(target_date: str) -> tuple[dict[str, Any]
                 if isinstance(submit_bucket.get("post_submit_contract_gaps"), list)
                 else []
             ),
-            "submit_bucket_workorder_count": _safe_int(summary.get("submit_bucket_workorder_count"), 0),
-            "submit_bucket_contract_gap_count": _safe_int(summary.get("submit_bucket_contract_gap_count"), 0),
+            "submit_bucket_workorder_count": _safe_int(
+                summary.get("submit_bucket_workorder_count"), 0
+            ),
+            "submit_bucket_contract_gap_count": _safe_int(
+                summary.get("submit_bucket_contract_gap_count"), 0
+            ),
             "holding_bucket_attribution_summary": holding_summary,
             "holding_bucket_code_improvement_workorders": (
                 holding_bucket.get("code_improvement_workorders")
@@ -1045,17 +1336,26 @@ def _lifecycle_decision_matrix_summary(target_date: str) -> tuple[dict[str, Any]
                 summary.get("scale_in_bucket_workorder_count"),
                 _safe_int(scale_in_summary.get("workorder_count"), 0),
             ),
-            "identity_missing_count": _safe_int(summary.get("identity_missing_count"), 0),
+            "identity_missing_count": _safe_int(
+                summary.get("identity_missing_count"), 0
+            ),
             "identity_join_rate": summary.get("identity_join_rate"),
             "complete_flow_rate": summary.get("complete_flow_rate"),
-            "join_contract_blocked": bool(summary.get("join_contract_blocked") or lifecycle_flow_summary.get("join_contract_blocked")),
+            "join_contract_blocked": bool(
+                summary.get("join_contract_blocked")
+                or lifecycle_flow_summary.get("join_contract_blocked")
+            ),
             "bundle_ev_tuning_state": (
                 summary.get("bundle_ev_tuning_state")
                 or lifecycle_flow_summary.get("bundle_ev_tuning_state")
                 or "ready_for_bundle_ev_tuning"
             ),
-            "top_incomplete_reason": summary.get("top_incomplete_reason") or lifecycle_flow_summary.get("top_incomplete_reason"),
-            "incomplete_flow_reason_counts": summary.get("incomplete_flow_reason_counts") or {},
+            "top_incomplete_reason": summary.get("top_incomplete_reason")
+            or lifecycle_flow_summary.get("top_incomplete_reason"),
+            "incomplete_flow_reason_counts": summary.get(
+                "incomplete_flow_reason_counts"
+            )
+            or {},
             "policy_entries": [
                 {
                     "stage": item.get("stage"),
@@ -1070,14 +1370,18 @@ def _lifecycle_decision_matrix_summary(target_date: str) -> tuple[dict[str, Any]
                 for item in (payload.get("policy_entries") or [])[:5]
                 if isinstance(item, dict)
             ],
-            "fixed_threshold_roles": contract.get("roles") if isinstance(contract.get("roles"), dict) else {},
+            "fixed_threshold_roles": (
+                contract.get("roles") if isinstance(contract.get("roles"), dict) else {}
+            ),
         },
         str(json_path),
         warnings,
     )
 
 
-def _buy_funnel_sentinel_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
+def _buy_funnel_sentinel_summary(
+    target_date: str,
+) -> tuple[dict[str, Any], str | None, list[str]]:
     path = BUY_FUNNEL_SENTINEL_DIR / f"buy_funnel_sentinel_{target_date}.json"
     payload = _load_json(path)
     if not payload:
@@ -1092,7 +1396,11 @@ def _buy_funnel_sentinel_summary(target_date: str) -> tuple[dict[str, Any], str 
             None,
             ["buy_funnel_sentinel_missing"],
         )
-    classification = payload.get("classification") if isinstance(payload.get("classification"), dict) else {}
+    classification = (
+        payload.get("classification")
+        if isinstance(payload.get("classification"), dict)
+        else {}
+    )
     contract = (
         payload.get("entry_submit_drought_contract")
         if isinstance(payload.get("entry_submit_drought_contract"), dict)
@@ -1103,9 +1411,17 @@ def _buy_funnel_sentinel_summary(target_date: str) -> tuple[dict[str, Any], str 
             "available": True,
             "artifact": str(path),
             "primary": classification.get("primary"),
-            "matches": classification.get("matches") if isinstance(classification.get("matches"), list) else [],
+            "matches": (
+                classification.get("matches")
+                if isinstance(classification.get("matches"), list)
+                else []
+            ),
             "entry_submit_drought_contract": contract,
-            "weak_contract_matches": contract.get("weak_contract_matches") if isinstance(contract.get("weak_contract_matches"), list) else [],
+            "weak_contract_matches": (
+                contract.get("weak_contract_matches")
+                if isinstance(contract.get("weak_contract_matches"), list)
+                else []
+            ),
             "runtime_effect": False,
             "allowed_runtime_apply": False,
         },
@@ -1114,7 +1430,9 @@ def _buy_funnel_sentinel_summary(target_date: str) -> tuple[dict[str, Any], str 
     )
 
 
-def _lifecycle_ai_context_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
+def _lifecycle_ai_context_summary(
+    target_date: str,
+) -> tuple[dict[str, Any], str | None, list[str]]:
     json_path, _ = lifecycle_ai_context_report_paths(target_date)
     payload = _load_json(json_path)
     if not payload:
@@ -1130,8 +1448,16 @@ def _lifecycle_ai_context_summary(target_date: str) -> tuple[dict[str, Any], str
             None,
             ["lifecycle_ai_context_missing"],
         )
-    stages = payload.get("stage_contexts") if isinstance(payload.get("stage_contexts"), list) else []
-    warnings = [f"lifecycle_ai_context:{item}" for item in (payload.get("warnings") or []) if str(item)]
+    stages = (
+        payload.get("stage_contexts")
+        if isinstance(payload.get("stage_contexts"), list)
+        else []
+    )
+    warnings = [
+        f"lifecycle_ai_context:{item}"
+        for item in (payload.get("warnings") or [])
+        if str(item)
+    ]
     return (
         {
             "available": True,
@@ -1139,16 +1465,28 @@ def _lifecycle_ai_context_summary(target_date: str) -> tuple[dict[str, Any], str
             "context_version": payload.get("context_version"),
             "runtime_effect": bool(payload.get("runtime_effect")),
             "decision_authority": payload.get("decision_authority"),
-            "provider_status": payload.get("provider_status") if isinstance(payload.get("provider_status"), dict) else {},
-            "prompt_stage_count": sum(1 for item in stages if isinstance(item, dict) and item.get("prompt_injection_allowed")),
+            "provider_status": (
+                payload.get("provider_status")
+                if isinstance(payload.get("provider_status"), dict)
+                else {}
+            ),
+            "prompt_stage_count": sum(
+                1
+                for item in stages
+                if isinstance(item, dict) and item.get("prompt_injection_allowed")
+            ),
             "stage_contexts": [
                 {
                     "stage": item.get("stage"),
                     "prompt_injection_allowed": item.get("prompt_injection_allowed"),
                     "policy_key": item.get("policy_key"),
                     "alignment_hint": item.get("alignment_hint"),
-                    "context_contribution_score": item.get("context_contribution_score"),
-                    "attribution_quality_status": item.get("attribution_quality_status"),
+                    "context_contribution_score": item.get(
+                        "context_contribution_score"
+                    ),
+                    "attribution_quality_status": item.get(
+                        "attribution_quality_status"
+                    ),
                 }
                 for item in stages[:5]
                 if isinstance(item, dict)
@@ -1159,7 +1497,9 @@ def _lifecycle_ai_context_summary(target_date: str) -> tuple[dict[str, Any], str
     )
 
 
-def _lifecycle_ai_context_attribution_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
+def _lifecycle_ai_context_attribution_summary(
+    target_date: str,
+) -> tuple[dict[str, Any], str | None, list[str]]:
     json_path, _ = lifecycle_ai_context_attribution_paths(target_date)
     payload = _load_json(json_path)
     if not payload:
@@ -1176,8 +1516,16 @@ def _lifecycle_ai_context_attribution_summary(target_date: str) -> tuple[dict[st
             ["lifecycle_ai_context_attribution_missing"],
         )
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-    warnings = [f"lifecycle_ai_context_attribution:{item}" for item in (payload.get("warnings") or []) if str(item)]
-    stage_map = payload.get("stage_attribution") if isinstance(payload.get("stage_attribution"), dict) else {}
+    warnings = [
+        f"lifecycle_ai_context_attribution:{item}"
+        for item in (payload.get("warnings") or [])
+        if str(item)
+    ]
+    stage_map = (
+        payload.get("stage_attribution")
+        if isinstance(payload.get("stage_attribution"), dict)
+        else {}
+    )
     return (
         {
             "available": True,
@@ -1187,19 +1535,29 @@ def _lifecycle_ai_context_attribution_summary(target_date: str) -> tuple[dict[st
             "implementation_status": payload.get("implementation_status"),
             "implementation_checks": payload.get("implementation_checks") or [],
             "implementation_provenance": payload.get("implementation_provenance") or {},
-            "context_eligible_count": _safe_int(summary.get("context_eligible_count"), 0),
+            "context_eligible_count": _safe_int(
+                summary.get("context_eligible_count"), 0
+            ),
             "context_applied_count": _safe_int(summary.get("context_applied_count"), 0),
             "context_skipped_count": _safe_int(summary.get("context_skipped_count"), 0),
             "replay_budget": _safe_int(summary.get("replay_budget"), 0),
             "stage_quality_counts": summary.get("stage_quality_counts") or {},
             "stage_attribution": {
                 stage: {
-                    "context_contribution_score": item.get("context_contribution_score"),
+                    "context_contribution_score": item.get(
+                        "context_contribution_score"
+                    ),
                     "bounded_auxiliary_weight": item.get("bounded_auxiliary_weight"),
-                    "attribution_quality_status": item.get("attribution_quality_status"),
-                    "source_quality_adjusted_ev_pct": item.get("source_quality_adjusted_ev_pct"),
+                    "attribution_quality_status": item.get(
+                        "attribution_quality_status"
+                    ),
+                    "source_quality_adjusted_ev_pct": item.get(
+                        "source_quality_adjusted_ev_pct"
+                    ),
                     "ai_action_alignment_rate": item.get("ai_action_alignment_rate"),
-                    "no_context_replay_observed": item.get("no_context_replay_observed"),
+                    "no_context_replay_observed": item.get(
+                        "no_context_replay_observed"
+                    ),
                 }
                 for stage, item in stage_map.items()
                 if isinstance(item, dict)
@@ -1210,7 +1568,9 @@ def _lifecycle_ai_context_attribution_summary(target_date: str) -> tuple[dict[st
     )
 
 
-def _swing_strategy_discovery_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
+def _swing_strategy_discovery_summary(
+    target_date: str,
+) -> tuple[dict[str, Any], str | None, list[str]]:
     json_path, _ = swing_strategy_discovery_ev_paths(target_date)
     payload = _load_json(json_path)
     if not payload:
@@ -1232,9 +1592,15 @@ def _swing_strategy_discovery_summary(target_date: str) -> tuple[dict[str, Any],
         )
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
     source_quality = (
-        payload.get("source_quality_summary") if isinstance(payload.get("source_quality_summary"), dict) else {}
+        payload.get("source_quality_summary")
+        if isinstance(payload.get("source_quality_summary"), dict)
+        else {}
     )
-    warnings = [f"swing_strategy_discovery:{item}" for item in (payload.get("warnings") or []) if str(item)]
+    warnings = [
+        f"swing_strategy_discovery:{item}"
+        for item in (payload.get("warnings") or [])
+        if str(item)
+    ]
     return (
         {
             "available": True,
@@ -1243,7 +1609,9 @@ def _swing_strategy_discovery_summary(target_date: str) -> tuple[dict[str, Any],
             "arm_count": _safe_int(summary.get("arm_count"), 0),
             "policy_exit_row_count": _safe_int(summary.get("policy_exit_row_count"), 0),
             "labeled_sample_count": _safe_int(summary.get("labeled_sample_count"), 0),
-            "pending_future_quote_count": _safe_int(summary.get("pending_future_quote_count"), 0),
+            "pending_future_quote_count": _safe_int(
+                summary.get("pending_future_quote_count"), 0
+            ),
             "top_surviving_arm": summary.get("top_surviving_arm"),
             "surviving_arm_count": _safe_int(summary.get("surviving_arm_count"), 0),
             "avoid_bucket_count": _safe_int(summary.get("avoid_bucket_count"), 0),
@@ -1253,14 +1621,17 @@ def _swing_strategy_discovery_summary(target_date: str) -> tuple[dict[str, Any],
             "source_quality_summary": source_quality,
             "implementation_status": source_quality.get("implementation_status"),
             "implementation_checks": source_quality.get("implementation_checks") or [],
-            "implementation_provenance": source_quality.get("implementation_provenance") or {},
+            "implementation_provenance": source_quality.get("implementation_provenance")
+            or {},
         },
         str(json_path),
         warnings,
     )
 
 
-def _swing_lifecycle_matrix_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
+def _swing_lifecycle_matrix_summary(
+    target_date: str,
+) -> tuple[dict[str, Any], str | None, list[str]]:
     json_path, _ = swing_lifecycle_matrix_paths(target_date)
     payload = _load_json(json_path)
     if not payload:
@@ -1285,8 +1656,16 @@ def _swing_lifecycle_matrix_summary(target_date: str) -> tuple[dict[str, Any], s
             ["swing_lifecycle_decision_matrix_missing"],
         )
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-    entry_bottleneck = payload.get("swing_entry_bottleneck") if isinstance(payload.get("swing_entry_bottleneck"), dict) else {}
-    warnings = [f"swing_lifecycle_decision_matrix:{item}" for item in (payload.get("warnings") or []) if str(item)]
+    entry_bottleneck = (
+        payload.get("swing_entry_bottleneck")
+        if isinstance(payload.get("swing_entry_bottleneck"), dict)
+        else {}
+    )
+    warnings = [
+        f"swing_lifecycle_decision_matrix:{item}"
+        for item in (payload.get("warnings") or [])
+        if str(item)
+    ]
     candidate_ids: list[str] = []
     workorder_ids: list[str] = []
     for section_name in (
@@ -1296,13 +1675,25 @@ def _swing_lifecycle_matrix_summary(target_date: str) -> tuple[dict[str, Any], s
         "scale_in_bucket_attribution",
         "discovery_arm_attribution",
     ):
-        section = payload.get(section_name) if isinstance(payload.get(section_name), dict) else {}
-        for item in section.get("sim_auto_approval_candidates") or section.get("runtime_approval_candidates") or []:
+        section = (
+            payload.get(section_name)
+            if isinstance(payload.get(section_name), dict)
+            else {}
+        )
+        for item in (
+            section.get("sim_auto_approval_candidates")
+            or section.get("runtime_approval_candidates")
+            or []
+        ):
             if isinstance(item, dict) and item.get("candidate_id"):
                 candidate_ids.append(str(item.get("candidate_id")))
         for item in section.get("code_improvement_workorders") or []:
-            if isinstance(item, dict) and (item.get("workorder_id") or item.get("bucket_key")):
-                workorder_ids.append(str(item.get("workorder_id") or item.get("bucket_key")))
+            if isinstance(item, dict) and (
+                item.get("workorder_id") or item.get("bucket_key")
+            ):
+                workorder_ids.append(
+                    str(item.get("workorder_id") or item.get("bucket_key"))
+                )
     return (
         {
             "available": True,
@@ -1315,29 +1706,49 @@ def _swing_lifecycle_matrix_summary(target_date: str) -> tuple[dict[str, Any], s
             "probe_rows": _safe_int(summary.get("probe_rows"), 0),
             "discovery_rows": _safe_int(summary.get("discovery_rows"), 0),
             "labeled_rows": _safe_int(summary.get("labeled_rows"), 0),
-            "pending_future_quote_count": _safe_int(summary.get("pending_future_quote_count"), 0),
-            "swing_lifecycle_flow_bucket_count": _safe_int(summary.get("swing_lifecycle_flow_bucket_count"), 0),
+            "pending_future_quote_count": _safe_int(
+                summary.get("pending_future_quote_count"), 0
+            ),
+            "swing_lifecycle_flow_bucket_count": _safe_int(
+                summary.get("swing_lifecycle_flow_bucket_count"), 0
+            ),
             "complete_flow_count": _safe_int(summary.get("complete_flow_count"), 0),
             "incomplete_flow_count": _safe_int(summary.get("incomplete_flow_count"), 0),
             "identity_join_rate": summary.get("identity_join_rate"),
             "complete_flow_rate": summary.get("complete_flow_rate"),
             "join_contract_blocked": bool(summary.get("join_contract_blocked")),
-            "sim_auto_candidate_count": _safe_int(summary.get("sim_auto_candidate_count"), 0),
+            "sim_auto_candidate_count": _safe_int(
+                summary.get("sim_auto_candidate_count"), 0
+            ),
             "workorder_count": _safe_int(summary.get("workorder_count"), 0),
             "raw_swing_event_count": _safe_int(summary.get("raw_swing_event_count"), 0),
-            "ldm_consumed_event_count": _safe_int(summary.get("ldm_consumed_event_count"), 0),
+            "ldm_consumed_event_count": _safe_int(
+                summary.get("ldm_consumed_event_count"), 0
+            ),
             "ldm_event_coverage_rate": summary.get("ldm_event_coverage_rate"),
-            "unmapped_swing_stage_counts": summary.get("unmapped_swing_stage_counts")
-            if isinstance(summary.get("unmapped_swing_stage_counts"), dict)
-            else {},
+            "unmapped_swing_stage_counts": (
+                summary.get("unmapped_swing_stage_counts")
+                if isinstance(summary.get("unmapped_swing_stage_counts"), dict)
+                else {}
+            ),
             "daily_simulation_consumed": bool(summary.get("daily_simulation_consumed")),
-            "swing_entry_bottleneck_primary": summary.get("swing_entry_bottleneck_primary")
+            "swing_entry_bottleneck_primary": summary.get(
+                "swing_entry_bottleneck_primary"
+            )
             or entry_bottleneck.get("primary"),
-            "swing_lifecycle_contract_gap_count": _safe_int(summary.get("swing_lifecycle_contract_gap_count"), 0),
-            "stage_counts": summary.get("stage_counts") if isinstance(summary.get("stage_counts"), dict) else {},
-            "source_book_counts": summary.get("source_book_counts")
-            if isinstance(summary.get("source_book_counts"), dict)
-            else {},
+            "swing_lifecycle_contract_gap_count": _safe_int(
+                summary.get("swing_lifecycle_contract_gap_count"), 0
+            ),
+            "stage_counts": (
+                summary.get("stage_counts")
+                if isinstance(summary.get("stage_counts"), dict)
+                else {}
+            ),
+            "source_book_counts": (
+                summary.get("source_book_counts")
+                if isinstance(summary.get("source_book_counts"), dict)
+                else {}
+            ),
             "sim_auto_candidate_ids": sorted(set(candidate_ids)),
             "workorder_ids": sorted(set(workorder_ids)),
         },
@@ -1346,7 +1757,9 @@ def _swing_lifecycle_matrix_summary(target_date: str) -> tuple[dict[str, Any], s
     )
 
 
-def _swing_lifecycle_bucket_discovery_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
+def _swing_lifecycle_bucket_discovery_summary(
+    target_date: str,
+) -> tuple[dict[str, Any], str | None, list[str]]:
     json_path, _ = swing_lifecycle_bucket_discovery_paths(target_date)
     payload = _load_json(json_path)
     if not payload:
@@ -1365,16 +1778,26 @@ def _swing_lifecycle_bucket_discovery_summary(target_date: str) -> tuple[dict[st
             ["swing_lifecycle_bucket_discovery_missing"],
         )
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-    warnings = [f"swing_lifecycle_bucket_discovery:{item}" for item in (payload.get("warnings") or []) if str(item)]
+    warnings = [
+        f"swing_lifecycle_bucket_discovery:{item}"
+        for item in (payload.get("warnings") or [])
+        if str(item)
+    ]
     ai_review_status = str(summary.get("ai_two_pass_review_status") or "").strip()
     if ai_review_status and ai_review_status != "parsed":
-        warnings.append(f"swing_lifecycle_bucket_discovery:ai_two_pass_review_{ai_review_status}_fail_closed")
+        warnings.append(
+            f"swing_lifecycle_bucket_discovery:ai_two_pass_review_{ai_review_status}_fail_closed"
+        )
     if bool(summary.get("ai_fail_closed")):
-        warnings.append("swing_lifecycle_bucket_discovery:ai_two_pass_review_fail_closed_sim_auto_blocked")
+        warnings.append(
+            "swing_lifecycle_bucket_discovery:ai_two_pass_review_fail_closed_sim_auto_blocked"
+        )
     if bool(summary.get("ai_review_followup_required")):
         warnings.append("swing_lifecycle_bucket_discovery:ai_review_followup_required")
     if bool(summary.get("sim_auto_blocked_by_ai_review_followup")):
-        warnings.append("swing_lifecycle_bucket_discovery:ai_review_followup_sim_auto_blocked")
+        warnings.append(
+            "swing_lifecycle_bucket_discovery:ai_review_followup_sim_auto_blocked"
+        )
     warnings = list(dict.fromkeys(warnings))
     return (
         {
@@ -1387,62 +1810,131 @@ def _swing_lifecycle_bucket_discovery_summary(target_date: str) -> tuple[dict[st
             "ai_two_pass_review_status": ai_review_status or None,
             "ai_fail_closed": bool(summary.get("ai_fail_closed")),
             "ai_review_blocker_state": summary.get("ai_review_blocker_state"),
-            "pre_review_sim_auto_candidate_count": _safe_int(summary.get("pre_review_sim_auto_candidate_count"), 0),
-            "sim_auto_reviewed_candidate_count": _safe_int(summary.get("sim_auto_reviewed_candidate_count"), 0),
-            "sim_auto_unreviewed_candidate_count": _safe_int(summary.get("sim_auto_unreviewed_candidate_count"), 0),
-            "sim_auto_downgraded_by_review_count": _safe_int(summary.get("sim_auto_downgraded_by_review_count"), 0),
-            "sim_auto_review_shard_count": _safe_int(summary.get("sim_auto_review_shard_count"), 0),
-            "ai_review_followup_required": bool(summary.get("ai_review_followup_required")),
-            "ai_review_followup_reasons": summary.get("ai_review_followup_reasons")
-            if isinstance(summary.get("ai_review_followup_reasons"), list)
-            else [],
-            "sim_auto_blocked_by_ai_review_followup": bool(summary.get("sim_auto_blocked_by_ai_review_followup")),
+            "pre_review_sim_auto_candidate_count": _safe_int(
+                summary.get("pre_review_sim_auto_candidate_count"), 0
+            ),
+            "sim_auto_reviewed_candidate_count": _safe_int(
+                summary.get("sim_auto_reviewed_candidate_count"), 0
+            ),
+            "sim_auto_unreviewed_candidate_count": _safe_int(
+                summary.get("sim_auto_unreviewed_candidate_count"), 0
+            ),
+            "sim_auto_downgraded_by_review_count": _safe_int(
+                summary.get("sim_auto_downgraded_by_review_count"), 0
+            ),
+            "sim_auto_review_shard_count": _safe_int(
+                summary.get("sim_auto_review_shard_count"), 0
+            ),
+            "ai_review_followup_required": bool(
+                summary.get("ai_review_followup_required")
+            ),
+            "ai_review_followup_reasons": (
+                summary.get("ai_review_followup_reasons")
+                if isinstance(summary.get("ai_review_followup_reasons"), list)
+                else []
+            ),
+            "sim_auto_blocked_by_ai_review_followup": bool(
+                summary.get("sim_auto_blocked_by_ai_review_followup")
+            ),
             "candidate_count": _safe_int(summary.get("candidate_count"), 0),
-            "surfaced_candidate_count": _safe_int(summary.get("surfaced_candidate_count"), 0),
-            "sim_auto_approved_count": _safe_int(summary.get("sim_auto_approved_count"), 0),
-            "swing_lifecycle_flow_bucket_count": _safe_int(summary.get("swing_lifecycle_flow_bucket_count"), 0),
+            "surfaced_candidate_count": _safe_int(
+                summary.get("surfaced_candidate_count"), 0
+            ),
+            "sim_auto_approved_count": _safe_int(
+                summary.get("sim_auto_approved_count"), 0
+            ),
+            "swing_lifecycle_flow_bucket_count": _safe_int(
+                summary.get("swing_lifecycle_flow_bucket_count"), 0
+            ),
             "complete_flow_count": _safe_int(summary.get("complete_flow_count"), 0),
             "incomplete_flow_count": _safe_int(summary.get("incomplete_flow_count"), 0),
             "identity_join_rate": summary.get("identity_join_rate"),
             "complete_flow_rate": summary.get("complete_flow_rate"),
             "join_contract_blocked": bool(summary.get("join_contract_blocked")),
-            "flow_sim_auto_approved_count": _safe_int(summary.get("flow_sim_auto_approved_count"), 0),
-            "stage_only_source_only_count": _safe_int(summary.get("stage_only_source_only_count"), 0),
-            "source_only_keep_collecting_count": _safe_int(summary.get("source_only_keep_collecting_count"), 0),
-            "code_patch_required_count": _safe_int(summary.get("code_patch_required_count"), 0),
-            "runtime_blocked_contract_gap_count": _safe_int(summary.get("runtime_blocked_contract_gap_count"), 0),
-            "automation_handoff_gap_count": _safe_int(summary.get("automation_handoff_gap_count"), 0),
-            "deterministic_proposal_count": _safe_int(summary.get("deterministic_proposal_count"), 0),
-            "ai_tier2_proposal_count": _safe_int(summary.get("ai_tier2_proposal_count"), 0),
-            "comparative_review_count": _safe_int(summary.get("comparative_review_count"), 0),
-            "selected_decision_counts": summary.get("selected_decision_counts")
-            if isinstance(summary.get("selected_decision_counts"), dict)
-            else {},
-            "selected_source_counts": summary.get("selected_source_counts")
-            if isinstance(summary.get("selected_source_counts"), dict)
-            else {},
-            "swing_entry_bottleneck_primary": summary.get("swing_entry_bottleneck_primary"),
+            "flow_sim_auto_approved_count": _safe_int(
+                summary.get("flow_sim_auto_approved_count"), 0
+            ),
+            "stage_only_source_only_count": _safe_int(
+                summary.get("stage_only_source_only_count"), 0
+            ),
+            "source_only_keep_collecting_count": _safe_int(
+                summary.get("source_only_keep_collecting_count"), 0
+            ),
+            "code_patch_required_count": _safe_int(
+                summary.get("code_patch_required_count"), 0
+            ),
+            "runtime_blocked_contract_gap_count": _safe_int(
+                summary.get("runtime_blocked_contract_gap_count"), 0
+            ),
+            "automation_handoff_gap_count": _safe_int(
+                summary.get("automation_handoff_gap_count"), 0
+            ),
+            "deterministic_proposal_count": _safe_int(
+                summary.get("deterministic_proposal_count"), 0
+            ),
+            "ai_tier2_proposal_count": _safe_int(
+                summary.get("ai_tier2_proposal_count"), 0
+            ),
+            "comparative_review_count": _safe_int(
+                summary.get("comparative_review_count"), 0
+            ),
+            "selected_decision_counts": (
+                summary.get("selected_decision_counts")
+                if isinstance(summary.get("selected_decision_counts"), dict)
+                else {}
+            ),
+            "selected_source_counts": (
+                summary.get("selected_source_counts")
+                if isinstance(summary.get("selected_source_counts"), dict)
+                else {}
+            ),
+            "swing_entry_bottleneck_primary": summary.get(
+                "swing_entry_bottleneck_primary"
+            ),
             "swing_entry_bottleneck_candidate_present": any(
-                str(item.get("bucket_id") or "") == "swing_entry_bottleneck_swing_entry_drought_critical"
+                str(item.get("bucket_id") or "")
+                == "swing_entry_bottleneck_swing_entry_drought_critical"
                 for item in (payload.get("surfaced_candidates") or [])
                 if isinstance(item, dict)
             ),
-            "state_counts": summary.get("state_counts") if isinstance(summary.get("state_counts"), dict) else {},
-            "stage_counts": summary.get("stage_counts") if isinstance(summary.get("stage_counts"), dict) else {},
+            "state_counts": (
+                summary.get("state_counts")
+                if isinstance(summary.get("state_counts"), dict)
+                else {}
+            ),
+            "stage_counts": (
+                summary.get("stage_counts")
+                if isinstance(summary.get("stage_counts"), dict)
+                else {}
+            ),
             "code_improvement_workorder_ids": [
-                str(item) for item in (summary.get("code_improvement_workorder_ids") or []) if str(item)
+                str(item)
+                for item in (summary.get("code_improvement_workorder_ids") or [])
+                if str(item)
             ],
             "implemented_code_improvement_workorder_ids": [
-                str(item) for item in (summary.get("implemented_code_improvement_workorder_ids") or []) if str(item)
+                str(item)
+                for item in (
+                    summary.get("implemented_code_improvement_workorder_ids") or []
+                )
+                if str(item)
             ],
             "pending_code_improvement_workorder_ids": [
-                str(item) for item in (summary.get("pending_code_improvement_workorder_ids") or []) if str(item)
+                str(item)
+                for item in (
+                    summary.get("pending_code_improvement_workorder_ids") or []
+                )
+                if str(item)
             ],
             "ai_review_followup_workorder_ids": [
-                str(item) for item in (summary.get("ai_review_followup_workorder_ids") or []) if str(item)
+                str(item)
+                for item in (summary.get("ai_review_followup_workorder_ids") or [])
+                if str(item)
             ],
             "surfaced_candidate_ids": [
-                str(item) for item in (payload.get("surfaced_candidate_ids") or []) if str(item)
+                str(item)
+                for item in (payload.get("surfaced_candidate_ids") or [])
+                if str(item)
             ],
             "warnings": warnings,
         },
@@ -1451,7 +1943,9 @@ def _swing_lifecycle_bucket_discovery_summary(target_date: str) -> tuple[dict[st
     )
 
 
-def _institutional_flow_context_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
+def _institutional_flow_context_summary(
+    target_date: str,
+) -> tuple[dict[str, Any], str | None, list[str]]:
     json_path, _ = institutional_flow_report_paths(target_date)
     payload = _load_json(json_path)
     if not payload:
@@ -1472,7 +1966,11 @@ def _institutional_flow_context_summary(target_date: str) -> tuple[dict[str, Any
             ["institutional_flow_context_missing"],
         )
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-    warnings = [f"institutional_flow_context:{item}" for item in (payload.get("warnings") or []) if str(item)]
+    warnings = [
+        f"institutional_flow_context:{item}"
+        for item in (payload.get("warnings") or [])
+        if str(item)
+    ]
     return (
         {
             "available": True,
@@ -1484,18 +1982,33 @@ def _institutional_flow_context_summary(target_date: str) -> tuple[dict[str, Any
             "missing_count": _safe_int(summary.get("missing_count"), 0),
             "token_error_count": _safe_int(summary.get("token_error_count"), 0),
             "join_rate_pct": round(_safe_float(summary.get("join_rate_pct"), 0.0), 2),
-            "status_counts": summary.get("status_counts") if isinstance(summary.get("status_counts"), dict) else {},
-            "source_mix": summary.get("source_mix") if isinstance(summary.get("source_mix"), dict) else {},
-            "top_net_buy": summary.get("top_net_buy") if isinstance(summary.get("top_net_buy"), list) else [],
+            "status_counts": (
+                summary.get("status_counts")
+                if isinstance(summary.get("status_counts"), dict)
+                else {}
+            ),
+            "source_mix": (
+                summary.get("source_mix")
+                if isinstance(summary.get("source_mix"), dict)
+                else {}
+            ),
+            "top_net_buy": (
+                summary.get("top_net_buy")
+                if isinstance(summary.get("top_net_buy"), list)
+                else []
+            ),
             "runtime_effect": bool(payload.get("runtime_effect")),
-            "decision_authority": payload.get("decision_authority") or "source_only_lifecycle_feature",
+            "decision_authority": payload.get("decision_authority")
+            or "source_only_lifecycle_feature",
         },
         str(json_path),
         warnings,
     )
 
 
-def _microstructure_reaction_context_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
+def _microstructure_reaction_context_summary(
+    target_date: str,
+) -> tuple[dict[str, Any], str | None, list[str]]:
     json_path, _ = microstructure_reaction_report_paths(target_date)
     payload = _load_json(json_path)
     if not payload:
@@ -1526,7 +2039,11 @@ def _microstructure_reaction_context_summary(target_date: str) -> tuple[dict[str
             [],
         )
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-    warnings = [f"microstructure_reaction_context:{item}" for item in (payload.get("warnings") or []) if str(item)]
+    warnings = [
+        f"microstructure_reaction_context:{item}"
+        for item in (payload.get("warnings") or [])
+        if str(item)
+    ]
     return (
         {
             "available": True,
@@ -1534,9 +2051,15 @@ def _microstructure_reaction_context_summary(target_date: str) -> tuple[dict[str
             "status": "warning" if payload.get("warnings") else "pass",
             "row_count": _safe_int(summary.get("row_count"), 0),
             "ok_count": _safe_int(summary.get("ok_count"), 0),
-            "missing_or_unusable_count": _safe_int(summary.get("missing_or_unusable_count"), 0),
+            "missing_or_unusable_count": _safe_int(
+                summary.get("missing_or_unusable_count"), 0
+            ),
             "real_submitted_count": _safe_int(summary.get("real_submitted_count"), 0),
-            "status_counts": summary.get("status_counts") if isinstance(summary.get("status_counts"), dict) else {},
+            "status_counts": (
+                summary.get("status_counts")
+                if isinstance(summary.get("status_counts"), dict)
+                else {}
+            ),
             "entry_reaction_quality_counts": (
                 summary.get("entry_reaction_quality_counts")
                 if isinstance(summary.get("entry_reaction_quality_counts"), dict)
@@ -1547,7 +2070,11 @@ def _microstructure_reaction_context_summary(target_date: str) -> tuple[dict[str
                 if isinstance(summary.get("source_quality_counts"), dict)
                 else {}
             ),
-            "v_pw_source_counts": summary.get("v_pw_source_counts") if isinstance(summary.get("v_pw_source_counts"), dict) else {},
+            "v_pw_source_counts": (
+                summary.get("v_pw_source_counts")
+                if isinstance(summary.get("v_pw_source_counts"), dict)
+                else {}
+            ),
             "v_pw_rest_fallback_rate_pct": summary.get("v_pw_rest_fallback_rate_pct"),
             "ka10046_strength_runtime_effect_true_count": _safe_int(
                 summary.get("ka10046_strength_runtime_effect_true_count"),
@@ -1566,20 +2093,33 @@ def _microstructure_reaction_context_summary(target_date: str) -> tuple[dict[str
                 summary.get("market_data_rest_signed_tape_pressure_usable_true_count"),
                 0,
             ),
-            "rest_signed_trade_ticks_row_count": _safe_int(summary.get("rest_signed_trade_ticks_row_count"), 0),
+            "rest_signed_trade_ticks_row_count": _safe_int(
+                summary.get("rest_signed_trade_ticks_row_count"), 0
+            ),
             "rest_signed_trade_ticks_source_counts": (
                 summary.get("rest_signed_trade_ticks_source_counts")
-                if isinstance(summary.get("rest_signed_trade_ticks_source_counts"), dict)
+                if isinstance(
+                    summary.get("rest_signed_trade_ticks_source_counts"), dict
+                )
                 else {}
             ),
             "ka10003_buy_dominance_observation_source_counts": (
                 summary.get("ka10003_buy_dominance_observation_source_counts")
-                if isinstance(summary.get("ka10003_buy_dominance_observation_source_counts"), dict)
+                if isinstance(
+                    summary.get("ka10003_buy_dominance_observation_source_counts"), dict
+                )
                 else {}
             ),
             "ka10003_buy_dominance_observation_trade_value_source_counts": (
-                summary.get("ka10003_buy_dominance_observation_trade_value_source_counts")
-                if isinstance(summary.get("ka10003_buy_dominance_observation_trade_value_source_counts"), dict)
+                summary.get(
+                    "ka10003_buy_dominance_observation_trade_value_source_counts"
+                )
+                if isinstance(
+                    summary.get(
+                        "ka10003_buy_dominance_observation_trade_value_source_counts"
+                    ),
+                    dict,
+                )
                 else {}
             ),
             "ka10003_buy_dominance_observation_inside_spread_count": _safe_int(
@@ -1589,7 +2129,9 @@ def _microstructure_reaction_context_summary(target_date: str) -> tuple[dict[str
             "ka10003_buy_dominance_observation_split_vs_15_mismatch_rate_pct": summary.get(
                 "ka10003_buy_dominance_observation_split_vs_15_mismatch_rate_pct"
             ),
-            "code_improvement_order_count": _safe_int(summary.get("code_improvement_order_count"), 0),
+            "code_improvement_order_count": _safe_int(
+                summary.get("code_improvement_order_count"), 0
+            ),
             "top_code_improvement_orders": (
                 summary.get("top_code_improvement_orders")
                 if isinstance(summary.get("top_code_improvement_orders"), list)
@@ -1600,18 +2142,30 @@ def _microstructure_reaction_context_summary(target_date: str) -> tuple[dict[str
             "avg_bid_replenishment_score": summary.get("avg_bid_replenishment_score"),
             "max_vi_proximity_risk": _safe_int(summary.get("max_vi_proximity_risk"), 0),
             "runtime_effect": bool(payload.get("runtime_effect")),
-            "decision_authority": payload.get("decision_authority") or "entry_confidence_modifier_source_only",
+            "decision_authority": payload.get("decision_authority")
+            or "entry_confidence_modifier_source_only",
             "metric_role": payload.get("metric_role") or "feature_context",
-            "primary_decision_metric": payload.get("primary_decision_metric") or "source_quality_adjusted_ev_pct",
-            "forbidden_uses": payload.get("forbidden_uses") if isinstance(payload.get("forbidden_uses"), list) else [],
+            "primary_decision_metric": payload.get("primary_decision_metric")
+            or "source_quality_adjusted_ev_pct",
+            "forbidden_uses": (
+                payload.get("forbidden_uses")
+                if isinstance(payload.get("forbidden_uses"), list)
+                else []
+            ),
         },
         str(json_path),
         warnings,
     )
 
 
-def _pipeline_event_verbosity_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
-    json_path = REPORT_DIR / "pipeline_event_verbosity" / f"pipeline_event_verbosity_{target_date}.json"
+def _pipeline_event_verbosity_summary(
+    target_date: str,
+) -> tuple[dict[str, Any], str | None, list[str]]:
+    json_path = (
+        REPORT_DIR
+        / "pipeline_event_verbosity"
+        / f"pipeline_event_verbosity_{target_date}.json"
+    )
     payload = _load_json(json_path)
     if not payload:
         return (
@@ -1624,7 +2178,9 @@ def _pipeline_event_verbosity_summary(target_date: str) -> tuple[dict[str, Any],
             None,
             ["pipeline_event_verbosity_missing"],
         )
-    raw = payload.get("raw_stream") if isinstance(payload.get("raw_stream"), dict) else {}
+    raw = (
+        payload.get("raw_stream") if isinstance(payload.get("raw_stream"), dict) else {}
+    )
     parity = payload.get("parity") if isinstance(payload.get("parity"), dict) else {}
     return (
         {
@@ -1637,17 +2193,25 @@ def _pipeline_event_verbosity_summary(target_date: str) -> tuple[dict[str, Any],
             "high_volume_byte_share_pct": raw.get("high_volume_byte_share_pct"),
             "parity_ok": parity.get("ok"),
             "suppress_eligibility": parity.get("suppress_eligibility"),
-            "runtime_effect": ((payload.get("policy") or {}).get("runtime_effect"))
-            if isinstance(payload.get("policy"), dict)
-            else False,
+            "runtime_effect": (
+                ((payload.get("policy") or {}).get("runtime_effect"))
+                if isinstance(payload.get("policy"), dict)
+                else False
+            ),
         },
         str(json_path),
         [],
     )
 
 
-def _codebase_performance_workorder_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
-    json_path = REPORT_DIR / "codebase_performance_workorder" / f"codebase_performance_workorder_{target_date}.json"
+def _codebase_performance_workorder_summary(
+    target_date: str,
+) -> tuple[dict[str, Any], str | None, list[str]]:
+    json_path = (
+        REPORT_DIR
+        / "codebase_performance_workorder"
+        / f"codebase_performance_workorder_{target_date}.json"
+    )
     payload = _load_json(json_path)
     if not payload:
         return (
@@ -1683,7 +2247,9 @@ def _codebase_performance_workorder_summary(target_date: str) -> tuple[dict[str,
     )
 
 
-def _audit_summary(target_date: str, report_type: str, report_dir: Path) -> tuple[dict[str, Any], str | None, list[str]]:
+def _audit_summary(
+    target_date: str, report_type: str, report_dir: Path
+) -> tuple[dict[str, Any], str | None, list[str]]:
     json_path = report_dir / f"{report_type}_{target_date}.json"
     payload = _load_json(json_path)
     if not payload:
@@ -1732,7 +2298,10 @@ def _audit_summary(target_date: str, report_type: str, report_dir: Path) -> tupl
             "warning_count": _safe_int(summary.get("warning_count"), 0),
             "code_improvement_order_count": _safe_int(
                 summary.get("code_improvement_order_count"),
-                _safe_int(summary.get("order_count"), _safe_int(summary.get("workorder_count"), 0)),
+                _safe_int(
+                    summary.get("order_count"),
+                    _safe_int(summary.get("workorder_count"), 0),
+                ),
             ),
             "runtime_effect": bool(payload.get("runtime_effect")),
             "decision_authority": payload.get("decision_authority"),
@@ -1741,23 +2310,37 @@ def _audit_summary(target_date: str, report_type: str, report_dir: Path) -> tupl
             "ai_fail_closed": ai_fail_closed,
             "ai_review_followup_required": ai_review_followup_required,
             "ai_review_followup_reasons": ai_review_followup_reasons,
-            "deterministic_proposal_count": _safe_int(summary.get("deterministic_proposal_count"), 0),
-            "ai_tier2_proposal_count": _safe_int(summary.get("ai_tier2_proposal_count"), 0),
-            "comparative_review_count": _safe_int(summary.get("comparative_review_count"), 0),
-            "selected_decision_counts": summary.get("selected_decision_counts")
-            if isinstance(summary.get("selected_decision_counts"), dict)
-            else {},
-            "selected_source_counts": summary.get("selected_source_counts")
-            if isinstance(summary.get("selected_source_counts"), dict)
-            else {},
+            "deterministic_proposal_count": _safe_int(
+                summary.get("deterministic_proposal_count"), 0
+            ),
+            "ai_tier2_proposal_count": _safe_int(
+                summary.get("ai_tier2_proposal_count"), 0
+            ),
+            "comparative_review_count": _safe_int(
+                summary.get("comparative_review_count"), 0
+            ),
+            "selected_decision_counts": (
+                summary.get("selected_decision_counts")
+                if isinstance(summary.get("selected_decision_counts"), dict)
+                else {}
+            ),
+            "selected_source_counts": (
+                summary.get("selected_source_counts")
+                if isinstance(summary.get("selected_source_counts"), dict)
+                else {}
+            ),
         },
         str(json_path),
         warnings,
     )
 
 
-def _entry_split_order_plan_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
-    json_path = ENTRY_SPLIT_ORDER_PLAN_DIR / f"entry_split_order_plan_{target_date}.json"
+def _entry_split_order_plan_summary(
+    target_date: str,
+) -> tuple[dict[str, Any], str | None, list[str]]:
+    json_path = (
+        ENTRY_SPLIT_ORDER_PLAN_DIR / f"entry_split_order_plan_{target_date}.json"
+    )
     payload = _load_json(json_path)
     if not payload:
         return (
@@ -1772,40 +2355,76 @@ def _entry_split_order_plan_summary(target_date: str) -> tuple[dict[str, Any], s
             None,
             ["entry_split_order_plan_missing"],
         )
-    recommended = payload.get("recommended_policy") if isinstance(payload.get("recommended_policy"), dict) else {}
-    source_quality = payload.get("source_quality") if isinstance(payload.get("source_quality"), dict) else {}
-    candidate_grid = payload.get("candidate_grid") if isinstance(payload.get("candidate_grid"), list) else []
-    candidates = recommended.get("candidates") if isinstance(recommended.get("candidates"), list) else []
+    recommended = (
+        payload.get("recommended_policy")
+        if isinstance(payload.get("recommended_policy"), dict)
+        else {}
+    )
+    source_quality = (
+        payload.get("source_quality")
+        if isinstance(payload.get("source_quality"), dict)
+        else {}
+    )
+    candidate_grid = (
+        payload.get("candidate_grid")
+        if isinstance(payload.get("candidate_grid"), list)
+        else []
+    )
+    candidates = (
+        recommended.get("candidates")
+        if isinstance(recommended.get("candidates"), list)
+        else []
+    )
     bounded_equal_baseline_count = sum(
         1
         for item in candidates
-        if isinstance(item, dict) and item.get("policy_mode") == "bounded_equal_split_baseline"
+        if isinstance(item, dict)
+        and item.get("policy_mode") == "bounded_equal_split_baseline"
     )
     post_submit_tick_band_seed_count = sum(
         1
         for item in candidates
-        if isinstance(item, dict) and item.get("policy_mode") == "post_submit_tick_band_seed"
+        if isinstance(item, dict)
+        and item.get("policy_mode") == "post_submit_tick_band_seed"
     )
     real_primary_ev_candidate_count = sum(
         1
         for item in candidates
-        if isinstance(item, dict) and item.get("policy_mode") == "real_primary_ev_optimized"
+        if isinstance(item, dict)
+        and item.get("policy_mode") == "real_primary_ev_optimized"
     )
     real_sample = max(
-        [_safe_int(item.get("real_sample_count"), 0) for item in candidate_grid if isinstance(item, dict)] or [0]
+        [
+            _safe_int(item.get("real_sample_count"), 0)
+            for item in candidate_grid
+            if isinstance(item, dict)
+        ]
+        or [0]
     )
     real_outcome = max(
-        [_safe_int(item.get("real_outcome_joined_sample"), 0) for item in candidate_grid if isinstance(item, dict)] or [0]
+        [
+            _safe_int(item.get("real_outcome_joined_sample"), 0)
+            for item in candidate_grid
+            if isinstance(item, dict)
+        ]
+        or [0]
     )
     sim_sample = max(
-        [_safe_int(item.get("sim_sample_count"), 0) for item in candidate_grid if isinstance(item, dict)] or [0]
+        [
+            _safe_int(item.get("sim_sample_count"), 0)
+            for item in candidate_grid
+            if isinstance(item, dict)
+        ]
+        or [0]
     )
     primary_books = [
         str(item.get("primary_sample_book") or "")
         for item in candidate_grid
         if isinstance(item, dict) and str(item.get("primary_sample_book") or "")
     ]
-    real_primary_books = [book for book in primary_books if book == "real" or book.startswith("real_")]
+    real_primary_books = [
+        book for book in primary_books if book == "real" or book.startswith("real_")
+    ]
     warnings: list[str] = []
     if source_quality.get("tuning_input_allowed") is False:
         warnings.append("entry_split_order_plan_source_quality_blocked")
@@ -1815,7 +2434,11 @@ def _entry_split_order_plan_summary(target_date: str) -> tuple[dict[str, Any], s
         {
             "available": True,
             "artifact": str(json_path),
-            "status": "source_quality_blocked" if source_quality.get("tuning_input_allowed") is False else "pass",
+            "status": (
+                "source_quality_blocked"
+                if source_quality.get("tuning_input_allowed") is False
+                else "pass"
+            ),
             "schema_version": payload.get("schema_version"),
             "candidate_grid_count": len(candidate_grid),
             "recommended_policy_candidate_count": len(candidates),
@@ -1826,7 +2449,11 @@ def _entry_split_order_plan_summary(target_date: str) -> tuple[dict[str, Any], s
             "real_sample_count": real_sample,
             "real_outcome_joined_sample": real_outcome,
             "sim_diagnostic_sample": sim_sample,
-            "primary_sample_book": real_primary_books[0] if real_primary_books else (primary_books[0] if primary_books else "none"),
+            "primary_sample_book": (
+                real_primary_books[0]
+                if real_primary_books
+                else (primary_books[0] if primary_books else "none")
+            ),
             "policy_file": recommended.get("policy_file"),
             "policy_version": recommended.get("policy_version"),
             "runtime_apply_allowed": recommended.get("runtime_apply_allowed"),
@@ -1839,8 +2466,12 @@ def _entry_split_order_plan_summary(target_date: str) -> tuple[dict[str, Any], s
     )
 
 
-def _scale_in_split_order_plan_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
-    json_path = SCALE_IN_SPLIT_ORDER_PLAN_DIR / f"scale_in_split_order_plan_{target_date}.json"
+def _scale_in_split_order_plan_summary(
+    target_date: str,
+) -> tuple[dict[str, Any], str | None, list[str]]:
+    json_path = (
+        SCALE_IN_SPLIT_ORDER_PLAN_DIR / f"scale_in_split_order_plan_{target_date}.json"
+    )
     payload = _load_json(json_path)
     if not payload:
         return (
@@ -1855,19 +2486,46 @@ def _scale_in_split_order_plan_summary(target_date: str) -> tuple[dict[str, Any]
             None,
             ["scale_in_split_order_plan_missing"],
         )
-    recommended = payload.get("recommended_policy") if isinstance(payload.get("recommended_policy"), dict) else {}
-    source_quality = payload.get("source_quality") if isinstance(payload.get("source_quality"), dict) else {}
-    input_summary = payload.get("input_summary") if isinstance(payload.get("input_summary"), dict) else {}
-    candidate_grid = payload.get("candidate_grid") if isinstance(payload.get("candidate_grid"), list) else []
-    candidates = recommended.get("candidates") if isinstance(recommended.get("candidates"), list) else []
+    recommended = (
+        payload.get("recommended_policy")
+        if isinstance(payload.get("recommended_policy"), dict)
+        else {}
+    )
+    source_quality = (
+        payload.get("source_quality")
+        if isinstance(payload.get("source_quality"), dict)
+        else {}
+    )
+    input_summary = (
+        payload.get("input_summary")
+        if isinstance(payload.get("input_summary"), dict)
+        else {}
+    )
+    candidate_grid = (
+        payload.get("candidate_grid")
+        if isinstance(payload.get("candidate_grid"), list)
+        else []
+    )
+    candidates = (
+        recommended.get("candidates")
+        if isinstance(recommended.get("candidates"), list)
+        else []
+    )
     baseline_count = sum(
         1
         for item in candidates
-        if isinstance(item, dict) and item.get("policy_mode") == "bounded_equal_scale_in_split_baseline"
+        if isinstance(item, dict)
+        and item.get("policy_mode") == "bounded_equal_scale_in_split_baseline"
     )
-    counterfactual_selected_count = _safe_int(input_summary.get("counterfactual_selected_count"), 0)
-    price_observation_join_gap_count = _safe_int(input_summary.get("price_observation_join_gap_count"), 0)
-    market_qty_split_only_count = _safe_int(input_summary.get("market_qty_split_only_count"), 0)
+    counterfactual_selected_count = _safe_int(
+        input_summary.get("counterfactual_selected_count"), 0
+    )
+    price_observation_join_gap_count = _safe_int(
+        input_summary.get("price_observation_join_gap_count"), 0
+    )
+    market_qty_split_only_count = _safe_int(
+        input_summary.get("market_qty_split_only_count"), 0
+    )
     warnings: list[str] = []
     if source_quality.get("tuning_input_allowed") is False:
         warnings.append("scale_in_split_order_plan_source_quality_blocked")
@@ -1877,21 +2535,33 @@ def _scale_in_split_order_plan_summary(target_date: str) -> tuple[dict[str, Any]
         {
             "available": True,
             "artifact": str(json_path),
-            "status": "source_quality_blocked" if source_quality.get("tuning_input_allowed") is False else "pass",
+            "status": (
+                "source_quality_blocked"
+                if source_quality.get("tuning_input_allowed") is False
+                else "pass"
+            ),
             "schema_version": payload.get("schema_version"),
             "candidate_grid_count": len(candidate_grid),
             "recommended_policy_candidate_count": len(candidates),
             "bounded_equal_split_baseline_candidate_count": baseline_count,
             "counterfactual_selected_count": counterfactual_selected_count,
-            "baseline_fallback_count": _safe_int(input_summary.get("baseline_fallback_count"), baseline_count),
+            "baseline_fallback_count": _safe_int(
+                input_summary.get("baseline_fallback_count"), baseline_count
+            ),
             "price_observation_join_gap_count": price_observation_join_gap_count,
-            "base_price_reconstruction_gap_count": _safe_int(input_summary.get("base_price_reconstruction_gap_count"), 0),
+            "base_price_reconstruction_gap_count": _safe_int(
+                input_summary.get("base_price_reconstruction_gap_count"), 0
+            ),
             "market_qty_split_only_count": market_qty_split_only_count,
-            "diagnostic_three_leg_candidate_count": _safe_int(input_summary.get("diagnostic_three_leg_candidate_count"), 0),
+            "diagnostic_three_leg_candidate_count": _safe_int(
+                input_summary.get("diagnostic_three_leg_candidate_count"), 0
+            ),
             "runtime_three_leg_candidate_count": _safe_int(
                 input_summary.get("runtime_three_leg_candidate_count"), 0
             ),
-            "avg_down_observation_count": _safe_int(input_summary.get("avg_down_observation_count"), 0),
+            "avg_down_observation_count": _safe_int(
+                input_summary.get("avg_down_observation_count"), 0
+            ),
             "policy_file": recommended.get("policy_file"),
             "policy_version": recommended.get("policy_version"),
             "runtime_apply_allowed": recommended.get("runtime_apply_allowed"),
@@ -1904,8 +2574,14 @@ def _scale_in_split_order_plan_summary(target_date: str) -> tuple[dict[str, Any]
     )
 
 
-def _positive_lifecycle_parent_summary(payload: dict[str, Any], *, limit: int = 8) -> dict[str, Any]:
-    parents = payload.get("parent_bucket_summaries") if isinstance(payload.get("parent_bucket_summaries"), list) else []
+def _positive_lifecycle_parent_summary(
+    payload: dict[str, Any], *, limit: int = 8
+) -> dict[str, Any]:
+    parents = (
+        payload.get("parent_bucket_summaries")
+        if isinstance(payload.get("parent_bucket_summaries"), list)
+        else []
+    )
     positive: list[dict[str, Any]] = []
     sample_ready: list[dict[str, Any]] = []
     conflicted: list[dict[str, Any]] = []
@@ -1916,13 +2592,20 @@ def _positive_lifecycle_parent_summary(payload: dict[str, Any], *, limit: int = 
         joined_sample = _safe_int(parent.get("parent_joined_sample"), 0)
         if ev is None or ev <= 0:
             continue
-        dimensions = parent.get("dimension_filters") if isinstance(parent.get("dimension_filters"), dict) else {}
+        dimensions = (
+            parent.get("dimension_filters")
+            if isinstance(parent.get("dimension_filters"), dict)
+            else {}
+        )
         item = {
-            "parent_bucket_id": parent.get("parent_bucket_id") or parent.get("policy_bucket_id"),
+            "parent_bucket_id": parent.get("parent_bucket_id")
+            or parent.get("policy_bucket_id"),
             "parent_ev_pct": ev,
             "parent_joined_sample": joined_sample,
             "complete_flow_count": _safe_int(parent.get("complete_flow_count"), 0),
-            "parent_granularity_floor_passed": bool(parent.get("parent_granularity_floor_passed")),
+            "parent_granularity_floor_passed": bool(
+                parent.get("parent_granularity_floor_passed")
+            ),
             "child_conflict_warning": bool(parent.get("child_conflict_warning")),
             "entry_score_parent": dimensions.get("entry_score_parent"),
             "entry_source_parent": dimensions.get("entry_source_parent"),
@@ -1936,8 +2619,14 @@ def _positive_lifecycle_parent_summary(payload: dict[str, Any], *, limit: int = 
             sample_ready.append(item)
         if item["child_conflict_warning"]:
             conflicted.append(item)
-    positive.sort(key=lambda item: (item["parent_ev_pct"], item["parent_joined_sample"]), reverse=True)
-    sample_ready.sort(key=lambda item: (item["parent_ev_pct"], item["parent_joined_sample"]), reverse=True)
+    positive.sort(
+        key=lambda item: (item["parent_ev_pct"], item["parent_joined_sample"]),
+        reverse=True,
+    )
+    sample_ready.sort(
+        key=lambda item: (item["parent_ev_pct"], item["parent_joined_sample"]),
+        reverse=True,
+    )
     return {
         "positive_parent_count": len(positive),
         "positive_parent_sample_ready_count": len(sample_ready),
@@ -1947,7 +2636,9 @@ def _positive_lifecycle_parent_summary(payload: dict[str, Any], *, limit: int = 
     }
 
 
-def _positive_sim_auto_summary(payload: dict[str, Any], *, limit: int = 8) -> dict[str, Any]:
+def _positive_sim_auto_summary(
+    payload: dict[str, Any], *, limit: int = 8
+) -> dict[str, Any]:
     items = (
         payload.get("sim_auto_approved_candidates")
         if isinstance(payload.get("sim_auto_approved_candidates"), list)
@@ -1990,20 +2681,28 @@ def _positive_sim_auto_summary(payload: dict[str, Any], *, limit: int = 8) -> di
         "entry_only_positive_sim_auto_approved_count": sum(
             1
             for item in positive
-            if str(item.get("classification_state") or "") == "entry_only_sim_auto_approved"
+            if str(item.get("classification_state") or "")
+            == "entry_only_sim_auto_approved"
         ),
         "entry_only_nonpositive_sim_auto_approved_count": sum(
             1
             for item in nonpositive
-            if str(item.get("classification_state") or "") == "entry_only_sim_auto_approved"
+            if str(item.get("classification_state") or "")
+            == "entry_only_sim_auto_approved"
         ),
         "top_positive_sim_auto_approved": positive[:limit],
         "top_nonpositive_sim_auto_approved": nonpositive[:limit],
     }
 
 
-def _active_positive_seed_summary(payload: dict[str, Any], *, limit: int = 8) -> dict[str, Any]:
-    seeds = payload.get("active_sim_priority_seeds") if isinstance(payload.get("active_sim_priority_seeds"), list) else []
+def _active_positive_seed_summary(
+    payload: dict[str, Any], *, limit: int = 8
+) -> dict[str, Any]:
+    seeds = (
+        payload.get("active_sim_priority_seeds")
+        if isinstance(payload.get("active_sim_priority_seeds"), list)
+        else []
+    )
     active_positive: list[dict[str, Any]] = []
     active_nonpositive = 0
     for seed in seeds:
@@ -2021,14 +2720,25 @@ def _active_positive_seed_summary(payload: dict[str, Any], *, limit: int = 8) ->
                 "complete_flow_count": seed.get("complete_flow_count"),
                 "observable_prefix": seed.get("observable_prefix"),
                 "active_collection_reason": seed.get("active_collection_reason"),
-                "live_conversion_blocked_reason": seed.get("live_conversion_blocked_reason"),
-                "positive_ev_stage_sampling_plan": seed.get("positive_ev_stage_sampling_plan"),
-                "child_conflict_stratified_targets": seed.get("child_conflict_stratified_targets"),
-                "stage_counterfactual_variant_count": len(
-                    (seed.get("stage_counterfactual_variant_plan") or {}).get("variants") or []
-                )
-                if isinstance(seed.get("stage_counterfactual_variant_plan"), dict)
-                else 0,
+                "live_conversion_blocked_reason": seed.get(
+                    "live_conversion_blocked_reason"
+                ),
+                "positive_ev_stage_sampling_plan": seed.get(
+                    "positive_ev_stage_sampling_plan"
+                ),
+                "child_conflict_stratified_targets": seed.get(
+                    "child_conflict_stratified_targets"
+                ),
+                "stage_counterfactual_variant_count": (
+                    len(
+                        (seed.get("stage_counterfactual_variant_plan") or {}).get(
+                            "variants"
+                        )
+                        or []
+                    )
+                    if isinstance(seed.get("stage_counterfactual_variant_plan"), dict)
+                    else 0
+                ),
             }
         )
     active_positive.sort(
@@ -2045,7 +2755,9 @@ def _active_positive_seed_summary(payload: dict[str, Any], *, limit: int = 8) ->
     }
 
 
-def _lifecycle_bucket_discovery_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
+def _lifecycle_bucket_discovery_summary(
+    target_date: str,
+) -> tuple[dict[str, Any], str | None, list[str]]:
     json_path = lifecycle_bucket_discovery_report_path(target_date)
     payload = _load_json(json_path)
     if not payload:
@@ -2067,7 +2779,11 @@ def _lifecycle_bucket_discovery_summary(target_date: str) -> tuple[dict[str, Any
             ["lifecycle_bucket_discovery_missing"],
         )
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-    warnings = [f"lifecycle_bucket_discovery:{item}" for item in (payload.get("warnings") or []) if str(item)]
+    warnings = [
+        f"lifecycle_bucket_discovery:{item}"
+        for item in (payload.get("warnings") or [])
+        if str(item)
+    ]
     positive_parent_summary = _positive_lifecycle_parent_summary(payload)
     positive_sim_auto_summary = _positive_sim_auto_summary(payload)
     active_seed_summary = _active_positive_seed_summary(payload)
@@ -2077,11 +2793,19 @@ def _lifecycle_bucket_discovery_summary(target_date: str) -> tuple[dict[str, Any
             "artifact": str(json_path),
             "status": summary.get("status"),
             "window_role": "new_pattern_detection",
-            "window_policy": payload.get("window_policy") or summary.get("source_window_policy") or "daily_only",
+            "window_policy": payload.get("window_policy")
+            or summary.get("source_window_policy")
+            or "daily_only",
             "candidate_count": _safe_int(summary.get("candidate_count"), 0),
-            "surfaced_candidate_count": _safe_int(summary.get("surfaced_candidate_count"), 0),
-            "sim_auto_approved_count": _safe_int(summary.get("sim_auto_approved_count"), 0),
-            "entry_only_sim_auto_approved_count": _safe_int(summary.get("entry_only_sim_auto_approved_count"), 0),
+            "surfaced_candidate_count": _safe_int(
+                summary.get("surfaced_candidate_count"), 0
+            ),
+            "sim_auto_approved_count": _safe_int(
+                summary.get("sim_auto_approved_count"), 0
+            ),
+            "entry_only_sim_auto_approved_count": _safe_int(
+                summary.get("entry_only_sim_auto_approved_count"), 0
+            ),
             "sim_auto_positive_ev_count": _safe_int(
                 summary.get("sim_auto_positive_ev_count"),
                 positive_sim_auto_summary["positive_sim_auto_approved_count"],
@@ -2092,26 +2816,40 @@ def _lifecycle_bucket_discovery_summary(target_date: str) -> tuple[dict[str, Any
             ),
             "entry_only_sim_auto_positive_ev_count": _safe_int(
                 summary.get("entry_only_sim_auto_positive_ev_count"),
-                positive_sim_auto_summary["entry_only_positive_sim_auto_approved_count"],
+                positive_sim_auto_summary[
+                    "entry_only_positive_sim_auto_approved_count"
+                ],
             ),
             "entry_only_sim_auto_nonpositive_ev_count": _safe_int(
                 summary.get("entry_only_sim_auto_nonpositive_ev_count"),
-                positive_sim_auto_summary["entry_only_nonpositive_sim_auto_approved_count"],
+                positive_sim_auto_summary[
+                    "entry_only_nonpositive_sim_auto_approved_count"
+                ],
             ),
             "lifecycle_flow_sim_probe_candidate_count": _safe_int(
                 summary.get("lifecycle_flow_sim_probe_candidate_count"),
                 0,
             ),
-            "live_auto_apply_ready_count": _safe_int(summary.get("live_auto_apply_ready_count"), 0),
-            "new_bucket_candidate_count": _safe_int(summary.get("new_bucket_candidate_count"), 0),
-            "code_patch_required_count": _safe_int(summary.get("code_patch_required_count"), 0),
-            "automation_handoff_gap_count": _safe_int(summary.get("automation_handoff_gap_count"), 0),
+            "live_auto_apply_ready_count": _safe_int(
+                summary.get("live_auto_apply_ready_count"), 0
+            ),
+            "new_bucket_candidate_count": _safe_int(
+                summary.get("new_bucket_candidate_count"), 0
+            ),
+            "code_patch_required_count": _safe_int(
+                summary.get("code_patch_required_count"), 0
+            ),
+            "automation_handoff_gap_count": _safe_int(
+                summary.get("automation_handoff_gap_count"), 0
+            ),
             "parent_bucket_count": _safe_int(summary.get("parent_bucket_count"), 0),
             "selected_parent_level": summary.get("selected_parent_level"),
             "parent_granularity_status": summary.get("parent_granularity_status"),
             "absorbed_child_count": _safe_int(summary.get("absorbed_child_count"), 0),
             "absorbed_sample_count": _safe_int(summary.get("absorbed_sample_count"), 0),
-            "child_conflict_warning_count": _safe_int(summary.get("child_conflict_warning_count"), 0),
+            "child_conflict_warning_count": _safe_int(
+                summary.get("child_conflict_warning_count"), 0
+            ),
             "positive_parent_count": _safe_int(
                 summary.get("positive_parent_count"),
                 positive_parent_summary["positive_parent_count"],
@@ -2124,7 +2862,9 @@ def _lifecycle_bucket_discovery_summary(target_date: str) -> tuple[dict[str, Any
                 summary.get("positive_parent_conflict_count"),
                 positive_parent_summary["positive_parent_conflict_count"],
             ),
-            "top_positive_parent_buckets": positive_parent_summary["top_positive_parent_buckets"],
+            "top_positive_parent_buckets": positive_parent_summary[
+                "top_positive_parent_buckets"
+            ],
             "top_sample_ready_positive_parent_buckets": positive_parent_summary[
                 "top_sample_ready_positive_parent_buckets"
             ],
@@ -2146,21 +2886,43 @@ def _lifecycle_bucket_discovery_summary(target_date: str) -> tuple[dict[str, Any
                 summary.get("active_sim_priority_nonpositive_seed_count"),
                 active_seed_summary["active_nonpositive_seed_count"],
             ),
-            "top_active_positive_seeds": active_seed_summary["top_active_positive_seeds"],
+            "top_active_positive_seeds": active_seed_summary[
+                "top_active_positive_seeds"
+            ],
             "source_contract_status": summary.get("source_contract_status"),
             "ai_two_pass_review_status": summary.get("ai_two_pass_review_status"),
-            "deterministic_proposal_count": _safe_int(summary.get("deterministic_proposal_count"), 0),
-            "ai_tier2_proposal_count": _safe_int(summary.get("ai_tier2_proposal_count"), 0),
-            "comparative_review_count": _safe_int(summary.get("comparative_review_count"), 0),
-            "selected_decision_counts": summary.get("selected_decision_counts")
-            if isinstance(summary.get("selected_decision_counts"), dict)
-            else {},
-            "selected_source_counts": summary.get("selected_source_counts")
-            if isinstance(summary.get("selected_source_counts"), dict)
-            else {},
-            "human_intervention_required": bool(summary.get("human_intervention_required")),
-            "state_counts": summary.get("state_counts") if isinstance(summary.get("state_counts"), dict) else {},
-            "stage_counts": summary.get("stage_counts") if isinstance(summary.get("stage_counts"), dict) else {},
+            "deterministic_proposal_count": _safe_int(
+                summary.get("deterministic_proposal_count"), 0
+            ),
+            "ai_tier2_proposal_count": _safe_int(
+                summary.get("ai_tier2_proposal_count"), 0
+            ),
+            "comparative_review_count": _safe_int(
+                summary.get("comparative_review_count"), 0
+            ),
+            "selected_decision_counts": (
+                summary.get("selected_decision_counts")
+                if isinstance(summary.get("selected_decision_counts"), dict)
+                else {}
+            ),
+            "selected_source_counts": (
+                summary.get("selected_source_counts")
+                if isinstance(summary.get("selected_source_counts"), dict)
+                else {}
+            ),
+            "human_intervention_required": bool(
+                summary.get("human_intervention_required")
+            ),
+            "state_counts": (
+                summary.get("state_counts")
+                if isinstance(summary.get("state_counts"), dict)
+                else {}
+            ),
+            "stage_counts": (
+                summary.get("stage_counts")
+                if isinstance(summary.get("stage_counts"), dict)
+                else {}
+            ),
             "top_surfaced": [
                 {
                     "bucket_id": item.get("bucket_id"),
@@ -2169,7 +2931,9 @@ def _lifecycle_bucket_discovery_summary(target_date: str) -> tuple[dict[str, Any
                     "live_auto_apply_family": item.get("live_auto_apply_family"),
                     "recommended_action": item.get("recommended_action"),
                     "joined_sample": item.get("joined_sample"),
-                    "source_quality_adjusted_ev_pct": item.get("source_quality_adjusted_ev_pct"),
+                    "source_quality_adjusted_ev_pct": item.get(
+                        "source_quality_adjusted_ev_pct"
+                    ),
                 }
                 for item in (payload.get("surfaced_candidates") or [])[:8]
                 if isinstance(item, dict)
@@ -2186,7 +2950,9 @@ def _lifecycle_bucket_window_report_path(target_date: str, suffix: str) -> Path:
     return base.parent / f"lifecycle_bucket_discovery_{target_date}_{safe_suffix}.json"
 
 
-def _lifecycle_bucket_windows_summary(target_date: str) -> tuple[dict[str, Any], list[str]]:
+def _lifecycle_bucket_windows_summary(
+    target_date: str,
+) -> tuple[dict[str, Any], list[str]]:
     windows = ("rolling5d", "rolling10d", "mtd")
     daily, _, daily_warnings = _lifecycle_bucket_discovery_summary(target_date)
     warnings = list(daily_warnings)
@@ -2200,20 +2966,29 @@ def _lifecycle_bucket_windows_summary(target_date: str) -> tuple[dict[str, Any],
     for suffix in windows:
         path = _lifecycle_bucket_window_report_path(target_date, suffix)
         payload = _load_json(path)
-        summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+        summary = (
+            payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+        )
         positive_parent_summary = _positive_lifecycle_parent_summary(payload)
         item = {
             "available": bool(payload),
             "artifact": str(path) if path.exists() else None,
-            "window_role": "promotion_confirmation" if suffix == "mtd" else "rolling_confirmation",
-            "window_policy": payload.get("window_policy") or summary.get("source_window_policy") or suffix,
-            "status": summary.get("status") or ("missing" if not payload else "unknown"),
+            "window_role": (
+                "promotion_confirmation" if suffix == "mtd" else "rolling_confirmation"
+            ),
+            "window_policy": payload.get("window_policy")
+            or summary.get("source_window_policy")
+            or suffix,
+            "status": summary.get("status")
+            or ("missing" if not payload else "unknown"),
             "parent_bucket_count": _safe_int(summary.get("parent_bucket_count"), 0),
             "selected_parent_level": summary.get("selected_parent_level"),
             "parent_granularity_status": summary.get("parent_granularity_status"),
             "absorbed_child_count": _safe_int(summary.get("absorbed_child_count"), 0),
             "absorbed_sample_count": _safe_int(summary.get("absorbed_sample_count"), 0),
-            "child_conflict_warning_count": _safe_int(summary.get("child_conflict_warning_count"), 0),
+            "child_conflict_warning_count": _safe_int(
+                summary.get("child_conflict_warning_count"), 0
+            ),
             "positive_parent_count": _safe_int(
                 summary.get("positive_parent_count"),
                 positive_parent_summary["positive_parent_count"],
@@ -2229,7 +3004,9 @@ def _lifecycle_bucket_windows_summary(target_date: str) -> tuple[dict[str, Any],
             "top_sample_ready_positive_parent_buckets": positive_parent_summary[
                 "top_sample_ready_positive_parent_buckets"
             ],
-            "live_auto_apply_ready_count": _safe_int(summary.get("live_auto_apply_ready_count"), 0),
+            "live_auto_apply_ready_count": _safe_int(
+                summary.get("live_auto_apply_ready_count"), 0
+            ),
             "source_contract_status": summary.get("source_contract_status"),
             "ai_two_pass_review_status": summary.get("ai_two_pass_review_status"),
         }
@@ -2252,88 +3029,160 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
     performance = _load_json(performance_path)
     calibration = _load_json(calibration_path)
     apply_manifest = _load_json(apply_path)
-    trade_metrics = trade_review.get("metrics") if isinstance(trade_review.get("metrics"), dict) else {}
-    perf_metrics = performance.get("metrics") if isinstance(performance.get("metrics"), dict) else {}
-    scalp_simulator = calibration.get("scalp_simulator") if isinstance(calibration.get("scalp_simulator"), dict) else {}
-    wait6579_counterfactual, wait6579_counterfactual_path = _wait6579_counterfactual_summary(target_date)
+    trade_metrics = (
+        trade_review.get("metrics")
+        if isinstance(trade_review.get("metrics"), dict)
+        else {}
+    )
+    perf_metrics = (
+        performance.get("metrics")
+        if isinstance(performance.get("metrics"), dict)
+        else {}
+    )
+    scalp_simulator = (
+        calibration.get("scalp_simulator")
+        if isinstance(calibration.get("scalp_simulator"), dict)
+        else {}
+    )
+    wait6579_counterfactual, wait6579_counterfactual_path = (
+        _wait6579_counterfactual_summary(target_date)
+    )
     completed_by_source = (
         calibration.get("completed_by_source")
         if isinstance(calibration.get("completed_by_source"), dict)
         else {}
     )
-    pattern_lab_summary, pattern_lab_path, pattern_lab_warnings = _pattern_lab_automation_summary(target_date)
-    swing_lab_summary, swing_lab_path, swing_lab_warnings = _swing_pattern_lab_automation_summary(target_date)
-    scalp_entry_adm_summary, scalp_entry_adm_path, scalp_entry_adm_warnings = _scalp_entry_adm_summary(target_date)
-    lifecycle_matrix_summary, lifecycle_matrix_path, lifecycle_matrix_warnings = _lifecycle_decision_matrix_summary(target_date)
-    buy_funnel_sentinel_summary, buy_funnel_sentinel_path, buy_funnel_sentinel_warnings = _buy_funnel_sentinel_summary(target_date)
-    entry_split_order_plan_summary, entry_split_order_plan_path, entry_split_order_plan_warnings = (
-        _entry_split_order_plan_summary(target_date)
+    pattern_lab_summary, pattern_lab_path, pattern_lab_warnings = (
+        _pattern_lab_automation_summary(target_date)
     )
-    scale_in_split_order_plan_summary, scale_in_split_order_plan_path, scale_in_split_order_plan_warnings = (
-        _scale_in_split_order_plan_summary(target_date)
+    swing_lab_summary, swing_lab_path, swing_lab_warnings = (
+        _swing_pattern_lab_automation_summary(target_date)
     )
+    scalp_entry_adm_summary, scalp_entry_adm_path, scalp_entry_adm_warnings = (
+        _scalp_entry_adm_summary(target_date)
+    )
+    lifecycle_matrix_summary, lifecycle_matrix_path, lifecycle_matrix_warnings = (
+        _lifecycle_decision_matrix_summary(target_date)
+    )
+    (
+        buy_funnel_sentinel_summary,
+        buy_funnel_sentinel_path,
+        buy_funnel_sentinel_warnings,
+    ) = _buy_funnel_sentinel_summary(target_date)
+    (
+        entry_split_order_plan_summary,
+        entry_split_order_plan_path,
+        entry_split_order_plan_warnings,
+    ) = _entry_split_order_plan_summary(target_date)
+    (
+        scale_in_split_order_plan_summary,
+        scale_in_split_order_plan_path,
+        scale_in_split_order_plan_warnings,
+    ) = _scale_in_split_order_plan_summary(target_date)
     (
         lifecycle_bucket_discovery_summary,
         lifecycle_bucket_discovery_path,
         lifecycle_bucket_discovery_warnings,
     ) = _lifecycle_bucket_discovery_summary(target_date)
-    lifecycle_bucket_windows_summary, lifecycle_bucket_windows_warnings = _lifecycle_bucket_windows_summary(target_date)
-    lifecycle_ai_context_summary, lifecycle_ai_context_path, lifecycle_ai_context_warnings = _lifecycle_ai_context_summary(target_date)
+    lifecycle_bucket_windows_summary, lifecycle_bucket_windows_warnings = (
+        _lifecycle_bucket_windows_summary(target_date)
+    )
+    (
+        lifecycle_ai_context_summary,
+        lifecycle_ai_context_path,
+        lifecycle_ai_context_warnings,
+    ) = _lifecycle_ai_context_summary(target_date)
     (
         lifecycle_ai_context_attribution_summary,
         lifecycle_ai_context_attribution_path,
         lifecycle_ai_context_attribution_warnings,
     ) = _lifecycle_ai_context_attribution_summary(target_date)
-    swing_discovery_summary, swing_discovery_path, swing_discovery_warnings = _swing_strategy_discovery_summary(target_date)
-    swing_lifecycle_matrix_summary, swing_lifecycle_matrix_path, swing_lifecycle_matrix_warnings = (
-        _swing_lifecycle_matrix_summary(target_date)
+    swing_discovery_summary, swing_discovery_path, swing_discovery_warnings = (
+        _swing_strategy_discovery_summary(target_date)
     )
+    (
+        swing_lifecycle_matrix_summary,
+        swing_lifecycle_matrix_path,
+        swing_lifecycle_matrix_warnings,
+    ) = _swing_lifecycle_matrix_summary(target_date)
     (
         swing_lifecycle_bucket_discovery_summary,
         swing_lifecycle_bucket_discovery_path,
         swing_lifecycle_bucket_discovery_warnings,
     ) = _swing_lifecycle_bucket_discovery_summary(target_date)
-    institutional_flow_summary, institutional_flow_path, institutional_flow_warnings = _institutional_flow_context_summary(target_date)
-    microstructure_reaction_summary, microstructure_reaction_path, microstructure_reaction_warnings = (
-        _microstructure_reaction_context_summary(target_date)
+    institutional_flow_summary, institutional_flow_path, institutional_flow_warnings = (
+        _institutional_flow_context_summary(target_date)
     )
-    code_workorder_summary, code_workorder_path, code_workorder_warnings = _code_improvement_workorder_summary(target_date)
-    pipeline_verbosity_summary, pipeline_verbosity_path, pipeline_verbosity_warnings = _pipeline_event_verbosity_summary(target_date)
-    codebase_perf_summary, codebase_perf_path, codebase_perf_warnings = _codebase_performance_workorder_summary(target_date)
-    currentness_audit_summary, currentness_audit_path, currentness_audit_warnings = _audit_summary(
-        target_date,
-        "pattern_lab_currentness_audit",
-        PATTERN_LAB_CURRENTNESS_AUDIT_DIR,
+    (
+        microstructure_reaction_summary,
+        microstructure_reaction_path,
+        microstructure_reaction_warnings,
+    ) = _microstructure_reaction_context_summary(target_date)
+    code_workorder_summary, code_workorder_path, code_workorder_warnings = (
+        _code_improvement_workorder_summary(target_date)
     )
-    pattern_lab_ai_review_summary, pattern_lab_ai_review_path, pattern_lab_ai_review_warnings = _audit_summary(
+    pipeline_verbosity_summary, pipeline_verbosity_path, pipeline_verbosity_warnings = (
+        _pipeline_event_verbosity_summary(target_date)
+    )
+    codebase_perf_summary, codebase_perf_path, codebase_perf_warnings = (
+        _codebase_performance_workorder_summary(target_date)
+    )
+    currentness_audit_summary, currentness_audit_path, currentness_audit_warnings = (
+        _audit_summary(
+            target_date,
+            "pattern_lab_currentness_audit",
+            PATTERN_LAB_CURRENTNESS_AUDIT_DIR,
+        )
+    )
+    (
+        pattern_lab_ai_review_summary,
+        pattern_lab_ai_review_path,
+        pattern_lab_ai_review_warnings,
+    ) = _audit_summary(
         target_date,
         "pattern_lab_ai_review",
         PATTERN_LAB_AI_REVIEW_DIR,
     )
-    time_window_regime_summary, time_window_regime_path, time_window_regime_warnings = _audit_summary(
-        target_date,
-        "time_window_regime_counterfactual",
-        TIME_WINDOW_REGIME_COUNTERFACTUAL_DIR,
+    time_window_regime_summary, time_window_regime_path, time_window_regime_warnings = (
+        _audit_summary(
+            target_date,
+            "time_window_regime_counterfactual",
+            TIME_WINDOW_REGIME_COUNTERFACTUAL_DIR,
+        )
     )
-    producer_gap_discovery_summary, producer_gap_discovery_path, producer_gap_discovery_warnings = _audit_summary(
+    (
+        producer_gap_discovery_summary,
+        producer_gap_discovery_path,
+        producer_gap_discovery_warnings,
+    ) = _audit_summary(
         target_date,
         "producer_gap_discovery",
         PRODUCER_GAP_DISCOVERY_DIR,
     )
-    stage_hook_workorder_summary, stage_hook_workorder_path, stage_hook_workorder_warnings = _audit_summary(
+    (
+        stage_hook_workorder_summary,
+        stage_hook_workorder_path,
+        stage_hook_workorder_warnings,
+    ) = _audit_summary(
         target_date,
         "stage_hook_workorder_discovery",
         STAGE_HOOK_WORKORDER_DISCOVERY_DIR,
     )
-    stage_hook_scaffold_summary, stage_hook_scaffold_path, stage_hook_scaffold_warnings = _audit_summary(
+    (
+        stage_hook_scaffold_summary,
+        stage_hook_scaffold_path,
+        stage_hook_scaffold_warnings,
+    ) = _audit_summary(
         target_date,
         "stage_hook_runtime_scaffold",
         STAGE_HOOK_RUNTIME_SCAFFOLD_DIR,
     )
-    propagation_audit_summary, propagation_audit_path, propagation_audit_warnings = _audit_summary(
-        target_date,
-        "pattern_lab_propagation_audit",
-        PATTERN_LAB_PROPAGATION_AUDIT_DIR,
+    propagation_audit_summary, propagation_audit_path, propagation_audit_warnings = (
+        _audit_summary(
+            target_date,
+            "pattern_lab_propagation_audit",
+            PATTERN_LAB_PROPAGATION_AUDIT_DIR,
+        )
     )
     selected_families = _selected_families(apply_manifest)
     swing_runtime_approval = _swing_runtime_approval_summary(apply_manifest)
@@ -2344,16 +3193,23 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
     budget_pass = _safe_int(perf_metrics.get("budget_pass_events"), 0)
     submitted = _safe_int(perf_metrics.get("order_bundle_submitted_events"), 0)
     submitted_rate = round((submitted / budget_pass) * 100.0, 2) if budget_pass else 0.0
-    full_fill_completed_avg = _safe_float(perf_metrics.get("full_fill_completed_avg_profit_rate"), 0.0)
-    latency_source_metrics, latency_recommendation = _latency_classifier_source_metrics(target_date, calibration)
-    latency_recommended_action = str(latency_source_metrics.get("recommended_action") or "")
-    latency_recovery_count = _safe_int(latency_source_metrics.get("would_recovery_canary_events"), 0)
-    latency_submit_routing = (
-        latency_source_metrics.get("latency_submit_routing")
-        or (
-            "latency_submit_recovery_candidate"
-            if latency_recommended_action == "bounded_apply"
-            else "latency_submit_recovery_hold"
+    full_fill_completed_avg = _safe_float(
+        perf_metrics.get("full_fill_completed_avg_profit_rate"), 0.0
+    )
+    latency_source_metrics, latency_recommendation = _latency_classifier_source_metrics(
+        target_date, calibration
+    )
+    latency_recommended_action = str(
+        latency_source_metrics.get("recommended_action") or ""
+    )
+    latency_recovery_count = _safe_int(
+        latency_source_metrics.get("would_recovery_canary_events"), 0
+    )
+    latency_submit_routing = latency_source_metrics.get("latency_submit_routing") or (
+        "latency_submit_recovery_candidate"
+        if latency_recommended_action == "bounded_apply"
+        else (
+            "latency_submit_recovery_hold"
             if latency_recovery_count > 0
             else "latency_classifier_runtime_semantics_gap"
         )
@@ -2363,11 +3219,16 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
         f"source_load_{item.get('status')}:{Path(str(item.get('path') or '')).name}"
         for item in _JSON_LOAD_DIAGNOSTICS
     ]
-    workorder_orders = code_workorder_summary.get("orders") if isinstance(code_workorder_summary.get("orders"), list) else []
+    workorder_orders = (
+        code_workorder_summary.get("orders")
+        if isinstance(code_workorder_summary.get("orders"), list)
+        else []
+    )
     entry_submit_drought_handoff_selected = bool(
         code_workorder_summary.get("entry_submit_drought_selected")
     ) or any(
-        isinstance(item, dict) and item.get("order_id") == "order_entry_submit_drought_auto_resolution"
+        isinstance(item, dict)
+        and item.get("order_id") == "order_entry_submit_drought_auto_resolution"
         for item in workorder_orders
     )
     clean_policy = clean_baseline_policy()
@@ -2387,7 +3248,9 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
             "selected_families": selected_families,
             "runtime_env_file": apply_manifest.get("runtime_env_file"),
             "runtime_apply_bridge": _runtime_apply_bridge_summary(apply_manifest),
-            "lifecycle_bucket_discovery": _lifecycle_bucket_discovery_apply_summary(apply_manifest),
+            "lifecycle_bucket_discovery": _lifecycle_bucket_discovery_apply_summary(
+                apply_manifest
+            ),
         },
         "daily_ev_summary": {
             "completed_trades": completed,
@@ -2395,32 +3258,59 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
             "win_trades": win,
             "loss_trades": loss,
             "win_rate_pct": win_rate,
-            "avg_profit_rate_pct": round(_safe_float(trade_metrics.get("avg_profit_rate"), 0.0), 4),
+            "avg_profit_rate_pct": round(
+                _safe_float(trade_metrics.get("avg_profit_rate"), 0.0), 4
+            ),
             "realized_pnl_krw": _safe_int(trade_metrics.get("realized_pnl_krw"), 0),
-            "full_fill_completed_avg_profit_rate_pct": round(full_fill_completed_avg, 4),
+            "full_fill_completed_avg_profit_rate_pct": round(
+                full_fill_completed_avg, 4
+            ),
             "source_split": completed_by_source,
         },
         "entry_funnel": {
             "budget_pass_events": budget_pass,
             "order_bundle_submitted_events": submitted,
             "budget_pass_to_submitted_rate_pct": submitted_rate,
-            "latency_block_events": _safe_int(perf_metrics.get("latency_block_events"), 0),
-            "latency_pass_events": _safe_int(perf_metrics.get("latency_pass_events"), 0),
+            "latency_block_events": _safe_int(
+                perf_metrics.get("latency_block_events"), 0
+            ),
+            "latency_pass_events": _safe_int(
+                perf_metrics.get("latency_pass_events"), 0
+            ),
             "latency_submit_routing": latency_submit_routing,
-            "latency_classifier_runtime_semantics": latency_source_metrics.get("latency_classifier_runtime_semantics")
+            "latency_classifier_runtime_semantics": latency_source_metrics.get(
+                "latency_classifier_runtime_semantics"
+            )
             or latency_source_metrics.get("profile_runtime_semantics"),
-            "latency_classifier_recommendation_status": "loaded" if latency_recommendation else "missing",
-            "latency_classifier_profile_generation": latency_source_metrics.get("latency_classifier_profile_generation")
-            or (latency_recommendation.get("profile_generation") if isinstance(latency_recommendation, dict) else {}),
+            "latency_classifier_recommendation_status": (
+                "loaded" if latency_recommendation else "missing"
+            ),
+            "latency_classifier_profile_generation": latency_source_metrics.get(
+                "latency_classifier_profile_generation"
+            )
+            or (
+                latency_recommendation.get("profile_generation")
+                if isinstance(latency_recommendation, dict)
+                else {}
+            ),
             "recommended_action": latency_recommended_action or None,
-            "recommended_action_reason": latency_source_metrics.get("recommended_action_reason"),
-            "allowed_runtime_apply": bool(latency_source_metrics.get("allowed_runtime_apply")),
+            "recommended_action_reason": latency_source_metrics.get(
+                "recommended_action_reason"
+            ),
+            "allowed_runtime_apply": bool(
+                latency_source_metrics.get("allowed_runtime_apply")
+            ),
             "calibration_state": latency_source_metrics.get("calibration_state"),
-            "would_safe_pass_events": _safe_int(latency_source_metrics.get("would_safe_pass_events"), 0),
+            "would_safe_pass_events": _safe_int(
+                latency_source_metrics.get("would_safe_pass_events"), 0
+            ),
             "would_caution_normal_events": _safe_int(
-                latency_source_metrics.get("would_caution_normal_events")
-                if latency_source_metrics.get("would_caution_normal_events") is not None
-                else latency_source_metrics.get("would_caution_reject_events"),
+                (
+                    latency_source_metrics.get("would_caution_normal_events")
+                    if latency_source_metrics.get("would_caution_normal_events")
+                    is not None
+                    else latency_source_metrics.get("would_caution_reject_events")
+                ),
                 0,
             ),
             "would_recovery_canary_events": _safe_int(
@@ -2431,7 +3321,9 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
                 latency_source_metrics.get("would_recovery_canary_attempts"),
                 0,
             ),
-            "stale_quote_override_events": _safe_int(latency_source_metrics.get("stale_quote_override_events"), 0),
+            "stale_quote_override_events": _safe_int(
+                latency_source_metrics.get("stale_quote_override_events"), 0
+            ),
             "broker_guard_bypass_candidates": _safe_int(
                 latency_source_metrics.get("broker_guard_bypass_candidates"),
                 0,
@@ -2440,26 +3332,44 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
                 latency_source_metrics.get("counterfactual_joined_sample"),
                 0,
             ),
-            "counterfactual_ev_pct": latency_source_metrics.get("counterfactual_ev_pct"),
-            "missed_winner_recovered": _safe_int(latency_source_metrics.get("missed_winner_recovered"), 0),
-            "avoided_loser_lost": _safe_int(latency_source_metrics.get("avoided_loser_lost"), 0),
+            "counterfactual_ev_pct": latency_source_metrics.get(
+                "counterfactual_ev_pct"
+            ),
+            "missed_winner_recovered": _safe_int(
+                latency_source_metrics.get("missed_winner_recovered"), 0
+            ),
+            "avoided_loser_lost": _safe_int(
+                latency_source_metrics.get("avoided_loser_lost"), 0
+            ),
             "full_fill_events": _safe_int(perf_metrics.get("full_fill_events"), 0),
-            "partial_fill_events": _safe_int(perf_metrics.get("partial_fill_events"), 0),
+            "partial_fill_events": _safe_int(
+                perf_metrics.get("partial_fill_events"), 0
+            ),
             "buy_funnel_sentinel_primary": buy_funnel_sentinel_summary.get("primary"),
             "entry_submit_drought_handoff_selected": entry_submit_drought_handoff_selected,
-            "submit_bucket_attribution_summary": lifecycle_matrix_summary.get("submit_bucket_attribution_summary"),
-            "post_submit_contract_gaps": lifecycle_matrix_summary.get("post_submit_contract_gaps"),
+            "submit_bucket_attribution_summary": lifecycle_matrix_summary.get(
+                "submit_bucket_attribution_summary"
+            ),
+            "post_submit_contract_gaps": lifecycle_matrix_summary.get(
+                "post_submit_contract_gaps"
+            ),
         },
         "holding_exit": {
             "holding_reviews": _safe_int(perf_metrics.get("holding_reviews"), 0),
             "exit_signals": _safe_int(perf_metrics.get("exit_signals"), 0),
-            "holding_review_ms_p95": round(_safe_float(perf_metrics.get("holding_review_ms_p95"), 0.0), 2),
-            "holding_ai_cache_hit_ratio": round(_safe_float(perf_metrics.get("holding_ai_cache_hit_ratio"), 0.0), 4),
+            "holding_review_ms_p95": round(
+                _safe_float(perf_metrics.get("holding_review_ms_p95"), 0.0), 2
+            ),
+            "holding_ai_cache_hit_ratio": round(
+                _safe_float(perf_metrics.get("holding_ai_cache_hit_ratio"), 0.0), 4
+            ),
         },
         "scalp_simulator": scalp_simulator,
         "missed_probe_counterfactual": wait6579_counterfactual,
         "calibration_outcome": {
-            "calibration_report": str(calibration_path) if calibration_path.exists() else None,
+            "calibration_report": (
+                str(calibration_path) if calibration_path.exists() else None
+            ),
             "run_phase": calibration.get("run_phase"),
             "runtime_change": bool(calibration.get("runtime_change")),
             "decisions": _cohort_decisions(calibration),
@@ -2493,8 +3403,12 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
         "pattern_lab_propagation_audit": propagation_audit_summary,
         "code_improvement_workorder": code_workorder_summary,
         "sources": {
-            "trade_review": str(trade_review_path) if trade_review_path.exists() else None,
-            "performance_tuning": str(performance_path) if performance_path.exists() else None,
+            "trade_review": (
+                str(trade_review_path) if trade_review_path.exists() else None
+            ),
+            "performance_tuning": (
+                str(performance_path) if performance_path.exists() else None
+            ),
             "calibration": str(calibration_path) if calibration_path.exists() else None,
             "apply_manifest": str(apply_path) if apply_path.exists() else None,
             "pattern_lab_automation": pattern_lab_path,
@@ -2524,7 +3438,9 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
             "pattern_lab_propagation_audit": propagation_audit_path,
             "code_improvement_workorder": code_workorder_path,
             "missed_probe_counterfactual": wait6579_counterfactual_path,
-            "observation_source_quality_audit": source_quality_preflight_gate.get("artifact"),
+            "observation_source_quality_audit": source_quality_preflight_gate.get(
+                "artifact"
+            ),
         },
         "source_load_diagnostics": _JSON_LOAD_DIAGNOSTICS.copy(),
         "warnings": [
@@ -2556,15 +3472,17 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
                 *pattern_lab_ai_review_warnings,
                 *time_window_regime_warnings,
                 *producer_gap_discovery_warnings,
-            *stage_hook_workorder_warnings,
-            *stage_hook_scaffold_warnings,
-            *propagation_audit_warnings,
+                *stage_hook_workorder_warnings,
+                *stage_hook_scaffold_warnings,
+                *propagation_audit_warnings,
                 *code_workorder_warnings,
                 *source_load_warnings,
                 clean_policy_warning or "",
-                "source_quality_blocked_contract_gap"
-                if source_quality_preflight_blocked(source_quality_preflight_gate)
-                else "",
+                (
+                    "source_quality_blocked_contract_gap"
+                    if source_quality_preflight_blocked(source_quality_preflight_gate)
+                    else ""
+                ),
             ]
             if message
         ],
@@ -2574,52 +3492,160 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
     report["summary"] = _top_level_summary(report)
     EV_REPORT_DIR.mkdir(parents=True, exist_ok=True)
     json_path, md_path = ev_report_paths(target_date)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     md_path.write_text(render_threshold_cycle_ev_markdown(report), encoding="utf-8")
     return report
 
 
 def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
-    ev = report.get("daily_ev_summary") if isinstance(report.get("daily_ev_summary"), dict) else {}
-    funnel = report.get("entry_funnel") if isinstance(report.get("entry_funnel"), dict) else {}
-    holding = report.get("holding_exit") if isinstance(report.get("holding_exit"), dict) else {}
-    scalp_sim = report.get("scalp_simulator") if isinstance(report.get("scalp_simulator"), dict) else {}
-    missed_probe = report.get("missed_probe_counterfactual") if isinstance(report.get("missed_probe_counterfactual"), dict) else {}
-    runtime = report.get("runtime_apply") if isinstance(report.get("runtime_apply"), dict) else {}
-    pattern_lab = report.get("pattern_lab_automation") if isinstance(report.get("pattern_lab_automation"), dict) else {}
-    swing_lab = report.get("swing_pattern_lab_automation") if isinstance(report.get("swing_pattern_lab_automation"), dict) else {}
-    scalp_entry_adm = report.get("scalp_entry_action_decision_matrix") if isinstance(report.get("scalp_entry_action_decision_matrix"), dict) else {}
-    entry_split_order_plan = report.get("entry_split_order_plan") if isinstance(report.get("entry_split_order_plan"), dict) else {}
-    scale_in_split_order_plan = report.get("scale_in_split_order_plan") if isinstance(report.get("scale_in_split_order_plan"), dict) else {}
-    lifecycle_matrix = report.get("lifecycle_decision_matrix") if isinstance(report.get("lifecycle_decision_matrix"), dict) else {}
+    ev = (
+        report.get("daily_ev_summary")
+        if isinstance(report.get("daily_ev_summary"), dict)
+        else {}
+    )
+    funnel = (
+        report.get("entry_funnel")
+        if isinstance(report.get("entry_funnel"), dict)
+        else {}
+    )
+    holding = (
+        report.get("holding_exit")
+        if isinstance(report.get("holding_exit"), dict)
+        else {}
+    )
+    scalp_sim = (
+        report.get("scalp_simulator")
+        if isinstance(report.get("scalp_simulator"), dict)
+        else {}
+    )
+    missed_probe = (
+        report.get("missed_probe_counterfactual")
+        if isinstance(report.get("missed_probe_counterfactual"), dict)
+        else {}
+    )
+    runtime = (
+        report.get("runtime_apply")
+        if isinstance(report.get("runtime_apply"), dict)
+        else {}
+    )
+    pattern_lab = (
+        report.get("pattern_lab_automation")
+        if isinstance(report.get("pattern_lab_automation"), dict)
+        else {}
+    )
+    swing_lab = (
+        report.get("swing_pattern_lab_automation")
+        if isinstance(report.get("swing_pattern_lab_automation"), dict)
+        else {}
+    )
+    scalp_entry_adm = (
+        report.get("scalp_entry_action_decision_matrix")
+        if isinstance(report.get("scalp_entry_action_decision_matrix"), dict)
+        else {}
+    )
+    entry_split_order_plan = (
+        report.get("entry_split_order_plan")
+        if isinstance(report.get("entry_split_order_plan"), dict)
+        else {}
+    )
+    scale_in_split_order_plan = (
+        report.get("scale_in_split_order_plan")
+        if isinstance(report.get("scale_in_split_order_plan"), dict)
+        else {}
+    )
+    lifecycle_matrix = (
+        report.get("lifecycle_decision_matrix")
+        if isinstance(report.get("lifecycle_decision_matrix"), dict)
+        else {}
+    )
     lifecycle_bucket_discovery = (
         report.get("lifecycle_bucket_discovery")
         if isinstance(report.get("lifecycle_bucket_discovery"), dict)
         else {}
     )
-    lifecycle_ai_context = report.get("lifecycle_ai_context") if isinstance(report.get("lifecycle_ai_context"), dict) else {}
+    lifecycle_ai_context = (
+        report.get("lifecycle_ai_context")
+        if isinstance(report.get("lifecycle_ai_context"), dict)
+        else {}
+    )
     lifecycle_ai_context_attribution = (
         report.get("lifecycle_ai_context_attribution")
         if isinstance(report.get("lifecycle_ai_context_attribution"), dict)
         else {}
     )
-    swing_discovery = report.get("swing_strategy_discovery") if isinstance(report.get("swing_strategy_discovery"), dict) else {}
-    institutional_flow = report.get("institutional_flow_context") if isinstance(report.get("institutional_flow_context"), dict) else {}
-    pipeline_verbosity = report.get("pipeline_event_verbosity") if isinstance(report.get("pipeline_event_verbosity"), dict) else {}
-    codebase_perf = report.get("codebase_performance_workorder") if isinstance(report.get("codebase_performance_workorder"), dict) else {}
-    currentness_audit = report.get("pattern_lab_currentness_audit") if isinstance(report.get("pattern_lab_currentness_audit"), dict) else {}
-    pattern_lab_ai_review = report.get("pattern_lab_ai_review") if isinstance(report.get("pattern_lab_ai_review"), dict) else {}
-    producer_gap_discovery = report.get("producer_gap_discovery") if isinstance(report.get("producer_gap_discovery"), dict) else {}
-    propagation_audit = report.get("pattern_lab_propagation_audit") if isinstance(report.get("pattern_lab_propagation_audit"), dict) else {}
-    swing_runtime = report.get("swing_runtime_approval") if isinstance(report.get("swing_runtime_approval"), dict) else {}
-    code_workorder = report.get("code_improvement_workorder") if isinstance(report.get("code_improvement_workorder"), dict) else {}
-    source_load_diagnostics = (
-        report.get("source_load_diagnostics") if isinstance(report.get("source_load_diagnostics"), list) else []
+    swing_discovery = (
+        report.get("swing_strategy_discovery")
+        if isinstance(report.get("swing_strategy_discovery"), dict)
+        else {}
     )
-    approval_requests = report.get("approval_requests") if isinstance(report.get("approval_requests"), list) else []
-    decisions = ((report.get("calibration_outcome") or {}).get("decisions") or []) if isinstance(report.get("calibration_outcome"), dict) else []
-    sim_post_sell = scalp_sim.get("post_sell_join") if isinstance(scalp_sim.get("post_sell_join"), dict) else {}
+    institutional_flow = (
+        report.get("institutional_flow_context")
+        if isinstance(report.get("institutional_flow_context"), dict)
+        else {}
+    )
+    pipeline_verbosity = (
+        report.get("pipeline_event_verbosity")
+        if isinstance(report.get("pipeline_event_verbosity"), dict)
+        else {}
+    )
+    codebase_perf = (
+        report.get("codebase_performance_workorder")
+        if isinstance(report.get("codebase_performance_workorder"), dict)
+        else {}
+    )
+    currentness_audit = (
+        report.get("pattern_lab_currentness_audit")
+        if isinstance(report.get("pattern_lab_currentness_audit"), dict)
+        else {}
+    )
+    pattern_lab_ai_review = (
+        report.get("pattern_lab_ai_review")
+        if isinstance(report.get("pattern_lab_ai_review"), dict)
+        else {}
+    )
+    producer_gap_discovery = (
+        report.get("producer_gap_discovery")
+        if isinstance(report.get("producer_gap_discovery"), dict)
+        else {}
+    )
+    propagation_audit = (
+        report.get("pattern_lab_propagation_audit")
+        if isinstance(report.get("pattern_lab_propagation_audit"), dict)
+        else {}
+    )
+    swing_runtime = (
+        report.get("swing_runtime_approval")
+        if isinstance(report.get("swing_runtime_approval"), dict)
+        else {}
+    )
+    code_workorder = (
+        report.get("code_improvement_workorder")
+        if isinstance(report.get("code_improvement_workorder"), dict)
+        else {}
+    )
+    source_load_diagnostics = (
+        report.get("source_load_diagnostics")
+        if isinstance(report.get("source_load_diagnostics"), list)
+        else []
+    )
+    approval_requests = (
+        report.get("approval_requests")
+        if isinstance(report.get("approval_requests"), list)
+        else []
+    )
+    decisions = (
+        ((report.get("calibration_outcome") or {}).get("decisions") or [])
+        if isinstance(report.get("calibration_outcome"), dict)
+        else []
+    )
+    sim_post_sell = (
+        scalp_sim.get("post_sell_join")
+        if isinstance(scalp_sim.get("post_sell_join"), dict)
+        else {}
+    )
     lines = [
         f"# Threshold Cycle Daily EV Report - {report.get('date')}",
         "",
@@ -2839,7 +3865,11 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
                 )
     else:
         lines.append("- none")
-    swing_requests = swing_runtime.get("requests") if isinstance(swing_runtime.get("requests"), list) else []
+    swing_requests = (
+        swing_runtime.get("requests")
+        if isinstance(swing_runtime.get("requests"), list)
+        else []
+    )
     lines.extend(["", "## Swing Approval Requests"])
     if swing_requests:
         for item in swing_requests:
@@ -2856,7 +3886,11 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
             "## Calibration Decisions",
         ]
     )
-    top_orders = code_workorder.get("top_orders") if isinstance(code_workorder.get("top_orders"), list) else []
+    top_orders = (
+        code_workorder.get("top_orders")
+        if isinstance(code_workorder.get("top_orders"), list)
+        else []
+    )
     if top_orders:
         lines.extend(["## Code Improvement Top Orders"])
         for item in top_orders[:3]:
@@ -2865,7 +3899,11 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
                     f"- `{item.get('order_id')}` decision=`{item.get('decision')}` subsystem=`{item.get('target_subsystem')}`"
                 )
         lines.append("")
-    top_findings = pattern_lab.get("top_consensus_findings") if isinstance(pattern_lab.get("top_consensus_findings"), list) else []
+    top_findings = (
+        pattern_lab.get("top_consensus_findings")
+        if isinstance(pattern_lab.get("top_consensus_findings"), list)
+        else []
+    )
     if top_findings:
         lines.extend(["## Pattern Lab Top Findings"])
         for item in top_findings[:3]:
@@ -2884,7 +3922,9 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
             )
     else:
         lines.append("- no calibration decisions")
-    warnings = report.get("warnings") if isinstance(report.get("warnings"), list) else []
+    warnings = (
+        report.get("warnings") if isinstance(report.get("warnings"), list) else []
+    )
     if warnings:
         lines.extend(["", "## Warnings"])
         lines.extend([f"- `{warning}`" for warning in warnings])
@@ -2902,7 +3942,9 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build threshold-cycle daily EV performance report.")
+    parser = argparse.ArgumentParser(
+        description="Build threshold-cycle daily EV performance report."
+    )
     parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
     args = parser.parse_args(argv)
     report = build_threshold_cycle_ev_report(args.target_date)
