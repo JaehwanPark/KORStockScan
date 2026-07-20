@@ -713,6 +713,13 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - daily EV 또는 postclose artifact에 기대 metric이 나타난다.
 - runtime 변경이 있다면 threshold version/family/applied value가 pipeline event 또는 runtime env JSON에서 복원 가능하다.
 
+## Python 코드 포맷 검증
+
+- Python 포맷 기준은 `pyproject.toml`의 Black 설정을 단일 source로 사용한다. 현재 고정값은 Python 3.11, Black `26.5.1`, line length `88`이다.
+- 로컬 변경은 `.venv/bin/black --check .`로 확인하며, 포맷이 필요할 때만 대상 경로를 명시해 `.venv/bin/black <path...>`를 실행한다.
+- GitHub Actions의 `Black` workflow는 모든 push와 pull request에서 Python 3.11 및 `black==26.5.1`로 `black --check .`을 실행한다.
+- 포맷 커밋에는 runtime report/cache, 주문·provider·threshold·bot 상태 변경을 포함하지 않는다. 대형 실시간 주문 모듈은 AST 동등성, compile, 대응 producer/consumer 테스트, `git diff --check`까지 통과한 뒤 독립 커밋으로 닫는다.
+
 ## 장애 대응 기준
 
 | 증상 | 우선 판정 | 다음 액션 |
