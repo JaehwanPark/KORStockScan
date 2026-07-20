@@ -53,14 +53,25 @@ LAB_DIR = Path(__file__).resolve().parent
 REPORT_DIR = PROJECT_ROOT / "data" / "report"
 SCALPING_FEEDBACK_SOURCES = {
     "threshold_cycle_ev": ("threshold_cycle_ev", "threshold_cycle_ev"),
-    "lifecycle_decision_matrix": ("lifecycle_decision_matrix", "lifecycle_decision_matrix"),
-    "lifecycle_bucket_discovery": ("lifecycle_bucket_discovery", "lifecycle_bucket_discovery"),
-    "runtime_approval_summary": ("runtime_approval_summary", "runtime_approval_summary"),
+    "lifecycle_decision_matrix": (
+        "lifecycle_decision_matrix",
+        "lifecycle_decision_matrix",
+    ),
+    "lifecycle_bucket_discovery": (
+        "lifecycle_bucket_discovery",
+        "lifecycle_bucket_discovery",
+    ),
+    "runtime_approval_summary": (
+        "runtime_approval_summary",
+        "runtime_approval_summary",
+    ),
 }
 CLEAN_TUNING_BASELINE_DATE = "2026-06-04"
 
 
-def _latest_feedback_artifact_path(report_name: str, stem: str, target_date: str) -> tuple[Path | None, str | None]:
+def _latest_feedback_artifact_path(
+    report_name: str, stem: str, target_date: str
+) -> tuple[Path | None, str | None]:
     target = str(target_date).strip()[:10]
     report_dir = REPORT_DIR / report_name
     exact = report_dir / f"{stem}_{target}.json"
@@ -73,7 +84,10 @@ def _latest_feedback_artifact_path(report_name: str, stem: str, target_date: str
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", suffix):
             continue
         source_date = suffix
-        if target >= CLEAN_TUNING_BASELINE_DATE and source_date < CLEAN_TUNING_BASELINE_DATE:
+        if (
+            target >= CLEAN_TUNING_BASELINE_DATE
+            and source_date < CLEAN_TUNING_BASELINE_DATE
+        ):
             continue
         if source_date <= target and (latest_date is None or source_date > latest_date):
             latest_path = path
@@ -82,6 +96,7 @@ def _latest_feedback_artifact_path(report_name: str, stem: str, target_date: str
 
 
 # ── 로드 ──────────────────────────────────────────────────────────────────────
+
 
 def _load_json(name: str) -> dict:
     p = OUTPUT_DIR / name
@@ -96,16 +111,18 @@ def _load_feedback_sources() -> dict:
     missing = []
     target_date = ANALYSIS_END.isoformat()
     for source_id, (report_name, stem) in SCALPING_FEEDBACK_SOURCES.items():
-        path, source_date = _latest_feedback_artifact_path(report_name, stem, target_date)
+        path, source_date = _latest_feedback_artifact_path(
+            report_name, stem, target_date
+        )
         item = {
             "source_id": source_id,
             "path": str(path) if path else "",
             "source_date": source_date,
             "target_date": target_date,
             "freshness": (
-                "same_day" if source_date == target_date
-                else "latest_available_lte_target" if source_date
-                else "missing"
+                "same_day"
+                if source_date == target_date
+                else "latest_available_lte_target" if source_date else "missing"
             ),
             "runtime_effect": False,
             "decision_authority": "source_quality_only",
@@ -115,12 +132,18 @@ def _load_feedback_sources() -> dict:
                 payload = json.loads(path.read_text(encoding="utf-8"))
             except Exception:
                 payload = {}
-            summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+            summary = (
+                payload.get("summary")
+                if isinstance(payload.get("summary"), dict)
+                else {}
+            )
             consumed.append(
                 {
                     **item,
                     "status": payload.get("status") or summary.get("status"),
-                    "warnings": payload.get("warnings") or summary.get("warnings") or [],
+                    "warnings": payload.get("warnings")
+                    or summary.get("warnings")
+                    or [],
                 }
             )
         else:
@@ -150,10 +173,13 @@ def _normalize_trade_id(df: pd.DataFrame) -> pd.DataFrame:
 
 # ── 요약 통계 payload ─────────────────────────────────────────────────────────
 
+
 def build_summary_payload(ev_result: dict, trade_df: pd.DataFrame) -> dict:
     # 유효 거래 필터
     if not trade_df.empty:
-        valid_mask = trade_df["profit_valid_flag"].astype(str).str.lower().isin(["true", "1"])
+        valid_mask = (
+            trade_df["profit_valid_flag"].astype(str).str.lower().isin(["true", "1"])
+        )
         vt = _normalize_trade_id(trade_df[valid_mask].copy())
     else:
         vt = pd.DataFrame()
@@ -164,15 +190,19 @@ def build_summary_payload(ev_result: dict, trade_df: pd.DataFrame) -> dict:
         for dt, grp in vt.groupby("rec_date"):
             equal_weight_avg = round(float(grp["profit_rate"].mean()), 3)
             simple_sum = round(float(grp["profit_rate"].sum()), 3)
-            daily_stats.append({
-                "date":          str(dt),
-                "n_trades":      int(len(grp)),
-                "diagnostic_win_rate_pct": round((grp["profit_rate"] > 0).mean() * 100, 1),
-                "median_profit": round(float(grp["profit_rate"].median()), 3),
-                "equal_weight_avg_profit_pct": equal_weight_avg,
-                "simple_sum_profit_pct": simple_sum,
-                "primary_decision_metric": "equal_weight_avg_profit_pct",
-            })
+            daily_stats.append(
+                {
+                    "date": str(dt),
+                    "n_trades": int(len(grp)),
+                    "diagnostic_win_rate_pct": round(
+                        (grp["profit_rate"] > 0).mean() * 100, 1
+                    ),
+                    "median_profit": round(float(grp["profit_rate"].median()), 3),
+                    "equal_weight_avg_profit_pct": equal_weight_avg,
+                    "simple_sum_profit_pct": simple_sum,
+                    "primary_decision_metric": "equal_weight_avg_profit_pct",
+                }
+            )
 
     # 코호트별 통계
     cohort_stats = ev_result.get("cohort_summary", [])
@@ -190,17 +220,17 @@ def build_summary_payload(ev_result: dict, trade_df: pd.DataFrame) -> dict:
     payload: dict = {
         "meta": {
             "analysis_period": f"{ANALYSIS_START} ~ {ANALYSIS_END}",
-            "generated_at":    datetime.now().isoformat(),
+            "generated_at": datetime.now().isoformat(),
             "total_valid_trades": int(len(vt)),
-            "cohorts":         ["full_fill", "partial_fill", "split-entry"],
+            "cohorts": ["full_fill", "partial_fill", "split-entry"],
         },
         "tuning_observability": observability,
-        "cohort_summary":   cohort_stats,
-        "loss_patterns":    ev_result.get("loss_patterns", []),
-        "profit_patterns":  ev_result.get("profit_patterns", []),
+        "cohort_summary": cohort_stats,
+        "loss_patterns": ev_result.get("loss_patterns", []),
+        "profit_patterns": ev_result.get("profit_patterns", []),
         "opportunity_cost": ev_result.get("opportunity_cost", []),
         "ev_backlog_titles": [b["title"] for b in ev_result.get("ev_backlog", [])],
-        "daily_stats":      daily_stats,
+        "daily_stats": daily_stats,
         "feedback_sources": _load_feedback_sources(),
         "instructions": {
             "rule_1": "full_fill / partial_fill / split-entry 혼합 해석 금지",
@@ -219,23 +249,26 @@ def build_summary_payload(ev_result: dict, trade_df: pd.DataFrame) -> dict:
 
 # ── 대표 케이스 payload ───────────────────────────────────────────────────────
 
+
 def build_cases_payload(
     trade_df: pd.DataFrame,
     seq_df: pd.DataFrame,
 ) -> dict:
     cases: dict = {
         "feedback_sources": _load_feedback_sources(),
-        "loss_split_entry":  [],
-        "loss_full_fill":    [],
+        "loss_split_entry": [],
+        "loss_full_fill": [],
         "profit_split_entry": [],
-        "profit_full_fill":  [],
+        "profit_full_fill": [],
         "integrity_flagged": [],
     }
 
     if trade_df.empty:
         return cases
 
-    valid_mask = trade_df["profit_valid_flag"].astype(str).str.lower().isin(["true", "1"])
+    valid_mask = (
+        trade_df["profit_valid_flag"].astype(str).str.lower().isin(["true", "1"])
+    )
     vt = _normalize_trade_id(trade_df[valid_mask].copy())
     if vt.empty:
         return cases
@@ -252,47 +285,69 @@ def build_cases_payload(
             "same_symbol_repeat_flag",
             "rebase_count",
         ]
-        seq_key = seq_df[[col for col in seq_join_cols if col in seq_df.columns]].drop_duplicates("trade_id")
+        seq_key = seq_df[
+            [col for col in seq_join_cols if col in seq_df.columns]
+        ].drop_duplicates("trade_id")
         seq_key["trade_id"] = seq_key["trade_id"].astype("string").str.strip()
         vt = vt.merge(seq_key, on="trade_id", how="left")
 
     def _row_to_case(row: pd.Series) -> dict:
         d: dict = {
-            "trade_id":   str(row.get("trade_id", "")),
-            "symbol":     str(row.get("symbol", "")),
-            "name":       str(row.get("name", "")),
-            "cohort":     str(row.get("cohort", "")),
+            "trade_id": str(row.get("trade_id", "")),
+            "symbol": str(row.get("symbol", "")),
+            "name": str(row.get("name", "")),
+            "cohort": str(row.get("cohort", "")),
             "entry_mode": str(row.get("entry_mode", "")),
-            "exit_rule":  str(row.get("exit_rule", "")),
+            "exit_rule": str(row.get("exit_rule", "")),
             "profit_rate": float(row.get("profit_rate", 0.0)),
-            "held_sec":   row.get("held_sec"),
-            "rec_date":   str(row.get("rec_date", "")),
+            "held_sec": row.get("held_sec"),
+            "rec_date": str(row.get("rec_date", "")),
         }
-        for flag in ["multi_rebase_flag", "partial_then_expand_flag",
-                     "rebase_integrity_flag", "same_symbol_repeat_flag"]:
+        for flag in [
+            "multi_rebase_flag",
+            "partial_then_expand_flag",
+            "rebase_integrity_flag",
+            "same_symbol_repeat_flag",
+        ]:
             if flag in row.index:
                 d[flag] = bool(row[flag]) if pd.notna(row[flag]) else False
         if "rebase_count" in row.index:
-            d["rebase_count"] = int(row["rebase_count"]) if pd.notna(row["rebase_count"]) else 0
+            d["rebase_count"] = (
+                int(row["rebase_count"]) if pd.notna(row["rebase_count"]) else 0
+            )
         return d
 
     # 손실 케이스
     loss_df = vt[vt["profit_rate"] <= 0].sort_values("profit_rate")
-    for _, row in loss_df[loss_df.get("cohort", pd.Series()) == "split-entry"].head(5).iterrows():
+    for _, row in (
+        loss_df[loss_df.get("cohort", pd.Series()) == "split-entry"].head(5).iterrows()
+    ):
         cases["loss_split_entry"].append(_row_to_case(row))
-    for _, row in loss_df[loss_df.get("cohort", pd.Series()) == "full_fill"].head(5).iterrows():
+    for _, row in (
+        loss_df[loss_df.get("cohort", pd.Series()) == "full_fill"].head(5).iterrows()
+    ):
         cases["loss_full_fill"].append(_row_to_case(row))
 
     # 수익 케이스
     profit_df = vt[vt["profit_rate"] > 0].sort_values("profit_rate", ascending=False)
-    for _, row in profit_df[profit_df.get("cohort", pd.Series()) == "split-entry"].head(5).iterrows():
+    for _, row in (
+        profit_df[profit_df.get("cohort", pd.Series()) == "split-entry"]
+        .head(5)
+        .iterrows()
+    ):
         cases["profit_split_entry"].append(_row_to_case(row))
-    for _, row in profit_df[profit_df.get("cohort", pd.Series()) == "full_fill"].head(5).iterrows():
+    for _, row in (
+        profit_df[profit_df.get("cohort", pd.Series()) == "full_fill"]
+        .head(5)
+        .iterrows()
+    ):
         cases["profit_full_fill"].append(_row_to_case(row))
 
     # 정합성 플래그 케이스
     if "rebase_integrity_flag" in vt.columns:
-        flag_df = vt[vt["rebase_integrity_flag"].astype(str).str.lower().isin(["true", "1"])]
+        flag_df = vt[
+            vt["rebase_integrity_flag"].astype(str).str.lower().isin(["true", "1"])
+        ]
         for _, row in flag_df.head(10).iterrows():
             cases["integrity_flagged"].append(_row_to_case(row))
 
@@ -301,16 +356,17 @@ def build_cases_payload(
 
 # ── 최종 리뷰 보고서 (for lead AI) ───────────────────────────────────────────
 
+
 def write_final_review_report(
     ev_result: dict,
     trade_df: pd.DataFrame,
     seq_df: pd.DataFrame,
 ) -> None:
-    loss_patterns  = ev_result.get("loss_patterns", [])
+    loss_patterns = ev_result.get("loss_patterns", [])
     profit_patterns = ev_result.get("profit_patterns", [])
-    opp_cost       = ev_result.get("opportunity_cost", [])
-    backlog        = ev_result.get("ev_backlog", [])
-    coh_summary    = ev_result.get("cohort_summary", [])
+    opp_cost = ev_result.get("opportunity_cost", [])
+    backlog = ev_result.get("ev_backlog", [])
+    coh_summary = ev_result.get("cohort_summary", [])
     observability = write_tuning_observability_outputs(
         output_dir=OUTPUT_DIR,
         target_date=ANALYSIS_END.isoformat(),
@@ -321,7 +377,9 @@ def write_final_review_report(
     # 표본 부족 서버 목록
     insufficient_note = ""
     if not trade_df.empty:
-        valid_mask = trade_df["profit_valid_flag"].astype(str).str.lower().isin(["true", "1"])
+        valid_mask = (
+            trade_df["profit_valid_flag"].astype(str).str.lower().isin(["true", "1"])
+        )
         n_valid = int(valid_mask.sum())
         if n_valid < MIN_VALID_PROFIT_SAMPLES:
             insufficient_note = (
@@ -350,10 +408,14 @@ def write_final_review_report(
     if coh_summary:
         lines.append("### 1-1. 코호트별 손익 요약")
         lines.append("")
-        lines.append("| 코호트 | 거래수 | 승률 | 손익 중앙값 | 기여손익 합 | 표본충분 |")
+        lines.append(
+            "| 코호트 | 거래수 | 승률 | 손익 중앙값 | 기여손익 합 | 표본충분 |"
+        )
         lines.append("|---|---:|---:|---:|---:|---|")
         for cs in coh_summary:
-            suf = "✓" if cs.get("sufficient") or cs.get("sample_sufficient") else "⚠️부족"
+            suf = (
+                "✓" if cs.get("sufficient") or cs.get("sample_sufficient") else "⚠️부족"
+            )
             lines.append(
                 f"| {cs['cohort']} | {cs['n']} | {cs.get('diagnostic_win_rate_pct', 0.0)}% "
                 f"| {cs['median_profit']:+.3f}% | {cs.get('simple_sum_profit_pct', 0.0):+.3f}% | {suf} |"
@@ -380,10 +442,13 @@ def write_final_review_report(
     if not loss_patterns:
         lines.append("- 분석 대상 없음")
     for i, lp in enumerate(loss_patterns, 1):
-        pre = ", ".join(
-            f"{k}={v['count']}건({v['pct']}%)"
-            for k, v in lp.get("preconditions", {}).items()
-        ) or "없음"
+        pre = (
+            ", ".join(
+                f"{k}={v['count']}건({v['pct']}%)"
+                for k, v in lp.get("preconditions", {}).items()
+            )
+            or "없음"
+        )
         lines += [
             f"**#{i}** — 코호트: `{lp['cohort']}` / 청산규칙: `{lp['exit_rule']}`",
             f"- 빈도: {lp['n']}건 | 손익 중앙값: {lp['median_profit']:+.3f}% | 기여손익: {lp['contrib_profit']:+.3f}%",
@@ -425,8 +490,10 @@ def write_final_review_report(
     ]
 
     if not seq_df.empty:
+
         def _seq_stat(col: str) -> int:
             return int(seq_df[col].sum()) if col in seq_df.columns else 0
+
         lines += [
             f"- rebase_integrity_flag: {_seq_stat('rebase_integrity_flag')}건",
             f"- partial_then_expand_flag: {_seq_stat('partial_then_expand_flag')}건",
@@ -455,9 +522,15 @@ def write_final_review_report(
         "### 3-1. EV 개선 우선순위 (report-only observation 선행)",
         "",
     ]
-    report_only_items = [b for b in backlog if b.get("적용단계") == "report_only_observation"]
-    canary_items = [b for b in backlog if b.get("적용단계") == "canary_only_candidate_after_workorder"]
-    hold_items   = [b for b in backlog if b.get("적용단계") == "hold"]
+    report_only_items = [
+        b for b in backlog if b.get("적용단계") == "report_only_observation"
+    ]
+    canary_items = [
+        b
+        for b in backlog
+        if b.get("적용단계") == "canary_only_candidate_after_workorder"
+    ]
+    hold_items = [b for b in backlog if b.get("적용단계") == "hold"]
 
     lines.append("**report-only observation (즉시 시작 가능):**")
     lines.append("")
@@ -503,23 +576,28 @@ def write_final_review_report(
 
 # ── run_manifest ──────────────────────────────────────────────────────────────
 
-def write_run_manifest(trade_df: pd.DataFrame, funnel_df: pd.DataFrame, seq_df: pd.DataFrame) -> None:
+
+def write_run_manifest(
+    trade_df: pd.DataFrame, funnel_df: pd.DataFrame, seq_df: pd.DataFrame
+) -> None:
     manifest = {
-        "run_at":  datetime.now().isoformat(),
+        "run_at": datetime.now().isoformat(),
         "version": "1.0.0",
         "data_source_mode": "none",
         "history_coverage_start": None,
         "history_coverage_end": None,
         "history_coverage_ok": False,
         "local_pipeline_source_stats": {},
-        "inputs":  [],
+        "inputs": [],
         "outputs": [],
     }
 
     source_manifest_path = OUTPUT_DIR / "source_manifest.json"
     if source_manifest_path.exists():
         try:
-            source_manifest = json.loads(source_manifest_path.read_text(encoding="utf-8"))
+            source_manifest = json.loads(
+                source_manifest_path.read_text(encoding="utf-8")
+            )
             for key in [
                 "data_source_mode",
                 "history_coverage_start",
@@ -539,11 +617,13 @@ def write_run_manifest(trade_df: pd.DataFrame, funnel_df: pd.DataFrame, seq_df: 
         ("sequence_fact.csv", seq_df),
     ]:
         p = OUTPUT_DIR / fname
-        manifest["inputs"].append({
-            "file":  fname,
-            "rows":  int(len(df)) if not df.empty else 0,
-            "exists": p.exists(),
-        })
+        manifest["inputs"].append(
+            {
+                "file": fname,
+                "rows": int(len(df)) if not df.empty else 0,
+                "exists": p.exists(),
+            }
+        )
 
     for fname in [
         "data_quality_report.md",
@@ -559,17 +639,20 @@ def write_run_manifest(trade_df: pd.DataFrame, funnel_df: pd.DataFrame, seq_df: 
         manifest["outputs"].append({"file": fname, "exists": p.exists()})
 
     path = OUTPUT_DIR / "run_manifest.json"
-    path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     print(f"  → {path}")
 
 
 # ── 진입점 ────────────────────────────────────────────────────────────────────
 
+
 def main() -> None:
     print("[payload] loading datasets …")
     ev_result = _load_json("ev_analysis_result.json")
-    trade_df  = _load_csv("trade_fact.csv")
-    seq_df    = _load_csv("sequence_fact.csv")
+    trade_df = _load_csv("trade_fact.csv")
+    seq_df = _load_csv("sequence_fact.csv")
     funnel_df = _load_csv("funnel_fact.csv")
 
     print("[payload] building summary payload …")

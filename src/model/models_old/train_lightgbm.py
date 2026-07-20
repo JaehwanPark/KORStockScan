@@ -14,17 +14,21 @@ from sqlalchemy import create_engine, text
 # 1. 디렉토리 및 DB 경로 설정
 # ==========================================
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, '..', '..'))
+PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, "..", ".."))
 
-DATA_DIR = os.path.join(PROJECT_ROOT, 'data')
+DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 
-MODEL_PATH = os.path.join(DATA_DIR, 'hybrid_lgbm_model.pkl')
-FEATURE_PATH = os.path.join(DATA_DIR, 'lgbm_features.pkl')
+MODEL_PATH = os.path.join(DATA_DIR, "hybrid_lgbm_model.pkl")
+FEATURE_PATH = os.path.join(DATA_DIR, "lgbm_features.pkl")
 
 # 🎯 PostgreSQL 연결 설정
-DB_URL = os.getenv("DATABASE_URL", "postgresql://quant_admin:quant_password_123!@localhost:5432/korstockscan")
+DB_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql://quant_admin:quant_password_123!@localhost:5432/korstockscan",
+)
 engine = create_engine(DB_URL)
+
 
 # ==========================================
 # 2. 우량 대장주 필터링 (FDR + PostgreSQL Fallback)
@@ -32,28 +36,30 @@ engine = create_engine(DB_URL)
 def get_hybrid_top_codes():
     print("[1/5] 최신 시장 데이터 기반 우량 대장주 필터링 중...")
     try:
-        df_krx = fdr.StockListing('KOSPI')
-        top_500 = df_krx.sort_values(by='Marcap', ascending=False).head(500)
-        target_top = top_500.sort_values(by='Volume', ascending=False).head(300)
+        df_krx = fdr.StockListing("KOSPI")
+        top_500 = df_krx.sort_values(by="Marcap", ascending=False).head(500)
+        target_top = top_500.sort_values(by="Volume", ascending=False).head(300)
         print(f"✅ FDR 기반으로 시총/거래량 상위 {len(target_top)}종목을 추출했습니다.")
-        return target_top['Code'].tolist()
+        return target_top["Code"].tolist()
     except Exception:
         try:
             print(f"⚠️ FDR 종목 리스트 수집 실패. DB 데이터로 우회합니다...")
             with engine.connect() as conn:
                 latest_date_query = "SELECT MAX(quote_date) FROM daily_stock_quotes"
                 latest_date = pd.read_sql(text(latest_date_query), conn).iloc[0, 0]
-                
+
                 top_codes_query = f"""
                     SELECT stock_code FROM daily_stock_quotes 
                     WHERE quote_date = '{latest_date}' 
                     ORDER BY volume DESC LIMIT 300
                 """
                 top_codes_df = pd.read_sql(text(top_codes_query), conn)
-                
-            print(f"✅ DB 기반 최근 거래량 상위 {len(top_codes_df)}종목을 추출했습니다.")
-            return top_codes_df['stock_code'].tolist() if not top_codes_df.empty else []
-        except Exception as e: 
+
+            print(
+                f"✅ DB 기반 최근 거래량 상위 {len(top_codes_df)}종목을 추출했습니다."
+            )
+            return top_codes_df["stock_code"].tolist() if not top_codes_df.empty else []
+        except Exception as e:
             print(f"❌ DB 종목 추출 실패: {e}")
             return []
 
@@ -82,50 +88,56 @@ def load_and_preprocess(codes):
                 ORDER BY quote_date ASC
             """
             df = pd.read_sql(text(query), conn)
-            
-            if df.empty or len(df) < 150: 
+
+            if df.empty or len(df) < 150:
                 continue
 
-            df = df.sort_values('quote_date', ascending=True).reset_index(drop=True)
+            df = df.sort_values("quote_date", ascending=True).reset_index(drop=True)
 
             # 파생 변수 계산
-            df['vol_change'] = df['volume'].pct_change()
-            df['ma_ratio'] = df['close_price'] / (df['ma20'] + 1e-9)
-            df['rsi_slope'] = df['rsi'].diff()
-            df['range_ratio'] = (df['high_price'] - df['low_price']) / (df['close_price'] + 1e-9)
-            df['vol_momentum'] = df['volume'] / (df['volume'].rolling(window=5).mean() + 1e-9)
-            df['dist_ma5'] = df['close_price'] / (df['ma5'] + 1e-9)
+            df["vol_change"] = df["volume"].pct_change()
+            df["ma_ratio"] = df["close_price"] / (df["ma20"] + 1e-9)
+            df["rsi_slope"] = df["rsi"].diff()
+            df["range_ratio"] = (df["high_price"] - df["low_price"]) / (
+                df["close_price"] + 1e-9
+            )
+            df["vol_momentum"] = df["volume"] / (
+                df["volume"].rolling(window=5).mean() + 1e-9
+            )
+            df["dist_ma5"] = df["close_price"] / (df["ma5"] + 1e-9)
 
             # 수급 비율 및 신용잔고 피처
-            vol_safe = df['volume'] + 1e-9
-            df['foreign_net'] = df['foreign_net'].fillna(0)
-            df['inst_net'] = df['inst_net'].fillna(0)
-            df['margin_rate'] = df['margin_rate'].fillna(0)
+            vol_safe = df["volume"] + 1e-9
+            df["foreign_net"] = df["foreign_net"].fillna(0)
+            df["inst_net"] = df["inst_net"].fillna(0)
+            df["margin_rate"] = df["margin_rate"].fillna(0)
 
-            df['foreign_vol_ratio'] = df['foreign_net'] / vol_safe
-            df['inst_vol_ratio'] = df['inst_net'] / vol_safe
-            df['margin_rate_change'] = df['margin_rate'].diff()
-            df['margin_rate_roll5'] = df['margin_rate'].rolling(5).mean()
+            df["foreign_vol_ratio"] = df["foreign_net"] / vol_safe
+            df["inst_vol_ratio"] = df["inst_net"] / vol_safe
+            df["margin_rate_change"] = df["margin_rate"].diff()
+            df["margin_rate_roll5"] = df["margin_rate"].rolling(5).mean()
 
             # 🎯 3일 단기 스윙 정답지(Target) 생성
-            df['next1_open'] = df['open_price'].shift(-1)
+            df["next1_open"] = df["open_price"].shift(-1)
 
             for i in range(1, 4):
-                df[f'next{i}_high'] = df['high_price'].shift(-i)
-                df[f'next{i}_low'] = df['low_price'].shift(-i)
-                df[f'next{i}_close'] = df['close_price'].shift(-i)
+                df[f"next{i}_high"] = df["high_price"].shift(-i)
+                df[f"next{i}_low"] = df["low_price"].shift(-i)
+                df[f"next{i}_close"] = df["close_price"].shift(-i)
 
-            df['max_high_3d'] = df[['next1_high', 'next2_high', 'next3_high']].max(axis=1)
-            df['min_low_3d'] = df[['next1_low', 'next2_low', 'next3_low']].min(axis=1)
+            df["max_high_3d"] = df[["next1_high", "next2_high", "next3_high"]].max(
+                axis=1
+            )
+            df["min_low_3d"] = df[["next1_low", "next2_low", "next3_low"]].min(axis=1)
 
-            hit_target = (df['max_high_3d'] / (df['next1_open'] + 1e-9)) >= 1.045
-            no_stop_loss = (df['min_low_3d'] / (df['next1_open'] + 1e-9)) >= 0.970
+            hit_target = (df["max_high_3d"] / (df["next1_open"] + 1e-9)) >= 1.045
+            no_stop_loss = (df["min_low_3d"] / (df["next1_open"] + 1e-9)) >= 0.970
 
-            df['target'] = np.where(hit_target & no_stop_loss, 1, 0)
+            df["target"] = np.where(hit_target & no_stop_loss, 1, 0)
 
             df = df.replace([np.inf, -np.inf], np.nan).dropna()
-            
-            if not df.empty: 
+
+            if not df.empty:
                 all_data.append(df)
 
     return pd.concat(all_data, axis=0) if all_data else pd.DataFrame()
@@ -136,46 +148,77 @@ def load_and_preprocess(codes):
 # ==========================================
 def train_hybrid_lgbm():
     target_codes = get_hybrid_top_codes()
-    if not target_codes: 
+    if not target_codes:
         print("❌ 대상 종목이 없어 학습을 종료합니다.")
         return
-        
+
     total_df = load_and_preprocess(target_codes)
-    if total_df.empty: 
+    if total_df.empty:
         print("❌ 학습할 데이터가 존재하지 않습니다.")
         return
 
     # 💡 [업데이트] DB 컬럼명에 맞춘 피처 리스트 (중복된 BB_Pos 제거하고 bbp 통일)
     features = [
-        'bbp', 'rsi', 'rsi_slope', 'range_ratio', 'vol_momentum', 'vol_change', 
-        'atr', 'bbb', 'foreign_vol_ratio', 'inst_vol_ratio', 'margin_rate_change', 'margin_rate_roll5'
+        "bbp",
+        "rsi",
+        "rsi_slope",
+        "range_ratio",
+        "vol_momentum",
+        "vol_change",
+        "atr",
+        "bbb",
+        "foreign_vol_ratio",
+        "inst_vol_ratio",
+        "margin_rate_change",
+        "margin_rate_roll5",
     ]
 
-    unique_dates = sorted(total_df['quote_date'].unique())
+    unique_dates = sorted(total_df["quote_date"].unique())
     split_date = unique_dates[int(len(unique_dates) * 0.8)]
-    train_df, test_df = total_df[total_df['quote_date'] < split_date], total_df[total_df['quote_date'] >= split_date]
+    train_df, test_df = (
+        total_df[total_df["quote_date"] < split_date],
+        total_df[total_df["quote_date"] >= split_date],
+    )
 
-    X_train, y_train = train_df[features], train_df['target']
-    X_test, y_test = test_df[features], test_df['target']
+    X_train, y_train = train_df[features], train_df["target"]
+    X_test, y_test = test_df[features], test_df["target"]
 
     neg_count, pos_count = (y_train == 0).sum(), (y_train == 1).sum()
     dynamic_weight = 1.0 if pos_count == 0 else neg_count / pos_count
 
     model = LGBMClassifier(
-        n_estimators=2000, learning_rate=0.005, num_leaves=31, max_depth=5, min_child_samples=20,
-        feature_fraction=0.8, bagging_fraction=0.8, subsample_freq=5, scale_pos_weight=dynamic_weight,
-        random_state=42, n_jobs=-1, force_col_wise=True
+        n_estimators=2000,
+        learning_rate=0.005,
+        num_leaves=31,
+        max_depth=5,
+        min_child_samples=20,
+        feature_fraction=0.8,
+        bagging_fraction=0.8,
+        subsample_freq=5,
+        scale_pos_weight=dynamic_weight,
+        random_state=42,
+        n_jobs=-1,
+        force_col_wise=True,
     )
-    
-    print(f"[3/5] LightGBM 모델 학습 시작... (Train: {len(train_df)}행, Test: {len(test_df)}행)")
-    model.fit(X_train, y_train, eval_set=[(X_test, y_test)], eval_metric='logloss',
-              callbacks=[early_stopping(100), log_evaluation(100)])
+
+    print(
+        f"[3/5] LightGBM 모델 학습 시작... (Train: {len(train_df)}행, Test: {len(test_df)}행)"
+    )
+    model.fit(
+        X_train,
+        y_train,
+        eval_set=[(X_test, y_test)],
+        eval_metric="logloss",
+        callbacks=[early_stopping(100), log_evaluation(100)],
+    )
 
     print("\n[4/5] 성능 검증 중...")
     prob = model.predict_proba(X_test)[:, 1]
     th = 0.50 if prob.max() >= 0.50 else prob.max() * 0.9
     pred = (prob >= th).astype(int)
-    print(f"✅ LightGBM 검증 정밀도: {precision_score(y_test, pred, zero_division=0):.2%}")
+    print(
+        f"✅ LightGBM 검증 정밀도: {precision_score(y_test, pred, zero_division=0):.2%}"
+    )
 
     joblib.dump(model, MODEL_PATH)
     joblib.dump(features, FEATURE_PATH)

@@ -86,8 +86,19 @@ def analyze_selection_bottleneck(
 ) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
     total_dates = len(funnel_fact)
-    zero_selected = int((funnel_fact["selected_count"] <= 0).sum()) if not funnel_fact.empty else 0
-    low_selected = int(((funnel_fact["selected_count"] > 0) & (funnel_fact["selected_count"] < 3)).sum()) if not funnel_fact.empty else 0
+    zero_selected = (
+        int((funnel_fact["selected_count"] <= 0).sum()) if not funnel_fact.empty else 0
+    )
+    low_selected = (
+        int(
+            (
+                (funnel_fact["selected_count"] > 0)
+                & (funnel_fact["selected_count"] < 3)
+            ).sum()
+        )
+        if not funnel_fact.empty
+        else 0
+    )
 
     if total_dates == 0:
         findings.append(
@@ -113,12 +124,22 @@ def analyze_selection_bottleneck(
                 "lifecycle_stage": "selection",
                 "route": "design_family_candidate",
                 "mapped_family": "swing_model_floor",
-                "confidence": "solo" if zero_selected < MIN_VALID_SAMPLES else "consensus",
+                "confidence": (
+                    "solo" if zero_selected < MIN_VALID_SAMPLES else "consensus"
+                ),
                 "evidence": {
                     "zero_selected_dates": _safe_int(zero_selected),
                     "total_dates": total_dates,
-                    "current_floor_bull": _nan_none(funnel_fact["floor_bull"].iloc[-1]) if not funnel_fact.empty else None,
-                    "current_floor_bear": _nan_none(funnel_fact["floor_bear"].iloc[-1]) if not funnel_fact.empty else None,
+                    "current_floor_bull": (
+                        _nan_none(funnel_fact["floor_bull"].iloc[-1])
+                        if not funnel_fact.empty
+                        else None
+                    ),
+                    "current_floor_bear": (
+                        _nan_none(funnel_fact["floor_bear"].iloc[-1])
+                        if not funnel_fact.empty
+                        else None
+                    ),
                 },
                 "runtime_effect": False,
                 "expected_ev_effect": "Lower floor could increase candidate count but risks quality degradation.",
@@ -133,7 +154,9 @@ def analyze_selection_bottleneck(
                 "lifecycle_stage": "selection",
                 "route": "attach_existing_family",
                 "mapped_family": "swing_selection_top_k",
-                "confidence": "solo" if low_selected < MIN_VALID_SAMPLES else "consensus",
+                "confidence": (
+                    "solo" if low_selected < MIN_VALID_SAMPLES else "consensus"
+                ),
                 "evidence": {
                     "low_selected_dates": _safe_int(low_selected),
                     "total_dates": total_dates,
@@ -153,7 +176,9 @@ def analyze_selection_bottleneck(
                 "lifecycle_stage": "selection",
                 "route": "design_family_candidate",
                 "mapped_family": "swing_model_floor",
-                "confidence": "solo" if fallback_count < MIN_VALID_SAMPLES else "consensus",
+                "confidence": (
+                    "solo" if fallback_count < MIN_VALID_SAMPLES else "consensus"
+                ),
                 "evidence": {
                     "fallback_dates": _safe_int(fallback_count),
                     "total_dates": total_dates,
@@ -183,12 +208,24 @@ def analyze_entry_bottleneck(funnel_fact: pd.DataFrame) -> list[dict[str, Any]]:
         )
         return findings
 
-    total_blocked_gatekeeper = _safe_int(funnel_fact["blocked_gatekeeper_reject_selection_unique"].sum())
-    total_blocked_gatekeeper_carryover = _safe_int(funnel_fact["blocked_gatekeeper_reject_carryover_unique"].sum())
-    total_blocked_gap = _safe_int(funnel_fact["blocked_swing_gap_selection_unique"].sum())
-    total_blocked_gap_carryover = _safe_int(funnel_fact["blocked_swing_gap_carryover_unique"].sum())
-    total_market_block = _safe_int(funnel_fact["market_regime_block_selection_unique"].sum())
-    total_market_block_carryover = _safe_int(funnel_fact["market_regime_block_carryover_unique"].sum())
+    total_blocked_gatekeeper = _safe_int(
+        funnel_fact["blocked_gatekeeper_reject_selection_unique"].sum()
+    )
+    total_blocked_gatekeeper_carryover = _safe_int(
+        funnel_fact["blocked_gatekeeper_reject_carryover_unique"].sum()
+    )
+    total_blocked_gap = _safe_int(
+        funnel_fact["blocked_swing_gap_selection_unique"].sum()
+    )
+    total_blocked_gap_carryover = _safe_int(
+        funnel_fact["blocked_swing_gap_carryover_unique"].sum()
+    )
+    total_market_block = _safe_int(
+        funnel_fact["market_regime_block_selection_unique"].sum()
+    )
+    total_market_block_carryover = _safe_int(
+        funnel_fact["market_regime_block_carryover_unique"].sum()
+    )
     total_submitted = _safe_int(funnel_fact["submitted_unique_records"].sum())
     total_selected = _safe_int(funnel_fact["selected_count"].sum())
 
@@ -196,14 +233,18 @@ def analyze_entry_bottleneck(funnel_fact: pd.DataFrame) -> list[dict[str, Any]]:
 
     if total_blocked_gatekeeper > 0 or total_blocked_gatekeeper_carryover > 0:
         route = "attach_existing_family" if selection_blocked else "defer_evidence"
-        confidence_val = "solo" if total_blocked_gatekeeper < MIN_VALID_SAMPLES else "consensus"
+        confidence_val = (
+            "solo" if total_blocked_gatekeeper < MIN_VALID_SAMPLES else "consensus"
+        )
         findings.append(
             {
                 "finding_id": f"{FINDING_ID_PREFIX}_entry_gatekeeper_reject",
                 "title": "Gatekeeper rejects swing entry candidates",
                 "lifecycle_stage": "entry",
                 "route": route,
-                "mapped_family": "swing_gatekeeper_accept_reject" if selection_blocked else None,
+                "mapped_family": (
+                    "swing_gatekeeper_accept_reject" if selection_blocked else None
+                ),
                 "confidence": confidence_val,
                 "evidence": {
                     "blocked_selection_unique": total_blocked_gatekeeper,
@@ -211,9 +252,11 @@ def analyze_entry_bottleneck(funnel_fact: pd.DataFrame) -> list[dict[str, Any]]:
                     "selected_count": total_selected,
                 },
                 "runtime_effect": False,
-                "expected_ev_effect": "Review gatekeeper criteria for swing-specific calibration."
-                if selection_blocked
-                else "Carryover-only blocker; observe before attaching to threshold family.",
+                "expected_ev_effect": (
+                    "Review gatekeeper criteria for swing-specific calibration."
+                    if selection_blocked
+                    else "Carryover-only blocker; observe before attaching to threshold family."
+                ),
             }
         )
 
@@ -221,7 +264,9 @@ def analyze_entry_bottleneck(funnel_fact: pd.DataFrame) -> list[dict[str, Any]]:
 
     if total_blocked_gap > 0 or total_blocked_gap_carryover > 0:
         route = "design_family_candidate" if gap_selection_blocked else "defer_evidence"
-        confidence_val = "solo" if total_blocked_gap < MIN_VALID_SAMPLES else "consensus"
+        confidence_val = (
+            "solo" if total_blocked_gap < MIN_VALID_SAMPLES else "consensus"
+        )
         findings.append(
             {
                 "finding_id": f"{FINDING_ID_PREFIX}_entry_gap_block",
@@ -236,9 +281,11 @@ def analyze_entry_bottleneck(funnel_fact: pd.DataFrame) -> list[dict[str, Any]]:
                     "selected_count": total_selected,
                 },
                 "runtime_effect": False,
-                "expected_ev_effect": "No existing swing gap family exists; design new gap/protection threshold family candidate."
-                if gap_selection_blocked
-                else "Carryover-only blocker; observe before designing new family.",
+                "expected_ev_effect": (
+                    "No existing swing gap family exists; design new gap/protection threshold family candidate."
+                    if gap_selection_blocked
+                    else "Carryover-only blocker; observe before designing new family."
+                ),
             }
         )
 
@@ -250,7 +297,9 @@ def analyze_entry_bottleneck(funnel_fact: pd.DataFrame) -> list[dict[str, Any]]:
                 "lifecycle_stage": "entry",
                 "route": "defer_evidence",
                 "mapped_family": "swing_market_regime_sensitivity",
-                "confidence": "solo" if total_market_block < MIN_VALID_SAMPLES else "consensus",
+                "confidence": (
+                    "solo" if total_market_block < MIN_VALID_SAMPLES else "consensus"
+                ),
                 "evidence": {
                     "blocked_selection_unique": total_market_block,
                     "blocked_carryover_unique": total_market_block_carryover,
@@ -269,7 +318,9 @@ def analyze_entry_bottleneck(funnel_fact: pd.DataFrame) -> list[dict[str, Any]]:
                 "lifecycle_stage": "entry",
                 "route": "design_family_candidate",
                 "mapped_family": None,
-                "confidence": "solo" if total_selected < MIN_VALID_SAMPLES else "consensus",
+                "confidence": (
+                    "solo" if total_selected < MIN_VALID_SAMPLES else "consensus"
+                ),
                 "evidence": {
                     "selected_count": total_selected,
                     "submitted_count": total_submitted,
@@ -295,9 +346,17 @@ def analyze_holding_exit_bottleneck(
 ) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
 
-    total_entered = _safe_int(funnel_fact["entered_rows"].sum()) if not funnel_fact.empty else 0
-    total_completed = _safe_int(funnel_fact["completed_rows"].sum()) if not funnel_fact.empty else 0
-    total_valid = _safe_int(funnel_fact["valid_profit_rows"].sum()) if not funnel_fact.empty else 0
+    total_entered = (
+        _safe_int(funnel_fact["entered_rows"].sum()) if not funnel_fact.empty else 0
+    )
+    total_completed = (
+        _safe_int(funnel_fact["completed_rows"].sum()) if not funnel_fact.empty else 0
+    )
+    total_valid = (
+        _safe_int(funnel_fact["valid_profit_rows"].sum())
+        if not funnel_fact.empty
+        else 0
+    )
 
     if not trade_fact.empty:
         completed = trade_fact[trade_fact["completed"] == True]
@@ -307,8 +366,18 @@ def analyze_holding_exit_bottleneck(
             loss_count = int((valid["profit_rate"] < 0).sum()) if not valid.empty else 0
             win_count_all = int((valid["profit"] > 0).sum()) if not valid.empty else 0
             loss_count_all = int((valid["profit"] < 0).sum()) if not valid.empty else 0
-            avg_win = round(float(valid[valid["profit_rate"] > 0]["profit_rate"].mean()), 4) if not valid.empty and win_count > 0 else None
-            avg_loss = round(abs(float(valid[valid["profit_rate"] < 0]["profit_rate"].mean())), 4) if not valid.empty and loss_count > 0 else None
+            avg_win = (
+                round(float(valid[valid["profit_rate"] > 0]["profit_rate"].mean()), 4)
+                if not valid.empty and win_count > 0
+                else None
+            )
+            avg_loss = (
+                round(
+                    abs(float(valid[valid["profit_rate"] < 0]["profit_rate"].mean())), 4
+                )
+                if not valid.empty and loss_count > 0
+                else None
+            )
             total_pnl = _safe_float(valid["profit"].sum()) if not valid.empty else 0.0
 
             if win_count_all + loss_count_all >= MIN_VALID_SAMPLES:
@@ -319,7 +388,11 @@ def analyze_holding_exit_bottleneck(
                         "lifecycle_stage": "holding_exit",
                         "route": "attach_existing_family",
                         "mapped_family": "swing_trailing_stop_time_stop",
-                        "confidence": "consensus" if win_count_all + loss_count_all >= 5 else "solo",
+                        "confidence": (
+                            "consensus"
+                            if win_count_all + loss_count_all >= 5
+                            else "solo"
+                        ),
                         "evidence": {
                             "completed_trades": len(completed),
                             "valid_profit_trades": len(valid),
@@ -340,7 +413,10 @@ def analyze_holding_exit_bottleneck(
         else {}
     )
     if exit_sources:
-        sources_str = ", ".join(f"{k}: {v}" for k, v in sorted(exit_sources.items(), key=lambda x: -x[1])[:5])
+        sources_str = ", ".join(
+            f"{k}: {v}"
+            for k, v in sorted(exit_sources.items(), key=lambda x: -x[1])[:5]
+        )
         findings.append(
             {
                 "finding_id": f"{FINDING_ID_PREFIX}_holding_exit_source_distribution",
@@ -364,7 +440,10 @@ def analyze_holding_exit_bottleneck(
                 "route": "defer_evidence",
                 "mapped_family": None,
                 "confidence": "low_sample",
-                "evidence": {"entered_rows": total_entered, "completed_rows": total_completed},
+                "evidence": {
+                    "entered_rows": total_entered,
+                    "completed_rows": total_completed,
+                },
                 "runtime_effect": False,
                 "expected_ev_effect": "Insufficient evidence; defer until more trades complete.",
             }
@@ -388,7 +467,11 @@ def analyze_scale_in_bottleneck(
                     "lifecycle_stage": "scale_in",
                     "route": "attach_existing_family",
                     "mapped_family": "swing_scale_in_ofi_qi_confirmation",
-                    "confidence": "solo" if len(scale_in_events) < MIN_VALID_SAMPLES else "consensus",
+                    "confidence": (
+                        "solo"
+                        if len(scale_in_events) < MIN_VALID_SAMPLES
+                        else "consensus"
+                    ),
                     "evidence": {"scale_in_events": len(scale_in_events)},
                     "runtime_effect": False,
                     "expected_ev_effect": "Evaluate PYRAMID/AVG_DOWN outcome quality with OFI/QI confirmation.",
@@ -406,7 +489,9 @@ def analyze_scale_in_bottleneck(
                     "lifecycle_stage": "scale_in",
                     "route": "attach_existing_family",
                     "mapped_family": "swing_pyramid_trigger",
-                    "confidence": "solo" if pyramid_count < MIN_VALID_SAMPLES else "consensus",
+                    "confidence": (
+                        "solo" if pyramid_count < MIN_VALID_SAMPLES else "consensus"
+                    ),
                     "evidence": {"pyramid_count": pyramid_count},
                     "runtime_effect": False,
                     "expected_ev_effect": "Assess PYRAMID trigger threshold and post-add MFE.",
@@ -420,7 +505,9 @@ def analyze_scale_in_bottleneck(
                     "lifecycle_stage": "scale_in",
                     "route": "attach_existing_family",
                     "mapped_family": "swing_avg_down_eligibility",
-                    "confidence": "solo" if avg_down_count < MIN_VALID_SAMPLES else "consensus",
+                    "confidence": (
+                        "solo" if avg_down_count < MIN_VALID_SAMPLES else "consensus"
+                    ),
                     "evidence": {"avg_down_count": avg_down_count},
                     "runtime_effect": False,
                     "expected_ev_effect": "Assess AVG_DOWN eligibility criteria and risk of loss extension.",
@@ -455,40 +542,68 @@ def analyze_ofi_qi_quality(ofi_qi_fact: pd.DataFrame) -> list[dict[str, Any]]:
     }
     stale_rows = ofi_qi_fact[ofi_qi_fact["stale_missing_flag"] == True].copy()
     reason_combination_counts = (
-        stale_rows["stale_missing_reasons"].fillna("unknown").replace("", "unknown").str.replace(",", "+").value_counts().to_dict()
+        stale_rows["stale_missing_reasons"]
+        .fillna("unknown")
+        .replace("", "unknown")
+        .str.replace(",", "+")
+        .value_counts()
+        .to_dict()
         if "stale_missing_reasons" in stale_rows and not stale_rows.empty
         else {}
     )
     reason_combination_unique_record_counts: dict[str, int] = {}
-    if not stale_rows.empty and "stale_missing_reasons" in stale_rows and "record_id" in stale_rows:
+    if (
+        not stale_rows.empty
+        and "stale_missing_reasons" in stale_rows
+        and "record_id" in stale_rows
+    ):
         tmp = stale_rows.copy()
-        tmp["_reason_combination"] = tmp["stale_missing_reasons"].fillna("unknown").replace("", "unknown").str.replace(",", "+")
+        tmp["_reason_combination"] = (
+            tmp["stale_missing_reasons"]
+            .fillna("unknown")
+            .replace("", "unknown")
+            .str.replace(",", "+")
+        )
         reason_combination_unique_record_counts = {
             str(key): int(value)
-            for key, value in tmp.groupby("_reason_combination")["record_id"].nunique().to_dict().items()
+            for key, value in tmp.groupby("_reason_combination")["record_id"]
+            .nunique()
+            .to_dict()
+            .items()
         }
     stale_missing_group_counts = (
-        stale_rows["group"].fillna("unknown").replace("", "unknown").value_counts().to_dict()
+        stale_rows["group"]
+        .fillna("unknown")
+        .replace("", "unknown")
+        .value_counts()
+        .to_dict()
         if "group" in stale_rows and not stale_rows.empty
         else {}
     )
     stale_missing_group_unique_record_counts = (
         {
             str(key): int(value)
-            for key, value in stale_rows.groupby("group")["record_id"].nunique().to_dict().items()
+            for key, value in stale_rows.groupby("group")["record_id"]
+            .nunique()
+            .to_dict()
+            .items()
         }
         if "group" in stale_rows and "record_id" in stale_rows and not stale_rows.empty
         else {}
     )
     observer_unhealthy_overlap = {
-        "observer_unhealthy_total": int(stale_rows["observer_unhealthy_flag"].sum())
-        if "observer_unhealthy_flag" in stale_rows and not stale_rows.empty else 0,
+        "observer_unhealthy_total": (
+            int(stale_rows["observer_unhealthy_flag"].sum())
+            if "observer_unhealthy_flag" in stale_rows and not stale_rows.empty
+            else 0
+        ),
         "observer_unhealthy_with_other_reason": 0,
         "observer_unhealthy_only": 0,
     }
     if not stale_rows.empty and "observer_unhealthy_flag" in stale_rows:
         other_columns = [
-            column for column in (
+            column
+            for column in (
                 "micro_missing_flag",
                 "micro_stale_flag",
                 "micro_not_ready_flag",
@@ -497,21 +612,33 @@ def analyze_ofi_qi_quality(ofi_qi_fact: pd.DataFrame) -> list[dict[str, Any]]:
             if column in stale_rows
         ]
         observer_rows = stale_rows[stale_rows["observer_unhealthy_flag"] == True]
-        observer_unhealthy_overlap["observer_unhealthy_with_other_reason"] = int(
-            observer_rows[other_columns].any(axis=1).sum()
-        ) if other_columns else 0
+        observer_unhealthy_overlap["observer_unhealthy_with_other_reason"] = (
+            int(observer_rows[other_columns].any(axis=1).sum()) if other_columns else 0
+        )
         observer_unhealthy_overlap["observer_unhealthy_only"] = (
             observer_unhealthy_overlap["observer_unhealthy_total"]
             - observer_unhealthy_overlap["observer_unhealthy_with_other_reason"]
         )
 
-    advice_counts = ofi_qi_fact["swing_micro_advice"].value_counts().to_dict() if "swing_micro_advice" in ofi_qi_fact else {}
-    state_counts = ofi_qi_fact["orderbook_micro_state"].value_counts().to_dict() if "orderbook_micro_state" in ofi_qi_fact else {}
-    group_counts = ofi_qi_fact["group"].value_counts().to_dict() if "group" in ofi_qi_fact else {}
+    advice_counts = (
+        ofi_qi_fact["swing_micro_advice"].value_counts().to_dict()
+        if "swing_micro_advice" in ofi_qi_fact
+        else {}
+    )
+    state_counts = (
+        ofi_qi_fact["orderbook_micro_state"].value_counts().to_dict()
+        if "orderbook_micro_state" in ofi_qi_fact
+        else {}
+    )
+    group_counts = (
+        ofi_qi_fact["group"].value_counts().to_dict() if "group" in ofi_qi_fact else {}
+    )
 
-    runtime_effect_true = int(
-        (ofi_qi_fact["swing_micro_runtime_effect"] == True).sum()
-    ) if "swing_micro_runtime_effect" in ofi_qi_fact else 0
+    runtime_effect_true = (
+        int((ofi_qi_fact["swing_micro_runtime_effect"] == True).sum())
+        if "swing_micro_runtime_effect" in ofi_qi_fact
+        else 0
+    )
 
     findings.append(
         {
@@ -531,7 +658,11 @@ def analyze_ofi_qi_quality(ofi_qi_fact: pd.DataFrame) -> list[dict[str, Any]]:
                 "stale_missing_reason_combination_unique_record_counts": reason_combination_unique_record_counts,
                 "stale_missing_group_counts": stale_missing_group_counts,
                 "stale_missing_group_unique_record_counts": stale_missing_group_unique_record_counts,
-                "stale_missing_unique_record_count": int(stale_rows["record_id"].nunique()) if "record_id" in stale_rows else 0,
+                "stale_missing_unique_record_count": (
+                    int(stale_rows["record_id"].nunique())
+                    if "record_id" in stale_rows
+                    else 0
+                ),
                 "observer_unhealthy_overlap": observer_unhealthy_overlap,
                 "advice_distribution": advice_counts,
                 "state_distribution": state_counts,
@@ -543,7 +674,11 @@ def analyze_ofi_qi_quality(ofi_qi_fact: pd.DataFrame) -> list[dict[str, Any]]:
         }
     )
 
-    smoothing_actions = ofi_qi_fact["smoothing_action"].value_counts().to_dict() if "smoothing_action" in ofi_qi_fact else {}
+    smoothing_actions = (
+        ofi_qi_fact["smoothing_action"].value_counts().to_dict()
+        if "smoothing_action" in ofi_qi_fact
+        else {}
+    )
     if smoothing_actions:
         findings.append(
             {
@@ -645,7 +780,9 @@ def build_swing_pattern_analysis_result() -> dict[str, Any]:
     all_findings: list[dict[str, Any]] = []
     all_findings.extend(analyze_selection_bottleneck(funnel_fact, trade_fact))
     all_findings.extend(analyze_entry_bottleneck(funnel_fact))
-    all_findings.extend(analyze_holding_exit_bottleneck(funnel_fact, sequence_fact, trade_fact))
+    all_findings.extend(
+        analyze_holding_exit_bottleneck(funnel_fact, sequence_fact, trade_fact)
+    )
     all_findings.extend(analyze_scale_in_bottleneck(sequence_fact, trade_fact))
     all_findings.extend(analyze_ofi_qi_quality(ofi_qi_fact))
 
@@ -654,20 +791,32 @@ def build_swing_pattern_analysis_result() -> dict[str, Any]:
     code_improvement_orders = build_code_improvement_orders(all_findings)
 
     quality_report = _load_json("data_quality_report.json")
-    quality_warnings = quality_report.get("warnings", []) if isinstance(quality_report.get("warnings"), list) else []
+    quality_warnings = (
+        quality_report.get("warnings", [])
+        if isinstance(quality_report.get("warnings"), list)
+        else []
+    )
 
     result = {
         "schema_version": SCHEMA_VERSION,
         "metric_contract": METRIC_CONTRACT,
         "report_type": "deepseek_swing_pattern_lab",
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-        "analysis_start": str(funnel_fact["date"].iloc[0]) if not funnel_fact.empty else "",
-        "analysis_end": str(funnel_fact["date"].iloc[-1]) if not funnel_fact.empty else "",
+        "analysis_start": (
+            str(funnel_fact["date"].iloc[0]) if not funnel_fact.empty else ""
+        ),
+        "analysis_end": (
+            str(funnel_fact["date"].iloc[-1]) if not funnel_fact.empty else ""
+        ),
         "runtime_change": False,
         "data_quality": {
             "trade_rows": len(trade_fact),
             "lifecycle_event_rows": len(sequence_fact),
-            "completed_valid_profit_rows": int(trade_fact["valid_profit_rate"].notna().sum()) if not trade_fact.empty else 0,
+            "completed_valid_profit_rows": (
+                int(trade_fact["valid_profit_rate"].notna().sum())
+                if not trade_fact.empty
+                else 0
+            ),
             "ofi_qi_rows": len(ofi_qi_fact),
             "sim_probe_provenance": quality_report.get("sim_probe_provenance", {}),
             "warnings": quality_warnings,
@@ -677,13 +826,17 @@ def build_swing_pattern_analysis_result() -> dict[str, Any]:
     }
 
     output_path = OUTPUT_DIR / "swing_pattern_analysis_result.json"
-    output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    output_path.write_text(
+        json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     return result
 
 
 def main() -> int:
     result = build_swing_pattern_analysis_result()
-    print(f"Analysis complete: {len(result['stage_findings'])} findings, {len(result['code_improvement_orders'])} code improvement orders")
+    print(
+        f"Analysis complete: {len(result['stage_findings'])} findings, {len(result['code_improvement_orders'])} code improvement orders"
+    )
     print(f"Output written to {OUTPUT_DIR / 'swing_pattern_analysis_result.json'}")
     return 0
 

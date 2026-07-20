@@ -26,7 +26,9 @@ RECO_PATH = DATA_DIR / "daily_recommendations_v2.csv"
 RECO_DIAGNOSTIC_JSON_PATH = DATA_DIR / "daily_recommendations_v2_diagnostics.json"
 PIPELINE_EVENTS_DIR = DATA_DIR / "pipeline_events"
 
-POSTGRES_URL = os.getenv("POSTGRES_URL", "postgresql://postgres:postgres@localhost:5432/korstockscan")
+POSTGRES_URL = os.getenv(
+    "POSTGRES_URL", "postgresql://postgres:postgres@localhost:5432/korstockscan"
+)
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(PROMPT_DIR, exist_ok=True)

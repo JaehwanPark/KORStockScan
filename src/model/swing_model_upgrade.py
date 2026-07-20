@@ -40,7 +40,6 @@ from src.model.common_v2 import (
 from src.model.dataset_builder_v2 import build_panel_dataset
 from src.model.swing_model_tracking import log_model_run
 
-
 CANDIDATE_FAMILIES = {
     "catboost_ranker_v1",
     "catboost_classifier_v1",
@@ -114,7 +113,9 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
-def _copy_base_artifacts(base_artifact_dir: Path, output_dir: Path, bull_mode: str) -> list[str]:
+def _copy_base_artifacts(
+    base_artifact_dir: Path, output_dir: Path, bull_mode: str
+) -> list[str]:
     names = ["hybrid_xgb_v2.pkl", "hybrid_lgbm_v2.pkl", "stacking_meta_v2.pkl"]
     if bull_mode != "disabled":
         names.extend(["bull_xgb_v2.pkl", "bull_lgbm_v2.pkl"])
@@ -139,7 +140,9 @@ def _prepare_meta_frame(
     meta_start_dt = pd.to_datetime(meta_start)
     fetch_start = (meta_start_dt - pd.Timedelta(days=200)).strftime("%Y-%m-%d")
     codes = get_top_kospi_codes(limit=codes_limit)
-    panel = build_panel_dataset(codes, fetch_start, meta_end, min_rows=150, include_labels=True)
+    panel = build_panel_dataset(
+        codes, fetch_start, meta_end, min_rows=150, include_labels=True
+    )
     if panel.empty:
         return pd.DataFrame()
     panel = panel[panel["date"] >= meta_start_dt].copy()
@@ -168,7 +171,9 @@ def _prepare_meta_frame(
         ],
     )
     meta_df["risk_adj_ret"] = meta_df["realized_ret_3d"] / (meta_df["atr_ratio"] + 1e-9)
-    meta_df["target_rank_pct"] = meta_df.groupby("date")["risk_adj_ret"].rank(pct=True, ascending=True)
+    meta_df["target_rank_pct"] = meta_df.groupby("date")["risk_adj_ret"].rank(
+        pct=True, ascending=True
+    )
     meta_df["target_rank_label"] = (meta_df["target_rank_pct"] >= 0.90).astype(int)
     return meta_df.sort_values(["date", "code"]).reset_index(drop=True)
 
@@ -248,17 +253,25 @@ def _train_optuna_lgbm_ranker(train_df: pd.DataFrame, valid_df: pd.DataFrame):
             train_df[META_FEATURES],
             train_df["target_rank_label"].astype(int),
             group=_groups_by_date(train_df),
-            eval_set=[(valid_df[META_FEATURES], valid_df["target_rank_label"].astype(int))],
+            eval_set=[
+                (valid_df[META_FEATURES], valid_df["target_rank_label"].astype(int))
+            ],
             eval_group=[_groups_by_date(valid_df)],
             eval_metric="ndcg",
             callbacks=[early_stopping(30), log_evaluation(0)],
         )
         scored = valid_df.copy()
         scored["candidate_score"] = model.predict(valid_df[META_FEATURES])
-        top = scored.sort_values(["date", "candidate_score"], ascending=[True, False]).groupby("date").head(3)
+        top = (
+            scored.sort_values(["date", "candidate_score"], ascending=[True, False])
+            .groupby("date")
+            .head(3)
+        )
         return float(top["realized_ret_3d"].mean()) if not top.empty else -99.0
 
-    study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=seed))
+    study = optuna.create_study(
+        direction="maximize", sampler=optuna.samplers.TPESampler(seed=seed)
+    )
     study.optimize(objective, n_trials=trials, timeout=timeout, show_progress_bar=False)
     params = {
         **study.best_params,
@@ -304,16 +317,24 @@ def _train_optuna_xgb_ranker(train_df: pd.DataFrame, valid_df: pd.DataFrame):
             train_df[META_FEATURES],
             train_df["target_rank_label"].astype(int),
             group=_groups_by_date(train_df),
-            eval_set=[(valid_df[META_FEATURES], valid_df["target_rank_label"].astype(int))],
+            eval_set=[
+                (valid_df[META_FEATURES], valid_df["target_rank_label"].astype(int))
+            ],
             eval_group=[_groups_by_date(valid_df)],
             verbose=False,
         )
         scored = valid_df.copy()
         scored["candidate_score"] = model.predict(valid_df[META_FEATURES])
-        top = scored.sort_values(["date", "candidate_score"], ascending=[True, False]).groupby("date").head(3)
+        top = (
+            scored.sort_values(["date", "candidate_score"], ascending=[True, False])
+            .groupby("date")
+            .head(3)
+        )
         return float(top["realized_ret_3d"].mean()) if not top.empty else -99.0
 
-    study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=seed))
+    study = optuna.create_study(
+        direction="maximize", sampler=optuna.samplers.TPESampler(seed=seed)
+    )
     study.optimize(objective, n_trials=trials, timeout=timeout, show_progress_bar=False)
     model = XGBRanker(
         **study.best_params,
@@ -333,7 +354,9 @@ def _train_optuna_xgb_ranker(train_df: pd.DataFrame, valid_df: pd.DataFrame):
     return model
 
 
-def _train_candidate_model(candidate_family: str, train_df: pd.DataFrame, valid_df: pd.DataFrame):
+def _train_candidate_model(
+    candidate_family: str, train_df: pd.DataFrame, valid_df: pd.DataFrame
+):
     if candidate_family == "catboost_ranker_v1":
         return _train_catboost_ranker(train_df, valid_df)
     if candidate_family == "catboost_classifier_v1":
@@ -345,8 +368,15 @@ def _train_candidate_model(candidate_family: str, train_df: pd.DataFrame, valid_
     raise ValueError(f"unknown_candidate_family:{candidate_family}")
 
 
-def _write_shap_summary(model, sample_x: pd.DataFrame, output_dir: Path) -> dict[str, Any]:
-    if str(os.getenv("KORSTOCKSCAN_SWING_MODEL_SHAP_ENABLED", "true")).lower() not in {"1", "true", "yes", "on"}:
+def _write_shap_summary(
+    model, sample_x: pd.DataFrame, output_dir: Path
+) -> dict[str, Any]:
+    if str(os.getenv("KORSTOCKSCAN_SWING_MODEL_SHAP_ENABLED", "true")).lower() not in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
         return {"status": "skipped_disabled"}
     try:
         import shap
@@ -361,15 +391,26 @@ def _write_shap_summary(model, sample_x: pd.DataFrame, output_dir: Path) -> dict
         importance = np.abs(arr).mean(axis=0)
         rows = [
             {"feature": feature, "mean_abs_shap": float(value)}
-            for feature, value in sorted(zip(x.columns, importance), key=lambda item: item[1], reverse=True)
+            for feature, value in sorted(
+                zip(x.columns, importance), key=lambda item: item[1], reverse=True
+            )
         ]
         path = output_dir / "shap_summary.json"
-        path.write_text(json.dumps({"status": "ok", "top_features": rows[:20]}, ensure_ascii=False, indent=2), encoding="utf-8")
+        path.write_text(
+            json.dumps(
+                {"status": "ok", "top_features": rows[:20]},
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
         return {"status": "ok", "path": str(path), "top_features": rows[:10]}
     except Exception as exc:
         path = output_dir / "shap_summary.json"
         payload = {"status": "failed", "error": str(exc)}
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
         return {**payload, "path": str(path)}
 
 
@@ -388,7 +429,9 @@ def train_upgrade_candidate(
     if candidate_family not in CANDIDATE_FAMILIES:
         raise ValueError(f"unknown_candidate_family:{candidate_family}")
     output_dir.mkdir(parents=True, exist_ok=True)
-    copied = _copy_base_artifacts(base_artifact_dir, output_dir, resolve_bull_specialist_mode(bull_mode))
+    copied = _copy_base_artifacts(
+        base_artifact_dir, output_dir, resolve_bull_specialist_mode(bull_mode)
+    )
     meta_df = _prepare_meta_frame(
         base_artifact_dir=base_artifact_dir,
         bull_mode=bull_mode,
@@ -399,12 +442,16 @@ def train_upgrade_candidate(
     if meta_df.empty:
         raise RuntimeError("empty_meta_training_frame")
 
-    train_df, valid_df, test_df = split_by_unique_dates(meta_df, ratios=(0.70, 0.15, 0.15))
+    train_df, valid_df, test_df = split_by_unique_dates(
+        meta_df, ratios=(0.70, 0.15, 0.15)
+    )
     model = _train_candidate_model(candidate_family, train_df, valid_df)
     save_df = meta_df.copy()
     save_df["score"] = model.predict(save_df[META_FEATURES])
     save_df = save_df[SAVE_COLS].sort_values(["date", "code"]).reset_index(drop=True)
-    save_df.to_csv(output_dir / Path(AI_PRED_PATH).name, index=False, encoding="utf-8-sig")
+    save_df.to_csv(
+        output_dir / Path(AI_PRED_PATH).name, index=False, encoding="utf-8-sig"
+    )
 
     artifact = {
         "model": model,
@@ -441,7 +488,10 @@ def train_upgrade_candidate(
         "shap": shap_summary,
     }
     manifest_path = output_dir / "candidate_manifest.json"
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
     tracking = log_model_run(
         run_name=f"{candidate_family}:{target_date or meta_end}",
         params={
@@ -458,21 +508,36 @@ def train_upgrade_candidate(
         artifact_paths=[manifest_path, output_dir / "shap_summary.json"],
     )
     manifest["mlflow"] = tracking
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
     return manifest
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Train a swing v2 upgraded model candidate.")
-    parser.add_argument("--candidate-family", required=True, choices=sorted(CANDIDATE_FAMILIES))
+    parser = argparse.ArgumentParser(
+        description="Train a swing v2 upgraded model candidate."
+    )
+    parser.add_argument(
+        "--candidate-family", required=True, choices=sorted(CANDIDATE_FAMILIES)
+    )
     parser.add_argument("--base-artifact-dir", required=True)
     parser.add_argument("--output-dir", required=True)
-    parser.add_argument("--bull-mode", default="disabled", choices=["enabled", "disabled", "hold_current"])
+    parser.add_argument(
+        "--bull-mode",
+        default="disabled",
+        choices=["enabled", "disabled", "hold_current"],
+    )
     parser.add_argument("--meta-start", required=True)
     parser.add_argument("--meta-end", required=True)
     parser.add_argument("--target-date", default=None)
     parser.add_argument("--run-id", default=None)
-    parser.add_argument("--codes-limit", type=int, default=_env_int("KORSTOCKSCAN_SWING_MODEL_CODES_LIMIT", 300))
+    parser.add_argument(
+        "--codes-limit",
+        type=int,
+        default=_env_int("KORSTOCKSCAN_SWING_MODEL_CODES_LIMIT", 300),
+    )
     args = parser.parse_args(argv)
     train_upgrade_candidate(
         candidate_family=args.candidate_family,

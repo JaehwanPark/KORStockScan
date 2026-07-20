@@ -10,7 +10,6 @@ from typing import Any
 
 from src.model.common_v2 import DATA_DIR
 
-
 AI_REVIEW_SCHEMA_NAME = "swing_model_tier2_review_v1"
 REPORT_DIR = Path(DATA_DIR) / "report" / "swing_model_tier2_review"
 CHECK_KEYS = {
@@ -86,7 +85,9 @@ def _build_review_context(
             "available": bool(benchmark_report),
             "report_type": benchmark_report.get("report_type"),
             "metric_contract": benchmark_report.get("metric_contract"),
-            "candidate_modes": sorted((benchmark_report.get("candidate_results") or {}).keys()),
+            "candidate_modes": sorted(
+                (benchmark_report.get("candidate_results") or {}).keys()
+            ),
         },
         "candidate_manifest": candidate_manifest,
         "shap_summary": shap_summary,
@@ -127,7 +128,9 @@ def _build_review_instructions() -> str:
     )
 
 
-def _call_openai_review(input_context: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
+def _call_openai_review(
+    input_context: dict[str, Any],
+) -> tuple[str | None, dict[str, Any]]:
     try:
         from openai import OpenAI, RateLimitError
         from src.engine.ai_response_contracts import build_openai_response_text_format
@@ -137,11 +140,19 @@ def _call_openai_review(input_context: dict[str, Any]) -> tuple[str | None, dict
             _threshold_ai_openai_model_sequence,
         )
     except Exception as exc:
-        return None, {"provider": "openai", "status": "unavailable", "reason": f"openai import failed: {exc}"}
+        return None, {
+            "provider": "openai",
+            "status": "unavailable",
+            "reason": f"openai import failed: {exc}",
+        }
 
     api_keys = _load_threshold_ai_openai_keys()
     if not api_keys:
-        return None, {"provider": "openai", "status": "unavailable", "reason": "OPENAI_API_KEY not configured"}
+        return None, {
+            "provider": "openai",
+            "status": "unavailable",
+            "reason": "OPENAI_API_KEY not configured",
+        }
 
     model_sequence = _threshold_ai_openai_model_sequence()
     prompt = json.dumps(input_context, ensure_ascii=True, indent=2, default=str)
@@ -155,7 +166,9 @@ def _call_openai_review(input_context: dict[str, Any]) -> tuple[str | None, dict
                     instructions=_build_review_instructions(),
                     input=prompt,
                     text={
-                        "format": build_openai_response_text_format(AI_REVIEW_SCHEMA_NAME),
+                        "format": build_openai_response_text_format(
+                            AI_REVIEW_SCHEMA_NAME
+                        ),
                         "verbosity": "low",
                     },
                     reasoning={"effort": "high"},
@@ -181,12 +194,20 @@ def _call_openai_review(input_context: dict[str, Any]) -> tuple[str | None, dict
                     "input_context_hash": _text_hash(input_context),
                     "input_context_chars": len(prompt),
                     "output_chars": len(raw_text),
-                    "input_tokens": int(getattr(usage, "input_tokens", 0) or 0) if usage else 0,
-                    "output_tokens": int(getattr(usage, "output_tokens", 0) or 0) if usage else 0,
-                    "total_tokens": int(getattr(usage, "total_tokens", 0) or 0) if usage else 0,
+                    "input_tokens": (
+                        int(getattr(usage, "input_tokens", 0) or 0) if usage else 0
+                    ),
+                    "output_tokens": (
+                        int(getattr(usage, "output_tokens", 0) or 0) if usage else 0
+                    ),
+                    "total_tokens": (
+                        int(getattr(usage, "total_tokens", 0) or 0) if usage else 0
+                    ),
                 }
             except RateLimitError as exc:
-                errors.append({"model": model, "key_name": key_name, "error": f"rate_limit:{exc}"})
+                errors.append(
+                    {"model": model, "key_name": key_name, "error": f"rate_limit:{exc}"}
+                )
             except Exception as exc:
                 errors.append({"model": model, "key_name": key_name, "error": str(exc)})
     return None, {
@@ -247,20 +268,31 @@ def parse_tier2_review_response(
         warnings.append("invalid_status")
     if decision not in VALID_DECISIONS:
         warnings.append("invalid_decision")
-    if not isinstance(reasons, list) or any(not isinstance(item, str) for item in reasons):
+    if not isinstance(reasons, list) or any(
+        not isinstance(item, str) for item in reasons
+    ):
         warnings.append("invalid_blocking_reasons")
         reasons = ["invalid_blocking_reasons"]
-    if str(payload.get("reviewed_candidate_family") or "") != str(expected_candidate_family):
+    if str(payload.get("reviewed_candidate_family") or "") != str(
+        expected_candidate_family
+    ):
         warnings.append("candidate_family_mismatch")
     if str(payload.get("reviewed_bull_mode") or "") != str(expected_bull_mode):
         warnings.append("bull_mode_mismatch")
     missing_checks = sorted(CHECK_KEYS - set(checks))
-    invalid_checks = sorted(key for key, value in checks.items() if key in CHECK_KEYS and value not in VALID_CHECK_VALUES)
+    invalid_checks = sorted(
+        key
+        for key, value in checks.items()
+        if key in CHECK_KEYS and value not in VALID_CHECK_VALUES
+    )
     if missing_checks:
         warnings.append(f"missing_checks:{','.join(missing_checks)}")
     if invalid_checks:
         warnings.append(f"invalid_checks:{','.join(invalid_checks)}")
-    if any(value == "block" for key, value in checks.items() if key in CHECK_KEYS) and decision != "blocked":
+    if (
+        any(value == "block" for key, value in checks.items() if key in CHECK_KEYS)
+        and decision != "blocked"
+    ):
         warnings.append("block_check_requires_blocked_decision")
 
     if warnings:
@@ -337,7 +369,15 @@ def write_tier2_review_report(
         candidate_manifest=candidate_manifest,
         shap_summary=shap_summary,
     )
-    provider_name = str(ai_review_provider or os.getenv("KORSTOCKSCAN_SWING_MODEL_TIER2_REVIEW_PROVIDER") or "openai").strip().lower()
+    provider_name = (
+        str(
+            ai_review_provider
+            or os.getenv("KORSTOCKSCAN_SWING_MODEL_TIER2_REVIEW_PROVIDER")
+            or "openai"
+        )
+        .strip()
+        .lower()
+    )
     raw_response = ai_raw_response
     provider = {"provider": provider_name, "status": "not_called"}
     if raw_response is None:
@@ -393,7 +433,9 @@ def write_tier2_review_report(
     }
     json_path, md_path = review_paths(target_date)
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
+    )
     md_path.write_text(render_markdown(report), encoding="utf-8")
     report["json_path"] = str(json_path)
     report["markdown_path"] = str(md_path)
@@ -401,7 +443,9 @@ def write_tier2_review_report(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run swing model Tier2 promotion review.")
+    parser = argparse.ArgumentParser(
+        description="Run swing model Tier2 promotion review."
+    )
     parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--candidate-family", required=True)
@@ -419,10 +463,20 @@ def main(argv: list[str] | None = None) -> int:
         candidate_metrics={},
         incumbent_metrics={},
         promotion_gate={},
-        benchmark_report_paths={"json": args.benchmark_report} if args.benchmark_report else {},
+        benchmark_report_paths=(
+            {"json": args.benchmark_report} if args.benchmark_report else {}
+        ),
         ai_review_provider=args.ai_review_provider,
     )
-    print(json.dumps({"status": report["status"], "decision": report["decision"], "approved": report["approved"]}))
+    print(
+        json.dumps(
+            {
+                "status": report["status"],
+                "decision": report["decision"],
+                "approved": report["approved"],
+            }
+        )
+    )
     return 0 if report.get("approved") else 2
 
 

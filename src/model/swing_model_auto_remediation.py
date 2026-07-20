@@ -11,7 +11,6 @@ from src.model.common_v2 import DATA_DIR, MODEL_REGISTRY_DIR
 from src.model.swing_model_tier2_review import FORBIDDEN_RUNTIME_USES
 from src.model.swing_model_upgrade import CANDIDATE_FAMILIES
 
-
 REPORT_DIR = Path(DATA_DIR) / "report" / "swing_model_remediation"
 REMEDIATION_DIR = Path(MODEL_REGISTRY_DIR) / "remediation"
 MAX_OPTUNA_TRIALS = 80
@@ -89,7 +88,9 @@ def _normalize_reasons(*payloads: Any) -> list[str]:
             for key in ("blocking_reasons", "reasons"):
                 value = payload.get(key)
                 if isinstance(value, list):
-                    reasons.extend(str(item) for item in value if item not in (None, ""))
+                    reasons.extend(
+                        str(item) for item in value if item not in (None, "")
+                    )
             if payload.get("reason"):
                 reasons.append(str(payload["reason"]))
     return sorted(set(reason.strip() for reason in reasons if str(reason).strip()))
@@ -104,11 +105,15 @@ def _sanitize_retry_env(raw_env: dict[str, Any]) -> tuple[dict[str, str], list[s
     warnings: list[str] = []
     for key, value in (raw_env or {}).items():
         key = str(key)
-        if key not in ALLOWED_RETRY_ENV or any(token in key for token in FORBIDDEN_ENV_TOKENS):
+        if key not in ALLOWED_RETRY_ENV or any(
+            token in key for token in FORBIDDEN_ENV_TOKENS
+        ):
             warnings.append(f"removed_disallowed_env:{key}")
             continue
         if key == "KORSTOCKSCAN_SWING_RETRAIN_FORCE":
-            sanitized[key] = "true" if str(value).lower() in {"1", "true", "yes", "on"} else "false"
+            sanitized[key] = (
+                "true" if str(value).lower() in {"1", "true", "yes", "on"} else "false"
+            )
         elif key == "KORSTOCKSCAN_SWING_MODEL_OPTUNA_TRIALS":
             try:
                 sanitized[key] = str(min(MAX_OPTUNA_TRIALS, max(40, int(float(value)))))
@@ -116,7 +121,9 @@ def _sanitize_retry_env(raw_env: dict[str, Any]) -> tuple[dict[str, str], list[s
                 warnings.append(f"invalid_env_value:{key}")
         elif key == "KORSTOCKSCAN_SWING_MODEL_OPTUNA_TIMEOUT_SEC":
             try:
-                sanitized[key] = str(min(MAX_OPTUNA_TIMEOUT_SEC, max(1800, int(float(value)))))
+                sanitized[key] = str(
+                    min(MAX_OPTUNA_TIMEOUT_SEC, max(1800, int(float(value))))
+                )
             except Exception:
                 warnings.append(f"invalid_env_value:{key}")
         elif key == "KORSTOCKSCAN_SWING_MODEL_UPGRADE_FAMILIES":
@@ -131,22 +138,32 @@ def _sanitize_retry_env(raw_env: dict[str, Any]) -> tuple[dict[str, str], list[s
     return sanitized, warnings
 
 
-def _default_retry_env(reason_state: str, benchmark_report: dict[str, Any]) -> dict[str, Any]:
+def _default_retry_env(
+    reason_state: str, benchmark_report: dict[str, Any]
+) -> dict[str, Any]:
     retry_env: dict[str, Any] = {
         "KORSTOCKSCAN_SWING_RETRAIN_FORCE": "true",
         "KORSTOCKSCAN_SWING_MODEL_TIER2_REVIEW_PROVIDER": "openai",
     }
     if reason_state == "candidate_retry":
         retry_env["KORSTOCKSCAN_SWING_MODEL_OPTUNA_TRIALS"] = str(MAX_OPTUNA_TRIALS)
-        retry_env["KORSTOCKSCAN_SWING_MODEL_OPTUNA_TIMEOUT_SEC"] = str(MAX_OPTUNA_TIMEOUT_SEC)
+        retry_env["KORSTOCKSCAN_SWING_MODEL_OPTUNA_TIMEOUT_SEC"] = str(
+            MAX_OPTUNA_TIMEOUT_SEC
+        )
         families = sorted(CANDIDATE_FAMILIES)
-        candidates = benchmark_report.get("candidate_results") if isinstance(benchmark_report.get("candidate_results"), dict) else {}
+        candidates = (
+            benchmark_report.get("candidate_results")
+            if isinstance(benchmark_report.get("candidate_results"), dict)
+            else {}
+        )
         seen = []
         for item in candidates.values():
             family = str((item or {}).get("selected_candidate_family") or "")
             if family in CANDIDATE_FAMILIES and family not in seen:
                 seen.append(family)
-        retry_env["KORSTOCKSCAN_SWING_MODEL_UPGRADE_FAMILIES"] = ",".join(seen or families)
+        retry_env["KORSTOCKSCAN_SWING_MODEL_UPGRADE_FAMILIES"] = ",".join(
+            seen or families
+        )
     return retry_env
 
 
@@ -172,8 +189,16 @@ def classify_remediation(
     benchmark_report = benchmark_report or {}
     reasons = _normalize_reasons(
         tier2_review,
-        retrain_report.get("promotion") if isinstance(retrain_report.get("promotion"), dict) else {},
-        (retrain_report.get("promotion_guard") or {}).get("reason") if isinstance(retrain_report.get("promotion_guard"), dict) else None,
+        (
+            retrain_report.get("promotion")
+            if isinstance(retrain_report.get("promotion"), dict)
+            else {}
+        ),
+        (
+            (retrain_report.get("promotion_guard") or {}).get("reason")
+            if isinstance(retrain_report.get("promotion_guard"), dict)
+            else None
+        ),
     )
     if not reasons and tier2_review.get("status") in {"unavailable", "parse_rejected"}:
         reasons = [str(tier2_review.get("status"))]
@@ -199,15 +224,26 @@ def classify_remediation(
     elif any(reason in blob for reason in RETRY_ALLOWED_REASONS):
         state = "retry_allowed"
         retry_reason = "schema_or_candidate_artifact_retry"
-        retry_env = _default_retry_env("candidate_retry" if "artifact" in blob or "training_command" in blob else "schema_retry", benchmark_report)
+        retry_env = _default_retry_env(
+            (
+                "candidate_retry"
+                if "artifact" in blob or "training_command" in blob
+                else "schema_retry"
+            ),
+            benchmark_report,
+        )
         next_cron_allowed = True
-    elif any(reason in blob for reason in RETRY_DEFERRED_REASONS) or str(tier2_review.get("status")) in {"unavailable", "parse_rejected"}:
+    elif any(reason in blob for reason in RETRY_DEFERRED_REASONS) or str(
+        tier2_review.get("status")
+    ) in {"unavailable", "parse_rejected"}:
         state = "retry_deferred"
         retry_reason = "deferred_until_next_source_or_ai_availability"
     elif "source_quality" in blob and ("sample" in blob or "insufficient" in blob):
         state = "retry_deferred"
         retry_reason = "source_quality_sample_wait"
-    elif "source_quality" in blob and ("artifact" in blob or "family" in blob or "training" in blob):
+    elif "source_quality" in blob and (
+        "artifact" in blob or "family" in blob or "training" in blob
+    ):
         state = "retry_allowed"
         retry_reason = "source_quality_candidate_retry"
         retry_env = _default_retry_env("candidate_retry", benchmark_report)
@@ -277,16 +313,27 @@ def write_remediation_report(
     json_path, md_path = remediation_report_paths(target_date)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    manifest_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
+    )
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
+    )
     md_path.write_text(render_markdown(report), encoding="utf-8")
-    return {**report, "manifest_path": str(manifest_path), "json_path": str(json_path), "markdown_path": str(md_path)}
+    return {
+        **report,
+        "manifest_path": str(manifest_path),
+        "json_path": str(json_path),
+        "markdown_path": str(md_path),
+    }
 
 
 def _candidate_manifest_paths(target_date: str) -> list[Path]:
     paths = [remediation_manifest_path(target_date)]
     try:
-        previous = (datetime.fromisoformat(target_date).date() - timedelta(days=1)).isoformat()
+        previous = (
+            datetime.fromisoformat(target_date).date() - timedelta(days=1)
+        ).isoformat()
         paths.append(remediation_manifest_path(previous))
     except Exception:
         pass
@@ -304,7 +351,9 @@ def resolve_cron_remediation(target_date: str) -> dict[str, Any]:
             break
     if not manifest:
         return {"found": False, "action": "ignore", "remediation_applied": False}
-    retry_env, warnings = _sanitize_retry_env(manifest.get("retry_env") if isinstance(manifest.get("retry_env"), dict) else {})
+    retry_env, warnings = _sanitize_retry_env(
+        manifest.get("retry_env") if isinstance(manifest.get("retry_env"), dict) else {}
+    )
     state = str(manifest.get("remediation_state") or "manual_required")
     retry_count = int(manifest.get("retry_count") or 0)
     max_retry_count = int(manifest.get("max_retry_count") or DEFAULT_MAX_RETRY_COUNT)
@@ -334,25 +383,49 @@ def resolve_cron_remediation(target_date: str) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Create or resolve swing model auto-remediation manifests.")
-    parser.add_argument("--resolve-cron", metavar="DATE", help="Resolve retry env for an auto_retrain cron date.")
+    parser = argparse.ArgumentParser(
+        description="Create or resolve swing model auto-remediation manifests."
+    )
+    parser.add_argument(
+        "--resolve-cron",
+        metavar="DATE",
+        help="Resolve retry env for an auto_retrain cron date.",
+    )
     parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
     parser.add_argument("--tier2-review-json")
     parser.add_argument("--retrain-json")
     parser.add_argument("--benchmark-json")
     args = parser.parse_args(argv)
     if args.resolve_cron:
-        print(json.dumps(resolve_cron_remediation(args.resolve_cron), ensure_ascii=False, separators=(",", ":")))
+        print(
+            json.dumps(
+                resolve_cron_remediation(args.resolve_cron),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        )
         return 0
     if not args.tier2_review_json:
-        raise SystemExit("--tier2-review-json is required unless --resolve-cron is used")
+        raise SystemExit(
+            "--tier2-review-json is required unless --resolve-cron is used"
+        )
     report = write_remediation_report(
         target_date=args.target_date,
         tier2_review=_safe_load_json(args.tier2_review_json),
         retrain_report=_safe_load_json(args.retrain_json),
-        benchmark_report_paths={"json": args.benchmark_json} if args.benchmark_json else {},
+        benchmark_report_paths=(
+            {"json": args.benchmark_json} if args.benchmark_json else {}
+        ),
     )
-    print(json.dumps({"remediation_state": report["remediation_state"], "manifest_path": report["manifest_path"]}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {
+                "remediation_state": report["remediation_state"],
+                "manifest_path": report["manifest_path"],
+            },
+            ensure_ascii=False,
+        )
+    )
     return 0
 
 

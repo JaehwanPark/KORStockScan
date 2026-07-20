@@ -16,9 +16,18 @@ from tuning_observability_summary import write_tuning_observability_outputs
 
 SCALPING_FEEDBACK_SOURCES = {
     "threshold_cycle_ev": ("threshold_cycle_ev", "threshold_cycle_ev"),
-    "lifecycle_decision_matrix": ("lifecycle_decision_matrix", "lifecycle_decision_matrix"),
-    "lifecycle_bucket_discovery": ("lifecycle_bucket_discovery", "lifecycle_bucket_discovery"),
-    "runtime_approval_summary": ("runtime_approval_summary", "runtime_approval_summary"),
+    "lifecycle_decision_matrix": (
+        "lifecycle_decision_matrix",
+        "lifecycle_decision_matrix",
+    ),
+    "lifecycle_bucket_discovery": (
+        "lifecycle_bucket_discovery",
+        "lifecycle_bucket_discovery",
+    ),
+    "runtime_approval_summary": (
+        "runtime_approval_summary",
+        "runtime_approval_summary",
+    ),
 }
 
 
@@ -46,12 +55,18 @@ def _load_feedback_sources() -> dict:
                 payload = json.loads(path.read_text(encoding="utf-8"))
             except Exception:
                 payload = {}
-            summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+            summary = (
+                payload.get("summary")
+                if isinstance(payload.get("summary"), dict)
+                else {}
+            )
             consumed.append(
                 {
                     **item,
                     "status": payload.get("status") or summary.get("status"),
-                    "warnings": payload.get("warnings") or summary.get("warnings") or [],
+                    "warnings": payload.get("warnings")
+                    or summary.get("warnings")
+                    or [],
                 }
             )
         else:
@@ -81,7 +96,9 @@ def _normalize_trade_id(df: pd.DataFrame) -> pd.DataFrame:
 
 def build_summary_payload(ev_result: dict, trade_df: pd.DataFrame) -> dict:
     if not trade_df.empty:
-        valid_mask = trade_df["profit_valid_flag"].astype(str).str.lower().isin(["true", "1"])
+        valid_mask = (
+            trade_df["profit_valid_flag"].astype(str).str.lower().isin(["true", "1"])
+        )
         valid_trades = _normalize_trade_id(trade_df[valid_mask].copy())
     else:
         valid_trades = pd.DataFrame()
@@ -93,10 +110,18 @@ def build_summary_payload(ev_result: dict, trade_df: pd.DataFrame) -> dict:
                 {
                     "date": str(rec_date),
                     "n_trades": int(len(group)),
-                    "diagnostic_win_rate_pct": round((group["profit_rate"].astype(float) > 0).mean() * 100, 1),
-                    "median_profit": round(float(group["profit_rate"].astype(float).median()), 3),
-                    "equal_weight_avg_profit_pct": round(float(group["profit_rate"].astype(float).mean()), 3),
-                    "simple_sum_profit_pct": round(float(group["profit_rate"].astype(float).sum()), 3),
+                    "diagnostic_win_rate_pct": round(
+                        (group["profit_rate"].astype(float) > 0).mean() * 100, 1
+                    ),
+                    "median_profit": round(
+                        float(group["profit_rate"].astype(float).median()), 3
+                    ),
+                    "equal_weight_avg_profit_pct": round(
+                        float(group["profit_rate"].astype(float).mean()), 3
+                    ),
+                    "simple_sum_profit_pct": round(
+                        float(group["profit_rate"].astype(float).sum()), 3
+                    ),
                     "primary_decision_metric": "equal_weight_avg_profit_pct",
                 }
             )
@@ -138,7 +163,9 @@ def build_cases_payload(trade_df: pd.DataFrame, seq_df: pd.DataFrame) -> dict:
     if trade_df.empty:
         return cases
 
-    valid_mask = trade_df["profit_valid_flag"].astype(str).str.lower().isin(["true", "1"])
+    valid_mask = (
+        trade_df["profit_valid_flag"].astype(str).str.lower().isin(["true", "1"])
+    )
     valid_trades = _normalize_trade_id(trade_df[valid_mask].copy())
     if valid_trades.empty:
         return cases
@@ -155,13 +182,19 @@ def build_cases_payload(trade_df: pd.DataFrame, seq_df: pd.DataFrame) -> dict:
             "same_ts_multi_rebase_flag",
             "rebase_count",
         ]
-        seq_view = seq_df[[col for col in join_cols if col in seq_df.columns]].drop_duplicates("trade_id")
+        seq_view = seq_df[
+            [col for col in join_cols if col in seq_df.columns]
+        ].drop_duplicates("trade_id")
         seq_view["trade_id"] = seq_view["trade_id"].astype("string").str.strip()
         valid_trades = valid_trades.merge(seq_view, on="trade_id", how="left")
 
-    valid_trades["profit_rate"] = pd.to_numeric(valid_trades["profit_rate"], errors="coerce")
+    valid_trades["profit_rate"] = pd.to_numeric(
+        valid_trades["profit_rate"], errors="coerce"
+    )
     loss_df = valid_trades[valid_trades["profit_rate"] <= 0].sort_values("profit_rate")
-    profit_df = valid_trades[valid_trades["profit_rate"] > 0].sort_values("profit_rate", ascending=False)
+    profit_df = valid_trades[valid_trades["profit_rate"] > 0].sort_values(
+        "profit_rate", ascending=False
+    )
 
     def _serialize(group: pd.DataFrame) -> list[dict]:
         rows = []
@@ -170,11 +203,21 @@ def build_cases_payload(trade_df: pd.DataFrame, seq_df: pd.DataFrame) -> dict:
             rows.append(item)
         return rows
 
-    cases["loss_split_entry"] = _serialize(loss_df[loss_df["cohort"] == "split-entry"].head(5))
-    cases["loss_full_fill"] = _serialize(loss_df[loss_df["cohort"] == "full_fill"].head(5))
-    cases["profit_split_entry"] = _serialize(profit_df[profit_df["cohort"] == "split-entry"].head(5))
-    cases["profit_full_fill"] = _serialize(profit_df[profit_df["cohort"] == "full_fill"].head(5))
-    cases["profit_partial_fill"] = _serialize(profit_df[profit_df["cohort"] == "partial_fill"].head(5))
+    cases["loss_split_entry"] = _serialize(
+        loss_df[loss_df["cohort"] == "split-entry"].head(5)
+    )
+    cases["loss_full_fill"] = _serialize(
+        loss_df[loss_df["cohort"] == "full_fill"].head(5)
+    )
+    cases["profit_split_entry"] = _serialize(
+        profit_df[profit_df["cohort"] == "split-entry"].head(5)
+    )
+    cases["profit_full_fill"] = _serialize(
+        profit_df[profit_df["cohort"] == "full_fill"].head(5)
+    )
+    cases["profit_partial_fill"] = _serialize(
+        profit_df[profit_df["cohort"] == "partial_fill"].head(5)
+    )
     return cases
 
 
@@ -184,11 +227,15 @@ def build_llm_payload() -> None:
     seq_df = _normalize_trade_id(_load_csv("sequence_fact.csv"))
 
     summary_payload = build_summary_payload(ev_result, trade_df)
-    with open(config.OUTPUT_DIR / "llm_payload_summary.json", "w", encoding="utf-8") as handle:
+    with open(
+        config.OUTPUT_DIR / "llm_payload_summary.json", "w", encoding="utf-8"
+    ) as handle:
         json.dump(summary_payload, handle, indent=2, ensure_ascii=False)
 
     cases_payload = build_cases_payload(trade_df, seq_df)
-    with open(config.OUTPUT_DIR / "llm_payload_cases.json", "w", encoding="utf-8") as handle:
+    with open(
+        config.OUTPUT_DIR / "llm_payload_cases.json", "w", encoding="utf-8"
+    ) as handle:
         json.dump(cases_payload, handle, indent=2, ensure_ascii=False)
 
     print("LLM payload built successfully.")

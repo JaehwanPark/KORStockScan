@@ -8,7 +8,6 @@ from typing import Any
 
 from src.model.common_v2 import DATA_DIR, load_swing_model_current_manifest
 
-
 REPORT_DIR = Path(DATA_DIR) / "report" / "swing_model_retrain"
 MODEL_PATHS = [
     Path(DATA_DIR) / "hybrid_xgb_v2.pkl",
@@ -50,10 +49,17 @@ def _latest_recommendation_diag() -> dict[str, Any]:
 
 
 def _latest_ev_report(target: date) -> dict[str, Any]:
-    return _safe_load_json(Path(DATA_DIR) / "report" / "threshold_cycle_ev" / f"threshold_cycle_ev_{target.isoformat()}.json")
+    return _safe_load_json(
+        Path(DATA_DIR)
+        / "report"
+        / "threshold_cycle_ev"
+        / f"threshold_cycle_ev_{target.isoformat()}.json"
+    )
 
 
-def build_retrain_diagnosis(target_date: str | None = None, *, force: bool = False) -> dict[str, Any]:
+def build_retrain_diagnosis(
+    target_date: str | None = None, *, force: bool = False
+) -> dict[str, Any]:
     target = _parse_date(target_date) or date.today()
     manifest = load_swing_model_current_manifest()
     diag = _latest_recommendation_diag()
@@ -61,7 +67,11 @@ def build_retrain_diagnosis(target_date: str | None = None, *, force: bool = Fal
     artifact_age = _artifact_age_days(target)
     selected_count = int(diag.get("selected_count") or 0)
     fallback_written = bool(diag.get("fallback_written_to_recommendations"))
-    ev_summary = ev_report.get("daily_ev_summary") if isinstance(ev_report.get("daily_ev_summary"), dict) else {}
+    ev_summary = (
+        ev_report.get("daily_ev_summary")
+        if isinstance(ev_report.get("daily_ev_summary"), dict)
+        else {}
+    )
     avg_profit = float(ev_summary.get("avg_profit_rate_pct") or 0.0)
 
     hard_triggers: list[str] = []
@@ -131,17 +141,23 @@ def render_markdown(report: dict[str, Any]) -> str:
     )
 
 
-def write_diagnosis(target_date: str | None = None, *, force: bool = False) -> dict[str, Any]:
+def write_diagnosis(
+    target_date: str | None = None, *, force: bool = False
+) -> dict[str, Any]:
     report = build_retrain_diagnosis(target_date, force=force)
     json_path, md_path = diagnosis_paths(str(report["target_date"]))
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
+    )
     md_path.write_text(render_markdown(report), encoding="utf-8")
     return report
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Diagnose whether swing v2 model retraining is required.")
+    parser = argparse.ArgumentParser(
+        description="Diagnose whether swing v2 model retraining is required."
+    )
     parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args(argv)

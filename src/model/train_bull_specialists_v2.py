@@ -4,25 +4,45 @@ from lightgbm import LGBMClassifier, early_stopping, log_evaluation
 
 try:
     from .common_v2 import (
-        BULL_BASE_START, BULL_BASE_END, FEATURES_XGB, FEATURES_LGBM,
-        BULL_XGB_PATH, BULL_LGBM_PATH,
-        get_top_kospi_codes, split_by_unique_dates, recency_sample_weight,
-        class_balance, fit_calibrator, apply_calibrator, threshold_table,
-        precision_at_k_by_day, select_daily_candidates
+        BULL_BASE_START,
+        BULL_BASE_END,
+        FEATURES_XGB,
+        FEATURES_LGBM,
+        BULL_XGB_PATH,
+        BULL_LGBM_PATH,
+        get_top_kospi_codes,
+        split_by_unique_dates,
+        recency_sample_weight,
+        class_balance,
+        fit_calibrator,
+        apply_calibrator,
+        threshold_table,
+        precision_at_k_by_day,
+        select_daily_candidates,
     )
     from .dataset_builder_v2 import build_panel_dataset
 except ImportError:
     from common_v2 import (
-        BULL_BASE_START, BULL_BASE_END, FEATURES_XGB, FEATURES_LGBM,
-        BULL_XGB_PATH, BULL_LGBM_PATH,
-        get_top_kospi_codes, split_by_unique_dates, recency_sample_weight,
-        class_balance, fit_calibrator, apply_calibrator, threshold_table,
-        precision_at_k_by_day, select_daily_candidates
+        BULL_BASE_START,
+        BULL_BASE_END,
+        FEATURES_XGB,
+        FEATURES_LGBM,
+        BULL_XGB_PATH,
+        BULL_LGBM_PATH,
+        get_top_kospi_codes,
+        split_by_unique_dates,
+        recency_sample_weight,
+        class_balance,
+        fit_calibrator,
+        apply_calibrator,
+        threshold_table,
+        precision_at_k_by_day,
+        select_daily_candidates,
     )
     from dataset_builder_v2 import build_panel_dataset
 
 
-TARGET_COL = 'target_strict'
+TARGET_COL = "target_strict"
 
 
 def train_bull_specialists_v2(bull_base_start=None, bull_base_end=None):
@@ -30,19 +50,25 @@ def train_bull_specialists_v2(bull_base_start=None, bull_base_end=None):
     bull_base_end = bull_base_end or BULL_BASE_END
     codes = get_top_kospi_codes(limit=300)
 
-    print(f"[1/5] Bull Specialist용 패널 생성 중... ({bull_base_start} ~ {bull_base_end})")
-    panel = build_panel_dataset(codes, bull_base_start, bull_base_end, min_rows=150, include_labels=True)
+    print(
+        f"[1/5] Bull Specialist용 패널 생성 중... ({bull_base_start} ~ {bull_base_end})"
+    )
+    panel = build_panel_dataset(
+        codes, bull_base_start, bull_base_end, min_rows=150, include_labels=True
+    )
     if panel.empty:
         print("❌ 학습 데이터가 없습니다.")
         return
 
-    train_df, valid_df, calib_df, test_df = split_by_unique_dates(panel, ratios=(0.65, 0.15, 0.10, 0.10))
+    train_df, valid_df, calib_df, test_df = split_by_unique_dates(
+        panel, ratios=(0.65, 0.15, 0.10, 0.10)
+    )
 
     # Bull regime row만 사용
-    train_bull = train_df[train_df['bull_regime'] == 1].copy()
-    valid_bull = valid_df[valid_df['bull_regime'] == 1].copy()
-    calib_bull = calib_df[calib_df['bull_regime'] == 1].copy()
-    test_bull = test_df[test_df['bull_regime'] == 1].copy()
+    train_bull = train_df[train_df["bull_regime"] == 1].copy()
+    valid_bull = valid_df[valid_df["bull_regime"] == 1].copy()
+    calib_bull = calib_df[calib_df["bull_regime"] == 1].copy()
+    test_bull = test_df[test_df["bull_regime"] == 1].copy()
 
     if min(len(train_bull), len(valid_bull), len(calib_bull), len(test_bull)) == 0:
         print("❌ Bull regime 샘플이 부족합니다.")
@@ -53,7 +79,7 @@ def train_bull_specialists_v2(bull_base_start=None, bull_base_end=None):
     y_calib = calib_bull[TARGET_COL].astype(int)
 
     pos, neg, spw = class_balance(y_train)
-    sw = recency_sample_weight(train_bull['date'])
+    sw = recency_sample_weight(train_bull["date"])
 
     print(f"[2/5] Bull XGB 학습 시작 - target={TARGET_COL}")
     print(f"   Train Pos={pos}, Neg={neg}, scale_pos_weight={spw:.2f}")
@@ -68,16 +94,17 @@ def train_bull_specialists_v2(bull_base_start=None, bull_base_end=None):
         reg_alpha=0.5,
         reg_lambda=2.0,
         scale_pos_weight=spw,
-        eval_metric='aucpr',
+        eval_metric="aucpr",
         random_state=42,
-        n_jobs=-1
+        n_jobs=-1,
     )
 
     bull_xgb.fit(
-        train_bull[FEATURES_XGB], y_train,
+        train_bull[FEATURES_XGB],
+        y_train,
         sample_weight=sw,
         eval_set=[(valid_bull[FEATURES_XGB], y_valid)],
-        verbose=False
+        verbose=False,
     )
 
     calib_raw_x = bull_xgb.predict_proba(calib_bull[FEATURES_XGB])[:, 1]
@@ -86,12 +113,14 @@ def train_bull_specialists_v2(bull_base_start=None, bull_base_end=None):
     test_raw_x = bull_xgb.predict_proba(test_bull[FEATURES_XGB])[:, 1]
     test_score_x = apply_calibrator(cal_x, test_raw_x)
 
-    eval_x = test_bull[['date', 'code', 'name', 'bull_regime', 'target_strict']].copy()
-    eval_x['score'] = test_score_x
+    eval_x = test_bull[["date", "code", "name", "bull_regime", "target_strict"]].copy()
+    eval_x["score"] = test_score_x
 
     print("\n[Bull XGB Threshold Table - target_strict]")
-    print(threshold_table(eval_x, score_col='score', target_col='target_strict'))
-    print(f"[Bull XGB Precision@5/day] {precision_at_k_by_day(eval_x, 'score', 'target_strict', k=5):.2%}")
+    print(threshold_table(eval_x, score_col="score", target_col="target_strict"))
+    print(
+        f"[Bull XGB Precision@5/day] {precision_at_k_by_day(eval_x, 'score', 'target_strict', k=5):.2%}"
+    )
 
     print("[3/5] Bull LGBM 학습 시작...")
     bull_lgbm = LGBMClassifier(
@@ -105,15 +134,16 @@ def train_bull_specialists_v2(bull_base_start=None, bull_base_end=None):
         scale_pos_weight=spw,
         random_state=42,
         n_jobs=-1,
-        force_col_wise=True
+        force_col_wise=True,
     )
 
     bull_lgbm.fit(
-        train_bull[FEATURES_LGBM], y_train,
+        train_bull[FEATURES_LGBM],
+        y_train,
         sample_weight=sw,
         eval_set=[(valid_bull[FEATURES_LGBM], y_valid)],
-        eval_metric='auc',
-        callbacks=[early_stopping(100), log_evaluation(100)]
+        eval_metric="auc",
+        callbacks=[early_stopping(100), log_evaluation(100)],
     )
 
     calib_raw_l = bull_lgbm.predict_proba(calib_bull[FEATURES_LGBM])[:, 1]
@@ -122,36 +152,46 @@ def train_bull_specialists_v2(bull_base_start=None, bull_base_end=None):
     test_raw_l = bull_lgbm.predict_proba(test_bull[FEATURES_LGBM])[:, 1]
     test_score_l = apply_calibrator(cal_l, test_raw_l)
 
-    eval_l = test_bull[['date', 'code', 'name', 'bull_regime', 'target_strict']].copy()
-    eval_l['score'] = test_score_l
+    eval_l = test_bull[["date", "code", "name", "bull_regime", "target_strict"]].copy()
+    eval_l["score"] = test_score_l
 
     print("\n[Bull LGBM Threshold Table - target_strict]")
-    print(threshold_table(eval_l, score_col='score', target_col='target_strict'))
-    print(f"[Bull LGBM Precision@5/day] {precision_at_k_by_day(eval_l, 'score', 'target_strict', k=5):.2%}")
+    print(threshold_table(eval_l, score_col="score", target_col="target_strict"))
+    print(
+        f"[Bull LGBM Precision@5/day] {precision_at_k_by_day(eval_l, 'score', 'target_strict', k=5):.2%}"
+    )
 
-    picks = select_daily_candidates(eval_l, score_col='score')
-    strict_precision = picks['target_strict'].mean() if len(picks) > 0 else 0.0
-    print(f"[Bull Daily Top-K Picks] picks={len(picks)} / strict_precision={strict_precision:.2%}")
+    picks = select_daily_candidates(eval_l, score_col="score")
+    strict_precision = picks["target_strict"].mean() if len(picks) > 0 else 0.0
+    print(
+        f"[Bull Daily Top-K Picks] picks={len(picks)} / strict_precision={strict_precision:.2%}"
+    )
 
-    joblib.dump({
-        'model': bull_xgb,
-        'calibrator': cal_x,
-        'features': FEATURES_XGB,
-        'target_col': TARGET_COL,
-        'model_name': 'bull_xgb_v2',
-        'bull_base_start': bull_base_start,
-        'bull_base_end': bull_base_end,
-    }, BULL_XGB_PATH)
+    joblib.dump(
+        {
+            "model": bull_xgb,
+            "calibrator": cal_x,
+            "features": FEATURES_XGB,
+            "target_col": TARGET_COL,
+            "model_name": "bull_xgb_v2",
+            "bull_base_start": bull_base_start,
+            "bull_base_end": bull_base_end,
+        },
+        BULL_XGB_PATH,
+    )
 
-    joblib.dump({
-        'model': bull_lgbm,
-        'calibrator': cal_l,
-        'features': FEATURES_LGBM,
-        'target_col': TARGET_COL,
-        'model_name': 'bull_lgbm_v2',
-        'bull_base_start': bull_base_start,
-        'bull_base_end': bull_base_end,
-    }, BULL_LGBM_PATH)
+    joblib.dump(
+        {
+            "model": bull_lgbm,
+            "calibrator": cal_l,
+            "features": FEATURES_LGBM,
+            "target_col": TARGET_COL,
+            "model_name": "bull_lgbm_v2",
+            "bull_base_start": bull_base_start,
+            "bull_base_end": bull_base_end,
+        },
+        BULL_LGBM_PATH,
+    )
 
     print(f"[4/5] 저장 완료: {BULL_XGB_PATH}")
     print(f"[5/5] 저장 완료: {BULL_LGBM_PATH}")
@@ -160,8 +200,12 @@ def train_bull_specialists_v2(bull_base_start=None, bull_base_end=None):
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Train swing v2 bull specialist models.")
+    parser = argparse.ArgumentParser(
+        description="Train swing v2 bull specialist models."
+    )
     parser.add_argument("--bull-base-start", default=None)
     parser.add_argument("--bull-base-end", default=None)
     args = parser.parse_args()
-    train_bull_specialists_v2(bull_base_start=args.bull_base_start, bull_base_end=args.bull_base_end)
+    train_bull_specialists_v2(
+        bull_base_start=args.bull_base_start, bull_base_end=args.bull_base_end
+    )
