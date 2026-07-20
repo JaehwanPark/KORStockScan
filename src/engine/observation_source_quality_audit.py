@@ -21,7 +21,6 @@ from src.engine.monitoring.market_halt_windows import load_market_halt_windows
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
-
 REPORT_DIRNAME = "observation_source_quality_audit"
 BACKFILL_REPORT_STEM = "observation_source_quality_backfill_audit"
 
@@ -109,7 +108,9 @@ class StageContract:
     max_missing_rate: float = 0.0
     max_zero_rate: float = 1.0
     decision_authority: str = "source_quality_only"
-    forbidden_uses: str = "runtime_threshold_apply/order_submit/provider_route_change/bot_restart"
+    forbidden_uses: str = (
+        "runtime_threshold_apply/order_submit/provider_route_change/bot_restart"
+    )
 
 
 AI_SOURCE_FIELDS = (
@@ -1156,12 +1157,20 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         ),
     ),
     "blocked_vpw": StageContract(
-        required_fields=(*AI_OVERLAP_FIELDS, *PRE_AI_RISK_CONTEXT_FIELDS, *PRE_AI_BLOCKED_GATE_QUALITY_FIELDS),
+        required_fields=(
+            *AI_OVERLAP_FIELDS,
+            *PRE_AI_RISK_CONTEXT_FIELDS,
+            *PRE_AI_BLOCKED_GATE_QUALITY_FIELDS,
+        ),
         zero_sensitive_fields=("distance_from_day_high_pct", "intraday_range_pct"),
         max_zero_rate=0.10,
     ),
     "blocked_overbought": StageContract(
-        required_fields=(*AI_OVERLAP_FIELDS, *PRE_AI_RISK_CONTEXT_FIELDS, *PRE_AI_BLOCKED_GATE_QUALITY_FIELDS),
+        required_fields=(
+            *AI_OVERLAP_FIELDS,
+            *PRE_AI_RISK_CONTEXT_FIELDS,
+            *PRE_AI_BLOCKED_GATE_QUALITY_FIELDS,
+        ),
         zero_sensitive_fields=("intraday_range_pct",),
         max_zero_rate=0.10,
     ),
@@ -1453,7 +1462,11 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
     ),
     "scalp_sim_entry_armed": StageContract(required_fields=SCALP_SIM_PROVENANCE_FIELDS),
     "scalp_sim_duplicate_buy_signal": StageContract(
-        required_fields=(*SCALP_SIM_PROVENANCE_FIELDS, "threshold_family", "sim_parent_record_id"),
+        required_fields=(
+            *SCALP_SIM_PROVENANCE_FIELDS,
+            "threshold_family",
+            "sim_parent_record_id",
+        ),
     ),
     "scalp_sim_pre_submit_liquidity_guard_would_block": StageContract(
         required_fields=SCALP_SIM_SUBMIT_LIQUIDITY_GUARD_FIELDS
@@ -1471,9 +1484,15 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
     "scalp_sim_pre_submit_overbought_guard_would_pass": StageContract(
         required_fields=SCALP_SIM_SUBMIT_OVERBOUGHT_GUARD_FIELDS
     ),
-    "scalp_sim_buy_order_virtual_pending": StageContract(required_fields=SCALP_SIM_PROVENANCE_FIELDS),
-    "scalp_sim_buy_order_assumed_filled": StageContract(required_fields=SCALP_SIM_PROVENANCE_FIELDS),
-    "scalp_sim_entry_ai_price_skip_order": StageContract(required_fields=SCALP_SIM_PROVENANCE_FIELDS),
+    "scalp_sim_buy_order_virtual_pending": StageContract(
+        required_fields=SCALP_SIM_PROVENANCE_FIELDS
+    ),
+    "scalp_sim_buy_order_assumed_filled": StageContract(
+        required_fields=SCALP_SIM_PROVENANCE_FIELDS
+    ),
+    "scalp_sim_entry_ai_price_skip_order": StageContract(
+        required_fields=SCALP_SIM_PROVENANCE_FIELDS
+    ),
     "scalp_sim_entry_submit_revalidation_warning": StageContract(
         required_fields=(
             *SCALP_SIM_PROVENANCE_FIELDS,
@@ -1485,7 +1504,9 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "mark_price_at_submit",
         ),
     ),
-    "scalp_sim_holding_started": StageContract(required_fields=SCALP_SIM_PROVENANCE_FIELDS),
+    "scalp_sim_holding_started": StageContract(
+        required_fields=SCALP_SIM_PROVENANCE_FIELDS
+    ),
     "scalp_sim_scale_in_candidate_funnel": StageContract(
         required_fields=(
             *SCALP_SIM_PROVENANCE_FIELDS,
@@ -1498,10 +1519,18 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "forbidden_uses",
         )
     ),
-    "scalp_sim_scale_in_order_assumed_filled": StageContract(required_fields=SCALP_SIM_PROVENANCE_FIELDS),
-    "scalp_sim_scale_in_order_unfilled": StageContract(required_fields=SCALP_SIM_PROVENANCE_FIELDS),
-    "scalp_sim_scale_in_counterfactual_started": StageContract(required_fields=SCALP_SIM_PROVENANCE_FIELDS),
-    "scalp_sim_sell_order_assumed_filled": StageContract(required_fields=SCALP_SIM_PROVENANCE_FIELDS),
+    "scalp_sim_scale_in_order_assumed_filled": StageContract(
+        required_fields=SCALP_SIM_PROVENANCE_FIELDS
+    ),
+    "scalp_sim_scale_in_order_unfilled": StageContract(
+        required_fields=SCALP_SIM_PROVENANCE_FIELDS
+    ),
+    "scalp_sim_scale_in_counterfactual_started": StageContract(
+        required_fields=SCALP_SIM_PROVENANCE_FIELDS
+    ),
+    "scalp_sim_sell_order_assumed_filled": StageContract(
+        required_fields=SCALP_SIM_PROVENANCE_FIELDS
+    ),
     "scalp_sim_ai_holding_live_call": StageContract(
         required_fields=SCALP_SIM_AI_BUDGET_FIELDS,
         decision_authority="source_quality_only_known_pre_fix_gap",
@@ -1518,29 +1547,71 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         required_fields=SCALP_SIM_AI_BUDGET_FIELDS,
         decision_authority="source_quality_only_known_pre_fix_gap",
     ),
-    "scalp_sim_panic_bottoming_entry_allowed": StageContract(required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS),
-    "scalp_sim_panic_level1_entry_observed": StageContract(required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS),
-    "scalp_sim_panic_entry_blocked": StageContract(required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS),
-    "scalp_sim_panic_scale_in_blocked": StageContract(required_fields=(*SCALP_SIM_RISK_CONTEXT_FIELDS, "sim_record_id")),
-    "scalp_sim_panic_action_deduped": StageContract(required_fields=(*SCALP_SIM_RISK_CONTEXT_FIELDS, "sim_record_id")),
-    "scalp_sim_partial_sell_order_assumed_filled": StageContract(
-        required_fields=(*SCALP_SIM_RISK_CONTEXT_FIELDS, "sim_record_id", "entry_adm_candidate_id")
+    "scalp_sim_panic_bottoming_entry_allowed": StageContract(
+        required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS
     ),
-    "scalp_sim_euphoria_context_noop": StageContract(required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS),
-    "scalp_sim_euphoria_entry_blocked": StageContract(required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS),
-    "scalp_sim_euphoria_chase_entry_blocked": StageContract(required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS),
-    "scalp_sim_euphoria_retest_starter_allowed": StageContract(required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS),
-    "scalp_sim_euphoria_level1_starter_observed": StageContract(required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS),
-    "scalp_sim_euphoria_scale_in_blocked": StageContract(required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS),
-    "scalp_sim_euphoria_partial_profit_assumed_filled": StageContract(required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS),
-    "scalp_sim_euphoria_partial_profit_unpriced": StageContract(required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS),
-    "scalp_sim_euphoria_action_deduped": StageContract(required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS),
+    "scalp_sim_panic_level1_entry_observed": StageContract(
+        required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS
+    ),
+    "scalp_sim_panic_entry_blocked": StageContract(
+        required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS
+    ),
+    "scalp_sim_panic_scale_in_blocked": StageContract(
+        required_fields=(*SCALP_SIM_RISK_CONTEXT_FIELDS, "sim_record_id")
+    ),
+    "scalp_sim_panic_action_deduped": StageContract(
+        required_fields=(*SCALP_SIM_RISK_CONTEXT_FIELDS, "sim_record_id")
+    ),
+    "scalp_sim_partial_sell_order_assumed_filled": StageContract(
+        required_fields=(
+            *SCALP_SIM_RISK_CONTEXT_FIELDS,
+            "sim_record_id",
+            "entry_adm_candidate_id",
+        )
+    ),
+    "scalp_sim_euphoria_context_noop": StageContract(
+        required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS
+    ),
+    "scalp_sim_euphoria_entry_blocked": StageContract(
+        required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS
+    ),
+    "scalp_sim_euphoria_chase_entry_blocked": StageContract(
+        required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS
+    ),
+    "scalp_sim_euphoria_retest_starter_allowed": StageContract(
+        required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS
+    ),
+    "scalp_sim_euphoria_level1_starter_observed": StageContract(
+        required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS
+    ),
+    "scalp_sim_euphoria_scale_in_blocked": StageContract(
+        required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS
+    ),
+    "scalp_sim_euphoria_partial_profit_assumed_filled": StageContract(
+        required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS
+    ),
+    "scalp_sim_euphoria_partial_profit_unpriced": StageContract(
+        required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS
+    ),
+    "scalp_sim_euphoria_action_deduped": StageContract(
+        required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS
+    ),
     "ai_holding_fast_reuse_band": StageContract(
-        required_fields=(*DIAGNOSTIC_CONTRACT_FIELDS, "source_quality_route", "telemetry_only", "action"),
+        required_fields=(
+            *DIAGNOSTIC_CONTRACT_FIELDS,
+            "source_quality_route",
+            "telemetry_only",
+            "action",
+        ),
         decision_authority="source_quality_only",
     ),
     "soft_stop_expert_shadow": StageContract(
-        required_fields=(*DIAGNOSTIC_CONTRACT_FIELDS, "source_quality_route", "shadow_only", "hierarchy"),
+        required_fields=(
+            *DIAGNOSTIC_CONTRACT_FIELDS,
+            "source_quality_route",
+            "shadow_only",
+            "hierarchy",
+        ),
         decision_authority="source_quality_only",
     ),
     "adverse_fill_observed": StageContract(
@@ -1625,7 +1696,12 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         decision_authority="source_quality_only",
     ),
     "holding_flow_override_candidate_cleared": StageContract(
-        required_fields=(*DIAGNOSTIC_CONTRACT_FIELDS, "source_quality_route", "reason", "previous_key"),
+        required_fields=(
+            *DIAGNOSTIC_CONTRACT_FIELDS,
+            "source_quality_route",
+            "reason",
+            "previous_key",
+        ),
         decision_authority="source_quality_only",
     ),
     "holding_flow_override_clamped_never_green_loss": StageContract(
@@ -1653,22 +1729,47 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         decision_authority="real_scalping_holding_defer_clamp",
     ),
     "swing_probe_entry_candidate": StageContract(
-        required_fields=(*SIM_PROVENANCE_FIELDS, *SWING_PROBE_FIELDS, "virtual_budget_override", "budget_authority"),
+        required_fields=(
+            *SIM_PROVENANCE_FIELDS,
+            *SWING_PROBE_FIELDS,
+            "virtual_budget_override",
+            "budget_authority",
+        ),
     ),
     "swing_probe_holding_started": StageContract(
-        required_fields=(*SIM_PROVENANCE_FIELDS, *SWING_PROBE_FIELDS, "virtual_budget_override", "budget_authority"),
+        required_fields=(
+            *SIM_PROVENANCE_FIELDS,
+            *SWING_PROBE_FIELDS,
+            "virtual_budget_override",
+            "budget_authority",
+        ),
     ),
-    "swing_probe_exit_signal": StageContract(required_fields=(*SIM_PROVENANCE_FIELDS, *SWING_PROBE_FIELDS)),
+    "swing_probe_exit_signal": StageContract(
+        required_fields=(*SIM_PROVENANCE_FIELDS, *SWING_PROBE_FIELDS)
+    ),
     "swing_probe_sell_order_assumed_filled": StageContract(
-        required_fields=(*SIM_PROVENANCE_FIELDS, *SWING_PROBE_FIELDS, *ORDERBOOK_MICRO_FIELDS),
+        required_fields=(
+            *SIM_PROVENANCE_FIELDS,
+            *SWING_PROBE_FIELDS,
+            *ORDERBOOK_MICRO_FIELDS,
+        ),
         max_missing_rate=0.05,
     ),
     "swing_probe_scale_in_order_assumed_filled": StageContract(
-        required_fields=(*SIM_PROVENANCE_FIELDS, *SWING_PROBE_FIELDS, *ORDERBOOK_MICRO_FIELDS),
+        required_fields=(
+            *SIM_PROVENANCE_FIELDS,
+            *SWING_PROBE_FIELDS,
+            *ORDERBOOK_MICRO_FIELDS,
+        ),
         max_missing_rate=0.05,
     ),
     "swing_reentry_counterfactual_after_loss": StageContract(
-        required_fields=("simulated_order", "actual_order_submitted", "broker_order_forbidden", "runtime_effect"),
+        required_fields=(
+            "simulated_order",
+            "actual_order_submitted",
+            "broker_order_forbidden",
+            "runtime_effect",
+        ),
     ),
     "swing_same_symbol_loss_reentry_cooldown": StageContract(
         required_fields=(
@@ -1705,8 +1806,12 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         ),
         decision_authority="swing_sim_exploration_only",
     ),
-    "swing_entry_micro_context_observed": StageContract(required_fields=ORDERBOOK_MICRO_FIELDS),
-    "swing_scale_in_micro_context_observed": StageContract(required_fields=ORDERBOOK_MICRO_FIELDS),
+    "swing_entry_micro_context_observed": StageContract(
+        required_fields=ORDERBOOK_MICRO_FIELDS
+    ),
+    "swing_scale_in_micro_context_observed": StageContract(
+        required_fields=ORDERBOOK_MICRO_FIELDS
+    ),
     "reversal_add_blocked_reason": StageContract(
         required_fields=(
             "state",
@@ -1915,7 +2020,12 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         decision_authority="real_scalping_deep_recovery_intercept",
     ),
     "scale_in_price_resolved": StageContract(
-        required_fields=("price_source", "virtual_budget_override", "budget_authority", *ORDERBOOK_MICRO_FIELDS),
+        required_fields=(
+            "price_source",
+            "virtual_budget_override",
+            "budget_authority",
+            *ORDERBOOK_MICRO_FIELDS,
+        ),
         max_missing_rate=0.50,
     ),
     "scale_in_price_p2_observe": StageContract(
@@ -1923,15 +2033,35 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         max_missing_rate=0.50,
     ),
     "swing_sim_scale_in_order_assumed_filled": StageContract(
-        required_fields=("actual_order_submitted", "broker_order_forbidden", "virtual_budget_override", "budget_authority", *ORDERBOOK_MICRO_FIELDS),
+        required_fields=(
+            "actual_order_submitted",
+            "broker_order_forbidden",
+            "virtual_budget_override",
+            "budget_authority",
+            *ORDERBOOK_MICRO_FIELDS,
+        ),
         max_missing_rate=0.05,
     ),
     "loss_fallback_probe": StageContract(
-        required_fields=("gate_allowed", "gate_reason", "fallback_candidate", "fallback_reason", "profit_rate", "peak_profit"),
+        required_fields=(
+            "gate_allowed",
+            "gate_reason",
+            "fallback_candidate",
+            "fallback_reason",
+            "profit_rate",
+            "peak_profit",
+        ),
         decision_authority="source_quality_only",
     ),
     "soft_stop_whipsaw_confirmation": StageContract(
-        required_fields=("threshold_family", "threshold_version", "threshold_calibration_state", "profit_rate", "flow_state", "exit_rule_candidate"),
+        required_fields=(
+            "threshold_family",
+            "threshold_version",
+            "threshold_calibration_state",
+            "profit_rate",
+            "flow_state",
+            "exit_rule_candidate",
+        ),
         decision_authority="source_quality_only",
     ),
     "blocked_gatekeeper_reject": StageContract(
@@ -1939,7 +2069,14 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         decision_authority="source_quality_only",
     ),
     "entry_armed": StageContract(
-        required_fields=("ai_score", "ratio", "target_buy_price", "current_vpw", "reason", "ttl_sec"),
+        required_fields=(
+            "ai_score",
+            "ratio",
+            "target_buy_price",
+            "current_vpw",
+            "reason",
+            "ttl_sec",
+        ),
         decision_authority="source_quality_only",
     ),
     "entry_armed_expired_after_wait": StageContract(
@@ -2006,7 +2143,9 @@ def _date_range(start_date: str, end_date: str) -> list[str]:
     start = _parse_date(start_date)
     end = _parse_date(end_date)
     if start > end:
-        raise ValueError(f"start_date must be <= target_date: {start_date} > {end_date}")
+        raise ValueError(
+            f"start_date must be <= target_date: {start_date} > {end_date}"
+        )
     days: list[str] = []
     current = start
     while current <= end:
@@ -2061,18 +2200,32 @@ def _reviewed_unknown_reason(value: Any) -> str | None:
         return None
     if "sample=insufficient" in lowered or "insufficient_sample" in lowered:
         return "reviewed_insufficient_sample"
-    if "not_applicable" in lowered or "not_available" in lowered or "not_evaluated" in lowered:
+    if (
+        "not_applicable" in lowered
+        or "not_available" in lowered
+        or "not_evaluated" in lowered
+    ):
         return "reviewed_not_available"
     if "unknown_pre_contract" in lowered:
         return "reviewed_pre_contract_placeholder"
-    if "panic_context_status" in lowered and "missing" in lowered and "risk_regime" in lowered:
+    if (
+        "panic_context_status" in lowered
+        and "missing" in lowered
+        and "risk_regime" in lowered
+    ):
         return "reviewed_missing_risk_regime_context"
-    if "panic_level_reason" in lowered and "context_not_ok" in lowered and "market_risk_state" in lowered:
+    if (
+        "panic_level_reason" in lowered
+        and "context_not_ok" in lowered
+        and "market_risk_state" in lowered
+    ):
         return "reviewed_missing_risk_regime_context"
     return None
 
 
-def _reviewed_unknown_reason_for_field(key: str, value: Any, *, emitted_date: str | None = None) -> str | None:
+def _reviewed_unknown_reason_for_field(
+    key: str, value: Any, *, emitted_date: str | None = None
+) -> str | None:
     reviewed_reason = _reviewed_unknown_reason(value)
     if reviewed_reason:
         return reviewed_reason
@@ -2085,7 +2238,11 @@ def _reviewed_unknown_reason_for_field(key: str, value: Any, *, emitted_date: st
     text = str(value or "").lower()
     if "unknown" not in text:
         return None
-    parts = {part.partition("=")[0]: part.partition("=")[2] for part in text.split("|") if "=" in part}
+    parts = {
+        part.partition("=")[0]: part.partition("=")[2]
+        for part in text.split("|")
+        if "=" in part
+    }
     if not parts:
         return None
     if any(parts.get(name) == "unknown" for name in ("spread", "price", "depth")):
@@ -2106,15 +2263,13 @@ def _reviewed_unknown_reason_for_stage_field(
     def _is_reviewed_stale_flag_not_available() -> bool:
         field = str(key or "")
         if field == "tick_context_stale":
-            return (
-                _field_text("tick_latest_age_ms") in {"", "-"}
-                or _field_text("tick_context_quality") in {"missing_ticks", "missing_tick_time"}
-            )
+            return _field_text("tick_latest_age_ms") in {"", "-"} or _field_text(
+                "tick_context_quality"
+            ) in {"missing_ticks", "missing_tick_time"}
         if field == "quote_stale":
-            return (
-                _field_text("quote_age_ms") in {"", "-"}
-                or _field_text("quote_age_source") in {"", "missing", "not_available_quote_age"}
-            )
+            return _field_text("quote_age_ms") in {"", "-"} or _field_text(
+                "quote_age_source"
+            ) in {"", "missing", "not_available_quote_age"}
         return False
 
     def _is_reviewed_sim_liquidity_not_available() -> bool:
@@ -2127,13 +2282,19 @@ def _reviewed_unknown_reason_for_stage_field(
                 "sim_observation_only",
                 "entry_advisory_prompt_context_only",
             }
-            and (authority != "entry_advisory_prompt_context_only" or source_stage == "scalp_sim_entry_armed")
+            and (
+                authority != "entry_advisory_prompt_context_only"
+                or source_stage == "scalp_sim_entry_armed"
+            )
             and _field_text("actual_order_submitted").lower() in {"false", "0", "no"}
             and _field_text("broker_order_forbidden").lower() in {"true", "1", "yes"}
-            and _field_text("sim_pre_submit_liquidity_reason") == "liquidity_not_available"
+            and _field_text("sim_pre_submit_liquidity_reason")
+            == "liquidity_not_available"
             and _field_text("sim_liquidity_value") == "not_available"
-            and _field_text("sim_min_liquidity") not in {"", "-", "unknown_pre_contract"}
-            and _field_text("sim_parent_record_id") not in {"", "-", "unknown_pre_contract"}
+            and _field_text("sim_min_liquidity")
+            not in {"", "-", "unknown_pre_contract"}
+            and _field_text("sim_parent_record_id")
+            not in {"", "-", "unknown_pre_contract"}
         )
 
     def _is_reviewed_live_liquidity_not_available() -> bool:
@@ -2141,7 +2302,8 @@ def _reviewed_unknown_reason_for_stage_field(
             _field_text("pre_submit_liquidity_guard_action") == "NOT_AVAILABLE"
             and _field_text("pre_submit_liquidity_reason") == "liquidity_not_available"
             and _field_text("pre_submit_liquidity_value") == "not_available"
-            and _field_text("pre_submit_min_liquidity") not in {"", "-", "unknown_pre_contract"}
+            and _field_text("pre_submit_min_liquidity")
+            not in {"", "-", "unknown_pre_contract"}
         )
 
     def _is_falseish(field: str) -> bool:
@@ -2166,9 +2328,14 @@ def _reviewed_unknown_reason_for_stage_field(
     def _is_reviewed_runtime_skip_context_not_evaluated() -> bool:
         if stage != "scalping_scanner_watching_runtime_skip":
             return False
-        if str(key or "") not in {"tick_context_quality", "minute_candle_context_quality"}:
+        if str(key or "") not in {
+            "tick_context_quality",
+            "minute_candle_context_quality",
+        }:
             return False
-        return _is_runtime_order_forbidden_observation() and _field_text("skip_reason") in {
+        return _is_runtime_order_forbidden_observation() and _field_text(
+            "skip_reason"
+        ) in {
             "before_strategy_start",
             "entry_cooldown_active",
             "runtime_queue_lag",
@@ -2191,7 +2358,8 @@ def _reviewed_unknown_reason_for_stage_field(
             return False
         skip_reason = _field_text("skip_reason")
         return _is_runtime_order_forbidden_observation() and (
-            skip_reason in {
+            skip_reason
+            in {
                 "micro_vwap_unusable",
                 "original_action_not_wait",
                 "not_evaluated",
@@ -2213,7 +2381,8 @@ def _reviewed_unknown_reason_for_stage_field(
         reason = _field_text("entry_score_excluded_reason").lower()
         return _is_runtime_order_forbidden_observation() and (
             reason.startswith("unusable_source:")
-            or reason in {"stale_quote_or_context", "score50_fallback_blocked", "not_evaluated"}
+            or reason
+            in {"stale_quote_or_context", "score50_fallback_blocked", "not_evaluated"}
         )
 
     def _is_reviewed_entry_block_source_quality_unknown() -> bool:
@@ -2223,9 +2392,15 @@ def _reviewed_unknown_reason_for_stage_field(
             "entry_action_final_reason",
         }:
             return False
-        if stage == "real_weak_ai_micro_entry_block" and str(key or "") not in {"reason", "block_reason"}:
+        if stage == "real_weak_ai_micro_entry_block" and str(key or "") not in {
+            "reason",
+            "block_reason",
+        }:
             return False
-        if stage not in {"scalp_entry_action_decision_snapshot", "real_weak_ai_micro_entry_block"}:
+        if stage not in {
+            "scalp_entry_action_decision_snapshot",
+            "real_weak_ai_micro_entry_block",
+        }:
             return False
         return (
             str(value or "").strip() == "source_quality_unknown"
@@ -2255,7 +2430,10 @@ def _reviewed_unknown_reason_for_stage_field(
         }
 
     def _is_reviewed_holding_score_preflight_not_available() -> bool:
-        if stage != "ai_holding_review" or str(key or "") != "holding_score_preflight_source_quality":
+        if (
+            stage != "ai_holding_review"
+            or str(key or "") != "holding_score_preflight_source_quality"
+        ):
             return False
         return _field_text("holding_review_trigger_reason") in {
             "fast_reuse_bypass",
@@ -2316,7 +2494,13 @@ def _reviewed_unknown_reason_for_stage_field(
         source_quality = _field_text("first_touch_reversal_feature_source_quality")
         stale_reason = _field_text("first_touch_reversal_feature_stale_reason")
         return _is_runtime_order_forbidden_observation() and (
-            quote_age in {"", "-", "not_available_quote_age", "not_available_quote_age_no_micro_context"}
+            quote_age
+            in {
+                "",
+                "-",
+                "not_available_quote_age",
+                "not_available_quote_age_no_micro_context",
+            }
             or quote_source.startswith("not_available")
             or source_quality in {"missing", "stale"}
             or stale_reason in {"-", "features_missing", "micro_vwap_unavailable"}
@@ -2335,17 +2519,28 @@ def _reviewed_unknown_reason_for_stage_field(
         return str(value or "").strip().lower() == "source_quality_missing_or_unknown"
 
     def _is_reviewed_rising_missed_nxt_eligibility_not_available() -> bool:
-        if str(key or "") not in {"rising_missed_nxt_eligible", "rising_missed_effective_venue"}:
+        if str(key or "") not in {
+            "rising_missed_nxt_eligible",
+            "rising_missed_effective_venue",
+        }:
             return False
-        if str(key or "") == "rising_missed_nxt_eligible" and str(value or "").strip().lower() != "unknown":
+        if (
+            str(key or "") == "rising_missed_nxt_eligible"
+            and str(value or "").strip().lower() != "unknown"
+        ):
             return False
-        if str(key or "") == "rising_missed_effective_venue" and str(value or "") != "NXT_ELIGIBILITY_UNKNOWN":
+        if (
+            str(key or "") == "rising_missed_effective_venue"
+            and str(value or "") != "NXT_ELIGIBILITY_UNKNOWN"
+        ):
             return False
         effective_venue = _field_text("rising_missed_effective_venue")
         standard_contract_present = (
             _field_text("rising_missed_nxt_metric_role") == "source_quality_gate"
-            and _field_text("rising_missed_nxt_decision_authority") == "observe_only_no_runtime_mutation"
-            and _field_text("rising_missed_nxt_observation_only").lower() in {"true", "1", "yes"}
+            and _field_text("rising_missed_nxt_decision_authority")
+            == "observe_only_no_runtime_mutation"
+            and _field_text("rising_missed_nxt_observation_only").lower()
+            in {"true", "1", "yes"}
             and _field_text("rising_missed_nxt_source_quality_gate")
             == "absolute_type_receive_ts_and_actual_ws_item_route"
         )
@@ -2372,7 +2567,8 @@ def _reviewed_unknown_reason_for_stage_field(
             return False
         return (
             _field_text("metric_role") == "source_quality_gate"
-            and _field_text("decision_authority") == "source_only_nxt_post_block_price_observation"
+            and _field_text("decision_authority")
+            == "source_only_nxt_post_block_price_observation"
             and _field_text("runtime_effect").lower() in {"false", "0", "no"}
             and _field_text("actual_order_submitted").lower() in {"false", "0", "no"}
             and _field_text("broker_order_forbidden").lower() in {"true", "1", "yes"}
@@ -2398,7 +2594,11 @@ def _reviewed_unknown_reason_for_stage_field(
             return False
         if not cache_token.startswith("entry_adm:"):
             return False
-        return price_bucket == "price_unknown" and "price_unknown" in bucket_token and "price_unknown" in cache_token
+        return (
+            price_bucket == "price_unknown"
+            and "price_unknown" in bucket_token
+            and "price_unknown" in cache_token
+        )
 
     def _is_reviewed_forbidden_uses_unknown_literal() -> bool:
         if str(key or "") != "forbidden_uses":
@@ -2436,13 +2636,20 @@ def _reviewed_unknown_reason_for_stage_field(
         return "reviewed_rising_missed_nxt_eligibility_not_available"
     if _is_reviewed_rising_missed_nxt_post_block_route_not_available():
         return "reviewed_rising_missed_nxt_post_block_route_not_available"
-    if str(key or "") in {"tick_context_stale", "quote_stale"} and _is_reviewed_stale_flag_not_available():
+    if (
+        str(key or "") in {"tick_context_stale", "quote_stale"}
+        and _is_reviewed_stale_flag_not_available()
+    ):
         return "reviewed_stale_flag_not_available"
-    if str(key or "") in {
-        "entry_adm_cache_token",
-        "entry_adm_bucket_token",
-        "entry_adm_price_resolution_bucket",
-    } and _is_reviewed_entry_adm_bucket_provenance():
+    if (
+        str(key or "")
+        in {
+            "entry_adm_cache_token",
+            "entry_adm_bucket_token",
+            "entry_adm_price_resolution_bucket",
+        }
+        and _is_reviewed_entry_adm_bucket_provenance()
+    ):
         return "reviewed_entry_adm_bucket_provenance_recorded"
     if (
         stage == "sell_order_sent"
@@ -2451,15 +2658,24 @@ def _reviewed_unknown_reason_for_stage_field(
         in {"unknown", "nxt_enabled_or_unknown", "nxt_session_nxt_enabled_or_unknown"}
     ):
         return "reviewed_sell_order_exchange_resolution_not_available"
-    if str(key or "") == "sim_pre_submit_liquidity_guard_action" and str(value or "").upper() == "WOULD_UNKNOWN":
+    if (
+        str(key or "") == "sim_pre_submit_liquidity_guard_action"
+        and str(value or "").upper() == "WOULD_UNKNOWN"
+    ):
         if _is_reviewed_sim_liquidity_not_available():
             return "reviewed_sim_liquidity_not_available"
         return None
-    if str(key or "") == "liquidity_guard_action" and str(value or "").upper() == "WOULD_UNKNOWN":
+    if (
+        str(key or "") == "liquidity_guard_action"
+        and str(value or "").upper() == "WOULD_UNKNOWN"
+    ):
         if _is_reviewed_live_liquidity_not_available():
             return "reviewed_pre_submit_liquidity_not_available"
         return None
-    if str(key or "") == "__stage" and str(stage or "") == "scalp_sim_pre_submit_liquidity_guard_unknown":
+    if (
+        str(key or "") == "__stage"
+        and str(stage or "") == "scalp_sim_pre_submit_liquidity_guard_unknown"
+    ):
         if _is_reviewed_sim_liquidity_not_available():
             return "reviewed_explicit_sim_liquidity_unknown_stage"
         return None
@@ -2482,7 +2698,9 @@ def _reviewed_unknown_reason_for_stage_field(
     return None
 
 
-def _unknown_scan_values(row: dict[str, Any], normalized: dict[str, Any]) -> dict[str, Any]:
+def _unknown_scan_values(
+    row: dict[str, Any], normalized: dict[str, Any]
+) -> dict[str, Any]:
     values = dict(normalized)
     for key in ("stage", "pipeline", "stock_code", "stock_name", "event_type"):
         value = row.get(key)
@@ -2509,10 +2727,16 @@ def _stage_name(row: dict[str, Any]) -> str:
     return str(row.get("stage") or "-")
 
 
-def _normalized_fields_for_contract(stage: str, fields: dict[str, Any]) -> dict[str, Any]:
+def _normalized_fields_for_contract(
+    stage: str, fields: dict[str, Any]
+) -> dict[str, Any]:
     normalized = dict(fields or {})
     contract = STAGE_CONTRACTS.get(stage)
-    if contract and "metric_role" in contract.required_fields and stage != "swing_probe_state_persisted":
+    if (
+        contract
+        and "metric_role" in contract.required_fields
+        and stage != "swing_probe_state_persisted"
+    ):
         normalized.setdefault("window_policy", "same_day_source_quality_audit")
         normalized.setdefault("sample_floor", contract.min_sample)
         normalized.setdefault("primary_decision_metric", "source_quality_gate")
@@ -2520,14 +2744,26 @@ def _normalized_fields_for_contract(stage: str, fields: dict[str, Any]) -> dict[
     if stage == "ai_confirmed":
         for field in AI_SOURCE_FIELDS:
             if not _is_present(normalized.get(field)):
-                normalized[field] = "not_evaluated_pre_contract" if field != "tick_source_quality_fields_sent" else False
+                normalized[field] = (
+                    "not_evaluated_pre_contract"
+                    if field != "tick_source_quality_fields_sent"
+                    else False
+                )
         normalized.setdefault("ai_input_source_quality_status", "not_evaluated")
-        normalized.setdefault("ai_input_source_quality_reason", "pre_contract_or_cooldown_score50_path")
+        normalized.setdefault(
+            "ai_input_source_quality_reason", "pre_contract_or_cooldown_score50_path"
+        )
     if stage in {"latency_block", "latency_pass", "order_bundle_submitted"}:
         if not _is_present(normalized.get("policy_decision")):
-            normalized["policy_decision"] = normalized.get("decision") or normalized.get("effective_decision") or "unknown_pre_contract"
+            normalized["policy_decision"] = (
+                normalized.get("decision")
+                or normalized.get("effective_decision")
+                or "unknown_pre_contract"
+            )
         if not _is_present(normalized.get("effective_decision")):
-            normalized["effective_decision"] = normalized.get("policy_decision") or "unknown_pre_contract"
+            normalized["effective_decision"] = (
+                normalized.get("policy_decision") or "unknown_pre_contract"
+            )
         for field in ("ws_age_ms", "ws_jitter_ms", "spread_ratio"):
             if not _is_present(normalized.get(field)):
                 normalized[field] = "unknown_pre_contract"
@@ -2535,43 +2771,94 @@ def _normalized_fields_for_contract(stage: str, fields: dict[str, Any]) -> dict[
             normalized["latency_canary_reason"] = "not_applicable_or_pre_contract"
         normalized.setdefault("latency_danger_reasons", "unknown_pre_contract")
         normalized.setdefault("latency_danger_detail_reason", "unknown_pre_contract")
-        normalized.setdefault("latency_danger_source_quality_state", "unknown_pre_contract")
-        normalized.setdefault("latency_danger_reason_taxonomy_gap", "unknown_pre_contract")
-        normalized.setdefault("latency_danger_max_ws_age_ms_for_caution", "unknown_pre_contract")
-        normalized.setdefault("latency_danger_max_ws_jitter_ms_for_caution", "unknown_pre_contract")
-        normalized.setdefault("latency_danger_max_spread_ratio_for_caution", "unknown_pre_contract")
-        normalized.setdefault("latency_danger_guard_max_spread_ratio", "unknown_pre_contract")
+        normalized.setdefault(
+            "latency_danger_source_quality_state", "unknown_pre_contract"
+        )
+        normalized.setdefault(
+            "latency_danger_reason_taxonomy_gap", "unknown_pre_contract"
+        )
+        normalized.setdefault(
+            "latency_danger_max_ws_age_ms_for_caution", "unknown_pre_contract"
+        )
+        normalized.setdefault(
+            "latency_danger_max_ws_jitter_ms_for_caution", "unknown_pre_contract"
+        )
+        normalized.setdefault(
+            "latency_danger_max_spread_ratio_for_caution", "unknown_pre_contract"
+        )
+        normalized.setdefault(
+            "latency_danger_guard_max_spread_ratio", "unknown_pre_contract"
+        )
         normalized.setdefault("latency_strategy_id", "unknown_pre_contract")
         normalized.setdefault("latency_position_tag", "unknown_pre_contract")
         normalized.setdefault("latency_spread_relief_tag", "unknown_pre_contract")
-        normalized.setdefault("latency_spread_relief_signal_score", "unknown_pre_contract")
-        normalized.setdefault("latency_spread_relief_configured_min_signal_score", "unknown_pre_contract")
-        normalized.setdefault("latency_spread_relief_effective_min_signal_score", "unknown_pre_contract")
-        normalized.setdefault("latency_spread_relief_block_reason", "not_applicable_or_pre_contract")
-        normalized.setdefault("latency_spread_relief_signal_score_source", "unknown_pre_contract")
-        normalized.setdefault("latency_spread_relief_signal_source_quality_state", "unknown_pre_contract")
-        normalized.setdefault("latency_spread_relief_candidate_ai_score", "unknown_pre_contract")
-        normalized.setdefault("latency_spread_relief_candidate_ai_score_source", "unknown_pre_contract")
-        normalized.setdefault("latency_spread_relief_source_quality_gap", "not_applicable_or_pre_contract")
+        normalized.setdefault(
+            "latency_spread_relief_signal_score", "unknown_pre_contract"
+        )
+        normalized.setdefault(
+            "latency_spread_relief_configured_min_signal_score", "unknown_pre_contract"
+        )
+        normalized.setdefault(
+            "latency_spread_relief_effective_min_signal_score", "unknown_pre_contract"
+        )
+        normalized.setdefault(
+            "latency_spread_relief_block_reason", "not_applicable_or_pre_contract"
+        )
+        normalized.setdefault(
+            "latency_spread_relief_signal_score_source", "unknown_pre_contract"
+        )
+        normalized.setdefault(
+            "latency_spread_relief_signal_source_quality_state", "unknown_pre_contract"
+        )
+        normalized.setdefault(
+            "latency_spread_relief_candidate_ai_score", "unknown_pre_contract"
+        )
+        normalized.setdefault(
+            "latency_spread_relief_candidate_ai_score_source", "unknown_pre_contract"
+        )
+        normalized.setdefault(
+            "latency_spread_relief_source_quality_gap", "not_applicable_or_pre_contract"
+        )
         normalized.setdefault("latency_spread_block_bucket", "unknown_pre_contract")
-        normalized.setdefault("latency_spread_block_price_bucket", "unknown_pre_contract")
-        normalized.setdefault("latency_spread_block_signal_context_bucket", "unknown_pre_contract")
+        normalized.setdefault(
+            "latency_spread_block_price_bucket", "unknown_pre_contract"
+        )
+        normalized.setdefault(
+            "latency_spread_block_signal_context_bucket", "unknown_pre_contract"
+        )
         normalized.setdefault("latency_spread_block_spread_bps", "unknown_pre_contract")
-        normalized.setdefault("latency_spread_block_spread_ticks", "unknown_pre_contract")
+        normalized.setdefault(
+            "latency_spread_block_spread_ticks", "unknown_pre_contract"
+        )
         normalized.setdefault("latency_relief_attempted", "unknown_pre_contract")
-        normalized.setdefault("latency_relief_block_reason", "not_applicable_or_pre_contract")
+        normalized.setdefault(
+            "latency_relief_block_reason", "not_applicable_or_pre_contract"
+        )
     if stage.startswith("early_accel_strong_bundle_recheck_"):
         normalized.setdefault("recheck_reason_excerpt", "not_evaluated_pre_contract")
         normalized.setdefault("recheck_failure_class", "not_evaluated_pre_contract")
     if stage == "order_bundle_submitted":
-        submitted = str(
-            normalized.get("actual_order_submitted")
-            if _is_present(normalized.get("actual_order_submitted"))
-            else normalized.get("order_submitted")
-            if _is_present(normalized.get("order_submitted"))
-            else normalized.get("broker_order_submitted")
-        ).strip().lower()
-        submitted_bool = submitted not in {"", "0", "false", "none", "no", "unknown_pre_contract"}
+        submitted = (
+            str(
+                normalized.get("actual_order_submitted")
+                if _is_present(normalized.get("actual_order_submitted"))
+                else (
+                    normalized.get("order_submitted")
+                    if _is_present(normalized.get("order_submitted"))
+                    else normalized.get("broker_order_submitted")
+                )
+            )
+            .strip()
+            .lower()
+        )
+        submitted_bool = submitted not in {
+            "",
+            "0",
+            "false",
+            "none",
+            "no",
+            "unknown_pre_contract",
+        }
         normalized.setdefault("broker_order_submitted", submitted_bool)
         normalized.setdefault(
             "broker_order_no",
@@ -2584,29 +2871,58 @@ def _normalized_fields_for_contract(stage: str, fields: dict[str, Any]) -> dict[
         if not _is_present(normalized.get("broker_receipt_status")):
             normalized["broker_receipt_status"] = (
                 "submitted_receipt_observed"
-                if submitted_bool and normalized.get("broker_order_no") != "unknown_pre_contract"
-                else "unknown_pre_contract"
                 if submitted_bool
-                else "not_submitted"
+                and normalized.get("broker_order_no") != "unknown_pre_contract"
+                else "unknown_pre_contract" if submitted_bool else "not_submitted"
             )
         normalized.setdefault(
             "broker_receipt_reason",
-            normalized.get("reason") or normalized.get("latency_canary_reason") or "source_contract_backfill",
+            normalized.get("reason")
+            or normalized.get("latency_canary_reason")
+            or "source_contract_backfill",
         )
-        normalized.setdefault("requested_qty", normalized.get("qty") or normalized.get("order_qty") or "unknown_pre_contract")
-        normalized.setdefault("filled_qty", normalized.get("filled_qty") or "unknown_pre_contract")
-        normalized.setdefault("remaining_qty", normalized.get("remaining_qty") or "unknown_pre_contract")
-        normalized.setdefault("fill_quality", normalized.get("fill_status") or "unknown_pre_contract")
-        normalized.setdefault("post_submit_state", normalized.get("order_state") or "submitted_or_pending")
+        normalized.setdefault(
+            "requested_qty",
+            normalized.get("qty")
+            or normalized.get("order_qty")
+            or "unknown_pre_contract",
+        )
+        normalized.setdefault(
+            "filled_qty", normalized.get("filled_qty") or "unknown_pre_contract"
+        )
+        normalized.setdefault(
+            "remaining_qty", normalized.get("remaining_qty") or "unknown_pre_contract"
+        )
+        normalized.setdefault(
+            "fill_quality", normalized.get("fill_status") or "unknown_pre_contract"
+        )
+        normalized.setdefault(
+            "post_submit_state", normalized.get("order_state") or "submitted_or_pending"
+        )
         normalized.setdefault("cancel_requested", False)
         normalized.setdefault("cancel_result", "not_requested")
         normalized.setdefault("position_rebased_after_fill", False)
-        normalized.setdefault("telegram_audience", normalized.get("telegram_audience") or "all")
-        normalized.setdefault("telegram_event_type", normalized.get("telegram_event_type") or "buy_post_submit")
+        normalized.setdefault(
+            "telegram_audience", normalized.get("telegram_audience") or "all"
+        )
+        normalized.setdefault(
+            "telegram_event_type",
+            normalized.get("telegram_event_type") or "buy_post_submit",
+        )
         normalized.setdefault("telegram_sent_after_broker_submit", submitted_bool)
-        normalized.setdefault("strategy_domain", normalized.get("strategy_domain") or normalized.get("strategy") or "scalping")
-        normalized.setdefault("source_namespace", normalized.get("source_namespace") or "scalping_entry_submit")
-        normalized.setdefault("blocker_namespace", normalized.get("blocker_namespace") or "entry_submit")
+        normalized.setdefault(
+            "strategy_domain",
+            normalized.get("strategy_domain")
+            or normalized.get("strategy")
+            or "scalping",
+        )
+        normalized.setdefault(
+            "source_namespace",
+            normalized.get("source_namespace") or "scalping_entry_submit",
+        )
+        normalized.setdefault(
+            "blocker_namespace", normalized.get("blocker_namespace") or "entry_submit"
+        )
     if stage in {"holding_started", "scale_in_executed"}:
         normalized.setdefault("metric_role", "execution_quality_real_only")
         normalized.setdefault("decision_authority", "broker_receipt_observation_only")
@@ -2623,11 +2939,15 @@ def _normalized_fields_for_contract(stage: str, fields: dict[str, Any]) -> dict[
         normalized.setdefault("broker_order_forbidden", False)
     if stage == "same_symbol_loss_reentry_cooldown":
         normalized.setdefault("metric_role", "safety_veto")
-        normalized.setdefault("decision_authority", "same_symbol_loss_reentry_guard_observation_only")
+        normalized.setdefault(
+            "decision_authority", "same_symbol_loss_reentry_guard_observation_only"
+        )
         normalized.setdefault("window_policy", "same_symbol_guard_event")
         normalized.setdefault("sample_floor", 1)
         normalized.setdefault("primary_decision_metric", "source_quality_gate")
-        normalized.setdefault("source_quality_gate", "same_symbol_loss_reentry_guard_observation_only")
+        normalized.setdefault(
+            "source_quality_gate", "same_symbol_loss_reentry_guard_observation_only"
+        )
         normalized.setdefault("runtime_effect", False)
         normalized.setdefault(
             "forbidden_uses",
@@ -2643,17 +2963,27 @@ def _normalized_fields_for_contract(stage: str, fields: dict[str, Any]) -> dict[
         normalized.setdefault("window_policy", "same_day_high_volume_diagnostic")
         normalized.setdefault("sample_floor", 1)
         normalized.setdefault("primary_decision_metric", "funnel_count")
-        normalized.setdefault("source_quality_gate", "diagnostic_contract_label_present")
+        normalized.setdefault(
+            "source_quality_gate", "diagnostic_contract_label_present"
+        )
         normalized.setdefault("runtime_effect", False)
         normalized.setdefault(
             "forbidden_uses",
             "runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
         )
-    if stage == "loss_fallback_probe" and not _is_present(normalized.get("fallback_reason")):
-        fallback_candidate = str(normalized.get("fallback_candidate") or "").strip().lower() in {"true", "1", "yes"}
+    if stage == "loss_fallback_probe" and not _is_present(
+        normalized.get("fallback_reason")
+    ):
+        fallback_candidate = str(
+            normalized.get("fallback_candidate") or ""
+        ).strip().lower() in {"true", "1", "yes"}
         if not fallback_candidate:
-            normalized["fallback_reason"] = normalized.get("gate_reason") or "not_candidate"
-    if stage == "soft_stop_whipsaw_confirmation" and not _is_present(normalized.get("flow_state")):
+            normalized["fallback_reason"] = (
+                normalized.get("gate_reason") or "not_candidate"
+            )
+    if stage == "soft_stop_whipsaw_confirmation" and not _is_present(
+        normalized.get("flow_state")
+    ):
         normalized["flow_state"] = "flow_state_unavailable"
         normalized["flow_state_source"] = "audit_normalized_missing_runtime_flow_state"
     elif _is_present(normalized.get("flow_state")):
@@ -2664,13 +2994,19 @@ def _normalized_fields_for_contract(stage: str, fields: dict[str, Any]) -> dict[
         normalized["flow_state"] = normalize_flow_state_label(raw_flow_state)
         if normalized["flow_state"] != raw_flow_state:
             normalized["raw_flow_state"] = raw_flow_state
-            normalized["flow_state_source"] = "audit_normalized_legacy_runtime_flow_state"
+            normalized["flow_state_source"] = (
+                "audit_normalized_legacy_runtime_flow_state"
+            )
     if "gatekeeper" in stage or any(
-        _is_present(normalized.get(field)) for field in ("action_key", "gatekeeper_action_key", "gatekeeper_action")
+        _is_present(normalized.get(field))
+        for field in ("action_key", "gatekeeper_action_key", "gatekeeper_action")
     ):
-        raw_action = normalized.get("action_key") or normalized.get("gatekeeper_action_key") or normalized.get(
-            "gatekeeper_action"
-        ) or normalized.get("action")
+        raw_action = (
+            normalized.get("action_key")
+            or normalized.get("gatekeeper_action_key")
+            or normalized.get("gatekeeper_action")
+            or normalized.get("action")
+        )
         if _is_present(raw_action):
             if not is_known_gatekeeper_action_label(raw_action):
                 normalized["invalid_gatekeeper_action_label"] = raw_action
@@ -2690,7 +3026,9 @@ def _contract_bool(value: Any, expected: bool) -> bool:
     return normalized in {"", "0", "false", "none", "no"}
 
 
-def _sim_submit_guard_contract_violations(stage: str, fields: dict[str, Any]) -> dict[str, bool]:
+def _sim_submit_guard_contract_violations(
+    stage: str, fields: dict[str, Any]
+) -> dict[str, bool]:
     action_contract = SIM_SUBMIT_GUARD_STAGE_ACTIONS.get(stage)
     if not action_contract:
         return {}
@@ -2698,7 +3036,9 @@ def _sim_submit_guard_contract_violations(stage: str, fields: dict[str, Any]) ->
     action_value = str(fields.get(action_field) or "").strip().upper()
     return {
         "sim_submit_guard_action_contract": action_value != expected_action,
-        "sim_submit_guard_authority_contract": str(fields.get("decision_authority") or "").strip()
+        "sim_submit_guard_authority_contract": str(
+            fields.get("decision_authority") or ""
+        ).strip()
         != "sim_submit_path_observation_only",
         "sim_submit_guard_actual_order_contract": not _contract_bool(
             fields.get("actual_order_submitted"),
@@ -2708,11 +3048,15 @@ def _sim_submit_guard_contract_violations(stage: str, fields: dict[str, Any]) ->
             fields.get("broker_order_forbidden"),
             True,
         ),
-        "sim_submit_guard_runtime_effect_contract": not _contract_bool(fields.get("runtime_effect"), False),
+        "sim_submit_guard_runtime_effect_contract": not _contract_bool(
+            fields.get("runtime_effect"), False
+        ),
     }
 
 
-def _scanner_rank_change_sign_contract_violations(fields: dict[str, Any]) -> dict[str, bool]:
+def _scanner_rank_change_sign_contract_violations(
+    fields: dict[str, Any],
+) -> dict[str, bool]:
     consistency = str(fields.get("rank_change_sign_consistency") or "").strip()
     state = str(fields.get("rank_change_sign_state") or "").strip()
     if not consistency and not state:
@@ -2721,14 +3065,23 @@ def _scanner_rank_change_sign_contract_violations(fields: dict[str, Any]) -> dic
             "rank_change_sign_consistency_mismatch": False,
         }
     return {
-        "rank_change_sign_consistency_unknown": consistency == "unknown" or state == "unknown",
+        "rank_change_sign_consistency_unknown": consistency == "unknown"
+        or state == "unknown",
         "rank_change_sign_consistency_mismatch": consistency == "mismatch",
     }
 
 
-def _shallow_source_gap_recheck_contract_violations(fields: dict[str, Any]) -> dict[str, bool]:
+def _shallow_source_gap_recheck_contract_violations(
+    fields: dict[str, Any],
+) -> dict[str, bool]:
     state = str(fields.get("recheck_state") or "").strip().lower()
-    valid_states = {"armed", "pending", "recovered", "ttl_expired", "recovered_without_add"}
+    valid_states = {
+        "armed",
+        "pending",
+        "recovered",
+        "ttl_expired",
+        "recovered_without_add",
+    }
     violations = {
         "shallow_recheck_state_contract": state not in valid_states,
         "shallow_recheck_quote_contract": False,
@@ -2772,12 +3125,18 @@ def _shallow_source_gap_recheck_contract_violations(fields: dict[str, Any]) -> d
 
 
 def _pressure_provenance_unusable(fields: dict[str, Any]) -> bool:
-    if not (_is_present(fields.get("buy_pressure_10t")) or _is_present(fields.get("buy_pressure"))):
+    if not (
+        _is_present(fields.get("buy_pressure_10t"))
+        or _is_present(fields.get("buy_pressure"))
+    ):
         return False
     trusted_count = _safe_float(fields.get("tick_aggressor_trusted_count"))
     if trusted_count is None:
         trusted_count = 0.0
-    return not _contract_bool(fields.get("tick_aggressor_pressure_usable"), True) and trusted_count <= 0.0
+    return (
+        not _contract_bool(fields.get("tick_aggressor_pressure_usable"), True)
+        and trusted_count <= 0.0
+    )
 
 
 def _stage_requires_tick_pressure_provenance(stage: str) -> bool:
@@ -2839,15 +3198,28 @@ def _row_identity(row: dict[str, Any], *, line_no: int | None = None) -> dict[st
         "record_id": row.get("record_id"),
     }
     fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
-    for key in ("sim_record_id", "source_probe_id", "source_record_id", "entry_adm_candidate_id"):
+    for key in (
+        "sim_record_id",
+        "source_probe_id",
+        "source_record_id",
+        "entry_adm_candidate_id",
+    ):
         if _is_present(fields.get(key)):
             identity[key] = fields.get(key)
     return identity
 
 
-def _row_contract_violations(stage: str, row: dict[str, Any], contract: StageContract) -> dict[str, list[str]]:
-    fields = _normalized_fields_for_contract(stage, row.get("fields") if isinstance(row.get("fields"), dict) else {})
-    missing = [field for field in contract.required_fields if not _is_present(fields.get(field))]
+def _row_contract_violations(
+    stage: str, row: dict[str, Any], contract: StageContract
+) -> dict[str, list[str]]:
+    fields = _normalized_fields_for_contract(
+        stage, row.get("fields") if isinstance(row.get("fields"), dict) else {}
+    )
+    missing = [
+        field
+        for field in contract.required_fields
+        if not _is_present(fields.get(field))
+    ]
     for field in _conditional_required_fields(stage, fields):
         if not _is_present(fields.get(field)) and field not in missing:
             missing.append(field)
@@ -2857,31 +3229,45 @@ def _row_contract_violations(stage: str, row: dict[str, Any], contract: StageCon
         if (value := _safe_float(fields.get(field))) is not None and abs(value) <= 1e-9
     ]
     invalid: list[str] = []
-    if stage == "soft_stop_whipsaw_confirmation" and _is_present(fields.get("invalid_flow_state_label")):
+    if stage == "soft_stop_whipsaw_confirmation" and _is_present(
+        fields.get("invalid_flow_state_label")
+    ):
         invalid.append("flow_state")
-    if "gatekeeper" in stage and _is_present(fields.get("invalid_gatekeeper_action_label")):
+    if "gatekeeper" in stage and _is_present(
+        fields.get("invalid_gatekeeper_action_label")
+    ):
         invalid.append("gatekeeper_action")
     if stage in SIM_SUBMIT_GUARD_STAGE_ACTIONS:
         invalid.extend(
             key
-            for key, violated in _sim_submit_guard_contract_violations(stage, fields).items()
+            for key, violated in _sim_submit_guard_contract_violations(
+                stage, fields
+            ).items()
             if violated
         )
     if stage in SCANNER_RANK_CHANGE_SIGN_STAGES:
         invalid.extend(
             key
-            for key, violated in _scanner_rank_change_sign_contract_violations(fields).items()
+            for key, violated in _scanner_rank_change_sign_contract_violations(
+                fields
+            ).items()
             if violated
         )
     if stage == "shallow_source_gap_recheck":
         invalid.extend(
             key
-            for key, violated in _shallow_source_gap_recheck_contract_violations(fields).items()
+            for key, violated in _shallow_source_gap_recheck_contract_violations(
+                fields
+            ).items()
             if violated
         )
-    if _stage_requires_tick_pressure_provenance(stage) and _pressure_provenance_unusable(fields):
+    if _stage_requires_tick_pressure_provenance(
+        stage
+    ) and _pressure_provenance_unusable(fields):
         invalid.append("tick_aggressor_pressure_usable_contract")
-    if _stage_requires_minute_candle_provenance(stage) and _micro_vwap_provenance_unusable(fields):
+    if _stage_requires_minute_candle_provenance(
+        stage
+    ) and _micro_vwap_provenance_unusable(fields):
         invalid.append("minute_candle_window_fresh_contract")
     if contract.required_fields == () or not set(PRE_AI_RISK_CONTEXT_FIELDS).issubset(
         set(contract.required_fields)
@@ -2924,7 +3310,10 @@ def _conditional_required_fields(stage: str, fields: dict[str, Any]) -> tuple[st
         return ()
     if fields.get("scanner_source_guard_first_seen_required") is True:
         return ("first_seen_flu_rate", "last_promoted_at")
-    if str(fields.get("scanner_source_guard_context") or "") == "repeat_guard_with_provenance":
+    if (
+        str(fields.get("scanner_source_guard_context") or "")
+        == "repeat_guard_with_provenance"
+    ):
         return ("first_seen_flu_rate", "last_promoted_at")
     reason_candidates = (
         fields.get("scanner_real_source_guard_skip_reason"),
@@ -2939,10 +3328,15 @@ def _conditional_required_fields(stage: str, fields: dict[str, Any]) -> tuple[st
     return ()
 
 
-def _hard_violation_fields_by_stage(contract_result: dict[str, Any]) -> dict[str, dict[str, set[str]]]:
+def _hard_violation_fields_by_stage(
+    contract_result: dict[str, Any],
+) -> dict[str, dict[str, set[str]]]:
     fields_by_stage: dict[str, dict[str, set[str]]] = {}
     for stage, result in (contract_result.get("stage_contracts") or {}).items():
-        if not isinstance(result, dict) or result.get("status") not in {"warning", "fail"}:
+        if not isinstance(result, dict) or result.get("status") not in {
+            "warning",
+            "fail",
+        }:
             continue
         missing = set((result.get("missing_violations") or {}).keys())
         zero = set((result.get("zero_violations") or {}).keys())
@@ -2982,7 +3376,9 @@ def _hard_blocking_row_exclusions(
                 **_row_identity(row, line_no=line_no),
                 **violations,
                 "reason": "row_contract_gap",
-                "exclusion_reasons": _raw_row_exclusion_reasons(row, violations, contract),
+                "exclusion_reasons": _raw_row_exclusion_reasons(
+                    row, violations, contract
+                ),
                 "producer_hint": _producer_hint_for_row(row),
                 "tuning_input_allowed": False,
                 "runtime_effect": False,
@@ -3017,7 +3413,9 @@ def _raw_row_exclusion_reasons(
     if contract is None:
         reasons.add("no_contract_stage")
     missing_source_fields = [
-        field for field in violations.get("missing_fields", []) if _source_like_field(field)
+        field
+        for field in violations.get("missing_fields", [])
+        if _source_like_field(field)
     ]
     if missing_source_fields:
         reasons.add("provenance_missing")
@@ -3074,13 +3472,17 @@ def _summarize_raw_row_exclusions(
         payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
         exclusion = exclusions_by_line.get(line_no, {})
         stage = str(payload.get("stage") or exclusion.get("stage") or "-")
-        fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+        fields = (
+            payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+        )
         stage_counts[stage] += 1
         if timestamp := _row_ts(payload):
             timestamps.append(timestamp)
         reasons = exclusion.get("exclusion_reasons")
         if not isinstance(reasons, list) or not reasons:
-            reasons = _raw_row_exclusion_reasons(payload, exclusion, STAGE_CONTRACTS.get(stage))
+            reasons = _raw_row_exclusion_reasons(
+                payload, exclusion, STAGE_CONTRACTS.get(stage)
+            )
         for reason in reasons:
             reason_counts[str(reason)] += 1
         for category in ("missing_fields", "zero_fields", "invalid_fields"):
@@ -3122,9 +3524,12 @@ def _summarize_raw_row_exclusions(
             stage_reason_counts[stage][str(reason)] += 1
     for stage, hint in producer_hints.items():
         hint["top_reasons"] = [
-            reason for reason, _ in stage_reason_counts.get(stage, Counter()).most_common(5)
+            reason
+            for reason, _ in stage_reason_counts.get(stage, Counter()).most_common(5)
         ]
-    halt_context = _market_halt_context_for_exclusion_timestamps(target_date, timestamps)
+    halt_context = _market_halt_context_for_exclusion_timestamps(
+        target_date, timestamps
+    )
     return {
         "stage_counts": dict(sorted(stage_counts.items())),
         "field_gap_counts": dict(sorted(field_gap_counts.items())),
@@ -3133,7 +3538,13 @@ def _summarize_raw_row_exclusions(
         "last_timestamp": max(timestamps) if timestamps else None,
         **halt_context,
         "sample_rows": sample_rows,
-        "producer_hint": sorted(producer_hints.values(), key=lambda item: (-int(item.get("count") or 0), str(item.get("stage") or ""))),
+        "producer_hint": sorted(
+            producer_hints.values(),
+            key=lambda item: (
+                -int(item.get("count") or 0),
+                str(item.get("stage") or ""),
+            ),
+        ),
     }
 
 
@@ -3156,7 +3567,11 @@ def _market_halt_context_for_exclusion_timestamps(
     contexts: list[dict[str, Any]] = []
     for window in windows:
         start = str(window.get("halt_started_at") or "")
-        end = str(window.get("normal_flow_check_after") or window.get("single_price_order_acceptance_until") or "")
+        end = str(
+            window.get("normal_flow_check_after")
+            or window.get("single_price_order_acceptance_until")
+            or ""
+        )
         if not start or not end:
             continue
         overlap_count = sum(1 for ts in ts_values if start <= ts < end)
@@ -3186,11 +3601,15 @@ def _market_halt_context_for_exclusion_timestamps(
     ]
     return {
         "market_halt_or_circuit_window_overlap": bool(active_contexts),
-        "market_halt_or_circuit_context": active_contexts[0] if active_contexts else None,
+        "market_halt_or_circuit_context": (
+            active_contexts[0] if active_contexts else None
+        ),
     }
 
 
-def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) -> dict[str, Any]:
+def _evaluate_contracts(
+    rows: list[dict[str, Any]], stage_counts: Counter[str]
+) -> dict[str, Any]:
     by_stage: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         by_stage[_stage_name(row)].append(row)
@@ -3220,16 +3639,20 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
             missing_counts[field] = sum(
                 1
                 for row in stage_rows
-                if not _is_present(_normalized_fields_for_contract(stage, row["fields"]).get(field))
+                if not _is_present(
+                    _normalized_fields_for_contract(stage, row["fields"]).get(field)
+                )
             )
-        conditional_fields = sorted({
-            field
-            for row in stage_rows
-            for field in _conditional_required_fields(
-                stage,
-                _normalized_fields_for_contract(stage, row["fields"]),
-            )
-        })
+        conditional_fields = sorted(
+            {
+                field
+                for row in stage_rows
+                for field in _conditional_required_fields(
+                    stage,
+                    _normalized_fields_for_contract(stage, row["fields"]),
+                )
+            }
+        )
         for field in conditional_fields:
             missing_counts[field] = sum(
                 1
@@ -3239,14 +3662,18 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
                     stage,
                     _normalized_fields_for_contract(stage, row["fields"]),
                 )
-                and not _is_present(_normalized_fields_for_contract(stage, row["fields"]).get(field))
+                and not _is_present(
+                    _normalized_fields_for_contract(stage, row["fields"]).get(field)
+                )
             )
         if stage == "soft_stop_whipsaw_confirmation":
             invalid_label_counts["flow_state"] = sum(
                 1
                 for row in stage_rows
                 if _is_present(
-                    _normalized_fields_for_contract(stage, row["fields"]).get("invalid_flow_state_label")
+                    _normalized_fields_for_contract(stage, row["fields"]).get(
+                        "invalid_flow_state_label"
+                    )
                 )
             )
         if "gatekeeper" in stage:
@@ -3254,7 +3681,9 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
                 1
                 for row in stage_rows
                 if _is_present(
-                    _normalized_fields_for_contract(stage, row["fields"]).get("invalid_gatekeeper_action_label")
+                    _normalized_fields_for_contract(stage, row["fields"]).get(
+                        "invalid_gatekeeper_action_label"
+                    )
                 )
             )
         if stage in SIM_SUBMIT_GUARD_STAGE_ACTIONS:
@@ -3325,29 +3754,52 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
                     1
                     for row in stage_rows
                     if violation_key
-                    in _row_contract_violations(stage, row, contract).get("invalid_fields", [])
+                    in _row_contract_violations(stage, row, contract).get(
+                        "invalid_fields", []
+                    )
                 )
         for field in contract.zero_sensitive_fields:
             zero_counts[field] = sum(
                 1
                 for row in stage_rows
-                if (value := _safe_float(_normalized_fields_for_contract(stage, row["fields"]).get(field)))
+                if (
+                    value := _safe_float(
+                        _normalized_fields_for_contract(stage, row["fields"]).get(field)
+                    )
+                )
                 is not None
                 and abs(value) <= 1e-9
             )
 
-        missing_rates = {field: round(count / total, 4) for field, count in missing_counts.items()}
-        zero_rates = {field: round(count / total, 4) for field, count in zero_counts.items()}
-        invalid_label_rates = {field: round(count / total, 4) for field, count in invalid_label_counts.items()}
-        missing_violations = {
-            field: rate for field, rate in missing_rates.items() if rate > contract.max_missing_rate
+        missing_rates = {
+            field: round(count / total, 4) for field, count in missing_counts.items()
         }
-        zero_violations = {field: rate for field, rate in zero_rates.items() if rate > contract.max_zero_rate}
-        invalid_label_violations = {field: rate for field, rate in invalid_label_rates.items() if rate > 0}
+        zero_rates = {
+            field: round(count / total, 4) for field, count in zero_counts.items()
+        }
+        invalid_label_rates = {
+            field: round(count / total, 4)
+            for field, count in invalid_label_counts.items()
+        }
+        missing_violations = {
+            field: rate
+            for field, rate in missing_rates.items()
+            if rate > contract.max_missing_rate
+        }
+        zero_violations = {
+            field: rate
+            for field, rate in zero_rates.items()
+            if rate > contract.max_zero_rate
+        }
+        invalid_label_violations = {
+            field: rate for field, rate in invalid_label_rates.items() if rate > 0
+        }
         status = (
             "fail"
             if invalid_label_violations
-            else ("pass" if not missing_violations and not zero_violations else "warning")
+            else (
+                "pass" if not missing_violations and not zero_violations else "warning"
+            )
         )
         if status == "warning":
             warnings.append(stage)
@@ -3404,7 +3856,9 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
             )
             finding["count"] += 1
             if len(finding["examples"]) < 5:
-                finding["examples"].append(str(normalized.get("invalid_flow_state_label")))
+                finding["examples"].append(
+                    str(normalized.get("invalid_flow_state_label"))
+                )
         if _is_present(normalized.get("invalid_gatekeeper_action_label")):
             key = f"{stage}:gatekeeper_action"
             finding = invalid_label_findings.setdefault(
@@ -3419,14 +3873,25 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
             )
             finding["count"] += 1
             if len(finding["examples"]) < 5:
-                finding["examples"].append(str(normalized.get("invalid_gatekeeper_action_label")))
+                finding["examples"].append(
+                    str(normalized.get("invalid_gatekeeper_action_label"))
+                )
         if normalized.get("ai_reason_numeric_inconsistency") is True:
             numeric_consistency_by_stage[stage].append(
                 {
-                    "field": str(normalized.get("ai_reason_numeric_inconsistency_field") or "tick_acceleration_ratio"),
-                    "reason": str(normalized.get("ai_reason_numeric_inconsistency_reason") or "-"),
-                    "excerpt": str(normalized.get("ai_reason_numeric_inconsistency_excerpt") or "")[:240],
-                    "detected_value": normalized.get("ai_reason_numeric_inconsistency_detected_value"),
+                    "field": str(
+                        normalized.get("ai_reason_numeric_inconsistency_field")
+                        or "tick_acceleration_ratio"
+                    ),
+                    "reason": str(
+                        normalized.get("ai_reason_numeric_inconsistency_reason") or "-"
+                    ),
+                    "excerpt": str(
+                        normalized.get("ai_reason_numeric_inconsistency_excerpt") or ""
+                    )[:240],
+                    "detected_value": normalized.get(
+                        "ai_reason_numeric_inconsistency_detected_value"
+                    ),
                 }
             )
         example_keys.setdefault(stage, list(fields.keys())[:30])
@@ -3441,12 +3906,19 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
                     emitted_date=str(row.get("emitted_date") or row.get("date") or ""),
                 )
                 if not reviewed_reason:
-                    reviewed_reason = _reviewed_unknown_reason_for_stage_field(stage, key, value, normalized)
+                    reviewed_reason = _reviewed_unknown_reason_for_stage_field(
+                        stage, key, value, normalized
+                    )
                 if (
                     not reviewed_reason
                     and stage == "scalp_sim_panic_context_warning"
                     and str(key)
-                    in {"panic_epoch_id", "market_risk_state", "liquidity_state", "risk_regime_epoch_id"}
+                    in {
+                        "panic_epoch_id",
+                        "market_risk_state",
+                        "liquidity_state",
+                        "risk_regime_epoch_id",
+                    }
                 ):
                     reviewed_reason = "reviewed_missing_risk_regime_context"
                 if reviewed_reason:
@@ -3473,7 +3945,9 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
                 "routing": "instrumentation_gap_or_diagnostic_contract_needed",
             }
         )
-    for stage, counter in sorted(unknown_counts.items(), key=lambda item: (-stage_counts[item[0]], item[0])):
+    for stage, counter in sorted(
+        unknown_counts.items(), key=lambda item: (-stage_counts[item[0]], item[0])
+    ):
         total = max(1, stage_counts.get(stage, 0))
         warning_fields = []
         for field, count in counter.most_common():
@@ -3500,7 +3974,10 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
             }
         )
     reviewed_unknown_token_findings: list[dict[str, Any]] = []
-    for stage, counter in sorted(reviewed_unknown_counts.items(), key=lambda item: (-stage_counts[item[0]], item[0])):
+    for stage, counter in sorted(
+        reviewed_unknown_counts.items(),
+        key=lambda item: (-stage_counts[item[0]], item[0]),
+    ):
         total = max(1, stage_counts.get(stage, 0))
         fields = []
         for compound_key, count in counter.most_common():
@@ -3511,7 +3988,9 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
                     "count": count,
                     "rate": round(count / total, 4),
                     "reviewed_reason": reason or "reviewed_unknown",
-                    "examples": reviewed_unknown_examples.get((stage, compound_key), []),
+                    "examples": reviewed_unknown_examples.get(
+                        (stage, compound_key), []
+                    ),
                 }
             )
         if fields:
@@ -3526,7 +4005,10 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
                     "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
                 }
             )
-    for stage, rows_with_issue in sorted(numeric_consistency_by_stage.items(), key=lambda item: (-stage_counts[item[0]], item[0])):
+    for stage, rows_with_issue in sorted(
+        numeric_consistency_by_stage.items(),
+        key=lambda item: (-stage_counts[item[0]], item[0]),
+    ):
         if not rows_with_issue:
             continue
         numeric_consistency_findings.append(
@@ -3534,7 +4016,9 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
                 "stage": stage,
                 "event_count": stage_counts.get(stage, 0),
                 "finding_count": len(rows_with_issue),
-                "rate": round(len(rows_with_issue) / max(1, stage_counts.get(stage, 0)), 4),
+                "rate": round(
+                    len(rows_with_issue) / max(1, stage_counts.get(stage, 0)), 4
+                ),
                 "routing": "source_quality_review_numeric_consistency",
                 "decision_authority": "source_quality_only",
                 "runtime_effect": False,
@@ -3553,7 +4037,10 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
         "numeric_consistency_findings": numeric_consistency_findings,
         "field_presence_top": {
             stage: dict(counter.most_common(20))
-            for stage, counter in sorted(field_presence.items(), key=lambda item: (-stage_counts[item[0]], item[0]))
+            for stage, counter in sorted(
+                field_presence.items(),
+                key=lambda item: (-stage_counts[item[0]], item[0]),
+            )
         },
     }
 
@@ -3561,13 +4048,26 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
 def _hard_gate_summary(contract_result: dict[str, Any]) -> dict[str, Any]:
     gaps: list[dict[str, Any]] = []
     stage_contracts = (
-        contract_result.get("stage_contracts") if isinstance(contract_result.get("stage_contracts"), dict) else {}
+        contract_result.get("stage_contracts")
+        if isinstance(contract_result.get("stage_contracts"), dict)
+        else {}
     )
     for stage, result in stage_contracts.items():
-        if not isinstance(result, dict) or result.get("status") not in {"warning", "fail"}:
+        if not isinstance(result, dict) or result.get("status") not in {
+            "warning",
+            "fail",
+        }:
             continue
-        missing = result.get("missing_violations") if isinstance(result.get("missing_violations"), dict) else {}
-        zeros = result.get("zero_violations") if isinstance(result.get("zero_violations"), dict) else {}
+        missing = (
+            result.get("missing_violations")
+            if isinstance(result.get("missing_violations"), dict)
+            else {}
+        )
+        zeros = (
+            result.get("zero_violations")
+            if isinstance(result.get("zero_violations"), dict)
+            else {}
+        )
         invalid = (
             result.get("invalid_label_violations")
             if isinstance(result.get("invalid_label_violations"), dict)
@@ -3618,7 +4118,11 @@ def _hard_gate_summary(contract_result: dict[str, Any]) -> dict[str, Any]:
                 "sample_count": item.get("event_count"),
                 "first_timestamp": item.get("first_timestamp"),
                 "last_timestamp": item.get("last_timestamp"),
-                "missing_fields": ["metric_role", "decision_authority", "source_quality_gate"],
+                "missing_fields": [
+                    "metric_role",
+                    "decision_authority",
+                    "source_quality_gate",
+                ],
                 "forbidden_uses": "EV/rolling/MTD/cumulative tuning/live-auto promotion/runtime approval until fixed",
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
@@ -3631,13 +4135,17 @@ def _hard_gate_summary(contract_result: dict[str, Any]) -> dict[str, Any]:
         "hard_blocking_contract_gaps": gaps,
         "tuning_input_allowed": not gaps,
         "blocked_reason": "blocked_contract_gap" if gaps else None,
-        "review_warning_count": len(contract_result.get("unknown_token_findings") or []) + len(contract_result.get("numeric_consistency_findings") or []),
-        "reviewed_unknown_token_stage_count": len(contract_result.get("reviewed_unknown_token_findings") or []),
+        "review_warning_count": len(contract_result.get("unknown_token_findings") or [])
+        + len(contract_result.get("numeric_consistency_findings") or []),
+        "reviewed_unknown_token_stage_count": len(
+            contract_result.get("reviewed_unknown_token_findings") or []
+        ),
         "review_warning_stages": [
             item.get("stage")
             for item in contract_result.get("unknown_token_findings") or []
             if isinstance(item, dict) and item.get("stage")
-        ] + [
+        ]
+        + [
             item.get("stage")
             for item in contract_result.get("numeric_consistency_findings") or []
             if isinstance(item, dict) and item.get("stage")
@@ -3654,17 +4162,21 @@ def build_observation_source_quality_audit(target_date: str) -> dict[str, Any]:
     row_exclusions = _hard_blocking_row_exclusions(rows, contract_result)
     status = (
         "fail"
-        if any((item.get("status") == "fail") for item in contract_result["stage_contracts"].values())
-        or contract_result["invalid_label_findings"]
-        else
-        "warning"
-        if (
-            contract_result["warning_stages"]
-            or contract_result["high_volume_no_source_fields"]
-            or contract_result["unknown_token_findings"]
-            or contract_result.get("numeric_consistency_findings")
+        if any(
+            (item.get("status") == "fail")
+            for item in contract_result["stage_contracts"].values()
         )
-        else "pass"
+        or contract_result["invalid_label_findings"]
+        else (
+            "warning"
+            if (
+                contract_result["warning_stages"]
+                or contract_result["high_volume_no_source_fields"]
+                or contract_result["unknown_token_findings"]
+                or contract_result.get("numeric_consistency_findings")
+            )
+            else "pass"
+        )
     )
     return {
         "report_type": REPORT_DIRNAME,
@@ -3691,13 +4203,23 @@ def build_observation_source_quality_audit(target_date: str) -> dict[str, Any]:
             "stage_count": len(stage_counts),
             "top_stages": dict(stage_counts.most_common(20)),
             "warning_stage_count": len(contract_result["warning_stages"]),
-            "high_volume_no_source_field_stage_count": len(contract_result["high_volume_no_source_fields"]),
+            "high_volume_no_source_field_stage_count": len(
+                contract_result["high_volume_no_source_fields"]
+            ),
             "unknown_token_stage_count": len(contract_result["unknown_token_findings"]),
-            "numeric_consistency_stage_count": len(contract_result.get("numeric_consistency_findings") or []),
-            "reviewed_unknown_token_stage_count": len(contract_result.get("reviewed_unknown_token_findings") or []),
+            "numeric_consistency_stage_count": len(
+                contract_result.get("numeric_consistency_findings") or []
+            ),
+            "reviewed_unknown_token_stage_count": len(
+                contract_result.get("reviewed_unknown_token_findings") or []
+            ),
             "hard_blocking_excluded_row_count": len(row_exclusions),
             "tuning_input_policy": "exclude_defective_rows_not_full_day_raw",
-            **{key: value for key, value in hard_gate.items() if key != "hard_blocking_contract_gaps"},
+            **{
+                key: value
+                for key, value in hard_gate.items()
+                if key != "hard_blocking_contract_gaps"
+            },
         },
         "hard_blocking_contract_gaps": hard_gate["hard_blocking_contract_gaps"],
         "hard_blocking_row_exclusions": row_exclusions,
@@ -3705,7 +4227,9 @@ def build_observation_source_quality_audit(target_date: str) -> dict[str, Any]:
     }
 
 
-def _quarantine_scope(entry_unknown: int, overbought_unknown: int, ldm_unknown: int) -> list[str]:
+def _quarantine_scope(
+    entry_unknown: int, overbought_unknown: int, ldm_unknown: int
+) -> list[str]:
     scope: list[str] = []
     if entry_unknown:
         scope.append("entry_adm_bucket_dimensions")
@@ -3759,7 +4283,13 @@ def _source_backfill_counts(path: Path) -> Counter[str]:
         close_stream = False
         try:
             process = subprocess.Popen(
-                ["rg", "-i", "--no-filename", BACKFILL_PREFILTER_PATTERN, str(resolved)],
+                [
+                    "rg",
+                    "-i",
+                    "--no-filename",
+                    BACKFILL_PREFILTER_PATTERN,
+                    str(resolved),
+                ],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 text=True,
@@ -3777,7 +4307,10 @@ def _source_backfill_counts(path: Path) -> Counter[str]:
         for line in stream_context:
             lowered = line.lower()
             has_sim = "sim" in lowered or "actual_order_submitted" in lowered
-            has_entry_adm = "scalp_entry_action_decision_snapshot" in lowered or "entry_adm_" in lowered
+            has_entry_adm = (
+                "scalp_entry_action_decision_snapshot" in lowered
+                or "entry_adm_" in lowered
+            )
             has_holding = "ai_holding_review" in lowered or "holding" in lowered
             has_ldm = "lifecycle_matrix_" in lowered
             has_overbought = (
@@ -3785,7 +4318,9 @@ def _source_backfill_counts(path: Path) -> Counter[str]:
                 or "sim_pre_submit_overbought" in lowered
                 or "sim_overbought_" in lowered
             )
-            if not (has_sim or has_entry_adm or has_holding or has_ldm or has_overbought):
+            if not (
+                has_sim or has_entry_adm or has_holding or has_ldm or has_overbought
+            ):
                 continue
             counts["event_rows"] += 1
             counts["parsed_candidate_rows"] += 1
@@ -3850,9 +4385,13 @@ def _build_backfill_date_row(target_date: str) -> dict[str, Any]:
         "quarantine_scope": quarantine_scope,
         "stale_derived_reports": stale_reports,
         "recommended_action": (
-            "regenerate_derived_reports_with_source_quality_gate" if quarantine_scope else "none"
+            "regenerate_derived_reports_with_source_quality_gate"
+            if quarantine_scope
+            else "none"
         ),
-        "source_counts": {source: dict(counter) for source, counter in source_counts.items()},
+        "source_counts": {
+            source: dict(counter) for source, counter in source_counts.items()
+        },
     }
 
 
@@ -3867,21 +4406,39 @@ def build_observation_source_quality_backfill_audit(
     target_date: str,
     start_date: str = DEFAULT_BACKFILL_START_DATE,
 ) -> dict[str, Any]:
-    date_rows = [_build_backfill_date_row(day) for day in _date_range(start_date, target_date)]
-    affected_rows = [row for row in date_rows if row["bucket_interpretation_quarantined"]]
+    date_rows = [
+        _build_backfill_date_row(day) for day in _date_range(start_date, target_date)
+    ]
+    affected_rows = [
+        row for row in date_rows if row["bucket_interpretation_quarantined"]
+    ]
     summary = {
         "date_count": len(date_rows),
         "affected_date_count": len(affected_rows),
-        "first_entry_adm_unknown_date": _first_affected_date(date_rows, "entry_adm_unknown_rows"),
-        "first_sim_overbought_unknown_date": _first_affected_date(date_rows, "sim_overbought_unknown_rows"),
+        "first_entry_adm_unknown_date": _first_affected_date(
+            date_rows, "entry_adm_unknown_rows"
+        ),
+        "first_sim_overbought_unknown_date": _first_affected_date(
+            date_rows, "sim_overbought_unknown_rows"
+        ),
         "first_ldm_unknown_date": _first_affected_date(date_rows, "ldm_unknown_rows"),
         "raw_sim_total": sum(int(row["sim_rows"]) for row in date_rows),
         "sim_filled_total": sum(int(row["sim_filled_rows"]) for row in date_rows),
-        "entry_adm_unknown_total": sum(int(row["entry_adm_unknown_rows"]) for row in date_rows),
-        "sim_overbought_unknown_total": sum(int(row["sim_overbought_unknown_rows"]) for row in date_rows),
+        "entry_adm_unknown_total": sum(
+            int(row["entry_adm_unknown_rows"]) for row in date_rows
+        ),
+        "sim_overbought_unknown_total": sum(
+            int(row["sim_overbought_unknown_rows"]) for row in date_rows
+        ),
         "ldm_unknown_total": sum(int(row["ldm_unknown_rows"]) for row in date_rows),
-        "stale_derived_report_count": sum(len(row["stale_derived_reports"]) for row in date_rows),
-        "decision": "quarantine_derived_bucket_interpretation" if affected_rows else "pass_no_quarantine",
+        "stale_derived_report_count": sum(
+            len(row["stale_derived_reports"]) for row in date_rows
+        ),
+        "decision": (
+            "quarantine_derived_bucket_interpretation"
+            if affected_rows
+            else "pass_no_quarantine"
+        ),
         "operator_action_required": False,
     }
     return {
@@ -3944,7 +4501,9 @@ def _write_backfill_markdown(report: dict[str, Any], path: Path) -> None:
         "| --- | ---: | ---: | ---: | ---: | ---: | --- | --- |",
     ]
     for row in report.get("date_impacts", []):
-        if not row.get("event_rows") and not row.get("bucket_interpretation_quarantined"):
+        if not row.get("event_rows") and not row.get(
+            "bucket_interpretation_quarantined"
+        ):
             continue
         scope = ",".join(row.get("quarantine_scope") or [])
         lines.append(
@@ -3977,10 +4536,14 @@ def write_backfill_report(
     target_date: str,
     start_date: str = DEFAULT_BACKFILL_START_DATE,
 ) -> dict[str, Any]:
-    report = build_observation_source_quality_backfill_audit(target_date, start_date=start_date)
+    report = build_observation_source_quality_backfill_audit(
+        target_date, start_date=start_date
+    )
     json_path, md_path = backfill_report_paths(target_date)
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     _write_backfill_markdown(report, md_path)
     return report
 
@@ -4070,17 +4633,26 @@ def _write_markdown(report: dict[str, Any], path: Path) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _raw_row_exclusion_paths(target_date: str, run_id: str | None = None) -> tuple[Path, Path]:
+def _raw_row_exclusion_paths(
+    target_date: str, run_id: str | None = None
+) -> tuple[Path, Path]:
     if run_id is None:
         run_id = datetime.now().astimezone().strftime("%Y%m%dT%H%M%S%f%z")
-    report_dir = DATA_DIR / "source_quality" / RAW_ROW_EXCLUSION_DIRNAME / f"{target_date}_{run_id}"
+    report_dir = (
+        DATA_DIR
+        / "source_quality"
+        / RAW_ROW_EXCLUSION_DIRNAME
+        / f"{target_date}_{run_id}"
+    )
     return (
         report_dir / "manifest.json",
         report_dir / f"pipeline_events_{target_date}.jsonl.gz",
     )
 
 
-def _exclude_hard_blocking_rows_from_raw(target_date: str, report: dict[str, Any]) -> dict[str, Any] | None:
+def _exclude_hard_blocking_rows_from_raw(
+    target_date: str, report: dict[str, Any]
+) -> dict[str, Any] | None:
     exclusions = report.get("hard_blocking_row_exclusions")
     if not isinstance(exclusions, list) or not exclusions:
         return None
@@ -4100,7 +4672,10 @@ def _exclude_hard_blocking_rows_from_raw(target_date: str, report: dict[str, Any
         with raw_path.open("rb") as source, backup_path.open("wb") as target:
             shutil.copyfileobj(source, target)
     else:
-        with raw_path.open("rb") as source, gzip.open(backup_path, "wb", compresslevel=9) as target:
+        with (
+            raw_path.open("rb") as source,
+            gzip.open(backup_path, "wb", compresslevel=9) as target,
+        ):
             shutil.copyfileobj(source, target)
     exclusions_by_line = {
         int(item.get("line_no")): item
@@ -4156,7 +4731,9 @@ def _exclude_hard_blocking_rows_from_raw(target_date: str, report: dict[str, Any
         ],
         "excluded_rows": excluded_payloads,
     }
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     return manifest
 
 
@@ -4185,18 +4762,24 @@ def write_report(target_date: str) -> dict[str, Any]:
             "policy": exclusion_manifest.get("policy"),
         }
         report["summary"]["raw_row_exclusion_applied"] = True
-        report["summary"]["raw_row_exclusion_manifest"] = exclusion_manifest.get("manifest_path")
+        report["summary"]["raw_row_exclusion_manifest"] = exclusion_manifest.get(
+            "manifest_path"
+        )
     else:
         report["summary"]["raw_row_exclusion_applied"] = False
     json_path, md_path = report_paths(target_date)
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     _write_markdown(report, md_path)
     return report
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Audit observation source-quality field coverage.")
+    parser = argparse.ArgumentParser(
+        description="Audit observation source-quality field coverage."
+    )
     parser.add_argument("--target-date", required=True)
     parser.add_argument("--start-date", default=DEFAULT_BACKFILL_START_DATE)
     parser.add_argument("--backfill", action="store_true")
@@ -4206,10 +4789,16 @@ def main() -> int:
         report = (
             write_backfill_report(args.target_date, start_date=args.start_date)
             if args.write
-            else build_observation_source_quality_backfill_audit(args.target_date, start_date=args.start_date)
+            else build_observation_source_quality_backfill_audit(
+                args.target_date, start_date=args.start_date
+            )
         )
     else:
-        report = write_report(args.target_date) if args.write else build_observation_source_quality_audit(args.target_date)
+        report = (
+            write_report(args.target_date)
+            if args.write
+            else build_observation_source_quality_audit(args.target_date)
+        )
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
 

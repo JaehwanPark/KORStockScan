@@ -847,14 +847,12 @@ def test_stage2_ops_cron_extends_ws_freshness_monitor_into_nxt_open():
     assert (
         "*/5 16-18 * * 1-5 "
         "INTRADAY_WS_FRESHNESS_MONITOR_COOLDOWN_SEC=240 "
-        "$PROJECT_DIR/deploy/run_intraday_ws_freshness_monitor.sh"
-        in script
+        "$PROJECT_DIR/deploy/run_intraday_ws_freshness_monitor.sh" in script
     )
     assert (
         "0,5,10,15,20 19 * * 1-5 "
         "INTRADAY_WS_FRESHNESS_MONITOR_COOLDOWN_SEC=240 "
-        "$PROJECT_DIR/deploy/run_intraday_ws_freshness_monitor.sh"
-        in script
+        "$PROJECT_DIR/deploy/run_intraday_ws_freshness_monitor.sh" in script
     )
     assert "!/INTRADAY_WS_FRESHNESS_MONITOR_5MIN/" in script
     assert "!/INTRADAY_WS_FRESHNESS_MONITOR_NXT_5MIN/" in script
@@ -1106,8 +1104,7 @@ def test_run_bot_waits_for_threshold_runtime_env_before_launching_bot():
     assert (
         "KORSTOCKSCAN_RISING_MISSED_NXT_PRICE_JUMP_RECOVERY_ENABLED:"
         "KORSTOCKSCAN_RISING_MISSED_NXT_PRICE_JUMP_RECOVERY_ACTIVE_DATE:"
-        "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED"
-        in script
+        "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED" in script
     )
     assert (
         "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ENABLED:KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ACTIVE_DATE:"

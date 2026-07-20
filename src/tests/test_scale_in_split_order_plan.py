@@ -11,13 +11,24 @@ from src.engine.scalping import scale_in_split_order_plan as split_plan
 def _patch_dirs(monkeypatch, tmp_path):
     data_dir = tmp_path / "data"
     monkeypatch.setattr(split_plan, "DATA_DIR", data_dir)
-    monkeypatch.setattr(split_plan, "REPORT_DIR", data_dir / "report" / "scale_in_split_order_plan")
-    monkeypatch.setattr(split_plan, "POLICY_DIR", data_dir / "threshold_cycle" / "scale_in_split_order_policy")
+    monkeypatch.setattr(
+        split_plan, "REPORT_DIR", data_dir / "report" / "scale_in_split_order_plan"
+    )
+    monkeypatch.setattr(
+        split_plan,
+        "POLICY_DIR",
+        data_dir / "threshold_cycle" / "scale_in_split_order_policy",
+    )
     return data_dir
 
 
 def _write_source_quality_pass(data_dir, target_date):
-    path = data_dir / "report" / "observation_source_quality_audit" / f"observation_source_quality_audit_{target_date}.json"
+    path = (
+        data_dir
+        / "report"
+        / "observation_source_quality_audit"
+        / f"observation_source_quality_audit_{target_date}.json"
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps({"status": "pass", "summary": {"tuning_input_allowed": True}}),
@@ -26,7 +37,12 @@ def _write_source_quality_pass(data_dir, target_date):
 
 
 def _write_source_quality_excluded_gap(data_dir, target_date):
-    path = data_dir / "report" / "observation_source_quality_audit" / f"observation_source_quality_audit_{target_date}.json"
+    path = (
+        data_dir
+        / "report"
+        / "observation_source_quality_audit"
+        / f"observation_source_quality_audit_{target_date}.json"
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
@@ -46,7 +62,9 @@ def _write_source_quality_excluded_gap(data_dir, target_date):
 def _write_pipeline_events(data_dir, target_date, events):
     path = data_dir / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(json.dumps(event) for event in events) + "\n", encoding="utf-8")
+    path.write_text(
+        "\n".join(json.dumps(event) for event in events) + "\n", encoding="utf-8"
+    )
 
 
 def test_allocator_preserves_avg_down_qty_and_offsets(monkeypatch, tmp_path):
@@ -268,7 +286,9 @@ def test_allocator_applies_explicit_three_leg_avg_down_policy(monkeypatch, tmp_p
         encoding="utf-8",
     )
     monkeypatch.setenv("KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED", "true")
-    monkeypatch.setenv("KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_FILE", str(policy_file))
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_FILE", str(policy_file)
+    )
 
     orders, fields = split_plan.apply_scale_in_split_order_policy(
         {"qty": 8, "price": 10000, "order_type_code": "00", "add_type": "AVG_DOWN"},
@@ -286,7 +306,9 @@ def test_allocator_applies_explicit_three_leg_avg_down_policy(monkeypatch, tmp_p
     assert sum(item["qty"] for item in orders) == 8
 
 
-def test_allocator_runtime_default_uses_one_pct_when_policy_bucket_missing(monkeypatch, tmp_path):
+def test_allocator_runtime_default_uses_one_pct_when_policy_bucket_missing(
+    monkeypatch, tmp_path
+):
     target_date = "2026-07-07"
     _patch_dirs(monkeypatch, tmp_path)
     policy_file = split_plan.policy_path(target_date)
@@ -304,7 +326,9 @@ def test_allocator_runtime_default_uses_one_pct_when_policy_bucket_missing(monke
         encoding="utf-8",
     )
     monkeypatch.setenv("KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED", "true")
-    monkeypatch.setenv("KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_FILE", str(policy_file))
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_FILE", str(policy_file)
+    )
 
     orders, fields = split_plan.apply_scale_in_split_order_policy(
         {"qty": 2, "price": 10000, "order_type_code": "00", "add_type": "AVG_DOWN"},
@@ -480,7 +504,9 @@ def test_report_selects_low_pct_touch_70_30_counterfactual(monkeypatch, tmp_path
     assert candidate["post_submit_touch_rates"]["touch_0_5pct_rate"] == 0.0
 
 
-def test_report_selects_70_30_when_touch_low_or_missed_upside_high(monkeypatch, tmp_path):
+def test_report_selects_70_30_when_touch_low_or_missed_upside_high(
+    monkeypatch, tmp_path
+):
     target_date = "2026-07-07"
     data_dir = _patch_dirs(monkeypatch, tmp_path)
     _write_source_quality_pass(data_dir, target_date)
@@ -634,7 +660,9 @@ def test_report_promotes_three_leg_candidate_after_runtime_sample_floor(
     assert candidate["policy_mode"] == split_plan.POLICY_MODE_BOUNDED_THREE_LEG
     assert candidate["runtime_apply_allowed"] is True
     assert (
-        report["policy_artifact"]["buckets"]["scalping:late_loss_retry:normal"]["leg_count"]
+        report["policy_artifact"]["buckets"]["scalping:late_loss_retry:normal"][
+            "leg_count"
+        ]
         == 3
     )
 
@@ -686,7 +714,9 @@ def test_report_keeps_market_avg_down_qty_split_only(monkeypatch, tmp_path):
     assert candidate["qty_weights"] == [0.5, 0.5]
 
 
-def test_report_reconstructs_submitted_anchor_from_execution_without_reason(monkeypatch, tmp_path):
+def test_report_reconstructs_submitted_anchor_from_execution_without_reason(
+    monkeypatch, tmp_path
+):
     target_date = "2026-07-07"
     data_dir = _patch_dirs(monkeypatch, tmp_path)
     _write_source_quality_pass(data_dir, target_date)
@@ -741,11 +771,16 @@ def test_report_reconstructs_submitted_anchor_from_execution_without_reason(monk
     assert candidate["post_submit_observed_sample"] == 1
     assert candidate["price_observation_join_gap_count"] == 0
     assert candidate["base_price_reconstruction_gap_count"] == 0
-    assert candidate["anchor_samples"][0]["base_price_source"] == "reconstructed_from_scale_in_executed"
+    assert (
+        candidate["anchor_samples"][0]["base_price_source"]
+        == "reconstructed_from_scale_in_executed"
+    )
     assert candidate["policy_mode"] == "counterfactual_tick_band_selector"
 
 
-def test_report_falls_back_when_anchor_price_reconstruction_fails(monkeypatch, tmp_path):
+def test_report_falls_back_when_anchor_price_reconstruction_fails(
+    monkeypatch, tmp_path
+):
     target_date = "2026-07-07"
     data_dir = _patch_dirs(monkeypatch, tmp_path)
     _write_source_quality_pass(data_dir, target_date)
@@ -775,5 +810,8 @@ def test_report_falls_back_when_anchor_price_reconstruction_fails(monkeypatch, t
     candidate = report["recommended_policy"]["candidates"][0]
 
     assert candidate["policy_mode"] == "bounded_equal_scale_in_split_baseline"
-    assert candidate["selection_reason"] == "counterfactual_sample_or_price_observation_missing"
+    assert (
+        candidate["selection_reason"]
+        == "counterfactual_sample_or_price_observation_missing"
+    )
     assert report["input_summary"]["base_price_reconstruction_gap_count"] == 1

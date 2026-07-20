@@ -54,7 +54,9 @@ def _normalized_for_match(text: str) -> str:
 _READY_RE = re.compile(
     r"artifact ready label=(?P<label>\S+) path=(?P<path>\S+) waited=(?P<waited>\d+)s(?: json_valid=(?P<json_valid>\w+))?"
 )
-_TIMEOUT_RE = re.compile(r"artifact wait timeout label=(?P<label>\S+) path=(?P<path>\S+) waited=(?P<waited>\d+)s")
+_TIMEOUT_RE = re.compile(
+    r"artifact wait timeout label=(?P<label>\S+) path=(?P<path>\S+) waited=(?P<waited>\d+)s"
+)
 _AI_RUNTIME_STATES = {
     "adjust_up",
     "adjust_down",
@@ -146,7 +148,9 @@ def _source_quality_hard_block_status(
             "candidate_violation_sources": [],
             "workorder_handoff_present": True,
         }
-    summary = preflight.get("summary") if isinstance(preflight.get("summary"), dict) else {}
+    summary = (
+        preflight.get("summary") if isinstance(preflight.get("summary"), dict) else {}
+    )
     candidate_sources = [
         name
         for name, payload in (
@@ -157,31 +161,46 @@ def _source_quality_hard_block_status(
         )
         if _has_runtime_applicable_candidate(payload)
     ]
-    orders = workorder.get("orders") if isinstance(workorder.get("orders"), list) else []
-    non_selected = workorder.get("non_selected_orders") if isinstance(workorder.get("non_selected_orders"), list) else []
+    orders = (
+        workorder.get("orders") if isinstance(workorder.get("orders"), list) else []
+    )
+    non_selected = (
+        workorder.get("non_selected_orders")
+        if isinstance(workorder.get("non_selected_orders"), list)
+        else []
+    )
     workorder_handoff_present = any(
         isinstance(item, dict)
         and (
-            item.get("order_id") == "order_observation_source_quality_hard_block_contract_gap"
+            item.get("order_id")
+            == "order_observation_source_quality_hard_block_contract_gap"
             or item.get("improvement_type") == "source_quality_hard_block_contract_gap"
             or item.get("route") == "source_quality_gap"
         )
         for item in [*orders, *non_selected]
     )
     return {
-        "status": "fail" if candidate_sources or not workorder_handoff_present else "pass",
+        "status": (
+            "fail" if candidate_sources or not workorder_handoff_present else "pass"
+        ),
         "tuning_input_allowed": False,
         "candidate_violation_sources": candidate_sources,
         "workorder_handoff_present": workorder_handoff_present,
-        "hard_blocking_contract_gap_count": summary.get("hard_blocking_contract_gap_count")
+        "hard_blocking_contract_gap_count": summary.get(
+            "hard_blocking_contract_gap_count"
+        )
         or preflight.get("hard_blocking_contract_gap_count"),
-        "hard_blocking_stages": summary.get("hard_blocking_stages") or preflight.get("hard_blocking_stages") or [],
+        "hard_blocking_stages": summary.get("hard_blocking_stages")
+        or preflight.get("hard_blocking_stages")
+        or [],
         "runtime_effect": False,
         "allowed_runtime_apply": False,
     }
 
 
-def _watching_score_smoothing_diagnostic_status(report: dict[str, Any]) -> dict[str, Any]:
+def _watching_score_smoothing_diagnostic_status(
+    report: dict[str, Any],
+) -> dict[str, Any]:
     if not isinstance(report, dict) or not report:
         return {
             "status": "missing",
@@ -192,14 +211,26 @@ def _watching_score_smoothing_diagnostic_status(report: dict[str, Any]) -> dict[
             "runtime_effect": False,
             "allowed_runtime_apply": False,
         }
-    transition_guard = report.get("transition_guard") if isinstance(report.get("transition_guard"), dict) else {}
-    automation_chain = report.get("automation_chain") if isinstance(report.get("automation_chain"), dict) else {}
+    transition_guard = (
+        report.get("transition_guard")
+        if isinstance(report.get("transition_guard"), dict)
+        else {}
+    )
+    automation_chain = (
+        report.get("automation_chain")
+        if isinstance(report.get("automation_chain"), dict)
+        else {}
+    )
     transition_status = str(transition_guard.get("status") or "unknown")
     eligible = bool(transition_guard.get("eligible"))
     if eligible:
         status = "pass"
         closure_status = "eligible_for_next_preopen_review"
-    elif transition_status in {"auto_followup_required", "manual_postclose_review_required", "await_required_evidence"}:
+    elif transition_status in {
+        "auto_followup_required",
+        "manual_postclose_review_required",
+        "await_required_evidence",
+    }:
         status = "warning"
         closure_status = "report_only_followup_open"
     else:
@@ -211,8 +242,14 @@ def _watching_score_smoothing_diagnostic_status(report: dict[str, Any]) -> dict[
         "eligible": eligible,
         "transition_status": transition_status,
         "applied_candidate_status": transition_guard.get("applied_candidate_status"),
-        "auto_followup_required_criteria": transition_guard.get("auto_followup_required_criteria") or [],
-        "manual_review_required_criteria": transition_guard.get("manual_review_required_criteria") or [],
+        "auto_followup_required_criteria": transition_guard.get(
+            "auto_followup_required_criteria"
+        )
+        or [],
+        "manual_review_required_criteria": transition_guard.get(
+            "manual_review_required_criteria"
+        )
+        or [],
         "root_cause_closure_status": closure_status,
         "runtime_effect": False,
         "allowed_runtime_apply": False,
@@ -224,7 +261,11 @@ def _raw_row_exclusion_handoff_status(
     *,
     workorder: dict[str, Any],
 ) -> dict[str, Any]:
-    raw_exclusion = preflight.get("raw_row_exclusion") if isinstance(preflight.get("raw_row_exclusion"), dict) else {}
+    raw_exclusion = (
+        preflight.get("raw_row_exclusion")
+        if isinstance(preflight.get("raw_row_exclusion"), dict)
+        else {}
+    )
     excluded_row_count = int(raw_exclusion.get("excluded_row_count") or 0)
     if excluded_row_count <= 0:
         return {
@@ -232,17 +273,27 @@ def _raw_row_exclusion_handoff_status(
             "excluded_row_count": 0,
             "workorder_handoff_present": True,
         }
-    orders = workorder.get("orders") if isinstance(workorder.get("orders"), list) else []
-    non_selected = workorder.get("non_selected_orders") if isinstance(workorder.get("non_selected_orders"), list) else []
+    orders = (
+        workorder.get("orders") if isinstance(workorder.get("orders"), list) else []
+    )
+    non_selected = (
+        workorder.get("non_selected_orders")
+        if isinstance(workorder.get("non_selected_orders"), list)
+        else []
+    )
     selected_matching_orders = [
         item
         for item in orders
         if isinstance(item, dict)
         and (
-            item.get("order_id") == "order_observation_source_quality_raw_row_exclusion_producer_gap"
-            or item.get("improvement_type") == "source_quality_raw_row_exclusion_producer_gap"
-            or item.get("improvement_type") == "source_quality_raw_row_exclusion_limit_up_locked_context"
-            or item.get("improvement_type") == "source_quality_raw_row_exclusion_market_halt_context"
+            item.get("order_id")
+            == "order_observation_source_quality_raw_row_exclusion_producer_gap"
+            or item.get("improvement_type")
+            == "source_quality_raw_row_exclusion_producer_gap"
+            or item.get("improvement_type")
+            == "source_quality_raw_row_exclusion_limit_up_locked_context"
+            or item.get("improvement_type")
+            == "source_quality_raw_row_exclusion_market_halt_context"
             or item.get("route") == "source_quality_raw_row_exclusion_producer_fix"
             or item.get("route") == "review_required_limit_up_locked_context"
             or item.get("route") == "review_required_market_halt_context"
@@ -253,30 +304,42 @@ def _raw_row_exclusion_handoff_status(
         for item in [*orders, *non_selected]
         if isinstance(item, dict)
         and (
-            item.get("raw_row_exclusion_context_classification") == "limit_up_locked_context"
-            or item.get("raw_row_exclusion_context_classification") == "market_halt_or_circuit_window_overlap"
-            or item.get("improvement_type") == "source_quality_raw_row_exclusion_limit_up_locked_context"
-            or item.get("improvement_type") == "source_quality_raw_row_exclusion_market_halt_context"
+            item.get("raw_row_exclusion_context_classification")
+            == "limit_up_locked_context"
+            or item.get("raw_row_exclusion_context_classification")
+            == "market_halt_or_circuit_window_overlap"
+            or item.get("improvement_type")
+            == "source_quality_raw_row_exclusion_limit_up_locked_context"
+            or item.get("improvement_type")
+            == "source_quality_raw_row_exclusion_market_halt_context"
             or item.get("route") == "review_required_limit_up_locked_context"
             or item.get("route") == "review_required_market_halt_context"
         )
     ]
     matching_orders = [
-        item
-        for item in [*selected_matching_orders, *review_only_matching_orders]
+        item for item in [*selected_matching_orders, *review_only_matching_orders]
     ]
     invalid_contract_reasons: list[str] = []
     for item in matching_orders:
         if (
-            item.get("raw_row_exclusion_context_classification") == "limit_up_locked_context"
-            or item.get("raw_row_exclusion_context_classification") == "market_halt_or_circuit_window_overlap"
-            or item.get("improvement_type") == "source_quality_raw_row_exclusion_limit_up_locked_context"
-            or item.get("improvement_type") == "source_quality_raw_row_exclusion_market_halt_context"
+            item.get("raw_row_exclusion_context_classification")
+            == "limit_up_locked_context"
+            or item.get("raw_row_exclusion_context_classification")
+            == "market_halt_or_circuit_window_overlap"
+            or item.get("improvement_type")
+            == "source_quality_raw_row_exclusion_limit_up_locked_context"
+            or item.get("improvement_type")
+            == "source_quality_raw_row_exclusion_market_halt_context"
             or item.get("route") == "review_required_limit_up_locked_context"
             or item.get("route") == "review_required_market_halt_context"
         ):
-            if str(item.get("decision") or "") not in {"attach_existing_family", "defer_evidence"}:
-                invalid_contract_reasons.append("review_context_decision_not_review_only")
+            if str(item.get("decision") or "") not in {
+                "attach_existing_family",
+                "defer_evidence",
+            }:
+                invalid_contract_reasons.append(
+                    "review_context_decision_not_review_only"
+                )
                 continue
             if item.get("runtime_effect") is not False:
                 invalid_contract_reasons.append("runtime_effect_not_false")
@@ -296,7 +359,9 @@ def _raw_row_exclusion_handoff_status(
             invalid_contract_reasons.append("allowed_runtime_apply_not_false")
             continue
         forbidden_uses = item.get("forbidden_uses")
-        if not isinstance(forbidden_uses, list) or not any(str(value).strip() for value in forbidden_uses):
+        if not isinstance(forbidden_uses, list) or not any(
+            str(value).strip() for value in forbidden_uses
+        ):
             invalid_contract_reasons.append("missing_forbidden_uses_contract")
             continue
         invalid_contract_reasons = []
@@ -315,10 +380,14 @@ def _raw_row_exclusion_handoff_status(
             for item in matching_orders
             if isinstance(item, dict)
             and (
-                item.get("raw_row_exclusion_context_classification") == "limit_up_locked_context"
-                or item.get("raw_row_exclusion_context_classification") == "market_halt_or_circuit_window_overlap"
-                or item.get("improvement_type") == "source_quality_raw_row_exclusion_limit_up_locked_context"
-                or item.get("improvement_type") == "source_quality_raw_row_exclusion_market_halt_context"
+                item.get("raw_row_exclusion_context_classification")
+                == "limit_up_locked_context"
+                or item.get("raw_row_exclusion_context_classification")
+                == "market_halt_or_circuit_window_overlap"
+                or item.get("improvement_type")
+                == "source_quality_raw_row_exclusion_limit_up_locked_context"
+                or item.get("improvement_type")
+                == "source_quality_raw_row_exclusion_market_halt_context"
                 or item.get("route") == "review_required_limit_up_locked_context"
                 or item.get("route") == "review_required_market_halt_context"
             )
@@ -371,7 +440,9 @@ def _read_single_log_lines(path: Path) -> list[str]:
         return []
 
 
-def _latest_run_lines(log_lines: list[str], target_date: str) -> tuple[list[str], str | None]:
+def _latest_run_lines(
+    log_lines: list[str], target_date: str
+) -> tuple[list[str], str | None]:
     needle = f"{_START_MARKER} target_date={target_date}"
     start_indexes = [idx for idx, line in enumerate(log_lines) if needle in line]
     if not start_indexes:
@@ -390,17 +461,26 @@ def _parse_bool_flags(line: str) -> dict[str, bool]:
 
 def _parse_marker_values(line: str) -> dict[str, str]:
     return {
-        key: value
-        for key, value in re.findall(r"([A-Za-z0-9_]+)=(\S+)", line or "")
+        key: value for key, value in re.findall(r"([A-Za-z0-9_]+)=(\S+)", line or "")
     }
 
 
-def _swing_lifecycle_provider_mismatch_warning(done_line: str | None, discovery: dict[str, Any]) -> str | None:
+def _swing_lifecycle_provider_mismatch_warning(
+    done_line: str | None, discovery: dict[str, Any]
+) -> str | None:
     marker_values = _parse_marker_values(done_line or "")
-    expected_provider = str(marker_values.get("swing_lifecycle_bucket_discovery_ai_provider") or "").strip().lower()
+    expected_provider = (
+        str(marker_values.get("swing_lifecycle_bucket_discovery_ai_provider") or "")
+        .strip()
+        .lower()
+    )
     if not expected_provider:
         return None
-    ai_review = discovery.get("ai_two_pass_review") if isinstance(discovery.get("ai_two_pass_review"), dict) else {}
+    ai_review = (
+        discovery.get("ai_two_pass_review")
+        if isinstance(discovery.get("ai_two_pass_review"), dict)
+        else {}
+    )
     actual_provider = str(ai_review.get("provider") or "").strip().lower()
     if not actual_provider or actual_provider == expected_provider:
         return None
@@ -443,7 +523,9 @@ def _conversion_kpi_health(
         issues.append("active_or_hypothesis_catalog_missing")
 
     preopen_missing_count = _safe_int(key_lineage_summary.get("preopen_missing_count"))
-    due_state = str(key_lineage_summary.get("new_postclose_candidates_due_state") or "").strip()
+    due_state = str(
+        key_lineage_summary.get("new_postclose_candidates_due_state") or ""
+    ).strip()
     if preopen_missing_count > 0:
         if due_state == "not_due_until_next_preopen":
             warnings.append("active_or_hypothesis_preopen_handoff_pending")
@@ -452,7 +534,10 @@ def _conversion_kpi_health(
 
     if _safe_int(key_lineage_summary.get("not_instrumented_count")) > 0:
         warnings.append("active_or_hypothesis_not_instrumented")
-    if _safe_int(conversion_lane_summary.get("conversion_candidate_count")) == 0 and conversion_lane:
+    if (
+        _safe_int(conversion_lane_summary.get("conversion_candidate_count")) == 0
+        and conversion_lane
+    ):
         warnings.append("conversion_lane_no_candidates")
 
     if issues:
@@ -483,16 +568,24 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "market_panic_breadth": REPORT_DIR
         / "market_panic_breadth"
         / f"market_panic_breadth_{target_date}.json",
-        "panic_sell_defense": REPORT_DIR / "panic_sell_defense" / f"panic_sell_defense_{target_date}.json",
-        "panic_buying": REPORT_DIR / "panic_buying" / f"panic_buying_{target_date}.json",
-        "threshold_cycle_ev": REPORT_DIR / "threshold_cycle_ev" / f"threshold_cycle_ev_{target_date}.json",
+        "panic_sell_defense": REPORT_DIR
+        / "panic_sell_defense"
+        / f"panic_sell_defense_{target_date}.json",
+        "panic_buying": REPORT_DIR
+        / "panic_buying"
+        / f"panic_buying_{target_date}.json",
+        "threshold_cycle_ev": REPORT_DIR
+        / "threshold_cycle_ev"
+        / f"threshold_cycle_ev_{target_date}.json",
         "scalp_entry_action_decision_matrix": REPORT_DIR
         / "scalp_entry_action_decision_matrix"
         / f"scalp_entry_action_decision_matrix_{target_date}.json",
         "one_share_threshold_opportunity": REPORT_DIR
         / "one_share_threshold_opportunity"
         / f"one_share_threshold_opportunity_{target_date}.json",
-        "buy_funnel_sentinel": REPORT_DIR / "buy_funnel_sentinel" / f"buy_funnel_sentinel_{target_date}.json",
+        "buy_funnel_sentinel": REPORT_DIR
+        / "buy_funnel_sentinel"
+        / f"buy_funnel_sentinel_{target_date}.json",
         "lifecycle_decision_matrix": REPORT_DIR
         / "lifecycle_decision_matrix"
         / f"lifecycle_decision_matrix_{target_date}.json",
@@ -520,14 +613,18 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "lifecycle_bucket_discovery_mtd": REPORT_DIR
         / "lifecycle_bucket_discovery"
         / f"lifecycle_bucket_discovery_{target_date}_mtd.json",
-        "code_improvement_workorder": REPORT_DIR / "code_improvement_workorder" / f"code_improvement_workorder_{target_date}.json",
+        "code_improvement_workorder": REPORT_DIR
+        / "code_improvement_workorder"
+        / f"code_improvement_workorder_{target_date}.json",
         "observation_source_quality_audit": REPORT_DIR
         / "observation_source_quality_audit"
         / f"observation_source_quality_audit_{target_date}.json",
         "ai_watching_score_smoothing_diagnostic": REPORT_DIR
         / "ai_watching_score_smoothing_diagnostic"
         / f"ai_watching_score_smoothing_diagnostic_{target_date}.json",
-        "runtime_approval_summary": REPORT_DIR / "runtime_approval_summary" / f"runtime_approval_summary_{target_date}.json",
+        "runtime_approval_summary": REPORT_DIR
+        / "runtime_approval_summary"
+        / f"runtime_approval_summary_{target_date}.json",
         "entry_split_order_plan": REPORT_DIR
         / "entry_split_order_plan"
         / f"entry_split_order_plan_{target_date}.json",
@@ -537,12 +634,18 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "runtime_apply_gap_audit": REPORT_DIR
         / "runtime_apply_gap_audit"
         / f"runtime_apply_gap_audit_{target_date}.json",
-        "key_lineage_ledger": REPORT_DIR / "key_lineage_ledger" / f"key_lineage_ledger_{target_date}.json",
-        "conversion_lane": REPORT_DIR / "conversion_lane" / f"conversion_lane_{target_date}.json",
+        "key_lineage_ledger": REPORT_DIR
+        / "key_lineage_ledger"
+        / f"key_lineage_ledger_{target_date}.json",
+        "conversion_lane": REPORT_DIR
+        / "conversion_lane"
+        / f"conversion_lane_{target_date}.json",
         "runtime_apply_bridge": REPORT_DIR
         / "runtime_apply_bridge"
         / f"runtime_apply_bridge_{target_date}.json",
-        "quote_consistency": REPORT_DIR / "quote_consistency" / f"quote_consistency_{target_date}.json",
+        "quote_consistency": REPORT_DIR
+        / "quote_consistency"
+        / f"quote_consistency_{target_date}.json",
         "threshold_preopen_apply_current": PROJECT_ROOT
         / "data"
         / "threshold_cycle"
@@ -566,7 +669,9 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "pattern_lab_currentness_audit": REPORT_DIR
         / "pattern_lab_currentness_audit"
         / f"pattern_lab_currentness_audit_{target_date}.json",
-        "pattern_lab_ai_review": REPORT_DIR / "pattern_lab_ai_review" / f"pattern_lab_ai_review_{target_date}.json",
+        "pattern_lab_ai_review": REPORT_DIR
+        / "pattern_lab_ai_review"
+        / f"pattern_lab_ai_review_{target_date}.json",
         "producer_gap_discovery": REPORT_DIR
         / "producer_gap_discovery"
         / f"producer_gap_discovery_{target_date}.json",
@@ -582,7 +687,9 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "pattern_lab_propagation_audit": REPORT_DIR
         / "pattern_lab_propagation_audit"
         / f"pattern_lab_propagation_audit_{target_date}.json",
-        "swing_daily_simulation": REPORT_DIR / "swing_daily_simulation" / f"swing_daily_simulation_{target_date}.json",
+        "swing_daily_simulation": REPORT_DIR
+        / "swing_daily_simulation"
+        / f"swing_daily_simulation_{target_date}.json",
         "swing_strategy_discovery_sim": REPORT_DIR
         / "swing_strategy_discovery_sim"
         / f"swing_strategy_discovery_sim_{target_date}.json",
@@ -592,12 +699,19 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "swing_lifecycle_bucket_discovery": REPORT_DIR
         / "swing_lifecycle_bucket_discovery"
         / f"swing_lifecycle_bucket_discovery_{target_date}.json",
-        "swing_lifecycle_audit": REPORT_DIR / "swing_lifecycle_audit" / f"swing_lifecycle_audit_{target_date}.json",
-        "next_stage2_checklist": PROJECT_ROOT / "docs" / "checklists" / f"{next_day}-stage2-todo-checklist.md",
+        "swing_lifecycle_audit": REPORT_DIR
+        / "swing_lifecycle_audit"
+        / f"swing_lifecycle_audit_{target_date}.json",
+        "next_stage2_checklist": PROJECT_ROOT
+        / "docs"
+        / "checklists"
+        / f"{next_day}-stage2-todo-checklist.md",
     }
 
 
-def _clean_baseline_report_residue_status(report_dir: Path = REPORT_DIR) -> dict[str, Any]:
+def _clean_baseline_report_residue_status(
+    report_dir: Path = REPORT_DIR,
+) -> dict[str, Any]:
     policy = clean_baseline_policy()
     residue: list[dict[str, Any]] = []
     for path in sorted(report_dir.rglob("*")):
@@ -625,7 +739,9 @@ def _clean_baseline_report_residue_status(report_dir: Path = REPORT_DIR) -> dict
     }
 
 
-def _clean_baseline_analytics_residue_status(analytics_dir: Path = ANALYTICS_DIR) -> dict[str, Any]:
+def _clean_baseline_analytics_residue_status(
+    analytics_dir: Path = ANALYTICS_DIR,
+) -> dict[str, Any]:
     policy = clean_baseline_policy()
     residue: list[dict[str, Any]] = []
     for path in sorted(analytics_dir.rglob("*")):
@@ -666,11 +782,17 @@ def _json_valid(path: Path) -> bool:
 
 
 def _ai_review_path(target_date: str) -> Path:
-    return REPORT_DIR / "threshold_cycle_ai_review" / f"threshold_cycle_ai_review_{target_date}_postclose.json"
+    return (
+        REPORT_DIR
+        / "threshold_cycle_ai_review"
+        / f"threshold_cycle_ai_review_{target_date}_postclose.json"
+    )
 
 
 def _scalp_sim_overnight_path(target_date: str) -> Path:
-    return REPORT_DIR / "scalp_sim_overnight" / f"scalp_sim_overnight_{target_date}.json"
+    return (
+        REPORT_DIR / "scalp_sim_overnight" / f"scalp_sim_overnight_{target_date}.json"
+    )
 
 
 def _calibration_path(target_date: str) -> Path:
@@ -704,9 +826,10 @@ def _runtime_candidates_requiring_ai(calibration_report: dict[str, Any]) -> list
     return sorted(set(blocking))
 
 
-
 def _slug(value: str) -> str:
-    text = re.sub(r"[^a-zA-Z0-9가-힣]+", "_", str(value or "").strip().lower()).strip("_")
+    text = re.sub(r"[^a-zA-Z0-9가-힣]+", "_", str(value or "").strip().lower()).strip(
+        "_"
+    )
     return text[:80] or "unknown"
 
 
@@ -724,13 +847,17 @@ def _slug_with_hash(value: str, *, limit: int = 80) -> str:
 
 def _entry_bucket_order_id(item: dict[str, Any]) -> str:
     bucket_type = _slug(str(item.get("bucket_type") or "bucket"))
-    bucket_key = _slug(str(item.get("bucket_key") or item.get("workorder_id") or "unknown"))
+    bucket_key = _slug(
+        str(item.get("bucket_key") or item.get("workorder_id") or "unknown")
+    )
     return f"order_lifecycle_entry_bucket_{bucket_type}_{bucket_key}"
 
 
 def _scale_in_bucket_order_id(item: dict[str, Any]) -> str:
     bucket_type = _slug(str(item.get("bucket_type") or "bucket"))
-    bucket_key = _slug(str(item.get("bucket_key") or item.get("workorder_id") or "unknown"))
+    bucket_key = _slug(
+        str(item.get("bucket_key") or item.get("workorder_id") or "unknown")
+    )
     return f"order_lifecycle_scale_in_bucket_{bucket_type}_{bucket_key}"
 
 
@@ -739,25 +866,33 @@ def _submit_bucket_order_id(item: dict[str, Any]) -> str:
     if workorder_id.startswith("order_entry_"):
         return workorder_id
     bucket_type = _slug(str(item.get("bucket_type") or "bucket"))
-    bucket_key = _slug(str(item.get("bucket_key") or item.get("workorder_id") or "unknown"))
+    bucket_key = _slug(
+        str(item.get("bucket_key") or item.get("workorder_id") or "unknown")
+    )
     return f"order_lifecycle_submit_bucket_{bucket_type}_{bucket_key}"
 
 
 def _overnight_bucket_order_id(item: dict[str, Any]) -> str:
     bucket_type = _slug(str(item.get("bucket_type") or "bucket"))
-    bucket_key = _slug(str(item.get("bucket_key") or item.get("workorder_id") or "unknown"))
+    bucket_key = _slug(
+        str(item.get("bucket_key") or item.get("workorder_id") or "unknown")
+    )
     return f"order_lifecycle_overnight_bucket_{bucket_type}_{bucket_key}"
 
 
 def _stage_bucket_order_id(stage: str, item: dict[str, Any]) -> str:
     bucket_type = _slug(str(item.get("bucket_type") or "bucket"))
-    bucket_key = _slug_with_hash(str(item.get("bucket_key") or item.get("workorder_id") or "unknown"))
+    bucket_key = _slug_with_hash(
+        str(item.get("bucket_key") or item.get("workorder_id") or "unknown")
+    )
     return f"order_lifecycle_{stage}_bucket_{bucket_type}_{bucket_key}"
 
 
 def _lifecycle_flow_bucket_order_id(item: dict[str, Any]) -> str:
     workorder_id = _slug(str(item.get("workorder_id") or "unknown"))
-    bucket_id = _slug_with_hash(str(item.get("lifecycle_flow_bucket_id") or item.get("bucket_key") or "unknown"))
+    bucket_id = _slug_with_hash(
+        str(item.get("lifecycle_flow_bucket_id") or item.get("bucket_key") or "unknown")
+    )
     return f"order_lifecycle_flow_bucket_{workorder_id}_{bucket_id}"
 
 
@@ -857,7 +992,11 @@ def _collect_lifecycle_bucket_discovery_ids(payload: Any) -> set[str]:
             value = payload.get(key)
             if isinstance(value, list):
                 found.update(str(item) for item in value if item)
-        for key in ("surfaced_candidates", "live_auto_apply_candidates", "sim_auto_approved_candidates"):
+        for key in (
+            "surfaced_candidates",
+            "live_auto_apply_candidates",
+            "sim_auto_approved_candidates",
+        ):
             value = payload.get(key)
             if isinstance(value, list):
                 for item in value:
@@ -878,12 +1017,21 @@ def _collect_swing_lifecycle_ids(payload: Any) -> set[str]:
             value = payload.get(key)
             if isinstance(value, list):
                 found.update(str(item) for item in value if item)
-        for key in ("sim_auto_approval_candidates", "runtime_approval_candidates", "surfaced_candidates", "sim_auto_approved_candidates"):
+        for key in (
+            "sim_auto_approval_candidates",
+            "runtime_approval_candidates",
+            "surfaced_candidates",
+            "sim_auto_approved_candidates",
+        ):
             value = payload.get(key)
             if isinstance(value, list):
                 for item in value:
-                    if isinstance(item, dict) and (item.get("candidate_id") or item.get("bucket_id")):
-                        found.add(str(item.get("candidate_id") or item.get("bucket_id")))
+                    if isinstance(item, dict) and (
+                        item.get("candidate_id") or item.get("bucket_id")
+                    ):
+                        found.add(
+                            str(item.get("candidate_id") or item.get("bucket_id"))
+                        )
         for value in payload.values():
             found.update(_collect_swing_lifecycle_ids(value))
     elif isinstance(payload, list):
@@ -902,10 +1050,16 @@ def _collect_swing_lifecycle_required_matrix_ids(matrix: dict[str, Any]) -> set[
         "discovery_arm_attribution",
     )
     for section_name in required_sections:
-        section = matrix.get(section_name) if isinstance(matrix.get(section_name), dict) else {}
+        section = (
+            matrix.get(section_name)
+            if isinstance(matrix.get(section_name), dict)
+            else {}
+        )
         for key in ("sim_auto_approval_candidates", "runtime_approval_candidates"):
             for item in section.get(key) or []:
-                if isinstance(item, dict) and (item.get("candidate_id") or item.get("bucket_id")):
+                if isinstance(item, dict) and (
+                    item.get("candidate_id") or item.get("bucket_id")
+                ):
                     found.add(str(item.get("candidate_id") or item.get("bucket_id")))
     return found
 
@@ -916,11 +1070,19 @@ def _lifecycle_bucket_discovery_handoff_status(
     runtime_summary: dict[str, Any],
     workorder: dict[str, Any],
 ) -> dict[str, Any]:
-    discovery_summary = discovery.get("summary") if isinstance(discovery.get("summary"), dict) else {}
-    discovery_warnings = [str(item) for item in (discovery.get("warnings") or []) if str(item)]
+    discovery_summary = (
+        discovery.get("summary") if isinstance(discovery.get("summary"), dict) else {}
+    )
+    discovery_warnings = [
+        str(item) for item in (discovery.get("warnings") or []) if str(item)
+    ]
     source_contract_status = str(discovery_summary.get("source_contract_status") or "")
     ai_review_status = str(discovery_summary.get("ai_two_pass_review_status") or "")
-    candidates = discovery.get("surfaced_candidates") if isinstance(discovery.get("surfaced_candidates"), list) else []
+    candidates = (
+        discovery.get("surfaced_candidates")
+        if isinstance(discovery.get("surfaced_candidates"), list)
+        else []
+    )
     source_dimension_summary = (
         discovery.get("source_dimension_gap_summary")
         if isinstance(discovery.get("source_dimension_gap_summary"), dict)
@@ -931,8 +1093,14 @@ def _lifecycle_bucket_discovery_handoff_status(
         if isinstance(discovery.get("quiet_gap_summary"), dict)
         else {}
     )
-    bridge_summary = bridge_report.get("summary") if isinstance(bridge_report.get("summary"), dict) else {}
-    greenfield_policy_emit_state = str(bridge_summary.get("greenfield_policy_emit_state") or "").strip()
+    bridge_summary = (
+        bridge_report.get("summary")
+        if isinstance(bridge_report.get("summary"), dict)
+        else {}
+    )
+    greenfield_policy_emit_state = str(
+        bridge_summary.get("greenfield_policy_emit_state") or ""
+    ).strip()
     expected_ids = sorted(
         str(item.get("bucket_id"))
         for item in candidates
@@ -946,28 +1114,45 @@ def _lifecycle_bucket_discovery_handoff_status(
         family = str(item.get("live_auto_apply_family") or "")
         if item.get("classification_state") != "live_auto_apply_ready" or not family:
             continue
-        if family == "greenfield_real_environment_authority" and greenfield_policy_emit_state.startswith("not_emitted_"):
+        if (
+            family == "greenfield_real_environment_authority"
+            and greenfield_policy_emit_state.startswith("not_emitted_")
+        ):
             explicit_bridge_exclusion_families.add(family)
             continue
         live_families_set.add(family)
     live_families = sorted(live_families_set)
     bridge_families = {
         str(item.get("family"))
-        for item in (bridge_report.get("candidates") if isinstance(bridge_report.get("candidates"), list) else [])
+        for item in (
+            bridge_report.get("candidates")
+            if isinstance(bridge_report.get("candidates"), list)
+            else []
+        )
         if isinstance(item, dict) and item.get("family")
     }
     runtime_ids = _collect_lifecycle_bucket_discovery_ids(runtime_summary)
     order_ids = {
         str(item.get("order_id"))
-        for item in (workorder.get("orders") if isinstance(workorder.get("orders"), list) else [])
+        for item in (
+            workorder.get("orders") if isinstance(workorder.get("orders"), list) else []
+        )
         if isinstance(item, dict) and item.get("order_id")
     }
     expected_workorder_prefix = "order_lifecycle_bucket_discovery_"
 
     def required_quiet_gap_order_ids(summary: dict[str, Any]) -> set[str]:
-        type_counts = summary.get("quiet_gap_type_counts") if isinstance(summary.get("quiet_gap_type_counts"), dict) else {}
+        type_counts = (
+            summary.get("quiet_gap_type_counts")
+            if isinstance(summary.get("quiet_gap_type_counts"), dict)
+            else {}
+        )
         required: set[str] = set()
-        if _safe_int(type_counts.get("parent_conflict_child")) + _safe_int(type_counts.get("exclusion_dimension_candidate")) > 0:
+        if (
+            _safe_int(type_counts.get("parent_conflict_child"))
+            + _safe_int(type_counts.get("exclusion_dimension_candidate"))
+            > 0
+        ):
             required.add("order_lifecycle_quiet_gap_parent_conflict_rollup")
         if (
             _safe_int(type_counts.get("positive_source_only_keep_collecting"))
@@ -982,18 +1167,25 @@ def _lifecycle_bucket_discovery_handoff_status(
         return required
 
     def source_only_excluded(item: dict[str, Any]) -> bool:
-        if item.get("explicit_runtime_exclusion") is True or item.get("source_only_explicit_exclusion") is True:
+        if (
+            item.get("explicit_runtime_exclusion") is True
+            or item.get("source_only_explicit_exclusion") is True
+        ):
             return True
         stage = str(item.get("stage") or "").strip()
         state = str(item.get("classification_state") or "").strip()
         family = str(item.get("live_auto_apply_family") or "").strip()
-        if stage != "lifecycle_flow" or state not in {"new_bucket_candidate", "runtime_blocked_contract_gap"}:
+        if stage != "lifecycle_flow" or state not in {
+            "new_bucket_candidate",
+            "runtime_blocked_contract_gap",
+        }:
             return False
         source_kind = str(item.get("source_bucket_kind") or "").strip()
         if source_kind in {"taxonomy_provenance_gap", "source_only_observation"}:
             return True
         if family == "greenfield_real_environment_authority" and (
-            item.get("allowed_runtime_apply") is False or item.get("broker_order_forbidden") is True
+            item.get("allowed_runtime_apply") is False
+            or item.get("broker_order_forbidden") is True
         ):
             return True
         return False
@@ -1002,7 +1194,13 @@ def _lifecycle_bucket_discovery_handoff_status(
         str(item.get("bucket_id"))
         for item in candidates
         if isinstance(item, dict)
-        and str(item.get("classification_state") or "") in {"new_bucket_candidate", "runtime_blocked_contract_gap", "code_patch_required", "code_review_failed"}
+        and str(item.get("classification_state") or "")
+        in {
+            "new_bucket_candidate",
+            "runtime_blocked_contract_gap",
+            "code_patch_required",
+            "code_review_failed",
+        }
         and not source_only_excluded(item)
     ]
     actionable_source_dimension_gap_ids = [
@@ -1010,10 +1208,14 @@ def _lifecycle_bucket_discovery_handoff_status(
         for item in candidates
         if isinstance(item, dict)
         and str(item.get("source_dimension_gap") or "") == "unknown_source_dimensions"
-        and str(item.get("recommended_resolution") or "") in {"emit_or_backfill_source_field", "resolve_unknown_source_dimensions"}
+        and str(item.get("recommended_resolution") or "")
+        in {"emit_or_backfill_source_field", "resolve_unknown_source_dimensions"}
         and item.get("bucket_id")
     ]
-    if not actionable_source_dimension_gap_ids and int(source_dimension_summary.get("actionable_unknown_gap_count") or 0) > 0:
+    if (
+        not actionable_source_dimension_gap_ids
+        and int(source_dimension_summary.get("actionable_unknown_gap_count") or 0) > 0
+    ):
         actionable_source_dimension_gap_ids = ["source_dimension_gap_summary"]
     blocking_source_dimension_gap_ids = [
         str(item.get("bucket_id"))
@@ -1021,20 +1223,36 @@ def _lifecycle_bucket_discovery_handoff_status(
         if isinstance(item, dict)
         and str(item.get("bucket_id") or "") in actionable_source_dimension_gap_ids
         and str(item.get("classification_state") or "")
-        in {"live_auto_apply_ready", "sim_auto_approved", "entry_only_sim_auto_approved", "lifecycle_flow_sim_probe_candidate"}
+        in {
+            "live_auto_apply_ready",
+            "sim_auto_approved",
+            "entry_only_sim_auto_approved",
+            "lifecycle_flow_sim_probe_candidate",
+        }
     ]
     ai_followup_ids = sorted(
         str(item.get("bucket_id"))
         for item in candidates
-        if isinstance(item, dict) and item.get("bucket_id") and item.get("ai_review_followup_required")
+        if isinstance(item, dict)
+        and item.get("bucket_id")
+        and item.get("ai_review_followup_required")
     )
     missing_bridge_families = sorted(set(live_families) - bridge_families)
-    missing_runtime_summary_ids = sorted(set(expected_ids) - runtime_ids) if runtime_ids else expected_ids
-    has_discovery_workorder = any(order_id.startswith(expected_workorder_prefix) for order_id in order_ids)
+    missing_runtime_summary_ids = (
+        sorted(set(expected_ids) - runtime_ids) if runtime_ids else expected_ids
+    )
+    has_discovery_workorder = any(
+        order_id.startswith(expected_workorder_prefix) for order_id in order_ids
+    )
     has_source_dimension_gap_workorder = any(
-        str(item.get("order_id") or "").startswith("order_lifecycle_source_dimension_gap_")
-        and str(item.get("order_id") or "") != "order_lifecycle_source_dimension_gap_rollup"
-        for item in (workorder.get("orders") if isinstance(workorder.get("orders"), list) else [])
+        str(item.get("order_id") or "").startswith(
+            "order_lifecycle_source_dimension_gap_"
+        )
+        and str(item.get("order_id") or "")
+        != "order_lifecycle_source_dimension_gap_rollup"
+        for item in (
+            workorder.get("orders") if isinstance(workorder.get("orders"), list) else []
+        )
         if isinstance(item, dict)
     )
     required_quiet_order_ids = required_quiet_gap_order_ids(quiet_gap_summary)
@@ -1044,12 +1262,19 @@ def _lifecycle_bucket_discovery_handoff_status(
         if (
             order_id not in order_ids
             if order_id != "order_lifecycle_quiet_gap_rollup"
-            else not any(existing.startswith("order_lifecycle_quiet_gap_") for existing in order_ids)
+            else not any(
+                existing.startswith("order_lifecycle_quiet_gap_")
+                for existing in order_ids
+            )
         )
     )
-    has_quiet_gap_rollup_workorder = not missing_quiet_order_ids if required_quiet_order_ids else False
+    has_quiet_gap_rollup_workorder = (
+        not missing_quiet_order_ids if required_quiet_order_ids else False
+    )
     quiet_gap_count = int(quiet_gap_summary.get("quiet_gap_count") or 0)
-    sim_live_connected_quiet_gap_count = int(quiet_gap_summary.get("sim_live_connected_quiet_gap_count") or 0)
+    sim_live_connected_quiet_gap_count = int(
+        quiet_gap_summary.get("sim_live_connected_quiet_gap_count") or 0
+    )
     missing: list[str] = []
     warnings: list[str] = []
     if missing_bridge_families:
@@ -1057,7 +1282,9 @@ def _lifecycle_bucket_discovery_handoff_status(
     if expected_ids and missing_runtime_summary_ids:
         missing.append("runtime_approval_summary_lifecycle_bucket_discovery_missing")
     if workorder_needed and not has_discovery_workorder:
-        missing.append("code_improvement_workorder_lifecycle_bucket_discovery_orders_missing")
+        missing.append(
+            "code_improvement_workorder_lifecycle_bucket_discovery_orders_missing"
+        )
     if actionable_source_dimension_gap_ids and not has_source_dimension_gap_workorder:
         if blocking_source_dimension_gap_ids:
             missing.append("lifecycle_source_dimension_gap_handoff_missing")
@@ -1071,22 +1298,38 @@ def _lifecycle_bucket_discovery_handoff_status(
     if source_contract_status == "fail":
         missing.append("lifecycle_bucket_discovery_source_contract_fail")
     elif source_contract_status and source_contract_status != "pass":
-        warnings.append(f"lifecycle_bucket_discovery_source_contract_{source_contract_status}")
-    missing_dimension_keys = source_dimension_summary.get("missing_dimension_key_counts") if isinstance(source_dimension_summary.get("missing_dimension_key_counts"), dict) else {}
+        warnings.append(
+            f"lifecycle_bucket_discovery_source_contract_{source_contract_status}"
+        )
+    missing_dimension_keys = (
+        source_dimension_summary.get("missing_dimension_key_counts")
+        if isinstance(
+            source_dimension_summary.get("missing_dimension_key_counts"), dict
+        )
+        else {}
+    )
     policy_key_missing_count = _safe_int(missing_dimension_keys.get("policy_key"), 0)
     policy_key_gap_classification_counts = (
         source_dimension_summary.get("policy_key_gap_classification_counts")
-        if isinstance(source_dimension_summary.get("policy_key_gap_classification_counts"), dict)
+        if isinstance(
+            source_dimension_summary.get("policy_key_gap_classification_counts"), dict
+        )
         else {}
     )
-    policy_key_required_missing_count = _safe_int(policy_key_gap_classification_counts.get("policy_key_required_missing"), 0)
+    policy_key_required_missing_count = _safe_int(
+        policy_key_gap_classification_counts.get("policy_key_required_missing"), 0
+    )
     if policy_key_missing_count > 0:
         if policy_key_required_missing_count > 0:
             warnings.append("lifecycle_bucket_discovery_policy_key_required_missing")
         elif policy_key_gap_classification_counts:
-            warnings.append("lifecycle_bucket_discovery_policy_key_missing_non_blocking_context")
+            warnings.append(
+                "lifecycle_bucket_discovery_policy_key_missing_non_blocking_context"
+            )
         else:
-            warnings.append("lifecycle_bucket_discovery_policy_key_missing_await_classification")
+            warnings.append(
+                "lifecycle_bucket_discovery_policy_key_missing_await_classification"
+            )
     if ai_followup_ids:
         warnings.append("lifecycle_bucket_discovery_ai_post_apply_followup_required")
     warnings.extend(
@@ -1104,20 +1347,35 @@ def _lifecycle_bucket_discovery_handoff_status(
     }
     handoff_warning = any(item in status_warning_reasons for item in warnings)
     return {
-        "status": "fail" if missing else ("missing" if not discovery else "warning" if handoff_warning else "pass"),
+        "status": (
+            "fail"
+            if missing
+            else (
+                "missing" if not discovery else "warning" if handoff_warning else "pass"
+            )
+        ),
         "source_contract_status": source_contract_status or None,
         "ai_two_pass_review_status": ai_review_status or None,
         "expected_candidate_ids": expected_ids,
         "live_auto_apply_families": live_families,
         "runtime_apply_bridge_families": sorted(bridge_families),
-        "explicit_bridge_exclusion_families": sorted(explicit_bridge_exclusion_families),
+        "explicit_bridge_exclusion_families": sorted(
+            explicit_bridge_exclusion_families
+        ),
         "runtime_approval_summary_candidate_ids": sorted(runtime_ids),
         "missing_bridge_families": missing_bridge_families,
         "missing_runtime_summary_candidate_ids": missing_runtime_summary_ids,
         "workorder_needed_bucket_ids": workorder_needed,
-        "actionable_source_dimension_gap_bucket_ids": sorted(actionable_source_dimension_gap_ids),
-        "actionable_source_dimension_gap_count": int(source_dimension_summary.get("actionable_unknown_gap_count") or len(actionable_source_dimension_gap_ids)),
-        "blocking_source_dimension_gap_bucket_ids": sorted(blocking_source_dimension_gap_ids),
+        "actionable_source_dimension_gap_bucket_ids": sorted(
+            actionable_source_dimension_gap_ids
+        ),
+        "actionable_source_dimension_gap_count": int(
+            source_dimension_summary.get("actionable_unknown_gap_count")
+            or len(actionable_source_dimension_gap_ids)
+        ),
+        "blocking_source_dimension_gap_bucket_ids": sorted(
+            blocking_source_dimension_gap_ids
+        ),
         "quiet_gap_count": quiet_gap_count,
         "sim_live_connected_quiet_gap_count": sim_live_connected_quiet_gap_count,
         "expected_quiet_gap_workorder_order_ids": sorted(required_quiet_order_ids),
@@ -1131,9 +1389,11 @@ def _lifecycle_bucket_discovery_handoff_status(
         "interpretation": (
             "lifecycle bucket discovery candidates propagated to bridge/runtime summary/workorder"
             if discovery and not missing
-            else "lifecycle bucket discovery produced surfaced candidates that downstream consumers dropped"
-            if discovery
-            else "lifecycle bucket discovery report missing"
+            else (
+                "lifecycle bucket discovery produced surfaced candidates that downstream consumers dropped"
+                if discovery
+                else "lifecycle bucket discovery report missing"
+            )
         ),
     }
 
@@ -1147,23 +1407,43 @@ def _lifecycle_bucket_windows_status(
     runtime_summary: dict[str, Any],
 ) -> dict[str, Any]:
     marker_values = _parse_marker_values(done_line or "")
-    marker_enabled = str(marker_values.get("lifecycle_bucket_windows") or "").lower() in {"true", "1"}
-    ev_windows = ev_report.get("lifecycle_bucket_windows") if isinstance(ev_report.get("lifecycle_bucket_windows"), dict) else {}
+    marker_enabled = str(
+        marker_values.get("lifecycle_bucket_windows") or ""
+    ).lower() in {"true", "1"}
+    ev_windows = (
+        ev_report.get("lifecycle_bucket_windows")
+        if isinstance(ev_report.get("lifecycle_bucket_windows"), dict)
+        else {}
+    )
     runtime_windows = (
         runtime_summary.get("lifecycle_bucket_windows")
         if isinstance(runtime_summary.get("lifecycle_bucket_windows"), dict)
         else {}
     )
-    promotion_window = str(
-        runtime_windows.get("promotion_window") or ev_windows.get("promotion_window") or "mtd"
-    ).strip() or "mtd"
-    confirmation_windows_raw = runtime_windows.get("confirmation_windows") or ev_windows.get("confirmation_windows")
+    promotion_window = (
+        str(
+            runtime_windows.get("promotion_window")
+            or ev_windows.get("promotion_window")
+            or "mtd"
+        ).strip()
+        or "mtd"
+    )
+    confirmation_windows_raw = runtime_windows.get(
+        "confirmation_windows"
+    ) or ev_windows.get("confirmation_windows")
     if isinstance(confirmation_windows_raw, list) and confirmation_windows_raw:
-        confirmation_windows = [str(item).strip() for item in confirmation_windows_raw if str(item).strip()]
+        confirmation_windows = [
+            str(item).strip() for item in confirmation_windows_raw if str(item).strip()
+        ]
     else:
         confirmation_windows = ["rolling5d", "rolling10d"]
-    artifact_present = any(paths[f"lifecycle_bucket_discovery_{suffix}"].exists() for suffix in ("rolling5d", "rolling10d", "mtd"))
-    should_check = marker_enabled or bool(ev_windows) or bool(runtime_windows) or artifact_present
+    artifact_present = any(
+        paths[f"lifecycle_bucket_discovery_{suffix}"].exists()
+        for suffix in ("rolling5d", "rolling10d", "mtd")
+    )
+    should_check = (
+        marker_enabled or bool(ev_windows) or bool(runtime_windows) or artifact_present
+    )
     if not should_check:
         return {"status": "pass", "checked": False, "missing": [], "warnings": []}
 
@@ -1171,7 +1451,11 @@ def _lifecycle_bucket_windows_status(
     warnings: list[str] = []
     windows: dict[str, dict[str, Any]] = {}
     confirmation_target_pass_count = 0
-    bridge_summary = bridge_report.get("summary") if isinstance(bridge_report.get("summary"), dict) else {}
+    bridge_summary = (
+        bridge_report.get("summary")
+        if isinstance(bridge_report.get("summary"), dict)
+        else {}
+    )
     live_ready_count = _safe_int(bridge_summary.get("live_auto_apply_ready_count"))
     promotion_passed = bridge_summary.get("lifecycle_bucket_promotion_contract_passed")
     promotion_authority_open = live_ready_count > 0 or promotion_passed is True
@@ -1185,7 +1469,9 @@ def _lifecycle_bucket_windows_status(
             windows[suffix] = {"available": False}
             continue
         payload = _load_json(discovery_path)
-        summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+        summary = (
+            payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+        )
         source_contract_status = str(summary.get("source_contract_status") or "")
         parent_granularity_status = str(summary.get("parent_granularity_status") or "")
         windows[suffix] = {
@@ -1193,11 +1479,20 @@ def _lifecycle_bucket_windows_status(
             "source_contract_status": source_contract_status or None,
             "parent_granularity_status": parent_granularity_status or None,
             "parent_bucket_count": _safe_int(summary.get("parent_bucket_count")),
-            "window_role": "promotion_confirmation" if suffix == promotion_window else "rolling_confirmation",
+            "window_role": (
+                "promotion_confirmation"
+                if suffix == promotion_window
+                else "rolling_confirmation"
+            ),
         }
         if source_contract_status != "pass":
-            missing.append(f"lifecycle_bucket_discovery_{suffix}_source_contract_not_pass")
-        if parent_granularity_status == "target_pass" and suffix in confirmation_windows:
+            missing.append(
+                f"lifecycle_bucket_discovery_{suffix}_source_contract_not_pass"
+            )
+        if (
+            parent_granularity_status == "target_pass"
+            and suffix in confirmation_windows
+        ):
             confirmation_target_pass_count += 1
         if parent_granularity_status != "target_pass" and suffix == promotion_window:
             issue = f"lifecycle_bucket_discovery_{suffix}_parent_granularity_not_target"
@@ -1205,8 +1500,13 @@ def _lifecycle_bucket_windows_status(
                 missing.append(issue)
             else:
                 warnings.append(issue)
-        elif parent_granularity_status != "target_pass" and suffix in confirmation_windows:
-            warnings.append(f"lifecycle_bucket_discovery_{suffix}_parent_granularity_not_target")
+        elif (
+            parent_granularity_status != "target_pass"
+            and suffix in confirmation_windows
+        ):
+            warnings.append(
+                f"lifecycle_bucket_discovery_{suffix}_parent_granularity_not_target"
+            )
 
     if confirmation_windows and confirmation_target_pass_count == 0:
         missing.append("lifecycle_bucket_confirmation_windows_not_target")
@@ -1221,10 +1521,24 @@ def _lifecycle_bucket_windows_status(
             continue
         if item.get("bridge_candidate_state") != "live_auto_apply_ready":
             continue
-        policy = item.get("greenfield_policy") if isinstance(item.get("greenfield_policy"), dict) else {}
-        policy_bucket_id = str(policy.get("policy_bucket_id") or item.get("policy_bucket_id") or "")
-        parent_status = str(policy.get("parent_granularity_status") or item.get("parent_granularity_status") or "")
-        absorbed = policy.get("absorbed_child_bucket_ids") if isinstance(policy.get("absorbed_child_bucket_ids"), list) else []
+        policy = (
+            item.get("greenfield_policy")
+            if isinstance(item.get("greenfield_policy"), dict)
+            else {}
+        )
+        policy_bucket_id = str(
+            policy.get("policy_bucket_id") or item.get("policy_bucket_id") or ""
+        )
+        parent_status = str(
+            policy.get("parent_granularity_status")
+            or item.get("parent_granularity_status")
+            or ""
+        )
+        absorbed = (
+            policy.get("absorbed_child_bucket_ids")
+            if isinstance(policy.get("absorbed_child_bucket_ids"), list)
+            else []
+        )
         if not policy_bucket_id or parent_status != "target_pass" or not absorbed:
             missing.append("runtime_apply_bridge_child_combo_policy_authority")
 
@@ -1252,14 +1566,22 @@ def _swing_lifecycle_handoff_status(
     expected_candidate_ids = set(required_matrix_candidate_ids)
     ev_candidate_ids = _collect_swing_lifecycle_ids(
         {
-            "swing_lifecycle_decision_matrix": ev_report.get("swing_lifecycle_decision_matrix"),
-            "swing_lifecycle_bucket_discovery": ev_report.get("swing_lifecycle_bucket_discovery"),
+            "swing_lifecycle_decision_matrix": ev_report.get(
+                "swing_lifecycle_decision_matrix"
+            ),
+            "swing_lifecycle_bucket_discovery": ev_report.get(
+                "swing_lifecycle_bucket_discovery"
+            ),
         }
     )
     runtime_candidate_ids = _collect_swing_lifecycle_ids(
         {
-            "swing_lifecycle_decision_matrix": runtime_summary.get("swing_lifecycle_decision_matrix"),
-            "swing_lifecycle_bucket_discovery": runtime_summary.get("swing_lifecycle_bucket_discovery"),
+            "swing_lifecycle_decision_matrix": runtime_summary.get(
+                "swing_lifecycle_decision_matrix"
+            ),
+            "swing_lifecycle_bucket_discovery": runtime_summary.get(
+                "swing_lifecycle_bucket_discovery"
+            ),
         }
     )
     source_workorders: list[dict[str, Any]] = []
@@ -1269,19 +1591,33 @@ def _swing_lifecycle_handoff_status(
         "scale_in_bucket_attribution",
         "discovery_arm_attribution",
     ):
-        section = matrix.get(section_name) if isinstance(matrix.get(section_name), dict) else {}
+        section = (
+            matrix.get(section_name)
+            if isinstance(matrix.get(section_name), dict)
+            else {}
+        )
         source_workorders.extend(
-            item for item in (section.get("code_improvement_workorders") or []) if isinstance(item, dict)
+            item
+            for item in (section.get("code_improvement_workorders") or [])
+            if isinstance(item, dict)
         )
     expected_order_ids = {_swing_ldm_order_id(item) for item in source_workorders}
-    bottleneck = matrix.get("swing_entry_bottleneck") if isinstance(matrix.get("swing_entry_bottleneck"), dict) else {}
-    bottleneck_matches = bottleneck.get("matches") if isinstance(bottleneck.get("matches"), list) else []
+    bottleneck = (
+        matrix.get("swing_entry_bottleneck")
+        if isinstance(matrix.get("swing_entry_bottleneck"), dict)
+        else {}
+    )
+    bottleneck_matches = (
+        bottleneck.get("matches") if isinstance(bottleneck.get("matches"), list) else []
+    )
     swing_entry_bottleneck_critical = (
         bottleneck.get("primary") == "SWING_ENTRY_DROUGHT_CRITICAL"
         or "SWING_ENTRY_DROUGHT_CRITICAL" in bottleneck_matches
     )
     if swing_entry_bottleneck_critical:
-        expected_candidate_ids.add("swing_entry_bottleneck_swing_entry_drought_critical")
+        expected_candidate_ids.add(
+            "swing_entry_bottleneck_swing_entry_drought_critical"
+        )
         expected_order_ids.add("order_swing_entry_bottleneck_auto_resolution")
     discovery_workorders = (
         discovery.get("code_improvement_workorders")
@@ -1297,11 +1633,21 @@ def _swing_lifecycle_handoff_status(
                 )
     actual_order_ids = {
         str(item.get("order_id"))
-        for item in (workorder.get("orders") if isinstance(workorder.get("orders"), list) else [])
+        for item in (
+            workorder.get("orders") if isinstance(workorder.get("orders"), list) else []
+        )
         if isinstance(item, dict) and item.get("order_id")
     }
-    missing_ev_candidates = sorted(expected_candidate_ids - ev_candidate_ids) if expected_candidate_ids else []
-    missing_runtime_candidates = sorted(expected_candidate_ids - runtime_candidate_ids) if expected_candidate_ids else []
+    missing_ev_candidates = (
+        sorted(expected_candidate_ids - ev_candidate_ids)
+        if expected_candidate_ids
+        else []
+    )
+    missing_runtime_candidates = (
+        sorted(expected_candidate_ids - runtime_candidate_ids)
+        if expected_candidate_ids
+        else []
+    )
     missing_order_ids = sorted(expected_order_ids - actual_order_ids)
     missing: list[str] = []
     if matrix and not discovery:
@@ -1321,32 +1667,57 @@ def _swing_lifecycle_handoff_status(
         missing.append("code_improvement_workorder_swing_lifecycle_orders_missing")
     if swing_entry_bottleneck_critical:
         ev_bottleneck = (
-            (ev_report.get("swing_lifecycle_decision_matrix") or {}).get("swing_entry_bottleneck_primary")
+            (ev_report.get("swing_lifecycle_decision_matrix") or {}).get(
+                "swing_entry_bottleneck_primary"
+            )
             if isinstance(ev_report.get("swing_lifecycle_decision_matrix"), dict)
             else None
         )
         runtime_bottleneck = (
-            (runtime_summary.get("swing_lifecycle_decision_matrix") or {}).get("swing_entry_bottleneck_primary")
+            (runtime_summary.get("swing_lifecycle_decision_matrix") or {}).get(
+                "swing_entry_bottleneck_primary"
+            )
             if isinstance(runtime_summary.get("swing_lifecycle_decision_matrix"), dict)
             else None
         )
-        if ev_bottleneck != "SWING_ENTRY_DROUGHT_CRITICAL" or runtime_bottleneck != "SWING_ENTRY_DROUGHT_CRITICAL":
+        if (
+            ev_bottleneck != "SWING_ENTRY_DROUGHT_CRITICAL"
+            or runtime_bottleneck != "SWING_ENTRY_DROUGHT_CRITICAL"
+        ):
             missing.append("swing_entry_bottleneck_handoff_missing")
-    contract = matrix.get("input_contract") if isinstance(matrix.get("input_contract"), dict) else {}
+    contract = (
+        matrix.get("input_contract")
+        if isinstance(matrix.get("input_contract"), dict)
+        else {}
+    )
     if matrix and contract.get("swing_daily_simulation_consumed") is not False:
         missing.append("swing_lifecycle_forbidden_daily_simulation_consumed")
-    discovery_summary = discovery.get("summary") if isinstance(discovery.get("summary"), dict) else {}
-    ai_review_status = str(discovery_summary.get("ai_two_pass_review_status") or "").strip()
+    discovery_summary = (
+        discovery.get("summary") if isinstance(discovery.get("summary"), dict) else {}
+    )
+    ai_review_status = str(
+        discovery_summary.get("ai_two_pass_review_status") or ""
+    ).strip()
     warnings = [
-        item
-        if item.startswith("swing_lifecycle_bucket_discovery:")
-        else f"swing_lifecycle_bucket_discovery:{item}"
-        for item in (str(raw_item) for raw_item in (discovery.get("warnings") or []) if str(raw_item))
+        (
+            item
+            if item.startswith("swing_lifecycle_bucket_discovery:")
+            else f"swing_lifecycle_bucket_discovery:{item}"
+        )
+        for item in (
+            str(raw_item)
+            for raw_item in (discovery.get("warnings") or [])
+            if str(raw_item)
+        )
     ]
     if ai_review_status and ai_review_status != "parsed":
-        warnings.append(f"swing_lifecycle_bucket_discovery:ai_two_pass_review_{ai_review_status}_fail_closed")
+        warnings.append(
+            f"swing_lifecycle_bucket_discovery:ai_two_pass_review_{ai_review_status}_fail_closed"
+        )
     if bool(discovery_summary.get("ai_fail_closed")):
-        warnings.append("swing_lifecycle_bucket_discovery:ai_two_pass_review_fail_closed_sim_auto_blocked")
+        warnings.append(
+            "swing_lifecycle_bucket_discovery:ai_two_pass_review_fail_closed_sim_auto_blocked"
+        )
     surfaced_candidates = (
         discovery.get("surfaced_candidates")
         if isinstance(discovery.get("surfaced_candidates"), list)
@@ -1356,15 +1727,25 @@ def _swing_lifecycle_handoff_status(
     for item in surfaced_candidates:
         if not isinstance(item, dict):
             continue
-        stage = str(item.get("stage") or item.get("lifecycle_stage") or "").strip().lower()
+        stage = (
+            str(item.get("stage") or item.get("lifecycle_stage") or "").strip().lower()
+        )
         if not stage or stage == "unknown":
-            stage_unknown_candidate_ids.append(str(item.get("candidate_id") or item.get("bucket_id") or "unknown"))
+            stage_unknown_candidate_ids.append(
+                str(item.get("candidate_id") or item.get("bucket_id") or "unknown")
+            )
     if stage_unknown_candidate_ids:
         warnings.append("swing_lifecycle_bucket_discovery:stage_unknown")
-    matrix_summary = matrix.get("summary") if isinstance(matrix.get("summary"), dict) else {}
+    matrix_summary = (
+        matrix.get("summary") if isinstance(matrix.get("summary"), dict) else {}
+    )
     raw_swing_event_count = _safe_int(matrix_summary.get("raw_swing_event_count"), 0)
-    ldm_consumed_event_count = _safe_int(matrix_summary.get("ldm_consumed_event_count"), 0)
-    ldm_event_coverage_rate = _safe_float(matrix_summary.get("ldm_event_coverage_rate"), 0.0)
+    ldm_consumed_event_count = _safe_int(
+        matrix_summary.get("ldm_consumed_event_count"), 0
+    )
+    ldm_event_coverage_rate = _safe_float(
+        matrix_summary.get("ldm_event_coverage_rate"), 0.0
+    )
     unmapped_swing_stage_counts = (
         matrix_summary.get("unmapped_swing_stage_counts")
         if isinstance(matrix_summary.get("unmapped_swing_stage_counts"), dict)
@@ -1374,7 +1755,11 @@ def _swing_lifecycle_handoff_status(
         warnings.append("swing_lifecycle_decision_matrix:low_event_coverage")
     warnings = list(dict.fromkeys(warnings))
     return {
-        "status": "fail" if missing else ("missing" if not matrix else "warning" if warnings else "pass"),
+        "status": (
+            "fail"
+            if missing
+            else ("missing" if not matrix else "warning" if warnings else "pass")
+        ),
         "matrix_candidate_ids": sorted(matrix_candidate_ids),
         "required_matrix_candidate_ids": sorted(required_matrix_candidate_ids),
         "discovery_candidate_ids": sorted(discovery_candidate_ids),
@@ -1388,8 +1773,12 @@ def _swing_lifecycle_handoff_status(
         "swing_entry_bottleneck_critical": swing_entry_bottleneck_critical,
         "actual_workorder_order_ids": sorted(actual_order_ids),
         "missing_workorder_order_ids": missing_order_ids,
-        "daily_simulation_consumed": bool(contract.get("swing_daily_simulation_consumed")),
-        "deterministic_proposal_count": discovery_summary.get("deterministic_proposal_count"),
+        "daily_simulation_consumed": bool(
+            contract.get("swing_daily_simulation_consumed")
+        ),
+        "deterministic_proposal_count": discovery_summary.get(
+            "deterministic_proposal_count"
+        ),
         "ai_two_pass_review_status": ai_review_status or None,
         "ai_fail_closed": bool(discovery_summary.get("ai_fail_closed")),
         "ai_review_blocker_state": discovery_summary.get("ai_review_blocker_state"),
@@ -1409,7 +1798,9 @@ def _swing_lifecycle_handoff_status(
             discovery_summary.get("sim_auto_downgraded_by_review_count"),
             0,
         ),
-        "sim_auto_review_shard_count": _safe_int(discovery_summary.get("sim_auto_review_shard_count"), 0),
+        "sim_auto_review_shard_count": _safe_int(
+            discovery_summary.get("sim_auto_review_shard_count"), 0
+        ),
         "stage_unknown_candidate_ids": sorted(set(stage_unknown_candidate_ids)),
         "raw_swing_event_count": raw_swing_event_count,
         "ldm_consumed_event_count": ldm_consumed_event_count,
@@ -1424,11 +1815,15 @@ def _swing_lifecycle_handoff_status(
         "interpretation": (
             "Swing LDM candidates/workorders propagated through EV, runtime summary, workorder, and verifier."
             if matrix and not missing and not warnings
-            else "Swing LDM AI two-pass review is fail-closed; sim-auto promotion is blocked and must be surfaced."
-            if matrix and warnings and not missing
-            else "Swing LDM generated output but one or more downstream consumers dropped it."
-            if matrix
-            else "Swing LDM report missing"
+            else (
+                "Swing LDM AI two-pass review is fail-closed; sim-auto promotion is blocked and must be surfaced."
+                if matrix and warnings and not missing
+                else (
+                    "Swing LDM generated output but one or more downstream consumers dropped it."
+                    if matrix
+                    else "Swing LDM report missing"
+                )
+            )
         ),
     }
 
@@ -1468,11 +1863,15 @@ def _entry_bucket_handoff_status(
     runtime_candidate_ids = _collect_entry_bucket_candidate_ids(runtime_summary)
     actual_order_ids = {
         str(item.get("order_id"))
-        for item in (workorder.get("orders") if isinstance(workorder.get("orders"), list) else [])
+        for item in (
+            workorder.get("orders") if isinstance(workorder.get("orders"), list) else []
+        )
         if isinstance(item, dict) and item.get("order_id")
     }
     missing_ev_candidates = sorted(set(expected_candidate_ids) - ev_candidate_ids)
-    missing_runtime_summary_candidates = sorted(set(expected_candidate_ids) - runtime_candidate_ids)
+    missing_runtime_summary_candidates = sorted(
+        set(expected_candidate_ids) - runtime_candidate_ids
+    )
     missing_workorder_order_ids = sorted(set(expected_order_ids) - actual_order_ids)
     missing: list[str] = []
     if missing_ev_candidates:
@@ -1535,11 +1934,15 @@ def _submit_bucket_handoff_status(
     runtime_candidate_ids = _collect_submit_bucket_candidate_ids(runtime_summary)
     actual_order_ids = {
         str(item.get("order_id"))
-        for item in (workorder.get("orders") if isinstance(workorder.get("orders"), list) else [])
+        for item in (
+            workorder.get("orders") if isinstance(workorder.get("orders"), list) else []
+        )
         if isinstance(item, dict) and item.get("order_id")
     }
     missing_ev_candidates = sorted(set(expected_candidate_ids) - ev_candidate_ids)
-    missing_runtime_summary_candidates = sorted(set(expected_candidate_ids) - runtime_candidate_ids)
+    missing_runtime_summary_candidates = sorted(
+        set(expected_candidate_ids) - runtime_candidate_ids
+    )
     missing_workorder_order_ids = sorted(set(expected_order_ids) - actual_order_ids)
     missing: list[str] = []
     if missing_ev_candidates:
@@ -1562,9 +1965,11 @@ def _submit_bucket_handoff_status(
         "interpretation": (
             "LDM submit bucket attribution propagated to threshold EV, runtime summary, and code workorder."
             if attribution and not missing
-            else "LDM submit bucket output was generated but one or more downstream consumers dropped it."
-            if attribution
-            else "LDM submit bucket attribution missing"
+            else (
+                "LDM submit bucket output was generated but one or more downstream consumers dropped it."
+                if attribution
+                else "LDM submit bucket attribution missing"
+            )
         ),
     }
 
@@ -1581,7 +1986,11 @@ def _buy_funnel_submit_drought_handoff_status(
         if isinstance(buy_funnel.get("classification"), dict)
         else {}
     )
-    matches = classification.get("matches") if isinstance(classification.get("matches"), list) else []
+    matches = (
+        classification.get("matches")
+        if isinstance(classification.get("matches"), list)
+        else []
+    )
     root_cause = (
         classification.get("submit_drought_root_cause")
         if isinstance(classification.get("submit_drought_root_cause"), dict)
@@ -1601,7 +2010,11 @@ def _buy_funnel_submit_drought_handoff_status(
         if isinstance(buy_funnel.get("entry_submit_drought_contract"), dict)
         else {}
     )
-    followup = buy_funnel.get("followup") if isinstance(buy_funnel.get("followup"), dict) else {}
+    followup = (
+        buy_funnel.get("followup")
+        if isinstance(buy_funnel.get("followup"), dict)
+        else {}
+    )
     handoff_present = bool(
         critical
         and contract.get("critical") is True
@@ -1609,7 +2022,9 @@ def _buy_funnel_submit_drought_handoff_status(
     )
     actual_order_ids = {
         str(item.get("order_id"))
-        for item in (workorder.get("orders") if isinstance(workorder.get("orders"), list) else [])
+        for item in (
+            workorder.get("orders") if isinstance(workorder.get("orders"), list) else []
+        )
         if isinstance(item, dict) and item.get("order_id")
     }
     ldm_submit = (
@@ -1617,28 +2032,43 @@ def _buy_funnel_submit_drought_handoff_status(
         if isinstance(ldm_report.get("submit_bucket_attribution"), dict)
         else {}
     )
-    ldm_submit_summary = ldm_submit.get("summary") if isinstance(ldm_submit.get("summary"), dict) else {}
-    ev_entry_funnel = ev_report.get("entry_funnel") if isinstance(ev_report.get("entry_funnel"), dict) else {}
-    ev_buy = ev_report.get("buy_funnel_sentinel") if isinstance(ev_report.get("buy_funnel_sentinel"), dict) else {}
+    ldm_submit_summary = (
+        ldm_submit.get("summary") if isinstance(ldm_submit.get("summary"), dict) else {}
+    )
+    ev_entry_funnel = (
+        ev_report.get("entry_funnel")
+        if isinstance(ev_report.get("entry_funnel"), dict)
+        else {}
+    )
+    ev_buy = (
+        ev_report.get("buy_funnel_sentinel")
+        if isinstance(ev_report.get("buy_funnel_sentinel"), dict)
+        else {}
+    )
     runtime_buy = (
         runtime_summary.get("buy_funnel_sentinel")
         if isinstance(runtime_summary.get("buy_funnel_sentinel"), dict)
         else {}
     )
     runtime_summary_section = (
-        runtime_summary.get("summary") if isinstance(runtime_summary.get("summary"), dict) else {}
+        runtime_summary.get("summary")
+        if isinstance(runtime_summary.get("summary"), dict)
+        else {}
     )
     missing: list[str] = []
     if critical:
-        missing_order_ids = sorted(set(ENTRY_SUBMIT_DROUGHT_REQUIRED_ORDER_IDS) - actual_order_ids)
+        missing_order_ids = sorted(
+            set(ENTRY_SUBMIT_DROUGHT_REQUIRED_ORDER_IDS) - actual_order_ids
+        )
         if missing_order_ids:
-            missing.append("code_improvement_workorder_entry_submit_drought_orders_missing")
+            missing.append(
+                "code_improvement_workorder_entry_submit_drought_orders_missing"
+            )
         if not ldm_submit:
             missing.append("ldm_submit_bucket_attribution_missing")
-        elif (
-            _safe_int(quote_freshness_attribution.get("refresh_attempted_count"), 0) > 0
-            and not ldm_submit_summary.get("quote_freshness_attribution_present")
-        ):
+        elif _safe_int(
+            quote_freshness_attribution.get("refresh_attempted_count"), 0
+        ) > 0 and not ldm_submit_summary.get("quote_freshness_attribution_present"):
             missing.append("ldm_submit_quote_freshness_attribution_missing")
         if ev_buy.get("primary") != "SUBMIT_DROUGHT_CRITICAL":
             missing.append("threshold_cycle_ev_buy_funnel_sentinel_missing")
@@ -1647,10 +2077,18 @@ def _buy_funnel_submit_drought_handoff_status(
         if runtime_buy.get("primary") != "SUBMIT_DROUGHT_CRITICAL":
             missing.append("runtime_approval_summary_buy_funnel_sentinel_missing")
         if not runtime_summary_section.get("entry_submit_drought_handoff_selected"):
-            missing.append("runtime_approval_summary_entry_submit_drought_handoff_missing")
-    refresh_attempted_count = _safe_int(quote_freshness_attribution.get("refresh_attempted_count"), 0)
-    refresh_applied_count = _safe_int(quote_freshness_attribution.get("refresh_applied_count"), 0)
-    latency_pass_recovered_count = _safe_int(quote_freshness_attribution.get("latency_pass_recovered_count"), 0)
+            missing.append(
+                "runtime_approval_summary_entry_submit_drought_handoff_missing"
+            )
+    refresh_attempted_count = _safe_int(
+        quote_freshness_attribution.get("refresh_attempted_count"), 0
+    )
+    refresh_applied_count = _safe_int(
+        quote_freshness_attribution.get("refresh_applied_count"), 0
+    )
+    latency_pass_recovered_count = _safe_int(
+        quote_freshness_attribution.get("latency_pass_recovered_count"), 0
+    )
     quote_freshness_attribution_inconsistent = (
         (refresh_attempted_count <= 0 and latency_pass_recovered_count > 0)
         or (refresh_attempted_count <= 0 and refresh_applied_count > 0)
@@ -1661,7 +2099,9 @@ def _buy_funnel_submit_drought_handoff_status(
         root_cause_open_reasons.append("unknown_latency_reason_present")
     if bool(root_cause.get("unknown_latency_workorder_required")):
         root_cause_open_reasons.append("unknown_latency_workorder_required")
-    if refresh_attempted_count > 0 and not ldm_submit_summary.get("quote_freshness_attribution_present"):
+    if refresh_attempted_count > 0 and not ldm_submit_summary.get(
+        "quote_freshness_attribution_present"
+    ):
         root_cause_open_reasons.append("ldm_submit_quote_freshness_attribution_missing")
     if quote_freshness_attribution_inconsistent:
         root_cause_open_reasons.append("quote_freshness_attribution_inconsistent")
@@ -1674,12 +2114,20 @@ def _buy_funnel_submit_drought_handoff_status(
     else:
         root_cause_closure_status = "not_applicable"
     return {
-        "status": "warning" if missing and handoff_present else ("fail" if missing else ("pass" if critical else "not_applicable")),
+        "status": (
+            "warning"
+            if missing and handoff_present
+            else ("fail" if missing else ("pass" if critical else "not_applicable"))
+        ),
         "critical": critical,
         "primary": classification.get("primary"),
         "matches": matches,
-        "handoff_status": "pass" if handoff_present else ("fail" if critical else "not_applicable"),
-        "downstream_closure_status": "fail" if missing else ("pass" if critical else "not_applicable"),
+        "handoff_status": (
+            "pass" if handoff_present else ("fail" if critical else "not_applicable")
+        ),
+        "downstream_closure_status": (
+            "fail" if missing else ("pass" if critical else "not_applicable")
+        ),
         "root_cause_closure_status": root_cause_closure_status,
         "artifact_regeneration_required": quote_freshness_attribution_inconsistent,
         "root_cause_open_reasons": root_cause_open_reasons,
@@ -1689,7 +2137,8 @@ def _buy_funnel_submit_drought_handoff_status(
             or root_cause.get("unknown_latency_reason_count")
             or quote_freshness_attribution_inconsistent
         ),
-        "submit_drought_root_cause_counts": root_cause.get("latency_root_cause_counts") or {},
+        "submit_drought_root_cause_counts": root_cause.get("latency_root_cause_counts")
+        or {},
         "submit_drought_quote_freshness_attribution": quote_freshness_attribution,
         "submit_drought_quote_freshness_subreason_counts": (
             quote_freshness_attribution.get("refresh_subreason_counts") or {}
@@ -1703,13 +2152,19 @@ def _buy_funnel_submit_drought_handoff_status(
         "submit_drought_unknown_latency_workorder_required": bool(
             root_cause.get("unknown_latency_workorder_required")
         ),
-        "expected_workorder_order_ids": ENTRY_SUBMIT_DROUGHT_REQUIRED_ORDER_IDS if critical else [],
+        "expected_workorder_order_ids": (
+            ENTRY_SUBMIT_DROUGHT_REQUIRED_ORDER_IDS if critical else []
+        ),
         "actual_workorder_order_ids": sorted(actual_order_ids),
         "missing_workorder_order_ids": (
-            sorted(set(ENTRY_SUBMIT_DROUGHT_REQUIRED_ORDER_IDS) - actual_order_ids) if critical else []
+            sorted(set(ENTRY_SUBMIT_DROUGHT_REQUIRED_ORDER_IDS) - actual_order_ids)
+            if critical
+            else []
         ),
         "ldm_submit_bucket_attribution_present": bool(ldm_submit),
-        "ldm_submit_real_submitted_row_count": _safe_int(ldm_submit_summary.get("real_submitted_row_count"), 0),
+        "ldm_submit_real_submitted_row_count": _safe_int(
+            ldm_submit_summary.get("real_submitted_row_count"), 0
+        ),
         "ldm_submit_quote_freshness_attribution_present": bool(
             ldm_submit_summary.get("quote_freshness_attribution_present")
         ),
@@ -1723,20 +2178,28 @@ def _buy_funnel_submit_drought_handoff_status(
             ldm_submit_summary.get("missing_broker_order_key_count"),
             0,
         ),
-        "ldm_submit_missing_broker_order_key_rate": ldm_submit_summary.get("missing_broker_order_key_rate"),
+        "ldm_submit_missing_broker_order_key_rate": ldm_submit_summary.get(
+            "missing_broker_order_key_rate"
+        ),
         "ldm_submit_bot_history_backfill_candidate_count": _safe_int(
-            ldm_submit_summary.get("bot_history_broker_order_key_backfill_candidate_count"),
+            ldm_submit_summary.get(
+                "bot_history_broker_order_key_backfill_candidate_count"
+            ),
             0,
         ),
         "ldm_submit_bot_history_backfill_full_coverage": bool(
-            ldm_submit_summary.get("bot_history_broker_order_key_backfill_full_coverage")
+            ldm_submit_summary.get(
+                "bot_history_broker_order_key_backfill_full_coverage"
+            )
         ),
         "ldm_submit_bot_history_exact_mapping_count": _safe_int(
             ldm_submit_summary.get("bot_history_broker_order_key_exact_mapping_count"),
             0,
         ),
         "ldm_submit_bot_history_exact_mapping_full_coverage": bool(
-            ldm_submit_summary.get("bot_history_broker_order_key_exact_mapping_full_coverage")
+            ldm_submit_summary.get(
+                "bot_history_broker_order_key_exact_mapping_full_coverage"
+            )
         ),
         "ldm_submit_post_submit_provenance_join_resolution": ldm_submit_summary.get(
             "post_submit_provenance_join_resolution"
@@ -1753,9 +2216,11 @@ def _buy_funnel_submit_drought_handoff_status(
         "interpretation": (
             "BUY Funnel Sentinel SUBMIT_DROUGHT_CRITICAL propagated through workorder, LDM submit attribution, EV, and runtime summary."
             if critical and not missing
-            else "BUY Funnel Sentinel critical source was generated but one or more downstream consumers dropped it."
-            if critical
-            else "BUY Funnel Sentinel submit drought is not critical."
+            else (
+                "BUY Funnel Sentinel critical source was generated but one or more downstream consumers dropped it."
+                if critical
+                else "BUY Funnel Sentinel submit drought is not critical."
+            )
         ),
     }
 
@@ -1770,21 +2235,37 @@ def _warning_followup_summary(
     runtime_apply_gap_audit: dict[str, Any],
     lifecycle_bucket_discovery_handoff: dict[str, Any],
 ) -> dict[str, Any]:
-    adm_summary = scalp_entry_adm.get("summary") if isinstance(scalp_entry_adm.get("summary"), dict) else {}
+    adm_summary = (
+        scalp_entry_adm.get("summary")
+        if isinstance(scalp_entry_adm.get("summary"), dict)
+        else {}
+    )
     adm_unknown = (
         adm_summary.get("unknown_bucket_summary")
         if isinstance(adm_summary.get("unknown_bucket_summary"), dict)
         else {}
     )
     currentness_summary = (
-        currentness_audit.get("summary") if isinstance(currentness_audit.get("summary"), dict) else {}
+        currentness_audit.get("summary")
+        if isinstance(currentness_audit.get("summary"), dict)
+        else {}
     )
-    currentness_status = str(currentness_audit.get("status") or currentness_summary.get("status") or "").strip()
+    currentness_status = str(
+        currentness_audit.get("status") or currentness_summary.get("status") or ""
+    ).strip()
     ai_review_summary = (
-        pattern_lab_ai_review.get("summary") if isinstance(pattern_lab_ai_review.get("summary"), dict) else {}
+        pattern_lab_ai_review.get("summary")
+        if isinstance(pattern_lab_ai_review.get("summary"), dict)
+        else {}
     )
-    ai_review_status = str(pattern_lab_ai_review.get("status") or ai_review_summary.get("status") or "").strip()
-    discovery_summary = discovery_report.get("summary") if isinstance(discovery_report.get("summary"), dict) else {}
+    ai_review_status = str(
+        pattern_lab_ai_review.get("status") or ai_review_summary.get("status") or ""
+    ).strip()
+    discovery_summary = (
+        discovery_report.get("summary")
+        if isinstance(discovery_report.get("summary"), dict)
+        else {}
+    )
     runtime_gap_summary = (
         runtime_apply_gap_audit.get("summary")
         if isinstance(runtime_apply_gap_audit.get("summary"), dict)
@@ -1794,7 +2275,11 @@ def _warning_followup_summary(
     live_auto_ready = _safe_int(discovery_summary.get("live_auto_apply_ready_count"), 0)
     live_auto_breakdown = {
         "live_auto_apply_ready_count": live_auto_ready,
-        "state_counts": discovery_summary.get("state_counts") if isinstance(discovery_summary.get("state_counts"), dict) else {},
+        "state_counts": (
+            discovery_summary.get("state_counts")
+            if isinstance(discovery_summary.get("state_counts"), dict)
+            else {}
+        ),
         "source_bucket_kind_counts": (
             discovery_summary.get("source_bucket_kind_counts")
             if isinstance(discovery_summary.get("source_bucket_kind_counts"), dict)
@@ -1802,17 +2287,23 @@ def _warning_followup_summary(
         ),
         "runtime_gap_categories": (
             runtime_gap_summary.get("derived_review_category_counts")
-            if isinstance(runtime_gap_summary.get("derived_review_category_counts"), dict)
+            if isinstance(
+                runtime_gap_summary.get("derived_review_category_counts"), dict
+            )
             else {}
         ),
         "source_contract_status": discovery_summary.get("source_contract_status"),
-        "source_contract_change_count": _safe_int(discovery_summary.get("source_contract_change_count"), 0),
+        "source_contract_change_count": _safe_int(
+            discovery_summary.get("source_contract_change_count"), 0
+        ),
         "ai_two_pass_review_status": discovery_summary.get("ai_two_pass_review_status"),
         "positive_edge_source_quality_pass_count": _safe_int(
             runtime_gap_summary.get("positive_edge_source_quality_pass_count"),
             0,
         ),
-        "bridge_blocker_ledger_count": _safe_int(runtime_gap_summary.get("bridge_blocker_ledger_count"), 0),
+        "bridge_blocker_ledger_count": _safe_int(
+            runtime_gap_summary.get("bridge_blocker_ledger_count"), 0
+        ),
         "runtime_uptake_rate_pct": runtime_gap_summary.get("runtime_uptake_rate_pct"),
         "handoff_warnings": lifecycle_bucket_discovery_handoff.get("warnings") or [],
     }
@@ -1830,8 +2321,12 @@ def _warning_followup_summary(
         live_auto_next_action = "Validate bridge/runtime/preopen uptake for the surfaced live-auto candidates."
 
     raw_post_submit_join_gap = bool(
-        buy_funnel_submit_drought_handoff.get("ldm_submit_post_submit_provenance_join_gap_raw")
-        or buy_funnel_submit_drought_handoff.get("ldm_submit_post_submit_provenance_join_gap")
+        buy_funnel_submit_drought_handoff.get(
+            "ldm_submit_post_submit_provenance_join_gap_raw"
+        )
+        or buy_funnel_submit_drought_handoff.get(
+            "ldm_submit_post_submit_provenance_join_gap"
+        )
     )
     items = [
         {
@@ -1840,31 +2335,52 @@ def _warning_followup_summary(
             "decision": (
                 "post_submit_provenance_join_gap_resolved_by_bot_history"
                 if raw_post_submit_join_gap
-                and buy_funnel_submit_drought_handoff.get("ldm_submit_bot_history_exact_mapping_full_coverage")
-                else
-                "post_submit_provenance_join_gap_open"
-                if raw_post_submit_join_gap
+                and buy_funnel_submit_drought_handoff.get(
+                    "ldm_submit_bot_history_exact_mapping_full_coverage"
+                )
                 else (
-                    "pass_no_submit_drought_critical"
-                    if not buy_funnel_submit_drought_handoff.get("critical")
+                    "post_submit_provenance_join_gap_open"
+                    if raw_post_submit_join_gap
                     else (
-                    "artifact_regeneration_required"
-                    if buy_funnel_submit_drought_handoff.get("root_cause_closure_status")
-                    == "artifact_regeneration_required"
-                    else "pass_handoff_root_cause_open"
-                    if buy_funnel_submit_drought_handoff.get("status") == "pass"
-                    and buy_funnel_submit_drought_handoff.get("root_cause_closure_status") == "open"
-                    else "pass_handoff_closed"
-                    if buy_funnel_submit_drought_handoff.get("status") == "pass"
-                    else "needs_followup"
+                        "pass_no_submit_drought_critical"
+                        if not buy_funnel_submit_drought_handoff.get("critical")
+                        else (
+                            "artifact_regeneration_required"
+                            if buy_funnel_submit_drought_handoff.get(
+                                "root_cause_closure_status"
+                            )
+                            == "artifact_regeneration_required"
+                            else (
+                                "pass_handoff_root_cause_open"
+                                if buy_funnel_submit_drought_handoff.get("status")
+                                == "pass"
+                                and buy_funnel_submit_drought_handoff.get(
+                                    "root_cause_closure_status"
+                                )
+                                == "open"
+                                else (
+                                    "pass_handoff_closed"
+                                    if buy_funnel_submit_drought_handoff.get("status")
+                                    == "pass"
+                                    else "needs_followup"
+                                )
+                            )
+                        )
                     )
                 )
             ),
             "evidence": {
                 "status": buy_funnel_submit_drought_handoff.get("status"),
-                "handoff_status": buy_funnel_submit_drought_handoff.get("handoff_status"),
-                "root_cause_closure_status": buy_funnel_submit_drought_handoff.get("root_cause_closure_status"),
-                "root_cause_open_reasons": buy_funnel_submit_drought_handoff.get("root_cause_open_reasons") or [],
+                "handoff_status": buy_funnel_submit_drought_handoff.get(
+                    "handoff_status"
+                ),
+                "root_cause_closure_status": buy_funnel_submit_drought_handoff.get(
+                    "root_cause_closure_status"
+                ),
+                "root_cause_open_reasons": buy_funnel_submit_drought_handoff.get(
+                    "root_cause_open_reasons"
+                )
+                or [],
                 "artifact_regeneration_required": buy_funnel_submit_drought_handoff.get(
                     "artifact_regeneration_required"
                 ),
@@ -1923,33 +2439,52 @@ def _warning_followup_summary(
                 "broker_order_no candidates for report/backfill attribution and keep future order_bundle_submitted "
                 "broker-key emission enabled."
                 if raw_post_submit_join_gap
-                and buy_funnel_submit_drought_handoff.get("ldm_submit_bot_history_exact_mapping_full_coverage")
-                else
-                "Bot history contains same-stock WS buy-order candidates for every missing broker-key row; "
-                "verify exact submit-time mapping before treating today's rows as fill-joinable, and keep future "
-                "order_bundle_submitted broker-key emission enabled."
-                if raw_post_submit_join_gap
-                and buy_funnel_submit_drought_handoff.get("ldm_submit_bot_history_backfill_full_coverage")
-                else
-                "Future order_bundle_submitted rows must emit broker_order_no/order_no/ord_no/order_response_ord_no; "
-                "today's existing submitted rows cannot be treated as fill-joinable until a broker key is recovered."
-                if raw_post_submit_join_gap
+                and buy_funnel_submit_drought_handoff.get(
+                    "ldm_submit_bot_history_exact_mapping_full_coverage"
+                )
                 else (
-                    "No submit drought critical condition was active in this verification context."
-                    if not buy_funnel_submit_drought_handoff.get("critical")
+                    "Bot history contains same-stock WS buy-order candidates for every missing broker-key row; "
+                    "verify exact submit-time mapping before treating today's rows as fill-joinable, and keep future "
+                    "order_bundle_submitted broker-key emission enabled."
+                    if raw_post_submit_join_gap
+                    and buy_funnel_submit_drought_handoff.get(
+                        "ldm_submit_bot_history_backfill_full_coverage"
+                    )
                     else (
-                    "Regenerate buy_funnel_sentinel, lifecycle_decision_matrix submit attribution, conversion_lane, "
-                    "threshold_cycle_postclose_verification, tuning_performance_control_tower, and code_improvement_workorder "
-                    "before re-judging submit drought closure."
-                    if buy_funnel_submit_drought_handoff.get("root_cause_closure_status")
-                    == "artifact_regeneration_required"
-                    else "Handoff is closed but submit drought root-cause counts remain open; keep downstream attribution and "
-                    "unknown latency reason closure tracking until acceptance metrics actually drop."
-                    if buy_funnel_submit_drought_handoff.get("status") == "pass"
-                    and buy_funnel_submit_drought_handoff.get("root_cause_closure_status") == "open"
-                    else "No new implementation from this warning pass; continue postclose attribution and submit blocker tracking."
-                    if buy_funnel_submit_drought_handoff.get("status") == "pass"
-                    else "Restore missing workorder/LDM/EV/runtime-summary submit drought handoff."
+                        "Future order_bundle_submitted rows must emit broker_order_no/order_no/ord_no/order_response_ord_no; "
+                        "today's existing submitted rows cannot be treated as fill-joinable until a broker key is recovered."
+                        if raw_post_submit_join_gap
+                        else (
+                            "No submit drought critical condition was active in this verification context."
+                            if not buy_funnel_submit_drought_handoff.get("critical")
+                            else (
+                                "Regenerate buy_funnel_sentinel, lifecycle_decision_matrix submit attribution, conversion_lane, "
+                                "threshold_cycle_postclose_verification, tuning_performance_control_tower, and code_improvement_workorder "
+                                "before re-judging submit drought closure."
+                                if buy_funnel_submit_drought_handoff.get(
+                                    "root_cause_closure_status"
+                                )
+                                == "artifact_regeneration_required"
+                                else (
+                                    "Handoff is closed but submit drought root-cause counts remain open; keep downstream attribution and "
+                                    "unknown latency reason closure tracking until acceptance metrics actually drop."
+                                    if buy_funnel_submit_drought_handoff.get("status")
+                                    == "pass"
+                                    and buy_funnel_submit_drought_handoff.get(
+                                        "root_cause_closure_status"
+                                    )
+                                    == "open"
+                                    else (
+                                        "No new implementation from this warning pass; continue postclose attribution and submit blocker tracking."
+                                        if buy_funnel_submit_drought_handoff.get(
+                                            "status"
+                                        )
+                                        == "pass"
+                                        else "Restore missing workorder/LDM/EV/runtime-summary submit drought handoff."
+                                    )
+                                )
+                            )
+                        )
                     )
                 )
             ),
@@ -1959,20 +2494,29 @@ def _warning_followup_summary(
         {
             "priority": 2,
             "topic": "scalp_entry_adm_unknown_bucket_source_quality_gap",
-            "decision": "source_quality_followup_required"
-            if "unknown_bucket_source_quality_gap" in (adm_summary.get("warnings") or [])
-            else "pass_no_unknown_bucket_warning",
+            "decision": (
+                "source_quality_followup_required"
+                if "unknown_bucket_source_quality_gap"
+                in (adm_summary.get("warnings") or [])
+                else "pass_no_unknown_bucket_warning"
+            ),
             "evidence": {
                 "status": adm_summary.get("status"),
                 "warnings": adm_summary.get("warnings") or [],
                 "affected_rows": _safe_int(adm_unknown.get("affected_rows"), 0),
                 "affected_rate": adm_unknown.get("affected_rate"),
                 "dimension_counts": adm_unknown.get("dimension_counts") or {},
-                "unknown_root_cause_counts": adm_unknown.get("unknown_root_cause_counts") or {},
+                "unknown_root_cause_counts": adm_unknown.get(
+                    "unknown_root_cause_counts"
+                )
+                or {},
                 "stage_counts": adm_unknown.get("stage_counts") or {},
                 "recommended_route": adm_unknown.get("recommended_route"),
                 "not_available_route": adm_unknown.get("not_available_route"),
-                "lookup_status_counts": adm_summary.get("adm_bucket_lookup_status_counts") or {},
+                "lookup_status_counts": adm_summary.get(
+                    "adm_bucket_lookup_status_counts"
+                )
+                or {},
             },
             "next_action": (
                 "Prioritize source score emission for score_bucket unknown rows, then risk_context/price_resolution "
@@ -1985,18 +2529,24 @@ def _warning_followup_summary(
         {
             "priority": 3,
             "topic": "pattern_lab_warning",
-            "decision": "pass_no_current_handoff_workorder"
-            if (
-                (currentness_status in {"", "pass"})
-                and (ai_review_status in {"", "pass"})
-                and _safe_int(ai_review_summary.get("workorder_count"), 0) == 0
-            )
-            else "warning_review_required",
+            "decision": (
+                "pass_no_current_handoff_workorder"
+                if (
+                    (currentness_status in {"", "pass"})
+                    and (ai_review_status in {"", "pass"})
+                    and _safe_int(ai_review_summary.get("workorder_count"), 0) == 0
+                )
+                else "warning_review_required"
+            ),
             "evidence": {
                 "currentness_status": currentness_status,
-                "currentness_fail_count": _safe_int(currentness_summary.get("fail_count"), 0),
+                "currentness_fail_count": _safe_int(
+                    currentness_summary.get("fail_count"), 0
+                ),
                 "ai_review_status": ai_review_status,
-                "ai_review_workorder_count": _safe_int(ai_review_summary.get("workorder_count"), 0),
+                "ai_review_workorder_count": _safe_int(
+                    ai_review_summary.get("workorder_count"), 0
+                ),
                 "ai_review_warnings": ai_review_summary.get("warnings") or [],
             },
             "next_action": (
@@ -2016,11 +2566,15 @@ def _warning_followup_summary(
             "allowed_runtime_apply": False,
         },
     ]
+
     def _is_warning_followup_decision(item: dict[str, Any]) -> bool:
         decision = str(item.get("decision") or "")
         if decision.startswith("pass"):
             return False
-        return any(token in decision for token in ("warning", "required", "gap_open", "needs_followup"))
+        return any(
+            token in decision
+            for token in ("warning", "required", "gap_open", "needs_followup")
+        )
 
     return {
         "status": (
@@ -2047,9 +2601,21 @@ def _producer_gap_discovery_handoff_status(
             "ai_two_pass_review_status": "missing",
             "interpretation": "producer_gap_discovery artifact missing",
         }
-    summary = producer_gap.get("summary") if isinstance(producer_gap.get("summary"), dict) else {}
-    ai_review = producer_gap.get("ai_two_pass_review") if isinstance(producer_gap.get("ai_two_pass_review"), dict) else {}
-    provider_status = ai_review.get("provider_status") if isinstance(ai_review.get("provider_status"), dict) else {}
+    summary = (
+        producer_gap.get("summary")
+        if isinstance(producer_gap.get("summary"), dict)
+        else {}
+    )
+    ai_review = (
+        producer_gap.get("ai_two_pass_review")
+        if isinstance(producer_gap.get("ai_two_pass_review"), dict)
+        else {}
+    )
+    provider_status = (
+        ai_review.get("provider_status")
+        if isinstance(ai_review.get("provider_status"), dict)
+        else {}
+    )
     ai_status = str(summary.get("ai_two_pass_review_status") or "").strip()
     audit_status = str(summary.get("audit_status") or "").strip()
     ai_review_followup_required = bool(summary.get("ai_review_followup_required"))
@@ -2058,9 +2624,16 @@ def _producer_gap_discovery_handoff_status(
         if isinstance(summary.get("ai_review_followup_reasons"), list)
         else []
     )
-    ai_provider = str(ai_review.get("provider") or summary.get("provider") or provider_status.get("provider") or "").strip()
+    ai_provider = str(
+        ai_review.get("provider")
+        or summary.get("provider")
+        or provider_status.get("provider")
+        or ""
+    ).strip()
     ai_provider_status = str(provider_status.get("status") or "").strip()
-    ai_model = ai_review.get("model") or summary.get("model") or provider_status.get("model")
+    ai_model = (
+        ai_review.get("model") or summary.get("model") or provider_status.get("model")
+    )
     source_orders = (
         producer_gap.get("code_improvement_orders")
         if isinstance(producer_gap.get("code_improvement_orders"), list)
@@ -2078,19 +2651,27 @@ def _producer_gap_discovery_handoff_status(
         for item in source_orders
         if isinstance(item, dict)
         and item.get("order_id")
-        and str(item.get("improvement_type") or item.get("source_workorder_id") or "") == "ai_review_followup"
+        and str(item.get("improvement_type") or item.get("source_workorder_id") or "")
+        == "ai_review_followup"
     }
     high_priority_candidate_ids = {
         f"order_producer_gap_discovery_{_slug(str(item.get('candidate_id') or 'unknown'))}"
-        for item in (producer_gap.get("producer_gap_candidates") if isinstance(producer_gap.get("producer_gap_candidates"), list) else [])
+        for item in (
+            producer_gap.get("producer_gap_candidates")
+            if isinstance(producer_gap.get("producer_gap_candidates"), list)
+            else []
+        )
         if isinstance(item, dict)
         and str(item.get("pattern_type") or "") == "sim_first_coverage_gap"
-        and str(item.get("ai_priority") or item.get("priority") or "high") in {"critical", "high"}
+        and str(item.get("ai_priority") or item.get("priority") or "high")
+        in {"critical", "high"}
     }
     expected_order_ids.update(high_priority_candidate_ids)
     actual_order_ids = {
         str(item.get("order_id"))
-        for item in (workorder.get("orders") if isinstance(workorder.get("orders"), list) else [])
+        for item in (
+            workorder.get("orders") if isinstance(workorder.get("orders"), list) else []
+        )
         if isinstance(item, dict) and item.get("order_id")
     }
     missing_order_ids = sorted(expected_order_ids - actual_order_ids)
@@ -2143,12 +2724,12 @@ def _producer_gap_discovery_handoff_status(
         "selected_source_counts": summary.get("selected_source_counts"),
         "interpretation": (
             "producer gap high-priority orders propagated to code improvement workorder with parsed AI review"
-            if not missing
-            and not parsed_followup_handoff_closed
-            else "producer gap parsed AI review requested follow-up and the follow-up workorder propagated"
-            if not missing
-            and parsed_followup_handoff_closed
-            else "producer gap discovery failed closed or workorder handoff is missing"
+            if not missing and not parsed_followup_handoff_closed
+            else (
+                "producer gap parsed AI review requested follow-up and the follow-up workorder propagated"
+                if not missing and parsed_followup_handoff_closed
+                else "producer gap discovery failed closed or workorder handoff is missing"
+            )
         ),
     }
 
@@ -2167,9 +2748,19 @@ def _stage_hook_workorder_handoff_status(
             "ai_two_pass_review_status": "missing",
             "interpretation": "stage_hook_workorder_discovery artifact missing",
         }
-    summary = stage_hook.get("summary") if isinstance(stage_hook.get("summary"), dict) else {}
-    ai_review = stage_hook.get("ai_two_pass_review") if isinstance(stage_hook.get("ai_two_pass_review"), dict) else {}
-    provider_status = ai_review.get("provider_status") if isinstance(ai_review.get("provider_status"), dict) else {}
+    summary = (
+        stage_hook.get("summary") if isinstance(stage_hook.get("summary"), dict) else {}
+    )
+    ai_review = (
+        stage_hook.get("ai_two_pass_review")
+        if isinstance(stage_hook.get("ai_two_pass_review"), dict)
+        else {}
+    )
+    provider_status = (
+        ai_review.get("provider_status")
+        if isinstance(ai_review.get("provider_status"), dict)
+        else {}
+    )
     ai_status = str(summary.get("ai_two_pass_review_status") or "").strip()
     audit_status = str(summary.get("audit_status") or "").strip()
     ai_review_followup_required = bool(summary.get("ai_review_followup_required"))
@@ -2178,7 +2769,12 @@ def _stage_hook_workorder_handoff_status(
         if isinstance(summary.get("ai_review_followup_reasons"), list)
         else []
     )
-    ai_provider = str(ai_review.get("provider") or summary.get("provider") or provider_status.get("provider") or "").strip()
+    ai_provider = str(
+        ai_review.get("provider")
+        or summary.get("provider")
+        or provider_status.get("provider")
+        or ""
+    ).strip()
     ai_provider_status = str(provider_status.get("status") or "").strip()
     source_orders = (
         stage_hook.get("code_improvement_orders")
@@ -2201,11 +2797,14 @@ def _stage_hook_workorder_handoff_status(
         for item in source_orders
         if isinstance(item, dict)
         and item.get("order_id")
-        and str(item.get("improvement_type") or item.get("source_workorder_id") or "") == "ai_review_followup"
+        and str(item.get("improvement_type") or item.get("source_workorder_id") or "")
+        == "ai_review_followup"
     }
     actual_order_ids = {
         str(item.get("order_id"))
-        for item in (workorder.get("orders") if isinstance(workorder.get("orders"), list) else [])
+        for item in (
+            workorder.get("orders") if isinstance(workorder.get("orders"), list) else []
+        )
         if isinstance(item, dict) and item.get("order_id")
     }
     missing_order_ids = sorted(expected_order_ids - actual_order_ids)
@@ -2216,14 +2815,21 @@ def _stage_hook_workorder_handoff_status(
         and bool(followup_order_ids)
         and not missing_followup_order_ids
     )
-    consumed_ids = set((stage_hook.get("context") or {}).get("consumed_candidate_ids") or [])
+    consumed_ids = set(
+        (stage_hook.get("context") or {}).get("consumed_candidate_ids") or []
+    )
     producer_hook_ids = {
         str(item.get("candidate_id") or "")
-        for item in (producer_gap.get("producer_gap_candidates") if isinstance(producer_gap.get("producer_gap_candidates"), list) else [])
+        for item in (
+            producer_gap.get("producer_gap_candidates")
+            if isinstance(producer_gap.get("producer_gap_candidates"), list)
+            else []
+        )
         if isinstance(item, dict)
         and (
             isinstance(item.get("runtime_hook_candidate_contract"), dict)
-            or str(item.get("pattern_type") or "") in {
+            or str(item.get("pattern_type") or "")
+            in {
                 "sim_entry_selection_gap_missing",
                 "sim_submit_fill_quality_gap_missing",
                 "sim_holding_runner_gap_missing",
@@ -2235,7 +2841,9 @@ def _stage_hook_workorder_handoff_status(
             }
         )
     }
-    unconsumed_hook_candidate_ids = sorted(item for item in producer_hook_ids - consumed_ids if item)
+    unconsumed_hook_candidate_ids = sorted(
+        item for item in producer_hook_ids - consumed_ids if item
+    )
     missing: list[str] = []
     if stage_hook.get("status") == "fail":
         missing.append("stage_hook_workorder_discovery_ai_review_failed")
@@ -2273,12 +2881,12 @@ def _stage_hook_workorder_handoff_status(
         "selected_source_counts": summary.get("selected_source_counts"),
         "interpretation": (
             "stage hook implementation-ready orders propagated to code improvement workorder"
-            if not missing
-            and not parsed_followup_handoff_closed
-            else "stage hook parsed AI review requested follow-up and the follow-up workorder propagated"
-            if not missing
-            and parsed_followup_handoff_closed
-            else "stage hook discovery failed closed or workorder handoff is missing"
+            if not missing and not parsed_followup_handoff_closed
+            else (
+                "stage hook parsed AI review requested follow-up and the follow-up workorder propagated"
+                if not missing and parsed_followup_handoff_closed
+                else "stage hook discovery failed closed or workorder handoff is missing"
+            )
         ),
     }
 
@@ -2292,22 +2900,30 @@ def _bottom_rebound_sim_handoff_status(sim_report: dict[str, Any]) -> dict[str, 
             "interpretation": "swing_strategy_discovery_sim artifact missing",
         }
     source_quality = (
-        sim_report.get("source_quality") if isinstance(sim_report.get("source_quality"), dict) else {}
+        sim_report.get("source_quality")
+        if isinstance(sim_report.get("source_quality"), dict)
+        else {}
     )
     bottom_source = (
         source_quality.get("bottom_rebound_source")
         if isinstance(source_quality.get("bottom_rebound_source"), dict)
         else {}
     )
-    summary = sim_report.get("summary") if isinstance(sim_report.get("summary"), dict) else {}
+    summary = (
+        sim_report.get("summary") if isinstance(sim_report.get("summary"), dict) else {}
+    )
     persist_summary = (
-        sim_report.get("persist_summary") if isinstance(sim_report.get("persist_summary"), dict) else {}
+        sim_report.get("persist_summary")
+        if isinstance(sim_report.get("persist_summary"), dict)
+        else {}
     )
     source_rows = _safe_int(source_quality.get("bottom_rebound_source_rows"))
     included = bottom_source.get("status") == "ok" and source_rows > 0
     selected_count = _safe_int(summary.get("bottom_rebound_selected_candidate_count"))
     arm_count = _safe_int(summary.get("bottom_rebound_arm_count"))
-    persisted_candidates = _safe_int(summary.get("bottom_rebound_persisted_candidate_count"))
+    persisted_candidates = _safe_int(
+        summary.get("bottom_rebound_persisted_candidate_count")
+    )
     persisted_arms = _safe_int(summary.get("bottom_rebound_persisted_arm_count"))
     total_persisted_candidates = _safe_int(persist_summary.get("candidate_rows"))
     total_persisted_arms = _safe_int(persist_summary.get("arm_rows"))
@@ -2335,15 +2951,22 @@ def _bottom_rebound_sim_handoff_status(sim_report: dict[str, Any]) -> dict[str, 
         "interpretation": (
             "bottom_rebound source candidates were selected, armed, and persisted for label/EV handoff"
             if included and not missing
-            else "bottom_rebound source was included but sim DB handoff is incomplete"
-            if included
-            else "bottom_rebound source was absent or blocked; safe-pool-only swing sim path applies"
+            else (
+                "bottom_rebound source was included but sim DB handoff is incomplete"
+                if included
+                else "bottom_rebound source was absent or blocked; safe-pool-only swing sim path applies"
+            )
         ),
     }
 
 
 def _iter_pipeline_event_fields(target_date: str):
-    path = PROJECT_ROOT / "data" / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
+    path = (
+        PROJECT_ROOT
+        / "data"
+        / "pipeline_events"
+        / f"pipeline_events_{target_date}.jsonl"
+    )
     paths = [path] if path.exists() else [path.with_suffix(path.suffix + ".gz")]
     for event_path in paths:
         if not event_path.exists():
@@ -2360,7 +2983,11 @@ def _iter_pipeline_event_fields(target_date: str):
                         continue
                     if not isinstance(item, dict):
                         continue
-                    fields = item.get("fields") if isinstance(item.get("fields"), dict) else item
+                    fields = (
+                        item.get("fields")
+                        if isinstance(item.get("fields"), dict)
+                        else item
+                    )
                     yield fields
         except Exception:
             continue
@@ -2378,10 +3005,16 @@ def _load_json_string_mapping(value: Any) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-_LDM_HYPOTHESIS_RUNTIME_REQUIREMENT_FIELDS = {"entry_score_parent", "entry_source_parent", "submit_quality_parent"}
+_LDM_HYPOTHESIS_RUNTIME_REQUIREMENT_FIELDS = {
+    "entry_score_parent",
+    "entry_source_parent",
+    "submit_quality_parent",
+}
 
 
-def _ldm_hypothesis_matches_requirements(candidate: dict[str, Any], requirements: Any) -> bool:
+def _ldm_hypothesis_matches_requirements(
+    candidate: dict[str, Any], requirements: Any
+) -> bool:
     if not isinstance(requirements, list) or not requirements:
         return False
     for requirement in requirements:
@@ -2423,20 +3056,33 @@ def _ldm_hypothesis_contract_runtime_compatible(hypothesis: dict[str, Any]) -> b
     }
     if not required.issubset(forbidden):
         return False
-    if not forbidden.intersection({"sizing_formula_runtime_apply_without_guard", "position_cap_release"}):
+    if not forbidden.intersection(
+        {"sizing_formula_runtime_apply_without_guard", "position_cap_release"}
+    ):
         return False
-    return isinstance(hypothesis.get("observable_requirements"), list) and bool(hypothesis.get("observable_requirements"))
+    return isinstance(hypothesis.get("observable_requirements"), list) and bool(
+        hypothesis.get("observable_requirements")
+    )
 
 
-def _ldm_hypothesis_contract_drift_status(target_date: str, scalp_catalog: dict[str, Any]) -> dict[str, Any]:
+def _ldm_hypothesis_contract_drift_status(
+    target_date: str, scalp_catalog: dict[str, Any]
+) -> dict[str, Any]:
     plan = (
         scalp_catalog.get("hypothesis_observation_plan")
         if isinstance(scalp_catalog.get("hypothesis_observation_plan"), dict)
         else {}
     )
-    hypotheses = [item for item in (plan.get("hypotheses") or []) if isinstance(item, dict)]
-    compatible_hypotheses = [item for item in hypotheses if _ldm_hypothesis_contract_runtime_compatible(item)]
-    if str(plan.get("schema_version") or "") != "ldm_hypothesis_observation_plan_v1" or not compatible_hypotheses:
+    hypotheses = [
+        item for item in (plan.get("hypotheses") or []) if isinstance(item, dict)
+    ]
+    compatible_hypotheses = [
+        item for item in hypotheses if _ldm_hypothesis_contract_runtime_compatible(item)
+    ]
+    if (
+        str(plan.get("schema_version") or "") != "ldm_hypothesis_observation_plan_v1"
+        or not compatible_hypotheses
+    ):
         return {
             "candidate_feature_event_count": 0,
             "recomputable_match_count": 0,
@@ -2448,16 +3094,24 @@ def _ldm_hypothesis_contract_drift_status(target_date: str, scalp_catalog: dict[
     runtime_matched_count = 0
     matched_ids: set[str] = set()
     for fields in _iter_pipeline_event_fields(target_date):
-        candidate = _load_json_string_mapping(fields.get("ldm_hypothesis_candidate_features"))
+        candidate = _load_json_string_mapping(
+            fields.get("ldm_hypothesis_candidate_features")
+        )
         if not candidate:
             continue
         candidate_event_count += 1
         if str(fields.get("ldm_hypothesis_matched") or "").strip().lower() == "true":
             runtime_matched_count += 1
         for hypothesis in compatible_hypotheses:
-            if _ldm_hypothesis_matches_requirements(candidate, hypothesis.get("observable_requirements")):
+            if _ldm_hypothesis_matches_requirements(
+                candidate, hypothesis.get("observable_requirements")
+            ):
                 recomputable_match_count += 1
-                hypothesis_id = str(hypothesis.get("soft_hypothesis_id") or hypothesis.get("ldm_hypothesis_id") or "")
+                hypothesis_id = str(
+                    hypothesis.get("soft_hypothesis_id")
+                    or hypothesis.get("ldm_hypothesis_id")
+                    or ""
+                )
                 if hypothesis_id:
                     matched_ids.add(hypothesis_id)
                 break
@@ -2491,19 +3145,32 @@ def _active_sim_priority_handoff_status(
         for item in (scalp_catalog.get("active_sim_priority_seeds") or [])
         if isinstance(item, dict) and str(item.get("active_seed_id") or "").strip()
     ]
-    if scalp_catalog and scalp_catalog.get("schema_version") != "scalp_sim_policy_catalog_v1":
+    if (
+        scalp_catalog
+        and scalp_catalog.get("schema_version") != "scalp_sim_policy_catalog_v1"
+    ):
         missing.append("active_sim_priority_catalog_schema_invalid")
     producer_seed_ids = {str(item.get("active_seed_id")) for item in producer_seeds}
     catalog_seed_ids = {str(item.get("active_seed_id")) for item in catalog_seeds}
-    active_seed_ids = {str(item.get("active_seed_id")) for item in catalog_seeds if str(item.get("status") or "") == "active"}
+    active_seed_ids = {
+        str(item.get("active_seed_id"))
+        for item in catalog_seeds
+        if str(item.get("status") or "") == "active"
+    }
     inactive_seed_ids = catalog_seed_ids - active_seed_ids
     if producer_seed_ids and not catalog_seed_ids:
         missing.append("active_sim_priority_catalog_seed_missing")
     if producer_seed_ids and producer_seed_ids - catalog_seed_ids:
         missing.append("active_sim_priority_producer_catalog_key_mismatch")
     for seed in catalog_seeds:
-        prefix = seed.get("observable_prefix") if isinstance(seed.get("observable_prefix"), dict) else {}
-        if not str(seed.get("source_parent_bucket_id") or "").strip() or str(seed.get("status") or "") not in {"active", "cooldown", "retired"}:
+        prefix = (
+            seed.get("observable_prefix")
+            if isinstance(seed.get("observable_prefix"), dict)
+            else {}
+        )
+        if not str(seed.get("source_parent_bucket_id") or "").strip() or str(
+            seed.get("status") or ""
+        ) not in {"active", "cooldown", "retired"}:
             missing.append("active_sim_priority_seed_required_key_missing")
             break
         if str(seed.get("status") or "") == "active" and (
@@ -2512,10 +3179,18 @@ def _active_sim_priority_handoff_status(
         ):
             missing.append("active_sim_priority_seed_observable_prefix_missing")
             break
-        if any(str(key) not in ACTIVE_SIM_PRIORITY_OBSERVABLE_PREFIX_KEYS for key in prefix):
-            missing.append("active_sim_priority_seed_observable_prefix_forbidden_dimension")
+        if any(
+            str(key) not in ACTIVE_SIM_PRIORITY_OBSERVABLE_PREFIX_KEYS for key in prefix
+        ):
+            missing.append(
+                "active_sim_priority_seed_observable_prefix_forbidden_dimension"
+            )
             break
-        if seed.get("actual_order_submitted") is True or seed.get("broker_order_forbidden") is not True or seed.get("runtime_effect") is not False:
+        if (
+            seed.get("actual_order_submitted") is True
+            or seed.get("broker_order_forbidden") is not True
+            or seed.get("runtime_effect") is not False
+        ):
             missing.append("active_sim_priority_forbidden_contract_violation")
             break
 
@@ -2524,19 +3199,38 @@ def _active_sim_priority_handoff_status(
         for item in (swing_catalog.get("active_arm_priority_policies") or [])
         if isinstance(item, dict) and str(item.get("priority_policy_id") or "").strip()
     ]
-    if swing_catalog and swing_catalog.get("schema_version") != "swing_sim_policy_catalog_v1":
+    if (
+        swing_catalog
+        and swing_catalog.get("schema_version") != "swing_sim_policy_catalog_v1"
+    ):
         missing.append("swing_active_arm_priority_catalog_schema_invalid")
     swing_policy_ids = {str(item.get("priority_policy_id")) for item in swing_policies}
-    active_swing_policy_ids = {str(item.get("priority_policy_id")) for item in swing_policies if str(item.get("status") or "") == "active"}
+    active_swing_policy_ids = {
+        str(item.get("priority_policy_id"))
+        for item in swing_policies
+        if str(item.get("status") or "") == "active"
+    }
     inactive_swing_policy_ids = swing_policy_ids - active_swing_policy_ids
     for policy in swing_policies:
-        if str(policy.get("status") or "") not in {"active", "cooldown", "retired"} or not str(policy.get("source_report_date") or "").strip():
+        if (
+            str(policy.get("status") or "") not in {"active", "cooldown", "retired"}
+            or not str(policy.get("source_report_date") or "").strip()
+        ):
             missing.append("swing_active_arm_priority_required_key_missing")
             break
-        if str(policy.get("status") or "") == "active" and not str(policy.get("priority_arm_id") or policy.get("priority_bucket_id") or "").strip():
+        if (
+            str(policy.get("status") or "") == "active"
+            and not str(
+                policy.get("priority_arm_id") or policy.get("priority_bucket_id") or ""
+            ).strip()
+        ):
             missing.append("swing_active_arm_priority_match_key_missing")
             break
-        if policy.get("actual_order_submitted") is True or policy.get("broker_order_forbidden") is not True or policy.get("runtime_effect") is not False:
+        if (
+            policy.get("actual_order_submitted") is True
+            or policy.get("broker_order_forbidden") is not True
+            or policy.get("runtime_effect") is not False
+        ):
             missing.append("swing_active_arm_priority_forbidden_contract_violation")
             break
 
@@ -2546,7 +3240,11 @@ def _active_sim_priority_handoff_status(
             if payload.get("selected") is True and payload.get("family"):
                 found.add(str(payload.get("family")))
             for key, value in payload.items():
-                if key == "family" and payload.get("decision_reason") and payload.get("selected") is not False:
+                if (
+                    key == "family"
+                    and payload.get("decision_reason")
+                    and payload.get("selected") is not False
+                ):
                     found.add(str(value))
                 else:
                     found.update(collect_selected_families(value))
@@ -2556,6 +3254,7 @@ def _active_sim_priority_handoff_status(
         return found
 
     selected_families = collect_selected_families(preopen_apply)
+
     def collect_values(payload: Any, key_name: str) -> set[str]:
         found: set[str] = set()
         if isinstance(payload, dict):
@@ -2572,15 +3271,31 @@ def _active_sim_priority_handoff_status(
         return found
 
     preopen_seed_ids = collect_values(preopen_apply, "active_sim_priority_seed_ids")
-    preopen_swing_policy_ids = collect_values(preopen_apply, "active_arm_priority_policy_ids")
-    preopen_source_date = str(preopen_apply.get("source_date") or "").strip() if isinstance(preopen_apply, dict) else ""
-    preopen_catalog_due_for_target = not preopen_source_date or preopen_source_date >= target_date
-    due_active_seed_ids = active_seed_ids if preopen_catalog_due_for_target else active_seed_ids & preopen_seed_ids
+    preopen_swing_policy_ids = collect_values(
+        preopen_apply, "active_arm_priority_policy_ids"
+    )
+    preopen_source_date = (
+        str(preopen_apply.get("source_date") or "").strip()
+        if isinstance(preopen_apply, dict)
+        else ""
+    )
+    preopen_catalog_due_for_target = (
+        not preopen_source_date or preopen_source_date >= target_date
+    )
+    due_active_seed_ids = (
+        active_seed_ids
+        if preopen_catalog_due_for_target
+        else active_seed_ids & preopen_seed_ids
+    )
     due_active_swing_policy_ids = (
-        active_swing_policy_ids if preopen_catalog_due_for_target else active_swing_policy_ids & preopen_swing_policy_ids
+        active_swing_policy_ids
+        if preopen_catalog_due_for_target
+        else active_swing_policy_ids & preopen_swing_policy_ids
     )
     pending_active_seed_ids = active_seed_ids - due_active_seed_ids
-    pending_active_swing_policy_ids = active_swing_policy_ids - due_active_swing_policy_ids
+    pending_active_swing_policy_ids = (
+        active_swing_policy_ids - due_active_swing_policy_ids
+    )
     if (active_seed_ids or active_swing_policy_ids) and preopen_apply:
         if due_active_seed_ids and "scalp_sim_auto_approval" not in selected_families:
             missing.append("active_sim_priority_preopen_handoff_missing")
@@ -2588,26 +3303,39 @@ def _active_sim_priority_handoff_status(
             missing.append("active_sim_priority_preopen_handoff_missing")
         if pending_active_seed_ids:
             next_preopen_pending.append("active_sim_priority_preopen_handoff_pending")
-        if due_active_swing_policy_ids and "swing_sim_auto_approval" not in selected_families:
+        if (
+            due_active_swing_policy_ids
+            and "swing_sim_auto_approval" not in selected_families
+        ):
             missing.append("swing_active_arm_priority_preopen_handoff_missing")
         elif due_active_swing_policy_ids and not preopen_swing_policy_ids:
             warnings.append("active_sim_priority_preopen_handoff_pending")
-        elif due_active_swing_policy_ids and not due_active_swing_policy_ids.issubset(preopen_swing_policy_ids):
+        elif due_active_swing_policy_ids and not due_active_swing_policy_ids.issubset(
+            preopen_swing_policy_ids
+        ):
             warnings.append("swing_active_arm_priority_preopen_handoff_pending")
         if pending_active_swing_policy_ids:
-            next_preopen_pending.append("swing_active_arm_priority_preopen_handoff_pending")
+            next_preopen_pending.append(
+                "swing_active_arm_priority_preopen_handoff_pending"
+            )
     elif active_seed_ids or active_swing_policy_ids:
         if active_seed_ids:
             next_preopen_pending.append("active_sim_priority_preopen_handoff_pending")
         if active_swing_policy_ids:
-            next_preopen_pending.append("swing_active_arm_priority_preopen_handoff_pending")
+            next_preopen_pending.append(
+                "swing_active_arm_priority_preopen_handoff_pending"
+            )
 
     def truthy(value: Any) -> bool:
         return value is True or str(value).strip().lower() in {"true", "1", "yes"}
 
-    referenced_scalp_catalog_cache: dict[str, tuple[set[str], set[str], dict[str, set[str]]]] = {}
+    referenced_scalp_catalog_cache: dict[
+        str, tuple[set[str], set[str], dict[str, set[str]]]
+    ] = {}
 
-    def referenced_scalp_catalog_seed_sets(path_value: Any) -> tuple[set[str], set[str], dict[str, set[str]]]:
+    def referenced_scalp_catalog_seed_sets(
+        path_value: Any,
+    ) -> tuple[set[str], set[str], dict[str, set[str]]]:
         path_text = str(path_value or "").strip()
         if not path_text:
             return set(), set(), {}
@@ -2623,17 +3351,31 @@ def _active_sim_priority_handoff_status(
             if isinstance(item, dict) and str(item.get("active_seed_id") or "").strip()
         ]
         all_ids = {str(item.get("active_seed_id")) for item in seeds}
-        active_ids = {str(item.get("active_seed_id")) for item in seeds if str(item.get("status") or "") == "active"}
+        active_ids = {
+            str(item.get("active_seed_id"))
+            for item in seeds
+            if str(item.get("status") or "") == "active"
+        }
         active_ids_by_prefix: dict[str, set[str]] = {}
         for item in seeds:
             if str(item.get("status") or "") != "active":
                 continue
-            prefix = item.get("observable_prefix") if isinstance(item.get("observable_prefix"), dict) else {}
-            prefix_key = json.dumps(prefix, ensure_ascii=True, sort_keys=True) if prefix else ""
+            prefix = (
+                item.get("observable_prefix")
+                if isinstance(item.get("observable_prefix"), dict)
+                else {}
+            )
+            prefix_key = (
+                json.dumps(prefix, ensure_ascii=True, sort_keys=True) if prefix else ""
+            )
             seed_id = str(item.get("active_seed_id") or "").strip()
             if prefix_key and seed_id:
                 active_ids_by_prefix.setdefault(prefix_key, set()).add(seed_id)
-        referenced_scalp_catalog_cache[path_text] = (all_ids, all_ids - active_ids, active_ids_by_prefix)
+        referenced_scalp_catalog_cache[path_text] = (
+            all_ids,
+            all_ids - active_ids,
+            active_ids_by_prefix,
+        )
         return referenced_scalp_catalog_cache[path_text]
 
     candidate_prefix_counts: dict[str, int] = {}
@@ -2644,7 +3386,9 @@ def _active_sim_priority_handoff_status(
     unknown_consumed: set[str] = set()
     stale_alias_consumed: set[str] = set()
     for fields in _iter_pipeline_event_fields(target_date):
-        prefix_raw = str(fields.get("active_seed_candidate_observable_prefix") or "").strip()
+        prefix_raw = str(
+            fields.get("active_seed_candidate_observable_prefix") or ""
+        ).strip()
         if prefix_raw:
             prefix_mapping = _load_json_string_mapping(prefix_raw)
             prefix_key = (
@@ -2652,25 +3396,33 @@ def _active_sim_priority_handoff_status(
                 if prefix_mapping
                 else prefix_raw
             )
-            candidate_prefix_counts[prefix_key] = candidate_prefix_counts.get(prefix_key, 0) + 1
+            candidate_prefix_counts[prefix_key] = (
+                candidate_prefix_counts.get(prefix_key, 0) + 1
+            )
         seed_id = str(fields.get("active_seed_id") or "").strip()
         if seed_id:
             observed_seed_ids.add(seed_id)
-            runtime_catalog_ids, runtime_inactive_ids, runtime_active_ids_by_prefix = referenced_scalp_catalog_seed_sets(
-                fields.get("scalp_sim_auto_policy_file")
+            runtime_catalog_ids, runtime_inactive_ids, runtime_active_ids_by_prefix = (
+                referenced_scalp_catalog_seed_sets(
+                    fields.get("scalp_sim_auto_policy_file")
+                )
             )
             if seed_id in runtime_catalog_ids:
                 referenced_runtime_seed_ids.add(seed_id)
             elif seed_id in preopen_seed_ids:
                 referenced_runtime_seed_ids.add(seed_id)
-            prefix_raw = str(fields.get("active_seed_candidate_observable_prefix") or "").strip()
+            prefix_raw = str(
+                fields.get("active_seed_candidate_observable_prefix") or ""
+            ).strip()
             prefix_mapping = _load_json_string_mapping(prefix_raw) if prefix_raw else {}
             runtime_prefix_key = (
                 json.dumps(prefix_mapping, ensure_ascii=True, sort_keys=True)
                 if isinstance(prefix_mapping, dict) and prefix_mapping
                 else prefix_raw
             )
-            same_prefix_active_ids = runtime_active_ids_by_prefix.get(runtime_prefix_key, set())
+            same_prefix_active_ids = runtime_active_ids_by_prefix.get(
+                runtime_prefix_key, set()
+            )
             # Runtime events must be validated against the policy file that was
             # actually loaded by that runtime.  The postclose catalog for
             # target_date can legitimately move yesterday's active seeds to
@@ -2684,10 +3436,18 @@ def _active_sim_priority_handoff_status(
                 and seed_id in inactive_seed_ids
             ):
                 inactive_consumed.add(seed_id)
-            elif seed_id not in catalog_seed_ids and seed_id not in runtime_catalog_ids and seed_id not in preopen_seed_ids:
+            elif (
+                seed_id not in catalog_seed_ids
+                and seed_id not in runtime_catalog_ids
+                and seed_id not in preopen_seed_ids
+            ):
                 unknown_consumed.add(seed_id)
-            if truthy(fields.get("actual_order_submitted")) or not truthy(fields.get("broker_order_forbidden")):
-                missing.append("active_sim_priority_runtime_forbidden_contract_violation")
+            if truthy(fields.get("actual_order_submitted")) or not truthy(
+                fields.get("broker_order_forbidden")
+            ):
+                missing.append(
+                    "active_sim_priority_runtime_forbidden_contract_violation"
+                )
         policy_id = str(fields.get("priority_policy_id") or "").strip()
         if policy_id:
             observed_swing_policy_ids.add(policy_id)
@@ -2695,7 +3455,11 @@ def _active_sim_priority_handoff_status(
                 inactive_consumed.add(policy_id)
             elif policy_id not in swing_policy_ids:
                 unknown_consumed.add(policy_id)
-    swing_summary = swing_sim_report.get("summary") if isinstance(swing_sim_report.get("summary"), dict) else {}
+    swing_summary = (
+        swing_sim_report.get("summary")
+        if isinstance(swing_sim_report.get("summary"), dict)
+        else {}
+    )
     if _safe_int(swing_summary.get("active_arm_priority_arm_count")) > 0:
         observed_swing_policy_ids.update(active_swing_policy_ids)
     if unknown_consumed:
@@ -2704,31 +3468,43 @@ def _active_sim_priority_handoff_status(
         missing.append("active_sim_priority_inactive_key_consumed")
     if stale_alias_consumed:
         warnings.append("active_sim_priority_stale_seed_alias_consumed")
-    active_seed_runtime_expected = bool(due_active_seed_ids and due_active_seed_ids.issubset(preopen_seed_ids))
+    active_seed_runtime_expected = bool(
+        due_active_seed_ids and due_active_seed_ids.issubset(preopen_seed_ids)
+    )
     active_swing_runtime_expected = bool(
-        due_active_swing_policy_ids and due_active_swing_policy_ids.issubset(preopen_swing_policy_ids)
+        due_active_swing_policy_ids
+        and due_active_swing_policy_ids.issubset(preopen_swing_policy_ids)
     )
     if active_seed_runtime_expected and not (observed_seed_ids & due_active_seed_ids):
         warnings.append("active_sim_priority_runtime_observation_missing")
-    if active_swing_runtime_expected and not (observed_swing_policy_ids & due_active_swing_policy_ids):
+    if active_swing_runtime_expected and not (
+        observed_swing_policy_ids & due_active_swing_policy_ids
+    ):
         warnings.append("swing_active_arm_priority_runtime_observation_missing")
     active_prefixes = {
         json.dumps(seed.get("observable_prefix"), ensure_ascii=True, sort_keys=True)
         for seed in catalog_seeds
-        if str(seed.get("status") or "") == "active" and isinstance(seed.get("observable_prefix"), dict)
+        if str(seed.get("status") or "") == "active"
+        and isinstance(seed.get("observable_prefix"), dict)
     }
     observed_prefixes = set(candidate_prefix_counts)
     prefix_field_names = {
         key
         for prefix in active_prefixes
-        for key in (_load_json_string_mapping(prefix).keys() if isinstance(_load_json_string_mapping(prefix), dict) else [])
+        for key in (
+            _load_json_string_mapping(prefix).keys()
+            if isinstance(_load_json_string_mapping(prefix), dict)
+            else []
+        )
     }
     active_priority_match_absence_diagnosis = {
         "status": "not_applicable",
         "diagnosis": "not_applicable",
         "reason": "active_priority_observed_or_no_active_priority",
         "candidate_prefix_count": sum(candidate_prefix_counts.values()),
-        "top_candidate_prefixes": sorted(candidate_prefix_counts.items(), key=lambda item: item[1], reverse=True)[:5],
+        "top_candidate_prefixes": sorted(
+            candidate_prefix_counts.items(), key=lambda item: item[1], reverse=True
+        )[:5],
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "actual_order_submitted": False,
@@ -2738,13 +3514,27 @@ def _active_sim_priority_handoff_status(
         active_priority_match_absence_diagnosis.update(
             {
                 "status": "fail",
-                "diagnosis": "posterior_dimension_leaked_into_priority"
-                if any("observable_prefix_forbidden_dimension" in item for item in missing)
-                else "catalog_or_preopen_handoff_gap"
-                if any("handoff" in item or "catalog" in item for item in missing)
-                else "inactive_or_unknown_key_consumed"
-                if any("unknown_key" in item or "inactive_key" in item for item in missing)
-                else "contract_or_handoff_gap",
+                "diagnosis": (
+                    "posterior_dimension_leaked_into_priority"
+                    if any(
+                        "observable_prefix_forbidden_dimension" in item
+                        for item in missing
+                    )
+                    else (
+                        "catalog_or_preopen_handoff_gap"
+                        if any(
+                            "handoff" in item or "catalog" in item for item in missing
+                        )
+                        else (
+                            "inactive_or_unknown_key_consumed"
+                            if any(
+                                "unknown_key" in item or "inactive_key" in item
+                                for item in missing
+                            )
+                            else "contract_or_handoff_gap"
+                        )
+                    )
+                ),
                 "reason": ",".join(sorted(set(missing))),
             }
         )
@@ -2755,7 +3545,10 @@ def _active_sim_priority_handoff_status(
         elif not candidate_prefix_counts:
             diagnosis = "runtime_observable_prefix_not_emitted"
             reason = "runtime_events_missing_active_seed_candidate_observable_prefix"
-        elif any(key not in ACTIVE_SIM_PRIORITY_OBSERVABLE_PREFIX_KEYS for key in prefix_field_names):
+        elif any(
+            key not in ACTIVE_SIM_PRIORITY_OBSERVABLE_PREFIX_KEYS
+            for key in prefix_field_names
+        ):
             diagnosis = "posterior_dimension_leaked_into_priority"
             reason = "active_prefix_contains_non_runtime_observable_dimension"
         elif active_prefixes and not (active_prefixes & observed_prefixes):
@@ -2768,7 +3561,19 @@ def _active_sim_priority_handoff_status(
             {"status": "warning", "diagnosis": diagnosis, "reason": reason}
         )
     return {
-        "status": "fail" if missing else ("warning" if warnings else "pass" if (active_seed_ids or active_swing_policy_ids) else "not_applicable"),
+        "status": (
+            "fail"
+            if missing
+            else (
+                "warning"
+                if warnings
+                else (
+                    "pass"
+                    if (active_seed_ids or active_swing_policy_ids)
+                    else "not_applicable"
+                )
+            )
+        ),
         "producer_seed_ids": sorted(producer_seed_ids),
         "catalog_seed_ids": sorted(catalog_seed_ids),
         "active_seed_ids": sorted(active_seed_ids),
@@ -2782,7 +3587,9 @@ def _active_sim_priority_handoff_status(
         "swing_priority_policy_ids": sorted(swing_policy_ids),
         "active_swing_priority_policy_ids": sorted(active_swing_policy_ids),
         "preopen_swing_priority_policy_ids": sorted(preopen_swing_policy_ids),
-        "pending_next_preopen_swing_priority_policy_ids": sorted(pending_active_swing_policy_ids),
+        "pending_next_preopen_swing_priority_policy_ids": sorted(
+            pending_active_swing_policy_ids
+        ),
         "observed_swing_priority_policy_ids": sorted(observed_swing_policy_ids),
         "missing": list(dict.fromkeys(missing)),
         "warnings": list(dict.fromkeys(warnings)),
@@ -2810,8 +3617,16 @@ def _ldm_refinement_consumption_status(
     scalp_catalog: dict[str, Any] | None = None,
     disabled: bool = False,
 ) -> dict[str, Any]:
-    inputs = [item for item in (refinement.get("refinement_inputs") or []) if isinstance(item, dict)]
-    drift = _ldm_hypothesis_contract_drift_status(target_date, scalp_catalog or {}) if target_date else {}
+    inputs = [
+        item
+        for item in (refinement.get("refinement_inputs") or [])
+        if isinstance(item, dict)
+    ]
+    drift = (
+        _ldm_hypothesis_contract_drift_status(target_date, scalp_catalog or {})
+        if target_date
+        else {}
+    )
     if disabled:
         return {
             "status": "disabled",
@@ -2867,8 +3682,12 @@ def _ldm_refinement_consumption_status(
     entries = [item for item in (ledger.get("entries") or []) if isinstance(item, dict)]
     missing: list[str] = []
     warnings: list[str] = []
-    derived_input_count = sum(1 for item in inputs if item.get("derived_from_contract_drift") is True)
-    derived_consumed_count = sum(1 for item in entries if item.get("derived_from_contract_drift") is True)
+    derived_input_count = sum(
+        1 for item in inputs if item.get("derived_from_contract_drift") is True
+    )
+    derived_consumed_count = sum(
+        1 for item in entries if item.get("derived_from_contract_drift") is True
+    )
     if (
         not inputs
         and _safe_int(drift.get("recomputable_match_count")) > 0
@@ -2881,7 +3700,11 @@ def _ldm_refinement_consumption_status(
         missing.append("ldm_refinement_consumption_ledger_failed")
     if inputs and _safe_int(ledger.get("input_count")) < len(inputs):
         missing.append("ldm_refinement_input_count_mismatch")
-    consumed_ids = {str(item.get("refinement_input_id") or "") for item in entries if str(item.get("refinement_input_id") or "")}
+    consumed_ids = {
+        str(item.get("refinement_input_id") or "")
+        for item in entries
+        if str(item.get("refinement_input_id") or "")
+    }
     expected_ids = {
         str(item.get("refinement_input_id") or "")
         for item in inputs
@@ -2890,7 +3713,10 @@ def _ldm_refinement_consumption_status(
     unconsumed_ids = sorted(expected_ids - consumed_ids)
     if unconsumed_ids:
         missing.append("ldm_refinement_inputs_unconsumed")
-    if entries and all(str(item.get("closure_status") or "") == "needs_more_contrastive_sample" for item in entries):
+    if entries and all(
+        str(item.get("closure_status") or "") == "needs_more_contrastive_sample"
+        for item in entries
+    ):
         if any(not str(item.get("closure_reason") or "").strip() for item in entries):
             warnings.append("ldm_refinement_all_needs_more_sample_without_reason")
         else:
@@ -2911,15 +3737,31 @@ def _ldm_refinement_consumption_status(
     runtime_authority_violation_ids = []
     for item in inputs:
         retry_count = _safe_int(item.get("retry_count"))
-        diagnosis = item.get("repeated_status_diagnosis") if isinstance(item.get("repeated_status_diagnosis"), dict) else {}
-        diagnosed_status = str(item.get("diagnosed_status") or diagnosis.get("diagnosed_status") or "").strip()
-        diagnosis_reason = str(item.get("diagnosis_reason") or diagnosis.get("diagnosis_reason") or "").strip()
-        closure_status = str(entry_by_id.get(str(item.get("refinement_input_id") or ""), {}).get("closure_status") or "")
+        diagnosis = (
+            item.get("repeated_status_diagnosis")
+            if isinstance(item.get("repeated_status_diagnosis"), dict)
+            else {}
+        )
+        diagnosed_status = str(
+            item.get("diagnosed_status") or diagnosis.get("diagnosed_status") or ""
+        ).strip()
+        diagnosis_reason = str(
+            item.get("diagnosis_reason") or diagnosis.get("diagnosis_reason") or ""
+        ).strip()
+        closure_status = str(
+            entry_by_id.get(str(item.get("refinement_input_id") or ""), {}).get(
+                "closure_status"
+            )
+            or ""
+        )
         has_forced_closure = closure_status in forced_closure_statuses
         has_diagnosis = bool(diagnosed_status and diagnosed_status != "not_applicable")
-        item_id = str(item.get("refinement_input_id") or item.get("soft_hypothesis_id") or "")
+        item_id = str(
+            item.get("refinement_input_id") or item.get("soft_hypothesis_id") or ""
+        )
         if _safe_int(item.get("forbidden_contract_violation_count")) > 0 or (
-            diagnosed_status == "contract_or_handoff_gap" and "authority" in diagnosis_reason
+            diagnosed_status == "contract_or_handoff_gap"
+            and "authority" in diagnosis_reason
         ):
             runtime_authority_violation_ids.append(item_id)
         if retry_count >= 2 and (has_diagnosis or has_forced_closure):
@@ -2940,9 +3782,9 @@ def _ldm_refinement_consumption_status(
         if str(item.get("classification") or "") == "taxonomy_gap_candidate"
         and _safe_int(item.get("repeated_gap_count")) >= 2
         and not any(
-            str(entry.get("refinement_input_id") or "") == str(item.get("refinement_input_id") or "")
-            and str(entry.get("closure_status") or "")
-            in forced_closure_statuses
+            str(entry.get("refinement_input_id") or "")
+            == str(item.get("refinement_input_id") or "")
+            and str(entry.get("closure_status") or "") in forced_closure_statuses
             for entry in entries
         )
     ]
@@ -2957,15 +3799,23 @@ def _ldm_refinement_consumption_status(
         "closure_counts": ledger.get("closure_counts") or {},
         "derived_refinement_input_count": derived_input_count,
         "derived_refinement_consumed_count": derived_consumed_count,
-        "derived_contract_drift_recompute_consumed": bool(derived_input_count and derived_consumed_count >= derived_input_count),
+        "derived_contract_drift_recompute_consumed": bool(
+            derived_input_count and derived_consumed_count >= derived_input_count
+        ),
         "missing": list(dict.fromkeys(missing)),
         "warnings": list(dict.fromkeys(warnings)),
         "unconsumed_refinement_input_ids": unconsumed_ids,
         "repeated_unresolved_input_ids": [item for item in repeated_unresolved if item],
-        "diagnosis_missing_warning_input_ids": [item for item in diagnosis_missing_warning if item],
-        "diagnosis_missing_fail_input_ids": [item for item in diagnosis_missing_fail if item],
+        "diagnosis_missing_warning_input_ids": [
+            item for item in diagnosis_missing_warning if item
+        ],
+        "diagnosis_missing_fail_input_ids": [
+            item for item in diagnosis_missing_fail if item
+        ],
         "diagnosed_repeated_input_ids": [item for item in diagnosed_repeated if item],
-        "runtime_authority_violation_input_ids": [item for item in runtime_authority_violation_ids if item],
+        "runtime_authority_violation_input_ids": [
+            item for item in runtime_authority_violation_ids if item
+        ],
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "actual_order_submitted": False,
@@ -3008,11 +3858,15 @@ def _scale_in_bucket_handoff_status(
     runtime_candidate_ids = _collect_scale_in_bucket_candidate_ids(runtime_summary)
     actual_order_ids = {
         str(item.get("order_id"))
-        for item in (workorder.get("orders") if isinstance(workorder.get("orders"), list) else [])
+        for item in (
+            workorder.get("orders") if isinstance(workorder.get("orders"), list) else []
+        )
         if isinstance(item, dict) and item.get("order_id")
     }
     missing_ev_candidates = sorted(set(expected_candidate_ids) - ev_candidate_ids)
-    missing_runtime_summary_candidates = sorted(set(expected_candidate_ids) - runtime_candidate_ids)
+    missing_runtime_summary_candidates = sorted(
+        set(expected_candidate_ids) - runtime_candidate_ids
+    )
     missing_workorder_order_ids = sorted(set(expected_order_ids) - actual_order_ids)
     missing: list[str] = []
     if missing_ev_candidates:
@@ -3046,12 +3900,17 @@ def _scale_in_policy_contract_status(
     bridge_report: dict[str, Any],
     runtime_apply_gap_audit: dict[str, Any],
 ) -> dict[str, Any]:
-    bridge_candidates = bridge_report.get("candidates") if isinstance(bridge_report.get("candidates"), list) else []
+    bridge_candidates = (
+        bridge_report.get("candidates")
+        if isinstance(bridge_report.get("candidates"), list)
+        else []
+    )
     bridge_candidate = next(
         (
             item
             for item in bridge_candidates
-            if isinstance(item, dict) and str(item.get("family") or "") == SCALE_IN_POLICY_FAMILY
+            if isinstance(item, dict)
+            and str(item.get("family") or "") == SCALE_IN_POLICY_FAMILY
         ),
         {},
     )
@@ -3078,17 +3937,33 @@ def _scale_in_policy_contract_status(
     bridge_state = str(bridge_candidate.get("bridge_candidate_state") or "")
     allowed_runtime_apply = bridge_candidate.get("allowed_runtime_apply")
     live_auto_apply = bridge_candidate.get("live_auto_apply")
-    target_env_keys = bridge_candidate.get("target_env_keys") if isinstance(bridge_candidate.get("target_env_keys"), list) else []
-    source_link = bridge_candidate.get("source_link") if isinstance(bridge_candidate.get("source_link"), dict) else {}
+    target_env_keys = (
+        bridge_candidate.get("target_env_keys")
+        if isinstance(bridge_candidate.get("target_env_keys"), list)
+        else []
+    )
+    source_link = (
+        bridge_candidate.get("source_link")
+        if isinstance(bridge_candidate.get("source_link"), dict)
+        else {}
+    )
     reopen_conditions = (
-        bridge_candidate.get("reopen_conditions") if isinstance(bridge_candidate.get("reopen_conditions"), list) else []
+        bridge_candidate.get("reopen_conditions")
+        if isinstance(bridge_candidate.get("reopen_conditions"), list)
+        else []
     )
     source_bucket_keys = [
         str(value).strip()
-        for value in (source_link.get("source_bucket_keys") if isinstance(source_link.get("source_bucket_keys"), list) else [])
+        for value in (
+            source_link.get("source_bucket_keys")
+            if isinstance(source_link.get("source_bucket_keys"), list)
+            else []
+        )
         if str(value).strip()
     ]
-    runtime_exclusion_reason = str(bridge_candidate.get("runtime_exclusion_reason") or "").strip()
+    runtime_exclusion_reason = str(
+        bridge_candidate.get("runtime_exclusion_reason") or ""
+    ).strip()
     source_only_blocked = (
         bool(bridge_candidate)
         and allowed_runtime_apply is False
@@ -3103,7 +3978,11 @@ def _scale_in_policy_contract_status(
             missing.append("scale_in_policy_explicit_exclusion_missing")
         if runtime_exclusion_reason != SCALE_IN_POLICY_EXCLUSION_REASON:
             missing.append("scale_in_policy_exclusion_reason_missing")
-        if str(source_link.get("source_section") or "") != "scale_in_bucket_attribution" or not source_bucket_keys:
+        if (
+            str(source_link.get("source_section") or "")
+            != "scale_in_bucket_attribution"
+            or not source_bucket_keys
+        ):
             missing.append("scale_in_policy_source_link_missing")
         if not reopen_conditions:
             missing.append("scale_in_policy_reopen_conditions_missing")
@@ -3111,8 +3990,10 @@ def _scale_in_policy_contract_status(
             missing.append("scale_in_policy_runtime_gap_ledger_missing")
         elif (
             ledger_row.get("explicit_runtime_exclusion") is not True
-            or str(ledger_row.get("runtime_exclusion_reason") or "") != SCALE_IN_POLICY_EXCLUSION_REASON
-            or str(ledger_row.get("final_disposition") or "") != "source_only_explicit_exclusion"
+            or str(ledger_row.get("runtime_exclusion_reason") or "")
+            != SCALE_IN_POLICY_EXCLUSION_REASON
+            or str(ledger_row.get("final_disposition") or "")
+            != "source_only_explicit_exclusion"
         ):
             missing.append("scale_in_policy_runtime_gap_contract_not_closed")
     elif bridge_candidate and bridge_state != "live_auto_apply_ready":
@@ -3142,7 +4023,9 @@ def _scale_in_policy_contract_status(
         "source_link_present": bool(source_link),
         "source_bucket_keys": source_bucket_keys,
         "reopen_conditions": reopen_conditions,
-        "runtime_gap_final_disposition": ledger_row.get("final_disposition") if ledger_row else None,
+        "runtime_gap_final_disposition": (
+            ledger_row.get("final_disposition") if ledger_row else None
+        ),
         "missing": missing,
         "interpretation": interpretation,
     }
@@ -3183,11 +4066,15 @@ def _overnight_bucket_handoff_status(
     runtime_candidate_ids = _collect_overnight_bucket_candidate_ids(runtime_summary)
     actual_order_ids = {
         str(item.get("order_id"))
-        for item in (workorder.get("orders") if isinstance(workorder.get("orders"), list) else [])
+        for item in (
+            workorder.get("orders") if isinstance(workorder.get("orders"), list) else []
+        )
         if isinstance(item, dict) and item.get("order_id")
     }
     missing_ev_candidates = sorted(set(expected_candidate_ids) - ev_candidate_ids)
-    missing_runtime_summary_candidates = sorted(set(expected_candidate_ids) - runtime_candidate_ids)
+    missing_runtime_summary_candidates = sorted(
+        set(expected_candidate_ids) - runtime_candidate_ids
+    )
     missing_workorder_order_ids = sorted(set(expected_order_ids) - actual_order_ids)
     missing: list[str] = []
     if missing_ev_candidates:
@@ -3246,32 +4133,56 @@ def _lifecycle_flow_bucket_handoff_status(
         for item in source_workorders
         if isinstance(item, dict) and item.get("lifecycle_flow_bucket_id")
     )
-    summary = attribution.get("summary") if isinstance(attribution.get("summary"), dict) else {}
+    summary = (
+        attribution.get("summary")
+        if isinstance(attribution.get("summary"), dict)
+        else {}
+    )
     flow_count = _safe_int(summary.get("flow_count"), 0)
     complete_flow_count = _safe_int(summary.get("complete_flow_count"), 0)
-    direct_sim_record_complete_flow_count = _safe_int(summary.get("direct_sim_record_complete_flow_count"), 0)
-    adm_bridge_complete_flow_count = _safe_int(summary.get("adm_bridge_complete_flow_count"), 0)
-    fallback_complete_flow_count = _safe_int(summary.get("fallback_complete_flow_count"), 0)
+    direct_sim_record_complete_flow_count = _safe_int(
+        summary.get("direct_sim_record_complete_flow_count"), 0
+    )
+    adm_bridge_complete_flow_count = _safe_int(
+        summary.get("adm_bridge_complete_flow_count"), 0
+    )
+    fallback_complete_flow_count = _safe_int(
+        summary.get("fallback_complete_flow_count"), 0
+    )
     join_contract_blocked = bool(summary.get("join_contract_blocked"))
-    direct_flow_zero_closure_status = str(summary.get("direct_flow_zero_closure_status") or "").strip()
-    direct_flow_zero_followup_required = bool(summary.get("direct_flow_zero_followup_required"))
+    direct_flow_zero_closure_status = str(
+        summary.get("direct_flow_zero_closure_status") or ""
+    ).strip()
+    direct_flow_zero_followup_required = bool(
+        summary.get("direct_flow_zero_followup_required")
+    )
     ev_candidate_ids = _collect_lifecycle_flow_bucket_candidate_ids(ev_report)
-    runtime_candidate_ids = _collect_lifecycle_flow_bucket_candidate_ids(runtime_summary)
+    runtime_candidate_ids = _collect_lifecycle_flow_bucket_candidate_ids(
+        runtime_summary
+    )
     actual_order_ids = {
         str(item.get("order_id"))
-        for item in (workorder.get("orders") if isinstance(workorder.get("orders"), list) else [])
+        for item in (
+            workorder.get("orders") if isinstance(workorder.get("orders"), list) else []
+        )
         if isinstance(item, dict) and item.get("order_id")
     }
     missing_ev_candidates = sorted(set(expected_candidate_ids) - ev_candidate_ids)
-    missing_runtime_summary_candidates = sorted(set(expected_candidate_ids) - runtime_candidate_ids)
+    missing_runtime_summary_candidates = sorted(
+        set(expected_candidate_ids) - runtime_candidate_ids
+    )
     missing_workorder_order_ids = sorted(set(expected_order_ids) - actual_order_ids)
     missing: list[str] = []
     if missing_ev_candidates:
         missing.append("threshold_cycle_ev_lifecycle_flow_bucket_candidates_missing")
     if missing_runtime_summary_candidates:
-        missing.append("runtime_approval_summary_lifecycle_flow_bucket_candidates_missing")
+        missing.append(
+            "runtime_approval_summary_lifecycle_flow_bucket_candidates_missing"
+        )
     if missing_workorder_order_ids:
-        missing.append("code_improvement_workorder_lifecycle_flow_bucket_orders_missing")
+        missing.append(
+            "code_improvement_workorder_lifecycle_flow_bucket_orders_missing"
+        )
     if flow_count > 0 and complete_flow_count <= 0:
         missing.append("lifecycle_complete_flow_absent")
     if join_contract_blocked:
@@ -3291,7 +4202,8 @@ def _lifecycle_flow_bucket_handoff_status(
         "join_contract_blocked": join_contract_blocked,
         "bundle_ev_tuning_state": summary.get("bundle_ev_tuning_state"),
         "top_incomplete_reason": summary.get("top_incomplete_reason"),
-        "incomplete_flow_reason_counts": summary.get("incomplete_flow_reason_counts") or {},
+        "incomplete_flow_reason_counts": summary.get("incomplete_flow_reason_counts")
+        or {},
         "expected_candidate_ids": expected_candidate_ids,
         "threshold_cycle_ev_candidate_ids": sorted(ev_candidate_ids),
         "runtime_approval_summary_candidate_ids": sorted(runtime_candidate_ids),
@@ -3304,9 +4216,11 @@ def _lifecycle_flow_bucket_handoff_status(
         "interpretation": (
             "LDM lifecycle-flow parent bucket candidates and workorders propagated to threshold EV, runtime summary, and code workorder."
             if not missing
-            else "LDM lifecycle-flow parent bucket is fail-closed because complete entry-submit-holding-exit flow is absent."
-            if "lifecycle_complete_flow_absent" in missing
-            else "LDM lifecycle-flow parent bucket output was generated but one or more downstream consumers dropped it."
+            else (
+                "LDM lifecycle-flow parent bucket is fail-closed because complete entry-submit-holding-exit flow is absent."
+                if "lifecycle_complete_flow_absent" in missing
+                else "LDM lifecycle-flow parent bucket output was generated but one or more downstream consumers dropped it."
+            )
         ),
     }
 
@@ -3335,9 +4249,15 @@ def _stage_only_bucket_handoff_status(
         if isinstance(attribution.get("runtime_approval_candidates"), list)
         else []
     )
-    attribution_summary = attribution.get("summary") if isinstance(attribution.get("summary"), dict) else {}
+    attribution_summary = (
+        attribution.get("summary")
+        if isinstance(attribution.get("summary"), dict)
+        else {}
+    )
     expected_bucket_count = _safe_int(attribution_summary.get("bucket_count"), 0)
-    expected_workorder_count = _safe_int(attribution_summary.get("workorder_count"), len(source_workorders))
+    expected_workorder_count = _safe_int(
+        attribution_summary.get("workorder_count"), len(source_workorders)
+    )
     expected_order_ids = sorted(
         _stage_bucket_order_id(stage, item)
         for item in source_workorders
@@ -3348,7 +4268,11 @@ def _stage_only_bucket_handoff_status(
         for item in source_workorders
         if isinstance(item, dict) and item.get("workorder_id")
     )
-    ev_matrix = ev_report.get("lifecycle_decision_matrix") if isinstance(ev_report.get("lifecycle_decision_matrix"), dict) else {}
+    ev_matrix = (
+        ev_report.get("lifecycle_decision_matrix")
+        if isinstance(ev_report.get("lifecycle_decision_matrix"), dict)
+        else {}
+    )
     runtime_matrix = (
         runtime_summary.get("lifecycle_decision_matrix")
         if isinstance(runtime_summary.get("lifecycle_decision_matrix"), dict)
@@ -3358,7 +4282,9 @@ def _stage_only_bucket_handoff_status(
         str(item.get("workorder_id"))
         for item in (
             ev_matrix.get(f"{stage}_bucket_code_improvement_workorders")
-            if isinstance(ev_matrix.get(f"{stage}_bucket_code_improvement_workorders"), list)
+            if isinstance(
+                ev_matrix.get(f"{stage}_bucket_code_improvement_workorders"), list
+            )
             else []
         )
         if isinstance(item, dict) and item.get("workorder_id")
@@ -3367,23 +4293,31 @@ def _stage_only_bucket_handoff_status(
         str(item.get("workorder_id"))
         for item in (
             runtime_matrix.get(f"{stage}_bucket_code_improvement_workorders")
-            if isinstance(runtime_matrix.get(f"{stage}_bucket_code_improvement_workorders"), list)
+            if isinstance(
+                runtime_matrix.get(f"{stage}_bucket_code_improvement_workorders"), list
+            )
             else []
         )
         if isinstance(item, dict) and item.get("workorder_id")
     }
     actual_order_ids = {
         str(item.get("order_id"))
-        for item in (workorder.get("orders") if isinstance(workorder.get("orders"), list) else [])
+        for item in (
+            workorder.get("orders") if isinstance(workorder.get("orders"), list) else []
+        )
         if isinstance(item, dict) and item.get("order_id")
     }
     missing_order_ids = sorted(set(expected_order_ids) - actual_order_ids)
     missing_ev_workorder_ids = sorted(set(expected_workorder_ids) - ev_workorder_ids)
-    missing_runtime_workorder_ids = sorted(set(expected_workorder_ids) - runtime_workorder_ids)
+    missing_runtime_workorder_ids = sorted(
+        set(expected_workorder_ids) - runtime_workorder_ids
+    )
     ev_bucket_count = _safe_int(ev_matrix.get(f"{stage}_bucket_count"), -1)
     runtime_bucket_count = _safe_int(runtime_matrix.get(f"{stage}_bucket_count"), -1)
     ev_workorder_count = _safe_int(ev_matrix.get(f"{stage}_bucket_workorder_count"), -1)
-    runtime_workorder_count = _safe_int(runtime_matrix.get(f"{stage}_bucket_workorder_count"), -1)
+    runtime_workorder_count = _safe_int(
+        runtime_matrix.get(f"{stage}_bucket_workorder_count"), -1
+    )
     missing: list[str] = []
     if runtime_candidates:
         missing.append(f"{stage}_stage_only_runtime_candidates_forbidden")
@@ -3393,8 +4327,13 @@ def _stage_only_bucket_handoff_status(
         missing.append(f"runtime_approval_summary_{stage}_bucket_count_missing")
     if expected_workorder_count > 0 and ev_workorder_count < expected_workorder_count:
         missing.append(f"threshold_cycle_ev_{stage}_bucket_workorder_count_missing")
-    if expected_workorder_count > 0 and runtime_workorder_count < expected_workorder_count:
-        missing.append(f"runtime_approval_summary_{stage}_bucket_workorder_count_missing")
+    if (
+        expected_workorder_count > 0
+        and runtime_workorder_count < expected_workorder_count
+    ):
+        missing.append(
+            f"runtime_approval_summary_{stage}_bucket_workorder_count_missing"
+        )
     if missing_ev_workorder_ids:
         missing.append(f"threshold_cycle_ev_{stage}_bucket_workorders_missing")
     if missing_runtime_workorder_ids:
@@ -3422,41 +4361,75 @@ def _stage_only_bucket_handoff_status(
         "interpretation": (
             f"LDM {stage} bucket attribution propagated as source-only child evidence."
             if attribution and not missing
-            else f"LDM {stage} bucket output was generated but one or more downstream consumers dropped it."
-            if attribution
-            else f"LDM {stage} bucket attribution missing"
+            else (
+                f"LDM {stage} bucket output was generated but one or more downstream consumers dropped it."
+                if attribution
+                else f"LDM {stage} bucket attribution missing"
+            )
         ),
     }
 
 
 def _has_scale_in_source(ldm_report: dict[str, Any]) -> bool:
-    sources = ldm_report.get("sources") if isinstance(ldm_report.get("sources"), dict) else {}
-    summary = sources.get("scale_in_attribution") if isinstance(sources.get("scale_in_attribution"), dict) else {}
+    sources = (
+        ldm_report.get("sources") if isinstance(ldm_report.get("sources"), dict) else {}
+    )
+    summary = (
+        sources.get("scale_in_attribution")
+        if isinstance(sources.get("scale_in_attribution"), dict)
+        else {}
+    )
     if int(summary.get("rows") or 0) > 0:
         return True
-    report_summary = ldm_report.get("summary") if isinstance(ldm_report.get("summary"), dict) else {}
-    stage_counts = report_summary.get("stage_counts") if isinstance(report_summary.get("stage_counts"), dict) else {}
+    report_summary = (
+        ldm_report.get("summary") if isinstance(ldm_report.get("summary"), dict) else {}
+    )
+    stage_counts = (
+        report_summary.get("stage_counts")
+        if isinstance(report_summary.get("stage_counts"), dict)
+        else {}
+    )
     return int(stage_counts.get("scale_in") or 0) > 0
 
 
 def _has_lifecycle_stage_source(ldm_report: dict[str, Any], stage: str) -> bool:
-    report_summary = ldm_report.get("summary") if isinstance(ldm_report.get("summary"), dict) else {}
-    stage_counts = report_summary.get("stage_counts") if isinstance(report_summary.get("stage_counts"), dict) else {}
+    report_summary = (
+        ldm_report.get("summary") if isinstance(ldm_report.get("summary"), dict) else {}
+    )
+    stage_counts = (
+        report_summary.get("stage_counts")
+        if isinstance(report_summary.get("stage_counts"), dict)
+        else {}
+    )
     return int(stage_counts.get(stage) or 0) > 0
 
 
 def _has_overnight_source(ldm_report: dict[str, Any]) -> bool:
-    sources = ldm_report.get("sources") if isinstance(ldm_report.get("sources"), dict) else {}
-    summary = sources.get("scalp_sim_overnight") if isinstance(sources.get("scalp_sim_overnight"), dict) else {}
+    sources = (
+        ldm_report.get("sources") if isinstance(ldm_report.get("sources"), dict) else {}
+    )
+    summary = (
+        sources.get("scalp_sim_overnight")
+        if isinstance(sources.get("scalp_sim_overnight"), dict)
+        else {}
+    )
     return int(summary.get("rows") or 0) > 0
 
 
-def _scalp_sim_overnight_source_quality(report: dict[str, Any], *, report_exists: bool) -> dict[str, Any]:
+def _scalp_sim_overnight_source_quality(
+    report: dict[str, Any], *, report_exists: bool
+) -> dict[str, Any]:
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
     active_undecided_count = int(summary.get("active_undecided_count") or 0)
     decision_target = int(summary.get("decision_target") or 0)
-    source_quality_status = str(summary.get("source_quality_status") or "missing").strip()
-    warnings = summary.get("source_quality_warnings") if isinstance(summary.get("source_quality_warnings"), list) else []
+    source_quality_status = str(
+        summary.get("source_quality_status") or "missing"
+    ).strip()
+    warnings = (
+        summary.get("source_quality_warnings")
+        if isinstance(summary.get("source_quality_warnings"), list)
+        else []
+    )
     missing: list[str] = []
     if report_exists and not summary:
         missing.append("scalp_sim_overnight_report_missing_or_invalid")
@@ -3475,11 +4448,14 @@ def _scalp_sim_overnight_source_quality(report: dict[str, Any], *, report_exists
         "interpretation": (
             "scalp sim overnight report was not present in this verification fixture/run"
             if not report_exists
-            else "scalp sim overnight preclose decisions covered active sim positions"
-            if not missing
-            else "active scalp sim overnight positions were not covered by preclose decision events"
+            else (
+                "scalp sim overnight preclose decisions covered active sim positions"
+                if not missing
+                else "active scalp sim overnight positions were not covered by preclose decision events"
+            )
         ),
     }
+
 
 def _ai_correction_status(target_date: str) -> dict[str, Any]:
     ai_path = _ai_review_path(target_date)
@@ -3488,7 +4464,9 @@ def _ai_correction_status(target_date: str) -> dict[str, Any]:
     calibration_report = _load_json(calibration_path)
     blocking_families = _runtime_candidates_requiring_ai(calibration_report)
     ai_status = str(ai_review.get("ai_status") or "missing").strip()
-    provider_status = ai_review.get("provider_status") or ai_review.get("ai_provider_status")
+    provider_status = ai_review.get("provider_status") or ai_review.get(
+        "ai_provider_status"
+    )
     parse_warnings = ai_review.get("parse_warnings")
     if not isinstance(parse_warnings, list):
         parse_warnings = []
@@ -3513,11 +4491,15 @@ def _ai_correction_status(target_date: str) -> dict[str, Any]:
         "interpretation": (
             "AI correction parsed successfully"
             if status == "pass"
-            else "AI correction unavailable blocks runtime-applicable threshold candidates"
-            if status == "fail"
-            else "AI correction unavailable but no runtime-applicable candidate was detected"
-            if status == "warning"
-            else "AI correction artifact missing or unreadable"
+            else (
+                "AI correction unavailable blocks runtime-applicable threshold candidates"
+                if status == "fail"
+                else (
+                    "AI correction unavailable but no runtime-applicable candidate was detected"
+                    if status == "warning"
+                    else "AI correction artifact missing or unreadable"
+                )
+            )
         ),
     }
 
@@ -3576,7 +4558,9 @@ def build_threshold_cycle_postclose_verification(
         if _DONE_MARKER in line and f"target_date={target_date}" in line:
             done_line = line
     if done_line and "recovery_action=" in done_line:
-        log_issues = [item for item in log_issues if item != "postclose_fail_marker_present"]
+        log_issues = [
+            item for item in log_issues if item != "postclose_fail_marker_present"
+        ]
 
     artifact_status = []
     for label, path in _artifact_paths(target_date).items():
@@ -3593,8 +4577,12 @@ def build_threshold_cycle_postclose_verification(
     paths = _artifact_paths(target_date)
     ev_report = _load_json(paths["threshold_cycle_ev"])
     workorder = _load_json(paths["code_improvement_workorder"])
-    observation_source_quality_audit = _load_json(paths["observation_source_quality_audit"])
-    watching_score_smoothing_diagnostic = _load_json(paths["ai_watching_score_smoothing_diagnostic"])
+    observation_source_quality_audit = _load_json(
+        paths["observation_source_quality_audit"]
+    )
+    watching_score_smoothing_diagnostic = _load_json(
+        paths["ai_watching_score_smoothing_diagnostic"]
+    )
     runtime_summary = _load_json(paths["runtime_approval_summary"])
     runtime_apply_gap_audit = _load_json(paths["runtime_apply_gap_audit"])
     key_lineage_ledger = _load_json(paths["key_lineage_ledger"])
@@ -3620,7 +4608,9 @@ def build_threshold_cycle_postclose_verification(
     discovery_report = _load_json(paths["lifecycle_bucket_discovery"])
     ldm_refinement_report = _load_json(paths["ldm_hypothesis_parent_refinement"])
     swing_ldm_report = _load_json(paths["swing_lifecycle_decision_matrix"])
-    swing_bucket_discovery_report = _load_json(paths["swing_lifecycle_bucket_discovery"])
+    swing_bucket_discovery_report = _load_json(
+        paths["swing_lifecycle_bucket_discovery"]
+    )
     scalp_sim_overnight_path = _scalp_sim_overnight_path(target_date)
     scalp_sim_overnight = _load_json(scalp_sim_overnight_path)
     scalp_sim_overnight_quality = _scalp_sim_overnight_source_quality(
@@ -3661,7 +4651,10 @@ def build_threshold_cycle_postclose_verification(
         log_issues.append("clean_baseline_report_residue_present")
     if clean_baseline_analytics_residue.get("status") == "fail":
         log_issues.append("clean_baseline_analytics_residue_present")
-    if is_date_allowed(target_date, clean_policy) and not paths["observation_source_quality_audit"].exists():
+    if (
+        is_date_allowed(target_date, clean_policy)
+        and not paths["observation_source_quality_audit"].exists()
+    ):
         log_issues.append("source_quality_preflight_missing")
     source_quality_hard_block = _source_quality_hard_block_status(
         observation_source_quality_audit,
@@ -3686,12 +4679,19 @@ def build_threshold_cycle_postclose_verification(
         handoff_warnings.append("ai_watching_score_smoothing_diagnostic_followup_open")
     if raw_row_exclusion_handoff.get("status") == "fail":
         log_issues.append("raw_row_exclusion_workorder_handoff_missing")
-    entry_bucket_handoff = _entry_bucket_handoff_status(ldm_report, ev_report, runtime_summary, workorder)
+    entry_bucket_handoff = _entry_bucket_handoff_status(
+        ldm_report, ev_report, runtime_summary, workorder
+    )
     if entry_bucket_handoff.get("status") == "fail":
         log_issues.append("ldm_entry_bucket_handoff_missing")
     submit_attribution = ldm_report.get("submit_bucket_attribution")
-    submit_bucket_handoff = _submit_bucket_handoff_status(ldm_report, ev_report, runtime_summary, workorder)
-    if isinstance(submit_attribution, dict) and submit_bucket_handoff.get("status") == "fail":
+    submit_bucket_handoff = _submit_bucket_handoff_status(
+        ldm_report, ev_report, runtime_summary, workorder
+    )
+    if (
+        isinstance(submit_attribution, dict)
+        and submit_bucket_handoff.get("status") == "fail"
+    ):
         log_issues.append("ldm_submit_bucket_handoff_missing")
     holding_attribution = ldm_report.get("holding_bucket_attribution")
     holding_source_present = _has_lifecycle_stage_source(ldm_report, "holding")
@@ -3718,7 +4718,10 @@ def build_threshold_cycle_postclose_verification(
         workorder,
         stage="holding",
     )
-    if isinstance(holding_attribution, dict) and holding_bucket_handoff.get("status") == "fail":
+    if (
+        isinstance(holding_attribution, dict)
+        and holding_bucket_handoff.get("status") == "fail"
+    ):
         log_issues.append("ldm_holding_bucket_handoff_missing")
     exit_attribution = ldm_report.get("exit_bucket_attribution")
     exit_source_present = _has_lifecycle_stage_source(ldm_report, "exit")
@@ -3745,7 +4748,10 @@ def build_threshold_cycle_postclose_verification(
         workorder,
         stage="exit",
     )
-    if isinstance(exit_attribution, dict) and exit_bucket_handoff.get("status") == "fail":
+    if (
+        isinstance(exit_attribution, dict)
+        and exit_bucket_handoff.get("status") == "fail"
+    ):
         log_issues.append("ldm_exit_bucket_handoff_missing")
     buy_funnel_submit_drought_handoff = _buy_funnel_submit_drought_handoff_status(
         buy_funnel_report,
@@ -3760,8 +4766,13 @@ def build_threshold_cycle_postclose_verification(
     scale_in_source_present = _has_scale_in_source(ldm_report)
     if scale_in_source_present and not isinstance(scale_in_attribution, dict):
         log_issues.append("ldm_scale_in_bucket_attribution_missing")
-    scale_in_bucket_handoff = _scale_in_bucket_handoff_status(ldm_report, ev_report, runtime_summary, workorder)
-    if isinstance(scale_in_attribution, dict) and scale_in_bucket_handoff.get("status") == "fail":
+    scale_in_bucket_handoff = _scale_in_bucket_handoff_status(
+        ldm_report, ev_report, runtime_summary, workorder
+    )
+    if (
+        isinstance(scale_in_attribution, dict)
+        and scale_in_bucket_handoff.get("status") == "fail"
+    ):
         log_issues.append("ldm_scale_in_bucket_handoff_missing")
     scale_in_policy_contract = _scale_in_policy_contract_status(
         scale_in_source_present=scale_in_source_present,
@@ -3774,8 +4785,13 @@ def build_threshold_cycle_postclose_verification(
     overnight_source_present = _has_overnight_source(ldm_report)
     if overnight_source_present and not isinstance(overnight_attribution, dict):
         log_issues.append("ldm_overnight_bucket_attribution_missing")
-    overnight_bucket_handoff = _overnight_bucket_handoff_status(ldm_report, ev_report, runtime_summary, workorder)
-    if isinstance(overnight_attribution, dict) and overnight_bucket_handoff.get("status") == "fail":
+    overnight_bucket_handoff = _overnight_bucket_handoff_status(
+        ldm_report, ev_report, runtime_summary, workorder
+    )
+    if (
+        isinstance(overnight_attribution, dict)
+        and overnight_bucket_handoff.get("status") == "fail"
+    ):
         log_issues.append("ldm_overnight_bucket_handoff_missing")
     lifecycle_flow_attribution = ldm_report.get("lifecycle_flow_bucket_attribution")
     lifecycle_flow_bucket_handoff = _lifecycle_flow_bucket_handoff_status(
@@ -3784,9 +4800,14 @@ def build_threshold_cycle_postclose_verification(
         runtime_summary,
         workorder,
     )
-    if isinstance(lifecycle_flow_attribution, dict) and lifecycle_flow_bucket_handoff.get("status") == "fail":
+    if (
+        isinstance(lifecycle_flow_attribution, dict)
+        and lifecycle_flow_bucket_handoff.get("status") == "fail"
+    ):
         log_issues.append("ldm_lifecycle_flow_bucket_handoff_missing")
-    if "lifecycle_complete_flow_absent" in (lifecycle_flow_bucket_handoff.get("missing") or []):
+    if "lifecycle_complete_flow_absent" in (
+        lifecycle_flow_bucket_handoff.get("missing") or []
+    ):
         log_issues.append("lifecycle_complete_flow_absent")
     lifecycle_bucket_discovery_handoff = _lifecycle_bucket_discovery_handoff_status(
         discovery_report,
@@ -3798,7 +4819,9 @@ def build_threshold_cycle_postclose_verification(
         log_issues.append("lifecycle_bucket_discovery_handoff_missing")
     elif lifecycle_bucket_discovery_handoff.get("status") == "warning":
         handoff_warnings.extend(
-            str(item) for item in (lifecycle_bucket_discovery_handoff.get("warnings") or []) if str(item)
+            str(item)
+            for item in (lifecycle_bucket_discovery_handoff.get("warnings") or [])
+            if str(item)
         )
     lifecycle_bucket_windows = _lifecycle_bucket_windows_status(
         paths=paths,
@@ -3810,7 +4833,11 @@ def build_threshold_cycle_postclose_verification(
     if lifecycle_bucket_windows.get("status") == "fail":
         log_issues.append("lifecycle_bucket_windows_fail")
     elif lifecycle_bucket_windows.get("status") == "warning":
-        handoff_warnings.extend(str(item) for item in (lifecycle_bucket_windows.get("warnings") or []) if str(item))
+        handoff_warnings.extend(
+            str(item)
+            for item in (lifecycle_bucket_windows.get("warnings") or [])
+            if str(item)
+        )
     swing_lifecycle_handoff = _swing_lifecycle_handoff_status(
         swing_ldm_report,
         swing_bucket_discovery_report,
@@ -3818,18 +4845,28 @@ def build_threshold_cycle_postclose_verification(
         runtime_summary,
         workorder,
     )
-    provider_mismatch_warning = _swing_lifecycle_provider_mismatch_warning(done_line, swing_bucket_discovery_report)
+    provider_mismatch_warning = _swing_lifecycle_provider_mismatch_warning(
+        done_line, swing_bucket_discovery_report
+    )
     if provider_mismatch_warning:
         warnings = list(swing_lifecycle_handoff.get("warnings") or [])
         warnings.append(provider_mismatch_warning)
-        swing_lifecycle_handoff["warnings"] = list(dict.fromkeys(str(item) for item in warnings if str(item)))
+        swing_lifecycle_handoff["warnings"] = list(
+            dict.fromkeys(str(item) for item in warnings if str(item))
+        )
         if swing_lifecycle_handoff.get("status") == "pass":
             swing_lifecycle_handoff["status"] = "warning"
     if swing_lifecycle_handoff.get("status") == "fail":
         log_issues.append("swing_lifecycle_handoff_missing")
     elif swing_lifecycle_handoff.get("status") == "warning":
-        handoff_warnings.extend(str(item) for item in (swing_lifecycle_handoff.get("warnings") or []) if str(item))
-    producer_gap_handoff = _producer_gap_discovery_handoff_status(producer_gap_discovery, workorder)
+        handoff_warnings.extend(
+            str(item)
+            for item in (swing_lifecycle_handoff.get("warnings") or [])
+            if str(item)
+        )
+    producer_gap_handoff = _producer_gap_discovery_handoff_status(
+        producer_gap_discovery, workorder
+    )
     if producer_gap_handoff.get("status") == "fail":
         log_issues.append("producer_gap_discovery_handoff_missing")
     stage_hook_handoff = _stage_hook_workorder_handoff_status(
@@ -3843,7 +4880,9 @@ def build_threshold_cycle_postclose_verification(
         and stage_hook_handoff.get("status") == "fail"
     ):
         log_issues.append("stage_hook_workorder_handoff_missing")
-    bottom_rebound_sim_handoff = _bottom_rebound_sim_handoff_status(swing_strategy_discovery_sim)
+    bottom_rebound_sim_handoff = _bottom_rebound_sim_handoff_status(
+        swing_strategy_discovery_sim
+    )
     if bottom_rebound_sim_handoff.get("status") == "fail":
         log_issues.append("bottom_rebound_sim_handoff_missing")
     active_sim_priority_handoff = _active_sim_priority_handoff_status(
@@ -3857,22 +4896,31 @@ def build_threshold_cycle_postclose_verification(
     if active_sim_priority_handoff.get("status") == "fail":
         log_issues.append("active_sim_priority_handoff_missing")
     elif active_sim_priority_handoff.get("status") == "warning":
-        handoff_warnings.extend(str(item) for item in (active_sim_priority_handoff.get("warnings") or []) if str(item))
+        handoff_warnings.extend(
+            str(item)
+            for item in (active_sim_priority_handoff.get("warnings") or [])
+            if str(item)
+        )
     ldm_refinement_consumption = _ldm_refinement_consumption_status(
         ldm_refinement_report,
         discovery_report,
         target_date=target_date,
         scalp_catalog=scalp_sim_policy_catalog,
-        disabled=preliminary_execution_flags.get("ldm_hypothesis_parent_refinement") is False,
+        disabled=preliminary_execution_flags.get("ldm_hypothesis_parent_refinement")
+        is False,
     )
     if ldm_refinement_consumption.get("status") == "fail":
         log_issues.append("ldm_hypothesis_parent_refinement_unconsumed")
     elif ldm_refinement_consumption.get("status") == "warning":
         handoff_warnings.extend(
-            str(item) for item in (ldm_refinement_consumption.get("warnings") or []) if str(item)
+            str(item)
+            for item in (ldm_refinement_consumption.get("warnings") or [])
+            if str(item)
         )
 
-    lineage = workorder.get("lineage") if isinstance(workorder.get("lineage"), dict) else {}
+    lineage = (
+        workorder.get("lineage") if isinstance(workorder.get("lineage"), dict) else {}
+    )
     workorder_snapshot = {
         "generation_id": workorder.get("generation_id"),
         "source_hash": workorder.get("source_hash"),
@@ -3881,26 +4929,45 @@ def build_threshold_cycle_postclose_verification(
         "previous_exists": bool(lineage.get("previous_exists")),
         "new_order_ids": list(lineage.get("new_order_ids") or []),
         "removed_order_ids": list(lineage.get("removed_order_ids") or []),
-        "decision_changed_order_ids": list(lineage.get("decision_changed_order_ids") or []),
-        "new_selected_order_count": ((workorder.get("summary") or {}).get("new_selected_order_count")),
-        "removed_selected_order_count": ((workorder.get("summary") or {}).get("removed_selected_order_count")),
-        "decision_changed_order_count": ((workorder.get("summary") or {}).get("decision_changed_order_count")),
+        "decision_changed_order_ids": list(
+            lineage.get("decision_changed_order_ids") or []
+        ),
+        "new_selected_order_count": (
+            (workorder.get("summary") or {}).get("new_selected_order_count")
+        ),
+        "removed_selected_order_count": (
+            (workorder.get("summary") or {}).get("removed_selected_order_count")
+        ),
+        "decision_changed_order_count": (
+            (workorder.get("summary") or {}).get("decision_changed_order_count")
+        ),
         "repeat_unresolved_structural_blocker_count": (
-            (workorder.get("summary") or {}).get("repeat_unresolved_structural_blocker_count")
+            (workorder.get("summary") or {}).get(
+                "repeat_unresolved_structural_blocker_count"
+            )
         ),
         "repeat_unresolved_structural_blocker_order_ids": (
-            (workorder.get("summary") or {}).get("repeat_unresolved_structural_blocker_order_ids")
+            (workorder.get("summary") or {}).get(
+                "repeat_unresolved_structural_blocker_order_ids"
+            )
         ),
         "selected_terminal_non_implement_longstanding_count": (
-            (workorder.get("summary") or {}).get("selected_terminal_non_implement_longstanding_count")
+            (workorder.get("summary") or {}).get(
+                "selected_terminal_non_implement_longstanding_count"
+            )
         ),
         "selected_terminal_non_implement_longstanding_order_ids": (
-            (workorder.get("summary") or {}).get("selected_terminal_non_implement_longstanding_order_ids")
+            (workorder.get("summary") or {}).get(
+                "selected_terminal_non_implement_longstanding_order_ids"
+            )
         ),
     }
 
     if workorder_snapshot["generation_id"] and workorder_snapshot["source_hash"]:
-        if workorder_snapshot["source_hash"] == workorder_snapshot["previous_source_hash"]:
+        if (
+            workorder_snapshot["source_hash"]
+            == workorder_snapshot["previous_source_hash"]
+        ):
             workorder_snapshot_status = "same_snapshot_replay"
         elif workorder_snapshot["previous_exists"]:
             workorder_snapshot_status = "source_changed_with_lineage"
@@ -3917,7 +4984,8 @@ def build_threshold_cycle_postclose_verification(
             ((runtime_summary.get("sources") or {}).get("threshold_cycle_ev")) or None
         ),
         "threshold_cycle_ev_sources_pattern_lab_currentness_audit": (
-            ((ev_report.get("sources") or {}).get("pattern_lab_currentness_audit")) or None
+            ((ev_report.get("sources") or {}).get("pattern_lab_currentness_audit"))
+            or None
         ),
         "threshold_cycle_ev_sources_pattern_lab_ai_review": (
             ((ev_report.get("sources") or {}).get("pattern_lab_ai_review")) or None
@@ -3926,61 +4994,94 @@ def build_threshold_cycle_postclose_verification(
             ((ev_report.get("sources") or {}).get("producer_gap_discovery")) or None
         ),
         "threshold_cycle_ev_sources_stage_hook_workorder_discovery": (
-            ((ev_report.get("sources") or {}).get("stage_hook_workorder_discovery")) or None
+            ((ev_report.get("sources") or {}).get("stage_hook_workorder_discovery"))
+            or None
         ),
         "threshold_cycle_ev_sources_stage_hook_runtime_scaffold": (
-            ((ev_report.get("sources") or {}).get("stage_hook_runtime_scaffold")) or None
+            ((ev_report.get("sources") or {}).get("stage_hook_runtime_scaffold"))
+            or None
         ),
         "threshold_cycle_ev_sources_pattern_lab_propagation_audit": (
-            ((ev_report.get("sources") or {}).get("pattern_lab_propagation_audit")) or None
+            ((ev_report.get("sources") or {}).get("pattern_lab_propagation_audit"))
+            or None
         ),
         "threshold_cycle_ev_sources_scalp_entry_action_decision_matrix": (
-            ((ev_report.get("sources") or {}).get("scalp_entry_action_decision_matrix")) or None
+            ((ev_report.get("sources") or {}).get("scalp_entry_action_decision_matrix"))
+            or None
         ),
         "threshold_cycle_ev_sources_lifecycle_decision_matrix": (
             ((ev_report.get("sources") or {}).get("lifecycle_decision_matrix")) or None
         ),
         "runtime_approval_summary_sources_scalp_entry_action_decision_matrix": (
-            ((runtime_summary.get("sources") or {}).get("scalp_entry_action_decision_matrix")) or None
+            (
+                (runtime_summary.get("sources") or {}).get(
+                    "scalp_entry_action_decision_matrix"
+                )
+            )
+            or None
         ),
         "runtime_approval_summary_sources_lifecycle_decision_matrix": (
-            ((runtime_summary.get("sources") or {}).get("lifecycle_decision_matrix")) or None
+            ((runtime_summary.get("sources") or {}).get("lifecycle_decision_matrix"))
+            or None
         ),
         "threshold_cycle_ev_sources_entry_split_order_plan": (
             ((ev_report.get("sources") or {}).get("entry_split_order_plan")) or None
         ),
         "runtime_approval_summary_sources_entry_split_order_plan": (
-            ((runtime_summary.get("sources") or {}).get("entry_split_order_plan")) or None
+            ((runtime_summary.get("sources") or {}).get("entry_split_order_plan"))
+            or None
         ),
         "threshold_cycle_ev_sources_scale_in_split_order_plan": (
             ((ev_report.get("sources") or {}).get("scale_in_split_order_plan")) or None
         ),
         "runtime_approval_summary_sources_scale_in_split_order_plan": (
-            ((runtime_summary.get("sources") or {}).get("scale_in_split_order_plan")) or None
+            ((runtime_summary.get("sources") or {}).get("scale_in_split_order_plan"))
+            or None
         ),
         "threshold_cycle_ev_sources_swing_lifecycle_decision_matrix": (
-            ((ev_report.get("sources") or {}).get("swing_lifecycle_decision_matrix")) or None
+            ((ev_report.get("sources") or {}).get("swing_lifecycle_decision_matrix"))
+            or None
         ),
         "threshold_cycle_ev_sources_swing_lifecycle_bucket_discovery": (
-            ((ev_report.get("sources") or {}).get("swing_lifecycle_bucket_discovery")) or None
+            ((ev_report.get("sources") or {}).get("swing_lifecycle_bucket_discovery"))
+            or None
         ),
         "runtime_approval_summary_sources_swing_lifecycle_decision_matrix": (
-            ((runtime_summary.get("sources") or {}).get("swing_lifecycle_decision_matrix")) or None
+            (
+                (runtime_summary.get("sources") or {}).get(
+                    "swing_lifecycle_decision_matrix"
+                )
+            )
+            or None
         ),
         "runtime_approval_summary_sources_swing_lifecycle_bucket_discovery": (
-            ((runtime_summary.get("sources") or {}).get("swing_lifecycle_bucket_discovery")) or None
+            (
+                (runtime_summary.get("sources") or {}).get(
+                    "swing_lifecycle_bucket_discovery"
+                )
+            )
+            or None
         ),
         "runtime_approval_summary_sources_pattern_lab_propagation_audit": (
-            ((runtime_summary.get("sources") or {}).get("pattern_lab_propagation_audit")) or None
+            (
+                (runtime_summary.get("sources") or {}).get(
+                    "pattern_lab_propagation_audit"
+                )
+            )
+            or None
         ),
         "runtime_approval_summary_sources_pattern_lab_ai_review": (
-            ((runtime_summary.get("sources") or {}).get("pattern_lab_ai_review")) or None
+            ((runtime_summary.get("sources") or {}).get("pattern_lab_ai_review"))
+            or None
         ),
     }
 
     marker_values = _parse_marker_values(done_line or "")
     recovery_action = marker_values.get("recovery_action")
-    recovery_done = recovery_action in {"marker_reconciliation", "tail_repair_done_reconciliation"}
+    recovery_done = recovery_action in {
+        "marker_reconciliation",
+        "tail_repair_done_reconciliation",
+    }
     marker_reconciliation_done = recovery_action == "marker_reconciliation"
     execution_flags = _parse_bool_flags(done_line or "")
     required_execution_flags = (
@@ -4001,45 +5102,79 @@ def build_threshold_cycle_postclose_verification(
         for key in required_execution_flags
         if done_line and not recovery_done and key not in execution_flags
     ]
-    for key in ("swing_strategy_discovery", "swing_lifecycle_matrix", "swing_lifecycle_bucket_discovery"):
+    for key in (
+        "swing_strategy_discovery",
+        "swing_lifecycle_matrix",
+        "swing_lifecycle_bucket_discovery",
+    ):
         if done_line and key in execution_flags and key not in missing_execution_flags:
             required_execution_flags = (*required_execution_flags, key)
-    if done_line and "pattern_lab_ai_review" in execution_flags and "pattern_lab_ai_review" not in missing_execution_flags:
+    if (
+        done_line
+        and "pattern_lab_ai_review" in execution_flags
+        and "pattern_lab_ai_review" not in missing_execution_flags
+    ):
         required_execution_flags = (*required_execution_flags, "pattern_lab_ai_review")
-    if done_line and "producer_gap_discovery" in execution_flags and "producer_gap_discovery" not in missing_execution_flags:
+    if (
+        done_line
+        and "producer_gap_discovery" in execution_flags
+        and "producer_gap_discovery" not in missing_execution_flags
+    ):
         required_execution_flags = (*required_execution_flags, "producer_gap_discovery")
     if (
         done_line
         and "one_share_threshold_opportunity" in execution_flags
         and "one_share_threshold_opportunity" not in missing_execution_flags
     ):
-        required_execution_flags = (*required_execution_flags, "one_share_threshold_opportunity")
+        required_execution_flags = (
+            *required_execution_flags,
+            "one_share_threshold_opportunity",
+        )
     if (
         done_line
         and "stage_hook_workorder_discovery" in execution_flags
         and "stage_hook_workorder_discovery" not in missing_execution_flags
     ):
-        required_execution_flags = (*required_execution_flags, "stage_hook_workorder_discovery")
+        required_execution_flags = (
+            *required_execution_flags,
+            "stage_hook_workorder_discovery",
+        )
     if (
         done_line
         and "stage_hook_runtime_scaffold" in execution_flags
         and "stage_hook_runtime_scaffold" not in missing_execution_flags
     ):
-        required_execution_flags = (*required_execution_flags, "stage_hook_runtime_scaffold")
+        required_execution_flags = (
+            *required_execution_flags,
+            "stage_hook_runtime_scaffold",
+        )
     if (
         done_line
         and "time_window_regime_counterfactual" in execution_flags
         and "time_window_regime_counterfactual" not in missing_execution_flags
     ):
-        required_execution_flags = (*required_execution_flags, "time_window_regime_counterfactual")
-    if done_line and "runtime_apply_gap_audit" in execution_flags and "runtime_apply_gap_audit" not in missing_execution_flags:
-        required_execution_flags = (*required_execution_flags, "runtime_apply_gap_audit")
+        required_execution_flags = (
+            *required_execution_flags,
+            "time_window_regime_counterfactual",
+        )
+    if (
+        done_line
+        and "runtime_apply_gap_audit" in execution_flags
+        and "runtime_apply_gap_audit" not in missing_execution_flags
+    ):
+        required_execution_flags = (
+            *required_execution_flags,
+            "runtime_apply_gap_audit",
+        )
     if (
         done_line
         and "ai_watching_score_smoothing_diagnostic" in execution_flags
         and "ai_watching_score_smoothing_diagnostic" not in missing_execution_flags
     ):
-        required_execution_flags = (*required_execution_flags, "ai_watching_score_smoothing_diagnostic")
+        required_execution_flags = (
+            *required_execution_flags,
+            "ai_watching_score_smoothing_diagnostic",
+        )
     if (
         done_line
         and "entry_split_order_plan" in execution_flags
@@ -4051,13 +5186,19 @@ def build_threshold_cycle_postclose_verification(
         and "scale_in_split_order_plan" in execution_flags
         and "scale_in_split_order_plan" not in missing_execution_flags
     ):
-        required_execution_flags = (*required_execution_flags, "scale_in_split_order_plan")
+        required_execution_flags = (
+            *required_execution_flags,
+            "scale_in_split_order_plan",
+        )
     if (
         done_line
         and "ldm_hypothesis_parent_refinement" in execution_flags
         and "ldm_hypothesis_parent_refinement" not in missing_execution_flags
     ):
-        required_execution_flags = (*required_execution_flags, "ldm_hypothesis_parent_refinement")
+        required_execution_flags = (
+            *required_execution_flags,
+            "ldm_hypothesis_parent_refinement",
+        )
     disabled_stage_flags = [
         key
         for key in (
@@ -4089,28 +5230,112 @@ def build_threshold_cycle_postclose_verification(
         if key in execution_flags and not execution_flags[key]
     ]
     disabled_artifact_labels = {
-        "pattern_lab_currentness_audit" if "pattern_lab_currentness_audit" in disabled_stage_flags else "",
-        "pattern_lab_ai_review" if "pattern_lab_ai_review" in disabled_stage_flags else "",
-        "time_window_regime_counterfactual" if "time_window_regime_counterfactual" in disabled_stage_flags else "",
-        "producer_gap_discovery" if "producer_gap_discovery" in disabled_stage_flags else "",
-        "one_share_threshold_opportunity" if "one_share_threshold_opportunity" in disabled_stage_flags else "",
-        "stage_hook_workorder_discovery" if "stage_hook_workorder_discovery" in disabled_stage_flags else "",
-        "stage_hook_runtime_scaffold" if "stage_hook_runtime_scaffold" in disabled_stage_flags else "",
-        "pattern_lab_propagation_audit" if "pattern_lab_propagation_audit" in disabled_stage_flags else "",
-        "scalp_entry_action_decision_matrix" if "scalp_entry_adm" in disabled_stage_flags else "",
-        "lifecycle_decision_matrix" if "lifecycle_decision_matrix" in disabled_stage_flags else "",
-        "swing_strategy_discovery_sim" if "swing_strategy_discovery" in disabled_stage_flags else "",
-        "swing_lifecycle_decision_matrix" if "swing_lifecycle_matrix" in disabled_stage_flags else "",
-        "swing_lifecycle_bucket_discovery" if "swing_lifecycle_bucket_discovery" in disabled_stage_flags else "",
-        "code_improvement_workorder" if "code_improvement_workorder" in disabled_stage_flags else "",
+        (
+            "pattern_lab_currentness_audit"
+            if "pattern_lab_currentness_audit" in disabled_stage_flags
+            else ""
+        ),
+        (
+            "pattern_lab_ai_review"
+            if "pattern_lab_ai_review" in disabled_stage_flags
+            else ""
+        ),
+        (
+            "time_window_regime_counterfactual"
+            if "time_window_regime_counterfactual" in disabled_stage_flags
+            else ""
+        ),
+        (
+            "producer_gap_discovery"
+            if "producer_gap_discovery" in disabled_stage_flags
+            else ""
+        ),
+        (
+            "one_share_threshold_opportunity"
+            if "one_share_threshold_opportunity" in disabled_stage_flags
+            else ""
+        ),
+        (
+            "stage_hook_workorder_discovery"
+            if "stage_hook_workorder_discovery" in disabled_stage_flags
+            else ""
+        ),
+        (
+            "stage_hook_runtime_scaffold"
+            if "stage_hook_runtime_scaffold" in disabled_stage_flags
+            else ""
+        ),
+        (
+            "pattern_lab_propagation_audit"
+            if "pattern_lab_propagation_audit" in disabled_stage_flags
+            else ""
+        ),
+        (
+            "scalp_entry_action_decision_matrix"
+            if "scalp_entry_adm" in disabled_stage_flags
+            else ""
+        ),
+        (
+            "lifecycle_decision_matrix"
+            if "lifecycle_decision_matrix" in disabled_stage_flags
+            else ""
+        ),
+        (
+            "swing_strategy_discovery_sim"
+            if "swing_strategy_discovery" in disabled_stage_flags
+            else ""
+        ),
+        (
+            "swing_lifecycle_decision_matrix"
+            if "swing_lifecycle_matrix" in disabled_stage_flags
+            else ""
+        ),
+        (
+            "swing_lifecycle_bucket_discovery"
+            if "swing_lifecycle_bucket_discovery" in disabled_stage_flags
+            else ""
+        ),
+        (
+            "code_improvement_workorder"
+            if "code_improvement_workorder" in disabled_stage_flags
+            else ""
+        ),
         "threshold_cycle_ev" if "daily_ev" in disabled_stage_flags else "",
-        "runtime_approval_summary" if "runtime_approval_summary" in disabled_stage_flags else "",
-        "runtime_apply_bridge" if "runtime_apply_bridge" in disabled_stage_flags else "",
-        "runtime_apply_gap_audit" if "runtime_apply_gap_audit" in disabled_stage_flags else "",
-        "entry_split_order_plan" if "entry_split_order_plan" in disabled_stage_flags else "",
-        "scale_in_split_order_plan" if "scale_in_split_order_plan" in disabled_stage_flags else "",
-        "ldm_hypothesis_parent_refinement" if "ldm_hypothesis_parent_refinement" in disabled_stage_flags else "",
-        "next_stage2_checklist" if "next_stage2_checklist" in disabled_stage_flags else "",
+        (
+            "runtime_approval_summary"
+            if "runtime_approval_summary" in disabled_stage_flags
+            else ""
+        ),
+        (
+            "runtime_apply_bridge"
+            if "runtime_apply_bridge" in disabled_stage_flags
+            else ""
+        ),
+        (
+            "runtime_apply_gap_audit"
+            if "runtime_apply_gap_audit" in disabled_stage_flags
+            else ""
+        ),
+        (
+            "entry_split_order_plan"
+            if "entry_split_order_plan" in disabled_stage_flags
+            else ""
+        ),
+        (
+            "scale_in_split_order_plan"
+            if "scale_in_split_order_plan" in disabled_stage_flags
+            else ""
+        ),
+        (
+            "ldm_hypothesis_parent_refinement"
+            if "ldm_hypothesis_parent_refinement" in disabled_stage_flags
+            else ""
+        ),
+        (
+            "next_stage2_checklist"
+            if "next_stage2_checklist" in disabled_stage_flags
+            else ""
+        ),
     }
     if "runtime_apply_bridge" not in execution_flags:
         disabled_artifact_labels.add("runtime_apply_bridge")
@@ -4147,14 +5372,8 @@ def build_threshold_cycle_postclose_verification(
         item["label"]
         for item in artifact_status
         if item["label"] not in disabled_artifact_labels
-        and (
-            item["label"] not in _OPTIONAL_ARTIFACT_LABELS
-            or item.get("exists")
-        )
-        and (
-            not item.get("exists")
-            or (item.get("json_valid") is False)
-        )
+        and (item["label"] not in _OPTIONAL_ARTIFACT_LABELS or item.get("exists"))
+        and (not item.get("exists") or (item.get("json_valid") is False))
     ]
     if (
         execution_flags.get("ldm_hypothesis_parent_refinement") is True
@@ -4171,7 +5390,8 @@ def build_threshold_cycle_postclose_verification(
     quote_consistency_warnings = [
         str(item.get("code") or "quote_consistency_warning")
         for item in quote_consistency_findings
-        if isinstance(item, dict) and str(item.get("severity") or "").lower() == "warning"
+        if isinstance(item, dict)
+        and str(item.get("severity") or "").lower() == "warning"
     ]
     if target_date >= "2026-06-27" and not paths["quote_consistency"].exists():
         quote_consistency_warnings.append("quote_consistency_report_missing")
@@ -4195,74 +5415,132 @@ def build_threshold_cycle_postclose_verification(
     ]
     if "pattern_lab_currentness_audit" in disabled_stage_flags:
         missing_downstream_links = [
-            key for key in missing_downstream_links if "pattern_lab_currentness_audit" not in key
+            key
+            for key in missing_downstream_links
+            if "pattern_lab_currentness_audit" not in key
         ]
-    if "pattern_lab_ai_review" not in execution_flags or "pattern_lab_ai_review" in disabled_stage_flags:
+    if (
+        "pattern_lab_ai_review" not in execution_flags
+        or "pattern_lab_ai_review" in disabled_stage_flags
+    ):
         missing_downstream_links = [
-            key for key in missing_downstream_links if "pattern_lab_ai_review" not in key
+            key
+            for key in missing_downstream_links
+            if "pattern_lab_ai_review" not in key
         ]
-    if "producer_gap_discovery" not in execution_flags or "producer_gap_discovery" in disabled_stage_flags:
+    if (
+        "producer_gap_discovery" not in execution_flags
+        or "producer_gap_discovery" in disabled_stage_flags
+    ):
         missing_downstream_links = [
-            key for key in missing_downstream_links if "producer_gap_discovery" not in key
+            key
+            for key in missing_downstream_links
+            if "producer_gap_discovery" not in key
         ]
-    if "stage_hook_workorder_discovery" not in execution_flags or "stage_hook_workorder_discovery" in disabled_stage_flags:
+    if (
+        "stage_hook_workorder_discovery" not in execution_flags
+        or "stage_hook_workorder_discovery" in disabled_stage_flags
+    ):
         missing_downstream_links = [
-            key for key in missing_downstream_links if "stage_hook_workorder_discovery" not in key
+            key
+            for key in missing_downstream_links
+            if "stage_hook_workorder_discovery" not in key
         ]
-    if "stage_hook_runtime_scaffold" not in execution_flags or "stage_hook_runtime_scaffold" in disabled_stage_flags:
+    if (
+        "stage_hook_runtime_scaffold" not in execution_flags
+        or "stage_hook_runtime_scaffold" in disabled_stage_flags
+    ):
         missing_downstream_links = [
-            key for key in missing_downstream_links if "stage_hook_runtime_scaffold" not in key
+            key
+            for key in missing_downstream_links
+            if "stage_hook_runtime_scaffold" not in key
         ]
     if "pattern_lab_propagation_audit" in disabled_stage_flags:
         missing_downstream_links = [
-            key for key in missing_downstream_links if "pattern_lab_propagation_audit" not in key
+            key
+            for key in missing_downstream_links
+            if "pattern_lab_propagation_audit" not in key
         ]
     if "code_improvement_workorder" in disabled_stage_flags:
         missing_downstream_links = [
-            key for key in missing_downstream_links if "code_improvement_workorder" not in key
+            key
+            for key in missing_downstream_links
+            if "code_improvement_workorder" not in key
         ]
     if "scalp_entry_adm" in disabled_stage_flags:
         missing_downstream_links = [
-            key for key in missing_downstream_links if "scalp_entry_action_decision_matrix" not in key
+            key
+            for key in missing_downstream_links
+            if "scalp_entry_action_decision_matrix" not in key
         ]
-    if "entry_split_order_plan" in disabled_stage_flags or "entry_split_order_plan" not in execution_flags:
+    if (
+        "entry_split_order_plan" in disabled_stage_flags
+        or "entry_split_order_plan" not in execution_flags
+    ):
         missing_downstream_links = [
-            key for key in missing_downstream_links if "entry_split_order_plan" not in key
+            key
+            for key in missing_downstream_links
+            if "entry_split_order_plan" not in key
         ]
-    if "scale_in_split_order_plan" in disabled_stage_flags or "scale_in_split_order_plan" not in execution_flags:
+    if (
+        "scale_in_split_order_plan" in disabled_stage_flags
+        or "scale_in_split_order_plan" not in execution_flags
+    ):
         missing_downstream_links = [
-            key for key in missing_downstream_links if "scale_in_split_order_plan" not in key
+            key
+            for key in missing_downstream_links
+            if "scale_in_split_order_plan" not in key
         ]
     if "lifecycle_decision_matrix" in disabled_stage_flags:
         missing_downstream_links = [
-            key for key in missing_downstream_links if "lifecycle_decision_matrix" not in key
+            key
+            for key in missing_downstream_links
+            if "lifecycle_decision_matrix" not in key
         ]
     if "swing_lifecycle_matrix" in disabled_stage_flags:
         missing_downstream_links = [
-            key for key in missing_downstream_links if "swing_lifecycle_decision_matrix" not in key
+            key
+            for key in missing_downstream_links
+            if "swing_lifecycle_decision_matrix" not in key
         ]
     if "swing_lifecycle_matrix" not in execution_flags:
         missing_downstream_links = [
-            key for key in missing_downstream_links if "swing_lifecycle_decision_matrix" not in key
+            key
+            for key in missing_downstream_links
+            if "swing_lifecycle_decision_matrix" not in key
         ]
     if "swing_lifecycle_bucket_discovery" in disabled_stage_flags:
         missing_downstream_links = [
-            key for key in missing_downstream_links if "swing_lifecycle_bucket_discovery" not in key
+            key
+            for key in missing_downstream_links
+            if "swing_lifecycle_bucket_discovery" not in key
         ]
     if "swing_lifecycle_bucket_discovery" not in execution_flags:
         missing_downstream_links = [
-            key for key in missing_downstream_links if "swing_lifecycle_bucket_discovery" not in key
+            key
+            for key in missing_downstream_links
+            if "swing_lifecycle_bucket_discovery" not in key
         ]
-    if "daily_ev" in disabled_stage_flags or "runtime_approval_summary" in disabled_stage_flags:
+    if (
+        "daily_ev" in disabled_stage_flags
+        or "runtime_approval_summary" in disabled_stage_flags
+    ):
         missing_downstream_links = []
-    runtime_apply_gap_audit_status = str(runtime_apply_gap_audit.get("status") or "missing").strip()
+    runtime_apply_gap_audit_status = str(
+        runtime_apply_gap_audit.get("status") or "missing"
+    ).strip()
     runtime_apply_gap_audit_summary = (
-        runtime_apply_gap_audit.get("summary") if isinstance(runtime_apply_gap_audit.get("summary"), dict) else {}
+        runtime_apply_gap_audit.get("summary")
+        if isinstance(runtime_apply_gap_audit.get("summary"), dict)
+        else {}
     )
     runtime_apply_gap_audit_issues: list[str] = []
     runtime_gap_check_enabled = (
         "runtime_apply_gap_audit" not in disabled_stage_flags
-        and ("runtime_apply_gap_audit" in execution_flags or bool(runtime_apply_gap_audit))
+        and (
+            "runtime_apply_gap_audit" in execution_flags
+            or bool(runtime_apply_gap_audit)
+        )
     )
     if runtime_gap_check_enabled:
         if not runtime_apply_gap_audit:
@@ -4270,23 +5548,36 @@ def build_threshold_cycle_postclose_verification(
         if runtime_apply_gap_audit_status == "fail":
             runtime_apply_gap_audit_issues.append("runtime_apply_gap_audit_failed")
         if runtime_apply_gap_audit_summary.get("ai_review_retry_pending") is True:
-            runtime_apply_gap_audit_issues.append("runtime_apply_gap_ai_review_retry_pending")
-        if (
-            int(runtime_apply_gap_audit_summary.get("critical_failure_count") or 0) > 0
-            and not runtime_apply_gap_audit.get("retry_queue")
-        ):
-            runtime_apply_gap_audit_issues.append("runtime_apply_gap_fail_without_retry_queue")
+            runtime_apply_gap_audit_issues.append(
+                "runtime_apply_gap_ai_review_retry_pending"
+            )
+        if int(
+            runtime_apply_gap_audit_summary.get("critical_failure_count") or 0
+        ) > 0 and not runtime_apply_gap_audit.get("retry_queue"):
+            runtime_apply_gap_audit_issues.append(
+                "runtime_apply_gap_fail_without_retry_queue"
+            )
         if bridge_report and _consumer_stale(runtime_apply_gap_audit, bridge_report):
-            runtime_apply_gap_audit_issues.append("runtime_apply_gap_audit_stale_before_runtime_apply_bridge")
-        if preopen_apply_next and _consumer_stale(runtime_apply_gap_audit, preopen_apply_next):
-            runtime_apply_gap_audit_issues.append("runtime_apply_gap_audit_stale_before_threshold_preopen_apply")
+            runtime_apply_gap_audit_issues.append(
+                "runtime_apply_gap_audit_stale_before_runtime_apply_bridge"
+            )
+        if preopen_apply_next and _consumer_stale(
+            runtime_apply_gap_audit, preopen_apply_next
+        ):
+            runtime_apply_gap_audit_issues.append(
+                "runtime_apply_gap_audit_stale_before_threshold_preopen_apply"
+            )
         if scale_in_source_present and scale_in_policy_contract.get("status") == "fail":
             runtime_apply_gap_audit_issues.append("scale_in_policy_contract_missing")
     key_lineage_summary = (
-        key_lineage_ledger.get("summary") if isinstance(key_lineage_ledger.get("summary"), dict) else {}
+        key_lineage_ledger.get("summary")
+        if isinstance(key_lineage_ledger.get("summary"), dict)
+        else {}
     )
     conversion_lane_summary = (
-        conversion_lane.get("summary") if isinstance(conversion_lane.get("summary"), dict) else {}
+        conversion_lane.get("summary")
+        if isinstance(conversion_lane.get("summary"), dict)
+        else {}
     )
     conversion_check_enabled = (
         execution_flags.get("key_lineage_ledger") is True
@@ -4294,59 +5585,91 @@ def build_threshold_cycle_postclose_verification(
         or bool(key_lineage_ledger)
         or bool(conversion_lane)
     )
-    conversion_kpi_status, conversion_kpi_issues, conversion_kpi_warnings = _conversion_kpi_health(
-        conversion_check_enabled=conversion_check_enabled,
-        key_lineage_ledger=key_lineage_ledger,
-        conversion_lane=conversion_lane,
-        key_lineage_summary=key_lineage_summary,
-        conversion_lane_summary=conversion_lane_summary,
+    conversion_kpi_status, conversion_kpi_issues, conversion_kpi_warnings = (
+        _conversion_kpi_health(
+            conversion_check_enabled=conversion_check_enabled,
+            key_lineage_ledger=key_lineage_ledger,
+            conversion_lane=conversion_lane,
+            key_lineage_summary=key_lineage_summary,
+            conversion_lane_summary=conversion_lane_summary,
+        )
     )
     stale_downstream_links: list[str] = []
     if "daily_ev" not in disabled_stage_flags:
-        if downstream_links.get("threshold_cycle_ev_sources_workorder") and _consumer_stale(ev_report, workorder):
-            stale_downstream_links.append("threshold_cycle_ev_stale_before_code_improvement_workorder")
+        if downstream_links.get(
+            "threshold_cycle_ev_sources_workorder"
+        ) and _consumer_stale(ev_report, workorder):
+            stale_downstream_links.append(
+                "threshold_cycle_ev_stale_before_code_improvement_workorder"
+            )
         if (
             "pattern_lab_currentness_audit" not in disabled_stage_flags
-            and downstream_links.get("threshold_cycle_ev_sources_pattern_lab_currentness_audit")
+            and downstream_links.get(
+                "threshold_cycle_ev_sources_pattern_lab_currentness_audit"
+            )
             and _consumer_stale(ev_report, currentness_audit)
         ):
-            stale_downstream_links.append("threshold_cycle_ev_stale_before_pattern_lab_currentness_audit")
+            stale_downstream_links.append(
+                "threshold_cycle_ev_stale_before_pattern_lab_currentness_audit"
+            )
         if (
             "pattern_lab_ai_review" in execution_flags
             and "pattern_lab_ai_review" not in disabled_stage_flags
             and downstream_links.get("threshold_cycle_ev_sources_pattern_lab_ai_review")
             and _consumer_stale(ev_report, pattern_lab_ai_review)
         ):
-            stale_downstream_links.append("threshold_cycle_ev_stale_before_pattern_lab_ai_review")
+            stale_downstream_links.append(
+                "threshold_cycle_ev_stale_before_pattern_lab_ai_review"
+            )
         if (
             "producer_gap_discovery" in execution_flags
             and "producer_gap_discovery" not in disabled_stage_flags
-            and downstream_links.get("threshold_cycle_ev_sources_producer_gap_discovery")
+            and downstream_links.get(
+                "threshold_cycle_ev_sources_producer_gap_discovery"
+            )
             and _consumer_stale(ev_report, producer_gap_discovery)
         ):
-            stale_downstream_links.append("threshold_cycle_ev_stale_before_producer_gap_discovery")
+            stale_downstream_links.append(
+                "threshold_cycle_ev_stale_before_producer_gap_discovery"
+            )
         if (
             "pattern_lab_propagation_audit" not in disabled_stage_flags
-            and downstream_links.get("threshold_cycle_ev_sources_pattern_lab_propagation_audit")
+            and downstream_links.get(
+                "threshold_cycle_ev_sources_pattern_lab_propagation_audit"
+            )
             and _consumer_stale(ev_report, propagation_audit)
         ):
-            stale_downstream_links.append("threshold_cycle_ev_stale_before_pattern_lab_propagation_audit")
+            stale_downstream_links.append(
+                "threshold_cycle_ev_stale_before_pattern_lab_propagation_audit"
+            )
     if "runtime_approval_summary" not in disabled_stage_flags:
-        if downstream_links.get("runtime_approval_summary_sources_ev") and _consumer_stale(runtime_summary, ev_report):
-            stale_downstream_links.append("runtime_approval_summary_stale_before_threshold_cycle_ev")
+        if downstream_links.get(
+            "runtime_approval_summary_sources_ev"
+        ) and _consumer_stale(runtime_summary, ev_report):
+            stale_downstream_links.append(
+                "runtime_approval_summary_stale_before_threshold_cycle_ev"
+            )
         if (
             "pattern_lab_propagation_audit" not in disabled_stage_flags
-            and downstream_links.get("runtime_approval_summary_sources_pattern_lab_propagation_audit")
+            and downstream_links.get(
+                "runtime_approval_summary_sources_pattern_lab_propagation_audit"
+            )
             and _consumer_stale(runtime_summary, propagation_audit)
         ):
-            stale_downstream_links.append("runtime_approval_summary_stale_before_pattern_lab_propagation_audit")
+            stale_downstream_links.append(
+                "runtime_approval_summary_stale_before_pattern_lab_propagation_audit"
+            )
         if (
             "pattern_lab_ai_review" in execution_flags
             and "pattern_lab_ai_review" not in disabled_stage_flags
-            and downstream_links.get("runtime_approval_summary_sources_pattern_lab_ai_review")
+            and downstream_links.get(
+                "runtime_approval_summary_sources_pattern_lab_ai_review"
+            )
             and _consumer_stale(runtime_summary, pattern_lab_ai_review)
         ):
-            stale_downstream_links.append("runtime_approval_summary_stale_before_pattern_lab_ai_review")
+            stale_downstream_links.append(
+                "runtime_approval_summary_stale_before_pattern_lab_ai_review"
+            )
     source_generation_warnings: list[str] = []
     freshness_sources = {
         "lifecycle_decision_matrix": ldm_report,
@@ -4357,65 +5680,137 @@ def build_threshold_cycle_postclose_verification(
     if "daily_ev" not in disabled_stage_flags:
         for label, source_payload in freshness_sources.items():
             if source_payload and _consumer_stale(ev_report, source_payload):
-                source_generation_warnings.append(f"threshold_cycle_ev_stale_before_{label}")
+                source_generation_warnings.append(
+                    f"threshold_cycle_ev_stale_before_{label}"
+                )
     if "runtime_approval_summary" not in disabled_stage_flags:
         for label, source_payload in freshness_sources.items():
             if source_payload and _consumer_stale(runtime_summary, source_payload):
-                source_generation_warnings.append(f"runtime_approval_summary_stale_before_{label}")
-    if "lifecycle_decision_matrix" in disabled_stage_flags or "lifecycle_decision_matrix" not in execution_flags:
+                source_generation_warnings.append(
+                    f"runtime_approval_summary_stale_before_{label}"
+                )
+    if (
+        "lifecycle_decision_matrix" in disabled_stage_flags
+        or "lifecycle_decision_matrix" not in execution_flags
+    ):
         source_generation_warnings = [
-            key for key in source_generation_warnings if "lifecycle_decision_matrix" not in key
+            key
+            for key in source_generation_warnings
+            if "lifecycle_decision_matrix" not in key
         ]
-    if "swing_lifecycle_matrix" in disabled_stage_flags or "swing_lifecycle_matrix" not in execution_flags:
+    if (
+        "swing_lifecycle_matrix" in disabled_stage_flags
+        or "swing_lifecycle_matrix" not in execution_flags
+    ):
         source_generation_warnings = [
-            key for key in source_generation_warnings if "swing_lifecycle_decision_matrix" not in key
+            key
+            for key in source_generation_warnings
+            if "swing_lifecycle_decision_matrix" not in key
         ]
-    if "swing_lifecycle_bucket_discovery" in disabled_stage_flags or "swing_lifecycle_bucket_discovery" not in execution_flags:
+    if (
+        "swing_lifecycle_bucket_discovery" in disabled_stage_flags
+        or "swing_lifecycle_bucket_discovery" not in execution_flags
+    ):
         source_generation_warnings = [
-            key for key in source_generation_warnings if "swing_lifecycle_bucket_discovery" not in key
+            key
+            for key in source_generation_warnings
+            if "swing_lifecycle_bucket_discovery" not in key
         ]
-    if "daily_ev" in disabled_stage_flags or "runtime_approval_summary" in disabled_stage_flags:
+    if (
+        "daily_ev" in disabled_stage_flags
+        or "runtime_approval_summary" in disabled_stage_flags
+    ):
         source_generation_warnings = []
     handoff_warnings.extend(source_generation_warnings)
 
     gap_provenance_path = runtime_gap_provenance_artifact_path(target_date)
-    gap_provenance = _load_json(gap_provenance_path) if gap_provenance_path.exists() else {}
+    gap_provenance = (
+        _load_json(gap_provenance_path) if gap_provenance_path.exists() else {}
+    )
     gap_affected_handoffs: list[dict[str, Any]] = []
     if gap_provenance and gap_provenance.get("gaps"):
         for gap in gap_provenance["gaps"]:
             gap_affected_families = [gap.get("family")]
             gap_affected_metric_scopes = gap.get("excluded_metrics") or []
             relevant_issues = [
-                issue for issue in log_issues
-                if any(scope.lower() in issue.lower() for scope in gap_affected_metric_scopes)
+                issue
+                for issue in log_issues
+                if any(
+                    scope.lower() in issue.lower()
+                    for scope in gap_affected_metric_scopes
+                )
                 or any(
                     _normalized_for_match(family) in _normalized_for_match(issue)
-                    for family in gap_affected_families if family
+                    for family in gap_affected_families
+                    if family
                 )
             ]
             if relevant_issues:
-                gap_affected_handoffs.append({
-                    "family": gap.get("family"),
-                    "gap_type": gap.get("gap_type"),
-                    "interpretation_rule": gap.get("interpretation_rule"),
-                    "affected_log_issues": relevant_issues,
-                })
-                handoff_warnings.append(f"runtime_gap_affected:{gap.get('family')}:{gap.get('gap_type')}")
+                gap_affected_handoffs.append(
+                    {
+                        "family": gap.get("family"),
+                        "gap_type": gap.get("gap_type"),
+                        "interpretation_rule": gap.get("interpretation_rule"),
+                        "affected_log_issues": relevant_issues,
+                    }
+                )
+                handoff_warnings.append(
+                    f"runtime_gap_affected:{gap.get('family')}:{gap.get('gap_type')}"
+                )
     if "code_improvement_workorder" in disabled_stage_flags:
-        stale_downstream_links = [key for key in stale_downstream_links if "code_improvement_workorder" not in key]
+        stale_downstream_links = [
+            key
+            for key in stale_downstream_links
+            if "code_improvement_workorder" not in key
+        ]
     if "pattern_lab_currentness_audit" in disabled_stage_flags:
-        stale_downstream_links = [key for key in stale_downstream_links if "pattern_lab_currentness_audit" not in key]
-    if "pattern_lab_ai_review" not in execution_flags or "pattern_lab_ai_review" in disabled_stage_flags:
-        stale_downstream_links = [key for key in stale_downstream_links if "pattern_lab_ai_review" not in key]
-    if "producer_gap_discovery" not in execution_flags or "producer_gap_discovery" in disabled_stage_flags:
-        stale_downstream_links = [key for key in stale_downstream_links if "producer_gap_discovery" not in key]
-    if "stage_hook_workorder_discovery" not in execution_flags or "stage_hook_workorder_discovery" in disabled_stage_flags:
-        stale_downstream_links = [key for key in stale_downstream_links if "stage_hook_workorder_discovery" not in key]
-    if "stage_hook_runtime_scaffold" not in execution_flags or "stage_hook_runtime_scaffold" in disabled_stage_flags:
-        stale_downstream_links = [key for key in stale_downstream_links if "stage_hook_runtime_scaffold" not in key]
+        stale_downstream_links = [
+            key
+            for key in stale_downstream_links
+            if "pattern_lab_currentness_audit" not in key
+        ]
+    if (
+        "pattern_lab_ai_review" not in execution_flags
+        or "pattern_lab_ai_review" in disabled_stage_flags
+    ):
+        stale_downstream_links = [
+            key for key in stale_downstream_links if "pattern_lab_ai_review" not in key
+        ]
+    if (
+        "producer_gap_discovery" not in execution_flags
+        or "producer_gap_discovery" in disabled_stage_flags
+    ):
+        stale_downstream_links = [
+            key for key in stale_downstream_links if "producer_gap_discovery" not in key
+        ]
+    if (
+        "stage_hook_workorder_discovery" not in execution_flags
+        or "stage_hook_workorder_discovery" in disabled_stage_flags
+    ):
+        stale_downstream_links = [
+            key
+            for key in stale_downstream_links
+            if "stage_hook_workorder_discovery" not in key
+        ]
+    if (
+        "stage_hook_runtime_scaffold" not in execution_flags
+        or "stage_hook_runtime_scaffold" in disabled_stage_flags
+    ):
+        stale_downstream_links = [
+            key
+            for key in stale_downstream_links
+            if "stage_hook_runtime_scaffold" not in key
+        ]
     if "pattern_lab_propagation_audit" in disabled_stage_flags:
-        stale_downstream_links = [key for key in stale_downstream_links if "pattern_lab_propagation_audit" not in key]
-    if "daily_ev" in disabled_stage_flags or "runtime_approval_summary" in disabled_stage_flags:
+        stale_downstream_links = [
+            key
+            for key in stale_downstream_links
+            if "pattern_lab_propagation_audit" not in key
+        ]
+    if (
+        "daily_ev" in disabled_stage_flags
+        or "runtime_approval_summary" in disabled_stage_flags
+    ):
         stale_downstream_links = []
 
     warning_followup_summary = _warning_followup_summary(
@@ -4438,14 +5833,26 @@ def build_threshold_cycle_postclose_verification(
     if not lifecycle_flow_closure_status:
         lifecycle_flow_closure_status = (
             "open"
-            if _safe_int(lifecycle_flow_bucket_handoff.get("direct_sim_record_complete_flow_count"), 0) <= 0
+            if _safe_int(
+                lifecycle_flow_bucket_handoff.get(
+                    "direct_sim_record_complete_flow_count"
+                ),
+                0,
+            )
+            <= 0
             else "closed"
         )
     active_seed_lineage_closure_status = str(
         key_lineage_summary.get("active_seed_candidate_lineage_closure_status") or ""
     ).strip() or (
         "open"
-        if _safe_int(key_lineage_summary.get("active_seed_candidate_without_seed_id_event_count"), 0) > 0
+        if _safe_int(
+            key_lineage_summary.get(
+                "active_seed_candidate_without_seed_id_event_count"
+            ),
+            0,
+        )
+        > 0
         else "closed"
     )
     adm_lookup_closure = (
@@ -4460,7 +5867,11 @@ def build_threshold_cycle_postclose_verification(
     ).strip() or (
         "open"
         if _safe_int(
-            ((adm_summary.get("adm_bucket_lookup_status_counts") or {}).get("new_or_unseen_token_vs_prior_adm")),
+            (
+                (adm_summary.get("adm_bucket_lookup_status_counts") or {}).get(
+                    "new_or_unseen_token_vs_prior_adm"
+                )
+            ),
             0,
         )
         > 0
@@ -4469,9 +5880,16 @@ def build_threshold_cycle_postclose_verification(
     root_cause_closure_summary = {
         "submit_drought": {
             "handoff_status": buy_funnel_submit_drought_handoff.get("handoff_status"),
-            "root_cause_closure_status": buy_funnel_submit_drought_handoff.get("root_cause_closure_status"),
-            "artifact_regeneration_required": buy_funnel_submit_drought_handoff.get("artifact_regeneration_required"),
-            "root_cause_open_reasons": buy_funnel_submit_drought_handoff.get("root_cause_open_reasons") or [],
+            "root_cause_closure_status": buy_funnel_submit_drought_handoff.get(
+                "root_cause_closure_status"
+            ),
+            "artifact_regeneration_required": buy_funnel_submit_drought_handoff.get(
+                "artifact_regeneration_required"
+            ),
+            "root_cause_open_reasons": buy_funnel_submit_drought_handoff.get(
+                "root_cause_open_reasons"
+            )
+            or [],
             "unknown_latency_reason_count": buy_funnel_submit_drought_handoff.get(
                 "submit_drought_unknown_latency_reason_count"
             ),
@@ -4480,8 +5898,12 @@ def build_threshold_cycle_postclose_verification(
             "direct_sim_record_complete_flow_count": lifecycle_flow_bucket_handoff.get(
                 "direct_sim_record_complete_flow_count"
             ),
-            "adm_bridge_complete_flow_count": lifecycle_flow_bucket_handoff.get("adm_bridge_complete_flow_count"),
-            "direct_flow_zero_reason": lifecycle_flow_bucket_handoff.get("direct_flow_zero_reason"),
+            "adm_bridge_complete_flow_count": lifecycle_flow_bucket_handoff.get(
+                "adm_bridge_complete_flow_count"
+            ),
+            "direct_flow_zero_reason": lifecycle_flow_bucket_handoff.get(
+                "direct_flow_zero_reason"
+            ),
             "direct_flow_zero_followup_required": bool(
                 lifecycle_flow_bucket_handoff.get("direct_flow_zero_followup_required")
             ),
@@ -4489,23 +5911,37 @@ def build_threshold_cycle_postclose_verification(
         },
         "active_seed_key_lineage": {
             "active_seed_candidate_without_seed_id_event_count": _safe_int(
-                key_lineage_summary.get("active_seed_candidate_without_seed_id_event_count"),
+                key_lineage_summary.get(
+                    "active_seed_candidate_without_seed_id_event_count"
+                ),
                 0,
             ),
             "active_seed_candidate_without_seed_id_reason_counts": (
-                key_lineage_summary.get("active_seed_candidate_without_seed_id_reason_counts") or {}
+                key_lineage_summary.get(
+                    "active_seed_candidate_without_seed_id_reason_counts"
+                )
+                or {}
             ),
             "active_seed_candidate_missing_parent_seed_lookup_key_counts": (
-                key_lineage_summary.get("active_seed_candidate_missing_parent_seed_lookup_key_counts") or {}
+                key_lineage_summary.get(
+                    "active_seed_candidate_missing_parent_seed_lookup_key_counts"
+                )
+                or {}
             ),
             "active_seed_candidate_lineage_followup_required": bool(
-                key_lineage_summary.get("active_seed_candidate_lineage_followup_required")
+                key_lineage_summary.get(
+                    "active_seed_candidate_lineage_followup_required"
+                )
             ),
             "root_cause_closure_status": active_seed_lineage_closure_status,
         },
         "entry_adm_lookup": {
             "new_or_unseen_token_vs_prior_adm_count": _safe_int(
-                ((adm_summary.get("adm_bucket_lookup_status_counts") or {}).get("new_or_unseen_token_vs_prior_adm")),
+                (
+                    (adm_summary.get("adm_bucket_lookup_status_counts") or {}).get(
+                        "new_or_unseen_token_vs_prior_adm"
+                    )
+                ),
                 0,
             ),
             "adm_bucket_lookup_closure": adm_lookup_closure,
@@ -4532,16 +5968,24 @@ def build_threshold_cycle_postclose_verification(
                 "submit_drought_latency_pass_recovered_count"
             ),
             "order_bundle_submitted_after_refresh_count": (
-                (buy_funnel_submit_drought_handoff.get("submit_drought_quote_freshness_attribution") or {}).get(
-                    "order_bundle_submitted_after_refresh_count"
-                )
+                (
+                    buy_funnel_submit_drought_handoff.get(
+                        "submit_drought_quote_freshness_attribution"
+                    )
+                    or {}
+                ).get("order_bundle_submitted_after_refresh_count")
                 if isinstance(
-                    buy_funnel_submit_drought_handoff.get("submit_drought_quote_freshness_attribution"),
+                    buy_funnel_submit_drought_handoff.get(
+                        "submit_drought_quote_freshness_attribution"
+                    ),
                     dict,
                 )
                 else None
             ),
-            "known_guard_counts": buy_funnel_submit_drought_handoff.get("submit_drought_root_cause_counts") or {},
+            "known_guard_counts": buy_funnel_submit_drought_handoff.get(
+                "submit_drought_root_cause_counts"
+            )
+            or {},
             "next_axis": "real_only_known_guard_reduction",
         },
     }
@@ -4549,17 +5993,22 @@ def build_threshold_cycle_postclose_verification(
         Counter(
             str(section.get("root_cause_closure_status") or "").strip()
             for section in root_cause_closure_summary.values()
-            if isinstance(section, dict) and str(section.get("root_cause_closure_status") or "").strip()
+            if isinstance(section, dict)
+            and str(section.get("root_cause_closure_status") or "").strip()
         )
     )
     if stale_downstream_links and not require_done_marker:
         handoff_warnings.append("pending_done_stale_downstream_links_present")
-    pending_done_marker = bool(start_line and done_line is None and not require_done_marker)
+    pending_done_marker = bool(
+        start_line and done_line is None and not require_done_marker
+    )
     execution_profile_status = "full_profile"
     if disabled_stage_flags:
         execution_profile_status = "recovered_partial_profile"
     elif done_line is None and start_line:
-        execution_profile_status = "done_marker_missing" if require_done_marker else "pending_done_marker"
+        execution_profile_status = (
+            "done_marker_missing" if require_done_marker else "pending_done_marker"
+        )
 
     status = "pass"
     strict_log_issues = list(log_issues)
@@ -4567,7 +6016,8 @@ def build_threshold_cycle_postclose_verification(
         strict_log_issues = [
             item
             for item in strict_log_issues
-            if item not in {"postclose_fail_marker_present", "postclose_done_marker_missing"}
+            if item
+            not in {"postclose_fail_marker_present", "postclose_done_marker_missing"}
         ]
 
     if not start_line:
@@ -4635,26 +6085,34 @@ def build_threshold_cycle_postclose_verification(
                 "latest DONE marker was produced by a recovery run with selected heavy stages disabled; "
                 "same-date artifacts are still validated separately"
                 if disabled_stage_flags
-                else f"latest DONE marker was produced by controller recovery action `{recovery_action}`; execution flags are not asserted by this marker"
-                if recovery_done
-                else "latest DONE marker used full/default stage profile"
-                if done_line
-                else "wrapper-internal verification passed required artifacts; final DONE marker is checked by a later health check"
-                if pending_done_marker
-                else "latest START marker has no matching DONE marker"
+                else (
+                    f"latest DONE marker was produced by controller recovery action `{recovery_action}`; execution flags are not asserted by this marker"
+                    if recovery_done
+                    else (
+                        "latest DONE marker used full/default stage profile"
+                        if done_line
+                        else (
+                            "wrapper-internal verification passed required artifacts; final DONE marker is checked by a later health check"
+                            if pending_done_marker
+                            else "latest START marker has no matching DONE marker"
+                        )
+                    )
+                )
             ),
         },
         "predecessor_integrity": {
             "status": (
                 "not_yet_due"
                 if status == "not_yet_due"
-                else "pass_pending_done_marker"
-                if status == "pass_with_pending_done_marker"
-                else "fail"
-                if predecessor_timeouts or strict_log_issues
-                else "warning"
-                if predecessor_waits
-                else "pass"
+                else (
+                    "pass_pending_done_marker"
+                    if status == "pass_with_pending_done_marker"
+                    else (
+                        "fail"
+                        if predecessor_timeouts or strict_log_issues
+                        else "warning" if predecessor_waits else "pass"
+                    )
+                )
             ),
             "wait_count": len(predecessor_waits),
             "timeout_count": len(predecessor_timeouts),
@@ -4678,24 +6136,32 @@ def build_threshold_cycle_postclose_verification(
             "issues": runtime_apply_gap_audit_issues,
             "summary": runtime_apply_gap_audit_summary,
             "retry_queue_count": len(runtime_apply_gap_audit.get("retry_queue") or []),
-            "codex_directive_count": len(runtime_apply_gap_audit.get("codex_workorder_directives") or []),
+            "codex_directive_count": len(
+                runtime_apply_gap_audit.get("codex_workorder_directives") or []
+            ),
             "runtime_apply_bridge_generated_at": bridge_report.get("generated_at"),
-            "threshold_preopen_apply_next_generated_at": preopen_apply_next.get("generated_at"),
-            "threshold_preopen_apply_current_generated_at": preopen_apply_current.get("generated_at"),
+            "threshold_preopen_apply_next_generated_at": preopen_apply_next.get(
+                "generated_at"
+            ),
+            "threshold_preopen_apply_current_generated_at": preopen_apply_current.get(
+                "generated_at"
+            ),
         },
         "quote_consistency": {
             "status": (
                 "fail"
                 if quote_consistency_failures
-                else "warning"
-                if quote_consistency_warnings
-                else "pass"
+                else "warning" if quote_consistency_warnings else "pass"
             ),
             "summary": quote_consistency_report.get("summary") or {},
             "findings": quote_consistency_findings,
             "failures": quote_consistency_failures,
             "warnings": quote_consistency_warnings,
-            "path": str(paths["quote_consistency"]) if paths["quote_consistency"].exists() else None,
+            "path": (
+                str(paths["quote_consistency"])
+                if paths["quote_consistency"].exists()
+                else None
+            ),
         },
         "conversion_kpi": {
             "status": conversion_kpi_status,
@@ -4735,7 +6201,9 @@ def build_threshold_cycle_postclose_verification(
         "overnight_bucket_attribution_present": isinstance(overnight_attribution, dict),
         "overnight_source_present": overnight_source_present,
         "lifecycle_flow_bucket_handoff": lifecycle_flow_bucket_handoff,
-        "lifecycle_flow_bucket_attribution_present": isinstance(lifecycle_flow_attribution, dict),
+        "lifecycle_flow_bucket_attribution_present": isinstance(
+            lifecycle_flow_attribution, dict
+        ),
         "lifecycle_bucket_discovery_handoff": lifecycle_bucket_discovery_handoff,
         "ldm_hypothesis_parent_refinement_consumption": ldm_refinement_consumption,
         "lifecycle_bucket_windows": lifecycle_bucket_windows,
@@ -4748,34 +6216,82 @@ def build_threshold_cycle_postclose_verification(
 
 
 def _render_markdown(report: dict[str, Any]) -> str:
-    predecessor = report.get("predecessor_integrity") if isinstance(report.get("predecessor_integrity"), dict) else {}
-    workorder = report.get("workorder_snapshot") if isinstance(report.get("workorder_snapshot"), dict) else {}
-    ai_correction = report.get("ai_correction") if isinstance(report.get("ai_correction"), dict) else {}
-    runtime_gap = report.get("runtime_apply_gap_audit") if isinstance(report.get("runtime_apply_gap_audit"), dict) else {}
+    predecessor = (
+        report.get("predecessor_integrity")
+        if isinstance(report.get("predecessor_integrity"), dict)
+        else {}
+    )
+    workorder = (
+        report.get("workorder_snapshot")
+        if isinstance(report.get("workorder_snapshot"), dict)
+        else {}
+    )
+    ai_correction = (
+        report.get("ai_correction")
+        if isinstance(report.get("ai_correction"), dict)
+        else {}
+    )
+    runtime_gap = (
+        report.get("runtime_apply_gap_audit")
+        if isinstance(report.get("runtime_apply_gap_audit"), dict)
+        else {}
+    )
     warning_followup = (
         report.get("warning_followup_summary")
         if isinstance(report.get("warning_followup_summary"), dict)
         else {}
     )
-    gap_provenance = report.get("gap_provenance") if isinstance(report.get("gap_provenance"), dict) else {}
+    gap_provenance = (
+        report.get("gap_provenance")
+        if isinstance(report.get("gap_provenance"), dict)
+        else {}
+    )
     gap_affected_handoffs = report.get("gap_affected_handoffs") or []
     overnight_quality = (
         report.get("scalp_sim_overnight_source_quality")
         if isinstance(report.get("scalp_sim_overnight_source_quality"), dict)
         else {}
     )
-    entry_bucket = report.get("entry_bucket_handoff") if isinstance(report.get("entry_bucket_handoff"), dict) else {}
-    submit_bucket = report.get("submit_bucket_handoff") if isinstance(report.get("submit_bucket_handoff"), dict) else {}
-    holding_bucket = report.get("holding_bucket_handoff") if isinstance(report.get("holding_bucket_handoff"), dict) else {}
-    exit_bucket = report.get("exit_bucket_handoff") if isinstance(report.get("exit_bucket_handoff"), dict) else {}
+    entry_bucket = (
+        report.get("entry_bucket_handoff")
+        if isinstance(report.get("entry_bucket_handoff"), dict)
+        else {}
+    )
+    submit_bucket = (
+        report.get("submit_bucket_handoff")
+        if isinstance(report.get("submit_bucket_handoff"), dict)
+        else {}
+    )
+    holding_bucket = (
+        report.get("holding_bucket_handoff")
+        if isinstance(report.get("holding_bucket_handoff"), dict)
+        else {}
+    )
+    exit_bucket = (
+        report.get("exit_bucket_handoff")
+        if isinstance(report.get("exit_bucket_handoff"), dict)
+        else {}
+    )
     buy_funnel_handoff = (
         report.get("buy_funnel_submit_drought_handoff")
         if isinstance(report.get("buy_funnel_submit_drought_handoff"), dict)
         else {}
     )
-    scale_in_bucket = report.get("scale_in_bucket_handoff") if isinstance(report.get("scale_in_bucket_handoff"), dict) else {}
-    scale_in_policy = report.get("scale_in_policy_contract") if isinstance(report.get("scale_in_policy_contract"), dict) else {}
-    overnight_bucket = report.get("overnight_bucket_handoff") if isinstance(report.get("overnight_bucket_handoff"), dict) else {}
+    scale_in_bucket = (
+        report.get("scale_in_bucket_handoff")
+        if isinstance(report.get("scale_in_bucket_handoff"), dict)
+        else {}
+    )
+    scale_in_policy = (
+        report.get("scale_in_policy_contract")
+        if isinstance(report.get("scale_in_policy_contract"), dict)
+        else {}
+    )
+    overnight_bucket = (
+        report.get("overnight_bucket_handoff")
+        if isinstance(report.get("overnight_bucket_handoff"), dict)
+        else {}
+    )
     lifecycle_flow_bucket = (
         report.get("lifecycle_flow_bucket_handoff")
         if isinstance(report.get("lifecycle_flow_bucket_handoff"), dict)
@@ -4823,7 +6339,9 @@ def _render_markdown(report: dict[str, Any]) -> str:
     )
     active_priority_diagnosis = (
         active_priority.get("active_priority_match_absence_diagnosis")
-        if isinstance(active_priority.get("active_priority_match_absence_diagnosis"), dict)
+        if isinstance(
+            active_priority.get("active_priority_match_absence_diagnosis"), dict
+        )
         else {}
     )
     lines = [
@@ -4852,7 +6370,11 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- runtime_effect: `{warning_followup.get('runtime_effect')}`",
         f"- allowed_runtime_apply: `{warning_followup.get('allowed_runtime_apply')}`",
     ]
-    for item in warning_followup.get("items") if isinstance(warning_followup.get("items"), list) else []:
+    for item in (
+        warning_followup.get("items")
+        if isinstance(warning_followup.get("items"), list)
+        else []
+    ):
         if not isinstance(item, dict):
             continue
         lines.extend(
@@ -4865,194 +6387,194 @@ def _render_markdown(report: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
-        "## Runtime Apply Gap Audit",
-        f"- status: `{runtime_gap.get('status') or '-'}`",
-        f"- retry_queue_count: `{runtime_gap.get('retry_queue_count') or 0}`",
-        f"- codex_directive_count: `{runtime_gap.get('codex_directive_count') or 0}`",
-        f"- summary: `{runtime_gap.get('summary') or {}}`",
-        "",
-        "## BUY Funnel Submit Drought Handoff",
-        f"- status: `{buy_funnel_handoff.get('status')}`",
-        f"- critical: `{buy_funnel_handoff.get('critical')}`",
-        f"- missing: `{buy_funnel_handoff.get('missing') or []}`",
-        "",
-        "## Submit Bucket Handoff",
-        f"- status: `{submit_bucket.get('status')}`",
-        f"- attribution_present: `{report.get('submit_bucket_attribution_present')}`",
-        f"- missing: `{submit_bucket.get('missing') or []}`",
-        "",
-        "## Holding Bucket Handoff",
-        f"- status: `{holding_bucket.get('status')}`",
-        f"- attribution_present: `{report.get('holding_bucket_attribution_present')}`",
-        f"- source_present: `{report.get('holding_source_present')}`",
-        f"- runtime_candidate_count: `{holding_bucket.get('runtime_candidate_count')}`",
-        f"- bucket_count ev/runtime/expected: `{holding_bucket.get('threshold_cycle_ev_bucket_count')}` / `{holding_bucket.get('runtime_approval_summary_bucket_count')}` / `{holding_bucket.get('expected_bucket_count')}`",
-        f"- workorder_count ev/runtime/expected: `{holding_bucket.get('threshold_cycle_ev_workorder_count')}` / `{holding_bucket.get('runtime_approval_summary_workorder_count')}` / `{holding_bucket.get('expected_workorder_count')}`",
-        f"- missing: `{holding_bucket.get('missing') or []}`",
-        "",
-        "## Exit Bucket Handoff",
-        f"- status: `{exit_bucket.get('status')}`",
-        f"- attribution_present: `{report.get('exit_bucket_attribution_present')}`",
-        f"- source_present: `{report.get('exit_source_present')}`",
-        f"- runtime_candidate_count: `{exit_bucket.get('runtime_candidate_count')}`",
-        f"- bucket_count ev/runtime/expected: `{exit_bucket.get('threshold_cycle_ev_bucket_count')}` / `{exit_bucket.get('runtime_approval_summary_bucket_count')}` / `{exit_bucket.get('expected_bucket_count')}`",
-        f"- workorder_count ev/runtime/expected: `{exit_bucket.get('threshold_cycle_ev_workorder_count')}` / `{exit_bucket.get('runtime_approval_summary_workorder_count')}` / `{exit_bucket.get('expected_workorder_count')}`",
-        f"- missing: `{exit_bucket.get('missing') or []}`",
-        "",
-        "## Lifecycle Flow Bucket Handoff",
-        f"- status: `{lifecycle_flow_bucket.get('status')}`",
-        f"- attribution_present: `{report.get('lifecycle_flow_bucket_attribution_present')}`",
-        f"- flow_count: `{lifecycle_flow_bucket.get('flow_count')}`",
-        f"- complete_flow_count: `{lifecycle_flow_bucket.get('complete_flow_count')}`",
-        f"- direct_sim_record_complete_flow_count: `{lifecycle_flow_bucket.get('direct_sim_record_complete_flow_count')}`",
-        f"- adm_bridge_complete_flow_count: `{lifecycle_flow_bucket.get('adm_bridge_complete_flow_count')}`",
-        f"- fallback_complete_flow_count: `{lifecycle_flow_bucket.get('fallback_complete_flow_count')}`",
-        f"- incomplete_flow_count: `{lifecycle_flow_bucket.get('incomplete_flow_count')}`",
-        f"- complete_flow_rate: `{lifecycle_flow_bucket.get('complete_flow_rate')}`",
-        f"- join_contract_blocked: `{lifecycle_flow_bucket.get('join_contract_blocked')}`",
-        f"- bundle_ev_tuning_state: `{lifecycle_flow_bucket.get('bundle_ev_tuning_state')}`",
-        f"- top_incomplete_reason: `{lifecycle_flow_bucket.get('top_incomplete_reason')}`",
-        f"- missing: `{lifecycle_flow_bucket.get('missing') or []}`",
-        "",
-        "## AI Correction",
-        f"- status: `{ai_correction.get('status') or '-'}`",
-        f"- ai_status: `{ai_correction.get('ai_status') or '-'}`",
-        f"- provider_status: `{ai_correction.get('provider_status') or '-'}`",
-        f"- blocking_runtime_candidate_families: `{ai_correction.get('blocking_runtime_candidate_families') or []}`",
-        f"- parse_warnings: `{ai_correction.get('parse_warnings') or []}`",
-        f"- interpretation: `{ai_correction.get('interpretation') or '-'}`",
-        "",
-        "## Scalp Sim Overnight",
-        f"- status: `{overnight_quality.get('status') or '-'}`",
-        f"- decision_target: `{overnight_quality.get('decision_target') or 0}`",
-        f"- active_undecided_count: `{overnight_quality.get('active_undecided_count') or 0}`",
-        f"- decision_coverage_rate: `{overnight_quality.get('decision_coverage_rate')}`",
-        f"- source_quality_status: `{overnight_quality.get('source_quality_status') or '-'}`",
-        f"- source_quality_warnings: `{overnight_quality.get('source_quality_warnings') or []}`",
-        f"- interpretation: `{overnight_quality.get('interpretation') or '-'}`",
-        "",
-        "## Entry Bucket Handoff",
-        f"- status: `{entry_bucket.get('status') or '-'}`",
-        f"- expected_candidate_ids: `{entry_bucket.get('expected_candidate_ids') or []}`",
-        f"- missing_ev_candidate_ids: `{entry_bucket.get('missing_ev_candidate_ids') or []}`",
-        f"- missing_runtime_summary_candidate_ids: `{entry_bucket.get('missing_runtime_summary_candidate_ids') or []}`",
-        f"- missing_workorder_order_ids: `{entry_bucket.get('missing_workorder_order_ids') or []}`",
-        f"- interpretation: `{entry_bucket.get('interpretation') or '-'}`",
-        "",
-        "## Scale-In Bucket Handoff",
-        f"- attribution_present: `{report.get('scale_in_bucket_attribution_present')}`",
-        f"- source_present: `{report.get('scale_in_source_present')}`",
-        f"- status: `{scale_in_bucket.get('status') or '-'}`",
-        f"- expected_candidate_ids: `{scale_in_bucket.get('expected_candidate_ids') or []}`",
-        f"- missing_ev_candidate_ids: `{scale_in_bucket.get('missing_ev_candidate_ids') or []}`",
-        f"- missing_runtime_summary_candidate_ids: `{scale_in_bucket.get('missing_runtime_summary_candidate_ids') or []}`",
-        f"- missing_workorder_order_ids: `{scale_in_bucket.get('missing_workorder_order_ids') or []}`",
-        f"- interpretation: `{scale_in_bucket.get('interpretation') or '-'}`",
-        f"- policy_contract_status: `{scale_in_policy.get('status') or '-'}`",
-        f"- policy_contract_missing: `{scale_in_policy.get('missing') or []}`",
-        f"- policy_contract_interpretation: `{scale_in_policy.get('interpretation') or '-'}`",
-        "",
-        "## Overnight Bucket Handoff",
-        f"- attribution_present: `{report.get('overnight_bucket_attribution_present')}`",
-        f"- source_present: `{report.get('overnight_source_present')}`",
-        f"- status: `{overnight_bucket.get('status') or '-'}`",
-        f"- expected_candidate_ids: `{overnight_bucket.get('expected_candidate_ids') or []}`",
-        f"- missing_ev_candidate_ids: `{overnight_bucket.get('missing_ev_candidate_ids') or []}`",
-        f"- missing_runtime_summary_candidate_ids: `{overnight_bucket.get('missing_runtime_summary_candidate_ids') or []}`",
-        f"- missing_workorder_order_ids: `{overnight_bucket.get('missing_workorder_order_ids') or []}`",
-        f"- interpretation: `{overnight_bucket.get('interpretation') or '-'}`",
-        "",
-        "## Lifecycle Bucket Discovery Handoff",
-        f"- status: `{lifecycle_bucket.get('status') or '-'}`",
-        f"- source_contract_status: `{lifecycle_bucket.get('source_contract_status') or '-'}`",
-        f"- ai_two_pass_review_status: `{lifecycle_bucket.get('ai_two_pass_review_status') or '-'}`",
-        f"- expected_candidate_ids: `{lifecycle_bucket.get('expected_candidate_ids') or []}`",
-        f"- live_auto_apply_families: `{lifecycle_bucket.get('live_auto_apply_families') or []}`",
-        f"- missing_bridge_families: `{lifecycle_bucket.get('missing_bridge_families') or []}`",
-        f"- missing_runtime_summary_candidate_ids: `{lifecycle_bucket.get('missing_runtime_summary_candidate_ids') or []}`",
-        f"- workorder_needed_bucket_ids: `{lifecycle_bucket.get('workorder_needed_bucket_ids') or []}`",
-        f"- ai_post_apply_followup_bucket_ids: `{lifecycle_bucket.get('ai_post_apply_followup_bucket_ids') or []}`",
-        f"- warnings: `{lifecycle_bucket.get('warnings') or []}`",
-        f"- interpretation: `{lifecycle_bucket.get('interpretation') or '-'}`",
-        "",
-        "## LDM Hypothesis Parent Refinement",
-        f"- status: `{ldm_refinement.get('status') or '-'}`",
-        f"- input/consumed: `{ldm_refinement.get('input_count') or 0}` / `{ldm_refinement.get('consumed_count') or 0}`",
-        f"- derived input/consumed: `{ldm_refinement.get('derived_refinement_input_count') or 0}` / `{ldm_refinement.get('derived_refinement_consumed_count') or 0}`",
-        f"- derived_contract_drift_recompute_consumed: `{ldm_refinement.get('derived_contract_drift_recompute_consumed')}`",
-        f"- closure_counts: `{ldm_refinement.get('closure_counts') or {}}`",
-        f"- missing: `{ldm_refinement.get('missing') or []}`",
-        f"- warnings: `{ldm_refinement.get('warnings') or []}`",
-        f"- contract_drift: `{ldm_refinement.get('contract_drift') or {}}`",
-        f"- diagnosis_missing_warning_input_ids: `{ldm_refinement.get('diagnosis_missing_warning_input_ids') or []}`",
-        f"- diagnosis_missing_fail_input_ids: `{ldm_refinement.get('diagnosis_missing_fail_input_ids') or []}`",
-        f"- diagnosed_repeated_input_ids: `{ldm_refinement.get('diagnosed_repeated_input_ids') or []}`",
-        f"- runtime_authority_violation_input_ids: `{ldm_refinement.get('runtime_authority_violation_input_ids') or []}`",
-        "",
-        "## Active Sim Priority Handoff",
-        f"- status: `{active_priority.get('status') or '-'}`",
-        f"- active_seed_ids: `{active_priority.get('active_seed_ids') or []}`",
-        f"- observed_seed_ids: `{active_priority.get('observed_seed_ids') or []}`",
-        f"- missing: `{active_priority.get('missing') or []}`",
-        f"- warnings: `{active_priority.get('warnings') or []}`",
-        f"- match_absence_diagnosis: `{active_priority_diagnosis.get('diagnosis') or '-'}`",
-        f"- match_absence_reason: `{active_priority_diagnosis.get('reason') or '-'}`",
-        f"- candidate_prefix_count: `{active_priority_diagnosis.get('candidate_prefix_count') or 0}`",
-        f"- top_candidate_prefixes: `{active_priority_diagnosis.get('top_candidate_prefixes') or []}`",
-        "",
-        "## Lifecycle Bucket Windows",
-        f"- status: `{lifecycle_bucket_windows.get('status') or '-'}`",
-        f"- checked: `{lifecycle_bucket_windows.get('checked')}`",
-        f"- windows: `{lifecycle_bucket_windows.get('windows') or {}}`",
-        f"- missing: `{lifecycle_bucket_windows.get('missing') or []}`",
-        f"- warnings: `{lifecycle_bucket_windows.get('warnings') or []}`",
-        "",
-        "## Swing Lifecycle Handoff",
-        f"- status: `{swing_lifecycle.get('status') or '-'}`",
-        f"- expected_candidate_ids: `{swing_lifecycle.get('expected_candidate_ids') or []}`",
-        f"- missing_ev_candidate_ids: `{swing_lifecycle.get('missing_ev_candidate_ids') or []}`",
-        f"- missing_runtime_summary_candidate_ids: `{swing_lifecycle.get('missing_runtime_summary_candidate_ids') or []}`",
-        f"- missing_workorder_order_ids: `{swing_lifecycle.get('missing_workorder_order_ids') or []}`",
-        f"- daily_simulation_consumed: `{swing_lifecycle.get('daily_simulation_consumed')}`",
-        f"- ai_two_pass_review_status: `{swing_lifecycle.get('ai_two_pass_review_status') or '-'}`",
-        f"- warnings: `{swing_lifecycle.get('warnings') or []}`",
-        f"- interpretation: `{swing_lifecycle.get('interpretation') or '-'}`",
-        "",
-        "## Producer Gap Discovery Handoff",
-        f"- status: `{producer_gap.get('status') or '-'}`",
-        f"- ai_two_pass_review_status: `{producer_gap.get('ai_two_pass_review_status') or '-'}`",
-        f"- audit_status: `{producer_gap.get('audit_status') or '-'}`",
-        f"- expected_workorder_order_ids: `{producer_gap.get('expected_workorder_order_ids') or []}`",
-        f"- missing_workorder_order_ids: `{producer_gap.get('missing_workorder_order_ids') or []}`",
-        f"- missing: `{producer_gap.get('missing') or []}`",
-        f"- interpretation: `{producer_gap.get('interpretation') or '-'}`",
-        "",
-        "## Stage Hook Workorder Handoff",
-        f"- status: `{stage_hook.get('status') or '-'}`",
-        f"- ai_two_pass_review_status: `{stage_hook.get('ai_two_pass_review_status') or '-'}`",
-        f"- audit_status: `{stage_hook.get('audit_status') or '-'}`",
-        f"- expected_workorder_order_ids: `{stage_hook.get('expected_workorder_order_ids') or []}`",
-        f"- missing_workorder_order_ids: `{stage_hook.get('missing_workorder_order_ids') or []}`",
-        f"- unconsumed_hook_candidate_ids: `{stage_hook.get('unconsumed_hook_candidate_ids') or []}`",
-        f"- missing: `{stage_hook.get('missing') or []}`",
-        f"- interpretation: `{stage_hook.get('interpretation') or '-'}`",
-        "",
-        "## Bottom Rebound Sim Handoff",
-        f"- status: `{bottom_rebound.get('status') or '-'}`",
-        f"- included: `{bottom_rebound.get('included')}`",
-        f"- source_rows: `{bottom_rebound.get('bottom_rebound_source_rows') or 0}`",
-        f"- selected_candidate_count: `{bottom_rebound.get('bottom_rebound_selected_candidate_count') or 0}`",
-        f"- arm_count: `{bottom_rebound.get('bottom_rebound_arm_count') or 0}`",
-        f"- persisted_candidate_count: `{bottom_rebound.get('bottom_rebound_persisted_candidate_count') or 0}`",
-        f"- persisted_arm_count: `{bottom_rebound.get('bottom_rebound_persisted_arm_count') or 0}`",
-        f"- missing: `{bottom_rebound.get('missing') or []}`",
-        f"- interpretation: `{bottom_rebound.get('interpretation') or '-'}`",
-        "",
-        "## Runtime Gap Provenance",
-        f"- active_gap_count: `{gap_provenance.get('active_gap_count') or 0}`",
-        f"- raw_preserved: `{gap_provenance.get('raw_preserved')}`",
-        f"- gap_affected_handoff_count: `{len(gap_affected_handoffs)}`",
-    ]
+            "## Runtime Apply Gap Audit",
+            f"- status: `{runtime_gap.get('status') or '-'}`",
+            f"- retry_queue_count: `{runtime_gap.get('retry_queue_count') or 0}`",
+            f"- codex_directive_count: `{runtime_gap.get('codex_directive_count') or 0}`",
+            f"- summary: `{runtime_gap.get('summary') or {}}`",
+            "",
+            "## BUY Funnel Submit Drought Handoff",
+            f"- status: `{buy_funnel_handoff.get('status')}`",
+            f"- critical: `{buy_funnel_handoff.get('critical')}`",
+            f"- missing: `{buy_funnel_handoff.get('missing') or []}`",
+            "",
+            "## Submit Bucket Handoff",
+            f"- status: `{submit_bucket.get('status')}`",
+            f"- attribution_present: `{report.get('submit_bucket_attribution_present')}`",
+            f"- missing: `{submit_bucket.get('missing') or []}`",
+            "",
+            "## Holding Bucket Handoff",
+            f"- status: `{holding_bucket.get('status')}`",
+            f"- attribution_present: `{report.get('holding_bucket_attribution_present')}`",
+            f"- source_present: `{report.get('holding_source_present')}`",
+            f"- runtime_candidate_count: `{holding_bucket.get('runtime_candidate_count')}`",
+            f"- bucket_count ev/runtime/expected: `{holding_bucket.get('threshold_cycle_ev_bucket_count')}` / `{holding_bucket.get('runtime_approval_summary_bucket_count')}` / `{holding_bucket.get('expected_bucket_count')}`",
+            f"- workorder_count ev/runtime/expected: `{holding_bucket.get('threshold_cycle_ev_workorder_count')}` / `{holding_bucket.get('runtime_approval_summary_workorder_count')}` / `{holding_bucket.get('expected_workorder_count')}`",
+            f"- missing: `{holding_bucket.get('missing') or []}`",
+            "",
+            "## Exit Bucket Handoff",
+            f"- status: `{exit_bucket.get('status')}`",
+            f"- attribution_present: `{report.get('exit_bucket_attribution_present')}`",
+            f"- source_present: `{report.get('exit_source_present')}`",
+            f"- runtime_candidate_count: `{exit_bucket.get('runtime_candidate_count')}`",
+            f"- bucket_count ev/runtime/expected: `{exit_bucket.get('threshold_cycle_ev_bucket_count')}` / `{exit_bucket.get('runtime_approval_summary_bucket_count')}` / `{exit_bucket.get('expected_bucket_count')}`",
+            f"- workorder_count ev/runtime/expected: `{exit_bucket.get('threshold_cycle_ev_workorder_count')}` / `{exit_bucket.get('runtime_approval_summary_workorder_count')}` / `{exit_bucket.get('expected_workorder_count')}`",
+            f"- missing: `{exit_bucket.get('missing') or []}`",
+            "",
+            "## Lifecycle Flow Bucket Handoff",
+            f"- status: `{lifecycle_flow_bucket.get('status')}`",
+            f"- attribution_present: `{report.get('lifecycle_flow_bucket_attribution_present')}`",
+            f"- flow_count: `{lifecycle_flow_bucket.get('flow_count')}`",
+            f"- complete_flow_count: `{lifecycle_flow_bucket.get('complete_flow_count')}`",
+            f"- direct_sim_record_complete_flow_count: `{lifecycle_flow_bucket.get('direct_sim_record_complete_flow_count')}`",
+            f"- adm_bridge_complete_flow_count: `{lifecycle_flow_bucket.get('adm_bridge_complete_flow_count')}`",
+            f"- fallback_complete_flow_count: `{lifecycle_flow_bucket.get('fallback_complete_flow_count')}`",
+            f"- incomplete_flow_count: `{lifecycle_flow_bucket.get('incomplete_flow_count')}`",
+            f"- complete_flow_rate: `{lifecycle_flow_bucket.get('complete_flow_rate')}`",
+            f"- join_contract_blocked: `{lifecycle_flow_bucket.get('join_contract_blocked')}`",
+            f"- bundle_ev_tuning_state: `{lifecycle_flow_bucket.get('bundle_ev_tuning_state')}`",
+            f"- top_incomplete_reason: `{lifecycle_flow_bucket.get('top_incomplete_reason')}`",
+            f"- missing: `{lifecycle_flow_bucket.get('missing') or []}`",
+            "",
+            "## AI Correction",
+            f"- status: `{ai_correction.get('status') or '-'}`",
+            f"- ai_status: `{ai_correction.get('ai_status') or '-'}`",
+            f"- provider_status: `{ai_correction.get('provider_status') or '-'}`",
+            f"- blocking_runtime_candidate_families: `{ai_correction.get('blocking_runtime_candidate_families') or []}`",
+            f"- parse_warnings: `{ai_correction.get('parse_warnings') or []}`",
+            f"- interpretation: `{ai_correction.get('interpretation') or '-'}`",
+            "",
+            "## Scalp Sim Overnight",
+            f"- status: `{overnight_quality.get('status') or '-'}`",
+            f"- decision_target: `{overnight_quality.get('decision_target') or 0}`",
+            f"- active_undecided_count: `{overnight_quality.get('active_undecided_count') or 0}`",
+            f"- decision_coverage_rate: `{overnight_quality.get('decision_coverage_rate')}`",
+            f"- source_quality_status: `{overnight_quality.get('source_quality_status') or '-'}`",
+            f"- source_quality_warnings: `{overnight_quality.get('source_quality_warnings') or []}`",
+            f"- interpretation: `{overnight_quality.get('interpretation') or '-'}`",
+            "",
+            "## Entry Bucket Handoff",
+            f"- status: `{entry_bucket.get('status') or '-'}`",
+            f"- expected_candidate_ids: `{entry_bucket.get('expected_candidate_ids') or []}`",
+            f"- missing_ev_candidate_ids: `{entry_bucket.get('missing_ev_candidate_ids') or []}`",
+            f"- missing_runtime_summary_candidate_ids: `{entry_bucket.get('missing_runtime_summary_candidate_ids') or []}`",
+            f"- missing_workorder_order_ids: `{entry_bucket.get('missing_workorder_order_ids') or []}`",
+            f"- interpretation: `{entry_bucket.get('interpretation') or '-'}`",
+            "",
+            "## Scale-In Bucket Handoff",
+            f"- attribution_present: `{report.get('scale_in_bucket_attribution_present')}`",
+            f"- source_present: `{report.get('scale_in_source_present')}`",
+            f"- status: `{scale_in_bucket.get('status') or '-'}`",
+            f"- expected_candidate_ids: `{scale_in_bucket.get('expected_candidate_ids') or []}`",
+            f"- missing_ev_candidate_ids: `{scale_in_bucket.get('missing_ev_candidate_ids') or []}`",
+            f"- missing_runtime_summary_candidate_ids: `{scale_in_bucket.get('missing_runtime_summary_candidate_ids') or []}`",
+            f"- missing_workorder_order_ids: `{scale_in_bucket.get('missing_workorder_order_ids') or []}`",
+            f"- interpretation: `{scale_in_bucket.get('interpretation') or '-'}`",
+            f"- policy_contract_status: `{scale_in_policy.get('status') or '-'}`",
+            f"- policy_contract_missing: `{scale_in_policy.get('missing') or []}`",
+            f"- policy_contract_interpretation: `{scale_in_policy.get('interpretation') or '-'}`",
+            "",
+            "## Overnight Bucket Handoff",
+            f"- attribution_present: `{report.get('overnight_bucket_attribution_present')}`",
+            f"- source_present: `{report.get('overnight_source_present')}`",
+            f"- status: `{overnight_bucket.get('status') or '-'}`",
+            f"- expected_candidate_ids: `{overnight_bucket.get('expected_candidate_ids') or []}`",
+            f"- missing_ev_candidate_ids: `{overnight_bucket.get('missing_ev_candidate_ids') or []}`",
+            f"- missing_runtime_summary_candidate_ids: `{overnight_bucket.get('missing_runtime_summary_candidate_ids') or []}`",
+            f"- missing_workorder_order_ids: `{overnight_bucket.get('missing_workorder_order_ids') or []}`",
+            f"- interpretation: `{overnight_bucket.get('interpretation') or '-'}`",
+            "",
+            "## Lifecycle Bucket Discovery Handoff",
+            f"- status: `{lifecycle_bucket.get('status') or '-'}`",
+            f"- source_contract_status: `{lifecycle_bucket.get('source_contract_status') or '-'}`",
+            f"- ai_two_pass_review_status: `{lifecycle_bucket.get('ai_two_pass_review_status') or '-'}`",
+            f"- expected_candidate_ids: `{lifecycle_bucket.get('expected_candidate_ids') or []}`",
+            f"- live_auto_apply_families: `{lifecycle_bucket.get('live_auto_apply_families') or []}`",
+            f"- missing_bridge_families: `{lifecycle_bucket.get('missing_bridge_families') or []}`",
+            f"- missing_runtime_summary_candidate_ids: `{lifecycle_bucket.get('missing_runtime_summary_candidate_ids') or []}`",
+            f"- workorder_needed_bucket_ids: `{lifecycle_bucket.get('workorder_needed_bucket_ids') or []}`",
+            f"- ai_post_apply_followup_bucket_ids: `{lifecycle_bucket.get('ai_post_apply_followup_bucket_ids') or []}`",
+            f"- warnings: `{lifecycle_bucket.get('warnings') or []}`",
+            f"- interpretation: `{lifecycle_bucket.get('interpretation') or '-'}`",
+            "",
+            "## LDM Hypothesis Parent Refinement",
+            f"- status: `{ldm_refinement.get('status') or '-'}`",
+            f"- input/consumed: `{ldm_refinement.get('input_count') or 0}` / `{ldm_refinement.get('consumed_count') or 0}`",
+            f"- derived input/consumed: `{ldm_refinement.get('derived_refinement_input_count') or 0}` / `{ldm_refinement.get('derived_refinement_consumed_count') or 0}`",
+            f"- derived_contract_drift_recompute_consumed: `{ldm_refinement.get('derived_contract_drift_recompute_consumed')}`",
+            f"- closure_counts: `{ldm_refinement.get('closure_counts') or {}}`",
+            f"- missing: `{ldm_refinement.get('missing') or []}`",
+            f"- warnings: `{ldm_refinement.get('warnings') or []}`",
+            f"- contract_drift: `{ldm_refinement.get('contract_drift') or {}}`",
+            f"- diagnosis_missing_warning_input_ids: `{ldm_refinement.get('diagnosis_missing_warning_input_ids') or []}`",
+            f"- diagnosis_missing_fail_input_ids: `{ldm_refinement.get('diagnosis_missing_fail_input_ids') or []}`",
+            f"- diagnosed_repeated_input_ids: `{ldm_refinement.get('diagnosed_repeated_input_ids') or []}`",
+            f"- runtime_authority_violation_input_ids: `{ldm_refinement.get('runtime_authority_violation_input_ids') or []}`",
+            "",
+            "## Active Sim Priority Handoff",
+            f"- status: `{active_priority.get('status') or '-'}`",
+            f"- active_seed_ids: `{active_priority.get('active_seed_ids') or []}`",
+            f"- observed_seed_ids: `{active_priority.get('observed_seed_ids') or []}`",
+            f"- missing: `{active_priority.get('missing') or []}`",
+            f"- warnings: `{active_priority.get('warnings') or []}`",
+            f"- match_absence_diagnosis: `{active_priority_diagnosis.get('diagnosis') or '-'}`",
+            f"- match_absence_reason: `{active_priority_diagnosis.get('reason') or '-'}`",
+            f"- candidate_prefix_count: `{active_priority_diagnosis.get('candidate_prefix_count') or 0}`",
+            f"- top_candidate_prefixes: `{active_priority_diagnosis.get('top_candidate_prefixes') or []}`",
+            "",
+            "## Lifecycle Bucket Windows",
+            f"- status: `{lifecycle_bucket_windows.get('status') or '-'}`",
+            f"- checked: `{lifecycle_bucket_windows.get('checked')}`",
+            f"- windows: `{lifecycle_bucket_windows.get('windows') or {}}`",
+            f"- missing: `{lifecycle_bucket_windows.get('missing') or []}`",
+            f"- warnings: `{lifecycle_bucket_windows.get('warnings') or []}`",
+            "",
+            "## Swing Lifecycle Handoff",
+            f"- status: `{swing_lifecycle.get('status') or '-'}`",
+            f"- expected_candidate_ids: `{swing_lifecycle.get('expected_candidate_ids') or []}`",
+            f"- missing_ev_candidate_ids: `{swing_lifecycle.get('missing_ev_candidate_ids') or []}`",
+            f"- missing_runtime_summary_candidate_ids: `{swing_lifecycle.get('missing_runtime_summary_candidate_ids') or []}`",
+            f"- missing_workorder_order_ids: `{swing_lifecycle.get('missing_workorder_order_ids') or []}`",
+            f"- daily_simulation_consumed: `{swing_lifecycle.get('daily_simulation_consumed')}`",
+            f"- ai_two_pass_review_status: `{swing_lifecycle.get('ai_two_pass_review_status') or '-'}`",
+            f"- warnings: `{swing_lifecycle.get('warnings') or []}`",
+            f"- interpretation: `{swing_lifecycle.get('interpretation') or '-'}`",
+            "",
+            "## Producer Gap Discovery Handoff",
+            f"- status: `{producer_gap.get('status') or '-'}`",
+            f"- ai_two_pass_review_status: `{producer_gap.get('ai_two_pass_review_status') or '-'}`",
+            f"- audit_status: `{producer_gap.get('audit_status') or '-'}`",
+            f"- expected_workorder_order_ids: `{producer_gap.get('expected_workorder_order_ids') or []}`",
+            f"- missing_workorder_order_ids: `{producer_gap.get('missing_workorder_order_ids') or []}`",
+            f"- missing: `{producer_gap.get('missing') or []}`",
+            f"- interpretation: `{producer_gap.get('interpretation') or '-'}`",
+            "",
+            "## Stage Hook Workorder Handoff",
+            f"- status: `{stage_hook.get('status') or '-'}`",
+            f"- ai_two_pass_review_status: `{stage_hook.get('ai_two_pass_review_status') or '-'}`",
+            f"- audit_status: `{stage_hook.get('audit_status') or '-'}`",
+            f"- expected_workorder_order_ids: `{stage_hook.get('expected_workorder_order_ids') or []}`",
+            f"- missing_workorder_order_ids: `{stage_hook.get('missing_workorder_order_ids') or []}`",
+            f"- unconsumed_hook_candidate_ids: `{stage_hook.get('unconsumed_hook_candidate_ids') or []}`",
+            f"- missing: `{stage_hook.get('missing') or []}`",
+            f"- interpretation: `{stage_hook.get('interpretation') or '-'}`",
+            "",
+            "## Bottom Rebound Sim Handoff",
+            f"- status: `{bottom_rebound.get('status') or '-'}`",
+            f"- included: `{bottom_rebound.get('included')}`",
+            f"- source_rows: `{bottom_rebound.get('bottom_rebound_source_rows') or 0}`",
+            f"- selected_candidate_count: `{bottom_rebound.get('bottom_rebound_selected_candidate_count') or 0}`",
+            f"- arm_count: `{bottom_rebound.get('bottom_rebound_arm_count') or 0}`",
+            f"- persisted_candidate_count: `{bottom_rebound.get('bottom_rebound_persisted_candidate_count') or 0}`",
+            f"- persisted_arm_count: `{bottom_rebound.get('bottom_rebound_persisted_arm_count') or 0}`",
+            f"- missing: `{bottom_rebound.get('missing') or []}`",
+            f"- interpretation: `{bottom_rebound.get('interpretation') or '-'}`",
+            "",
+            "## Runtime Gap Provenance",
+            f"- active_gap_count: `{gap_provenance.get('active_gap_count') or 0}`",
+            f"- raw_preserved: `{gap_provenance.get('raw_preserved')}`",
+            f"- gap_affected_handoff_count: `{len(gap_affected_handoffs)}`",
+        ]
     )
     if gap_affected_handoffs:
         lines.extend(
@@ -5063,21 +6585,23 @@ def _render_markdown(report: dict[str, Any]) -> str:
         [
             "",
             "## Workorder Snapshot",
-        f"- generation_id: `{workorder.get('generation_id') or '-'}`",
-        f"- source_hash: `{workorder.get('source_hash') or '-'}`",
-        f"- snapshot_status: `{workorder.get('status') or '-'}`",
-        f"- previous_generation_id: `{workorder.get('previous_generation_id') or '-'}`",
-        f"- previous_source_hash: `{workorder.get('previous_source_hash') or '-'}`",
-        f"- new_order_ids: `{workorder.get('new_order_ids') or []}`",
-        f"- removed_order_ids: `{workorder.get('removed_order_ids') or []}`",
-        f"- decision_changed_order_ids: `{workorder.get('decision_changed_order_ids') or []}`",
-    ]
+            f"- generation_id: `{workorder.get('generation_id') or '-'}`",
+            f"- source_hash: `{workorder.get('source_hash') or '-'}`",
+            f"- snapshot_status: `{workorder.get('status') or '-'}`",
+            f"- previous_generation_id: `{workorder.get('previous_generation_id') or '-'}`",
+            f"- previous_source_hash: `{workorder.get('previous_source_hash') or '-'}`",
+            f"- new_order_ids: `{workorder.get('new_order_ids') or []}`",
+            f"- removed_order_ids: `{workorder.get('removed_order_ids') or []}`",
+            f"- decision_changed_order_ids: `{workorder.get('decision_changed_order_ids') or []}`",
+        ]
     )
     return "\n".join(lines) + "\n"
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Verify threshold-cycle postclose chain integrity.")
+    parser = argparse.ArgumentParser(
+        description="Verify threshold-cycle postclose chain integrity."
+    )
     parser.add_argument("--date", required=True)
     parser.add_argument(
         "--allow-pending-done-marker",
@@ -5095,9 +6619,20 @@ def main() -> None:
     )
     VERIFY_DIR.mkdir(parents=True, exist_ok=True)
     json_path, md_path = verification_report_paths(args.date)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     md_path.write_text(_render_markdown(report), encoding="utf-8")
-    print(json.dumps({"status": report.get("status"), "json": str(json_path), "md": str(md_path)}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {
+                "status": report.get("status"),
+                "json": str(json_path),
+                "md": str(md_path),
+            },
+            ensure_ascii=False,
+        )
+    )
     if report.get("status") == "fail":
         raise SystemExit(1)
 

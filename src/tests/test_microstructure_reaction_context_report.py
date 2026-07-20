@@ -304,13 +304,9 @@ def test_microstructure_reaction_context_report_preserves_contract_and_keys(
     assert report["summary"]["tick_trade_value_1313_missing_rate_pct"] == 70.0
     assert report["summary"]["trade_volume_1030_1031_vs_15_mismatch_count"] == 1
     assert report["summary"]["trade_volume_1030_1031_vs_15_mismatch_rate_pct"] == 20.0
+    assert report["summary"]["trade_volume_1030_1031_vs_15_noncomparable_count"] == 5
     assert (
-        report["summary"]["trade_volume_1030_1031_vs_15_noncomparable_count"]
-        == 5
-    )
-    assert (
-        report["summary"]["trade_volume_1030_1031_vs_15_contract_violation_count"]
-        == 0
+        report["summary"]["trade_volume_1030_1031_vs_15_contract_violation_count"] == 0
     )
     assert report["summary"]["v_pw_expected_count"] == 2
     assert report["summary"]["v_pw_missing_count"] == 0

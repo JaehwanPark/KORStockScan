@@ -34,7 +34,7 @@ def _enable_rules(
     policy_file,
     max_promotes=3,
     min_confidence=0.6,
-    promote_enabled=True
+    promote_enabled=True,
 ):
     monkeypatch.setattr(
         mod,

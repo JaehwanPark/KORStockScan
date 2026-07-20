@@ -3612,9 +3612,7 @@ def test_swing_lifecycle_handoff_uses_hashed_long_workorder_ids():
         ]
     }
 
-    report = mod._swing_lifecycle_handoff_status(
-        matrix, discovery, {}, {}, workorder
-    )
+    report = mod._swing_lifecycle_handoff_status(matrix, discovery, {}, {}, workorder)
 
     assert report["status"] == "pass"
     assert report["missing_workorder_order_ids"] == []
