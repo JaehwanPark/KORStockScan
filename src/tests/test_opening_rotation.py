@@ -8,6 +8,10 @@ from src.engine.scalping.opening_rotation import (
     EntryConfig,
     ExitConfig,
     POSITION_TAG,
+    WINDOW_VERSION,
+    entry_time_bucket,
+    entry_time_bucket_labels,
+    entry_window_version,
     evaluate_entry,
     evaluate_exit,
     is_watch_candidate,
@@ -160,20 +164,20 @@ def test_qualified_entry_exposes_freshness_contract_fields():
     assert decision["micro_vwap_available"] is True
 
 
-def test_entry_window_remains_open_until_1030_but_not_after():
+def test_entry_window_remains_open_until_1500_but_not_after():
     config = EntryConfig()
     assert is_watch_candidate(
         position_tag="SCANNER",
         source_signature="PRICE_JUMP_START",
         day_change_pct=2.0,
-        now_dt=datetime(2026, 7, 20, 10, 29, 59),
+        now_dt=datetime(2026, 7, 20, 14, 59, 59),
         config=config,
     )
     assert not is_watch_candidate(
         position_tag="SCANNER",
         source_signature="PRICE_JUMP_START",
         day_change_pct=2.0,
-        now_dt=datetime(2026, 7, 20, 10, 30, 1),
+        now_dt=datetime(2026, 7, 20, 15, 0, 1),
         config=config,
     )
 
@@ -224,16 +228,31 @@ def test_negative_rising_missed_source_token_does_not_take_entry_ownership():
     )
 
 
-def test_runtime_entry_cutoff_defaults_to_1030(monkeypatch):
+def test_runtime_entry_cutoff_defaults_to_1500(monkeypatch):
     monkeypatch.delenv("KORSTOCKSCAN_OPENING_ROTATION_1PCT_ENTRY_END", raising=False)
-    assert handlers._opening_rotation_entry_config().entry_end.hour == 10
-    assert handlers._opening_rotation_entry_config().entry_end.minute == 30
+    assert handlers._opening_rotation_entry_config().entry_end.hour == 15
+    assert handlers._opening_rotation_entry_config().entry_end.minute == 0
+
+
+def test_entry_time_cohorts_are_clock_aligned_and_include_1500_boundary():
+    assert entry_window_version() == WINDOW_VERSION
+    assert entry_time_bucket(datetime(2026, 7, 20, 9, 10)) == "09:00-09:30"
+    assert entry_time_bucket(datetime(2026, 7, 20, 9, 30)) == "09:30-10:00"
+    assert entry_time_bucket(datetime(2026, 7, 20, 14, 59, 59)) == "14:30-15:00"
+    assert entry_time_bucket(datetime(2026, 7, 20, 15, 0)) == "14:30-15:00"
+    assert entry_time_bucket(datetime(2026, 7, 20, 15, 0, 1)) == "outside_entry_window"
+    labels = entry_time_bucket_labels()
+    assert labels[0] == "09:00-09:30"
+    assert labels[-1] == "14:30-15:00"
+    assert len(labels) == 12
 
 
 def test_runtime_entry_cutoff_is_preopen_configurable(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_OPENING_ROTATION_1PCT_ENTRY_END", "10:45")
-    assert handlers._opening_rotation_entry_config().entry_end.hour == 10
-    assert handlers._opening_rotation_entry_config().entry_end.minute == 45
+    config = handlers._opening_rotation_entry_config()
+    assert config.entry_end.hour == 10
+    assert config.entry_end.minute == 45
+    assert entry_window_version(config) == "opening_rotation_0910_1045_custom"
 
 
 def _fresh_ws_envelope(now_ts=1000.0):
@@ -626,7 +645,11 @@ def test_runtime_branch_uses_mechanical_authority_without_pre_submit_retag(
     assert runtime["pos_tag"] == POSITION_TAG
     assert runtime["current_ai_score"] == 0.0
     assert runtime["opening_rotation_mechanical_signal_strength"] == pytest.approx(0.8)
+    assert runtime["opening_rotation_window_version"] == WINDOW_VERSION
+    assert runtime["opening_rotation_decision_time_bucket"] == "09:00-09:30"
     assert stock["position_tag"] == "SCANNER"
+    assert stock["opening_rotation_window_version"] == WINDOW_VERSION
+    assert stock["opening_rotation_decision_time_bucket"] == "09:00-09:30"
     assert "scale_in_locked" not in stock
     assert "opening_rotation_1pct_live" not in stock
     qualified_log = next(
@@ -636,6 +659,8 @@ def test_runtime_branch_uses_mechanical_authority_without_pre_submit_retag(
     )
     _, replay = rotation_backtest._canonical_replay_inputs(qualified_log)
     assert replay["missing"] == ()
+    assert qualified_log["opening_rotation_window_version"] == WINDOW_VERSION
+    assert qualified_log["opening_rotation_decision_time_bucket"] == "09:00-09:30"
 
 
 def test_full_watching_branch_never_calls_ai_for_rotation_candidate(monkeypatch):
@@ -716,6 +741,71 @@ def test_broker_submit_activation_commits_rotation_tag_and_scale_in_lock():
     assert "005930" not in handlers._OPENING_ROTATION_CONTEXT_CACHE
 
 
+def test_opening_rotation_first_buy_fill_persists_entry_time_cohort(monkeypatch):
+    events = []
+
+    class _NoopThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            return None
+
+    monkeypatch.setattr(sniper_execution_receipts.threading, "Thread", _NoopThread)
+    monkeypatch.setattr(
+        sniper_execution_receipts,
+        "_log_holding_pipeline",
+        lambda name, code, target_id, stage, **fields: events.append((stage, fields)),
+    )
+    sniper_execution_receipts.highest_prices = {}
+    stock = {
+        "id": 7,
+        "name": "테스트",
+        "code": "005930",
+        "strategy": "SCALPING",
+        "position_tag": POSITION_TAG,
+        "opening_rotation_window_version": WINDOW_VERSION,
+        "pending_entry_orders": [
+            {
+                "ord_no": "ROT1",
+                "qty": 2,
+                "filled_qty": 0,
+                "price": 10_000,
+                "status": "OPEN",
+            }
+        ],
+        "entry_requested_qty": 2,
+        "requested_buy_qty": 2,
+    }
+
+    sniper_execution_receipts._handle_entry_buy_execution(
+        target_id=7,
+        target_stock=stock,
+        code="005930",
+        order_no="ROT1",
+        exec_price=10_000,
+        exec_qty=1,
+        now=datetime(2026, 7, 20, 13, 29, 59),
+    )
+
+    assert stock["opening_rotation_entry_time_bucket"] == "13:00-13:30"
+
+    sniper_execution_receipts._handle_entry_buy_execution(
+        target_id=7,
+        target_stock=stock,
+        code="005930",
+        order_no="ROT1",
+        exec_price=10_010,
+        exec_qty=1,
+        now=datetime(2026, 7, 20, 13, 30, 1),
+    )
+
+    assert stock["opening_rotation_entry_time_bucket"] == "13:00-13:30"
+    holding_started = [fields for stage, fields in events if stage == "holding_started"]
+    assert holding_started[-1]["opening_rotation_entry_time_bucket"] == "13:00-13:30"
+    assert holding_started[-1]["opening_rotation_window_version"] == WINDOW_VERSION
+
+
 def test_rotation_tag_activation_is_strictly_after_broker_acceptance():
     watch_source = inspect.getsource(handlers._handle_watching_opening_rotation)
     submit_source = inspect.getsource(handlers._submit_watching_triggered_entry)
@@ -771,7 +861,16 @@ def test_opening_rotation_scope_skips_preceding_rising_missed_hook(monkeypatch):
         "strategy": "SCALPING",
         "position_tag": "SCANNER",
         "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        "rising_missed_class": "not_rising_missed",
     }
+
+    assert handlers._has_rising_missed_watch_source_marker(stock) is True
+    assert (
+        handlers._opening_rotation_yields_to_rising_missed_owner(
+            stock, {"pos_tag": "SCANNER"}
+        )
+        is False
+    )
 
     handlers.handle_watching_state(
         stock,
@@ -845,6 +944,21 @@ def test_rising_missed_overlap_keeps_scout_hook_ownership(monkeypatch):
     assert len(scout_calls) == 1
 
 
+def test_explicit_rising_missed_class_keeps_rising_missed_entry_ownership():
+    stock = {
+        "position_tag": "SCANNER",
+        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        "rising_missed_class": "rising_missed_raw",
+    }
+
+    assert (
+        handlers._opening_rotation_yields_to_rising_missed_owner(
+            stock, {"pos_tag": "SCANNER"}
+        )
+        is True
+    )
+
+
 def test_rising_missed_scout_upgrade_cannot_be_retagged_as_rotation(monkeypatch):
     stock = {
         "id": 11,
@@ -891,7 +1005,7 @@ def test_rising_missed_scout_upgrade_cannot_be_retagged_as_rotation(monkeypatch)
     assert "005930" not in handlers._OPENING_ROTATION_CONTEXT_CACHE
 
 
-def test_runtime_branch_does_not_fall_back_to_ai_after_direct_entry_window():
+def test_runtime_branch_does_not_fall_back_to_ai_after_1500_entry_window():
     stock = {
         "id": 7,
         "name": "테스트",
@@ -900,8 +1014,8 @@ def test_runtime_branch_does_not_fall_back_to_ai_after_direct_entry_window():
     }
     runtime = {
         "pos_tag": POSITION_TAG,
-        "now_ts": datetime(2026, 7, 20, 10, 31).timestamp(),
-        "now_dt": datetime(2026, 7, 20, 10, 31),
+        "now_ts": datetime(2026, 7, 20, 15, 1).timestamp(),
+        "now_dt": datetime(2026, 7, 20, 15, 1),
         "fluctuation": 3.5,
         "curr_price": 10_000,
         "is_trigger": False,

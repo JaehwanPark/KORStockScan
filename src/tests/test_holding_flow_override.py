@@ -94,6 +94,18 @@ def _enable_trailing_continuation_recheck(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_TTL_SEC", "15")
 
 
+def _enable_high_peak_trailing_continuation_recheck(monkeypatch):
+    _enable_trailing_continuation_recheck(monkeypatch)
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_HIGH_PEAK_ENABLED",
+        "true",
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_HIGH_PEAK_TTL_SEC",
+        "10",
+    )
+
+
 def _fresh_reversal_features():
     return {
         "tick_context_quality": "fresh_computed",
@@ -1153,6 +1165,134 @@ def test_trailing_continuation_recheck_defers_only_fresh_supportive_shallow_prof
         and fields.get("force_reason") == "trailing_peak_worsen_floor"
         for stage, fields in logs
     )
+
+
+def test_trailing_continuation_recheck_defers_high_peak_transient_bearish_estimator(
+    monkeypatch,
+):
+    logs = []
+    _patch_holding_context(monkeypatch, logs)
+    _enable_high_peak_trailing_continuation_recheck(monkeypatch)
+    now_ts = datetime(
+        2026, 7, 15, 10, 0, tzinfo=timezone(timedelta(hours=9))
+    ).timestamp()
+    stock = {
+        **_stock(),
+        "last_reversal_features": _fresh_reversal_features(),
+    }
+    micro_fields = {
+        **_trailing_continuation_micro_fields(),
+        "holding_flow_micro_estimator_source_state": "smoothed_probe_estimate",
+        "holding_flow_micro_estimator_true_ofi_ewma": -0.1147,
+        "holding_flow_micro_estimator_pressure_ewma": 41.202,
+        "holding_flow_micro_estimator_top_depth_ratio": 0.3377,
+    }
+
+    deferred = handlers._evaluate_scalp_trailing_continuation_recheck(
+        stock=stock,
+        code="049080",
+        ws_data={**_ws(), "last_ws_update_ts": now_ts - 0.1},
+        micro_fields=micro_fields,
+        profit_rate=0.78,
+        peak_profit=2.12,
+        trailing_peak_worsen=1.34,
+        current_ai_score=78,
+        now_ts=now_ts,
+    )
+
+    assert deferred is True, logs[0][1]["high_peak_failed_checks"]
+    assert stock["scalp_trailing_continuation_recheck_lane"] == "high_peak"
+    assert stock["scalp_trailing_continuation_recheck_until_epoch"] == now_ts + 10
+    event = next(
+        fields
+        for stage, fields in logs
+        if stage == "scalp_trailing_continuation_recheck"
+    )
+    assert event["recheck_state"] == "armed"
+    assert event["recheck_lane"] == "high_peak"
+    assert event["high_peak_eligible"] is True
+    assert event["micro_source_trusted_ws"] is False
+
+
+def test_trailing_continuation_recheck_high_peak_vetoes_stale_quote(monkeypatch):
+    logs = []
+    _patch_holding_context(monkeypatch, logs)
+    _enable_high_peak_trailing_continuation_recheck(monkeypatch)
+    now_ts = datetime(
+        2026, 7, 15, 10, 0, tzinfo=timezone(timedelta(hours=9))
+    ).timestamp()
+    features = {
+        **_fresh_reversal_features(),
+        "quote_stale": True,
+        "quote_age_ms": 4000,
+    }
+    stock = {**_stock(), "last_reversal_features": features}
+
+    deferred = handlers._evaluate_scalp_trailing_continuation_recheck(
+        stock=stock,
+        code="049080",
+        ws_data={**_ws(), "last_ws_update_ts": now_ts - 4.0},
+        micro_fields={
+            **_trailing_continuation_micro_fields(),
+            "holding_flow_micro_estimator_source_state": "smoothed_probe_estimate",
+        },
+        profit_rate=0.78,
+        peak_profit=2.12,
+        trailing_peak_worsen=1.34,
+        current_ai_score=78,
+        now_ts=now_ts,
+    )
+
+    assert deferred is False
+    assert "scalp_trailing_continuation_recheck_started_at" not in stock
+    event = next(
+        fields
+        for stage, fields in logs
+        if stage == "scalp_trailing_continuation_recheck"
+    )
+    assert event["recheck_state"] == "high_peak_ineligible"
+    assert event["high_peak_quote_fresh"] is False
+    assert "quote_fresh" in event["high_peak_failed_checks"]
+
+
+def test_trailing_continuation_recheck_high_peak_vetoes_large_sell(monkeypatch):
+    logs = []
+    _patch_holding_context(monkeypatch, logs)
+    _enable_high_peak_trailing_continuation_recheck(monkeypatch)
+    now_ts = datetime(
+        2026, 7, 15, 10, 0, tzinfo=timezone(timedelta(hours=9))
+    ).timestamp()
+    features = {
+        **_fresh_reversal_features(),
+        "large_sell_print_detected": True,
+    }
+    stock = {**_stock(), "last_reversal_features": features}
+
+    deferred = handlers._evaluate_scalp_trailing_continuation_recheck(
+        stock=stock,
+        code="049080",
+        ws_data={**_ws(), "last_ws_update_ts": now_ts - 0.1},
+        micro_fields={
+            **_trailing_continuation_micro_fields(),
+            "holding_flow_micro_estimator_source_state": "smoothed_probe_estimate",
+        },
+        profit_rate=0.78,
+        peak_profit=2.12,
+        trailing_peak_worsen=1.34,
+        current_ai_score=78,
+        now_ts=now_ts,
+    )
+
+    assert deferred is False
+    assert "scalp_trailing_continuation_recheck_started_at" not in stock
+    event = next(
+        fields
+        for stage, fields in logs
+        if stage == "scalp_trailing_continuation_recheck"
+    )
+    assert event["recheck_state"] == "high_peak_ineligible"
+    assert event["large_sell_print_detected"] is True
+    assert "large_sell_clear" in event["high_peak_failed_checks"]
 
 
 def test_trailing_continuation_recheck_fails_closed_without_fresh_signed_tape_features(

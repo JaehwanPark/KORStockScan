@@ -1123,6 +1123,8 @@ def _latency_opportunity_price_delta_pct(
             [
                 source.get("price_delta_since_first_seen_pct"),
                 source.get("comparable_flu_delta_since_first_seen"),
+                source.get("rising_missed_tp1_submit_context_watch_delta_pct"),
+                source.get("rising_missed_tp1_submit_context_low_rebound_pct"),
                 source.get("fluctuation"),
                 source.get("fluctuation_rate"),
                 source.get("change_rate"),
@@ -1149,7 +1151,9 @@ def _latency_rising_missed_lineage(stock: dict[str, Any] | None) -> bool:
     )
 
 
-def _latency_opportunity_source_support(stock: dict[str, Any] | None, ws_data: dict[str, Any] | None) -> bool:
+def _latency_opportunity_source_support(
+    stock: dict[str, Any] | None, ws_data: dict[str, Any] | None
+) -> bool:
     markers = {
         "PRICE_JUMP_START",
         "NEW_HIGH_CONFIRMATION",
@@ -1675,7 +1679,9 @@ def _latency_true_ofi_direct_canary_fields(
     extended_max_spread_bps = max(
         max_spread_bps,
         _to_float(
-            os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_MAX_SPREAD_BPS"),
+            os.getenv(
+                "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_MAX_SPREAD_BPS"
+            ),
             120.0,
         ),
     )
@@ -1693,7 +1699,9 @@ def _latency_true_ofi_direct_canary_fields(
     extended_min_delta_pct = max(
         0.0,
         _to_float(
-            os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_MIN_DELTA_PCT"),
+            os.getenv(
+                "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_MIN_DELTA_PCT"
+            ),
             3.0,
         ),
     )
@@ -1713,8 +1721,92 @@ def _latency_true_ofi_direct_canary_fields(
             ),
         ),
     )
-    min_true_ofi = _to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MIN_TRUE_OFI"), -0.09)
-    max_true_ofi = _to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MAX_TRUE_OFI"), 0.12)
+    low_rebound_recovery_enabled = _truthy(
+        os.getenv(
+            "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_LOW_REBOUND_RECOVERY_ENABLED",
+            "false",
+        )
+    )
+    low_rebound_recovery_active_date = str(
+        os.getenv(
+            "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_LOW_REBOUND_RECOVERY_ACTIVE_DATE"
+        )
+        or ""
+    ).strip()
+    low_rebound_recovery_active = bool(
+        low_rebound_recovery_enabled
+        and low_rebound_recovery_active_date == current_date
+    )
+    low_rebound_recovery_min_rebound_pct = max(
+        0.0,
+        _to_float(
+            os.getenv(
+                "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_LOW_REBOUND_RECOVERY_MIN_REBOUND_PCT"
+            ),
+            2.5,
+        ),
+    )
+    low_rebound_recovery_min_support_count = max(
+        2,
+        int(
+            _to_float(
+                os.getenv(
+                    "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_LOW_REBOUND_RECOVERY_MIN_SUPPORT_COUNT"
+                ),
+                2.0,
+            )
+        ),
+    )
+    low_rebound_recovery_min_samples = max(
+        20,
+        int(
+            _to_float(
+                os.getenv(
+                    "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_LOW_REBOUND_RECOVERY_MIN_SAMPLES"
+                ),
+                60.0,
+            )
+        ),
+    )
+    low_rebound_recovery_max_spread_bps = max(
+        max_spread_bps,
+        _to_float(
+            os.getenv(
+                "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_LOW_REBOUND_RECOVERY_MAX_SPREAD_BPS"
+            ),
+            120.0,
+        ),
+    )
+    low_rebound_recovery_min_confidence = max(
+        0.0,
+        _to_float(
+            os.getenv(
+                "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_LOW_REBOUND_RECOVERY_MIN_CONFIDENCE"
+            ),
+            0.8,
+        ),
+    )
+    low_rebound_recovery_min_pressure = _to_float(
+        os.getenv(
+            "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_LOW_REBOUND_RECOVERY_MIN_PRESSURE"
+        ),
+        49.0,
+    )
+    low_rebound_recovery_min_depth_ratio = max(
+        0.0,
+        _to_float(
+            os.getenv(
+                "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_LOW_REBOUND_RECOVERY_MIN_DEPTH_RATIO"
+            ),
+            1.05,
+        ),
+    )
+    min_true_ofi = _to_float(
+        os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MIN_TRUE_OFI"), -0.09
+    )
+    max_true_ofi = _to_float(
+        os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MAX_TRUE_OFI"), 0.12
+    )
     nxt_probability_band_configured = _truthy(
         os.getenv(
             "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_ENABLED",
@@ -1760,9 +1852,7 @@ def _latency_true_ofi_direct_canary_fields(
         ),
     )
     nxt_probability_band_min_true_ofi = _to_float(
-        os.getenv(
-            "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_MIN_TRUE_OFI"
-        ),
+        os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_MIN_TRUE_OFI"),
         -0.02,
     )
     nxt_probability_band_min_confidence = min(
@@ -1778,35 +1868,51 @@ def _latency_true_ofi_direct_canary_fields(
         ),
     )
     nxt_probability_band_min_pressure = _to_float(
-        os.getenv(
-            "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_MIN_PRESSURE"
-        ),
+        os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_MIN_PRESSURE"),
         60.0,
     )
     nxt_probability_band_min_depth_ratio = _to_float(
-        os.getenv(
-            "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_MIN_DEPTH_RATIO"
-        ),
+        os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_MIN_DEPTH_RATIO"),
         1.50,
     )
     nxt_probability_band_min_delta_pct = _to_float(
-        os.getenv(
-            "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_MIN_DELTA_PCT"
-        ),
+        os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_MIN_DELTA_PCT"),
         8.0,
     )
     min_signal_score = max(
         0.0,
-        _to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MIN_SIGNAL_SCORE"), 70.0),
+        _to_float(
+            os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MIN_SIGNAL_SCORE"),
+            70.0,
+        ),
     )
     min_delta_pct = max(
         0.0,
-        _to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MIN_DELTA_PCT"), 3.0),
+        _to_float(
+            os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MIN_DELTA_PCT"), 3.0
+        ),
     )
-    true_ofi = _to_float(estimator_context.get("latency_false_negative_remeasure_true_ofi_ewma"), 0.0)
-    sample_count = int(_to_float(estimator_context.get("latency_false_negative_remeasure_true_ofi_sample_count"), 0.0))
-    ws_age_ms = _to_float(estimator_context.get("latency_false_negative_remeasure_ws_age_ms"), -1.0)
-    source_state = str(estimator_context.get("latency_false_negative_remeasure_source_state") or "").strip().lower()
+    true_ofi = _to_float(
+        estimator_context.get("latency_false_negative_remeasure_true_ofi_ewma"), 0.0
+    )
+    sample_count = int(
+        _to_float(
+            estimator_context.get(
+                "latency_false_negative_remeasure_true_ofi_sample_count"
+            ),
+            0.0,
+        )
+    )
+    ws_age_ms = _to_float(
+        estimator_context.get("latency_false_negative_remeasure_ws_age_ms"), -1.0
+    )
+    source_state = (
+        str(
+            estimator_context.get("latency_false_negative_remeasure_source_state") or ""
+        )
+        .strip()
+        .lower()
+    )
     delta_pct = _latency_opportunity_price_delta_pct(stock, ws_data)
     support_count = int(
         _to_float(
@@ -1820,9 +1926,14 @@ def _latency_true_ofi_direct_canary_fields(
         or _latency_opportunity_source_support(stock, ws_data)
     )
     tape_fields = _latency_direct_canary_tape_pressure_fields(stock, ws_data)
-    tp1_submit_safety_action = str(
-        (stock or {}).get("rising_missed_tp1_counterfactual_submit_safety_action") or ""
-    ).strip().upper()
+    tp1_submit_safety_action = (
+        str(
+            (stock or {}).get("rising_missed_tp1_counterfactual_submit_safety_action")
+            or ""
+        )
+        .strip()
+        .upper()
+    )
     raw_tp1_risks = (stock or {}).get("rising_missed_tp1_counterfactual_risks") or []
     if isinstance(raw_tp1_risks, str):
         tp1_risk_tokens = {
@@ -1833,7 +1944,9 @@ def _latency_true_ofi_direct_canary_fields(
     else:
         try:
             tp1_risk_tokens = {
-                str(token).strip().lower() for token in raw_tp1_risks if str(token).strip()
+                str(token).strip().lower()
+                for token in raw_tp1_risks
+                if str(token).strip()
             }
         except TypeError:
             tp1_risk_tokens = set()
@@ -1841,8 +1954,55 @@ def _latency_true_ofi_direct_canary_fields(
         tp1_submit_safety_action == "RECHECK_REQUIRED"
         or {"true_ofi_nonpositive", "depth_support_weak"}.issubset(tp1_risk_tokens)
     )
+    tp1_context_fresh = _truthy(
+        (stock or {}).get("rising_missed_tp1_submit_context_fresh")
+    )
+    tp1_true_ofi = _to_float(
+        (stock or {}).get("rising_missed_tp1_submit_context_true_ofi_ewma"),
+        0.0,
+    )
+    tp1_spread_bps = max(
+        0.0,
+        _to_float(
+            (stock or {}).get("rising_missed_tp1_submit_context_spread_ratio"),
+            0.0,
+        )
+        * 10_000.0,
+    )
+    spread_worsen_bps = max(
+        1.0,
+        _to_float(
+            os.getenv(
+                "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_SPREAD_WORSEN_BPS"
+            ),
+            10.0,
+        ),
+    )
+    submit_true_ofi_deteriorated = bool(
+        tp1_context_fresh
+        and source_state.startswith("fresh_ws")
+        and tp1_true_ofi > 0.0
+        and true_ofi < 0.0
+    )
+    submit_spread_deteriorated = bool(
+        tp1_context_fresh
+        and tp1_spread_bps > 0.0
+        and float(spread_bps or 0.0) >= tp1_spread_bps + spread_worsen_bps
+    )
+    submit_deterioration_reasons = [
+        reason
+        for reason, detected in (
+            ("true_ofi_turned_negative", submit_true_ofi_deteriorated),
+            ("spread_worsened", submit_spread_deteriorated),
+        )
+        if detected
+    ]
+    if submit_deterioration_reasons:
+        tp1_recheck_required = True
     recheck_configured = _truthy(
-        os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ENABLED", "false")
+        os.getenv(
+            "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ENABLED", "false"
+        )
     )
     recheck_active_date = str(
         os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ACTIVE_DATE")
@@ -1857,7 +2017,9 @@ def _latency_true_ofi_direct_canary_fields(
         max(
             2.0,
             _to_float(
-                os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_MIN_WAIT_SEC"),
+                os.getenv(
+                    "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_MIN_WAIT_SEC"
+                ),
                 2.0,
             ),
         ),
@@ -1867,7 +2029,9 @@ def _latency_true_ofi_direct_canary_fields(
         max(
             recheck_min_wait_sec,
             _to_float(
-                os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_TTL_SEC"),
+                os.getenv(
+                    "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_TTL_SEC"
+                ),
                 5.0,
             ),
         ),
@@ -1878,8 +2042,12 @@ def _latency_true_ofi_direct_canary_fields(
     recheck_started_at = _to_float(
         (stock or {}).get("latency_true_ofi_direct_canary_recheck_started_at"), 0.0
     )
-    recheck_elapsed_sec = max(0.0, time.time() - recheck_started_at) if recheck_started_at > 0 else 0.0
-    top_depth_ratio, top_depth_ratio_source = _latency_direct_canary_top_depth_ratio(stock, ws_data)
+    recheck_elapsed_sec = (
+        max(0.0, time.time() - recheck_started_at) if recheck_started_at > 0 else 0.0
+    )
+    top_depth_ratio, top_depth_ratio_source = _latency_direct_canary_top_depth_ratio(
+        stock, ws_data
+    )
     fresh_ws_micro = source_state.startswith("fresh_ws")
     positive_micro_recovered = bool(
         fresh_ws_micro
@@ -1889,11 +2057,15 @@ def _latency_true_ofi_direct_canary_fields(
         and bool(tape_fields.get("latency_true_ofi_direct_canary_tape_pressure_usable"))
         and bool(tape_fields.get("latency_true_ofi_direct_canary_tape_support_ok"))
     )
-    micro_state = str(
-        (ws_data or {}).get("orderbook_micro_state")
-        or (stock or {}).get("orderbook_micro_state")
-        or ""
-    ).strip().lower()
+    micro_state = (
+        str(
+            (ws_data or {}).get("orderbook_micro_state")
+            or (stock or {}).get("orderbook_micro_state")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
     micro_reason = str(micro_estimator_reason or "").strip().lower()
     estimator_confidence = _to_float(
         estimator_context.get("latency_false_negative_remeasure_estimator_confidence"),
@@ -1909,20 +2081,26 @@ def _latency_true_ofi_direct_canary_fields(
         or estimator_context.get("top_depth_ratio"),
         0.0,
     )
-    effective_venue = str(
-        (stock or {}).get("rising_missed_effective_venue")
-        or (stock or {}).get("effective_venue")
-        or ""
-    ).strip().upper()
-    market_session_bucket = str(
-        (stock or {}).get("rising_missed_market_session_bucket") or ""
-    ).strip().lower()
-    ws_0b_route = str(
-        (stock or {}).get("rising_missed_ws_0b_route") or ""
-    ).strip().lower()
-    ws_0d_route = str(
-        (stock or {}).get("rising_missed_ws_0d_route") or ""
-    ).strip().lower()
+    effective_venue = (
+        str(
+            (stock or {}).get("rising_missed_effective_venue")
+            or (stock or {}).get("effective_venue")
+            or ""
+        )
+        .strip()
+        .upper()
+    )
+    market_session_bucket = (
+        str((stock or {}).get("rising_missed_market_session_bucket") or "")
+        .strip()
+        .lower()
+    )
+    ws_0b_route = (
+        str((stock or {}).get("rising_missed_ws_0b_route") or "").strip().lower()
+    )
+    ws_0d_route = (
+        str((stock or {}).get("rising_missed_ws_0d_route") or "").strip().lower()
+    )
     nxt_probability_band_context = bool(
         nxt_probability_band_active
         and effective_venue == "NXT"
@@ -1933,22 +2111,21 @@ def _latency_true_ofi_direct_canary_fields(
         and str((stock or {}).get("rising_missed_tp1_evaluation_id") or "").strip()
         and _truthy((stock or {}).get("rising_missed_tp1_submit_context_fresh"))
     )
-    derived_true_ofi_below_floor = (
-        micro_reason == "true_ofi_below_floor"
-        or (
-            micro_reason in {"", "disabled", "not_evaluated"}
-            and true_ofi < 0.20
-        )
+    derived_true_ofi_below_floor = micro_reason == "true_ofi_below_floor" or (
+        micro_reason in {"", "disabled", "not_evaluated"} and true_ofi < 0.20
     )
     fields: dict[str, Any] = {
         "latency_true_ofi_direct_canary_enabled": enabled,
         "latency_true_ofi_direct_canary_configured_enabled": bool(
             runtime_state["configured_enabled"]
         ),
-        "latency_true_ofi_direct_canary_active_date": runtime_state["active_date"] or "-",
+        "latency_true_ofi_direct_canary_active_date": runtime_state["active_date"]
+        or "-",
         "latency_true_ofi_direct_canary_current_date": current_date,
         "latency_true_ofi_direct_canary_applied": False,
-        "latency_true_ofi_direct_canary_reason": "disabled" if not enabled else "not_evaluated",
+        "latency_true_ofi_direct_canary_reason": (
+            "disabled" if not enabled else "not_evaluated"
+        ),
         "latency_true_ofi_direct_canary_decision_authority": _LATENCY_TRUE_OFI_DIRECT_CANARY_AUTHORITY,
         "latency_true_ofi_direct_canary_runtime_effect": False,
         "latency_true_ofi_direct_canary_allowed_runtime_apply": False,
@@ -1980,6 +2157,17 @@ def _latency_true_ofi_direct_canary_fields(
         "latency_true_ofi_direct_canary_extended_support_count": support_count,
         "latency_true_ofi_direct_canary_extended_signed_tape_ws_only": False,
         "latency_true_ofi_direct_canary_extended_tier_applied": False,
+        "latency_true_ofi_direct_canary_low_rebound_recovery_active": (
+            low_rebound_recovery_active
+        ),
+        "latency_true_ofi_direct_canary_low_rebound_recovery_applied": False,
+        "latency_true_ofi_direct_canary_low_rebound_recovery_rebound_pct": round(
+            _to_float(
+                (stock or {}).get("rising_missed_tp1_submit_context_low_rebound_pct"),
+                0.0,
+            ),
+            4,
+        ),
         "latency_true_ofi_direct_canary_min_true_ofi": round(min_true_ofi, 4),
         "latency_true_ofi_direct_canary_max_true_ofi": round(max_true_ofi, 4),
         "latency_true_ofi_nxt_probability_band_configured": (
@@ -1989,9 +2177,7 @@ def _latency_true_ofi_direct_canary_fields(
         "latency_true_ofi_nxt_probability_band_active_date": (
             nxt_probability_band_active_date or "-"
         ),
-        "latency_true_ofi_nxt_probability_band_context": (
-            nxt_probability_band_context
-        ),
+        "latency_true_ofi_nxt_probability_band_context": (nxt_probability_band_context),
         "latency_true_ofi_nxt_probability_band_applied": False,
         "latency_true_ofi_nxt_probability_band_reason": (
             "not_evaluated" if nxt_probability_band_active else "runtime_inactive"
@@ -2031,15 +2217,15 @@ def _latency_true_ofi_direct_canary_fields(
         "latency_true_ofi_nxt_probability_band_confidence": round(
             estimator_confidence, 4
         ),
-        "latency_true_ofi_nxt_probability_band_pressure": round(
-            estimator_pressure, 3
-        ),
+        "latency_true_ofi_nxt_probability_band_pressure": round(estimator_pressure, 3),
         "latency_true_ofi_nxt_probability_band_depth_ratio": round(
             estimator_depth_ratio, 4
         ),
         "latency_true_ofi_direct_canary_min_signal_score": round(min_signal_score, 3),
         "latency_true_ofi_direct_canary_min_delta_pct": round(min_delta_pct, 3),
-        "latency_true_ofi_direct_canary_signal_score": round(float(signal_score or 0.0), 3),
+        "latency_true_ofi_direct_canary_signal_score": round(
+            float(signal_score or 0.0), 3
+        ),
         "latency_true_ofi_direct_canary_price_delta_pct": round(delta_pct, 4),
         "latency_true_ofi_direct_canary_spread_bps": round(float(spread_bps or 0.0), 3),
         "latency_true_ofi_direct_canary_true_ofi_ewma": round(true_ofi, 4),
@@ -2048,28 +2234,64 @@ def _latency_true_ofi_direct_canary_fields(
         "latency_true_ofi_direct_canary_source_state": source_state or "not_evaluated",
         "latency_true_ofi_direct_canary_micro_reason": micro_reason or "not_evaluated",
         "latency_true_ofi_direct_canary_derived_reason": (
-            "true_ofi_below_floor" if derived_true_ofi_below_floor else "not_true_ofi_below_floor"
+            "true_ofi_below_floor"
+            if derived_true_ofi_below_floor
+            else "not_true_ofi_below_floor"
         ),
-        "latency_true_ofi_direct_canary_opportunity_supported": bool(opportunity_supported),
-        "latency_true_ofi_direct_canary_rising_missed_lineage": _latency_rising_missed_lineage(stock),
+        "latency_true_ofi_direct_canary_opportunity_supported": bool(
+            opportunity_supported
+        ),
+        "latency_true_ofi_direct_canary_rising_missed_lineage": _latency_rising_missed_lineage(
+            stock
+        ),
         "latency_true_ofi_direct_canary_micro_state": micro_state or "-",
         "latency_true_ofi_direct_canary_tp1_submit_safety_action": (
             tp1_submit_safety_action or "not_evaluated"
         ),
-        "latency_true_ofi_direct_canary_tp1_risk_tokens": ",".join(sorted(tp1_risk_tokens)) or "-",
+        "latency_true_ofi_direct_canary_tp1_risk_tokens": ",".join(
+            sorted(tp1_risk_tokens)
+        )
+        or "-",
+        "latency_true_ofi_direct_canary_tp1_context_true_ofi": round(tp1_true_ofi, 4),
+        "latency_true_ofi_direct_canary_tp1_context_spread_bps": round(
+            tp1_spread_bps, 3
+        ),
+        "latency_true_ofi_direct_canary_submit_deterioration_reasons": (
+            ",".join(submit_deterioration_reasons) or "-"
+        ),
+        "latency_true_ofi_direct_canary_submit_true_ofi_deteriorated": (
+            submit_true_ofi_deteriorated
+        ),
+        "latency_true_ofi_direct_canary_submit_spread_deteriorated": (
+            submit_spread_deteriorated
+        ),
+        "latency_true_ofi_direct_canary_recheck_spread_worsen_bps": round(
+            spread_worsen_bps, 3
+        ),
         "latency_true_ofi_direct_canary_recheck_configured": recheck_configured,
         "latency_true_ofi_direct_canary_recheck_active": recheck_active,
-        "latency_true_ofi_direct_canary_recheck_active_date": recheck_active_date or "-",
+        "latency_true_ofi_direct_canary_recheck_active_date": recheck_active_date
+        or "-",
         "latency_true_ofi_direct_canary_recheck_required": tp1_recheck_required,
         "latency_true_ofi_direct_canary_recheck_armed": recheck_armed,
-        "latency_true_ofi_direct_canary_recheck_started_at": round(recheck_started_at, 3),
-        "latency_true_ofi_direct_canary_recheck_elapsed_sec": round(recheck_elapsed_sec, 3),
-        "latency_true_ofi_direct_canary_recheck_min_wait_sec": round(recheck_min_wait_sec, 3),
+        "latency_true_ofi_direct_canary_recheck_started_at": round(
+            recheck_started_at, 3
+        ),
+        "latency_true_ofi_direct_canary_recheck_elapsed_sec": round(
+            recheck_elapsed_sec, 3
+        ),
+        "latency_true_ofi_direct_canary_recheck_min_wait_sec": round(
+            recheck_min_wait_sec, 3
+        ),
         "latency_true_ofi_direct_canary_recheck_ttl_sec": round(recheck_ttl_sec, 3),
         "latency_true_ofi_direct_canary_recheck_until_epoch": (
-            round(recheck_started_at + recheck_ttl_sec, 3) if recheck_started_at > 0 else 0.0
+            round(recheck_started_at + recheck_ttl_sec, 3)
+            if recheck_started_at > 0
+            else 0.0
         ),
-        "latency_true_ofi_direct_canary_recheck_top_depth_ratio": round(top_depth_ratio, 4),
+        "latency_true_ofi_direct_canary_recheck_top_depth_ratio": round(
+            top_depth_ratio, 4
+        ),
         "latency_true_ofi_direct_canary_recheck_top_depth_ratio_source": top_depth_ratio_source,
         "latency_true_ofi_direct_canary_recheck_positive_micro_recovered": (
             positive_micro_recovered
@@ -2084,7 +2306,9 @@ def _latency_true_ofi_direct_canary_fields(
             fields["latency_true_ofi_direct_canary_reason"] = "inactive_date"
         return fields
     if danger_relief_forbidden:
-        fields["latency_true_ofi_direct_canary_reason"] = "latency_relief_runtime_disabled"
+        fields["latency_true_ofi_direct_canary_reason"] = (
+            "latency_relief_runtime_disabled"
+        )
         return fields
     if str(strategy_id or "").upper() not in {"SCALPING", "SCALP"}:
         fields["latency_true_ofi_direct_canary_reason"] = "non_scalping"
@@ -2092,17 +2316,26 @@ def _latency_true_ofi_direct_canary_fields(
     if not fields["latency_true_ofi_direct_canary_rising_missed_lineage"]:
         fields["latency_true_ofi_direct_canary_reason"] = "non_rising_missed_lineage"
         return fields
-    if policy_decision != EntryDecision.REJECT_DANGER or effective_decision != EntryDecision.REJECT_DANGER:
-        fields["latency_true_ofi_direct_canary_reason"] = "not_blocked_by_latency_danger"
+    if (
+        policy_decision != EntryDecision.REJECT_DANGER
+        or effective_decision != EntryDecision.REJECT_DANGER
+    ):
+        fields["latency_true_ofi_direct_canary_reason"] = (
+            "not_blocked_by_latency_danger"
+        )
         return fields
     if bool(getattr(latency_status, "quote_stale", False)):
         fields["latency_true_ofi_direct_canary_reason"] = "quote_stale"
         return fields
     explicit_negative_ai_action = _latency_explicit_negative_ai_action(stock, ws_data)
     if explicit_negative_ai_action:
-        fields["latency_true_ofi_direct_canary_reason"] = f"explicit_ai_{explicit_negative_ai_action.lower()}_veto"
+        fields["latency_true_ofi_direct_canary_reason"] = (
+            f"explicit_ai_{explicit_negative_ai_action.lower()}_veto"
+        )
         return fields
-    normalized_reasons = _normalized_reason_set(danger_reasons or _latency_danger_reasons(latency_status))
+    normalized_reasons = _normalized_reason_set(
+        danger_reasons or _latency_danger_reasons(latency_status)
+    )
     spread_reasons = {
         "spread_above_caution_below_guard_cap",
         "spread_above_caution",
@@ -2187,14 +2420,90 @@ def _latency_true_ofi_direct_canary_fields(
     if source_state in {"", "not_evaluated", "missing_code", "snapshot_unavailable"}:
         fields["latency_true_ofi_direct_canary_reason"] = "true_ofi_source_unavailable"
         return fields
-    if sample_count < min_samples:
+    low_rebound_sample_exception = bool(
+        low_rebound_recovery_active
+        and float(spread_bps or 0.0) > max_spread_bps
+        and float(spread_bps or 0.0) <= low_rebound_recovery_max_spread_bps
+        and sample_count >= low_rebound_recovery_min_samples
+        and _to_float(
+            (stock or {}).get("rising_missed_tp1_submit_context_low_rebound_pct"),
+            0.0,
+        )
+        >= low_rebound_recovery_min_rebound_pct
+    )
+    if sample_count < min_samples and not low_rebound_sample_exception:
         fields["latency_true_ofi_direct_canary_reason"] = "true_ofi_samples_below_floor"
         return fields
     if not (0.0 <= ws_age_ms <= max_ws_age_ms):
-        fields["latency_true_ofi_direct_canary_reason"] = "ws_age_above_direct_canary_cap"
+        fields["latency_true_ofi_direct_canary_reason"] = (
+            "ws_age_above_direct_canary_cap"
+        )
         return fields
     spread_bps_value = float(spread_bps or 0.0)
     if spread_bps_value > max_spread_bps:
+        low_rebound_pct = _to_float(
+            (stock or {}).get("rising_missed_tp1_submit_context_low_rebound_pct"),
+            0.0,
+        )
+        tape_buy_pressure = _to_float(
+            fields.get("latency_true_ofi_direct_canary_tape_buy_pressure"),
+            0.0,
+        )
+        low_rebound_recovery_checks = (
+            low_rebound_recovery_active
+            and _truthy((stock or {}).get("rising_missed_tp1_submit_context_fresh"))
+            and spread_bps_value <= low_rebound_recovery_max_spread_bps
+            and sample_count >= low_rebound_recovery_min_samples
+            and source_state.startswith("fresh_ws")
+            and 0.0 <= ws_age_ms <= max_ws_age_ms
+            and true_ofi >= 0.0
+            and estimator_confidence >= low_rebound_recovery_min_confidence
+            and estimator_pressure >= low_rebound_recovery_min_pressure
+            and estimator_depth_ratio >= low_rebound_recovery_min_depth_ratio
+            and low_rebound_pct >= low_rebound_recovery_min_rebound_pct
+            and support_count >= low_rebound_recovery_min_support_count
+            and tape_buy_pressure >= low_rebound_recovery_min_pressure
+            and int(
+                _to_float(
+                    fields.get(
+                        "latency_true_ofi_direct_canary_signed_tape_trusted_ws_count"
+                    ),
+                    0.0,
+                )
+            )
+            >= 3
+            and int(
+                _to_float(
+                    fields.get(
+                        "latency_true_ofi_direct_canary_signed_tape_unknown_source_count"
+                    ),
+                    0.0,
+                )
+            )
+            == 0
+            and str(
+                fields.get("latency_true_ofi_direct_canary_signed_tape_latest_side")
+                or ""
+            ).upper()
+            == "BUY"
+            and micro_state not in {"bearish", "strong_bearish"}
+            and not bool(
+                fields.get("latency_true_ofi_direct_canary_large_sell_print_detected")
+            )
+        )
+        if low_rebound_recovery_checks:
+            fields.update(
+                {
+                    "latency_true_ofi_direct_canary_applied": True,
+                    "latency_true_ofi_direct_canary_reason": (
+                        "direct_canary_low_rebound_recovery_allow"
+                    ),
+                    "latency_true_ofi_direct_canary_runtime_effect": True,
+                    "latency_true_ofi_direct_canary_allowed_runtime_apply": True,
+                    "latency_true_ofi_direct_canary_low_rebound_recovery_applied": True,
+                }
+            )
+            return fields
         if not extended_active:
             fields["latency_true_ofi_direct_canary_reason"] = (
                 "spread_bps_above_direct_canary_cap"

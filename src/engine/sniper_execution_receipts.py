@@ -8,6 +8,8 @@ from typing import Any
 from src.database.models import RecommendationHistory
 from src.engine.scalping.opening_rotation import (
     POSITION_TAG as OPENING_ROTATION_POSITION_TAG,
+    entry_time_bucket as opening_rotation_entry_time_bucket,
+    entry_window_version as opening_rotation_entry_window_version,
 )
 from src.engine.sniper_entry_state import (
     ENTRY_LOCK,
@@ -21,14 +23,16 @@ from src.engine.sniper_position_tags import (
     normalize_position_tag,
     normalize_strategy,
 )
-from src.engine.trade_profit import calculate_net_profit_rate, calculate_net_realized_pnl
+from src.engine.trade_profit import (
+    calculate_net_profit_rate,
+    calculate_net_realized_pnl,
+)
 from src.utils.constants import TRADING_RULES
 from src.utils import kiwoom_utils
 from src.utils.logger import log_error, log_info
 from src.utils.pipeline_event_logger import emit_pipeline_event
 from src.engine.sniper_time import TIME_15_30
 from src.engine.sniper_post_sell_feedback import record_post_sell_candidate
-
 
 KIWOOM_TOKEN = None
 DB = None
@@ -68,6 +72,7 @@ def _safe_int(value: Any, default: int = 0) -> int:
     except Exception:
         return int(default)
 
+
 _BUY_RECEIPT_SNAPSHOT_KEYS = (
     "buy_execution_notified",
     "buy_price",
@@ -78,6 +83,8 @@ _BUY_RECEIPT_SNAPSHOT_KEYS = (
     "actual_order_submitted",
     "msg_audience",
     "name",
+    "opening_rotation_entry_time_bucket",
+    "opening_rotation_window_version",
     "pending_buy_msg",
     "scalp_live_simulator",
     "simulation_book",
@@ -100,6 +107,8 @@ _SELL_RECEIPT_SNAPSHOT_KEYS = (
     "msg_audience",
     "name",
     "no_scale_in_counterfactual_profit_pct",
+    "opening_rotation_entry_time_bucket",
+    "opening_rotation_window_version",
     "pending_sell_msg",
     "post_add_avg_price",
     "post_add_qty",
@@ -1803,14 +1812,15 @@ def _update_db_for_sell(target_id, exec_price, now, receipt_snapshot, strategy, 
                 profit_rate=profit_rate,
             )
             _log_holding_pipeline(
-                receipt_snapshot.get('name'),
-                str(receipt_snapshot.get('code', '')).strip()[:6],
+                receipt_snapshot.get("name"),
+                str(receipt_snapshot.get("code", "")).strip()[:6],
                 target_id,
-                'sell_completed',
+                "sell_completed",
                 sell_price=int(exec_price or 0),
                 profit_rate=f"{profit_rate:+.2f}",
-                exit_rule=receipt_snapshot.get('last_exit_rule') or '-',
-                exit_decision_source=receipt_snapshot.get('last_exit_decision_source') or 'MANUAL',
+                exit_rule=receipt_snapshot.get("last_exit_rule") or "-",
+                exit_decision_source=receipt_snapshot.get("last_exit_decision_source")
+                or "MANUAL",
                 revive=bool(is_scalp_revive),
                 strategy=strategy,
                 position_tag=completed_position_tag,
@@ -1819,33 +1829,51 @@ def _update_db_for_sell(target_id, exec_price, now, receipt_snapshot, strategy, 
                 realized_pnl_krw=realized_pnl_krw,
                 actual_order_submitted=True,
                 broker_order_forbidden=False,
-                no_scale_in_counterfactual_profit_pct=receipt_snapshot.get("no_scale_in_counterfactual_profit_pct", "-"),
-                scale_in_incremental_realized_delta_pct=receipt_snapshot.get("scale_in_incremental_realized_delta_pct", "-"),
+                no_scale_in_counterfactual_profit_pct=receipt_snapshot.get(
+                    "no_scale_in_counterfactual_profit_pct", "-"
+                ),
+                scale_in_incremental_realized_delta_pct=receipt_snapshot.get(
+                    "scale_in_incremental_realized_delta_pct", "-"
+                ),
                 pre_add_avg_price=receipt_snapshot.get("pre_add_avg_price", "-"),
                 post_add_avg_price=receipt_snapshot.get("post_add_avg_price", "-"),
                 pre_add_qty=receipt_snapshot.get("pre_add_qty", "-"),
                 post_add_qty=receipt_snapshot.get("post_add_qty", "-"),
+                opening_rotation_entry_time_bucket=receipt_snapshot.get(
+                    "opening_rotation_entry_time_bucket", "-"
+                ),
+                opening_rotation_window_version=receipt_snapshot.get(
+                    "opening_rotation_window_version", "-"
+                ),
                 **_sell_completion_contract_fields(completed_position_tag),
             )
             try:
                 record_post_sell_candidate(
                     recommendation_id=target_id,
                     stock=receipt_snapshot,
-                    code=str(receipt_snapshot.get('code', '')).strip()[:6],
+                    code=str(receipt_snapshot.get("code", "")).strip()[:6],
                     sell_time=now,
                     buy_price=safe_buy_price,
                     sell_price=exec_price,
                     profit_rate=profit_rate,
-                    buy_qty=int(float(getattr(record, 'buy_qty', 0) or receipt_snapshot.get('buy_qty', 0) or 0)),
-                    exit_rule=receipt_snapshot.get('last_exit_rule') or '-',
+                    buy_qty=int(
+                        float(
+                            getattr(record, "buy_qty", 0)
+                            or receipt_snapshot.get("buy_qty", 0)
+                            or 0
+                        )
+                    ),
+                    exit_rule=receipt_snapshot.get("last_exit_rule") or "-",
                     strategy=strategy,
                     revive=bool(is_scalp_revive),
-                    peak_profit=receipt_snapshot.get('last_exit_peak_profit'),
-                    held_sec=receipt_snapshot.get('last_exit_held_sec'),
-                    current_ai_score=receipt_snapshot.get('last_exit_current_ai_score'),
-                    soft_stop_threshold_pct=receipt_snapshot.get('last_exit_soft_stop_threshold_pct'),
+                    peak_profit=receipt_snapshot.get("last_exit_peak_profit"),
+                    held_sec=receipt_snapshot.get("last_exit_held_sec"),
+                    current_ai_score=receipt_snapshot.get("last_exit_current_ai_score"),
+                    soft_stop_threshold_pct=receipt_snapshot.get(
+                        "last_exit_soft_stop_threshold_pct"
+                    ),
                     same_symbol_soft_stop_cooldown_would_block=receipt_snapshot.get(
-                        'last_exit_same_symbol_soft_stop_cooldown_would_block'
+                        "last_exit_same_symbol_soft_stop_cooldown_would_block"
                     ),
                 )
             except Exception as exc:
@@ -2159,36 +2187,51 @@ def _handle_entry_buy_execution(
             f"mode={target_stock.get('entry_mode', 'normal')} "
             f"filled_qty={new_qty}/{requested_entry_qty} avg_buy={new_avg}"
         )
-        move_orders_to_terminal(target_stock, reason='entry_bundle_filled')
-        target_stock.pop('pending_entry_orders', None)
-        target_stock.pop('entry_requested_qty', None)
-        target_stock.pop('requested_buy_qty', None)
-        target_stock.pop('entry_filled_qty', None)
-        target_stock.pop('entry_fill_amount', None)
-        target_stock.pop('entry_bundle_id', None)
-        target_stock.pop('rising_missed_scout_upgrade_order_pending', None)
-        if target_stock.get('rising_missed_one_share_scout'):
-            target_stock['rising_missed_scout_upgraded'] = True
+        move_orders_to_terminal(target_stock, reason="entry_bundle_filled")
+        target_stock.pop("pending_entry_orders", None)
+        target_stock.pop("entry_requested_qty", None)
+        target_stock.pop("requested_buy_qty", None)
+        target_stock.pop("entry_filled_qty", None)
+        target_stock.pop("entry_fill_amount", None)
+        target_stock.pop("entry_bundle_id", None)
+        target_stock.pop("rising_missed_scout_upgrade_order_pending", None)
+        if target_stock.get("rising_missed_one_share_scout"):
+            target_stock["rising_missed_scout_upgraded"] = True
 
-    strategy = normalize_strategy(target_stock.get('strategy'))
-    pos_tag = normalize_position_tag(strategy, target_stock.get('position_tag'))
-    target_stock['position_tag'] = pos_tag
+    strategy = normalize_strategy(target_stock.get("strategy"))
+    pos_tag = normalize_position_tag(strategy, target_stock.get("position_tag"))
+    target_stock["position_tag"] = pos_tag
+    if pos_tag == OPENING_ROTATION_POSITION_TAG:
+        target_stock.setdefault(
+            "opening_rotation_entry_time_bucket",
+            opening_rotation_entry_time_bucket(now),
+        )
+        target_stock.setdefault(
+            "opening_rotation_window_version",
+            opening_rotation_entry_window_version(),
+        )
 
-    if strategy == 'SCALPING' and is_default_position_tag(strategy, pos_tag):
-        target_stock['exit_mode'] = 'SCALP_PRESET_TP'
+    if strategy == "SCALPING" and is_default_position_tag(strategy, pos_tag):
+        target_stock["exit_mode"] = "SCALP_PRESET_TP"
 
-        base_buy_price = int(target_stock.get('buy_price') or exec_price or 0)
+        base_buy_price = int(target_stock.get("buy_price") or exec_price or 0)
         if base_buy_price <= 0:
             base_buy_price = exec_price
 
-        target_stock['preset_tp_price'] = 0
-        preset_tp_ord_no_before = str(target_stock.get('preset_tp_ord_no', '') or '').strip()
-        preset_hard_stop_pct = float(getattr(TRADING_RULES, 'SCALP_PRESET_HARD_STOP_PCT', -0.7) or -0.7)
-        preset_hard_stop_grace_sec = int(getattr(TRADING_RULES, 'SCALP_PRESET_HARD_STOP_GRACE_SEC', 0) or 0)
+        target_stock["preset_tp_price"] = 0
+        preset_tp_ord_no_before = str(
+            target_stock.get("preset_tp_ord_no", "") or ""
+        ).strip()
+        preset_hard_stop_pct = float(
+            getattr(TRADING_RULES, "SCALP_PRESET_HARD_STOP_PCT", -0.7) or -0.7
+        )
+        preset_hard_stop_grace_sec = int(
+            getattr(TRADING_RULES, "SCALP_PRESET_HARD_STOP_GRACE_SEC", 0) or 0
+        )
         preset_hard_stop_emergency_pct = float(
             getattr(
                 TRADING_RULES,
-                'SCALP_PRESET_HARD_STOP_EMERGENCY_PCT',
+                "SCALP_PRESET_HARD_STOP_EMERGENCY_PCT",
                 min(preset_hard_stop_pct - 0.5, -1.2),
             )
             or min(preset_hard_stop_pct - 0.5, -1.2)
@@ -2291,13 +2334,17 @@ def _handle_entry_buy_execution(
         remaining_qty=int(remaining_qty or 0),
         new_qty=int(new_qty or 0),
     )
-    if strategy == 'SCALPING' and is_default_position_tag(strategy, pos_tag):
+    if strategy == "SCALPING" and is_default_position_tag(strategy, pos_tag):
         if preset_sync_status == "DISABLED_TRAILING_UNIFIED":
-            sync_stage = 'preset_exit_sync_disabled_trailing_unified'
+            sync_stage = "preset_exit_sync_disabled_trailing_unified"
         else:
-            sync_stage = 'preset_exit_sync_ok' if preset_sync_status == "OK" else 'preset_exit_sync_mismatch'
+            sync_stage = (
+                "preset_exit_sync_ok"
+                if preset_sync_status == "OK"
+                else "preset_exit_sync_mismatch"
+            )
         _log_holding_pipeline(
-            target_stock.get('name'),
+            target_stock.get("name"),
             code,
             target_id,
             sync_stage,
@@ -2305,7 +2352,7 @@ def _handle_entry_buy_execution(
             fill_quality=fill_quality,
             requested_qty=int(requested_entry_qty or 0),
             buy_qty=int(new_qty or 0),
-            preset_tp_qty=int(target_stock.get('preset_tp_qty', 0) or 0),
+            preset_tp_qty=int(target_stock.get("preset_tp_qty", 0) or 0),
             preset_tp_price=int(preset_tp_price or 0),
             preset_tp_ord_no_before=preset_tp_ord_no_before or "-",
             preset_tp_ord_no_after=preset_tp_ord_no_after or "-",
@@ -2314,18 +2361,24 @@ def _handle_entry_buy_execution(
         )
 
     _log_holding_pipeline(
-        target_stock.get('name'),
+        target_stock.get("name"),
         code,
         target_id,
-        'holding_started',
-        metric_role='execution_quality_real_only',
-        decision_authority='broker_receipt_observation_only',
+        "holding_started",
+        metric_role="execution_quality_real_only",
+        decision_authority="broker_receipt_observation_only",
         runtime_effect=False,
-        forbidden_uses='runtime_threshold_apply/provider_route_change/bot_restart/sim_execution_quality_claim',
+        forbidden_uses="runtime_threshold_apply/provider_route_change/bot_restart/sim_execution_quality_claim",
         actual_order_submitted=True,
         broker_order_forbidden=False,
-        strategy=target_stock.get('strategy'),
-        position_tag=target_stock.get('position_tag'),
+        strategy=target_stock.get("strategy"),
+        position_tag=target_stock.get("position_tag"),
+        opening_rotation_entry_time_bucket=target_stock.get(
+            "opening_rotation_entry_time_bucket", "-"
+        ),
+        opening_rotation_window_version=target_stock.get(
+            "opening_rotation_window_version", "-"
+        ),
         buy_price=f"{float(new_avg or 0):.2f}",
         buy_qty=int(new_qty or 0),
         fill_price=int(exec_price or 0),

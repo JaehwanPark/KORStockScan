@@ -13,6 +13,8 @@ from typing import Any
 POSITION_TAG = "OPENING_ROTATION_1PCT"
 WATCH_POSITION_TAG = "SCANNER"
 STATE_KEY = "opening_rotation_1pct_state"
+WINDOW_VERSION = "opening_rotation_0910_1500_v1"
+ENTRY_TIME_BUCKET_MINUTES = 30
 
 PRIMARY_SOURCES = frozenset(
     {
@@ -53,7 +55,7 @@ class EntryConfig:
     enabled: bool = True
     observe_start: time = time(9, 1)
     entry_start: time = time(9, 10)
-    entry_end: time = time(10, 30)
+    entry_end: time = time(15, 0)
     min_day_change_pct: float = 1.5
     max_day_change_pct: float = 8.0
     min_pullback_pct: float = 0.25
@@ -82,6 +84,68 @@ class ExitConfig:
     stagnation_sec: int = 300
     stagnation_max_profit_pct: float = 0.20
     max_hold_sec: int = 600
+
+
+def entry_window_version(config: EntryConfig | None = None) -> str:
+    """Return a stable cohort version for the effective entry window."""
+
+    config = config or EntryConfig()
+    if config.entry_start == time(9, 10) and config.entry_end == time(15, 0):
+        return WINDOW_VERSION
+    return (
+        "opening_rotation_"
+        f"{config.entry_start.strftime('%H%M')}_"
+        f"{config.entry_end.strftime('%H%M')}_custom"
+    )
+
+
+def entry_time_bucket(
+    value: datetime | time,
+    config: EntryConfig | None = None,
+) -> str:
+    """Map an in-window entry to its clock-aligned 30-minute cohort.
+
+    The inclusive end boundary belongs to the final bucket so a fill stamped
+    exactly at 15:00 is not reported as an out-of-window trade.
+    """
+
+    config = config or EntryConfig()
+    value_time = value.time() if isinstance(value, datetime) else value
+    if value_time < config.entry_start or value_time > config.entry_end:
+        return "outside_entry_window"
+
+    minute_of_day = (value_time.hour * 60) + value_time.minute
+    end_minute = (config.entry_end.hour * 60) + config.entry_end.minute
+    if value_time == config.entry_end:
+        minute_of_day = max(0, end_minute - 1)
+    bucket_start = (
+        minute_of_day // ENTRY_TIME_BUCKET_MINUTES
+    ) * ENTRY_TIME_BUCKET_MINUTES
+    bucket_end = bucket_start + ENTRY_TIME_BUCKET_MINUTES
+    return (
+        f"{bucket_start // 60:02d}:{bucket_start % 60:02d}-"
+        f"{bucket_end // 60:02d}:{bucket_end % 60:02d}"
+    )
+
+
+def entry_time_bucket_labels(config: EntryConfig | None = None) -> tuple[str, ...]:
+    """Return every clock-aligned cohort intersecting the entry window."""
+
+    config = config or EntryConfig()
+    start_minute = (config.entry_start.hour * 60) + config.entry_start.minute
+    end_minute = (config.entry_end.hour * 60) + config.entry_end.minute
+    bucket_start = (
+        start_minute // ENTRY_TIME_BUCKET_MINUTES
+    ) * ENTRY_TIME_BUCKET_MINUTES
+    labels: list[str] = []
+    while bucket_start < end_minute:
+        bucket_end = bucket_start + ENTRY_TIME_BUCKET_MINUTES
+        labels.append(
+            f"{bucket_start // 60:02d}:{bucket_start % 60:02d}-"
+            f"{bucket_end // 60:02d}:{bucket_end % 60:02d}"
+        )
+        bucket_start = bucket_end
+    return tuple(labels)
 
 
 def is_strategy_position(position_tag: Any) -> bool:

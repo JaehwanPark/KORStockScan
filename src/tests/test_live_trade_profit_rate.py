@@ -387,6 +387,8 @@ def test_opening_rotation_sell_receipt_keeps_tag_and_realized_pnl(monkeypatch):
         "msg_audience": "ADMIN_ONLY",
         "position_tag": "OPENING_ROTATION_1PCT",
         "strategy": "SCALPING",
+        "opening_rotation_entry_time_bucket": "09:00-09:30",
+        "opening_rotation_window_version": "opening_rotation_0910_1500_v1",
     }
 
     receipts._update_db_for_sell(
@@ -405,6 +407,8 @@ def test_opening_rotation_sell_receipt_keeps_tag_and_realized_pnl(monkeypatch):
     assert logged["metric_role"] == "exact_real_trade_performance_source"
     assert "EV" not in logged["forbidden_uses"].split("|")
     assert logged["allowed_runtime_apply"] is False
+    assert logged["opening_rotation_entry_time_bucket"] == "09:00-09:30"
+    assert logged["opening_rotation_window_version"] == "opening_rotation_0910_1500_v1"
     assert post_sell_calls[0]["stock"]["position_tag"] == "OPENING_ROTATION_1PCT"
     assert post_sell_calls[0]["stock"]["actual_order_submitted"] is True
     assert post_sell_calls[0]["stock"]["broker_order_forbidden"] is False

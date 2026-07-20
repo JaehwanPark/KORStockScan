@@ -67,6 +67,8 @@ from src.engine.scalping.opening_rotation import (
     STATE_KEY as OPENING_ROTATION_STATE_KEY,
     evaluate_entry as evaluate_opening_rotation_entry,
     evaluate_exit as evaluate_opening_rotation_exit,
+    entry_time_bucket as opening_rotation_entry_time_bucket,
+    entry_window_version as opening_rotation_entry_window_version,
     is_strategy_position as is_opening_rotation_position,
     is_watch_candidate as is_opening_rotation_watch_candidate,
 )
@@ -2907,6 +2909,7 @@ def _evaluate_stop_line_touch_mandatory_avg_down(
     held_sec: int,
     dynamic_stop_pct: float,
     now_ts: float | None = None,
+    current_ai_score_usable: bool = True,
     composite_micro_support: bool = False,
     composite_micro_fields: dict | None = None,
 ) -> dict:
@@ -3007,16 +3010,6 @@ def _evaluate_stop_line_touch_mandatory_avg_down(
             "max_hold_sec": max_hold,
             **hold_context,
         }
-    min_ai = _rule_float("DEEP_RECOVERY_AVG_DOWN_MIN_AI_SCORE", 60.0)
-    max_ai = _rule_float("DEEP_RECOVERY_AVG_DOWN_MAX_AI_SCORE", 74.0)
-    if not (min_ai <= current_ai_score <= max_ai):
-        return {
-            "should_retry": False,
-            "reason": "deep_recovery_ai_score_out_of_range",
-            "current_ai_score": current_ai_score,
-            "min_ai_score": min_ai,
-            "max_ai_score": max_ai,
-        }
     feat = stock.get("last_reversal_features", {}) if isinstance(stock, dict) else {}
     feature_quality = reversal_feature_source_quality(
         feat if isinstance(feat, dict) else {}
@@ -3029,6 +3022,18 @@ def _evaluate_stop_line_touch_mandatory_avg_down(
             "reason": "deep_recovery_features_stale:"
             + str(feature_quality.get("reversal_feature_stale_reason")),
             **feature_quality,
+        }
+    min_ai = _rule_float("DEEP_RECOVERY_AVG_DOWN_MIN_AI_SCORE", 60.0)
+    max_ai = _rule_float("DEEP_RECOVERY_AVG_DOWN_MAX_AI_SCORE", 74.0)
+    ai_score_usable = bool(current_ai_score_usable)
+    if ai_score_usable and not (min_ai <= current_ai_score <= max_ai):
+        return {
+            "should_retry": False,
+            "reason": "deep_recovery_ai_score_out_of_range",
+            "current_ai_score": current_ai_score,
+            "current_ai_score_usable": True,
+            "min_ai_score": min_ai,
+            "max_ai_score": max_ai,
         }
     quote_age_raw = feature_quality.get("quote_age_ms")
     quote_age_ms = None if quote_age_raw == "-" else _safe_float(quote_age_raw, None)
@@ -3096,6 +3101,12 @@ def _evaluate_stop_line_touch_mandatory_avg_down(
         "peak_profit": peak_profit,
         "stop_line_pct": stop_pct,
         "current_ai_score": current_ai_score,
+        "current_ai_score_usable": ai_score_usable,
+        "deep_recovery_ai_gate_mode": (
+            "usable_score_band"
+            if ai_score_usable
+            else "unusable_neutral_feature_fallback"
+        ),
         "held_sec": effective_held_sec,
         **hold_context,
         "deep_recovery_composite_micro_support": bool(composite_micro_support),
@@ -4451,6 +4462,7 @@ def _attempt_stop_line_touch_mandatory_avg_down(
     profit_rate: float,
     peak_profit: float,
     current_ai_score: float,
+    current_ai_score_usable: bool = True,
     held_sec: int,
     dynamic_stop_pct: float,
     now_ts: float,
@@ -4492,6 +4504,7 @@ def _attempt_stop_line_touch_mandatory_avg_down(
                 peak_profit=f"{peak_profit:+.2f}",
                 stop_line_pct=f"{_safe_float(dynamic_stop_pct, 0.0):+.2f}",
                 current_ai_score=f"{current_ai_score:.0f}",
+                current_ai_score_usable=bool(current_ai_score_usable),
                 held_sec=held_sec,
                 gate_allowed=False,
                 gate_reason=reason,
@@ -4542,6 +4555,7 @@ def _attempt_stop_line_touch_mandatory_avg_down(
         profit_rate=profit_rate,
         peak_profit=peak_profit,
         current_ai_score=current_ai_score,
+        current_ai_score_usable=current_ai_score_usable,
         held_sec=held_sec,
         dynamic_stop_pct=dynamic_stop_pct,
         now_ts=now_ts,
@@ -4588,6 +4602,7 @@ def _attempt_stop_line_touch_mandatory_avg_down(
         "peak_profit": f"{peak_profit:+.2f}",
         "stop_line_pct": f"{_safe_float(stop_touch_avg_down.get('stop_line_pct'), dynamic_stop_pct):+.2f}",
         "current_ai_score": f"{current_ai_score:.0f}",
+        "current_ai_score_usable": bool(current_ai_score_usable),
         "held_sec": held_sec,
         "deep_recovery_raw_held_sec": stop_touch_avg_down.get("raw_held_sec", held_sec),
         "deep_recovery_effective_held_sec": stop_touch_avg_down.get(
@@ -18228,6 +18243,15 @@ def _holding_strong_trailing_enabled(
     )
 
 
+def _holding_exit_ai_reason_label(
+    current_ai_score: float, holding_score_context: dict | None
+) -> str:
+    context = holding_score_context if isinstance(holding_score_context, dict) else {}
+    if not context.get("usable_for_negative_exit"):
+        return "[AI 판단 불가]"
+    return f"[AI: {current_ai_score:.0f}]"
+
+
 def _holding_score_acceptance_gate(ai_decision: dict | None) -> dict:
     payload = ai_decision if isinstance(ai_decision, dict) else {}
     data_quality = _normalize_holding_score_data_quality(
@@ -24683,10 +24707,15 @@ def _evaluate_real_weak_ai_micro_entry_block(
     )
     fields.update(tp1_source_gap_relief)
     measured_weak_context = bool(weak_buy_pressure and weak_micro)
+    measured_hard_negative_context = micro_state in {
+        "bearish",
+        "strong_bearish",
+    }
     tp1_source_gap_relief_applied = bool(
         fields["blocked"]
         and missing_fields
         and not measured_weak_context
+        and not measured_hard_negative_context
         and tp1_source_gap_relief.get("rising_missed_tp1_source_gap_relief_eligible")
     )
     fields["rising_missed_tp1_source_gap_relief_applied"] = (
@@ -24695,18 +24724,38 @@ def _evaluate_real_weak_ai_micro_entry_block(
     fields["rising_missed_tp1_source_gap_relief_measured_weak_context"] = (
         measured_weak_context
     )
+    fields["rising_missed_tp1_source_gap_relief_measured_hard_negative_context"] = (
+        measured_hard_negative_context
+    )
     if tp1_source_gap_relief_applied:
+        strong_micro_relief = bool(
+            tp1_source_gap_relief.get(
+                "rising_missed_tp1_source_gap_relief_strong_micro_eligible"
+            )
+        )
         fields.update(
             {
                 "blocked": False,
-                "reason": "tp1_support_momentum_source_gap_relief",
-                "block_reason": "tp1_support_momentum_source_gap_relief",
+                "reason": (
+                    "tp1_strong_micro_source_gap_relief"
+                    if strong_micro_relief
+                    else "tp1_support_momentum_source_gap_relief"
+                ),
+                "block_reason": (
+                    "tp1_strong_micro_source_gap_relief"
+                    if strong_micro_relief
+                    else "tp1_support_momentum_source_gap_relief"
+                ),
                 "decision_authority": (
                     "operator_runtime_override_rising_missed_tp1_source_gap_relief"
                 ),
                 "metric_role": "bounded_tunable",
                 "window_policy": "same_day_intraday_runtime_state",
-                "sample_floor": "fresh_tp1_eligible_lane_with_three_supports_and_momentum",
+                "sample_floor": (
+                    "fresh_tp1_two_supports_with_strong_trusted_ws_micro"
+                    if strong_micro_relief
+                    else "fresh_tp1_eligible_lane_with_three_supports_and_momentum"
+                ),
                 "primary_decision_metric": "post_relief_submit_and_tp1_first_hit_outcome",
                 "source_quality_gate": (
                     "fresh_tp1_contract_replaces_missing_legacy_weak_ai_micro_context"
@@ -25013,6 +25062,24 @@ def _rising_missed_tick_window_max_span_sec() -> float:
 
 def _rising_missed_min_tick_acceleration_ratio() -> float:
     return 1.0
+
+
+def _rising_missed_tick_absolute_throughput_relief_enabled() -> bool:
+    return _env_bool(
+        "KORSTOCKSCAN_RISING_MISSED_TICK_ABSOLUTE_THROUGHPUT_RELIEF_ENABLED",
+        False,
+    )
+
+
+def _rising_missed_tick_absolute_throughput_relief_active() -> tuple[bool, str, str]:
+    active_date = str(
+        os.getenv(
+            "KORSTOCKSCAN_RISING_MISSED_TICK_ABSOLUTE_THROUGHPUT_RELIEF_ACTIVE_DATE"
+        )
+        or ""
+    ).strip()
+    current_date = datetime.now(tz=_KST).strftime("%Y-%m-%d")
+    return bool(active_date and active_date == current_date), active_date, current_date
 
 
 def _rising_missed_reversal_pre_submit_guard_enabled() -> bool:
@@ -26049,6 +26116,104 @@ def _evaluate_rising_missed_tick_speed_entry_guard(
     )
     missing_window = tick_window_span_sec is None
     missing_accel = tick_acceleration_ratio is None
+    recent_5tick_seconds = _safe_float(
+        _entry_submit_field(
+            *sources,
+            key="recent_5tick_seconds",
+            aliases=("tick_accel_effective_recent_5tick_seconds",),
+            default=None,
+        ),
+        None,
+    )
+    tick_sample_count = _safe_int(
+        _entry_submit_field(
+            *sources,
+            key="tick_sample_count",
+            aliases=("tick_window_sample_count",),
+            default=0,
+        ),
+        0,
+    )
+    quote_age_ms = _safe_float(
+        market_data_fields.get("market_data_effective_quote_age_ms"), None
+    )
+    orderbook_ready = _truthy_field(orderbook_fields.get("orderbook_micro_ready"))
+    orderbook_state = (
+        str(orderbook_fields.get("orderbook_micro_state") or "").strip().lower()
+    )
+    orderbook_qi = _safe_float(orderbook_fields.get("orderbook_micro_qi"), None)
+    orderbook_ofi_norm = _safe_float(
+        orderbook_fields.get("orderbook_micro_ofi_norm"), None
+    )
+    tp1_context = _rising_missed_tp1_observation_context_log_fields(stock)
+    tp1_context_age_sec = _safe_float(
+        tp1_context.get("rising_missed_tp1_submit_context_age_sec"), None
+    )
+    tp1_support_count = _safe_int(
+        tp1_context.get("rising_missed_tp1_submit_context_support_count"), 0
+    )
+    tp1_micro_confidence = _safe_float(
+        tp1_context.get("rising_missed_tp1_submit_context_micro_confidence"), 0.0
+    )
+    tp1_ws_micro_ready = _truthy_field(
+        tp1_context.get("rising_missed_tp1_submit_context_ws_micro_ready")
+    )
+    large_sell_detected = any(
+        _truthy_field(source.get(key))
+        for source in (microstructure_fields, orderbook_fields, ws_data, stock)
+        for key in (
+            "large_sell_print_detected",
+            "signed_tape_sell_dominated",
+            "market_data_signed_tape_sell_dominated",
+        )
+    )
+    relief_active, relief_active_date, relief_current_date = (
+        _rising_missed_tick_absolute_throughput_relief_active()
+    )
+    relief_checks = {
+        "enabled": _rising_missed_tick_absolute_throughput_relief_enabled(),
+        "active_date": relief_active,
+        "only_relative_accel_slow": bool(
+            slow_accel and not slow_window and not missing_window and not missing_accel
+        ),
+        "absolute_tick_throughput": bool(
+            tick_window_span_sec is not None
+            and tick_window_span_sec <= 5.0
+            and recent_5tick_seconds is not None
+            and 0.0 <= recent_5tick_seconds <= 3.0
+            and tick_sample_count >= 10
+        ),
+        "fresh_quote": bool(quote_age_ms is not None and quote_age_ms <= 500.0),
+        "positive_current_micro": bool(
+            orderbook_ready
+            and orderbook_state not in {"bearish", "strong_bearish"}
+            and (
+                orderbook_state == "bullish"
+                or (
+                    orderbook_qi is not None
+                    and orderbook_qi >= 0.55
+                    and orderbook_ofi_norm is not None
+                    and orderbook_ofi_norm > 0.0
+                )
+                or (
+                    tick_window_span_sec is not None
+                    and tick_window_span_sec <= 1.0
+                    and orderbook_ofi_norm is not None
+                    and orderbook_ofi_norm >= 1.2
+                    and tp1_support_count >= 3
+                )
+            )
+        ),
+        "fresh_tp1_support": bool(
+            tp1_context_age_sec is not None
+            and tp1_context_age_sec <= 60.0
+            and tp1_support_count >= 2
+            and tp1_micro_confidence >= 0.8
+            and tp1_ws_micro_ready
+        ),
+        "no_large_sell": not large_sell_detected,
+    }
+    relief_applied = bool(is_rising_missed and all(relief_checks.values()))
     reasons = []
     if missing_window:
         reasons.append("tick_window_span_sec_missing")
@@ -26058,8 +26223,12 @@ def _evaluate_rising_missed_tick_speed_entry_guard(
         reasons.append("tick_window_span_sec_ge_60")
     if slow_accel:
         reasons.append("tick_acceleration_ratio_lt_1")
-    blocked = bool(enabled and is_rising_missed and reasons)
-    block_reason = "+".join(reasons) if reasons else "tick_speed_guard_pass"
+    blocked = bool(enabled and is_rising_missed and reasons and not relief_applied)
+    block_reason = (
+        "tick_speed_absolute_throughput_relief"
+        if relief_applied
+        else "+".join(reasons) if reasons else "tick_speed_guard_pass"
+    )
     return {
         **_rising_missed_submit_safety_filter_fields(blocked=blocked),
         **market_data_fields,
@@ -26086,15 +26255,51 @@ def _evaluate_rising_missed_tick_speed_entry_guard(
         ),
         "rising_missed_min_tick_acceleration_ratio": f"{min_accel_ratio:.3f}",
         "rising_missed_tick_accel_slow": bool(slow_accel),
-        "metric_role": "safety_veto" if blocked else "diagnostic",
-        "decision_authority": "real_scalping_rising_missed_tick_speed_guard",
+        "rising_missed_tick_absolute_throughput_relief_enabled": bool(
+            relief_checks["enabled"]
+        ),
+        "rising_missed_tick_absolute_throughput_relief_active_date": relief_active_date,
+        "rising_missed_tick_absolute_throughput_relief_current_date": relief_current_date,
+        "rising_missed_tick_absolute_throughput_relief_applied": relief_applied,
+        "rising_missed_tick_absolute_throughput_relief_checks": ",".join(
+            key for key, passed in relief_checks.items() if passed
+        ),
+        "rising_missed_tick_absolute_recent_5tick_seconds": (
+            f"{recent_5tick_seconds:.3f}" if recent_5tick_seconds is not None else "-"
+        ),
+        "rising_missed_tick_absolute_sample_count": tick_sample_count,
+        "rising_missed_tick_absolute_quote_age_ms": (
+            f"{quote_age_ms:.3f}" if quote_age_ms is not None else "-"
+        ),
+        "rising_missed_tick_absolute_orderbook_state": orderbook_state or "-",
+        "rising_missed_tick_absolute_orderbook_qi": (
+            f"{orderbook_qi:.6f}" if orderbook_qi is not None else "-"
+        ),
+        "rising_missed_tick_absolute_orderbook_ofi_norm": (
+            f"{orderbook_ofi_norm:.6f}" if orderbook_ofi_norm is not None else "-"
+        ),
+        "rising_missed_tick_absolute_tp1_support_count": tp1_support_count,
+        "rising_missed_tick_absolute_tp1_micro_confidence": (
+            f"{tp1_micro_confidence:.3f}"
+        ),
+        "rising_missed_tick_absolute_large_sell_detected": large_sell_detected,
+        "metric_role": (
+            "bounded_tunable"
+            if relief_applied
+            else "safety_veto" if blocked else "diagnostic"
+        ),
+        "decision_authority": (
+            "operator_runtime_override_tick_absolute_throughput_relief"
+            if relief_applied
+            else "real_scalping_rising_missed_tick_speed_guard"
+        ),
         "window_policy": "same_day_intraday_runtime_state",
         "sample_floor": "not_applicable_runtime_guard",
         "primary_decision_metric": "tick_window_span_sec_or_tick_acceleration_ratio",
         "source_quality_gate": "rising_missed_tick_context_present",
         "threshold_family": "rising_missed_tick_speed_entry_guard",
         "gate_action": "pre_submit_block" if blocked else "observe_only",
-        "runtime_effect": bool(blocked),
+        "runtime_effect": bool(blocked or relief_applied),
         "allowed_runtime_apply": False,
         "actual_order_submitted": False,
         "broker_order_forbidden": bool(blocked),
@@ -35179,6 +35384,7 @@ _SCALP_TRAILING_CONTINUATION_RECHECK_STATE_FIELDS = (
     "scalp_trailing_continuation_recheck_until_epoch",
     "scalp_trailing_continuation_recheck_anchor_profit",
     "scalp_trailing_continuation_recheck_min_profit",
+    "scalp_trailing_continuation_recheck_lane",
 )
 
 
@@ -35252,6 +35458,71 @@ def _scalp_trailing_continuation_recheck_config(now_ts: float) -> dict[str, Any]
                 65.0,
             ),
         ),
+        "high_peak_enabled": _env_bool(
+            "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_HIGH_PEAK_ENABLED",
+            False,
+        ),
+        "high_peak_ttl_sec": max(
+            5.0,
+            min(
+                20.0,
+                _safe_float(
+                    os.getenv(
+                        "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_HIGH_PEAK_TTL_SEC"
+                    ),
+                    10.0,
+                ),
+            ),
+        ),
+        "high_peak_min_peak_pct": max(
+            0.0,
+            _env_float(
+                "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_HIGH_PEAK_MIN_PEAK_PCT",
+                1.50,
+            ),
+        ),
+        "high_peak_max_peak_pct": max(
+            0.0,
+            _env_float(
+                "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_HIGH_PEAK_MAX_PEAK_PCT",
+                3.50,
+            ),
+        ),
+        "high_peak_min_profit_pct": max(
+            0.01,
+            _env_float(
+                "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_HIGH_PEAK_MIN_PROFIT_PCT",
+                0.40,
+            ),
+        ),
+        "high_peak_max_worsen_pct": max(
+            0.0,
+            _env_float(
+                "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_HIGH_PEAK_MAX_WORSEN_PCT",
+                1.50,
+            ),
+        ),
+        "high_peak_min_ai_score": max(
+            0.0,
+            _env_float(
+                "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_HIGH_PEAK_MIN_AI_SCORE",
+                75.0,
+            ),
+        ),
+        "high_peak_max_quote_age_ms": max(
+            100.0,
+            _env_float(
+                "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_HIGH_PEAK_MAX_QUOTE_AGE_MS",
+                1500.0,
+            ),
+        ),
+        "high_peak_min_trusted_ticks": max(
+            3,
+            _env_int(
+                "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_HIGH_PEAK_MIN_TRUSTED_TICKS",
+                3,
+            ),
+        ),
     }
 
 
@@ -35267,9 +35538,9 @@ def _scalp_trailing_continuation_recheck_contract_fields() -> dict[str, Any]:
         "metric_role": "bounded_tunable",
         "decision_authority": "operator_runtime_override_scalp_trailing_continuation_recheck",
         "window_policy": "same_trailing_candidate_bounded_recheck",
-        "sample_floor": "positive_profit_with_fresh_trusted_ws_composite_micro",
+        "sample_floor": "positive_profit_with_fresh_trusted_ws_micro_or_high_peak_signed_tick_confirmation",
         "primary_decision_metric": "post_recheck_mfe_before_trailing_exit",
-        "source_quality_gate": "fresh_trusted_ws_and_composite_micro_support",
+        "source_quality_gate": "fresh_trusted_ws_composite_micro_or_fresh_quote_and_signed_tick_context",
         "runtime_effect": True,
         "allowed_runtime_apply": True,
         "actual_order_submitted": False,
@@ -35300,6 +35571,8 @@ def _evaluate_scalp_trailing_continuation_recheck(
         return False
 
     micro_fields = micro_fields if isinstance(micro_fields, dict) else {}
+    raw_features = stock.get("last_reversal_features") or {}
+    raw_features = raw_features if isinstance(raw_features, dict) else {}
     features, has_features = _normalize_soft_stop_expert_features(stock)
     feature_context_usable = bool(
         has_features
@@ -35321,7 +35594,7 @@ def _evaluate_scalp_trailing_continuation_recheck(
         .lower()
     )
     micro_source_trusted_ws = micro_source_state.startswith("fresh_ws")
-    eligible = bool(
+    shallow_eligible = bool(
         config["min_peak_pct"] <= float(peak_profit) <= config["max_peak_pct"]
         and float(profit_rate) >= config["min_profit_pct"]
         and float(trailing_peak_worsen) <= config["max_worsen_pct"]
@@ -35331,6 +35604,43 @@ def _evaluate_scalp_trailing_continuation_recheck(
         and micro_source_trusted_ws
         and micro_supported
     )
+    quote_age_raw = raw_features.get("quote_age_ms")
+    quote_age_ms = (
+        _safe_float(quote_age_raw, float("inf"))
+        if _field_has_numeric_value(quote_age_raw)
+        else float("inf")
+    )
+    quote_fresh = bool(
+        not _truthy_field(raw_features.get("quote_stale"))
+        and quote_age_ms <= config["high_peak_max_quote_age_ms"]
+    )
+    trusted_tick_count = _safe_int(features.get("tick_aggressor_trusted_count"), 0)
+    high_peak_checks = {
+        "enabled": bool(config["high_peak_enabled"]),
+        "peak_band": bool(
+            config["high_peak_min_peak_pct"]
+            <= float(peak_profit)
+            <= config["high_peak_max_peak_pct"]
+        ),
+        "profit_floor": float(profit_rate) >= config["high_peak_min_profit_pct"],
+        "worsen_cap": (
+            float(trailing_peak_worsen) <= config["high_peak_max_worsen_pct"]
+        ),
+        "ai_score": float(current_ai_score) >= config["high_peak_min_ai_score"],
+        "feature_context": feature_context_usable,
+        "quote_fresh": quote_fresh,
+        "trusted_ticks": trusted_tick_count >= config["high_peak_min_trusted_ticks"],
+        "large_sell_clear": not large_sell_print,
+    }
+    high_peak_eligible = all(high_peak_checks.values())
+    eligible = bool(shallow_eligible or high_peak_eligible)
+    recheck_lane = "high_peak" if high_peak_eligible else "shallow"
+    recheck_ttl_sec = (
+        config["high_peak_ttl_sec"] if high_peak_eligible else config["ttl_sec"]
+    )
+    high_peak_failed_checks = [
+        name for name, passed in high_peak_checks.items() if not passed
+    ]
     started_at = _safe_float(
         stock.get("scalp_trailing_continuation_recheck_started_at"), 0.0
     )
@@ -35339,12 +35649,31 @@ def _evaluate_scalp_trailing_continuation_recheck(
         "recheck_active": bool(config["active"]),
         "recheck_active_date": config["active_date"] or "-",
         "recheck_current_date": config["current_date"],
-        "recheck_ttl_sec": f"{config['ttl_sec']:.3f}",
+        "recheck_ttl_sec": f"{recheck_ttl_sec:.3f}",
         "recheck_min_peak_pct": f"{config['min_peak_pct']:.2f}",
         "recheck_max_peak_pct": f"{config['max_peak_pct']:.2f}",
         "recheck_min_profit_pct": f"{config['min_profit_pct']:+.2f}",
         "recheck_max_worsen_pct": f"{config['max_worsen_pct']:.2f}",
         "recheck_min_ai_score": f"{config['min_ai_score']:.0f}",
+        "recheck_lane": recheck_lane if eligible else "ineligible",
+        "high_peak_enabled": bool(config["high_peak_enabled"]),
+        "high_peak_eligible": bool(high_peak_eligible),
+        "high_peak_failed_checks": (
+            ",".join(high_peak_failed_checks) if high_peak_failed_checks else "-"
+        ),
+        "high_peak_ttl_sec": f"{config['high_peak_ttl_sec']:.3f}",
+        "high_peak_min_peak_pct": f"{config['high_peak_min_peak_pct']:.2f}",
+        "high_peak_max_peak_pct": f"{config['high_peak_max_peak_pct']:.2f}",
+        "high_peak_min_profit_pct": f"{config['high_peak_min_profit_pct']:+.2f}",
+        "high_peak_max_worsen_pct": f"{config['high_peak_max_worsen_pct']:.2f}",
+        "high_peak_min_ai_score": f"{config['high_peak_min_ai_score']:.0f}",
+        "high_peak_max_quote_age_ms": f"{config['high_peak_max_quote_age_ms']:.0f}",
+        "high_peak_quote_age_ms": (
+            f"{quote_age_ms:.3f}" if quote_age_ms != float("inf") else "-"
+        ),
+        "high_peak_quote_fresh": quote_fresh,
+        "high_peak_min_trusted_ticks": config["high_peak_min_trusted_ticks"],
+        "high_peak_trusted_tick_count": trusted_tick_count,
         "profit_rate": f"{float(profit_rate):+.2f}",
         "peak_profit": f"{float(peak_profit):+.2f}",
         "trailing_peak_worsen": f"{float(trailing_peak_worsen):.2f}",
@@ -35360,8 +35689,16 @@ def _evaluate_scalp_trailing_continuation_recheck(
     }
     if started_at <= 0:
         if not eligible:
+            if float(peak_profit) > config["max_peak_pct"]:
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "scalp_trailing_continuation_recheck",
+                    recheck_state="high_peak_ineligible",
+                    **state_fields,
+                )
             return False
-        until_epoch = float(now_ts) + float(config["ttl_sec"])
+        until_epoch = float(now_ts) + float(recheck_ttl_sec)
         _mutate_stock_state(
             stock,
             set_fields={
@@ -35369,6 +35706,7 @@ def _evaluate_scalp_trailing_continuation_recheck(
                 "scalp_trailing_continuation_recheck_until_epoch": until_epoch,
                 "scalp_trailing_continuation_recheck_anchor_profit": float(profit_rate),
                 "scalp_trailing_continuation_recheck_min_profit": float(profit_rate),
+                "scalp_trailing_continuation_recheck_lane": recheck_lane,
             },
         )
         _log_holding_pipeline(
@@ -35383,7 +35721,7 @@ def _evaluate_scalp_trailing_continuation_recheck(
 
     until_epoch = _safe_float(
         stock.get("scalp_trailing_continuation_recheck_until_epoch"),
-        started_at + float(config["ttl_sec"]),
+        started_at + float(recheck_ttl_sec),
     )
     elapsed_sec = max(0.0, float(now_ts) - started_at)
     if not eligible:
@@ -38047,7 +38385,7 @@ def _opening_rotation_entry_config() -> OpeningRotationEntryConfig:
             "OPENING_ROTATION_1PCT_ENTRY_START", datetime_time(9, 10)
         ),
         entry_end=_opening_rotation_time(
-            "OPENING_ROTATION_1PCT_ENTRY_END", datetime_time(10, 30)
+            "OPENING_ROTATION_1PCT_ENTRY_END", datetime_time(15, 0)
         ),
         min_day_change_pct=_opening_rotation_float(
             "OPENING_ROTATION_1PCT_MIN_DAY_CHANGE_PCT", 1.5
@@ -38151,6 +38489,26 @@ def _opening_rotation_contract_fields(*, runtime_effect: bool) -> dict:
             "ai_score_submit_permission,ai_score_sizing,ai_score_exit_permission,"
             "broker_guard_bypass,stale_quote_bypass,account_guard_bypass,"
             "quantity_guard_bypass,hard_safety_relaxation"
+        ),
+    }
+
+
+def _opening_rotation_provenance_fields(stock: dict | None) -> dict[str, Any]:
+    stock = stock if isinstance(stock, dict) else {}
+    if not (
+        is_opening_rotation_position(stock.get("position_tag"))
+        or stock.get("opening_rotation_1pct_live")
+    ):
+        return {}
+    return {
+        "opening_rotation_window_version": stock.get(
+            "opening_rotation_window_version", "-"
+        ),
+        "opening_rotation_decision_time_bucket": stock.get(
+            "opening_rotation_decision_time_bucket", "-"
+        ),
+        "opening_rotation_entry_time_bucket": stock.get(
+            "opening_rotation_entry_time_bucket", "-"
         ),
     }
 
@@ -38537,7 +38895,10 @@ def _opening_rotation_yields_to_rising_missed_owner(stock, runtime=None) -> bool
     return bool(
         runtime.get("scout_upgrade_entry")
         or _has_rising_missed_entry_lineage(stock, runtime)
-        or _has_rising_missed_watch_source_marker(stock)
+        or _has_rising_missed_watch_source_marker(
+            stock,
+            include_not_rising_class=False,
+        )
     )
 
 
@@ -38554,6 +38915,8 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
         runtime.get("fluctuation", 0.0),
     )
     direct_position = is_opening_rotation_position(pos_tag)
+    window_version = opening_rotation_entry_window_version(entry_config)
+    decision_time_bucket = opening_rotation_entry_time_bucket(now_dt, entry_config)
     if _opening_rotation_yields_to_rising_missed_owner(stock, runtime):
         with ENTRY_LOCK:
             _OPENING_ROTATION_CONTEXT_CACHE.pop(code, None)
@@ -38663,6 +39026,8 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
                 if should_log
                 else stock.get("opening_rotation_1pct_last_log_at", 0.0)
             ),
+            "opening_rotation_window_version": window_version,
+            "opening_rotation_decision_time_bucket": decision_time_bucket,
         },
     )
     if should_log:
@@ -38678,6 +39043,8 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
             position_tag_candidate=OPENING_ROTATION_POSITION_TAG,
             entry_window_start=entry_config.entry_start.isoformat(),
             entry_window_end=entry_config.entry_end.isoformat(),
+            opening_rotation_window_version=window_version,
+            opening_rotation_decision_time_bucket=decision_time_bucket,
             **{
                 key: value
                 for key, value in decision.items()
@@ -38712,6 +39079,8 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
             "scalp_min_liquidity": int(config.get("MIN_SCALP_LIQUIDITY", 500_000_000)),
             "is_trigger": True,
             "opening_rotation_1pct_live": True,
+            "opening_rotation_window_version": window_version,
+            "opening_rotation_decision_time_bucket": decision_time_bucket,
             "opening_rotation_mechanical_signal_strength": float(
                 decision.get(
                     "mechanical_signal_strength",
@@ -38732,6 +39101,8 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
             "opening_rotation_ai_score_decision_authority": (
                 "feature_only_not_evaluated"
             ),
+            "opening_rotation_window_version": window_version,
+            "opening_rotation_decision_time_bucket": decision_time_bucket,
         },
     )
     return True
@@ -44005,6 +44376,26 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             extra_fields=rising_missed_tick_speed_guard,
         )
         return False
+    if rising_missed_tick_speed_guard.get(
+        "rising_missed_tick_absolute_throughput_relief_applied"
+    ):
+        _log_entry_pipeline(
+            stock,
+            code,
+            "rising_missed_tick_absolute_throughput_relief_applied",
+            forced_entry_reason=(
+                RISING_MISSED_FORCED_ENTRY_REASON
+                if forced_rising_missed_one_share
+                else "-"
+            ),
+            forced_entry_qty=forced_rising_missed_scout_qty,
+            **_merge_entry_pipeline_field_groups(
+                latency_price_snapshot,
+                entry_orderbook_micro_fields,
+                microstructure_submit_log_fields,
+                rising_missed_tick_speed_guard,
+            ),
+        )
     rising_missed_reversal_pre_submit_guard = (
         _evaluate_rising_missed_reversal_pre_submit_guard(
             stock=stock,
@@ -46185,6 +46576,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         broker_order_no_list=",".join(broker_order_numbers),
         order_response_ord_no=primary_broker_order_no,
         submit_attempt_id=submit_attempt_id,
+        **_opening_rotation_provenance_fields(stock),
         **{
             "ai_call_trigger_reason": ai_call_trigger_reason_at_submit,
             **entry_runtime_retry_submit_exclusion_fields,
@@ -47028,6 +47420,13 @@ def _rising_missed_tp1_source_gap_relief_min_support_count() -> int:
     )
 
 
+def _rising_missed_tp1_strong_micro_source_gap_relief_enabled() -> bool:
+    return _env_bool(
+        "KORSTOCKSCAN_RISING_MISSED_TP1_STRONG_MICRO_SOURCE_GAP_RELIEF_ENABLED",
+        False,
+    )
+
+
 def _rising_missed_tp1_submit_context_cache_key(
     stock: dict | None, code: str | None = None
 ) -> str:
@@ -47105,6 +47504,44 @@ def _rising_missed_tp1_submit_context_fields(
         "rising_missed_tp1_submit_context_support_momentum": _truthy_field(
             log_fields.get("rising_missed_tp1_support_momentum")
         ),
+        "rising_missed_tp1_submit_context_micro_confidence": _safe_float(
+            log_fields.get("rising_missed_tp1_micro_confidence"),
+            0.0,
+        ),
+        "rising_missed_tp1_submit_context_true_ofi_ewma": _safe_float(
+            log_fields.get("rising_missed_tp1_true_ofi_ewma"),
+            0.0,
+        ),
+        "rising_missed_tp1_submit_context_pressure_ewma": _safe_float(
+            log_fields.get("rising_missed_tp1_pressure_ewma"),
+            0.0,
+        ),
+        "rising_missed_tp1_submit_context_top_depth_ratio": _safe_float(
+            log_fields.get("rising_missed_tp1_top_depth_ratio"),
+            0.0,
+        ),
+        "rising_missed_tp1_submit_context_spread_ratio": _safe_float(
+            log_fields.get("rising_missed_tp1_spread_ratio"),
+            0.0,
+        ),
+        "rising_missed_tp1_submit_context_ws_micro_ready": _truthy_field(
+            log_fields.get("rising_missed_tp1_ws_micro_provenance_ready")
+        ),
+        "rising_missed_tp1_submit_context_low_rebound_pct": _safe_float(
+            log_fields.get("rising_missed_tp1_low_rebound_pct"),
+            0.0,
+        ),
+        "rising_missed_tp1_submit_context_watch_delta_pct": _safe_float(
+            log_fields.get("rising_missed_tp1_actual_watch_delta_pct"),
+            0.0,
+        ),
+        "rising_missed_tp1_submit_context_anchor_price": _safe_float(
+            log_fields.get("rising_missed_tp1_actual_watch_delta_anchor_price"),
+            0.0,
+        ),
+        "rising_missed_tp1_submit_context_anchor_source": (
+            log_fields.get("rising_missed_tp1_actual_watch_delta_anchor_source") or "-"
+        ),
     }
     for source_key in (
         "rising_missed_market_session_bucket",
@@ -47168,6 +47605,20 @@ def _rising_missed_tp1_observation_context_log_fields(
             context_age_sec is not None and context_age_sec <= 60.0
         ),
     }
+    for context_key in (
+        "rising_missed_tp1_submit_context_low_rebound_pct",
+        "rising_missed_tp1_submit_context_watch_delta_pct",
+        "rising_missed_tp1_submit_context_anchor_price",
+        "rising_missed_tp1_submit_context_anchor_source",
+        "rising_missed_tp1_submit_context_support_count",
+        "rising_missed_tp1_submit_context_micro_confidence",
+        "rising_missed_tp1_submit_context_true_ofi_ewma",
+        "rising_missed_tp1_submit_context_pressure_ewma",
+        "rising_missed_tp1_submit_context_top_depth_ratio",
+        "rising_missed_tp1_submit_context_spread_ratio",
+        "rising_missed_tp1_submit_context_ws_micro_ready",
+    ):
+        fields[context_key] = context.get(context_key, "-")
     for source_key in (
         "rising_missed_market_session_bucket",
         "rising_missed_market_session_state",
@@ -47255,16 +47706,101 @@ def _evaluate_rising_missed_tp1_source_gap_relief(
             stock.get("rising_missed_tp1_submit_context_support_momentum")
         ),
     }
-    eligible = bool(enabled and all(checks.values()))
+    strong_micro_enabled = _rising_missed_tp1_strong_micro_source_gap_relief_enabled()
+    strong_micro_active_date = str(
+        os.getenv(
+            "KORSTOCKSCAN_RISING_MISSED_TP1_STRONG_MICRO_SOURCE_GAP_RELIEF_ACTIVE_DATE"
+        )
+        or ""
+    ).strip()
+    strong_micro_min_support_count = max(
+        2,
+        _env_int(
+            "KORSTOCKSCAN_RISING_MISSED_TP1_STRONG_MICRO_SOURCE_GAP_RELIEF_MIN_SUPPORT_COUNT",
+            2,
+        ),
+    )
+    strong_micro_min_confidence = max(
+        0.0,
+        _env_float(
+            "KORSTOCKSCAN_RISING_MISSED_TP1_STRONG_MICRO_SOURCE_GAP_RELIEF_MIN_CONFIDENCE",
+            0.8,
+        ),
+    )
+    strong_micro_min_true_ofi = _env_float(
+        "KORSTOCKSCAN_RISING_MISSED_TP1_STRONG_MICRO_SOURCE_GAP_RELIEF_MIN_TRUE_OFI",
+        0.0,
+    )
+    strong_micro_min_pressure = _env_float(
+        "KORSTOCKSCAN_RISING_MISSED_TP1_STRONG_MICRO_SOURCE_GAP_RELIEF_MIN_PRESSURE",
+        60.0,
+    )
+    strong_micro_min_depth_ratio = max(
+        0.0,
+        _env_float(
+            "KORSTOCKSCAN_RISING_MISSED_TP1_STRONG_MICRO_SOURCE_GAP_RELIEF_MIN_DEPTH_RATIO",
+            1.5,
+        ),
+    )
+    micro_confidence = _safe_float(
+        stock.get("rising_missed_tp1_submit_context_micro_confidence"), 0.0
+    )
+    true_ofi = _safe_float(
+        stock.get("rising_missed_tp1_submit_context_true_ofi_ewma"), 0.0
+    )
+    pressure = _safe_float(
+        stock.get("rising_missed_tp1_submit_context_pressure_ewma"), 0.0
+    )
+    depth_ratio = _safe_float(
+        stock.get("rising_missed_tp1_submit_context_top_depth_ratio"), 0.0
+    )
+    base_eligible = bool(enabled and all(checks.values()))
+    strong_micro_checks = {
+        "active_date": bool(
+            strong_micro_active_date and strong_micro_active_date == current_date
+        ),
+        "context_fresh": checks["context_fresh"],
+        "candidate_allowed": checks["candidate_allowed"],
+        "selector_active": checks["selector_active"],
+        "policy_v3": checks["policy_v3"],
+        "eligible_lane": checks["eligible_lane"],
+        "input_ready": checks["input_ready"],
+        "trusted_ws_micro": bool(
+            checks["trusted_ws_micro"]
+            and _truthy_field(
+                stock.get("rising_missed_tp1_submit_context_ws_micro_ready")
+            )
+        ),
+        "support_count": support_count >= strong_micro_min_support_count,
+        "confidence": micro_confidence >= strong_micro_min_confidence,
+        "true_ofi": true_ofi > strong_micro_min_true_ofi,
+        "pressure": pressure >= strong_micro_min_pressure,
+        "depth_ratio": depth_ratio >= strong_micro_min_depth_ratio,
+    }
+    strong_micro_eligible = bool(
+        enabled and strong_micro_enabled and all(strong_micro_checks.values())
+    )
+    eligible = bool(base_eligible or strong_micro_eligible)
     failed_checks = [name for name, passed in checks.items() if not passed]
+    strong_micro_failed_checks = [
+        name for name, passed in strong_micro_checks.items() if not passed
+    ]
     return {
         "rising_missed_tp1_source_gap_relief_enabled": enabled,
         "rising_missed_tp1_source_gap_relief_eligible": eligible,
         "rising_missed_tp1_source_gap_relief_applied": False,
         "rising_missed_tp1_source_gap_relief_reason": (
             "fresh_tp1_support_momentum_contract"
-            if eligible
-            else "disabled" if not enabled else "ineligible:" + ",".join(failed_checks)
+            if base_eligible
+            else (
+                "fresh_tp1_strong_micro_probability_contract"
+                if strong_micro_eligible
+                else (
+                    "disabled"
+                    if not enabled
+                    else "ineligible:" + ",".join(failed_checks)
+                )
+            )
         ),
         "rising_missed_tp1_source_gap_relief_context_age_sec": (
             round(context_age_sec, 6) if context_age_sec is not None else "-"
@@ -47281,6 +47817,46 @@ def _evaluate_rising_missed_tp1_source_gap_relief(
         "rising_missed_tp1_source_gap_relief_current_date": current_date,
         "rising_missed_tp1_source_gap_relief_evaluation_id": (
             stock.get("rising_missed_tp1_submit_context_evaluation_id") or "-"
+        ),
+        "rising_missed_tp1_source_gap_relief_strong_micro_enabled": (
+            strong_micro_enabled
+        ),
+        "rising_missed_tp1_source_gap_relief_strong_micro_eligible": (
+            strong_micro_eligible
+        ),
+        "rising_missed_tp1_source_gap_relief_strong_micro_reason": (
+            "eligible"
+            if strong_micro_eligible
+            else "ineligible:" + ",".join(strong_micro_failed_checks)
+        ),
+        "rising_missed_tp1_source_gap_relief_strong_micro_active_date": (
+            strong_micro_active_date or "-"
+        ),
+        "rising_missed_tp1_source_gap_relief_strong_micro_support_count": (
+            support_count
+        ),
+        "rising_missed_tp1_source_gap_relief_strong_micro_min_support_count": (
+            strong_micro_min_support_count
+        ),
+        "rising_missed_tp1_source_gap_relief_strong_micro_confidence": round(
+            micro_confidence, 4
+        ),
+        "rising_missed_tp1_source_gap_relief_strong_micro_min_confidence": round(
+            strong_micro_min_confidence, 4
+        ),
+        "rising_missed_tp1_source_gap_relief_strong_micro_true_ofi": round(true_ofi, 6),
+        "rising_missed_tp1_source_gap_relief_strong_micro_min_true_ofi": round(
+            strong_micro_min_true_ofi, 6
+        ),
+        "rising_missed_tp1_source_gap_relief_strong_micro_pressure": round(pressure, 4),
+        "rising_missed_tp1_source_gap_relief_strong_micro_min_pressure": round(
+            strong_micro_min_pressure, 4
+        ),
+        "rising_missed_tp1_source_gap_relief_strong_micro_depth_ratio": round(
+            depth_ratio, 4
+        ),
+        "rising_missed_tp1_source_gap_relief_strong_micro_min_depth_ratio": round(
+            strong_micro_min_depth_ratio, 4
         ),
     }
 
@@ -47330,7 +47906,20 @@ def _rising_missed_source_value_present(value) -> bool:
     return bool(str(value).strip() and str(value).strip() != "-")
 
 
-def _has_rising_missed_watch_source_marker(stock: dict | None) -> bool:
+def _has_rising_missed_watch_source_marker(
+    stock: dict | None,
+    *,
+    include_not_rising_class: bool = True,
+) -> bool:
+    """Return rising-missed routing markers present on a scanner candidate.
+
+    The rising-missed fast-reject path treats ``not_rising_missed`` as an
+    owned classification so it can close its own observation. OPENING entry
+    ownership must opt out of that classification: it means rising-missed did
+    not claim the candidate, not that rising-missed should preempt another
+    strategy.
+    """
+
     stock = stock if isinstance(stock, dict) else {}
     source_tokens = set()
     for key in ("source_signature", "scanner_source_signature"):
@@ -47347,8 +47936,11 @@ def _has_rising_missed_watch_source_marker(stock: dict | None) -> bool:
         or _rising_missed_source_value_present(stock.get("low_rebound_pct"))
         or _rising_missed_source_value_present(stock.get("LowReboundPct"))
         or "LOW_REBOUND_RISING_MISSED" in source_tokens
-        or str(stock.get("rising_missed_class") or "").strip()
-        == RISING_MISSED_CLASS_NOT_RISING
+        or (
+            include_not_rising_class
+            and str(stock.get("rising_missed_class") or "").strip()
+            == RISING_MISSED_CLASS_NOT_RISING
+        )
     )
 
 
@@ -52799,6 +53391,7 @@ def handle_holding_state(
                 reason=opening_rotation_exit.get("reason"),
                 exit_rule=exit_rule,
                 sell_reason_type=sell_reason_type,
+                **_opening_rotation_provenance_fields(stock),
                 **{
                     key: value
                     for key, value in opening_rotation_exit.items()
@@ -54314,7 +54907,10 @@ def handle_holding_state(
         elif profit_rate <= hard_stop_pct:
             is_sell_signal = True
             sell_reason_type = "LOSS"
-            reason = f"🛑 하드스탑 도달 ({hard_stop_pct}%) [AI: {current_ai_score:.0f}]"
+            reason = (
+                f"🛑 하드스탑 도달 ({hard_stop_pct}%) "
+                f"{_holding_exit_ai_reason_label(current_ai_score, holding_score_exit_role_ctx)}"
+            )
             exit_rule = "scalp_hard_stop_pct"
 
         elif _should_revert_overnight_flow_override_hold(stock, profit_rate, now_t):
@@ -54550,6 +55146,9 @@ def handle_holding_state(
                 profit_rate=profit_rate,
                 peak_profit=peak_profit,
                 current_ai_score=current_ai_score,
+                current_ai_score_usable=bool(
+                    holding_score_exit_role_ctx.get("usable_for_scale_in_support")
+                ),
                 held_sec=held_sec,
                 dynamic_stop_pct=dynamic_stop_pct,
                 now_ts=now_ts,
@@ -55310,7 +55909,8 @@ def handle_holding_state(
                 is_sell_signal = True
                 sell_reason_type = "LOSS"
                 reason = (
-                    f"🔪 소프트 손절 ({dynamic_stop_pct}%) [AI: {current_ai_score:.0f}]"
+                    f"🔪 소프트 손절 ({dynamic_stop_pct}%) "
+                    f"{_holding_exit_ai_reason_label(current_ai_score, holding_score_exit_role_ctx)}"
                 )
                 exit_rule = "scalp_soft_stop_pct"
 
@@ -55745,6 +56345,9 @@ def handle_holding_state(
                 profit_rate=profit_rate,
                 peak_profit=peak_profit,
                 current_ai_score=current_ai_score,
+                current_ai_score_usable=bool(
+                    holding_score_exit_role_ctx.get("usable_for_scale_in_support")
+                ),
                 held_sec=held_sec,
                 dynamic_stop_pct=(
                     _safe_float(locals().get("hard_stop_pct"), profit_rate)
@@ -57039,6 +57642,7 @@ def handle_holding_state(
                 peak_profit=f"{peak_profit:+.2f}",
                 held_sec=held_sec,
                 scale_in_locked=True,
+                **_opening_rotation_provenance_fields(stock),
                 **_opening_rotation_contract_fields(runtime_effect=True),
             )
         return
