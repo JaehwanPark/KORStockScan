@@ -23,6 +23,9 @@ from src.engine.automation.source_quality_clean_baseline import clean_baseline_p
 from src.engine.scalping.opening_rotation import (
     EntryConfig,
     POSITION_TAG,
+    entry_time_bucket,
+    entry_time_bucket_labels,
+    entry_window_version,
     evaluate_entry,
     parse_source_signature,
 )
@@ -31,7 +34,7 @@ from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto
 
 REPORT_TYPE = "opening_rotation_1pct_backtest"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 REPORT_DIR = DATA_DIR / "report" / REPORT_TYPE
 PIPELINE_EVENTS_DIR = DATA_DIR / "pipeline_events"
 POST_SELL_DIR = DATA_DIR / "post_sell"
@@ -205,6 +208,56 @@ def _config_fingerprint(config_snapshot: dict[str, Any]) -> str:
         separators=(",", ":"),
     ).encode("ascii")
     return hashlib.sha256(encoded).hexdigest()[:12]
+
+
+def _flat_performance(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    profits = [_safe_float(row.get("profit_rate")) for row in rows]
+    notionals = [
+        _safe_float(row.get("buy_price")) * _safe_int(row.get("buy_qty"))
+        for row in rows
+    ]
+    notional_total = sum(notionals)
+    return {
+        "completed_trade_count": len(rows),
+        "win_count": sum(1 for value in profits if value > 0),
+        "loss_count": sum(1 for value in profits if value < 0),
+        "diagnostic_win_rate_pct": (
+            round((sum(1 for value in profits if value > 0) / len(profits)) * 100.0, 3)
+            if profits
+            else None
+        ),
+        "equal_weight_avg_profit_pct": (
+            round(sum(profits) / len(profits), 4) if profits else None
+        ),
+        "notional_weighted_ev_pct": (
+            round(
+                sum(profit * notional for profit, notional in zip(profits, notionals))
+                / notional_total,
+                4,
+            )
+            if profits and notional_total > 0
+            else None
+        ),
+        "simple_sum_profit_pct": round(sum(profits), 4),
+        "realized_pnl_krw": sum(_safe_int(row.get("realized_pnl_krw")) for row in rows),
+    }
+
+
+def _cohort_performance(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    by_fill_quality: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        fill_quality = str(row.get("entry_fill_quality") or "UNKNOWN")
+        by_fill_quality.setdefault(fill_quality, []).append(row)
+    combined = _flat_performance(rows)
+    combined["performance_by_fill_quality"] = {
+        fill_quality: _flat_performance(fill_rows)
+        for fill_quality, fill_rows in sorted(by_fill_quality.items())
+    }
+    combined["combined_fill_quality_ev_suppressed"] = len(by_fill_quality) > 1
+    if combined["combined_fill_quality_ev_suppressed"]:
+        combined["equal_weight_avg_profit_pct"] = None
+        combined["notional_weighted_ev_pct"] = None
+    return combined
 
 
 def _eligible_session_dates(
@@ -540,6 +593,28 @@ def build_report(
                     entry_fill_quality = observed_fill_quality
                     if partial_fill_observed and observed_fill_quality == "FULL_FILL":
                         entry_fill_quality = "PARTIAL_THEN_FULL"
+                    derived_entry_time_bucket = (
+                        entry_time_bucket(event_dt, config)
+                        if event_dt is not None
+                        else "outside_entry_window"
+                    )
+                    emitted_entry_time_bucket = str(
+                        fields.get("opening_rotation_entry_time_bucket") or ""
+                    ).strip()
+                    first_filled_at = str(trade.get("filled_at") or "")
+                    first_entry_time_bucket = str(
+                        trade.get("opening_rotation_entry_time_bucket") or ""
+                    )
+                    expected_emitted_bucket = (
+                        first_entry_time_bucket
+                        if first_filled_at
+                        else derived_entry_time_bucket
+                    )
+                    if (
+                        emitted_entry_time_bucket
+                        and emitted_entry_time_bucket != expected_emitted_bucket
+                    ):
+                        counters["entry_time_bucket_provenance_mismatch"] += 1
                     trade.update(
                         {
                             "fill_observed": True,
@@ -561,7 +636,25 @@ def build_report(
                             "buy_price": _safe_float(fields.get("buy_price")),
                             "buy_qty": _safe_int(fields.get("buy_qty")),
                             "fill_price": _safe_float(fields.get("fill_price")),
-                            "filled_at": event_dt.isoformat() if event_dt else "",
+                            "filled_at": first_filled_at
+                            or (event_dt.isoformat() if event_dt else ""),
+                            "opening_rotation_entry_time_bucket": (
+                                first_entry_time_bucket or derived_entry_time_bucket
+                            ),
+                            "opening_rotation_entry_time_bucket_source": (
+                                trade.get("opening_rotation_entry_time_bucket_source")
+                                or (
+                                    "receipt_field_verified"
+                                    if emitted_entry_time_bucket
+                                    == derived_entry_time_bucket
+                                    else "holding_started_event_time"
+                                )
+                            ),
+                            "opening_rotation_window_version": str(
+                                fields.get("opening_rotation_window_version")
+                                or trade.get("opening_rotation_window_version")
+                                or entry_window_version(config)
+                            ),
                         }
                     )
                 elif stage == "opening_rotation_1pct_exit_signal":
@@ -591,6 +684,15 @@ def build_report(
                     forbidden_tokens = _forbidden_use_tokens(
                         fields.get("forbidden_uses")
                     )
+                    completion_entry_time_bucket = str(
+                        fields.get("opening_rotation_entry_time_bucket") or ""
+                    ).strip()
+                    if (
+                        completion_entry_time_bucket
+                        and completion_entry_time_bucket
+                        != str(trade.get("opening_rotation_entry_time_bucket") or "")
+                    ):
+                        counters["completion_entry_time_bucket_mismatch"] += 1
                     completion_source_quality_reasons: list[str] = []
                     if not trade.get("qualified"):
                         completion_source_quality_reasons.append(
@@ -730,24 +832,23 @@ def build_report(
 
     completed = [row for row in exact_trades.values() if row.get("completed")]
     profits = [_safe_float(row.get("profit_rate")) for row in completed]
-    completed_by_fill_quality: dict[str, list[dict[str, Any]]] = {}
-    for row in completed:
-        fill_quality = str(row.get("entry_fill_quality") or "UNKNOWN")
-        completed_by_fill_quality.setdefault(fill_quality, []).append(row)
-    fill_quality_performance = {
-        fill_quality: {
-            "completed_trade_count": len(rows),
-            "equal_weight_avg_profit_pct": round(
-                sum(_safe_float(row.get("profit_rate")) for row in rows) / len(rows),
-                4,
-            ),
-            "realized_pnl_krw": sum(
-                _safe_int(row.get("realized_pnl_krw")) for row in rows
-            ),
-        }
-        for fill_quality, rows in sorted(completed_by_fill_quality.items())
+    overall_performance = _cohort_performance(completed)
+    fill_quality_performance = overall_performance["performance_by_fill_quality"]
+    combined_fill_quality_ev_suppressed = overall_performance[
+        "combined_fill_quality_ev_suppressed"
+    ]
+    completed_by_entry_time_bucket: dict[str, list[dict[str, Any]]] = {
+        label: [] for label in entry_time_bucket_labels(config)
     }
-    combined_fill_quality_ev_suppressed = len(fill_quality_performance) > 1
+    for row in completed:
+        bucket = str(
+            row.get("opening_rotation_entry_time_bucket") or "outside_entry_window"
+        )
+        completed_by_entry_time_bucket.setdefault(bucket, []).append(row)
+    entry_time_bucket_performance = {
+        bucket: _cohort_performance(rows)
+        for bucket, rows in completed_by_entry_time_bucket.items()
+    }
     pnl_by_date: dict[str, int] = {
         target_date: 0 for target_date in eligible_session_dates
     }
@@ -780,7 +881,7 @@ def build_report(
         "sample_floor": (
             "one_exact_completed_real_trade_for_descriptive_output_only_no_promotion"
         ),
-        "primary_decision_metric": "realized_pnl_krw_and_equal_weight_avg_profit_pct",
+        "primary_decision_metric": "realized_pnl_krw_and_notional_weighted_ev_pct",
         "source_quality_gate": (
             "valid_clean_baseline_and_exact_qualified_tagged_completed_real_lifecycle"
         ),
@@ -792,6 +893,8 @@ def build_report(
             "schema_version": SCHEMA_VERSION,
             "config_fingerprint": config_fingerprint,
             "entry_config": config_snapshot,
+            "opening_rotation_window_version": entry_window_version(config),
+            "entry_time_bucket_minutes": 30,
         },
         "summary": {
             "source_date_count": len(target_dates),
@@ -818,6 +921,12 @@ def build_report(
             "completion_source_quality_rejected_count": counters[
                 "completion_source_quality_rejected"
             ],
+            "entry_time_bucket_provenance_mismatch_count": counters[
+                "entry_time_bucket_provenance_mismatch"
+            ],
+            "completion_entry_time_bucket_mismatch_count": counters[
+                "completion_entry_time_bucket_mismatch"
+            ],
             "performance_evaluable": performance_evaluable,
         },
         "real_performance": {
@@ -832,10 +941,10 @@ def build_report(
                 else None
             ),
             "equal_weight_avg_profit_pct": (
-                round(sum(profits) / len(profits), 4)
-                if profits and not combined_fill_quality_ev_suppressed
-                else None
+                overall_performance["equal_weight_avg_profit_pct"]
             ),
+            "notional_weighted_ev_pct": overall_performance["notional_weighted_ev_pct"],
+            "simple_sum_profit_pct": overall_performance["simple_sum_profit_pct"],
             "combined_fill_quality_ev_suppressed": (
                 combined_fill_quality_ev_suppressed
             ),
@@ -856,6 +965,20 @@ def build_report(
             ),
             "daily_realized_pnl_krw": dict(sorted(pnl_by_date.items())),
         },
+        "entry_time_bucket_performance_contract": {
+            "metric_role": "descriptive_exact_real_trade_cohort_performance",
+            "decision_authority": "retrospective_report_only",
+            "window_policy": "first_real_buy_fill_time_kst_clock_aligned_30m",
+            "sample_floor": "one_exact_completed_real_trade_per_bucket_for_description_only",
+            "primary_decision_metric": "notional_weighted_ev_pct_and_realized_pnl_krw",
+            "source_quality_gate": (
+                "valid_clean_baseline_exact_tagged_completed_real_lifecycle"
+            ),
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "forbidden_uses": list(FORBIDDEN_USES),
+        },
+        "entry_time_bucket_performance": entry_time_bucket_performance,
         "source_quality": {
             "required_replay_fields": list(REQUIRED_REPLAY_FIELDS),
             "missing_field_counts": dict(missing_counts.most_common()),
@@ -879,6 +1002,7 @@ def render_markdown(report: dict[str, Any]) -> str:
     inventory = report.get("auxiliary_post_sell_inventory") or {}
     missing = report.get("source_quality", {}).get("missing_field_counts") or {}
     identity = report.get("report_identity") or {}
+    bucket_performance = report.get("entry_time_bucket_performance") or {}
     daily_hit_rate = perf.get("daily_target_hit_rate_pct")
     daily_hit_rate_text = (
         "평가 불가" if daily_hit_rate is None else f"{daily_hit_rate:.3f}%"
@@ -889,6 +1013,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- 기간: `{report.get('start_date')}` ~ `{report.get('end_date')}`",
         f"- 판정: `{report.get('status')}`",
         f"- 설정 지문: `{identity.get('config_fingerprint', '-')}`",
+        f"- 진입창 버전: `{identity.get('opening_rotation_window_version', '-')}`",
         f"- 과거 SCANNER 이벤트: `{summary.get('legacy_scanner_event_count', 0)}`",
         f"- 완전 진입 패킷: `{summary.get('legacy_complete_packet_count', 0)}`",
         f"- 엄격 재생 진입: `{summary.get('legacy_replay_qualified_count', 0)}`",
@@ -905,6 +1030,25 @@ def render_markdown(report: dict[str, Any]) -> str:
         lines.extend(f"- `{key}`: {value}" for key, value in list(missing.items())[:12])
     else:
         lines.append("- 누락 필드 집계 없음")
+    lines.extend(
+        [
+            "",
+            "## Entry-time 30-minute performance",
+            "",
+            "| 진입 cohort | 완료 | 승 | 승률 | notional EV | 실현손익 |",
+            "|---|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for bucket, bucket_perf in bucket_performance.items():
+        win_rate = bucket_perf.get("diagnostic_win_rate_pct")
+        weighted_ev = bucket_perf.get("notional_weighted_ev_pct")
+        lines.append(
+            f"| {bucket} | {bucket_perf.get('completed_trade_count', 0)} | "
+            f"{bucket_perf.get('win_count', 0)} | "
+            f"{'-' if win_rate is None else f'{win_rate:.3f}%'} | "
+            f"{'분리 집계' if weighted_ev is None and bucket_perf.get('combined_fill_quality_ev_suppressed') else '-' if weighted_ev is None else f'{weighted_ev:+.4f}%'} | "
+            f"{bucket_perf.get('realized_pnl_krw', 0):,}원 |"
+        )
     lines.extend(
         [
             "",

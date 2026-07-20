@@ -498,6 +498,129 @@ def test_full_and_partial_fill_ev_are_not_merged(tmp_path):
         ]
         == -0.4
     )
+    bucket = report["entry_time_bucket_performance"]["09:00-09:30"]
+    assert bucket["combined_fill_quality_ev_suppressed"] is True
+    assert bucket["notional_weighted_ev_pct"] is None
+
+
+def test_completed_trades_are_measured_by_first_fill_30minute_cohort(tmp_path):
+    events_dir = tmp_path / "events"
+    rows = []
+    for record_id, fill_at, buy_price, profit_rate, pnl in (
+        (1, "2026-07-20T09:29:59", 10_000, 1.0, 10_000),
+        (2, "2026-07-20T13:05:00", 20_000, -0.5, -10_000),
+    ):
+        rows.extend(
+            [
+                _event(
+                    "opening_rotation_1pct_qualified",
+                    fill_at,
+                    record_id=record_id,
+                    fields=_qualification_fields(),
+                ),
+                _event(
+                    "holding_started",
+                    fill_at,
+                    record_id=record_id,
+                    pipeline="HOLDING_PIPELINE",
+                    fields={
+                        "buy_price": buy_price,
+                        "buy_qty": 100,
+                        "position_tag": POSITION_TAG,
+                        "fill_quality": "FULL_FILL",
+                        "actual_order_submitted": True,
+                        "broker_order_forbidden": False,
+                    },
+                ),
+                _event(
+                    "sell_completed",
+                    "2026-07-20T13:20:00",
+                    record_id=record_id,
+                    pipeline="HOLDING_PIPELINE",
+                    fields=_real_completion_fields(
+                        profit_rate=profit_rate,
+                        realized_pnl_krw=pnl,
+                    ),
+                ),
+            ]
+        )
+    _write_events(events_dir, "2026-07-20", rows)
+
+    report = build_report(
+        start_date="2026-07-20",
+        end_date="2026-07-20",
+        events_dir=events_dir,
+        post_sell_dir=tmp_path / "post_sell",
+    )
+
+    buckets = report["entry_time_bucket_performance"]
+    assert len(buckets) == 12
+    assert buckets["09:00-09:30"]["completed_trade_count"] == 1
+    assert buckets["09:00-09:30"]["notional_weighted_ev_pct"] == 1.0
+    assert buckets["13:00-13:30"]["completed_trade_count"] == 1
+    assert buckets["13:00-13:30"]["notional_weighted_ev_pct"] == -0.5
+    assert buckets["14:30-15:00"]["completed_trade_count"] == 0
+    assert report["entry_time_bucket_performance_contract"]["runtime_effect"] is False
+
+
+def test_partial_fill_crossing_bucket_boundary_keeps_first_fill_cohort(tmp_path):
+    events_dir = tmp_path / "events"
+    holding_fields = {
+        "buy_price": 10_000,
+        "buy_qty": 100,
+        "position_tag": POSITION_TAG,
+        "actual_order_submitted": True,
+        "broker_order_forbidden": False,
+        "opening_rotation_entry_time_bucket": "09:00-09:30",
+        "opening_rotation_window_version": "opening_rotation_0910_1500_v1",
+    }
+    _write_events(
+        events_dir,
+        "2026-07-20",
+        [
+            _event(
+                "opening_rotation_1pct_qualified",
+                "2026-07-20T09:29:58",
+                fields=_qualification_fields(),
+            ),
+            _event(
+                "holding_started",
+                "2026-07-20T09:29:59",
+                pipeline="HOLDING_PIPELINE",
+                fields={**holding_fields, "fill_quality": "PARTIAL_FILL"},
+            ),
+            _event(
+                "holding_started",
+                "2026-07-20T09:30:01",
+                pipeline="HOLDING_PIPELINE",
+                fields={**holding_fields, "fill_quality": "FULL_FILL"},
+            ),
+            _event(
+                "sell_completed",
+                "2026-07-20T09:35:00",
+                pipeline="HOLDING_PIPELINE",
+                fields=_real_completion_fields(
+                    opening_rotation_entry_time_bucket="09:00-09:30"
+                ),
+            ),
+        ],
+    )
+
+    report = build_report(
+        start_date="2026-07-20",
+        end_date="2026-07-20",
+        events_dir=events_dir,
+        post_sell_dir=tmp_path / "post_sell",
+    )
+
+    assert report["summary"]["entry_time_bucket_provenance_mismatch_count"] == 0
+    trade = report["exact_trade_rows"][0]
+    assert trade["opening_rotation_entry_time_bucket"] == "09:00-09:30"
+    assert trade["entry_fill_quality"] == "PARTIAL_THEN_FULL"
+    assert (
+        report["entry_time_bucket_performance"]["09:00-09:30"]["completed_trade_count"]
+        == 1
+    )
 
 
 def test_simulated_fill_is_never_counted_as_real_performance(tmp_path):
@@ -623,8 +746,11 @@ def test_report_identity_pins_config_and_versioned_filename(tmp_path):
     )
 
     identity = report["report_identity"]
-    assert identity["schema_version"] == 2
-    assert identity["entry_config"]["entry_end"] == "10:30:00"
+    assert identity["schema_version"] == 3
+    assert identity["entry_config"]["entry_end"] == "15:00:00"
+    assert identity["opening_rotation_window_version"] == (
+        "opening_rotation_0910_1500_v1"
+    )
     assert len(identity["config_fingerprint"]) == 12
 
     json_path, _ = write_report(report, tmp_path / "report")
