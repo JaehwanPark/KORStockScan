@@ -1658,23 +1658,90 @@ def _latency_true_ofi_direct_canary_fields(
     )
     max_ws_age_ms = max(
         1.0,
-        _to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MAX_WS_AGE_MS"), 180.0),
+        _to_float(
+            os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MAX_WS_AGE_MS"),
+            180.0,
+        ),
+    )
+    dynamic_age_enabled = _truthy(
+        os.getenv(
+            "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_DYNAMIC_AGE_BAND_ENABLED",
+            "false",
+        )
+    )
+    dynamic_age_active_date = str(
+        os.getenv(
+            "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_DYNAMIC_AGE_BAND_ACTIVE_DATE"
+        )
+        or ""
+    ).strip()
+    dynamic_age_max_ws_age_ms = max(
+        max_ws_age_ms,
+        _to_float(
+            os.getenv(
+                "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_DYNAMIC_AGE_BAND_MAX_WS_AGE_MS"
+            ),
+            500.0,
+        ),
+    )
+    dynamic_age_max_spread_bps = max(
+        1.0,
+        _to_float(
+            os.getenv(
+                "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_DYNAMIC_AGE_BAND_MAX_SPREAD_BPS"
+            ),
+            60.0,
+        ),
+    )
+    dynamic_age_min_true_ofi = max(
+        0.0,
+        _to_float(
+            os.getenv(
+                "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_DYNAMIC_AGE_BAND_MIN_TRUE_OFI"
+            ),
+            0.0,
+        ),
+    )
+    dynamic_age_min_signed_tape_buy_ratio = min(
+        100.0,
+        max(
+            50.0,
+            _to_float(
+                os.getenv(
+                    "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_DYNAMIC_AGE_BAND_MIN_SIGNED_TAPE_BUY_RATIO"
+                ),
+                80.0,
+            ),
+        ),
     )
     max_spread_bps = max(
         1.0,
-        _to_float(os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MAX_SPREAD_BPS"), 90.0),
+        _to_float(
+            os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_MAX_SPREAD_BPS"),
+            90.0,
+        ),
     )
     extended_enabled = _truthy(
-        os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ENABLED", "false")
+        os.getenv(
+            "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ENABLED",
+            "false",
+        )
     )
     extended_active_date = str(
-        os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ACTIVE_DATE")
+        os.getenv(
+            "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ACTIVE_DATE"
+        )
         or os.getenv("KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE")
         or ""
     ).strip()
     current_date = str(runtime_state["current_date"])
+    dynamic_age_active = bool(
+        enabled and dynamic_age_enabled and dynamic_age_active_date == current_date
+    )
     extended_active = bool(
-        extended_enabled and extended_active_date and extended_active_date == current_date
+        extended_enabled
+        and extended_active_date
+        and extended_active_date == current_date
     )
     extended_max_spread_bps = max(
         max_spread_bps,
@@ -2081,6 +2148,65 @@ def _latency_true_ofi_direct_canary_fields(
         or estimator_context.get("top_depth_ratio"),
         0.0,
     )
+    signed_tape_sample_count = int(
+        _to_float(
+            tape_fields.get("latency_true_ofi_direct_canary_signed_tape_sample_count"),
+            0.0,
+        )
+    )
+    signed_tape_trusted_ws_count = int(
+        _to_float(
+            tape_fields.get(
+                "latency_true_ofi_direct_canary_signed_tape_trusted_ws_count"
+            ),
+            0.0,
+        )
+    )
+    signed_tape_rest_fresh_count = int(
+        _to_float(
+            tape_fields.get(
+                "latency_true_ofi_direct_canary_signed_tape_rest_fresh_count"
+            ),
+            0.0,
+        )
+    )
+    signed_tape_unknown_source_count = int(
+        _to_float(
+            tape_fields.get(
+                "latency_true_ofi_direct_canary_signed_tape_unknown_source_count"
+            ),
+            0.0,
+        )
+    )
+    signed_tape_buy_ratio = _to_float(
+        tape_fields.get("latency_true_ofi_direct_canary_signed_tape_buy_ratio"),
+        -1.0,
+    )
+    dynamic_age_eligible = bool(
+        dynamic_age_active
+        and sample_count >= min_samples
+        and source_state.startswith("fresh_ws")
+        and 0.0 <= ws_age_ms <= dynamic_age_max_ws_age_ms
+        and float(spread_bps or 0.0) <= dynamic_age_max_spread_bps
+        and true_ofi > dynamic_age_min_true_ofi
+        and signed_tape_sample_count >= 3
+        and signed_tape_trusted_ws_count == signed_tape_sample_count
+        and signed_tape_rest_fresh_count == 0
+        and signed_tape_unknown_source_count == 0
+        and signed_tape_buy_ratio >= dynamic_age_min_signed_tape_buy_ratio
+        and str(
+            tape_fields.get("latency_true_ofi_direct_canary_signed_tape_latest_side")
+            or ""
+        ).upper()
+        == "BUY"
+        and not bool(
+            tape_fields.get("latency_true_ofi_direct_canary_large_sell_print_detected")
+        )
+        and micro_state not in {"bearish", "strong_bearish"}
+    )
+    effective_max_ws_age_ms = (
+        dynamic_age_max_ws_age_ms if dynamic_age_eligible else max_ws_age_ms
+    )
     effective_venue = (
         str(
             (stock or {}).get("rising_missed_effective_venue")
@@ -2133,6 +2259,32 @@ def _latency_true_ofi_direct_canary_fields(
         "latency_true_ofi_direct_canary_relief_runtime_enabled": not danger_relief_forbidden,
         "latency_true_ofi_direct_canary_min_samples": min_samples,
         "latency_true_ofi_direct_canary_max_ws_age_ms": round(max_ws_age_ms, 3),
+        "latency_true_ofi_direct_canary_effective_max_ws_age_ms": round(
+            effective_max_ws_age_ms, 3
+        ),
+        "latency_true_ofi_direct_canary_dynamic_age_band_enabled": (
+            dynamic_age_enabled
+        ),
+        "latency_true_ofi_direct_canary_dynamic_age_band_active": (dynamic_age_active),
+        "latency_true_ofi_direct_canary_dynamic_age_band_active_date": (
+            dynamic_age_active_date or "-"
+        ),
+        "latency_true_ofi_direct_canary_dynamic_age_band_eligible": (
+            dynamic_age_eligible
+        ),
+        "latency_true_ofi_direct_canary_dynamic_age_band_applied": False,
+        "latency_true_ofi_direct_canary_dynamic_age_band_max_ws_age_ms": round(
+            dynamic_age_max_ws_age_ms, 3
+        ),
+        "latency_true_ofi_direct_canary_dynamic_age_band_max_spread_bps": round(
+            dynamic_age_max_spread_bps, 3
+        ),
+        "latency_true_ofi_direct_canary_dynamic_age_band_min_true_ofi": round(
+            dynamic_age_min_true_ofi, 4
+        ),
+        "latency_true_ofi_direct_canary_dynamic_age_band_min_signed_tape_buy_ratio": round(
+            dynamic_age_min_signed_tape_buy_ratio, 3
+        ),
         "latency_true_ofi_direct_canary_max_spread_bps": round(max_spread_bps, 3),
         "latency_true_ofi_direct_canary_extended_spread_enabled": extended_enabled,
         "latency_true_ofi_direct_canary_extended_spread_active": extended_active,
@@ -2434,7 +2586,7 @@ def _latency_true_ofi_direct_canary_fields(
     if sample_count < min_samples and not low_rebound_sample_exception:
         fields["latency_true_ofi_direct_canary_reason"] = "true_ofi_samples_below_floor"
         return fields
-    if not (0.0 <= ws_age_ms <= max_ws_age_ms):
+    if not (0.0 <= ws_age_ms <= effective_max_ws_age_ms):
         fields["latency_true_ofi_direct_canary_reason"] = (
             "ws_age_above_direct_canary_cap"
         )
@@ -2547,7 +2699,9 @@ def _latency_true_ofi_direct_canary_fields(
         )
         signed_tape_rest_fresh_count = int(
             _to_float(
-                fields.get("latency_true_ofi_direct_canary_signed_tape_rest_fresh_count"),
+                fields.get(
+                    "latency_true_ofi_direct_canary_signed_tape_rest_fresh_count"
+                ),
                 0.0,
             )
         )
@@ -2604,13 +2758,19 @@ def _latency_true_ofi_direct_canary_fields(
         fields["latency_true_ofi_direct_canary_reason"] = "not_true_ofi_below_floor"
         return fields
     if not (min_true_ofi <= true_ofi <= max_true_ofi):
-        fields["latency_true_ofi_direct_canary_reason"] = "true_ofi_outside_near_zero_band"
+        fields["latency_true_ofi_direct_canary_reason"] = (
+            "true_ofi_outside_near_zero_band"
+        )
         return fields
     if micro_state in {"bearish", "strong_bearish"}:
-        fields["latency_true_ofi_direct_canary_reason"] = "bearish_orderbook_micro_state"
+        fields["latency_true_ofi_direct_canary_reason"] = (
+            "bearish_orderbook_micro_state"
+        )
         return fields
     if not opportunity_supported:
-        fields["latency_true_ofi_direct_canary_reason"] = "opportunity_signal_below_floor"
+        fields["latency_true_ofi_direct_canary_reason"] = (
+            "opportunity_signal_below_floor"
+        )
         return fields
     if not fields["latency_true_ofi_direct_canary_tape_support_ok"]:
         fields["latency_true_ofi_direct_canary_reason"] = str(
@@ -2621,7 +2781,9 @@ def _latency_true_ofi_direct_canary_fields(
     if fields["latency_true_ofi_direct_canary_recheck_required"]:
         if not fields["latency_true_ofi_direct_canary_recheck_active"]:
             fields["latency_true_ofi_direct_canary_recheck_state"] = "runtime_inactive"
-            fields["latency_true_ofi_direct_canary_reason"] = "tp1_recheck_runtime_inactive"
+            fields["latency_true_ofi_direct_canary_reason"] = (
+                "tp1_recheck_runtime_inactive"
+            )
             return fields
         if not fields["latency_true_ofi_direct_canary_recheck_armed"]:
             fields["latency_true_ofi_direct_canary_recheck_state"] = "arm_required"
@@ -2632,7 +2794,9 @@ def _latency_true_ofi_direct_canary_fields(
             < fields["latency_true_ofi_direct_canary_recheck_min_wait_sec"]
         ):
             fields["latency_true_ofi_direct_canary_recheck_state"] = "min_wait_pending"
-            fields["latency_true_ofi_direct_canary_reason"] = "tp1_recheck_min_wait_pending"
+            fields["latency_true_ofi_direct_canary_reason"] = (
+                "tp1_recheck_min_wait_pending"
+            )
             return fields
         if (
             fields["latency_true_ofi_direct_canary_recheck_elapsed_sec"]
@@ -2641,9 +2805,15 @@ def _latency_true_ofi_direct_canary_fields(
             fields["latency_true_ofi_direct_canary_recheck_state"] = "expired"
             fields["latency_true_ofi_direct_canary_reason"] = "tp1_recheck_expired"
             return fields
-        if not fields["latency_true_ofi_direct_canary_recheck_positive_micro_recovered"]:
-            fields["latency_true_ofi_direct_canary_recheck_state"] = "positive_micro_not_recovered"
-            fields["latency_true_ofi_direct_canary_reason"] = "tp1_recheck_positive_micro_not_recovered"
+        if not fields[
+            "latency_true_ofi_direct_canary_recheck_positive_micro_recovered"
+        ]:
+            fields["latency_true_ofi_direct_canary_recheck_state"] = (
+                "positive_micro_not_recovered"
+            )
+            fields["latency_true_ofi_direct_canary_reason"] = (
+                "tp1_recheck_positive_micro_not_recovered"
+            )
             return fields
         fields["latency_true_ofi_direct_canary_recheck_state"] = "recovered"
     fields.update(
@@ -2652,12 +2822,17 @@ def _latency_true_ofi_direct_canary_fields(
             "latency_true_ofi_direct_canary_reason": (
                 "direct_canary_tp1_recheck_recovered_allow"
                 if fields["latency_true_ofi_direct_canary_recheck_required"]
-                else "direct_canary_extended_spread_true_ofi_allow"
-                if fields["latency_true_ofi_direct_canary_extended_tier_applied"]
-                else "direct_canary_true_ofi_false_negative_allow"
+                else (
+                    "direct_canary_extended_spread_true_ofi_allow"
+                    if fields["latency_true_ofi_direct_canary_extended_tier_applied"]
+                    else "direct_canary_true_ofi_false_negative_allow"
+                )
             ),
             "latency_true_ofi_direct_canary_runtime_effect": True,
             "latency_true_ofi_direct_canary_allowed_runtime_apply": True,
+            "latency_true_ofi_direct_canary_dynamic_age_band_applied": bool(
+                dynamic_age_eligible and ws_age_ms > max_ws_age_ms
+            ),
         }
     )
     return fields

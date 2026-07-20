@@ -1385,6 +1385,195 @@ def test_trailing_continuation_recheck_rejects_rest_or_feature_only_micro_proven
     assert not any(stage == "scalp_trailing_continuation_recheck" for stage, _ in logs)
 
 
+def test_trailing_continuation_recheck_uses_bounded_rest_quote_recovery(
+    monkeypatch,
+):
+    logs = []
+    _patch_holding_context(monkeypatch, logs)
+    _enable_trailing_continuation_recheck(monkeypatch)
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_QUOTE_RECOVERY_ENABLED",
+        "true",
+    )
+    fetches = []
+    monkeypatch.setattr(
+        handlers,
+        "_fetch_rest_orderbook_snapshot_bounded",
+        lambda code, timeout_ms: fetches.append((code, timeout_ms))
+        or ({"best_bid": 10_590, "best_ask": 10_600}, "ok", 12.0),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_build_quote_consistency_fields",
+        lambda *args, **kwargs: (
+            {
+                "quote_consistency_state": "single_source",
+                "quote_consistency_rest_age_ms": 12.0,
+                "price_source": "rest_mid",
+            },
+            10_595,
+            10_600,
+            10_590,
+        ),
+    )
+    now_ts = datetime(
+        2026, 7, 15, 10, 0, tzinfo=timezone(timedelta(hours=9))
+    ).timestamp()
+    stock = _stock()
+
+    deferred = handlers._evaluate_scalp_trailing_continuation_recheck(
+        stock=stock,
+        code="002990",
+        ws_data={"curr": 10_590},
+        micro_fields={
+            **_trailing_continuation_micro_fields(),
+            "holding_flow_micro_estimator_source_state": "smoothed_probe_estimate",
+        },
+        profit_rate=0.34,
+        peak_profit=0.90,
+        trailing_peak_worsen=0.56,
+        current_ai_score=72,
+        now_ts=now_ts,
+    )
+
+    assert deferred is True
+    assert fetches == [("002990", 300)]
+    assert stock["scalp_trailing_continuation_recheck_lane"] == "quote_recovery"
+    event = next(
+        fields
+        for stage, fields in logs
+        if stage == "scalp_trailing_continuation_recheck"
+    )
+    assert event["recheck_state"] == "armed"
+    assert event["quote_recovery_eligible"] is True
+    assert event["quote_recovery_best_bid"] == 10_590
+    assert event["quote_recovery_spread_bps"] == "9.443"
+    assert event["quote_recovery_large_sell_state"] == "unknown"
+
+    expired = handlers._evaluate_scalp_trailing_continuation_recheck(
+        stock=stock,
+        code="002990",
+        ws_data={"curr": 10_590},
+        micro_fields={
+            **_trailing_continuation_micro_fields(),
+            "holding_flow_micro_estimator_source_state": "smoothed_probe_estimate",
+        },
+        profit_rate=0.35,
+        peak_profit=0.90,
+        trailing_peak_worsen=0.55,
+        current_ai_score=72,
+        now_ts=now_ts + 20.0,
+    )
+
+    assert expired is False
+    assert fetches == [("002990", 300)]
+    assert logs[-1][1]["recheck_state"] == "ttl_expired"
+
+
+def test_trailing_continuation_recheck_quote_recovery_fails_open(
+    monkeypatch,
+):
+    logs = []
+    _patch_holding_context(monkeypatch, logs)
+    _enable_trailing_continuation_recheck(monkeypatch)
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_QUOTE_RECOVERY_ENABLED",
+        "true",
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_fetch_rest_orderbook_snapshot_bounded",
+        lambda code, timeout_ms: ({}, "timeout", float(timeout_ms)),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_build_quote_consistency_fields",
+        lambda *args, **kwargs: (
+            {"quote_consistency_rest_age_ms": "-"},
+            0,
+            0,
+            0,
+        ),
+    )
+    now_ts = datetime(
+        2026, 7, 15, 10, 0, tzinfo=timezone(timedelta(hours=9))
+    ).timestamp()
+
+    deferred = handlers._evaluate_scalp_trailing_continuation_recheck(
+        stock=_stock(),
+        code="002990",
+        ws_data={"curr": 10_590},
+        micro_fields={
+            **_trailing_continuation_micro_fields(),
+            "holding_flow_micro_estimator_source_state": "smoothed_probe_estimate",
+        },
+        profit_rate=0.34,
+        peak_profit=0.90,
+        trailing_peak_worsen=0.56,
+        current_ai_score=72,
+        now_ts=now_ts,
+    )
+
+    assert deferred is False
+    assert not any(stage == "scalp_trailing_continuation_recheck" for stage, _ in logs)
+
+
+def test_trailing_continuation_recheck_quote_recovery_rejects_quote_conflict(
+    monkeypatch,
+):
+    logs = []
+    _patch_holding_context(monkeypatch, logs)
+    _enable_trailing_continuation_recheck(monkeypatch)
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_QUOTE_RECOVERY_ENABLED",
+        "true",
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_fetch_rest_orderbook_snapshot_bounded",
+        lambda code, timeout_ms: (
+            {"best_bid": 10_590, "best_ask": 10_600},
+            "ok",
+            12.0,
+        ),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_build_quote_consistency_fields",
+        lambda *args, **kwargs: (
+            {
+                "quote_consistency_state": "diverged",
+                "quote_consistency_reason": "quote_diverged",
+                "quote_consistency_rest_age_ms": 12.0,
+            },
+            10_595,
+            10_600,
+            10_590,
+        ),
+    )
+    now_ts = datetime(
+        2026, 7, 15, 10, 0, tzinfo=timezone(timedelta(hours=9))
+    ).timestamp()
+
+    deferred = handlers._evaluate_scalp_trailing_continuation_recheck(
+        stock=_stock(),
+        code="002990",
+        ws_data={"curr": 10_590},
+        micro_fields={
+            **_trailing_continuation_micro_fields(),
+            "holding_flow_micro_estimator_source_state": "smoothed_probe_estimate",
+        },
+        profit_rate=0.34,
+        peak_profit=0.90,
+        trailing_peak_worsen=0.56,
+        current_ai_score=72,
+        now_ts=now_ts,
+    )
+
+    assert deferred is False
+    assert not any(stage == "scalp_trailing_continuation_recheck" for stage, _ in logs)
+
+
 def test_trailing_continuation_recheck_clamps_negative_min_profit_to_positive_floor(
     monkeypatch,
 ):

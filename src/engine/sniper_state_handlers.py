@@ -27573,6 +27573,299 @@ def _entry_ai_submit_authority_fields(
     }
 
 
+def _evaluate_rising_missed_post_ai_hard_negative_submit_block(
+    *,
+    strategy,
+    stock,
+    runtime,
+    latency_gate,
+    orderbook_fields,
+    retry_fields,
+    now_ts: float,
+) -> dict[str, Any]:
+    """Block a stale rising-missed submit only on a measured hard-negative bundle."""
+    current_date = datetime.fromtimestamp(float(now_ts), tz=_KST).date().isoformat()
+    enabled = _env_bool(
+        "KORSTOCKSCAN_RISING_MISSED_POST_AI_HARD_NEGATIVE_BLOCK_ENABLED", False
+    )
+    active_date = str(
+        os.getenv(
+            "KORSTOCKSCAN_RISING_MISSED_POST_AI_HARD_NEGATIVE_BLOCK_ACTIVE_DATE",
+            "",
+        )
+    ).strip()
+    active = bool(enabled and active_date == current_date)
+    stock = stock if isinstance(stock, dict) else {}
+    runtime = runtime if isinstance(runtime, dict) else {}
+    latency_fields = latency_gate if isinstance(latency_gate, dict) else {}
+    orderbook_fields = orderbook_fields if isinstance(orderbook_fields, dict) else {}
+    retry_fields = retry_fields if isinstance(retry_fields, dict) else {}
+    sources = (retry_fields, latency_fields, orderbook_fields, stock)
+
+    action = (
+        str(
+            retry_fields.get("pre_submit_entry_ai_authority_retry_action")
+            or stock.get("last_watching_ai_action")
+            or ""
+        )
+        .strip()
+        .upper()
+    )
+    score = _safe_float(
+        retry_fields.get("pre_submit_entry_ai_authority_retry_score"),
+        _safe_float(stock.get("last_watching_ai_score"), 0.0),
+    )
+    max_score = max(
+        0.0,
+        _env_float("KORSTOCKSCAN_RISING_MISSED_POST_AI_HARD_NEGATIVE_MAX_SCORE", 62.0),
+    )
+    confirmed_at = _safe_float(stock.get("last_watching_ai_confirmed_at"), 0.0)
+    ai_age_sec = max(0.0, float(now_ts) - confirmed_at) if confirmed_at > 0 else None
+    max_ai_age_sec = max(
+        1.0,
+        _env_float(
+            "KORSTOCKSCAN_RISING_MISSED_POST_AI_HARD_NEGATIVE_MAX_AI_AGE_SEC",
+            30.0,
+        ),
+    )
+    result_source = (
+        str(
+            retry_fields.get("pre_submit_entry_ai_authority_retry_result_source")
+            or stock.get("last_watching_ai_result_source")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
+    fresh_weak_ai = bool(
+        action in {"WAIT", "DROP"}
+        and 0.0 < score <= max_score
+        and result_source in {"live", "prior_valid"}
+        and ai_age_sec is not None
+        and ai_age_sec <= max_ai_age_sec
+    )
+
+    tp1_evaluation_id = str(
+        stock.get("rising_missed_tp1_submit_context_evaluation_id") or ""
+    ).strip()
+    tp1_context_at = _safe_float(stock.get("rising_missed_tp1_submit_context_at"), 0.0)
+    tp1_context_age_sec = (
+        max(0.0, float(now_ts) - tp1_context_at) if tp1_context_at > 0 else None
+    )
+    max_tp1_context_age_sec = max(
+        1.0,
+        _env_float(
+            "KORSTOCKSCAN_RISING_MISSED_POST_AI_HARD_NEGATIVE_MAX_TP1_CONTEXT_AGE_SEC",
+            60.0,
+        ),
+    )
+    stale_tp1_context = bool(
+        tp1_evaluation_id
+        and tp1_context_age_sec is not None
+        and tp1_context_age_sec > max_tp1_context_age_sec
+    )
+    latency_state = (
+        str(
+            _entry_submit_field(
+                *sources,
+                key="latency_state",
+                aliases=("status", "entry_latency_state"),
+                default="",
+            )
+            or ""
+        )
+        .strip()
+        .upper()
+    )
+
+    ofi_norm, has_ofi, _ = _first_numeric_field_with_source(
+        *sources,
+        key="orderbook_micro_ofi_norm",
+        aliases=("ofi_norm",),
+    )
+    micro_state = (
+        str(
+            _entry_submit_field(
+                *sources,
+                key="orderbook_micro_state",
+                aliases=("micro_state",),
+                default="",
+            )
+            or ""
+        )
+        .strip()
+        .lower()
+    )
+    max_ofi_norm = _env_float(
+        "KORSTOCKSCAN_RISING_MISSED_POST_AI_HARD_NEGATIVE_MAX_OFI_NORM", -1.0
+    )
+    bearish_orderbook = bool(
+        has_ofi
+        and ofi_norm <= max_ofi_norm
+        and micro_state in {"bearish", "strong_bearish"}
+    )
+
+    tape_samples, has_tape_samples, _ = _first_numeric_field_with_source(
+        *sources,
+        key="latency_true_ofi_direct_canary_signed_tape_sample_count",
+        aliases=("market_data_signed_tape_sample_count", "signed_tape_sample_count"),
+    )
+    trusted_ws_count, has_trusted_ws_count, _ = _first_numeric_field_with_source(
+        *sources,
+        key="latency_true_ofi_direct_canary_signed_tape_trusted_ws_count",
+        aliases=(
+            "market_data_signed_tape_trusted_ws_count",
+            "signed_tape_trusted_ws_count",
+        ),
+    )
+    rest_count, has_rest_count, _ = _first_numeric_field_with_source(
+        *sources,
+        key="latency_true_ofi_direct_canary_signed_tape_rest_fresh_count",
+        aliases=(
+            "market_data_signed_tape_rest_fresh_count",
+            "signed_tape_rest_fresh_count",
+        ),
+    )
+    unknown_count, has_unknown_count, _ = _first_numeric_field_with_source(
+        *sources,
+        key="latency_true_ofi_direct_canary_signed_tape_unknown_source_count",
+        aliases=(
+            "market_data_signed_tape_unknown_source_count",
+            "signed_tape_unknown_source_count",
+        ),
+    )
+    buy_ratio, has_buy_ratio, _ = _first_numeric_field_with_source(
+        *sources,
+        key="latency_true_ofi_direct_canary_signed_tape_buy_ratio",
+        aliases=("market_data_signed_tape_buy_ratio", "signed_tape_buy_ratio"),
+    )
+    latest_side = (
+        str(
+            _entry_submit_field(
+                *sources,
+                key="latency_true_ofi_direct_canary_signed_tape_latest_side",
+                aliases=(
+                    "market_data_signed_tape_latest_side",
+                    "signed_tape_latest_side",
+                ),
+                default="",
+            )
+            or ""
+        )
+        .strip()
+        .upper()
+    )
+    min_tape_samples = max(
+        3,
+        _env_int(
+            "KORSTOCKSCAN_RISING_MISSED_POST_AI_HARD_NEGATIVE_MIN_TAPE_SAMPLES",
+            3,
+        ),
+    )
+    max_buy_ratio = min(
+        50.0,
+        max(
+            0.0,
+            _env_float(
+                "KORSTOCKSCAN_RISING_MISSED_POST_AI_HARD_NEGATIVE_MAX_BUY_RATIO",
+                20.0,
+            ),
+        ),
+    )
+    trusted_sell_tape = bool(
+        has_tape_samples
+        and has_trusted_ws_count
+        and has_rest_count
+        and has_unknown_count
+        and has_buy_ratio
+        and int(tape_samples) >= min_tape_samples
+        and int(trusted_ws_count) == int(tape_samples)
+        and int(rest_count) == 0
+        and int(unknown_count) == 0
+        and buy_ratio <= max_buy_ratio
+        and latest_side == "SELL"
+    )
+    rising_missed_lineage = bool(
+        _truthy_field(stock.get("rising_missed_entry_lineage"))
+        or _has_rising_missed_entry_lineage(stock, runtime)
+        or _has_rising_missed_watch_source_marker(stock)
+    )
+    blocked = bool(
+        active
+        and str(strategy or "").upper() in {"SCALPING", "SCALP"}
+        and not _is_any_simulated_position(stock, strategy)
+        and rising_missed_lineage
+        and latency_state == "CAUTION"
+        and stale_tp1_context
+        and fresh_weak_ai
+        and bearish_orderbook
+        and trusted_sell_tape
+    )
+    return {
+        "blocked": blocked,
+        "reason": (
+            "stale_tp1_fresh_weak_ai_bearish_orderbook_sell_tape"
+            if blocked
+            else "bundle_not_met"
+        ),
+        "block_reason": (
+            "stale_tp1_fresh_weak_ai_bearish_orderbook_sell_tape"
+            if blocked
+            else "bundle_not_met"
+        ),
+        "rising_missed_post_ai_hard_negative_enabled": enabled,
+        "rising_missed_post_ai_hard_negative_active": active,
+        "rising_missed_post_ai_hard_negative_active_date": active_date or "-",
+        "rising_missed_post_ai_hard_negative_lineage": rising_missed_lineage,
+        "rising_missed_post_ai_hard_negative_latency_state": latency_state or "-",
+        "rising_missed_post_ai_hard_negative_tp1_context_stale": stale_tp1_context,
+        "rising_missed_post_ai_hard_negative_tp1_context_age_sec": (
+            f"{tp1_context_age_sec:.3f}" if tp1_context_age_sec is not None else "-"
+        ),
+        "rising_missed_post_ai_hard_negative_max_tp1_context_age_sec": (
+            f"{max_tp1_context_age_sec:.3f}"
+        ),
+        "rising_missed_post_ai_hard_negative_ai_action": action or "-",
+        "rising_missed_post_ai_hard_negative_ai_score": f"{score:.1f}",
+        "rising_missed_post_ai_hard_negative_ai_age_sec": (
+            f"{ai_age_sec:.3f}" if ai_age_sec is not None else "-"
+        ),
+        "rising_missed_post_ai_hard_negative_ai_fresh_weak": fresh_weak_ai,
+        "rising_missed_post_ai_hard_negative_orderbook_state": micro_state or "-",
+        "rising_missed_post_ai_hard_negative_ofi_norm": (
+            f"{ofi_norm:.4f}" if has_ofi else "-"
+        ),
+        "rising_missed_post_ai_hard_negative_bearish_orderbook": bearish_orderbook,
+        "rising_missed_post_ai_hard_negative_tape_samples": (
+            int(tape_samples) if has_tape_samples else 0
+        ),
+        "rising_missed_post_ai_hard_negative_tape_trusted_ws_count": (
+            int(trusted_ws_count) if has_trusted_ws_count else 0
+        ),
+        "rising_missed_post_ai_hard_negative_tape_buy_ratio": (
+            f"{buy_ratio:.2f}" if has_buy_ratio else "-"
+        ),
+        "rising_missed_post_ai_hard_negative_tape_latest_side": latest_side or "-",
+        "rising_missed_post_ai_hard_negative_trusted_sell_tape": trusted_sell_tape,
+        "threshold_family": "rising_missed_post_ai_hard_negative_submit_block",
+        "metric_role": "bounded_tunable",
+        "decision_authority": "operator_runtime_override_real_entry_block",
+        "window_policy": "same_day_intraday_pre_submit",
+        "sample_floor": "fresh_ai_and_three_trusted_ws_sell_ticks",
+        "primary_decision_metric": "counterfactual_tp1_first_hit_after_block",
+        "source_quality_gate": "fresh_ai_trusted_ws_tape_and_measured_orderbook_ofi",
+        "runtime_effect": blocked,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": blocked,
+        "forbidden_uses": (
+            "standalone_wait_gate,submit_safety_bypass,broker_guard_bypass,"
+            "quantity_or_cap_change,provider_route_change,tp_or_exit_change,"
+            "hard_or_protect_or_emergency_guard_relaxation"
+        ),
+    }
+
+
 def _pre_submit_micro_unavailable_guard_enabled() -> bool:
     return _rule_bool("PRE_SUBMIT_MICRO_UNAVAILABLE_GUARD_ENABLED", True)
 
@@ -35338,6 +35631,7 @@ def _clear_holding_flow_override_candidate(
             "holding_flow_max_defer_extension_until",
             "holding_flow_max_defer_extension_started_at",
             *_SCALP_TRAILING_CONTINUATION_RECHECK_STATE_FIELDS,
+            *_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_STATE_FIELDS,
         ),
     )
     _log_holding_pipeline(
@@ -35385,6 +35679,13 @@ _SCALP_TRAILING_CONTINUATION_RECHECK_STATE_FIELDS = (
     "scalp_trailing_continuation_recheck_anchor_profit",
     "scalp_trailing_continuation_recheck_min_profit",
     "scalp_trailing_continuation_recheck_lane",
+)
+
+_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_STATE_FIELDS = (
+    "scalp_trailing_loss_conversion_recheck_started_at",
+    "scalp_trailing_loss_conversion_recheck_until_epoch",
+    "scalp_trailing_loss_conversion_recheck_anchor_profit",
+    "scalp_trailing_loss_conversion_recheck_min_profit",
 )
 
 
@@ -35458,6 +35759,34 @@ def _scalp_trailing_continuation_recheck_config(now_ts: float) -> dict[str, Any]
                 65.0,
             ),
         ),
+        "quote_recovery_enabled": _env_bool(
+            "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_QUOTE_RECOVERY_ENABLED",
+            False,
+        ),
+        "quote_recovery_timeout_ms": max(
+            100,
+            min(
+                500,
+                _env_int(
+                    "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_QUOTE_RECOVERY_TIMEOUT_MS",
+                    300,
+                ),
+            ),
+        ),
+        "quote_recovery_max_age_ms": max(
+            100.0,
+            _env_float(
+                "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_QUOTE_RECOVERY_MAX_AGE_MS",
+                1500.0,
+            ),
+        ),
+        "quote_recovery_max_spread_bps": max(
+            1.0,
+            _env_float(
+                "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_QUOTE_RECOVERY_MAX_SPREAD_BPS",
+                150.0,
+            ),
+        ),
         "high_peak_enabled": _env_bool(
             "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_HIGH_PEAK_ENABLED",
             False,
@@ -35526,9 +35855,325 @@ def _scalp_trailing_continuation_recheck_config(now_ts: float) -> dict[str, Any]
     }
 
 
+def _scalp_trailing_loss_conversion_recheck_config(now_ts: float) -> dict[str, Any]:
+    enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_ENABLED", False
+    )
+    active_date = str(
+        os.getenv("KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_ACTIVE_DATE", "")
+    ).strip()
+    current_date = datetime.fromtimestamp(float(now_ts), tz=_KST).date().isoformat()
+    return {
+        "enabled": enabled,
+        "active_date": active_date,
+        "current_date": current_date,
+        "active": bool(enabled and active_date == current_date),
+        "ttl_sec": max(
+            5.0,
+            min(
+                20.0,
+                _env_float(
+                    "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_TTL_SEC",
+                    15.0,
+                ),
+            ),
+        ),
+        "min_peak_pct": max(
+            0.0,
+            _env_float(
+                "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_MIN_PEAK_PCT",
+                0.50,
+            ),
+        ),
+        "max_peak_pct": max(
+            0.0,
+            _env_float(
+                "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_MAX_PEAK_PCT",
+                1.00,
+            ),
+        ),
+        "min_profit_pct": min(
+            -0.01,
+            _env_float(
+                "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_MIN_PROFIT_PCT",
+                -0.30,
+            ),
+        ),
+        "max_profit_pct": max(
+            -0.01,
+            _env_float(
+                "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_MAX_PROFIT_PCT",
+                0.05,
+            ),
+        ),
+        "max_worsen_pct": max(
+            0.0,
+            _env_float(
+                "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_MAX_WORSEN_PCT",
+                1.00,
+            ),
+        ),
+        "rest_timeout_ms": max(
+            100,
+            min(
+                500,
+                _env_int(
+                    "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_REST_TIMEOUT_MS",
+                    300,
+                ),
+            ),
+        ),
+        "max_rest_age_ms": max(
+            100.0,
+            _env_float(
+                "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_MAX_REST_AGE_MS",
+                1500.0,
+            ),
+        ),
+        "max_spread_bps": max(
+            1.0,
+            _env_float(
+                "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_MAX_SPREAD_BPS",
+                150.0,
+            ),
+        ),
+    }
+
+
+def _scalp_trailing_loss_conversion_contract_fields() -> dict[str, Any]:
+    return {
+        "threshold_family": "scalp_trailing_loss_conversion_recheck",
+        "metric_role": "bounded_tunable",
+        "decision_authority": "operator_runtime_override_scalp_trailing_loss_conversion_recheck",
+        "window_policy": "same_trailing_candidate_single_bounded_recheck",
+        "sample_floor": "shallow_loss_conversion_with_fresh_rest_executable_quote",
+        "primary_decision_metric": "post_recheck_mfe_before_trailing_exit",
+        "source_quality_gate": "ka10004_receive_age_and_valid_top_of_book",
+        "runtime_effect": True,
+        "allowed_runtime_apply": True,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": (
+            "hard_stop_bypass|protect_stop_bypass|emergency_stop_bypass|"
+            "broker_guard_bypass|provider_route_change|quantity_or_cap_change|"
+            "second_extension"
+        ),
+    }
+
+
+def _evaluate_scalp_trailing_loss_conversion_recheck(
+    *,
+    stock: dict,
+    code: str,
+    ws_data: dict | None,
+    profit_rate: float,
+    peak_profit: float,
+    trailing_peak_worsen: float,
+    now_ts: float,
+) -> bool:
+    """Defer one shallow loss-conversion trailing exit on a fresh REST quote."""
+    config = _scalp_trailing_loss_conversion_recheck_config(now_ts)
+    if not config["active"]:
+        return False
+
+    started_at = _safe_float(
+        stock.get("scalp_trailing_loss_conversion_recheck_started_at"), 0.0
+    )
+    features, has_features = _normalize_soft_stop_expert_features(stock)
+    feature_context_usable = bool(
+        has_features and _truthy_field(features.get("micro_context_usable"))
+    )
+    explicit_large_sell = bool(
+        feature_context_usable
+        and _truthy_field(features.get("large_sell_print_detected"))
+    )
+    band_eligible = bool(
+        config["min_peak_pct"] <= float(peak_profit) <= config["max_peak_pct"]
+        and config["min_profit_pct"] <= float(profit_rate) < config["max_profit_pct"]
+        and float(trailing_peak_worsen) <= config["max_worsen_pct"]
+        and not explicit_large_sell
+    )
+    if not band_eligible:
+        if started_at > 0:
+            _clear_scalp_trailing_loss_conversion_recheck(stock)
+            _log_holding_pipeline(
+                stock,
+                code,
+                "scalp_trailing_loss_conversion_recheck",
+                recheck_state="vetoed",
+                profit_rate=f"{float(profit_rate):+.2f}",
+                peak_profit=f"{float(peak_profit):+.2f}",
+                trailing_peak_worsen=f"{float(trailing_peak_worsen):.2f}",
+                explicit_large_sell=explicit_large_sell,
+                **_scalp_trailing_loss_conversion_contract_fields(),
+            )
+        return False
+
+    if started_at > 0:
+        until_epoch = _safe_float(
+            stock.get("scalp_trailing_loss_conversion_recheck_until_epoch"),
+            started_at + config["ttl_sec"],
+        )
+        elapsed_sec = max(0.0, float(now_ts) - started_at)
+        if float(now_ts) >= until_epoch:
+            _clear_scalp_trailing_loss_conversion_recheck(stock)
+            _log_holding_pipeline(
+                stock,
+                code,
+                "scalp_trailing_loss_conversion_recheck",
+                recheck_state="ttl_expired",
+                recheck_elapsed_sec=f"{elapsed_sec:.3f}",
+                recheck_until_epoch=f"{until_epoch:.3f}",
+                profit_rate=f"{float(profit_rate):+.2f}",
+                peak_profit=f"{float(peak_profit):+.2f}",
+                trailing_peak_worsen=f"{float(trailing_peak_worsen):.2f}",
+                **_scalp_trailing_loss_conversion_contract_fields(),
+            )
+            return False
+
+    rest_snapshot, rest_state, rest_elapsed_ms = _fetch_rest_orderbook_snapshot_bounded(
+        code, config["rest_timeout_ms"]
+    )
+    rest_snapshot = dict(rest_snapshot or {})
+    if rest_snapshot and not any(
+        rest_snapshot.get(key)
+        for key in (
+            "rest_received_ts_ms",
+            "received_at_ms",
+            "rest_received_ts",
+            "received_ts",
+        )
+    ):
+        rest_snapshot["rest_received_ts"] = time.time()
+    quote_fields, _, _, executable_sell_price = _build_quote_consistency_fields(
+        ws_data,
+        rest_snapshot=rest_snapshot,
+        side="sell",
+        safety_exit=True,
+        now_ts=now_ts,
+    )
+    rest_age_ms = _safe_float(
+        quote_fields.get("quote_consistency_rest_age_ms"), float("inf")
+    )
+    best_bid = _safe_int(rest_snapshot.get("best_bid"), 0)
+    best_ask = _safe_int(rest_snapshot.get("best_ask"), 0)
+    spread_bps = (
+        ((best_ask - best_bid) / max(best_bid, 1)) * 10000.0
+        if best_bid > 0 and best_ask >= best_bid
+        else float("inf")
+    )
+    rest_quote_fresh = bool(
+        rest_state == "ok"
+        and rest_snapshot
+        and 0.0 <= rest_age_ms <= config["max_rest_age_ms"]
+        and best_bid > 0
+        and best_ask >= best_bid
+        and executable_sell_price > 0
+        and spread_bps <= config["max_spread_bps"]
+    )
+    state_fields = {
+        "recheck_enabled": config["enabled"],
+        "recheck_active": config["active"],
+        "recheck_active_date": config["active_date"] or "-",
+        "recheck_current_date": config["current_date"],
+        "recheck_ttl_sec": f"{config['ttl_sec']:.3f}",
+        "recheck_min_peak_pct": f"{config['min_peak_pct']:.2f}",
+        "recheck_max_peak_pct": f"{config['max_peak_pct']:.2f}",
+        "recheck_min_profit_pct": f"{config['min_profit_pct']:+.2f}",
+        "recheck_max_profit_pct": f"{config['max_profit_pct']:+.2f}",
+        "recheck_max_worsen_pct": f"{config['max_worsen_pct']:.2f}",
+        "profit_rate": f"{float(profit_rate):+.2f}",
+        "peak_profit": f"{float(peak_profit):+.2f}",
+        "trailing_peak_worsen": f"{float(trailing_peak_worsen):.2f}",
+        "explicit_large_sell": explicit_large_sell,
+        "rest_fetch_state": rest_state,
+        "rest_fetch_elapsed_ms": f"{rest_elapsed_ms:.3f}",
+        "rest_quote_age_ms": (
+            f"{rest_age_ms:.3f}" if rest_age_ms != float("inf") else "-"
+        ),
+        "rest_best_bid": best_bid,
+        "rest_best_ask": best_ask,
+        "rest_executable_sell_price": executable_sell_price,
+        "rest_spread_bps": f"{spread_bps:.3f}" if spread_bps != float("inf") else "-",
+        "rest_quote_fresh": rest_quote_fresh,
+        **quote_fields,
+        **_scalp_trailing_loss_conversion_contract_fields(),
+    }
+    if not rest_quote_fresh:
+        if started_at > 0:
+            _clear_scalp_trailing_loss_conversion_recheck(stock)
+        _log_holding_pipeline(
+            stock,
+            code,
+            "scalp_trailing_loss_conversion_recheck",
+            recheck_state="rest_quote_unavailable",
+            **state_fields,
+        )
+        return False
+
+    if started_at <= 0:
+        until_epoch = float(now_ts) + config["ttl_sec"]
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "scalp_trailing_loss_conversion_recheck_started_at": float(now_ts),
+                "scalp_trailing_loss_conversion_recheck_until_epoch": until_epoch,
+                "scalp_trailing_loss_conversion_recheck_anchor_profit": float(
+                    profit_rate
+                ),
+                "scalp_trailing_loss_conversion_recheck_min_profit": float(profit_rate),
+            },
+        )
+        _log_holding_pipeline(
+            stock,
+            code,
+            "scalp_trailing_loss_conversion_recheck",
+            recheck_state="armed",
+            recheck_until_epoch=f"{until_epoch:.3f}",
+            **state_fields,
+        )
+        return True
+
+    until_epoch = _safe_float(
+        stock.get("scalp_trailing_loss_conversion_recheck_until_epoch"),
+        started_at + config["ttl_sec"],
+    )
+    elapsed_sec = max(0.0, float(now_ts) - started_at)
+
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "scalp_trailing_loss_conversion_recheck_min_profit": min(
+                _safe_float(
+                    stock.get("scalp_trailing_loss_conversion_recheck_min_profit"),
+                    profit_rate,
+                ),
+                float(profit_rate),
+            )
+        },
+    )
+    _log_holding_pipeline(
+        stock,
+        code,
+        "scalp_trailing_loss_conversion_recheck",
+        recheck_state="deferred",
+        recheck_elapsed_sec=f"{elapsed_sec:.3f}",
+        recheck_until_epoch=f"{until_epoch:.3f}",
+        **state_fields,
+    )
+    return True
+
+
 def _clear_scalp_trailing_continuation_recheck(stock: dict) -> None:
     _mutate_stock_state(
         stock, pop_fields=_SCALP_TRAILING_CONTINUATION_RECHECK_STATE_FIELDS
+    )
+
+
+def _clear_scalp_trailing_loss_conversion_recheck(stock: dict) -> None:
+    _mutate_stock_state(
+        stock,
+        pop_fields=_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_STATE_FIELDS,
     )
 
 
@@ -35538,16 +36183,16 @@ def _scalp_trailing_continuation_recheck_contract_fields() -> dict[str, Any]:
         "metric_role": "bounded_tunable",
         "decision_authority": "operator_runtime_override_scalp_trailing_continuation_recheck",
         "window_policy": "same_trailing_candidate_bounded_recheck",
-        "sample_floor": "positive_profit_with_fresh_trusted_ws_micro_or_high_peak_signed_tick_confirmation",
+        "sample_floor": "positive_profit_with_fresh_trusted_ws_micro_or_single_fresh_rest_quote_recovery",
         "primary_decision_metric": "post_recheck_mfe_before_trailing_exit",
-        "source_quality_gate": "fresh_trusted_ws_composite_micro_or_fresh_quote_and_signed_tick_context",
+        "source_quality_gate": "fresh_trusted_ws_composite_micro_or_bounded_ka10004_executable_quote",
         "runtime_effect": True,
         "allowed_runtime_apply": True,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
         "forbidden_uses": (
             "hard_stop_bypass|protect_stop_bypass|emergency_stop_bypass|"
-            "stale_ws_bypass|broker_guard_bypass|provider_route_change|"
+            "stale_effective_quote_bypass|broker_guard_bypass|provider_route_change|"
             "quantity_or_cap_change|second_extension"
         ),
     }
@@ -35570,6 +36215,18 @@ def _evaluate_scalp_trailing_continuation_recheck(
     if not config["active"]:
         return False
 
+    started_at = _safe_float(
+        stock.get("scalp_trailing_continuation_recheck_started_at"), 0.0
+    )
+    stored_until_epoch = _safe_float(
+        stock.get("scalp_trailing_continuation_recheck_until_epoch"), 0.0
+    )
+    recheck_already_expired = bool(
+        started_at > 0
+        and stored_until_epoch > 0
+        and float(now_ts) >= stored_until_epoch
+    )
+
     micro_fields = micro_fields if isinstance(micro_fields, dict) else {}
     raw_features = stock.get("last_reversal_features") or {}
     raw_features = raw_features if isinstance(raw_features, dict) else {}
@@ -35582,6 +36239,13 @@ def _evaluate_scalp_trailing_continuation_recheck(
     large_sell_print = bool(
         feature_context_usable
         and _truthy_field(features.get("large_sell_print_detected"))
+    )
+    large_sell_state = (
+        "confirmed_sell"
+        if large_sell_print
+        else "confirmed_clear"
+        if feature_context_usable
+        else "unknown"
     )
     micro_supported, micro_support_fields = _holding_flow_max_defer_micro_support(
         ws_data,
@@ -35633,17 +36297,125 @@ def _evaluate_scalp_trailing_continuation_recheck(
         "large_sell_clear": not large_sell_print,
     }
     high_peak_eligible = all(high_peak_checks.values())
-    eligible = bool(shallow_eligible or high_peak_eligible)
-    recheck_lane = "high_peak" if high_peak_eligible else "shallow"
+    quote_recovery_band_candidate = bool(
+        config["quote_recovery_enabled"]
+        and config["min_peak_pct"] <= float(peak_profit) <= config["max_peak_pct"]
+        and float(profit_rate) >= config["min_profit_pct"]
+        and float(trailing_peak_worsen) <= config["max_worsen_pct"]
+        and not large_sell_print
+        and not shallow_eligible
+        and not recheck_already_expired
+    )
+    quote_recovery_fields = {
+        "quote_recovery_enabled": bool(config["quote_recovery_enabled"]),
+        "quote_recovery_candidate": bool(quote_recovery_band_candidate),
+        "quote_recovery_eligible": False,
+        "quote_recovery_fetch_state": "not_requested",
+        "quote_recovery_fetch_elapsed_ms": "-",
+        "quote_recovery_quote_age_ms": "-",
+        "quote_recovery_quote_conflicted": False,
+        "quote_recovery_best_bid": 0,
+        "quote_recovery_best_ask": 0,
+        "quote_recovery_executable_sell_price": 0,
+        "quote_recovery_spread_bps": "-",
+        "quote_recovery_max_age_ms": f"{config['quote_recovery_max_age_ms']:.0f}",
+        "quote_recovery_max_spread_bps": (
+            f"{config['quote_recovery_max_spread_bps']:.1f}"
+        ),
+        "quote_recovery_large_sell_state": large_sell_state,
+    }
+    quote_recovery_eligible = False
+    if quote_recovery_band_candidate:
+        rest_snapshot, rest_state, rest_elapsed_ms = (
+            _fetch_rest_orderbook_snapshot_bounded(
+                code, config["quote_recovery_timeout_ms"]
+            )
+        )
+        rest_snapshot = dict(rest_snapshot or {})
+        if rest_snapshot and not any(
+            rest_snapshot.get(key)
+            for key in (
+                "rest_received_ts_ms",
+                "received_at_ms",
+                "rest_received_ts",
+                "received_ts",
+            )
+        ):
+            rest_snapshot["rest_received_ts"] = time.time()
+        quote_fields, _, _, executable_sell_price = _build_quote_consistency_fields(
+            ws_data,
+            rest_snapshot=rest_snapshot,
+            side="sell",
+            safety_exit=True,
+            now_ts=now_ts,
+        )
+        rest_age_ms = _safe_float(
+            quote_fields.get("quote_consistency_rest_age_ms"), float("inf")
+        )
+        quote_consistency_state = (
+            str(quote_fields.get("quote_consistency_state") or "").strip().lower()
+        )
+        quote_consistency_reason = (
+            str(quote_fields.get("quote_consistency_reason") or "").strip().lower()
+        )
+        quote_conflicted = bool(
+            quote_consistency_state in {"conflicted", "diverged"}
+            or quote_consistency_reason
+            in {"conflicted", "price_conflict", "quote_diverged"}
+        )
+        rest_best_bid = _safe_int(rest_snapshot.get("best_bid"), 0)
+        rest_best_ask = _safe_int(rest_snapshot.get("best_ask"), 0)
+        rest_spread_bps = (
+            ((rest_best_ask - rest_best_bid) / max(rest_best_bid, 1)) * 10000.0
+            if rest_best_bid > 0 and rest_best_ask >= rest_best_bid
+            else float("inf")
+        )
+        quote_recovery_eligible = bool(
+            rest_state == "ok"
+            and rest_snapshot
+            and not quote_conflicted
+            and 0.0 <= rest_age_ms <= config["quote_recovery_max_age_ms"]
+            and rest_best_bid > 0
+            and rest_best_ask >= rest_best_bid
+            and executable_sell_price > 0
+            and rest_spread_bps <= config["quote_recovery_max_spread_bps"]
+        )
+        quote_recovery_fields.update(
+            {
+                "quote_recovery_eligible": quote_recovery_eligible,
+                "quote_recovery_fetch_state": rest_state,
+                "quote_recovery_fetch_elapsed_ms": f"{rest_elapsed_ms:.3f}",
+                "quote_recovery_quote_age_ms": (
+                    f"{rest_age_ms:.3f}" if rest_age_ms != float("inf") else "-"
+                ),
+                "quote_recovery_quote_conflicted": quote_conflicted,
+                "quote_recovery_best_bid": rest_best_bid,
+                "quote_recovery_best_ask": rest_best_ask,
+                "quote_recovery_executable_sell_price": executable_sell_price,
+                "quote_recovery_spread_bps": (
+                    f"{rest_spread_bps:.3f}"
+                    if rest_spread_bps != float("inf")
+                    else "-"
+                ),
+                **quote_fields,
+            }
+        )
+
+    eligible = bool(
+        shallow_eligible or high_peak_eligible or quote_recovery_eligible
+    )
+    if high_peak_eligible:
+        recheck_lane = "high_peak"
+    elif shallow_eligible:
+        recheck_lane = "shallow"
+    else:
+        recheck_lane = "quote_recovery"
     recheck_ttl_sec = (
         config["high_peak_ttl_sec"] if high_peak_eligible else config["ttl_sec"]
     )
     high_peak_failed_checks = [
         name for name, passed in high_peak_checks.items() if not passed
     ]
-    started_at = _safe_float(
-        stock.get("scalp_trailing_continuation_recheck_started_at"), 0.0
-    )
     state_fields = {
         "recheck_enabled": bool(config["enabled"]),
         "recheck_active": bool(config["active"]),
@@ -35683,6 +36455,7 @@ def _evaluate_scalp_trailing_continuation_recheck(
         "micro_source_state": micro_source_state or "missing",
         "micro_source_trusted_ws": bool(micro_source_trusted_ws),
         "composite_micro_supported": bool(micro_supported),
+        **quote_recovery_fields,
         **micro_support_fields,
         **micro_fields,
         **_scalp_trailing_continuation_recheck_contract_fields(),
@@ -35724,18 +36497,6 @@ def _evaluate_scalp_trailing_continuation_recheck(
         started_at + float(recheck_ttl_sec),
     )
     elapsed_sec = max(0.0, float(now_ts) - started_at)
-    if not eligible:
-        _clear_scalp_trailing_continuation_recheck(stock)
-        _log_holding_pipeline(
-            stock,
-            code,
-            "scalp_trailing_continuation_recheck",
-            recheck_state="vetoed",
-            recheck_elapsed_sec=f"{elapsed_sec:.3f}",
-            recheck_until_epoch=f"{until_epoch:.3f}",
-            **state_fields,
-        )
-        return False
     if float(now_ts) >= until_epoch:
         _clear_scalp_trailing_continuation_recheck(stock)
         _log_holding_pipeline(
@@ -35743,6 +36504,18 @@ def _evaluate_scalp_trailing_continuation_recheck(
             code,
             "scalp_trailing_continuation_recheck",
             recheck_state="ttl_expired",
+            recheck_elapsed_sec=f"{elapsed_sec:.3f}",
+            recheck_until_epoch=f"{until_epoch:.3f}",
+            **state_fields,
+        )
+        return False
+    if not eligible:
+        _clear_scalp_trailing_continuation_recheck(stock)
+        _log_holding_pipeline(
+            stock,
+            code,
+            "scalp_trailing_continuation_recheck",
+            recheck_state="vetoed",
             recheck_elapsed_sec=f"{elapsed_sec:.3f}",
             recheck_until_epoch=f"{until_epoch:.3f}",
             **state_fields,
@@ -35870,7 +36643,10 @@ def _evaluate_holding_flow_override(
                 "holding_flow_max_defer_extension_until": None,
                 "holding_flow_max_defer_extension_started_at": None,
             },
-            pop_fields=_SCALP_TRAILING_CONTINUATION_RECHECK_STATE_FIELDS,
+            pop_fields=(
+                *_SCALP_TRAILING_CONTINUATION_RECHECK_STATE_FIELDS,
+                *_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_STATE_FIELDS,
+            ),
         )
 
     elapsed_sec = max(0, int(now_ts - candidate_started_at))
@@ -36034,6 +36810,16 @@ def _evaluate_holding_flow_override(
             )
             else _rule_float("SCALP_TRAILING_LIMIT_WEAK", 0.4)
         )
+        if _evaluate_scalp_trailing_loss_conversion_recheck(
+            stock=stock,
+            code=code,
+            ws_data=ws_data,
+            profit_rate=profit_rate,
+            peak_profit=peak_profit,
+            trailing_peak_worsen=trailing_peak_worsen,
+            now_ts=now_ts,
+        ):
+            return False
         if _evaluate_scalp_trailing_continuation_recheck(
             stock=stock,
             code=code,
@@ -45217,6 +46003,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             pre_ai_fields=pre_ai_gate_submit_log_fields,
         )
     )
+    retry_fields = {}
     if entry_ai_submit_authority.get("blocked"):
         retry_fields = _retry_entry_ai_submit_authority_before_block(
             stock=stock,
@@ -45285,6 +46072,86 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             actual_order_submitted=False,
             broker_order_forbidden=True,
             extra_fields=entry_ai_submit_authority,
+        )
+        return False
+
+    post_ai_hard_negative_block = (
+        {
+            "blocked": False,
+            "reason": "opening_rotation_ai_score_gate_prohibited",
+            "rising_missed_post_ai_hard_negative_active": False,
+        }
+        if opening_rotation_active
+        else _evaluate_rising_missed_post_ai_hard_negative_submit_block(
+            strategy=strategy,
+            stock=stock,
+            runtime=runtime,
+            latency_gate=latency_gate,
+            orderbook_fields=entry_orderbook_micro_fields,
+            retry_fields=retry_fields,
+            now_ts=now_ts,
+        )
+    )
+    if post_ai_hard_negative_block.get("blocked"):
+        backoff_fields = _record_rising_missed_submit_safety_backoff(
+            stock,
+            code,
+            post_ai_hard_negative_block.get("block_reason"),
+            now_ts=now_ts,
+            source_stage="rising_missed_post_ai_hard_negative_submit_block",
+            runtime=runtime,
+        )
+        log_info(
+            f"[RISING_MISSED_POST_AI_HARD_NEGATIVE_BLOCK] {stock.get('name')}({code}) "
+            f"ai={post_ai_hard_negative_block.get('rising_missed_post_ai_hard_negative_ai_action')}"
+            f"/{post_ai_hard_negative_block.get('rising_missed_post_ai_hard_negative_ai_score')} "
+            f"ofi={post_ai_hard_negative_block.get('rising_missed_post_ai_hard_negative_ofi_norm')}"
+        )
+        _mutate_stock_state(
+            stock,
+            pop_fields=[
+                "rising_missed_one_share_entry_forced",
+                "rising_missed_one_share_scout",
+                "rising_missed_scout_upgrade_pending",
+                "forced_entry_qty",
+                "forced_entry_reason",
+                "target_buy_price",
+                "rising_missed_normal_buy_bridge_allowed",
+                "rising_missed_normal_buy_bridge_reason",
+                "rising_missed_normal_buy_bridge_at",
+            ],
+        )
+        clear_signal_reference(stock)
+        block_fields = _merge_entry_pipeline_field_groups(
+            real_pre_submit_guard_fields,
+            submit_revalidation_fields,
+            latency_price_snapshot,
+            entry_orderbook_micro_fields,
+            microstructure_submit_log_fields,
+            pre_ai_gate_submit_log_fields,
+            entry_ai_submit_authority,
+            post_ai_hard_negative_block,
+            backoff_fields,
+        )
+        _log_entry_pipeline(
+            stock,
+            code,
+            "rising_missed_post_ai_hard_negative_submit_block",
+            **block_fields,
+        )
+        _emit_scalp_entry_adm_snapshot(
+            stock,
+            code,
+            "rising_missed_post_ai_hard_negative_submit_block",
+            ai_score=latency_signal_score,
+            chosen_action="WAIT_HARD_NEGATIVE_RECHECK",
+            latency_gate=latency_gate,
+            submit_fields=submit_revalidation_fields,
+            price_snapshot=latency_price_snapshot,
+            orderbook_fields=entry_orderbook_micro_fields,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            extra_fields=block_fields,
         )
         return False
 

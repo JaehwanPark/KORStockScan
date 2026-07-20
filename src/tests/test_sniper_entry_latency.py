@@ -2818,6 +2818,85 @@ def _enable_latency_true_ofi_direct_canary(monkeypatch):
     )
 
 
+def test_latency_true_ofi_direct_canary_dynamic_age_band_allows_strong_ws_tape(
+    monkeypatch,
+):
+    _enable_latency_true_ofi_direct_canary(monkeypatch)
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_DYNAMIC_AGE_BAND_ENABLED",
+        "true",
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_DYNAMIC_AGE_BAND_ACTIVE_DATE",
+        datetime.now(entry_latency_module._KST).strftime("%Y-%m-%d"),
+    )
+    common = {
+        "stock": {
+            "rising_missed_entry_lineage": True,
+            "price_delta_since_first_seen_pct": "4.2",
+        },
+        "ws_data": {
+            "tick_aggressor_pressure_usable": True,
+            "tick_aggressor_trusted_count": 5,
+            "buy_pressure_10t": 80.0,
+            "buy_exec_volume": 500,
+            "sell_exec_volume": 0,
+            "net_buy_exec_volume": 500,
+            "orderbook_micro_state": "bullish",
+            "recent_trade_ticks": [
+                {
+                    "signed_trade_volume": value,
+                    "aggressor_source": "kiwoom_0b_signed_trade_volume",
+                }
+                for value in ("+100", "+90", "+80", "+70", "+60")
+            ],
+        },
+        "strategy_id": "SCALPING",
+        "policy_decision": entry_latency_module.EntryDecision.REJECT_DANGER,
+        "effective_decision": entry_latency_module.EntryDecision.REJECT_DANGER,
+        "latency_status": SimpleNamespace(quote_stale=False),
+        "danger_reasons": ["spread_too_wide"],
+        "spread_bps": 51.0,
+        "signal_score": 70.0,
+        "micro_estimator_reason": "true_ofi_below_floor",
+        "estimator_context": {
+            "latency_false_negative_remeasure_true_ofi_ewma": 0.02,
+            "latency_false_negative_remeasure_true_ofi_sample_count": 92,
+            "latency_false_negative_remeasure_ws_age_ms": 443.7,
+            "latency_false_negative_remeasure_source_state": (
+                "fresh_ws_order_flow_delta"
+            ),
+        },
+        "danger_relief_forbidden": False,
+    }
+
+    fields = entry_latency_module._latency_true_ofi_direct_canary_fields(**common)
+
+    assert fields["latency_true_ofi_direct_canary_applied"] is True
+    assert fields["latency_true_ofi_direct_canary_dynamic_age_band_eligible"] is True
+    assert fields["latency_true_ofi_direct_canary_dynamic_age_band_applied"] is True
+    assert fields["latency_true_ofi_direct_canary_effective_max_ws_age_ms"] == 500.0
+
+    mixed_tape = dict(common)
+    mixed_tape["ws_data"] = {
+        **common["ws_data"],
+        "recent_trade_ticks": [
+            {
+                "signed_trade_volume": value,
+                "aggressor_source": "kiwoom_0b_signed_trade_volume",
+            }
+            for value in ("+100", "+90", "+80", "-70", "-60")
+        ],
+    }
+    blocked = entry_latency_module._latency_true_ofi_direct_canary_fields(**mixed_tape)
+
+    assert blocked["latency_true_ofi_direct_canary_applied"] is False
+    assert blocked["latency_true_ofi_direct_canary_dynamic_age_band_eligible"] is False
+    assert blocked["latency_true_ofi_direct_canary_reason"] == (
+        "ws_age_above_direct_canary_cap"
+    )
+
+
 def _enable_latency_true_ofi_nxt_probability_band(monkeypatch):
     _enable_latency_true_ofi_direct_canary(monkeypatch)
     monkeypatch.setenv(

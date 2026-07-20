@@ -2764,6 +2764,97 @@ def test_entry_ai_submit_authority_blocks_not_evaluated_zero_score():
     assert decision["entry_ai_submit_authority_result_source"] == "not_available"
 
 
+def test_rising_missed_post_ai_hard_negative_blocks_only_complete_bundle(monkeypatch):
+    now_ts = time.time()
+    active_date = (
+        datetime.fromtimestamp(now_ts, tz=state_handlers._KST).date().isoformat()
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_POST_AI_HARD_NEGATIVE_BLOCK_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_POST_AI_HARD_NEGATIVE_BLOCK_ACTIVE_DATE",
+        active_date,
+    )
+    stock = {
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "rising_missed_entry_lineage": True,
+        "rising_missed_tp1_submit_context_evaluation_id": "eval-stale",
+        "rising_missed_tp1_submit_context_at": now_ts - 84.0,
+        "last_watching_ai_action": "WAIT",
+        "last_watching_ai_score": 54.0,
+        "last_watching_ai_confirmed_at": now_ts,
+        "last_watching_ai_result_source": "live",
+    }
+    latency_gate = {
+        "latency_state": "CAUTION",
+        "latency_true_ofi_direct_canary_signed_tape_sample_count": 5,
+        "latency_true_ofi_direct_canary_signed_tape_trusted_ws_count": 5,
+        "latency_true_ofi_direct_canary_signed_tape_rest_fresh_count": 0,
+        "latency_true_ofi_direct_canary_signed_tape_unknown_source_count": 0,
+        "latency_true_ofi_direct_canary_signed_tape_buy_ratio": 0.0,
+        "latency_true_ofi_direct_canary_signed_tape_latest_side": "SELL",
+    }
+    orderbook = {
+        "orderbook_micro_state": "strong_bearish",
+        "orderbook_micro_ofi_norm": -8.879779,
+    }
+
+    decision = (
+        state_handlers._evaluate_rising_missed_post_ai_hard_negative_submit_block(
+            strategy="SCALPING",
+            stock=stock,
+            runtime={},
+            latency_gate=latency_gate,
+            orderbook_fields=orderbook,
+            retry_fields={
+                "pre_submit_entry_ai_authority_retry_action": "WAIT",
+                "pre_submit_entry_ai_authority_retry_score": "54.0",
+                "pre_submit_entry_ai_authority_retry_result_source": "live",
+            },
+            now_ts=now_ts,
+        )
+    )
+
+    assert decision["blocked"] is True
+    assert decision["broker_order_forbidden"] is True
+    assert decision["rising_missed_post_ai_hard_negative_trusted_sell_tape"] is True
+
+    mixed_tape = (
+        state_handlers._evaluate_rising_missed_post_ai_hard_negative_submit_block(
+            strategy="SCALPING",
+            stock=stock,
+            runtime={},
+            latency_gate={
+                **latency_gate,
+                "latency_true_ofi_direct_canary_signed_tape_buy_ratio": 40.0,
+            },
+            orderbook_fields=orderbook,
+            retry_fields={},
+            now_ts=now_ts,
+        )
+    )
+
+    assert mixed_tape["blocked"] is False
+    assert mixed_tape["broker_order_forbidden"] is False
+
+    fresh_tp1 = (
+        state_handlers._evaluate_rising_missed_post_ai_hard_negative_submit_block(
+            strategy="SCALPING",
+            stock={**stock, "rising_missed_tp1_submit_context_at": now_ts - 10.0},
+            runtime={},
+            latency_gate=latency_gate,
+            orderbook_fields=orderbook,
+            retry_fields={},
+            now_ts=now_ts,
+        )
+    )
+
+    assert fresh_tp1["blocked"] is False
+    assert fresh_tp1["rising_missed_post_ai_hard_negative_tp1_context_stale"] is False
+
+
 def test_entry_ai_submit_authority_blocks_not_evaluated_positive_score_without_prior():
     decision = state_handlers._entry_ai_submit_authority_fields(
         strategy="SCALPING",
@@ -28386,6 +28477,72 @@ def test_add_execution_caps_duplicate_split_leg_by_order_number(monkeypatch):
     assert [call["executed_qty"] for call in history_calls] == [16, 17]
 
 
+def test_add_execution_marks_above_average_fill_as_recovery_add(monkeypatch):
+    receipts.ACTIVE_TARGETS = []
+    receipts.highest_prices = {}
+    receipts._get_fast_state = lambda code: None
+    pipeline_events = []
+
+    monkeypatch.setattr(receipts, "_update_db_for_add", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        receipts, "record_add_history_event", lambda *args, **kwargs: True
+    )
+    monkeypatch.setattr(
+        receipts, "_refresh_scalp_preset_exit_order", lambda *args, **kwargs: True
+    )
+    monkeypatch.setattr(
+        receipts,
+        "_log_holding_pipeline",
+        lambda name, code, target_id, stage, **fields: pipeline_events.append(
+            (stage, fields)
+        ),
+    )
+    target_stock = {
+        "id": 173,
+        "code": "950160",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 60_867,
+        "buy_qty": 3,
+        "pending_add_order": True,
+        "pending_add_type": "AVG_DOWN",
+        "pending_add_reason": "late_loss_avg_down_retry",
+        "pending_add_qty": 2,
+        "pending_add_ord_no": "A1",
+        "add_count": 0,
+        "avg_down_count": 0,
+    }
+    receipts.ACTIVE_TARGETS.append(target_stock)
+
+    receipts.handle_real_execution(
+        {
+            "code": "950160",
+            "type": "BUY",
+            "order_no": "A1",
+            "price": 61_000,
+            "qty": 2,
+        }
+    )
+
+    assert target_stock["avg_down_count"] == 1
+    assert target_stock["buy_price"] > 60_867
+    assert (
+        target_stock["last_add_economic_direction"]
+        == "recovery_add_above_average"
+    )
+    assert target_stock["last_add_avg_price_improved"] is False
+    event = next(
+        fields for stage, fields in pipeline_events if stage == "scale_in_executed"
+    )
+    assert event["add_type"] == "AVG_DOWN"
+    assert event["add_economic_direction"] == "recovery_add_above_average"
+    assert event["avg_price_improved"] is False
+    assert event["add_reference_avg_price"] == "60867.00"
+    assert event["pre_add_avg_price"] == "60867.00"
+    assert float(event["post_add_avg_price"]) > 60_867
+
+
 def test_order_notice_for_pending_add_binds_ordno_without_entry_odno(monkeypatch):
     receipts.ACTIVE_TARGETS = []
     receipts.highest_prices = {}
@@ -40101,6 +40258,130 @@ def test_scalp_profit_stagnation_time_exit_allows_holding_flow_override(monkeypa
         )
         is True
     )
+
+
+def test_scalp_trailing_loss_conversion_recheck_is_one_shot_and_rest_bounded(
+    monkeypatch,
+):
+    now_ts = 1_783_471_000.0
+    active_date = (
+        datetime.fromtimestamp(now_ts, tz=state_handlers._KST).date().isoformat()
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_ACTIVE_DATE",
+        active_date,
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_TTL_SEC", "15"
+    )
+    fetches = []
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_fetch_rest_orderbook_snapshot_bounded",
+        lambda code, timeout_ms: fetches.append((code, timeout_ms))
+        or ({"best_bid": 2_825, "best_ask": 2_830}, "ok", 12.0),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_build_quote_consistency_fields",
+        lambda *args, **kwargs: (
+            {
+                "quote_consistency_state": "single_source",
+                "quote_consistency_rest_age_ms": 12.0,
+                "price_source": "rest_mid",
+            },
+            2_827,
+            2_830,
+            2_825,
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    stock = {"strategy": "SCALPING"}
+
+    armed = state_handlers._evaluate_scalp_trailing_loss_conversion_recheck(
+        stock=stock,
+        code="099440",
+        ws_data={"curr": 2_840},
+        profit_rate=-0.05,
+        peak_profit=0.65,
+        trailing_peak_worsen=0.70,
+        now_ts=now_ts,
+    )
+    deferred = state_handlers._evaluate_scalp_trailing_loss_conversion_recheck(
+        stock=stock,
+        code="099440",
+        ws_data={"curr": 2_840},
+        profit_rate=-0.04,
+        peak_profit=0.65,
+        trailing_peak_worsen=0.69,
+        now_ts=now_ts + 10.0,
+    )
+    expired = state_handlers._evaluate_scalp_trailing_loss_conversion_recheck(
+        stock=stock,
+        code="099440",
+        ws_data={"curr": 2_840},
+        profit_rate=-0.03,
+        peak_profit=0.65,
+        trailing_peak_worsen=0.68,
+        now_ts=now_ts + 16.0,
+    )
+
+    assert armed is True
+    assert deferred is True
+    assert expired is False
+    assert len(fetches) == 2
+    assert [fields["recheck_state"] for _, fields in logs] == [
+        "armed",
+        "deferred",
+        "ttl_expired",
+    ]
+    assert "scalp_trailing_loss_conversion_recheck_started_at" not in stock
+
+
+def test_scalp_trailing_loss_conversion_recheck_fails_open_without_fresh_rest(
+    monkeypatch,
+):
+    now_ts = 1_783_471_000.0
+    active_date = (
+        datetime.fromtimestamp(now_ts, tz=state_handlers._KST).date().isoformat()
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_ACTIVE_DATE",
+        active_date,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_fetch_rest_orderbook_snapshot_bounded",
+        lambda code, timeout_ms: ({}, "timeout", float(timeout_ms)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda *args, **kwargs: None,
+    )
+
+    decision = state_handlers._evaluate_scalp_trailing_loss_conversion_recheck(
+        stock={"strategy": "SCALPING"},
+        code="099440",
+        ws_data={"curr": 2_840},
+        profit_rate=-0.05,
+        peak_profit=0.65,
+        trailing_peak_worsen=0.70,
+        now_ts=now_ts,
+    )
+
+    assert decision is False
 
 
 def test_emit_same_symbol_soft_stop_cooldown_shadow_once(monkeypatch):

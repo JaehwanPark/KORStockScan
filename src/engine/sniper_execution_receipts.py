@@ -144,6 +144,8 @@ _ADD_RECEIPT_SNAPSHOT_KEYS = (
     "scale_in_locked",
     "scalp_live_simulator",
     "last_add_reason",
+    "last_add_economic_direction",
+    "last_add_avg_price_improved",
     "shallow_volatility_avg_down_count",
     "shallow_volatility_avg_down_last_at",
     "simulation_book",
@@ -1937,6 +1939,25 @@ def _handle_add_buy_execution(
         new_avg = _avg_from_totals((old_price * old_qty) + (exec_price * exec_qty), total_qty)
     else:
         new_avg = exec_price
+    add_reference_avg_price = float(
+        target_stock.get('pending_add_initial_buy_price') or old_price or 0.0
+    )
+    if add_type == 'AVG_DOWN' and add_reference_avg_price > 0:
+        if float(exec_price) < add_reference_avg_price:
+            add_economic_direction = 'averaging_down'
+        elif float(exec_price) > add_reference_avg_price:
+            add_economic_direction = 'recovery_add_above_average'
+        else:
+            add_economic_direction = 'recovery_add_at_average'
+    elif add_type == 'PYRAMID':
+        add_economic_direction = 'pyramid'
+    else:
+        add_economic_direction = 'unclassified'
+    avg_price_improved = bool(
+        add_type == 'AVG_DOWN'
+        and add_reference_avg_price > 0
+        and float(new_avg) < add_reference_avg_price
+    )
 
     target_stock['status'] = 'HOLDING'
     target_stock['buy_price'] = new_avg
@@ -1948,6 +1969,8 @@ def _handle_add_buy_execution(
     target_stock['last_add_type'] = add_type
     pending_add_reason = str(target_stock.get('pending_add_reason') or '').strip()
     target_stock['last_add_reason'] = pending_add_reason
+    target_stock['last_add_economic_direction'] = add_economic_direction
+    target_stock['last_add_avg_price_improved'] = avg_price_improved
     target_stock['last_add_at'] = now
     target_stock['last_add_fill_price'] = int(exec_price or 0)
     now_ts = time.time()
@@ -2077,6 +2100,11 @@ def _handle_add_buy_execution(
         add_count=int(target_stock.get('add_count', 0) or 0),
         avg_down_count=int(target_stock.get('avg_down_count', 0) or 0),
         add_reason=pending_add_reason or "-",
+        add_economic_direction=add_economic_direction,
+        avg_price_improved=avg_price_improved,
+        add_reference_avg_price=f"{add_reference_avg_price:.2f}",
+        pre_add_avg_price=f"{float(old_price or 0):.2f}",
+        post_add_avg_price=f"{float(new_avg or 0):.2f}",
         shallow_volatility_avg_down_count=int(target_stock.get('shallow_volatility_avg_down_count', 0) or 0),
         shallow_volatility_avg_down_last_at=target_stock.get('shallow_volatility_avg_down_last_at', '-'),
         reversal_add_state=target_stock.get('reversal_add_state', '-'),
