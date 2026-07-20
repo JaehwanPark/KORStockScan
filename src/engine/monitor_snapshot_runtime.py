@@ -12,7 +12,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 TMP_DIR = PROJECT_DIR / "tmp"
 DEPLOY_DIR = PROJECT_DIR / "deploy"
@@ -169,7 +168,9 @@ def normalize_result_payload(
 def write_completion_artifact(path: Path | str, payload: dict[str, Any]) -> Path:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    target.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     return target
 
 
@@ -183,7 +184,9 @@ def load_completion_artifact(target_date: str, profile: str) -> dict[str, Any]:
         return {}
 
 
-def parse_async_dispatch_response(stdout: str, *, target_date: str, profile: str) -> dict[str, Any]:
+def parse_async_dispatch_response(
+    stdout: str, *, target_date: str, profile: str
+) -> dict[str, Any]:
     status = "failed"
     worker_pid = ""
     output_file = ""
@@ -233,7 +236,9 @@ def dispatch_monitor_snapshot_job(
         capture_output=True,
         check=False,
     )
-    parsed = parse_async_dispatch_response(proc.stdout, target_date=target_date, profile=normalized_profile)
+    parsed = parse_async_dispatch_response(
+        proc.stdout, target_date=target_date, profile=normalized_profile
+    )
     artifact_path = completion_artifact_path(target_date, normalized_profile)
     normalized = normalize_result_payload(
         target_date=target_date,
@@ -353,7 +358,9 @@ def guard_stdin_heavy_build(
         target_date=target_date,
         profile=profile,
     )
-    report = copy.deepcopy(fallback_snapshot or pending_report_shell(snapshot_kind, target_date))
+    report = copy.deepcopy(
+        fallback_snapshot or pending_report_shell(snapshot_kind, target_date)
+    )
     meta = report.setdefault("meta", {})
     warnings = meta.get("warnings")
     if not isinstance(warnings, list):
@@ -367,7 +374,9 @@ def guard_stdin_heavy_build(
         {
             "source": "snapshot" if fallback_snapshot else "pending",
             "guarded_heavy_builder": True,
-            "guard_status": "stale_snapshot_pending_refresh" if fallback_snapshot else "pending",
+            "guard_status": (
+                "stale_snapshot_pending_refresh" if fallback_snapshot else "pending"
+            ),
             "warnings": warnings,
             "async_dispatch": {
                 "snapshot_kind": snapshot_kind,

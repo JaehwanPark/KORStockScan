@@ -11,7 +11,6 @@ from src.utils.logger import log_error, log_info
 from src.utils.pipeline_event_logger import emit_pipeline_event
 from src.engine.ai_response_contracts import normalize_flow_state_label
 
-
 KIWOOM_TOKEN = None
 DB = None
 WS_MANAGER = None
@@ -157,7 +156,13 @@ def _entry_time_context_from_mem_stock(mem_stock):
         for source in (source_quality, feature_probe, mem_stock):
             if isinstance(source, dict) and key in source:
                 value = source.get(key)
-                if value is not None and str(value).strip() not in {"", "-", "None", "none", "null"}:
+                if value is not None and str(value).strip() not in {
+                    "",
+                    "-",
+                    "None",
+                    "none",
+                    "null",
+                }:
                     context[key] = value
                     break
     observed_at = _safe_float(mem_stock.get("last_watching_ai_feature_probe_at"), 0.0)
@@ -172,7 +177,10 @@ def _entry_time_context_from_mem_stock(mem_stock):
 
 
 def _eod_label() -> str:
-    raw = str(getattr(TRADING_RULES, "SCALPING_OVERNIGHT_DECISION_TIME", "15:10:00") or "15:10:00")
+    raw = str(
+        getattr(TRADING_RULES, "SCALPING_OVERNIGHT_DECISION_TIME", "15:10:00")
+        or "15:10:00"
+    )
     return raw[:5] if len(raw) >= 5 else "15:10"
 
 
@@ -183,17 +191,17 @@ def _overnight_gatekeeper_enabled() -> bool:
 def _find_active_target_by_code(code):
     code = str(code).strip()[:6]
     for item in ACTIVE_TARGETS:
-        if str(item.get('code', '')).strip()[:6] == code:
+        if str(item.get("code", "")).strip()[:6] == code:
             return item
     return None
 
 
 def _calc_held_minutes(stock=None, db_record=None):
     buy_time = None
-    if stock and stock.get('buy_time'):
-        buy_time = stock.get('buy_time')
+    if stock and stock.get("buy_time"):
+        buy_time = stock.get("buy_time")
     elif db_record is not None:
-        buy_time = getattr(db_record, 'buy_time', None)
+        buy_time = getattr(db_record, "buy_time", None)
 
     if not buy_time:
         return 0.0
@@ -206,7 +214,9 @@ def _calc_held_minutes(stock=None, db_record=None):
             try:
                 buy_dt = datetime.fromisoformat(buy_str)
             except Exception:
-                buy_dt = datetime.combine(datetime.now().date(), datetime.strptime(buy_str, '%H:%M:%S').time())
+                buy_dt = datetime.combine(
+                    datetime.now().date(), datetime.strptime(buy_str, "%H:%M:%S").time()
+                )
         return max(0.0, (datetime.now() - buy_dt).total_seconds() / 60.0)
     except Exception:
         return 0.0
@@ -230,26 +240,38 @@ def _build_scalping_overnight_ctx(record, mem_stock=None, ws_data=None):
         record.stock_code,
         position_status=record.status,
         ws_data=ws_data,
-        market_cap=(mem_stock or {}).get('marcap', 0),
+        market_cap=(mem_stock or {}).get("marcap", 0),
     )
 
-    avg_price = int(float(getattr(record, 'buy_price', 0) or (mem_stock.get('buy_price', 0) if mem_stock else 0) or 0))
-    curr_price = int(float(ctx.get('curr_price', 0) or 0))
-    pnl_pct = ((curr_price - avg_price) / avg_price * 100.0) if avg_price > 0 and curr_price > 0 else 0.0
+    avg_price = int(
+        float(
+            getattr(record, "buy_price", 0)
+            or (mem_stock.get("buy_price", 0) if mem_stock else 0)
+            or 0
+        )
+    )
+    curr_price = int(float(ctx.get("curr_price", 0) or 0))
+    pnl_pct = (
+        ((curr_price - avg_price) / avg_price * 100.0)
+        if avg_price > 0 and curr_price > 0
+        else 0.0
+    )
 
-    ctx['stock_name'] = getattr(record, 'stock_name', '') or (mem_stock.get('name') if mem_stock else '')
-    ctx['stock_code'] = record.stock_code
-    ctx['position_status'] = record.status
-    ctx['avg_price'] = avg_price
-    ctx['pnl_pct'] = pnl_pct
-    ctx['held_minutes'] = _calc_held_minutes(mem_stock, record)
-    ctx['strat_label'] = 'SCALPING_EOD_REVIEW'
-    if mem_stock and mem_stock.get('rt_ai_prob') is not None:
+    ctx["stock_name"] = getattr(record, "stock_name", "") or (
+        mem_stock.get("name") if mem_stock else ""
+    )
+    ctx["stock_code"] = record.stock_code
+    ctx["position_status"] = record.status
+    ctx["avg_price"] = avg_price
+    ctx["pnl_pct"] = pnl_pct
+    ctx["held_minutes"] = _calc_held_minutes(mem_stock, record)
+    ctx["strat_label"] = "SCALPING_EOD_REVIEW"
+    if mem_stock and mem_stock.get("rt_ai_prob") is not None:
         try:
-            ctx['score'] = float(mem_stock.get('rt_ai_prob', 0.5) or 0.5) * 100.0
+            ctx["score"] = float(mem_stock.get("rt_ai_prob", 0.5) or 0.5) * 100.0
         except Exception:
             pass
-    ctx['order_status_note'] = (
+    ctx["order_status_note"] = (
         f"db_status={record.status}, buy_qty={int(float(getattr(record, 'buy_qty', 0) or 0))}, "
         f"sell_ord_no={(mem_stock or {}).get('sell_odno', '') if mem_stock else ''}"
     )
@@ -257,10 +279,10 @@ def _build_scalping_overnight_ctx(record, mem_stock=None, ws_data=None):
 
 
 def _publish_scalping_overnight_decision(stock_name, code, decision, action_taken):
-    confidence = int(decision.get('confidence', 0) or 0)
-    reason = decision.get('reason', '')
-    risk_note = decision.get('risk_note', '')
-    chosen = decision.get('action', 'SELL_TODAY')
+    confidence = int(decision.get("confidence", 0) or 0)
+    reason = decision.get("reason", "")
+    risk_note = decision.get("risk_note", "")
+    chosen = decision.get("action", "SELL_TODAY")
     chosen_ko = _humanize_eod_action(chosen)
     action_ko = _clean_telegram_text(action_taken)
     reason_ko = _clean_telegram_text(reason)
@@ -274,8 +296,8 @@ def _publish_scalping_overnight_decision(stock_name, code, decision, action_take
         f"리스크 메모: {risk_note_ko}"
     )
     event_bus.publish(
-        'TELEGRAM_BROADCAST',
-        {'message': msg, 'audience': 'ADMIN_ONLY', 'parse_mode': None}
+        "TELEGRAM_BROADCAST",
+        {"message": msg, "audience": "ADMIN_ONLY", "parse_mode": None},
     )
 
 
@@ -327,7 +349,10 @@ def _log_overnight_dual_persona_shadow_result(stock_name, code, strategy, payloa
 
 
 def _submit_overnight_dual_persona_shadow(stock_name, code, realtime_ctx, decision):
-    if not bool(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_ENABLED", False)) or DUAL_PERSONA_ENGINE is None:
+    if (
+        not bool(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_ENABLED", False))
+        or DUAL_PERSONA_ENGINE is None
+    ):
         return
     try:
         DUAL_PERSONA_ENGINE.submit_overnight_shadow(
@@ -336,10 +361,14 @@ def _submit_overnight_dual_persona_shadow(stock_name, code, realtime_ctx, decisi
             strategy="SCALPING",
             realtime_ctx=realtime_ctx,
             gemini_result=decision,
-            callback=lambda payload: _log_overnight_dual_persona_shadow_result(stock_name, code, "SCALPING", payload),
+            callback=lambda payload: _log_overnight_dual_persona_shadow_result(
+                stock_name, code, "SCALPING", payload
+            ),
         )
     except Exception as e:
-        log_error(f"🚨 [{_eod_label()} EOD 듀얼 페르소나 shadow 제출 실패] {stock_name}({code}): {e}")
+        log_error(
+            f"🚨 [{_eod_label()} EOD 듀얼 페르소나 shadow 제출 실패] {stock_name}({code}): {e}"
+        )
 
 
 def _format_order_error(res) -> str:
@@ -382,16 +411,28 @@ def _humanize_eod_action(action) -> str:
 
 def _execute_scalping_sell_today(record, mem_stock=None):
     code = str(record.stock_code).strip()[:6]
-    stock_name = getattr(record, 'stock_name', code)
-    expected_qty = int(float(getattr(record, 'buy_qty', 0) or (mem_stock.get('buy_qty', 0) if mem_stock else 0) or 0))
-    orig_ord_no = ''
+    stock_name = getattr(record, "stock_name", code)
+    expected_qty = int(
+        float(
+            getattr(record, "buy_qty", 0)
+            or (mem_stock.get("buy_qty", 0) if mem_stock else 0)
+            or 0
+        )
+    )
+    orig_ord_no = ""
     if mem_stock:
-        orig_ord_no = mem_stock.get('sell_odno', '') or mem_stock.get('sell_ord_no', '') or ''
+        orig_ord_no = (
+            mem_stock.get("sell_odno", "") or mem_stock.get("sell_ord_no", "") or ""
+        )
 
-    rem_qty = _confirm_cancel_or_reload_remaining(code, orig_ord_no, KIWOOM_TOKEN, expected_qty)
+    rem_qty = _confirm_cancel_or_reload_remaining(
+        code, orig_ord_no, KIWOOM_TOKEN, expected_qty
+    )
     if rem_qty <= 0:
-        print(f"⚠️ [{_eod_label()} EOD] {stock_name}({code}) 청산 대상이지만 잔량 확인 실패/0주. 시장가 청산 생략")
-        return False, '잔량 없음 또는 확인 실패'
+        print(
+            f"⚠️ [{_eod_label()} EOD] {stock_name}({code}) 청산 대상이지만 잔량 확인 실패/0주. 시장가 청산 생략"
+        )
+        return False, "잔량 없음 또는 확인 실패"
 
     res = _send_market_exit_now(code, rem_qty, KIWOOM_TOKEN)
     if not _is_ok_response(res):
@@ -399,44 +440,56 @@ def _execute_scalping_sell_today(record, mem_stock=None):
 
     ord_no = _extract_ord_no(res)
     if mem_stock is not None:
-        mem_stock['status'] = 'SELL_ORDERED'
-        mem_stock['sell_order_time'] = time.time()
-        mem_stock['sell_target_price'] = int((WS_MANAGER.get_latest_data(code) or {}).get('curr', 0) or 0)
+        mem_stock["status"] = "SELL_ORDERED"
+        mem_stock["sell_order_time"] = time.time()
+        mem_stock["sell_target_price"] = int(
+            (WS_MANAGER.get_latest_data(code) or {}).get("curr", 0) or 0
+        )
         if ord_no:
-            mem_stock['sell_odno'] = ord_no
+            mem_stock["sell_odno"] = ord_no
 
     try:
         with DB.get_session() as session:
-            session.query(RecommendationHistory).filter_by(id=record.id).update({"status": "SELL_ORDERED"})
+            session.query(RecommendationHistory).filter_by(id=record.id).update(
+                {"status": "SELL_ORDERED"}
+            )
     except Exception as e:
-        log_error(f"🚨 [{_eod_label()} EOD] DB SELL_ORDERED 업데이트 실패 ({code}): {e}")
+        log_error(
+            f"🚨 [{_eod_label()} EOD] DB SELL_ORDERED 업데이트 실패 ({code}): {e}"
+        )
 
     return True, f"시장가 청산 주문 전송 ({rem_qty}주)"
 
 
 def _execute_scalping_hold_overnight(record, mem_stock=None):
     code = str(record.stock_code).strip()[:6]
-    if record.status != 'SELL_ORDERED':
-        return True, '기존 HOLDING 유지'
+    if record.status != "SELL_ORDERED":
+        return True, "기존 HOLDING 유지"
 
     if not mem_stock:
-        return False, '메모리 대상 없음으로 기존 SELL_ORDERED 취소 불가'
+        return False, "메모리 대상 없음으로 기존 SELL_ORDERED 취소 불가"
 
-    orig_ord_no = mem_stock.get('sell_odno', '') or mem_stock.get('sell_ord_no', '') or ''
+    orig_ord_no = (
+        mem_stock.get("sell_odno", "") or mem_stock.get("sell_ord_no", "") or ""
+    )
     if not orig_ord_no:
-        return False, '취소할 원주문번호 없음'
+        return False, "취소할 원주문번호 없음"
 
     cancelled = process_sell_cancellation(mem_stock, code, orig_ord_no, DB)
     if cancelled:
-        mem_stock['status'] = 'HOLDING'
-        return True, '미체결 매도 취소 후 HOLDING 복귀'
-    return False, '미체결 매도 취소 실패'
+        mem_stock["status"] = "HOLDING"
+        return True, "미체결 매도 취소 후 HOLDING 복귀"
+    return False, "미체결 매도 취소 실패"
 
 
 def _flow_evidence_text(flow_result: dict) -> str:
     evidence = flow_result.get("evidence") if isinstance(flow_result, dict) else None
     if isinstance(evidence, list):
-        cleaned = [str(item).replace("\n", " ").strip() for item in evidence if str(item).strip()]
+        cleaned = [
+            str(item).replace("\n", " ").strip()
+            for item in evidence
+            if str(item).strip()
+        ]
         return "|".join(cleaned[:5]) if cleaned else "-"
     return str(evidence or "-").replace("\n", " ")
 
@@ -460,7 +513,9 @@ def _append_mem_flow_history(mem_stock, *, exit_rule, profit_rate, flow_result):
     mem_stock["holding_flow_review_history"] = history[-5:]
 
 
-def _apply_overnight_flow_override(record, mem_stock, ws_data, ctx, decision, ai_engine):
+def _apply_overnight_flow_override(
+    record, mem_stock, ws_data, ctx, decision, ai_engine
+):
     """Re-check a SELL_TODAY overnight decision through the holding flow override."""
     action = str((decision or {}).get("action", "SELL_TODAY") or "SELL_TODAY").upper()
     if action != "SELL_TODAY":
@@ -474,7 +529,11 @@ def _apply_overnight_flow_override(record, mem_stock, ws_data, ctx, decision, ai
     name = getattr(record, "stock_name", code)
     avg_price = _safe_float(ctx.get("avg_price", getattr(record, "buy_price", 0)), 0.0)
     curr_price = _safe_float((ws_data or {}).get("curr", ctx.get("curr_price", 0)), 0.0)
-    expected_qty = _safe_int(getattr(record, "buy_qty", 0) or ((mem_stock or {}).get("buy_qty") if mem_stock else 0), 0)
+    expected_qty = _safe_int(
+        getattr(record, "buy_qty", 0)
+        or ((mem_stock or {}).get("buy_qty") if mem_stock else 0),
+        0,
+    )
     if avg_price <= 0 or curr_price <= 0 or expected_qty <= 0:
         _log_holding_pipeline(
             name,
@@ -488,7 +547,11 @@ def _apply_overnight_flow_override(record, mem_stock, ws_data, ctx, decision, ai
         return decision
 
     if str(getattr(record, "status", "") or "").upper() == "SELL_ORDERED":
-        ord_no = ((mem_stock or {}).get("sell_odno") or (mem_stock or {}).get("sell_ord_no") or "")
+        ord_no = (
+            (mem_stock or {}).get("sell_odno")
+            or (mem_stock or {}).get("sell_ord_no")
+            or ""
+        )
         if not ord_no:
             _log_holding_pipeline(
                 name,
@@ -498,11 +561,19 @@ def _apply_overnight_flow_override(record, mem_stock, ws_data, ctx, decision, ai
             )
             return decision
 
-    tick_limit = max(1, _safe_int(getattr(TRADING_RULES, "HOLDING_FLOW_REVIEW_TICK_LIMIT", 30), 30))
-    candle_limit = max(1, _safe_int(getattr(TRADING_RULES, "HOLDING_FLOW_REVIEW_CANDLE_LIMIT", 60), 60))
+    tick_limit = max(
+        1, _safe_int(getattr(TRADING_RULES, "HOLDING_FLOW_REVIEW_TICK_LIMIT", 30), 30)
+    )
+    candle_limit = max(
+        1, _safe_int(getattr(TRADING_RULES, "HOLDING_FLOW_REVIEW_CANDLE_LIMIT", 60), 60)
+    )
     try:
-        recent_ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=tick_limit)
-        recent_candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=candle_limit)
+        recent_ticks = kiwoom_utils.get_tick_history_ka10003(
+            KIWOOM_TOKEN, code, limit=tick_limit
+        )
+        recent_candles = kiwoom_utils.get_minute_candles_ka10080(
+            KIWOOM_TOKEN, code, limit=candle_limit
+        )
     except Exception as exc:
         _log_holding_pipeline(
             name,
@@ -513,10 +584,17 @@ def _apply_overnight_flow_override(record, mem_stock, ws_data, ctx, decision, ai
         )
         return decision
     if not recent_ticks:
-        _log_holding_pipeline(name, code, "overnight_flow_override_skip", skip_reason="no_recent_ticks")
+        _log_holding_pipeline(
+            name, code, "overnight_flow_override_skip", skip_reason="no_recent_ticks"
+        )
         return decision
 
-    worsen_pct = max(0.0, _safe_float(getattr(TRADING_RULES, "HOLDING_FLOW_OVERRIDE_WORSEN_PCT", 0.80), 0.80))
+    worsen_pct = max(
+        0.0,
+        _safe_float(
+            getattr(TRADING_RULES, "HOLDING_FLOW_OVERRIDE_WORSEN_PCT", 0.80), 0.80
+        ),
+    )
     pnl_pct = _safe_float(ctx.get("pnl_pct"), 0.0)
     position_ctx = {
         "exit_rule": "overnight_sell_today",
@@ -533,7 +611,9 @@ def _apply_overnight_flow_override(record, mem_stock, ws_data, ctx, decision, ai
         "current_ai_score": _safe_float(ctx.get("score"), 0.0),
         "day_high": _safe_float(ctx.get("day_high", ctx.get("high_price")), 0.0),
         "worsen_pct": worsen_pct,
-        "eod_liquidity_risk": ctx.get("liquidity_risk", ctx.get("order_status_note", "-")),
+        "eod_liquidity_risk": ctx.get(
+            "liquidity_risk", ctx.get("order_status_note", "-")
+        ),
         "entry_time_context": _entry_time_context_from_mem_stock(mem_stock),
     }
     flow_result = ai_engine.evaluate_scalping_holding_flow(
@@ -546,7 +626,8 @@ def _apply_overnight_flow_override(record, mem_stock, ws_data, ctx, decision, ai
         flow_history=(mem_stock or {}).get("holding_flow_review_history") or [],
         decision_kind="overnight_sell_today",
         metadata_extra={
-            "record_id": (mem_stock or {}).get("record_id") or (mem_stock or {}).get("id"),
+            "record_id": (mem_stock or {}).get("record_id")
+            or (mem_stock or {}).get("id"),
             "sim_record_id": (mem_stock or {}).get("sim_record_id"),
             "sim_parent_record_id": (mem_stock or {}).get("sim_parent_record_id")
             or (mem_stock or {}).get("record_id")
@@ -556,10 +637,19 @@ def _apply_overnight_flow_override(record, mem_stock, ws_data, ctx, decision, ai
             "source_event_stage": "overnight_holding_flow",
         },
     )
-    _append_mem_flow_history(mem_stock, exit_rule="overnight_sell_today", profit_rate=pnl_pct, flow_result=flow_result)
+    _append_mem_flow_history(
+        mem_stock,
+        exit_rule="overnight_sell_today",
+        profit_rate=pnl_pct,
+        flow_result=flow_result,
+    )
     flow_action = str(flow_result.get("action", "EXIT") or "EXIT").upper()
     flow_state = normalize_flow_state_label(flow_result.get("flow_state", "-"))
-    parse_failed = bool(flow_result.get("ai_parse_fail")) or flow_action not in {"HOLD", "TRIM", "EXIT"}
+    parse_failed = bool(flow_result.get("ai_parse_fail")) or flow_action not in {
+        "HOLD",
+        "TRIM",
+        "EXIT",
+    }
     _log_holding_pipeline(
         name,
         code,
@@ -590,8 +680,12 @@ def _apply_overnight_flow_override(record, mem_stock, ws_data, ctx, decision, ai
 
     overridden = dict(decision or {})
     overridden["action"] = "HOLD_OVERNIGHT"
-    overridden["confidence"] = _safe_int(flow_result.get("score"), _safe_int(overridden.get("confidence"), 0))
-    overridden["reason"] = f"flow override {flow_action}: {flow_result.get('reason', '-')}"
+    overridden["confidence"] = _safe_int(
+        flow_result.get("score"), _safe_int(overridden.get("confidence"), 0)
+    )
+    overridden["reason"] = (
+        f"flow override {flow_action}: {flow_result.get('reason', '-')}"
+    )
     overridden["risk_note"] = (
         f"SELL_TODAY 재검문에서 {flow_state} 흐름. "
         f"추가악화 {worsen_pct:.2f}%p 도달 시 당일청산 복귀."
@@ -629,7 +723,9 @@ def run_scalping_overnight_gatekeeper(ai_engine=None):
         )
         return False
     if ai_engine is None:
-        log_info(f"⚠️ [{_eod_label()} EOD] AI 엔진이 없어 오버나이트 판정을 건너뜁니다.")
+        log_info(
+            f"⚠️ [{_eod_label()} EOD] AI 엔진이 없어 오버나이트 판정을 건너뜁니다."
+        )
         return False
     if DB is None or ACTIVE_TARGETS is None:
         log_info(f"⚠️ [{_eod_label()} EOD] DB/ACTIVE_TARGETS 의존성 미설정")
@@ -639,8 +735,8 @@ def run_scalping_overnight_gatekeeper(ai_engine=None):
         with DB.get_session() as session:
             orm_records = (
                 session.query(RecommendationHistory)
-                .filter(RecommendationHistory.status.in_(('HOLDING', 'SELL_ORDERED')))
-                .filter(RecommendationHistory.strategy.in_(('SCALPING', 'SCALP')))
+                .filter(RecommendationHistory.status.in_(("HOLDING", "SELL_ORDERED")))
+                .filter(RecommendationHistory.strategy.in_(("SCALPING", "SCALP")))
                 .all()
             )
             records = [_snapshot_record(record) for record in orm_records]
@@ -658,17 +754,19 @@ def run_scalping_overnight_gatekeeper(ai_engine=None):
 
     for record in records:
         code = str(record.stock_code).strip()[:6]
-        name = getattr(record, 'stock_name', code)
+        name = getattr(record, "stock_name", code)
         mem_stock = _find_active_target_by_code(code)
         ws_data = WS_MANAGER.get_latest_data(code) if WS_MANAGER else {}
 
         ctx = _build_scalping_overnight_ctx(record, mem_stock, ws_data)
         decision = ai_engine.evaluate_scalping_overnight_decision(name, code, ctx)
         _submit_overnight_dual_persona_shadow(name, code, ctx, decision)
-        decision = _apply_overnight_flow_override(record, mem_stock, ws_data, ctx, decision, ai_engine)
-        action = str(decision.get('action', 'SELL_TODAY') or 'SELL_TODAY').upper()
+        decision = _apply_overnight_flow_override(
+            record, mem_stock, ws_data, ctx, decision, ai_engine
+        )
+        action = str(decision.get("action", "SELL_TODAY") or "SELL_TODAY").upper()
 
-        if action == 'HOLD_OVERNIGHT':
+        if action == "HOLD_OVERNIGHT":
             ok, action_taken = _execute_scalping_hold_overnight(record, mem_stock)
             hold_count += 1
         else:
@@ -676,16 +774,20 @@ def run_scalping_overnight_gatekeeper(ai_engine=None):
             sell_count += 1
 
         if not ok:
-            log_info(f"⚠️ [{_eod_label()} EOD] {name}({code}) 처리 실패: {action_taken}")
+            log_info(
+                f"⚠️ [{_eod_label()} EOD] {name}({code}) 처리 실패: {action_taken}"
+            )
 
-        summary_rows.append({
-            'name': name,
-            'code': code,
-            'action': action,
-            'confidence': int(decision.get('confidence', 0) or 0),
-            'pnl_pct': float(ctx.get('pnl_pct', 0.0) or 0.0),
-            'note': action_taken,
-        })
+        summary_rows.append(
+            {
+                "name": name,
+                "code": code,
+                "action": action,
+                "confidence": int(decision.get("confidence", 0) or 0),
+                "pnl_pct": float(ctx.get("pnl_pct", 0.0) or 0.0),
+                "note": action_taken,
+            }
+        )
 
     if event_bus and summary_rows:
         lines = [
@@ -699,8 +801,8 @@ def run_scalping_overnight_gatekeeper(ai_engine=None):
                 f"- {row['name']}({row['code']}) | {action_ko} | 신뢰도 {row['confidence']}점 | 손익 {row['pnl_pct']:+.2f}% | {note_ko}"
             )
         event_bus.publish(
-            'TELEGRAM_BROADCAST',
-            {'message': "\n".join(lines), 'audience': 'ADMIN_ONLY', 'parse_mode': None}
+            "TELEGRAM_BROADCAST",
+            {"message": "\n".join(lines), "audience": "ADMIN_ONLY", "parse_mode": None},
         )
 
     return True

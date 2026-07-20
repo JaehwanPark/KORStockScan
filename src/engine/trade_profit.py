@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from src.utils.constants import TRADING_RULES
 
-
 DEFAULT_TRADE_COST_RATE = 0.0023
 
 
@@ -18,7 +17,9 @@ def _resolve_trade_cost_rate(cost_rate: float | None = None) -> float:
         configured = getattr(
             TRADING_RULES,
             "TRADE_COST_RATE",
-            getattr(TRADING_RULES, "REPORT_REALIZED_PNL_COST_RATE", DEFAULT_TRADE_COST_RATE),
+            getattr(
+                TRADING_RULES, "REPORT_REALIZED_PNL_COST_RATE", DEFAULT_TRADE_COST_RATE
+            ),
         )
         return max(float(configured), 0.0)
     except Exception:

@@ -20,9 +20,10 @@ from src.database.models import (
     SwingStrategyDiscoveryCandidate,
     SwingStrategyDiscoveryLabel,
 )
-from src.engine.swing_strategy_discovery_schema import ensure_swing_strategy_discovery_schema
+from src.engine.swing_strategy_discovery_schema import (
+    ensure_swing_strategy_discovery_schema,
+)
 from src.utils.constants import DATA_DIR, POSTGRES_URL
-
 
 REPORT_DIR = Path(DATA_DIR) / "report" / "swing_strategy_discovery_labels"
 DISCOVERY_SIM_REPORT_DIR = Path(DATA_DIR) / "report" / "swing_strategy_discovery_sim"
@@ -213,8 +214,14 @@ def _entry_day_observation_features(
 
     entry_price = float(entry.entry_price)
     entry_day = quotes_from_entry[0]
-    entry_delta_pct = round(_pct(entry_price, reference_price), 6) if reference_price > 0 else None
-    gap_pct = round(_pct(entry_day.open_price, reference_price), 6) if reference_price > 0 else None
+    entry_delta_pct = (
+        round(_pct(entry_price, reference_price), 6) if reference_price > 0 else None
+    )
+    gap_pct = (
+        round(_pct(entry_day.open_price, reference_price), 6)
+        if reference_price > 0
+        else None
+    )
     low_from_entry_pct = round(_pct(entry_day.low_price, entry_price), 6)
     close_from_entry_pct = round(_pct(entry_day.close_price, entry_price), 6)
     stop_price = _price_at_pct(entry_price, MAE_STOP_PCT)
@@ -244,8 +251,12 @@ def _entry_day_observation_features(
         "entry_day_close_from_entry_pct": close_from_entry_pct,
         "entry_price_delta_bucket": _entry_price_delta_bucket(entry_delta_pct),
         "entry_day_gap_bucket": _entry_day_gap_bucket(gap_pct),
-        "entry_day_low_from_entry_bucket": _entry_day_low_from_entry_bucket(low_from_entry_pct),
-        "entry_day_close_from_entry_bucket": _entry_day_close_from_entry_bucket(close_from_entry_pct),
+        "entry_day_low_from_entry_bucket": _entry_day_low_from_entry_bucket(
+            low_from_entry_pct
+        ),
+        "entry_day_close_from_entry_bucket": _entry_day_close_from_entry_bucket(
+            close_from_entry_pct
+        ),
         "stop_touch_outcome_bucket": stop_touch_outcome,
         "entry_position_opportunity_bucket": opportunity_bucket,
     }
@@ -268,7 +279,10 @@ def _arm_is_bottom_rebound(arm: SwingStrategyDiscoveryArm) -> bool:
         return True
     features = _json_loads(arm.arm_features)
     context = features.get("bottom_rebound_entry_context")
-    return bool(isinstance(context, dict) and context.get("setup_type") == "anticipatory_bottom_rebound_swing")
+    return bool(
+        isinstance(context, dict)
+        and context.get("setup_type") == "anticipatory_bottom_rebound_swing"
+    )
 
 
 def _bottom_rebound_sim_expected(target_date: str) -> bool:
@@ -277,9 +291,17 @@ def _bottom_rebound_sim_expected(target_date: str) -> bool:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return False
-    source_quality = payload.get("source_quality") if isinstance(payload.get("source_quality"), dict) else {}
+    source_quality = (
+        payload.get("source_quality")
+        if isinstance(payload.get("source_quality"), dict)
+        else {}
+    )
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-    bottom_source = source_quality.get("bottom_rebound_source") if isinstance(source_quality.get("bottom_rebound_source"), dict) else {}
+    bottom_source = (
+        source_quality.get("bottom_rebound_source")
+        if isinstance(source_quality.get("bottom_rebound_source"), dict)
+        else {}
+    )
     return (
         bottom_source.get("status") == "ok"
         and _safe_int(source_quality.get("bottom_rebound_source_rows")) > 0
@@ -303,7 +325,9 @@ def _quote_from_model(row: DailyStockQuote) -> Quote | None:
     )
 
 
-def simulate_entry(entry_policy: str, reference_price: float, future_quotes: list[Quote]) -> EntryResult:
+def simulate_entry(
+    entry_policy: str, reference_price: float, future_quotes: list[Quote]
+) -> EntryResult:
     if reference_price <= 0:
         return EntryResult("expired", reason="missing_reference_price")
     if not future_quotes:
@@ -313,44 +337,86 @@ def simulate_entry(entry_policy: str, reference_price: float, future_quotes: lis
         return EntryResult("entered", q.quote_date, q.open_price, "next_open")
     if entry_policy == "bottom_rebound_next_open_entry":
         q = future_quotes[0]
-        return EntryResult("entered", q.quote_date, q.open_price, "bottom_rebound_next_open")
+        return EntryResult(
+            "entered", q.quote_date, q.open_price, "bottom_rebound_next_open"
+        )
     lookahead = future_quotes[:ENTRY_LOOKAHEAD_DAYS]
     if entry_policy == "pullback_limit_entry":
         limit_price = _price_at_pct(reference_price, PULLBACK_LIMIT_PCT)
         for q in lookahead:
             if q.low_price <= limit_price:
-                return EntryResult("entered", q.quote_date, limit_price, "pullback_limit_touched")
-        return EntryResult("expired" if len(lookahead) >= ENTRY_LOOKAHEAD_DAYS else "pending_future_quotes", reason="pullback_not_touched")
+                return EntryResult(
+                    "entered", q.quote_date, limit_price, "pullback_limit_touched"
+                )
+        return EntryResult(
+            (
+                "expired"
+                if len(lookahead) >= ENTRY_LOOKAHEAD_DAYS
+                else "pending_future_quotes"
+            ),
+            reason="pullback_not_touched",
+        )
     if entry_policy == "bottom_rebound_signal_close_retest_limit_entry":
         limit_price = _price_at_pct(reference_price, BOTTOM_REBOUND_RETEST_LIMIT_PCT)
         for q in lookahead:
             if q.low_price <= limit_price:
-                return EntryResult("entered", q.quote_date, limit_price, "bottom_rebound_signal_close_retest_touched")
+                return EntryResult(
+                    "entered",
+                    q.quote_date,
+                    limit_price,
+                    "bottom_rebound_signal_close_retest_touched",
+                )
         return EntryResult(
-            "expired" if len(lookahead) >= ENTRY_LOOKAHEAD_DAYS else "pending_future_quotes",
+            (
+                "expired"
+                if len(lookahead) >= ENTRY_LOOKAHEAD_DAYS
+                else "pending_future_quotes"
+            ),
             reason="bottom_rebound_signal_close_retest_not_touched",
         )
     if entry_policy == "bottom_rebound_atr_pullback_limit_entry":
-        limit_price = _price_at_pct(reference_price, BOTTOM_REBOUND_ATR_PULLBACK_LIMIT_PCT)
+        limit_price = _price_at_pct(
+            reference_price, BOTTOM_REBOUND_ATR_PULLBACK_LIMIT_PCT
+        )
         for q in lookahead:
             if q.low_price <= limit_price:
-                return EntryResult("entered", q.quote_date, limit_price, "bottom_rebound_atr_pullback_touched")
+                return EntryResult(
+                    "entered",
+                    q.quote_date,
+                    limit_price,
+                    "bottom_rebound_atr_pullback_touched",
+                )
         return EntryResult(
-            "expired" if len(lookahead) >= ENTRY_LOOKAHEAD_DAYS else "pending_future_quotes",
+            (
+                "expired"
+                if len(lookahead) >= ENTRY_LOOKAHEAD_DAYS
+                else "pending_future_quotes"
+            ),
             reason="bottom_rebound_atr_pullback_not_touched",
         )
     if entry_policy == "breakout_confirm_entry":
         trigger_price = _price_at_pct(reference_price, BREAKOUT_TRIGGER_PCT)
         for q in lookahead:
             if q.high_price >= trigger_price:
-                return EntryResult("entered", q.quote_date, trigger_price, "breakout_trigger_touched")
-        return EntryResult("expired" if len(lookahead) >= ENTRY_LOOKAHEAD_DAYS else "pending_future_quotes", reason="breakout_not_touched")
+                return EntryResult(
+                    "entered", q.quote_date, trigger_price, "breakout_trigger_touched"
+                )
+        return EntryResult(
+            (
+                "expired"
+                if len(lookahead) >= ENTRY_LOOKAHEAD_DAYS
+                else "pending_future_quotes"
+            ),
+            reason="breakout_not_touched",
+        )
     if entry_policy == "gap_fade_entry":
         q = future_quotes[0]
         gap_pct = _pct(q.open_price, reference_price)
         limit_price = _price_at_pct(reference_price, GAP_FADE_LIMIT_PCT)
         if gap_pct >= GAP_FADE_GAP_PCT and q.low_price <= limit_price:
-            return EntryResult("entered", q.quote_date, limit_price, "gap_fade_limit_touched")
+            return EntryResult(
+                "entered", q.quote_date, limit_price, "gap_fade_limit_touched"
+            )
         return EntryResult("expired", reason="gap_fade_condition_not_met")
     return EntryResult("expired", reason=f"unknown_entry_policy:{entry_policy}")
 
@@ -366,7 +432,10 @@ def _label_maturity_status(entry: EntryResult, exit_result: ExitResult) -> str:
         return "matured_labeled"
     if entry.status == "expired":
         return "matured_no_entry"
-    if entry.status == "pending_future_quotes" or exit_result.status == "pending_future_quotes":
+    if (
+        entry.status == "pending_future_quotes"
+        or exit_result.status == "pending_future_quotes"
+    ):
         return "pending_future_quotes"
     return "unresolved"
 
@@ -380,7 +449,9 @@ def _window_mfe_mae(quotes: list[Quote], entry_price: float) -> tuple[float, flo
     )
 
 
-def simulate_policy_exit(exit_policy: str, entry: EntryResult, quotes_from_entry: list[Quote]) -> ExitResult:
+def simulate_policy_exit(
+    exit_policy: str, entry: EntryResult, quotes_from_entry: list[Quote]
+) -> ExitResult:
     if entry.status != "entered" or not entry.entry_date or not entry.entry_price:
         return ExitResult("not_entered", exit_reason=entry.reason)
     entry_price = float(entry.entry_price)
@@ -389,10 +460,14 @@ def simulate_policy_exit(exit_policy: str, entry: EntryResult, quotes_from_entry
 
     def _fixed(days: int, reason: str) -> ExitResult:
         if len(quotes_from_entry) < days:
-            return ExitResult("pending_future_quotes", exit_reason=f"need_{days}_quotes")
+            return ExitResult(
+                "pending_future_quotes", exit_reason=f"need_{days}_quotes"
+            )
         q = quotes_from_entry[days - 1]
         ret = round(_pct(q.close_price, entry_price), 6)
-        return ExitResult("exited", q.quote_date, q.close_price, reason, ret, ret, holding_days=days)
+        return ExitResult(
+            "exited", q.quote_date, q.close_price, reason, ret, ret, holding_days=days
+        )
 
     if exit_policy == "fixed_5d":
         return _fixed(5, "fixed_5d_close")
@@ -404,7 +479,15 @@ def simulate_policy_exit(exit_policy: str, entry: EntryResult, quotes_from_entry
         for idx, q in enumerate(window, start=1):
             if q.low_price <= stop_price:
                 ret = round(_pct(stop_price, entry_price), 6)
-                return ExitResult("exited", q.quote_date, stop_price, "mae_stop_touched", ret, ret, holding_days=idx)
+                return ExitResult(
+                    "exited",
+                    q.quote_date,
+                    stop_price,
+                    "mae_stop_touched",
+                    ret,
+                    ret,
+                    holding_days=idx,
+                )
         return _fixed(10, "mae_stop_time_stop_10d_close")
     if exit_policy == "trailing_after_mfe":
         window = quotes_from_entry[:10]
@@ -418,7 +501,15 @@ def simulate_policy_exit(exit_policy: str, entry: EntryResult, quotes_from_entry
                 trail_price = _price_at_pct(peak, TRAILING_GIVEBACK_PCT)
                 if q.low_price <= trail_price:
                     ret = round(_pct(trail_price, entry_price), 6)
-                    return ExitResult("exited", q.quote_date, trail_price, "trailing_after_mfe_stop", ret, ret, holding_days=idx)
+                    return ExitResult(
+                        "exited",
+                        q.quote_date,
+                        trail_price,
+                        "trailing_after_mfe_stop",
+                        ret,
+                        ret,
+                        holding_days=idx,
+                    )
         return _fixed(10, "trailing_after_mfe_10d_close")
     if exit_policy == "scale_in_recovery":
         if len(quotes_from_entry) < 10:
@@ -432,7 +523,9 @@ def simulate_policy_exit(exit_policy: str, entry: EntryResult, quotes_from_entry
         exit_q = quotes_from_entry[9]
         base_ret = _pct(exit_q.close_price, entry_price)
         if added:
-            avg_price = ((entry_price * 1.0) + (scale_price * SCALE_IN_ADD_RATIO)) / (1.0 + SCALE_IN_ADD_RATIO)
+            avg_price = ((entry_price * 1.0) + (scale_price * SCALE_IN_ADD_RATIO)) / (
+                1.0 + SCALE_IN_ADD_RATIO
+            )
             scaled_ret = _pct(exit_q.close_price, avg_price)
             delta = scaled_ret - base_ret
             ret = round(scaled_ret, 6)
@@ -473,7 +566,11 @@ def build_horizon_label(
     if entry.status != "entered" or not entry.entry_price:
         return {
             "label_horizon": horizon,
-            "label_status": "expired_entry_no_trigger" if entry.status == "expired" else "pending_future_quotes",
+            "label_status": (
+                "expired_entry_no_trigger"
+                if entry.status == "expired"
+                else "pending_future_quotes"
+            ),
             "label_features": {
                 "fill_status": entry.status,
                 "final_return_basis": "horizon_close",
@@ -519,9 +616,18 @@ def build_policy_exit_label(
     quotes_from_entry: list[Quote],
     entry_day_observation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    mfe, mae = _window_mfe_mae(quotes_from_entry[: max(1, int(exit_result.holding_days or 10))], entry.entry_price or 0.0)
-    status = "labeled" if exit_result.status == "exited" else (
-        "expired_entry_no_trigger" if entry.status == "expired" else "pending_future_quotes"
+    mfe, mae = _window_mfe_mae(
+        quotes_from_entry[: max(1, int(exit_result.holding_days or 10))],
+        entry.entry_price or 0.0,
+    )
+    status = (
+        "labeled"
+        if exit_result.status == "exited"
+        else (
+            "expired_entry_no_trigger"
+            if entry.status == "expired"
+            else "pending_future_quotes"
+        )
     )
     observation = entry_day_observation or {}
     return {
@@ -539,7 +645,9 @@ def build_policy_exit_label(
             "final_return_basis": "arm_policy_exit",
             "entry_date": entry.entry_date.isoformat() if entry.entry_date else None,
             "entry_price": entry.entry_price,
-            "exit_date": exit_result.exit_date.isoformat() if exit_result.exit_date else None,
+            "exit_date": (
+                exit_result.exit_date.isoformat() if exit_result.exit_date else None
+            ),
             "exit_price": exit_result.exit_price,
             "exit_reason": exit_result.exit_reason,
             "holding_days": exit_result.holding_days,
@@ -548,10 +656,15 @@ def build_policy_exit_label(
     }
 
 
-def _load_future_quotes(session: Any, stock_code: str, source_date: date) -> list[Quote]:
+def _load_future_quotes(
+    session: Any, stock_code: str, source_date: date
+) -> list[Quote]:
     rows = (
         session.query(DailyStockQuote)
-        .filter(DailyStockQuote.stock_code == stock_code, DailyStockQuote.quote_date > source_date)
+        .filter(
+            DailyStockQuote.stock_code == stock_code,
+            DailyStockQuote.quote_date > source_date,
+        )
         .order_by(DailyStockQuote.quote_date.asc())
         .all()
     )
@@ -559,11 +672,17 @@ def _load_future_quotes(session: Any, stock_code: str, source_date: date) -> lis
     return [q for q in out if q is not None]
 
 
-def _reference_price(arm: SwingStrategyDiscoveryArm, candidate: SwingStrategyDiscoveryCandidate) -> float:
+def _reference_price(
+    arm: SwingStrategyDiscoveryArm, candidate: SwingStrategyDiscoveryCandidate
+) -> float:
     if arm.virtual_entry_price:
         return float(arm.virtual_entry_price)
     source_features = _json_loads(candidate.source_features)
-    quote = source_features.get("quote_features") if isinstance(source_features.get("quote_features"), dict) else {}
+    quote = (
+        source_features.get("quote_features")
+        if isinstance(source_features.get("quote_features"), dict)
+        else {}
+    )
     return _as_float(quote.get("reference_price"), 0.0)
 
 
@@ -574,7 +693,11 @@ def _upsert_label(
 ) -> None:
     existing = (
         session.query(SwingStrategyDiscoveryLabel)
-        .filter_by(arm_row_id=arm.id, label_horizon=label["label_horizon"], label_version=LABEL_VERSION)
+        .filter_by(
+            arm_row_id=arm.id,
+            label_horizon=label["label_horizon"],
+            label_version=LABEL_VERSION,
+        )
         .first()
     )
     payload = {
@@ -592,7 +715,12 @@ def _upsert_label(
         "realized_exit_return_pct": label.get("realized_exit_return_pct"),
         "exit_only_delta_pct": label.get("exit_only_delta_pct"),
         "scale_in_delta_pct": label.get("scale_in_delta_pct"),
-        "label_features": json.dumps(label.get("label_features") or {}, ensure_ascii=False, sort_keys=True, default=str),
+        "label_features": json.dumps(
+            label.get("label_features") or {},
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        ),
         "updated_at": datetime.now(),
     }
     if existing is None:
@@ -603,7 +731,11 @@ def _upsert_label(
 
 
 def process_arm(session: Any, arm: SwingStrategyDiscoveryArm) -> dict[str, Any]:
-    candidate = session.query(SwingStrategyDiscoveryCandidate).filter_by(id=arm.candidate_id).first()
+    candidate = (
+        session.query(SwingStrategyDiscoveryCandidate)
+        .filter_by(id=arm.candidate_id)
+        .first()
+    )
     if candidate is None:
         return {"status": "candidate_missing", "labels": 0}
     future_quotes = _load_future_quotes(session, arm.stock_code, arm.source_date)
@@ -612,18 +744,35 @@ def process_arm(session: Any, arm: SwingStrategyDiscoveryArm) -> dict[str, Any]:
     quotes_from_entry = _quotes_from_entry(entry, future_quotes)
     exit_result = simulate_policy_exit(arm.exit_policy, entry, quotes_from_entry)
     maturity_status = _label_maturity_status(entry, exit_result)
-    entry_day_observation = _entry_day_observation_features(entry, reference_price, quotes_from_entry)
-    labels = [build_horizon_label(horizon, entry, quotes_from_entry, entry_day_observation) for horizon in LABEL_HORIZONS]
-    labels.append(build_policy_exit_label(entry, exit_result, quotes_from_entry, entry_day_observation))
+    entry_day_observation = _entry_day_observation_features(
+        entry, reference_price, quotes_from_entry
+    )
+    labels = [
+        build_horizon_label(horizon, entry, quotes_from_entry, entry_day_observation)
+        for horizon in LABEL_HORIZONS
+    ]
+    labels.append(
+        build_policy_exit_label(
+            entry, exit_result, quotes_from_entry, entry_day_observation
+        )
+    )
     for label in labels:
         _upsert_label(session, arm, label)
 
     if entry.status == "entered":
         arm.status = "EXITED" if exit_result.status == "exited" else "ENTERED"
-        arm.entry_at = datetime.combine(entry.entry_date, datetime.min.time()) if entry.entry_date else None
+        arm.entry_at = (
+            datetime.combine(entry.entry_date, datetime.min.time())
+            if entry.entry_date
+            else None
+        )
         arm.virtual_entry_price = entry.entry_price
         if exit_result.status == "exited":
-            arm.exit_at = datetime.combine(exit_result.exit_date, datetime.min.time()) if exit_result.exit_date else None
+            arm.exit_at = (
+                datetime.combine(exit_result.exit_date, datetime.min.time())
+                if exit_result.exit_date
+                else None
+            )
             arm.exit_price = exit_result.exit_price
             arm.final_return_pct = exit_result.final_return_pct
     elif entry.status == "expired":
@@ -643,9 +792,15 @@ def process_arm(session: Any, arm: SwingStrategyDiscoveryArm) -> dict[str, Any]:
             "future_quote_count": len(future_quotes),
             "quotes_from_entry_count": len(quotes_from_entry),
             "latest_future_quote_date": (
-                max(q.quote_date for q in future_quotes).isoformat() if future_quotes else None
+                max(q.quote_date for q in future_quotes).isoformat()
+                if future_quotes
+                else None
             ),
-            "source_quality_status": "pending_future_quotes" if maturity_status == "pending_future_quotes" else "ok",
+            "source_quality_status": (
+                "pending_future_quotes"
+                if maturity_status == "pending_future_quotes"
+                else "ok"
+            ),
             "implementation_order_id": IMPLEMENTATION_ORDER_ID,
             "implementation_scope": "source_quality_instrumentation_only",
             "actual_order_submitted": False,
@@ -654,12 +809,16 @@ def process_arm(session: Any, arm: SwingStrategyDiscoveryArm) -> dict[str, Any]:
             "allowed_runtime_apply": False,
         }
     )
-    arm.arm_features = json.dumps(features, ensure_ascii=False, sort_keys=True, default=str)
+    arm.arm_features = json.dumps(
+        features, ensure_ascii=False, sort_keys=True, default=str
+    )
     arm.updated_at = datetime.now()
     return {
         "status": arm.status,
         "labels": len(labels),
-        "label_status_counts": dict(Counter(label.get("label_status") for label in labels)),
+        "label_status_counts": dict(
+            Counter(label.get("label_status") for label in labels)
+        ),
         "maturity_status": maturity_status,
     }
 
@@ -684,10 +843,15 @@ def build_swing_strategy_discovery_labels(
     bottom_label_status_counts: Counter[str] = Counter()
     bottom_maturity_status_counts: Counter[str] = Counter()
     with Session.begin() as session:
-        query = session.query(SwingStrategyDiscoveryArm).filter(SwingStrategyDiscoveryArm.source_date <= target)
+        query = session.query(SwingStrategyDiscoveryArm).filter(
+            SwingStrategyDiscoveryArm.source_date <= target
+        )
         if not refresh_matured:
             query = query.filter(SwingStrategyDiscoveryArm.source_date == target)
-        arms = query.order_by(SwingStrategyDiscoveryArm.source_date.asc(), SwingStrategyDiscoveryArm.id.asc()).all()
+        arms = query.order_by(
+            SwingStrategyDiscoveryArm.source_date.asc(),
+            SwingStrategyDiscoveryArm.id.asc(),
+        ).all()
         for arm in arms:
             is_bottom = _arm_is_bottom_rebound(arm)
             result = process_arm(session, arm)
@@ -699,11 +863,17 @@ def build_swing_strategy_discovery_labels(
             if is_bottom:
                 bottom_processed += 1
                 bottom_status_counts[str(result.get("status"))] += 1
-                bottom_maturity_status_counts[str(result.get("maturity_status") or "unknown")] += 1
+                bottom_maturity_status_counts[
+                    str(result.get("maturity_status") or "unknown")
+                ] += 1
                 for status, count in (result.get("label_status_counts") or {}).items():
                     bottom_label_status_counts[str(status)] += int(count)
 
-    warnings = ["pending_future_quotes"] if label_status_counts.get("pending_future_quotes", 0) else []
+    warnings = (
+        ["pending_future_quotes"]
+        if label_status_counts.get("pending_future_quotes", 0)
+        else []
+    )
     if _bottom_rebound_sim_expected(date_key) and bottom_processed == 0:
         warnings.append("bottom_rebound_label_handoff_missing")
 
@@ -749,15 +919,25 @@ def build_swing_strategy_discovery_labels(
             "arm_status_counts": dict(status_counts),
             "label_status_counts": dict(label_status_counts),
             "maturity_status_counts": dict(maturity_status_counts),
-            "pending_future_quote_count": label_status_counts.get("pending_future_quotes", 0),
+            "pending_future_quote_count": label_status_counts.get(
+                "pending_future_quotes", 0
+            ),
             "labeled_sample_count": label_status_counts.get("labeled", 0),
             "bottom_rebound_processed_arm_count": bottom_processed,
             "bottom_rebound_arm_status_counts": dict(bottom_status_counts),
             "bottom_rebound_label_status_counts": dict(bottom_label_status_counts),
-            "bottom_rebound_maturity_status_counts": dict(bottom_maturity_status_counts),
-            "bottom_rebound_pending_future_quote_count": bottom_label_status_counts.get("pending_future_quotes", 0),
-            "bottom_rebound_labeled_sample_count": bottom_label_status_counts.get("labeled", 0),
-            "bottom_rebound_expired_entry_count": bottom_label_status_counts.get("expired_entry_no_trigger", 0),
+            "bottom_rebound_maturity_status_counts": dict(
+                bottom_maturity_status_counts
+            ),
+            "bottom_rebound_pending_future_quote_count": bottom_label_status_counts.get(
+                "pending_future_quotes", 0
+            ),
+            "bottom_rebound_labeled_sample_count": bottom_label_status_counts.get(
+                "labeled", 0
+            ),
+            "bottom_rebound_expired_entry_count": bottom_label_status_counts.get(
+                "expired_entry_no_trigger", 0
+            ),
         },
         "warnings": warnings,
     }
@@ -801,12 +981,16 @@ def write_swing_strategy_discovery_labels(
     output_dir: Path = REPORT_DIR,
     refresh_matured: bool = False,
 ) -> dict[str, Path]:
-    report = build_swing_strategy_discovery_labels(target_date, db_url=db_url, refresh_matured=refresh_matured)
+    report = build_swing_strategy_discovery_labels(
+        target_date, db_url=db_url, refresh_matured=refresh_matured
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     date_key = _date_text(target_date)
     json_path = output_dir / f"swing_strategy_discovery_labels_{date_key}.json"
     md_path = output_dir / f"swing_strategy_discovery_labels_{date_key}.md"
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
+    )
     md_path.write_text(render_markdown(report), encoding="utf-8")
     return {"json": json_path, "md": md_path}
 
@@ -824,7 +1008,9 @@ def main(argv: list[str] | None = None) -> None:
         output_dir=args.output_dir,
         refresh_matured=args.refresh_matured,
     )
-    print(f"[DONE] swing_strategy_discovery_label_builder json={paths['json']} md={paths['md']}")
+    print(
+        f"[DONE] swing_strategy_discovery_label_builder json={paths['json']} md={paths['md']}"
+    )
 
 
 if __name__ == "__main__":

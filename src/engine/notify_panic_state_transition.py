@@ -12,7 +12,6 @@ from urllib import parse, request
 from src.database.db_manager import DBManager
 from src.utils.constants import CONFIG_PATH, DEV_PATH, PROJECT_ROOT
 
-
 DEFAULT_STATE_FILE = PROJECT_ROOT / "tmp" / "panic_state_telegram_notify_state.json"
 
 SELL_ACTIVE_STATES = {"PANIC_SELL", "RECOVERY_WATCH"}
@@ -39,7 +38,9 @@ def _report_session_key(report_file: Path, report: dict) -> str:
 
 
 def _previous_session_key(previous: dict) -> str:
-    value = str(previous.get("session_key") or previous.get("target_date") or "").strip()
+    value = str(
+        previous.get("session_key") or previous.get("target_date") or ""
+    ).strip()
     if value:
         return value[:10]
     report_file = str(previous.get("report_file") or "")
@@ -126,7 +127,10 @@ def _state_value(kind: str, report: dict) -> str:
         single_market_risk_off = bool(
             micro_context.get("market_panic_breadth_single_market_risk_off_advisory")
         )
-        if str(report.get("panic_state") or "UNKNOWN") == "NORMAL" and single_market_risk_off:
+        if (
+            str(report.get("panic_state") or "UNKNOWN") == "NORMAL"
+            and single_market_risk_off
+        ):
             return "RECOVERY_WATCH"
         return str(report.get("panic_state") or "UNKNOWN")
     if kind == "panic_buying":
@@ -157,7 +161,9 @@ def _transition(
 ) -> str:
     if force:
         return "start" if current_phase == "active" else "release"
-    previous_effective_phase = "active" if previous_phase == "release_pending" else previous_phase
+    previous_effective_phase = (
+        "active" if previous_phase == "release_pending" else previous_phase
+    )
     if previous_effective_phase != "active" and current_phase == "active":
         return "start"
     if previous_effective_phase == "active" and current_phase == "released":
@@ -212,13 +218,32 @@ def _sell_context_label(report: dict) -> str:
         if isinstance(report.get("microstructure_market_context"), dict)
         else {}
     )
-    market_breadth_only = any("market breadth risk-off watch without panic confirmation" in item for item in reasons)
-    market_breadth_risk_off = bool(micro_context.get("market_panic_breadth_risk_off_advisory"))
-    single_market_risk_off = bool(micro_context.get("market_panic_breadth_single_market_risk_off_advisory"))
-    micro_panic = int((report.get("microstructure_detector") or {}).get("panic_signal_count", 0) or 0) > 0
-    panic_metrics = report.get("panic_metrics") if isinstance(report.get("panic_metrics"), dict) else {}
+    market_breadth_only = any(
+        "market breadth risk-off watch without panic confirmation" in item
+        for item in reasons
+    )
+    market_breadth_risk_off = bool(
+        micro_context.get("market_panic_breadth_risk_off_advisory")
+    )
+    single_market_risk_off = bool(
+        micro_context.get("market_panic_breadth_single_market_risk_off_advisory")
+    )
+    micro_panic = (
+        int(
+            (report.get("microstructure_detector") or {}).get("panic_signal_count", 0)
+            or 0
+        )
+        > 0
+    )
+    panic_metrics = (
+        report.get("panic_metrics")
+        if isinstance(report.get("panic_metrics"), dict)
+        else {}
+    )
     stop_cluster = bool(panic_metrics.get("panic_detected"))
-    market_weak = market_breadth_risk_off or single_market_risk_off or market_breadth_only
+    market_weak = (
+        market_breadth_risk_off or single_market_risk_off or market_breadth_only
+    )
     if market_weak and stop_cluster:
         return "market_and_stop_loss"
     if market_weak and micro_panic:
@@ -277,8 +302,14 @@ def _sell_notice_copy(context: str) -> tuple[str, str, str]:
 
 
 def _message_for_sell(report: dict, transition: str) -> str:
-    micro = report.get("microstructure_detector") if isinstance(report.get("microstructure_detector"), dict) else {}
-    micro_metrics = micro.get("metrics") if isinstance(micro.get("metrics"), dict) else {}
+    micro = (
+        report.get("microstructure_detector")
+        if isinstance(report.get("microstructure_detector"), dict)
+        else {}
+    )
+    micro_metrics = (
+        micro.get("metrics") if isinstance(micro.get("metrics"), dict) else {}
+    )
     if transition == "release":
         title = "✅ 패닉셀 경보 해제"
         body = "급한 매도세가 진정되어 패닉셀 관찰을 종료합니다."
@@ -286,18 +317,26 @@ def _message_for_sell(report: dict, transition: str) -> str:
     elif transition == "status":
         title = "ℹ️ 패닉셀 알림 테스트"
         body = "현재 패닉셀 알림 상태를 관리자 테스트로 확인합니다."
-        intensity_line = f"- 체감 강도\n  {_score_bar(micro_metrics.get('max_panic_score'))}"
+        intensity_line = (
+            f"- 체감 강도\n  {_score_bar(micro_metrics.get('max_panic_score'))}"
+        )
     else:
         context = _sell_context_label(report)
         title, body, stage_label = _sell_notice_copy(context)
         if transition == "update":
             title = title.replace("⚠️", "🔄", 1)
-        intensity_line = f"- 체감 강도\n  {_score_bar(micro_metrics.get('max_panic_score'))}"
+        intensity_line = (
+            f"- 체감 강도\n  {_score_bar(micro_metrics.get('max_panic_score'))}"
+        )
     return "\n".join(
         [
             title,
             body,
-            f"- 현재 단계\n  {stage_label}" if transition not in {"release", "status"} else "",
+            (
+                f"- 현재 단계\n  {stage_label}"
+                if transition not in {"release", "status"}
+                else ""
+            ),
             intensity_line,
             "- 자동매매 변경: 없음",
         ]
@@ -305,7 +344,11 @@ def _message_for_sell(report: dict, transition: str) -> str:
 
 
 def _message_for_buying(report: dict, transition: str) -> str:
-    metrics = report.get("panic_buy_metrics") if isinstance(report.get("panic_buy_metrics"), dict) else {}
+    metrics = (
+        report.get("panic_buy_metrics")
+        if isinstance(report.get("panic_buy_metrics"), dict)
+        else {}
+    )
     if transition == "release":
         title = "✅ 패닉바잉 경보 해제"
         body = "급한 매수세가 진정되어 패닉바잉 관찰을 종료합니다."
@@ -313,11 +356,15 @@ def _message_for_buying(report: dict, transition: str) -> str:
     elif transition == "status":
         title = "ℹ️ 패닉바잉 알림 테스트"
         body = "현재 패닉바잉 알림 상태를 관리자 테스트로 확인합니다."
-        intensity_line = f"- 체감 강도\n  {_score_bar(metrics.get('max_panic_buy_score'))}"
+        intensity_line = (
+            f"- 체감 강도\n  {_score_bar(metrics.get('max_panic_buy_score'))}"
+        )
     else:
         title = "⚠️ 패닉바잉 주의"
         body = "시장에 급한 매수세가 감지되었습니다. 단기 과열과 소진 가능성을 함께 볼 구간입니다."
-        intensity_line = f"- 체감 강도\n  {_score_bar(metrics.get('max_panic_buy_score'))}"
+        intensity_line = (
+            f"- 체감 강도\n  {_score_bar(metrics.get('max_panic_buy_score'))}"
+        )
     return "\n".join(
         [
             title,
@@ -343,7 +390,9 @@ def notify_from_report(
     force: bool = False,
     now_ts: float | None = None,
 ) -> str:
-    if str(os.getenv("KORSTOCKSCAN_PANIC_STATE_TELEGRAM_NOTIFY_ENABLED", "true")).lower() in {
+    if str(
+        os.getenv("KORSTOCKSCAN_PANIC_STATE_TELEGRAM_NOTIFY_ENABLED", "true")
+    ).lower() in {
         "0",
         "false",
         "no",
@@ -362,7 +411,9 @@ def notify_from_report(
     previous = state.get(kind) if isinstance(state.get(kind), dict) else {}
     previous_phase = str(previous.get("phase") or "") or None
     current_session_key = _report_session_key(report_file, report)
-    previous_session_key = _previous_session_key(previous) if isinstance(previous, dict) else ""
+    previous_session_key = (
+        _previous_session_key(previous) if isinstance(previous, dict) else ""
+    )
     stale_previous_session = (
         not force
         and previous_phase in {"active", "release_pending"}
@@ -371,10 +422,16 @@ def notify_from_report(
     )
     if stale_previous_session:
         previous_phase = None
-    previous_value = str(previous.get("state") or "") if isinstance(previous, dict) else ""
-    transition = _transition(previous_phase, current_phase, force=force, current_value=current_value)
+    previous_value = (
+        str(previous.get("state") or "") if isinstance(previous, dict) else ""
+    )
+    transition = _transition(
+        previous_phase, current_phase, force=force, current_value=current_value
+    )
     current_context = _sell_context_label(report) if kind == "panic_sell" else ""
-    previous_context = str(previous.get("context_label") or "") if isinstance(previous, dict) else ""
+    previous_context = (
+        str(previous.get("context_label") or "") if isinstance(previous, dict) else ""
+    )
     if (
         kind == "panic_sell"
         and transition == "none"
@@ -387,10 +444,17 @@ def notify_from_report(
 
     now = time.time() if now_ts is None else now_ts
     previous_last_notification = (
-        previous.get("last_notification") if isinstance(previous.get("last_notification"), dict) else {}
+        previous.get("last_notification")
+        if isinstance(previous.get("last_notification"), dict)
+        else {}
     )
     suppress_sell_restart_after_release = False
-    if not force and kind == "panic_sell" and transition == "start" and previous_phase == "released":
+    if (
+        not force
+        and kind == "panic_sell"
+        and transition == "start"
+        and previous_phase == "released"
+    ):
         previous_release_ts = _safe_float(previous_last_notification.get("sent_at_ts"))
         suppress_sell_restart_after_release = (
             previous_last_notification.get("transition") == "release"
@@ -406,7 +470,9 @@ def notify_from_report(
         next_phase = previous_phase or "released"
         next_value = previous_value or current_value
     else:
-        next_phase = "release_pending" if transition == "release_pending" else current_phase
+        next_phase = (
+            "release_pending" if transition == "release_pending" else current_phase
+        )
         next_value = current_value
     next_state = {
         "phase": next_phase,
@@ -417,7 +483,9 @@ def notify_from_report(
     }
     if kind == "panic_sell":
         next_state["context_label"] = current_context
-    if isinstance(previous, dict) and isinstance(previous.get("last_notification"), dict):
+    if isinstance(previous, dict) and isinstance(
+        previous.get("last_notification"), dict
+    ):
         next_state["last_notification"] = previous["last_notification"]
 
     if transition in {"none", "release_pending", "restart_suppressed_after_release"}:
@@ -459,12 +527,18 @@ def notify_from_report(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Notify Telegram users for panic start/release transitions.")
+    parser = argparse.ArgumentParser(
+        description="Notify Telegram users for panic start/release transitions."
+    )
     parser.add_argument("--report-file", required=True)
     parser.add_argument("--kind", choices=["panic_sell", "panic_buying"], required=True)
     parser.add_argument("--audience", choices=["all", "admin"], default="all")
     parser.add_argument("--state-file", default=str(DEFAULT_STATE_FILE))
-    parser.add_argument("--force", action="store_true", help="Send a status notice even without a transition.")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Send a status notice even without a transition.",
+    )
     return parser
 
 
@@ -477,7 +551,9 @@ def main() -> int:
         state_file=Path(args.state_file),
         force=bool(args.force),
     )
-    print(f"[INFO] panic state Telegram notify status={status} kind={args.kind} audience={args.audience}")
+    print(
+        f"[INFO] panic state Telegram notify status={status} kind={args.kind} audience={args.audience}"
+    )
     return 0
 
 

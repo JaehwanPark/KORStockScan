@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-
 PRIMARY_EV_UPLIFT_THRESHOLD_PCT = 1.0
 
 AUTO_PROMOTION_STATES = (

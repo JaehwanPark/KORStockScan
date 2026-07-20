@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from src.utils.constants import TRADING_RULES
 
-
 LARGE_CAP_THRESHOLD = 2_000_000_000_000
 MID_CAP_THRESHOLD = 500_000_000_000
 
@@ -46,9 +45,15 @@ def estimate_turnover_hint(curr_price, volume) -> int:
 
 
 def get_dynamic_scalp_thresholds(marcap, turnover_hint=0) -> dict:
-    base_surge = _coerce_float(getattr(TRADING_RULES, "MAX_SCALP_SURGE_PCT", 20.0), 20.0)
-    base_intraday = _coerce_float(getattr(TRADING_RULES, "MAX_INTRADAY_SURGE", 16.0), 16.0)
-    base_liquidity = _coerce_int(getattr(TRADING_RULES, "MIN_SCALP_LIQUIDITY", 500_000_000), 500_000_000)
+    base_surge = _coerce_float(
+        getattr(TRADING_RULES, "MAX_SCALP_SURGE_PCT", 20.0), 20.0
+    )
+    base_intraday = _coerce_float(
+        getattr(TRADING_RULES, "MAX_INTRADAY_SURGE", 16.0), 16.0
+    )
+    base_liquidity = _coerce_int(
+        getattr(TRADING_RULES, "MIN_SCALP_LIQUIDITY", 500_000_000), 500_000_000
+    )
 
     bucket = classify_market_cap_bucket(marcap)
     if bucket == "large":
@@ -87,9 +92,13 @@ def get_dynamic_swing_gap_threshold(strategy: str, marcap, turnover_hint=0) -> d
     fallback = _coerce_float(getattr(TRADING_RULES, "MAX_SWING_GAP_UP_PCT", 3.0), 3.0)
     strategy_upper = str(strategy or "").upper()
     if strategy_upper == "KOSPI_ML":
-        base_gap = _coerce_float(getattr(TRADING_RULES, "MAX_SWING_GAP_UP_PCT_KOSPI", fallback), fallback)
+        base_gap = _coerce_float(
+            getattr(TRADING_RULES, "MAX_SWING_GAP_UP_PCT_KOSPI", fallback), fallback
+        )
     else:
-        base_gap = _coerce_float(getattr(TRADING_RULES, "MAX_SWING_GAP_UP_PCT_KOSDAQ", fallback), fallback)
+        base_gap = _coerce_float(
+            getattr(TRADING_RULES, "MAX_SWING_GAP_UP_PCT_KOSDAQ", fallback), fallback
+        )
 
     bucket = classify_market_cap_bucket(marcap)
     if strategy_upper == "KOSPI_ML":

@@ -14,7 +14,6 @@ from typing import Any, Iterable
 from src.trading.config.entry_config import EntryConfig
 from src.utils.constants import DATA_DIR
 
-
 PIPELINE_EVENT_DIR = DATA_DIR / "pipeline_events"
 REPORT_DIR = DATA_DIR / "report" / "latency_classifier_recommendation"
 MONITOR_SNAPSHOT_DIR = DATA_DIR / "report" / "monitor_snapshots"
@@ -174,11 +173,16 @@ def _broker_bypass_required(event: dict[str, Any]) -> bool:
     )
 
 
-def _latency_block_events(target_date: str, *, source_path: Path | None = None) -> list[dict[str, Any]]:
+def _latency_block_events(
+    target_date: str, *, source_path: Path | None = None
+) -> list[dict[str, Any]]:
     path = source_path or _event_source_path(target_date)
     events: list[dict[str, Any]] = []
     for event in _read_jsonl(path):
-        if event.get("pipeline") != "ENTRY_PIPELINE" or event.get("stage") != "latency_block":
+        if (
+            event.get("pipeline") != "ENTRY_PIPELINE"
+            or event.get("stage") != "latency_block"
+        ):
             continue
         if _is_synthetic(event):
             continue
@@ -205,18 +209,26 @@ def _latency_block_events(target_date: str, *, source_path: Path | None = None) 
                 "blocked_stage": fields.get("blocked_stage"),
                 "threshold_family": fields.get("threshold_family"),
                 "decision_authority": fields.get("decision_authority"),
-                "actual_order_submitted": _boolish(fields.get("actual_order_submitted")),
-                "broker_order_forbidden": _boolish(fields.get("broker_order_forbidden")),
+                "actual_order_submitted": _boolish(
+                    fields.get("actual_order_submitted")
+                ),
+                "broker_order_forbidden": _boolish(
+                    fields.get("broker_order_forbidden")
+                ),
                 "emitted_at": event.get("emitted_at"),
             }
         )
     return events
 
 
-def _load_counterfactual_labels(target_date: str) -> tuple[dict[tuple[str, str], dict[str, Any]], dict[str, Any]]:
+def _load_counterfactual_labels(
+    target_date: str,
+) -> tuple[dict[tuple[str, str], dict[str, Any]], dict[str, Any]]:
     path = _counterfactual_source_path(target_date)
     payload = _read_json_dict(path)
-    full_rows = payload.get("full_rows") if isinstance(payload.get("full_rows"), list) else []
+    full_rows = (
+        payload.get("full_rows") if isinstance(payload.get("full_rows"), list) else []
+    )
     display_rows = payload.get("rows") if isinstance(payload.get("rows"), list) else []
     rows = full_rows or display_rows
     row_source = "full_rows" if full_rows else "rows"
@@ -349,25 +361,43 @@ def _counterfactual_summary_for_events(
         for event in recovery_candidates
         if _record_key(event.get("stock_code"), event.get("record_id"))[1]
     }
-    joined_rows = [counterfactual_labels[key] for key in sorted(attempted_keys) if key in counterfactual_labels]
-    outcome_counts = Counter(str(row.get("outcome") or "UNKNOWN") for row in joined_rows)
-    pnl_values = [_to_float(row.get("estimated_counterfactual_pnl_10m_krw"), 0.0) or 0.0 for row in joined_rows]
-    notional_values = [_to_float(row.get("counterfactual_notional_krw"), 0.0) or 0.0 for row in joined_rows]
+    joined_rows = [
+        counterfactual_labels[key]
+        for key in sorted(attempted_keys)
+        if key in counterfactual_labels
+    ]
+    outcome_counts = Counter(
+        str(row.get("outcome") or "UNKNOWN") for row in joined_rows
+    )
+    pnl_values = [
+        _to_float(row.get("estimated_counterfactual_pnl_10m_krw"), 0.0) or 0.0
+        for row in joined_rows
+    ]
+    notional_values = [
+        _to_float(row.get("counterfactual_notional_krw"), 0.0) or 0.0
+        for row in joined_rows
+    ]
     close_values = [_to_float(row.get("close_10m_pct"), None) for row in joined_rows]
     close_values = [value for value in close_values if value is not None]
     pnl_sum = int(round(sum(pnl_values)))
     notional_sum = int(round(sum(notional_values)))
-    ev_pct = round((float(pnl_sum) / float(notional_sum)) * 100.0, 4) if notional_sum > 0 else None
+    ev_pct = (
+        round((float(pnl_sum) / float(notional_sum)) * 100.0, 4)
+        if notional_sum > 0
+        else None
+    )
     return {
         "counterfactual_joined_sample": len(joined_rows),
         "counterfactual_joinable_attempts": len(attempted_keys),
-        "counterfactual_join_rate_pct": round((len(joined_rows) / len(attempted_keys)) * 100.0, 1)
-        if attempted_keys
-        else 0.0,
+        "counterfactual_join_rate_pct": (
+            round((len(joined_rows) / len(attempted_keys)) * 100.0, 1)
+            if attempted_keys
+            else 0.0
+        ),
         "counterfactual_ev_pct": ev_pct,
-        "counterfactual_avg_close_10m_pct": round(sum(close_values) / len(close_values), 4)
-        if close_values
-        else None,
+        "counterfactual_avg_close_10m_pct": (
+            round(sum(close_values) / len(close_values), 4) if close_values else None
+        ),
         "counterfactual_pnl_10m_krw_sum": pnl_sum,
         "counterfactual_notional_krw_sum": notional_sum,
         "missed_winner_recovered": int(outcome_counts.get("MISSED_WINNER", 0)),
@@ -381,7 +411,9 @@ def _counterfactual_summary_for_events(
                 "record_id": row.get("record_id"),
                 "outcome": row.get("outcome"),
                 "close_10m_pct": row.get("close_10m_pct"),
-                "estimated_counterfactual_pnl_10m_krw": row.get("estimated_counterfactual_pnl_10m_krw"),
+                "estimated_counterfactual_pnl_10m_krw": row.get(
+                    "estimated_counterfactual_pnl_10m_krw"
+                ),
             }
             for row in joined_rows[:5]
         ],
@@ -432,14 +464,23 @@ def _profile_result(
                 stale_quote_candidates.append(event)
             elif broker_bypass:
                 broker_bypass_candidates.append(event)
-            elif reason == "latency_fallback_deprecated" and ai_score >= RECOVERY_MIN_SIGNAL_SCORE:
+            elif (
+                reason == "latency_fallback_deprecated"
+                and ai_score >= RECOVERY_MIN_SIGNAL_SCORE
+            ):
                 recovery_candidates.append(event)
         else:
             hard_rejected.append(event)
 
-    unique_safe_codes = {str(event.get("stock_code") or "") for event in safe_passed if event.get("stock_code")}
+    unique_safe_codes = {
+        str(event.get("stock_code") or "")
+        for event in safe_passed
+        if event.get("stock_code")
+    }
     unique_recovery_codes = {
-        str(event.get("stock_code") or "") for event in recovery_candidates if event.get("stock_code")
+        str(event.get("stock_code") or "")
+        for event in recovery_candidates
+        if event.get("stock_code")
     }
     unique_recovery_attempts = {
         _record_key(event.get("stock_code"), event.get("record_id"))
@@ -449,15 +490,23 @@ def _profile_result(
     total = len(events)
     reason_breakdown = dict(
         sorted(
-            Counter(str(event.get("reason") or event.get("decision") or "unknown") for event in events).items()
+            Counter(
+                str(event.get("reason") or event.get("decision") or "unknown")
+                for event in events
+            ).items()
         )
     )
     recovery_reason_breakdown = dict(
         sorted(
-            Counter(str(event.get("reason") or event.get("decision") or "unknown") for event in recovery_candidates).items()
+            Counter(
+                str(event.get("reason") or event.get("decision") or "unknown")
+                for event in recovery_candidates
+            ).items()
         )
     )
-    cf_summary = _counterfactual_summary_for_events(recovery_candidates, counterfactual_labels)
+    cf_summary = _counterfactual_summary_for_events(
+        recovery_candidates, counterfactual_labels
+    )
     recovery_floor = max(10, int(total_events * RECOVERY_EVENT_FLOOR_RATIO))
     stale_quote_override = len(stale_quote_candidates)
     broker_guard_bypass = len(broker_bypass_candidates)
@@ -476,17 +525,13 @@ def _profile_result(
     elif len(recovery_candidates) >= recovery_floor:
         if joined < COUNTERFACTUAL_SAMPLE_FLOOR:
             action = "hold"
-            action_reason = (
-                f"counterfactual_joined_sample={joined} below floor={COUNTERFACTUAL_SAMPLE_FLOOR}"
-            )
+            action_reason = f"counterfactual_joined_sample={joined} below floor={COUNTERFACTUAL_SAMPLE_FLOOR}"
         elif ev_pct is None or float(ev_pct) <= 0.0:
             action = "hold"
             action_reason = f"counterfactual_ev_pct={ev_pct} not positive"
         elif avoided_losers > missed_winners:
             action = "hold"
-            action_reason = (
-                f"avoided_loser_lost={avoided_losers} exceeds missed_winner_recovered={missed_winners}"
-            )
+            action_reason = f"avoided_loser_lost={avoided_losers} exceeds missed_winner_recovered={missed_winners}"
         else:
             action = "bounded_apply"
             action_reason = (
@@ -527,7 +572,9 @@ def _profile_result(
     }
 
 
-def _build_candidate(target_date: str, profile: dict[str, Any], total_events: int) -> dict[str, Any]:
+def _build_candidate(
+    target_date: str, profile: dict[str, Any], total_events: int
+) -> dict[str, Any]:
     sample_floor = 20
     recovery_floor = max(10, int(total_events * RECOVERY_EVENT_FLOOR_RATIO))
     recovery_count = int(profile.get("would_recovery_canary_events") or 0)
@@ -540,7 +587,11 @@ def _build_candidate(target_date: str, profile: dict[str, Any], total_events: in
         state = "adjust_up"
     elif runtime_simplified:
         state = "hold"
-    elif recovery_count < recovery_floor or int(profile.get("counterfactual_joined_sample") or 0) < COUNTERFACTUAL_SAMPLE_FLOOR:
+    elif (
+        recovery_count < recovery_floor
+        or int(profile.get("counterfactual_joined_sample") or 0)
+        < COUNTERFACTUAL_SAMPLE_FLOOR
+    ):
         state = "hold_sample"
     elif quote_stale_override > 0 or broker_guard_bypass > 0:
         state = "freeze"
@@ -550,14 +601,16 @@ def _build_candidate(target_date: str, profile: dict[str, Any], total_events: in
         f"recommended_action=bounded_apply; {profile.get('recommended_action_reason')}"
         if eligible
         else (
-            "latency runtime simplified: CAUTION no longer blocks submit after slippage check; "
-            "DANGER/stale/broker safety remains blocked; no adaptive latency env apply"
-        )
-        if runtime_simplified
-        else (
-            f"recommended_action={recommended_action}; {profile.get('recommended_action_reason')}; "
-            f"latency_blocks={total_events} recovery_count={recovery_count} floor={recovery_floor} "
-            f"quote_stale_override={quote_stale_override} broker_guard_bypass={broker_guard_bypass}"
+            (
+                "latency runtime simplified: CAUTION no longer blocks submit after slippage check; "
+                "DANGER/stale/broker safety remains blocked; no adaptive latency env apply"
+            )
+            if runtime_simplified
+            else (
+                f"recommended_action={recommended_action}; {profile.get('recommended_action_reason')}; "
+                f"latency_blocks={total_events} recovery_count={recovery_count} floor={recovery_floor} "
+                f"quote_stale_override={quote_stale_override} broker_guard_bypass={broker_guard_bypass}"
+            )
         )
     )
     return {
@@ -573,8 +626,12 @@ def _build_candidate(target_date: str, profile: dict[str, Any], total_events: in
         "current_values": DEFAULT_CURRENT_VALUES,
         "recommended_values": {
             "max_ws_age_ms_for_caution": int(profile["max_ws_age_ms_for_caution"]),
-            "max_ws_jitter_ms_for_caution": int(profile["max_ws_jitter_ms_for_caution"]),
-            "max_spread_ratio_for_caution": float(profile["max_spread_ratio_for_caution"]),
+            "max_ws_jitter_ms_for_caution": int(
+                profile["max_ws_jitter_ms_for_caution"]
+            ),
+            "max_spread_ratio_for_caution": float(
+                profile["max_spread_ratio_for_caution"]
+            ),
             "recovery_enabled": bool(eligible),
             "recovery_min_signal_score": RECOVERY_MIN_SIGNAL_SCORE,
             "recovery_max_ws_age_ms": int(profile["max_ws_age_ms_for_caution"]),
@@ -603,27 +660,46 @@ def _build_candidate(target_date: str, profile: dict[str, Any], total_events: in
             "recommended_action": recommended_action,
             "recommended_action_reason": profile.get("recommended_action_reason"),
             "would_safe_pass_events": int(profile.get("would_safe_pass_events") or 0),
-            "would_caution_normal_events": int(profile.get("would_caution_normal_events") or 0),
+            "would_caution_normal_events": int(
+                profile.get("would_caution_normal_events") or 0
+            ),
             "would_recovery_canary_events": recovery_count,
-            "would_recovery_canary_attempts": int(profile.get("would_recovery_canary_attempts") or 0),
+            "would_recovery_canary_attempts": int(
+                profile.get("would_recovery_canary_attempts") or 0
+            ),
             "hard_reject_events": int(profile.get("hard_reject_events") or 0),
             "quote_stale_override_events": quote_stale_override,
-            "stale_quote_override_events": int(profile.get("stale_quote_override_events") or 0),
+            "stale_quote_override_events": int(
+                profile.get("stale_quote_override_events") or 0
+            ),
             "broker_guard_bypass_candidates": broker_guard_bypass,
             "fallback_deprecated_excluded_from_pass_events": int(
                 profile.get("fallback_deprecated_excluded_from_pass_events") or 0
             ),
-            "counterfactual_joined_sample": int(profile.get("counterfactual_joined_sample") or 0),
-            "counterfactual_joinable_attempts": int(profile.get("counterfactual_joinable_attempts") or 0),
+            "counterfactual_joined_sample": int(
+                profile.get("counterfactual_joined_sample") or 0
+            ),
+            "counterfactual_joinable_attempts": int(
+                profile.get("counterfactual_joinable_attempts") or 0
+            ),
             "counterfactual_join_rate_pct": profile.get("counterfactual_join_rate_pct"),
             "counterfactual_ev_pct": profile.get("counterfactual_ev_pct"),
-            "counterfactual_avg_close_10m_pct": profile.get("counterfactual_avg_close_10m_pct"),
-            "counterfactual_pnl_10m_krw_sum": int(profile.get("counterfactual_pnl_10m_krw_sum") or 0),
-            "counterfactual_notional_krw_sum": int(profile.get("counterfactual_notional_krw_sum") or 0),
+            "counterfactual_avg_close_10m_pct": profile.get(
+                "counterfactual_avg_close_10m_pct"
+            ),
+            "counterfactual_pnl_10m_krw_sum": int(
+                profile.get("counterfactual_pnl_10m_krw_sum") or 0
+            ),
+            "counterfactual_notional_krw_sum": int(
+                profile.get("counterfactual_notional_krw_sum") or 0
+            ),
             "missed_winner_recovered": int(profile.get("missed_winner_recovered") or 0),
             "avoided_loser_lost": int(profile.get("avoided_loser_lost") or 0),
             "neutral_recovered": int(profile.get("neutral_recovered") or 0),
-            "counterfactual_outcome_counts": profile.get("counterfactual_outcome_counts") or {},
+            "counterfactual_outcome_counts": profile.get(
+                "counterfactual_outcome_counts"
+            )
+            or {},
             "reason_breakdown": profile.get("reason_breakdown") or {},
             "recovery_reason_breakdown": profile.get("recovery_reason_breakdown") or {},
             "r0_r6_consumer_map": {
@@ -645,26 +721,44 @@ def _build_candidate(target_date: str, profile: dict[str, Any], total_events: in
     }
 
 
-def build_report(target_date: str, *, source_path: Path | None = None) -> dict[str, Any]:
+def build_report(
+    target_date: str, *, source_path: Path | None = None
+) -> dict[str, Any]:
     events = _latency_block_events(target_date, source_path=source_path)
-    counterfactual_labels, counterfactual_source = _load_counterfactual_labels(target_date)
+    counterfactual_labels, counterfactual_source = _load_counterfactual_labels(
+        target_date
+    )
     profiles = _build_profiles(events)
     profile_results = [
-        _profile_result(profile, events, counterfactual_labels, total_events=len(events)) for profile in profiles
+        _profile_result(
+            profile, events, counterfactual_labels, total_events=len(events)
+        )
+        for profile in profiles
     ]
     recommended = max(
         profile_results,
         key=lambda item: (
-            {"bounded_apply": 2, "hold": 1, "reject": 0}.get(str(item.get("recommended_action") or ""), 0),
-            float(item.get("counterfactual_ev_pct") if item.get("counterfactual_ev_pct") is not None else -9999.0),
-            int(item.get("missed_winner_recovered") or 0) - int(item.get("avoided_loser_lost") or 0),
+            {"bounded_apply": 2, "hold": 1, "reject": 0}.get(
+                str(item.get("recommended_action") or ""), 0
+            ),
+            float(
+                item.get("counterfactual_ev_pct")
+                if item.get("counterfactual_ev_pct") is not None
+                else -9999.0
+            ),
+            int(item.get("missed_winner_recovered") or 0)
+            - int(item.get("avoided_loser_lost") or 0),
             int(item.get("would_recovery_canary_events") or 0),
             int(item.get("would_safe_pass_events") or 0),
             -float(item.get("max_spread_ratio_for_caution") or 0.0),
             -int(item.get("max_ws_jitter_ms_for_caution") or 0),
             -int(item.get("max_ws_age_ms_for_caution") or 0),
         ),
-        default=next(item for item in profile_results if item["profile_id"] == RECOMMENDED_PROFILE_ID),
+        default=next(
+            item
+            for item in profile_results
+            if item["profile_id"] == RECOMMENDED_PROFILE_ID
+        ),
     )
     candidate = _build_candidate(target_date, recommended, len(events))
     return {
@@ -675,8 +769,16 @@ def build_report(target_date: str, *, source_path: Path | None = None) -> dict[s
         "counterfactual_source": counterfactual_source,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "latency_block_count": len(events),
-        "unique_codes": sorted({str(event.get("stock_code") or "") for event in events if event.get("stock_code")}),
-        "quote_stale_true_count": sum(1 for event in events if bool(event.get("quote_stale"))),
+        "unique_codes": sorted(
+            {
+                str(event.get("stock_code") or "")
+                for event in events
+                if event.get("stock_code")
+            }
+        ),
+        "quote_stale_true_count": sum(
+            1 for event in events if bool(event.get("quote_stale"))
+        ),
         "profile_generation": {
             "mode": "grid_quantile_search",
             "profile_count": len(profile_results),
@@ -712,8 +814,14 @@ def _render_md(payload: dict[str, Any]) -> str:
     ranked = sorted(
         payload.get("profile_results") or [],
         key=lambda item: (
-            {"bounded_apply": 2, "hold": 1, "reject": 0}.get(str(item.get("recommended_action") or ""), 0),
-            float(item.get("counterfactual_ev_pct") if item.get("counterfactual_ev_pct") is not None else -9999.0),
+            {"bounded_apply": 2, "hold": 1, "reject": 0}.get(
+                str(item.get("recommended_action") or ""), 0
+            ),
+            float(
+                item.get("counterfactual_ev_pct")
+                if item.get("counterfactual_ev_pct") is not None
+                else -9999.0
+            ),
             int(item.get("would_recovery_canary_events") or 0),
         ),
         reverse=True,
@@ -753,20 +861,34 @@ def _render_md(payload: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def write_report(target_date: str, *, source_path: Path | None = None) -> dict[str, Any]:
+def write_report(
+    target_date: str, *, source_path: Path | None = None
+) -> dict[str, Any]:
     payload = build_report(target_date, source_path=source_path)
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    report_json_path(target_date).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    report_json_path(target_date).write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     report_md_path(target_date).write_text(_render_md(payload), encoding="utf-8")
     return payload
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build latency classifier threshold recommendation.")
-    parser.add_argument("--date", default=date.today().isoformat(), help="Target source date")
-    parser.add_argument("--source-path", default=None, help="Optional pipeline_events jsonl/jsonl.gz path")
+    parser = argparse.ArgumentParser(
+        description="Build latency classifier threshold recommendation."
+    )
+    parser.add_argument(
+        "--date", default=date.today().isoformat(), help="Target source date"
+    )
+    parser.add_argument(
+        "--source-path",
+        default=None,
+        help="Optional pipeline_events jsonl/jsonl.gz path",
+    )
     args = parser.parse_args(argv)
-    payload = write_report(args.date, source_path=Path(args.source_path) if args.source_path else None)
+    payload = write_report(
+        args.date, source_path=Path(args.source_path) if args.source_path else None
+    )
     print(json.dumps(payload, ensure_ascii=False))
     return 0
 

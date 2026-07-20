@@ -10,7 +10,6 @@ from typing import Any
 
 from src.utils.constants import DATA_DIR
 
-
 APPROVAL_DIR = DATA_DIR / "threshold_cycle" / "approvals"
 REPORT_DIR = DATA_DIR / "report" / "lifecycle_decision_matrix"
 POLICY_ID = "scalp_sim_scale_in_window_expansion"
@@ -35,10 +34,22 @@ def build_scalp_sim_scale_in_window_approval(target_date: str) -> dict[str, Any]
     matrix = _read_json(matrix_path)
     summary = matrix.get("summary") if isinstance(matrix.get("summary"), dict) else {}
     source = matrix.get("sources") if isinstance(matrix.get("sources"), dict) else {}
-    scale_source = source.get("scalp_sim_scale_in") if isinstance(source.get("scalp_sim_scale_in"), dict) else {}
-    policy_entries = matrix.get("policy_entries") if isinstance(matrix.get("policy_entries"), list) else []
+    scale_source = (
+        source.get("scalp_sim_scale_in")
+        if isinstance(source.get("scalp_sim_scale_in"), dict)
+        else {}
+    )
+    policy_entries = (
+        matrix.get("policy_entries")
+        if isinstance(matrix.get("policy_entries"), list)
+        else []
+    )
     scale_policy = next(
-        (item for item in policy_entries if isinstance(item, dict) and item.get("stage") == "scale_in"),
+        (
+            item
+            for item in policy_entries
+            if isinstance(item, dict) and item.get("stage") == "scale_in"
+        ),
         {},
     )
     matrix_status = str(summary.get("status") or "")
@@ -59,7 +70,9 @@ def build_scalp_sim_scale_in_window_approval(target_date: str) -> dict[str, Any]
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "approved": auto_approved,
-        "approval_state": "sim_auto_approved" if auto_approved else "source_quality_blocked",
+        "approval_state": (
+            "sim_auto_approved" if auto_approved else "source_quality_blocked"
+        ),
         "human_approval_required": False,
         "decision_authority": "sim_auto_approval_only",
         "runtime_effect": False,
@@ -124,12 +137,16 @@ def build_scalp_sim_scale_in_window_approval(target_date: str) -> dict[str, Any]
         ],
     }
     APPROVAL_DIR.mkdir(parents=True, exist_ok=True)
-    approval_path(target_date).write_text(json.dumps(artifact, ensure_ascii=False, indent=2), encoding="utf-8")
+    approval_path(target_date).write_text(
+        json.dumps(artifact, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     return artifact
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build scalp sim scale-in window sim-auto artifact.")
+    parser = argparse.ArgumentParser(
+        description="Build scalp sim scale-in window sim-auto artifact."
+    )
     parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
     args = parser.parse_args(argv)
     artifact = build_scalp_sim_scale_in_window_approval(args.target_date)

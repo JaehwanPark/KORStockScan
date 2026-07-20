@@ -300,7 +300,9 @@ class TuningDuckDBRepository:
             "parquet_root": str(PARQUET_ROOT),
             "coverage": coverage.to_dict(orient="records"),
             "missing_datasets": missing_datasets,
-            "total_rows": int(coverage["total_rows"].sum() if not coverage.empty else 0),
+            "total_rows": int(
+                coverage["total_rows"].sum() if not coverage.empty else 0
+            ),
         }
 
 
@@ -315,6 +317,7 @@ def create_analytics_views(duckdb_path: Optional[Path] = None):
 if __name__ == "__main__":
     # 테스트 실행
     import sys
+
     logging.basicConfig(level=logging.INFO)
     if len(sys.argv) > 1 and sys.argv[1] == "init":
         create_analytics_views()

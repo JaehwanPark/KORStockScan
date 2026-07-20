@@ -18,7 +18,11 @@ def _rule_time(rule_name, default_value):
 
 
 def _in_time_window(now_value, start, end):
-    return (start <= now_value <= end) if start <= end else (now_value >= start or now_value <= end)
+    return (
+        (start <= now_value <= end)
+        if start <= end
+        else (now_value >= start or now_value <= end)
+    )
 
 
 def _parse_time_value(value):
@@ -37,7 +41,12 @@ def _rule_time_windows(rule_name, default_value):
                 if not token:
                     continue
                 start_raw, end_raw = token.split("-", 1)
-                windows.append((_parse_time_value(start_raw.strip()), _parse_time_value(end_raw.strip())))
+                windows.append(
+                    (
+                        _parse_time_value(start_raw.strip()),
+                        _parse_time_value(end_raw.strip()),
+                    )
+                )
             if windows:
                 return tuple(windows)
         except Exception:
@@ -57,12 +66,16 @@ def _coerce_time(value):
 
 def describe_scalping_buy_windows(windows=None):
     active_windows = windows if windows is not None else SCALPING_BUY_WINDOWS
-    return ",".join(f"{start.isoformat()}-{end.isoformat()}" for start, end in active_windows)
+    return ",".join(
+        f"{start.isoformat()}-{end.isoformat()}" for start, end in active_windows
+    )
 
 
 def is_scalping_buy_time_allowed(now_value=None):
     now_t = _coerce_time(now_value)
-    return any(_in_time_window(now_t, start, end) for start, end in SCALPING_BUY_WINDOWS)
+    return any(
+        _in_time_window(now_t, start, end) for start, end in SCALPING_BUY_WINDOWS
+    )
 
 
 def scalping_buy_time_block_reason(now_value=None):
@@ -83,9 +96,13 @@ TIME_09_05 = _rule_time("SWING_EARLIEST_BUY_TIME", "09:05:00")
 TIME_09_10 = _rule_time("MORNING_BATCH_END_TIME", "09:10:00")
 TIME_10_30 = _rule_time("MORNING_SCALPING_END_TIME", "10:30:00")
 TIME_11_00 = _rule_time("MIDDAY_SCALPING_END_TIME", "11:00:00")
-SCALPING_BUY_WINDOWS = _rule_time_windows("SCALPING_BUY_WINDOWS", DEFAULT_SCALPING_BUY_WINDOWS)
+SCALPING_BUY_WINDOWS = _rule_time_windows(
+    "SCALPING_BUY_WINDOWS", DEFAULT_SCALPING_BUY_WINDOWS
+)
 TIME_SCALPING_NEW_BUY_CUTOFF = _rule_time("SCALPING_NEW_BUY_CUTOFF", "19:45:00")
-TIME_SCALPING_OVERNIGHT_DECISION = _rule_time("SCALPING_OVERNIGHT_DECISION_TIME", "15:10:00")
+TIME_SCALPING_OVERNIGHT_DECISION = _rule_time(
+    "SCALPING_OVERNIGHT_DECISION_TIME", "15:10:00"
+)
 TIME_MARKET_CLOSE = _rule_time("MARKET_CLOSE_TIME", "15:30:00")
 TIME_15_30 = TIME_MARKET_CLOSE
 TIME_20_00 = _rule_time("SYSTEM_SHUTDOWN_TIME", "20:00:00")

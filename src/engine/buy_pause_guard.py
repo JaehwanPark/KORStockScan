@@ -24,7 +24,6 @@ from src.utils.constants import DATA_DIR, LOGS_DIR
 from src.utils.logger import log_error, log_info
 from src.utils.runtime_flags import is_trading_paused
 
-
 RUNTIME_DIR = DATA_DIR / "runtime"
 BUY_PAUSE_GUARD_STATE_PATH = RUNTIME_DIR / "buy_pause_guard_state.json"
 BUY_PAUSE_GUARD_VERSION = 1
@@ -121,7 +120,9 @@ def _collect_trade_rows(target_date: str) -> list[dict[str, Any]]:
     return compiled_rows
 
 
-def _filter_completed_fallback_scalps(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _filter_completed_fallback_scalps(
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     filtered: list[dict[str, Any]] = []
     for row in rows:
         if str(row.get("strategy") or "").upper() != "SCALPING":
@@ -133,18 +134,26 @@ def _filter_completed_fallback_scalps(rows: list[dict[str, Any]]) -> list[dict[s
         filtered.append(row)
     filtered.sort(
         key=lambda row: (
-            _parse_dt(row.get("sell_time")) or _parse_dt(row.get("buy_time")) or datetime.min,
+            _parse_dt(row.get("sell_time"))
+            or _parse_dt(row.get("buy_time"))
+            or datetime.min,
             _safe_int(row.get("id")),
         )
     )
     return filtered
 
 
-def _find_previous_trading_day_avg_loss(now_dt: datetime, *, max_lookback_days: int = 7) -> tuple[str, float | None]:
+def _find_previous_trading_day_avg_loss(
+    now_dt: datetime, *, max_lookback_days: int = 7
+) -> tuple[str, float | None]:
     for day_delta in range(1, max_lookback_days + 1):
         candidate = (now_dt - timedelta(days=day_delta)).strftime("%Y-%m-%d")
         rows = _filter_completed_fallback_scalps(_collect_trade_rows(candidate))
-        losses = [_safe_float(row.get("profit_rate")) for row in rows if _safe_float(row.get("profit_rate")) < 0]
+        losses = [
+            _safe_float(row.get("profit_rate"))
+            for row in rows
+            if _safe_float(row.get("profit_rate")) < 0
+        ]
         if losses:
             return candidate, round(sum(losses) / len(losses), 2)
     return "", None
@@ -166,10 +175,22 @@ def _build_metrics_snapshot(target_date: str, now_dt: datetime) -> dict[str, Any
     wins = [row for row in completed_rows if _safe_float(row.get("profit_rate")) > 0]
     losses = [row for row in completed_rows if _safe_float(row.get("profit_rate")) < 0]
     win_rate = round((len(wins) / completed_count) * 100, 1) if completed_count else 0.0
-    avg_loss_rate = round(sum(_safe_float(row.get("profit_rate")) for row in losses) / len(losses), 2) if losses else 0.0
-    realized_pnl_krw = int(sum(_safe_int(row.get("realized_pnl_krw")) for row in completed_rows))
+    avg_loss_rate = (
+        round(
+            sum(_safe_float(row.get("profit_rate")) for row in losses) / len(losses), 2
+        )
+        if losses
+        else 0.0
+    )
+    realized_pnl_krw = int(
+        sum(_safe_int(row.get("realized_pnl_krw")) for row in completed_rows)
+    )
     exit_rule_counts = Counter(
-        str((row.get("exit_signal") or {}).get("exit_rule") or row.get("exit_rule") or "unknown")
+        str(
+            (row.get("exit_signal") or {}).get("exit_rule")
+            or row.get("exit_rule")
+            or "unknown"
+        )
         for row in losses
     )
     prev_loss_date, prev_avg_loss_rate = _find_previous_trading_day_avg_loss(now_dt)
@@ -180,7 +201,10 @@ def _build_metrics_snapshot(target_date: str, now_dt: datetime) -> dict[str, Any
     )
     sample_ready = bool(
         completed_count >= 3
-        or (now_dt.time() >= BUY_PAUSE_GUARD_TRIGGER_SAMPLE_READY and completed_count >= 2)
+        or (
+            now_dt.time() >= BUY_PAUSE_GUARD_TRIGGER_SAMPLE_READY
+            and completed_count >= 2
+        )
     )
     trigger_flags = {
         "win_rate_bad": completed_count >= 3 and win_rate <= 0.0,
@@ -213,7 +237,9 @@ def _build_metrics_snapshot(target_date: str, now_dt: datetime) -> dict[str, Any
         "fallback_avg_loss_rate_delta_vs_prev": avg_loss_delta,
         "sample_ready": sample_ready,
         "trigger_flags": trigger_flags,
-        "triggered_flag_names": [name for name, active in trigger_flags.items() if active],
+        "triggered_flag_names": [
+            name for name, active in trigger_flags.items() if active
+        ],
         "latest_trade_fingerprint": _build_latest_trade_fingerprint(completed_rows),
     }
 
@@ -241,7 +267,10 @@ def _build_guard_id(state: dict[str, Any], now_dt: datetime) -> tuple[str, int]:
 def _format_guard_alert_message(guard_id: str, metrics_snapshot: dict[str, Any]) -> str:
     trigger_names = ", ".join(metrics_snapshot.get("triggered_flag_names") or []) or "-"
     exit_rules = metrics_snapshot.get("fallback_loss_exit_rules") or {}
-    exit_rule_text = ", ".join(f"{key}:{value}" for key, value in sorted(exit_rules.items())) or "없음"
+    exit_rule_text = (
+        ", ".join(f"{key}:{value}" for key, value in sorted(exit_rules.items()))
+        or "없음"
+    )
     prev_loss_text = (
         f"{metrics_snapshot.get('previous_loss_date')} avg_loss={metrics_snapshot.get('previous_fallback_losing_avg_loss_rate')}%"
         if metrics_snapshot.get("previous_fallback_losing_avg_loss_rate") is not None
@@ -287,7 +316,9 @@ def evaluate_buy_pause_guard(
     resolved_date = str(target_date or current.strftime("%Y-%m-%d"))
     state = load_buy_pause_guard_state(now_dt=current)
     metrics_snapshot = _build_metrics_snapshot(resolved_date, current)
-    latest_trade_fingerprint = str(metrics_snapshot.get("latest_trade_fingerprint") or "")
+    latest_trade_fingerprint = str(
+        metrics_snapshot.get("latest_trade_fingerprint") or ""
+    )
     should_alert = _should_alert(metrics_snapshot)
 
     result = {
@@ -305,7 +336,10 @@ def evaluate_buy_pause_guard(
 
     active_status = str(state.get("status") or "")
     active_fingerprint = str(state.get("latest_trade_fingerprint") or "")
-    if active_status in {"pending", "confirmed", "rejected"} and active_fingerprint == latest_trade_fingerprint:
+    if (
+        active_status in {"pending", "confirmed", "rejected"}
+        and active_fingerprint == latest_trade_fingerprint
+    ):
         result["guard_id"] = str(state.get("active_guard_id") or "")
         result["state_status"] = active_status
         return result
@@ -338,7 +372,9 @@ def evaluate_buy_pause_guard(
     return result
 
 
-def confirm_buy_pause_guard(guard_id: str, *, event_bus=None, now_dt: datetime | None = None) -> dict[str, Any]:
+def confirm_buy_pause_guard(
+    guard_id: str, *, event_bus=None, now_dt: datetime | None = None
+) -> dict[str, Any]:
     current = _now(now_dt)
     state = load_buy_pause_guard_state(now_dt=current)
     requested_guard_id = str(guard_id or "").strip()
@@ -346,13 +382,19 @@ def confirm_buy_pause_guard(guard_id: str, *, event_bus=None, now_dt: datetime |
     if not requested_guard_id or requested_guard_id != active_guard_id:
         return {"ok": False, "message": "대기 중인 guard_id와 일치하지 않습니다."}
     if str(state.get("status") or "") != "pending":
-        return {"ok": False, "message": f"현재 상태는 `{state.get('status') or '-'}` 입니다."}
+        return {
+            "ok": False,
+            "message": f"현재 상태는 `{state.get('status') or '-'}` 입니다.",
+        }
     expires_at = _parse_guard_timestamp(state.get("expires_at"))
     if expires_at and expires_at <= current:
         state["status"] = "expired"
         state["resolved_at"] = _format_guard_timestamp(current)
         save_buy_pause_guard_state(state)
-        return {"ok": False, "message": "guard 승인 가능 시간이 지났습니다. 필요하면 /pause 를 직접 사용하세요."}
+        return {
+            "ok": False,
+            "message": "guard 승인 가능 시간이 지났습니다. 필요하면 /pause 를 직접 사용하세요.",
+        }
 
     paused = set_buy_side_pause(
         True,
@@ -374,7 +416,9 @@ def confirm_buy_pause_guard(guard_id: str, *, event_bus=None, now_dt: datetime |
     }
 
 
-def reject_buy_pause_guard(guard_id: str, *, now_dt: datetime | None = None) -> dict[str, Any]:
+def reject_buy_pause_guard(
+    guard_id: str, *, now_dt: datetime | None = None
+) -> dict[str, Any]:
     current = _now(now_dt)
     state = load_buy_pause_guard_state(now_dt=current)
     requested_guard_id = str(guard_id or "").strip()
@@ -382,7 +426,10 @@ def reject_buy_pause_guard(guard_id: str, *, now_dt: datetime | None = None) -> 
     if not requested_guard_id or requested_guard_id != active_guard_id:
         return {"ok": False, "message": "대기 중인 guard_id와 일치하지 않습니다."}
     if str(state.get("status") or "") != "pending":
-        return {"ok": False, "message": f"현재 상태는 `{state.get('status') or '-'}` 입니다."}
+        return {
+            "ok": False,
+            "message": f"현재 상태는 `{state.get('status') or '-'}` 입니다.",
+        }
 
     state["status"] = "rejected"
     state["resolved_at"] = _format_guard_timestamp(current)
@@ -411,24 +458,42 @@ def get_buy_pause_guard_status(now_dt: datetime | None = None) -> dict[str, Any]
 
 
 def _main() -> int:
-    parser = argparse.ArgumentParser(description="Buy pause guard evaluator and status helper")
+    parser = argparse.ArgumentParser(
+        description="Buy pause guard evaluator and status helper"
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    evaluate_parser = subparsers.add_parser("evaluate", help="Evaluate buy pause guard conditions")
+    evaluate_parser = subparsers.add_parser(
+        "evaluate", help="Evaluate buy pause guard conditions"
+    )
     evaluate_parser.add_argument("--date", dest="target_date", default=None)
-    evaluate_parser.add_argument("--no-alert", action="store_true", help="Skip Telegram alert publishing")
+    evaluate_parser.add_argument(
+        "--no-alert", action="store_true", help="Skip Telegram alert publishing"
+    )
 
-    status_parser = subparsers.add_parser("status", help="Show current buy pause guard state")
-    status_parser.add_argument("--json", action="store_true", help="Print full JSON payload")
+    status_parser = subparsers.add_parser(
+        "status", help="Show current buy pause guard state"
+    )
+    status_parser.add_argument(
+        "--json", action="store_true", help="Print full JSON payload"
+    )
 
     args = parser.parse_args()
 
     if args.command == "evaluate":
-        result = evaluate_buy_pause_guard(args.target_date, send_alert=not args.no_alert)
+        result = evaluate_buy_pause_guard(
+            args.target_date, send_alert=not args.no_alert
+        )
         print(json.dumps(result, ensure_ascii=False, indent=2))
-        target_date = str(result.get("target_date") or args.target_date or datetime.now().strftime("%Y-%m-%d"))
+        target_date = str(
+            result.get("target_date")
+            or args.target_date
+            or datetime.now().strftime("%Y-%m-%d")
+        )
         finished_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        print(f"[DONE] buy_pause_guard target_date={target_date} finished_at={finished_at}")
+        print(
+            f"[DONE] buy_pause_guard target_date={target_date} finished_at={finished_at}"
+        )
         return 0
 
     if args.command == "status":

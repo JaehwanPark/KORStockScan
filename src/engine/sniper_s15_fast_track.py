@@ -15,7 +15,6 @@ from src.utils import kiwoom_utils
 from src.utils.logger import log_error, log_info
 from src.utils.pipeline_event_logger import emit_pipeline_event
 
-
 KIWOOM_TOKEN = None
 WS_MANAGER = None
 AI_ENGINE = None
@@ -80,7 +79,7 @@ def _now_ts():
 
 
 def _get_tick_size_for_price(price):
-    if hasattr(kiwoom_utils, 'get_tick_size'):
+    if hasattr(kiwoom_utils, "get_tick_size"):
         return int(kiwoom_utils.get_tick_size(price))
     if price < 2000:
         return 1
@@ -123,11 +122,11 @@ def _arm_s15_candidate(code, name, cnd_name, ttl_sec=180):
     expires_at = now + ttl_sec
     with FAST_LOCK:
         FAST_SCALP_POOL[code] = {
-            'name': name or code,
-            'armed_at': now,
-            'last_seen': now,
-            'base_condition': cnd_name,
-            'expires_at': expires_at,
+            "name": name or code,
+            "armed_at": now,
+            "last_seen": now,
+            "base_condition": cnd_name,
+            "expires_at": expires_at,
         }
     try:
         _save_armed_candidate_to_db(code, name, cnd_name, now, expires_at)
@@ -156,14 +155,14 @@ def _save_armed_candidate_to_db(code, name, cnd_name, armed_at, expires_at):
     if DB is None:
         return
     with DB.get_session() as session:
-        record = session.query(RecommendationHistory).filter_by(
-            rec_date=today,
-            stock_code=code,
-            strategy='S15_CANDID'
-        ).first()
+        record = (
+            session.query(RecommendationHistory)
+            .filter_by(rec_date=today, stock_code=code, strategy="S15_CANDID")
+            .first()
+        )
         if record:
             record.stock_name = name
-            record.position_tag = 'S15_CANDID:' + cnd_name
+            record.position_tag = "S15_CANDID:" + cnd_name
             record.entry_armed_at_epoch = armed_at
             # Legacy TTL persistence fields: nxt=armed_at, hard_stop_price=expires_at.
             record.nxt = armed_at
@@ -174,10 +173,10 @@ def _save_armed_candidate_to_db(code, name, cnd_name, armed_at, expires_at):
                 rec_date=today,
                 stock_code=code,
                 stock_name=name,
-                trade_type='SCALP',
-                strategy='S15_CANDID',
-                status='WATCHING',
-                position_tag='S15_CANDID:' + cnd_name,
+                trade_type="SCALP",
+                strategy="S15_CANDID",
+                status="WATCHING",
+                position_tag="S15_CANDID:" + cnd_name,
                 prob=0.0,
                 entry_armed_at_epoch=armed_at,
                 # Legacy TTL persistence fields: nxt=armed_at, hard_stop_price=expires_at.
@@ -185,7 +184,7 @@ def _save_armed_candidate_to_db(code, name, cnd_name, armed_at, expires_at):
                 hard_stop_price=expires_at,
                 profit_rate=0.0,
                 buy_price=0,
-                buy_qty=0
+                buy_qty=0,
             )
             session.add(record)
 
@@ -196,9 +195,7 @@ def _delete_armed_candidate_from_database(code):
         return
     with DB.get_session() as session:
         session.query(RecommendationHistory).filter_by(
-            rec_date=today,
-            stock_code=code,
-            strategy='S15_CANDID'
+            rec_date=today, stock_code=code, strategy="S15_CANDID"
         ).delete()
 
 
@@ -209,30 +206,38 @@ def _restore_armed_candidates_from_database():
     if DB is None:
         return
     with DB.get_session() as session:
-        records = session.query(RecommendationHistory).filter_by(
-            rec_date=today,
-            strategy='S15_CANDID',
-            status='WATCHING'
-        ).all()
+        records = (
+            session.query(RecommendationHistory)
+            .filter_by(rec_date=today, strategy="S15_CANDID", status="WATCHING")
+            .all()
+        )
         for rec in records:
             code = rec.stock_code
             name = rec.stock_name
-            cnd_name = rec.position_tag.replace('S15_CANDID:', '') if rec.position_tag else ''
-            armed_at = rec.entry_armed_at_epoch if rec.entry_armed_at_epoch else (rec.nxt if rec.nxt else 0.0)
-            expires_at = rec.hard_stop_price if rec.hard_stop_price else (rec.profit_rate if rec.profit_rate else 0.0)
+            cnd_name = (
+                rec.position_tag.replace("S15_CANDID:", "") if rec.position_tag else ""
+            )
+            armed_at = (
+                rec.entry_armed_at_epoch
+                if rec.entry_armed_at_epoch
+                else (rec.nxt if rec.nxt else 0.0)
+            )
+            expires_at = (
+                rec.hard_stop_price
+                if rec.hard_stop_price
+                else (rec.profit_rate if rec.profit_rate else 0.0)
+            )
             if expires_at < now:
                 session.query(RecommendationHistory).filter_by(
-                    rec_date=today,
-                    stock_code=code,
-                    strategy='S15_CANDID'
+                    rec_date=today, stock_code=code, strategy="S15_CANDID"
                 ).delete()
                 continue
             with FAST_LOCK:
                 FAST_SCALP_POOL[code] = {
-                    'name': name or code,
-                    'cnd_name': cnd_name,
-                    'armed_at': armed_at,
-                    'expires_at': expires_at
+                    "name": name or code,
+                    "cnd_name": cnd_name,
+                    "armed_at": armed_at,
+                    "expires_at": expires_at,
                 }
         session.commit()
 
@@ -244,7 +249,7 @@ def _is_s15_armed(code):
         item = FAST_SCALP_POOL.get(code)
         if not item:
             return False
-        if item.get('expires_at', 0) < now:
+        if item.get("expires_at", 0) < now:
             FAST_SCALP_POOL.pop(code, None)
             need_unarm = True
         else:
@@ -287,10 +292,10 @@ def create_s15_shadow_record(code, name):
                 stock_code=code,
                 stock_name=name,
                 buy_price=0,
-                trade_type='SCALP',
-                strategy='S15_FAST',
-                status='WATCHING',
-                position_tag='S15_FAST'
+                trade_type="SCALP",
+                strategy="S15_FAST",
+                status="WATCHING",
+                position_tag="S15_FAST",
             )
             session.add(record)
             session.flush()
@@ -307,7 +312,9 @@ def update_s15_shadow_record(shadow_id, **kwargs):
         return
     try:
         with DB.get_session() as session:
-            record = session.query(RecommendationHistory).filter_by(id=shadow_id).first()
+            record = (
+                session.query(RecommendationHistory).filter_by(id=shadow_id).first()
+            )
             if not record:
                 return
             for key, value in kwargs.items():
@@ -319,72 +326,65 @@ def update_s15_shadow_record(shadow_id, **kwargs):
 
 def _send_s15_limit_buy(code, qty, price):
     return kiwoom_orders.send_buy_order_market(
-        code=code,
-        qty=qty,
-        token=KIWOOM_TOKEN,
-        order_type="00",
-        price=int(price)
+        code=code, qty=qty, token=KIWOOM_TOKEN, order_type="00", price=int(price)
     )
 
 
 def _send_s15_limit_sell(code, qty, price):
     return kiwoom_orders.send_sell_order_market(
-        code=code,
-        qty=qty,
-        token=KIWOOM_TOKEN,
-        order_type="00",
-        price=int(price)
+        code=code, qty=qty, token=KIWOOM_TOKEN, order_type="00", price=int(price)
     )
 
 
 def _send_s15_market_sell(code, qty):
     return kiwoom_orders.send_sell_order_market(
-        code=code,
-        qty=qty,
-        token=KIWOOM_TOKEN,
-        order_type="3"
+        code=code, qty=qty, token=KIWOOM_TOKEN, order_type="3"
     )
 
 
 def _send_exit_best_ioc(code, qty, token):
     """[공통 긴급 청산 래퍼] 최유리(IOC, 16) 조건으로 즉각 청산 시도"""
     return kiwoom_orders.send_sell_order_market(
-        code=code,
-        qty=qty,
-        token=token,
-        order_type="16"
+        code=code, qty=qty, token=token, order_type="16"
     )
 
 
 def _extract_ord_no(res):
     if isinstance(res, dict):
-        return str(res.get('ord_no', '') or res.get('odno', '') or '')
-    return ''
+        return str(res.get("ord_no", "") or res.get("odno", "") or "")
+    return ""
 
 
 def _is_ok_response(res):
     if isinstance(res, dict):
-        return str(res.get('return_code', res.get('rt_cd', ''))) == '0'
+        return str(res.get("return_code", res.get("rt_cd", ""))) == "0"
     return bool(res)
 
 
 def _confirm_s15_cancel_or_reload_remaining(code, state, wait_sec=0.5):
     until = _now_ts() + wait_sec
     while _now_ts() < until:
-        with state['lock']:
-            rem_qty = max(0, state['cum_buy_qty'] - state['cum_sell_qty'])
+        with state["lock"]:
+            rem_qty = max(0, state["cum_buy_qty"] - state["cum_sell_qty"])
         if rem_qty == 0:
             return 0
         time.sleep(0.05)
     try:
         inventory, _ = kiwoom_orders.get_my_inventory(KIWOOM_TOKEN)
-        real_stock = next((item for item in (inventory or []) if str(item.get('code', '')).strip()[:6] == code), None)
+        real_stock = next(
+            (
+                item
+                for item in (inventory or [])
+                if str(item.get("code", "")).strip()[:6] == code
+            ),
+            None,
+        )
         if real_stock:
-            return int(float(real_stock.get('qty', 0) or 0))
+            return int(float(real_stock.get("qty", 0) or 0))
     except Exception as exc:
         log_info(f"⚠️ S15 잔량 재조회 실패 ({code}): {exc}")
-    with state['lock']:
-        return max(0, state['cum_buy_qty'] - state['cum_sell_qty'])
+    with state["lock"]:
+        return max(0, state["cum_buy_qty"] - state["cum_sell_qty"])
 
 
 def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
@@ -395,18 +395,18 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
         cleanup_allowed = False
         actual_entry_happened = False
         if is_trading_paused():
-            with state['lock']:
-                state['status'] = 'BLOCKED'
-                state['updated_at'] = _now_ts()
+            with state["lock"]:
+                state["status"] = "BLOCKED"
+                state["updated_at"] = _now_ts()
             cleanup_allowed = True
             log_info(
                 f"[TRADING_PAUSED_BLOCK] S15 fast-track buy skipped "
                 f"{name}({code}) state=신규 매수 및 추가매수 중단 상태"
             )
             update_s15_shadow_record(
-                state.get('shadow_id'),
-                status='WATCHING',
-                position_tag='S15_FAST_PAUSED',
+                state.get("shadow_id"),
+                status="WATCHING",
+                position_tag="S15_FAST_PAUSED",
             )
             _log_s15_event(
                 "s15_trigger_blocked",
@@ -414,40 +414,40 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
                 name,
                 s15_condition_role="fast_track_submit",
                 s15_block_reason="trading_paused",
-                shadow_id=state.get('shadow_id'),
+                shadow_id=state.get("shadow_id"),
                 trigger_price=trigger_price,
             )
             return
 
         rt_data = WS_MANAGER.get_latest_data(code) if WS_MANAGER else {}
-        curr_price = int(float((rt_data or {}).get('curr', 0) or 0))
+        curr_price = int(float((rt_data or {}).get("curr", 0) or 0))
         if curr_price <= 0:
             curr_price = int(trigger_price or 0)
         if curr_price <= 0:
-            state['status'] = 'FAILED'
-            update_s15_shadow_record(state.get('shadow_id'), status='EXPIRED')
+            state["status"] = "FAILED"
+            update_s15_shadow_record(state.get("shadow_id"), status="EXPIRED")
             _log_s15_event(
                 "s15_trigger_blocked",
                 code,
                 name,
                 s15_condition_role="fast_track_submit",
                 s15_block_reason="missing_price",
-                shadow_id=state.get('shadow_id'),
+                shadow_id=state.get("shadow_id"),
                 trigger_price=trigger_price,
             )
             return
 
         if AI_ENGINE is None:
-            state['status'] = 'FAILED'
+            state["status"] = "FAILED"
             log_error(f"🚨 S15 AI_ENGINE 미초기화 ({code})")
-            update_s15_shadow_record(state.get('shadow_id'), status='EXPIRED')
+            update_s15_shadow_record(state.get("shadow_id"), status="EXPIRED")
             _log_s15_event(
                 "s15_fast_track_failed",
                 code,
                 name,
                 s15_condition_role="fast_track_submit",
                 s15_block_reason="ai_engine_missing",
-                shadow_id=state.get('shadow_id'),
+                shadow_id=state.get("shadow_id"),
                 trigger_price=trigger_price,
                 curr_price=curr_price,
             )
@@ -456,34 +456,36 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
         ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10)
         ai_res = AI_ENGINE.analyze_target(
             name,
-            rt_data or {'curr': curr_price, 'orderbook': {'asks': [], 'bids': []}},
+            rt_data or {"curr": curr_price, "orderbook": {"asks": [], "bids": []}},
             ticks,
             recent_candles=[],
-            strategy="SCALPING"
+            strategy="SCALPING",
         )
 
-        s15_buy_score_threshold = int(getattr(TRADING_RULES, "BUY_SCORE_THRESHOLD", 75) or 75)
+        s15_buy_score_threshold = int(
+            getattr(TRADING_RULES, "BUY_SCORE_THRESHOLD", 75) or 75
+        )
         s15_score_prior = evaluate_ai_score_prior(
-            ai_res.get('action'),
-            ai_res.get('score', 0),
+            ai_res.get("action"),
+            ai_res.get("score", 0),
             {"BUY_SCORE_THRESHOLD": s15_buy_score_threshold},
             usable=True,
         )
-        if ai_res.get('action') != 'BUY':
+        if ai_res.get("action") != "BUY":
             block_reason = "ai_not_buy"
-            state['status'] = 'FAILED'
-            update_s15_shadow_record(state.get('shadow_id'), status='EXPIRED')
+            state["status"] = "FAILED"
+            update_s15_shadow_record(state.get("shadow_id"), status="EXPIRED")
             _log_s15_event(
                 "s15_trigger_blocked",
                 code,
                 name,
                 s15_condition_role="fast_track_submit",
                 s15_block_reason=block_reason,
-                shadow_id=state.get('shadow_id'),
+                shadow_id=state.get("shadow_id"),
                 trigger_price=trigger_price,
                 curr_price=curr_price,
-                ai_action=ai_res.get('action'),
-                ai_score=ai_res.get('score', 0),
+                ai_action=ai_res.get("action"),
+                ai_score=ai_res.get("score", 0),
                 ai_score_threshold=s15_buy_score_threshold,
                 s15_score_gate_converted_to_prior=True,
                 s15_score_prior_band=s15_score_prior.get("score_prior_band"),
@@ -496,21 +498,21 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
         deposit = kiwoom_orders.get_deposit(KIWOOM_TOKEN)
         req_qty = kiwoom_orders.calc_buy_qty(curr_price, deposit, ratio=ratio)
         if req_qty <= 0:
-            state['status'] = 'FAILED'
-            update_s15_shadow_record(state.get('shadow_id'), status='EXPIRED')
+            state["status"] = "FAILED"
+            update_s15_shadow_record(state.get("shadow_id"), status="EXPIRED")
             _log_s15_event(
                 "s15_trigger_blocked",
                 code,
                 name,
                 s15_condition_role="fast_track_submit",
                 s15_block_reason="qty_zero",
-                shadow_id=state.get('shadow_id'),
+                shadow_id=state.get("shadow_id"),
                 trigger_price=trigger_price,
                 curr_price=curr_price,
                 deposit=deposit,
                 requested_qty=req_qty,
-                ai_action=ai_res.get('action'),
-                ai_score=ai_res.get('score', 0),
+                ai_action=ai_res.get("action"),
+                ai_score=ai_res.get("score", 0),
                 ai_score_threshold=s15_buy_score_threshold,
                 s15_score_gate_converted_to_prior=True,
                 s15_score_prior_band=s15_score_prior.get("score_prior_band"),
@@ -524,15 +526,15 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
             stock=state,
             code=code,
             ws_data=rt_data,
-            strategy_id='S15_FAST',
+            strategy_id="S15_FAST",
             planned_qty=req_qty,
             signal_price=int(trigger_price or curr_price),
-            signal_strength=float(ai_res.get('score', 0) or 0) / 100.0,
+            signal_strength=float(ai_res.get("score", 0) or 0) / 100.0,
             target_buy_price=0,
         )
-        if not latency_gate.get('allowed'):
-            state['status'] = 'BLOCKED'
-            state['updated_at'] = _now_ts()
+        if not latency_gate.get("allowed"):
+            state["status"] = "BLOCKED"
+            state["updated_at"] = _now_ts()
             log_info(
                 f"[LATENCY_ENTRY_BLOCK] S15 {name}({code}) "
                 f"decision={latency_gate.get('decision')} "
@@ -541,9 +543,9 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
                 f"signal={latency_gate.get('signal_price')} latest={latency_gate.get('latest_price')}"
             )
             update_s15_shadow_record(
-                state.get('shadow_id'),
-                status='WATCHING',
-                position_tag='S15_FAST_LATENCY_BLOCKED',
+                state.get("shadow_id"),
+                status="WATCHING",
+                position_tag="S15_FAST_LATENCY_BLOCKED",
             )
             _log_s15_event(
                 "s15_trigger_blocked",
@@ -551,14 +553,14 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
                 name,
                 s15_condition_role="fast_track_submit",
                 s15_block_reason="latency_block",
-                shadow_id=state.get('shadow_id'),
+                shadow_id=state.get("shadow_id"),
                 trigger_price=trigger_price,
                 curr_price=curr_price,
                 requested_qty=req_qty,
-                latency_decision=latency_gate.get('decision'),
-                latency_state=latency_gate.get('latency_state'),
-                latency_reason=latency_gate.get('reason'),
-                ai_score=ai_res.get('score', 0),
+                latency_decision=latency_gate.get("decision"),
+                latency_state=latency_gate.get("latency_state"),
+                latency_reason=latency_gate.get("reason"),
+                ai_score=ai_res.get("score", 0),
                 ai_score_threshold=s15_buy_score_threshold,
                 s15_score_gate_converted_to_prior=True,
                 s15_score_prior_band=s15_score_prior.get("score_prior_band"),
@@ -568,55 +570,63 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
             )
             return
 
-        buy_price = int(float(latency_gate.get('order_price', curr_price) or curr_price))
+        buy_price = int(
+            float(latency_gate.get("order_price", curr_price) or curr_price)
+        )
 
         buy_res = _send_s15_limit_buy(code, req_qty, buy_price)
         if not _is_ok_response(buy_res):
-            state['status'] = 'FAILED'
-            update_s15_shadow_record(state.get('shadow_id'), status='EXPIRED')
+            state["status"] = "FAILED"
+            update_s15_shadow_record(state.get("shadow_id"), status="EXPIRED")
             _log_s15_event(
                 "s15_trigger_blocked",
                 code,
                 name,
                 s15_condition_role="fast_track_submit",
                 s15_block_reason="order_rejected",
-                shadow_id=state.get('shadow_id'),
+                shadow_id=state.get("shadow_id"),
                 trigger_price=trigger_price,
                 curr_price=curr_price,
                 requested_qty=req_qty,
                 order_price=buy_price,
-                ai_score=ai_res.get('score', 0),
+                ai_score=ai_res.get("score", 0),
                 ai_score_threshold=s15_buy_score_threshold,
                 s15_score_gate_converted_to_prior=True,
                 s15_score_prior_band=s15_score_prior.get("score_prior_band"),
                 s15_ai_score_prior_weight=s15_score_prior.get("ai_score_prior_weight"),
                 s15_score_prior_reason=s15_score_prior.get("score_prior_reason"),
                 s15_hard_gate_veto=False,
-                broker_return_code=(buy_res or {}).get('return_code') if isinstance(buy_res, dict) else "",
-                broker_reason=(buy_res or {}).get('msg') if isinstance(buy_res, dict) else "",
+                broker_return_code=(
+                    (buy_res or {}).get("return_code")
+                    if isinstance(buy_res, dict)
+                    else ""
+                ),
+                broker_reason=(
+                    (buy_res or {}).get("msg") if isinstance(buy_res, dict) else ""
+                ),
             )
             return
 
-        with state['lock']:
-            state['status'] = 'BUY_SENT'
-            state['buy_ord_no'] = _extract_ord_no(buy_res)
-            state['req_buy_qty'] = req_qty
-            state['updated_at'] = _now_ts()
-        update_s15_shadow_record(state.get('shadow_id'), status='BUY_ORDERED')
+        with state["lock"]:
+            state["status"] = "BUY_SENT"
+            state["buy_ord_no"] = _extract_ord_no(buy_res)
+            state["req_buy_qty"] = req_qty
+            state["updated_at"] = _now_ts()
+        update_s15_shadow_record(state.get("shadow_id"), status="BUY_ORDERED")
         _log_s15_event(
             "s15_fast_track_submitted",
             code,
             name,
             actual_order_submitted=True,
             s15_condition_role="fast_track_submit",
-            shadow_id=state.get('shadow_id'),
+            shadow_id=state.get("shadow_id"),
             trigger_price=trigger_price,
             curr_price=curr_price,
             requested_qty=req_qty,
             order_price=buy_price,
-            broker_order_no=state.get('buy_ord_no', ''),
-            ai_action=ai_res.get('action'),
-            ai_score=ai_res.get('score', 0),
+            broker_order_no=state.get("buy_ord_no", ""),
+            ai_action=ai_res.get("action"),
+            ai_score=ai_res.get("score", 0),
             ai_score_threshold=s15_buy_score_threshold,
             s15_score_gate_converted_to_prior=True,
             s15_score_prior_band=s15_score_prior.get("score_prior_band"),
@@ -627,37 +637,39 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
 
         expire_at = _now_ts() + 20.0
         while _now_ts() < expire_at:
-            with state['lock']:
-                if state['cum_buy_qty'] >= req_qty:
+            with state["lock"]:
+                if state["cum_buy_qty"] >= req_qty:
                     break
             time.sleep(0.1)
 
-        with state['lock']:
-            real_buy_qty = state['cum_buy_qty']
-            avg_buy_price = state['avg_buy_price']
-            buy_ord_no = state.get('buy_ord_no', '')
+        with state["lock"]:
+            real_buy_qty = state["cum_buy_qty"]
+            avg_buy_price = state["avg_buy_price"]
+            buy_ord_no = state.get("buy_ord_no", "")
         if real_buy_qty > 0:
             actual_entry_happened = True
 
         if real_buy_qty <= 0:
             cleanup_allowed = True
             if buy_ord_no:
-                kiwoom_orders.send_cancel_order(code=code, orig_ord_no=buy_ord_no, token=KIWOOM_TOKEN, qty=0)
-            state['status'] = 'CANCELLED'
-            update_s15_shadow_record(state.get('shadow_id'), status='EXPIRED')
+                kiwoom_orders.send_cancel_order(
+                    code=code, orig_ord_no=buy_ord_no, token=KIWOOM_TOKEN, qty=0
+                )
+            state["status"] = "CANCELLED"
+            update_s15_shadow_record(state.get("shadow_id"), status="EXPIRED")
             _log_s15_event(
                 "s15_fast_track_cancelled",
                 code,
                 name,
                 s15_condition_role="fast_track_submit",
-                shadow_id=state.get('shadow_id'),
+                shadow_id=state.get("shadow_id"),
                 trigger_price=trigger_price,
                 requested_qty=req_qty,
                 filled_qty=real_buy_qty,
                 broker_order_no=buy_ord_no,
                 s15_cancel_reason="no_fill_after_20s",
-                ai_action=ai_res.get('action'),
-                ai_score=ai_res.get('score', 0),
+                ai_action=ai_res.get("action"),
+                ai_score=ai_res.get("score", 0),
                 ai_score_threshold=s15_buy_score_threshold,
                 s15_score_gate_converted_to_prior=True,
                 s15_score_prior_band=s15_score_prior.get("score_prior_band"),
@@ -668,7 +680,9 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
             return
 
         if real_buy_qty < req_qty and buy_ord_no:
-            kiwoom_orders.send_cancel_order(code=code, orig_ord_no=buy_ord_no, token=KIWOOM_TOKEN, qty=0)
+            kiwoom_orders.send_cancel_order(
+                code=code, orig_ord_no=buy_ord_no, token=KIWOOM_TOKEN, qty=0
+            )
 
         if avg_buy_price <= 0:
             avg_buy_price = buy_price
@@ -676,23 +690,23 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
         target_price = _target_price_pct_up(avg_buy_price, 1.8)
         stop_price = int(avg_buy_price * (1 - 0.007))
 
-        with state['lock']:
-            state['status'] = 'HOLDING'
-            state['target_price'] = target_price
-            state['stop_price'] = stop_price
-            state['updated_at'] = _now_ts()
+        with state["lock"]:
+            state["status"] = "HOLDING"
+            state["target_price"] = target_price
+            state["stop_price"] = stop_price
+            state["updated_at"] = _now_ts()
         update_s15_shadow_record(
-            state.get('shadow_id'),
-            status='HOLDING',
+            state.get("shadow_id"),
+            status="HOLDING",
             buy_price=avg_buy_price,
-            buy_qty=real_buy_qty
+            buy_qty=real_buy_qty,
         )
         _log_s15_event(
             "s15_fast_track_holding",
             code,
             name,
             s15_condition_role="fast_track_holding",
-            shadow_id=state.get('shadow_id'),
+            shadow_id=state.get("shadow_id"),
             trigger_price=trigger_price,
             avg_buy_price=avg_buy_price,
             buy_qty=real_buy_qty,
@@ -703,109 +717,118 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
         sell_res = _send_s15_limit_sell(code, real_buy_qty, target_price)
 
         if not _is_ok_response(sell_res):
-            print(f"🚨 [S15 Fail-safe] {name} 익절 지정가 매도 세팅 실패. 보호 상태 유지 후 최유리(IOC) 청산 시도.")
-            with state['lock']:
-                state['status'] = 'HOLDING_NEEDS_EXIT'
-                state['updated_at'] = _now_ts()
-
-            update_s15_shadow_record(
-                state.get('shadow_id'),
-                status='HOLDING'
+            print(
+                f"🚨 [S15 Fail-safe] {name} 익절 지정가 매도 세팅 실패. 보호 상태 유지 후 최유리(IOC) 청산 시도."
             )
+            with state["lock"]:
+                state["status"] = "HOLDING_NEEDS_EXIT"
+                state["updated_at"] = _now_ts()
+
+            update_s15_shadow_record(state.get("shadow_id"), status="HOLDING")
 
             rem_qty = _confirm_s15_cancel_or_reload_remaining(code, state, wait_sec=0.3)
             if rem_qty > 0:
                 emergency_res = _send_exit_best_ioc(code, rem_qty, KIWOOM_TOKEN)
                 if _is_ok_response(emergency_res):
-                    with state['lock']:
-                        state['sell_ord_no'] = _extract_ord_no(emergency_res)
-                        state['status'] = 'EXIT_RETRY'
-                        state['updated_at'] = _now_ts()
+                    with state["lock"]:
+                        state["sell_ord_no"] = _extract_ord_no(emergency_res)
+                        state["status"] = "EXIT_RETRY"
+                        state["updated_at"] = _now_ts()
                 else:
-                    print(f"🚨 [S15 Fail-safe] {name} 긴급 청산 주문도 실패. 상태 유지 및 관리자 알림 필요.")
+                    print(
+                        f"🚨 [S15 Fail-safe] {name} 긴급 청산 주문도 실패. 상태 유지 및 관리자 알림 필요."
+                    )
             else:
-                print(f"ℹ️ [S15 Fail-safe] {name} 재조회 결과 잔량 없음. 자연 종료 가능.")
+                print(
+                    f"ℹ️ [S15 Fail-safe] {name} 재조회 결과 잔량 없음. 자연 종료 가능."
+                )
 
-        with state['lock']:
-            state['sell_ord_no'] = _extract_ord_no(sell_res)
-            state['status'] = 'EXIT_SENT'
-            state['updated_at'] = _now_ts()
+        with state["lock"]:
+            state["sell_ord_no"] = _extract_ord_no(sell_res)
+            state["status"] = "EXIT_SENT"
+            state["updated_at"] = _now_ts()
 
         while True:
             time.sleep(0.1)
 
-            with state['lock']:
-                if state['cum_sell_qty'] >= state['cum_buy_qty'] > 0:
-                    state['status'] = 'DONE'
+            with state["lock"]:
+                if state["cum_sell_qty"] >= state["cum_buy_qty"] > 0:
+                    state["status"] = "DONE"
                     cleanup_allowed = True
                     break
 
             rt = WS_MANAGER.get_latest_data(code) if WS_MANAGER else {}
-            curr_p = int(float((rt or {}).get('curr', 0) or 0))
+            curr_p = int(float((rt or {}).get("curr", 0) or 0))
             if curr_p <= 0 or avg_buy_price <= 0:
                 continue
 
             profit_rate = calculate_net_profit_rate(avg_buy_price, curr_p)
             if profit_rate <= -0.7:
-                with state['lock']:
-                    sell_ord_no = state.get('sell_ord_no', '')
+                with state["lock"]:
+                    sell_ord_no = state.get("sell_ord_no", "")
 
                 if sell_ord_no:
                     cancel_res = kiwoom_orders.send_cancel_order(
                         code=code, orig_ord_no=sell_ord_no, token=KIWOOM_TOKEN, qty=0
                     )
                     if _is_ok_response(cancel_res):
-                        with state['lock']:
-                            state['pending_cancel_ord_no'] = sell_ord_no
+                        with state["lock"]:
+                            state["pending_cancel_ord_no"] = sell_ord_no
 
-                rem_qty = _confirm_s15_cancel_or_reload_remaining(code, state, wait_sec=0.5)
+                rem_qty = _confirm_s15_cancel_or_reload_remaining(
+                    code, state, wait_sec=0.5
+                )
                 if rem_qty > 0:
                     market_res = _send_exit_best_ioc(code, rem_qty, KIWOOM_TOKEN)
                     if _is_ok_response(market_res):
-                        with state['lock']:
-                            state['sell_ord_no'] = _extract_ord_no(market_res) or state.get('sell_ord_no', '')
-                            state['updated_at'] = _now_ts()
+                        with state["lock"]:
+                            state["sell_ord_no"] = _extract_ord_no(
+                                market_res
+                            ) or state.get("sell_ord_no", "")
+                            state["updated_at"] = _now_ts()
                 break
 
-        with state['lock']:
-            final_buy = state['avg_buy_price']
-            final_sell = state['avg_sell_price']
-            final_qty = state['cum_buy_qty']
+        with state["lock"]:
+            final_buy = state["avg_buy_price"]
+            final_sell = state["avg_sell_price"]
+            final_qty = state["cum_buy_qty"]
 
         final_profit_rate = 0.0
         if final_buy > 0 and final_sell > 0:
             final_profit_rate = calculate_net_profit_rate(final_buy, final_sell)
 
         update_s15_shadow_record(
-            state.get('shadow_id'),
-            status='COMPLETED',
-            sell_price=final_sell or state.get('target_price', 0),
+            state.get("shadow_id"),
+            status="COMPLETED",
+            sell_price=final_sell or state.get("target_price", 0),
             sell_time=datetime.now(),
             profit_rate=final_profit_rate,
             buy_price=final_buy,
-            buy_qty=final_qty
+            buy_qty=final_qty,
         )
         _log_s15_event(
             "s15_fast_track_completed",
             code,
             name,
             s15_condition_role="fast_track_exit",
-            shadow_id=state.get('shadow_id'),
+            shadow_id=state.get("shadow_id"),
             buy_price=final_buy,
-            sell_price=final_sell or state.get('target_price', 0),
+            sell_price=final_sell or state.get("target_price", 0),
             buy_qty=final_qty,
             profit_rate=final_profit_rate,
         )
     except Exception as exc:
         log_error(f"🚨 S15 Fast-Track 에러 ({code}): {exc}")
-        update_s15_shadow_record(state.get('shadow_id'), status='EXPIRED')
+        update_s15_shadow_record(state.get("shadow_id"), status="EXPIRED")
         _log_s15_event(
             "s15_fast_track_failed",
             code,
             name,
             s15_condition_role="fast_track_submit",
             s15_block_reason="exception",
-            shadow_id=(state or {}).get('shadow_id') if isinstance(state, dict) else None,
+            shadow_id=(
+                (state or {}).get("shadow_id") if isinstance(state, dict) else None
+            ),
             error=str(exc),
         )
     finally:

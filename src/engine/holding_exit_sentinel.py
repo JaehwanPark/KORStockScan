@@ -20,7 +20,6 @@ from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 from src.utils.market_day import is_krx_trading_day
 
-
 IGNORED_STOCK_NAMES = {"TEST", "DUMMY", "MOCK"}
 DEFAULT_WINDOWS = (5, 10, 30)
 SESSION_START = time(9, 0)
@@ -58,7 +57,12 @@ def _event_cache_dir() -> Path:
 
 
 def _observation_path(target_date: str) -> Path:
-    return DATA_DIR / "report" / "monitor_snapshots" / f"holding_exit_observation_{target_date}.json"
+    return (
+        DATA_DIR
+        / "report"
+        / "monitor_snapshots"
+        / f"holding_exit_observation_{target_date}.json"
+    )
 
 
 def _report_dir() -> Path:
@@ -140,7 +144,11 @@ def _event_from_cache_row(row: dict[str, Any]) -> PipelineEvent | None:
     if emitted_at is None:
         return None
     raw_fields = row.get("fields") or {}
-    fields = {str(k): _safe_str(v) for k, v in raw_fields.items()} if isinstance(raw_fields, dict) else {}
+    fields = (
+        {str(k): _safe_str(v) for k, v in raw_fields.items()}
+        if isinstance(raw_fields, dict)
+        else {}
+    )
     return PipelineEvent(
         emitted_at=emitted_at,
         pipeline=_safe_str(row.get("pipeline")),
@@ -152,7 +160,9 @@ def _event_from_cache_row(row: dict[str, Any]) -> PipelineEvent | None:
     )
 
 
-def load_pipeline_events(target_date: str, *, use_cache: bool = False) -> list[PipelineEvent]:
+def load_pipeline_events(
+    target_date: str, *, use_cache: bool = False
+) -> list[PipelineEvent]:
     path = existing_or_gzip_path(_pipeline_events_path(target_date))
     if not path.exists():
         return []
@@ -165,7 +175,9 @@ def load_pipeline_events(target_date: str, *, use_cache: bool = False) -> list[P
             schema_version=EVENT_CACHE_SCHEMA_VERSION,
             parse_payload=_payload_to_cache_row,
         )
-        events = [event for row in rows if (event := _event_from_cache_row(row)) is not None]
+        events = [
+            event for row in rows if (event := _event_from_cache_row(row)) is not None
+        ]
         events.sort(key=lambda event: event.emitted_at)
         return events
 
@@ -210,7 +222,9 @@ def load_observation_report(target_date: str) -> dict[str, Any] | None:
         return None
 
 
-def previous_trading_day_with_events(target_date: str, *, max_lookback_days: int = 10) -> str | None:
+def previous_trading_day_with_events(
+    target_date: str, *, max_lookback_days: int = 10
+) -> str | None:
     current = _parse_target_date(target_date)
     for offset in range(1, max_lookback_days + 1):
         candidate = current - timedelta(days=offset)
@@ -260,7 +274,11 @@ def _is_non_real_observation(event: PipelineEvent) -> bool:
         return True
     if fields.get("probe_id") or fields.get("probe_origin_stage"):
         return True
-    if "sim_" in event.stage or "_probe_" in event.stage or event.stage.startswith("swing_probe_"):
+    if (
+        "sim_" in event.stage
+        or "_probe_" in event.stage
+        or event.stage.startswith("swing_probe_")
+    ):
         return True
     return False
 
@@ -275,7 +293,11 @@ def _non_real_attempt_keys(events: list[PipelineEvent]) -> set[str]:
 
 
 def _count_cache_miss(events: list[PipelineEvent]) -> int:
-    return sum(1 for event in events if event.stage == "ai_holding_review" and event.fields.get("ai_cache") == "miss")
+    return sum(
+        1
+        for event in events
+        if event.stage == "ai_holding_review" and event.fields.get("ai_cache") == "miss"
+    )
 
 
 def _count_parse_fail(events: list[PipelineEvent]) -> int:
@@ -314,7 +336,11 @@ def _score50_origin_counts(events: list[PipelineEvent]) -> dict[str, int]:
 
 
 def _max_field(events: list[PipelineEvent], stage: str, field: str) -> float:
-    values = [_safe_float(event.fields.get(field), 0.0) for event in events if event.stage == stage]
+    values = [
+        _safe_float(event.fields.get(field), 0.0)
+        for event in events
+        if event.stage == stage
+    ]
     return max(values) if values else 0.0
 
 
@@ -354,7 +380,8 @@ def _active_holding_keys(events: list[PipelineEvent]) -> set[str]:
     return {
         key
         for key, event in last_by_key.items()
-        if event.stage in ACTIVE_HOLDING_STAGES and event.stage not in TERMINAL_HOLDING_STAGES
+        if event.stage in ACTIVE_HOLDING_STAGES
+        and event.stage not in TERMINAL_HOLDING_STAGES
     }
 
 
@@ -374,16 +401,21 @@ def _stage_reason_top(events: list[PipelineEvent]) -> list[dict[str, Any]]:
         else:
             continue
         counter[key] += 1
-    return [{"label": label, "count": count} for label, count in counter.most_common(10)]
+    return [
+        {"label": label, "count": count} for label, count in counter.most_common(10)
+    ]
 
 
-def _summarize_events(events: list[PipelineEvent], *, start_at: datetime, end_at: datetime) -> dict[str, Any]:
+def _summarize_events(
+    events: list[PipelineEvent], *, start_at: datetime, end_at: datetime
+) -> dict[str, Any]:
     scoped = [event for event in events if start_at <= event.emitted_at <= end_at]
     non_real_keys = _non_real_attempt_keys(scoped)
     real_scoped = [
         event
         for event in scoped
-        if _attempt_key(event) not in non_real_keys and not _is_non_real_observation(event)
+        if _attempt_key(event) not in non_real_keys
+        and not _is_non_real_observation(event)
     ]
     non_real_scoped = [
         event
@@ -420,7 +452,9 @@ def _summarize_events(events: list[PipelineEvent], *, start_at: datetime, end_at
     cache_miss = _count_cache_miss(scoped)
     score50_origin_counts = _score50_origin_counts(scoped)
     active_keys = _active_holding_keys(scoped)
-    latest_event_at = scoped[-1].emitted_at.isoformat(timespec="seconds") if scoped else None
+    latest_event_at = (
+        scoped[-1].emitted_at.isoformat(timespec="seconds") if scoped else None
+    )
     return {
         "start_at": start_at.isoformat(timespec="seconds"),
         "end_at": end_at.isoformat(timespec="seconds"),
@@ -436,19 +470,35 @@ def _summarize_events(events: list[PipelineEvent], *, start_at: datetime, end_at
         "holding_score_raw_non50_neutralized_events": int(
             score50_origin_counts.get("post_call_source_quality_neutralized", 0)
         ),
-        "max_defer_worsen_pct": round(_max_field(scoped, "holding_flow_override_defer_exit", "worsen_pct"), 3),
-        "max_force_worsen_pct": round(_max_field(scoped, "holding_flow_override_force_exit", "profit_rate"), 3),
+        "max_defer_worsen_pct": round(
+            _max_field(scoped, "holding_flow_override_defer_exit", "worsen_pct"), 3
+        ),
+        "max_force_worsen_pct": round(
+            _max_field(scoped, "holding_flow_override_force_exit", "profit_rate"), 3
+        ),
         "ai_parse_fail_events": _count_parse_fail(scoped),
         "ratios": {
             "sell_sent_to_exit_signal_unique_pct": _ratio(sell_sent, exit_signal),
-            "sell_completed_to_exit_signal_unique_pct": _ratio(sell_completed, exit_signal),
-            "real_sell_sent_to_exit_signal_unique_pct": _ratio(real_sell_sent, real_exit_signal),
-            "non_real_sell_sent_to_exit_signal_unique_pct": _ratio(non_real_sell_sent, non_real_exit_signal),
+            "sell_completed_to_exit_signal_unique_pct": _ratio(
+                sell_completed, exit_signal
+            ),
+            "real_sell_sent_to_exit_signal_unique_pct": _ratio(
+                real_sell_sent, real_exit_signal
+            ),
+            "non_real_sell_sent_to_exit_signal_unique_pct": _ratio(
+                non_real_sell_sent, non_real_exit_signal
+            ),
             "flow_defer_to_review_event_pct": _ratio(flow_defer, flow_review),
             "ai_cache_miss_pct": _ratio(cache_miss, ai_review),
         },
         "unique_symbols": {
-            "holding_started": len({_attempt_key(event) for event in scoped if event.stage == "holding_started"}),
+            "holding_started": len(
+                {
+                    _attempt_key(event)
+                    for event in scoped
+                    if event.stage == "holding_started"
+                }
+            ),
             "exit_signal": exit_signal,
             "sell_order_sent": sell_sent,
             "sell_completed": sell_completed,
@@ -483,11 +533,19 @@ def _observation_metrics(observation: dict[str, Any] | None) -> dict[str, Any]:
             0.0,
         ),
         "trailing_evaluated": int(trailing.get("evaluated_post_sell") or 0),
-        "trailing_missed_upside_rate": _safe_float(trailing.get("missed_upside_rate"), 0.0),
+        "trailing_missed_upside_rate": _safe_float(
+            trailing.get("missed_upside_rate"), 0.0
+        ),
     }
 
 
-def _classify(summary: dict[str, Any], baseline: dict[str, Any] | None, observation_metrics: dict[str, Any], *, as_of: datetime) -> dict[str, Any]:
+def _classify(
+    summary: dict[str, Any],
+    baseline: dict[str, Any] | None,
+    observation_metrics: dict[str, Any],
+    *,
+    as_of: datetime,
+) -> dict[str, Any]:
     stage_events = summary["stage_events"]
     unique = summary["stage_unique"]
     ratios = summary["ratios"]
@@ -503,9 +561,13 @@ def _classify(summary: dict[str, Any], baseline: dict[str, Any] | None, observat
     non_real_sell_sent = int(unique.get("non_real_sell_order_sent", 0) or 0)
     flow_defer = int(stage_events.get("holding_flow_override_defer_exit", 0) or 0)
     force_exit = int(stage_events.get("holding_flow_override_force_exit", 0) or 0)
-    exit_confirmed = int(stage_events.get("holding_flow_override_exit_confirmed", 0) or 0)
+    exit_confirmed = int(
+        stage_events.get("holding_flow_override_exit_confirmed", 0) or 0
+    )
     ai_review = int(stage_events.get("ai_holding_review", 0) or 0)
-    active_holding = int(summary.get("unique_symbols", {}).get("active_holding", 0) or 0)
+    active_holding = int(
+        summary.get("unique_symbols", {}).get("active_holding", 0) or 0
+    )
 
     matches: list[str] = []
     reasons: list[str] = []
@@ -521,27 +583,33 @@ def _classify(summary: dict[str, Any], baseline: dict[str, Any] | None, observat
         and active_holding > 0
     ):
         matches.append("RUNTIME_OPS")
-        reasons.append("holding pipeline event stream is stale while active holdings remain")
+        reasons.append(
+            "holding pipeline event stream is stale while active holdings remain"
+        )
 
     if real_exit_signal >= 1 and real_sell_sent < real_exit_signal:
         matches.append("SELL_EXECUTION_DROUGHT")
         reasons.append("real exit_signal is not fully followed by real sell_order_sent")
     elif non_real_exit_signal >= 1 and non_real_sell_sent < non_real_exit_signal:
-        reasons.append("non-real exit_signal has no broker sell_order_sent; report-only provenance split")
+        reasons.append(
+            "non-real exit_signal has no broker sell_order_sent; report-only provenance split"
+        )
 
     if flow_defer >= 3 or force_exit >= 1 or exit_confirmed >= 2:
         matches.append("HOLD_DEFER_DANGER")
         reasons.append("holding_flow_override defer/force/confirm events are elevated")
 
     if ai_review >= 5 and (
-        ratios.get("ai_cache_miss_pct", 0.0) >= 90.0 or summary.get("ai_parse_fail_events", 0) > 0
+        ratios.get("ai_cache_miss_pct", 0.0) >= 90.0
+        or summary.get("ai_parse_fail_events", 0) > 0
     ):
         matches.append("AI_HOLDING_OPS")
         reasons.append("AI holding review cache miss or parse failure is elevated")
 
     if (
         observation_metrics.get("soft_stop_total", 0) >= 5
-        and observation_metrics.get("soft_stop_rebound_above_sell_10m_rate", 0.0) >= 70.0
+        and observation_metrics.get("soft_stop_rebound_above_sell_10m_rate", 0.0)
+        >= 70.0
     ):
         matches.append("SOFT_STOP_WHIPSAW")
         reasons.append("soft stop rebound rate is high in saved observation")
@@ -573,7 +641,9 @@ def _classify(summary: dict[str, Any], baseline: dict[str, Any] | None, observat
         "reasons": reasons,
         "stale_sec": stale_sec,
         "baseline_sell_sent_to_exit_signal_unique_pct": (
-            (baseline or {}).get("ratios", {}).get("sell_sent_to_exit_signal_unique_pct")
+            (baseline or {})
+            .get("ratios", {})
+            .get("sell_sent_to_exit_signal_unique_pct")
         ),
         "sell_execution_scope": {
             "real_exit_signal": real_exit_signal,
@@ -591,15 +661,21 @@ def _recommend_actions(classification: dict[str, Any]) -> list[str]:
     if primary == "SELL_EXECUTION_DROUGHT":
         return ["Check sell order receipt/order path before changing exit thresholds."]
     if primary == "HOLD_DEFER_DANGER":
-        return ["Review holding_flow_override defer examples and worsen floor evidence."]
+        return [
+            "Review holding_flow_override defer examples and worsen floor evidence."
+        ]
     if primary == "AI_HOLDING_OPS":
-        return ["Review AI cache/provenance/parse telemetry; do not mutate cache TTL automatically."]
+        return [
+            "Review AI cache/provenance/parse telemetry; do not mutate cache TTL automatically."
+        ]
     if primary == "SOFT_STOP_WHIPSAW":
         return ["Append soft-stop rebound examples to postclose threshold review."]
     if primary == "TRAILING_EARLY_EXIT":
         return ["Append trailing missed-upside examples to postclose threshold review."]
     if primary == "RUNTIME_OPS":
-        return ["Check holding pipeline event freshness; restart only after explicit approval."]
+        return [
+            "Check holding pipeline event freshness; restart only after explicit approval."
+        ]
     return ["Continue monitoring; no dynamic action required."]
 
 
@@ -683,19 +759,27 @@ def build_holding_exit_sentinel_report(
     windows = {}
     for minutes in sorted(set(windows_min)):
         start_at = max(session_start, as_of - timedelta(minutes=minutes))
-        windows[f"{minutes}m"] = _summarize_events(events, start_at=start_at, end_at=as_of)
+        windows[f"{minutes}m"] = _summarize_events(
+            events, start_at=start_at, end_at=as_of
+        )
 
     baseline_date = previous_trading_day_with_events(target_date)
     baseline_summary = None
     if baseline_date:
         baseline_events = load_pipeline_events(baseline_date, use_cache=use_cache)
-        baseline_start = datetime.combine(_parse_target_date(baseline_date), SESSION_START)
+        baseline_start = datetime.combine(
+            _parse_target_date(baseline_date), SESSION_START
+        )
         baseline_end = _same_time_on_date(baseline_date, as_of)
-        baseline_summary = _summarize_events(baseline_events, start_at=baseline_start, end_at=baseline_end)
+        baseline_summary = _summarize_events(
+            baseline_events, start_at=baseline_start, end_at=baseline_end
+        )
 
     observation = load_observation_report(target_date)
     obs_metrics = _observation_metrics(observation)
-    classification = _classify(session_summary, baseline_summary, obs_metrics, as_of=as_of)
+    classification = _classify(
+        session_summary, baseline_summary, obs_metrics, as_of=as_of
+    )
     followup = _followup_route(classification)
 
     return {
@@ -712,12 +796,19 @@ def build_holding_exit_sentinel_report(
         "policy": {
             "report_only": True,
             "live_runtime_effect": False,
-            "allowed_automations": ["json_report", "markdown_report", "action_recommendation"],
+            "allowed_automations": [
+                "json_report",
+                "markdown_report",
+                "action_recommendation",
+            ],
             "forbidden_automations": FORBIDDEN_AUTOMATIONS,
         },
         "baseline": {"date": baseline_date, "same_time_summary": baseline_summary},
         "current": {"session": session_summary, "windows": windows},
-        "observation": {"path": str(_observation_path(target_date)), "metrics": obs_metrics},
+        "observation": {
+            "path": str(_observation_path(target_date)),
+            "metrics": obs_metrics,
+        },
         "classification": classification,
         "followup": followup,
         "recommended_actions": _recommend_actions(classification),
@@ -787,18 +878,30 @@ def save_report_artifacts(report: dict[str, Any]) -> dict[str, str]:
     report_dir.mkdir(parents=True, exist_ok=True)
     json_path = report_dir / f"holding_exit_sentinel_{target_date}.json"
     md_path = report_dir / f"holding_exit_sentinel_{target_date}.md"
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     md_path.write_text(build_markdown(report), encoding="utf-8")
     return {"json": str(json_path), "markdown": str(md_path)}
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Build intraday HOLD/EXIT sentinel report.")
-    parser.add_argument("--date", dest="target_date", default=datetime.now().strftime("%Y-%m-%d"))
+    parser = argparse.ArgumentParser(
+        description="Build intraday HOLD/EXIT sentinel report."
+    )
+    parser.add_argument(
+        "--date", dest="target_date", default=datetime.now().strftime("%Y-%m-%d")
+    )
     parser.add_argument("--as-of", dest="as_of", default="")
-    parser.add_argument("--window-min", dest="window_min", action="append", type=int, default=[])
+    parser.add_argument(
+        "--window-min", dest="window_min", action="append", type=int, default=[]
+    )
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--use-cache", action="store_true", help="Use slim incremental sentinel event cache.")
+    parser.add_argument(
+        "--use-cache",
+        action="store_true",
+        help="Use slim incremental sentinel event cache.",
+    )
     parser.add_argument("--print-json", action="store_true")
     return parser
 

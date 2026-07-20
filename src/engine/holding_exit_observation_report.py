@@ -14,7 +14,6 @@ from src.engine.monitor_snapshot_runtime import guard_stdin_heavy_build
 from src.utils.constants import DATA_DIR, TRADING_RULES
 from src.utils.jsonl_io import existing_or_gzip_path
 
-
 SCHEMA_VERSION = 1
 POST_FALLBACK_CUTOFF = datetime(2026, 4, 21, 9, 45)
 TARGET_EXIT_RULES = (
@@ -46,7 +45,11 @@ def _safe_int(value: Any, default: int = 0) -> int:
 
 
 def _ratio(numerator: int, denominator: int) -> float:
-    return round((float(numerator) / float(denominator)) * 100.0, 1) if denominator > 0 else 0.0
+    return (
+        round((float(numerator) / float(denominator)) * 100.0, 1)
+        if denominator > 0
+        else 0.0
+    )
 
 
 def _avg(values: list[float]) -> float:
@@ -128,7 +131,9 @@ def _load_saved_snapshot(snapshot_kind: str, target_date: str) -> dict | None:
         return None
 
 
-def _load_saved_snapshots(snapshot_kind: str, dates: list[str]) -> tuple[list[dict], list[str]]:
+def _load_saved_snapshots(
+    snapshot_kind: str, dates: list[str]
+) -> tuple[list[dict], list[str]]:
     snapshots: list[dict] = []
     paths: list[str] = []
     for target_date in dates:
@@ -146,7 +151,7 @@ def _load_saved_snapshots(snapshot_kind: str, dates: list[str]) -> tuple[list[di
 def _trade_rows_from_snapshots(snapshots: list[dict]) -> list[dict]:
     rows: list[dict] = []
     for snapshot in snapshots:
-        for row in ((snapshot.get("sections") or {}).get("recent_trades") or []):
+        for row in (snapshot.get("sections") or {}).get("recent_trades") or []:
             if isinstance(row, dict):
                 rows.append(row)
     return rows
@@ -230,29 +235,51 @@ def _is_pyramid_activated(row: dict) -> bool:
 
 def _summarize_completed_trades(rows: list[dict]) -> dict:
     valid_rows = [row for row in rows if _is_valid_completed_trade(row)]
-    profits = [float(_safe_float(row.get("profit_rate"), 0.0) or 0.0) for row in valid_rows]
+    profits = [
+        float(_safe_float(row.get("profit_rate"), 0.0) or 0.0) for row in valid_rows
+    ]
     exit_rules = Counter(_exit_group(_exit_rule_from_trade(row)) for row in valid_rows)
     return {
         "trade_count": len(valid_rows),
         "win_trades": sum(1 for value in profits if value > 0),
         "loss_trades": sum(1 for value in profits if value <= 0),
         "avg_profit_rate": _avg(profits),
-        "realized_pnl_krw": int(sum(_safe_int(row.get("realized_pnl_krw"), 0) for row in valid_rows)),
-        "exit_rules": [{"label": key, "count": value} for key, value in exit_rules.most_common()],
+        "realized_pnl_krw": int(
+            sum(_safe_int(row.get("realized_pnl_krw"), 0) for row in valid_rows)
+        ),
+        "exit_rules": [
+            {"label": key, "count": value} for key, value in exit_rules.most_common()
+        ],
     }
 
 
 def _build_cohorts(valid_trades: list[dict]) -> dict:
     return {
-        "normal_only": _summarize_completed_trades([row for row in valid_trades if _entry_mode(row) == "normal"]),
-        "post_fallback_deprecation": _summarize_completed_trades([row for row in valid_trades if _is_post_fallback(row)]),
-        "post_fallback_normal_only": _summarize_completed_trades(
-            [row for row in valid_trades if _is_post_fallback(row) and _entry_mode(row) == "normal"]
+        "normal_only": _summarize_completed_trades(
+            [row for row in valid_trades if _entry_mode(row) == "normal"]
         ),
-        "full_fill": _summarize_completed_trades([row for row in valid_trades if _fill_quality(row) == "full_fill"]),
-        "partial_fill": _summarize_completed_trades([row for row in valid_trades if _fill_quality(row) == "partial_fill"]),
-        "initial-only": _summarize_completed_trades([row for row in valid_trades if not _is_pyramid_activated(row)]),
-        "pyramid-activated": _summarize_completed_trades([row for row in valid_trades if _is_pyramid_activated(row)]),
+        "post_fallback_deprecation": _summarize_completed_trades(
+            [row for row in valid_trades if _is_post_fallback(row)]
+        ),
+        "post_fallback_normal_only": _summarize_completed_trades(
+            [
+                row
+                for row in valid_trades
+                if _is_post_fallback(row) and _entry_mode(row) == "normal"
+            ]
+        ),
+        "full_fill": _summarize_completed_trades(
+            [row for row in valid_trades if _fill_quality(row) == "full_fill"]
+        ),
+        "partial_fill": _summarize_completed_trades(
+            [row for row in valid_trades if _fill_quality(row) == "partial_fill"]
+        ),
+        "initial-only": _summarize_completed_trades(
+            [row for row in valid_trades if not _is_pyramid_activated(row)]
+        ),
+        "pyramid-activated": _summarize_completed_trades(
+            [row for row in valid_trades if _is_pyramid_activated(row)]
+        ),
     }
 
 
@@ -332,10 +359,14 @@ def _enrich_post_sell_row(*, candidate: dict, evaluation: dict) -> dict:
     profit_rate = float(_safe_float(merged.get("profit_rate"), 0.0) or 0.0)
     sell_price = float(_safe_float(merged.get("sell_price"), 0.0) or 0.0)
     buy_qty = _safe_int(merged.get("buy_qty"), 0)
-    extra_upside_pct = max(0.0, float(_safe_float(metrics_10m.get("mfe_pct"), 0.0) or 0.0))
+    extra_upside_pct = max(
+        0.0, float(_safe_float(metrics_10m.get("mfe_pct"), 0.0) or 0.0)
+    )
     potential_peak_profit_rate = round(profit_rate + extra_upside_pct, 3)
     capture_efficiency_pct = (
-        round(max(0.0, min(100.0, (profit_rate / potential_peak_profit_rate) * 100.0)), 1)
+        round(
+            max(0.0, min(100.0, (profit_rate / potential_peak_profit_rate) * 100.0)), 1
+        )
         if potential_peak_profit_rate > 0
         else 0.0
     )
@@ -354,12 +385,16 @@ def _enrich_post_sell_row(*, candidate: dict, evaluation: dict) -> dict:
         "buy_price": _safe_int(merged.get("buy_price"), 0),
         "sell_price": _safe_int(merged.get("sell_price"), 0),
         "buy_qty": buy_qty,
-        "peak_profit": round(float(_safe_float(merged.get("peak_profit"), 0.0) or 0.0), 3),
+        "peak_profit": round(
+            float(_safe_float(merged.get("peak_profit"), 0.0) or 0.0), 3
+        ),
         "held_sec": _safe_int(merged.get("held_sec"), 0),
         "extra_upside_10m_pct": round(extra_upside_pct, 3),
-        "extra_upside_10m_krw_est": int(round(sell_price * buy_qty * (extra_upside_pct / 100.0)))
-        if sell_price > 0 and buy_qty > 0
-        else 0,
+        "extra_upside_10m_krw_est": (
+            int(round(sell_price * buy_qty * (extra_upside_pct / 100.0)))
+            if sell_price > 0 and buy_qty > 0
+            else 0
+        ),
         "potential_peak_profit_rate_10m": float(potential_peak_profit_rate),
         "capture_efficiency_pct": float(capture_efficiency_pct),
         "recovery_to_buy_threshold_pct": _recovery_to_buy_threshold_pct(merged),
@@ -373,16 +408,36 @@ def _enrich_post_sell_row(*, candidate: dict, evaluation: dict) -> dict:
         "rebound_above_buy_5m": _rebound_above_buy(merged, "metrics_5m"),
         "rebound_above_buy_10m": _rebound_above_buy(merged, "metrics_10m"),
         "rebound_above_buy_20m": _rebound_above_buy(merged, "metrics_20m"),
-        "mfe_1m_pct": round(float(_safe_float(metrics_1m.get("mfe_pct"), 0.0) or 0.0), 3),
-        "mfe_3m_pct": round(float(_safe_float(metrics_3m.get("mfe_pct"), 0.0) or 0.0), 3),
-        "mfe_5m_pct": round(float(_safe_float(metrics_5m.get("mfe_pct"), 0.0) or 0.0), 3),
-        "mfe_10m_pct": round(float(_safe_float(metrics_10m.get("mfe_pct"), 0.0) or 0.0), 3),
-        "mfe_20m_pct": round(float(_safe_float(metrics_20m.get("mfe_pct"), 0.0) or 0.0), 3),
-        "close_ret_1m_pct": round(float(_safe_float(metrics_1m.get("close_ret_pct"), 0.0) or 0.0), 3),
-        "close_ret_3m_pct": round(float(_safe_float(metrics_3m.get("close_ret_pct"), 0.0) or 0.0), 3),
-        "close_ret_5m_pct": round(float(_safe_float(metrics_5m.get("close_ret_pct"), 0.0) or 0.0), 3),
-        "close_ret_10m_pct": round(float(_safe_float(metrics_10m.get("close_ret_pct"), 0.0) or 0.0), 3),
-        "close_ret_20m_pct": round(float(_safe_float(metrics_20m.get("close_ret_pct"), 0.0) or 0.0), 3),
+        "mfe_1m_pct": round(
+            float(_safe_float(metrics_1m.get("mfe_pct"), 0.0) or 0.0), 3
+        ),
+        "mfe_3m_pct": round(
+            float(_safe_float(metrics_3m.get("mfe_pct"), 0.0) or 0.0), 3
+        ),
+        "mfe_5m_pct": round(
+            float(_safe_float(metrics_5m.get("mfe_pct"), 0.0) or 0.0), 3
+        ),
+        "mfe_10m_pct": round(
+            float(_safe_float(metrics_10m.get("mfe_pct"), 0.0) or 0.0), 3
+        ),
+        "mfe_20m_pct": round(
+            float(_safe_float(metrics_20m.get("mfe_pct"), 0.0) or 0.0), 3
+        ),
+        "close_ret_1m_pct": round(
+            float(_safe_float(metrics_1m.get("close_ret_pct"), 0.0) or 0.0), 3
+        ),
+        "close_ret_3m_pct": round(
+            float(_safe_float(metrics_3m.get("close_ret_pct"), 0.0) or 0.0), 3
+        ),
+        "close_ret_5m_pct": round(
+            float(_safe_float(metrics_5m.get("close_ret_pct"), 0.0) or 0.0), 3
+        ),
+        "close_ret_10m_pct": round(
+            float(_safe_float(metrics_10m.get("close_ret_pct"), 0.0) or 0.0), 3
+        ),
+        "close_ret_20m_pct": round(
+            float(_safe_float(metrics_20m.get("close_ret_pct"), 0.0) or 0.0), 3
+        ),
         "hit_up_05_1m": bool(metrics_1m.get("hit_up_05", False)),
         "hit_up_05_3m": bool(metrics_3m.get("hit_up_05", False)),
         "hit_up_05_5m": bool(metrics_5m.get("hit_up_05", False)),
@@ -399,7 +454,9 @@ def _enrich_post_sell_row(*, candidate: dict, evaluation: dict) -> dict:
     }
 
 
-def _summarize_exit_rule_quality(post_sell_rows: list[dict], valid_trades: list[dict]) -> list[dict]:
+def _summarize_exit_rule_quality(
+    post_sell_rows: list[dict], valid_trades: list[dict]
+) -> list[dict]:
     post_sell_by_rule: dict[str, list[dict]] = defaultdict(list)
     for row in post_sell_rows:
         post_sell_by_rule[_exit_group(str(row.get("exit_rule") or "-"))].append(row)
@@ -412,7 +469,9 @@ def _summarize_exit_rule_quality(post_sell_rows: list[dict], valid_trades: list[
     for exit_rule in TARGET_EXIT_RULES:
         quality_rows = post_sell_by_rule.get(exit_rule, [])
         completed_rows = trades_by_rule.get(exit_rule, [])
-        outcomes = Counter(str(row.get("outcome") or "NEUTRAL").upper() for row in quality_rows)
+        outcomes = Counter(
+            str(row.get("outcome") or "NEUTRAL").upper() for row in quality_rows
+        )
         evaluated = len(quality_rows)
         completed_profits = [
             float(_safe_float(row.get("profit_rate"), 0.0) or 0.0)
@@ -422,7 +481,8 @@ def _summarize_exit_rule_quality(post_sell_rows: list[dict], valid_trades: list[
         capture_values = [
             float(_safe_float(row.get("capture_efficiency_pct"), 0.0) or 0.0)
             for row in quality_rows
-            if float(_safe_float(row.get("potential_peak_profit_rate_10m"), 0.0) or 0.0) > 0
+            if float(_safe_float(row.get("potential_peak_profit_rate_10m"), 0.0) or 0.0)
+            > 0
         ]
         rows.append(
             {
@@ -433,16 +493,24 @@ def _summarize_exit_rule_quality(post_sell_rows: list[dict], valid_trades: list[
                     "GOOD_EXIT": int(outcomes.get("GOOD_EXIT", 0)),
                     "NEUTRAL": int(outcomes.get("NEUTRAL", 0)),
                 },
-                "missed_upside_rate": _ratio(outcomes.get("MISSED_UPSIDE", 0), evaluated),
+                "missed_upside_rate": _ratio(
+                    outcomes.get("MISSED_UPSIDE", 0), evaluated
+                ),
                 "good_exit_rate": _ratio(outcomes.get("GOOD_EXIT", 0), evaluated),
                 "capture_efficiency_avg_pct": _avg(capture_values),
                 "avg_extra_upside_10m_pct": _avg(
-                    [float(_safe_float(row.get("extra_upside_10m_pct"), 0.0) or 0.0) for row in quality_rows]
+                    [
+                        float(_safe_float(row.get("extra_upside_10m_pct"), 0.0) or 0.0)
+                        for row in quality_rows
+                    ]
                 ),
                 "completed_valid_trades": len(completed_profits),
                 "completed_valid_avg_profit_rate": _avg(completed_profits),
                 "completed_valid_realized_pnl_krw": int(
-                    sum(_safe_int(row.get("realized_pnl_krw"), 0) for row in completed_rows)
+                    sum(
+                        _safe_int(row.get("realized_pnl_krw"), 0)
+                        for row in completed_rows
+                    )
                 ),
             }
         )
@@ -465,7 +533,11 @@ def _build_trailing_continuation(
     fallback_regression_count: int,
 ) -> dict:
     trade_lookup = _build_trade_lookup(valid_trades)
-    trailing_rows = [row for row in post_sell_rows if _exit_group(str(row.get("exit_rule") or "-")) == "scalp_trailing_take_profit"]
+    trailing_rows = [
+        row
+        for row in post_sell_rows
+        if _exit_group(str(row.get("exit_rule") or "-")) == "scalp_trailing_take_profit"
+    ]
     qualifying_rows: list[dict] = []
     for row in trailing_rows:
         trade = trade_lookup.get(str(row.get("recommendation_id") or ""))
@@ -480,7 +552,9 @@ def _build_trailing_continuation(
         ):
             qualifying_rows.append(row)
 
-    outcomes = Counter(str(row.get("outcome") or "NEUTRAL").upper() for row in trailing_rows)
+    outcomes = Counter(
+        str(row.get("outcome") or "NEUTRAL").upper() for row in trailing_rows
+    )
     evaluated = len(trailing_rows)
     missed_rate = _ratio(outcomes.get("MISSED_UPSIDE", 0), evaluated)
     good_rate = _ratio(outcomes.get("GOOD_EXIT", 0), evaluated)
@@ -508,7 +582,13 @@ def _build_trailing_continuation(
         "eligible_for_live_review": eligible,
         "single_control_point": "SCALP_TRAILING_LIMIT_WEAK qualifying cohort +0.2%p only",
         "scope": "normal_only + post_fallback_deprecation + full_fill + initial-only + scalp_trailing_take_profit + profit_rate>0",
-        "excluded_scopes": ["partial_fill", "pyramid-activated", "soft_stop", "EOD/NXT", "fallback"],
+        "excluded_scopes": [
+            "partial_fill",
+            "pyramid-activated",
+            "soft_stop",
+            "EOD/NXT",
+            "fallback",
+        ],
         "rollback_guards": [
             "Plan Rebase §6 common guards",
             "trailing canary cohort avg_profit_rate <= 0",
@@ -524,10 +604,19 @@ def _build_rebound_windows(rows: list[dict]) -> list[dict]:
         window_total = sum(1 for row in rows if f"mfe_{label}_pct" in row)
         if window_total <= 0:
             continue
-        mfe_values = [float(_safe_float(row.get(f"mfe_{label}_pct"), 0.0) or 0.0) for row in rows]
-        close_values = [float(_safe_float(row.get(f"close_ret_{label}_pct"), 0.0) or 0.0) for row in rows]
-        above_sell = sum(1 for row in rows if bool(row.get(f"rebound_above_sell_{label}")))
-        above_buy = sum(1 for row in rows if bool(row.get(f"rebound_above_buy_{label}")))
+        mfe_values = [
+            float(_safe_float(row.get(f"mfe_{label}_pct"), 0.0) or 0.0) for row in rows
+        ]
+        close_values = [
+            float(_safe_float(row.get(f"close_ret_{label}_pct"), 0.0) or 0.0)
+            for row in rows
+        ]
+        above_sell = sum(
+            1 for row in rows if bool(row.get(f"rebound_above_sell_{label}"))
+        )
+        above_buy = sum(
+            1 for row in rows if bool(row.get(f"rebound_above_buy_{label}"))
+        )
         hit_up_05 = sum(1 for row in rows if bool(row.get(f"hit_up_05_{label}")))
         hit_up_10 = sum(1 for row in rows if bool(row.get(f"hit_up_10_{label}")))
         windows.append(
@@ -543,9 +632,13 @@ def _build_rebound_windows(rows: list[dict]) -> list[dict]:
                 "hit_up_10_count": int(hit_up_10),
                 "hit_up_10_rate": _ratio(hit_up_10, window_total),
                 "mfe_ge_0_5_count": sum(1 for value in mfe_values if value >= 0.5),
-                "mfe_ge_0_5_rate": _ratio(sum(1 for value in mfe_values if value >= 0.5), window_total),
+                "mfe_ge_0_5_rate": _ratio(
+                    sum(1 for value in mfe_values if value >= 0.5), window_total
+                ),
                 "mfe_ge_1_0_count": sum(1 for value in mfe_values if value >= 1.0),
-                "mfe_ge_1_0_rate": _ratio(sum(1 for value in mfe_values if value >= 1.0), window_total),
+                "mfe_ge_1_0_rate": _ratio(
+                    sum(1 for value in mfe_values if value >= 1.0), window_total
+                ),
                 "avg_mfe_pct": _avg(mfe_values),
                 "avg_close_ret_pct": _avg(close_values),
             }
@@ -553,23 +646,34 @@ def _build_rebound_windows(rows: list[dict]) -> list[dict]:
     return windows
 
 
-def _build_hard_stop_auxiliary(post_sell_rows: list[dict], valid_trades: list[dict]) -> dict:
+def _build_hard_stop_auxiliary(
+    post_sell_rows: list[dict], valid_trades: list[dict]
+) -> dict:
     hard_rules = {"scalp_preset_hard_stop_pct", "scalp_hard_stop_pct"}
-    rows = [row for row in post_sell_rows if _exit_group(str(row.get("exit_rule") or "-")) in hard_rules]
+    rows = [
+        row
+        for row in post_sell_rows
+        if _exit_group(str(row.get("exit_rule") or "-")) in hard_rules
+    ]
     completed_rows = [
         row
         for row in valid_trades
-        if _exit_group(_exit_rule_from_trade(row)) in hard_rules and _is_valid_completed_trade(row)
+        if _exit_group(_exit_rule_from_trade(row)) in hard_rules
+        and _is_valid_completed_trade(row)
     ]
     outcomes = Counter(str(row.get("outcome") or "NEUTRAL").upper() for row in rows)
     by_rule = Counter(_exit_group(str(row.get("exit_rule") or "-")) for row in rows)
-    completed_profits = [float(_safe_float(row.get("profit_rate"), 0.0) or 0.0) for row in completed_rows]
+    completed_profits = [
+        float(_safe_float(row.get("profit_rate"), 0.0) or 0.0) for row in completed_rows
+    ]
     return {
         "candidate_id": "hard_stop_whipsaw_aux",
         "priority": "parking_auxiliary",
         "basis": "하드스탑은 극단 손실 방어선이므로 표본이 작거나 반등이 보여도 soft_stop보다 먼저 완화하지 않는다.",
         "evaluated_post_sell": len(rows),
-        "exit_rule_counts": [{"label": key, "count": value} for key, value in by_rule.most_common()],
+        "exit_rule_counts": [
+            {"label": key, "count": value} for key, value in by_rule.most_common()
+        ],
         "outcome_counts": {
             "MISSED_UPSIDE": int(outcomes.get("MISSED_UPSIDE", 0)),
             "GOOD_EXIT": int(outcomes.get("GOOD_EXIT", 0)),
@@ -590,15 +694,29 @@ def _build_soft_stop_rebound(
     same_symbol_reentry: dict,
     valid_trades: list[dict],
 ) -> dict:
-    rows = [row for row in post_sell_rows if _exit_group(str(row.get("exit_rule") or "-")) == "scalp_soft_stop_pct"]
+    rows = [
+        row
+        for row in post_sell_rows
+        if _exit_group(str(row.get("exit_rule") or "-")) == "scalp_soft_stop_pct"
+    ]
     total = len(rows)
-    rebound_sell_rate = _ratio(sum(1 for row in rows if bool(row.get("rebound_above_sell_10m"))), total)
-    rebound_buy_rate = _ratio(sum(1 for row in rows if bool(row.get("rebound_above_buy_10m"))), total)
+    rebound_sell_rate = _ratio(
+        sum(1 for row in rows if bool(row.get("rebound_above_sell_10m"))), total
+    )
+    rebound_buy_rate = _ratio(
+        sum(1 for row in rows if bool(row.get("rebound_above_buy_10m"))), total
+    )
     cooldown_rate = _ratio(
-        sum(1 for row in rows if bool(row.get("same_symbol_soft_stop_cooldown_would_block"))),
+        sum(
+            1
+            for row in rows
+            if bool(row.get("same_symbol_soft_stop_cooldown_would_block"))
+        ),
         total,
     )
-    soft_reentry_losses = int(same_symbol_reentry.get("after_soft_stop_next_loss_count", 0) or 0)
+    soft_reentry_losses = int(
+        same_symbol_reentry.get("after_soft_stop_next_loss_count", 0) or 0
+    )
     whipsaw_windows = _build_rebound_windows(rows)
     whipsaw_10m = next((row for row in whipsaw_windows if row["window"] == "10m"), {})
     whipsaw_signal = bool(
@@ -612,7 +730,11 @@ def _build_soft_stop_rebound(
         recommendation = "cooldown live 금지, threshold/AI 재판정 후보"
     elif whipsaw_signal:
         recommendation = "soft_stop whipsaw confirmation canary 후보"
-    elif rebound_sell_rate >= 50.0 and rebound_buy_rate < 50.0 and soft_reentry_losses > 0:
+    elif (
+        rebound_sell_rate >= 50.0
+        and rebound_buy_rate < 50.0
+        and soft_reentry_losses > 0
+    ):
         recommendation = "same-symbol cooldown canary 후보"
     else:
         recommendation = "관찰 지속"
@@ -630,7 +752,9 @@ def _build_soft_stop_rebound(
         "hard_stop_auxiliary": _build_hard_stop_auxiliary(post_sell_rows, valid_trades),
         "recommendation": recommendation,
         "cooldown_live_allowed": bool(
-            rebound_sell_rate >= 50.0 and rebound_buy_rate < 50.0 and soft_reentry_losses > 0
+            rebound_sell_rate >= 50.0
+            and rebound_buy_rate < 50.0
+            and soft_reentry_losses > 0
         ),
     }
 
@@ -644,7 +768,9 @@ def _build_same_symbol_reentry(valid_trades: list[dict]) -> dict:
 
     reentries: list[dict] = []
     for code, rows in by_code.items():
-        ordered = sorted(rows, key=lambda item: _parse_dt(item.get("buy_time")) or datetime.min)
+        ordered = sorted(
+            rows, key=lambda item: _parse_dt(item.get("buy_time")) or datetime.min
+        )
         for prev, next_trade in zip(ordered, ordered[1:]):
             prev_sell_dt = _parse_dt(prev.get("sell_time"))
             next_buy_dt = _parse_dt(next_trade.get("buy_time"))
@@ -663,7 +789,9 @@ def _build_same_symbol_reentry(valid_trades: list[dict]) -> dict:
                     "next_id": _trade_id(next_trade),
                     "gap_min": round(gap_min, 1),
                     "prev_exit_rule": prev_rule,
-                    "prev_profit_rate": round(float(_safe_float(prev.get("profit_rate"), 0.0) or 0.0), 3),
+                    "prev_profit_rate": round(
+                        float(_safe_float(prev.get("profit_rate"), 0.0) or 0.0), 3
+                    ),
                     "next_profit_rate": round(next_profit, 3),
                     "higher_reentry": (
                         float(_safe_float(next_trade.get("buy_price"), 0.0) or 0.0)
@@ -678,13 +806,19 @@ def _build_same_symbol_reentry(valid_trades: list[dict]) -> dict:
         "window_min": 60,
         "total_reentries": len(reentries),
         "higher_reentry_count": sum(1 for row in reentries if row["higher_reentry"]),
-        "post_fallback_reentry_count": sum(1 for row in reentries if row["post_fallback_reentry"]),
+        "post_fallback_reentry_count": sum(
+            1 for row in reentries if row["post_fallback_reentry"]
+        ),
         "after_trailing_count": int(by_prev_rule.get("scalp_trailing_take_profit", 0)),
         "after_soft_stop_count": int(by_prev_rule.get("scalp_soft_stop_pct", 0)),
         "after_soft_stop_next_loss_count": sum(
-            1 for row in reentries if row["prev_exit_rule"] == "scalp_soft_stop_pct" and row["next_loss"]
+            1
+            for row in reentries
+            if row["prev_exit_rule"] == "scalp_soft_stop_pct" and row["next_loss"]
         ),
-        "prev_exit_rule_counts": [{"label": key, "count": value} for key, value in by_prev_rule.most_common()],
+        "prev_exit_rule_counts": [
+            {"label": key, "count": value} for key, value in by_prev_rule.most_common()
+        ],
         "examples": sorted(
             reentries,
             key=lambda row: (row["post_fallback_reentry"], -row["gap_min"]),
@@ -715,7 +849,9 @@ def _summarize_target_pipeline_events(target_date: str) -> tuple[dict, list[str]
             stage = str(payload.get("stage") or "").strip()
             if stage:
                 counts[stage] += 1
-            fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+            fields = (
+                payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+            )
             if stage == "position_rebased_after_fill":
                 fill_quality = str(fields.get("fill_quality") or "").upper()
                 if "PARTIAL" in fill_quality:
@@ -723,11 +859,17 @@ def _summarize_target_pipeline_events(target_date: str) -> tuple[dict, list[str]
                 else:
                     counts["full_fill_events"] += 1
             joined = " ".join(str(value) for value in [stage, *(fields or {}).values()])
-            if "fallback_scout" in joined or "fallback_main" in joined or "fallback_single" in joined:
+            if (
+                "fallback_scout" in joined
+                or "fallback_main" in joined
+                or "fallback_single" in joined
+            ):
                 fallback_regression += 1
     return (
         {
-            "order_bundle_submitted_events": int(counts.get("order_bundle_submitted", 0)),
+            "order_bundle_submitted_events": int(
+                counts.get("order_bundle_submitted", 0)
+            ),
             "full_fill_events": int(counts.get("full_fill_events", 0)),
             "partial_fill_events": int(counts.get("partial_fill_events", 0)),
             "fallback_regression_count": int(fallback_regression),
@@ -747,8 +889,12 @@ def _build_opportunity_cost(dates: list[str]) -> tuple[dict, list[str]]:
         summary = snapshot.get("summary") or {}
         metrics = snapshot.get("metrics") or {}
         outcome_counts.update(summary.get("outcome_counts") or {})
-        evaluated += _safe_int(metrics.get("evaluated_candidates", summary.get("evaluated_candidates")), 0)
-        total_estimated_pnl += _safe_int(metrics.get("estimated_counterfactual_pnl_10m_krw_sum"), 0)
+        evaluated += _safe_int(
+            metrics.get("evaluated_candidates", summary.get("evaluated_candidates")), 0
+        )
+        total_estimated_pnl += _safe_int(
+            metrics.get("estimated_counterfactual_pnl_10m_krw_sum"), 0
+        )
         for row in snapshot.get("rows") or []:
             terminal_counts[str(row.get("terminal_stage") or "-")] += 1
     return (
@@ -760,7 +906,8 @@ def _build_opportunity_cost(dates: list[str]) -> tuple[dict, list[str]]:
                 "NEUTRAL": int(outcome_counts.get("NEUTRAL", 0)),
             },
             "terminal_stage_top": [
-                {"label": key, "count": value} for key, value in terminal_counts.most_common(10)
+                {"label": key, "count": value}
+                for key, value in terminal_counts.most_common(10)
             ],
             "estimated_counterfactual_pnl_10m_krw_sum": int(total_estimated_pnl),
             "interpretation": "기회비용 방향성 참고용이며 COMPLETED 실현손익과 합산하지 않는다.",
@@ -781,7 +928,9 @@ def _build_readiness(
     full_fill = _safe_int(metrics.get("full_fill_events"), 0)
     partial_fill = _safe_int(metrics.get("partial_fill_events"), 0)
     if submitted <= 0:
-        submitted = _safe_int(target_pipeline_summary.get("order_bundle_submitted_events"), 0)
+        submitted = _safe_int(
+            target_pipeline_summary.get("order_bundle_submitted_events"), 0
+        )
     if full_fill + partial_fill <= 0:
         full_fill = _safe_int(target_pipeline_summary.get("full_fill_events"), 0)
         partial_fill = _safe_int(target_pipeline_summary.get("partial_fill_events"), 0)
@@ -818,7 +967,8 @@ def _build_load_distribution_evidence(
     manifest_paths = [
         str(path)
         for path in (
-            manifest_dir / f"monitor_snapshot_manifest_{target_date}_intraday_light.json",
+            manifest_dir
+            / f"monitor_snapshot_manifest_{target_date}_intraday_light.json",
             manifest_dir / f"monitor_snapshot_manifest_{target_date}_full.json",
         )
         if path.exists()
@@ -863,16 +1013,25 @@ def build_holding_exit_observation_report(
     if perf_path is not None:
         performance_paths.append(str(perf_path))
 
-    valid_trades = [row for row in _trade_rows_from_snapshots(trade_snapshots) if _is_valid_completed_trade(row)]
+    valid_trades = [
+        row
+        for row in _trade_rows_from_snapshots(trade_snapshots)
+        if _is_valid_completed_trade(row)
+    ]
     target_valid_trades = [
         row
         for row in valid_trades
-        if str(row.get("rec_date") or "") == safe_date or str(row.get("buy_time") or "").startswith(safe_date)
+        if str(row.get("rec_date") or "") == safe_date
+        or str(row.get("buy_time") or "").startswith(safe_date)
     ]
     post_sell_rows, post_sell_paths = _load_post_sell_rows(dates)
-    target_pipeline_summary, pipeline_paths, pipeline_rows = _summarize_target_pipeline_events(safe_date)
+    target_pipeline_summary, pipeline_paths, pipeline_rows = (
+        _summarize_target_pipeline_events(safe_date)
+    )
     opportunity_cost, missed_entry_paths = _build_opportunity_cost(dates)
-    fallback_regression_count = _safe_int(target_pipeline_summary.get("fallback_regression_count"), 0)
+    fallback_regression_count = _safe_int(
+        target_pipeline_summary.get("fallback_regression_count"), 0
+    )
 
     same_symbol_reentry = _build_same_symbol_reentry(valid_trades)
     report = {

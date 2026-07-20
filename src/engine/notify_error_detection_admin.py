@@ -12,7 +12,6 @@ from urllib import parse, request
 
 from src.utils.constants import CONFIG_PATH, DEV_PATH, PROJECT_ROOT
 
-
 DEFAULT_STATE_FILE = PROJECT_ROOT / "tmp" / "error_detection_telegram_notify_state.json"
 
 
@@ -73,9 +72,7 @@ def _alert_results(report: dict) -> list[dict]:
     if not isinstance(results, list):
         return []
     return [
-        item
-        for item in results
-        if isinstance(item, dict) and _is_alert_result(item)
+        item for item in results if isinstance(item, dict) and _is_alert_result(item)
     ]
 
 
@@ -99,7 +96,9 @@ def _signature(report: dict, fail_results: list[dict]) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def _build_message(report: dict, fail_results: list[dict], *, mode: str, log_file: str) -> str:
+def _build_message(
+    report: dict, fail_results: list[dict], *, mode: str, log_file: str
+) -> str:
     timestamp = report.get("timestamp") or "-"
     lines = [
         "[KORStockScan] ERROR DETECTION ALERT",
@@ -129,7 +128,9 @@ def notify_from_report(
     cooldown_sec: int = 600,
     now_ts: float | None = None,
 ) -> str:
-    if str(os.getenv("KORSTOCKSCAN_ERROR_DETECTION_TELEGRAM_NOTIFY_ENABLED", "true")).lower() in {
+    if str(
+        os.getenv("KORSTOCKSCAN_ERROR_DETECTION_TELEGRAM_NOTIFY_ENABLED", "true")
+    ).lower() in {
         "0",
         "false",
         "no",
@@ -170,7 +171,9 @@ def notify_from_report(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Notify admin for error detector failures.")
+    parser = argparse.ArgumentParser(
+        description="Notify admin for error detector failures."
+    )
     parser.add_argument("--report-file", required=True)
     parser.add_argument("--mode", default="full")
     parser.add_argument("--log-file", default="logs/run_error_detection.log")

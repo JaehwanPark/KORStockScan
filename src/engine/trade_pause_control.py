@@ -10,7 +10,6 @@ from src.utils.runtime_flags import (
     set_trading_paused,
 )
 
-
 PAUSE_EVENT_TYPE = "BUY_SIDE_PAUSE_CHANGED"
 TRADING_PAUSED_EVENT = "TRADING_PAUSED"
 PAUSE_STATE_LABEL = "신규 매수 및 추가매수 중단 상태"
@@ -18,6 +17,7 @@ PAUSE_STATE_LABEL = "신규 매수 및 추가매수 중단 상태"
 _lock = threading.RLock()
 _cached_paused: Optional[bool] = None
 _bound_bus = None
+
 
 def _read_file_state() -> bool:
     return is_trading_paused()
@@ -71,7 +71,9 @@ def _handle_trading_paused_event(payload: Optional[Dict[str, Any]]) -> None:
         _cached_paused = paused
 
 
-def set_buy_side_pause(paused: bool, *, source: str = "system", reason: str | None = None, event_bus=None) -> bool:
+def set_buy_side_pause(
+    paused: bool, *, source: str = "system", reason: str | None = None, event_bus=None
+) -> bool:
     """
     Compatibility helper for non-telegram callers.
     Current telegram control path writes the file via runtime_flags.py and publishes EventBus separately.
@@ -88,7 +90,9 @@ def set_buy_side_pause(paused: bool, *, source: str = "system", reason: str | No
                 clear_trading_paused()
         except Exception as exc:
             tag = "TRADING_PAUSED" if paused else "TRADING_RESUMED"
-            log_error(f"[{tag}] flag update failed source={source} paused={paused}: {exc}")
+            log_error(
+                f"[{tag}] flag update failed source={source} paused={paused}: {exc}"
+            )
             raise
 
         after = _read_file_state()

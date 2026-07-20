@@ -105,7 +105,9 @@ def load_pipeline_events(
 
 
 def _load_pipeline_events_from_file(target_date: str) -> list[dict]:
-    path = _existing_or_gzip_path(PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl")
+    path = _existing_or_gzip_path(
+        PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl"
+    )
     events = []
     if not path.exists():
         return events

@@ -54,7 +54,9 @@ def _cancel_exchange_from_unfilled_row(row: dict | None) -> str:
         return "KRX"
     if stex_tp == "2":
         return "NXT"
-    stex_text = str(row.get("stex_tp_txt") or raw.get("stex_tp_txt") or "").strip().upper()
+    stex_text = (
+        str(row.get("stex_tp_txt") or raw.get("stex_tp_txt") or "").strip().upper()
+    )
     if "NXT" in stex_text:
         return "NXT"
     if "KRX" in stex_text:
@@ -62,7 +64,9 @@ def _cancel_exchange_from_unfilled_row(row: dict | None) -> str:
     return ""
 
 
-def _resolve_cancel_exchange_from_unfilled_snapshot(code: str, orig_ord_no: str, token: str) -> str:
+def _resolve_cancel_exchange_from_unfilled_snapshot(
+    code: str, orig_ord_no: str, token: str
+) -> str:
     try:
         rows = kiwoom_utils.get_unfilled_order_snapshot_ka10075(
             token,
@@ -80,7 +84,9 @@ def _resolve_cancel_exchange_from_unfilled_snapshot(code: str, orig_ord_no: str,
     return ""
 
 
-def send_cancel_order_with_exchange_retry(code, orig_ord_no, token, qty=0, dmst_stex_tp="SOR"):
+def send_cancel_order_with_exchange_retry(
+    code, orig_ord_no, token, qty=0, dmst_stex_tp="SOR"
+):
     cancel_exchange = str(dmst_stex_tp or "SOR").strip().upper()
     if cancel_exchange not in {"KRX", "NXT", "SOR"}:
         cancel_exchange = "SOR"
@@ -93,10 +99,14 @@ def send_cancel_order_with_exchange_retry(code, orig_ord_no, token, qty=0, dmst_
     )
     if _cancel_response_success(res) or cancel_exchange != "SOR":
         return res
-    if not _cancel_reject_indicates_sor_exchange_mismatch(_cancel_response_message(res)):
+    if not _cancel_reject_indicates_sor_exchange_mismatch(
+        _cancel_response_message(res)
+    ):
         return res
 
-    resolved_exchange = _resolve_cancel_exchange_from_unfilled_snapshot(code, orig_ord_no, token)
+    resolved_exchange = _resolve_cancel_exchange_from_unfilled_snapshot(
+        code, orig_ord_no, token
+    )
     if resolved_exchange not in {"KRX", "NXT"}:
         return res
     return kiwoom_orders.send_cancel_order(
@@ -124,11 +134,15 @@ def confirm_cancel_or_reload_remaining(code, orig_ord_no, token, expected_qty):
     try:
         real_inventory, _ = kiwoom_orders.get_my_inventory(token)
         real_stock = next(
-            (item for item in (real_inventory or []) if str(item.get('code', '')).strip()[:6] == code),
+            (
+                item
+                for item in (real_inventory or [])
+                if str(item.get("code", "")).strip()[:6] == code
+            ),
             None,
         )
         if real_stock:
-            real_qty = int(float(real_stock.get('qty', 0) or 0))
+            real_qty = int(float(real_stock.get("qty", 0) or 0))
             if real_qty > 0:
                 return real_qty
     except Exception:
@@ -142,11 +156,11 @@ def confirm_cancel_or_reload_remaining(code, orig_ord_no, token, expected_qty):
 
 def extract_ord_no(res):
     if isinstance(res, dict):
-        return str(res.get('ord_no', '') or res.get('odno', '') or '')
-    return ''
+        return str(res.get("ord_no", "") or res.get("odno", "") or "")
+    return ""
 
 
 def is_ok_response(res):
     if isinstance(res, dict):
-        return str(res.get('return_code', res.get('rt_cd', ''))) == '0'
+        return str(res.get("return_code", res.get("rt_cd", ""))) == "0"
     return bool(res)

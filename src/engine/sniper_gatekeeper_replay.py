@@ -16,7 +16,6 @@ from src.utils.constants import DATA_DIR, TRADING_RULES
 from src.utils.jsonl_io import read_jsonl
 from src.utils.logger import log_error, log_info
 
-
 _WRITE_LOCK = threading.RLock()
 _RECENT_SNAPSHOT_SIGNATURES: dict[str, float] = {}
 
@@ -66,7 +65,11 @@ def _prune_stale_signatures(now_ts: float) -> None:
     dedup_ttl = float(getattr(TRADING_RULES, "GATEKEEPER_SNAPSHOT_DEDUP_TTL_SEC", 20.0))
     # dedup TTL의 10배 이상 경과한 시그니처는 제거 (최소 200초, 기본 200초)
     keep_ttl = max(dedup_ttl * 10, 200.0)
-    stale_keys = [k for k, ts in list(_RECENT_SNAPSHOT_SIGNATURES.items()) if now_ts - ts > keep_ttl]
+    stale_keys = [
+        k
+        for k, ts in list(_RECENT_SNAPSHOT_SIGNATURES.items())
+        if now_ts - ts > keep_ttl
+    ]
     for k in stale_keys:
         _RECENT_SNAPSHOT_SIGNATURES.pop(k, None)
     _LAST_SNAPSHOT_PRUNE_TS = now_ts
@@ -134,6 +137,7 @@ def _append_jsonl_async(
     dedup 시그니처 자체는 호출자가 이미 _WRITE_LOCK 아래에서 즉시 기록했음을
     전제로 한다.
     """
+
     def _on_write_done(future):
         exc = future.exception()
         if exc is not None:
@@ -154,7 +158,9 @@ def _append_jsonl_async(
             # 동기 fallback 성공 → 롤백 불필요 (이미 기록된 dedup 유지)
             return True
         except Exception as fallback_exc:
-            log_error(f"[GATEKEEPER_SNAPSHOT] 동기 fallback write도 실패 (dedup 롤백): {fallback_exc}")
+            log_error(
+                f"[GATEKEEPER_SNAPSHOT] 동기 fallback write도 실패 (dedup 롤백): {fallback_exc}"
+            )
             if _rollback_signature:
                 with _WRITE_LOCK:
                     _RECENT_SNAPSHOT_SIGNATURES.pop(_rollback_signature, None)
@@ -170,7 +176,9 @@ def _snapshot_signature(payload: dict) -> str:
         "allow_entry": payload.get("allow_entry", False),
         "ctx_summary": payload.get("ctx_summary", {}),
     }
-    raw = json.dumps(signature_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    raw = json.dumps(
+        signature_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 
@@ -204,7 +212,9 @@ def record_gatekeeper_snapshot(
         "strategy": str(strategy or stock.get("strategy", "") or ""),
         "position_tag": str(stock.get("position_tag", "") or ""),
         "action_label": str(gatekeeper.get("action_label", "") or "UNKNOWN"),
-        "action_key": normalize_gatekeeper_action_key(gatekeeper.get("action_key") or gatekeeper.get("action_label")),
+        "action_key": normalize_gatekeeper_action_key(
+            gatekeeper.get("action_key") or gatekeeper.get("action_label")
+        ),
         "allow_entry": bool(gatekeeper.get("allow_entry", False)),
         "cache_mode": str(gatekeeper.get("cache_mode", "") or ""),
         "eval_ms": int(gatekeeper.get("eval_ms", 0) or 0),
@@ -221,7 +231,9 @@ def record_gatekeeper_snapshot(
             "buy_ratio_ws": _json_safe(realtime_ctx.get("buy_ratio_ws", 0.0)),
             "exec_buy_ratio": _json_safe(realtime_ctx.get("exec_buy_ratio", 0.0)),
             "tick_trade_value": _json_safe(realtime_ctx.get("tick_trade_value", 0)),
-            "net_buy_exec_volume": _json_safe(realtime_ctx.get("net_buy_exec_volume", 0)),
+            "net_buy_exec_volume": _json_safe(
+                realtime_ctx.get("net_buy_exec_volume", 0)
+            ),
             "program_flow_desc": _json_safe(realtime_ctx.get("program_flow_desc", "")),
             "micro_flow_desc": _json_safe(realtime_ctx.get("micro_flow_desc", "")),
             "depth_flow_desc": _json_safe(realtime_ctx.get("depth_flow_desc", "")),
@@ -235,7 +247,9 @@ def record_gatekeeper_snapshot(
     try:
         with _WRITE_LOCK:
             now_ts = time.time()
-            dedup_ttl = float(getattr(TRADING_RULES, "GATEKEEPER_SNAPSHOT_DEDUP_TTL_SEC", 20.0))
+            dedup_ttl = float(
+                getattr(TRADING_RULES, "GATEKEEPER_SNAPSHOT_DEDUP_TTL_SEC", 20.0)
+            )
             signature = _snapshot_signature(payload)
             last_saved_at = _RECENT_SNAPSHOT_SIGNATURES.get(signature, 0.0)
             if dedup_ttl > 0 and (now_ts - last_saved_at) < dedup_ttl:
@@ -250,7 +264,8 @@ def record_gatekeeper_snapshot(
             # 비동기 write (single-thread, best-effort, same-process ordering)
             # write 실패 시 _rollback_signature로 dedup 롤백
             ok = _append_jsonl_async(
-                _snapshot_path(payload["signal_date"]), payload,
+                _snapshot_path(payload["signal_date"]),
+                payload,
                 _rollback_signature=signature,
             )
             if not ok:
@@ -271,18 +286,28 @@ def record_gatekeeper_snapshot(
         return None
 
 
-def find_gatekeeper_snapshot(target_date: str, code: str, target_time: str | None = None) -> dict | None:
+def find_gatekeeper_snapshot(
+    target_date: str, code: str, target_time: str | None = None
+) -> dict | None:
     code = str(code or "").strip()[:6]
-    rows = [row for row in load_gatekeeper_snapshots(target_date) if str(row.get("stock_code", "")) == code]
+    rows = [
+        row
+        for row in load_gatekeeper_snapshots(target_date)
+        if str(row.get("stock_code", "")) == code
+    ]
     if not rows:
         return None
     if not target_time:
         return rows[-1]
     try:
-        target_dt = datetime.strptime(f"{target_date} {target_time}", "%Y-%m-%d %H:%M:%S")
+        target_dt = datetime.strptime(
+            f"{target_date} {target_time}", "%Y-%m-%d %H:%M:%S"
+        )
     except Exception:
         try:
-            target_dt = datetime.strptime(f"{target_date} {target_time}", "%Y-%m-%d %H:%M")
+            target_dt = datetime.strptime(
+                f"{target_date} {target_time}", "%Y-%m-%d %H:%M"
+            )
         except Exception:
             return rows[-1]
 
@@ -313,7 +338,11 @@ def find_gatekeeper_snapshot_for_trade(
     code = str(code or "").strip()[:6]
     if not code:
         return None
-    rows = [row for row in load_gatekeeper_snapshots(target_date) if str(row.get("stock_code", "")) == code]
+    rows = [
+        row
+        for row in load_gatekeeper_snapshots(target_date)
+        if str(row.get("stock_code", "")) == code
+    ]
     if not rows:
         return None
     if anchor_dt is None:

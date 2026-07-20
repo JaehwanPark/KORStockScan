@@ -13,7 +13,6 @@ from typing import Any, Callable
 
 from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto
 
-
 ReasonLabeler = Callable[[str, dict[str, str]], str]
 IgnorePredicate = Callable[[dict[str, Any]], bool]
 
@@ -70,7 +69,13 @@ NUMERIC_FIELD_EXCLUDED_NAMES = {
     "종목코드",
 }
 KEY_FIELD_CANDIDATES = {
-    "strategy": ("strategy", "selected_strategy", "entry_strategy", "origin_strategy", "trade_type"),
+    "strategy": (
+        "strategy",
+        "selected_strategy",
+        "entry_strategy",
+        "origin_strategy",
+        "trade_type",
+    ),
     "market": ("market", "market_type", "market_name", "universe", "market_code"),
 }
 ACTUAL_ORDER_FIELD_CANDIDATES = (
@@ -110,7 +115,9 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     tmp_path = path.with_suffix(path.suffix + ".tmp")
-    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     tmp_path.replace(path)
 
 
@@ -154,7 +161,13 @@ def default_reason_label(stage: str, fields: dict[str, str]) -> str:
     if stage == "ai_confirmed_terminal_no_budget":
         terminal_reason = _first_field(
             fields,
-            ("terminal_reason", "reason", "block_reason", "blocked_reason", "source_stage"),
+            (
+                "terminal_reason",
+                "reason",
+                "block_reason",
+                "blocked_reason",
+                "source_stage",
+            ),
         )
         if terminal_reason:
             return f"ai_terminal:{terminal_reason}"
@@ -165,8 +178,13 @@ def default_reason_label(stage: str, fields: dict[str, str]) -> str:
         return "ai_terminal:unknown_terminal_reason"
     if stage == "blocked_ai_score":
         score = _first_field(fields, ("score", "ai_score", "current_ai_score"))
-        reason = _first_field(fields, ("reason", "block_reason", "blocked_reason", "decision"))
-        if "ai_score_50_buy_hold_override" in reason or fields.get("ai_score_50_buy_hold_override") == "True":
+        reason = _first_field(
+            fields, ("reason", "block_reason", "blocked_reason", "decision")
+        )
+        if (
+            "ai_score_50_buy_hold_override" in reason
+            or fields.get("ai_score_50_buy_hold_override") == "True"
+        ):
             return "blocked_ai_score:ai_score_50_buy_hold_override"
         if score:
             return f"blocked_ai_score:score_{score}"
@@ -179,7 +197,9 @@ def default_reason_label(stage: str, fields: dict[str, str]) -> str:
         "entry_ai_price_canary_fallback",
         "scale_in_price_guard_block",
     }:
-        reason = _first_field(fields, ("reason", "block_reason", "resolution_reason", "action"))
+        reason = _first_field(
+            fields, ("reason", "block_reason", "resolution_reason", "action")
+        )
         return f"{stage}:{reason or '-'}"
     if stage == "wait65_79_ev_candidate":
         score = _first_field(fields, ("ai_score", "score", "current_ai_score"))
@@ -325,7 +345,9 @@ class _SummaryAggregate:
         self.last_seen = event.emitted_at
         self.last_record_id = event.record_id
         self.last_raw_offset = event.raw_offset_end
-        self.second_counts[event.emitted_at.replace(microsecond=0).isoformat(timespec="seconds")] += 1
+        self.second_counts[
+            event.emitted_at.replace(microsecond=0).isoformat(timespec="seconds")
+        ] += 1
         sample = _compact_sample(event)
         if len(self.first_samples) < SAMPLE_FIRST_LIMIT:
             self.first_samples.append(sample)
@@ -403,8 +425,14 @@ class _SummaryAggregate:
             "reason_label": self.reason_label,
             "actual_order_submitted": self.actual_order_submitted,
             "event_count": self.event_count,
-            "first_seen": self.first_seen.isoformat(timespec="seconds") if self.first_seen else None,
-            "last_seen": self.last_seen.isoformat(timespec="seconds") if self.last_seen else None,
+            "first_seen": (
+                self.first_seen.isoformat(timespec="seconds")
+                if self.first_seen
+                else None
+            ),
+            "last_seen": (
+                self.last_seen.isoformat(timespec="seconds") if self.last_seen else None
+            ),
             "first_record_id": self.first_record_id,
             "last_record_id": self.last_record_id,
             "field_presence_counts": dict(sorted(self.field_presence_counts.items())),
@@ -412,7 +440,9 @@ class _SummaryAggregate:
             "second_counts": dict(sorted(self.second_counts.items())),
             "first_raw_offset": self.first_raw_offset,
             "last_raw_offset": self.last_raw_offset,
-            "sample_raw_offsets": [int(sample.get("raw_offset") or 0) for sample in samples],
+            "sample_raw_offsets": [
+                int(sample.get("raw_offset") or 0) for sample in samples
+            ],
             "sample_events": samples,
             "metric_role": "ops_volume_diagnostic",
             "decision_authority": "diagnostic_aggregation",
@@ -429,7 +459,9 @@ def is_summary_target_stage(stage: str) -> bool:
     return _safe_str(stage) in SUMMARY_STAGES
 
 
-def payload_has_lossless_authority(payload: dict[str, Any], threshold_family: str | None = None) -> bool:
+def payload_has_lossless_authority(
+    payload: dict[str, Any], threshold_family: str | None = None
+) -> bool:
     stage = _safe_str(payload.get("stage")).lower()
     fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
     if threshold_family:
@@ -484,7 +516,11 @@ def _summary_event_from_payload(
     if emitted_at is None:
         return None
     raw_fields = payload.get("fields") or {}
-    fields = {str(k): _safe_str(v) for k, v in raw_fields.items()} if isinstance(raw_fields, dict) else {}
+    fields = (
+        {str(k): _safe_str(v) for k, v in raw_fields.items()}
+        if isinstance(raw_fields, dict)
+        else {}
+    )
     record_id = payload.get("record_id")
     if record_id in (None, "", 0):
         record_id = fields.get("id") or ""
@@ -556,7 +592,9 @@ def _new_aggregate(event: SummaryEvent) -> _SummaryAggregate:
     )
 
 
-def _load_summary_rows(summary_path: Path, *, include_samples: bool = True) -> list[dict[str, Any]]:
+def _load_summary_rows(
+    summary_path: Path, *, include_samples: bool = True
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     summary_path = existing_or_gzip_path(summary_path)
     if not summary_path.exists():
@@ -578,7 +616,9 @@ def _load_summary_rows(summary_path: Path, *, include_samples: bool = True) -> l
     return rows
 
 
-def load_summary_rows(path: Path, *, include_samples: bool = True) -> list[dict[str, Any]]:
+def load_summary_rows(
+    path: Path, *, include_samples: bool = True
+) -> list[dict[str, Any]]:
     return _load_summary_rows(path, include_samples=include_samples)
 
 
@@ -599,7 +639,11 @@ def _slim_summary_row(payload: dict[str, Any]) -> dict[str, Any]:
         "event_count": payload.get("event_count"),
         "first_seen": payload.get("first_seen"),
         "last_seen": payload.get("last_seen"),
-        "second_counts": payload.get("second_counts") if isinstance(payload.get("second_counts"), dict) else {},
+        "second_counts": (
+            payload.get("second_counts")
+            if isinstance(payload.get("second_counts"), dict)
+            else {}
+        ),
         "decision_authority": payload.get("decision_authority"),
         "runtime_effect": payload.get("runtime_effect"),
     }
@@ -690,12 +734,16 @@ def update_and_load_pipeline_event_summaries(
         with summary_path.open("a", encoding="utf-8") as summary_handle:
             for key in sorted(groups):
                 row = groups[key].to_row(target_date=target_date)
-                summary_handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+                summary_handle.write(
+                    json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n"
+                )
                 appended_summary_rows += 1
 
     rows = _load_summary_rows(summary_path, include_samples=include_samples)
     final_stat_size = int(raw_path.stat().st_size) if raw_path.exists() else raw_size
-    final_raw_size = max(final_stat_size, last_good_offset) if is_gzip_raw else final_stat_size
+    final_raw_size = (
+        max(final_stat_size, last_good_offset) if is_gzip_raw else final_stat_size
+    )
     new_manifest = {
         "schema_version": SUMMARY_SCHEMA_VERSION,
         "raw_path": str(raw_path),
@@ -751,14 +799,23 @@ class ProducerSummaryCompactor:
     def enabled(self) -> bool:
         return self.mode in {"shadow", "suppress"}
 
-    def submit(self, payload: dict[str, Any], *, threshold_family: str | None = None) -> dict[str, Any]:
+    def submit(
+        self, payload: dict[str, Any], *, threshold_family: str | None = None
+    ) -> dict[str, Any]:
         if not self.enabled or _safe_str(payload.get("event_type")) != "pipeline_event":
             return {"mode": self.mode, "summary_recorded": False, "suppress_raw": False}
 
         stage = _safe_str(payload.get("stage"))
-        lossless = payload_has_lossless_authority(payload, threshold_family=threshold_family)
+        lossless = payload_has_lossless_authority(
+            payload, threshold_family=threshold_family
+        )
         if stage not in SUMMARY_STAGES:
-            return {"mode": self.mode, "summary_recorded": False, "suppress_raw": False, "lossless": True}
+            return {
+                "mode": self.mode,
+                "summary_recorded": False,
+                "suppress_raw": False,
+                "lossless": True,
+            }
 
         self._sequence += 1
         event = summary_event_from_payload(
@@ -768,7 +825,12 @@ class ProducerSummaryCompactor:
             line_end=self._sequence,
         )
         if event is None:
-            return {"mode": self.mode, "summary_recorded": False, "suppress_raw": False, "lossless": lossless}
+            return {
+                "mode": self.mode,
+                "summary_recorded": False,
+                "suppress_raw": False,
+                "lossless": lossless,
+            }
 
         key = _aggregate_key(event)
         self._groups.setdefault(key, _new_aggregate(event)).add(event)
@@ -778,7 +840,10 @@ class ProducerSummaryCompactor:
             self._suppressed_count += 1
         if lossless:
             self._lossless_preserved_count += 1
-        if self.flush_sec == 0 or (time.monotonic() - self._last_flush_monotonic) >= self.flush_sec:
+        if (
+            self.flush_sec == 0
+            or (time.monotonic() - self._last_flush_monotonic) >= self.flush_sec
+        ):
             self.flush(target_date=_safe_str(payload.get("emitted_date")))
         return {
             "mode": self.mode,
@@ -798,11 +863,15 @@ class ProducerSummaryCompactor:
         safe_date = _safe_str(target_date)
         if not safe_date:
             latest = max(
-                aggregate.last_seen for aggregate in self._groups.values() if aggregate.last_seen is not None
+                aggregate.last_seen
+                for aggregate in self._groups.values()
+                if aggregate.last_seen is not None
             )
             safe_date = latest.strftime("%Y-%m-%d")
         self.summary_dir.mkdir(parents=True, exist_ok=True)
-        summary_path, manifest_path = producer_summary_paths(self.summary_dir, safe_date)
+        summary_path, manifest_path = producer_summary_paths(
+            self.summary_dir, safe_date
+        )
         summary_path.touch(exist_ok=True)
         flushed_rows = 0
         flushed_events = 0
@@ -812,7 +881,9 @@ class ProducerSummaryCompactor:
                 row["schema_version"] = PRODUCER_SUMMARY_SCHEMA_VERSION
                 row["producer_mode"] = self.mode
                 row["source"] = "pipeline_event_logger"
-                handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+                handle.write(
+                    json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n"
+                )
                 flushed_rows += 1
                 flushed_events += int(row.get("event_count") or 0)
         existing = _read_json(manifest_path)
@@ -829,8 +900,11 @@ class ProducerSummaryCompactor:
             "updated_at": datetime.now().isoformat(timespec="seconds"),
             "summary_stages": sorted(SUMMARY_STAGES),
             "sample_per_bucket": self.sample_per_bucket,
-            "suppressed_count": int(existing.get("suppressed_count") or 0) + self._suppressed_count,
-            "lossless_preserved_count": int(existing.get("lossless_preserved_count") or 0)
+            "suppressed_count": int(existing.get("suppressed_count") or 0)
+            + self._suppressed_count,
+            "lossless_preserved_count": int(
+                existing.get("lossless_preserved_count") or 0
+            )
             + self._lossless_preserved_count,
             "metric_role": "ops_volume_diagnostic",
             "decision_authority": "diagnostic_aggregation",

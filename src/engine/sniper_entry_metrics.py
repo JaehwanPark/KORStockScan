@@ -11,7 +11,6 @@ from pathlib import Path
 from src.engine.log_archive_service import iter_target_log_lines
 from src.utils.constants import LOGS_DIR
 
-
 _DECISION_RE = re.compile(
     r"\[LATENCY_ENTRY_DECISION\].*?mode=(?P<mode>\w+).*?decision=(?P<decision>\w+).*?"
     r"latency=(?P<latency>\w+)"
@@ -66,9 +65,15 @@ def summarize_today_entry_metrics(now: datetime | None = None) -> EntryMetricsSu
     target_date = current.strftime("%Y-%m-%d")
     summary = EntryMetricsSummary(date=target_date)
 
-    decision_lines = _iter_today_lines(LOGS_DIR / "sniper_state_handlers_info.log", target_date=target_date)
-    fill_lines = _iter_today_lines(LOGS_DIR / "sniper_execution_receipts_info.log", target_date=target_date)
-    tif_lines = _iter_today_lines(LOGS_DIR / "kiwoom_orders_info.log", target_date=target_date)
+    decision_lines = _iter_today_lines(
+        LOGS_DIR / "sniper_state_handlers_info.log", target_date=target_date
+    )
+    fill_lines = _iter_today_lines(
+        LOGS_DIR / "sniper_execution_receipts_info.log", target_date=target_date
+    )
+    tif_lines = _iter_today_lines(
+        LOGS_DIR / "kiwoom_orders_info.log", target_date=target_date
+    )
 
     for line in decision_lines:
         if match := _DECISION_RE.search(line):
@@ -106,14 +111,20 @@ def _extract_display_values(summary: EntryMetricsSummary) -> dict[str, int | str
     scout_fill = summary.fill_tag_counts.get("fallback_scout", 0)
     main_fill = summary.fill_tag_counts.get("fallback_main", 0)
     fallback_filled = summary.bundle_filled_mode_counts.get("fallback", 0)
-    order_types = ", ".join(
-        f"{order_type} {count}건"
-        for order_type, count in sorted(summary.order_type_counts.items())
-    ) or "없음"
-    tif_usage = ", ".join(
-        f"{tif} {count}건"
-        for tif, count in sorted(summary.order_tif_counts.items())
-    ) or "없음"
+    order_types = (
+        ", ".join(
+            f"{order_type} {count}건"
+            for order_type, count in sorted(summary.order_type_counts.items())
+        )
+        or "없음"
+    )
+    tif_usage = (
+        ", ".join(
+            f"{tif} {count}건"
+            for tif, count in sorted(summary.order_tif_counts.items())
+        )
+        or "없음"
+    )
 
     return {
         "safe": safe,

@@ -59,9 +59,7 @@ PIPELINE_FIELD_KEYS = [
 ]
 
 
-def list_jsonl_files(
-    dataset: str, target_date: date
-) -> List[Path]:
+def list_jsonl_files(dataset: str, target_date: date) -> List[Path]:
     """지정 날짜에 해당하는 JSONL 파일 목록을 반환."""
     src_path = DATASET_PATHS[dataset]
     if dataset == "system_metric_samples":
@@ -72,7 +70,9 @@ def list_jsonl_files(
     if dataset == "post_sell":
         pattern = f"post_sell_evaluations*{target_date.strftime('%Y-%m-%d')}*.jsonl"
         files = list(src_path.glob(pattern))
-        gz_pattern = f"post_sell_evaluations*{target_date.strftime('%Y-%m-%d')}*.jsonl.gz"
+        gz_pattern = (
+            f"post_sell_evaluations*{target_date.strftime('%Y-%m-%d')}*.jsonl.gz"
+        )
         files.extend(src_path.glob(gz_pattern))
         return sorted(files)
     # pipeline_events: 날짜 패턴 매칭
@@ -126,16 +126,16 @@ def extract_event_id(event: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def convert_to_dataframe(
-    events: List[Dict[str, Any]], dataset: str
-) -> pd.DataFrame:
+def convert_to_dataframe(events: List[Dict[str, Any]], dataset: str) -> pd.DataFrame:
     """이벤트 리스트를 Pandas DataFrame으로 변환."""
     if not events:
         return pd.DataFrame()
     if dataset == "pipeline_events":
         rows: List[Dict[str, Any]] = []
         for event in events:
-            fields = event.get("fields") if isinstance(event.get("fields"), dict) else {}
+            fields = (
+                event.get("fields") if isinstance(event.get("fields"), dict) else {}
+            )
             row: Dict[str, Any] = {
                 "schema_version": event.get("schema_version"),
                 "event_type": event.get("event_type"),
@@ -148,7 +148,9 @@ def convert_to_dataframe(
                 "emitted_date": event.get("emitted_date"),
                 "text_payload": event.get("text_payload"),
                 "event_id": event.get("event_id"),
-                "fields_json": json.dumps(fields, ensure_ascii=False) if fields else None,
+                "fields_json": (
+                    json.dumps(fields, ensure_ascii=False) if fields else None
+                ),
             }
             for key in PIPELINE_FIELD_KEYS:
                 row[f"fields_{key}"] = fields.get(key)
@@ -225,7 +227,9 @@ def convert_pipeline_event_to_row(event: Dict[str, Any]) -> Dict[str, Any]:
     return row
 
 
-def _event_matches_target_date(event: Dict[str, Any], dataset: str, target_date: date) -> bool:
+def _event_matches_target_date(
+    event: Dict[str, Any], dataset: str, target_date: date
+) -> bool:
     target = target_date.isoformat()
     # 우선 공통 날짜 필드를 사용한다.
     for key in ("emitted_date", "event_date", "signal_date"):
@@ -273,7 +277,10 @@ def write_parquet_partition(
         out_file = partition_dir / f"{dataset}_{target_date.strftime('%Y%m%d')}.parquet"
     else:
         timestamp = datetime.now().strftime("%H%M%S")
-        out_file = partition_dir / f"{dataset}_{target_date.strftime('%Y%m%d')}_{timestamp}.parquet"
+        out_file = (
+            partition_dir
+            / f"{dataset}_{target_date.strftime('%Y%m%d')}_{timestamp}.parquet"
+        )
     # PyArrow 테이블로 변환
     table = pa.Table.from_pandas(df, preserve_index=False)
     # Parquet 작성
@@ -284,7 +291,9 @@ def write_parquet_partition(
 
 def clear_parquet_partition(dataset: str, target_date: date) -> None:
     """대상 날짜 파티션을 제거한다 (stale partition 정리)."""
-    partition_dir = ANALYTICS_ROOT / dataset / f"date={target_date.strftime('%Y-%m-%d')}"
+    partition_dir = (
+        ANALYTICS_ROOT / dataset / f"date={target_date.strftime('%Y-%m-%d')}"
+    )
     if partition_dir.exists():
         shutil.rmtree(partition_dir, ignore_errors=True)
         logger.info("기존 파티션 제거: %s", partition_dir)
@@ -355,7 +364,9 @@ def backfill_date_range(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="튜닝 모니터링 로그 JSONL → Parquet 변환")
+    parser = argparse.ArgumentParser(
+        description="튜닝 모니터링 로그 JSONL → Parquet 변환"
+    )
     parser.add_argument(
         "--dataset",
         required=True,
@@ -380,9 +391,7 @@ def main():
         action="store_true",
         help="중복 제거 수행 안 함",
     )
-    parser.add_argument(
-        "--verbose", "-v", action="store_true", help="상세 로그 출력"
-    )
+    parser.add_argument("--verbose", "-v", action="store_true", help="상세 로그 출력")
     args = parser.parse_args()
 
     logging.basicConfig(

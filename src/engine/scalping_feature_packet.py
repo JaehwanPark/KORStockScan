@@ -9,7 +9,6 @@ from src.engine.scalping.microstructure_reaction_context import (
     precompute_microstructure_reaction_inputs,
 )
 
-
 SCALP_FEATURE_PACKET_VERSION = "scalp_feature_packet_v1"
 SCALP_FEATURE_PACKET_QUOTE_STALE_MS = 3000
 SCALP_FEATURE_PACKET_MINUTE_CANDLE_STALE_MS = 180_000
@@ -98,7 +97,12 @@ def _entry_liquidity_features(
         ),
         1,
     )
-    would_fill_now = bool(orderbook_present and quote_age_ms is not None and not quote_stale and fillability_score >= 60)
+    would_fill_now = bool(
+        orderbook_present
+        and quote_age_ms is not None
+        and not quote_stale
+        and fillability_score >= 60
+    )
     return {
         "entry_liquidity_score": score,
         "entry_liquidity_status": status,
@@ -109,7 +113,9 @@ def _entry_liquidity_features(
         "top3_bid_notional": round(top3_bid_notional, 1),
         "top3_ask_notional": round(top3_ask_notional, 1),
         "quote_depth_present": orderbook_present,
-        "quote_fresh_for_entry": bool(orderbook_present and quote_age_ms is not None and not quote_stale),
+        "quote_fresh_for_entry": bool(
+            orderbook_present and quote_age_ms is not None and not quote_stale
+        ),
         "quote_stale_threshold_ms": quote_stale_threshold_ms,
     }
 
@@ -123,12 +129,16 @@ def _entry_order_flow_features(
     large_sell_print_detected,
     large_buy_print_detected,
 ):
-    has_pressure = bool(tick_aggressor_pressure_usable or tick_aggressor_trusted_count > 0)
+    has_pressure = bool(
+        tick_aggressor_pressure_usable or tick_aggressor_trusted_count > 0
+    )
     if not has_pressure:
         score = 50.0
         status = "unknown"
     else:
-        delta_component = _clamp(50.0 + (float(net_aggressive_delta_10t or 0) / 20.0), 0.0, 100.0)
+        delta_component = _clamp(
+            50.0 + (float(net_aggressive_delta_10t or 0) / 20.0), 0.0, 100.0
+        )
         score = (float(buy_pressure_10t or 50.0) * 0.65) + (delta_component * 0.35)
         if large_buy_print_detected:
             score += 6.0
@@ -144,7 +154,9 @@ def _entry_order_flow_features(
     return {
         "order_flow_pressure_score": score,
         "entry_order_flow_status": status,
-        "order_flow_pressure_source": "trusted_aggressor" if has_pressure else "untrusted_or_missing",
+        "order_flow_pressure_source": (
+            "trusted_aggressor" if has_pressure else "untrusted_or_missing"
+        ),
     }
 
 
@@ -176,7 +188,10 @@ def _entry_momentum_features(
         score += 8.0
     elif latest_strength < 85:
         score -= 8.0
-    if str(tick_context_quality or "").startswith("stale") or tick_context_quality in {"missing_ticks", "missing_tick_time"}:
+    if str(tick_context_quality or "").startswith("stale") or tick_context_quality in {
+        "missing_ticks",
+        "missing_tick_time",
+    }:
         score -= 12.0
     score = round(_clamp(score), 1)
     if score >= 68:
@@ -261,7 +276,9 @@ def _reference_seconds_of_day(ws_data, ticks, now=None) -> tuple[int, str]:
     for tick in ticks or []:
         if not isinstance(tick, dict):
             continue
-        sec = _time_to_seconds(tick.get("time") or tick.get("체결시간") or tick.get("20"))
+        sec = _time_to_seconds(
+            tick.get("time") or tick.get("체결시간") or tick.get("20")
+        )
         if sec is not None:
             return sec, "latest_tick_time"
     ref = datetime.fromtimestamp(time.time())
@@ -273,7 +290,9 @@ def _minute_candle_time_quality(recent_candles, ws_data, ticks, *, now=None) -> 
     base = {
         "minute_candle_latest_time": "-",
         "minute_candle_latest_age_ms": "-",
-        "minute_candle_context_quality": "missing_candles" if not candles else "missing_candle_time",
+        "minute_candle_context_quality": (
+            "missing_candles" if not candles else "missing_candle_time"
+        ),
         "minute_candle_reference_source": "-",
         "minute_candle_source_time_basis": "-",
         "minute_candle_window_fresh": False,
@@ -303,7 +322,9 @@ def _minute_candle_time_quality(recent_candles, ws_data, ticks, *, now=None) -> 
     base.update(
         {
             "minute_candle_latest_age_ms": age_ms,
-            "minute_candle_context_quality": "fresh_bar_window" if fresh else "stale_bar_window",
+            "minute_candle_context_quality": (
+                "fresh_bar_window" if fresh else "stale_bar_window"
+            ),
             "minute_candle_reference_source": ref_source,
             "minute_candle_window_fresh": fresh,
         }
@@ -314,7 +335,14 @@ def _minute_candle_time_quality(recent_candles, ws_data, ticks, *, now=None) -> 
 def calculate_scalping_micro_indicator_values(recent_candles):
     candles = recent_candles if isinstance(recent_candles, list) else []
     if len(candles) < 5:
-        last_close = _safe_number(candles[-1].get("현재가") if candles and isinstance(candles[-1], dict) else 0, 0.0)
+        last_close = _safe_number(
+            (
+                candles[-1].get("현재가")
+                if candles and isinstance(candles[-1], dict)
+                else 0
+            ),
+            0.0,
+        )
         return {"MA5": int(last_close), "Micro_VWAP": int(last_close)}
 
     window = [candle for candle in candles[-5:] if isinstance(candle, dict)]
@@ -330,16 +358,24 @@ def calculate_scalping_micro_indicator_values(recent_candles):
         typical_price = (high + low + close) / 3.0
         price_vol_sum += typical_price * volume
         volume_sum += volume
-    micro_vwap_value = int(price_vol_sum / volume_sum) if volume_sum > 0 else int(closes[-1] if closes else 0)
+    micro_vwap_value = (
+        int(price_vol_sum / volume_sum)
+        if volume_sum > 0
+        else int(closes[-1] if closes else 0)
+    )
     return {"MA5": ma5_value, "Micro_VWAP": micro_vwap_value}
 
 
-def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, *, now=None):
+def extract_scalping_feature_packet(
+    ws_data, recent_ticks, recent_candles=None, *, now=None
+):
     if recent_candles is None:
         recent_candles = []
 
     ws_data = ws_data or {}
-    recent_ticks = _select_recent_ticks_for_feature_packet(ws_data, recent_ticks, now=now)
+    recent_ticks = _select_recent_ticks_for_feature_packet(
+        ws_data, recent_ticks, now=now
+    )
     snapshot = precompute_microstructure_reaction_inputs(
         ws_data,
         recent_ticks,
@@ -368,21 +404,39 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
     top3_ask_vol = snapshot.get("top3_ask_vol", 0)
     top3_bid_vol = snapshot.get("top3_bid_vol", 0)
 
-    top1_depth_ratio = round((best_ask_vol / best_bid_vol), 3) if best_bid_vol > 0 else 999.0
-    top3_depth_ratio = round((top3_ask_vol / top3_bid_vol), 3) if top3_bid_vol > 0 else 999.0
+    top1_depth_ratio = (
+        round((best_ask_vol / best_bid_vol), 3) if best_bid_vol > 0 else 999.0
+    )
+    top3_depth_ratio = (
+        round((top3_ask_vol / top3_bid_vol), 3) if top3_bid_vol > 0 else 999.0
+    )
 
     micro_price = curr_price
     denom = best_ask_vol + best_bid_vol
     if denom > 0:
         micro_price = ((best_bid * best_ask_vol) + (best_ask * best_bid_vol)) / denom
 
-    microprice_edge_bp = round(((micro_price - curr_price) / curr_price) * 10000, 2) if curr_price > 0 else 0.0
+    microprice_edge_bp = (
+        round(((micro_price - curr_price) / curr_price) * 10000, 2)
+        if curr_price > 0
+        else 0.0
+    )
 
-    high_price = snapshot.get("session_high", curr_price) if recent_candles else curr_price
-    low_price = snapshot.get("session_low", curr_price) if recent_candles else curr_price
+    high_price = (
+        snapshot.get("session_high", curr_price) if recent_candles else curr_price
+    )
+    low_price = (
+        snapshot.get("session_low", curr_price) if recent_candles else curr_price
+    )
 
-    distance_from_day_high_pct = round(((curr_price - high_price) / high_price) * 100, 3) if high_price > 0 else 0.0
-    intraday_range_pct = round(((high_price - low_price) / low_price) * 100, 3) if low_price > 0 else 0.0
+    distance_from_day_high_pct = (
+        round(((curr_price - high_price) / high_price) * 100, 3)
+        if high_price > 0
+        else 0.0
+    )
+    intraday_range_pct = (
+        round(((high_price - low_price) / low_price) * 100, 3) if low_price > 0 else 0.0
+    )
 
     buy_vol_10 = 0
     sell_vol_10 = 0
@@ -404,16 +458,28 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
     tick_latest_age_ms = snapshot.get("tick_age_ms")
     tick_aggressor_source_counts = snapshot.get("tick_aggressor_source_counts") or {}
     tick_aggressor_quality_counts = snapshot.get("tick_aggressor_quality_counts") or {}
-    tick_trade_value_source_counts = snapshot.get("tick_trade_value_source_counts") or {}
+    tick_trade_value_source_counts = (
+        snapshot.get("tick_trade_value_source_counts") or {}
+    )
     trade_volume_source_counts = snapshot.get("trade_volume_source_counts") or {}
-    tick_aggressor_orderbook_touch_count = int(snapshot.get("tick_aggressor_orderbook_touch_count") or 0)
+    tick_aggressor_orderbook_touch_count = int(
+        snapshot.get("tick_aggressor_orderbook_touch_count") or 0
+    )
     tick_aggressor_cached_orderbook_touch_count = int(
         snapshot.get("tick_aggressor_cached_orderbook_touch_count") or 0
     )
-    tick_aggressor_price_heuristic_count = int(snapshot.get("tick_aggressor_price_heuristic_count") or 0)
-    tick_aggressor_unknown_count = int(snapshot.get("tick_aggressor_unknown_count") or 0)
-    tick_aggressor_trusted_count = int(snapshot.get("tick_aggressor_trusted_count") or 0)
-    tick_aggressor_pressure_usable = bool(snapshot.get("tick_aggressor_pressure_usable", False))
+    tick_aggressor_price_heuristic_count = int(
+        snapshot.get("tick_aggressor_price_heuristic_count") or 0
+    )
+    tick_aggressor_unknown_count = int(
+        snapshot.get("tick_aggressor_unknown_count") or 0
+    )
+    tick_aggressor_trusted_count = int(
+        snapshot.get("tick_aggressor_trusted_count") or 0
+    )
+    tick_aggressor_pressure_usable = bool(
+        snapshot.get("tick_aggressor_pressure_usable", False)
+    )
     kiwoom_0b_aux_observed_count = int(ws_data.get("kiwoom_0b_aux_observed_count") or 0)
     kiwoom_0b_1313_missing_count = int(ws_data.get("kiwoom_0b_1313_missing_count") or 0)
     kiwoom_0b_1030_1031_vs_15_evaluable_count = int(
@@ -429,29 +495,53 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
         buy_vol_10 = snapshot.get("buy_vol", 0)
         sell_vol_10 = snapshot.get("sell_vol", 0)
         total_vol_10 = buy_vol_10 + sell_vol_10
-        buy_pressure_10t = round(snapshot.get("buy_pressure_pct", 50.0), 2) if total_vol_10 > 0 else 50.0
+        buy_pressure_10t = (
+            round(snapshot.get("buy_pressure_pct", 50.0), 2)
+            if total_vol_10 > 0
+            else 50.0
+        )
         net_aggressive_delta_10t = buy_vol_10 - sell_vol_10
 
         latest_strength = ticks[0].get("strength", v_pw)
 
         latest_price = snapshot.get("latest_price", curr_price)
         oldest_price = snapshot.get("oldest_price", curr_price)
-        price_change_10t_pct = round(((latest_price - oldest_price) / oldest_price) * 100, 3) if oldest_price > 0 else 0.0
+        price_change_10t_pct = (
+            round(((latest_price - oldest_price) / oldest_price) * 100, 3)
+            if oldest_price > 0
+            else 0.0
+        )
 
-        tick_secs = snapshot.get("tick_secs") if isinstance(snapshot.get("tick_secs"), list) else []
-        if len(tick_secs) >= 2 and tick_secs[0] is not None and tick_secs[-1] is not None:
+        tick_secs = (
+            snapshot.get("tick_secs")
+            if isinstance(snapshot.get("tick_secs"), list)
+            else []
+        )
+        if (
+            len(tick_secs) >= 2
+            and tick_secs[0] is not None
+            and tick_secs[-1] is not None
+        ):
             tick_window_span_sec = tick_secs[0] - tick_secs[-1]
             if tick_window_span_sec < 0:
                 tick_window_span_sec += 86400
         tick_accel_source = "insufficient_ticks"
-        if len(tick_secs) >= 5 and tick_secs[0] is not None and tick_secs[4] is not None:
+        if (
+            len(tick_secs) >= 5
+            and tick_secs[0] is not None
+            and tick_secs[4] is not None
+        ):
             recent_5tick_seconds = tick_secs[0] - tick_secs[4]
             if recent_5tick_seconds < 0:
                 recent_5tick_seconds += 86400
         elif len(tick_secs) >= 5:
             tick_accel_source = "invalid_recent_tick_time"
 
-        if len(tick_secs) >= 10 and tick_secs[5] is not None and tick_secs[9] is not None:
+        if (
+            len(tick_secs) >= 10
+            and tick_secs[5] is not None
+            and tick_secs[9] is not None
+        ):
             prev_5tick_seconds = tick_secs[5] - tick_secs[9]
             if prev_5tick_seconds < 0:
                 prev_5tick_seconds += 86400
@@ -459,14 +549,18 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
             tick_accel_source = "invalid_previous_tick_time"
 
         if recent_5tick_seconds > 0 and prev_5tick_seconds < 999:
-            tick_acceleration_ratio_raw = round(prev_5tick_seconds / recent_5tick_seconds, 3)
+            tick_acceleration_ratio_raw = round(
+                prev_5tick_seconds / recent_5tick_seconds, 3
+            )
             tick_acceleration_ratio = tick_acceleration_ratio_raw
             tick_accel_effective_recent_5tick_seconds = recent_5tick_seconds
             tick_accel_source = "computed_10ticks"
         elif recent_5tick_seconds <= 0 and prev_5tick_seconds < 999:
             tick_accel_effective_recent_5tick_seconds = 1.0
             tick_acceleration_ratio_raw = 0.0
-            tick_acceleration_ratio = round(prev_5tick_seconds / tick_accel_effective_recent_5tick_seconds, 3)
+            tick_acceleration_ratio = round(
+                prev_5tick_seconds / tick_accel_effective_recent_5tick_seconds, 3
+            )
             tick_accel_source = "same_second_burst_10ticks"
         elif recent_5tick_seconds <= 0:
             tick_accel_source = "same_second_burst_insufficient_previous_window"
@@ -482,7 +576,10 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
     quote_stale_threshold_ms = max(
         1,
         int(
-            _safe_number(snapshot.get("ai_quote_stale_max_ms"), SCALP_FEATURE_PACKET_QUOTE_STALE_MS)
+            _safe_number(
+                snapshot.get("ai_quote_stale_max_ms"),
+                SCALP_FEATURE_PACKET_QUOTE_STALE_MS,
+            )
             or SCALP_FEATURE_PACKET_QUOTE_STALE_MS
         ),
     )
@@ -507,12 +604,20 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
     ma5_value = 0.0
     micro_vwap_available = False
     ma5_available = False
-    minute_candle_quality = _minute_candle_time_quality(recent_candles, ws_data, ticks, now=now)
-    minute_candle_window_fresh = bool(minute_candle_quality.get("minute_candle_window_fresh"))
+    minute_candle_quality = _minute_candle_time_quality(
+        recent_candles, ws_data, ticks, now=now
+    )
+    minute_candle_window_fresh = bool(
+        minute_candle_quality.get("minute_candle_window_fresh")
+    )
 
     if minute_candle_window_fresh and recent_candles and len(recent_candles) >= 2:
         current_volume = recent_candles[-1].get("거래량", 0)
-        prev_volumes = [candle.get("거래량", 0) for candle in recent_candles[:-1] if candle.get("거래량", 0) > 0]
+        prev_volumes = [
+            candle.get("거래량", 0)
+            for candle in recent_candles[:-1]
+            if candle.get("거래량", 0) > 0
+        ]
         avg_prev_volume = mean(prev_volumes) if prev_volumes else 0
         if avg_prev_volume > 0:
             volume_ratio_pct = round((current_volume / avg_prev_volume) * 100, 2)
@@ -525,10 +630,14 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
             micro_vwap_value = indicators.get("Micro_VWAP", 0) or 0
 
             if minute_candle_window_fresh and micro_vwap_value > 0 and curr_price > 0:
-                curr_vs_micro_vwap_bp = round(((curr_price - micro_vwap_value) / micro_vwap_value) * 10000, 2)
+                curr_vs_micro_vwap_bp = round(
+                    ((curr_price - micro_vwap_value) / micro_vwap_value) * 10000, 2
+                )
                 micro_vwap_available = True
             if minute_candle_window_fresh and ma5_value > 0 and curr_price > 0:
-                curr_vs_ma5_bp = round(((curr_price - ma5_value) / ma5_value) * 10000, 2)
+                curr_vs_ma5_bp = round(
+                    ((curr_price - ma5_value) / ma5_value) * 10000, 2
+                )
                 ma5_available = True
         except Exception:
             pass
@@ -597,10 +706,14 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
         "net_aggressive_delta_10t": int(net_aggressive_delta_10t),
         "price_change_10t_pct": price_change_10t_pct,
         "recent_5tick_seconds": round(recent_5tick_seconds, 3),
-        "tick_accel_effective_recent_5tick_seconds": round(tick_accel_effective_recent_5tick_seconds, 3)
-        if tick_accel_effective_recent_5tick_seconds < 999
-        else 999.0,
-        "prev_5tick_seconds": round(prev_5tick_seconds, 3) if prev_5tick_seconds < 999 else 999.0,
+        "tick_accel_effective_recent_5tick_seconds": (
+            round(tick_accel_effective_recent_5tick_seconds, 3)
+            if tick_accel_effective_recent_5tick_seconds < 999
+            else 999.0
+        ),
+        "prev_5tick_seconds": (
+            round(prev_5tick_seconds, 3) if prev_5tick_seconds < 999 else 999.0
+        ),
         "tick_acceleration_ratio": tick_acceleration_ratio,
         "tick_acceleration_ratio_raw": tick_acceleration_ratio_raw,
         "tick_accel_source": tick_accel_source,
@@ -609,9 +722,15 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
         "tick_aggressor_source_counts": tick_aggressor_source_counts,
         "tick_aggressor_quality_counts": tick_aggressor_quality_counts,
         "tick_trade_value_source_counts": tick_trade_value_source_counts,
-        "tick_trade_value_1313_count": int(snapshot.get("tick_trade_value_1313_count") or 0),
-        "tick_trade_value_1313_missing_count": int(snapshot.get("tick_trade_value_1313_missing_count") or 0),
-        "tick_trade_value_1313_missing_rate_pct": snapshot.get("tick_trade_value_1313_missing_rate_pct", 0.0),
+        "tick_trade_value_1313_count": int(
+            snapshot.get("tick_trade_value_1313_count") or 0
+        ),
+        "tick_trade_value_1313_missing_count": int(
+            snapshot.get("tick_trade_value_1313_missing_count") or 0
+        ),
+        "tick_trade_value_1313_missing_rate_pct": snapshot.get(
+            "tick_trade_value_1313_missing_rate_pct", 0.0
+        ),
         "trade_volume_source_counts": trade_volume_source_counts,
         "trade_volume_1030_1031_vs_15_evaluable_count": int(
             snapshot.get("trade_volume_1030_1031_vs_15_evaluable_count") or 0
@@ -628,14 +747,22 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
         ),
         "trade_volume_1030_1031_vs_15_decision_usable": False,
         "kiwoom_0b_aux_observed_count": kiwoom_0b_aux_observed_count,
-        "kiwoom_0b_1313_present_count": int(ws_data.get("kiwoom_0b_1313_present_count") or 0),
+        "kiwoom_0b_1313_present_count": int(
+            ws_data.get("kiwoom_0b_1313_present_count") or 0
+        ),
         "kiwoom_0b_1313_missing_count": kiwoom_0b_1313_missing_count,
         "kiwoom_0b_1313_missing_rate_pct": _rate_pct(
             kiwoom_0b_1313_missing_count,
             kiwoom_0b_aux_observed_count,
         ),
-        "kiwoom_0b_trade_value_source_counts": ws_data.get("kiwoom_0b_trade_value_source_counts") or {},
-        "kiwoom_0b_trade_volume_source_counts": ws_data.get("kiwoom_0b_trade_volume_source_counts") or {},
+        "kiwoom_0b_trade_value_source_counts": ws_data.get(
+            "kiwoom_0b_trade_value_source_counts"
+        )
+        or {},
+        "kiwoom_0b_trade_volume_source_counts": ws_data.get(
+            "kiwoom_0b_trade_volume_source_counts"
+        )
+        or {},
         "kiwoom_0b_1030_1031_vs_15_evaluable_count": kiwoom_0b_1030_1031_vs_15_evaluable_count,
         "kiwoom_0b_1030_1031_vs_15_mismatch_count": kiwoom_0b_1030_1031_vs_15_mismatch_count,
         "kiwoom_0b_1030_1031_vs_15_mismatch_rate_pct": _rate_pct(
@@ -649,16 +776,24 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
         "tick_aggressor_trusted_count": tick_aggressor_trusted_count,
         "tick_aggressor_pressure_usable": tick_aggressor_pressure_usable,
         "tick_latest_time": tick_latest_time or "-",
-        "tick_latest_age_ms": tick_latest_age_ms if tick_latest_age_ms is not None else "-",
-        "tick_window_span_sec": tick_window_span_sec if tick_window_span_sec is not None else "-",
+        "tick_latest_age_ms": (
+            tick_latest_age_ms if tick_latest_age_ms is not None else "-"
+        ),
+        "tick_window_span_sec": (
+            tick_window_span_sec if tick_window_span_sec is not None else "-"
+        ),
         "tick_context_stale": (
-            bool(tick_stale) if tick_latest_age_ms is not None else "not_available_tick_latest_age"
+            bool(tick_stale)
+            if tick_latest_age_ms is not None
+            else "not_available_tick_latest_age"
         ),
         "tick_context_quality": tick_context_quality,
         "quote_age_ms": quote_age_ms if quote_age_ms is not None else "-",
         "quote_age_source": quote_age_source,
         "quote_stale_threshold_ms": quote_stale_threshold_ms,
-        "quote_stale": bool(quote_stale) if quote_age_ms is not None else "not_available_quote_age",
+        "quote_stale": (
+            bool(quote_stale) if quote_age_ms is not None else "not_available_quote_age"
+        ),
         "same_price_buy_absorption": same_price_buy_absorption,
         "large_sell_print_detected": large_sell_print_detected,
         "large_buy_print_detected": large_buy_print_detected,
@@ -707,12 +842,15 @@ def _select_recent_ticks_for_feature_packet(ws_data, recent_ticks, *, now=None):
 def build_scalping_feature_audit_fields(packet):
     payload = packet or {}
     return {
-        "scalp_feature_packet_version": str(payload.get("packet_version", SCALP_FEATURE_PACKET_VERSION)),
+        "scalp_feature_packet_version": str(
+            payload.get("packet_version", SCALP_FEATURE_PACKET_VERSION)
+        ),
         "tick_acceleration_ratio_sent": "tick_acceleration_ratio" in payload,
         "same_price_buy_absorption_sent": "same_price_buy_absorption" in payload,
         "large_sell_print_detected_sent": "large_sell_print_detected" in payload,
         "ask_depth_ratio_sent": "ask_depth_ratio" in payload,
-        "microstructure_reaction_context_sent": "microstructure_reaction_context_version" in payload,
+        "microstructure_reaction_context_sent": "microstructure_reaction_context_version"
+        in payload,
         "tick_source_quality_fields_sent": all(
             field in payload
             for field in (
@@ -725,11 +863,19 @@ def build_scalping_feature_audit_fields(packet):
         "tick_sample_count": payload.get("tick_sample_count", "-"),
         "tick_window_sample_count": payload.get("tick_window_sample_count", "-"),
         "tick_aggressor_source_counts": payload.get("tick_aggressor_source_counts", {}),
-        "tick_aggressor_quality_counts": payload.get("tick_aggressor_quality_counts", {}),
-        "tick_trade_value_source_counts": payload.get("tick_trade_value_source_counts", {}),
+        "tick_aggressor_quality_counts": payload.get(
+            "tick_aggressor_quality_counts", {}
+        ),
+        "tick_trade_value_source_counts": payload.get(
+            "tick_trade_value_source_counts", {}
+        ),
         "tick_trade_value_1313_count": payload.get("tick_trade_value_1313_count", 0),
-        "tick_trade_value_1313_missing_count": payload.get("tick_trade_value_1313_missing_count", 0),
-        "tick_trade_value_1313_missing_rate_pct": payload.get("tick_trade_value_1313_missing_rate_pct", 0.0),
+        "tick_trade_value_1313_missing_count": payload.get(
+            "tick_trade_value_1313_missing_count", 0
+        ),
+        "tick_trade_value_1313_missing_rate_pct": payload.get(
+            "tick_trade_value_1313_missing_rate_pct", 0.0
+        ),
         "trade_volume_source_counts": payload.get("trade_volume_source_counts", {}),
         "trade_volume_1030_1031_vs_15_evaluable_count": payload.get(
             "trade_volume_1030_1031_vs_15_evaluable_count",
@@ -746,9 +892,15 @@ def build_scalping_feature_audit_fields(packet):
         "kiwoom_0b_aux_observed_count": payload.get("kiwoom_0b_aux_observed_count", 0),
         "kiwoom_0b_1313_present_count": payload.get("kiwoom_0b_1313_present_count", 0),
         "kiwoom_0b_1313_missing_count": payload.get("kiwoom_0b_1313_missing_count", 0),
-        "kiwoom_0b_1313_missing_rate_pct": payload.get("kiwoom_0b_1313_missing_rate_pct", 0.0),
-        "kiwoom_0b_trade_value_source_counts": payload.get("kiwoom_0b_trade_value_source_counts", {}),
-        "kiwoom_0b_trade_volume_source_counts": payload.get("kiwoom_0b_trade_volume_source_counts", {}),
+        "kiwoom_0b_1313_missing_rate_pct": payload.get(
+            "kiwoom_0b_1313_missing_rate_pct", 0.0
+        ),
+        "kiwoom_0b_trade_value_source_counts": payload.get(
+            "kiwoom_0b_trade_value_source_counts", {}
+        ),
+        "kiwoom_0b_trade_volume_source_counts": payload.get(
+            "kiwoom_0b_trade_volume_source_counts", {}
+        ),
         "kiwoom_0b_1030_1031_vs_15_evaluable_count": payload.get(
             "kiwoom_0b_1030_1031_vs_15_evaluable_count",
             0,
@@ -761,25 +913,37 @@ def build_scalping_feature_audit_fields(packet):
             "kiwoom_0b_1030_1031_vs_15_mismatch_rate_pct",
             0.0,
         ),
-        "tick_aggressor_orderbook_touch_count": payload.get("tick_aggressor_orderbook_touch_count", 0),
+        "tick_aggressor_orderbook_touch_count": payload.get(
+            "tick_aggressor_orderbook_touch_count", 0
+        ),
         "tick_aggressor_cached_orderbook_touch_count": payload.get(
             "tick_aggressor_cached_orderbook_touch_count", 0
         ),
-        "tick_aggressor_price_heuristic_count": payload.get("tick_aggressor_price_heuristic_count", 0),
+        "tick_aggressor_price_heuristic_count": payload.get(
+            "tick_aggressor_price_heuristic_count", 0
+        ),
         "tick_aggressor_unknown_count": payload.get("tick_aggressor_unknown_count", 0),
         "tick_aggressor_trusted_count": payload.get("tick_aggressor_trusted_count", 0),
-        "tick_aggressor_pressure_usable": payload.get("tick_aggressor_pressure_usable", False),
+        "tick_aggressor_pressure_usable": payload.get(
+            "tick_aggressor_pressure_usable", False
+        ),
         "tick_latest_time": payload.get("tick_latest_time", "-"),
         "tick_latest_age_ms": payload.get("tick_latest_age_ms", "-"),
         "tick_window_span_sec": payload.get("tick_window_span_sec", "-"),
-        "tick_accel_effective_recent_5tick_seconds": payload.get("tick_accel_effective_recent_5tick_seconds", "-"),
+        "tick_accel_effective_recent_5tick_seconds": payload.get(
+            "tick_accel_effective_recent_5tick_seconds", "-"
+        ),
         "tick_acceleration_ratio_raw": payload.get("tick_acceleration_ratio_raw", "-"),
         "tick_accel_source": payload.get("tick_accel_source", "-"),
-        "tick_context_stale": payload.get("tick_context_stale", "not_available_tick_latest_age"),
+        "tick_context_stale": payload.get(
+            "tick_context_stale", "not_available_tick_latest_age"
+        ),
         "tick_context_quality": payload.get("tick_context_quality", "unknown"),
         "quote_age_ms": payload.get("quote_age_ms", "-"),
         "quote_age_source": payload.get("quote_age_source", "missing"),
-        "quote_stale_threshold_ms": payload.get("quote_stale_threshold_ms", SCALP_FEATURE_PACKET_QUOTE_STALE_MS),
+        "quote_stale_threshold_ms": payload.get(
+            "quote_stale_threshold_ms", SCALP_FEATURE_PACKET_QUOTE_STALE_MS
+        ),
         "quote_stale": payload.get("quote_stale", "not_available_quote_age"),
         "entry_liquidity_score": payload.get("entry_liquidity_score", "-"),
         "entry_liquidity_status": payload.get("entry_liquidity_status", "-"),
@@ -797,7 +961,9 @@ def build_scalping_feature_audit_fields(packet):
         "entry_momentum_score": payload.get("entry_momentum_score", "-"),
         "entry_momentum_status": payload.get("entry_momentum_status", "-"),
         "entry_context_quality": payload.get("entry_context_quality", "-"),
-        "entry_context_missing_features": payload.get("entry_context_missing_features", "-"),
+        "entry_context_missing_features": payload.get(
+            "entry_context_missing_features", "-"
+        ),
         "latest_strength": payload.get("latest_strength", "-"),
         "spread_bp": payload.get("spread_bp", "-"),
         "top1_depth_ratio": payload.get("top1_depth_ratio", "-"),
@@ -825,16 +991,26 @@ def build_scalping_feature_audit_fields(packet):
         "ma5_value": payload.get("ma5_value", "-"),
         "minute_candle_latest_time": payload.get("minute_candle_latest_time", "-"),
         "minute_candle_latest_age_ms": payload.get("minute_candle_latest_age_ms", "-"),
-        "minute_candle_context_quality": payload.get("minute_candle_context_quality", "unknown"),
-        "minute_candle_reference_source": payload.get("minute_candle_reference_source", "-"),
-        "minute_candle_source_time_basis": payload.get("minute_candle_source_time_basis", "-"),
+        "minute_candle_context_quality": payload.get(
+            "minute_candle_context_quality", "unknown"
+        ),
+        "minute_candle_reference_source": payload.get(
+            "minute_candle_reference_source", "-"
+        ),
+        "minute_candle_source_time_basis": payload.get(
+            "minute_candle_source_time_basis", "-"
+        ),
         "minute_candle_window_fresh": payload.get("minute_candle_window_fresh", False),
         "minute_candle_stale_threshold_ms": payload.get(
             "minute_candle_stale_threshold_ms",
             SCALP_FEATURE_PACKET_MINUTE_CANDLE_STALE_MS,
         ),
-        "microstructure_reaction_context_version": payload.get("microstructure_reaction_context_version", "-"),
-        "microstructure_reaction_context_status": payload.get("microstructure_reaction_context_status", "-"),
+        "microstructure_reaction_context_version": payload.get(
+            "microstructure_reaction_context_version", "-"
+        ),
+        "microstructure_reaction_context_status": payload.get(
+            "microstructure_reaction_context_status", "-"
+        ),
         "microstructure_reaction_tick_aggressor_pressure_usable": payload.get(
             "microstructure_reaction_tick_aggressor_pressure_usable", False
         ),
@@ -847,12 +1023,28 @@ def build_scalping_feature_audit_fields(packet):
         "microstructure_reaction_tick_trade_value_prev_sum": payload.get(
             "microstructure_reaction_tick_trade_value_prev_sum", 0
         ),
-        "microstructure_reaction_ask_sweep_score": payload.get("microstructure_reaction_ask_sweep_score", 50),
-        "microstructure_reaction_post_sweep_hold_score": payload.get("microstructure_reaction_post_sweep_hold_score", 50),
-        "microstructure_reaction_bid_replenishment_score": payload.get("microstructure_reaction_bid_replenishment_score", 50),
-        "microstructure_reaction_wall_replenishment_risk_score": payload.get("microstructure_reaction_wall_replenishment_risk_score", 50),
-        "microstructure_reaction_vi_proximity_risk": payload.get("microstructure_reaction_vi_proximity_risk", 0),
-        "microstructure_reaction_entry_reaction_quality": payload.get("microstructure_reaction_entry_reaction_quality", "-"),
-        "microstructure_reaction_source_quality": payload.get("microstructure_reaction_source_quality", "-"),
-        "microstructure_reaction_context_hash": payload.get("microstructure_reaction_context_hash", "-"),
+        "microstructure_reaction_ask_sweep_score": payload.get(
+            "microstructure_reaction_ask_sweep_score", 50
+        ),
+        "microstructure_reaction_post_sweep_hold_score": payload.get(
+            "microstructure_reaction_post_sweep_hold_score", 50
+        ),
+        "microstructure_reaction_bid_replenishment_score": payload.get(
+            "microstructure_reaction_bid_replenishment_score", 50
+        ),
+        "microstructure_reaction_wall_replenishment_risk_score": payload.get(
+            "microstructure_reaction_wall_replenishment_risk_score", 50
+        ),
+        "microstructure_reaction_vi_proximity_risk": payload.get(
+            "microstructure_reaction_vi_proximity_risk", 0
+        ),
+        "microstructure_reaction_entry_reaction_quality": payload.get(
+            "microstructure_reaction_entry_reaction_quality", "-"
+        ),
+        "microstructure_reaction_source_quality": payload.get(
+            "microstructure_reaction_source_quality", "-"
+        ),
+        "microstructure_reaction_context_hash": payload.get(
+            "microstructure_reaction_context_hash", "-"
+        ),
     }

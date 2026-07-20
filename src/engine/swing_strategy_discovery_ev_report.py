@@ -18,10 +18,14 @@ from src.database.models import (
     SwingStrategyDiscoveryCandidate,
     SwingStrategyDiscoveryLabel,
 )
-from src.engine.automation.source_quality_clean_baseline import clean_baseline_policy, is_date_allowed
-from src.engine.swing_strategy_discovery_schema import ensure_swing_strategy_discovery_schema
+from src.engine.automation.source_quality_clean_baseline import (
+    clean_baseline_policy,
+    is_date_allowed,
+)
+from src.engine.swing_strategy_discovery_schema import (
+    ensure_swing_strategy_discovery_schema,
+)
 from src.utils.constants import DATA_DIR, POSTGRES_URL
-
 
 REPORT_DIR = Path(DATA_DIR) / "report" / "swing_strategy_discovery_ev"
 LABEL_REPORT_DIR = Path(DATA_DIR) / "report" / "swing_strategy_discovery_labels"
@@ -100,7 +104,9 @@ def _json_loads(value: Any) -> Any:
 def _theme_key(value: Any) -> str:
     parsed = _json_loads(value)
     if isinstance(parsed, list):
-        return ",".join(sorted(str(item) for item in parsed if str(item).strip())) or "-"
+        return (
+            ",".join(sorted(str(item) for item in parsed if str(item).strip())) or "-"
+        )
     return str(value or "-")
 
 
@@ -125,23 +131,39 @@ def report_paths(target_date: str) -> tuple[Path, Path]:
 
 
 def _source_paths(target_date: str) -> dict[str, str | None]:
-    sim_json = DISCOVERY_SIM_REPORT_DIR / f"swing_strategy_discovery_sim_{target_date}.json"
-    labels_json = LABEL_REPORT_DIR / f"swing_strategy_discovery_labels_{target_date}.json"
+    sim_json = (
+        DISCOVERY_SIM_REPORT_DIR / f"swing_strategy_discovery_sim_{target_date}.json"
+    )
+    labels_json = (
+        LABEL_REPORT_DIR / f"swing_strategy_discovery_labels_{target_date}.json"
+    )
     return {
         "swing_strategy_discovery_sim": str(sim_json) if sim_json.exists() else None,
-        "swing_strategy_discovery_labels": str(labels_json) if labels_json.exists() else None,
+        "swing_strategy_discovery_labels": (
+            str(labels_json) if labels_json.exists() else None
+        ),
     }
 
 
 def _bottom_rebound_sim_expected(target_date: str) -> bool:
-    sim_json = DISCOVERY_SIM_REPORT_DIR / f"swing_strategy_discovery_sim_{target_date}.json"
+    sim_json = (
+        DISCOVERY_SIM_REPORT_DIR / f"swing_strategy_discovery_sim_{target_date}.json"
+    )
     try:
         payload = json.loads(sim_json.read_text(encoding="utf-8"))
     except Exception:
         return False
-    source_quality = payload.get("source_quality") if isinstance(payload.get("source_quality"), dict) else {}
+    source_quality = (
+        payload.get("source_quality")
+        if isinstance(payload.get("source_quality"), dict)
+        else {}
+    )
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-    bottom_source = source_quality.get("bottom_rebound_source") if isinstance(source_quality.get("bottom_rebound_source"), dict) else {}
+    bottom_source = (
+        source_quality.get("bottom_rebound_source")
+        if isinstance(source_quality.get("bottom_rebound_source"), dict)
+        else {}
+    )
     return (
         bottom_source.get("status") == "ok"
         and _safe_int(source_quality.get("bottom_rebound_source_rows")) > 0
@@ -157,7 +179,9 @@ def _clean_baseline_metadata(target_date: str, lookback_days: int) -> dict[str, 
     excluded_before: str | None = None
     if is_date_allowed(target.isoformat(), policy):
         try:
-            baseline = date.fromisoformat(str(policy.get("clean_tuning_baseline_date") or ""))
+            baseline = date.fromisoformat(
+                str(policy.get("clean_tuning_baseline_date") or "")
+            )
         except ValueError:
             baseline = requested_start
         if requested_start < baseline:
@@ -181,10 +205,20 @@ def _row_from_models(
     features = _json_loads(label.label_features)
     arm_features = _json_loads(arm.arm_features)
     candidate_features = _json_loads(candidate.source_features)
-    bottom = candidate_features.get("bottom_rebound_source") if isinstance(candidate_features.get("bottom_rebound_source"), dict) else {}
+    bottom = (
+        candidate_features.get("bottom_rebound_source")
+        if isinstance(candidate_features.get("bottom_rebound_source"), dict)
+        else {}
+    )
     source_family_bucket = str(candidate_features.get("source_family_bucket") or "")
     if not source_family_bucket:
-        source_family_bucket = "bottom_rebound" if bottom.get("present") or str(arm.entry_policy or "").startswith("bottom_rebound_") else "safe_pool"
+        source_family_bucket = (
+            "bottom_rebound"
+            if bottom.get("present")
+            or str(arm.entry_policy or "").startswith("bottom_rebound_")
+            else "safe_pool"
+        )
+
     def _feature_value(name: str) -> Any:
         return (features or {}).get(name) or (arm_features or {}).get(name) or "unknown"
 
@@ -207,29 +241,45 @@ def _row_from_models(
         "theme_tags": _theme_key(candidate.theme_tags),
         "label_status": label.label_status,
         "final_return_pct": _safe_float(label.final_return_pct, float("nan")),
-        "realized_exit_return_pct": _safe_float(label.realized_exit_return_pct, float("nan")),
+        "realized_exit_return_pct": _safe_float(
+            label.realized_exit_return_pct, float("nan")
+        ),
         "mfe_pct": _safe_float(label.mfe_pct, float("nan")),
         "mae_pct": _safe_float(label.mae_pct, float("nan")),
         "virtual_notional_krw": _safe_float(arm.virtual_notional_krw, 0.0),
         "fill_status": (features or {}).get("fill_status"),
-        "entry_reason": (features or {}).get("entry_reason") or (arm_features or {}).get("entry_reason"),
-        "policy_exit_reason": (features or {}).get("exit_reason") or (arm_features or {}).get("policy_exit_reason"),
+        "entry_reason": (features or {}).get("entry_reason")
+        or (arm_features or {}).get("entry_reason"),
+        "policy_exit_reason": (features or {}).get("exit_reason")
+        or (arm_features or {}).get("policy_exit_reason"),
         "label_maturity_status": (arm_features or {}).get("label_maturity_status"),
         "source_quality_status": (arm_features or {}).get("source_quality_status"),
         "future_quote_count": int((arm_features or {}).get("future_quote_count") or 0),
-        "quotes_from_entry_count": int((arm_features or {}).get("quotes_from_entry_count") or 0),
-        "latest_future_quote_date": (arm_features or {}).get("latest_future_quote_date"),
+        "quotes_from_entry_count": int(
+            (arm_features or {}).get("quotes_from_entry_count") or 0
+        ),
+        "latest_future_quote_date": (arm_features or {}).get(
+            "latest_future_quote_date"
+        ),
         "final_return_basis": (features or {}).get("final_return_basis"),
         "entry_price_delta_bucket": _feature_value("entry_price_delta_bucket"),
         "entry_day_gap_bucket": _feature_value("entry_day_gap_bucket"),
-        "entry_day_low_from_entry_bucket": _feature_value("entry_day_low_from_entry_bucket"),
-        "entry_day_close_from_entry_bucket": _feature_value("entry_day_close_from_entry_bucket"),
+        "entry_day_low_from_entry_bucket": _feature_value(
+            "entry_day_low_from_entry_bucket"
+        ),
+        "entry_day_close_from_entry_bucket": _feature_value(
+            "entry_day_close_from_entry_bucket"
+        ),
         "stop_touch_outcome_bucket": _feature_value("stop_touch_outcome_bucket"),
-        "entry_position_opportunity_bucket": _feature_value("entry_position_opportunity_bucket"),
+        "entry_position_opportunity_bucket": _feature_value(
+            "entry_position_opportunity_bucket"
+        ),
     }
 
 
-def _load_rows(target_date: str, *, db_url: str = POSTGRES_URL, lookback_days: int = 90) -> tuple[list[dict[str, Any]], dict[str, int]]:
+def _load_rows(
+    target_date: str, *, db_url: str = POSTGRES_URL, lookback_days: int = 90
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
     ensure_swing_strategy_discovery_schema(db_url)
     target = datetime.fromisoformat(_date_text(target_date)).date()
     metadata = _clean_baseline_metadata(target.isoformat(), lookback_days)
@@ -238,17 +288,33 @@ def _load_rows(target_date: str, *, db_url: str = POSTGRES_URL, lookback_days: i
     Session = sessionmaker(bind=engine)
     with Session() as session:
         query = (
-            session.query(SwingStrategyDiscoveryCandidate, SwingStrategyDiscoveryArm, SwingStrategyDiscoveryLabel)
-            .join(SwingStrategyDiscoveryArm, SwingStrategyDiscoveryArm.candidate_id == SwingStrategyDiscoveryCandidate.id)
-            .join(SwingStrategyDiscoveryLabel, SwingStrategyDiscoveryLabel.arm_row_id == SwingStrategyDiscoveryArm.id)
+            session.query(
+                SwingStrategyDiscoveryCandidate,
+                SwingStrategyDiscoveryArm,
+                SwingStrategyDiscoveryLabel,
+            )
+            .join(
+                SwingStrategyDiscoveryArm,
+                SwingStrategyDiscoveryArm.candidate_id
+                == SwingStrategyDiscoveryCandidate.id,
+            )
+            .join(
+                SwingStrategyDiscoveryLabel,
+                SwingStrategyDiscoveryLabel.arm_row_id == SwingStrategyDiscoveryArm.id,
+            )
             .filter(SwingStrategyDiscoveryArm.source_date >= start)
             .filter(SwingStrategyDiscoveryArm.source_date <= target)
             .filter(SwingStrategyDiscoveryLabel.label_horizon == "policy_exit")
         )
-        rows = [_row_from_models(candidate, arm, label) for candidate, arm, label in query.all()]
+        rows = [
+            _row_from_models(candidate, arm, label)
+            for candidate, arm, label in query.all()
+        ]
         arm_status_counts: dict[str, int] = defaultdict(int)
         for status, count in (
-            session.query(SwingStrategyDiscoveryArm.status, SwingStrategyDiscoveryArm.id)
+            session.query(
+                SwingStrategyDiscoveryArm.status, SwingStrategyDiscoveryArm.id
+            )
             .filter(SwingStrategyDiscoveryArm.source_date >= start)
             .filter(SwingStrategyDiscoveryArm.source_date <= target)
             .all()
@@ -257,25 +323,50 @@ def _load_rows(target_date: str, *, db_url: str = POSTGRES_URL, lookback_days: i
     return rows, dict(arm_status_counts)
 
 
-def _aggregate(rows: Iterable[dict[str, Any]], group_key: str, *, total_by_key: dict[str, int] | None = None) -> list[dict[str, Any]]:
+def _aggregate(
+    rows: Iterable[dict[str, Any]],
+    group_key: str,
+    *,
+    total_by_key: dict[str, int] | None = None,
+) -> list[dict[str, Any]]:
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         groups[str(row.get(group_key) or "-")].append(row)
     out: list[dict[str, Any]] = []
     for key, items in groups.items():
-        labeled = [item for item in items if item.get("label_status") == "labeled" and math.isfinite(item.get("final_return_pct", float("nan")))]
+        labeled = [
+            item
+            for item in items
+            if item.get("label_status") == "labeled"
+            and math.isfinite(item.get("final_return_pct", float("nan")))
+        ]
         returns = [float(item["final_return_pct"]) for item in labeled]
-        notional_sum = sum(max(0.0, _safe_float(item.get("virtual_notional_krw"), 0.0)) for item in labeled)
+        notional_sum = sum(
+            max(0.0, _safe_float(item.get("virtual_notional_krw"), 0.0))
+            for item in labeled
+        )
         weighted = (
-            sum(float(item["final_return_pct"]) * max(0.0, _safe_float(item.get("virtual_notional_krw"), 0.0)) for item in labeled)
+            sum(
+                float(item["final_return_pct"])
+                * max(0.0, _safe_float(item.get("virtual_notional_krw"), 0.0))
+                for item in labeled
+            )
             / notional_sum
             if notional_sum > 0
             else (sum(returns) / len(returns) if returns else 0.0)
         )
         sample_count = len(labeled)
         total = (total_by_key or {}).get(key, len(items)) or len(items)
-        expired = sum(1 for item in items if item.get("label_status") == "expired_entry_no_trigger")
-        mae_values = [float(item["mae_pct"]) for item in labeled if math.isfinite(item.get("mae_pct", float("nan")))]
+        expired = sum(
+            1
+            for item in items
+            if item.get("label_status") == "expired_entry_no_trigger"
+        )
+        mae_values = [
+            float(item["mae_pct"])
+            for item in labeled
+            if math.isfinite(item.get("mae_pct", float("nan")))
+        ]
         equal_ev = sum(returns) / sample_count if sample_count else 0.0
         coverage_factor = min(1.0, sample_count / SAMPLE_FLOOR) if SAMPLE_FLOOR else 1.0
         out.append(
@@ -288,12 +379,20 @@ def _aggregate(rows: Iterable[dict[str, Any]], group_key: str, *, total_by_key: 
                 "equal_weight_avg_final_return_pct": round(equal_ev, 6),
                 "notional_weighted_ev_pct": round(weighted, 6),
                 "source_quality_adjusted_ev_pct": round(weighted * coverage_factor, 6),
-                "diagnostic_win_rate": round(sum(1 for value in returns if value > 0) / sample_count, 6) if sample_count else 0.0,
+                "diagnostic_win_rate": (
+                    round(sum(1 for value in returns if value > 0) / sample_count, 6)
+                    if sample_count
+                    else 0.0
+                ),
                 "downside_p10_pct": _percentile(returns, 0.10),
                 "mae_p90_pct": _percentile(mae_values, 0.10),
             }
         )
-    return sorted(out, key=lambda item: (item["source_quality_adjusted_ev_pct"], item["sample_count"]), reverse=True)
+    return sorted(
+        out,
+        key=lambda item: (item["source_quality_adjusted_ev_pct"], item["sample_count"]),
+        reverse=True,
+    )
 
 
 def _aggregate_all(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
@@ -326,7 +425,9 @@ def _morning_turbulence_analysis(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _surviving_arms(aggregates: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+def _surviving_arms(
+    aggregates: dict[str, list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
     arms = aggregates.get("arm_id") or []
     out = []
     for item in arms:
@@ -342,7 +443,13 @@ def _surviving_arms(aggregates: dict[str, list[dict[str, Any]]]) -> list[dict[st
 
 def _avoid_buckets(aggregates: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
-    for axis in ("block_reason", "position_tag", "volatility_bucket", "sector", "theme_tags"):
+    for axis in (
+        "block_reason",
+        "position_tag",
+        "volatility_bucket",
+        "sector",
+        "theme_tags",
+    ):
         for item in aggregates.get(axis) or []:
             downside = item.get("downside_p10_pct")
             if int(item.get("sample_count") or 0) >= SAMPLE_FLOOR and (
@@ -350,11 +457,20 @@ def _avoid_buckets(aggregates: dict[str, list[dict[str, Any]]]) -> list[dict[str
                 or (downside is not None and _safe_float(downside, 0.0) <= -5.0)
             ):
                 out.append({"axis": axis, **item})
-    return sorted(out, key=lambda item: (item.get("source_quality_adjusted_ev_pct", 0), item.get("downside_p10_pct") or 0))[:20]
+    return sorted(
+        out,
+        key=lambda item: (
+            item.get("source_quality_adjusted_ev_pct", 0),
+            item.get("downside_p10_pct") or 0,
+        ),
+    )[:20]
 
 
 def _legacy_vs_discovery(aggregates: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
-    selection = {item.get("selection_arm"): item for item in aggregates.get("selection_arm") or []}
+    selection = {
+        item.get("selection_arm"): item
+        for item in aggregates.get("selection_arm") or []
+    }
     legacy = selection.get("legacy_ml") or {}
     discovery = [
         item
@@ -363,7 +479,11 @@ def _legacy_vs_discovery(aggregates: dict[str, list[dict[str, Any]]]) -> dict[st
     ]
     discovery_sample = sum(int(item.get("sample_count") or 0) for item in discovery)
     discovery_ev = (
-        sum(_safe_float(item.get("source_quality_adjusted_ev_pct"), 0.0) * int(item.get("sample_count") or 0) for item in discovery)
+        sum(
+            _safe_float(item.get("source_quality_adjusted_ev_pct"), 0.0)
+            * int(item.get("sample_count") or 0)
+            for item in discovery
+        )
         / discovery_sample
         if discovery_sample
         else 0.0
@@ -396,7 +516,9 @@ def _source_quality_summary(
         source_quality_counts[str(row.get("source_quality_status") or "-")] += 1
         if row.get("source_family_bucket") == "bottom_rebound":
             bottom_label_status_counts[str(row.get("label_status") or "UNKNOWN")] += 1
-            bottom_maturity_counts[str(row.get("label_maturity_status") or "unknown")] += 1
+            bottom_maturity_counts[
+                str(row.get("label_maturity_status") or "unknown")
+            ] += 1
     return {
         "implementation_status": "implemented",
         "implementation_provenance": {
@@ -432,9 +554,15 @@ def _source_quality_summary(
         "label_status_counts": dict(label_status_counts),
         "bottom_rebound_label_status_counts": dict(bottom_label_status_counts),
         "bottom_rebound_maturity_status_counts": dict(bottom_maturity_counts),
-        "bottom_rebound_pending_future_quote_count": bottom_label_status_counts.get("pending_future_quotes", 0),
-        "bottom_rebound_labeled_sample_count": bottom_label_status_counts.get("labeled", 0),
-        "bottom_rebound_expired_entry_count": bottom_label_status_counts.get("expired_entry_no_trigger", 0),
+        "bottom_rebound_pending_future_quote_count": bottom_label_status_counts.get(
+            "pending_future_quotes", 0
+        ),
+        "bottom_rebound_labeled_sample_count": bottom_label_status_counts.get(
+            "labeled", 0
+        ),
+        "bottom_rebound_expired_entry_count": bottom_label_status_counts.get(
+            "expired_entry_no_trigger", 0
+        ),
         "maturity_status_counts": dict(maturity_counts),
         "entry_reason_counts": dict(entry_reason_counts),
         "policy_exit_reason_counts": dict(exit_reason_counts),
@@ -450,7 +578,9 @@ def build_swing_strategy_discovery_ev_report(
 ) -> dict[str, Any]:
     date_key = _date_text(target_date)
     clean_metadata = _clean_baseline_metadata(date_key, lookback_days)
-    rows, arm_status_counts = _load_rows(date_key, db_url=db_url, lookback_days=lookback_days)
+    rows, arm_status_counts = _load_rows(
+        date_key, db_url=db_url, lookback_days=lookback_days
+    )
     aggregates = _aggregate_all(rows)
     morning_turbulence = _morning_turbulence_analysis(rows)
     surviving = _surviving_arms(aggregates)
@@ -461,7 +591,9 @@ def build_swing_strategy_discovery_ev_report(
         label_status_counts[str(row.get("label_status") or "UNKNOWN")] += 1
         if row.get("source_family_bucket") == "bottom_rebound":
             bottom_label_status_counts[str(row.get("label_status") or "UNKNOWN")] += 1
-    bottom_rows = [row for row in rows if row.get("source_family_bucket") == "bottom_rebound"]
+    bottom_rows = [
+        row for row in rows if row.get("source_family_bucket") == "bottom_rebound"
+    ]
     source_quality_summary = _source_quality_summary(
         rows,
         arm_status_counts=arm_status_counts,
@@ -472,12 +604,20 @@ def build_swing_strategy_discovery_ev_report(
         "arm_count": len({row.get("arm_row_id") for row in rows}),
         "policy_exit_row_count": len(rows),
         "labeled_sample_count": label_status_counts.get("labeled", 0),
-        "pending_future_quote_count": label_status_counts.get("pending_future_quotes", 0),
+        "pending_future_quote_count": label_status_counts.get(
+            "pending_future_quotes", 0
+        ),
         "expired_entry_count": label_status_counts.get("expired_entry_no_trigger", 0),
         "bottom_rebound_policy_exit_row_count": len(bottom_rows),
-        "bottom_rebound_labeled_sample_count": bottom_label_status_counts.get("labeled", 0),
-        "bottom_rebound_pending_future_quote_count": bottom_label_status_counts.get("pending_future_quotes", 0),
-        "bottom_rebound_expired_entry_count": bottom_label_status_counts.get("expired_entry_no_trigger", 0),
+        "bottom_rebound_labeled_sample_count": bottom_label_status_counts.get(
+            "labeled", 0
+        ),
+        "bottom_rebound_pending_future_quote_count": bottom_label_status_counts.get(
+            "pending_future_quotes", 0
+        ),
+        "bottom_rebound_expired_entry_count": bottom_label_status_counts.get(
+            "expired_entry_no_trigger", 0
+        ),
         "bottom_rebound_label_status_counts": dict(bottom_label_status_counts),
         "surviving_arm_count": len(surviving),
         "avoid_bucket_count": len(avoid),
@@ -530,12 +670,24 @@ def build_swing_strategy_discovery_ev_report(
 
 def render_markdown(report: dict[str, Any]) -> str:
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
-    legacy = report.get("legacy_vs_discovery") if isinstance(report.get("legacy_vs_discovery"), dict) else {}
-    morning = report.get("morning_turbulence_analysis") if isinstance(report.get("morning_turbulence_analysis"), dict) else {}
+    legacy = (
+        report.get("legacy_vs_discovery")
+        if isinstance(report.get("legacy_vs_discovery"), dict)
+        else {}
+    )
+    morning = (
+        report.get("morning_turbulence_analysis")
+        if isinstance(report.get("morning_turbulence_analysis"), dict)
+        else {}
+    )
     morning_axes = morning.get("axes") if isinstance(morning.get("axes"), dict) else {}
     stop_touch_rows = morning_axes.get("stop_touch_outcome_bucket") or []
     opportunity_rows = morning_axes.get("entry_position_opportunity_bucket") or []
-    morning_contract = morning.get("metric_contract") if isinstance(morning.get("metric_contract"), dict) else {}
+    morning_contract = (
+        morning.get("metric_contract")
+        if isinstance(morning.get("metric_contract"), dict)
+        else {}
+    )
     lines = [
         f"# Swing Strategy Discovery EV - {report.get('date')}",
         "",
@@ -637,13 +789,17 @@ def write_swing_strategy_discovery_ev_report(
     output_dir: Path = REPORT_DIR,
     lookback_days: int = 90,
 ) -> dict[str, Path]:
-    report = build_swing_strategy_discovery_ev_report(target_date, db_url=db_url, lookback_days=lookback_days)
+    report = build_swing_strategy_discovery_ev_report(
+        target_date, db_url=db_url, lookback_days=lookback_days
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path, md_path = report_paths(_date_text(target_date))
     if output_dir != REPORT_DIR:
         base = output_dir / f"swing_strategy_discovery_ev_{_date_text(target_date)}"
         json_path, md_path = base.with_suffix(".json"), base.with_suffix(".md")
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
+    )
     md_path.write_text(render_markdown(report), encoding="utf-8")
     return {"json": json_path, "md": md_path}
 
@@ -661,7 +817,9 @@ def main(argv: list[str] | None = None) -> None:
         output_dir=args.output_dir,
         lookback_days=args.lookback_days,
     )
-    print(f"[DONE] swing_strategy_discovery_ev_report json={paths['json']} md={paths['md']}")
+    print(
+        f"[DONE] swing_strategy_discovery_ev_report json={paths['json']} md={paths['md']}"
+    )
 
 
 if __name__ == "__main__":

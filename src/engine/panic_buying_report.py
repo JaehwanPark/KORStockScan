@@ -16,10 +16,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from src.engine.panic_buying_state_detector import summarize_microstructure_detector_from_events
+from src.engine.panic_buying_state_detector import (
+    summarize_microstructure_detector_from_events,
+)
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import read_jsonl
-
 
 SCHEMA_VERSION = 1
 REPORT_DIRNAME = "panic_buying"
@@ -75,7 +76,9 @@ def _safe_float(value: Any, default: float | None = None) -> float | None:
     try:
         if value in (None, "", "-", "None"):
             return default
-        numeric = float(str(value).replace("%", "").replace("+", "").replace(",", "").strip())
+        numeric = float(
+            str(value).replace("%", "").replace("+", "").replace(",", "").strip()
+        )
         return numeric if math.isfinite(numeric) else default
     except (TypeError, ValueError):
         return default
@@ -117,9 +120,14 @@ def _micro_input_exclusion_reason(row: dict[str, Any]) -> str | None:
         return "non_entry_pipeline"
     if any(marker in stage for marker in PANIC_BUY_EXCLUDED_STAGE_MARKERS):
         return "post_entry_stage"
-    if _truthy(fields.get("actual_order_submitted")) or _truthy(row.get("actual_order_submitted")):
+    if _truthy(fields.get("actual_order_submitted")) or _truthy(
+        row.get("actual_order_submitted")
+    ):
         return "actual_order_submitted"
-    if any(_safe_str(fields.get(name)) or _safe_str(row.get(name)) for name in BROKER_ORDER_ID_FIELDS):
+    if any(
+        _safe_str(fields.get(name)) or _safe_str(row.get(name))
+        for name in BROKER_ORDER_ID_FIELDS
+    ):
         return "broker_order_provenance"
     return None
 
@@ -156,7 +164,9 @@ def _panic_buy_micro_detector_events(
         "excluded_reason_counts": dict(sorted(excluded.items())),
         "excluded_holding_row_count": excluded.get("holding_pipeline", 0),
         "excluded_exit_sell_row_count": excluded_stage.get("exit_sell", 0),
-        "excluded_holding_scale_position_stage_count": excluded_stage.get("holding_scale_position", 0),
+        "excluded_holding_scale_position_stage_count": excluded_stage.get(
+            "holding_scale_position", 0
+        ),
     }
 
 
@@ -189,7 +199,9 @@ def _threshold_contract(
     return {
         "name": name,
         "threshold_mode": "dynamic_quantile" if sample_ready else "insufficient_sample",
-        "threshold_source": threshold_source if sample_ready else "insufficient_quantile_baseline",
+        "threshold_source": (
+            threshold_source if sample_ready else "insufficient_quantile_baseline"
+        ),
         "observed_value": observed_value,
         "dynamic_threshold_value": dynamic_threshold_value,
         "static_fallback_value": static_fallback_value,
@@ -296,7 +308,9 @@ def _is_tp_like_exit(row: dict[str, Any]) -> bool:
         return False
     text = _exit_rule_text(row)
     profit = _profit_rate(row)
-    return any(marker in text for marker in TP_RULE_MARKERS) or (profit is not None and profit > 0)
+    return any(marker in text for marker in TP_RULE_MARKERS) or (
+        profit is not None and profit > 0
+    )
 
 
 def _profit_rate(row: dict[str, Any]) -> float | None:
@@ -310,8 +324,15 @@ def _profit_rate(row: dict[str, Any]) -> float | None:
 
 
 def _summarize_tp_counterfactual(events: list[dict[str, Any]]) -> dict[str, Any]:
-    holding_rows = [row for row in events if _safe_str(row.get("pipeline")) == "HOLDING_PIPELINE"]
-    exit_rows = [row for row in holding_rows if "exit" in _safe_str(row.get("stage")) or "sell" in _safe_str(row.get("stage"))]
+    holding_rows = [
+        row for row in events if _safe_str(row.get("pipeline")) == "HOLDING_PIPELINE"
+    ]
+    exit_rows = [
+        row
+        for row in holding_rows
+        if "exit" in _safe_str(row.get("stage"))
+        or "sell" in _safe_str(row.get("stage"))
+    ]
     non_real_keys = _non_real_attempt_keys(holding_rows)
     real_exit_rows = [
         row
@@ -332,7 +353,9 @@ def _summarize_tp_counterfactual(events: list[dict[str, Any]]) -> dict[str, Any]
     ]
     tp_rows = [row for row in real_exit_rows if _is_tp_like_exit(row)]
     non_real_tp_rows = [row for row in non_real_exit_rows if _is_tp_like_exit(row)]
-    profits = [value for row in tp_rows for value in [_profit_rate(row)] if value is not None]
+    profits = [
+        value for row in tp_rows for value in [_profit_rate(row)] if value is not None
+    ]
     peak_profits = [
         value
         for row in tp_rows
@@ -356,7 +379,14 @@ def _summarize_tp_counterfactual(events: list[dict[str, Any]]) -> dict[str, Any]
         "avg_tp_profit_rate_pct": _avg(profits),
         "avg_tp_peak_profit_rate_pct": _avg(peak_profits),
         "candidate_context_count": len(tp_rows),
-        "exit_rule_counts": dict(sorted(Counter(_safe_str(_event_fields(row).get("exit_rule") or "-") for row in tp_rows).items())),
+        "exit_rule_counts": dict(
+            sorted(
+                Counter(
+                    _safe_str(_event_fields(row).get("exit_rule") or "-")
+                    for row in tp_rows
+                ).items()
+            )
+        ),
     }
 
 
@@ -367,54 +397,98 @@ def _load_source_summary(target_date: str) -> dict[str, Any]:
     market_breadth = _load_json(_market_panic_breadth_path(target_date))
     panic_breadth = (
         market_breadth.get("panic_breadth")
-        if isinstance(market_breadth, dict) and isinstance(market_breadth.get("panic_breadth"), dict)
+        if isinstance(market_breadth, dict)
+        and isinstance(market_breadth.get("panic_breadth"), dict)
         else {}
     )
     return {
         "buy_funnel_sentinel": {
             "path": str(_json_report_path("buy_funnel_sentinel", target_date)),
             "exists": _json_report_path("buy_funnel_sentinel", target_date).exists(),
-            "primary": ((buy or {}).get("classification") or {}).get("primary") if isinstance(buy, dict) else None,
+            "primary": (
+                ((buy or {}).get("classification") or {}).get("primary")
+                if isinstance(buy, dict)
+                else None
+            ),
         },
         "holding_exit_sentinel": {
             "path": str(_json_report_path("holding_exit_sentinel", target_date)),
             "exists": _json_report_path("holding_exit_sentinel", target_date).exists(),
-            "primary": ((hold or {}).get("classification") or {}).get("primary") if isinstance(hold, dict) else None,
+            "primary": (
+                ((hold or {}).get("classification") or {}).get("primary")
+                if isinstance(hold, dict)
+                else None
+            ),
         },
         "panic_sell_defense": {
             "path": str(_json_report_path("panic_sell_defense", target_date)),
             "exists": _json_report_path("panic_sell_defense", target_date).exists(),
-            "panic_state": (panic_sell or {}).get("panic_state") if isinstance(panic_sell, dict) else None,
+            "panic_state": (
+                (panic_sell or {}).get("panic_state")
+                if isinstance(panic_sell, dict)
+                else None
+            ),
         },
         "market_panic_breadth": {
             "path": str(_market_panic_breadth_path(target_date)),
             "exists": _market_panic_breadth_path(target_date).exists(),
-            "as_of": market_breadth.get("as_of") if isinstance(market_breadth, dict) else None,
-            "source_quality_status": ((market_breadth or {}).get("source_quality") or {}).get("status")
-            if isinstance(market_breadth, dict)
-            else None,
+            "as_of": (
+                market_breadth.get("as_of")
+                if isinstance(market_breadth, dict)
+                else None
+            ),
+            "source_quality_status": (
+                ((market_breadth or {}).get("source_quality") or {}).get("status")
+                if isinstance(market_breadth, dict)
+                else None
+            ),
             "risk_on_advisory": bool(panic_breadth.get("risk_on_advisory")),
             "risk_off_advisory": bool(panic_breadth.get("risk_off_advisory")),
-            "single_market_risk_on_advisory": bool(panic_breadth.get("single_market_risk_on_advisory")),
-            "single_market_risk_off_advisory": bool(panic_breadth.get("single_market_risk_off_advisory")),
-            "weighted_market_breadth": panic_breadth.get("weighted_market_breadth")
-            if isinstance(panic_breadth, dict)
-            else {},
-            "industry_breadth": panic_breadth.get("industry_breadth") if isinstance(panic_breadth, dict) else {},
-            "stock_breadth": panic_breadth.get("stock_breadth") if isinstance(panic_breadth, dict) else {},
-            "risk_on_reasons": panic_breadth.get("risk_on_reasons") if isinstance(panic_breadth, dict) else [],
+            "single_market_risk_on_advisory": bool(
+                panic_breadth.get("single_market_risk_on_advisory")
+            ),
+            "single_market_risk_off_advisory": bool(
+                panic_breadth.get("single_market_risk_off_advisory")
+            ),
+            "weighted_market_breadth": (
+                panic_breadth.get("weighted_market_breadth")
+                if isinstance(panic_breadth, dict)
+                else {}
+            ),
+            "industry_breadth": (
+                panic_breadth.get("industry_breadth")
+                if isinstance(panic_breadth, dict)
+                else {}
+            ),
+            "stock_breadth": (
+                panic_breadth.get("stock_breadth")
+                if isinstance(panic_breadth, dict)
+                else {}
+            ),
+            "risk_on_reasons": (
+                panic_breadth.get("risk_on_reasons")
+                if isinstance(panic_breadth, dict)
+                else []
+            ),
         },
     }
 
 
-def _market_breadth_context(source_summary: dict[str, Any], micro: dict[str, Any]) -> dict[str, Any]:
+def _market_breadth_context(
+    source_summary: dict[str, Any], micro: dict[str, Any]
+) -> dict[str, Any]:
     market = (
         source_summary.get("market_panic_breadth")
         if isinstance(source_summary.get("market_panic_breadth"), dict)
         else {}
     )
-    active_or_watch = _safe_int(micro.get("panic_buy_active_count"), 0) + _safe_int(micro.get("panic_buy_watch_count"), 0)
-    source_ok = bool(market.get("exists")) and _safe_str(market.get("source_quality_status")) == "ok"
+    active_or_watch = _safe_int(micro.get("panic_buy_active_count"), 0) + _safe_int(
+        micro.get("panic_buy_watch_count"), 0
+    )
+    source_ok = (
+        bool(market.get("exists"))
+        and _safe_str(market.get("source_quality_status")) == "ok"
+    )
     risk_on = bool(market.get("risk_on_advisory"))
     reasons: list[str] = []
     if risk_on:
@@ -437,7 +511,9 @@ def _market_breadth_context(source_summary: dict[str, Any], micro: dict[str, Any
         "market_panic_buy_interpretation": interpretation,
         "market_panic_breadth_source": market.get("path"),
         "market_panic_breadth_as_of": market.get("as_of"),
-        "market_panic_breadth_source_quality_status": market.get("source_quality_status"),
+        "market_panic_breadth_source_quality_status": market.get(
+            "source_quality_status"
+        ),
         "market_panic_breadth_risk_on_advisory": risk_on,
         "market_panic_breadth_risk_off_advisory": bool(market.get("risk_off_advisory")),
         "market_panic_breadth_single_market_risk_on_advisory": bool(
@@ -451,7 +527,8 @@ def _market_breadth_context(source_summary: dict[str, Any], micro: dict[str, Any
         "local_panic_buy_signal_count": active_or_watch,
         "industry_breadth": market.get("industry_breadth") or {},
         "stock_breadth": market.get("stock_breadth") or {},
-        "reasons": reasons or ["no market-wide panic-buy confirmation required for NORMAL state"],
+        "reasons": reasons
+        or ["no market-wide panic-buy confirmation required for NORMAL state"],
         "forbidden_uses": list(dict.fromkeys(FORBIDDEN_AUTOMATIONS + ["order_submit"])),
     }
 
@@ -469,11 +546,20 @@ def _risk_regime_gate(
     active = _safe_int(panic_metrics.get("panic_buy_active_count"), 0)
     watch = _safe_int(panic_metrics.get("panic_buy_watch_count"), 0)
     exhausted = _safe_int(exhaustion_metrics.get("exhaustion_confirmed_count"), 0)
-    exhaustion_watch = _safe_int(exhaustion_metrics.get("exhaustion_candidate_count"), 0)
+    exhaustion_watch = _safe_int(
+        exhaustion_metrics.get("exhaustion_candidate_count"), 0
+    )
     sample_floor = 8
     sample_ready = evaluated >= sample_floor
-    market_confirmed = bool(market_breadth_context.get("market_wide_panic_buy_confirmed"))
-    market_source_ok = _safe_str(market_breadth_context.get("market_panic_breadth_source_quality_status")) == "ok"
+    market_confirmed = bool(
+        market_breadth_context.get("market_wide_panic_buy_confirmed")
+    )
+    market_source_ok = (
+        _safe_str(
+            market_breadth_context.get("market_panic_breadth_source_quality_status")
+        )
+        == "ok"
+    )
     orderbook_missing = _safe_int(micro.get("missing_orderbook_count"), 0)
     missing_ratio = (orderbook_missing / evaluated) if evaluated > 0 else 1.0
     source_blockers: list[str] = []
@@ -481,7 +567,11 @@ def _risk_regime_gate(
         source_blockers.append("insufficient_quantile_baseline")
     if not market_source_ok and active + watch + exhausted + exhaustion_watch > 0:
         source_blockers.append("market_panic_breadth_source_unavailable")
-    if evaluated > 0 and missing_ratio >= 0.50 and active + watch + exhausted + exhaustion_watch > 0:
+    if (
+        evaluated > 0
+        and missing_ratio >= 0.50
+        and active + watch + exhausted + exhaustion_watch > 0
+    ):
         source_blockers.append("panic_buy_orderbook_collector_coverage_gap")
 
     signal_counts = [
@@ -520,9 +610,19 @@ def _risk_regime_gate(
         state = "source_quality_blocked"
     elif exhausted > 0:
         state = "exhaustion_confirmed" if market_confirmed and sample_ready else "watch"
-    elif panic_buy_state == "PANIC_BUY" and active > 0 and market_confirmed and sample_ready:
+    elif (
+        panic_buy_state == "PANIC_BUY"
+        and active > 0
+        and market_confirmed
+        and sample_ready
+    ):
         state = "confirmed_panic_buy"
-    elif panic_buy_state in {"PANIC_BUY", "PANIC_BUY_WATCH", "EXHAUSTION_WATCH", "BUYING_EXHAUSTED"}:
+    elif panic_buy_state in {
+        "PANIC_BUY",
+        "PANIC_BUY_WATCH",
+        "EXHAUSTION_WATCH",
+        "BUYING_EXHAUSTED",
+    }:
         state = "watch"
     else:
         state = "normal"
@@ -557,14 +657,20 @@ def _risk_regime_gate(
             "tp_counterfactual_real_context": _threshold_contract(
                 "tp_counterfactual_real_context",
                 observed_value=real_tp_count,
-                dynamic_threshold_value=_quantile([float(real_tp_count), float(tp_context)], 0.95),
+                dynamic_threshold_value=_quantile(
+                    [float(real_tp_count), float(tp_context)], 0.95
+                ),
                 static_fallback_value=1,
                 sample_count=_safe_int(tp_counterfactual.get("real_exit_count"), 0),
                 sample_floor=1,
                 threshold_source="real_exit_provenance_tp_distribution",
             ),
         },
-        "forbidden_uses": list(dict.fromkeys(FORBIDDEN_AUTOMATIONS + ["order_submit", "runtime_threshold_apply"])),
+        "forbidden_uses": list(
+            dict.fromkeys(
+                FORBIDDEN_AUTOMATIONS + ["order_submit", "runtime_threshold_apply"]
+            )
+        ),
     }
 
 
@@ -585,7 +691,11 @@ def _resolve_panic_buy_state(micro: dict[str, Any]) -> tuple[str, list[str]]:
 
 
 def _latest_internal_states(micro: dict[str, Any]) -> set[str]:
-    signals = micro.get("latest_signals") if isinstance(micro.get("latest_signals"), list) else []
+    signals = (
+        micro.get("latest_signals")
+        if isinstance(micro.get("latest_signals"), list)
+        else []
+    )
     return {
         _safe_str(item.get("internal_state"))
         for item in signals
@@ -599,7 +709,10 @@ def _panic_buy_regime_mode(panic_buy_state: str, micro: dict[str, Any]) -> str:
     allow_runner_count = _safe_int(micro.get("allow_runner_count"), 0)
     if "COOLDOWN" in internal_states:
         return "COOLDOWN"
-    if panic_buy_state in {"BUYING_EXHAUSTED", "EXHAUSTION_WATCH"} or force_exit_runner_count > 0:
+    if (
+        panic_buy_state in {"BUYING_EXHAUSTED", "EXHAUSTION_WATCH"}
+        or force_exit_runner_count > 0
+    ):
         return "PANIC_BUY_EXHAUSTION"
     if panic_buy_state == "PANIC_BUY" and allow_runner_count > 0:
         return "PANIC_BUY_CONTINUATION"
@@ -610,7 +723,10 @@ def _panic_buy_regime_mode(panic_buy_state: str, micro: dict[str, Any]) -> str:
 
 def _panic_buy_regime_contract(mode: str) -> dict[str, Any]:
     actions_by_mode = {
-        "NORMAL": ["regular_entry_exit_at_existing_runtime_policy", "fixed_tp_allowed_by_existing_policy"],
+        "NORMAL": [
+            "regular_entry_exit_at_existing_runtime_policy",
+            "fixed_tp_allowed_by_existing_policy",
+        ],
         "PANIC_BUY_DETECTED": [
             "report_chase_entry_freeze_candidate",
             "report_partial_tp_runner_candidate",
@@ -676,9 +792,15 @@ def _panic_buy_metrics(micro: dict[str, Any]) -> dict[str, Any]:
         "allow_runner_count": _safe_int(micro.get("allow_runner_count"), 0),
         "missing_orderbook_count": _safe_int(micro.get("missing_orderbook_count"), 0),
         "degraded_orderbook_count": _safe_int(micro.get("degraded_orderbook_count"), 0),
-        "missing_trade_aggressor_count": _safe_int(micro.get("missing_trade_aggressor_count"), 0),
-        "carried_orderbook_snapshot_count": _safe_int(micro.get("carried_orderbook_snapshot_count"), 0),
-        "carried_trade_aggressor_snapshot_count": _safe_int(micro.get("carried_trade_aggressor_snapshot_count"), 0),
+        "missing_trade_aggressor_count": _safe_int(
+            micro.get("missing_trade_aggressor_count"), 0
+        ),
+        "carried_orderbook_snapshot_count": _safe_int(
+            micro.get("carried_orderbook_snapshot_count"), 0
+        ),
+        "carried_trade_aggressor_snapshot_count": _safe_int(
+            micro.get("carried_trade_aggressor_snapshot_count"), 0
+        ),
         "max_panic_buy_score": _safe_float(metrics.get("max_panic_buy_score"), 0.0),
         "avg_confidence": _safe_float(metrics.get("avg_confidence"), 0.0),
     }
@@ -687,8 +809,12 @@ def _panic_buy_metrics(micro: dict[str, Any]) -> dict[str, Any]:
 def _exhaustion_metrics(micro: dict[str, Any]) -> dict[str, Any]:
     metrics = micro.get("metrics") if isinstance(micro.get("metrics"), dict) else {}
     return {
-        "exhaustion_candidate_count": _safe_int(micro.get("exhaustion_candidate_count"), 0),
-        "exhaustion_confirmed_count": _safe_int(micro.get("exhaustion_confirmed_count"), 0),
+        "exhaustion_candidate_count": _safe_int(
+            micro.get("exhaustion_candidate_count"), 0
+        ),
+        "exhaustion_confirmed_count": _safe_int(
+            micro.get("exhaustion_confirmed_count"), 0
+        ),
         "force_exit_runner_count": _safe_int(micro.get("force_exit_runner_count"), 0),
         "max_exhaustion_score": _safe_float(metrics.get("max_exhaustion_score"), 0.0),
     }
@@ -711,7 +837,11 @@ def _canary_candidates(
         and _safe_int(tp_counterfactual.get("tp_like_exit_count"), 0) > 0
         and avg_confidence >= 0.55
     )
-    status = "report_only_candidate" if candidate_ready else "hold_until_confirmed_panic_buy_with_tp_context"
+    status = (
+        "report_only_candidate"
+        if candidate_ready
+        else "hold_until_confirmed_panic_buy_with_tp_context"
+    )
     if avg_confidence < 0.55 and active > 0:
         status = "hold_low_detector_confidence"
     if risk_regime_gate.get("risk_regime_gate_state") == "source_quality_blocked":
@@ -730,11 +860,17 @@ def _canary_candidates(
                 "panic_buy_state": panic_buy_state,
                 "panic_buy_regime_mode": panic_buy_regime_mode,
                 "panic_buy_active_count": active,
-                "exhaustion_confirmed_count": _safe_int(exhaustion_metrics.get("exhaustion_confirmed_count"), 0),
+                "exhaustion_confirmed_count": _safe_int(
+                    exhaustion_metrics.get("exhaustion_confirmed_count"), 0
+                ),
                 "tp_counterfactual_count": tp_context,
                 "avg_confidence": avg_confidence,
-                "risk_regime_gate_state": risk_regime_gate.get("risk_regime_gate_state"),
-                "confirmed_evidence_count": risk_regime_gate.get("confirmed_evidence_count"),
+                "risk_regime_gate_state": risk_regime_gate.get(
+                    "risk_regime_gate_state"
+                ),
+                "confirmed_evidence_count": risk_regime_gate.get(
+                    "confirmed_evidence_count"
+                ),
             },
         }
     ]
@@ -747,11 +883,18 @@ def build_panic_buying_report(
     dry_run: bool = False,
 ) -> dict[str, Any]:
     events = _load_jsonl(_pipeline_events_path(target_date))
-    event_datetimes = [dt for row in events for dt in [_parse_dt(row.get("emitted_at"))] if dt is not None]
+    event_datetimes = [
+        dt
+        for row in events
+        for dt in [_parse_dt(row.get("emitted_at"))]
+        if dt is not None
+    ]
     latest_dt = max(event_datetimes) if event_datetimes else None
     if as_of is None:
         as_of = datetime.now()
-    micro_events, micro_input_provenance = _panic_buy_micro_detector_events(events, as_of=as_of)
+    micro_events, micro_input_provenance = _panic_buy_micro_detector_events(
+        events, as_of=as_of
+    )
     micro = summarize_microstructure_detector_from_events(
         micro_events,
         as_of=as_of,
@@ -779,7 +922,9 @@ def build_panic_buying_report(
         "target_date": target_date,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "as_of": as_of.isoformat(timespec="seconds"),
-        "latest_event_at": latest_dt.isoformat(timespec="seconds") if latest_dt else None,
+        "latest_event_at": (
+            latest_dt.isoformat(timespec="seconds") if latest_dt else None
+        ),
         "dry_run": bool(dry_run),
         "policy": {
             "report_only": True,
@@ -830,9 +975,21 @@ def build_markdown(report: dict[str, Any]) -> str:
     panic = report["panic_buy_metrics"]
     exhaustion = report["exhaustion_metrics"]
     tp = report["tp_counterfactual_summary"]
-    micro = report.get("microstructure_detector") if isinstance(report.get("microstructure_detector"), dict) else {}
-    micro_input = micro.get("input_provenance") if isinstance(micro.get("input_provenance"), dict) else {}
-    market = report.get("market_breadth_context") if isinstance(report.get("market_breadth_context"), dict) else {}
+    micro = (
+        report.get("microstructure_detector")
+        if isinstance(report.get("microstructure_detector"), dict)
+        else {}
+    )
+    micro_input = (
+        micro.get("input_provenance")
+        if isinstance(micro.get("input_provenance"), dict)
+        else {}
+    )
+    market = (
+        report.get("market_breadth_context")
+        if isinstance(report.get("market_breadth_context"), dict)
+        else {}
+    )
     lines = [
         f"# Panic Buying {report['target_date']}",
         "",
@@ -921,7 +1078,9 @@ def save_report_artifacts(report: dict[str, Any]) -> dict[str, str]:
     target_date = report["target_date"]
     json_path = report_dir / f"panic_buying_{target_date}.json"
     md_path = report_dir / f"panic_buying_{target_date}.md"
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     md_path.write_text(build_markdown(report), encoding="utf-8")
     return {"json": str(json_path), "markdown": str(md_path)}
 
@@ -936,8 +1095,12 @@ def _parse_as_of(value: str | None) -> datetime | None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Build report-only panic buying report.")
-    parser.add_argument("--date", dest="target_date", default=datetime.now().strftime("%Y-%m-%d"))
+    parser = argparse.ArgumentParser(
+        description="Build report-only panic buying report."
+    )
+    parser.add_argument(
+        "--date", dest="target_date", default=datetime.now().strftime("%Y-%m-%d")
+    )
     parser.add_argument("--as-of", dest="as_of", default="")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--print-json", action="store_true")
@@ -960,7 +1123,11 @@ def main(argv: list[str] | None = None) -> int:
         "artifacts": artifacts,
     }
     if args.print_json:
-        print(json.dumps(report if args.dry_run else summary, ensure_ascii=False, indent=2))
+        print(
+            json.dumps(
+                report if args.dry_run else summary, ensure_ascii=False, indent=2
+            )
+        )
     else:
         print(json.dumps(summary, ensure_ascii=False))
     return 0

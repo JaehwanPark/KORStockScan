@@ -10,7 +10,6 @@ from typing import Any, Callable
 
 from src.utils.constants import CONFIG_PATH, DATA_DIR, DEV_PATH
 
-
 DEFAULT_REGION = "ap-northeast-2"
 DEFAULT_QWEN3_32B_REGION = "us-west-2"
 DEFAULT_LITE_MODEL_ID = "apac.amazon.nova-lite-v1:0"
@@ -38,7 +37,13 @@ OPENAI_GPT54_MINI_OUTPUT_USD_PER_1M = 4.50
 
 
 class BedrockNovaProviderError(RuntimeError):
-    def __init__(self, message: str, *, error_type: str = "BedrockNovaProviderError", attempts: int = 0):
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_type: str = "BedrockNovaProviderError",
+        attempts: int = 0,
+    ):
         super().__init__(message)
         self.error_type = error_type
         self.attempts = attempts
@@ -141,7 +146,11 @@ def endpoint_allowed_for_lite_primary(endpoint_name: str) -> bool:
 
 
 def entry_price_bedrock_route_mode() -> str:
-    return str(os.getenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_ROUTE_MODE", "off")).strip().lower()
+    return (
+        str(os.getenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_ROUTE_MODE", "off"))
+        .strip()
+        .lower()
+    )
 
 
 def entry_price_failback_enabled() -> bool:
@@ -185,17 +194,36 @@ def _normalize_score_value(value: Any) -> int | None:
 
 def normalize_action_score(payload: dict[str, Any] | None) -> tuple[str, int | None]:
     data = payload if isinstance(payload, dict) else {}
-    action = str(data.get("action") or data.get("decision") or data.get("recommendation") or "").strip().upper()
+    action = (
+        str(
+            data.get("action")
+            or data.get("decision")
+            or data.get("recommendation")
+            or ""
+        )
+        .strip()
+        .upper()
+    )
     score = _normalize_score_value(data.get("score"))
     if score is None:
         score = _normalize_score_value(data.get("confidence"))
     return action, score
 
 
-def estimate_cost_usd(input_tokens: Any, output_tokens: Any, *, input_usd_per_1m: float, output_usd_per_1m: float) -> float:
+def estimate_cost_usd(
+    input_tokens: Any,
+    output_tokens: Any,
+    *,
+    input_usd_per_1m: float,
+    output_usd_per_1m: float,
+) -> float:
     in_tokens = max(0, _safe_int(input_tokens) or 0)
     out_tokens = max(0, _safe_int(output_tokens) or 0)
-    return round((in_tokens * float(input_usd_per_1m) + out_tokens * float(output_usd_per_1m)) / 1_000_000, 8)
+    return round(
+        (in_tokens * float(input_usd_per_1m) + out_tokens * float(output_usd_per_1m))
+        / 1_000_000,
+        8,
+    )
 
 
 def estimate_nova_cost_usd(
@@ -239,7 +267,10 @@ def load_bedrock_api_keys_from_config(config_path: Path | None = None) -> list[s
         if isinstance(payload, dict):
             for name, value in payload.items():
                 raw_name = str(name)
-                if raw_name == "BEDROCK_API_KEY" or raw_name == "AWS_BEARER_TOKEN_BEDROCK":
+                if (
+                    raw_name == "BEDROCK_API_KEY"
+                    or raw_name == "AWS_BEARER_TOKEN_BEDROCK"
+                ):
                     order = 1
                 elif raw_name.startswith("BEDROCK_API_KEY_"):
                     suffix = raw_name.replace("BEDROCK_API_KEY_", "", 1)
@@ -290,8 +321,12 @@ def _usage_int(usage: Any, key: str) -> int | None:
 
 
 def _extract_converse_text(response: dict[str, Any]) -> str:
-    content = (((response or {}).get("output") or {}).get("message") or {}).get("content") or []
-    return "\n".join(str(part.get("text") or "") for part in content if isinstance(part, dict)).strip()
+    content = (((response or {}).get("output") or {}).get("message") or {}).get(
+        "content"
+    ) or []
+    return "\n".join(
+        str(part.get("text") or "") for part in content if isinstance(part, dict)
+    ).strip()
 
 
 def _is_retryable_bedrock_error(exc: Exception) -> bool:
@@ -329,7 +364,11 @@ class BedrockNovaProvider:
         client_factory: Callable[..., Any] | None = None,
         key_rotation_enabled: bool = True,
     ):
-        self.api_keys = list(api_keys if api_keys is not None else load_bedrock_api_keys_from_config(config_path))
+        self.api_keys = list(
+            api_keys
+            if api_keys is not None
+            else load_bedrock_api_keys_from_config(config_path)
+        )
         self.config_path = config_path
         self.client_factory = client_factory
         self.key_rotation_enabled = bool(key_rotation_enabled)
@@ -338,7 +377,12 @@ class BedrockNovaProvider:
     def _client(self, *, key_index: int, key: str, region_name: str, timeout_ms: int):
         if self.client_factory is not None:
             try:
-                return self.client_factory(key_index=key_index, api_key=key, region_name=region_name, timeout_ms=timeout_ms)
+                return self.client_factory(
+                    key_index=key_index,
+                    api_key=key,
+                    region_name=region_name,
+                    timeout_ms=timeout_ms,
+                )
             except TypeError:
                 try:
                     return self.client_factory(key_index, key, region_name, timeout_ms)
@@ -355,14 +399,24 @@ class BedrockNovaProvider:
         client = boto3.client(
             "bedrock-runtime",
             region_name=region_name,
-            config=Config(connect_timeout=timeout_sec, read_timeout=timeout_sec, retries={"max_attempts": 0}),
+            config=Config(
+                connect_timeout=timeout_sec,
+                read_timeout=timeout_sec,
+                retries={"max_attempts": 0},
+            ),
         )
         self._clients[cache_key] = client
         return client
 
-    def converse(self, *, prompt: str, user_input: str, profile: BedrockNovaModelProfile) -> BedrockNovaResult:
+    def converse(
+        self, *, prompt: str, user_input: str, profile: BedrockNovaModelProfile
+    ) -> BedrockNovaResult:
         if not self.api_keys:
-            raise BedrockNovaProviderError("No Bedrock API keys configured", error_type="NoBedrockApiKey", attempts=0)
+            raise BedrockNovaProviderError(
+                "No Bedrock API keys configured",
+                error_type="NoBedrockApiKey",
+                attempts=0,
+            )
         keys = self.api_keys if self.key_rotation_enabled else self.api_keys[:1]
         last_error: Exception | None = None
         for idx, key in enumerate(keys):
@@ -379,8 +433,13 @@ class BedrockNovaProvider:
                 ).converse(
                     modelId=profile.model_id,
                     system=system,
-                    messages=[{"role": "user", "content": [{"text": str(user_input or "")}]}],
-                    inferenceConfig={"maxTokens": int(profile.max_output_tokens), "temperature": 0},
+                    messages=[
+                        {"role": "user", "content": [{"text": str(user_input or "")}]}
+                    ],
+                    inferenceConfig={
+                        "maxTokens": int(profile.max_output_tokens),
+                        "temperature": 0,
+                    },
                 )
                 latency_ms = int((time.perf_counter() - started) * 1000)
                 text = _extract_converse_text(response)
@@ -390,7 +449,9 @@ class BedrockNovaProvider:
                 output_tokens = _safe_int((usage or {}).get("outputTokens"))
                 cache_read = _usage_int(usage, "cacheReadInputTokens")
                 cache_write = _usage_int(usage, "cacheWriteInputTokens")
-                total_input = (input_tokens or 0) + (cache_read or 0) + (cache_write or 0)
+                total_input = (
+                    (input_tokens or 0) + (cache_read or 0) + (cache_write or 0)
+                )
                 return BedrockNovaResult(
                     payload=dict(parsed or {}),
                     raw_text=text,
@@ -421,20 +482,40 @@ class BedrockNovaProvider:
                 last_error = exc
                 if not _is_retryable_bedrock_error(exc):
                     break
-        error_type = type(last_error).__name__ if last_error is not None else "BedrockNovaProviderError"
-        raise BedrockNovaProviderError(str(last_error or "Bedrock Nova call failed"), error_type=error_type, attempts=len(keys))
+        error_type = (
+            type(last_error).__name__
+            if last_error is not None
+            else "BedrockNovaProviderError"
+        )
+        raise BedrockNovaProviderError(
+            str(last_error or "Bedrock Nova call failed"),
+            error_type=error_type,
+            attempts=len(keys),
+        )
 
 
 def lite_profile_from_env() -> BedrockNovaModelProfile:
     return BedrockNovaModelProfile(
         family="lite",
-        model_id=os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_MODEL_ID", DEFAULT_LITE_MODEL_ID),
+        model_id=os.getenv(
+            "KORSTOCKSCAN_BEDROCK_NOVA_LITE_MODEL_ID", DEFAULT_LITE_MODEL_ID
+        ),
         region_name=os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_REGION", DEFAULT_REGION),
-        max_output_tokens=_env_int("KORSTOCKSCAN_BEDROCK_NOVA_LITE_MAX_OUTPUT_TOKENS", 768),
+        max_output_tokens=_env_int(
+            "KORSTOCKSCAN_BEDROCK_NOVA_LITE_MAX_OUTPUT_TOKENS", 768
+        ),
         timeout_ms=_env_int("KORSTOCKSCAN_BEDROCK_NOVA_LITE_TIMEOUT_MS", 7000),
-        prompt_cache_enabled=_env_bool("KORSTOCKSCAN_BEDROCK_NOVA_LITE_PROMPT_CACHE_ENABLED", False),
-        input_usd_per_1m=_safe_float(os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_INPUT_USD_PER_1M"), LITE_INPUT_USD_PER_1M),
-        output_usd_per_1m=_safe_float(os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_OUTPUT_USD_PER_1M"), LITE_OUTPUT_USD_PER_1M),
+        prompt_cache_enabled=_env_bool(
+            "KORSTOCKSCAN_BEDROCK_NOVA_LITE_PROMPT_CACHE_ENABLED", False
+        ),
+        input_usd_per_1m=_safe_float(
+            os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_INPUT_USD_PER_1M"),
+            LITE_INPUT_USD_PER_1M,
+        ),
+        output_usd_per_1m=_safe_float(
+            os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_OUTPUT_USD_PER_1M"),
+            LITE_OUTPUT_USD_PER_1M,
+        ),
         cache_read_input_usd_per_1m=_safe_float(
             os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_CACHE_READ_INPUT_USD_PER_1M"),
             LITE_CACHE_READ_INPUT_USD_PER_1M,
@@ -449,14 +530,20 @@ def lite_profile_from_env() -> BedrockNovaModelProfile:
 def lite_v2_profile_from_env() -> BedrockNovaModelProfile:
     return BedrockNovaModelProfile(
         family="lite_v2",
-        model_id=os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_V2_MODEL_ID", DEFAULT_LITE_V2_MODEL_ID),
+        model_id=os.getenv(
+            "KORSTOCKSCAN_BEDROCK_NOVA_LITE_V2_MODEL_ID", DEFAULT_LITE_V2_MODEL_ID
+        ),
         region_name=os.getenv(
             "KORSTOCKSCAN_BEDROCK_NOVA_LITE_V2_REGION",
             os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_REGION", DEFAULT_REGION),
         ),
-        max_output_tokens=_env_int("KORSTOCKSCAN_BEDROCK_NOVA_LITE_V2_MAX_OUTPUT_TOKENS", 768),
+        max_output_tokens=_env_int(
+            "KORSTOCKSCAN_BEDROCK_NOVA_LITE_V2_MAX_OUTPUT_TOKENS", 768
+        ),
         timeout_ms=_env_int("KORSTOCKSCAN_BEDROCK_NOVA_LITE_V2_TIMEOUT_MS", 7000),
-        prompt_cache_enabled=_env_bool("KORSTOCKSCAN_BEDROCK_NOVA_LITE_V2_PROMPT_CACHE_ENABLED", False),
+        prompt_cache_enabled=_env_bool(
+            "KORSTOCKSCAN_BEDROCK_NOVA_LITE_V2_PROMPT_CACHE_ENABLED", False
+        ),
         input_usd_per_1m=_safe_float(
             os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_V2_INPUT_USD_PER_1M"),
             LITE_V2_INPUT_USD_PER_1M,
@@ -479,11 +566,19 @@ def lite_v2_profile_from_env() -> BedrockNovaModelProfile:
 def qwen3_32b_profile_from_env() -> BedrockNovaModelProfile:
     return BedrockNovaModelProfile(
         family="qwen3_32b",
-        model_id=os.getenv("KORSTOCKSCAN_BEDROCK_QWEN3_32B_MODEL_ID", DEFAULT_QWEN3_32B_MODEL_ID),
-        region_name=os.getenv("KORSTOCKSCAN_BEDROCK_QWEN3_32B_REGION", DEFAULT_QWEN3_32B_REGION),
-        max_output_tokens=_env_int("KORSTOCKSCAN_BEDROCK_QWEN3_32B_MAX_OUTPUT_TOKENS", 768),
+        model_id=os.getenv(
+            "KORSTOCKSCAN_BEDROCK_QWEN3_32B_MODEL_ID", DEFAULT_QWEN3_32B_MODEL_ID
+        ),
+        region_name=os.getenv(
+            "KORSTOCKSCAN_BEDROCK_QWEN3_32B_REGION", DEFAULT_QWEN3_32B_REGION
+        ),
+        max_output_tokens=_env_int(
+            "KORSTOCKSCAN_BEDROCK_QWEN3_32B_MAX_OUTPUT_TOKENS", 768
+        ),
         timeout_ms=_env_int("KORSTOCKSCAN_BEDROCK_QWEN3_32B_TIMEOUT_MS", 7000),
-        prompt_cache_enabled=_env_bool("KORSTOCKSCAN_BEDROCK_QWEN3_32B_PROMPT_CACHE_ENABLED", False),
+        prompt_cache_enabled=_env_bool(
+            "KORSTOCKSCAN_BEDROCK_QWEN3_32B_PROMPT_CACHE_ENABLED", False
+        ),
         input_usd_per_1m=_safe_float(
             os.getenv("KORSTOCKSCAN_BEDROCK_QWEN3_32B_INPUT_USD_PER_1M"),
             QWEN3_32B_INPUT_USD_PER_1M,
@@ -498,7 +593,11 @@ def qwen3_32b_profile_from_env() -> BedrockNovaModelProfile:
 
 
 def entry_price_primary_profile_from_env() -> BedrockNovaModelProfile | None:
-    primary_family = str(os.getenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_PRIMARY_FAMILY", "qwen3_32b")).strip().lower()
+    primary_family = (
+        str(os.getenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_PRIMARY_FAMILY", "qwen3_32b"))
+        .strip()
+        .lower()
+    )
     if primary_family in {"qwen3_32b", "qwen3-32b", "qwen"}:
         return qwen3_32b_profile_from_env()
     if primary_family in {"lite_v2", "v2", "nova_lite_v2"}:
@@ -509,7 +608,11 @@ def entry_price_primary_profile_from_env() -> BedrockNovaModelProfile | None:
 
 
 def entry_price_failback_profile_from_env() -> BedrockNovaModelProfile | None:
-    failback_family = str(os.getenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_FAILBACK_FAMILY", "lite_v2")).strip().lower()
+    failback_family = (
+        str(os.getenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_FAILBACK_FAMILY", "lite_v2"))
+        .strip()
+        .lower()
+    )
     if failback_family in {"lite_v2", "v2", "nova_lite_v2"}:
         return lite_v2_profile_from_env()
     if failback_family in {"lite", "nova_lite"}:
@@ -524,9 +627,22 @@ def entry_price_failback_profile_from_env() -> BedrockNovaModelProfile | None:
 def route_mode_for_model(model_name: str) -> tuple[str, BedrockNovaModelProfile | None]:
     model = str(model_name or "")
     if model == "gpt-5.4-mini":
-        primary_family = str(os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_PRIMARY_FAMILY", "lite")).strip().lower()
-        profile = lite_v2_profile_from_env() if primary_family in {"lite_v2", "v2", "nova_lite_v2"} else lite_profile_from_env()
-        return str(os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "shadow")).strip().lower(), profile
+        primary_family = (
+            str(os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_PRIMARY_FAMILY", "lite"))
+            .strip()
+            .lower()
+        )
+        profile = (
+            lite_v2_profile_from_env()
+            if primary_family in {"lite_v2", "v2", "nova_lite_v2"}
+            else lite_profile_from_env()
+        )
+        return (
+            str(os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "shadow"))
+            .strip()
+            .lower(),
+            profile,
+        )
     return "off", None
 
 
@@ -537,9 +653,14 @@ _RUNTIME_PROVIDER_SIGNATURE: tuple[Any, ...] | None = None
 def runtime_provider() -> BedrockNovaProvider:
     global _RUNTIME_PROVIDER, _RUNTIME_PROVIDER_SIGNATURE
     keys = load_bedrock_api_keys_from_config()
-    signature = (tuple(keys), _env_bool("KORSTOCKSCAN_BEDROCK_KEY_ROTATION_ENABLED", True))
+    signature = (
+        tuple(keys),
+        _env_bool("KORSTOCKSCAN_BEDROCK_KEY_ROTATION_ENABLED", True),
+    )
     if _RUNTIME_PROVIDER is None or _RUNTIME_PROVIDER_SIGNATURE != signature:
-        _RUNTIME_PROVIDER = BedrockNovaProvider(api_keys=keys, key_rotation_enabled=signature[1])
+        _RUNTIME_PROVIDER = BedrockNovaProvider(
+            api_keys=keys, key_rotation_enabled=signature[1]
+        )
         _RUNTIME_PROVIDER_SIGNATURE = signature
     return _RUNTIME_PROVIDER
 
@@ -558,31 +679,52 @@ def provider_audit_row(
         "schema_version": 1,
         "event_type": "bedrock_nova_primary_provider",
         "request_id": str(request_meta.get("request_id") or ""),
-        "openai_request_id": str(request_meta.get("openai_request_id") or request_meta.get("request_id") or ""),
+        "openai_request_id": str(
+            request_meta.get("openai_request_id")
+            or request_meta.get("request_id")
+            or ""
+        ),
         "endpoint_name": str(request_meta.get("endpoint_name") or ""),
-        "prompt_type": str(request_meta.get("prompt_type") or request_meta.get("endpoint_name") or ""),
+        "prompt_type": str(
+            request_meta.get("prompt_type") or request_meta.get("endpoint_name") or ""
+        ),
         "symbol": str(request_meta.get("symbol") or ""),
         "cache_key": str(request_meta.get("cache_key") or ""),
-        "pipeline_stage": str(request_meta.get("pipeline_stage") or request_meta.get("endpoint_name") or ""),
+        "pipeline_stage": str(
+            request_meta.get("pipeline_stage")
+            or request_meta.get("endpoint_name")
+            or ""
+        ),
         "record_id": str(request_meta.get("record_id") or ""),
         "sim_record_id": str(request_meta.get("sim_record_id") or ""),
         "sim_parent_record_id": str(request_meta.get("sim_parent_record_id") or ""),
         "entry_adm_candidate_id": str(request_meta.get("entry_adm_candidate_id") or ""),
         "source_event_stage": str(request_meta.get("source_event_stage") or ""),
-        "pipeline_event_emitted_at": str(request_meta.get("pipeline_event_emitted_at") or ""),
+        "pipeline_event_emitted_at": str(
+            request_meta.get("pipeline_event_emitted_at") or ""
+        ),
         "primary_provider": "bedrock",
         "bedrock_model_family": str(request_meta.get("bedrock_model_family") or ""),
         "bedrock_primary_family": str(request_meta.get("bedrock_primary_family") or ""),
-        "bedrock_failback_family": str(request_meta.get("bedrock_failback_family") or ""),
-        "bedrock_failback_used": bool(request_meta.get("bedrock_failback_used") or False),
+        "bedrock_failback_family": str(
+            request_meta.get("bedrock_failback_family") or ""
+        ),
+        "bedrock_failback_used": bool(
+            request_meta.get("bedrock_failback_used") or False
+        ),
         "bedrock_attempted_key_count": int(result.attempted_key_count) if result else 0,
-        "bedrock_primary_error_type": str(request_meta.get("bedrock_primary_error_type") or ""),
+        "bedrock_primary_error_type": str(
+            request_meta.get("bedrock_primary_error_type") or ""
+        ),
         "bedrock_action": action,
         "bedrock_score": score,
         "parse_ok": bool(result.parse_ok) if result else False,
         "error_type": error_type or (result.parse_error if result else ""),
         "error_message": str(error_message or "")[:240],
-        "decision_authority": str(request_meta.get("decision_authority") or "runtime_primary_with_openai_failback"),
+        "decision_authority": str(
+            request_meta.get("decision_authority")
+            or "runtime_primary_with_openai_failback"
+        ),
         "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
     }
     if result is not None:

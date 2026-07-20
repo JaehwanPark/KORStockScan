@@ -15,7 +15,6 @@ from typing import Any
 
 from src.utils.constants import DATA_DIR
 
-
 SCHEMA_VERSION = 1
 REPORT_DIRNAME = "market_panic_breadth"
 REPORT_ONLY_FORBIDDEN_USES = [
@@ -116,29 +115,52 @@ def _find_rows(payload: Any) -> list[dict[str, Any]]:
     visit(payload)
     dedup: dict[tuple[str, str], dict[str, Any]] = {}
     for row in rows:
-        code = _safe_str(_field(row, "inds_cd", "upjong_cd", "stk_cd", "code", "marketCode"))
-        name = _safe_str(_field(row, "inds_nm", "upjong_nm", "stk_nm", "name", "marketName"))
+        code = _safe_str(
+            _field(row, "inds_cd", "upjong_cd", "stk_cd", "code", "marketCode")
+        )
+        name = _safe_str(
+            _field(row, "inds_nm", "upjong_nm", "stk_nm", "name", "marketName")
+        )
         dedup[(code, name)] = row
     return list(dedup.values())
 
 
-def parse_kiwoom_industry_rows(payloads: list[dict[str, Any]] | dict[str, Any] | list[Any]) -> list[dict[str, Any]]:
+def parse_kiwoom_industry_rows(
+    payloads: list[dict[str, Any]] | dict[str, Any] | list[Any],
+) -> list[dict[str, Any]]:
     payload_list = payloads if isinstance(payloads, list) else [payloads]
     parsed: list[dict[str, Any]] = []
     for row in _find_rows(payload_list):
-        code = _safe_str(_field(row, "inds_cd", "upjong_cd", "stk_cd", "code", "marketCode"))
-        name = _safe_str(_field(row, "inds_nm", "upjong_nm", "stk_nm", "name", "marketName"))
-        price = _safe_float(_field(row, "cur_prc", "curr_price", "close_pric", "price"), None)
+        code = _safe_str(
+            _field(row, "inds_cd", "upjong_cd", "stk_cd", "code", "marketCode")
+        )
+        name = _safe_str(
+            _field(row, "inds_nm", "upjong_nm", "stk_nm", "name", "marketName")
+        )
+        price = _safe_float(
+            _field(row, "cur_prc", "curr_price", "close_pric", "price"), None
+        )
         change_pct = _safe_float(
-            _field(row, "flu_rt", "chg_rt", "change_rate", "fluctuation_rate", "updown_rate"),
+            _field(
+                row,
+                "flu_rt",
+                "chg_rt",
+                "change_rate",
+                "fluctuation_rate",
+                "updown_rate",
+            ),
             None,
         )
-        change = _safe_float(_field(row, "pred_pre", "chg_prc", "change", "change_price"), None)
+        change = _safe_float(
+            _field(row, "pred_pre", "chg_prc", "change", "change_price"), None
+        )
         volume = _safe_float(_field(row, "trde_qty", "volume", "acc_trdvol"), None)
         rising_count = _safe_int(_field(row, "rising", "rise", "up_count"), 0)
         flat_count = _safe_int(_field(row, "stdns", "flat", "unchanged_count"), 0)
         fall_count = _safe_int(_field(row, "fall", "down", "down_count"), 0)
-        listed_count = _safe_int(_field(row, "flo_stk_num", "listed_count", "stock_count"), 0)
+        listed_count = _safe_int(
+            _field(row, "flo_stk_num", "listed_count", "stock_count"), 0
+        )
         if price is None and change_pct is None and change is None:
             continue
         parsed.append(
@@ -174,7 +196,9 @@ def _weighted_average(values: list[tuple[float, float]]) -> float | None:
     total_weight = sum(weight for _, weight in values if weight > 0)
     if total_weight <= 0:
         return None
-    return round(sum(value * weight for value, weight in values if weight > 0) / total_weight, 3)
+    return round(
+        sum(value * weight for value, weight in values if weight > 0) / total_weight, 3
+    )
 
 
 def summarize_breadth(
@@ -204,14 +228,30 @@ def summarize_breadth(
 
     pct_rows = [row for row in industry_rows if row.get("change_pct") is not None]
     down_rows = [row for row in pct_rows if float(row.get("change_pct") or 0.0) < 0.0]
-    severe_down_rows = [row for row in pct_rows if float(row.get("change_pct") or 0.0) <= severe_down_floor_pct]
+    severe_down_rows = [
+        row
+        for row in pct_rows
+        if float(row.get("change_pct") or 0.0) <= severe_down_floor_pct
+    ]
     up_rows = [row for row in pct_rows if float(row.get("change_pct") or 0.0) > 0.0]
-    severe_up_rows = [row for row in pct_rows if float(row.get("change_pct") or 0.0) >= severe_up_floor_pct]
+    severe_up_rows = [
+        row
+        for row in pct_rows
+        if float(row.get("change_pct") or 0.0) >= severe_up_floor_pct
+    ]
     sample_count = len(pct_rows)
-    down_ratio = round((len(down_rows) / sample_count) * 100.0, 1) if sample_count else 0.0
-    severe_ratio = round((len(severe_down_rows) / sample_count) * 100.0, 1) if sample_count else 0.0
+    down_ratio = (
+        round((len(down_rows) / sample_count) * 100.0, 1) if sample_count else 0.0
+    )
+    severe_ratio = (
+        round((len(severe_down_rows) / sample_count) * 100.0, 1)
+        if sample_count
+        else 0.0
+    )
     up_ratio = round((len(up_rows) / sample_count) * 100.0, 1) if sample_count else 0.0
-    severe_up_ratio = round((len(severe_up_rows) / sample_count) * 100.0, 1) if sample_count else 0.0
+    severe_up_ratio = (
+        round((len(severe_up_rows) / sample_count) * 100.0, 1) if sample_count else 0.0
+    )
     index_changes = {
         market: float(row.get("change_pct"))
         for market, row in market_indices.items()
@@ -235,7 +275,11 @@ def summarize_breadth(
         denominator = listed or (fall + rising + flat)
         fall_ratio = round((fall / denominator) * 100.0, 1) if denominator else 0.0
         rise_ratio = round((rising / denominator) * 100.0, 1) if denominator else 0.0
-        weight = float(denominator) if denominator > 0 else DEFAULT_MARKET_WEIGHTS.get(market, 0.0)
+        weight = (
+            float(denominator)
+            if denominator > 0
+            else DEFAULT_MARKET_WEIGHTS.get(market, 0.0)
+        )
         stock_fall_weight_values.append((fall_ratio, weight))
         stock_rise_weight_values.append((rise_ratio, weight))
         stock_fall_rows.append(
@@ -258,29 +302,48 @@ def summarize_breadth(
                 "rise_ratio_pct": rise_ratio,
             }
         )
-    max_stock_fall_ratio = max([row["fall_ratio_pct"] for row in stock_fall_rows], default=0.0)
-    max_stock_rise_ratio = max([row["rise_ratio_pct"] for row in stock_rise_rows], default=0.0)
+    max_stock_fall_ratio = max(
+        [row["fall_ratio_pct"] for row in stock_fall_rows], default=0.0
+    )
+    max_stock_rise_ratio = max(
+        [row["rise_ratio_pct"] for row in stock_rise_rows], default=0.0
+    )
     weighted_stock_fall_ratio = _weighted_average(stock_fall_weight_values) or 0.0
     weighted_stock_rise_ratio = _weighted_average(stock_rise_weight_values) or 0.0
-    index_risk_off = weighted_index_change is not None and weighted_index_change <= index_drop_floor_pct
-    single_market_index_risk_off = any(change <= index_drop_floor_pct for change in index_changes.values())
+    index_risk_off = (
+        weighted_index_change is not None
+        and weighted_index_change <= index_drop_floor_pct
+    )
+    single_market_index_risk_off = any(
+        change <= index_drop_floor_pct for change in index_changes.values()
+    )
     industry_risk_off = sample_count > 0 and down_ratio >= industry_down_ratio_floor_pct
     severe_risk_off = sample_count > 0 and severe_ratio >= severe_down_ratio_floor_pct
     stock_breadth_risk_off = weighted_stock_fall_ratio >= stock_fall_ratio_floor_pct
     single_market_stock_risk_off = max_stock_fall_ratio >= stock_fall_ratio_floor_pct
-    risk_off = bool(index_risk_off and (industry_risk_off or severe_risk_off or stock_breadth_risk_off))
+    risk_off = bool(
+        index_risk_off
+        and (industry_risk_off or severe_risk_off or stock_breadth_risk_off)
+    )
     single_market_risk_off = bool(
         not risk_off
         and (single_market_index_risk_off or single_market_stock_risk_off)
         and (industry_risk_off or severe_risk_off or single_market_stock_risk_off)
     )
-    index_risk_on = weighted_index_change is not None and weighted_index_change >= index_rise_floor_pct
-    single_market_index_risk_on = any(change >= index_rise_floor_pct for change in index_changes.values())
+    index_risk_on = (
+        weighted_index_change is not None
+        and weighted_index_change >= index_rise_floor_pct
+    )
+    single_market_index_risk_on = any(
+        change >= index_rise_floor_pct for change in index_changes.values()
+    )
     industry_risk_on = sample_count > 0 and up_ratio >= industry_up_ratio_floor_pct
     severe_risk_on = sample_count > 0 and severe_up_ratio >= severe_up_ratio_floor_pct
     stock_breadth_risk_on = weighted_stock_rise_ratio >= stock_rise_ratio_floor_pct
     single_market_stock_risk_on = max_stock_rise_ratio >= stock_rise_ratio_floor_pct
-    risk_on = bool(index_risk_on and (industry_risk_on or severe_risk_on or stock_breadth_risk_on))
+    risk_on = bool(
+        index_risk_on and (industry_risk_on or severe_risk_on or stock_breadth_risk_on)
+    )
     single_market_risk_on = bool(
         not risk_on
         and (single_market_index_risk_on or single_market_stock_risk_on)
@@ -374,7 +437,9 @@ def summarize_breadth(
     }
 
 
-def fetch_kiwoom_market_breadth(token: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def fetch_kiwoom_market_breadth(
+    token: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     from src.utils import kiwoom_utils
 
     url = kiwoom_utils.get_api_url("/api/dostk/sect")
@@ -465,7 +530,9 @@ def build_market_panic_breadth_report(
 
 
 def write_report(report: dict[str, Any]) -> Path:
-    target_date = _safe_str(report.get("target_date")) or datetime.now().strftime("%Y-%m-%d")
+    target_date = _safe_str(report.get("target_date")) or datetime.now().strftime(
+        "%Y-%m-%d"
+    )
     path = _report_path(target_date)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -473,8 +540,12 @@ def write_report(report: dict[str, Any]) -> Path:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Collect report-only intraday market panic breadth.")
-    parser.add_argument("--date", dest="target_date", default=datetime.now().strftime("%Y-%m-%d"))
+    parser = argparse.ArgumentParser(
+        description="Collect report-only intraday market panic breadth."
+    )
+    parser.add_argument(
+        "--date", dest="target_date", default=datetime.now().strftime("%Y-%m-%d")
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--print-json", action="store_true")
     return parser

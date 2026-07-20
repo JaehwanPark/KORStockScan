@@ -19,7 +19,6 @@ from typing import Any, Iterable
 from src.utils.constants import DATA_DIR, TRADING_RULES
 from src.utils.jsonl_io import existing_or_gzip_path
 
-
 REPORT_DIR = DATA_DIR / "report"
 CONTEXT_DIR = REPORT_DIR / "lifecycle_ai_context"
 ATTRIBUTION_DIR = REPORT_DIR / "lifecycle_ai_context_attribution"
@@ -55,7 +54,9 @@ def _implementation_provenance() -> dict[str, Any]:
     }
 
 
-def _implementation_checks(*, stage_count: int, runtime_effect: bool) -> list[dict[str, Any]]:
+def _implementation_checks(
+    *, stage_count: int, runtime_effect: bool
+) -> list[dict[str, Any]]:
     return [
         {
             "name": "stage_attribution_contract",
@@ -149,7 +150,9 @@ def _session_cutoff_source_date(now: datetime) -> date:
 
 
 def _latest_context_path_on_or_before(target_date: date) -> Path | None:
-    explicit = str(getattr(TRADING_RULES, "LIFECYCLE_AI_CONTEXT_FILE", "") or "").strip()
+    explicit = str(
+        getattr(TRADING_RULES, "LIFECYCLE_AI_CONTEXT_FILE", "") or ""
+    ).strip()
     if explicit:
         path = Path(explicit)
         if path.exists():
@@ -175,32 +178,58 @@ def _latest_context_path_on_or_before(target_date: date) -> Path | None:
 def _load_stage_attribution(target_date: str) -> dict[str, dict[str, Any]]:
     path, _ = attribution_report_paths(target_date)
     payload = _read_json(path)
-    by_stage = payload.get("stage_attribution") if isinstance(payload.get("stage_attribution"), dict) else {}
-    return {str(stage): dict(value) for stage, value in by_stage.items() if isinstance(value, dict)}
+    by_stage = (
+        payload.get("stage_attribution")
+        if isinstance(payload.get("stage_attribution"), dict)
+        else {}
+    )
+    return {
+        str(stage): dict(value)
+        for stage, value in by_stage.items()
+        if isinstance(value, dict)
+    }
 
 
 def _source_payloads(target_date: str) -> dict[str, Any]:
-    lifecycle_path = REPORT_DIR / "lifecycle_decision_matrix" / f"lifecycle_decision_matrix_{target_date}.json"
+    lifecycle_path = (
+        REPORT_DIR
+        / "lifecycle_decision_matrix"
+        / f"lifecycle_decision_matrix_{target_date}.json"
+    )
     entry_path = (
         REPORT_DIR
         / "scalp_entry_action_decision_matrix"
         / f"scalp_entry_action_decision_matrix_{target_date}.json"
     )
-    holding_path = REPORT_DIR / "holding_exit_decision_matrix" / f"holding_exit_decision_matrix_{target_date}.json"
+    holding_path = (
+        REPORT_DIR
+        / "holding_exit_decision_matrix"
+        / f"holding_exit_decision_matrix_{target_date}.json"
+    )
     return {
         "lifecycle_decision_matrix": _read_json(lifecycle_path),
         "scalp_entry_action_decision_matrix": _read_json(entry_path),
         "holding_exit_decision_matrix": _read_json(holding_path),
         "paths": {
-            "lifecycle_decision_matrix": str(lifecycle_path) if lifecycle_path.exists() else None,
-            "scalp_entry_action_decision_matrix": str(entry_path) if entry_path.exists() else None,
-            "holding_exit_decision_matrix": str(holding_path) if holding_path.exists() else None,
+            "lifecycle_decision_matrix": (
+                str(lifecycle_path) if lifecycle_path.exists() else None
+            ),
+            "scalp_entry_action_decision_matrix": (
+                str(entry_path) if entry_path.exists() else None
+            ),
+            "holding_exit_decision_matrix": (
+                str(holding_path) if holding_path.exists() else None
+            ),
         },
     }
 
 
 def _policy_by_stage(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    entries = payload.get("policy_entries") if isinstance(payload.get("policy_entries"), list) else []
+    entries = (
+        payload.get("policy_entries")
+        if isinstance(payload.get("policy_entries"), list)
+        else []
+    )
     result: dict[str, dict[str, Any]] = {}
     for item in entries:
         if not isinstance(item, dict):
@@ -241,10 +270,16 @@ def _stage_context_text(
     )
 
 
-def build_lifecycle_ai_context_report(target_date: str, *, provider: str | None = None) -> dict[str, Any]:
+def build_lifecycle_ai_context_report(
+    target_date: str, *, provider: str | None = None
+) -> dict[str, Any]:
     target_date = str(target_date).strip()
     source = _source_payloads(target_date)
-    lifecycle = source["lifecycle_decision_matrix"] if isinstance(source["lifecycle_decision_matrix"], dict) else {}
+    lifecycle = (
+        source["lifecycle_decision_matrix"]
+        if isinstance(source["lifecycle_decision_matrix"], dict)
+        else {}
+    )
     policy_entries = _policy_by_stage(lifecycle)
     attribution_by_stage = _load_stage_attribution(target_date)
     matrix_version = str(lifecycle.get("matrix_version") or "")
@@ -268,9 +303,13 @@ def build_lifecycle_ai_context_report(target_date: str, *, provider: str | None 
             {
                 "stage": stage,
                 "prompt_injection_allowed": stage in PROMPT_STAGES,
-                "policy_key": str(policy.get("policy_key") or f"{stage}:missing_policy"),
+                "policy_key": str(
+                    policy.get("policy_key") or f"{stage}:missing_policy"
+                ),
                 "source_matrix_version": matrix_version or "-",
-                "selected_action_hint": str(policy.get("selected_action") or "NO_CHANGE"),
+                "selected_action_hint": str(
+                    policy.get("selected_action") or "NO_CHANGE"
+                ),
                 "alignment_hint": str(policy.get("selected_action") or "NO_CHANGE"),
                 "confidence": _safe_float(policy.get("confidence"), 0.0),
                 "stage_ev_composite_pct": policy.get("stage_ev_composite_pct"),
@@ -299,9 +338,11 @@ def build_lifecycle_ai_context_report(target_date: str, *, provider: str | None 
         warnings.append("lifecycle_ai_context_attribution_missing_or_empty")
     provider_status = {
         "provider": provider_name,
-        "status": "deterministic_fallback"
-        if provider_name == "deterministic_source_only"
-        else "not_called_v1",
+        "status": (
+            "deterministic_fallback"
+            if provider_name == "deterministic_source_only"
+            else "not_called_v1"
+        ),
         "schema_name": "lifecycle_ai_context_v1",
         "fallback_used": True,
     }
@@ -324,7 +365,13 @@ def build_lifecycle_ai_context_report(target_date: str, *, provider: str | None 
         "threshold_env_mutation_allowed": False,
         "real_order_allowed": False,
         "prompt_stages": sorted(PROMPT_STAGES),
-        "prompt_stage_count": len([item for item in stage_contexts if bool(item.get("prompt_injection_allowed"))]),
+        "prompt_stage_count": len(
+            [
+                item
+                for item in stage_contexts
+                if bool(item.get("prompt_injection_allowed"))
+            ]
+        ),
         "stage_contexts": stage_contexts,
         "sources": source.get("paths") or {},
         "forbidden_uses": FORBIDDEN_USES,
@@ -332,7 +379,9 @@ def build_lifecycle_ai_context_report(target_date: str, *, provider: str | None 
     }
     CONTEXT_DIR.mkdir(parents=True, exist_ok=True)
     json_path, md_path = context_report_paths(target_date)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     md_path.write_text(render_lifecycle_ai_context_markdown(report), encoding="utf-8")
     return report
 
@@ -410,11 +459,17 @@ def _pipeline_context_rows(target_date: str) -> list[dict[str, Any]]:
                 "status": str(merged.get("lifecycle_ai_context_status") or "-"),
                 "policy_key": str(merged.get("lifecycle_ai_context_policy_key") or "-"),
                 "context_hash": str(merged.get("lifecycle_ai_context_hash") or "-"),
-                "alignment_hint": str(merged.get("lifecycle_ai_context_alignment_hint") or "NO_CHANGE"),
+                "alignment_hint": str(
+                    merged.get("lifecycle_ai_context_alignment_hint") or "NO_CHANGE"
+                ),
                 "action": action,
                 "score": score,
                 "profit_rate": _safe_float(merged.get("profit_rate"), None),
-                "source_quality": str(merged.get("source_quality_status") or merged.get("source_quality_gate") or "-"),
+                "source_quality": str(
+                    merged.get("source_quality_status")
+                    or merged.get("source_quality_gate")
+                    or "-"
+                ),
                 "replay_action": replay_action,
                 "replay_score": replay_score,
             }
@@ -422,7 +477,9 @@ def _pipeline_context_rows(target_date: str) -> list[dict[str, Any]]:
     return rows
 
 
-def build_lifecycle_ai_context_attribution_report(target_date: str, *, replay_budget: int = REPLAY_BUDGET) -> dict[str, Any]:
+def build_lifecycle_ai_context_attribution_report(
+    target_date: str, *, replay_budget: int = REPLAY_BUDGET
+) -> dict[str, Any]:
     target_date = str(target_date).strip()
     rows = _pipeline_context_rows(target_date)
     by_stage: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -448,15 +505,32 @@ def build_lifecycle_ai_context_attribution_report(target_date: str, *, replay_bu
             if row.get("score") is not None and row.get("replay_score") is not None
         ]
         action_delta_count = sum(
-            1 for row in replay_rows if str(row.get("action") or "").upper() != str(row.get("replay_action") or "").upper()
+            1
+            for row in replay_rows
+            if str(row.get("action") or "").upper()
+            != str(row.get("replay_action") or "").upper()
         )
-        profits = [float(row["profit_rate"]) for row in applied if row.get("profit_rate") is not None]
+        profits = [
+            float(row["profit_rate"])
+            for row in applied
+            if row.get("profit_rate") is not None
+        ]
         completed_sample = len(profits)
-        avg_profit = round(sum(profits) / completed_sample, 4) if completed_sample else None
-        alignment_rate = round(sum(1 for value in alignments if value) / len(alignments), 4) if alignments else None
+        avg_profit = (
+            round(sum(profits) / completed_sample, 4) if completed_sample else None
+        )
+        alignment_rate = (
+            round(sum(1 for value in alignments if value) / len(alignments), 4)
+            if alignments
+            else None
+        )
         replay_sample = min(len(applied), max(0, int(replay_budget or 0)))
-        action_delta_rate = round(action_delta_count / len(replay_rows), 4) if replay_rows else None
-        score_delta_avg = round(sum(score_deltas) / len(score_deltas), 4) if score_deltas else None
+        action_delta_rate = (
+            round(action_delta_count / len(replay_rows), 4) if replay_rows else None
+        )
+        score_delta_avg = (
+            round(sum(score_deltas) / len(score_deltas), 4) if score_deltas else None
+        )
         if eligible <= 0:
             quality = "hold_sample"
         elif completed_sample <= 0:
@@ -465,10 +539,27 @@ def build_lifecycle_ai_context_attribution_report(target_date: str, *, replay_bu
             quality = "sampled_replay"
         else:
             quality = "observational_only"
-        ev_component = 0.0 if avg_profit is None else max(-1.0, min(1.0, avg_profit / 2.0))
-        alignment_component = 0.0 if alignment_rate is None else (alignment_rate * 2.0 - 1.0)
-        replay_component = 0.0 if action_delta_rate is None else min(1.0, action_delta_rate)
-        contribution = round(max(-1.0, min(1.0, 0.45 * ev_component + 0.35 * alignment_component + 0.20 * replay_component)), 4)
+        ev_component = (
+            0.0 if avg_profit is None else max(-1.0, min(1.0, avg_profit / 2.0))
+        )
+        alignment_component = (
+            0.0 if alignment_rate is None else (alignment_rate * 2.0 - 1.0)
+        )
+        replay_component = (
+            0.0 if action_delta_rate is None else min(1.0, action_delta_rate)
+        )
+        contribution = round(
+            max(
+                -1.0,
+                min(
+                    1.0,
+                    0.45 * ev_component
+                    + 0.35 * alignment_component
+                    + 0.20 * replay_component,
+                ),
+            ),
+            4,
+        )
         bounded_weight = round(max(-0.15, min(0.15, contribution * 0.15)), 4)
         stage_attribution[stage] = {
             "stage": stage,
@@ -495,14 +586,29 @@ def build_lifecycle_ai_context_attribution_report(target_date: str, *, replay_bu
             "forbidden_uses": FORBIDDEN_USES,
         }
     summary = {
-        "context_eligible_count": sum(item["context_eligible_count"] for item in stage_attribution.values()),
-        "context_applied_count": sum(item["context_applied_count"] for item in stage_attribution.values()),
-        "context_skipped_count": sum(item["context_skipped_count"] for item in stage_attribution.values()),
-        "no_context_replay_sample": sum(item["no_context_replay_sample"] for item in stage_attribution.values()),
-        "no_context_replay_observed": sum(item["no_context_replay_observed"] for item in stage_attribution.values()),
+        "context_eligible_count": sum(
+            item["context_eligible_count"] for item in stage_attribution.values()
+        ),
+        "context_applied_count": sum(
+            item["context_applied_count"] for item in stage_attribution.values()
+        ),
+        "context_skipped_count": sum(
+            item["context_skipped_count"] for item in stage_attribution.values()
+        ),
+        "no_context_replay_sample": sum(
+            item["no_context_replay_sample"] for item in stage_attribution.values()
+        ),
+        "no_context_replay_observed": sum(
+            item["no_context_replay_observed"] for item in stage_attribution.values()
+        ),
         "replay_budget": int(replay_budget or 0),
         "replay_mode": "observed_no_context_fields_or_degrade",
-        "stage_quality_counts": dict(Counter(item["attribution_quality_status"] for item in stage_attribution.values())),
+        "stage_quality_counts": dict(
+            Counter(
+                item["attribution_quality_status"]
+                for item in stage_attribution.values()
+            )
+        ),
     }
     report = {
         "schema_version": REPORT_SCHEMA_VERSION,
@@ -533,16 +639,24 @@ def build_lifecycle_ai_context_attribution_report(target_date: str, *, replay_bu
         "summary": summary,
         "stage_attribution": stage_attribution,
         "sources": {
-            "pipeline_events": str(PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl"),
-            "post_sell": str(POST_SELL_DIR / f"sim_post_sell_evaluations_{target_date}.jsonl"),
+            "pipeline_events": str(
+                PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl"
+            ),
+            "post_sell": str(
+                POST_SELL_DIR / f"sim_post_sell_evaluations_{target_date}.jsonl"
+            ),
         },
         "forbidden_uses": FORBIDDEN_USES,
         "warnings": [] if rows else ["lifecycle_ai_context_runtime_provenance_missing"],
     }
     ATTRIBUTION_DIR.mkdir(parents=True, exist_ok=True)
     json_path, md_path = attribution_report_paths(target_date)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    md_path.write_text(render_lifecycle_ai_context_attribution_markdown(report), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    md_path.write_text(
+        render_lifecycle_ai_context_attribution_markdown(report), encoding="utf-8"
+    )
     return report
 
 
@@ -595,7 +709,10 @@ def build_lifecycle_ai_runtime_context(
     path = _latest_context_path_on_or_before(_session_cutoff_source_date(current_dt))
     payload = _read_json(path) if path else {}
     if not payload:
-        fields = {**base_fields, "lifecycle_ai_context_status": "context_missing_or_invalid"}
+        fields = {
+            **base_fields,
+            "lifecycle_ai_context_status": "context_missing_or_invalid",
+        }
         return {
             "applied": False,
             "status": "context_missing_or_invalid",
@@ -603,9 +720,17 @@ def build_lifecycle_ai_runtime_context(
             "prompt_context": "",
             "fields": fields,
         }
-    contexts = payload.get("stage_contexts") if isinstance(payload.get("stage_contexts"), list) else []
+    contexts = (
+        payload.get("stage_contexts")
+        if isinstance(payload.get("stage_contexts"), list)
+        else []
+    )
     selected = next(
-        (item for item in contexts if isinstance(item, dict) and str(item.get("stage") or "") == stage_name),
+        (
+            item
+            for item in contexts
+            if isinstance(item, dict) and str(item.get("stage") or "") == stage_name
+        ),
         {},
     )
     if not selected or not bool(selected.get("prompt_injection_allowed")):
@@ -632,7 +757,9 @@ def build_lifecycle_ai_runtime_context(
         "lifecycle_ai_context_source_date": str(payload.get("date") or "-"),
         "lifecycle_ai_context_policy_key": str(selected.get("policy_key") or "-"),
         "lifecycle_ai_context_hash": context_hash,
-        "lifecycle_ai_context_alignment_hint": str(selected.get("alignment_hint") or "NO_CHANGE"),
+        "lifecycle_ai_context_alignment_hint": str(
+            selected.get("alignment_hint") or "NO_CHANGE"
+        ),
     }
     return {
         "applied": True,
@@ -699,7 +826,11 @@ def render_lifecycle_ai_context_attribution_markdown(report: dict[str, Any]) -> 
         "| stage | eligible | applied | completed | align | replay | delta | ev | contribution | quality |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
     ]
-    stage_map = report.get("stage_attribution") if isinstance(report.get("stage_attribution"), dict) else {}
+    stage_map = (
+        report.get("stage_attribution")
+        if isinstance(report.get("stage_attribution"), dict)
+        else {}
+    )
     for stage in STAGES:
         item = stage_map.get(stage) if isinstance(stage_map.get(stage), dict) else {}
         lines.append(
@@ -721,7 +852,9 @@ def render_lifecycle_ai_context_attribution_markdown(report: dict[str, Any]) -> 
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build lifecycle AI context and attribution reports.")
+    parser = argparse.ArgumentParser(
+        description="Build lifecycle AI context and attribution reports."
+    )
     parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
     parser.add_argument(
         "--mode",
@@ -732,7 +865,9 @@ def main() -> None:
     parser.add_argument("--replay-budget", type=int, default=REPLAY_BUDGET)
     args = parser.parse_args()
     if args.mode in {"attribution", "both"}:
-        build_lifecycle_ai_context_attribution_report(args.target_date, replay_budget=args.replay_budget)
+        build_lifecycle_ai_context_attribution_report(
+            args.target_date, replay_budget=args.replay_budget
+        )
     if args.mode in {"context", "both"}:
         build_lifecycle_ai_context_report(args.target_date, provider=args.provider)
 

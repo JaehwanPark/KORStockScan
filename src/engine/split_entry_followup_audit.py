@@ -10,7 +10,6 @@ from typing import Any
 
 from src.utils.jsonl_io import iter_jsonl
 
-
 LATENCY_STAGES = {"latency_block", "latency_pass"}
 
 
@@ -50,7 +49,9 @@ def summarize_latency_canary(pipeline_events_path: Path) -> dict[str, Any]:
             continue
         fields = row.get("fields") or {}
         stage_counts[stage] += 1
-        if stage == "latency_block" and str(fields.get("quote_stale") or "").strip().lower() in {"false", "0", "no"}:
+        if stage == "latency_block" and str(
+            fields.get("quote_stale") or ""
+        ).strip().lower() in {"false", "0", "no"}:
             quote_not_stale_blocks += 1
         reason = str(fields.get("latency_canary_reason") or "").strip()
         if reason:
@@ -79,8 +80,12 @@ def summarize_split_entry_soft_stop(pipeline_events_path: Path) -> dict[str, Any
     same_symbol_counts: Counter[str] = Counter()
 
     for record_id, events in by_record.items():
-        sorted_events = sorted(events, key=lambda item: str(item.get("emitted_at") or ""))
-        exit_events = [row for row in sorted_events if str(row.get("stage") or "") == "exit_signal"]
+        sorted_events = sorted(
+            events, key=lambda item: str(item.get("emitted_at") or "")
+        )
+        exit_events = [
+            row for row in sorted_events if str(row.get("stage") or "") == "exit_signal"
+        ]
         if not exit_events:
             continue
 
@@ -88,18 +93,36 @@ def summarize_split_entry_soft_stop(pipeline_events_path: Path) -> dict[str, Any
         if str(exit_fields.get("exit_rule") or "") != "scalp_soft_stop_pct":
             continue
 
-        rebase_events = [row for row in sorted_events if str(row.get("stage") or "") == "position_rebased_after_fill"]
+        rebase_events = [
+            row
+            for row in sorted_events
+            if str(row.get("stage") or "") == "position_rebased_after_fill"
+        ]
         if not rebase_events:
             continue
 
-        partial_rebases = [row for row in rebase_events if str((row.get("fields") or {}).get("fill_quality") or "").upper() == "PARTIAL_FILL"]
+        partial_rebases = [
+            row
+            for row in rebase_events
+            if str((row.get("fields") or {}).get("fill_quality") or "").upper()
+            == "PARTIAL_FILL"
+        ]
         split_entry = len(rebase_events) >= 2 or bool(partial_rebases)
         if not split_entry:
             continue
 
-        first_partial_cum = _to_int((partial_rebases[0].get("fields") or {}).get("cum_filled_qty")) if partial_rebases else 0
-        max_rebased_qty = max(_to_int((row.get("fields") or {}).get("cum_filled_qty")) for row in rebase_events)
-        expanded_after_partial = bool(partial_rebases) and max_rebased_qty > first_partial_cum
+        first_partial_cum = (
+            _to_int((partial_rebases[0].get("fields") or {}).get("cum_filled_qty"))
+            if partial_rebases
+            else 0
+        )
+        max_rebased_qty = max(
+            _to_int((row.get("fields") or {}).get("cum_filled_qty"))
+            for row in rebase_events
+        )
+        expanded_after_partial = (
+            bool(partial_rebases) and max_rebased_qty > first_partial_cum
+        )
         partial_only = bool(partial_rebases) and not expanded_after_partial
 
         integrity_flags: set[str] = set()
@@ -149,10 +172,26 @@ def summarize_split_entry_soft_stop(pipeline_events_path: Path) -> dict[str, Any
         "case_count": int(len(cases)),
         "expanded_after_partial_count": int(len(expanded_cases)),
         "partial_only_count": int(sum(1 for case in cases if case.get("partial_only"))),
-        "held_le_180_count": int(sum(1 for case in cases if int(case.get("held_sec") or 0) <= 180)),
-        "integrity_issue_count": int(sum(1 for case in cases if case.get("integrity_flags"))),
-        "peak_le_zero_count": int(sum(1 for case in expanded_cases if float(case.get("peak_profit") or 0.0) <= 0.0)),
-        "peak_lt_point2_count": int(sum(1 for case in expanded_cases if float(case.get("peak_profit") or 0.0) < 0.2)),
+        "held_le_180_count": int(
+            sum(1 for case in cases if int(case.get("held_sec") or 0) <= 180)
+        ),
+        "integrity_issue_count": int(
+            sum(1 for case in cases if case.get("integrity_flags"))
+        ),
+        "peak_le_zero_count": int(
+            sum(
+                1
+                for case in expanded_cases
+                if float(case.get("peak_profit") or 0.0) <= 0.0
+            )
+        ),
+        "peak_lt_point2_count": int(
+            sum(
+                1
+                for case in expanded_cases
+                if float(case.get("peak_profit") or 0.0) < 0.2
+            )
+        ),
         "same_symbol_repeats": repeats,
         "cases": cases,
     }
@@ -165,26 +204,52 @@ def build_followup_summary(
 ) -> dict[str, Any]:
     summary = {
         "local_latency_canary": summarize_latency_canary(local_pipeline_events_path),
-        "local_split_entry_soft_stop": summarize_split_entry_soft_stop(local_pipeline_events_path),
+        "local_split_entry_soft_stop": summarize_split_entry_soft_stop(
+            local_pipeline_events_path
+        ),
     }
     if remote_pipeline_events_path is not None:
-        summary["remote_latency_canary"] = summarize_latency_canary(remote_pipeline_events_path)
-        summary["remote_split_entry_soft_stop"] = summarize_split_entry_soft_stop(remote_pipeline_events_path)
+        summary["remote_latency_canary"] = summarize_latency_canary(
+            remote_pipeline_events_path
+        )
+        summary["remote_split_entry_soft_stop"] = summarize_split_entry_soft_stop(
+            remote_pipeline_events_path
+        )
     return summary
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Summarize noon follow-up metrics from pipeline event JSONL files.")
-    parser.add_argument("--local-pipeline-events", required=True, help="Path to the local pipeline_events_YYYY-MM-DD.jsonl file.")
-    parser.add_argument("--remote-pipeline-events", help="Optional path to the remote fetched pipeline_events_YYYY-MM-DD.jsonl file.")
-    parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
+    parser = argparse.ArgumentParser(
+        description="Summarize noon follow-up metrics from pipeline event JSONL files."
+    )
+    parser.add_argument(
+        "--local-pipeline-events",
+        required=True,
+        help="Path to the local pipeline_events_YYYY-MM-DD.jsonl file.",
+    )
+    parser.add_argument(
+        "--remote-pipeline-events",
+        help="Optional path to the remote fetched pipeline_events_YYYY-MM-DD.jsonl file.",
+    )
+    parser.add_argument(
+        "--pretty", action="store_true", help="Pretty-print JSON output."
+    )
     args = parser.parse_args()
 
     summary = build_followup_summary(
         local_pipeline_events_path=Path(args.local_pipeline_events),
-        remote_pipeline_events_path=Path(args.remote_pipeline_events) if args.remote_pipeline_events else None,
+        remote_pipeline_events_path=(
+            Path(args.remote_pipeline_events) if args.remote_pipeline_events else None
+        ),
     )
-    print(json.dumps(summary, ensure_ascii=False, indent=2 if args.pretty else None, sort_keys=args.pretty))
+    print(
+        json.dumps(
+            summary,
+            ensure_ascii=False,
+            indent=2 if args.pretty else None,
+            sort_keys=args.pretty,
+        )
+    )
     return 0
 
 

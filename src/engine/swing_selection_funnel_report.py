@@ -21,7 +21,6 @@ from src.model.common_v2 import (
 from src.utils.constants import DATA_DIR, POSTGRES_URL
 from src.utils.jsonl_io import read_jsonl
 
-
 SWING_STRATEGIES = {"KOSPI_ML", "KOSDAQ_ML", "MAIN"}
 SWING_REAL_WATCHING_ENABLED_ENV = "KORSTOCKSCAN_SWING_REAL_WATCHING_ENABLED"
 SWING_EVENT_STAGES = {
@@ -77,14 +76,33 @@ def _micro_group(stage: str) -> str:
 
 
 def _micro_summary_item(fields: dict) -> tuple[str, str, dict[str, bool]]:
-    state = str(fields.get("orderbook_micro_state") or fields.get("swing_micro_state") or "missing").lower()
+    state = str(
+        fields.get("orderbook_micro_state")
+        or fields.get("swing_micro_state")
+        or "missing"
+    ).lower()
     advice = str(fields.get("swing_micro_advice") or "MISSING").upper()
     ready = fields.get("orderbook_micro_ready")
-    ready_bool = ready is True or str(ready).strip().lower() in {"1", "true", "yes", "y"}
+    ready_bool = ready is True or str(ready).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "y",
+    }
     healthy = fields.get("orderbook_micro_observer_healthy")
-    healthy_bool = healthy is True or str(healthy).strip().lower() in {"1", "true", "yes", "y"}
+    healthy_bool = healthy is True or str(healthy).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "y",
+    }
     stale = fields.get("swing_micro_stale")
-    stale_bool = stale is True or str(stale).strip().lower() in {"1", "true", "yes", "y"}
+    stale_bool = stale is True or str(stale).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "y",
+    }
     reason_flags = {
         "micro_missing": advice in {"MISSING", ""} or state in {"", "missing"},
         "micro_stale": stale_bool,
@@ -126,15 +144,21 @@ def summarize_ofi_qi_events(events: Iterable[dict]) -> dict:
         if not _is_swing_event(event):
             continue
         fields = _event_fields(event)
-        if not any(str(key).startswith(("orderbook_micro_", "swing_micro_")) for key in fields):
+        if not any(
+            str(key).startswith(("orderbook_micro_", "swing_micro_")) for key in fields
+        ):
             continue
         stage = _event_stage(event)
         group = _micro_group(stage)
         state, advice, reason_flags = _micro_summary_item(fields)
         missing = any(reason_flags.values())
         orderbook_micro_reason = str(fields.get("orderbook_micro_reason") or "UNKNOWN")
-        observer_missing_reason = str(fields.get("orderbook_micro_observer_missing_reason") or "UNKNOWN")
-        source_quality_status = str(fields.get("swing_micro_source_quality_status") or "UNKNOWN")
+        observer_missing_reason = str(
+            fields.get("orderbook_micro_observer_missing_reason") or "UNKNOWN"
+        )
+        source_quality_status = str(
+            fields.get("swing_micro_source_quality_status") or "UNKNOWN"
+        )
         ws_quote_source = str(fields.get("swing_micro_ws_quote_source") or "UNKNOWN")
         ws_quote_stale = str(fields.get("swing_micro_ws_quote_stale") or "UNKNOWN")
         state_by_group[group][state] += 1
@@ -151,7 +175,9 @@ def summarize_ofi_qi_events(events: Iterable[dict]) -> dict:
                 stale_missing_reasons[reason] += 1
                 stale_missing_reasons_by_group[group][reason] += 1
         if missing:
-            active_reasons = [reason for reason, active in reason_flags.items() if active]
+            active_reasons = [
+                reason for reason, active in reason_flags.items() if active
+            ]
             combination = "+".join(active_reasons) if active_reasons else "unknown"
             record_id = str(event.get("record_id") or "")
             stale_missing_reason_combinations[combination] += 1
@@ -188,22 +214,29 @@ def summarize_ofi_qi_events(events: Iterable[dict]) -> dict:
                     }
                 )
         if stage == "holding_flow_ofi_smoothing_applied":
-            exit_smoothing_actions[str(fields.get("smoothing_action") or "MISSING").upper()] += 1
+            exit_smoothing_actions[
+                str(fields.get("smoothing_action") or "MISSING").upper()
+            ] += 1
 
     reason_counts = dict(stale_missing_reasons)
     return {
         "sample_count": int(sample_count),
         "stale_missing_count": int(stale_missing_count),
         "stale_missing_unique_record_count": int(len(stale_missing_records)),
-        "stale_missing_ratio": round(stale_missing_count / sample_count, 4) if sample_count else 0.0,
+        "stale_missing_ratio": (
+            round(stale_missing_count / sample_count, 4) if sample_count else 0.0
+        ),
         "stale_missing_reason_counts": reason_counts,
         "stale_missing_reason_ratios": {
             reason: round(count / sample_count, 4) if sample_count else 0.0
             for reason, count in reason_counts.items()
         },
-        "stale_missing_reason_combination_counts": dict(stale_missing_reason_combinations),
+        "stale_missing_reason_combination_counts": dict(
+            stale_missing_reason_combinations
+        ),
         "stale_missing_reason_combination_unique_record_counts": {
-            key: len(values) for key, values in stale_missing_reason_combination_records.items()
+            key: len(values)
+            for key, values in stale_missing_reason_combination_records.items()
         },
         "stale_missing_group_counts": dict(stale_missing_groups),
         "stale_missing_group_unique_record_counts": {
@@ -211,7 +244,8 @@ def summarize_ofi_qi_events(events: Iterable[dict]) -> dict:
         },
         "stale_missing_stage_counts": dict(stale_missing_stages),
         "stale_missing_reason_counts_by_group": {
-            group: dict(counts) for group, counts in stale_missing_reasons_by_group.items()
+            group: dict(counts)
+            for group, counts in stale_missing_reasons_by_group.items()
         },
         "stale_missing_reason_unique_record_counts_by_group": {
             group: {reason: len(records) for reason, records in reason_records.items()}
@@ -224,13 +258,16 @@ def summarize_ofi_qi_events(events: Iterable[dict]) -> dict:
         },
         "stale_missing_examples": stale_missing_examples,
         "orderbook_micro_reason_counts_by_group": {
-            group: dict(counts) for group, counts in orderbook_micro_reasons_by_group.items()
+            group: dict(counts)
+            for group, counts in orderbook_micro_reasons_by_group.items()
         },
         "observer_missing_reason_counts_by_group": {
-            group: dict(counts) for group, counts in observer_missing_reasons_by_group.items()
+            group: dict(counts)
+            for group, counts in observer_missing_reasons_by_group.items()
         },
         "source_quality_status_counts_by_group": {
-            group: dict(counts) for group, counts in source_quality_status_by_group.items()
+            group: dict(counts)
+            for group, counts in source_quality_status_by_group.items()
         },
         "ws_quote_source_counts_by_group": {
             group: dict(counts) for group, counts in ws_quote_source_by_group.items()
@@ -283,8 +320,12 @@ def _event_strategy(event: dict) -> str:
 def _event_identity(event: dict) -> tuple[str, str, str]:
     fields = _event_fields(event)
     record_id = str(event.get("record_id") or fields.get("record_id") or "")
-    code = str(event.get("stock_code") or fields.get("stock_code") or fields.get("code") or "")
-    name = str(event.get("stock_name") or fields.get("stock_name") or fields.get("name") or "")
+    code = str(
+        event.get("stock_code") or fields.get("stock_code") or fields.get("code") or ""
+    )
+    name = str(
+        event.get("stock_name") or fields.get("stock_name") or fields.get("name") or ""
+    )
     return record_id, code, name
 
 
@@ -327,7 +368,9 @@ def summarize_pipeline_events(events: Iterable[dict]) -> dict:
         if stage == "blocked_gatekeeper_reject":
             action = str(fields.get("action", "UNKNOWN") or "UNKNOWN")
             gatekeeper_actions[action] += 1
-            gatekeeper_action_keys[normalize_gatekeeper_action_key(fields.get("action_key") or action)] += 1
+            gatekeeper_action_keys[
+                normalize_gatekeeper_action_key(fields.get("action_key") or action)
+            ] += 1
         if stage == "swing_probe_discarded":
             reason = str(fields.get("discard_reason") or "UNKNOWN")
             origin = str(fields.get("probe_origin_stage") or "UNKNOWN")
@@ -335,7 +378,9 @@ def summarize_pipeline_events(events: Iterable[dict]) -> dict:
             discard_origin_reason_counts[(origin, reason)] += 1
             discard_reason_unique[reason].add(identity)
             discard_origin_reason_unique[(origin, reason)].add(identity)
-            discard_by_record[(identity[0], identity[1], identity[2], origin, reason)] += 1
+            discard_by_record[
+                (identity[0], identity[1], identity[2], origin, reason)
+            ] += 1
 
     key_stages = sorted(set(raw_counts) | SWING_EVENT_STAGES)
     return {
@@ -356,14 +401,20 @@ def summarize_pipeline_events(events: Iterable[dict]) -> dict:
         ],
         "swing_probe_discard_summary": {
             "raw_count": int(raw_counts.get("swing_probe_discarded", 0)),
-            "unique_records": int(len(unique_records.get("swing_probe_discarded", set()))),
+            "unique_records": int(
+                len(unique_records.get("swing_probe_discarded", set()))
+            ),
             "reason_counts": dict(discard_reason_counts),
             "reason_unique_record_counts": {
-                reason: int(len(records)) for reason, records in discard_reason_unique.items()
+                reason: int(len(records))
+                for reason, records in discard_reason_unique.items()
             },
             "origin_reason_counts": {
                 f"{origin}:{reason}": int(count)
-                for (origin, reason), count in discard_origin_reason_counts.most_common()
+                for (
+                    origin,
+                    reason,
+                ), count in discard_origin_reason_counts.most_common()
             },
             "origin_reason_unique_record_counts": {
                 f"{origin}:{reason}": int(len(records))
@@ -378,12 +429,24 @@ def summarize_pipeline_events(events: Iterable[dict]) -> dict:
                     "discard_reason": reason,
                     "raw_count": int(count),
                 }
-                for (record_id, code, name, origin, reason), count in discard_by_record.most_common(20)
+                for (
+                    record_id,
+                    code,
+                    name,
+                    origin,
+                    reason,
+                ), count in discard_by_record.most_common(20)
             ],
         },
-        "submitted_raw_count": int(sum(raw_counts.get(stage, 0) for stage in SUBMITTED_STAGES)),
+        "submitted_raw_count": int(
+            sum(raw_counts.get(stage, 0) for stage in SUBMITTED_STAGES)
+        ),
         "submitted_unique_records": int(
-            len(set().union(*(unique_records.get(stage, set()) for stage in SUBMITTED_STAGES)))
+            len(
+                set().union(
+                    *(unique_records.get(stage, set()) for stage in SUBMITTED_STAGES)
+                )
+            )
             if any(stage in unique_records for stage in SUBMITTED_STAGES)
             else 0
         ),
@@ -391,7 +454,14 @@ def summarize_pipeline_events(events: Iterable[dict]) -> dict:
             sum(raw_counts.get(stage, 0) for stage in SIMULATED_ORDER_STAGES)
         ),
         "simulated_order_unique_records": int(
-            len(set().union(*(unique_records.get(stage, set()) for stage in SIMULATED_ORDER_STAGES)))
+            len(
+                set().union(
+                    *(
+                        unique_records.get(stage, set())
+                        for stage in SIMULATED_ORDER_STAGES
+                    )
+                )
+            )
             if any(stage in unique_records for stage in SIMULATED_ORDER_STAGES)
             else 0
         ),
@@ -424,8 +494,14 @@ def summarize_recommendation_rows(rows: Iterable[dict]) -> dict:
 
     return {
         "csv_rows": int(len(df)),
-        "selection_modes": df.get("selection_mode", pd.Series(dtype=str)).fillna("UNKNOWN").value_counts().to_dict(),
-        "position_tags": df.get("position_tag", pd.Series(dtype=str)).fillna("UNKNOWN").value_counts().to_dict(),
+        "selection_modes": df.get("selection_mode", pd.Series(dtype=str))
+        .fillna("UNKNOWN")
+        .value_counts()
+        .to_dict(),
+        "position_tags": df.get("position_tag", pd.Series(dtype=str))
+        .fillna("UNKNOWN")
+        .value_counts()
+        .to_dict(),
         "hybrid_mean_max": float(hybrid_mean.max() or 0.0),
         "meta_score_max": float(meta_score.max() or 0.0),
     }
@@ -442,7 +518,9 @@ def summarize_db_rows(rows: Iterable[dict]) -> dict:
         }
 
     status = df.get("status", pd.Series(dtype=str)).fillna("UNKNOWN").astype(str)
-    position = df.get("position_tag", pd.Series(dtype=str)).fillna("UNKNOWN").astype(str)
+    position = (
+        df.get("position_tag", pd.Series(dtype=str)).fillna("UNKNOWN").astype(str)
+    )
     by_position_status = Counter(zip(position, status))
     buy_qty = pd.to_numeric(df.get("buy_qty", 0), errors="coerce").fillna(0)
     buy_time_present = df.get("buy_time", pd.Series([None] * len(df))).notna()
@@ -451,7 +529,8 @@ def summarize_db_rows(rows: Iterable[dict]) -> dict:
     return {
         "db_rows": int(len(df)),
         "by_position_status": {
-            f"{pos}:{stat}": int(count) for (pos, stat), count in sorted(by_position_status.items())
+            f"{pos}:{stat}": int(count)
+            for (pos, stat), count in sorted(by_position_status.items())
         },
         "entered_rows": int(((buy_qty > 0) | buy_time_present).sum()),
         "submitted_or_open_rows": int(active_status.sum()),
@@ -467,7 +546,9 @@ def summarize_recommendation_db_load_gap(
     db_rows = int(db_recommendations.get("db_rows") or 0)
     db_error = diagnostic_summary.get("db_load_error")
     selection_modes = recommendation_csv.get("selection_modes") or {}
-    swing_real_watching_enabled = str(os.getenv(SWING_REAL_WATCHING_ENABLED_ENV, "") or "").strip().lower() in {
+    swing_real_watching_enabled = str(
+        os.getenv(SWING_REAL_WATCHING_ENABLED_ENV, "") or ""
+    ).strip().lower() in {
         "1",
         "true",
         "t",
@@ -483,7 +564,8 @@ def summarize_recommendation_db_load_gap(
     elif db_rows > 0:
         reason = "loaded"
     elif selection_modes and not any(
-        str(mode).upper() in {"SELECTED", "META_V2", "META_FALLBACK"} for mode in selection_modes
+        str(mode).upper() in {"SELECTED", "META_V2", "META_FALLBACK"}
+        for mode in selection_modes
     ):
         reason = "diagnostic_only_recommendation_rows"
     elif not swing_real_watching_enabled:
@@ -491,7 +573,9 @@ def summarize_recommendation_db_load_gap(
     else:
         reason = "csv_rows_positive_db_rows_zero"
     csv_db_divergence = bool(csv_rows > 0 and db_rows <= 0)
-    db_load_gap = bool(csv_db_divergence and reason not in {"swing_real_watching_disabled_by_policy"})
+    db_load_gap = bool(
+        csv_db_divergence and reason not in {"swing_real_watching_disabled_by_policy"}
+    )
 
     return {
         "csv_rows": csv_rows,
@@ -501,11 +585,11 @@ def summarize_recommendation_db_load_gap(
         "db_load_gap_classification": (
             "db_load_error"
             if reason == "db_load_error"
-            else "policy_disabled_source_only"
-            if reason == "swing_real_watching_disabled_by_policy"
-            else "db_ingestion_gap"
-            if db_load_gap
-            else "no_gap"
+            else (
+                "policy_disabled_source_only"
+                if reason == "swing_real_watching_disabled_by_policy"
+                else "db_ingestion_gap" if db_load_gap else "no_gap"
+            )
         ),
         "db_load_skip_reason": reason,
         "db_load_error": str(db_error) if db_error else None,
@@ -529,16 +613,14 @@ def load_recommendation_rows(path: str | Path = RECO_PATH) -> list[dict]:
 
 def load_db_rows(target_date: str, db_url: str = POSTGRES_URL) -> list[dict]:
     engine = create_engine(db_url)
-    query = text(
-        """
+    query = text("""
         SELECT rec_date, stock_code, stock_name, strategy, trade_type, position_tag,
                status, prob, buy_price, buy_qty, buy_time
         FROM recommendation_history
         WHERE rec_date = :target_date
           AND strategy IN ('KOSPI_ML', 'KOSDAQ_ML', 'MAIN')
         ORDER BY position_tag, stock_code
-        """
-    )
+        """)
     with engine.connect() as conn:
         df = pd.read_sql(query, conn, params={"target_date": target_date})
     return df.to_dict("records")
@@ -568,7 +650,9 @@ def build_swing_selection_funnel_report(
             db_rows = []
             diagnostic_summary = {**diagnostic_summary, "db_load_error": str(exc)}
     if event_rows is None:
-        event_path = Path(DATA_DIR) / "pipeline_events" / f"pipeline_events_{date_key}.jsonl"
+        event_path = (
+            Path(DATA_DIR) / "pipeline_events" / f"pipeline_events_{date_key}.jsonl"
+        )
         event_rows = _read_jsonl(event_path)
 
     model = {
@@ -673,11 +757,17 @@ def write_swing_selection_funnel_report(
 ) -> dict:
     date_key = _date_text(target_date)
     report = build_swing_selection_funnel_report(date_key, **kwargs)
-    out_dir = Path(output_dir) if output_dir is not None else Path(DATA_DIR) / "report" / "swing_selection_funnel"
+    out_dir = (
+        Path(output_dir)
+        if output_dir is not None
+        else Path(DATA_DIR) / "report" / "swing_selection_funnel"
+    )
     out_dir.mkdir(parents=True, exist_ok=True)
     json_path = out_dir / f"swing_selection_funnel_{date_key}.json"
     md_path = out_dir / f"swing_selection_funnel_{date_key}.md"
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
+    )
     md_path.write_text(render_markdown(report), encoding="utf-8")
     report["paths"] = {"json": str(json_path), "markdown": str(md_path)}
     return report
@@ -686,7 +776,9 @@ def write_swing_selection_funnel_report(
 def main() -> None:
     import argparse
 
-    parser = argparse.ArgumentParser(description="Build swing model selection funnel report")
+    parser = argparse.ArgumentParser(
+        description="Build swing model selection funnel report"
+    )
     parser.add_argument("target_date", nargs="?", default=_date_text(datetime.now()))
     args = parser.parse_args()
     report = write_swing_selection_funnel_report(args.target_date)
