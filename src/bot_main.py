@@ -426,7 +426,16 @@ if __name__ == "__main__":
 
             # [스케줄러 3] 관리자의 우아한 재시작(restart.flag) 감지
             if RESTART_FLAG_PATH.exists():
-                print("🔄 [시스템] 수동 재시작 플래그 감지. 관제탑을 종료합니다.")
+                try:
+                    restart_request = RESTART_FLAG_PATH.read_text(
+                        encoding="utf-8"
+                    ).strip()[:512]
+                except OSError as exc:
+                    restart_request = f"unreadable:{exc}"
+                print(
+                    "🔄 [시스템] 수동 재시작 플래그 감지. 관제탑을 종료합니다. "
+                    f"request={restart_request or 'source=unknown_legacy_touch'}"
+                )
                 RESTART_FLAG_PATH.unlink(missing_ok=True)
                 time.sleep(3)  # 다른 쓰레드들이 종료될 시간을 잠시 부여
                 os.kill(os.getpid(), signal.SIGTERM)
